@@ -18,6 +18,7 @@ use base64::Engine as _;
 use engine::{
     validate_chaser_effect_request as validate_engine_chaser_effect_request,
     validate_curve_effect_request as validate_engine_curve_effect_request,
+    validate_mapping_effect_request as validate_engine_mapping_effect_request,
     validate_move_effect_request as validate_engine_move_effect_request,
     validate_value_effect_request as validate_engine_value_effect_request, EngineCommand,
     EngineHandle, FixtureFlagClearKind, VideoIsfStackMutation,
@@ -39,12 +40,13 @@ use protocol::{
     DmxOutputProtocol, EffectId, EffectKind, EffectParamsSnapshot, EffectPreset, EffectSummary,
     EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, FixtureId, FixtureLimits,
     FixturePreset, FixtureProfileSummary, GeometrySummary, LearnedMidiControl, LearnedOscControl,
-    LfoEffectRequest, MidiControlAction, MidiControlMapping, MidiInputSummary, MidiOutputSummary,
-    MoveEffectRequest, NodeGraphId, NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary,
-    NodeGraphTransformOp, OscControlAction, OscControlMapping, OscInputConfig, PatchFixtureRequest,
-    PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RecallMode, RemoteControlConfig,
-    RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile,
-    StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary, TimelineAudioClipId,
+    LfoEffectRequest, MappingEffectRequest, MidiControlAction, MidiControlMapping,
+    MidiInputSummary, MidiOutputSummary, MoveEffectRequest, NodeGraphId, NodeGraphNodeKind,
+    NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp, OscControlAction,
+    OscControlMapping, OscInputConfig, PatchFixtureRequest, PatchedFixtureSummary,
+    PositionWaveEffectRequest, ProjectFile, RecallMode, RemoteControlConfig, RemoteControlStatus,
+    Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile, StageMapPresetSummary,
+    StageObjectId, StageObjectKind, StageObjectSummary, TimelineAudioClipId,
     TimelineAudioClipSummary, TimelineEventId, TimelineLayerKind, TimelineSnapRequest,
     TimelineTrackKind, TouchControlBinding, TouchSurfaceSummary, ValueEffectRequest, Vec3,
     VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode, VideoEffectTarget,
@@ -12068,6 +12070,17 @@ fn add_curve_effect(
 }
 
 #[tauri::command]
+fn add_mapping_effect(
+    state: State<'_, AppState>,
+    request: MappingEffectRequest,
+) -> Result<EffectId, String> {
+    validate_mapping_effect_request(&request)?;
+    let effect_id = state.engine.allocate_effect_id();
+    state.engine.add_mapping_effect(effect_id, request, true)?;
+    Ok(effect_id)
+}
+
+#[tauri::command]
 fn update_lfo_effect(
     state: State<'_, AppState>,
     effect_id: EffectId,
@@ -12152,6 +12165,17 @@ fn update_curve_effect(
     validate_curve_effect_request(&request)?;
     validate_effect_update_kind(&state.engine.snapshot(), effect_id, EffectKind::Curve)?;
     state.engine.update_curve_effect(effect_id, request)
+}
+
+#[tauri::command]
+fn update_mapping_effect(
+    state: State<'_, AppState>,
+    effect_id: EffectId,
+    request: MappingEffectRequest,
+) -> Result<(), String> {
+    validate_mapping_effect_request(&request)?;
+    validate_effect_update_kind(&state.engine.snapshot(), effect_id, EffectKind::Mapping)?;
+    state.engine.update_mapping_effect(effect_id, request)
 }
 
 fn validate_effect_update_kind(
@@ -12350,6 +12374,11 @@ fn relabel_effect_preset(mut preset: EffectPreset, label: String) -> EffectPrese
         }
         EffectKind::Curve => {
             if let Some(request) = &mut preset.curve {
+                request.label = label;
+            }
+        }
+        EffectKind::Mapping => {
+            if let Some(request) = &mut preset.mapping {
                 request.label = label;
             }
         }
@@ -12601,6 +12630,20 @@ fn add_effect_preset_to_engine(
             validate_effect_target_references(&snapshot, &request.fixture_ids, &[])?;
             engine.add_curve_effect(effect_id, request, enabled)?;
         }
+        EffectKind::Mapping => {
+            let request = preset
+                .mapping
+                .ok_or_else(|| "Mapping effect preset is missing its request body".to_string())?;
+            let request = match target_override {
+                Some(target_override) => {
+                    apply_mapping_effect_target_override(request, target_override)
+                }
+                None => request,
+            };
+            validate_mapping_effect_request(&request)?;
+            validate_effect_target_references(&snapshot, &request.fixture_ids, &[])?;
+            engine.add_mapping_effect(effect_id, request, enabled)?;
+        }
     }
     if !enabled
         && !matches!(
@@ -12610,6 +12653,7 @@ fn add_effect_preset_to_engine(
                 | EffectKind::Move
                 | EffectKind::Value
                 | EffectKind::Curve
+                | EffectKind::Mapping
         )
     {
         engine
@@ -16040,6 +16084,14 @@ fn validate_project_cue_effect_params(
             &request.attribute,
             &owner_label,
         ),
+        EffectParamsSnapshot::Mapping(request) => validate_project_effect_fixture_targets(
+            snapshot,
+            fixtures_by_id,
+            &request.fixture_ids,
+            &request.target_group_ids,
+            &request.attribute,
+            &owner_label,
+        ),
     }
 }
 
@@ -17241,6 +17293,24 @@ fn validate_project_effect_body(effect: &EffectSummary) -> Result<(), String> {
             effect.id
         ));
     }
+    if effect.effect_type != EffectKind::Mapping && effect.mapping.is_some() {
+        return Err(format!(
+            "Project {:?} effect {} contains a Mapping body",
+            effect.effect_type, effect.id
+        ));
+    }
+    if effect.effect_type == EffectKind::Mapping
+        && (effect.color.is_some()
+            || effect.chaser.is_some()
+            || effect.move_effect.is_some()
+            || effect.value.is_some()
+            || effect.curve.is_some())
+    {
+        return Err(format!(
+            "Project Mapping effect {} contains a body for another effect kind",
+            effect.id
+        ));
+    }
     match effect.effect_type {
         EffectKind::Lfo | EffectKind::PositionWave => {
             if effect.color.is_some()
@@ -17449,6 +17519,36 @@ fn validate_project_effect_body(effect: &EffectSummary) -> Result<(), String> {
                 ));
             }
         }
+        EffectKind::Mapping => {
+            let request = effect.mapping.as_ref().ok_or_else(|| {
+                format!(
+                    "Project Mapping effect {} is missing its request body",
+                    effect.id
+                )
+            })?;
+            let scalar_body_matches = effect.label == request.label
+                && effect.fixture_ids == request.fixture_ids
+                && effect.target_group_ids == request.target_group_ids
+                && effect.attribute == request.attribute
+                && effect.video_targets.is_empty()
+                && effect.shape == request.shape
+                && effect.period_ms == Some(request.period_ms)
+                && effect.clock_sync == request.clock_sync
+                && effect.low == request.low
+                && effect.high == request.high
+                && effect.phase == request.phase
+                && effect.blend_mode == request.blend_mode
+                && effect.origin.is_none()
+                && effect.direction.is_none()
+                && effect.speed.is_none()
+                && effect.wavelength.is_none();
+            if !scalar_body_matches {
+                return Err(format!(
+                    "Project Mapping effect {} summary fields do not match its request body",
+                    effect.id
+                ));
+            }
+        }
     }
     let preset = effect_summary_to_preset(effect)
         .map_err(|error| format!("Project effect {} is invalid: {error}", effect.id))?;
@@ -17581,6 +17681,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 move_effect: None,
                 value: None,
                 curve: None,
+                mapping: None,
             })
         }
         EffectKind::PositionWave => {
@@ -17623,6 +17724,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 move_effect: None,
                 value: None,
                 curve: None,
+                mapping: None,
             })
         }
         EffectKind::Color => {
@@ -17641,6 +17743,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 move_effect: None,
                 value: None,
                 curve: None,
+                mapping: None,
             })
         }
         EffectKind::Chaser => {
@@ -17659,6 +17762,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 move_effect: None,
                 value: None,
                 curve: None,
+                mapping: None,
             })
         }
         EffectKind::Move => {
@@ -17677,6 +17781,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 move_effect: Some(request),
                 value: None,
                 curve: None,
+                mapping: None,
             })
         }
         EffectKind::Value => {
@@ -17695,6 +17800,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 move_effect: None,
                 value: Some(request),
                 curve: None,
+                mapping: None,
             })
         }
         EffectKind::Curve => {
@@ -17713,6 +17819,26 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                 move_effect: None,
                 value: None,
                 curve: Some(request),
+                mapping: None,
+            })
+        }
+        EffectKind::Mapping => {
+            let request = effect
+                .mapping
+                .clone()
+                .ok_or_else(|| "Mapping effect summary is missing its request body".to_string())?;
+            Ok(EffectPreset {
+                version: 1,
+                effect_type: EffectKind::Mapping,
+                enabled: effect.enabled,
+                lfo: None,
+                position_wave: None,
+                color: None,
+                chaser: None,
+                move_effect: None,
+                value: None,
+                curve: None,
+                mapping: Some(request),
             })
         }
     }
@@ -17751,6 +17877,10 @@ fn effect_params_snapshot_from_summary(
             .curve
             .map(EffectParamsSnapshot::Curve)
             .ok_or_else(|| "Curve effect summary is missing its request body".to_string()),
+        EffectKind::Mapping => preset
+            .mapping
+            .map(EffectParamsSnapshot::Mapping)
+            .ok_or_else(|| "Mapping effect summary is missing its request body".to_string()),
     }
 }
 
@@ -17852,6 +17982,16 @@ fn apply_curve_effect_target_override(
     mut request: CurveEffectRequest,
     target_override: &EffectTargetOverride,
 ) -> CurveEffectRequest {
+    request.fixture_ids = target_override.fixture_ids.clone();
+    request.target_group_ids = target_override.target_group_ids.clone();
+    request.attribute = overridden_light_attribute(target_override);
+    request
+}
+
+fn apply_mapping_effect_target_override(
+    mut request: MappingEffectRequest,
+    target_override: &EffectTargetOverride,
+) -> MappingEffectRequest {
     request.fixture_ids = target_override.fixture_ids.clone();
     request.target_group_ids = target_override.target_group_ids.clone();
     request.attribute = overridden_light_attribute(target_override);
@@ -18035,6 +18175,13 @@ fn validate_effect_target_override_for_preset(
                 .curve
                 .as_ref()
                 .ok_or_else(|| "Curve effect preset is missing its request body".to_string())?;
+            validate_effect_target_override(target_override)
+        }
+        EffectKind::Mapping => {
+            preset
+                .mapping
+                .as_ref()
+                .ok_or_else(|| "Mapping effect preset is missing its request body".to_string())?;
             validate_effect_target_override(target_override)
         }
         EffectKind::Lfo | EffectKind::PositionWave => {
@@ -18328,6 +18475,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.move_effect.is_some()
                 || preset.value.is_some()
                 || preset.curve.is_some()
+                || preset.mapping.is_some()
             {
                 return Err("LFO effect preset must not contain another effect body".to_string());
             }
@@ -18344,6 +18492,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.move_effect.is_some()
                 || preset.value.is_some()
                 || preset.curve.is_some()
+                || preset.mapping.is_some()
             {
                 return Err(
                     "Position wave effect preset must not contain another effect body".to_string(),
@@ -18361,6 +18510,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.move_effect.is_some()
                 || preset.value.is_some()
                 || preset.curve.is_some()
+                || preset.mapping.is_some()
             {
                 return Err("Color effect preset must not contain another effect body".to_string());
             }
@@ -18377,6 +18527,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.move_effect.is_some()
                 || preset.value.is_some()
                 || preset.curve.is_some()
+                || preset.mapping.is_some()
             {
                 return Err("Chaser effect preset must not contain another effect body".to_string());
             }
@@ -18393,6 +18544,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.chaser.is_some()
                 || preset.value.is_some()
                 || preset.curve.is_some()
+                || preset.mapping.is_some()
             {
                 return Err("Move effect preset must not contain another effect body".to_string());
             }
@@ -18409,6 +18561,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.chaser.is_some()
                 || preset.move_effect.is_some()
                 || preset.curve.is_some()
+                || preset.mapping.is_some()
             {
                 return Err("Value effect preset must not contain another effect body".to_string());
             }
@@ -18425,6 +18578,7 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 || preset.chaser.is_some()
                 || preset.move_effect.is_some()
                 || preset.value.is_some()
+                || preset.mapping.is_some()
             {
                 return Err("Curve effect preset must not contain another effect body".to_string());
             }
@@ -18433,6 +18587,25 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
                 .as_ref()
                 .ok_or_else(|| "Curve effect preset is missing its request body".to_string())?;
             validate_curve_effect_request(request)?;
+        }
+        EffectKind::Mapping => {
+            if preset.lfo.is_some()
+                || preset.position_wave.is_some()
+                || preset.color.is_some()
+                || preset.chaser.is_some()
+                || preset.move_effect.is_some()
+                || preset.value.is_some()
+                || preset.curve.is_some()
+            {
+                return Err(
+                    "Mapping effect preset must not contain another effect body".to_string()
+                );
+            }
+            let request = preset
+                .mapping
+                .as_ref()
+                .ok_or_else(|| "Mapping effect preset is missing its request body".to_string())?;
+            validate_mapping_effect_request(request)?;
         }
     }
     Ok(())
@@ -23241,6 +23414,7 @@ fn validate_effect_params_snapshot(params: &EffectParamsSnapshot) -> Result<(), 
         EffectParamsSnapshot::Move(request) => validate_move_effect_request(request),
         EffectParamsSnapshot::Value(request) => validate_value_effect_request(request),
         EffectParamsSnapshot::Curve(request) => validate_curve_effect_request(request),
+        EffectParamsSnapshot::Mapping(request) => validate_mapping_effect_request(request),
     }
 }
 
@@ -23382,6 +23556,11 @@ fn validate_value_effect_request(request: &ValueEffectRequest) -> Result<(), Str
 
 fn validate_curve_effect_request(request: &CurveEffectRequest) -> Result<(), String> {
     validate_engine_curve_effect_request(request)?;
+    validate_group_ids(&request.target_group_ids)
+}
+
+fn validate_mapping_effect_request(request: &MappingEffectRequest) -> Result<(), String> {
+    validate_engine_mapping_effect_request(request)?;
     validate_group_ids(&request.target_group_ids)
 }
 
@@ -29655,6 +29834,7 @@ f 1 2 3
             move_effect: None,
             value: None,
             curve: None,
+            mapping: None,
         }
     }
 
@@ -29721,6 +29901,7 @@ f 1 2 3
             move_effect: None,
             value: None,
             curve: None,
+            mapping: None,
         }
     }
 
@@ -29961,6 +30142,7 @@ f 1 2 3
             move_effect: None,
             value: None,
             curve: None,
+            mapping: None,
         }];
         assert!(validate_project_file(&project)
             .unwrap_err()
@@ -30027,6 +30209,7 @@ f 1 2 3
             move_effect: None,
             value: None,
             curve: None,
+            mapping: None,
         }];
         assert!(validate_project_file(&project)
             .unwrap_err()
@@ -30048,6 +30231,7 @@ f 1 2 3
         let canonical_bytes = serde_json::to_vec(&project).unwrap();
         let canonical_text = std::str::from_utf8(&canonical_bytes).unwrap();
         assert!(!canonical_text.contains("\"curve\""));
+        assert!(!canonical_text.contains("\"mapping\""));
         let mut json = serde_json::to_value(&project).unwrap();
         json["snapshot"]["effects"][0]
             .as_object_mut()
@@ -30057,6 +30241,10 @@ f 1 2 3
             .as_object_mut()
             .unwrap()
             .remove("curve");
+        json["snapshot"]["effects"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("mapping");
 
         let legacy: ProjectFile = serde_json::from_value(json).unwrap();
         validate_project_file(&legacy).unwrap();
@@ -30064,6 +30252,7 @@ f 1 2 3
         assert_eq!(legacy.snapshot.effects[0].effect_type, EffectKind::Lfo);
         assert!(legacy.snapshot.effects[0].chaser.is_none());
         assert!(legacy.snapshot.effects[0].curve.is_none());
+        assert!(legacy.snapshot.effects[0].mapping.is_none());
         assert_eq!(serde_json::to_vec(&legacy).unwrap(), canonical_bytes);
     }
 
@@ -30178,6 +30367,7 @@ f 1 2 3
             move_effect: None,
             value: None,
             curve: None,
+            mapping: None,
         };
         let mut project = ProjectFile {
             version: 1,
@@ -32958,6 +33148,7 @@ f 1 2 3
             move_effect: Some(request),
             value: None,
             curve: None,
+            mapping: None,
         }
     }
 
@@ -33004,6 +33195,7 @@ f 1 2 3
             move_effect: None,
             value: None,
             curve: None,
+            mapping: None,
         }
     }
 
@@ -33191,6 +33383,7 @@ f 1 2 3
             move_effect: None,
             value: None,
             curve: None,
+            mapping: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -33256,6 +33449,7 @@ f 1 2 3
             move_effect: None,
             value: None,
             curve: None,
+            mapping: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -33346,6 +33540,7 @@ f 1 2 3
             move_effect: None,
             value: Some(request.clone()),
             curve: None,
+            mapping: None,
         }
     }
 
@@ -33407,7 +33602,83 @@ f 1 2 3
             move_effect: None,
             value: None,
             curve: Some(request.clone()),
+            mapping: None,
         }
+    }
+
+    fn sample_mapping_effect_request() -> MappingEffectRequest {
+        MappingEffectRequest {
+            label: "Front fixture-order wave".to_string(),
+            fixture_ids: vec![4, 2, 3],
+            target_group_ids: vec!["Front".to_string()],
+            attribute: "Dimmer".to_string(),
+            shape: protocol::LfoShape::Triangle,
+            mode: protocol::ValueEffectMode::Absolute,
+            direction: protocol::MappingEffectDirection::Bounce,
+            period_ms: 1_500,
+            clock_sync: Some(protocol::EffectClockSync { beats: 4.0 }),
+            low: 1_024,
+            high: 64_000,
+            phase: 0.25,
+            fixture_spread: 1.0,
+            repetitions: 2.0,
+            blend_mode: protocol::EffectBlendMode::Override,
+        }
+    }
+
+    fn mapping_effect_summary(id: EffectId, request: &MappingEffectRequest) -> EffectSummary {
+        EffectSummary {
+            id,
+            label: request.label.clone(),
+            effect_type: EffectKind::Mapping,
+            fixture_ids: request.fixture_ids.clone(),
+            target_group_ids: request.target_group_ids.clone(),
+            attribute: request.attribute.clone(),
+            video_targets: Vec::new(),
+            shape: request.shape.clone(),
+            period_ms: Some(request.period_ms),
+            clock_sync: request.clock_sync,
+            low: request.low,
+            high: request.high,
+            phase: request.phase,
+            blend_mode: request.blend_mode.clone(),
+            origin: None,
+            direction: None,
+            speed: None,
+            wavelength: None,
+            enabled: true,
+            color: None,
+            chaser: None,
+            move_effect: None,
+            value: None,
+            curve: None,
+            mapping: Some(request.clone()),
+        }
+    }
+
+    #[test]
+    fn effect_summary_serializes_independent_mapping_preset_and_preserves_order() {
+        let request = sample_mapping_effect_request();
+        let effect = mapping_effect_summary(23, &request);
+        validate_project_effect_body(&effect).unwrap();
+
+        let preset = effect_summary_to_preset(&effect).unwrap();
+        validate_effect_preset(&preset).unwrap();
+        let json = serde_json::to_string_pretty(&preset).unwrap();
+        let roundtrip: EffectPreset = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtrip.effect_type, EffectKind::Mapping);
+        assert_eq!(roundtrip.mapping, Some(request.clone()));
+
+        let target_override = EffectTargetOverride {
+            fixture_ids: vec![9, 7, 8],
+            target_group_ids: Vec::new(),
+            attribute: "Pan".to_string(),
+            video_targets: Vec::new(),
+        };
+        let retargeted = apply_mapping_effect_target_override(request, &target_override);
+        assert_eq!(retargeted.fixture_ids, vec![9, 7, 8]);
+        assert_eq!(retargeted.attribute, "Pan");
+        assert_eq!(retargeted.repetitions, 2.0);
     }
 
     #[test]
@@ -33510,6 +33781,7 @@ f 1 2 3
             move_effect: None,
             value: None,
             curve: None,
+            mapping: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -33552,6 +33824,7 @@ f 1 2 3
             move_effect: None,
             value: None,
             curve: None,
+            mapping: None,
         };
 
         let preset = effect_summary_to_preset(&effect).unwrap();
@@ -33789,6 +34062,7 @@ f 1 2 3
             move_effect: None,
             value: None,
             curve: None,
+            mapping: None,
         };
 
         let error = validate_effect_preset(&preset).unwrap_err();
@@ -33806,6 +34080,7 @@ f 1 2 3
             move_effect: None,
             value: None,
             curve: None,
+            mapping: None,
         };
         assert!(validate_effect_preset(&color_with_scalar_body)
             .unwrap_err()
@@ -33822,6 +34097,7 @@ f 1 2 3
             move_effect: None,
             value: None,
             curve: None,
+            mapping: None,
         };
         assert!(validate_effect_preset(&chaser_with_color_body)
             .unwrap_err()
@@ -33884,6 +34160,8 @@ f 1 2 3
             EffectParamsSnapshot::Chaser(sample_chaser_effect_request()),
             EffectParamsSnapshot::Move(sample_move_effect_request()),
             EffectParamsSnapshot::Value(sample_value_effect_request()),
+            EffectParamsSnapshot::Curve(sample_curve_effect_request()),
+            EffectParamsSnapshot::Mapping(sample_mapping_effect_request()),
         ];
 
         for snapshot in snapshots {
@@ -33947,12 +34225,20 @@ f 1 2 3
         let (wave_label, wave_json) = sample_effect_preset_json("wave").unwrap();
         assert_eq!(wave_label, SAMPLE_EFFECT_PRESET_WAVE_LABEL);
         assert_eq!(wave_json, SAMPLE_EFFECT_PRESET_WAVE_JSON);
-        assert_eq!(wave.effect_type, EffectKind::PositionWave);
+        assert_eq!(wave.effect_type, EffectKind::Mapping);
         assert_eq!(
-            wave.position_wave.as_ref().unwrap().target_group_ids,
+            wave.mapping.as_ref().unwrap().target_group_ids,
             vec!["Front".to_string()]
         );
-        assert_eq!(wave.position_wave.as_ref().unwrap().attribute, "Dimmer");
+        let wave_mapping = wave.mapping.as_ref().unwrap();
+        assert_eq!(wave_mapping.attribute, "Dimmer");
+        assert_eq!(wave_mapping.shape, protocol::LfoShape::Triangle);
+        assert_eq!(
+            wave_mapping.direction,
+            protocol::MappingEffectDirection::Forward
+        );
+        assert_eq!(wave_mapping.fixture_spread, 1.0);
+        assert_eq!(wave_mapping.repetitions, 1.0);
 
         let flash: EffectPreset =
             serde_json::from_str(include_str!("../../../samples/front-dimmer-flash.effect"))
@@ -34039,16 +34325,19 @@ f 1 2 3
         let (ball_label, ball_json) = sample_effect_preset_json("ball").unwrap();
         assert_eq!(ball_label, SAMPLE_EFFECT_PRESET_BALL_LABEL);
         assert_eq!(ball_json, SAMPLE_EFFECT_PRESET_BALL_JSON);
-        assert_eq!(ball.effect_type, EffectKind::PositionWave);
-        let ball_wave = ball.position_wave.as_ref().unwrap();
-        assert_eq!(ball_wave.target_group_ids, vec!["Front".to_string()]);
-        assert_eq!(ball_wave.attribute, "Dimmer");
-        assert_eq!(ball_wave.shape, protocol::LfoShape::Sine);
-        assert_eq!(ball_wave.direction, Vec3::default());
-        assert_eq!(ball_wave.speed, 1.0);
-        assert_eq!(ball_wave.wavelength, 3.0);
+        assert_eq!(ball.effect_type, EffectKind::Mapping);
+        let ball_mapping = ball.mapping.as_ref().unwrap();
+        assert_eq!(ball_mapping.target_group_ids, vec!["Front".to_string()]);
+        assert_eq!(ball_mapping.attribute, "Dimmer");
+        assert_eq!(ball_mapping.shape, protocol::LfoShape::Sine);
         assert_eq!(
-            ball_wave.clock_sync,
+            ball_mapping.direction,
+            protocol::MappingEffectDirection::Bounce
+        );
+        assert_eq!(ball_mapping.fixture_spread, 1.0);
+        assert_eq!(ball_mapping.repetitions, 1.0);
+        assert_eq!(
+            ball_mapping.clock_sync,
             Some(protocol::EffectClockSync { beats: 4.0 })
         );
 
@@ -34058,16 +34347,20 @@ f 1 2 3
         let (fan_label, fan_json) = sample_effect_preset_json("fan").unwrap();
         assert_eq!(fan_label, SAMPLE_EFFECT_PRESET_FAN_LABEL);
         assert_eq!(fan_json, SAMPLE_EFFECT_PRESET_FAN_JSON);
-        assert_eq!(fan.effect_type, EffectKind::PositionWave);
-        let fan_wave = fan.position_wave.as_ref().unwrap();
-        assert_eq!(fan_wave.target_group_ids, vec!["Front".to_string()]);
-        assert_eq!(fan_wave.attribute, "Pan");
-        assert_eq!(fan_wave.shape, protocol::LfoShape::Triangle);
-        assert_eq!(fan_wave.speed, 0.0);
-        assert_eq!(fan_wave.wavelength, 6.0);
-        assert_eq!(fan_wave.low, 24576);
-        assert_eq!(fan_wave.high, 40960);
-        assert_eq!(fan_wave.clock_sync, None);
+        assert_eq!(fan.effect_type, EffectKind::Mapping);
+        let fan_mapping = fan.mapping.as_ref().unwrap();
+        assert_eq!(fan_mapping.target_group_ids, vec!["Front".to_string()]);
+        assert_eq!(fan_mapping.attribute, "Pan");
+        assert_eq!(fan_mapping.shape, protocol::LfoShape::Triangle);
+        assert_eq!(
+            fan_mapping.direction,
+            protocol::MappingEffectDirection::Static
+        );
+        assert_eq!(fan_mapping.fixture_spread, 0.5);
+        assert_eq!(fan_mapping.repetitions, 1.0);
+        assert_eq!(fan_mapping.low, 24576);
+        assert_eq!(fan_mapping.high, 40960);
+        assert_eq!(fan_mapping.clock_sync, None);
 
         let (circle_label, circle_json) = sample_effect_preset_json("circle").unwrap();
         assert_eq!(circle_label, SAMPLE_EFFECT_PRESET_CIRCLE_LABEL);
@@ -34301,28 +34594,19 @@ f 1 2 3
         let (_, wave_json) = sample_effect_preset_json("wave").unwrap();
         let wave: EffectPreset = serde_json::from_str(wave_json).unwrap();
         validate_effect_preset(&wave).unwrap();
-        let wave_request = apply_position_wave_effect_target_override(
-            wave.position_wave.unwrap(),
-            &target_override,
-        );
-        validate_position_wave_effect_request(&wave_request).unwrap();
+        let wave_request =
+            apply_mapping_effect_target_override(wave.mapping.unwrap(), &target_override);
+        validate_mapping_effect_request(&wave_request).unwrap();
         assert_eq!(wave_request.fixture_ids, vec![42]);
         assert_eq!(wave_request.target_group_ids, vec!["floor".to_string()]);
         assert_eq!(wave_request.attribute, "ColorRed");
-        assert_eq!(
-            wave_request.video_targets,
-            vec![sample_video_effect_target(7)]
-        );
-        assert_eq!(wave_request.origin, Vec3::default());
+        assert_eq!(wave_request.shape, protocol::LfoShape::Triangle);
         assert_eq!(
             wave_request.direction,
-            Vec3 {
-                x: 1.0,
-                y: 0.0,
-                z: 0.0,
-            }
+            protocol::MappingEffectDirection::Forward
         );
-        assert_eq!(wave_request.wavelength, 4.0);
+        assert_eq!(wave_request.fixture_spread, 1.0);
+        assert_eq!(wave_request.repetitions, 1.0);
         assert_eq!(
             wave_request.clock_sync,
             Some(protocol::EffectClockSync { beats: 4.0 })
@@ -34372,22 +34656,19 @@ f 1 2 3
         let (_, ball_json) = sample_effect_preset_json("front_dimmer_ball").unwrap();
         let ball: EffectPreset = serde_json::from_str(ball_json).unwrap();
         validate_effect_preset(&ball).unwrap();
-        let ball_request = apply_position_wave_effect_target_override(
-            ball.position_wave.unwrap(),
-            &target_override,
-        );
-        validate_position_wave_effect_request(&ball_request).unwrap();
+        let ball_request =
+            apply_mapping_effect_target_override(ball.mapping.unwrap(), &target_override);
+        validate_mapping_effect_request(&ball_request).unwrap();
         assert_eq!(ball_request.fixture_ids, vec![42]);
         assert_eq!(ball_request.target_group_ids, vec!["floor".to_string()]);
         assert_eq!(ball_request.attribute, "ColorRed");
-        assert_eq!(
-            ball_request.video_targets,
-            vec![sample_video_effect_target(7)]
-        );
         assert_eq!(ball_request.shape, protocol::LfoShape::Sine);
-        assert_eq!(ball_request.direction, Vec3::default());
-        assert_eq!(ball_request.speed, 1.0);
-        assert_eq!(ball_request.wavelength, 3.0);
+        assert_eq!(
+            ball_request.direction,
+            protocol::MappingEffectDirection::Bounce
+        );
+        assert_eq!(ball_request.fixture_spread, 1.0);
+        assert_eq!(ball_request.repetitions, 1.0);
         assert_eq!(
             ball_request.clock_sync,
             Some(protocol::EffectClockSync { beats: 4.0 })
@@ -34396,21 +34677,19 @@ f 1 2 3
         let (_, fan_json) = sample_effect_preset_json("front-pan-fan").unwrap();
         let fan: EffectPreset = serde_json::from_str(fan_json).unwrap();
         validate_effect_preset(&fan).unwrap();
-        let fan_request = apply_position_wave_effect_target_override(
-            fan.position_wave.unwrap(),
-            &target_override,
-        );
-        validate_position_wave_effect_request(&fan_request).unwrap();
+        let fan_request =
+            apply_mapping_effect_target_override(fan.mapping.unwrap(), &target_override);
+        validate_mapping_effect_request(&fan_request).unwrap();
         assert_eq!(fan_request.fixture_ids, vec![42]);
         assert_eq!(fan_request.target_group_ids, vec!["floor".to_string()]);
         assert_eq!(fan_request.attribute, "ColorRed");
-        assert_eq!(
-            fan_request.video_targets,
-            vec![sample_video_effect_target(7)]
-        );
         assert_eq!(fan_request.shape, protocol::LfoShape::Triangle);
-        assert_eq!(fan_request.speed, 0.0);
-        assert_eq!(fan_request.wavelength, 6.0);
+        assert_eq!(
+            fan_request.direction,
+            protocol::MappingEffectDirection::Static
+        );
+        assert_eq!(fan_request.fixture_spread, 0.5);
+        assert_eq!(fan_request.repetitions, 1.0);
         assert_eq!(fan_request.low, 24576);
         assert_eq!(fan_request.high, 40960);
         assert_eq!(fan_request.clock_sync, None);
@@ -34863,6 +35142,7 @@ f 1 2 3
                 move_effect: None,
                 value: None,
                 curve: None,
+                mapping: None,
             },
             None,
         )
@@ -38463,6 +38743,7 @@ fn main() {
             add_move_effect,
             add_value_effect,
             add_curve_effect,
+            add_mapping_effect,
             update_lfo_effect,
             update_position_wave_effect,
             update_color_effect,
@@ -38470,6 +38751,7 @@ fn main() {
             update_move_effect,
             update_value_effect,
             update_curve_effect,
+            update_mapping_effect,
             save_node_graph,
             set_node_graph_enabled,
             remove_node_graph,

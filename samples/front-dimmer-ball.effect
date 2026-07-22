@@ -1,33 +1,26 @@
 {
   "version": 1,
-  "effect_type": "PositionWave",
+  "effect_type": "Mapping",
   "enabled": true,
   "lfo": null,
-  "position_wave": {
+  "position_wave": null,
+  "mapping": {
     "label": "Front Dimmer Ball",
     "fixture_ids": [],
     "target_group_ids": ["Front"],
     "attribute": "Dimmer",
-    "video_targets": [],
     "shape": "Sine",
-    "origin": {
-      "x": 0.0,
-      "y": 0.0,
-      "z": 0.0
-    },
-    "direction": {
-      "x": 0.0,
-      "y": 0.0,
-      "z": 0.0
-    },
-    "speed": 1.0,
-    "wavelength": 3.0,
+    "mode": "Absolute",
+    "direction": "Bounce",
+    "period_ms": 2000,
     "clock_sync": {
       "beats": 4.0
     },
     "low": 0,
     "high": 65535,
     "phase": 0.0,
+    "fixture_spread": 1.0,
+    "repetitions": 1.0,
     "blend_mode": "Override"
   }
 }

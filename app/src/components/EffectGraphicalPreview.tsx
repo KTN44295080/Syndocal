@@ -17,6 +17,7 @@ import type {
   EffectKind,
   EffectParamsSnapshot,
   EffectSummary,
+  MappingEffectRequest,
   MoveEffectRequest,
   ValueEffectRequest,
 } from "../types";
@@ -39,6 +40,7 @@ interface PreviewModel {
   move?: MoveEffectRequest | null;
   value?: ValueEffectRequest | null;
   curve?: CurveEffectRequest | null;
+  mapping?: MappingEffectRequest | null;
 }
 
 const modelFromParams = (params: EffectParamsSnapshot): PreviewModel => {
@@ -66,7 +68,16 @@ const modelFromParams = (params: EffectParamsSnapshot): PreviewModel => {
   if ("Chaser" in params) return { kind: "Chaser", label: params.Chaser.label, chaser: params.Chaser };
   if ("Move" in params) return { kind: "Move", label: params.Move.label, move: params.Move };
   if ("Value" in params) return { kind: "Value", label: params.Value.label, value: params.Value };
-  return { kind: "Curve", label: params.Curve.label, curve: params.Curve };
+  if ("Curve" in params) return { kind: "Curve", label: params.Curve.label, curve: params.Curve };
+  return {
+    kind: "Mapping",
+    label: params.Mapping.label,
+    shape: params.Mapping.shape,
+    low: params.Mapping.low,
+    high: params.Mapping.high,
+    phase: params.Mapping.phase,
+    mapping: params.Mapping,
+  };
 };
 
 const modelFromEffect = (effect: EffectSummary): PreviewModel => ({
@@ -81,10 +92,12 @@ const modelFromEffect = (effect: EffectSummary): PreviewModel => ({
   move: effect.move_effect,
   value: effect.value,
   curve: effect.curve,
+  mapping: effect.mapping,
 });
 
 const effectKindLabel = (kind: EffectKind) => {
-  if (kind === "PositionWave") return "Mapping";
+  if (kind === "PositionWave") return "Spatial Wave";
+  if (kind === "Mapping") return "Fixture Mapping";
   return kind;
 };
 
@@ -148,7 +161,7 @@ export function EffectGraphicalPreview(props: EffectGraphicalPreviewProps) {
           data-preview-kind={current().kind}
           data-effect-label={current().label}
         >
-          <Show when={current().kind === "Lfo" || current().kind === "PositionWave"}>
+          <Show when={current().kind === "Lfo" || current().kind === "PositionWave" || current().kind === "Mapping"}>
             <svg
               class="effectGraphicalCurve"
               viewBox="0 0 100 32"
@@ -157,6 +170,9 @@ export function EffectGraphicalPreview(props: EffectGraphicalPreviewProps) {
               data-lfo-low={current().low}
               data-lfo-high={current().high}
               data-lfo-phase={current().phase}
+              data-mapping-direction={current().mapping?.direction}
+              data-mapping-repetitions={current().mapping?.repetitions}
+              data-mapping-fixture-order={current().mapping?.fixture_ids.join(",")}
               aria-hidden="true"
             >
               <line x1="0" y1="16" x2="100" y2="16" />
@@ -166,6 +182,9 @@ export function EffectGraphicalPreview(props: EffectGraphicalPreviewProps) {
               <b>{current().shape}</b>
               <span>{Math.round(current().low ?? 0)}–{Math.round(current().high ?? 0)}</span>
               <span>φ {Math.round((current().phase ?? 0) * 100)}%</span>
+              <Show when={current().mapping}>
+                {(mapping) => <span>{mapping().repetitions.toFixed(2)}× order</span>}
+              </Show>
             </span>
           </Show>
 

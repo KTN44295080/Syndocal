@@ -53,7 +53,7 @@ Syndocal は `target/debug/syndocal.exe`（2026-07-18 ビルド = シリーズ�
 
 1. 3D可視化（Easy View 相当のオペレータ向け 3D viewport）が無い（設計上外部化）
 2. SSL 20,000+ 規模の統合灯体ライブラリ/検索UXが無い（GDTF + GDTF Share 経路のみ）
-3. FXジェネレータの独立エンジン幅（Mappings / Colour Mappings 相当）とプリセット量で劣る。Curveは2026-07-23のT19-Aで独立body/runtime/editorへ移行済み
+3. FXジェネレータの独立エンジン幅（特にimage-driven Colour Mappings）とプリセット量で劣る。CurveはT19-A、fixture-order MappingはT19-Bで独立body/runtime/editorへ移行済み
 4. シーン単位 Live modifier 群（speed / phase / size / direction / segment / flash / strobe / solo の即時操作）が不足
 5. Syndocal側は13タスクを自動計測するが、Daslight同一タスク比較は3件のみ（シーン配置の旧2 vs 1はT18再計測で1 vs 1へ解消）
 6. detachable workspace が Stage / Timeline の2ペイン限定（Daslight は任意ペイン）

@@ -699,6 +699,39 @@ const fxVisualizationCurve: EffectSummary = {
   },
 };
 
+const fxVisualizationMapping: EffectSummary = {
+  ...cueRecallEffect,
+  id: 407,
+  label: "T19 Fixture Order Mapping",
+  effect_type: "Mapping",
+  fixture_ids: [3, 1, 2],
+  target_group_ids: [],
+  video_targets: [],
+  shape: "Triangle",
+  period_ms: 2_600,
+  clock_sync: { beats: 4 },
+  low: 2_048,
+  high: 63_000,
+  phase: 0.2,
+  mapping: {
+    label: "T19 Fixture Order Mapping",
+    fixture_ids: [3, 1, 2],
+    target_group_ids: [],
+    attribute: "Dimmer",
+    shape: "Triangle",
+    mode: "Absolute",
+    direction: "Bounce",
+    period_ms: 2_600,
+    clock_sync: { beats: 4 },
+    low: 2_048,
+    high: 63_000,
+    phase: 0.2,
+    fixture_spread: 0.8,
+    repetitions: 1.5,
+    blend_mode: "Override",
+  },
+};
+
 const fxVisualizationChaser: EffectSummary = {
   ...cueRecallEffect,
   id: 405,
@@ -742,6 +775,7 @@ const fxVisualizationEffects: EffectSummary[] = [
   fxVisualizationMove,
   fxVisualizationValue,
   fxVisualizationCurve,
+  fxVisualizationMapping,
   fxVisualizationChaser,
 ];
 
@@ -832,6 +866,7 @@ const fxVisualizationCue: CueSummary = {
     { effect_id: fxVisualizationMove.id, enabled: true, params: { Move: structuredClone(fxVisualizationMove.move_effect!) } },
     { effect_id: fxVisualizationValue.id, enabled: true, params: { Value: structuredClone(fxVisualizationValue.value!) } },
     { effect_id: fxVisualizationCurve.id, enabled: true, params: { Curve: structuredClone(fxVisualizationCurve.curve!) } },
+    { effect_id: fxVisualizationMapping.id, enabled: true, params: { Mapping: structuredClone(fxVisualizationMapping.mapping!) } },
     { effect_id: fxVisualizationChaser.id, enabled: true, params: { Chaser: structuredClone(fxVisualizationChaser.chaser!) } },
   ],
 };

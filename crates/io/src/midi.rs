@@ -2210,6 +2210,7 @@ mod tests {
                 move_effect: None,
                 value: None,
                 curve: None,
+                mapping: None,
             }],
             ..EngineSnapshot::default()
         };

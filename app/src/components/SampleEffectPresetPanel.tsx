@@ -32,7 +32,7 @@ interface SampleEffectPresetOption {
   value: SampleEffectPreset;
   label: string;
   family: EffectRecipeFamily;
-  engine: "LFO" | "Wave" | "Color" | "Chaser" | "Move" | "Curve";
+  engine: "LFO" | "Mapping" | "Color" | "Chaser" | "Move" | "Curve";
   target: string;
   description: string;
   supportsTarget: boolean;
@@ -74,9 +74,9 @@ export const sampleEffectPresetOptions: SampleEffectPresetOption[] = [
     value: "wave",
     label: "Wave",
     family: "MAPPINGS",
-    engine: "Wave",
+    engine: "Mapping",
     target: "Dimmer",
-    description: "Position wave across the Front group with beat-synced travel.",
+    description: "Beat-synced dimmer function distributed across authored fixture order.",
     supportsTarget: true,
   },
   {
@@ -120,18 +120,18 @@ export const sampleEffectPresetOptions: SampleEffectPresetOption[] = [
     value: "ball",
     label: "Ball",
     family: "MAPPINGS",
-    engine: "Wave",
+    engine: "Mapping",
     target: "Dimmer",
-    description: "Radial dimmer ball expanding from the stage origin.",
+    description: "Bouncing dimmer function distributed across authored fixture order.",
     supportsTarget: true,
   },
   {
     value: "fan",
     label: "Fan",
     family: "MAPPINGS",
-    engine: "Wave",
+    engine: "Mapping",
     target: "Pan",
-    description: "Position-based pan fan for moving-head spread looks.",
+    description: "Static pan fan distributed deterministically across authored fixture order.",
     supportsTarget: true,
   },
   {

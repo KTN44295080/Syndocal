@@ -219,7 +219,7 @@ export interface RemoteControlStatus {
 
 export type ClockSource = "Manual" | "Tap" | "MidiClock" | "MidiTimecode" | "Ltc" | "AbletonLink";
 export type LfoShape = "Sine" | "Cosine" | "Triangle" | "Saw" | "Square" | "Random" | "Perlin";
-export type EffectKind = "Lfo" | "PositionWave" | "Color" | "Chaser" | "Move" | "Value" | "Curve";
+export type EffectKind = "Lfo" | "PositionWave" | "Color" | "Chaser" | "Move" | "Value" | "Curve" | "Mapping";
 export type EffectBlendMode = "Override" | "Add" | "Multiply";
 export type ColorEffectAlgorithm = "Cycle" | "Bounce" | "Sequence" | "Random";
 export type ColorEffectInterpolation = "Rgb" | "HsvShortest" | "HsvLongest";
@@ -230,6 +230,7 @@ export type MoveDirection = "Forward" | "Reverse" | "Bounce";
 export type ValueEffectInterpolation = "Step" | "Line" | "Smooth";
 export type ValueEffectMode = "Absolute" | "Relative";
 export type ValueEffectDirection = "Forward" | "Reverse" | "Bounce";
+export type MappingEffectDirection = "Forward" | "Reverse" | "Bounce" | "Static";
 export type NodeGraphNodeKind = "Lfo" | "PositionWave" | "Audio" | "Transform" | "Output";
 export type AudioSpectrumBand = "Bass" | "Mid" | "High";
 export type AudioSpectrumSource = "Timeline" | "Live";
@@ -1583,7 +1584,8 @@ export type EffectParamsSnapshot =
   | { Chaser: ChaserEffectRequest }
   | { Move: MoveEffectRequest }
   | { Value: ValueEffectRequest }
-  | { Curve: CurveEffectRequest };
+  | { Curve: CurveEffectRequest }
+  | { Mapping: MappingEffectRequest };
 
 export interface CueEffectTarget {
   effect_id: number;
@@ -1923,6 +1925,24 @@ export interface CurveEffectRequest {
   blend_mode: EffectBlendMode;
 }
 
+export interface MappingEffectRequest {
+  label: string;
+  fixture_ids: number[];
+  target_group_ids: string[];
+  attribute: string;
+  shape: LfoShape;
+  mode: ValueEffectMode;
+  direction: MappingEffectDirection;
+  period_ms: number;
+  clock_sync?: EffectClockSync | null;
+  low: number;
+  high: number;
+  phase: number;
+  fixture_spread: number;
+  repetitions: number;
+  blend_mode: EffectBlendMode;
+}
+
 export interface VideoEffectTarget {
   layer_ids: number[];
   param: VideoParam;
@@ -1956,6 +1976,7 @@ export interface EffectSummary {
   move_effect?: MoveEffectRequest | null;
   value?: ValueEffectRequest | null;
   curve?: CurveEffectRequest | null;
+  mapping?: MappingEffectRequest | null;
 }
 
 export interface EffectPreset {
@@ -1969,6 +1990,7 @@ export interface EffectPreset {
   move_effect?: MoveEffectRequest | null;
   value?: ValueEffectRequest | null;
   curve?: CurveEffectRequest | null;
+  mapping?: MappingEffectRequest | null;
 }
 
 export type DmxOutputProtocol =

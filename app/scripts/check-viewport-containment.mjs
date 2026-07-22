@@ -5300,9 +5300,9 @@ function hasExpectedMappingWaveDraft(result) {
     result.visibleEffectEditorCount > 0 &&
     result.effectTargetHintCount >= 1 &&
     result.effectTargetHintText.toLowerCase().includes("map selection") &&
-    result.effectTargetHintText.toLowerCase().includes("wave") &&
+    result.effectTargetHintText.toLowerCase().includes("mapping") &&
     result.effectTargetValue === "selection" &&
-    result.effectTypeValue === "PositionWave" &&
+    result.effectTypeValue === "Mapping" &&
     result.effectCommonAttributeValue.length > 0
   );
 }
@@ -12471,7 +12471,7 @@ const fxVisualRecipeFamilies = [
   ["MOVE FX", "Move", 1],
   ["VALUE FX", "Value", 5],
   ["CURVE FX", "Curve", 1],
-  ["MAPPINGS", "PositionWave", 3],
+  ["MAPPINGS", "Mapping", 3],
   ["COLOR MAPPINGS", "Color", 1],
 ];
 
@@ -12555,6 +12555,9 @@ async function readFxVisualSurface(client) {
         valuePoints: curve?.getAttribute("data-value-points") ?? "",
         valueInterpolation: curve?.getAttribute("data-value-interpolation") ?? "",
         curvePoints: curve?.getAttribute("data-curve-points") ?? "",
+        mappingDirection: curve?.getAttribute("data-mapping-direction") ?? "",
+        mappingRepetitions: curve?.getAttribute("data-mapping-repetitions") ?? "",
+        mappingFixtureOrder: curve?.getAttribute("data-mapping-fixture-order") ?? "",
         chaserStepCount: chaser?.getAttribute("data-step-count") ?? "",
         chaserActiveStepCount: chaser?.getAttribute("data-active-step-count") ?? "",
       };
@@ -12943,7 +12946,7 @@ async function runFxVisualViewport(client, viewport) {
   await waitForApp(client);
   await waitForClientCondition(
     client,
-    "document.querySelectorAll('.effectFamilyChooser button').length === 9 && document.querySelectorAll('.effectListRows .effectGraphicalPreview').length === 6",
+    "document.querySelectorAll('.effectFamilyChooser button').length === 9 && document.querySelectorAll('.effectListRows .effectGraphicalPreview').length === 7",
     "T19 FX visualization fixture",
   );
   await sleep(120);
@@ -12961,7 +12964,7 @@ async function runFxVisualViewport(client, viewport) {
         return rectangle.width > 0 && rectangle.height > 0 && style.display !== "none" && style.visibility !== "hidden";
       };
       const typeSelect = [...document.querySelectorAll(".effectEditor select")]
-        .find((candidate) => [...candidate.options].some((option) => option.value === "PositionWave"));
+        .find((candidate) => [...candidate.options].some((option) => option.value === "Mapping"));
       const active = document.querySelector('.effectFamilyChooser button.active[aria-pressed="true"]');
       return {
         family: name,
@@ -12979,6 +12982,13 @@ async function runFxVisualViewport(client, viewport) {
         visibleCurveTangentInputCount: [...document.querySelectorAll('.curveEffectPointRow input[aria-label^="In"], .curveEffectPointRow input[aria-label^="Out"]')].filter(isVisible).length,
         curveEditorHorizontalOverflowPx: (() => {
           const editor = document.querySelector(".curveEffectEditor");
+          return editor ? Math.max(0, editor.scrollWidth - editor.clientWidth) : 0;
+        })(),
+        visibleMappingEditorCount: [...document.querySelectorAll(".mappingEffectEditor")].filter(isVisible).length,
+        visibleMappingOrderRowCount: [...document.querySelectorAll(".mappingEffectOrderList li")].filter(isVisible).length,
+        visibleMappingRepetitionInputCount: [...document.querySelectorAll('.mappingEffectEditor input[aria-label^="Mapping repetitions"]')].filter(isVisible).length,
+        mappingEditorHorizontalOverflowPx: (() => {
+          const editor = document.querySelector(".mappingEffectEditor");
           return editor ? Math.max(0, editor.scrollWidth - editor.clientWidth) : 0;
         })(),
       };
@@ -13046,7 +13056,7 @@ async function runFxVisualViewport(client, viewport) {
 
   await client.send("Page.navigate", { url: fixtureUrl("fx-visual") });
   await waitForApp(client);
-  await waitForClientCondition(client, "document.querySelectorAll('.effectListRows .effectGraphicalPreview').length === 6", "T19 rack reload");
+  await waitForClientCondition(client, "document.querySelectorAll('.effectListRows .effectGraphicalPreview').length === 7", "T19 rack reload");
   await clickVisibleByText(client, ".effectItemSummary", "T16 Diamond Move");
   await waitForClientCondition(client, "Boolean(document.querySelector('.moveEffectPathCanvas .moveEffectPointHandle'))", "T16 Move editor");
   await evaluatePageFunction(client, async () => {
@@ -13082,7 +13092,11 @@ async function runFxVisualViewport(client, viewport) {
       const curve = recipeFamilies.find((entry) => entry.family === "CURVE FX");
       return curve?.effectType === "Curve" && curve.visibleCurveEditorCount === 1 && curve.visibleCurvePointRowCount === 2 && curve.visibleCurveTangentInputCount === 4 && curve.curveEditorHorizontalOverflowPx <= 1;
     }],
-    ["rackSixActualPreviews", () => JSON.stringify(initial.previewKinds) === JSON.stringify(["Lfo", "Color", "Move", "Value", "Curve", "Chaser"])],
+    ["independentMappingEditorReachable", () => {
+      const mapping = recipeFamilies.find((entry) => entry.family === "MAPPINGS");
+      return mapping?.effectType === "Mapping" && mapping.visibleMappingEditorCount === 1 && mapping.visibleMappingOrderRowCount >= 1 && mapping.visibleMappingRepetitionInputCount === 2 && mapping.mappingEditorHorizontalOverflowPx <= 1;
+    }],
+    ["rackSevenActualPreviews", () => JSON.stringify(initial.previewKinds) === JSON.stringify(["Lfo", "Color", "Move", "Value", "Curve", "Mapping", "Chaser"])],
     ["rackPreviewDimensions", () => initial.previews.every((preview) => preview.width >= 72 && preview.height >= 34 && preview.containedInItem && preview.horizontalOverflowPx <= 1)],
     ["rackNoHorizontalOverflow", () => initial.rackHorizontalOverflowPx <= 1 && initial.effectListHorizontalOverflowPx <= 1],
     ["rackVerticalScrollReachesLastPreview", () => initial.effectListVerticalOverflowPx <= 1 || (["auto", "scroll"].includes(initial.effectListOverflowY) && initial.lastPreviewReachable)],
@@ -13091,9 +13105,10 @@ async function runFxVisualViewport(client, viewport) {
     ["movePreviewUsesAuthoredPath", () => previewByKind.Move?.movePointCount === "4" && previewByKind.Move?.movePoints === "0.5:0.08,0.92:0.5,0.5:0.92,0.08:0.5" && previewByKind.Move?.moveCenter === "0.46:0.56" && previewByKind.Move?.moveSize === "0.78:0.62" && previewByKind.Move?.moveRotation === "18" && previewByKind.Move?.moveCoordinateMode === "Absolute" && previewByKind.Move?.movePreviewBase === "absolute" && previewByKind.Move?.moveControlPath.length > 20 && previewByKind.Move?.moveOutputPath.length > 20 && previewByKind.Move?.moveControlPath !== previewByKind.Move?.moveOutputPath && previewByKind.Move?.moveOutputInViewBox],
     ["valuePreviewUsesAuthoredEnvelope", () => previewByKind.Value?.valuePoints === "0:0.12,0.22:0.88,0.58:0.42,1:0.76" && previewByKind.Value?.valueInterpolation === "Smooth" && previewByKind.Value?.curvePath.length > 20],
     ["curvePreviewUsesAuthoredTangents", () => previewByKind.Curve?.curvePoints === "0:0.08:0:2.4,0.42:0.92:0.2:-0.8,1:0.22:-1.6:0" && previewByKind.Curve?.curvePath.length > 20],
+    ["mappingPreviewUsesAuthoredOrder", () => previewByKind.Mapping?.shape === "Triangle" && previewByKind.Mapping?.low === "2048" && previewByKind.Mapping?.high === "63000" && previewByKind.Mapping?.phase === "0.2" && previewByKind.Mapping?.mappingDirection === "Bounce" && previewByKind.Mapping?.mappingRepetitions === "1.5" && previewByKind.Mapping?.mappingFixtureOrder === "3,1,2" && previewByKind.Mapping?.curvePath.length > 20],
     ["chaserPreviewUsesAuthoredSteps", () => previewByKind.Chaser?.chaserStepCount === "4" && previewByKind.Chaser?.chaserActiveStepCount === "2"],
     ["stepsNavigation", () => stepsNavigation.cueEditOpened && stepsNavigation.cueRecallOpened && stepsNavigation.cueDrawerVisible && stepsNavigation.cueLabelVisible && stepsNavigation.stepEditorCount === 1],
-    ["cueOwnedParamsRendered", () => stepsNavigation.ownedParamsChipCount === 6 && JSON.stringify(stepsNavigation.ownedPreviewKinds) === JSON.stringify(["Lfo", "Color", "Move", "Value", "Curve", "Chaser"]) && stepsNavigation.ownedLfo.label === "Cue-owned Sine Curve" && stepsNavigation.ownedLfo.low === "8192" && stepsNavigation.ownedLfo.high === "61440" && stepsNavigation.ownedLfo.phase === "0.25"],
+    ["cueOwnedParamsRendered", () => stepsNavigation.ownedParamsChipCount === 7 && JSON.stringify(stepsNavigation.ownedPreviewKinds) === JSON.stringify(["Lfo", "Color", "Move", "Value", "Curve", "Mapping", "Chaser"]) && stepsNavigation.ownedLfo.label === "Cue-owned Sine Curve" && stepsNavigation.ownedLfo.low === "8192" && stepsNavigation.ownedLfo.high === "61440" && stepsNavigation.ownedLfo.phase === "0.25"],
     ["superSceneNavigation", () => superSceneNavigation.breadcrumbVisible && superSceneNavigation.childLabel === "T16 Owned FX Cue" && superSceneNavigation.childLayerCount === 3 && superSceneNavigation.showExitButton === "Show"],
     ["moveThreePxIsClick", () => close(subThreshold.before?.x, subThreshold.during?.x) && close(subThreshold.before?.y, subThreshold.during?.y) && subThreshold.during?.ghostCount === 0 && subThreshold.during?.readoutCount === 0 && close(subThreshold.before?.x, subThreshold.after?.x) && close(subThreshold.before?.y, subThreshold.after?.y)],
     ["moveSixPxShowsGhostAndReadout", () => escapeRollback.during?.ghostCount === 1 && escapeRollback.during?.readoutCount === 1 && /X\s+[0-9.]+\s+·\s+Y\s+[0-9.]+/.test(escapeRollback.during?.readout ?? "") && !close(escapeRollback.before?.x, escapeRollback.during?.x)],

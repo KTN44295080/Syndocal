@@ -10,6 +10,7 @@ import { ArtRdmPanel } from "./components/ArtRdmPanel";
 import { ChaserEffectEditorPanel } from "./components/ChaserEffectEditorPanel";
 import { ColorEffectEditorPanel, defaultColorEffectStops } from "./components/ColorEffectEditorPanel";
 import { CurveEffectEditorPanel } from "./components/CurveEffectEditorPanel";
+import { MappingEffectEditorPanel } from "./components/MappingEffectEditorPanel";
 import { CustomProfileEditorPanel } from "./components/CustomProfileEditorPanel";
 import {
   type DmxAddressCell,
@@ -218,6 +219,8 @@ import type {
   LiveAudioInputStartRequest,
   LiveAudioInputStatus,
   LfoEffectRequest,
+  MappingEffectDirection,
+  MappingEffectRequest,
   MidiControlAction,
   MidiControlMapping,
   MidiControlMessage,
@@ -724,6 +727,7 @@ const projectMutationCommands = new Set([
   "add_move_effect",
   "add_value_effect",
   "add_curve_effect",
+  "add_mapping_effect",
   "update_lfo_effect",
   "update_position_wave_effect",
   "update_color_effect",
@@ -731,6 +735,7 @@ const projectMutationCommands = new Set([
   "update_move_effect",
   "update_value_effect",
   "update_curve_effect",
+  "update_mapping_effect",
   "save_node_graph",
   "set_node_graph_enabled",
   "remove_node_graph",
@@ -908,6 +913,8 @@ const authoredBeatsForEffectClock = (effect: EffectSummary) => {
       return effect.value?.clock_sync?.beats ?? effect.clock_sync?.beats ?? null;
     case "Curve":
       return effect.curve?.clock_sync?.beats ?? effect.clock_sync?.beats ?? null;
+    case "Mapping":
+      return effect.mapping?.clock_sync?.beats ?? effect.clock_sync?.beats ?? null;
     default:
       return effect.clock_sync?.beats ?? null;
   }
@@ -1425,6 +1432,10 @@ export default function App() {
   const [curveMode, setCurveMode] = createSignal<ValueEffectMode>("Absolute");
   const [curveDirection, setCurveDirection] = createSignal<ValueEffectDirection>("Forward");
   const [curveFixtureSpread, setCurveFixtureSpread] = createSignal(0);
+  const [mappingMode, setMappingMode] = createSignal<ValueEffectMode>("Absolute");
+  const [mappingDirection, setMappingDirection] = createSignal<MappingEffectDirection>("Forward");
+  const [mappingFixtureSpread, setMappingFixtureSpread] = createSignal(1);
+  const [mappingRepetitions, setMappingRepetitions] = createSignal(1);
   const [effectLow, setEffectLow] = createSignal(0);
   const [effectHigh, setEffectHigh] = createSignal(65535);
   const [effectPhase, setEffectPhase] = createSignal(0);
@@ -2492,6 +2503,25 @@ export default function App() {
   const selectedMappingFixtures = createMemo(() => {
     const selectedIds = selectedMappingFixtureIdSet();
     return snapshot().fixtures.filter((fixture) => selectedIds.has(fixture.id));
+  });
+  const orderedMappingSelectionFixtures = createMemo(() => {
+    const fixturesById = new Map(snapshot().fixtures.map((fixture) => [fixture.id, fixture]));
+    return selectedMappingFixtureIds().flatMap((fixtureId) => {
+      const fixture = fixturesById.get(fixtureId);
+      return fixture ? [fixture] : [];
+    });
+  });
+  const mappingEffectOrderFixtures = createMemo(() => {
+    if (effectTargetMode() === "selection") return orderedMappingSelectionFixtures();
+    if (effectTargetMode() === "fixture") {
+      const fixture = selectedFixture();
+      return fixture ? [fixture] : [];
+    }
+    if (effectTargetMode() === "group") {
+      const groupIds = new Set(parseGroupIds(effectTargetGroups()));
+      return snapshot().fixtures.filter((fixture) => fixture.group_ids.some((groupId) => groupIds.has(groupId)));
+    }
+    return [];
   });
   const selectedMappingFlagState = createMemo(() => {
     const fixtures = selectedMappingFixtures();
@@ -3562,6 +3592,7 @@ export default function App() {
     if (nextType === "Move") return "MOVE FX";
     if (nextType === "Value") return "VALUE FX";
     if (nextType === "Curve") return "CURVE FX";
+    if (nextType === "Mapping") return "MAPPINGS";
     if (nextType === "PositionWave") return "MAPPINGS";
     return "CURVE FX";
   };
@@ -3600,6 +3631,16 @@ export default function App() {
       setEffectVideoTargetLinked(false);
       if (effectTargetMode() === "video") setEffectTargetMode("fixture");
       if (!startsNewEffect) setMessage("Prepared an independent cubic Curve draft for the current scalar attribute.");
+    } else if (nextType === "Mapping") {
+      setEffectVideoTargetLinked(false);
+      if (effectTargetMode() === "video") setEffectTargetMode("fixture");
+      if (nextType !== previousType) {
+        setMappingMode("Absolute");
+        setMappingDirection("Forward");
+        setMappingFixtureSpread(1);
+        setMappingRepetitions(1);
+      }
+      if (!startsNewEffect) setMessage("Prepared a fixture-order Mapping draft for the current scalar attribute.");
     }
   };
   const effectTargetSummary = createMemo(() => {
@@ -3664,6 +3705,10 @@ export default function App() {
       const clock = sync === null ? `${effectPeriod()}ms` : `${sync} beat`;
       return `Curve ${curvePoints().length} points / Cubic / ${curveMode()} / ${curveDirection()} / ${clock}`;
     }
+    if (effectType() === "Mapping") {
+      const clock = sync === null ? `${effectPeriod()}ms` : `${sync} beat`;
+      return `Mapping ${mappingEffectOrderFixtures().length} fixtures / ${effectShape()} / ${mappingDirection()} / ${mappingRepetitions().toFixed(2)}× / ${clock}`;
+    }
     return sync === null ? `LFO ${effectShape()} / ${effectPeriod()}ms` : `LFO ${effectShape()} / ${sync} beat`;
   });
   const currentValueDraftError = createMemo<string>(() => {
@@ -3697,6 +3742,15 @@ export default function App() {
       if (previous !== null && point.position <= previous) return "Curve positions must be strictly increasing.";
       previous = point.position;
     }
+    return "";
+  });
+  const currentMappingDraftError = createMemo<string>(() => {
+    if (!Number.isFinite(effectPeriod()) || effectPeriod() < 10) return "Mapping period must be at least 10 ms.";
+    const clockSyncBeats = effectClockSyncBeats();
+    if (clockSyncBeats !== null && (!Number.isFinite(clockSyncBeats) || clockSyncBeats <= 0)) return "Mapping clock beats must be positive.";
+    if (!Number.isFinite(effectPhase()) || effectPhase() < 0 || effectPhase() > 1) return "Mapping phase must be within 0..1.";
+    if (!Number.isFinite(mappingFixtureSpread()) || mappingFixtureSpread() < 0 || mappingFixtureSpread() > 1) return "Mapping fixture spread must be within 0..1.";
+    if (!Number.isFinite(mappingRepetitions()) || mappingRepetitions() < 0.25 || mappingRepetitions() > 16) return "Mapping repetitions must be within 0.25..16.";
     return "";
   });
   const editingEffectSummary = createMemo<EffectSummary | null>(() => {
@@ -5979,13 +6033,6 @@ export default function App() {
     if (!prepareMappingSelectionEffectTarget()) {
       return;
     }
-    const minX = Math.min(...fixtures.map((fixture) => fixture.position.x));
-    const maxX = Math.max(...fixtures.map((fixture) => fixture.position.x));
-    const minZ = Math.min(...fixtures.map((fixture) => fixture.position.z));
-    const maxZ = Math.max(...fixtures.map((fixture) => fixture.position.z));
-    const width = Math.abs(maxX - minX);
-    const depth = Math.abs(maxZ - minZ);
-    const span = Math.max(width, depth);
     const controls = commonAttributeControls(fixtures);
     const preferredAttribute =
       controls.find((control) => ["dimmer", "intensity", "masterintensity"].includes(control.attribute.toLowerCase())) ??
@@ -5993,20 +6040,21 @@ export default function App() {
     if (preferredAttribute) {
       setEffectAttribute(preferredAttribute.attribute);
     }
-    selectEffectType("PositionWave");
+    selectEffectType("Mapping");
     setEffectShape("Sine");
     setEffectBlendMode("Override");
     setEffectLow(0);
     setEffectHigh(65_535);
     setEffectPhase(0);
-    setWaveSpeed(1);
-    setWaveWavelength(Number(clampRange(span > 0 ? span / 2 : 2, 1, 8).toFixed(2)));
-    setWaveDirectionPreset(width >= depth ? 1 : 0, 0, depth > width ? 1 : 0);
+    setMappingMode("Absolute");
+    setMappingDirection("Forward");
+    setMappingFixtureSpread(1);
+    setMappingRepetitions(1);
     setEffectClockSyncPreset(1);
     setMessage(
       preferredAttribute
-        ? `Prepared a position wave draft for ${fixtures.length} mapped fixture${fixtures.length === 1 ? "" : "s"} on ${preferredAttribute.attribute}.`
-        : `Prepared a position wave draft for ${fixtures.length} mapped fixture${fixtures.length === 1 ? "" : "s"}, but no common light attribute was found.`,
+        ? `Prepared a fixture-order Mapping draft for ${fixtures.length} mapped fixture${fixtures.length === 1 ? "" : "s"} on ${preferredAttribute.attribute}.`
+        : `Prepared a fixture-order Mapping draft for ${fixtures.length} mapped fixture${fixtures.length === 1 ? "" : "s"}, but no common light attribute was found.`,
     );
   };
 
@@ -10680,7 +10728,7 @@ export default function App() {
           : family === "VALUE FX"
             ? "Value"
           : family === "MAPPINGS"
-            ? "PositionWave"
+            ? "Mapping"
             : family === "CURVE FX"
               ? "Curve"
               : "Lfo";
@@ -12718,6 +12766,19 @@ export default function App() {
           return !selectedFixture() || !selectedEffectAttribute();
       }
     }
+    if (effectType() === "Mapping") {
+      if (currentMappingDraftError()) return true;
+      if (effectVideoTargetLinked() || effectTargetMode() === "video") return true;
+      switch (effectTargetMode()) {
+        case "selection":
+          return orderedMappingSelectionFixtures().length === 0 || !selectedEffectAttribute();
+        case "group":
+          return parseGroupIds(effectTargetGroups()).length === 0 || !selectedEffectAttribute();
+        case "fixture":
+        default:
+          return !selectedFixture() || !selectedEffectAttribute();
+      }
+    }
     switch (effectTargetMode()) {
       case "video":
         return snapshot().video.layers.length === 0;
@@ -12738,7 +12799,8 @@ export default function App() {
     | { effectType: "Chaser"; request: ChaserEffectRequest }
     | { effectType: "Move"; request: MoveEffectRequest }
     | { effectType: "Value"; request: ValueEffectRequest }
-    | { effectType: "Curve"; request: CurveEffectRequest };
+    | { effectType: "Curve"; request: CurveEffectRequest }
+    | { effectType: "Mapping"; request: MappingEffectRequest };
 
   const buildEffectRequestFromForm = (): EffectRequestDraft | null => {
     const fixture = selectedFixture();
@@ -12920,6 +12982,35 @@ export default function App() {
         },
       };
     }
+    if (effectType() === "Mapping") {
+      const error = currentMappingDraftError();
+      if (error) {
+        setMessage(error);
+        return null;
+      }
+      return {
+        effectType: "Mapping",
+        request: {
+          label: `${lightAttribute} Mapping`,
+          fixture_ids: targetMode === "selection"
+            ? orderedMappingSelectionFixtures().map((candidate) => candidate.id)
+            : requestBase.fixture_ids,
+          target_group_ids: requestBase.target_group_ids,
+          attribute: lightAttribute,
+          shape: effectShape(),
+          mode: mappingMode(),
+          direction: mappingDirection(),
+          period_ms: Math.round(effectPeriod()),
+          clock_sync: requestBase.clock_sync,
+          low: effectLow(),
+          high: effectHigh(),
+          phase: effectPhase(),
+          fixture_spread: mappingFixtureSpread(),
+          repetitions: mappingRepetitions(),
+          blend_mode: effectBlendMode(),
+        },
+      };
+    }
     if (colorEffect) {
       if (!colorEffectDraftValid()) {
         setMessage("Color effects require 2 to 8 ordered palette stops with valid colors.");
@@ -12982,9 +13073,11 @@ export default function App() {
                 ? await invoke<number>("add_value_effect", { request: draft.request })
                 : draft.effectType === "Curve"
                   ? await invoke<number>("add_curve_effect", { request: draft.request })
+                : draft.effectType === "Mapping"
+                  ? await invoke<number>("add_mapping_effect", { request: draft.request })
                 : await invoke<number>("add_move_effect", { request: draft.request });
       setEditingEffectId(null);
-      setMessage(`Added ${draft.effectType === "PositionWave" ? "position wave" : draft.effectType === "Color" ? "color" : draft.effectType === "Chaser" ? "Chaser" : draft.effectType === "Move" ? "Move" : draft.effectType === "Value" ? "Value" : draft.effectType === "Curve" ? "Curve" : "LFO"} effect ${effectId}`);
+      setMessage(`Added ${draft.effectType === "PositionWave" ? "position wave" : draft.effectType === "Color" ? "color" : draft.effectType === "Chaser" ? "Chaser" : draft.effectType === "Move" ? "Move" : draft.effectType === "Value" ? "Value" : draft.effectType === "Curve" ? "Curve" : draft.effectType === "Mapping" ? "Mapping" : "LFO"} effect ${effectId}`);
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
@@ -13014,6 +13107,8 @@ export default function App() {
         await invoke("update_value_effect", { effectId, request: draft.request });
       } else if (draft.effectType === "Curve") {
         await invoke("update_curve_effect", { effectId, request: draft.request });
+      } else if (draft.effectType === "Mapping") {
+        await invoke("update_mapping_effect", { effectId, request: draft.request });
       } else {
         await invoke("update_move_effect", { effectId, request: draft.request });
       }
@@ -13169,6 +13264,26 @@ export default function App() {
       setEffectBlendMode(curve.blend_mode);
       setEffectVideoTargetLinked(false);
     }
+    if (effect.effect_type === "Mapping") {
+      const mapping = effect.mapping;
+      if (!mapping) {
+        setEditingEffectId(null);
+        setMessage(`Mapping effect ${effect.id} is missing its editor body.`);
+        return;
+      }
+      setEffectShape(mapping.shape);
+      setMappingMode(mapping.mode);
+      setMappingDirection(mapping.direction);
+      setEffectPeriod(mapping.period_ms);
+      setEffectClockSyncBeats(mapping.clock_sync?.beats ?? null);
+      setEffectLow(mapping.low);
+      setEffectHigh(mapping.high);
+      setEffectPhase(mapping.phase);
+      setMappingFixtureSpread(mapping.fixture_spread);
+      setMappingRepetitions(mapping.repetitions);
+      setEffectBlendMode(mapping.blend_mode);
+      setEffectVideoTargetLinked(false);
+    }
     setEffectShape(effect.shape);
     setEffectClockSyncBeats(effect.clock_sync?.beats ?? null);
     if (effect.period_ms) {
@@ -13225,6 +13340,8 @@ export default function App() {
         ? `Loaded Chaser effect ${effect.id} with ${effect.chaser?.steps.length ?? 0} ordered steps and ${effect.chaser?.features.length ?? 0} features.`
         : effect.effect_type === "Move"
           ? `Loaded Move effect ${effect.id} with ${effect.move_effect?.points.length ?? 0} path points into the paired Pan/Tilt editor.`
+          : effect.effect_type === "Mapping"
+            ? `Loaded Mapping effect ${effect.id} with ${effect.fixture_ids.length} authored fixtures into the fixture-order editor.`
           : targetPlan.message,
     );
   };
@@ -13254,6 +13371,8 @@ export default function App() {
   const sampleEffectTargetOverrideOptions = (preset: SampleEffectPreset): EffectTargetOverrideOptions =>
     preset === "shared"
       ? { forceVideoTarget: true, requireLightTarget: true }
+      : preset === "wave" || preset === "ball" || preset === "fan"
+        ? { requireLightTarget: true }
       : preset === "chase"
         ? { requireLightTarget: true, allowPartialLightAttribute: true }
       : preset === "spectrum" || preset === "colour-chase"
@@ -15912,7 +16031,7 @@ export default function App() {
                 <strong>Inspector</strong>
                 <span>{editingEffectId() === null ? "New effect" : `Editing #${editingEffectId()}`}</span>
               </div>
-              <span>{effectType() === "PositionWave" ? "SPATIAL" : effectType() === "Color" ? "MULTI-COLOR" : effectType() === "Chaser" ? "CHASE" : effectType() === "Move" ? "PAN/TILT PATH" : effectType() === "Value" ? "ENVELOPE" : "MODULATOR"}</span>
+              <span>{effectType() === "PositionWave" ? "SPATIAL" : effectType() === "Mapping" ? "FIXTURE ORDER" : effectType() === "Color" ? "MULTI-COLOR" : effectType() === "Chaser" ? "CHASE" : effectType() === "Move" ? "PAN/TILT PATH" : effectType() === "Value" ? "ENVELOPE" : "MODULATOR"}</span>
             </header>
             <div class="effectForm">
               <div class="effectTargetHint">
@@ -15951,7 +16070,7 @@ export default function App() {
                     <option value="fixture">Selected fixture</option>
                     <option value="selection">Map selection ({selectedMappingFixtures().length})</option>
                     <option value="group">Group</option>
-                    <option value="video" disabled={effectType() === "Color" || effectType() === "Chaser" || effectType() === "Move" || effectType() === "Value" || effectType() === "Curve"}>Video layer</option>
+                    <option value="video" disabled={effectType() === "Color" || effectType() === "Chaser" || effectType() === "Move" || effectType() === "Value" || effectType() === "Curve" || effectType() === "Mapping"}>Video layer</option>
                   </select>
                 </label>
                 <label>
@@ -15967,10 +16086,11 @@ export default function App() {
                     <option value="Move">Move (Pan/Tilt path)</option>
                     <option value="Value">Value (envelope)</option>
                     <option value="Curve">Curve (cubic function)</option>
+                    <option value="Mapping">Mapping (fixture order)</option>
                   </select>
                 </label>
               </div>
-              <Show when={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "Chaser" && effectType() !== "Move" && effectType() !== "Value" && effectType() !== "Curve"}>
+              <Show when={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "Chaser" && effectType() !== "Move" && effectType() !== "Value" && effectType() !== "Curve" && effectType() !== "Mapping"}>
                 <label class="checkbox inlineCheckbox effectLinkedVideoToggle">
                   <input
                     type="checkbox"
@@ -15991,7 +16111,7 @@ export default function App() {
                   onToggleGroup={toggleEffectTargetGroup}
                 />
               </Show>
-              <Show when={effectType() !== "Color" && effectType() !== "Chaser" && effectType() !== "Move" && effectType() !== "Value" && effectType() !== "Curve" && (effectTargetMode() === "video" || effectVideoTargetLinked())}>
+              <Show when={effectType() !== "Color" && effectType() !== "Chaser" && effectType() !== "Move" && effectType() !== "Value" && effectType() !== "Curve" && effectType() !== "Mapping" && (effectTargetMode() === "video" || effectVideoTargetLinked())}>
                 <VideoEffectTargetPanel
                   layers={snapshot().video.layers}
                   outputsCount={snapshot().video.outputs.length}
@@ -16242,10 +16362,37 @@ export default function App() {
                   onSpread={setCurveFixtureSpread}
                 />
               </Show>
+              <Show when={effectType() === "Mapping"}>
+                <Show when={currentMappingDraftError()}>
+                  {(error) => <p class="moveEffectDraftError" role="status">{error()}</p>}
+                </Show>
+                <MappingEffectEditorPanel
+                  shape={effectShape()}
+                  mode={mappingMode()}
+                  direction={mappingDirection()}
+                  periodMs={effectPeriod()}
+                  bpm={snapshot().clock.bpm}
+                  clockSyncBeats={effectClockSyncBeats()}
+                  phase={effectPhase()}
+                  spread={mappingFixtureSpread()}
+                  repetitions={mappingRepetitions()}
+                  fixtures={mappingEffectOrderFixtures().map((fixture) => ({ id: fixture.id, label: fixture.label }))}
+                  orderEditable={effectTargetMode() === "selection"}
+                  onShape={setEffectShape}
+                  onMode={setMappingMode}
+                  onDirection={setMappingDirection}
+                  onPeriodMs={setEffectPeriod}
+                  onClockSyncBeats={setEffectClockSyncPreset}
+                  onPhase={setEffectPhase}
+                  onSpread={setMappingFixtureSpread}
+                  onRepetitions={setMappingRepetitions}
+                  onFixtureOrder={setSelectedMappingFixtureIds}
+                />
+              </Show>
             </div>
             <EffectActionControlsPanel
               showLightRange={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "Chaser" && effectType() !== "Move"}
-              showPhase={effectType() !== "Move" && effectType() !== "Value" && effectType() !== "Curve"}
+              showPhase={effectType() !== "Move" && effectType() !== "Value" && effectType() !== "Curve" && effectType() !== "Mapping"}
               lockBlendMode={effectType() === "Move"}
               low={effectLow()}
               high={effectHigh()}

@@ -36,22 +36,23 @@ use protocol::{
     DmxOutputRouteTelemetry, DmxUniversePreview, EffectBlendMode, EffectClockSync, EffectId,
     EffectKind, EffectParamsSnapshot, EffectSummary, EngineSnapshot, EngineTelemetry,
     ExclusiveVideoTakeRequest, ExecutorId, FixtureId, FixtureLimits, FixtureProfileSummary,
-    LfoEffectRequest, LfoShape, LiveAudioFrame, LiveAudioReactiveFeatures, MoveCoordinateMode,
-    MoveDirection, MoveEffectRequest, MovePathPoint, NodeGraphAudioRuntimeStatus, NodeGraphId,
-    NodeGraphNodeKind, NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId,
-    PatchFixtureRequest, PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest,
-    ProgrammerSnapshot, ProgrammerValueSummary, RecallMode, ReferencePaletteSummary, Rotation3,
-    StageMapConfig, StageMapPresetSummary, StageObjectId, StageObjectSummary, SubmasterSummary,
-    TimelineAudioClipId, TimelineAudioClipSummary, TimelineAutomationSummary,
-    TimelineCueEventSummary, TimelineEventId, TimelineLayerKind, TimelineLayerSummary,
-    TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind, TimelineVideoAutomationSummary,
-    TouchSurfaceSummary, Transform2D, ValueEffectDirection, ValueEffectInterpolation,
-    ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
-    VideoBlendMode, VideoColorAdjust, VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust,
-    VideoIsfControlKind, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId,
-    VideoLayerState, VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind,
-    VideoOutputMapping, VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget,
-    VideoParam, VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
+    LfoEffectRequest, LfoShape, LiveAudioFrame, LiveAudioReactiveFeatures, MappingEffectDirection,
+    MappingEffectRequest, MoveCoordinateMode, MoveDirection, MoveEffectRequest, MovePathPoint,
+    NodeGraphAudioRuntimeStatus, NodeGraphId, NodeGraphNodeKind, NodeGraphNodeSummary,
+    NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest, PatchedFixtureSummary,
+    PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot, ProgrammerValueSummary,
+    RecallMode, ReferencePaletteSummary, Rotation3, StageMapConfig, StageMapPresetSummary,
+    StageObjectId, StageObjectSummary, SubmasterSummary, TimelineAudioClipId,
+    TimelineAudioClipSummary, TimelineAutomationSummary, TimelineCueEventSummary, TimelineEventId,
+    TimelineLayerKind, TimelineLayerSummary, TimelineSnapRequest, TimelineSnapshot,
+    TimelineTrackKind, TimelineVideoAutomationSummary, TouchSurfaceSummary, Transform2D,
+    ValueEffectDirection, ValueEffectInterpolation, ValueEffectMode, ValueEffectPoint,
+    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBlendMode, VideoColorAdjust,
+    VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust, VideoIsfControlKind,
+    VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
+    VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
+    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
+    VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
     LIVE_AUDIO_FEATURE_BAND_CAPACITY, MAX_CUE_AUTHORED_BEATS, MAX_TIMELINE_SCENE_BLOCK_LOOPS,
     MIN_CUE_AUTHORED_BEATS,
 };
@@ -371,6 +372,13 @@ pub enum EngineCommand {
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
+    AddMappingEffect {
+        effect_id: EffectId,
+        request: MappingEffectRequest,
+        enabled: bool,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     UpdateLfoEffect {
         effect_id: EffectId,
         request: LfoEffectRequest,
@@ -406,6 +414,12 @@ pub enum EngineCommand {
     UpdateCurveEffect {
         effect_id: EffectId,
         request: CurveEffectRequest,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    UpdateMappingEffect {
+        effect_id: EffectId,
+        request: MappingEffectRequest,
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
@@ -1074,6 +1088,7 @@ impl EngineCommand {
                 | EngineCommand::AddMoveEffect { .. }
                 | EngineCommand::AddValueEffect { .. }
                 | EngineCommand::AddCurveEffect { .. }
+                | EngineCommand::AddMappingEffect { .. }
                 | EngineCommand::UpdateLfoEffect { .. }
                 | EngineCommand::UpdatePositionWaveEffect { .. }
                 | EngineCommand::UpdateColorEffect { .. }
@@ -1081,6 +1096,7 @@ impl EngineCommand {
                 | EngineCommand::UpdateMoveEffect { .. }
                 | EngineCommand::UpdateValueEffect { .. }
                 | EngineCommand::UpdateCurveEffect { .. }
+                | EngineCommand::UpdateMappingEffect { .. }
                 | EngineCommand::SetEffectEnabled { .. }
                 | EngineCommand::SetEffectEnabledPublished { .. }
                 | EngineCommand::SetEffectVideoTargetPosition { .. }
@@ -1719,6 +1735,44 @@ impl EngineHandle {
         receiver
             .recv_timeout(Duration::from_secs(3))
             .map_err(|error| format!("Curve effect update acknowledgement failed: {error}"))?
+    }
+
+    pub fn add_mapping_effect(
+        &self,
+        effect_id: EffectId,
+        request: MappingEffectRequest,
+        enabled: bool,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::AddMappingEffect {
+            effect_id,
+            request,
+            enabled,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Mapping effect add acknowledgement failed: {error}"))?
+    }
+
+    pub fn update_mapping_effect(
+        &self,
+        effect_id: EffectId,
+        request: MappingEffectRequest,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::UpdateMappingEffect {
+            effect_id,
+            request,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Mapping effect update acknowledgement failed: {error}"))?
     }
 
     pub fn set_effect_enabled_published(
@@ -2907,6 +2961,7 @@ enum RuntimeEffectKind {
     Move(RuntimeMoveEffect),
     Value(RuntimeValueEffect),
     Curve(RuntimeCurveEffect),
+    Mapping(RuntimeMappingEffect),
 }
 
 fn clear_runtime_effect_caches(kind: &RuntimeEffectKind) {
@@ -2932,6 +2987,11 @@ fn clear_runtime_effect_caches(kind: &RuntimeEffectKind) {
             }
         }
         RuntimeEffectKind::Curve(runtime) => {
+            for target in &runtime.targets {
+                target.cached.set(None);
+            }
+        }
+        RuntimeEffectKind::Mapping(runtime) => {
             for target in &runtime.targets {
                 target.cached.set(None);
             }
@@ -2978,6 +3038,26 @@ struct RuntimeCurveTarget {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct RuntimeCurveEvaluation {
+    at: Instant,
+    normalized: f32,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeMappingEffect {
+    request: MappingEffectRequest,
+    targets: Vec<RuntimeMappingTarget>,
+    target_indices: HashMap<FixtureId, usize>,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeMappingTarget {
+    fixture_id: FixtureId,
+    order_phase: f32,
+    cached: Cell<Option<RuntimeMappingEvaluation>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct RuntimeMappingEvaluation {
     at: Instant,
     normalized: f32,
 }
@@ -4627,6 +4707,15 @@ impl EngineRuntime {
                         created_at: now,
                     })
                 }
+                RuntimeEffectKind::Mapping(runtime) => {
+                    let runtime = self.restore_mapping_effect_request(runtime.request).ok()?;
+                    Some(RuntimeEffect {
+                        id: effect.id,
+                        kind: RuntimeEffectKind::Mapping(runtime),
+                        enabled: effect.enabled,
+                        created_at: now,
+                    })
+                }
             })
             .collect();
         self.sanitize_cue_effect_targets();
@@ -4795,6 +4884,12 @@ impl EngineRuntime {
                     | EngineCommand::UpdateChaserEffect { .. }
                     | EngineCommand::AddMoveEffect { .. }
                     | EngineCommand::UpdateMoveEffect { .. }
+                    | EngineCommand::AddValueEffect { .. }
+                    | EngineCommand::UpdateValueEffect { .. }
+                    | EngineCommand::AddCurveEffect { .. }
+                    | EngineCommand::UpdateCurveEffect { .. }
+                    | EngineCommand::AddMappingEffect { .. }
+                    | EngineCommand::UpdateMappingEffect { .. }
                     | EngineCommand::SetEffectEnabledPublished { .. }
                     | EngineCommand::UpsertNodeGraphPublished { .. }
                     | EngineCommand::SetNodeGraphEnabledPublished { .. }
@@ -4917,6 +5012,7 @@ impl EngineRuntime {
                 self.rebuild_move_effect_targets();
                 self.rebuild_value_effect_targets();
                 self.rebuild_curve_effect_targets();
+                self.rebuild_mapping_effect_targets();
                 self.last_error = None;
             }
             EngineCommand::RemoveFixture(fixture_id) => {
@@ -5163,6 +5259,7 @@ impl EngineRuntime {
                     self.rebuild_move_effect_targets();
                     self.rebuild_value_effect_targets();
                     self.rebuild_curve_effect_targets();
+                    self.rebuild_mapping_effect_targets();
                     self.last_error = None;
                 } else {
                     self.last_error = Some(format!("Fixture {fixture_id} was not found"));
@@ -5767,6 +5864,46 @@ impl EngineRuntime {
                     publication_error: "Engine snapshot was busy; Curve effect add was rolled back",
                 });
             }
+            EngineCommand::AddMappingEffect {
+                effect_id,
+                request,
+                enabled,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RemoveAddedEffect {
+                    effect_id,
+                    last_error: previous_last_error.clone(),
+                };
+                let expired = Instant::now() > expires_at;
+                let result = if expired {
+                    Err("Mapping effect add expired before engine execution".to_string())
+                } else if self.effects.iter().any(|effect| effect.id == effect_id) {
+                    Err(format!("Effect {effect_id} already exists"))
+                } else {
+                    self.resolve_mapping_effect_request(request).map(|runtime| {
+                        self.effects.push(RuntimeEffect {
+                            id: effect_id,
+                            kind: RuntimeEffectKind::Mapping(runtime),
+                            enabled,
+                            created_at: Instant::now(),
+                        });
+                    })
+                };
+                self.last_error = if expired {
+                    previous_last_error
+                } else {
+                    result.as_ref().err().cloned()
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Mapping effect add was rolled back",
+                });
+            }
             EngineCommand::UpdateLfoEffect { effect_id, request } => {
                 let request = match self.resolve_lfo_effect_request(request) {
                     Ok(request) => request,
@@ -6150,6 +6287,66 @@ impl EngineRuntime {
                         "Engine snapshot was busy; Curve effect update was rolled back",
                 });
             }
+            EngineCommand::UpdateMappingEffect {
+                effect_id,
+                request,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let previous_index = self
+                    .effects
+                    .iter()
+                    .position(|effect| effect.id == effect_id);
+                let reconform_referenced_events =
+                    self.timeline_has_conformed_events_for_effect(effect_id);
+                let rollback = PendingCommandRollback::RestoreEffect {
+                    index: previous_index,
+                    effect: previous_index.map(|index| self.effects[index].clone()),
+                    timeline_events: reconform_referenced_events
+                        .then(|| self.timeline_events.clone()),
+                    last_error: previous_last_error.clone(),
+                };
+                let expired = Instant::now() > expires_at;
+                let result = if expired {
+                    Err("Mapping effect update expired before engine execution".to_string())
+                } else {
+                    self.resolve_mapping_effect_request(request)
+                        .and_then(|runtime| {
+                            let effect = self
+                                .effects
+                                .iter_mut()
+                                .find(|effect| effect.id == effect_id)
+                                .ok_or_else(|| format!("Effect {effect_id} was not found"))?;
+                            if !matches!(&effect.kind, RuntimeEffectKind::Mapping(_)) {
+                                return Err(format!("Effect {effect_id} is not a Mapping effect"));
+                            }
+                            effect.kind = RuntimeEffectKind::Mapping(runtime);
+                            effect.created_at = Instant::now();
+                            Ok(())
+                        })
+                        .and_then(|()| {
+                            if reconform_referenced_events {
+                                let bpm = self.clock.bpm;
+                                self.reconform_timeline_events_to_bpm(bpm)
+                            } else {
+                                Ok(())
+                            }
+                        })
+                };
+                self.last_error = if expired {
+                    previous_last_error
+                } else {
+                    result.as_ref().err().cloned()
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Mapping effect update was rolled back",
+                });
+            }
             EngineCommand::SetEffectEnabled { effect_id, enabled } => {
                 if let Some(effect) = self
                     .effects
@@ -6234,7 +6431,8 @@ impl EngineRuntime {
                     | RuntimeEffectKind::Chaser(_)
                     | RuntimeEffectKind::Move(_)
                     | RuntimeEffectKind::Value(_)
-                    | RuntimeEffectKind::Curve(_) => {
+                    | RuntimeEffectKind::Curve(_)
+                    | RuntimeEffectKind::Mapping(_) => {
                         self.last_error = Some(format!(
                             "Lighting-only effect {effect_id} cannot target video layers"
                         ));
@@ -9711,12 +9909,18 @@ impl EngineRuntime {
                 !runtime.request.fixture_ids.is_empty()
                     || !runtime.request.target_group_ids.is_empty()
             }
+            RuntimeEffectKind::Mapping(runtime) => {
+                runtime.request.fixture_ids.retain(|id| *id != fixture_id);
+                !runtime.request.fixture_ids.is_empty()
+                    || !runtime.request.target_group_ids.is_empty()
+            }
         });
         self.rebuild_color_effect_targets();
         self.rebuild_chaser_effect_targets();
         self.rebuild_move_effect_targets();
         self.rebuild_value_effect_targets();
         self.rebuild_curve_effect_targets();
+        self.rebuild_mapping_effect_targets();
         self.sanitize_node_graph_references();
         self.clear_empty_active_fade();
         self.last_error = None;
@@ -9762,7 +9966,8 @@ impl EngineRuntime {
             | RuntimeEffectKind::Chaser(_)
             | RuntimeEffectKind::Move(_)
             | RuntimeEffectKind::Value(_)
-            | RuntimeEffectKind::Curve(_) => true,
+            | RuntimeEffectKind::Curve(_)
+            | RuntimeEffectKind::Mapping(_) => true,
         });
         self.sanitize_cue_effect_targets();
         self.sanitize_node_graph_references();
@@ -11716,6 +11921,9 @@ impl EngineRuntime {
             EffectParamsSnapshot::Curve(request) => {
                 RuntimeEffectKind::Curve(self.resolve_curve_effect_request(request.clone())?)
             }
+            EffectParamsSnapshot::Mapping(request) => {
+                RuntimeEffectKind::Mapping(self.resolve_mapping_effect_request(request.clone())?)
+            }
         };
         Ok(RuntimeEffect {
             id: effect_id,
@@ -13111,6 +13319,68 @@ impl EngineRuntime {
             };
             let has_group_reference = !runtime.request.target_group_ids.is_empty();
             match runtime_curve_effect_from_request(runtime.request.clone(), fixtures, false) {
+                Ok(rebuilt) => {
+                    *runtime = rebuilt;
+                    !runtime.targets.is_empty() || has_group_reference
+                }
+                Err(_) => has_group_reference,
+            }
+        });
+        self.sanitize_cue_effect_targets();
+    }
+
+    fn resolve_mapping_effect_request(
+        &self,
+        request: MappingEffectRequest,
+    ) -> Result<RuntimeMappingEffect, String> {
+        self.resolve_mapping_effect_request_with_policy(request, false)
+    }
+
+    fn restore_mapping_effect_request(
+        &self,
+        request: MappingEffectRequest,
+    ) -> Result<RuntimeMappingEffect, String> {
+        self.resolve_mapping_effect_request_with_policy(request, true)
+    }
+
+    fn resolve_mapping_effect_request_with_policy(
+        &self,
+        mut request: MappingEffectRequest,
+        allow_unresolved_groups: bool,
+    ) -> Result<RuntimeMappingEffect, String> {
+        validate_mapping_effect_request(&request)?;
+        request.fixture_ids = self.normalize_effect_fixture_ids(request.fixture_ids)?;
+        request.target_group_ids = normalize_runtime_group_ids(request.target_group_ids)?;
+
+        let has_group_reference = !request.target_group_ids.is_empty();
+        for group_id in &request.target_group_ids {
+            if self.fixture_ids_in_group(group_id).is_empty() {
+                if allow_unresolved_groups {
+                    continue;
+                }
+                return Err(format!(
+                    "Group '{group_id}' was not found or has no fixtures"
+                ));
+            }
+        }
+        if request.fixture_ids.is_empty() && request.target_group_ids.is_empty() {
+            return Err("Mapping effect must target at least one fixture or group".to_string());
+        }
+        runtime_mapping_effect_from_request(
+            request,
+            &self.fixtures,
+            !(allow_unresolved_groups && has_group_reference),
+        )
+    }
+
+    fn rebuild_mapping_effect_targets(&mut self) {
+        let fixtures = &self.fixtures;
+        self.effects.retain_mut(|effect| {
+            let RuntimeEffectKind::Mapping(runtime) = &mut effect.kind else {
+                return true;
+            };
+            let has_group_reference = !runtime.request.target_group_ids.is_empty();
+            match runtime_mapping_effect_from_request(runtime.request.clone(), fixtures, false) {
                 Ok(rebuilt) => {
                     *runtime = rebuilt;
                     !runtime.targets.is_empty() || has_group_reference
@@ -14699,6 +14969,20 @@ impl EngineRuntime {
                 }
                 RuntimeEffectKind::Curve(runtime) => {
                     if let Some(evaluated) = evaluate_runtime_curve_attribute_at_rate(
+                        runtime,
+                        fixture.id,
+                        attribute,
+                        value,
+                        effect.created_at,
+                        now,
+                        &clock,
+                        rate,
+                    ) {
+                        value = blend_effect_value(value, evaluated, &runtime.request.blend_mode);
+                    }
+                }
+                RuntimeEffectKind::Mapping(runtime) => {
+                    if let Some(evaluated) = evaluate_runtime_mapping_attribute_at_rate(
                         runtime,
                         fixture.id,
                         attribute,
@@ -17077,7 +17361,8 @@ impl EngineRuntime {
                 | RuntimeEffectKind::Chaser(_)
                 | RuntimeEffectKind::Move(_)
                 | RuntimeEffectKind::Value(_)
-                | RuntimeEffectKind::Curve(_) => {}
+                | RuntimeEffectKind::Curve(_)
+                | RuntimeEffectKind::Mapping(_) => {}
             }
         }
         for graph in &self.node_graphs {
@@ -17889,7 +18174,7 @@ fn live_modifier_shifted_phase(phase: f32, offset: f32) -> f32 {
 
 /// Applies one scene's effective live modifier to authored effect params.
 /// Kind mapping: speed scales period/step duration/wave speed and shared-clock
-/// beats; size scales level ranges (Lfo/PositionWave/Value/Curve), Chaser feature
+/// beats; size scales level ranges (Lfo/PositionWave/Value/Curve/Mapping), Chaser feature
 /// ranges, and Move path size; Color has no amplitude so size is a deliberate
 /// no-op there; phase adds a wrapped traversal offset on every kind.
 fn effect_params_with_live_modifier(
@@ -17956,6 +18241,16 @@ fn effect_params_with_live_modifier(
             request.phase = live_modifier_shifted_phase(request.phase, modifier.phase);
         }
         EffectParamsSnapshot::Curve(request) => {
+            request.period_ms = live_modifier_scaled_period_ms(request.period_ms, modifier.speed);
+            request.clock_sync =
+                live_modifier_scaled_clock_sync(request.clock_sync, modifier.speed);
+            let (low, high) =
+                live_modifier_scaled_level_range(request.low, request.high, modifier.size);
+            request.low = low;
+            request.high = high;
+            request.phase = live_modifier_shifted_phase(request.phase, modifier.phase);
+        }
+        EffectParamsSnapshot::Mapping(request) => {
             request.period_ms = live_modifier_scaled_period_ms(request.period_ms, modifier.speed);
             request.clock_sync =
                 live_modifier_scaled_clock_sync(request.clock_sync, modifier.speed);
@@ -18735,6 +19030,7 @@ fn runtime_effect_free_run_period_ms(kind: &RuntimeEffectKind) -> Option<f64> {
         RuntimeEffectKind::Move(runtime) => runtime.request.period_ms as f64,
         RuntimeEffectKind::Value(runtime) => runtime.request.period_ms as f64,
         RuntimeEffectKind::Curve(runtime) => runtime.request.period_ms as f64,
+        RuntimeEffectKind::Mapping(runtime) => runtime.request.period_ms as f64,
     };
     (period_ms.is_finite() && period_ms > 0.0).then_some(period_ms)
 }
@@ -18761,6 +19057,7 @@ fn effect_params_snapshot_free_run_period_ms(params: &EffectParamsSnapshot) -> O
         EffectParamsSnapshot::Move(request) => request.period_ms as f64,
         EffectParamsSnapshot::Value(request) => request.period_ms as f64,
         EffectParamsSnapshot::Curve(request) => request.period_ms as f64,
+        EffectParamsSnapshot::Mapping(request) => request.period_ms as f64,
     };
     (period_ms.is_finite() && period_ms > 0.0).then_some(period_ms)
 }
@@ -19954,6 +20251,14 @@ fn effect_targets_fixture_attribute(
                     fixture,
                 )
         }
+        RuntimeEffectKind::Mapping(runtime) => {
+            runtime.request.attribute.eq_ignore_ascii_case(attribute)
+                && request_targets_fixture(
+                    runtime.request.fixture_ids.as_slice(),
+                    runtime.request.target_group_ids.as_slice(),
+                    fixture,
+                )
+        }
         RuntimeEffectKind::Color(_) | RuntimeEffectKind::Chaser(_) | RuntimeEffectKind::Move(_) => {
             false
         }
@@ -20617,6 +20922,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             move_effect: None,
             value: None,
             curve: None,
+            mapping: None,
         },
         RuntimeEffectKind::PositionWave(request) => EffectSummary {
             id: effect.id,
@@ -20643,6 +20949,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             move_effect: None,
             value: None,
             curve: None,
+            mapping: None,
         },
         RuntimeEffectKind::Color(runtime) => EffectSummary {
             id: effect.id,
@@ -20669,6 +20976,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             move_effect: None,
             value: None,
             curve: None,
+            mapping: None,
         },
         RuntimeEffectKind::Chaser(runtime) => {
             let mut fixture_ids = Vec::new();
@@ -20715,6 +21023,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
                 move_effect: None,
                 value: None,
                 curve: None,
+                mapping: None,
             }
         }
         RuntimeEffectKind::Move(runtime) => EffectSummary {
@@ -20742,6 +21051,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             move_effect: Some(runtime.request.clone()),
             value: None,
             curve: None,
+            mapping: None,
         },
         RuntimeEffectKind::Value(runtime) => EffectSummary {
             id: effect.id,
@@ -20768,6 +21078,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             move_effect: None,
             value: Some(runtime.request.clone()),
             curve: None,
+            mapping: None,
         },
         RuntimeEffectKind::Curve(runtime) => EffectSummary {
             id: effect.id,
@@ -20794,6 +21105,34 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             move_effect: None,
             value: None,
             curve: Some(runtime.request.clone()),
+            mapping: None,
+        },
+        RuntimeEffectKind::Mapping(runtime) => EffectSummary {
+            id: effect.id,
+            label: runtime.request.label.clone(),
+            effect_type: EffectKind::Mapping,
+            fixture_ids: runtime.request.fixture_ids.clone(),
+            target_group_ids: runtime.request.target_group_ids.clone(),
+            attribute: runtime.request.attribute.clone(),
+            video_targets: Vec::new(),
+            shape: runtime.request.shape.clone(),
+            period_ms: Some(runtime.request.period_ms),
+            clock_sync: runtime.request.clock_sync,
+            low: runtime.request.low,
+            high: runtime.request.high,
+            phase: runtime.request.phase,
+            blend_mode: runtime.request.blend_mode.clone(),
+            origin: None,
+            direction: None,
+            speed: None,
+            wavelength: None,
+            enabled: effect.enabled,
+            color: None,
+            chaser: None,
+            move_effect: None,
+            value: None,
+            curve: None,
+            mapping: Some(runtime.request.clone()),
         },
     }
 }
@@ -20875,6 +21214,14 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
             RuntimeEffectKind::Curve(RuntimeCurveEffect {
                 request,
                 function,
+                targets: Vec::new(),
+                target_indices: HashMap::new(),
+            })
+        }
+        EffectKind::Mapping => {
+            let request = effect.mapping.clone()?;
+            RuntimeEffectKind::Mapping(RuntimeMappingEffect {
+                request,
                 targets: Vec::new(),
                 target_indices: HashMap::new(),
             })
@@ -21693,6 +22040,192 @@ fn curve_effect_progress(
             }
         }
     }
+}
+
+pub fn validate_mapping_effect_request(request: &MappingEffectRequest) -> Result<(), String> {
+    if request.label.trim().is_empty() {
+        return Err("Mapping effect label is required".to_string());
+    }
+    if request.attribute.trim().is_empty() {
+        return Err("Mapping effect attribute is required".to_string());
+    }
+    if request.fixture_ids.is_empty() && request.target_group_ids.is_empty() {
+        return Err("Mapping effect must target at least one fixture or group".to_string());
+    }
+    if request.period_ms < 10 {
+        return Err("Mapping effect period must be at least 10 ms".to_string());
+    }
+    if let Some(clock_sync) = request.clock_sync {
+        if !clock_sync.beats.is_finite() || clock_sync.beats <= 0.0 {
+            return Err(
+                "Mapping effect clock sync beats must be finite and greater than 0".to_string(),
+            );
+        }
+    }
+    if !request.phase.is_finite() || !(0.0..=1.0).contains(&request.phase) {
+        return Err("Mapping effect phase must be finite and within 0..1".to_string());
+    }
+    if !request.fixture_spread.is_finite() || !(0.0..=1.0).contains(&request.fixture_spread) {
+        return Err("Mapping effect fixture spread must be finite and within 0..1".to_string());
+    }
+    if !request.repetitions.is_finite() || !(0.25..=16.0).contains(&request.repetitions) {
+        return Err("Mapping effect repetitions must be finite and within 0.25..16".to_string());
+    }
+    Ok(())
+}
+
+fn runtime_mapping_effect_from_request(
+    request: MappingEffectRequest,
+    fixtures: &[RuntimeFixture],
+    require_resolved_target: bool,
+) -> Result<RuntimeMappingEffect, String> {
+    validate_mapping_effect_request(&request)?;
+    let mut fixture_ids = Vec::new();
+    let mut seen = HashSet::new();
+    for fixture_id in &request.fixture_ids {
+        if fixtures.iter().any(|fixture| fixture.id == *fixture_id) && seen.insert(*fixture_id) {
+            fixture_ids.push(*fixture_id);
+        }
+    }
+    for group_id in &request.target_group_ids {
+        for fixture in fixtures.iter().filter(|fixture| {
+            fixture
+                .request
+                .group_ids
+                .iter()
+                .any(|fixture_group| group_matches(fixture_group, group_id))
+        }) {
+            if seen.insert(fixture.id) {
+                fixture_ids.push(fixture.id);
+            }
+        }
+    }
+    if require_resolved_target && fixture_ids.is_empty() {
+        return Err("Mapping effect must resolve at least one fixture".to_string());
+    }
+
+    let count = fixture_ids.len().max(1) as f32;
+    let targets = fixture_ids
+        .into_iter()
+        .enumerate()
+        .map(|(index, fixture_id)| RuntimeMappingTarget {
+            fixture_id,
+            order_phase: index as f32 / count * request.fixture_spread * request.repetitions,
+            cached: Cell::new(None),
+        })
+        .collect::<Vec<_>>();
+    let target_indices = targets
+        .iter()
+        .enumerate()
+        .map(|(index, target)| (target.fixture_id, index))
+        .collect();
+    Ok(RuntimeMappingEffect {
+        request,
+        targets,
+        target_indices,
+    })
+}
+
+#[cfg(test)]
+fn evaluate_runtime_mapping_attribute(
+    runtime: &RuntimeMappingEffect,
+    fixture_id: FixtureId,
+    attribute: &str,
+    base_value: u16,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+) -> Option<u16> {
+    evaluate_runtime_mapping_attribute_at_rate(
+        runtime, fixture_id, attribute, base_value, created_at, now, clock, 1.0,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_runtime_mapping_attribute_at_rate(
+    runtime: &RuntimeMappingEffect,
+    fixture_id: FixtureId,
+    attribute: &str,
+    base_value: u16,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> Option<u16> {
+    if !runtime.request.attribute.eq_ignore_ascii_case(attribute) {
+        return None;
+    }
+    let target = runtime
+        .target_indices
+        .get(&fixture_id)
+        .and_then(|index| runtime.targets.get(*index))?;
+    let normalized = target
+        .cached
+        .get()
+        .filter(|evaluation| evaluation.at == now)
+        .map(|evaluation| evaluation.normalized)
+        .unwrap_or_else(|| {
+            let normalized = evaluate_mapping_effect_normalized(
+                &runtime.request,
+                target.order_phase,
+                created_at,
+                now,
+                clock,
+                rate,
+            );
+            target.cached.set(Some(RuntimeMappingEvaluation {
+                at: now,
+                normalized,
+            }));
+            normalized
+        });
+    let value = match runtime.request.mode {
+        ValueEffectMode::Absolute => {
+            scale_effect_u16(runtime.request.low, runtime.request.high, normalized)
+        }
+        ValueEffectMode::Relative => {
+            let span = runtime.request.low.max(runtime.request.high) as f32
+                - runtime.request.low.min(runtime.request.high) as f32;
+            let offset = (normalized - 0.5) * 2.0 * span;
+            (base_value as f32 + offset).round().clamp(0.0, 65_535.0) as u16
+        }
+    };
+    Some(value)
+}
+
+fn evaluate_mapping_effect_normalized(
+    request: &MappingEffectRequest,
+    order_phase: f32,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> f32 {
+    let rate = valid_effect_rate(rate);
+    let cycle = if let Some(clock_sync) = request.clock_sync {
+        let beat_position = clock.beat_counter as f32 + clock.beat_phase;
+        beat_position / clock_sync.beats.max(0.000_1) * rate
+    } else {
+        let period = request.period_ms.max(10) as f32 / 1_000.0;
+        now.saturating_duration_since(created_at).as_secs_f32() * rate / period
+    };
+    let traversal = match request.direction {
+        MappingEffectDirection::Forward => cycle,
+        MappingEffectDirection::Reverse => -cycle,
+        MappingEffectDirection::Bounce => {
+            let doubled = cycle.rem_euclid(1.0) * 2.0;
+            if doubled <= 1.0 {
+                doubled
+            } else {
+                2.0 - doubled
+            }
+        }
+        MappingEffectDirection::Static => 0.0,
+    };
+    evaluate_lfo_shape(
+        &request.shape,
+        (request.phase + traversal - order_phase).rem_euclid(1.0),
+    )
 }
 
 pub fn validate_chaser_effect_request(request: &ChaserEffectRequest) -> Result<(), String> {
@@ -27959,6 +28492,7 @@ mod tests {
                 move_effect: None,
                 value: None,
                 curve: None,
+                mapping: None,
             }],
             node_graphs: vec![sample_node_graph(48, 40)],
             output: DmxOutputConfig {
@@ -29439,6 +29973,7 @@ mod tests {
                     move_effect: None,
                     value: None,
                     curve: None,
+                    mapping: None,
                 },
                 EffectSummary {
                     id: 51,
@@ -29465,6 +30000,7 @@ mod tests {
                     move_effect: None,
                     value: None,
                     curve: None,
+                    mapping: None,
                 },
                 EffectSummary {
                     id: 52,
@@ -29491,6 +30027,7 @@ mod tests {
                     move_effect: None,
                     value: None,
                     curve: None,
+                    mapping: None,
                 },
             ],
             ..EngineSnapshot::default()
@@ -29676,6 +30213,7 @@ mod tests {
                     move_effect: None,
                     value: None,
                     curve: None,
+                    mapping: None,
                 },
                 EffectSummary {
                     id: 41,
@@ -29702,6 +30240,7 @@ mod tests {
                     move_effect: None,
                     value: None,
                     curve: None,
+                    mapping: None,
                 },
             ],
             ..EngineSnapshot::default()
@@ -46892,6 +47431,163 @@ mod tests {
         );
     }
 
+    fn test_mapping_request(fixture_ids: &[FixtureId]) -> MappingEffectRequest {
+        MappingEffectRequest {
+            label: "Production fixture-order mapping".to_string(),
+            fixture_ids: fixture_ids.to_vec(),
+            target_group_ids: Vec::new(),
+            attribute: "Dimmer".to_string(),
+            shape: LfoShape::Saw,
+            mode: ValueEffectMode::Absolute,
+            direction: MappingEffectDirection::Forward,
+            period_ms: 1_000,
+            clock_sync: None,
+            low: 0,
+            high: u16::MAX,
+            phase: 0.0,
+            fixture_spread: 1.0,
+            repetitions: 1.0,
+            blend_mode: EffectBlendMode::Override,
+        }
+    }
+
+    #[test]
+    fn mapping_validation_rejects_invalid_order_function_parameters() {
+        let valid = test_mapping_request(&[1]);
+        validate_mapping_effect_request(&valid).unwrap();
+
+        let mut invalid = valid.clone();
+        invalid.repetitions = 0.0;
+        assert!(validate_mapping_effect_request(&invalid)
+            .unwrap_err()
+            .contains("0.25..16"));
+        invalid.repetitions = f32::NAN;
+        assert!(validate_mapping_effect_request(&invalid)
+            .unwrap_err()
+            .contains("finite"));
+    }
+
+    #[test]
+    fn mapping_uses_authored_fixture_order_instead_of_stage_position() {
+        let runtime = runtime_with_move_fixtures(4);
+        let request = test_mapping_request(&[3, 1, 4, 2]);
+        let effect = runtime.resolve_mapping_effect_request(request).unwrap();
+        assert_eq!(
+            effect
+                .targets
+                .iter()
+                .map(|target| target.fixture_id)
+                .collect::<Vec<_>>(),
+            vec![3, 1, 4, 2]
+        );
+
+        let created_at = Instant::now();
+        let clock = ClockSnapshot::default();
+        let values = [3, 1, 4, 2].map(|fixture_id| {
+            evaluate_runtime_mapping_attribute(
+                &effect, fixture_id, "Dimmer", 0, created_at, created_at, &clock,
+            )
+            .unwrap()
+        });
+        assert_eq!(values[0], 0);
+        assert_eq!(values[1], scale_effect_u16(0, u16::MAX, 0.75));
+        assert_eq!(values[2], scale_effect_u16(0, u16::MAX, 0.5));
+        assert_eq!(values[3], scale_effect_u16(0, u16::MAX, 0.25));
+        assert!(evaluate_runtime_mapping_attribute(
+            &effect, 3, "Pan", 0, created_at, created_at, &clock,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn mapping_published_add_update_and_snapshot_roundtrip_are_atomic() {
+        let mut runtime = runtime_with_move_fixtures(3);
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let request = test_mapping_request(&[3, 1, 2]);
+        let (add_ack, add_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::AddMappingEffect {
+            effect_id: 340,
+            request: request.clone(),
+            enabled: false,
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: add_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(add_receiver.recv().unwrap(), Ok(()));
+        let snapshot = published.read().unwrap().clone();
+        assert_eq!(snapshot.effects[0].effect_type, EffectKind::Mapping);
+        assert_eq!(snapshot.effects[0].mapping, Some(request.clone()));
+        assert!(!snapshot.effects[0].enabled);
+
+        let mut updated = request;
+        updated.direction = MappingEffectDirection::Bounce;
+        updated.repetitions = 2.0;
+        let (update_ack, update_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::UpdateMappingEffect {
+            effect_id: 340,
+            request: updated.clone(),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            ack: update_ack,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(update_receiver.recv().unwrap(), Ok(()));
+        assert_eq!(published.read().unwrap().effects[0].mapping, Some(updated));
+
+        let roundtrip = runtime.build_snapshot(0);
+        let mut loaded = runtime_with_move_fixtures(3);
+        loaded.load_project_snapshot(roundtrip.clone());
+        assert_eq!(loaded.build_snapshot(0).effects, roundtrip.effects);
+    }
+
+    #[test]
+    fn mapping_venue_stack_200_fixtures_64_effects_stays_bounded() {
+        let runtime = runtime_with_move_fixtures(200);
+        let fixture_ids = (1..=200).rev().collect::<Vec<_>>();
+        let base = test_mapping_request(&fixture_ids);
+        let stack = (0..64)
+            .map(|index| {
+                let mut request = base.clone();
+                request.phase = index as f32 / 64.0;
+                request.repetitions = 1.0 + (index % 4) as f32;
+                runtime.resolve_mapping_effect_request(request).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let created_at = Instant::now();
+        let clock = ClockSnapshot::default();
+        let started = Instant::now();
+        let mut checksum = 0_u64;
+        for frame in 0..10 {
+            let at = created_at + Duration::from_millis(frame * 10);
+            for effect in &stack {
+                for fixture_id in &fixture_ids {
+                    checksum = checksum.wrapping_add(
+                        evaluate_runtime_mapping_attribute(
+                            effect,
+                            *fixture_id,
+                            "Dimmer",
+                            32_768,
+                            created_at,
+                            at,
+                            &clock,
+                        )
+                        .unwrap() as u64,
+                    );
+                    let target_index = effect.target_indices[fixture_id];
+                    assert!(effect.targets[target_index]
+                        .cached
+                        .get()
+                        .is_some_and(|cached| cached.at == at));
+                }
+            }
+        }
+        assert_ne!(checksum, 0);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "200-fixture, 64-effect Mapping regression took {:?}",
+            started.elapsed()
+        );
+    }
+
     fn runtime_with_mixed_effect_fixtures(count: u64) -> EngineRuntime {
         let mut runtime = EngineRuntime::new(DmxOutputConfig {
             enabled: false,
@@ -46939,7 +47635,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_color_chaser_move_curve_release_stack_meets_44hz_budget() {
+    fn mixed_color_chaser_move_curve_mapping_release_stack_meets_44hz_budget() {
         const FIXTURE_COUNT: u64 = 200;
         const EFFECT_COUNT: usize = 64;
         const SAMPLES: usize = 1_000;
@@ -46963,9 +47659,10 @@ mod tests {
         chaser_base.fixture_spread = 0.5;
         let move_base = test_move_request(&fixture_ids);
         let curve_base = test_curve_request(&fixture_ids);
+        let mapping_base = test_mapping_request(&fixture_ids);
         for index in 0..EFFECT_COUNT {
             let phase = index as f32 / EFFECT_COUNT as f32;
-            let kind = match index % 4 {
+            let kind = match index % 5 {
                 0 => {
                     let mut request = test_color_request(
                         fixture_ids.clone(),
@@ -47004,10 +47701,18 @@ mod tests {
                     request.phase = phase;
                     RuntimeEffectKind::Move(runtime.resolve_move_effect_request(request).unwrap())
                 }
-                _ => {
+                3 => {
                     let mut request = curve_base.clone();
                     request.phase = phase;
                     RuntimeEffectKind::Curve(runtime.resolve_curve_effect_request(request).unwrap())
+                }
+                _ => {
+                    let mut request = mapping_base.clone();
+                    request.phase = phase;
+                    request.repetitions = 1.0 + (index % 4) as f32;
+                    RuntimeEffectKind::Mapping(
+                        runtime.resolve_mapping_effect_request(request).unwrap(),
+                    )
                 }
             };
             runtime.effects.push(RuntimeEffect {
@@ -47038,7 +47743,7 @@ mod tests {
         let p99 = durations[(SAMPLES * 99 / 100).min(SAMPLES - 1)];
         let max = *durations.last().unwrap();
         eprintln!(
-            "Mixed Color/Chaser/Move/Curve 64x200 stack per-tick evaluation: p95={}us p99={}us max={}us",
+            "Mixed Color/Chaser/Move/Curve/Mapping 64x200 stack per-tick evaluation: p95={}us p99={}us max={}us",
             p95.as_micros(),
             p99.as_micros(),
             max.as_micros()
@@ -47047,7 +47752,8 @@ mod tests {
         // (apply_effects per fixture x control, including its per-call clock
         // snapshot) under 64 simultaneous full-rig effects. Observed on the
         // reference Windows host in release with Curve included: p95 ~2.8ms /
-        // p99 ~3.4ms / max ~4.1ms. The gate keeps the worst-case mixed stack at or below
+        // p99 ~3.4ms / max ~4.1ms. Mapping is included and must remain within the
+        // same gate, which keeps the worst-case mixed stack at or below
         // roughly half of the 22.7ms 44Hz tick while still failing on a
         // >50% evaluation regression.
         if !cfg!(debug_assertions) {

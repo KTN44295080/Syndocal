@@ -25,7 +25,7 @@
 
 - Scene Matrix主体のControl、統一workspace shell、内部スクロールと可変splitter
 - source-linked Scene Block、layer、loop/jump、Super Scene child timeline、tempo conform
-- independent Colour / Chaser / Move / Value / Curve runtimeとeditor
+- independent Colour / Chaser / Move / Value / Curve / fixture-order Mapping runtimeとeditor
 - cue-owned FX params、selective Effect Recall、Effects Only
 - editable project-saved Touch surfaceとLAN remote反映
 - Scene Live speed / size / phase latch、flash momentary
@@ -43,7 +43,7 @@
 
 ### P1 FX
 
-- Mappings / Colour MappingsはPositionWave/Colorのrecipe分類で、fixture-order/image-drivenの独立runtimeではない。
+- Colour MappingsはColorのrecipe分類で、image/text/video-drivenの独立runtimeではない。fixture-order MappingはT19-Bで独立化済み。
 - Cue所有paramsはactivation時のcopyであり、Cue間parameter morph/fadeは無い。
 - calibrated Amber/Lime/UV/multi-emitter colour outputは未対応。
 
@@ -86,7 +86,7 @@
 
 受入: additive serde defaults、legacy `.sdc` byte-shape、project/preset round-trip、200 fixtures x 64 effects regression、release 44 Hz mixed benchmark、physical acceptance分離。
 
-進捗（2026-07-23）: **T19-A完了**。`EffectKind::Curve`、独立`CurveEffectRequest`、2〜32点のCubic Hermite channel function（各点のin/out tangent）、command-time compile、独立runtime/editor/preset/Cue-owned paramsを追加した。旧project/presetは`curve`を出力せずbyte-shapeを維持。protocol 36、engine 378、Tauri 322、5解像度FX viewport、2635/2635 localization、frontend buildがgreen。Curveを含む64 FX×200灯体release hot-pathはp95 2.778ms / p99 3.400ms / max 4.056ms。T19-B〜Eは未完。
+進捗（2026-07-23）: **T19-A/B完了**。T19-Aは`EffectKind::Curve`、独立`CurveEffectRequest`、2〜32点のCubic Hermite channel function（各点のin/out tangent）、command-time compile、独立runtime/editor/preset/Cue-owned paramsを追加した。T19-Bは`EffectKind::Mapping`、明示fixture順、Forward/Reverse/Bounce/Static、LFO shape、Absolute/Relative、phase/spread/repetitions、free/beat clockを独立protocol/runtime/editor/preset/Cue paramsとして追加し、Wave/Ball/FanをMapping bodyへ移行した。groupはpatch順、selectionは保存順を使い、tick前にtarget index/cacheを構築する。旧project/presetは`curve`/`mapping`を出力せずbyte-shapeを維持。protocol 37、engine 382、Tauri 323、5解像度FX viewport、2666/2666 localization、frontend buildがgreen。Color/Chaser/Move/Curve/Mapping混載64 FX×200灯体release hot-pathはp95 1.902ms / p99 2.445ms / max 2.789ms。T19-C〜Eは未完。
 
 ### T20: Complete Scene Live
 

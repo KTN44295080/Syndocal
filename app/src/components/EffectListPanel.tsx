@@ -27,6 +27,7 @@ export function EffectListPanel(props: EffectListPanelProps) {
     if (effect.effect_type === "Move") return "Move";
     if (effect.effect_type === "Value") return "Value";
     if (effect.effect_type === "Curve") return "Curve";
+    if (effect.effect_type === "Mapping") return "Mapping";
     return effect.effect_type === "PositionWave" ? "Wave" : "LFO";
   };
   const effectKindClass = (effect: EffectSummary) => {
@@ -35,6 +36,7 @@ export function EffectListPanel(props: EffectListPanelProps) {
     if (effect.effect_type === "Move") return "move";
     if (effect.effect_type === "Value") return "value";
     if (effect.effect_type === "Curve") return "curve";
+    if (effect.effect_type === "Mapping") return "mapping";
     return effect.effect_type === "PositionWave" ? "wave" : "lfo";
   };
   const timingLabel = (effect: EffectSummary) => {
@@ -46,6 +48,8 @@ export function EffectListPanel(props: EffectListPanelProps) {
           ? effect.move_effect?.clock_sync
         : effect.effect_type === "Curve"
           ? effect.curve?.clock_sync
+        : effect.effect_type === "Mapping"
+          ? effect.mapping?.clock_sync
         : effect.clock_sync;
     if (clockSync) {
       return `sync ${clockSync.beats} beat`;
@@ -58,6 +62,8 @@ export function EffectListPanel(props: EffectListPanelProps) {
           ? effect.move_effect?.period_ms
         : effect.effect_type === "Curve"
           ? effect.curve?.period_ms
+        : effect.effect_type === "Mapping"
+          ? effect.mapping?.period_ms
         : effect.period_ms;
     if (periodMs) {
       return effect.effect_type === "Chaser" ? `${periodMs}ms/step` : `${periodMs}ms`;
@@ -166,6 +172,16 @@ export function EffectListPanel(props: EffectListPanelProps) {
                       </>
                     )}
                   </Show>
+                  <Show when={effect.effect_type === "Mapping" ? effect.mapping : null}>
+                    {(mapping) => (
+                      <>
+                        <span class="effectMetaChip">{mapping().shape}</span>
+                        <span class="effectMetaChip">{mapping().direction}</span>
+                        <span class="effectMetaChip tabularNums">spread {Math.round(mapping().fixture_spread * 100)}%</span>
+                        <span class="effectMetaChip tabularNums">{mapping().repetitions.toFixed(2)}× order</span>
+                      </>
+                    )}
+                  </Show>
                   <span
                     class={(
                       effect.effect_type === "Color"
@@ -176,6 +192,8 @@ export function EffectListPanel(props: EffectListPanelProps) {
                             ? effect.move_effect?.clock_sync
                           : effect.effect_type === "Curve"
                             ? effect.curve?.clock_sync
+                          : effect.effect_type === "Mapping"
+                            ? effect.mapping?.clock_sync
                           : effect.clock_sync
                     ) ? "effectMetaChip sync" : "effectMetaChip"}
                   >
@@ -188,7 +206,7 @@ export function EffectListPanel(props: EffectListPanelProps) {
                     <span class="effectMetaChip range">{rangeLabel(effect)}</span>
                   </Show>
                   <span class="effectMetaChip target">{targetLabel(effect)}</span>
-                  <span class="effectMetaChip blend">{effect.color?.blend_mode ?? effect.chaser?.blend_mode ?? effect.move_effect?.blend_mode ?? effect.blend_mode}</span>
+                  <span class="effectMetaChip blend">{effect.color?.blend_mode ?? effect.chaser?.blend_mode ?? effect.move_effect?.blend_mode ?? effect.mapping?.blend_mode ?? effect.blend_mode}</span>
                 </div>
               </button>
               <div class="effectItemActions">

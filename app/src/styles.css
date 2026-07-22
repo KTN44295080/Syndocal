@@ -4816,6 +4816,11 @@ progress {
   color: #f0cb83;
 }
 
+.effectMetaChip.mapping {
+  border-color: #4f8b78;
+  color: #9ee1ca;
+}
+
 .effectListRows .effectGraphicalPreview {
   width: 100%;
 }
@@ -24316,6 +24321,143 @@ h3 {
 
 .curveEffectPointRow input {
   width: 100%;
+}
+
+.mappingEffectPreviewGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(250px, 0.75fr);
+  gap: 8px;
+  min-width: 0;
+}
+
+.mappingEffectCanvas {
+  height: 146px;
+}
+
+.mappingEffectOrderPanel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 5px;
+  min-width: 0;
+  min-height: 0;
+  max-height: 198px;
+  border: 1px solid #343a3f;
+  border-radius: 2px;
+  background: #181c1f;
+  padding: 7px;
+}
+
+.mappingEffectOrderPanel > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mappingEffectOrderPanel > header > div {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.mappingEffectOrderPanel > header span,
+.mappingEffectOrderPanel > p {
+  margin: 0;
+  color: #8f999f;
+  font-size: 10px;
+}
+
+.mappingEffectOrderList {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.mappingEffectOrderList li {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  min-height: 31px;
+  border: 1px solid #343a3f;
+  background: #121619;
+  padding: 2px 3px;
+}
+
+.mappingEffectOrderList li > strong {
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mappingEffectOrderList li > small,
+.mappingEffectOrderIndex {
+  color: #8f999f;
+  font-size: 10px;
+}
+
+.mappingEffectOrderIndex {
+  display: grid;
+  place-items: center;
+  min-height: 24px;
+  background: #20272b;
+  color: #9ee1ca;
+}
+
+.mappingEffectOrderList li > div {
+  display: flex;
+  gap: 2px;
+}
+
+.mappingEffectOrderList button {
+  width: 27px;
+  min-width: 27px;
+  min-height: 27px;
+  padding: 0;
+}
+
+.mappingEffectShapeRow {
+  display: grid;
+  grid-template-columns: minmax(0, 0.55fr) minmax(0, 0.8fr) minmax(0, 1.25fr);
+  align-items: end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mappingEffectShapeRow > label {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.mappingDirectionSegmented {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.mappingEffectTransportRow {
+  grid-template-columns: minmax(0, 0.55fr) minmax(0, 1.45fr);
+}
+
+.mappingEffectPhaseGrid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@container move-effect-editor (max-width: 780px) {
+  .mappingEffectPreviewGrid,
+  .mappingEffectShapeRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mappingEffectPhaseGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @container move-effect-editor (max-width: 860px) {

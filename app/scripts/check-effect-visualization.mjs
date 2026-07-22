@@ -37,6 +37,10 @@ const curveEditorSource = await readFile(
   new URL("../src/components/CurveEffectEditorPanel.tsx", import.meta.url),
   "utf8",
 );
+const mappingEditorSource = await readFile(
+  new URL("../src/components/MappingEffectEditorPanel.tsx", import.meta.url),
+  "utf8",
+);
 
 const expectedFamilies = [
   "STEPS",
@@ -75,8 +79,8 @@ assert.equal(
 );
 assert.match(
   appSource,
-  /const useMappingSelectionAsWaveEffectTarget = \(\) => \{[\s\S]*?selectEffectType\("PositionWave"\);[\s\S]*?\n  \};/,
-  "the Mapping-to-wave route must synchronize the effect type, chooser family, and recipe",
+  /const useMappingSelectionAsWaveEffectTarget = \(\) => \{[\s\S]*?selectEffectType\("Mapping"\);[\s\S]*?setMappingFixtureSpread\(1\);[\s\S]*?setMappingRepetitions\(1\);[\s\S]*?\n  \};/,
+  "the 2D Mapping route must prepare the independent fixture-order Mapping draft",
 );
 
 const closeTo = (actual, expected, message, epsilon = 1e-10) => {
@@ -377,4 +381,32 @@ assert.equal(
   "the Curve Saw recipe must load the independent Curve body",
 );
 
-console.log("T19 effect family, LFO, palette, Move, Value, and independent Curve visualization contracts ok");
+assert.match(
+  mappingEditorSource,
+  /buildLfoPreviewPath\(props\.shape, props\.phase/,
+  "the independent Mapping editor must use the shared runtime-aligned LFO preview helper",
+);
+assert.match(
+  mappingEditorSource,
+  /props\.onFixtureOrder\(next\)/,
+  "the independent Mapping editor must reorder authored fixture order",
+);
+assert.match(
+  mappingEditorSource,
+  /aria-label="Authored fixture order"/,
+  "the independent Mapping editor must expose authored fixture order",
+);
+assert.match(
+  appSource,
+  /family === "MAPPINGS"\s*\? "Mapping"/,
+  "the MAPPINGS family must select the independent Mapping kind",
+);
+for (const preset of ["wave", "ball", "fan"]) {
+  assert.equal(
+    chooser.sampleEffectPresetOptions.find((option) => option.value === preset)?.engine,
+    "Mapping",
+    `${preset} must load the independent fixture-order Mapping body`,
+  );
+}
+
+console.log("T19 effect family, LFO, palette, Move, Value, independent Curve, and fixture-order Mapping visualization contracts ok");

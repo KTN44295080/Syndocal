@@ -36,7 +36,8 @@ const effectParamsDescriptor = (params: EffectParamsSnapshot): { kind: EffectKin
   if ("Chaser" in params) return { kind: "Chaser", label: params.Chaser.label };
   if ("Move" in params) return { kind: "Move", label: params.Move.label };
   if ("Value" in params) return { kind: "Value", label: params.Value.label };
-  return { kind: "Curve", label: params.Curve.label };
+  if ("Curve" in params) return { kind: "Curve", label: params.Curve.label };
+  return { kind: "Mapping", label: params.Mapping.label };
 };
 
 interface CueEffectRecallRowModel {
