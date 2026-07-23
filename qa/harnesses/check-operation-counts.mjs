@@ -152,6 +152,16 @@ async function navigateFixture(fixture) {
 
 async function openFixture(fixture) {
   await navigateFixture(fixture);
+  const localeChanged = await evalJs(`(() => {
+    const key = 'syndocal.uiLocale.v1';
+    const changed = window.localStorage.getItem(key) !== 'en';
+    window.localStorage.setItem(key, 'en');
+    return changed;
+  })()`);
+  if (localeChanged) {
+    await send("Page.reload", { ignoreCache: true });
+    await sleep(5000);
+  }
   await evalJs(`(async () => {
     const raf2 = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
     const clickVis = (sel, text) => { const el = [...document.querySelectorAll(sel)].find(b => b.textContent.trim() === text && b.getBoundingClientRect().width > 0); el?.click(); return !!el; };
@@ -222,6 +232,16 @@ try {
       const r = light.getBoundingClientRect();
       return JSON.stringify({ x: r.x + r.width * 0.55, y: r.y + r.height / 2 });
     })()`));
+    if (!grip || !lane) {
+      const diagnostic = JSON.parse(await evalJs(`(() => JSON.stringify({
+        lang: document.documentElement.lang,
+        workspace: document.querySelector('.workspaceTabs')?.textContent?.trim() || '',
+        controlMode: document.querySelector('.controlModeTabs')?.textContent?.trim() || '',
+        sceneCards: document.querySelectorAll('.sceneMatrixCard[data-timeline-cue-drag-source]').length,
+        timelineLayers: document.querySelectorAll('[data-timeline-layer-kind]').length,
+      }))()`));
+      throw new Error(`Scene-to-timeline drag target unavailable: ${JSON.stringify(diagnostic)}`);
+    }
     await opDrag(grip, lane); // op 1
     const after = Number(await evalJs("document.querySelectorAll('.timelineMarker.sceneBlock').length"));
     const dropDiagnostic = JSON.parse(await evalJs(`(() => {

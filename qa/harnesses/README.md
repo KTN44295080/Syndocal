@@ -62,6 +62,23 @@ between-phase browser recycling (fresh profile each time) isolates it.
   Patch, static programming, FX target application, and native Save/reopen
   are still outside this harness and remain unmeasured.
 
+## External Art-Net monitor
+
+- `artnet-monitor.mjs` is a separate-process ArtDMX receiver and 512-channel
+  dashboard for the product's formal external-visualizer path. It parses UDP
+  6454 fail-closed, tracks sequence continuity per sender/universe, records
+  payload transitions and writes machine-readable JSON evidence.
+
+  ```powershell
+  node qa/harnesses/artnet-monitor.mjs --self-test
+  node qa/harnesses/artnet-monitor.mjs --duration-seconds 20 --evidence target/qa/artnet-acceptance.json
+  ```
+
+  Open `http://127.0.0.1:6455/` while it is running. Loopback proves the
+  Syndocal software/process boundary; a receiving PC, Art-Net node or fixture
+  rig remains separate hardware acceptance. See
+  `qa/ARTNET_EXTERNAL_VISUALIZER_ACCEPTANCE.md`.
+
 ## Bench launchers
 
 - `check-asio-build.ps1`, `ndi_studio_monitor_launcher.rs`,

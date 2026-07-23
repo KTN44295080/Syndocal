@@ -1,7 +1,7 @@
 # Daslight parity current-HEAD gap matrix
 
 - 監査日: 2026-07-23
-- 監査基準: `e7b29e1` + T19-E作業差分
+- 監査基準: `83970ea` + T23受入差分
 - 製品境界: 内蔵3Dビジュアライザーは対象外。Art-Netを外部ビジュアライザーへ送る経路を正式な可視化受入とする
 - 判定規則: Syndocal実装、同一タスク計測、ネイティブ/物理出力を別々に扱い、証拠のないDaslight比較は`未計測`とする
 
@@ -15,14 +15,14 @@
 | Scene trigger / Live speed / reset | すべて1 gesture、DOM runtime truthまで検証 | 未計測 | 未計測 | Daslight同一開始状態を実測 |
 | Touch live / flash / Edit / control追加 | 各1 gesture、flashはdown/up、追加は件数増加を検証 | 未計測 | 未計測 | Daslight remote/touch面を同一タスク実測 |
 | FX family / recipe選択 | 各1 click、active familyとrecipe選択を検証 | 未計測 | 未計測 | 作成、target適用、Cue保存まで比較を拡張 |
-| Independent FX | 7系統が独立body/runtime/editor。Colour Mappingは埋め込みimage/text/video、matrix cell、UV/sampling/playbackを持ち、GDTF CIE xyY付き3–16 emitterはcalibrated fixed-anchor mixingを共有する。metadata無し追加emittersはzero | Daslightは7独立generator群 | ソフトウェア構造差は解消・プリセット/実出力未計測 | T23の物理/外部可視化受入へ分離 |
-| Cue FX parameter transition | Cue-owned Effectごとに任意fade、同一IDの直前live result→次state、連続/離散属性別policy、video target対応 | あり | ソフトウェア構造差は解消・同一タスク未計測 | T23で実ショー/Art-NetとDaslight操作を実測 |
-| Scene Live | scene speed / size / phase / direction / segment / flash、group dimmer / strobe / solo | 同等機能あり | ソフトウェア構造差は解消・同一タスク/実出力未計測 | T23で実ショー/Art-NetとDaslight操作を実測 |
-| Fixture onboarding | GDTF import、faceted Share検索、favorites、検証付きoffline cache/health、exact-layout repair、generic verified common pack、custom builder | 商用統合catalogと復旧UXあり | ソフトウェア構造差は解消・catalog規模/実サービス運用は未計測 | T23でlive Share/native restart/Art-Net実出力 |
-| Workspace | Stage / Timeline popout、split保存 | 任意pane/workspace構成 | 劣 | T22で名前付きdetachable workspace |
-| Operator policy | destructive confirmationはあるがpassword/partial lockなし | lock機能あり | 劣 | T22でcredential-safe full/partial lock |
-| 3D visualization | 内蔵しない | 内蔵あり | 比較対象外 | Art-Net外部可視化をT23で実証 |
-| DMX/network output | Art-Net / sACN / serial DMX、RDM、active/standby基盤 | 対応 | 実装済み・物理受入未完 | T23で利用可能な外部Art-Net経路、node soakは外部依存を分離 |
+| Independent FX | 7系統が独立body/runtime/editor。Colour Mappingは埋め込みimage/text/video、matrix cell、UV/sampling/playbackを持ち、GDTF CIE xyY付き3–16 emitterはcalibrated fixed-anchor mixingを共有する。metadata無し追加emittersはzero | Daslightは7独立generator群 | ソフトウェア構造差は解消。Shinkan動的FXの別プロセスArt-Net受信PASS | プリセット量と実灯体/商用visualizer目視は外部比較 |
+| Cue FX parameter transition | Cue-owned Effectごとに任意fade、同一IDの直前live result→次state、連続/離散属性別policy、video target対応 | あり | ソフトウェア構造差は解消・Daslight同一タスク未計測 | 実灯体とDaslight操作を外部比較 |
+| Scene Live | scene speed / size / phase / direction / segment / flash、group dimmer / strobe / solo。Shinkanでspeed x4→retrigger x1とArt-Net変化をnative実証 | 同等機能あり | ソフトウェア/実出力PASS・Daslight同一タスク未計測 | 実灯体とDaslight操作を外部比較 |
+| Fixture onboarding | GDTF import、faceted Share検索、favorites、検証付きoffline cache/health、exact-layout repair、generic verified common pack、custom builder | 商用統合catalogと復旧UXあり | ソフトウェア構造差は解消・catalog規模/live account未計測 | live Shareとcatalog-scale比較を外部実施 |
+| Workspace | 7主要paneの名前付きdetachable workspace、複数window、monitor placement復元 | detachable dual-monitor構成 | ソフトウェア差を解消 | 実2-monitor operator rehearsal |
+| Operator policy | credential-safe PBKDF2 verifier、full / partial lock、main/pane共通policy | full / partial lock | ソフトウェア差を解消 | operator rehearsal |
+| 3D visualization | 内蔵しない | 内蔵あり | 比較対象外 | 別プロセスArt-Net monitor受信PASS。商用visualizer描画は外部環境依存 |
+| DMX/network output | Art-Net / sACN / serial DMX、RDM、active/standby基盤。Shinkan U0 512-byte ArtDMXを別プロセスで880/880 frame受信 | 対応 | software/process境界PASS・物理LAN受入未完 | 外部PC/node一時間soakを外部依存として分離 |
 | Standalone hardware write | 対応ハード製品なし | 対応機器あり | PCソフト範囲外 | 未実装を隠さず製品境界として最終判定に明記 |
 
 ## T18 operation-count coverage
