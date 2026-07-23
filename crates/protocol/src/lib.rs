@@ -346,10 +346,34 @@ pub struct FixturePreset {
     pub values: Vec<AttributeValueSummary>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum OperatorLockMode {
+    Full,
+    Partial,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OperatorCredentialVerifier {
+    pub scheme: String,
+    pub iterations: u32,
+    pub salt_b64: String,
+    pub verifier_b64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OperatorPolicy {
+    pub lock_mode: OperatorLockMode,
+    #[serde(default)]
+    pub lock_on_load: bool,
+    pub credential: OperatorCredentialVerifier,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProjectFile {
     pub version: u32,
     pub app: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_policy: Option<OperatorPolicy>,
     #[serde(default)]
     pub custom_profiles: Vec<FixtureProfileSummary>,
     pub snapshot: EngineSnapshot,

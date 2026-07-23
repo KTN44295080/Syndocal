@@ -315,6 +315,7 @@ fn import_bytes(bytes: &[u8], path_label: &str) -> Result<DvcImportOutcome, Stri
     let project = ProjectFile {
         version: 1,
         app: "Syndocal".to_string(),
+        operator_policy: None,
         custom_profiles: profiles
             .iter()
             .map(|profile| profile.summary.clone())

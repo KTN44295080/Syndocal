@@ -22,7 +22,11 @@ export interface DesktopWindowShortcutEvent {
 }
 
 export const shouldMountDesktopWindowModeController = (search: string): boolean => {
-  const rawOutputId = new URLSearchParams(search).get("videoOutputId");
+  const params = new URLSearchParams(search);
+  if (params.has("syndocalPaneWindow")) {
+    return false;
+  }
+  const rawOutputId = params.get("videoOutputId");
   if (!rawOutputId) {
     return true;
   }

@@ -1,4 +1,4 @@
-import { createSignal, For, onCleanup, Show } from "solid-js";
+import { createSignal, For, onCleanup, Show, type JSX } from "solid-js";
 import {
   projectRecoverySourceLabel,
   projectRecoveryTimeLabel,
@@ -11,6 +11,7 @@ import type {
   ApplicationUpdateProgress,
   ProjectBackupSummary,
   ProjectHistoryStatus,
+  OperatorLockMode,
 } from "../types";
 import { controlModes, setupAreaForSubTab, setupAreas, setupSubTabs, setupSubTabsForArea } from "../uiModes";
 import type { ControlMode, SetupSubTab, WorkspaceTab } from "../uiModes";
@@ -44,6 +45,8 @@ type WorkspaceChromeProps = {
   uiLocale: UiLocale;
   canGo: boolean;
   nextCueLabel: string;
+  operatorLockMode: OperatorLockMode | null;
+  operations: JSX.Element;
   onWorkspaceTab: (tab: WorkspaceTab) => void;
   onSetupSubTab: (tab: SetupSubTab) => void;
   onControlMode: (mode: ControlMode) => void;
@@ -143,6 +146,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
             aria-label="Project menu"
             aria-haspopup="menu"
             aria-expanded={projectMenuOpen()}
+            disabled={props.operatorLockMode !== null}
             onClick={() => setProjectMenuOpen((open) => !open)}
           >
             ...
@@ -365,6 +369,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               aria-keyshortcuts="F1"
               onClick={() => props.onWorkspaceTab("setup")}
               aria-pressed={props.workspaceTab === "setup"}
+              disabled={props.operatorLockMode !== null}
             >
               Setup
             </button>
@@ -395,6 +400,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
         >
           <strong>Syndocal</strong>
           <span>{props.projectLabel}</span>
+          {props.operations}
         </div>
 
         <div class="status">
@@ -425,7 +431,12 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
           <button class="projectAction" title="Save project (Ctrl/Cmd+S)" onClick={props.onSaveProject}>
             Save
           </button>
-          <button class="projectAction" title="Load project (Ctrl/Cmd+O)" onClick={props.onLoadProject}>
+          <button
+            class="projectAction"
+            title="Load project (Ctrl/Cmd+O)"
+            disabled={props.operatorLockMode !== null}
+            onClick={props.onLoadProject}
+          >
             Load
           </button>
         </div>
@@ -483,6 +494,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
                   aria-keyshortcuts={mode.label[0]}
                   onClick={() => props.onControlMode(mode.id)}
                   aria-pressed={props.controlMode === mode.id}
+                  disabled={props.operatorLockMode === "Partial" && mode.id === "edit"}
                 >
                   {mode.label}
                 </button>

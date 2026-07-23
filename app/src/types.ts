@@ -677,9 +677,25 @@ export interface NodeGraphPresetFile {
   graph: NodeGraphSummary;
 }
 
+export type OperatorLockMode = "Full" | "Partial";
+
+export interface OperatorCredentialVerifier {
+  scheme: "PBKDF2-SHA256";
+  iterations: number;
+  salt_b64: string;
+  verifier_b64: string;
+}
+
+export interface OperatorPolicy {
+  lock_mode: OperatorLockMode;
+  lock_on_load: boolean;
+  credential: OperatorCredentialVerifier;
+}
+
 export interface ProjectFile {
   version: number;
   app: string;
+  operator_policy?: OperatorPolicy | null;
   custom_profiles?: FixtureProfileSummary[];
   snapshot: EngineSnapshot;
 }

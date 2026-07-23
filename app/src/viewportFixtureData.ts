@@ -20,6 +20,7 @@ import type {
 } from "./types";
 import { defaultColorAdjust, defaultFxAdjust, defaultTransform } from "./videoLayerDefaults";
 import { defaultVideoOutputMapping } from "./videoOutputMapping";
+import { isPaneWindowKind, type PaneWindowKind } from "./workspaceProfiles";
 
 export const browserViewportFixture = (tauriRuntime: boolean) => {
   if (tauriRuntime || typeof window === "undefined") {
@@ -30,17 +31,17 @@ export const browserViewportFixture = (tauriRuntime: boolean) => {
 
 // T12: pane-window mode works in BOTH browser and Tauri runtimes - a pane
 // window is the full app collapsed to one pane by a root class.
-export const paneWindowMode = (): "" | "stage" | "timeline" => {
+export const paneWindowMode = (): "" | PaneWindowKind => {
   if (typeof window === "undefined") return "";
   const value = new URLSearchParams(window.location.search).get("syndocalPaneWindow") ?? "";
-  return value === "stage" || value === "timeline" ? value : "";
+  return isPaneWindowKind(value) ? value : "";
 };
 
 // T12: harness-only simulation of popped panes in the main window.
-export const browserPoppedPanes = (): string[] => {
+export const browserPoppedPanes = (): PaneWindowKind[] => {
   if (typeof window === "undefined") return [];
   const value = new URLSearchParams(window.location.search).get("syndocalPoppedPanes") ?? "";
-  return value.split(",").map((pane) => pane.trim()).filter((pane) => pane === "stage" || pane === "timeline");
+  return value.split(",").map((pane) => pane.trim()).filter(isPaneWindowKind);
 };
 
 const viewportFixtureControls: AttributeControl[] = [

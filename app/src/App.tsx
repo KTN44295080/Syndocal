@@ -130,12 +130,30 @@ import {
   type TimelineCueDragState,
 } from "./timelineCueDrag";
 import { WorkspaceChrome } from "./components/WorkspaceChrome";
+import { WorkspaceOperationsMenu } from "./components/WorkspaceOperationsMenu";
+import { OperatorLockOverlay } from "./components/OperatorLockOverlay";
 import { WorkspaceSplitHandle } from "./components/WorkspaceSplitHandle";
 import {
   defaultWorkspaceLayout,
   loadWorkspaceLayout,
   saveWorkspaceLayout,
+  type WorkspaceLayout,
 } from "./workspaceLayoutStorage";
+import {
+  loadNamedWorkspaces,
+  paneWindowKinds,
+  saveNamedWorkspaces,
+  upsertNamedWorkspace,
+  type NamedWorkspaceProfile,
+  type PaneWindowKind,
+  type PaneWindowPlacement,
+} from "./workspaceProfiles";
+import {
+  createOperatorPolicy,
+  operatorCommandAllowed,
+  operatorPolicyFromUnknown,
+  verifyOperatorPassword,
+} from "./operatorPolicy";
 import { type ColorWheelFunctionEntry, type GoboSlotPattern, type GoboWheelFunctionEntry } from "./components/WheelSlotPanel";
 import {
   customProfileAttributeDraftChannelLabel,
@@ -255,6 +273,8 @@ import type {
   OscControlAction,
   OscControlMapping,
   OscInputConfig,
+  OperatorLockMode,
+  OperatorPolicy,
   PatchFixtureRequest,
   PatchedFixtureSummary,
   Phase1SmokeReport,
@@ -623,6 +643,7 @@ const isTauriRuntime = () =>
   typeof window !== "undefined" && Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
 
 const projectHistoryChangedEvent = "syndocal:project-history-changed";
+let activeOperatorLockMode: OperatorLockMode | null = null;
 
 const projectMutationCommands = new Set([
   "analyze_audio_file",
@@ -777,6 +798,8 @@ const projectMutationCommands = new Set([
   "set_stage_object",
   "remove_stage_object",
   "set_touch_surface",
+  "set_operator_policy",
+  "clear_operator_policy",
 ]);
 
 const projectMutationLabel = (command: string) =>
@@ -798,6 +821,13 @@ const projectMutationCoalesceKey = (command: string, args?: Record<string, unkno
 const invoke = async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
   if (!isTauriRuntime()) {
     throw new Error(tauriBackendUnavailableMessage);
+  }
+  if (!operatorCommandAllowed(activeOperatorLockMode, command, projectMutationCommands.has(command))) {
+    throw new Error(
+      activeOperatorLockMode === "Full"
+        ? "Operator Full Lock allows only status reads and emergency blackout controls."
+        : "Operator Partial Lock blocks programming and project replacement commands.",
+    );
   }
   if (!projectMutationCommands.has(command)) {
     return tauriInvoke<T>(command, args);
@@ -996,6 +1026,11 @@ export default function App() {
     undo_label: null,
     redo_label: null,
   });
+  const [namedWorkspaces, setNamedWorkspaces] = createSignal<NamedWorkspaceProfile[]>(loadNamedWorkspaces());
+  const [selectedNamedWorkspaceId, setSelectedNamedWorkspaceId] = createSignal<string | null>(null);
+  const [operatorPolicy, setOperatorPolicy] = createSignal<OperatorPolicy | null>(null);
+  const [operatorPolicyReady, setOperatorPolicyReady] = createSignal(false);
+  const [operatorLockMode, setOperatorLockMode] = createSignal<OperatorLockMode | null>(null);
   const [cleanProjectSignature, setCleanProjectSignature] = createSignal<string | null>(null);
   const [workspaceTab, setWorkspaceTab] = createSignal<WorkspaceTab>(initialWorkspaceLayout.workspace_tab);
   const [topSplitRatio, setTopSplitRatio] = createSignal(initialWorkspaceLayout.top_split_ratio);
@@ -1582,22 +1617,25 @@ export default function App() {
   // main window's record of which panes live in separate windows. Window
   // placement is machine-specific, so persistence is localStorage, not .sdc.
   const paneWindow = paneWindowMode();
-  const initialPoppedPanes = (): string[] => {
+  const autoOpenPaneWindows = new URLSearchParams(window.location.search).get("syndocalAutoPaneWindows") === "1";
+  const initialPoppedPanes = (): PaneWindowKind[] => {
     const fromParam = browserPoppedPanes();
     if (fromParam.length > 0) return fromParam;
+    if (autoOpenPaneWindows) return [];
     if (!isTauriRuntime() || paneWindow) return [];
     try {
       const raw = window.localStorage.getItem("syndocal.paneWindows.v1");
       const parsed: unknown = raw ? JSON.parse(raw) : [];
       return Array.isArray(parsed)
-        ? parsed.filter((pane): pane is string => pane === "stage" || pane === "timeline")
+        ? parsed.filter((pane): pane is PaneWindowKind =>
+            typeof pane === "string" && paneWindowKinds.includes(pane as PaneWindowKind))
         : [];
     } catch {
       return [];
     }
   };
-  const [poppedPanes, setPoppedPanes] = createSignal<string[]>(initialPoppedPanes());
-  const persistPoppedPanes = (panes: string[]) => {
+  const [poppedPanes, setPoppedPanes] = createSignal<PaneWindowKind[]>(initialPoppedPanes());
+  const persistPoppedPanes = (panes: PaneWindowKind[]) => {
     try {
       window.localStorage.setItem("syndocal.paneWindows.v1", JSON.stringify(panes));
     } catch {
@@ -1611,7 +1649,7 @@ export default function App() {
       return next;
     });
   };
-  const markPaneWindowOpen = (pane: "stage" | "timeline") => {
+  const markPaneWindowOpen = (pane: PaneWindowKind) => {
     setPoppedPanes((current) => {
       const next = current.includes(pane) ? current : [...current, pane];
       persistPoppedPanes(next);
@@ -1619,7 +1657,7 @@ export default function App() {
     });
   };
   let paneWindowEventsReady: Promise<boolean> = Promise.resolve(true);
-  const openPaneWindow = async (pane: "stage" | "timeline") => {
+  const openPaneWindow = async (pane: PaneWindowKind, placement: PaneWindowPlacement | null = null) => {
     if (isTauriRuntime()) {
       if (!await paneWindowEventsReady) {
         setMessage("Pane window events are unavailable.");
@@ -1627,7 +1665,7 @@ export default function App() {
       }
       markPaneWindowOpen(pane);
       try {
-        await invoke("open_pane_window", { pane });
+        await invoke("open_pane_window", { pane, placement });
       } catch (error) {
         acknowledgePaneWindowClosed(pane);
         setMessage(`Pane window failed: ${error}`);
@@ -1642,7 +1680,7 @@ export default function App() {
     }
     markPaneWindowOpen(pane);
   };
-  const closePaneWindow = async (pane: "stage" | "timeline") => {
+  const closePaneWindow = async (pane: PaneWindowKind) => {
     if (isTauriRuntime()) {
       if (!await paneWindowEventsReady) {
         setMessage("Pane window events are unavailable.");
@@ -1661,7 +1699,7 @@ export default function App() {
     }
     acknowledgePaneWindowClosed(pane);
   };
-  const togglePaneWindow = (pane: "stage" | "timeline") => {
+  const togglePaneWindow = (pane: PaneWindowKind) => {
     void (poppedPanes().includes(pane) ? closePaneWindow(pane) : openPaneWindow(pane));
   };
   if (isTauriRuntime() && !paneWindow) {
@@ -1678,7 +1716,7 @@ export default function App() {
         unlistenPaneWindowClosed = unlisten;
         await Promise.all(poppedPanes().map(async (pane) => {
           try {
-            await invoke("open_pane_window", { pane });
+            await invoke("open_pane_window", { pane, placement: null });
           } catch (error) {
             acknowledgePaneWindowClosed(pane);
             setMessage(`Pane window restore failed: ${error}`);
@@ -1696,12 +1734,138 @@ export default function App() {
       unlistenPaneWindowClosed?.();
     });
   }
-  if (paneWindow) {
-    setWorkspaceTab("control");
-    // Force a mode whose surface contains the pane: a persisted "mixer" mode
-    // would hide the stage column (exclusive surface) inside a stage window.
-    setControlMode("live");
+  if (isTauriRuntime() && !paneWindow && autoOpenPaneWindows) {
+    void paneWindowEventsReady.then(async (ready) => {
+      if (!ready) return;
+      for (const [index, pane] of paneWindowKinds.entries()) {
+        await openPaneWindow(pane, {
+          pane,
+          x: 48 + index * 42,
+          y: 64 + index * 34,
+          width: 860,
+          height: 520,
+          maximized: false,
+        });
+      }
+    });
   }
+  if (paneWindow) {
+    if (paneWindow === "setup") {
+      setWorkspaceTab("setup");
+    } else if (paneWindow === "touch") {
+      setWorkspaceTab("touch");
+    } else {
+      setWorkspaceTab("control");
+      setControlMode(paneWindow === "programmer" ? "edit" : paneWindow === "mixer" ? "mixer" : "live");
+    }
+  }
+  const capturePaneWindowPlacements = async (): Promise<PaneWindowPlacement[]> => {
+    if (isTauriRuntime()) {
+      return invoke<PaneWindowPlacement[]>("capture_pane_window_placements");
+    }
+    return poppedPanes().map((pane, index) => ({
+      pane,
+      x: 80 + index * 48,
+      y: 80 + index * 36,
+      width: 1_280,
+      height: 720,
+      maximized: false,
+    }));
+  };
+  const saveNamedWorkspace = async (name: string) => {
+    try {
+      const placements = await capturePaneWindowPlacements();
+      const next = upsertNamedWorkspace(namedWorkspaces(), name, currentWorkspaceLayout(), placements);
+      if (!saveNamedWorkspaces(next)) throw new Error("Local workspace storage is unavailable.");
+      setNamedWorkspaces(next);
+      const saved = next.find((profile) => profile.name.localeCompare(name.trim(), undefined, { sensitivity: "accent" }) === 0);
+      setSelectedNamedWorkspaceId(saved?.id ?? null);
+      setMessage(`Saved local workspace ${saved?.name ?? name.trim()} with ${placements.length} pane window(s).`);
+    } catch (error) {
+      setMessage(`Workspace save failed: ${String(error)}`);
+    }
+  };
+  const applyNamedWorkspace = async (profile: NamedWorkspaceProfile) => {
+    if (operatorLockMode() !== null) {
+      setMessage("Unlock operator mode before changing the workspace layout.");
+      return;
+    }
+    try {
+      applyWorkspaceLayout(profile.layout);
+      const desired = new Map(profile.pane_windows.map((placement) => [placement.pane, placement]));
+      await Promise.all(poppedPanes()
+        .filter((pane) => !desired.has(pane))
+        .map((pane) => closePaneWindow(pane)));
+      await Promise.all(profile.pane_windows.map((placement) => openPaneWindow(placement.pane, placement)));
+      const desiredPanes = profile.pane_windows.map((placement) => placement.pane);
+      setPoppedPanes(desiredPanes);
+      persistPoppedPanes(desiredPanes);
+      setSelectedNamedWorkspaceId(profile.id);
+      setMessage(`Applied local workspace ${profile.name}.`);
+    } catch (error) {
+      setMessage(`Workspace restore failed: ${String(error)}`);
+    }
+  };
+  const deleteNamedWorkspace = (profile: NamedWorkspaceProfile) => {
+    const next = namedWorkspaces().filter((candidate) => candidate.id !== profile.id);
+    if (!saveNamedWorkspaces(next)) {
+      setMessage("Workspace delete failed: local workspace storage is unavailable.");
+      return;
+    }
+    setNamedWorkspaces(next);
+    if (selectedNamedWorkspaceId() === profile.id) setSelectedNamedWorkspaceId(null);
+    setMessage(`Deleted local workspace ${profile.name}.`);
+  };
+
+  const configureOperatorPolicy = async (
+    password: string,
+    lockMode: OperatorLockMode,
+    lockOnLoad: boolean,
+  ) => {
+    try {
+      const policy = await createOperatorPolicy(password, lockMode, lockOnLoad);
+      await invoke("set_operator_policy", { policy });
+      setOperatorPolicy(policy);
+      setOperatorPolicyReady(true);
+      setCleanProjectSignature("__syndocal_operator_policy_changed__");
+      setProjectDirty(true);
+      setMessage(`Operator ${lockMode} Lock policy saved to this project; no plaintext password is stored.`);
+      return true;
+    } catch (error) {
+      setMessage(`Operator policy failed: ${String(error)}`);
+      return false;
+    }
+  };
+  const clearOperatorPolicy = async () => {
+    try {
+      await invoke("clear_operator_policy");
+      setOperatorSessionLock(null);
+      setOperatorPolicy(null);
+      setCleanProjectSignature("__syndocal_operator_policy_changed__");
+      setProjectDirty(true);
+      setMessage("Operator lock policy removed from this project.");
+      return true;
+    } catch (error) {
+      setMessage(`Operator policy removal failed: ${String(error)}`);
+      return false;
+    }
+  };
+  const unlockOperator = async (password: string) => {
+    const policy = operatorPolicy();
+    if (!policy) return false;
+    try {
+      if (!await verifyOperatorPassword(policy, password)) {
+        setMessage("Operator password is incorrect.");
+        return false;
+      }
+      setOperatorSessionLock(null);
+      setMessage("Operator lock released.");
+      return true;
+    } catch (error) {
+      setMessage(`Operator unlock failed: ${String(error)}`);
+      return false;
+    }
+  };
   if (
     viewportFixture === "timeline"
     || viewportFixture === "timeline-layered"
@@ -1711,6 +1875,7 @@ export default function App() {
     || viewportFixture === "cue-recall-large"
     || viewportFixture === "cue-node-graph"
     || viewportFixture === "scene-matrix"
+    || viewportFixture === "workspace-operator"
     || viewportFixture === "touch-composed"
     || viewportFixture === "fx-visual"
   ) {
@@ -1723,7 +1888,7 @@ export default function App() {
     const fxVisualFixture = viewportFixture === "fx-visual";
     const cueFixture = cueRecallFixture || cueRecallLargeFixture || fxVisualFixture;
     const cueNodeGraphFixture = viewportFixture === "cue-node-graph";
-    const sceneMatrixFixture = viewportFixture === "scene-matrix";
+    const sceneMatrixFixture = viewportFixture === "scene-matrix" || viewportFixture === "workspace-operator";
     const touchComposedFixture = viewportFixture === "touch-composed";
     const cueFixtureEffects = fxVisualFixture
       ? structuredClone(viewportFixtureData.fxVisualizationEffects)
@@ -2228,6 +2393,18 @@ export default function App() {
   if (viewportFixture === "operator-vj") {
     sceneBlockFixtureWindow.__syndocalReadOperatorVjFixtureSnapshot = () => snapshot();
   }
+  // Viewport fixtures seed their own primary workspace. Pane windows remain
+  // authoritative and must re-select the surface they were opened to host.
+  if (paneWindow) {
+    if (paneWindow === "setup") {
+      setWorkspaceTab("setup");
+    } else if (paneWindow === "touch") {
+      setWorkspaceTab("touch");
+    } else {
+      setWorkspaceTab("control");
+      setControlMode(paneWindow === "programmer" ? "edit" : paneWindow === "mixer" ? "mixer" : "live");
+    }
+  }
   onCleanup(() => {
     if (sceneBlockLargeSnapshotCloneTimer !== null) {
       window.clearInterval(sceneBlockLargeSnapshotCloneTimer);
@@ -2283,17 +2460,132 @@ export default function App() {
     setAppStatus(appStatusFromMessage(text, key));
     return text;
   };
+  const currentWorkspaceLayout = (): WorkspaceLayout => ({
+    workspace_tab: workspaceTab(),
+    setup_sub_tab: setupSubTab(),
+    control_mode: controlMode(),
+    timeline_desk_surface: timelineDeskSurface(),
+    timeline_context_drawer: timelineContextDrawer() === "block" ? "none" : timelineContextDrawer(),
+    edit_desk_surface: editDeskSurface(),
+    control_category: controlCategory(),
+    top_split_ratio: topSplitRatio(),
+    lower_split_ratio: lowerSplitRatio(),
+    selections_drawer_open: selectionsDrawerOpen(),
+  });
+  const applyWorkspaceLayout = (layout: WorkspaceLayout) => {
+    setWorkspaceTab(layout.workspace_tab);
+    setSetupSubTab(layout.setup_sub_tab);
+    setControlMode(layout.control_mode);
+    setTimelineDeskSurface(layout.timeline_desk_surface);
+    setTimelineContextDrawer(layout.timeline_context_drawer);
+    setEditDeskSurface(layout.edit_desk_surface);
+    setControlCategory(layout.control_category);
+    setTopSplitRatio(layout.top_split_ratio);
+    setLowerSplitRatio(layout.lower_split_ratio);
+    setSelectionsDrawerOpen(layout.selections_drawer_open);
+  };
+
+  const operatorLockSessionStorageKey = "syndocal.operatorLockSession.v1";
+  const matchingStoredOperatorLock = (policy: OperatorPolicy | null): OperatorLockMode | null => {
+    if (!policy) return null;
+    try {
+      const raw = window.localStorage.getItem(operatorLockSessionStorageKey);
+      if (!raw) return null;
+      const value = JSON.parse(raw) as Record<string, unknown>;
+      return value.verifier === policy.credential.verifier_b64 &&
+        (value.mode === "Full" || value.mode === "Partial")
+        ? value.mode
+        : null;
+    } catch {
+      return null;
+    }
+  };
+  const setOperatorSessionLock = (mode: OperatorLockMode | null) => {
+    const policy = operatorPolicy();
+    if (mode !== null && !policy) {
+      setMessage("Configure an operator policy before locking the show.");
+      return;
+    }
+    setOperatorLockMode(mode);
+  };
+  const refreshOperatorPolicy = async (projectBoundary = false) => {
+    if (!isTauriRuntime()) {
+      if (viewportFixture === "workspace-operator") {
+        const policy: OperatorPolicy = {
+          lock_mode: "Partial",
+          lock_on_load: true,
+          credential: {
+            scheme: "PBKDF2-SHA256",
+            iterations: 600_000,
+            salt_b64: "MTExMTExMTExMTExMTExMQ==",
+            verifier_b64: "p6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6c=",
+          },
+        };
+        setOperatorPolicy(policy);
+        const fixtureLock = new URLSearchParams(window.location.search).get("syndocalOperatorLock");
+        setOperatorLockMode(fixtureLock === "full" ? "Full" : fixtureLock === "partial" ? "Partial" : null);
+      } else {
+        setOperatorPolicy(null);
+        setOperatorLockMode(null);
+      }
+      setOperatorPolicyReady(true);
+      return operatorPolicy();
+    }
+    try {
+      const raw = await tauriInvoke<unknown>("get_operator_policy");
+      const policy = raw === null ? null : operatorPolicyFromUnknown(raw);
+      if (raw !== null && !policy) throw new Error("Project operator policy failed frontend validation.");
+      setOperatorPolicy(policy);
+      setOperatorPolicyReady(true);
+      const storedMode = matchingStoredOperatorLock(policy);
+      if (storedMode) {
+        setOperatorLockMode(storedMode);
+      } else if (projectBoundary) {
+        setOperatorLockMode(policy?.lock_on_load ? policy.lock_mode : null);
+      }
+      return policy;
+    } catch (error) {
+      setOperatorPolicy(null);
+      setOperatorLockMode(null);
+      setOperatorPolicyReady(true);
+      setMessage(`Operator policy unavailable: ${String(error)}`);
+      return null;
+    }
+  };
+  createEffect(() => {
+    if (!operatorPolicyReady()) return;
+    const mode = operatorLockMode();
+    const policy = operatorPolicy();
+    activeOperatorLockMode = mode;
+    try {
+      if (mode && policy) {
+        window.localStorage.setItem(operatorLockSessionStorageKey, JSON.stringify({
+          mode,
+          verifier: policy.credential.verifier_b64,
+        }));
+      } else {
+        window.localStorage.removeItem(operatorLockSessionStorageKey);
+      }
+    } catch {
+      // The lock remains active in this WebView if storage synchronization is unavailable.
+    }
+  });
+  const handleOperatorLockStorage = (event: StorageEvent) => {
+    if (event.key !== operatorLockSessionStorageKey) return;
+    setOperatorLockMode(matchingStoredOperatorLock(operatorPolicy()));
+  };
+  window.addEventListener("storage", handleOperatorLockStorage);
+  onCleanup(() => window.removeEventListener("storage", handleOperatorLockStorage));
+  void refreshOperatorPolicy(true);
+  createEffect(() => {
+    if (operatorLockMode() !== "Partial") return;
+    if (workspaceTab() !== "control" || controlMode() === "edit") {
+      setWorkspaceTab("control");
+      setControlMode("live");
+    }
+  });
   const resetWorkspaceLayout = () => {
-    setWorkspaceTab(defaultWorkspaceLayout.workspace_tab);
-    setSetupSubTab(defaultWorkspaceLayout.setup_sub_tab);
-    setControlMode(defaultWorkspaceLayout.control_mode);
-    setTimelineDeskSurface(defaultWorkspaceLayout.timeline_desk_surface);
-    setTimelineContextDrawer(defaultWorkspaceLayout.timeline_context_drawer);
-    setEditDeskSurface(defaultWorkspaceLayout.edit_desk_surface);
-    setControlCategory(defaultWorkspaceLayout.control_category);
-    setTopSplitRatio(defaultWorkspaceLayout.top_split_ratio);
-    setLowerSplitRatio(defaultWorkspaceLayout.lower_split_ratio);
-    setSelectionsDrawerOpen(defaultWorkspaceLayout.selections_drawer_open);
+    applyWorkspaceLayout(defaultWorkspaceLayout);
     setMessage("Workspace layout reset to the default desk.");
   };
   const {
@@ -7017,8 +7309,10 @@ export default function App() {
     }));
   };
 
+  const projectStateSignature = (nextSnapshot = snapshot()) =>
+    `${projectSnapshotSignature(nextSnapshot)}|operator:${JSON.stringify(operatorPolicy())}`;
   const markProjectClean = (nextSnapshot = snapshot()) => {
-    setCleanProjectSignature(projectSnapshotSignature(nextSnapshot));
+    setCleanProjectSignature(projectStateSignature(nextSnapshot));
     setProjectDirty(false);
   };
 
@@ -7183,7 +7477,7 @@ export default function App() {
       return;
     }
     const sceneBlockDrafts = dirtyTimelineEventDrafts();
-    const signature = `${projectSnapshotSignature(snapshot())}|scene-block-drafts:${JSON.stringify(
+    const signature = `${projectStateSignature(snapshot())}|scene-block-drafts:${JSON.stringify(
       Object.entries(sceneBlockDrafts).sort(([left], [right]) => Number(left) - Number(right)),
     )}`;
     try {
@@ -7278,7 +7572,7 @@ export default function App() {
       ));
     }
     if (syncProjectState) {
-      const signature = projectSnapshotSignature(next);
+      const signature = projectStateSignature(next);
       const cleanSignature = cleanProjectSignature();
       if (cleanSignature === null) {
         setCleanProjectSignature(signature);
@@ -7335,6 +7629,9 @@ export default function App() {
         try {
           next = await invoke<EngineSnapshot>("get_snapshot");
           setSnapshotRevision(null);
+          if (batch.some((waiter) => waiter.resetEditorDrafts)) {
+            await refreshOperatorPolicy(true);
+          }
           applyEngineSnapshot(
             next,
             batch.some((waiter) => waiter.syncProjectState),
@@ -14408,6 +14705,25 @@ export default function App() {
         applicationUpdateError={applicationUpdateError()}
         uiScale={uiScale()}
         uiLocale={uiLocale()}
+        operatorLockMode={operatorLockMode()}
+        operations={
+          <WorkspaceOperationsMenu
+            profiles={namedWorkspaces()}
+            selectedProfileId={selectedNamedWorkspaceId()}
+            poppedPanes={poppedPanes()}
+            operatorPolicy={operatorPolicy()}
+            operatorLockMode={operatorLockMode()}
+            onSelectProfile={setSelectedNamedWorkspaceId}
+            onSaveProfile={saveNamedWorkspace}
+            onApplyProfile={applyNamedWorkspace}
+            onDeleteProfile={deleteNamedWorkspace}
+            onTogglePane={togglePaneWindow}
+            onConfigurePolicy={configureOperatorPolicy}
+            onClearPolicy={clearOperatorPolicy}
+            onLock={setOperatorSessionLock}
+            onUnlock={unlockOperator}
+          />
+        }
         canGo={snapshot().cues.length > 0}
         nextCueLabel={nextCue()?.label ?? "No cue"}
         onWorkspaceTab={setWorkspaceTab}
@@ -17057,6 +17373,26 @@ export default function App() {
         </aside>
         </Show>
       </section>
+
+      <Show when={
+        operatorLockMode() === "Full"
+          ? "Full"
+          : operatorLockMode() === "Partial" && (paneWindow === "setup" || paneWindow === "programmer")
+            ? "Partial"
+            : null
+      }>
+        {(mode) => (
+          <OperatorLockOverlay
+            mode={mode() as OperatorLockMode}
+            restrictedPane={mode() === "Partial"}
+            blackout={snapshot().blackout}
+            videoBlackout={snapshot().video.blackout}
+            onSetBlackout={(enabled) => void setBlackout(enabled)}
+            onSetAllBlackout={(enabled) => void setAllBlackout(enabled)}
+            onUnlock={unlockOperator}
+          />
+        )}
+      </Show>
 
       <AppStatusLine status={appStatus()} />
     </main>

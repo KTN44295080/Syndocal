@@ -28,10 +28,13 @@ const fxVisualOnlyMode = process.argv.includes("--fx-visual-only");
 const sceneLiveModifierOnlyMode = process.argv.includes("--scene-live-modifier-only");
 const groupStrobeOnlyMode = process.argv.includes("--group-strobe-only");
 const fixtureCatalogOnlyMode = process.argv.includes("--fixture-catalog-only");
+const workspaceOperatorOnlyMode = process.argv.includes("--workspace-operator-only");
 const viewportTraceEnabled = process.env.SYNDOCAL_VIEWPORT_TRACE === "1";
 const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
   largeShowMode
     ? "large-show"
+    : workspaceOperatorOnlyMode
+      ? "workspace-operator"
     : sceneLiveModifierOnlyMode || groupStrobeOnlyMode || fixtureCatalogOnlyMode
       ? "scene-matrix"
       : fxVisualOnlyMode
@@ -13422,6 +13425,140 @@ async function runFxVisualViewport(client, viewport) {
   };
 }
 
+async function runWorkspaceOperatorViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: fixtureUrl("workspace-operator") });
+  await waitForApp(client);
+  await clickVisibleSelector(client, ".workspaceOperationsButton");
+  await sleep(80);
+  const menu = await client.evaluate(`(() => {
+    const popover = document.querySelector('.workspaceOperationsPopover');
+    const rect = popover?.getBoundingClientRect();
+    return {
+      visible: Boolean(rect && rect.width > 0 && rect.height > 0),
+      contained: Boolean(rect && rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth + 1 && rect.bottom <= innerHeight + 1),
+      paneButtons: document.querySelectorAll('.workspacePaneButtons button').length,
+      hasLocalDisclosure: (popover?.textContent || '').includes('Local to this device'),
+      hasGuardDisclosure: (popover?.textContent || '').includes('not operating-system security'),
+      passwordInputs: popover?.querySelectorAll('input[type="password"]').length ?? 0,
+      bodyOverflow: Math.max(0, document.body.scrollWidth - document.body.clientWidth),
+      appOverflow: (() => { const app = document.querySelector('.app'); return app ? Math.max(0, app.scrollWidth - app.clientWidth) : 0; })(),
+    };
+  })()`);
+
+  const fullUrl = new URL(fixtureUrl("workspace-operator"));
+  fullUrl.searchParams.set("syndocalOperatorLock", "full");
+  await client.send("Page.navigate", { url: fullUrl.toString() });
+  await waitForApp(client);
+  await sleep(80);
+  const full = await client.evaluate(`(() => {
+    const overlay = document.querySelector('.operatorLockOverlay');
+    const rect = overlay?.getBoundingClientRect();
+    return {
+      visible: Boolean(rect && rect.width >= innerWidth - 1 && rect.height >= innerHeight - 1),
+      emergencyButtons: document.querySelectorAll('.operatorEmergencyDeck button').length,
+      passwordInputs: document.querySelectorAll('.operatorUnlockForm input[type="password"]').length,
+      text: overlay?.textContent || '',
+    };
+  })()`);
+
+  const partialUrl = new URL(fixtureUrl("workspace-operator"));
+  partialUrl.searchParams.set("syndocalOperatorLock", "partial");
+  await client.send("Page.navigate", { url: partialUrl.toString() });
+  await waitForApp(client);
+  await sleep(80);
+  const partial = await client.evaluate(`(() => ({
+    overlayCount: document.querySelectorAll('.operatorLockOverlay').length,
+    workspace: document.querySelector('.workspaceTabs button.active')?.textContent?.trim() || '',
+    setupDisabled: document.querySelector('.workspaceTabs button[title="Setup workspace"]')?.disabled === true,
+    lockLabel: document.querySelector('.workspaceOperationsButton')?.textContent?.trim() || '',
+    appOverflow: (() => { const app = document.querySelector('.app'); return app ? Math.max(0, app.scrollWidth - app.clientWidth) : 0; })(),
+  }))()`);
+
+  const partialPaneUrl = new URL(fixtureUrl("workspace-operator"));
+  partialPaneUrl.searchParams.set("syndocalOperatorLock", "partial");
+  partialPaneUrl.searchParams.set("syndocalPaneWindow", "setup");
+  await client.send("Page.navigate", { url: partialPaneUrl.toString() });
+  await waitForApp(client);
+  await sleep(80);
+  const partialPane = await client.evaluate(`(() => ({
+    overlayCount: document.querySelectorAll('.operatorLockOverlay').length,
+    restrictedText: (document.querySelector('.operatorLockOverlay')?.textContent || '').includes('programming pane is unavailable'),
+  }))()`);
+
+  const paneSelectors = {
+    stage: ".mappingPersistentStage",
+    timeline: ".controlContextPane .faders",
+    programmer: ".controlContextPane .faders",
+    setup: ".setupPanel",
+    live: ".liveControlPanel",
+    mixer: ".videoControlPanelMixer, .groupLiveMixerStrip",
+    touch: ".touchSafetyDeck",
+  };
+  const paneWindows = [];
+  for (const [pane, selector] of Object.entries(paneSelectors)) {
+    const paneUrl = new URL(fixtureUrl("workspace-operator"));
+    paneUrl.searchParams.set("syndocalPaneWindow", pane);
+    await client.send("Page.navigate", { url: paneUrl.toString() });
+    await waitForApp(client);
+    await sleep(48);
+    paneWindows.push(await evaluatePageFunction(client, (pane, selector) => {
+      const app = document.querySelector(".app");
+      const target = document.querySelector(selector);
+      const targetRect = target?.getBoundingClientRect();
+      const topbar = document.querySelector(".topbar");
+      return {
+        pane,
+        rootMode: app?.getAttribute("data-pane-window-mode") ?? "",
+        rootClass: app?.className ?? "",
+        targetVisible: Boolean(targetRect && targetRect.width > 0 && targetRect.height > 0),
+        topbarHidden: !topbar || getComputedStyle(topbar).display === "none",
+        containmentZero: document.documentElement.scrollWidth <= innerWidth + 1 &&
+          document.body.scrollWidth <= document.body.clientWidth + 1 &&
+          (!app || app.scrollWidth <= app.clientWidth + 1),
+      };
+    }, pane, selector));
+  }
+
+  const checks = {
+    menuVisible: menu.visible,
+    menuContained: menu.contained,
+    sevenPaneKinds: menu.paneButtons === 7,
+    localDisclosure: menu.hasLocalDisclosure,
+    guardDisclosure: menu.hasGuardDisclosure,
+    credentialFields: menu.passwordInputs === 2,
+    unlockedContainment: menu.bodyOverflow <= 1 && menu.appOverflow <= 1,
+    fullOverlay: full.visible && full.emergencyButtons === 3 && full.passwordInputs === 1,
+    fullDisclosure: full.text.includes('Show output continues') && full.text.includes('no plaintext password stored'),
+    partialMain: partial.overlayCount === 0 && partial.workspace === 'Control' && partial.setupDisabled && partial.lockLabel === 'Partial Lock',
+    partialContainment: partial.appOverflow <= 1,
+    partialProgrammingPaneGuard: partialPane.overlayCount === 1 && partialPane.restrictedText,
+    sevenPaneWindows: paneWindows.length === 7 && paneWindows.every((pane) =>
+      pane.rootMode === pane.pane &&
+      pane.rootClass.includes(`paneWindow-${pane.pane}`) &&
+      pane.targetVisible &&
+      pane.topbarHidden &&
+      pane.containmentZero),
+  };
+  const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  return {
+    label: `workspace-operator-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    menu,
+    full,
+    partial,
+    partialPane,
+    paneWindows,
+  };
+}
+
 async function main() {
   const browser = findBrowser();
   if (!browser) {
@@ -13495,6 +13632,22 @@ async function main() {
     console.log(
       `viewport contract primary-browser=${primaryOperationalViewport.width}x${primaryOperationalViewport.height} measured-client-size-browser=${measuredClientSizeViewport.width}x${measuredClientSizeViewport.height} extended-browser=${extendedCeilingViewport.width}x${extendedCeilingViewport.height} fallback-browsers=${compactFallbackViewports.map((viewport) => `${viewport.width}x${viewport.height}`).join(",")} screenshots=${captureAllViewportScreenshots ? "all" : "large-browser-fixtures"}`,
     );
+    if (workspaceOperatorOnlyMode) {
+      const results = [];
+      for (const viewport of viewports) {
+        const result = await runWorkspaceOperatorViewport(client, viewport);
+        results.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} panes=${result.menu.paneButtons} ` +
+            `full=${result.full.emergencyButtons} partial=${result.partial.workspace} failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = results.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Workspace/operator viewport failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (fixtureCatalogOnlyMode) {
       const fixtureCatalogResults = [];
       for (const viewport of viewports) {

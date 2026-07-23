@@ -29018,8 +29018,23 @@ h3 {
   max-height: none;
 }
 
-.app.paneWindow .layout > *:not(.mappingPersistentWorkspaceBand) {
+.app.paneWindow-stage .layout > *:not(.mappingPersistentWorkspaceBand),
+.app.paneWindow-timeline .layout > *:not(.mappingPersistentWorkspaceBand),
+.app.paneWindow-programmer .layout > *:not(.mappingPersistentWorkspaceBand) {
   display: none;
+}
+
+.app.paneWindow-setup .layout > *:not(.setupPanel),
+.app.paneWindow-live .layout > *:not(.liveControlPanel) {
+  display: none;
+}
+
+.app.paneWindow-setup .layout > .setupPanel,
+.app.paneWindow-live .layout > .liveControlPanel {
+  grid-row: 1 / -1 !important;
+  height: 100% !important;
+  max-height: none !important;
+  min-height: 0;
 }
 
 .app.paneWindow .workspaceTabs,
@@ -29057,23 +29072,29 @@ h3 {
 .app.paneWindow-timeline .mappingGroupStrip,
 .app.paneWindow-timeline .mappingWorkspaceLeftPane,
 .app.paneWindow-timeline .workspaceSplitHandle-vertical,
+.app.paneWindow-programmer .mappingGroupStrip,
+.app.paneWindow-programmer .mappingWorkspaceLeftPane,
+.app.paneWindow-programmer .workspaceSplitHandle-vertical,
 .app.paneWindow .paneRejoinToggle {
   display: none;
 }
 
 .app.paneWindow .panePopoutToggle,
 .app.paneWindow-timeline .contextModeTabs,
+.app.paneWindow-programmer .contextModeTabs,
 .app.paneWindow-stage .mappingSelectionsDrawer {
   display: none;
 }
 
-.app.paneWindow-timeline .controlContextPane {
+.app.paneWindow-timeline .controlContextPane,
+.app.paneWindow-programmer .controlContextPane {
   grid-column: 1 / -1;
   grid-row: 1 / -1;
   grid-template-rows: minmax(0, 1fr);
 }
 
-.app.paneWindow-timeline .controlContextPane > .faders {
+.app.paneWindow-timeline .controlContextPane > .faders,
+.app.paneWindow-programmer .controlContextPane > .faders {
   /* The main-shell live selector has five class components and otherwise
      leaves this desk on implicit row 2, producing a large blank row above the
      Timeline in a real maximized child window. */
@@ -29122,6 +29143,215 @@ h3 {
 .panePopoutToggle.expanded {
   color: #e8ecef;
   box-shadow: inset 0 -2px 0 var(--ray-accent);
+}
+
+/* ---- T22: device-local named workspaces and project-owned operator guard. */
+.workspaceOperationsMenu {
+  position: relative;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.workspaceOperationsButton {
+  min-height: 27px;
+  border: 1px solid #514a43;
+  background: #302b27;
+  color: #ddd5cd;
+  padding: 0 8px;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.workspaceOperationsButton.locked {
+  border-color: #b06436;
+  background: #532c20;
+  color: #fff3e9;
+}
+
+.workspaceOperationsPopover {
+  position: fixed;
+  z-index: 1200;
+  top: 43px;
+  right: 8px;
+  display: grid;
+  width: min(560px, calc(100vw - 16px));
+  max-height: calc(100vh - 52px);
+  overflow: auto;
+  border: 1px solid #655c53;
+  background: #1c1a18;
+  box-shadow: 0 14px 42px rgba(0, 0, 0, 0.65);
+  padding: 8px;
+  gap: 8px;
+  color: #e5ddd5;
+  text-align: left;
+}
+
+.workspaceOperationsPopover section {
+  display: grid;
+  gap: 6px;
+  border: 1px solid #3f3a35;
+  background: #25221f;
+  padding: 7px;
+}
+
+.workspaceOperationsPopover section > header,
+.operatorPolicyStatus,
+.operatorUnlockRow,
+.workspaceProfileRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.workspaceOperationsPopover section > header small {
+  margin-left: auto;
+  color: #9d948c;
+}
+
+.workspaceOperationsPopover input,
+.workspaceOperationsPopover select {
+  min-width: 0;
+  min-height: 30px;
+  border: 1px solid #4a443e;
+  background: #151412;
+  color: #eee7df;
+  padding: 4px 7px;
+}
+
+.workspaceProfileRow input,
+.workspaceProfileRow select,
+.operatorUnlockRow input,
+.operatorPolicyForm > input,
+.operatorPolicyForm > select {
+  flex: 1 1 160px;
+}
+
+.workspaceOperationsPopover button {
+  min-height: 30px;
+  border: 1px solid #554e47;
+  background: #302c28;
+  color: #e9e1d9;
+  padding: 4px 9px;
+}
+
+.workspaceOperationsPopover button.active {
+  border-color: var(--ray-accent);
+  background: #56341f;
+}
+
+.workspaceOperationsPopover button.dangerSubtle {
+  color: #efb3a6;
+}
+
+.workspacePaneButtons {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.operatorPolicyForm {
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) auto;
+  gap: 5px;
+}
+
+.operatorPolicyForm > input,
+.operatorPolicyForm > button {
+  grid-column: 1 / -1;
+}
+
+.operatorPolicyForm label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.operatorLockOverlay {
+  position: fixed;
+  z-index: 5000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background:
+    linear-gradient(rgba(7, 7, 6, 0.94), rgba(13, 11, 10, 0.97)),
+    repeating-linear-gradient(135deg, transparent 0 18px, rgba(222, 116, 49, 0.08) 18px 36px);
+  padding: 24px;
+}
+
+.operatorLockCard {
+  display: grid;
+  width: min(620px, 100%);
+  gap: 13px;
+  border: 1px solid #8d5938;
+  background: #1d1916;
+  box-shadow: 0 20px 80px rgba(0, 0, 0, 0.75);
+  padding: 24px;
+  color: #eee6de;
+}
+
+.operatorLockCard h1,
+.operatorLockCard p {
+  margin: 0;
+}
+
+.operatorLockMark {
+  justify-self: start;
+  border: 1px solid #b36a3d;
+  background: #512b1e;
+  color: #ffd6bd;
+  padding: 4px 9px;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.18em;
+}
+
+.operatorEmergencyDeck {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.operatorEmergencyDeck button {
+  min-height: 64px;
+  border: 1px solid #6b625a;
+  background: #302b27;
+  color: #fff;
+  font-weight: 900;
+}
+
+.operatorEmergencyDeck button.danger,
+.operatorEmergencyDeck button.active {
+  border-color: #d2684f;
+  background: #69261e;
+}
+
+.operatorEmergencyDeck button.safe {
+  border-color: #568a66;
+  background: #203b2a;
+}
+
+.operatorUnlockForm {
+  display: grid;
+  grid-template-columns: auto minmax(180px, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.operatorUnlockForm input,
+.operatorUnlockForm button {
+  min-height: 40px;
+}
+
+@media (max-width: 800px) {
+  .workspacePaneButtons {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .operatorEmergencyDeck,
+  .operatorUnlockForm {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ---- T13: Control / Live Edit follows a vertical Daslight-style fader desk.

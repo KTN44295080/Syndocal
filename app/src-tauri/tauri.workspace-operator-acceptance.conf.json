@@ -1,0 +1,25 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Syndocal QA Workspace Acceptance",
+  "identifier": "jp.seraf.ktn.syndocal.qa.workspace-acceptance",
+  "build": {
+    "beforeDevCommand": "pnpm dev --host 127.0.0.1 --port 5191 --strictPort",
+    "devUrl": "http://127.0.0.1:5191/?syndocalViewportFixture=workspace-operator&syndocalAutoPaneWindows=1"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Syndocal QA - Workspace Acceptance",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 640,
+        "maximized": false,
+        "resizable": true
+      }
+    ]
+  },
+  "bundle": {
+    "active": false
+  }
+}

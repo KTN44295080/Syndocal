@@ -141,6 +141,8 @@ assert.equal(shortcuts.desktopWindowModeFromWindowState(true, true), "fullscreen
 
 assert.equal(shortcuts.shouldMountDesktopWindowModeController(""), true);
 assert.equal(shortcuts.shouldMountDesktopWindowModeController("?syndocalViewportFixture=primary"), true);
+assert.equal(shortcuts.shouldMountDesktopWindowModeController("?syndocalPaneWindow=stage"), false);
+assert.equal(shortcuts.shouldMountDesktopWindowModeController("?syndocalPaneWindow=timeline"), false);
 assert.equal(shortcuts.shouldMountDesktopWindowModeController("?videoOutputId=1"), false);
 assert.equal(shortcuts.shouldMountDesktopWindowModeController("?testPattern=1&videoOutputId=12"), false);
 assert.equal(shortcuts.shouldMountDesktopWindowModeController("?videoOutputId=0"), true);

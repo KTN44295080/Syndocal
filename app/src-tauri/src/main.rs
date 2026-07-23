@@ -43,7 +43,7 @@ use protocol::{
     FixtureLimits, FixturePreset, FixtureProfileSummary, GeometrySummary, LearnedMidiControl,
     LearnedOscControl, LfoEffectRequest, MappingEffectRequest, MidiControlAction,
     MidiControlMapping, MidiInputSummary, MidiOutputSummary, MoveEffectRequest, NodeGraphId,
-    NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp,
+    NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp, OperatorPolicy,
     OscControlAction, OscControlMapping, OscInputConfig, PatchFixtureRequest,
     PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RecallMode, RemoteControlConfig,
     RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile,
@@ -190,6 +190,7 @@ struct AppState {
     dmx_input: Mutex<Option<io::dmx_input::DmxInput>>,
     pending_project_open_paths: Mutex<Vec<String>>,
     current_project_path: Mutex<Option<PathBuf>>,
+    operator_policy: Mutex<Option<OperatorPolicy>>,
     project_history: Mutex<ProjectHistory>,
     snapshot_sync: Mutex<SnapshotSyncState>,
     standby_sync: Mutex<StandbySyncRuntime>,
@@ -3471,6 +3472,9 @@ const SACN_MAX_UNIVERSE: u16 = 63_999;
 const MAX_DMX_OUTPUT_ROUTES: usize = 256;
 const USER_TEMPLATE_VERSION: u32 = 1;
 const USER_TEMPLATE_MAX_BYTES: u64 = 64 * 1024 * 1024;
+const OPERATOR_CREDENTIAL_SCHEME: &str = "PBKDF2-SHA256";
+const OPERATOR_CREDENTIAL_MIN_ITERATIONS: u32 = 100_000;
+const OPERATOR_CREDENTIAL_MAX_ITERATIONS: u32 = 2_000_000;
 
 #[tauri::command]
 fn select_gdtf_file() -> Option<String> {
@@ -13301,8 +13305,74 @@ fn new_project(state: State<'_, AppState>) -> Result<(), String> {
             .map_err(|_| "Current project path lock was poisoned".to_string())?;
         *current_path = None;
     }
+    {
+        let mut operator_policy = state
+            .operator_policy
+            .lock()
+            .map_err(|_| "Operator policy state lock was poisoned".to_string())?;
+        *operator_policy = None;
+    }
     load_project_snapshot_with_runtime_reset(&state, EngineSnapshot::default())?;
     reset_vj_preview_after_project_change(&state);
+    Ok(())
+}
+
+fn validate_operator_policy(policy: &OperatorPolicy) -> Result<(), String> {
+    let credential = &policy.credential;
+    if credential.scheme != OPERATOR_CREDENTIAL_SCHEME {
+        return Err(format!(
+            "Operator credential scheme must be {OPERATOR_CREDENTIAL_SCHEME}"
+        ));
+    }
+    if !(OPERATOR_CREDENTIAL_MIN_ITERATIONS..=OPERATOR_CREDENTIAL_MAX_ITERATIONS)
+        .contains(&credential.iterations)
+    {
+        return Err(format!(
+            "Operator credential iterations must be from {OPERATOR_CREDENTIAL_MIN_ITERATIONS} to {OPERATOR_CREDENTIAL_MAX_ITERATIONS}"
+        ));
+    }
+    let salt = base64::engine::general_purpose::STANDARD
+        .decode(&credential.salt_b64)
+        .map_err(|_| "Operator credential salt is not valid base64".to_string())?;
+    if salt.len() < 16 || salt.len() > 64 {
+        return Err("Operator credential salt must decode to 16-64 bytes".to_string());
+    }
+    let verifier = base64::engine::general_purpose::STANDARD
+        .decode(&credential.verifier_b64)
+        .map_err(|_| "Operator credential verifier is not valid base64".to_string())?;
+    if verifier.len() != 32 {
+        return Err("Operator credential verifier must decode to 32 bytes".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_operator_policy(state: State<'_, AppState>) -> Result<Option<OperatorPolicy>, String> {
+    state
+        .operator_policy
+        .lock()
+        .map_err(|_| "Operator policy state lock was poisoned".to_string())
+        .map(|policy| policy.clone())
+}
+
+#[tauri::command]
+fn set_operator_policy(state: State<'_, AppState>, policy: OperatorPolicy) -> Result<(), String> {
+    validate_operator_policy(&policy)?;
+    let mut current = state
+        .operator_policy
+        .lock()
+        .map_err(|_| "Operator policy state lock was poisoned".to_string())?;
+    *current = Some(policy);
+    Ok(())
+}
+
+#[tauri::command]
+fn clear_operator_policy(state: State<'_, AppState>) -> Result<(), String> {
+    let mut current = state
+        .operator_policy
+        .lock()
+        .map_err(|_| "Operator policy state lock was poisoned".to_string())?;
+    *current = None;
     Ok(())
 }
 
@@ -13455,6 +13525,11 @@ fn project_file_for_save(state: &State<'_, AppState>) -> Result<ProjectFile, Str
     Ok(ProjectFile {
         version: 1,
         app: APP_NAME.to_string(),
+        operator_policy: state
+            .operator_policy
+            .lock()
+            .map_err(|_| "Operator policy state lock was poisoned".to_string())?
+            .clone(),
         custom_profiles,
         snapshot: project_snapshot_for_save(state.engine.persistence_snapshot()?),
     })
@@ -15224,7 +15299,15 @@ fn load_project_from_file(
             custom_profiles.insert(profile.source_path.clone(), profile.clone());
         }
     }
+    let operator_policy = project.operator_policy.clone();
     load_project_snapshot_with_runtime_reset(state, project.snapshot)?;
+    {
+        let mut current_policy = state
+            .operator_policy
+            .lock()
+            .map_err(|_| "Operator policy state lock was poisoned".to_string())?;
+        *current_policy = operator_policy;
+    }
     reset_vj_preview_after_project_change(state);
     if let Some(path) = current_path {
         set_current_project_path(state, path)?;
@@ -15372,6 +15455,8 @@ fn normalize_user_template_file(
     if template.label.is_empty() || template.label.chars().count() > 80 {
         return Err("User template label must contain 1 to 80 characters".to_string());
     }
+    // Templates are reusable creation aids, not credential carriers.
+    template.project.operator_policy = None;
     validate_project_file(&template.project)?;
     template.midi_mappings = validate_midi_control_mappings(template.midi_mappings)?;
     template.osc_mappings = validate_osc_control_mappings(template.osc_mappings)?;
@@ -15702,6 +15787,9 @@ fn validate_project_file(project: &ProjectFile) -> Result<(), String> {
         return Err(format!("Unsupported project version {}", project.version));
     }
     validate_app_name("project", &project.app)?;
+    if let Some(policy) = project.operator_policy.as_ref() {
+        validate_operator_policy(policy)?;
+    }
     validate_project_custom_profiles(&project.custom_profiles)?;
     validate_touch_surface(&project.snapshot.touch_surface, &project.snapshot)?;
     validate_unique_ids(
@@ -22174,40 +22262,181 @@ fn pane_window_label(pane: &str) -> String {
     format!("pane-{pane}")
 }
 
+const PANE_WINDOW_KINDS: [&str; 7] = [
+    "stage",
+    "timeline",
+    "programmer",
+    "setup",
+    "live",
+    "mixer",
+    "touch",
+];
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct PaneWindowPlacement {
+    pane: String,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    maximized: bool,
+}
+
+fn normalize_pane_window_kind(pane: &str) -> Result<String, String> {
+    let pane = pane.trim().to_ascii_lowercase();
+    if PANE_WINDOW_KINDS.contains(&pane.as_str()) {
+        Ok(pane)
+    } else {
+        Err(format!("Unknown pane window '{pane}'"))
+    }
+}
+
+fn validate_pane_window_placement(
+    pane: &str,
+    placement: &PaneWindowPlacement,
+) -> Result<(), String> {
+    if normalize_pane_window_kind(&placement.pane)? != pane {
+        return Err("Pane window placement does not match the requested pane".to_string());
+    }
+    if placement.x.unsigned_abs() > 100_000 || placement.y.unsigned_abs() > 100_000 {
+        return Err("Pane window placement coordinates exceed the safety limit".to_string());
+    }
+    if !(320..=8_192).contains(&placement.width) || !(240..=8_192).contains(&placement.height) {
+        return Err("Pane window placement size is outside the supported range".to_string());
+    }
+    Ok(())
+}
+
+fn pane_window_title(pane: &str) -> &'static str {
+    match pane {
+        "stage" => "Syndocal Stage - 2D Map",
+        "timeline" => "Syndocal Timeline",
+        "programmer" => "Syndocal Programmer",
+        "setup" => "Syndocal Setup",
+        "live" => "Syndocal Live Desk",
+        "mixer" => "Syndocal Live Mixer",
+        "touch" => "Syndocal Touch",
+        _ => "Syndocal Workspace",
+    }
+}
+
+fn pane_placement_intersects_monitor(
+    app: &tauri::AppHandle,
+    placement: &PaneWindowPlacement,
+) -> bool {
+    let Some(reference_window) = app.webview_windows().values().next().cloned() else {
+        return true;
+    };
+    let Ok(monitors) = reference_window.available_monitors() else {
+        return true;
+    };
+    let right = i64::from(placement.x) + i64::from(placement.width);
+    let bottom = i64::from(placement.y) + i64::from(placement.height);
+    monitors.iter().any(|monitor| {
+        let position = monitor.position();
+        let size = monitor.size();
+        let monitor_right = i64::from(position.x) + i64::from(size.width);
+        let monitor_bottom = i64::from(position.y) + i64::from(size.height);
+        let overlap_width =
+            right.min(monitor_right) - i64::from(placement.x).max(i64::from(position.x));
+        let overlap_height =
+            bottom.min(monitor_bottom) - i64::from(placement.y).max(i64::from(position.y));
+        overlap_width >= 64 && overlap_height >= 64
+    })
+}
+
+fn apply_pane_window_placement(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+    placement: &PaneWindowPlacement,
+) -> Result<(), String> {
+    window.unmaximize().map_err(|error| error.to_string())?;
+    window
+        .set_size(tauri::PhysicalSize::new(placement.width, placement.height))
+        .map_err(|error| error.to_string())?;
+    if pane_placement_intersects_monitor(app, placement) {
+        window
+            .set_position(tauri::PhysicalPosition::new(placement.x, placement.y))
+            .map_err(|error| error.to_string())?;
+    } else {
+        window.center().map_err(|error| error.to_string())?;
+    }
+    if placement.maximized {
+        window.maximize().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn capture_pane_window_placements(
+    app: tauri::AppHandle,
+) -> Result<Vec<PaneWindowPlacement>, String> {
+    let mut placements = Vec::new();
+    for pane in PANE_WINDOW_KINDS {
+        let label = pane_window_label(pane);
+        let Some(window) = app.webview_windows().get(&label).cloned() else {
+            continue;
+        };
+        let position = window.outer_position().map_err(|error| error.to_string())?;
+        let size = window.inner_size().map_err(|error| error.to_string())?;
+        placements.push(PaneWindowPlacement {
+            pane: pane.to_string(),
+            x: position.x,
+            y: position.y,
+            width: size.width,
+            height: size.height,
+            maximized: window.is_maximized().map_err(|error| error.to_string())?,
+        });
+    }
+    Ok(placements)
+}
+
 /// T12: open a pane as its own WebView window (multi-display workspaces). The
 /// window runs the full app pointed at ?syndocalPaneWindow=<pane>, so every
 /// command/snapshot path works unchanged; a root class collapses the shell to
 /// the one pane. Window placement is machine-specific, so persistence lives in
 /// frontend localStorage rather than the .sdc project.
 #[tauri::command]
-async fn open_pane_window(app: tauri::AppHandle, pane: String) -> Result<(), String> {
-    let pane = pane.trim().to_ascii_lowercase();
-    if pane != "stage" && pane != "timeline" {
-        return Err(format!("Unknown pane window '{pane}'"));
+async fn open_pane_window(
+    app: tauri::AppHandle,
+    pane: String,
+    placement: Option<PaneWindowPlacement>,
+) -> Result<(), String> {
+    let pane = normalize_pane_window_kind(&pane)?;
+    if let Some(placement) = placement.as_ref() {
+        validate_pane_window_placement(&pane, placement)?;
     }
     let label = pane_window_label(&pane);
     if let Some(window) = app.webview_windows().get(&label).cloned() {
+        if let Some(placement) = placement.as_ref() {
+            apply_pane_window_placement(&app, &window, placement)?;
+        }
         window.show().map_err(|error| error.to_string())?;
         window.set_focus().map_err(|error| error.to_string())?;
         return Ok(());
     }
-    let title = if pane == "stage" {
-        "Syndocal Stage - 2D Map"
-    } else {
-        "Syndocal Timeline"
-    };
     let emit_pane = pane.clone();
     let emit_app = app.clone();
-    let window = tauri::WebviewWindowBuilder::new(
+    let mut builder = tauri::WebviewWindowBuilder::new(
         &app,
         &label,
         tauri::WebviewUrl::App(format!("index.html?syndocalPaneWindow={pane}").into()),
     )
-    .title(title)
+    .title(pane_window_title(&pane))
     .inner_size(1280.0, 720.0)
-    .resizable(true)
-    .build()
-    .map_err(|error| error.to_string())?;
+    .resizable(true);
+    if let Some(placement) = placement.as_ref() {
+        builder = builder
+            .maximized(false)
+            .inner_size(placement.width as f64, placement.height as f64);
+        if pane_placement_intersects_monitor(&app, placement) {
+            builder = builder.position(placement.x as f64, placement.y as f64);
+        }
+    }
+    let window = builder.build().map_err(|error| error.to_string())?;
+    if let Some(placement) = placement.as_ref() {
+        apply_pane_window_placement(&app, &window, placement)?;
+    }
     window.on_window_event(move |event| {
         if matches!(event, tauri::WindowEvent::Destroyed) {
             let _ = emit_app.emit("syndocal://pane-window-closed", emit_pane.clone());
@@ -22218,10 +22447,7 @@ async fn open_pane_window(app: tauri::AppHandle, pane: String) -> Result<(), Str
 
 #[tauri::command]
 async fn close_pane_window(app: tauri::AppHandle, pane: String) -> Result<(), String> {
-    let pane = pane.trim().to_ascii_lowercase();
-    if pane != "stage" && pane != "timeline" {
-        return Err(format!("Unknown pane window '{pane}'"));
-    }
+    let pane = normalize_pane_window_kind(&pane)?;
     let label = pane_window_label(&pane);
     if let Some(window) = app.webview_windows().get(&label).cloned() {
         window.close().map_err(|error| error.to_string())?;
@@ -25923,8 +26149,22 @@ mod tests {
         ProjectFile {
             version: PROJECT_FILE_VERSION,
             app: APP_NAME.to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot::default(),
+        }
+    }
+
+    fn sample_operator_policy() -> OperatorPolicy {
+        OperatorPolicy {
+            lock_mode: protocol::OperatorLockMode::Partial,
+            lock_on_load: true,
+            credential: protocol::OperatorCredentialVerifier {
+                scheme: OPERATOR_CREDENTIAL_SCHEME.to_string(),
+                iterations: 600_000,
+                salt_b64: base64::engine::general_purpose::STANDARD.encode([0x31; 16]),
+                verifier_b64: base64::engine::general_purpose::STANDARD.encode([0xa7; 32]),
+            },
         }
     }
 
@@ -27612,6 +27852,7 @@ f 1 2 3
         project.snapshot.video.blackout = false;
         project.snapshot.video.outputs[0].enabled = true;
         project.snapshot.video.outputs[0].blackout = false;
+        project.operator_policy = Some(sample_operator_policy());
         let template = UserTemplateFile {
             version: USER_TEMPLATE_VERSION,
             app: APP_NAME.to_string(),
@@ -27655,6 +27896,7 @@ f 1 2 3
         let parsed: UserTemplateFile = serde_json::from_str(&json).unwrap();
         let normalized = normalize_user_template_file(parsed).unwrap();
         assert_eq!(normalized.label, "Festival Base");
+        assert!(normalized.project.operator_policy.is_none());
         assert_eq!(normalized.midi_mappings.len(), 1);
         assert_eq!(normalized.osc_mappings.len(), 1);
         assert_eq!(
@@ -29609,6 +29851,7 @@ f 1 2 3
         let project = ProjectFile {
             version: 1,
             app: APP_NAME.to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 blackout: true,
@@ -29637,7 +29880,9 @@ f 1 2 3
         let parsed: ProjectFile = serde_json::from_str(&json).unwrap();
 
         assert!(json.contains("\"version\": 1"));
+        assert!(!json.contains("\"operator_policy\""));
         assert_eq!(parsed.app, APP_NAME);
+        assert!(parsed.operator_policy.is_none());
         assert!(parsed.snapshot.blackout);
         assert_eq!(parsed.snapshot.dmx_outputs.len(), 1);
         let mut legacy = serde_json::to_value(&project).unwrap();
@@ -29656,6 +29901,79 @@ f 1 2 3
                 .and_then(|audio| audio.estimated_bpm),
             Some(120.0)
         );
+    }
+
+    #[test]
+    fn operator_policy_round_trips_without_plaintext_and_rejects_invalid_verifiers() {
+        let policy = sample_operator_policy();
+        validate_operator_policy(&policy).unwrap();
+        let mut project = empty_project_file();
+        project.operator_policy = Some(policy.clone());
+
+        let json = serde_json::to_string_pretty(&project).unwrap();
+        let parsed: ProjectFile = serde_json::from_str(&json).unwrap();
+
+        assert!(json.contains("\"operator_policy\""));
+        assert!(json.contains(OPERATOR_CREDENTIAL_SCHEME));
+        assert!(!json.to_ascii_lowercase().contains("password"));
+        assert_eq!(parsed.operator_policy, Some(policy.clone()));
+        validate_project_file(&parsed).unwrap();
+
+        let mut invalid = policy.clone();
+        invalid.credential.scheme = "SHA-256".to_string();
+        assert!(validate_operator_policy(&invalid)
+            .unwrap_err()
+            .contains(OPERATOR_CREDENTIAL_SCHEME));
+        invalid = policy.clone();
+        invalid.credential.iterations = OPERATOR_CREDENTIAL_MIN_ITERATIONS - 1;
+        assert!(validate_operator_policy(&invalid)
+            .unwrap_err()
+            .contains("iterations"));
+        invalid = policy.clone();
+        invalid.credential.salt_b64 = "not base64".to_string();
+        assert!(validate_operator_policy(&invalid)
+            .unwrap_err()
+            .contains("salt"));
+        invalid = policy;
+        invalid.credential.verifier_b64 =
+            base64::engine::general_purpose::STANDARD.encode([0xa7; 31]);
+        assert!(validate_operator_policy(&invalid)
+            .unwrap_err()
+            .contains("32 bytes"));
+    }
+
+    #[test]
+    fn pane_window_placements_accept_known_safe_windows_and_reject_mismatches() {
+        let placement = PaneWindowPlacement {
+            pane: "timeline".to_string(),
+            x: -1_920,
+            y: 0,
+            width: 1_280,
+            height: 720,
+            maximized: false,
+        };
+        assert_eq!(
+            normalize_pane_window_kind(" Timeline ").unwrap(),
+            "timeline"
+        );
+        validate_pane_window_placement("timeline", &placement).unwrap();
+        assert!(normalize_pane_window_kind("visualizer").is_err());
+
+        let mut invalid = placement.clone();
+        invalid.pane = "stage".to_string();
+        assert!(validate_pane_window_placement("timeline", &invalid)
+            .unwrap_err()
+            .contains("does not match"));
+        invalid = placement.clone();
+        invalid.width = 319;
+        assert!(validate_pane_window_placement("timeline", &invalid)
+            .unwrap_err()
+            .contains("size"));
+        invalid = placement;
+        invalid.x = 100_001;
+        assert!(validate_pane_window_placement("timeline", &invalid)
+            .unwrap_err()
+            .contains("coordinates"));
     }
 
     #[test]
@@ -29690,6 +30008,7 @@ f 1 2 3
         let mut legacy_value = serde_json::to_value(ProjectFile {
             version: PROJECT_FILE_VERSION,
             app: APP_NAME.to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot::default(),
         })
@@ -30014,6 +30333,7 @@ f 1 2 3
         let before = ProjectFile {
             version: PROJECT_FILE_VERSION,
             app: APP_NAME.to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: project_snapshot_for_save(snapshot(before_rendered, before_graph)),
         };
@@ -30166,6 +30486,7 @@ f 1 2 3
         let mut project = ProjectFile {
             version: 2,
             app: "Syndocal".to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot::default(),
         };
@@ -30194,6 +30515,7 @@ f 1 2 3
         let mut project = ProjectFile {
             version: 1,
             app: "Syndocal".to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot::default(),
         };
@@ -30232,6 +30554,7 @@ f 1 2 3
         ProjectFile {
             version: PROJECT_FILE_VERSION,
             app: APP_NAME.to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![project_fixture(1, "Effect Target", 0, 1)],
@@ -30487,6 +30810,7 @@ f 1 2 3
         ProjectFile {
             version: 1,
             app: "Syndocal".to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 video: protocol::VideoSnapshot {
@@ -30707,6 +31031,7 @@ f 1 2 3
         let project = ProjectFile {
             version: 1,
             app: "Syndocal".to_string(),
+            operator_policy: None,
             custom_profiles: vec![project_custom_profile()],
             snapshot: EngineSnapshot {
                 fixtures: vec![fixture],
@@ -30739,6 +31064,7 @@ f 1 2 3
         let project = ProjectFile {
             version: 1,
             app: "Syndocal".to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![fixture],
@@ -30754,6 +31080,7 @@ f 1 2 3
         let mut project = ProjectFile {
             version: 1,
             app: "Syndocal".to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![project_fixture(1, "Custom Bar 1", 0, 1)],
@@ -30973,6 +31300,7 @@ f 1 2 3
         let mut project = ProjectFile {
             version: 1,
             app: "Syndocal".to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![project_fixture(1, "Fixture 1", 0, 1)],
@@ -31147,6 +31475,7 @@ f 1 2 3
         let project = ProjectFile {
             version: 1,
             app: "Syndocal".to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![fixture],
@@ -31170,6 +31499,7 @@ f 1 2 3
         let project = ProjectFile {
             version: 1,
             app: "Syndocal".to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![fixture],
@@ -31190,6 +31520,7 @@ f 1 2 3
         let project = ProjectFile {
             version: 1,
             app: "Syndocal".to_string(),
+            operator_policy: None,
             custom_profiles: vec![profile],
             snapshot: EngineSnapshot::default(),
         };
@@ -31380,6 +31711,7 @@ f 1 2 3
         let mut project = ProjectFile {
             version: 1,
             app: "Syndocal".to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot::default(),
         };
@@ -31419,6 +31751,7 @@ f 1 2 3
         let mut project = ProjectFile {
             version: 1,
             app: "Syndocal".to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![project_fixture(1, "Fixture 1", 0, 1)],
@@ -31468,6 +31801,7 @@ f 1 2 3
         let project = ProjectFile {
             version: 1,
             app: "Syndocal".to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![fixture],
@@ -31485,6 +31819,7 @@ f 1 2 3
         let mut project = ProjectFile {
             version: 1,
             app: "Syndocal".to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![project_fixture(1, "Fixture 1", 0, 1)],
@@ -31603,6 +31938,7 @@ f 1 2 3
         let mut project = ProjectFile {
             version: 1,
             app: "Syndocal".to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![project_fixture(1, "Fixture 1", 0, 1)],
@@ -31663,6 +31999,7 @@ f 1 2 3
         let project = ProjectFile {
             version: 1,
             app: "Syndocal".to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![project_fixture(1, "Legacy fixture", 0, 1)],
@@ -31763,6 +32100,7 @@ f 1 2 3
         let mut project = ProjectFile {
             version: 1,
             app: "Syndocal".to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![rgb, wheel, unsupported.clone()],
@@ -31818,6 +32156,7 @@ f 1 2 3
         let mut project = ProjectFile {
             version: 1,
             app: "Syndocal".to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![dimmer_only, pan_and_dimmer],
@@ -33004,6 +33343,7 @@ f 1 2 3
         let mut project = ProjectFile {
             version: 1,
             app: "Syndocal".to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![project_fixture(1, "Fixture 1", 0, 1)],
@@ -33131,6 +33471,7 @@ f 1 2 3
         let mut project = ProjectFile {
             version: 1,
             app: "Syndocal".to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot::default(),
         };
@@ -34730,6 +35071,7 @@ f 1 2 3
         let dormant_project = ProjectFile {
             version: PROJECT_FILE_VERSION,
             app: APP_NAME.to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![incompatible_fixture],
@@ -34766,6 +35108,7 @@ f 1 2 3
         let case_project = ProjectFile {
             version: PROJECT_FILE_VERSION,
             app: APP_NAME.to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![upper_fixture, lower_fixture],
@@ -34825,6 +35168,7 @@ f 1 2 3
         let mut project = ProjectFile {
             version: PROJECT_FILE_VERSION,
             app: APP_NAME.to_string(),
+            operator_policy: None,
             custom_profiles: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![mover],
@@ -40129,6 +40473,7 @@ fn main() {
             dmx_input: Mutex::new(None),
             pending_project_open_paths: Mutex::new(Vec::new()),
             current_project_path: Mutex::new(None),
+            operator_policy: Mutex::new(None),
             project_history: Mutex::new(ProjectHistory::default()),
             snapshot_sync: Mutex::new(SnapshotSyncState::default()),
             standby_sync: Mutex::new(StandbySyncRuntime::default()),
@@ -40288,6 +40633,7 @@ fn main() {
             set_group_color,
             open_pane_window,
             close_pane_window,
+            capture_pane_window_placements,
             move_cue,
             duplicate_cue,
             trigger_cue,
@@ -40425,6 +40771,9 @@ fn main() {
             load_fixture_preset_for_group,
             load_fixture_preset_for_all_matching,
             new_project,
+            get_operator_policy,
+            set_operator_policy,
+            clear_operator_policy,
             save_user_template,
             load_user_template,
             save_project,
