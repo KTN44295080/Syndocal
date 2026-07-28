@@ -129,7 +129,7 @@ const setupTabs = [
 const controlTabs = [
   { id: "edit", label: "Live Edit" },
   { id: "live", label: "Timeline" },
-  { id: "mixer", label: "Mixer" },
+  { id: "mixer", label: "VJ Desk" },
 ];
 const viewportRecentProjects = [
   "C:/shows/front-room.sdc",
@@ -6211,9 +6211,8 @@ async function prepareLiveAudioAcceptanceViewport(client, viewport, locale, full
   await waitForApp(client);
   // Reset persisted UI state before applying the locale. A prior iteration's
   // acceptance run persists controlMode "mixer"; booting straight into the
-  // full VJ-desk layout replaces the shared workspace band whose tab is
-  // labeled "Mixer"/"ミキサー" with tabs labeled "VJ Desk"/"VJデスク", so the
-  // scripted tab click below would not find its target.
+  // full VJ-desk layout replaces the shared workspace band, so its
+  // "VJ Desk"/"VJデスク" context tab would not exist for the click below.
   await client.evaluate(
     "window.localStorage.clear();" +
       "window.localStorage.setItem('syndocal.uiLocale.v1'," + JSON.stringify(locale) + ")",
@@ -6222,7 +6221,7 @@ async function prepareLiveAudioAcceptanceViewport(client, viewport, locale, full
   await waitForApp(client);
   await pressKey(client, "F2");
   await sleep(120);
-  await clickByText(client, locale === "ja" ? "ミキサー" : "Mixer");
+  await clickByText(client, locale === "ja" ? "VJデスク" : "VJ Desk");
   await sleep(120);
   if (fullscreen) {
     await client.evaluate("document.documentElement.setAttribute('data-window-mode','fullscreen')");
@@ -7316,7 +7315,7 @@ async function runViewport(client, viewport) {
     await clickVisibleByText(client, ".appMenuButton", "...");
     await pressKey(client, "F2");
     await sleep(120);
-    await clickByText(client, "ミキサー");
+    await clickByText(client, "VJデスク");
     await sleep(120);
     const japaneseLiveAudioAcceptance = await runLiveAudioAcceptance(
       client,
@@ -13000,7 +12999,7 @@ async function runEmptyVjViewport(client, viewport) {
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
   await clickByText(client, "Control");
-  await clickByText(client, "Mixer");
+  await clickByText(client, "VJ Desk");
   await sleep(180);
   if (shouldCaptureViewport(viewport)) {
     mkdirSync(screenshotDir, { recursive: true });

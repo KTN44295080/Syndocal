@@ -41,11 +41,6 @@ type MappingPersistentWorkspaceBandProps = {
   children?: JSX.Element;
 };
 
-const controlContextModes = controlModes.map((mode) => ({
-  ...mode,
-  label: mode.id === "mixer" ? "Mixer" : mode.label,
-}));
-
 export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspaceBandProps) {
   const [timelinePaneExpanded, setTimelinePaneExpanded] = createSignal(false);
   const timelinePaneActionLabel = () =>
@@ -175,12 +170,12 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
             fallback={
               <>
                 <nav class="controlModeTabs contextModeTabs" aria-label="Control mode">
-                  <For each={controlContextModes}>
+                  <For each={controlModes}>
                     {(mode) => (
                       <button
                         class={props.controlMode === mode.id ? "active" : ""}
                         title={mode.description}
-                        aria-keyshortcuts={mode.label[0]}
+                        aria-keyshortcuts={mode.id === "mixer" ? "M" : mode.label[0]}
                         onClick={() => selectControlMode(mode.id)}
                         aria-pressed={props.controlMode === mode.id}
                       >

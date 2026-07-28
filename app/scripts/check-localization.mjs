@@ -214,6 +214,13 @@ assert.equal(
   ),
   "Festival Baseから未保存プロジェクトを作成しました（埋め込みプロファイル 2、MIDI 4、OSC 1）。DMXと映像出力はすべて無効・ブラックアウトです。",
 );
+assert.equal(
+  localization.translateUiText(
+    "Recovered Festival Base from 2026/7/29 14:30:00 (2 embedded profiles). Save to keep it.",
+    "ja",
+  ),
+  "Festival Baseを2026/7/29 14:30:00の復旧データから復元しました（埋め込みプロファイル2件）。維持するには保存してください。",
+);
 assert.equal(localization.translateUiText("Custom fixture", "ja"), "Custom fixture");
 assert.equal(localization.translateUiText("Effect family chooser", "ja"), "エフェクトファミリーチューザー");
 assert.equal(localization.translateUiText("COLOR FX", "ja"), "カラーFX");

@@ -29881,8 +29881,9 @@ h3 {
 
 .attributeDeskSurface > .channelFunctionPanel {
   order: 4;
-  flex-basis: 230px;
-  width: 230px;
+  flex: 1 1 360px;
+  width: auto;
+  min-width: 230px;
   overflow: hidden auto;
 }
 
@@ -29892,12 +29893,88 @@ h3 {
 }
 
 .attributeDeskSurface > .channelFunctionPanel > summary {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
   min-height: 40px;
+  overflow: hidden;
   cursor: pointer;
 }
 
 .attributeDeskSurface > .channelFunctionPanel[open] > summary {
   margin-bottom: 4px;
+}
+
+.channelFunctionSummaryIdentity {
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  min-width: max-content;
+}
+
+.channelFunctionSummaryIdentity > strong,
+.channelFunctionSummaryIdentity > span {
+  white-space: nowrap;
+}
+
+.channelFunctionSummaryReadoutRegion {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.channelFunctionSummaryReadouts {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: stretch;
+  gap: 3px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.channelFunctionSummaryChip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  flex: 1 1 112px;
+  align-items: center;
+  gap: 4px;
+  min-width: 72px;
+  overflow: hidden;
+  border: 1px solid #47423d;
+  background: #24211f;
+  padding: 2px 5px;
+}
+
+.channelFunctionSummaryChip strong,
+.channelFunctionSummaryChip output,
+.channelFunctionSummaryChip small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.channelFunctionSummaryChip output {
+  color: #e2ded8;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+}
+
+.channelFunctionSummaryChip small {
+  color: #a8a19a;
+  font-variant-numeric: tabular-nums;
+}
+
+.channelFunctionSummaryCategory {
+  align-self: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-height: 760px) {
@@ -30622,6 +30699,33 @@ h3 {
 .layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveMasterGrid {
   grid-column: 1;
   grid-row: 5;
+  align-items: stretch;
+  min-height: 0;
+  padding-top: 2px;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveMasterGrid label {
+  grid-template-rows: 11px minmax(0, 24px);
+  align-content: end;
+  gap: 0;
+  min-height: 0;
+  overflow: hidden;
+  line-height: 11px;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveMasterGrid input[type="range"] {
+  align-self: end;
+  height: 18px;
+  min-height: 18px;
+  padding: 0;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveMasterGrid input[type="number"],
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveMasterGrid > button {
+  align-self: end;
+  height: 24px;
+  min-height: 24px;
+  padding-block: 0;
 }
 
 @media (max-width: 1320px) {

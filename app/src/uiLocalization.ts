@@ -2671,6 +2671,11 @@ const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
     (label, profiles, midi, osc) =>
       `${label}から未保存プロジェクトを作成しました（埋め込みプロファイル ${profiles}、MIDI ${midi}、OSC ${osc}）。DMXと映像出力はすべて無効・ブラックアウトです。`,
   ],
+  [
+    /^Recovered (.+) from (.+) \((\d+) embedded profiles?\)\. Save to keep it\.$/,
+    (name, date, profiles) =>
+      `${name}を${date}の復旧データから復元しました（埋め込みプロファイル${profiles}件）。維持するには保存してください。`,
+  ],
   [/^Project backup restore failed: (.+)$/, (detail) => `バックアップ復元に失敗しました: ${detail}`],
   [/^Downloading signed Syndocal (.+) update\.\.\.$/, (version) => `署名付きSyndocal ${version}をダウンロード中...`],
   [/^Syndocal (.+) was verified and handed to the platform installer\.$/, (version) => `Syndocal ${version}を検証し、OSインストーラーへ渡しました。`],

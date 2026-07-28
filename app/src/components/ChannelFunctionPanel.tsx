@@ -26,6 +26,10 @@ export function ChannelFunctionPanel(props: ChannelFunctionPanelProps) {
     const value = props.currentValue(entry.control);
     return entry.functions.find((fn) => props.functionContainsValue(fn, value));
   };
+  const displayValue = (entry: ChannelFunctionControlEntry) => {
+    const value = props.clampDmxValue(props.currentValue(entry.control));
+    return entry.control.resolution === "SixteenBit" ? value : Math.round(value / 257);
+  };
   const applyIndex = (entry: ChannelFunctionControlEntry, index: number) => {
     const count = entry.functions.length;
     if (count === 0) {
@@ -64,11 +68,40 @@ export function ChannelFunctionPanel(props: ChannelFunctionPanelProps) {
   return (
     <details class="visualControlPanel channelFunctionPanel">
       <summary class="visualControlHeader">
-        <div>
+        <span class="channelFunctionSummaryIdentity">
           <strong>GDTF Functions</strong>
           <span>{props.entries.length} attribute(s) with function ranges</span>
-        </div>
-        <span>{props.categoryLabel}</span>
+        </span>
+        <span class="channelFunctionSummaryReadoutRegion">
+          <span class="channelFunctionSummaryReadouts">
+            <For each={props.entries}>
+              {(entry) => {
+                const currentFunction = () => activeFunction(entry);
+                const range = () => {
+                  const fn = currentFunction();
+                  return fn ? props.functionRangeLabel(fn) : "—";
+                };
+                const detail = () => {
+                  const fn = currentFunction();
+                  return fn
+                    ? `${props.functionLabel(fn)} / ${props.functionRangeLabel(fn)} / ${props.functionDetail(fn)}`
+                    : "—";
+                };
+                return (
+                  <span
+                    class="channelFunctionSummaryChip"
+                    title={`${entry.control.attribute} ${displayValue(entry)} / ${detail()}`}
+                  >
+                    <strong>{entry.control.attribute}</strong>
+                    <output>{displayValue(entry)}</output>
+                    <small>{range()}</small>
+                  </span>
+                );
+              }}
+            </For>
+          </span>
+          <span class="channelFunctionSummaryCategory">{props.categoryLabel}</span>
+        </span>
       </summary>
       <div class="channelFunctionList">
         <For each={props.entries}>
