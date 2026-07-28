@@ -67,6 +67,9 @@ export default defineConfig({
           ) {
             return "video-control-panels";
           }
+          if (normalizedId.includes("/src/components/EditableTouchSurface")) {
+            return "touch-panels";
+          }
           if (
             normalizedId.includes("/src/createMappingViewportModel") ||
             normalizedId.includes("/src/createMappingRenderModel") ||
@@ -74,7 +77,10 @@ export default defineConfig({
             normalizedId.includes("/src/createMappingLayoutController") ||
             normalizedId.includes("/src/createStageMapController") ||
             normalizedId.includes("/src/mappingRuntime") ||
+            normalizedId.includes("/src/stageLabelLayout") ||
             normalizedId.includes("/src/components/SetupMappingWorkspace") ||
+            normalizedId.includes("/src/components/StageGlyphs") ||
+            normalizedId.includes("/src/components/StagePreview2D") ||
             normalizedId.includes("/src/components/Mapping")
           ) {
             return "mapping-panels";

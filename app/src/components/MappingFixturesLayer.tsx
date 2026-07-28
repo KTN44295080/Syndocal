@@ -1,10 +1,12 @@
-import { For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import type { MappingFixtureVisualKind } from "../fixtureVisuals";
-import { StageFixtureGlyph } from "./StageGlyphs";
+import { planStageFixtureLabels, type StageLabelViewport } from "../stageLabelLayout";
+import { StageFixtureGlyph, StageFixtureLabel } from "./StageGlyphs";
 
 export interface MappingFixture2D {
   id: number;
   label: string;
+  addressOrder: number;
   dmxLabel: string;
   groupLabel: string;
   typeKey: string;
@@ -36,6 +38,8 @@ type MappingFixturesLayerProps = {
   selectedGroupId: string | null;
   selectedTypeKey: string | null;
   showLabels: boolean;
+  labelViewport: StageLabelViewport;
+  labelZoom: number;
   showLevels: boolean;
   placePreview: MappingPlacePreview2D | null;
   isDragging: (fixtureId: number) => boolean;
@@ -45,6 +49,19 @@ type MappingFixturesLayerProps = {
 };
 
 export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
+  const [hoveredFixtureId, setHoveredFixtureId] = createSignal<number | null>(null);
+  const labelLayout = createMemo(() =>
+    planStageFixtureLabels({
+      fixtures: props.fixtures,
+      viewport: props.labelViewport,
+      zoom: props.labelZoom,
+      showLabels: props.showLabels,
+      pickedFixtureIds: props.selectedFixtureIds,
+      pickedFixtureId: props.selectedFixtureId,
+      hoveredFixtureId: hoveredFixtureId(),
+    }),
+  );
+
   return (
     <>
       <For each={props.fixtures}>
@@ -70,6 +87,10 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
                 class={className()}
                 transform={`translate(${fixture.x} ${fixture.z}) rotate(${fixture.yaw})`}
                 onPointerDown={(event) => props.onFixturePointerDown(event, fixture.id)}
+                onPointerEnter={() => setHoveredFixtureId(fixture.id)}
+                onPointerLeave={() =>
+                  setHoveredFixtureId((current) => current === fixture.id ? null : current)
+                }
               >
                 <StageFixtureGlyph
                   visualKind={fixture.visualKind}
@@ -98,11 +119,6 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
                   <title data-no-localize>{fixture.label} yaw {fixture.yaw} deg</title>
                 </circle>
               </Show>
-              <Show when={props.showLabels}>
-                <text data-no-localize class="stageLabel" x={fixture.x + 3.5} y={fixture.z - 3.5}>
-                  {fixture.label}
-                </text>
-              </Show>
               <Show when={props.showLevels}>
                 <text class={fixture.inGroupFilter ? "stageLevelLabel" : "stageLevelLabel muted"} x={fixture.x + 3.5} y={fixture.z + 5}>
                   {Math.round(fixture.intensity * 100)}%
@@ -111,6 +127,9 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
             </>
           );
         }}
+      </For>
+      <For each={labelLayout().labels}>
+        {(layout) => <StageFixtureLabel layout={layout} />}
       </For>
       <Show when={props.placePreview}>
         {(preview) => (

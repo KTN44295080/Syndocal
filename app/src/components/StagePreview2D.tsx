@@ -1,13 +1,15 @@
 import { createMemo, createSignal, For, onCleanup, onMount } from "solid-js";
 import type { MappingFixtureVisualKind } from "../fixtureVisuals";
+import { planStageFixtureLabels } from "../stageLabelLayout";
 import { stageViewBoxSize } from "../stageGeometry";
 import { stageObjectClass } from "../stageObjects";
 import type { StageObjectKind } from "../types";
-import { StageFixtureGlyph, StageObjectGlyph, StageProjectionSurfaceGlyph } from "./StageGlyphs";
+import { StageFixtureGlyph, StageFixtureLabel, StageObjectGlyph, StageProjectionSurfaceGlyph } from "./StageGlyphs";
 
 export interface StagePreviewFixture {
   id: number;
   label: string;
+  addressOrder: number;
   dmxLabel: string;
   groupLabel: string;
   typeKey: string;
@@ -66,6 +68,7 @@ type StagePreview2DProps = {
   beamMinOpacity: number;
   beamIntensityScale: number;
   compact?: boolean;
+  showLabels?: boolean;
   viewAspectRatio?: number;
   onSelectFixture: (fixtureId: number) => void;
   onSelectVideoOutput: (outputId: number) => void;
@@ -74,6 +77,7 @@ type StagePreview2DProps = {
 export function StagePreview2D(props: StagePreview2DProps) {
   let stageElement: SVGSVGElement | undefined;
   const [measuredAspectRatio, setMeasuredAspectRatio] = createSignal<number | null>(null);
+  const [hoveredFixtureId, setHoveredFixtureId] = createSignal<number | null>(null);
 
   onMount(() => {
     if (!stageElement || typeof ResizeObserver === "undefined") return;
@@ -163,6 +167,17 @@ export function StagePreview2D(props: StagePreview2DProps) {
   const viewBoxAttribute = createMemo(() => {
     const view = viewBox();
     return `${view.x} ${view.z} ${view.width} ${view.height}`;
+  });
+  const labelLayout = createMemo(() => {
+    const view = viewBox();
+    return planStageFixtureLabels({
+      fixtures: props.fixtures,
+      viewport: { x: view.x, z: view.z, width: view.width, height: view.height },
+      zoom: stageViewBoxSize / Math.max(view.width, view.height),
+      showLabels: props.showLabels !== false,
+      pickedFixtureId: props.selectedFixtureId,
+      hoveredFixtureId: hoveredFixtureId(),
+    });
   });
 
   return (
@@ -260,6 +275,10 @@ export function StagePreview2D(props: StagePreview2DProps) {
                 event.stopPropagation();
                 props.onSelectFixture(fixture.id);
               }}
+              onPointerEnter={() => setHoveredFixtureId(fixture.id)}
+              onPointerLeave={() =>
+                setHoveredFixtureId((current) => current === fixture.id ? null : current)
+              }
             >
               <StageFixtureGlyph
                 visualKind={fixture.visualKind}
@@ -276,6 +295,9 @@ export function StagePreview2D(props: StagePreview2DProps) {
             </g>
           );
         }}
+      </For>
+      <For each={labelLayout().labels}>
+        {(layout) => <StageFixtureLabel layout={layout} />}
       </For>
     </svg>
   );

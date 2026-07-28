@@ -319,6 +319,7 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
       return {
         id: fixture.id,
         label: fixture.label,
+        addressOrder: fixture.universe * 512 + fixture.address,
         dmxLabel: `U${fixture.universe} A${fixture.address}`,
         groupLabel: fixture.group_ids.length > 0 ? fixture.group_ids.join(", ") : "No group",
         typeKey: fixtureTypeKey(fixture),

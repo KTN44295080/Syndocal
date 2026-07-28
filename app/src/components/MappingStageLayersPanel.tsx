@@ -1,5 +1,6 @@
 import { Show } from "solid-js";
 import type { MappingStageTool } from "../mappingViewPresets";
+import type { StageLabelViewport } from "../stageLabelLayout";
 import { MappingBeamsLayer, type MappingBeamFixture } from "./MappingBeamsLayer";
 import { MappingFixturesLayer, type MappingFixture2D, type MappingPlacePreview2D } from "./MappingFixturesLayer";
 import { MappingGeometryLayer, type MappingGeometryNode2D } from "./MappingGeometryLayer";
@@ -12,6 +13,8 @@ interface MappingStageLayersPanelProps {
   showBeams: boolean;
   showGeometry: boolean;
   showLabels: boolean;
+  labelViewport: StageLabelViewport;
+  labelZoom: number;
   showLevels: boolean;
   stageTool: MappingStageTool;
   stageObjects: MappingStageObject2D[];
@@ -69,6 +72,8 @@ export function MappingStageLayersPanel(props: MappingStageLayersPanelProps) {
         selectedGroupId={props.selectedGroupId}
         selectedTypeKey={props.selectedTypeKey}
         showLabels={props.showLabels}
+        labelViewport={props.labelViewport}
+        labelZoom={props.labelZoom}
         showLevels={props.showLevels}
         placePreview={props.placePreview}
         isDragging={props.isDraggingFixture}

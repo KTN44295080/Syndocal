@@ -18,6 +18,7 @@ export type WaveStageDragMode = "origin" | "direction" | "videoTarget";
 export interface VisualizerFixture {
   id: number;
   label: string;
+  addressOrder: number;
   dmxLabel: string;
   groupLabel: string;
   typeKey: string;

@@ -15133,6 +15133,7 @@ export default function App() {
             surfaceMinOpacity={0.2}
             beamMinOpacity={0.06}
             beamIntensityScale={0.48}
+            showLabels={mappingShowLabels()}
             onSelectVideoOutput={setSelectedVideoOutputId}
             onSelectFixture={(fixtureId) => {
               const patchedFixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
@@ -15967,6 +15968,13 @@ export default function App() {
             showBeams: mappingShowBeams(),
             showGeometry: mappingShowGeometry(),
             showLabels: mappingShowLabels(),
+            labelViewport: {
+              x: mappingViewportBox().x,
+              z: mappingViewportBox().z,
+              width: mappingViewportBox().size,
+              height: mappingViewportBox().size,
+            },
+            labelZoom: normalizedMappingViewportZoom(),
             showLevels: mappingShowLevels(),
             stageTool: mappingStageTool(),
             stageObjects: visualizerStageObjects2d(),

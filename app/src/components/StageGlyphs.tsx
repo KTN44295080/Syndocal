@@ -1,5 +1,6 @@
 import { Show } from "solid-js";
 import type { MappingFixtureVisualKind } from "../fixtureVisuals";
+import type { StageFixtureLabelLayout } from "../stageLabelLayout";
 import type { StageObjectKind } from "../types";
 
 type StageFixtureGlyphProps = {
@@ -91,6 +92,25 @@ export function StageFixtureGlyph(props: StageFixtureGlyphProps) {
         {(title) => <title>{title()}</title>}
       </Show>
     </>
+  );
+}
+
+type StageFixtureLabelProps = {
+  layout: StageFixtureLabelLayout;
+  class?: string;
+};
+
+export function StageFixtureLabel(props: StageFixtureLabelProps) {
+  return (
+    <text
+      data-no-localize
+      class={props.class ?? "stageLabel"}
+      x={props.layout.x}
+      y={props.layout.z}
+      ref={(element) => element.setAttribute("title", props.layout.fullLabel)}
+    >
+      {props.layout.displayLabel}
+    </text>
   );
 }
 
