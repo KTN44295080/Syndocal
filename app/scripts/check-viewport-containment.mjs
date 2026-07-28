@@ -22,6 +22,7 @@ const sceneMatrixOnlyMode = process.argv.includes("--scene-matrix-only");
 const timelineSlimOnlyMode = process.argv.includes("--timeline-slim-only");
 const patchOnlyMode = process.argv.includes("--patch-only");
 const persistentBandOnlyMode = process.argv.includes("--persistent-band-only");
+const mappingExpansionOnlyMode = process.argv.includes("--mapping-expansion-only");
 const workspaceSplitOnlyMode = process.argv.includes("--workspace-split-only");
 const workspaceShellOnlyMode = process.argv.includes("--workspace-shell-only");
 const fxVisualOnlyMode = process.argv.includes("--fx-visual-only");
@@ -239,6 +240,16 @@ function persistentBandRectsExactlyEqual(left, right) {
     Math.abs(left.y - right.y) <= 1 &&
     Math.abs(left.width - right.width) <= 1 &&
     Math.abs(left.height - right.height) <= 1
+  );
+}
+
+function persistentBandRectsWithinTolerance(left, right, tolerance = 0.5) {
+  if (!left || !right) return false;
+  return (
+    Math.abs(left.x - right.x) <= tolerance &&
+    Math.abs(left.y - right.y) <= tolerance &&
+    Math.abs(left.width - right.width) <= tolerance &&
+    Math.abs(left.height - right.height) <= tolerance
   );
 }
 
@@ -2351,6 +2362,270 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
     restoredResized,
     restored,
   };
+}
+
+async function measureMappingExpansionState(client) {
+  return await client.evaluate(`(async () => {
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const isVisible = (element) => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const measuredRect = (selector, visibleOnly = true) => {
+      const elements = [...document.querySelectorAll(selector)];
+      const element = visibleOnly ? elements.find(isVisible) : elements[0];
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      const precision = (value) => Math.round(value * 100) / 100;
+      return {
+        x: precision(rect.x),
+        y: precision(rect.y),
+        width: precision(rect.width),
+        height: precision(rect.height),
+        right: precision(rect.right),
+        bottom: precision(rect.bottom),
+      };
+    };
+    const documentElement = document.documentElement;
+    const body = document.body;
+    const app = document.querySelector('.app');
+    const layout = document.querySelector('[data-workspace-split-root="true"]');
+    const band = document.querySelector('.mappingPersistentWorkspaceBand');
+    const stageHost = document.querySelector('.mappingPersistentStage');
+    const mappingGrid = document.querySelector('.mappingPersistentWorkspaceGrid');
+    const drawer = document.querySelector('[data-workspace-selection-drawer]');
+    const config = document.querySelector('[data-mapping-expanded-stage-config]');
+    const visibleConfigControls = config
+      ? [...config.querySelectorAll('button, input, select')].filter(isVisible).length
+      : 0;
+    const stageContain = stageHost ? getComputedStyle(stageHost).contain : '';
+    return {
+      mappingWorkspaceExpanded:
+        band?.getAttribute('data-mapping-workspace-expanded') === 'true' &&
+        band?.classList.contains('mappingWorkspaceExpanded'),
+      layoutRect: measuredRect('[data-workspace-split-root="true"]'),
+      bandRect: measuredRect('.mappingPersistentWorkspaceBand'),
+      stageHostRect: measuredRect('.mappingPersistentStage'),
+      stageCanvasRect: measuredRect('[data-persistent-band-part="stage"]'),
+      configRect: measuredRect('[data-mapping-expanded-stage-config]'),
+      contextContentRect: measuredRect('.mappingSetupContextContent'),
+      persistentBandRects: {
+        groups: measuredRect('[data-persistent-band-part="groups"]'),
+        stage: measuredRect('[data-workspace-pane="lower-left"]'),
+        selections: measuredRect('[data-workspace-selection-drawer]'),
+        context: measuredRect('[data-workspace-pane="lower-right"]'),
+      },
+      horizontalSplitterRect: measuredRect('[data-workspace-splitter="upper-lower"]'),
+      verticalSplitterRect: measuredRect('[data-workspace-splitter="lower-left-right"]'),
+      mappingTopPanelRect: measuredRect('.mappingSetupTopPanel'),
+      selectionDrawerOpen: drawer instanceof HTMLDetailsElement && drawer.open,
+      visibleConfigControls,
+      stageContain,
+      mappingGridRows: mappingGrid ? getComputedStyle(mappingGrid).gridTemplateRows : '',
+      workspaceStorageRaw: window.localStorage.getItem('syndocal.workspaceLayout.v1') ?? '',
+      documentAndAppScrollZero:
+        window.scrollX === 0 && window.scrollY === 0 &&
+        documentElement.scrollWidth === documentElement.clientWidth &&
+        documentElement.scrollHeight === documentElement.clientHeight &&
+        body.scrollWidth === documentElement.clientWidth &&
+        body.scrollHeight === documentElement.clientHeight &&
+        (!app || (app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight)) &&
+        (!layout || (layout.scrollWidth === layout.clientWidth && layout.scrollHeight === layout.clientHeight)),
+      viewport: [innerWidth, innerHeight],
+    };
+  })()`);
+}
+
+async function ensureMappingSelectionDrawerOpen(client) {
+  const opened = await client.evaluate(`(() => {
+    const drawer = document.querySelector('[data-workspace-selection-drawer]');
+    if (!(drawer instanceof HTMLDetailsElement)) return false;
+    if (!drawer.open) {
+      const summary = drawer.querySelector('[data-workspace-selection-drawer-toggle]');
+      if (!(summary instanceof HTMLElement)) return false;
+      summary.click();
+    }
+    return true;
+  })()`);
+  await sleep(120);
+  return opened;
+}
+
+function clippedRectArea(rect, clip) {
+  if (!rect || !clip) return 0;
+  const left = Math.max(rect.x, clip.x);
+  const top = Math.max(rect.y, clip.y);
+  const right = Math.min(rect.right, clip.right);
+  const bottom = Math.min(rect.bottom, clip.bottom);
+  return Math.max(0, right - left) * Math.max(0, bottom - top);
+}
+
+async function runMappingExpansionCheck(client, viewport) {
+  await clickByText(client, "Setup");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
+  await sleep(120);
+  const drawerOpened = await ensureMappingSelectionDrawerOpen(client);
+  const before = await measureMappingExpansionState(client);
+
+  await clickByText(client, "Mapping");
+  await clickByText(client, "Stage Map");
+  await sleep(160);
+  const expanded = await measureMappingExpansionState(client);
+
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
+  await sleep(160);
+  const restoredSubtab = await measureMappingExpansionState(client);
+
+  await clickByText(client, "Mapping");
+  await clickByText(client, "Stage Map");
+  await sleep(160);
+  const expandedAgain = await measureMappingExpansionState(client);
+  await clickByText(client, "Control");
+  await clickByText(client, "Live Edit");
+  await sleep(160);
+  const restoredWorkspace = await measureMappingExpansionState(client);
+
+  const partNames = ["groups", "stage", "selections", "context"];
+  const allPartsPresent = (state) => partNames.every((part) => Boolean(state.persistentBandRects[part]));
+  const allPartsRestored = (state) => partNames.every((part) =>
+    persistentBandRectsWithinTolerance(
+      before.persistentBandRects[part],
+      state.persistentBandRects[part],
+      0.5,
+    )
+  );
+  const oldUpperRect = before.layoutRect && before.bandRect ? {
+    x: before.layoutRect.x,
+    y: before.layoutRect.y,
+    width: before.layoutRect.width,
+    height: Math.max(0, before.bandRect.y - before.layoutRect.y),
+    right: before.layoutRect.right,
+    bottom: before.bandRect.y,
+  } : null;
+  const oldUpperArea = oldUpperRect ? oldUpperRect.width * oldUpperRect.height : 0;
+  const oldUpperCoveredArea = oldUpperRect
+    ? [
+        expanded.persistentBandRects.groups,
+        expanded.stageHostRect,
+        expanded.configRect,
+      ].reduce((area, rect) => area + clippedRectArea(rect, oldUpperRect), 0)
+    : 0;
+  const oldUpperUnfilledRatio = oldUpperArea > 0
+    ? Math.max(0, 1 - Math.min(1, oldUpperCoveredArea / oldUpperArea))
+    : 1;
+  const normalStageHeight = before.stageHostRect?.height ?? 0;
+  const expandedStageHeight = expanded.stageHostRect?.height ?? 0;
+  const stageHeightRatio = normalStageHeight > 0 ? expandedStageHeight / normalStageHeight : 0;
+  const bandFillsLayout = (state) => Boolean(
+    state.bandRect &&
+    state.layoutRect &&
+    persistentBandRectsWithinTolerance(state.bandRect, state.layoutRect, 0.5)
+  );
+  const settingsStackFillsRightColumn = (state) => Boolean(
+    state.configRect &&
+    state.contextContentRect &&
+    state.persistentBandRects.context &&
+    Math.abs(state.configRect.x - state.persistentBandRects.context.x) <= 0.5 &&
+    Math.abs(state.configRect.width - state.persistentBandRects.context.width) <= 0.5 &&
+    Math.abs(state.configRect.y - state.persistentBandRects.context.y) <= 0.5 &&
+    Math.abs(state.configRect.bottom - state.contextContentRect.y) <= 1 &&
+    Math.abs(state.contextContentRect.bottom - state.persistentBandRects.context.bottom) <= 0.5
+  );
+  const fixedContainedStageHost = (state) => Boolean(
+    state.stageHostRect?.height > 0 &&
+    state.stageContain.includes("size") &&
+    state.stageContain.includes("layout") &&
+    state.mappingGridRows &&
+    !state.mappingGridRows.includes("auto")
+  );
+  const mappingExpansionConditions = [
+    ["selectionDrawerOpenedForFourRegionContract", () => Boolean(drawerOpened && before.selectionDrawerOpen)],
+    ["normalFourRegionRectsPresent", () => allPartsPresent(before)],
+    ["mappingExpandedStateApplied", () => Boolean(expanded.mappingWorkspaceExpanded)],
+    ["mappingExpandedStageAtLeastDoubleNormal", () => stageHeightRatio >= 2],
+    ["primaryMappingStageHostAtLeast900Px", () =>
+      viewport.width !== 1920 || viewport.height !== 1080 || expandedStageHeight >= 900],
+    ["mappingExpandedBandFillsWorkspace", () => bandFillsLayout(expanded)],
+    ["mappingExpandedOldUpperAreaAtLeast98PercentFilled", () => oldUpperUnfilledRatio <= 0.02],
+    ["mappingExpandedSettingsStackFillsRightColumn", () => settingsStackFillsRightColumn(expanded)],
+    ["mappingExpandedConfigControlsVisible", () => expanded.visibleConfigControls >= 20],
+    ["mappingExpandedRemovesLegacyTopPanelAndSplitter", () =>
+      expanded.mappingTopPanelRect === null && expanded.horizontalSplitterRect === null],
+    ["mappingExpandedKeepsLowerSplitterAndAllFourRegions", () =>
+      Boolean(expanded.verticalSplitterRect) && allPartsPresent(expanded)],
+    ["mappingExpandedStageHostFixedAndContained", () => fixedContainedStageHost(expanded)],
+    ["mappingExpandedDocumentAndAppScrollZero", () => Boolean(expanded.documentAndAppScrollZero)],
+    ["mappingReentryKeepsSameExpandedGeometry", () =>
+      Boolean(
+        expandedAgain.mappingWorkspaceExpanded &&
+        persistentBandRectsWithinTolerance(expanded.stageHostRect, expandedAgain.stageHostRect, 0.5) &&
+        persistentBandRectsWithinTolerance(expanded.configRect, expandedAgain.configRect, 0.5)
+      )],
+    ["mappingSubtabExitClearsExpandedState", () =>
+      Boolean(
+        !restoredSubtab.mappingWorkspaceExpanded &&
+        restoredSubtab.configRect === null &&
+        restoredSubtab.horizontalSplitterRect
+      )],
+    ["mappingSubtabExitRestoresFourRectsWithinHalfPixel", () => allPartsRestored(restoredSubtab)],
+    ["mappingWorkspaceExitClearsExpandedState", () =>
+      Boolean(
+        !restoredWorkspace.mappingWorkspaceExpanded &&
+        restoredWorkspace.configRect === null &&
+        restoredWorkspace.horizontalSplitterRect
+      )],
+    ["mappingWorkspaceExitRestoresFourRectsWithinHalfPixel", () => allPartsRestored(restoredWorkspace)],
+    ["mappingExitKeepsDocumentAndAppScrollZero", () =>
+      Boolean(
+        restoredSubtab.documentAndAppScrollZero &&
+        expandedAgain.documentAndAppScrollZero &&
+        restoredWorkspace.documentAndAppScrollZero
+      )],
+  ];
+  const checks = Object.fromEntries(mappingExpansionConditions.map(([name, check]) => {
+    try {
+      return [name, check()];
+    } catch {
+      return [name, false];
+    }
+  }));
+  const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  return {
+    label: `mapping-expansion-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    metrics: {
+      normalStageHeight,
+      expandedStageHeight,
+      stageHeightRatio,
+      oldUpperUnfilledRatio,
+    },
+    before,
+    expanded,
+    expandedAgain,
+    restoredSubtab,
+    restoredWorkspace,
+  };
+}
+
+async function runMappingExpansionViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await seedViewportLocalStorage(client);
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  return await runMappingExpansionCheck(client, viewport);
 }
 
 async function measureLayeredTimelineDeskState(client) {
@@ -4619,9 +4894,21 @@ function expectsPersistentWorkspaceBand(result) {
   );
 }
 
+const expandedMappingBandLabelPrefixes = [
+  // Labels measured while Setup > Mapping is active (expanded stage, single
+  // splitter). mapping-wave-draft-* is intentionally absent: that phase jumps
+  // to the Control wave editor before measuring, so it observes the normal
+  // two-splitter band.
+  "setup-mapping-",
+  "mapping-hotkey-help-",
+];
+
 function hasExpectedPersistentWorkspaceBand(result) {
   if (!expectsPersistentWorkspaceBand(result)) return true;
   const rects = result.persistentBandRects ?? {};
+  const mappingExpanded = expandedMappingBandLabelPrefixes.some((prefix) =>
+    result.label.startsWith(prefix)
+  );
   const oldControlPreviewAbsent = !result.label.startsWith("control-") || (
     result.visibleControlStagePanelCount === 0 && result.visibleControlStageCount === 0
   );
@@ -4631,7 +4918,7 @@ function hasExpectedPersistentWorkspaceBand(result) {
     result.visiblePersistentStageCount === 1 &&
     result.visibleSelectionDrawerToggleCount === 1 &&
     result.visiblePersistentContextCount === 1 &&
-    result.visibleWorkspaceSplitterCount === 2 &&
+    result.visibleWorkspaceSplitterCount === (mappingExpanded ? 1 : 2) &&
     rects.groups?.width >= 428 && rects.groups?.height >= 24 &&
     rects.stage?.width >= 428 && rects.stage?.height >= 120 &&
     rects.context?.width >= 478 && rects.context?.height >= 120 &&
@@ -4641,6 +4928,10 @@ function hasExpectedPersistentWorkspaceBand(result) {
 
 function hasExpectedPersistentBandInvariance(result) {
   return !result.label.startsWith("persistent-band-invariance-") || result.persistentBandInvariant === true;
+}
+
+function hasExpectedMappingExpansion(result) {
+  return !result.label.startsWith("persistent-band-invariance-") || result.mappingExpansion?.passed === true;
 }
 
 function hasExpectedTimelinePaneExpansion(result) {
@@ -7062,8 +7353,8 @@ async function runViewport(client, viewport) {
     traceViewport(`setup ${setupTab.id} measured ${viewport.width}x${viewport.height}`);
   }
   await clickByText(client, "Setup");
-  await clickByText(client, "Mapping");
-  await clickByText(client, "Stage Map");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
   await sleep(120);
   const persistentSetupBefore = await measurePersistentBand(client, `persistent-band-setup-before-${viewport.width}x${viewport.height}`);
   await clickByText(client, "Control");
@@ -7071,8 +7362,8 @@ async function runViewport(client, viewport) {
   await sleep(120);
   const persistentControl = await measurePersistentBand(client, `persistent-band-control-${viewport.width}x${viewport.height}`);
   await clickByText(client, "Setup");
-  await clickByText(client, "Mapping");
-  await clickByText(client, "Stage Map");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
   await sleep(120);
   const persistentSetupAfter = await measurePersistentBand(client, `persistent-band-setup-after-${viewport.width}x${viewport.height}`);
   const persistentBandComparison = comparePersistentBandMeasurements(
@@ -7080,6 +7371,7 @@ async function runViewport(client, viewport) {
     persistentControl,
     persistentSetupAfter,
   );
+  const mappingExpansion = await runMappingExpansionCheck(client, viewport);
   const timelinePaneExpansion = await runTimelinePaneExpansionCheck(client, viewport);
   const layeredTimelineDesk = await runLayeredTimelineDeskCheck(client, viewport);
   results.push({
@@ -7089,6 +7381,7 @@ async function runViewport(client, viewport) {
     persistentBandInvariant: persistentBandComparison.invariant,
     persistentBandRectsByWorkspace: persistentBandComparison.rectsByWorkspace,
     persistentBandRectDeltas: persistentBandComparison.deltas,
+    mappingExpansion,
     timelinePaneExpansion,
     layeredTimelineDesk,
   });
@@ -8186,8 +8479,8 @@ async function runPersistentBandInvarianceViewport(client, viewport) {
   await waitForApp(client);
 
   await clickByText(client, "Setup");
-  await clickByText(client, "Mapping");
-  await clickByText(client, "Stage Map");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
   await sleep(120);
   const setupBefore = await measurePersistentBand(client, `persistent-band-setup-before-${viewport.width}x${viewport.height}`);
   await clickByText(client, "Control");
@@ -8195,11 +8488,12 @@ async function runPersistentBandInvarianceViewport(client, viewport) {
   await sleep(120);
   const control = await measurePersistentBand(client, `persistent-band-control-${viewport.width}x${viewport.height}`);
   await clickByText(client, "Setup");
-  await clickByText(client, "Mapping");
-  await clickByText(client, "Stage Map");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
   await sleep(120);
   const setupAfter = await measurePersistentBand(client, `persistent-band-setup-after-${viewport.width}x${viewport.height}`);
   const comparison = comparePersistentBandMeasurements(setupBefore, control, setupAfter);
+  const mappingExpansion = await runMappingExpansionCheck(client, viewport);
   const timelinePaneExpansion = await runTimelinePaneExpansionCheck(client, viewport);
   const layeredTimelineDesk = await runLayeredTimelineDeskCheck(client, viewport);
   const containment = {
@@ -8208,6 +8502,7 @@ async function runPersistentBandInvarianceViewport(client, viewport) {
     persistentBandInvariant: comparison.invariant,
     persistentBandRectsByWorkspace: comparison.rectsByWorkspace,
     persistentBandRectDeltas: comparison.deltas,
+    mappingExpansion,
     timelinePaneExpansion,
     layeredTimelineDesk,
   };
@@ -8220,6 +8515,7 @@ async function runPersistentBandInvarianceViewport(client, viewport) {
       hasExpectedPersistentWorkspaceBand(control) &&
       hasExpectedPersistentWorkspaceBand(containment) &&
       hasExpectedPersistentBandInvariance(containment) &&
+      hasExpectedMappingExpansion(containment) &&
       hasExpectedTimelinePaneExpansion(containment) &&
       hasExpectedLayeredTimelineDesk(containment),
     containment,
@@ -13852,6 +14148,29 @@ async function main() {
       }
       return;
     }
+    if (mappingExpansionOnlyMode) {
+      const mappingExpansionResults = [];
+      for (const viewport of viewports) {
+        const result = await runMappingExpansionViewport(client, viewport);
+        mappingExpansionResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `stage=${result.metrics.normalStageHeight}->${result.metrics.expandedStageHeight} ` +
+            `ratio=${result.metrics.stageHeightRatio.toFixed(3)} ` +
+            `upperUnfilled=${result.metrics.oldUpperUnfilledRatio.toFixed(4)} ` +
+            `normalRects=${JSON.stringify(result.before.persistentBandRects)} ` +
+            `expandedRects=${JSON.stringify(result.expanded.persistentBandRects)} ` +
+            `restoredSubtabRects=${JSON.stringify(result.restoredSubtab.persistentBandRects)} ` +
+            `restoredWorkspaceRects=${JSON.stringify(result.restoredWorkspace.persistentBandRects)} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = mappingExpansionResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Mapping expansion failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (persistentBandOnlyMode) {
       const persistentBandResults = [];
       for (const viewport of viewports) {
@@ -13861,6 +14180,8 @@ async function main() {
           `${result.passed ? "pass" : "fail"} ${result.containment.label} ` +
             `rects=${JSON.stringify(result.containment.persistentBandRectsByWorkspace)} ` +
             `deltas=${JSON.stringify(result.containment.persistentBandRectDeltas)} ` +
+            `mappingExpansion=${result.containment.mappingExpansion?.passed ? "pass" : "fail"} ` +
+            `mappingFailed=${JSON.stringify(result.containment.mappingExpansion?.failedChecks ?? [])} ` +
             `timelineExpansion=${result.containment.timelinePaneExpansion?.passed ? "pass" : "fail"} ` +
             `failedChecks=${JSON.stringify(result.containment.timelinePaneExpansion?.failedChecks ?? [])} ` +
             `layeredDesk=${result.containment.layeredTimelineDesk?.passed ? "pass" : "fail"} ` +
@@ -14251,6 +14572,7 @@ async function main() {
     const setupSurfaceFailures = results.filter((result) => !hasExpectedSetupSurface(result));
     const persistentBandFailures = results.filter((result) => !hasExpectedPersistentWorkspaceBand(result));
     const persistentBandInvarianceFailures = results.filter((result) => !hasExpectedPersistentBandInvariance(result));
+    const mappingExpansionFailures = results.filter((result) => !hasExpectedMappingExpansion(result));
     const timelinePaneExpansionFailures = results.filter((result) => !hasExpectedTimelinePaneExpansion(result));
     const layeredTimelineDeskFailures = results.filter((result) => !hasExpectedLayeredTimelineDesk(result));
     const projectMenuFailures = results.filter((result) => !hasExpectedProjectMenu(result));
@@ -14326,7 +14648,7 @@ async function main() {
         ? ` mixer=${result.visibleVideoOutputItemCount}/${result.visibleVideoOutputSelectedItemCount}/${result.visibleVideoMixerOutputDeckCount}/${result.visibleVideoMixerOutputFaderCount}/${result.visibleVideoMixerOutputSelectButtonCount}/${result.visibleVideoLayerItemCount}/${result.visibleBuiltinVideoFxSelectCount}/${result.visibleVideoMixerLayerDeckCount}/${result.visibleVideoMixerLayerFaderCount}/${result.visibleVideoMixerLayerButtonCount} clip=${result.videoClipGridClientHeight}/${result.fullyVisibleVideoClipPadCount} contract=${result.controlModeFailedChecks?.join(",") || "ok"}`
         : "";
       const persistentBandSuffix = result.label.startsWith("persistent-band-invariance-")
-        ? ` persistentBand=${result.persistentBandInvariant ? "stable" : "moved"} rects=${JSON.stringify(result.persistentBandRectsByWorkspace)} deltas=${JSON.stringify(result.persistentBandRectDeltas)} timelineExpansion=${result.timelinePaneExpansion?.passed ? "pass" : "fail"} timelineExpansionFailed=${JSON.stringify(result.timelinePaneExpansion?.failedChecks ?? [])} layeredDesk=${result.layeredTimelineDesk?.passed ? "pass" : "fail"} layeredDeskFailed=${JSON.stringify(result.layeredTimelineDesk?.failedChecks ?? [])}`
+        ? ` persistentBand=${result.persistentBandInvariant ? "stable" : "moved"} rects=${JSON.stringify(result.persistentBandRectsByWorkspace)} deltas=${JSON.stringify(result.persistentBandRectDeltas)} mappingExpansion=${result.mappingExpansion?.passed ? "pass" : "fail"} mappingExpansionFailed=${JSON.stringify(result.mappingExpansion?.failedChecks ?? [])} timelineExpansion=${result.timelinePaneExpansion?.passed ? "pass" : "fail"} timelineExpansionFailed=${JSON.stringify(result.timelinePaneExpansion?.failedChecks ?? [])} layeredDesk=${result.layeredTimelineDesk?.passed ? "pass" : "fail"} layeredDeskFailed=${JSON.stringify(result.layeredTimelineDesk?.failedChecks ?? [])}`
         : "";
       console.log(
         `${status} [${viewportRole({ width: result.innerWidth, height: result.innerHeight })}] ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${keyboardSuffix}${timelineSuffix}${sceneBlockSuffix}${touchSuffix}${controlStageGlyphSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${waveDraftSuffix}${editVisualSuffix}${positionVisualSuffix}${colorEffectSuffix}${chaserEffectSuffix}${moveEffectSuffix}${mixerSuffix}${persistentBandSuffix}`,
@@ -14386,6 +14708,7 @@ async function main() {
       setupSurfaceFailures.length > 0 ||
       persistentBandFailures.length > 0 ||
       persistentBandInvarianceFailures.length > 0 ||
+      mappingExpansionFailures.length > 0 ||
       timelinePaneExpansionFailures.length > 0 ||
       layeredTimelineDeskFailures.length > 0 ||
       projectMenuFailures.length > 0 ||
@@ -14405,6 +14728,10 @@ async function main() {
           setupSurface: setupSurfaceFailures.map((result) => result.label),
           persistentBand: persistentBandFailures.map((result) => result.label),
           persistentBandInvariance: persistentBandInvarianceFailures.map((result) => result.label),
+          mappingExpansion: mappingExpansionFailures.map((result) => ({
+            label: result.mappingExpansion?.label ?? result.label,
+            failedChecks: result.mappingExpansion?.failedChecks ?? [],
+          })),
           timelinePaneExpansion: timelinePaneExpansionFailures.map((result) => ({
             label: result.timelinePaneExpansion?.label ?? result.label,
             failedChecks: result.timelinePaneExpansion?.failedChecks ?? [],
@@ -14496,6 +14823,7 @@ async function main() {
             setupSurface: setupSurfaceFailures,
             persistentBand: persistentBandFailures,
             persistentBandInvariance: persistentBandInvarianceFailures,
+            mappingExpansion: mappingExpansionFailures.map((result) => result.mappingExpansion),
             timelinePaneExpansion: timelinePaneExpansionFailures.map((result) => result.timelinePaneExpansion),
             layeredTimelineDesk: layeredTimelineDeskFailures.map((result) => result.layeredTimelineDesk),
             projectMenu: projectMenuFailures,
@@ -14521,7 +14849,7 @@ async function main() {
         ),
       );
       throw new Error(
-        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${effectStackLargeFailures.length} large live-effect DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${killZoneFailures.length} kill zone check(s), ${statusLineFailures.length} status line check(s) failed.`,
+        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${effectStackLargeFailures.length} large live-effect DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${mappingExpansionFailures.length} mapping expansion check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${killZoneFailures.length} kill zone check(s), ${statusLineFailures.length} status line check(s) failed.`,
       );
     }
   } finally {

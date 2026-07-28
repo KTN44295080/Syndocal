@@ -15470,11 +15470,10 @@ export default function App() {
         </aside>
         </Show>
 
-        <Show when={workspaceTab() === "setup" && ["patch", "mapping"].includes(setupSubTab())}>
+        <Show when={workspaceTab() === "setup" && setupSubTab() === "patch"}>
         <SetupMappingWorkspace
-          className={setupPanelClass("panel fixtures setupPanel", ["patch", "mapping"])}
-          panelRef={registerSetupPanel(["patch", "mapping"])}
-          compact={setupSubTab() === "patch"}
+          className={setupPanelClass("panel fixtures setupPanel", ["patch"])}
+          panelRef={registerSetupPanel(["patch"])}
           patchMap={{
             activeUniverse: activePatchGridUniverse(),
             universeOptions: patchGridUniverseOptions(),
@@ -15522,34 +15521,6 @@ export default function App() {
             onSetTransform: setFixtureTransform,
             onLayoutFixtures: layoutFixturePositions,
           } : null}
-          stageConfig={{
-            stageMap: snapshot().stage_map,
-            stageWorldBounds: stageWorldBounds(),
-            stageMapPresetLabel: stageMapPresetLabel(),
-            selectedStageMapPresetLabel: selectedStageMapPresetLabel(),
-            stageMapPresets: snapshot().stage_map_presets,
-            mappingViewPresetLabel: mappingViewPresetLabel(),
-            selectedMappingViewPresetId: selectedMappingViewPresetId(),
-            mappingViewPresets: mappingViewPresets(),
-            stageMapPresetLabelFor: stageMapPresetObjectCountLabel,
-            mappingViewPresetLabelFor: mappingViewPresetObjectLabel,
-            onLockToCurrentBounds: lockStageMapToCurrentBounds,
-            onSetStageMapConfig: setStageMapConfig,
-            onStageMapPresetLabel: setStageMapPresetLabel,
-            onSelectedStageMapPresetLabel: setSelectedStageMapPresetLabel,
-            onSaveStageMapPreset: saveStageMapPreset,
-            onExportStageMapPreset: exportStageMapPreset,
-            onImportStageMapPreset: importStageMapPreset,
-            onApplyStageMapPreset: applyStageMapPreset,
-            onRemoveStageMapPreset: removeStageMapPreset,
-            onMappingViewPresetLabel: setMappingViewPresetLabel,
-            onSelectedMappingViewPresetId: setSelectedMappingViewPresetId,
-            onSaveMappingViewPreset: saveMappingViewPreset,
-            onApplyMappingViewPreset: applyMappingViewPreset,
-            onRemoveMappingViewPreset: removeMappingViewPreset,
-            onExportMappingStageSvg: exportMappingStageSvg,
-            onExportVisualizerRenderPayload: exportVisualizerRenderPayload,
-          }}
         />
         </Show>
 
@@ -15884,8 +15855,37 @@ export default function App() {
           onLowerSplitRatio={setLowerSplitRatio}
           onSelectionsDrawerOpen={setSelectionsDrawerOpen}
           workspace={workspaceTab() === "control" ? "control" : "setup"}
+          mappingWorkspaceExpanded={workspaceTab() === "setup" && setupSubTab() === "mapping"}
           controlMode={controlMode()}
           onControlMode={selectControlMode}
+          stageConfig={{
+            stageMap: snapshot().stage_map,
+            stageWorldBounds: stageWorldBounds(),
+            stageMapPresetLabel: stageMapPresetLabel(),
+            selectedStageMapPresetLabel: selectedStageMapPresetLabel(),
+            stageMapPresets: snapshot().stage_map_presets,
+            mappingViewPresetLabel: mappingViewPresetLabel(),
+            selectedMappingViewPresetId: selectedMappingViewPresetId(),
+            mappingViewPresets: mappingViewPresets(),
+            stageMapPresetLabelFor: stageMapPresetObjectCountLabel,
+            mappingViewPresetLabelFor: mappingViewPresetObjectLabel,
+            onLockToCurrentBounds: lockStageMapToCurrentBounds,
+            onSetStageMapConfig: setStageMapConfig,
+            onStageMapPresetLabel: setStageMapPresetLabel,
+            onSelectedStageMapPresetLabel: setSelectedStageMapPresetLabel,
+            onSaveStageMapPreset: saveStageMapPreset,
+            onExportStageMapPreset: exportStageMapPreset,
+            onImportStageMapPreset: importStageMapPreset,
+            onApplyStageMapPreset: applyStageMapPreset,
+            onRemoveStageMapPreset: removeStageMapPreset,
+            onMappingViewPresetLabel: setMappingViewPresetLabel,
+            onSelectedMappingViewPresetId: setSelectedMappingViewPresetId,
+            onSaveMappingViewPreset: saveMappingViewPreset,
+            onApplyMappingViewPreset: applyMappingViewPreset,
+            onRemoveMappingViewPreset: removeMappingViewPreset,
+            onExportMappingStageSvg: exportMappingStageSvg,
+            onExportVisualizerRenderPayload: exportVisualizerRenderPayload,
+          }}
           filters={{
             fixtureCount: snapshot().fixtures.length,
             filteredFixtureCount: filteredFixtures().length,

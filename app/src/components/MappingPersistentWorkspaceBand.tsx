@@ -10,6 +10,7 @@ import {
   MappingSetupContextPanel,
   type MappingSelectionPanelProps,
 } from "./MappingSelectionSidebarPanel";
+import { MappingStageConfigPanel } from "./MappingStageConfigPanel";
 import { MappingStageLayersPanel } from "./MappingStageLayersPanel";
 import { MappingToolRail } from "./MappingToolRail";
 import { MappingViewportControls } from "./MappingViewportControls";
@@ -19,12 +20,14 @@ type WithoutChildren<T> = Omit<T, "children">;
 
 type MappingPersistentWorkspaceBandProps = {
   workspace: "setup" | "control";
+  mappingWorkspaceExpanded: boolean;
   controlMode: ControlMode;
   filters: MappingFilterStripsProps;
   toolRail: ComponentProps<typeof MappingToolRail>;
   viewportControls: ComponentProps<typeof MappingViewportControls>;
   editableStage: WithoutChildren<ComponentProps<typeof MappingEditableStageShell>>;
   stageLayers: ComponentProps<typeof MappingStageLayersPanel>;
+  stageConfig: ComponentProps<typeof MappingStageConfigPanel>;
   selection: MappingSelectionPanelProps;
   hotkeyHelpOpen: boolean;
   poppedPanes: string[];
@@ -78,7 +81,8 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
 
   return (
     <section
-      class={`mappingPersistentWorkspaceBand${timelinePaneExpanded() ? " timelinePaneExpanded" : ""}${props.poppedPanes.includes("stage") ? " stagePanePopped" : ""}${props.poppedPanes.includes("timeline") ? " timelinePanePopped" : ""}`}
+      class={`mappingPersistentWorkspaceBand${props.mappingWorkspaceExpanded ? " mappingWorkspaceExpanded" : ""}${timelinePaneExpanded() ? " timelinePaneExpanded" : ""}${props.poppedPanes.includes("stage") ? " stagePanePopped" : ""}${props.poppedPanes.includes("timeline") ? " timelinePanePopped" : ""}`}
+      data-mapping-workspace-expanded={props.mappingWorkspaceExpanded ? "true" : "false"}
       data-timeline-pane-expanded={timelinePaneExpanded() ? "true" : "false"}
       data-workspace-pane="lower"
       aria-label="Persistent workspace band"
@@ -230,7 +234,15 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
               </>
             }
           >
-            <MappingSetupContextPanel {...props.selection} />
+            <Show
+              when={props.mappingWorkspaceExpanded}
+              fallback={<MappingSetupContextPanel {...props.selection} />}
+            >
+              <div class="mappingExpandedStageConfig" data-mapping-expanded-stage-config>
+                <MappingStageConfigPanel {...props.stageConfig} />
+              </div>
+              <MappingSetupContextPanel {...props.selection} />
+            </Show>
           </Show>
         </aside>
       </div>

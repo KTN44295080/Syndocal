@@ -27635,6 +27635,105 @@ h3 {
   }
 }
 
+/* T24-B: Setup > Mapping temporarily consumes the full workspace height.
+   The root track and stage host are viewport-derived fixed tracks: neither is
+   content-sized, so the editable SVG cannot feed intrinsic height back into
+   layout while its viewBox responds to the new pixel surface. */
+.layout.layoutSharedWorkspace.layoutSetup.setupMode-mapping {
+  grid-template-rows: minmax(0, 1fr) !important;
+}
+
+.layoutSharedWorkspace.layoutSetup.setupMode-mapping > .workspaceSplitHandle-horizontal {
+  display: none;
+}
+
+.layoutSharedWorkspace.layoutSetup.setupMode-mapping > .mappingPersistentWorkspaceBand.mappingWorkspaceExpanded {
+  grid-row: 1 / -1 !important;
+  height: 100% !important;
+  max-height: none !important;
+}
+
+.layoutSharedWorkspace.layoutSetup.setupMode-mapping .mappingWorkspaceExpanded > .mappingPersistentWorkspaceGrid {
+  grid-template-rows: 31px minmax(0, 1fr) !important;
+  height: 100% !important;
+  max-height: none !important;
+  contain: size layout;
+}
+
+.layoutSharedWorkspace.layoutSetup.setupMode-mapping .mappingWorkspaceExpanded .mappingWorkspaceLeftPane,
+.layoutSharedWorkspace.layoutSetup.setupMode-mapping .mappingWorkspaceExpanded .mappingPersistentStage,
+.layoutSharedWorkspace.layoutSetup.setupMode-mapping .mappingWorkspaceExpanded .mappingStageViewport,
+.layoutSharedWorkspace.layoutSetup.setupMode-mapping .mappingWorkspaceExpanded .mappingPersistentStage .visualizerStage {
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: none !important;
+}
+
+.layoutSharedWorkspace.layoutSetup.setupMode-mapping .mappingWorkspaceExpanded .mappingPersistentStage {
+  contain: size layout;
+}
+
+/* The former horizontal Stage Bounds row becomes a fixed-height upper track in
+   the existing right context column. Its controls may scroll internally at
+   compact heights; the lower context content keeps its component structure. */
+.layoutSharedWorkspace.layoutSetup.setupMode-mapping .mappingWorkspaceExpanded > .mappingPersistentWorkspaceGrid > .setupContextPane {
+  display: grid;
+  grid-template-rows: minmax(270px, 0.58fr) minmax(0, 0.42fr);
+  overflow: hidden;
+}
+
+.layoutSharedWorkspace.layoutSetup.setupMode-mapping .mappingExpandedStageConfig {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden auto;
+  border-bottom: 1px solid #3b3732;
+  background: #191715;
+  overscroll-behavior: contain;
+}
+
+.layoutSharedWorkspace.layoutSetup.setupMode-mapping .mappingExpandedStageConfig > .mappingStageBoundsPanel {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: start;
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
+  border: 0;
+  border-radius: 0;
+  padding: 6px;
+}
+
+.layoutSharedWorkspace.layoutSetup.setupMode-mapping .mappingExpandedStageConfig .mappingStageBoundsGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.layoutSharedWorkspace.layoutSetup.setupMode-mapping .mappingExpandedStageConfig .mappingStageBoundsActions button,
+.layoutSharedWorkspace.layoutSetup.setupMode-mapping .mappingExpandedStageConfig .mappingStagePresetActions button {
+  min-height: 26px;
+  padding-inline: 5px;
+  font-size: 11px;
+}
+
+.layoutSharedWorkspace.layoutSetup.setupMode-mapping .mappingExpandedStageConfig + .mappingSetupContextContent {
+  height: 100%;
+  min-height: 0;
+}
+
+@media (max-height: 800px) {
+  .layoutSharedWorkspace.layoutSetup.setupMode-mapping .mappingWorkspaceExpanded > .mappingPersistentWorkspaceGrid > .setupContextPane {
+    grid-template-rows: minmax(260px, 0.54fr) minmax(0, 0.46fr);
+  }
+
+  .layoutSharedWorkspace.layoutSetup.setupMode-mapping .mappingExpandedStageConfig > .mappingStageBoundsPanel {
+    gap: 4px;
+    padding: 4px;
+  }
+
+  .layoutSharedWorkspace.layoutSetup.setupMode-mapping .mappingExpandedStageConfig .mappingStageBoundsGrid,
+  .layoutSharedWorkspace.layoutSetup.setupMode-mapping .mappingExpandedStageConfig .mappingStagePresetPanel {
+    gap: 4px;
+  }
+}
+
 /* Compact the inherited full-canvas desks inside T10's fixed context slot. */
 .layoutSharedWorkspace.layoutSetup.setupMode-video .videoSetupInspectorPane {
   grid-template-rows: 34px minmax(58px, 0.7fr) minmax(78px, 1fr) minmax(72px, 0.85fr);
