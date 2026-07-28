@@ -2455,6 +2455,7 @@ export default function App() {
     });
   });
   const [appStatus, setAppStatus] = createSignal(appStatusFromMessage("Ready"));
+  const [daslightProjectImportBusy, setDaslightProjectImportBusy] = createSignal(false);
   const message = () => appStatus().text;
   const setMessage = (text: string, key?: string) => {
     setAppStatus(appStatusFromMessage(text, key));
@@ -9013,10 +9014,15 @@ export default function App() {
   };
 
   const importDaslightProject = async () => {
+    if (daslightProjectImportBusy()) {
+      return;
+    }
     if (!confirmDiscardProjectChanges("import a Daslight Project (.dvc)")) {
       setMessage("Daslight Project import canceled.");
       return;
     }
+    setDaslightProjectImportBusy(true);
+    setMessage("Importing Daslight Project...", "daslight-project-import-busy");
     try {
       const report = await invoke<DvcImportReport | null>("import_daslight_project", { path: null });
       if (!report) {
@@ -9039,6 +9045,8 @@ export default function App() {
       );
     } catch (error) {
       setMessage(`Daslight Project import failed: ${String(error)}`);
+    } finally {
+      setDaslightProjectImportBusy(false);
     }
   };
 
@@ -14693,6 +14701,7 @@ export default function App() {
         recentProjectPaths={recentProjectPaths()}
         recoveryCheckpoint={projectRecoveryCheckpoint()}
         projectBackups={projectBackups()}
+        daslightProjectImportBusy={daslightProjectImportBusy()}
         historyStatus={{
           ...projectHistoryStatus(),
           can_undo: !isfEventPulseBusy() && projectHistoryStatus().can_undo,

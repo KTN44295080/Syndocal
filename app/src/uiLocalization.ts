@@ -11,6 +11,7 @@ const japaneseText: Record<string, string> = {
   Load: "開く",
   "Import .dvc": ".dvcをインポート",
   "Daslight Project (.dvc)": "Daslightプロジェクト（.dvc）",
+  "Importing Daslight Project...": "Daslightプロジェクトをインポート中…",
   "Daslight build": "Daslightビルド",
   "· VERSIONFILE": "· ファイルバージョン",
   "Import report": "インポートレポート",

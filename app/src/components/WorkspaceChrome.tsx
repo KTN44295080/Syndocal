@@ -35,6 +35,7 @@ type WorkspaceChromeProps = {
   recentProjectPaths: string[];
   recoveryCheckpoint: ProjectRecoveryCheckpoint | null;
   projectBackups: ProjectBackupSummary[];
+  daslightProjectImportBusy: boolean;
   historyStatus: ProjectHistoryStatus;
   applicationUpdateConfiguration: ApplicationUpdateConfiguration | null;
   applicationUpdateCheck: ApplicationUpdateCheck | null;
@@ -169,7 +170,12 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               <button role="menuitem" aria-keyshortcuts="Control+O Meta+O" onClick={() => runProjectMenuAction(props.onLoadProject)}>
                 <span>Load</span>
               </button>
-              <button role="menuitem" onClick={() => runProjectMenuAction(props.onImportDaslightProject)}>
+              <button
+                role="menuitem"
+                disabled={props.daslightProjectImportBusy}
+                aria-busy={props.daslightProjectImportBusy}
+                onClick={() => runProjectMenuAction(props.onImportDaslightProject)}
+              >
                 <span>Import .dvc</span>
                 <small>Daslight Project (.dvc)</small>
               </button>

@@ -59,7 +59,7 @@ use protocol::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use tauri::Emitter;
-use tauri::{Manager, State};
+use tauri::{Manager, State, WebviewWindow};
 use tauri_plugin_updater::UpdaterExt;
 
 mod capture_transport;
@@ -3476,27 +3476,39 @@ const OPERATOR_CREDENTIAL_SCHEME: &str = "PBKDF2-SHA256";
 const OPERATOR_CREDENTIAL_MIN_ITERATIONS: u32 = 100_000;
 const OPERATOR_CREDENTIAL_MAX_ITERATIONS: u32 = 2_000_000;
 
+fn parented_file_dialog(window: &WebviewWindow) -> rfd::FileDialog {
+    // rfd treats failed raw-window/display handle acquisition as no parent,
+    // preserving the existing dialog behavior when a native handle is unavailable.
+    rfd::FileDialog::new().set_parent(window)
+}
+
 #[tauri::command]
-fn select_gdtf_file() -> Option<String> {
-    rfd::FileDialog::new()
+fn select_gdtf_file(window: WebviewWindow) -> Option<String> {
+    parented_file_dialog(&window)
         .add_filter("GDTF Fixture", &["gdtf"])
         .pick_file()
         .map(|path| path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
-fn select_video_source_file(kind: VideoSourceKind) -> Result<Option<String>, String> {
+fn select_video_source_file(
+    window: WebviewWindow,
+    kind: VideoSourceKind,
+) -> Result<Option<String>, String> {
     let (label, extensions) = video_source_file_dialog_filter(&kind)?;
-    Ok(rfd::FileDialog::new()
+    Ok(parented_file_dialog(&window)
         .add_filter(label, extensions)
         .pick_file()
         .map(|path| path.to_string_lossy().to_string()))
 }
 
 #[tauri::command]
-fn select_video_source_files(kind: VideoSourceKind) -> Result<Vec<String>, String> {
+fn select_video_source_files(
+    window: WebviewWindow,
+    kind: VideoSourceKind,
+) -> Result<Vec<String>, String> {
     let (label, extensions) = video_source_file_dialog_filter(&kind)?;
-    Ok(rfd::FileDialog::new()
+    Ok(parented_file_dialog(&window)
         .add_filter(label, extensions)
         .pick_files()
         .unwrap_or_default()
@@ -3506,8 +3518,8 @@ fn select_video_source_files(kind: VideoSourceKind) -> Result<Vec<String>, Strin
 }
 
 #[tauri::command]
-fn select_video_isf_file() -> Result<Option<VideoIsfEffectSummary>, String> {
-    let Some(path) = rfd::FileDialog::new()
+fn select_video_isf_file(window: WebviewWindow) -> Result<Option<VideoIsfEffectSummary>, String> {
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Interactive Shader Format", ISF_FILE_EXTENSIONS)
         .pick_file()
     else {
@@ -3536,8 +3548,10 @@ fn load_video_isf_effect_from_path(path: &Path) -> Result<VideoIsfEffectSummary,
 }
 
 #[tauri::command]
-fn import_video_output_bitmap_mask() -> Result<Option<VideoBitmapMaskImportResult>, String> {
-    let Some(path) = rfd::FileDialog::new()
+fn import_video_output_bitmap_mask(
+    window: WebviewWindow,
+) -> Result<Option<VideoBitmapMaskImportResult>, String> {
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Luma Mask Image", &["png", "jpg", "jpeg"])
         .pick_file()
     else {
@@ -3604,9 +3618,9 @@ fn load_gdtf_model_file(
 }
 
 #[tauri::command]
-fn download_gdtf_from_url(url: String) -> Result<Option<String>, String> {
+fn download_gdtf_from_url(window: WebviewWindow, url: String) -> Result<Option<String>, String> {
     let trimmed_url = validate_gdtf_download_url(&url)?;
-    let Some(path) = rfd::FileDialog::new()
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("GDTF Fixture", &["gdtf"])
         .set_file_name(gdtf_download_file_name_from_url(trimmed_url))
         .save_file()
@@ -3682,10 +3696,13 @@ fn search_gdtf_share(request: GdtfShareSearchRequest) -> Result<GdtfShareSearchR
 }
 
 #[tauri::command]
-fn download_gdtf_from_share(request: GdtfShareDownloadRequest) -> Result<Option<String>, String> {
+fn download_gdtf_from_share(
+    window: WebviewWindow,
+    request: GdtfShareDownloadRequest,
+) -> Result<Option<String>, String> {
     validate_gdtf_share_credentials(&request.user, &request.password)?;
     validate_gdtf_share_download_identity(&request)?;
-    let Some(path) = rfd::FileDialog::new()
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("GDTF Fixture", &["gdtf"])
         .set_file_name(gdtf_share_download_file_name(&request))
         .save_file()
@@ -3892,6 +3909,7 @@ fn create_custom_fixture_profile(
 
 #[tauri::command]
 fn save_custom_fixture_profile(
+    window: WebviewWindow,
     request: CustomFixtureProfileRequest,
 ) -> Result<Option<String>, String> {
     validate_custom_fixture_profile_request(&request)?;
@@ -3899,7 +3917,7 @@ fn save_custom_fixture_profile(
         version: PROJECT_FILE_VERSION,
         request,
     };
-    let Some(path) = rfd::FileDialog::new()
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal Fixture Profile", &["fixture"])
         .set_file_name(format!(
             "{}.fixture",
@@ -3917,9 +3935,10 @@ fn save_custom_fixture_profile(
 
 #[tauri::command]
 fn load_custom_fixture_profile(
+    window: WebviewWindow,
     state: State<'_, AppState>,
 ) -> Result<Option<FixtureProfileSummary>, String> {
-    let Some(path) = rfd::FileDialog::new()
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal Fixture Profile", &["fixture"])
         .pick_file()
     else {
@@ -4438,11 +4457,14 @@ fn reset_engine_telemetry(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn save_engine_telemetry_report(state: State<'_, AppState>) -> Result<Option<String>, String> {
+fn save_engine_telemetry_report(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
     let captured_at_unix_ms = current_unix_ms();
     let snapshot = state.engine.snapshot();
     let report = engine_telemetry_report_from_snapshot(&snapshot, captured_at_unix_ms);
-    let Some(path) = rfd::FileDialog::new()
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal Telemetry Report", &["json"])
         .set_file_name(format!("syndocal-telemetry-{captured_at_unix_ms}.json"))
         .save_file()
@@ -4508,8 +4530,11 @@ fn sync_ableton_link_clock(
 }
 
 #[tauri::command]
-fn analyze_audio_file(state: State<'_, AppState>) -> Result<Option<AudioAnalysisSummary>, String> {
-    let Some(path) = rfd::FileDialog::new()
+fn analyze_audio_file(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<Option<AudioAnalysisSummary>, String> {
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Audio Files", AUDIO_FILE_EXTENSIONS)
         .pick_file()
     else {
@@ -4546,9 +4571,10 @@ fn analyze_timeline_audio_path(
 
 #[tauri::command]
 fn select_timeline_audio_clip_file(
+    window: WebviewWindow,
     state: State<'_, AppState>,
 ) -> Result<Option<AudioAnalysisSummary>, String> {
-    let Some(path) = rfd::FileDialog::new()
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Audio Files", AUDIO_FILE_EXTENSIONS)
         .pick_file()
     else {
@@ -5016,9 +5042,12 @@ fn learn_midi_control(input_index: usize) -> Result<Option<LearnedMidiControl>, 
 }
 
 #[tauri::command]
-fn save_midi_mappings(mappings: Vec<MidiControlMapping>) -> Result<Option<String>, String> {
+fn save_midi_mappings(
+    window: WebviewWindow,
+    mappings: Vec<MidiControlMapping>,
+) -> Result<Option<String>, String> {
     let mappings = validate_midi_control_mappings(mappings)?;
-    let Some(path) = rfd::FileDialog::new()
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal MIDI Mapping", &["midimap"])
         .set_file_name("syndocal.midimap")
         .save_file()
@@ -5035,8 +5064,8 @@ fn save_midi_mappings(mappings: Vec<MidiControlMapping>) -> Result<Option<String
 }
 
 #[tauri::command]
-fn load_midi_mappings() -> Result<Option<Vec<MidiControlMapping>>, String> {
-    let Some(path) = rfd::FileDialog::new()
+fn load_midi_mappings(window: WebviewWindow) -> Result<Option<Vec<MidiControlMapping>>, String> {
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal MIDI Mapping", &["midimap"])
         .pick_file()
     else {
@@ -5051,9 +5080,12 @@ fn load_midi_mappings() -> Result<Option<Vec<MidiControlMapping>>, String> {
 }
 
 #[tauri::command]
-fn save_osc_mappings(mappings: Vec<OscControlMapping>) -> Result<Option<String>, String> {
+fn save_osc_mappings(
+    window: WebviewWindow,
+    mappings: Vec<OscControlMapping>,
+) -> Result<Option<String>, String> {
     let mappings = validate_osc_control_mappings(mappings)?;
-    let Some(path) = rfd::FileDialog::new()
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal OSC Mapping", &["oscmap"])
         .set_file_name("syndocal.oscmap")
         .save_file()
@@ -5070,8 +5102,8 @@ fn save_osc_mappings(mappings: Vec<OscControlMapping>) -> Result<Option<String>,
 }
 
 #[tauri::command]
-fn load_osc_mappings() -> Result<Option<Vec<OscControlMapping>>, String> {
-    let Some(path) = rfd::FileDialog::new()
+fn load_osc_mappings(window: WebviewWindow) -> Result<Option<Vec<OscControlMapping>>, String> {
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal OSC Mapping", &["oscmap"])
         .pick_file()
     else {
@@ -12215,6 +12247,7 @@ fn remove_video_output_mapping_preset(
 
 #[tauri::command]
 fn save_video_output_mapping_preset_file(
+    window: WebviewWindow,
     label: String,
     mapping: VideoOutputMapping,
 ) -> Result<Option<String>, String> {
@@ -12228,7 +12261,7 @@ fn save_video_output_mapping_preset_file(
             mapping,
         },
     };
-    let Some(path) = rfd::FileDialog::new()
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal Projector Map", &["projmap"])
         .set_file_name(format!("{}.projmap", safe_file_stem(&label)))
         .save_file()
@@ -12242,9 +12275,10 @@ fn save_video_output_mapping_preset_file(
 
 #[tauri::command]
 fn load_video_output_mapping_preset_file(
+    window: WebviewWindow,
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
-    let Some(path) = rfd::FileDialog::new()
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal Projector Map", &["projmap"])
         .pick_file()
     else {
@@ -12543,6 +12577,7 @@ fn remove_node_graph(state: State<'_, AppState>, graph_id: NodeGraphId) -> Resul
 
 #[tauri::command]
 fn save_node_graph_preset_file(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     graph_id: NodeGraphId,
 ) -> Result<Option<String>, String> {
@@ -12558,7 +12593,7 @@ fn save_node_graph_preset_file(
         app: APP_NAME.to_string(),
         graph,
     };
-    let Some(path) = rfd::FileDialog::new()
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal Node Graph", &["graph"])
         .set_file_name(format!("{}.graph", safe_file_stem(&file.graph.label)))
         .save_file()
@@ -12571,8 +12606,11 @@ fn save_node_graph_preset_file(
 }
 
 #[tauri::command]
-fn load_node_graph_preset_file(state: State<'_, AppState>) -> Result<Option<NodeGraphId>, String> {
-    let Some(path) = rfd::FileDialog::new()
+fn load_node_graph_preset_file(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<Option<NodeGraphId>, String> {
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal Node Graph", &["graph"])
         .pick_file()
     else {
@@ -13065,6 +13103,7 @@ fn load_sample_effect_bundle(
 
 #[tauri::command]
 fn save_effect_preset(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     effect_id: EffectId,
 ) -> Result<Option<String>, String> {
@@ -13075,7 +13114,7 @@ fn save_effect_preset(
         .find(|effect| effect.id == effect_id)
         .ok_or_else(|| format!("Effect {effect_id} was not found"))?;
     let preset = effect_summary_to_preset(effect)?;
-    let Some(path) = rfd::FileDialog::new()
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal Effect", &["effect"])
         .set_file_name(format!("{}.effect", safe_file_stem(&effect.label)))
         .save_file()
@@ -13088,8 +13127,11 @@ fn save_effect_preset(
 }
 
 #[tauri::command]
-fn load_effect_preset(state: State<'_, AppState>) -> Result<Option<EffectId>, String> {
-    let Some(path) = rfd::FileDialog::new()
+fn load_effect_preset(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<Option<EffectId>, String> {
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal Effect", &["effect"])
         .pick_file()
     else {
@@ -13103,10 +13145,11 @@ fn load_effect_preset(state: State<'_, AppState>) -> Result<Option<EffectId>, St
 
 #[tauri::command]
 fn load_effect_preset_for_target(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     target_override: EffectTargetOverride,
 ) -> Result<Option<EffectId>, String> {
-    let Some(path) = rfd::FileDialog::new()
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal Effect", &["effect"])
         .pick_file()
     else {
@@ -13122,6 +13165,7 @@ fn load_effect_preset_for_target(
 
 #[tauri::command]
 fn save_fixture_preset(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     fixture_id: FixtureId,
 ) -> Result<Option<String>, String> {
@@ -13139,7 +13183,7 @@ fn save_fixture_preset(
         mode_name: fixture.mode_name.clone(),
         values: fixture.attribute_values.clone(),
     };
-    let Some(path) = rfd::FileDialog::new()
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal Preset", &["preset"])
         .set_file_name(format!("{}.preset", safe_file_stem(&fixture.label)))
         .save_file()
@@ -13154,10 +13198,11 @@ fn save_fixture_preset(
 
 #[tauri::command]
 fn load_fixture_preset(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     fixture_id: FixtureId,
 ) -> Result<Option<String>, String> {
-    let Some(path) = rfd::FileDialog::new()
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal Preset", &["preset"])
         .pick_file()
     else {
@@ -13193,11 +13238,12 @@ fn load_fixture_preset(
 
 #[tauri::command]
 fn load_fixture_preset_for_group(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     group_id: String,
 ) -> Result<Option<FixturePresetGroupLoadResult>, String> {
     let group_id = normalize_control_group_id(group_id)?;
-    let Some(path) = rfd::FileDialog::new()
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal Preset", &["preset"])
         .pick_file()
     else {
@@ -13251,9 +13297,10 @@ fn load_fixture_preset_for_group(
 
 #[tauri::command]
 fn load_fixture_preset_for_all_matching(
+    window: WebviewWindow,
     state: State<'_, AppState>,
 ) -> Result<Option<FixturePresetGroupLoadResult>, String> {
-    let Some(path) = rfd::FileDialog::new()
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal Preset", &["preset"])
         .pick_file()
     else {
@@ -13378,11 +13425,12 @@ fn clear_operator_policy(state: State<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 fn save_user_template(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     midi_mappings: Vec<MidiControlMapping>,
     osc_mappings: Vec<OscControlMapping>,
 ) -> Result<Option<String>, String> {
-    let Some(path) = rfd::FileDialog::new()
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal User Template", &["sdctemplate"])
         .set_file_name("show.sdctemplate")
         .save_file()
@@ -13419,9 +13467,10 @@ fn save_user_template(
 
 #[tauri::command]
 fn load_user_template(
+    window: WebviewWindow,
     state: State<'_, AppState>,
 ) -> Result<Option<UserTemplateLoadResult>, String> {
-    let Some(path) = rfd::FileDialog::new()
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal User Template", &["sdctemplate"])
         .pick_file()
     else {
@@ -13463,7 +13512,10 @@ fn load_user_template(
 }
 
 #[tauri::command]
-fn save_project(state: State<'_, AppState>) -> Result<Option<String>, String> {
+fn save_project(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
     let current_path = state
         .current_project_path
         .lock()
@@ -13473,16 +13525,22 @@ fn save_project(state: State<'_, AppState>) -> Result<Option<String>, String> {
         write_project_file(&state, &path)?;
         return Ok(Some(path.to_string_lossy().to_string()));
     }
-    save_project_with_dialog(&state)
+    save_project_with_dialog(&window, &state)
 }
 
 #[tauri::command]
-fn save_project_as(state: State<'_, AppState>) -> Result<Option<String>, String> {
-    save_project_with_dialog(&state)
+fn save_project_as(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    save_project_with_dialog(&window, &state)
 }
 
-fn save_project_with_dialog(state: &State<'_, AppState>) -> Result<Option<String>, String> {
-    let Some(path) = rfd::FileDialog::new()
+fn save_project_with_dialog(
+    window: &WebviewWindow,
+    state: &State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let Some(path) = parented_file_dialog(window)
         .add_filter("Syndocal Project", &["sdc"])
         .set_file_name("show.sdc")
         .save_file()
@@ -14468,8 +14526,8 @@ fn stop_standby_sync_runtime(runtime: &mut StandbySyncRuntime) {
 }
 
 #[tauri::command]
-fn select_standby_sync_directory() -> Option<String> {
-    rfd::FileDialog::new()
+fn select_standby_sync_directory(window: WebviewWindow) -> Option<String> {
+    parented_file_dialog(&window)
         .pick_folder()
         .map(|path| path.to_string_lossy().to_string())
 }
@@ -14825,11 +14883,12 @@ fn write_diagnostic_archive<W: Write + Seek>(
 
 #[tauri::command]
 fn export_diagnostic_package(
+    window: WebviewWindow,
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
     let captured_at_unix_ms = current_unix_ms();
-    let Some(path) = rfd::FileDialog::new()
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal Diagnostic Package", &["zip"])
         .set_file_name(format!("syndocal-diagnostics-{captured_at_unix_ms}.zip"))
         .save_file()
@@ -15009,8 +15068,11 @@ fn project_snapshot_for_save(mut snapshot: EngineSnapshot) -> EngineSnapshot {
 }
 
 #[tauri::command]
-fn load_project(state: State<'_, AppState>) -> Result<Option<ProjectLoadResult>, String> {
-    let Some(path) = rfd::FileDialog::new()
+fn load_project(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<Option<ProjectLoadResult>, String> {
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal Project", &["sdc"])
         .pick_file()
     else {
@@ -15021,13 +15083,14 @@ fn load_project(state: State<'_, AppState>) -> Result<Option<ProjectLoadResult>,
 
 #[tauri::command]
 fn import_daslight_project(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     path: Option<String>,
 ) -> Result<Option<dvc_import::DvcImportReport>, String> {
     let path = match path {
         Some(path) => PathBuf::from(path),
         None => {
-            let Some(path) = rfd::FileDialog::new()
+            let Some(path) = parented_file_dialog(&window)
                 .add_filter("Daslight 5 Project", &["dvc"])
                 .pick_file()
             else {
@@ -19511,6 +19574,7 @@ fn remove_stage_object(state: State<'_, AppState>, object_id: StageObjectId) -> 
 
 #[tauri::command]
 fn save_stage_map_preset_file(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     label: String,
     config: StageMapConfig,
@@ -19526,7 +19590,7 @@ fn save_stage_map_preset_file(
             stage_objects: Some(state.engine.snapshot().stage_objects),
         },
     };
-    let Some(path) = rfd::FileDialog::new()
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal Stage Map", &["stagemap"])
         .set_file_name(format!("{}.stagemap", safe_file_stem(&label)))
         .save_file()
@@ -19539,8 +19603,11 @@ fn save_stage_map_preset_file(
 }
 
 #[tauri::command]
-fn load_stage_map_preset_file(state: State<'_, AppState>) -> Result<Option<String>, String> {
-    let Some(path) = rfd::FileDialog::new()
+fn load_stage_map_preset_file(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal Stage Map", &["stagemap"])
         .pick_file()
     else {
@@ -20382,6 +20449,7 @@ fn expected_video_preview_queue_len(
 
 #[tauri::command]
 fn start_video_output_recording(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     output_id: VideoOutputId,
     frame_rate: Option<u32>,
@@ -20413,7 +20481,7 @@ fn start_video_output_recording(
         sanitize_file_name_component(&output.label),
         current_unix_ms()
     );
-    let Some(path) = rfd::FileDialog::new()
+    let Some(path) = parented_file_dialog(&window)
         .add_filter("MP4 video", &["mp4"])
         .set_file_name(&default_name)
         .save_file()
