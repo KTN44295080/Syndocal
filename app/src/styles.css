@@ -31168,6 +31168,90 @@ h3 {
   }
 }
 
+/* T24-F: Timeline expansion is a transient lane-editing workspace. Give the
+   lower band a fixed fraction of the shell while expanded, then use fixed
+   header/mixer tracks plus a bounded fr track for the ResizeObserver-driven
+   lane surface. Normal Control geometry remains on the stored T15-P split. */
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive:has(> .mappingPersistentWorkspaceBand.timelinePaneExpanded) {
+  grid-template-rows: minmax(0, 0.32fr) 7px minmax(0, 0.68fr) !important;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive:has(> .mappingPersistentWorkspaceBand.timelinePaneExpanded) > .workspaceSplitHandle-horizontal {
+  display: none;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .mappingPersistentWorkspaceBand.timelinePaneExpanded .controlContextPane > .faders.timelineDesk-show {
+  grid-template-rows: 34px 34px minmax(0, 1fr);
+  gap: 3px;
+  overflow: hidden;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .mappingPersistentWorkspaceBand.timelinePaneExpanded .groupLiveMixerStrip {
+  grid-template-columns: minmax(150px, 0.62fr) minmax(220px, 1fr) minmax(220px, 1fr) auto 76px;
+  height: 34px;
+  min-height: 34px;
+  gap: 4px;
+  overflow: hidden;
+  padding: 1px 5px;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .mappingPersistentWorkspaceBand.timelinePaneExpanded .groupLiveMixerIdentity {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .mappingPersistentWorkspaceBand.timelinePaneExpanded .groupLiveMixerIdentity span,
+.layoutSharedWorkspace.layoutControl.controlModeLive .mappingPersistentWorkspaceBand.timelinePaneExpanded .groupLiveMixerIdentity small {
+  flex: 0 0 auto;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .mappingPersistentWorkspaceBand.timelinePaneExpanded .groupLiveMixerIdentity strong {
+  min-width: 0;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .mappingPersistentWorkspaceBand.timelinePaneExpanded .groupLiveMixerControl {
+  grid-template-columns: auto minmax(80px, 1fr) 42px;
+  gap: 4px;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .mappingPersistentWorkspaceBand.timelinePaneExpanded .groupLiveMixerControl input {
+  height: 22px;
+  min-height: 22px;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .mappingPersistentWorkspaceBand.timelinePaneExpanded .groupLiveMixerStrip > button {
+  height: 28px;
+  min-height: 28px;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .mappingPersistentWorkspaceBand.timelinePaneExpanded .controlContextPane .timelinePanel {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .mappingPersistentWorkspaceBand.timelinePaneExpanded .controlContextPane .timelineShowSurface {
+  grid-template-rows: auto auto minmax(0, 1fr);
+  align-content: stretch;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .mappingPersistentWorkspaceBand.timelinePaneExpanded .controlContextPane .timelineShowSurface > .timelineOverviewFrame {
+  height: 100%;
+  min-height: 0;
+  contain: size layout;
+}
+
+@media (max-height: 800px) {
+  .layout.layoutSharedWorkspace.layoutControl.controlModeLive:has(> .mappingPersistentWorkspaceBand.timelinePaneExpanded) {
+    grid-template-rows: minmax(0, 0.25fr) 7px minmax(0, 0.75fr) !important;
+  }
+}
+
 /* Keep T16's added chooser row after the legacy FX desk cascade. */
 .layoutControl.controlModeEdit .faders.editDesk-effects > .effectEditor {
   grid-template-rows: 39px 54px minmax(0, 1fr);

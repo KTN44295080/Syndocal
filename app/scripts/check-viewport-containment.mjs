@@ -23,6 +23,7 @@ const timelineSlimOnlyMode = process.argv.includes("--timeline-slim-only");
 const patchOnlyMode = process.argv.includes("--patch-only");
 const persistentBandOnlyMode = process.argv.includes("--persistent-band-only");
 const mappingExpansionOnlyMode = process.argv.includes("--mapping-expansion-only");
+const timelineExpansionOnlyMode = process.argv.includes("--timeline-expansion-only");
 const workspaceSplitOnlyMode = process.argv.includes("--workspace-split-only");
 const workspaceShellOnlyMode = process.argv.includes("--workspace-shell-only");
 const fxVisualOnlyMode = process.argv.includes("--fx-visual-only");
@@ -2155,6 +2156,22 @@ async function measureTimelinePaneExpansionState(client) {
     const band = document.querySelector('.mappingPersistentWorkspaceBand');
     const toggle = document.querySelector('[data-timeline-pane-expand-toggle]');
     const drawer = document.querySelector('[data-workspace-selection-drawer]');
+    const liveMixer = [...document.querySelectorAll('.groupLiveMixerStrip')].find(isVisible);
+    const liveMixerChildren = liveMixer
+      ? [...liveMixer.children].filter(isVisible)
+      : [];
+    const liveMixerChildCenters = liveMixerChildren.map((child) => {
+      const rect = child.getBoundingClientRect();
+      return rect.top + rect.height / 2;
+    });
+    const liveMixerCenterSpread = liveMixerChildCenters.length > 0
+      ? Math.max(...liveMixerChildCenters) - Math.min(...liveMixerChildCenters)
+      : Number.POSITIVE_INFINITY;
+    const timelineFrame = [...document.querySelectorAll('.timelineShowSurface > .timelineOverviewFrame')].find(isVisible);
+    const timelineFrameStyle = timelineFrame ? getComputedStyle(timelineFrame) : null;
+    const timelineFaders = [...document.querySelectorAll('.controlContextPane > .faders')].find(isVisible);
+    const timelineShowSurface = [...document.querySelectorAll('.timelineShowSurface')].find(isVisible);
+    const liveMixerStyle = liveMixer ? getComputedStyle(liveMixer) : null;
     return {
       persistentBandRect: measuredRect('.mappingPersistentWorkspaceBand'),
       persistentBandRects: {
@@ -2180,6 +2197,21 @@ async function measureTimelinePaneExpansionState(client) {
       timelinePaneExpanded: band?.classList.contains('timelinePaneExpanded') ?? false,
       timelinePaneExpandToggleVisible: isVisible(toggle),
       timelinePaneExpandToggleNamed: Boolean(toggle?.getAttribute('aria-label')),
+      timelineLaneFrameRect: measuredRect('.timelineShowSurface > .timelineOverviewFrame'),
+      timelineLaneScrollportRect: measuredRect('[data-timeline-layer-scrollport]'),
+      timelinePanelRect: measuredRect('.controlContextPane .timelinePanel'),
+      timelineShowSurfaceRect: measuredRect('.controlContextPane .timelineShowSurface'),
+      timelineFrameContain: timelineFrameStyle?.contain ?? '',
+      timelineFadersGridRows: timelineFaders ? getComputedStyle(timelineFaders).gridTemplateRows : '',
+      timelineShowSurfaceGridRows: timelineShowSurface ? getComputedStyle(timelineShowSurface).gridTemplateRows : '',
+      liveMixerRect: measuredRect('.groupLiveMixerStrip'),
+      liveMixerGridColumns: liveMixerStyle?.gridTemplateColumns ?? '',
+      liveMixerDirectChildCount: liveMixerChildren.length,
+      liveMixerCenterSpread: Math.round(liveMixerCenterSpread * 100) / 100,
+      liveMixerIdentityDisplay: (() => {
+        const identity = liveMixer?.querySelector('.groupLiveMixerIdentity');
+        return identity ? getComputedStyle(identity).display : '';
+      })(),
       viewport: [innerWidth, innerHeight],
       documentAndAppScrollZero:
         window.scrollX === 0 && window.scrollY === 0 &&
@@ -2207,6 +2239,25 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
   await clickVisibleByText(client, '.controlModeTabs button', 'Timeline');
   await sleep(120);
   const before = await measureTimelinePaneExpansionState(client);
+  const resizedViewport = {
+    width: viewport.width + 37,
+    height: viewport.height + 23,
+  };
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: resizedViewport.width,
+    height: resizedViewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await sleep(160);
+  const beforeResized = await measureTimelinePaneExpansionState(client);
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await sleep(160);
   const expandToggleClicked = await client.evaluate(`(() => {
     const toggle = document.querySelector('[data-timeline-pane-expand-toggle]');
     if (!toggle || toggle.disabled) return false;
@@ -2220,10 +2271,6 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
   })()`);
   await sleep(120);
   const expanded = await measureTimelinePaneExpansionState(client);
-  const resizedViewport = {
-    width: viewport.width + 37,
-    height: viewport.height + 23,
-  };
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: resizedViewport.width,
     height: resizedViewport.height,
@@ -2246,6 +2293,24 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
   const beforeContextWidth = before.persistentBandRects.context?.width ?? 0;
   const expandedContextWidth = expanded.persistentBandRects.context?.width ?? 0;
   const expandedBandWidth = expanded.persistentBandRect?.width ?? 0;
+  const expandedLaneHeight = expanded.timelineLaneScrollportRect?.height ?? 0;
+  const expandedTimelineSurfaceHeight = expanded.timelineShowSurfaceRect?.height ?? 0;
+  const expandedLaneHeightRatio = expandedTimelineSurfaceHeight > 0
+    ? expandedLaneHeight / expandedTimelineSurfaceHeight
+    : 0;
+  const compactLaneMinimum = 400 * viewport.height / primaryOperationalViewport.height;
+  const expandedFrameUsesContainment =
+    expanded.timelineFrameContain.includes('size') &&
+    expanded.timelineFrameContain.includes('layout');
+  const expandedShowGridTracks = expanded.timelineShowSurfaceGridRows.trim().split(/\s+/);
+  const expandedLaneTrackHeight = Number.parseFloat(
+    expandedShowGridTracks[expandedShowGridTracks.length - 1] ?? '',
+  );
+  const expandedMixerIsSingleCompactRow =
+    (expanded.liveMixerRect?.height ?? Number.POSITIVE_INFINITY) <= 36 &&
+    expanded.liveMixerDirectChildCount >= 5 &&
+    expanded.liveMixerCenterSpread <= 1 &&
+    expanded.liveMixerIdentityDisplay === 'flex';
   const splitterAriaMatchesRendered = (state) => Boolean(
     state &&
     Number.isFinite(state.minimum) &&
@@ -2270,9 +2335,10 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
     )],
     ['expandedGroupsStripHiddenWithLowerLeftPane', () => Boolean(expanded.persistentBandRects.groups === null)],
     ['expandedLowerSplitterHidden', () => Boolean(expanded.workspaceSplitterRects.lowerLeftRight === null)],
-    ['expandedUpperSplitterBoundaryPreserved', () => persistentBandRectsExactlyEqual(
-      before.workspaceSplitterRects.upperLower,
-      expanded.workspaceSplitterRects.upperLower,
+    ['expandedUpperSplitterHiddenForLanePriority', () => Boolean(
+      before.workspaceSplitterRects.upperLower &&
+      expanded.workspaceSplitterRects.upperLower === null &&
+      (expanded.persistentBandRect?.height ?? 0) > (before.persistentBandRect?.height ?? 0) + 1
     )],
     ['expandedSplitRatiosRemainStable', () => Boolean(
       Math.abs(expanded.workspaceSplitRatios.top - before.workspaceSplitRatios.top) <= 0.001 &&
@@ -2280,14 +2346,40 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
     )],
     ['expandedStateDoesNotPersistTransientGeometry', () => expanded.workspaceStorageRaw === before.workspaceStorageRaw],
     ['expandedDocumentAndAppScrollZero', () => Boolean(expanded.documentAndAppScrollZero)],
+    ['expandedTimelineLaneScrollportPresent', () => Boolean(
+      expanded.timelineLaneFrameRect && expanded.timelineLaneScrollportRect
+    )],
+    ['expandedPrimaryTimelineLaneAtLeast400Px', () => Boolean(
+      viewport.width !== primaryOperationalViewport.width ||
+      viewport.height !== primaryOperationalViewport.height ||
+      expandedLaneHeight >= 400
+    )],
+    ['expandedCompactTimelineLaneMeetsProportionalMinimum', () => Boolean(
+      viewport.height > 800 || expandedLaneHeight >= compactLaneMinimum
+    )],
+    ['expandedTimelineLaneUsesMostAvailableSurfaceHeight', () => expandedLaneHeightRatio >= 0.72],
+    ['expandedTimelineLaneUsesFixedFrTrackAndContainment', () => Boolean(
+      expandedFrameUsesContainment &&
+      expanded.timelineLaneFrameRect &&
+      expanded.timelineLaneScrollportRect &&
+      Number.isFinite(expandedLaneTrackHeight) &&
+      Math.abs(expandedLaneTrackHeight - expanded.timelineLaneFrameRect.height) <= 1 &&
+      expanded.timelineLaneFrameRect.height - expanded.timelineLaneScrollportRect.height >= 0 &&
+      expanded.timelineLaneFrameRect.height - expanded.timelineLaneScrollportRect.height <= 2.5
+    )],
+    ['expandedLiveMixerIsSingleCompactRow', () => expandedMixerIsSingleCompactRow],
     ['expandedResizeKeepsFocusAndPreferredRatios', () => Boolean(
       expandedResized.timelinePaneExpanded &&
       Math.abs(expandedResized.workspaceSplitRatios.top - before.workspaceSplitRatios.top) <= 0.001 &&
       Math.abs(expandedResized.workspaceSplitRatios.lower - before.workspaceSplitRatios.lower) <= 0.001 &&
       expandedResized.workspaceStorageRaw === before.workspaceStorageRaw
     )],
-    ['expandedResizeKeepsUpperSplitterAriaAndOuterScroll', () => Boolean(
-      splitterAriaMatchesRendered(expandedResized.workspaceSplitterState.upperLower) &&
+    ['expandedResizeKeepsTransientLanePriorityAndOuterScroll', () => Boolean(
+      (expandedResized.timelineLaneScrollportRect?.height ?? 0) >= (
+        resizedViewport.height <= 800
+          ? 400 * resizedViewport.height / primaryOperationalViewport.height
+          : 400
+      ) &&
       expandedResized.workspaceSplitterState.lowerLeftRight === null &&
       expandedResized.documentAndAppScrollZero
     )],
@@ -2296,13 +2388,13 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
       splitterAriaMatchesRendered(restoredResized.workspaceSplitterState.upperLower) &&
       splitterAriaMatchesRendered(restoredResized.workspaceSplitterState.lowerLeftRight)
     )],
-    ['resizeEscapePreservesUpperBoundary', () => Boolean(
+    ['resizeEscapeRestoresPreferredUpperBoundary', () => Boolean(
       persistentBandRectsExactlyEqual(
-        expandedResized.workspaceSplitterRects.upperLower,
+        beforeResized.workspaceSplitterRects.upperLower,
         restoredResized.workspaceSplitterRects.upperLower,
       ) &&
       persistentBandRectsExactlyEqual(
-        expandedResized.persistentBandRect,
+        beforeResized.persistentBandRect,
         restoredResized.persistentBandRect,
       )
     )],
@@ -2328,6 +2420,15 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
     ['escapeRestoredLowerSplitterWithinOnePixel', () => persistentBandRectsExactlyEqual(
       before.workspaceSplitterRects.lowerLeftRight,
       restored.workspaceSplitterRects.lowerLeftRight,
+    )],
+    ['escapeRestoredTimelineLaneAndMixerRectsWithinOnePixel', () => Boolean(
+      persistentBandRectsExactlyEqual(before.timelineLaneFrameRect, restored.timelineLaneFrameRect) &&
+      persistentBandRectsExactlyEqual(before.timelineLaneScrollportRect, restored.timelineLaneScrollportRect) &&
+      persistentBandRectsExactlyEqual(before.liveMixerRect, restored.liveMixerRect)
+    )],
+    ['escapeRestoredTimelineGridTracksExactly', () => Boolean(
+      restored.timelineFadersGridRows === before.timelineFadersGridRows &&
+      restored.timelineShowSurfaceGridRows === before.timelineShowSurfaceGridRows
     )],
     ['escapeRestoredDrawerState', () => restored.selectionDrawerOpen === before.selectionDrawerOpen],
     ['escapeRestoredSplitRatios', () => Boolean(
@@ -2357,11 +2458,27 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
     checks,
     failedChecks,
     before,
+    beforeResized,
     expanded,
     expandedResized,
     restoredResized,
     restored,
   };
+}
+
+async function runTimelinePaneExpansionViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await seedViewportLocalStorage(client);
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  return await runTimelinePaneExpansionCheck(client, viewport);
 }
 
 async function measureMappingExpansionState(client) {
@@ -14167,6 +14284,30 @@ async function main() {
       const failures = mappingExpansionResults.filter((result) => !result.passed);
       if (failures.length > 0) {
         throw new Error(`Mapping expansion failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
+    if (timelineExpansionOnlyMode) {
+      const timelineExpansionResults = [];
+      for (const viewport of viewports) {
+        const result = await runTimelinePaneExpansionViewport(client, viewport);
+        timelineExpansionResults.push(result);
+        const laneHeight = (state) => state.timelineLaneScrollportRect?.height ?? 0;
+        const mixerHeight = (state) => state.liveMixerRect?.height ?? 0;
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `lane=${laneHeight(result.before)}->${laneHeight(result.expanded)}->${laneHeight(result.restored)} ` +
+            `mixer=${mixerHeight(result.before)}->${mixerHeight(result.expanded)}->${mixerHeight(result.restored)} ` +
+            `surface=${result.expanded.timelineShowSurfaceRect?.height ?? 0} ` +
+            `contain=${JSON.stringify(result.expanded.timelineFrameContain)} ` +
+            `faderRows=${JSON.stringify(result.expanded.timelineFadersGridRows)} ` +
+            `showRows=${JSON.stringify(result.expanded.timelineShowSurfaceGridRows)} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = timelineExpansionResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Timeline expansion failed: ${JSON.stringify(failures)}`);
       }
       return;
     }
