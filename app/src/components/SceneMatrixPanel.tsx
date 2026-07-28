@@ -32,6 +32,7 @@ interface SceneMatrixPanelProps {
   onReleaseCue?: (cueId: number) => void | Promise<void>;
   onTriggerCue: (cueId: number) => void | Promise<void>;
   onEditCue: (cueId: number) => void;
+  onOpenSuperScene: (cueId: number) => void | Promise<void>;
   onOpenCueEditor: () => void;
   onBeginTimelineCueDrag: (cue: CueSummary, point: TimelineCueDragPoint) => void;
   onMoveTimelineCueDrag: (point: TimelineCueDragPoint) => void;
@@ -278,16 +279,38 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                 }}
                               >
                                 <span data-no-localize class="sceneMatrixCueNumber">{cue.cue_number || cue.id}</span>
-                                <strong data-no-localize>{cue.label}</strong>
+                                <strong data-no-localize title={cue.label}>{cue.label}</strong>
                                 <small>{cue.fade_ms}ms</small>
                               </button>
                               <div class="sceneMatrixCardFooter">
-                                <span
-                                  class={`sceneMatrixKindBadge ${cue.effect_targets.length > 0 ? "fx" : "static"}`}
-                                  data-scene-matrix-kind={cue.effect_targets.length > 0 ? "FX" : "STATIC"}
-                                >
-                                  {cue.effect_targets.length > 0 ? "FX" : "STATIC"}
-                                </span>
+                                <div class="sceneMatrixTypeBadges">
+                                  <span
+                                    class={`sceneMatrixKindBadge ${cue.effect_targets.length > 0 ? "fx" : "static"}`}
+                                    data-scene-matrix-kind={cue.effect_targets.length > 0 ? "FX" : "STATIC"}
+                                  >
+                                    {cue.effect_targets.length > 0 ? "FX" : "STATIC"}
+                                  </span>
+                                  <Show when={cue.child_timeline}>
+                                    <button
+                                      type="button"
+                                      class="sceneMatrixKindBadge superScene"
+                                      data-scene-matrix-super-scene={cue.id}
+                                      title={`Open Super Scene ${cue.label}`}
+                                      aria-label={`Open Super Scene ${cue.label}`}
+                                      onPointerDown={(event) => event.stopPropagation()}
+                                      onPointerMove={(event) => event.stopPropagation()}
+                                      onPointerUp={(event) => event.stopPropagation()}
+                                      onPointerCancel={(event) => event.stopPropagation()}
+                                      onClick={(event) => {
+                                        event.preventDefault();
+                                        event.stopPropagation();
+                                        void props.onOpenSuperScene(cue.id);
+                                      }}
+                                    >
+                                      SS
+                                    </button>
+                                  </Show>
+                                </div>
                                 <Show when={flashMode()}>
                                   <span class="sceneMatrixFlashBadge" data-scene-flash-badge={cue.id}>
                                     FLASH

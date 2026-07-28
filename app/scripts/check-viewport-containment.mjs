@@ -8266,6 +8266,7 @@ async function measureSceneMatrixPane(client) {
     const cards = [...document.querySelectorAll('[data-scene-matrix-cue-id]')].filter(isVisible);
     const triggers = cards.map((card) => card.querySelector('.sceneMatrixTrigger')).filter(isVisible);
     const kindBadges = cards.map((card) => card.querySelector('[data-scene-matrix-kind]')).filter(isVisible);
+    const superSceneBadges = cards.map((card) => card.querySelector('[data-scene-matrix-super-scene]')).filter(isVisible);
     const progressBars = cards.map((card) => card.querySelector('[data-scene-matrix-progress] progress')).filter(isVisible);
     const bankStrips = columns.map((column) => column.querySelector('.sceneMatrixBankStrip')).filter(isVisible);
     const cardScrollers = columns.map((column) => column.querySelector('.sceneMatrixCards')).filter(isVisible);
@@ -8283,6 +8284,19 @@ async function measureSceneMatrixPane(client) {
     const dragSources = cards.filter((card) => card.hasAttribute('data-timeline-cue-drag-source'));
     const timelineLanes = [...document.querySelectorAll('.timelineShowSurface [data-timeline-layer-id]')].filter(isVisible);
     const liveViewButtons = [...document.querySelectorAll('.liveDeskViewToggle button')].filter(isVisible);
+    const badgeRenderState = (badge) => {
+      const text = (badge.innerText || badge.textContent || '').trim();
+      const style = getComputedStyle(badge);
+      const fullyRendered = badge.scrollWidth <= badge.clientWidth + 1 &&
+        badge.scrollHeight <= badge.clientHeight + 1;
+      return {
+        label: text,
+        renderedText: fullyRendered ? text : '',
+        fullyRendered,
+        flexShrink: style.flexShrink,
+        whiteSpace: style.whiteSpace,
+      };
+    };
     const matrixTextNodes = pane
       ? [...pane.querySelectorAll('h2, p, span, strong, small, button')]
           .filter(isVisible)
@@ -8344,6 +8358,25 @@ async function measureSceneMatrixPane(client) {
         kind,
         kindBadges.filter((badge) => badge.getAttribute('data-scene-matrix-kind') === kind).length,
       ])),
+      kindBadges: kindBadges.map((badge) => ({
+        cueId: badge.closest('[data-scene-matrix-cue-id]')
+          ?.getAttribute('data-scene-matrix-cue-id') ?? '',
+        kind: badge.getAttribute('data-scene-matrix-kind') ?? '',
+        ...badgeRenderState(badge),
+      })),
+      superSceneBadges: superSceneBadges.map((badge) => ({
+        cueId: badge.getAttribute('data-scene-matrix-super-scene') ?? '',
+        ...badgeRenderState(badge),
+        name: badge.getAttribute('aria-label') ?? '',
+        coexistingKindBadge: (() => {
+          const kindBadge = badge.closest('[data-scene-matrix-cue-id]')
+            ?.querySelector('[data-scene-matrix-kind="FX"]');
+          return kindBadge ? {
+            kind: kindBadge.getAttribute('data-scene-matrix-kind') ?? '',
+            ...badgeRenderState(kindBadge),
+          } : null;
+        })(),
+      })),
       bankStripCount: bankStrips.length,
       bankStripColors: bankStrips.map((strip) => getComputedStyle(strip).backgroundColor),
       progressBarCount: progressBars.length,
@@ -9256,6 +9289,26 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       before.bankStripCount === expectedColumns.length && before.bankStripColors.every((color) => color !== "rgba(0, 0, 0, 0)")],
     ["matrixStaticAndFxBadgesPresent", () =>
       before.kindBadgeCounts.STATIC === 14 && before.kindBadgeCounts.FX === 1],
+    ["matrixSuperSceneBadgeCoexistsWithFx", () =>
+      before.superSceneBadges.length === 1 &&
+      before.superSceneBadges[0].cueId === "303" &&
+      before.superSceneBadges[0].label === "SS" &&
+      before.superSceneBadges[0].renderedText === "SS" &&
+      before.superSceneBadges[0].fullyRendered &&
+      before.superSceneBadges[0].flexShrink === "0" &&
+      before.superSceneBadges[0].whiteSpace === "nowrap" &&
+      before.superSceneBadges[0].name === "Open Super Scene Back Sweep" &&
+      before.superSceneBadges[0].coexistingKindBadge?.kind === "FX" &&
+      before.superSceneBadges[0].coexistingKindBadge?.renderedText === "FX" &&
+      before.superSceneBadges[0].coexistingKindBadge?.fullyRendered &&
+      before.superSceneBadges[0].coexistingKindBadge?.flexShrink === "0" &&
+      before.superSceneBadges[0].coexistingKindBadge?.whiteSpace === "nowrap" &&
+      before.kindBadges.some((badge) =>
+        badge.kind === "STATIC" &&
+        (badge.renderedText === "STATIC" || badge.renderedText === "固定") &&
+        badge.fullyRendered &&
+        badge.flexShrink === "0" &&
+        badge.whiteSpace === "nowrap")],
     ["matrixReplaceGroupBadgesPresent", () => JSON.stringify(before.replaceCardIds.sort()) === JSON.stringify(expectedReplaceCards)],
     ["matrixInitialActiveCueVisible", () => JSON.stringify(before.activeCardIds) === JSON.stringify(["301"])],
     ["matrixActiveCueProgressVisible", () =>

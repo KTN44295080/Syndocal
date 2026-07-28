@@ -101,6 +101,7 @@ interface TimelineOverviewProps {
   executionLive: boolean;
   markerAriaLabel: (event: TimelineOverviewEvent) => string;
   automationRanges: TimelineOverviewAutomationRange[];
+  superSceneEmptyHintCount: number;
   overlapClusters: TimelineOverviewOverlapCluster[];
   overlapLayerIds: number[];
   selectedRangeId: string | null;
@@ -550,6 +551,9 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   const renderedAudioClips = createMemo(() => props.legacyMode
     ? []
     : props.audioClips.filter((clip) => layerRowById().get(clip.layer_id)?.layer.kind === "Audio"));
+  const superSceneEmptyHint = createMemo(() => props.superSceneEmptyHintCount === 1
+    ? "The timeline is empty. 1 Super Scene has a child timeline (open it from the SS badge in Scene Matrix)."
+    : `The timeline is empty. ${props.superSceneEmptyHintCount} Super Scenes have child timelines (open them from the SS badges in Scene Matrix).`);
   const audioClipTabStopId = createMemo(() => {
     const clips = renderedAudioClips();
     return clips.some((clip) => clip.id === props.selectedAudioClipId)
@@ -2797,6 +2801,14 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               {renderOverviewCanvas()}
             </div>
           </div>
+        </Show>
+        <Show when={props.superSceneEmptyHintCount > 0}>
+          <p
+            class="timelineSuperSceneEmptyHint textPretty"
+            data-timeline-super-scene-empty-hint={props.superSceneEmptyHintCount}
+          >
+            {superSceneEmptyHint()}
+          </p>
         </Show>
       </div>
       <Show when={safeCueDrag()}>

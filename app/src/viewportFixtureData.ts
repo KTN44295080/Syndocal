@@ -1024,6 +1024,15 @@ const sceneMatrixCues: CueSummary[] = [
     recall_mode: "ReplaceGroup",
     node_graph_targets: [],
     effect_targets: [{ effect_id: cueRecallEffect.id, enabled: true }],
+    child_timeline: {
+      layers: [],
+      events: [],
+      automations: [],
+      video_automations: [],
+      audio: null,
+      audio_clips: [],
+      duration_ms: 0,
+    },
     steps: [
       { values: structuredClone(cueRecallCue.targets), fade_ms: 100, hold_ms: 900 },
       { values: structuredClone(cueRecallCue.targets), fade_ms: 150, hold_ms: 850 },

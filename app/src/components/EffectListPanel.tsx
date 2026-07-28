@@ -6,6 +6,7 @@ const effectsPerPage = 10;
 
 interface EffectListPanelProps {
   effects: EffectSummary[];
+  cueOwnedEffectCount: number;
   onMoveEffect: (effectId: number, delta: -1 | 1) => void | Promise<void>;
   onSetEnabled: (effectId: number, enabled: boolean) => void | Promise<void>;
   onUseOutputPosition: (effectId: number, targets: EffectSummary["video_targets"]) => void | Promise<void>;
@@ -99,7 +100,21 @@ export function EffectListPanel(props: EffectListPanelProps) {
 
   return (
     <div class="effectList">
-      <Show when={props.effects.length > 0} fallback={<div class="effectListEmpty">Choose a recipe in Effect Library, then Apply to Current.</div>}>
+      <Show when={props.effects.length > 0} fallback={
+        <div class="effectListEmpty textPretty">
+          <span>Choose a recipe in Effect Library, then Apply to Current.</span>
+          <Show when={props.cueOwnedEffectCount > 0}>
+            <span
+              class="effectListCueOwnedHint"
+              data-cue-owned-effect-empty-hint={props.cueOwnedEffectCount}
+            >
+              {props.cueOwnedEffectCount === 1
+                ? "1 cue-owned effect is available in Cue editing > Effect Recall."
+                : `${props.cueOwnedEffectCount} cue-owned effects are available in Cue editing > Effect Recall.`}
+            </span>
+          </Show>
+        </div>
+      }>
         <Show when={pageCount() > 1}>
           <nav class="effectListPager" aria-label="Live effect pages">
             <button type="button" onClick={() => setPage(Math.max(0, currentPage() - 1))} disabled={currentPage() === 0}>Previous</button>

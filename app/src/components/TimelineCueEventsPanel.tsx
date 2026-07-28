@@ -65,6 +65,7 @@ interface TimelineCueEventsPanelProps {
   playing: boolean;
   executingLive: boolean;
   cuesCount: number;
+  superSceneCueCount: number;
   lightingAutomationCount: number;
   videoAutomationCount: number;
   overviewEvents: TimelineOverviewEvent[];
@@ -239,6 +240,14 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
     }
     return counts;
   });
+  const timelineSuperSceneEmptyHintCount = createMemo(() =>
+    props.childTimelineLabel === null
+    && props.eventRows.length === 0
+    && props.lightingAutomationCount === 0
+    && props.videoAutomationCount === 0
+    && props.audioClips.length === 0
+      ? props.superSceneCueCount
+      : 0);
   const pendingRemoveLayer = () => {
     const layerId = pendingRemoveLayerId();
     return layerId === null
@@ -689,6 +698,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         executionLive={props.executingLive}
         markerAriaLabel={props.overviewMarkerAriaLabel}
         automationRanges={props.overviewAutomationRanges}
+        superSceneEmptyHintCount={timelineSuperSceneEmptyHintCount()}
         overlapClusters={props.overviewOverlapClusters}
         overlapLayerIds={props.overviewOverlapLayerIds}
         selectedRangeId={props.selectedAutomationRangeId}

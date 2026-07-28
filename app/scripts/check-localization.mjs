@@ -113,6 +113,40 @@ assert.equal(
   localization.translateUiText("Edit Source for Cue Opening Wash", "ja"),
   "キュー Opening Wash のソースを編集",
 );
+assert.equal(localization.translateUiText("SS", "ja"), "SS");
+assert.equal(
+  localization.translateUiText("Open Super Scene Opening Wash", "ja"),
+  "Super Scene Opening Wash を開く",
+);
+assert.equal(
+  localization.translateUiText(
+    "The timeline is empty. 1 Super Scene has a child timeline (open it from the SS badge in Scene Matrix).",
+    "ja",
+  ),
+  "タイムラインは空です。1件のSuper Sceneが子タイムラインを持っています（Scene MatrixのSSバッジから開けます）",
+);
+assert.equal(
+  localization.translateUiText(
+    "The timeline is empty. 3 Super Scenes have child timelines (open them from the SS badges in Scene Matrix).",
+    "ja",
+  ),
+  "タイムラインは空です。3件のSuper Sceneが子タイムラインを持っています（Scene MatrixのSSバッジから開けます）",
+);
+assert.equal(localization.translateUiText("Cue-owned 50", "ja"), "Cue所有 50");
+assert.equal(
+  localization.translateUiText(
+    "1 cue-owned effect is available in Cue editing > Effect Recall.",
+    "ja",
+  ),
+  "Cue所有エフェクトが1件あります。キュー編集の「エフェクト呼び出し」から開けます。",
+);
+assert.equal(
+  localization.translateUiText(
+    "50 cue-owned effects are available in Cue editing > Effect Recall.",
+    "ja",
+  ),
+  "Cue所有エフェクトが50件あります。キュー編集の「エフェクト呼び出し」から開けます。",
+);
 assert.equal(localization.translateUiText("Lighting overlap ×250", "ja"), "照明の重複 ×250");
 assert.equal(
   localization.translateUiText("Lane 3: Front Wash, 42 items", "ja"),
@@ -387,7 +421,7 @@ const localeInvariantText = new Set([
   "COM3 or /dev/ttyUSB0", "Crop B", "Crop L", "Crop R", "Crop T", "ctl", "ctrl", "Cue #", "DECK A",
   "DECK B", "deg / Sat", "Dimmer@1:8, Pan@2:16, Tilt@4:16, ColorRed@6:8", "Dir X", "Dir Y", "Dir Z",
   "DMXKing ultraDMX", "e/", "Enttec Open DMX", "ENTTEC USB Pro", "fps", "front, bars",
-  "front, movers, floor", "FX", "GDTF", "GDTF Share", "GET", "Hi", "HL",
+  "front, movers, floor", "FX", "SS", "GDTF", "GDTF Share", "GET", "Hi", "HL",
   "https://gdtf-share.com/.../fixture.gdtf", "Key H", "Key V", "Keystone H", "Keystone V", "Keystone X",
   "Keystone Y", "LFO", "LIVE LINK", "m /", "MID", "MIB targets (", "ms ·", "ms · max", "NACK reason 0x",
   "PID (hex)", "Port-Address",

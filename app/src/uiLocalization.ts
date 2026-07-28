@@ -313,6 +313,7 @@ const japaneseText: Record<string, string> = {
   LIVE: "ライブ",
   FLASH: "FLASH",
   FX: "FX",
+  SS: "SS",
   STATIC: "固定",
   PLAYHEAD: "再生位置",
   UNSAVED: "未保存",
@@ -2246,6 +2247,24 @@ const japaneseText: Record<string, string> = {
 };
 
 const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
+  [
+    /^The timeline is empty\. (1) Super Scene has a child timeline \(open it from the SS badge in Scene Matrix\)\.$/,
+    (count) => `タイムラインは空です。${count}件のSuper Sceneが子タイムラインを持っています（Scene MatrixのSSバッジから開けます）`,
+  ],
+  [
+    /^The timeline is empty\. (\d+) Super Scenes have child timelines \(open them from the SS badges in Scene Matrix\)\.$/,
+    (count) => `タイムラインは空です。${count}件のSuper Sceneが子タイムラインを持っています（Scene MatrixのSSバッジから開けます）`,
+  ],
+  [/^Cue-owned (\d+)$/, (count) => `Cue所有 ${count}`],
+  [
+    /^(1) cue-owned effect is available in Cue editing > Effect Recall\.$/,
+    (count) => `Cue所有エフェクトが${count}件あります。キュー編集の「エフェクト呼び出し」から開けます。`,
+  ],
+  [
+    /^(\d+) cue-owned effects are available in Cue editing > Effect Recall\.$/,
+    (count) => `Cue所有エフェクトが${count}件あります。キュー編集の「エフェクト呼び出し」から開けます。`,
+  ],
+  [/^Open Super Scene (.+)$/, (label) => `Super Scene ${label} を開く`],
   [
     /^(Absolute|Relative) (Step|Line|Smooth) value envelope with (\d+) points\. Double-click to add\. Focus a point and use Arrow keys to nudge, Shift coarse, Alt fine, Delete to remove\.$/,
     (mode, interpolation, count) => {

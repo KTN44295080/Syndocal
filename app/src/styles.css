@@ -13113,6 +13113,7 @@ input[type="color"] {
 
 /* Fixed left gutter (HTML) + pixel-space canvas (SVG) live side by side. */
 .timelineOverviewFrame {
+  position: relative;
   display: flex;
   align-items: stretch;
   width: 100%;
@@ -13248,6 +13249,23 @@ input[type="color"] {
 
 .timelineOverviewFrame.timelineOverviewLayered {
   display: block;
+}
+
+.timelineSuperSceneEmptyHint {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  left: 112px;
+  margin: 0;
+  overflow: hidden;
+  color: #aeb7bd;
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateY(-50%);
 }
 
 .timelineLayerScrollport {
@@ -22913,6 +22931,12 @@ h3 {
   font-size: 12px;
 }
 
+.effectListCueOwnedHint {
+  display: block;
+  margin-top: 4px;
+  color: #c5cdd2;
+}
+
 .effectRackPane .effectItem {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 5px;
@@ -30069,6 +30093,16 @@ h3 {
   padding: 3px;
 }
 
+.sceneMatrixTypeBadges {
+  display: flex;
+  grid-column: 1;
+  grid-row: 1;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 2px;
+  min-width: max-content;
+}
+
 .sceneMatrixKindBadge,
 .sceneMatrixReplaceBadge,
 .sceneMatrixProgress > span {
@@ -30085,9 +30119,33 @@ h3 {
   text-align: center;
 }
 
+.sceneMatrixKindBadge {
+  flex: 0 0 auto;
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
 .sceneMatrixKindBadge.fx {
   border-color: var(--cue-identity);
   color: var(--cue-identity-text);
+}
+
+.sceneMatrixKindBadge.superScene {
+  min-width: max-content;
+  min-height: 0;
+  border-color: var(--cue-identity);
+  border-radius: 1px;
+  background: #171b1e;
+  color: var(--cue-identity-text);
+  padding: 1px 3px;
+  cursor: pointer;
+}
+
+.sceneMatrixKindBadge.superScene:focus-visible {
+  outline: 2px solid var(--cue-identity);
+  outline-offset: 1px;
 }
 
 .sceneMatrixReplaceBadge {
@@ -30818,11 +30876,11 @@ h3 {
 
 .sceneMatrixCard {
   position: relative;
-  grid-template-columns: minmax(0, 1fr) 124px;
+  grid-template-columns: minmax(0, 1fr) max-content;
 }
 
 .sceneMatrixCardFooter {
-  grid-template-columns: minmax(0, 1fr) 26px 40px;
+  grid-template-columns: max-content 26px 40px;
 }
 
 .sceneMatrixEditCue {

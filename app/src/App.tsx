@@ -5647,6 +5647,10 @@ export default function App() {
   const enabledDmxOutputCount = createMemo(() => snapshot().dmx_outputs.filter((route) => route.enabled).length);
   const enabledVideoOutputCount = createMemo(() => snapshot().video.outputs.filter((output) => output.enabled).length);
   const activeEffectCount = createMemo(() => snapshot().effects.filter((effect) => effect.enabled).length);
+  const superSceneCueCount = createMemo(() =>
+    snapshotCues().reduce((count, cue) => count + (cue.child_timeline ? 1 : 0), 0));
+  const cueOwnedEffectCount = createMemo(() =>
+    snapshotCues().reduce((count, cue) => count + cue.effect_targets.length, 0));
   const faderDeskTitle = createMemo(() => {
     if (controlMode() === "edit") return editDeskSurface() === "effects" ? "Lighting FX" : "Faders";
     if (controlMode() !== "live") return "Faders";
@@ -14962,6 +14966,7 @@ export default function App() {
               timelineTrack={timelineTrack()}
               onTriggerCue={triggerCue}
               onEditCue={openTimelineSourceCue}
+              onOpenSuperScene={(cueId) => void openOrCreateSuperScene(cueId)}
               onOpenCueEditor={() => {
                 setTimelineDeskSurface("show");
                 setTimelineContextDrawer("cue");
@@ -16448,6 +16453,7 @@ export default function App() {
               playing={activeTimeline().playing}
               executingLive={timelineExecutionLive()}
               cuesCount={snapshot().cues.length}
+              superSceneCueCount={superSceneCueCount()}
               lightingAutomationCount={activeTimeline().automations.length}
               videoAutomationCount={activeTimeline().video_automations.length}
               overviewEvents={timelineOverviewEvents()}
@@ -16597,7 +16603,12 @@ export default function App() {
             <div class="effectWorkspaceHeader">
               <div>
                 <strong>FX Workspace</strong>
-                <span>{activeEffectCount()} active · {snapshot().effects.length} stacked · {snapshot().clock.bpm.toFixed(1)} BPM</span>
+                <span data-cue-owned-effect-count={cueOwnedEffectCount()}>
+                  {activeEffectCount()} active · {snapshot().effects.length} stacked · {translateUiText(
+                    `Cue-owned ${cueOwnedEffectCount()}`,
+                    uiLocale(),
+                  )} · {snapshot().clock.bpm.toFixed(1)} BPM
+                </span>
               </div>
               <div class="panelHeaderActions">
                 <button onClick={loadEffectPreset}>Load File</button>
@@ -17136,6 +17147,7 @@ export default function App() {
             <Show when={effectRackSurface() === "stack"}>
             <EffectListPanel
               effects={snapshot().effects}
+              cueOwnedEffectCount={cueOwnedEffectCount()}
               onMoveEffect={moveEffect}
               onSetEnabled={setEffectEnabled}
               onUseOutputPosition={setEffectVideoTargetsFromSelectedOutput}
