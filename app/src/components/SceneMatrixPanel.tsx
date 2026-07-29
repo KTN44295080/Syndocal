@@ -1,5 +1,6 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { cueIdentityCss, groupIdentityCss, groupIdentityHue } from "../identityColor";
+import { displayNumber } from "../numberDisplay";
 import type {
   ActiveFadeSummary,
   CueLiveDirection,
@@ -346,7 +347,7 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                               >
                                 <span data-no-localize class="sceneMatrixCueNumber">{cue.cue_number || cue.id}</span>
                                 <strong data-no-localize title={cue.label}>{cue.label}</strong>
-                                <small>{cue.fade_ms}ms</small>
+                                <small>{displayNumber(cue.fade_ms, 0)}ms</small>
                               </button>
                               <div class="sceneMatrixCardFooter">
                                 <div class="sceneMatrixTypeBadges">

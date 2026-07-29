@@ -1,6 +1,7 @@
 import { For, Show } from "solid-js";
 import type { CueSummary, EngineSnapshot } from "../types";
 import { cueIdentityCss } from "../identityColor";
+import { displayNumber } from "../numberDisplay";
 
 type MaybePromise = void | Promise<void>;
 
@@ -69,7 +70,7 @@ export function TouchCuePanel(props: TouchCuePanelProps) {
               <Show when={pad.cue} fallback={<strong>Empty</strong>}>
                 {(cue) => <strong data-no-localize>{cue().label}</strong>}
               </Show>
-              <small>{pad.cue ? `${pad.cue.fade_ms} ms` : "-"}</small>
+              <small>{pad.cue ? `${displayNumber(pad.cue.fade_ms, 0)} ms` : "-"}</small>
             </button>
           )}
         </For>

@@ -11279,6 +11279,10 @@ async function readSceneSettingsState(client) {
     const selectedStrip = selectedCard?.querySelector("[data-scene-matrix-edit-strip]") ?? null;
     const selectedStripBand = selectedStrip?.querySelector(".sceneMatrixEditStripBand") ?? null;
     const editSourceButton = pane?.querySelector("[data-scene-settings-edit-source]") ?? null;
+    const scenePropertyValue = (property) => {
+      const input = pane?.querySelector(`[data-scene-property="${property}"]`);
+      return input instanceof HTMLInputElement ? input.value : "";
+    };
     const chooserButtons = [...document.querySelectorAll(
       "[data-scene-static-fx-chooser] .effectFamilyChooser button",
     )].filter(isVisible);
@@ -11329,6 +11333,12 @@ async function readSceneSettingsState(client) {
       staticPropertyInputCount: [...document.querySelectorAll(
         "[data-scene-static-properties] input",
       )].filter(isVisible).length,
+      scenePropertyValues: {
+        fadeMs: scenePropertyValue("fade-ms"),
+        authoredBeats: scenePropertyValue("authored-beats"),
+        preWaitMs: scenePropertyValue("pre-wait-ms"),
+        followMs: scenePropertyValue("follow-ms"),
+      },
       chooserButtonCount: chooserButtons.length,
       chooserFamilies: chooserButtons.map((button) =>
         button.getAttribute("data-effect-family") ?? ""),
@@ -11442,6 +11452,56 @@ async function clickSceneSettingsTarget(client, selector) {
   }, selector);
 }
 
+async function installSceneSettingsSaveCapture(client) {
+  return await evaluatePageFunction(client, () => {
+    const installedWithoutExistingInternals = window.__TAURI_INTERNALS__ === undefined;
+    window.__syndocalSceneSettingsSaveCapture = {
+      installedWithoutExistingInternals,
+      commands: [],
+      metadataArgs: null,
+      committed: false,
+      snapshotAttempted: false,
+    };
+    window.__TAURI_INTERNALS__ = {
+      invoke: async (command, args) => {
+        const capture = window.__syndocalSceneSettingsSaveCapture;
+        capture.commands.push(command);
+        if (command === "begin_project_transaction") return 26_001;
+        if (command === "set_cue_metadata") {
+          capture.metadataArgs = structuredClone(args);
+          return undefined;
+        }
+        if (command === "commit_project_transaction") {
+          capture.committed = true;
+          return {
+            can_undo: true,
+            can_redo: false,
+            undo_depth: 1,
+            redo_depth: 0,
+            undo_label: "Set Cue Metadata",
+            redo_label: null,
+          };
+        }
+        if (command === "get_snapshot") {
+          capture.snapshotAttempted = true;
+          throw new Error("Scene settings focus fixture stops after committed metadata capture.");
+        }
+        throw new Error(`Unexpected scene settings focus command: ${command}`);
+      },
+    };
+    return installedWithoutExistingInternals;
+  });
+}
+
+async function finishSceneSettingsSaveCapture(client) {
+  return await evaluatePageFunction(client, () => {
+    const capture = structuredClone(window.__syndocalSceneSettingsSaveCapture);
+    delete window.__syndocalSceneSettingsSaveCapture;
+    delete window.__TAURI_INTERNALS__;
+    return capture;
+  });
+}
+
 async function clickSceneSettingsStrip(client, selector) {
   const hit = await evaluatePageFunction(client, async (selector) => {
     const button = document.querySelector(selector);
@@ -11534,6 +11594,18 @@ async function runSceneSettingsViewport(client, viewport) {
   const selectStripClicked = selectStripGesture.dispatched;
   await sleep(96);
   const selectedStatic = await readSceneSettingsState(client);
+  const saveCaptureInstalled = await installSceneSettingsSaveCapture(client);
+  const saveMetadataClicked = await clickSceneSettingsTarget(
+    client,
+    "[data-save-scene-properties]",
+  );
+  await waitForClientCondition(
+    client,
+    "window.__syndocalSceneSettingsSaveCapture?.snapshotAttempted === true",
+    `T26-A metadata save ${viewport.width}x${viewport.height}`,
+  );
+  const saveRoundTrip = await finishSceneSettingsSaveCapture(client);
+  const savedStatic = await readSceneSettingsState(client);
   const releaseClicked = await clickSceneSettingsTarget(
     client,
     '[data-scene-matrix-cue-id="302"] .sceneMatrixTrigger',
@@ -11615,6 +11687,48 @@ async function runSceneSettingsViewport(client, viewport) {
         ?.getAttribute("aria-expanded") ?? "",
     };
   });
+  const cueEditAuthoredBeats = await evaluatePageFunction(client, () => {
+    const selector = '.cueItem[data-cue-id="302"] .cueEditRow [data-cue-authored-beats]';
+    const input = document.querySelector(selector);
+    const editRow = input?.closest(".cueEditRow");
+    const isVisible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0
+        && style.display !== "none" && style.visibility !== "hidden";
+    };
+    if (!(input instanceof HTMLInputElement)) {
+      return { found: false, editRowVisible: false, initialValue: "", blurredValue: "" };
+    }
+    const initialValue = input.value;
+    input.focus();
+    input.value = "0.94716597";
+    input.blur();
+    return {
+      found: true,
+      editRowVisible: isVisible(editRow),
+      initialValue,
+      blurredValue: input.value,
+    };
+  });
+  const cueEditSaveCaptureInstalled = await installSceneSettingsSaveCapture(client);
+  const cueEditSaveClicked = await clickSceneSettingsTarget(
+    client,
+    '.cueItem[data-cue-id="302"] .cueSaveDetails',
+  );
+  await waitForClientCondition(
+    client,
+    "window.__syndocalSceneSettingsSaveCapture?.snapshotAttempted === true",
+    `F-1b cue edit metadata save ${viewport.width}x${viewport.height}`,
+  );
+  const cueEditSaveRoundTrip = await finishSceneSettingsSaveCapture(client);
+  const cueEditAfterSave = await evaluatePageFunction(client, () => {
+    const input = document.querySelector(
+      '.cueItem[data-cue-id="302"] .cueEditRow [data-cue-authored-beats]',
+    );
+    return input instanceof HTMLInputElement ? input.value : "";
+  });
 
   const expectedFamilies = [
     "STEPS",
@@ -11653,6 +11767,52 @@ async function runSceneSettingsViewport(client, viewport) {
       && selectedStatic.chooserButtonCount === 9
       && JSON.stringify(selectedStatic.chooserFamilies) === JSON.stringify(expectedFamilies)
       && selectedStatic.chooserMinimumHitSize >= 40],
+    ["scenePropertyInputsRoundDisplayWithoutRawFloats", () =>
+      selectedStatic.scenePropertyValues.authoredBeats === "0.947"
+      && selectedStatic.scenePropertyValues.authoredBeats !== "0.94716597"
+      && selectedStatic.scenePropertyValues.fadeMs === "1000"
+      && selectedStatic.scenePropertyValues.preWaitMs === "250"
+      && selectedStatic.scenePropertyValues.followMs === "1500"
+      && editSelected.scenePropertyValues.authoredBeats === "4"],
+    ["scenePropertySaveRoundTripPreservesUneditedAuthoredBeats", () =>
+      saveCaptureInstalled
+      && saveMetadataClicked
+      && saveRoundTrip.installedWithoutExistingInternals
+      && saveRoundTrip.committed
+      && saveRoundTrip.snapshotAttempted
+      && JSON.stringify(saveRoundTrip.commands) === JSON.stringify([
+        "begin_project_transaction",
+        "set_cue_metadata",
+        "commit_project_transaction",
+        "get_snapshot",
+      ])
+      && saveRoundTrip.metadataArgs?.cueId === 302
+      && saveRoundTrip.metadataArgs?.fadeMs === 1_000
+      && saveRoundTrip.metadataArgs?.authoredBeats === 0.94716597
+      && saveRoundTrip.metadataArgs?.preWaitMs === 250
+      && saveRoundTrip.metadataArgs?.followMs === 1_500
+      && savedStatic.scenePropertyValues.authoredBeats === "0.947"],
+    ["timelineCueEditAuthoredBeatsRoundsAndRenormalizesOnBlur", () =>
+      cueEditAuthoredBeats.found
+      && cueEditAuthoredBeats.editRowVisible
+      && cueEditAuthoredBeats.initialValue === "0.947"
+      && cueEditAuthoredBeats.initialValue !== "0.94716597"
+      && cueEditAuthoredBeats.blurredValue === "0.947"],
+    ["timelineCueEditSaveRoundTripPreservesUneditedAuthoredBeats", () =>
+      cueEditSaveCaptureInstalled
+      && cueEditSaveClicked
+      && cueEditSaveRoundTrip.installedWithoutExistingInternals
+      && cueEditSaveRoundTrip.committed
+      && cueEditSaveRoundTrip.snapshotAttempted
+      && JSON.stringify(cueEditSaveRoundTrip.commands) === JSON.stringify([
+        "begin_project_transaction",
+        "set_cue_metadata",
+        "commit_project_transaction",
+        "get_snapshot",
+      ])
+      && cueEditSaveRoundTrip.metadataArgs?.cueId === 302
+      && cueEditSaveRoundTrip.metadataArgs?.authoredBeats === 0.94716597
+      && cueEditAfterSave === "0.947"],
     ["activeReclickReleasesButKeepsEditSelection", () =>
       releaseClicked
       && releasedStatic.selectedSceneId === "302"
@@ -11738,6 +11898,7 @@ async function runSceneSettingsViewport(client, viewport) {
       initial.documentAndAppScrollZero
       && triggeredOnly.documentAndAppScrollZero
       && selectedStatic.documentAndAppScrollZero
+      && savedStatic.documentAndAppScrollZero
       && releasedStatic.documentAndAppScrollZero
       && otherTriggered.documentAndAppScrollZero
       && editSelected.documentAndAppScrollZero
@@ -11763,6 +11924,10 @@ async function runSceneSettingsViewport(client, viewport) {
     triggeredOnly,
     selectStripGesture,
     selectedStatic,
+    saveCaptureInstalled,
+    saveMetadataClicked,
+    saveRoundTrip,
+    savedStatic,
     releasedStatic,
     otherTriggered,
     editStripGesture,
@@ -11772,6 +11937,11 @@ async function runSceneSettingsViewport(client, viewport) {
     beforeCreate,
     createdFx,
     editSourceRoute,
+    cueEditAuthoredBeats,
+    cueEditSaveCaptureInstalled,
+    cueEditSaveClicked,
+    cueEditSaveRoundTrip,
+    cueEditAfterSave,
   };
 }
 
@@ -12890,6 +13060,7 @@ async function runCueRecallViewport(client, viewport) {
     return {
       scope: document.querySelector('#cue-store-form select')?.value ?? '',
       recallDetailsOpen: Boolean(recallDetails?.open),
+      recallElementCount: document.querySelectorAll('.cueItem .cueEffectRecallEditor').length,
       recallCount: (recallDetails?.querySelector('summary small')?.textContent || '').trim(),
       saveDetailsLabel: (saveDetails?.textContent || '').trim(),
       saveRecallLabel: (saveRecall?.textContent || '').trim(),
@@ -12935,6 +13106,7 @@ async function runCueRecallViewport(client, viewport) {
     ["cueEffectsScopeOptionPresent", () => cueStoreRoute.effectsOptionPresent],
     ["cueEffectsScopeSelected", () => stats.scope === "effects"],
     ["cueEffectRecallOpen", () => stats.recallDetailsOpen],
+    ["cueEffectRecallElementRendered", () => stats.recallElementCount === 1],
     ["cueEffectRecallCleared", () => stats.recallCount === "0 / 1"],
     ["cueSaveDetailsLabel", () => stats.saveDetailsLabel === "Save Details"],
     ["cueSaveRecallLabel", () => stats.saveRecallLabel === "Save Recall"],
@@ -12953,7 +13125,7 @@ async function runCueRecallViewport(client, viewport) {
     ["cueStepFadeEditAndReorderApplied", () => JSON.stringify(stats.stepFadeValues) === JSON.stringify([250, 375, 500, 1000, 1000])],
     ["cueStepHoldsPreserved", () => JSON.stringify(stats.stepHoldValues) === JSON.stringify([750, 750, 500, 250, 0])],
     ["cueStepEditedTotal", () => stats.stepTotalLabel === "5375 ms total"],
-    ["cueStepDerivedBeatsVisible", () => stats.stepDerivedLabel === "10.750 beats at 120.0 BPM"],
+    ["cueStepDerivedBeatsVisible", () => stats.stepDerivedLabel === "10.75 beats at 120.0 BPM"],
     ["cueStepAuthoredBeatsApplied", () => stats.authoredBeatsValue === 10.75],
     ["cueStepUsesInternalScrollport", () => stats.stepListOverflowY === "auto" || stats.stepListOverflowY === "scroll"],
     ["cueStepAddControlRendered", () => stats.addButtonCount === 1],
@@ -17285,6 +17457,8 @@ async function main() {
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
             `body=${result.triggeredOnly.activeCardIds.join("+") || "none"}:${result.triggeredOnly.selectedSceneId || "unselected"} ` +
             `strip=${result.selectedStatic.selectedSceneId}/${result.selectedStatic.kind}@${result.selectedStatic.selectedStripVisualWidth}px ` +
+            `precision=${result.selectedStatic.scenePropertyValues.authoredBeats}->${result.saveRoundTrip.metadataArgs?.authoredBeats ?? "none"} ` +
+            `drawerPrecision=${result.cueEditAuthoredBeats.initialValue}->${result.cueEditSaveRoundTrip.metadataArgs?.authoredBeats ?? "none"} ` +
             `topHit=${result.selectStripGesture.centerHitTag}.${result.selectStripGesture.centerHitClass || "none"} ` +
             `release=${result.releasedStatic.activeCardIds.join("+") || "none"}:${result.releasedStatic.selectedSceneId} ` +
             `edit=${result.editSelected.selectedSceneId}/${result.editSelected.activeCardIds.join("+") || "none"} ` +
@@ -17318,6 +17492,7 @@ async function main() {
             `drawer=${result.cueStoreRoute.drawerVisible} ` +
             `store=${result.cueStoreRoute.formVisible} ` +
             `effects=${result.cueStoreRoute.effectsOptionPresent}/${result.stats.scope} ` +
+            `recall=${result.stats.recallElementCount}/1 cleared=${result.stats.recallCount} ` +
             `actions=${result.stats.fullyVisibleActionCount}/${result.stats.actionCount} ` +
             `failed=${JSON.stringify(result.failedChecks)}`,
         );
@@ -18074,7 +18249,7 @@ async function main() {
     }
     for (const result of cueRecallResults) {
       console.log(
-        `${result.passed ? "pass" : "fail"} ${result.label} actions=${result.stats.fullyVisibleActionCount}/${result.stats.actionCount} recall=${result.stats.recallCount} outer=${result.containment.cueHostHorizontalOverflowPx}/${result.containment.cueHostVerticalOverflowPx}`,
+        `${result.passed ? "pass" : "fail"} ${result.label} actions=${result.stats.fullyVisibleActionCount}/${result.stats.actionCount} recall=${result.stats.recallElementCount}/1 cleared=${result.stats.recallCount} outer=${result.containment.cueHostHorizontalOverflowPx}/${result.containment.cueHostVerticalOverflowPx}`,
       );
     }
     for (const result of cueRecallLargeResults) {

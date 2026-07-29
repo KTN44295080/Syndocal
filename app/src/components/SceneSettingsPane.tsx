@@ -1,6 +1,7 @@
 import { For, Show, type ComponentProps } from "solid-js";
 import type { CueMetadataDraft } from "../editorDrafts";
 import { cueIdentityCss } from "../identityColor";
+import { displayNumber } from "../numberDisplay";
 import type { CueSummary, EffectKind, EffectSummary } from "../types";
 import { ChaserEffectEditorPanel } from "./ChaserEffectEditorPanel";
 import { ColorEffectEditorPanel } from "./ColorEffectEditorPanel";
@@ -136,49 +137,69 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
                     Fade in / out (ms)
                     <input
                       type="number"
+                      class="tabularNums"
+                      data-scene-property="fade-ms"
                       min="0"
                       step="10"
-                      value={props.draft.fade_ms}
+                      value={displayNumber(props.draft.fade_ms, 0)}
                       onInput={(event) => props.onDraft({ fade_ms: Number(event.currentTarget.value) })}
+                      onBlur={(event) => {
+                        event.currentTarget.value = displayNumber(props.draft.fade_ms, 0);
+                      }}
                     />
                   </label>
                   <label>
                     Duration (beats)
                     <input
                       type="number"
+                      class="tabularNums"
+                      data-scene-property="authored-beats"
                       min="0.25"
                       max="1024"
                       step="0.25"
                       placeholder="Auto"
-                      value={props.draft.authored_beats ?? ""}
+                      value={displayNumber(props.draft.authored_beats, 3)}
                       onInput={(event) => props.onDraft({
                         authored_beats: optionalNumber(event.currentTarget.value),
                       })}
+                      onBlur={(event) => {
+                        event.currentTarget.value = displayNumber(props.draft.authored_beats, 3);
+                      }}
                     />
                   </label>
                   <label>
                     Pre-wait (ms)
                     <input
                       type="number"
+                      class="tabularNums"
+                      data-scene-property="pre-wait-ms"
                       min="0"
                       step="10"
-                      value={props.draft.pre_wait_ms}
+                      value={displayNumber(props.draft.pre_wait_ms, 0)}
                       onInput={(event) => props.onDraft({
                         pre_wait_ms: Number(event.currentTarget.value),
                       })}
+                      onBlur={(event) => {
+                        event.currentTarget.value = displayNumber(props.draft.pre_wait_ms, 0);
+                      }}
                     />
                   </label>
                   <label>
                     Follow (ms)
                     <input
                       type="number"
+                      class="tabularNums"
+                      data-scene-property="follow-ms"
                       min="0"
                       step="10"
                       placeholder="No follow"
-                      value={props.draft.follow_ms ?? ""}
+                      value={displayNumber(props.draft.follow_ms, 0)}
                       onInput={(event) => props.onDraft({
                         follow_ms: optionalNumber(event.currentTarget.value),
                       })}
+                      onBlur={(event) => {
+                        event.currentTarget.value = displayNumber(props.draft.follow_ms, 0);
+                      }}
                     />
                   </label>
                 </div>

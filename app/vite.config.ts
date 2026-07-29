@@ -28,6 +28,7 @@ export default defineConfig({
             normalizedId.includes("/src/hotkeyHelpers") ||
             normalizedId.includes("/src/projectRecentStorage") ||
             normalizedId.includes("/src/projectRecoveryStorage") ||
+            normalizedId.includes("/src/numberDisplay") ||
             normalizedId.includes("/src/uiModes") ||
             normalizedId.includes("/src/workspaceLayoutStorage") ||
             normalizedId.includes("/src/workspaceProfiles")

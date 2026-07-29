@@ -588,6 +588,7 @@ import {
   videoSourceKindLabel,
 } from "./videoHelpers";
 import { clockSourceLabel, clockSyncStatusLabel, formatShowTimecode } from "./clockDisplay";
+import { displayNumber } from "./numberDisplay";
 import {
   fixtureFlagClearKinds,
   fixtureFlagMappingActions,
@@ -16391,7 +16392,7 @@ export default function App() {
                     >
                       <span>{pad.slot}</span>
                       <strong>{pad.cue?.label ?? "Empty"}</strong>
-                      <small>{pad.cue ? `#${pad.index + 1} / ${pad.cue.fade_ms} ms` : "-"}</small>
+                      <small>{pad.cue ? `#${pad.index + 1} / ${displayNumber(pad.cue.fade_ms, 0)} ms` : "-"}</small>
                     </button>
                   )}
                 </For>

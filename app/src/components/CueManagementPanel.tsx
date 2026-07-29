@@ -18,6 +18,7 @@ import { canSaveCueEffectTargets } from "../cueEffectRecall";
 import type { CueEffectRecallChange } from "../cueEffectRecall";
 import { timelineConformRateBadge } from "../timelineSceneBlocks";
 import { cueIdentityCss } from "../identityColor";
+import { displayNumber } from "../numberDisplay";
 import type { TimelineCueDragPoint } from "../timelineCueDrag";
 import { CueCapturePreviewPanel, type CueCapturePreviewModel } from "./CueCapturePreviewPanel";
 import { CueEffectRecallEditor } from "./CueEffectRecallEditor";
@@ -295,23 +296,36 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
         </label>
         <label>
           Fade ms
-          <input type="number" min="0" value={props.cueFadeMs} onInput={(event) => props.onCueFadeMs(Number(event.currentTarget.value))} />
+          <input
+            class="tabularNums"
+            type="number"
+            min="0"
+            value={displayNumber(props.cueFadeMs, 0)}
+            onInput={(event) => props.onCueFadeMs(Number(event.currentTarget.value))}
+            onBlur={(event) => {
+              event.currentTarget.value = displayNumber(props.cueFadeMs, 0);
+            }}
+          />
         </label>
         <label>
           Authored beats
           <input
+            class="tabularNums"
             type="number"
             min="0.25"
             max="1024"
             step="0.25"
             placeholder="Optional"
-            value={props.cueAuthoredBeats ?? ""}
+            value={displayNumber(props.cueAuthoredBeats, 3)}
             aria-invalid={Boolean(props.cueAuthoredBeatsError)}
             aria-describedby={props.cueAuthoredBeatsError ? "cue-authored-beats-error" : undefined}
             title={props.cueAuthoredBeatsSeeded ? "Seeded from enabled Effect timing." : "Scene length in beats."}
             onInput={(event) => props.onCueAuthoredBeats(
               event.currentTarget.value === "" ? null : Number(event.currentTarget.value),
             )}
+            onBlur={(event) => {
+              event.currentTarget.value = displayNumber(props.cueAuthoredBeats, 3);
+            }}
           />
         </label>
         <label>
@@ -500,7 +514,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                     </button>
                   </div>
                   <span>
-                    {`${cue.targets.length} fixture(s) / ${(cue.steps ?? []).length} step(s) / ${cue.video_targets.length} video / ${cue.video_output_targets.length} video output(s) / ${(cue.effect_targets ?? []).length} effect(s) / ${cue.fade_ms}ms / ${cue.tracking ? "Track" : "Block"}${cue.mark ? " / MIB" : ""}`}
+                    {`${cue.targets.length} fixture(s) / ${(cue.steps ?? []).length} step(s) / ${cue.video_targets.length} video / ${cue.video_output_targets.length} video output(s) / ${(cue.effect_targets ?? []).length} effect(s) / ${displayNumber(cue.fade_ms, 0)}ms / ${cue.tracking ? "Track" : "Block"}${cue.mark ? " / MIB" : ""}`}
                   </span>
                 </div>
                 <div class="cueEditRow">
@@ -674,26 +688,34 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                   <label>
                     Fade ms
                   <input
+                    class="tabularNums"
                     type="number"
                     min="0"
-                    value={draft().fade_ms}
+                    value={displayNumber(draft().fade_ms, 0)}
                     onInput={(event) => props.onUpdateCueMetadataDraft(cue, { fade_ms: Number(event.currentTarget.value) })}
+                    onBlur={(event) => {
+                      event.currentTarget.value = displayNumber(draft().fade_ms, 0);
+                    }}
                   />
                   </label>
                   <label>
                     Authored beats
                     <input
+                      class="tabularNums"
                       type="number"
                       min="0.25"
                       max="1024"
                       step="0.25"
                       placeholder="Optional"
                       data-cue-authored-beats
-                      value={draft().authored_beats ?? ""}
+                      value={displayNumber(draft().authored_beats, 3)}
                       aria-invalid={authoredBeatsInvalid()}
                       onInput={(event) => props.onUpdateCueMetadataDraft(cue, {
                         authored_beats: event.currentTarget.value === "" ? null : Number(event.currentTarget.value),
                       })}
+                      onBlur={(event) => {
+                        event.currentTarget.value = displayNumber(draft().authored_beats, 3);
+                      }}
                     />
                     <Show when={authoredBeatsInvalid()}>
                       <small class="cueFieldError">Use 0.25 to 1024.</small>
@@ -702,22 +724,30 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                   <label>
                     Pre-wait ms
                     <input
+                      class="tabularNums"
                       type="number"
                       min="0"
-                      value={draft().pre_wait_ms}
+                      value={displayNumber(draft().pre_wait_ms, 0)}
                       onInput={(event) => props.onUpdateCueMetadataDraft(cue, { pre_wait_ms: Number(event.currentTarget.value) })}
+                      onBlur={(event) => {
+                        event.currentTarget.value = displayNumber(draft().pre_wait_ms, 0);
+                      }}
                     />
                   </label>
                   <label>
                     Follow ms
                     <input
+                      class="tabularNums"
                       type="number"
                       min="0"
                       placeholder="Manual"
-                      value={draft().follow_ms ?? ""}
+                      value={displayNumber(draft().follow_ms, 0)}
                       onInput={(event) => props.onUpdateCueMetadataDraft(cue, {
                         follow_ms: event.currentTarget.value === "" ? null : Number(event.currentTarget.value),
                       })}
+                      onBlur={(event) => {
+                        event.currentTarget.value = displayNumber(draft().follow_ms, 0);
+                      }}
                     />
                   </label>
                   <label class="cueTrackingToggle">
@@ -792,10 +822,13 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                             type="number"
                             min="0"
                             placeholder="Inherit"
-                            value={draft().ifcb_timing[fadeKey] ?? ""}
+                            value={displayNumber(draft().ifcb_timing[fadeKey], 0)}
                             onInput={(event) => updateIfcbTiming({
                               [fadeKey]: event.currentTarget.value === "" ? null : Number(event.currentTarget.value),
                             })}
+                            onBlur={(event) => {
+                              event.currentTarget.value = displayNumber(draft().ifcb_timing[fadeKey], 0);
+                            }}
                           />
                         </label>
                         <label>
@@ -803,8 +836,11 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                           <input
                             type="number"
                             min="0"
-                            value={draft().ifcb_timing[delayKey]}
+                            value={displayNumber(draft().ifcb_timing[delayKey], 0)}
                             onInput={(event) => updateIfcbTiming({ [delayKey]: Number(event.currentTarget.value) })}
+                            onBlur={(event) => {
+                              event.currentTarget.value = displayNumber(draft().ifcb_timing[delayKey], 0);
+                            }}
                           />
                         </label>
                       </fieldset>
@@ -824,8 +860,33 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                         <div class="cuePartFields tabularNums">
                           <label>Number<input type="number" min="1" max="999" value={part.number} onInput={(event) => updatePart(partIndex(), { number: Number(event.currentTarget.value) })} /></label>
                           <label>Label<input maxlength="64" value={part.label} onInput={(event) => updatePart(partIndex(), { label: event.currentTarget.value })} /></label>
-                          <label>Delay ms<input type="number" min="0" value={part.delay_ms} onInput={(event) => updatePart(partIndex(), { delay_ms: Number(event.currentTarget.value) })} /></label>
-                          <label>Fade ms<input type="number" min="0" placeholder="Inherit" value={part.fade_ms ?? ""} onInput={(event) => updatePart(partIndex(), { fade_ms: event.currentTarget.value === "" ? null : Number(event.currentTarget.value) })} /></label>
+                          <label>
+                            Delay ms
+                            <input
+                              type="number"
+                              min="0"
+                              value={displayNumber(part.delay_ms, 0)}
+                              onInput={(event) => updatePart(partIndex(), { delay_ms: Number(event.currentTarget.value) })}
+                              onBlur={(event) => {
+                                event.currentTarget.value = displayNumber(part.delay_ms, 0);
+                              }}
+                            />
+                          </label>
+                          <label>
+                            Fade ms
+                            <input
+                              type="number"
+                              min="0"
+                              placeholder="Inherit"
+                              value={displayNumber(part.fade_ms, 0)}
+                              onInput={(event) => updatePart(partIndex(), {
+                                fade_ms: event.currentTarget.value === "" ? null : Number(event.currentTarget.value),
+                              })}
+                              onBlur={(event) => {
+                                event.currentTarget.value = displayNumber(part.fade_ms, 0);
+                              }}
+                            />
+                          </label>
                           <button class="danger" onClick={() => props.onUpdateCueMetadataDraft(cue, { parts: draft().parts.filter((_, index) => index !== partIndex()) })}>Remove Part</button>
                         </div>
                         <div class="cuePartTargets" aria-label={`Fixture assignments for Cue Part ${part.number}`}>
@@ -971,23 +1032,23 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                             class="cueTimelinePlacementMain"
                             title={placement.duration_ms > 0
                               ? placement.conform_to_tempo
-                                ? `Linked Scene Block${timelineConformRateBadge(placement) ? ` ${timelineConformRateBadge(placement)}` : ""} · ${placement.time_ms} ms / ${placement.duration_ms} ms window / ${placement.loop_count} ${placement.loop_fill ? "fill loops" : "tempo iterations"} / ${placement.track}`
-                                : `Linked Scene Block · ${placement.time_ms} ms / ${placement.duration_ms} ms × ${placement.loop_count} / ${placement.track}`
-                              : `Legacy point · ${placement.time_ms} ms / ${placement.track}`}
+                                ? `Linked Scene Block${timelineConformRateBadge(placement) ? ` ${timelineConformRateBadge(placement)}` : ""} · ${displayNumber(placement.time_ms, 0)} ms / ${displayNumber(placement.duration_ms, 0)} ms window / ${placement.loop_count} ${placement.loop_fill ? "fill loops" : "tempo iterations"} / ${placement.track}`
+                                : `Linked Scene Block · ${displayNumber(placement.time_ms, 0)} ms / ${displayNumber(placement.duration_ms, 0)} ms × ${placement.loop_count} / ${placement.track}`
+                              : `Legacy point · ${displayNumber(placement.time_ms, 0)} ms / ${placement.track}`}
                             onClick={() => void props.onSeekTimeline(placement.time_ms)}
                           >
                             <b>{placement.track === "Lighting" ? "L" : "V"}</b>
                             <small>
-                              {placement.time_ms} · {placement.duration_ms > 0
+                              {displayNumber(placement.time_ms, 0)} · {placement.duration_ms > 0
                                 ? placement.conform_to_tempo
-                                  ? `${timelineConformRateBadge(placement) ? `${timelineConformRateBadge(placement)} ` : ""}${placement.duration_ms} window/${placement.loop_count} ${placement.loop_fill ? "fill" : "tempo"}`
-                                  : `${placement.duration_ms}×${placement.loop_count}`
+                                  ? `${timelineConformRateBadge(placement) ? `${timelineConformRateBadge(placement)} ` : ""}${displayNumber(placement.duration_ms, 0)} window/${placement.loop_count} ${placement.loop_fill ? "fill" : "tempo"}`
+                                  : `${displayNumber(placement.duration_ms, 0)}×${placement.loop_count}`
                                 : "Point"}
                             </small>
                           </button>
                           <button
                             class="cueTimelinePlacementMove"
-                            title={`Nudge ${props.timelinePlacementNudgeMs} ms. Shift-click nudges left.`}
+                            title={`Nudge ${displayNumber(props.timelinePlacementNudgeMs, 0)} ms. Shift-click nudges left.`}
                             onClick={(event) =>
                               void props.onMoveTimelineCueEvent(
                                 placement,

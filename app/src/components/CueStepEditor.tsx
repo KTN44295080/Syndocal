@@ -8,6 +8,7 @@ import {
   moveCueStep,
   sanitizeCueStepDuration,
 } from "../cueSteps";
+import { displayNumber } from "../numberDisplay";
 import type { CueStepSummary, CueSummary } from "../types";
 
 interface CueStepEditorProps {
@@ -54,7 +55,7 @@ export function CueStepEditor(props: CueStepEditorProps) {
     >
       <summary>
         <span>{`Static steps (${steps().length})`}</span>
-        <small class="tabularNums">{`${totalDurationMs()} ms total`}</small>
+        <small class="tabularNums">{`${displayNumber(totalDurationMs(), 0)} ms total`}</small>
       </summary>
       <p>
         Each step stores a fixture-value snapshot. Fade moves into the step, then Hold keeps it before the next step.
@@ -70,7 +71,7 @@ export function CueStepEditor(props: CueStepEditorProps) {
         <span class="tabularNums">
           {derivedBeats() === null
             ? "Add timed steps to derive authored beats."
-            : `${derivedBeats()!.toFixed(3)} beats at ${props.bpm.toFixed(1)} BPM`}
+            : `${displayNumber(derivedBeats(), 3)} beats at ${props.bpm.toFixed(1)} BPM`}
         </span>
         <button
           type="button"
@@ -102,9 +103,12 @@ export function CueStepEditor(props: CueStepEditorProps) {
                     class="tabularNums"
                     type="number"
                     min="0"
-                    value={step.fade_ms}
+                    value={displayNumber(step.fade_ms, 0)}
                     data-cue-step-fade
                     onInput={(event) => updateDuration(index(), "fade_ms", Number(event.currentTarget.value))}
+                    onBlur={(event) => {
+                      event.currentTarget.value = displayNumber(step.fade_ms, 0);
+                    }}
                   />
                 </label>
                 <label>
@@ -113,9 +117,12 @@ export function CueStepEditor(props: CueStepEditorProps) {
                     class="tabularNums"
                     type="number"
                     min="0"
-                    value={step.hold_ms}
+                    value={displayNumber(step.hold_ms, 0)}
                     data-cue-step-hold
                     onInput={(event) => updateDuration(index(), "hold_ms", Number(event.currentTarget.value))}
+                    onBlur={(event) => {
+                      event.currentTarget.value = displayNumber(step.hold_ms, 0);
+                    }}
                   />
                 </label>
                 <button
