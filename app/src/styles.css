@@ -30173,15 +30173,6 @@ h3 {
   min-width: 0;
 }
 
-.layoutControl .liveControlPanel > .liveDeskHeader {
-  display: grid;
-  grid-column: 1;
-  grid-row: 1;
-  grid-template-columns: auto minmax(160px, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-}
-
 .liveDeskViewToggle {
   display: flex;
   justify-self: center;
@@ -30293,10 +30284,6 @@ h3 {
 /* Timeline/Live keeps its readable status rail in column 1. Place the
    operator surface in the adjacent primary column instead of overlapping the
    status rail's row span. */
-.layoutControl.controlModeLive .liveControlPanel > .liveDeskHeader {
-  grid-column: 1 / -1;
-}
-
 .layoutControl.controlModeLive .liveControlPanel > .sceneMatrixPanel,
 .layoutControl.controlModeLive .liveControlPanel > .liveCuePadSurface {
   grid-column: 2;
@@ -30691,12 +30678,6 @@ h3 {
    (viewport contract: >=35% of the live desk height). Reclaim chrome height
    from the status/header rows instead of squeezing the matrix. ---- */
 @media (max-height: 820px) {
-  .layout.layoutControl .liveControlPanel .panelHeader.liveDeskHeader {
-    padding-top: 2px;
-    padding-bottom: 2px;
-    min-height: 0;
-  }
-
   /* Collapse the two-line status cells into a single label/value line so the
      matrix keeps its >=35% primary-surface share on short desks. The live-mode
      status sidebar keeps its stacked two-line cells (narrow column). */
@@ -30745,36 +30726,6 @@ h3 {
 
 .layout.layoutSharedWorkspace.layoutControl .liveControlPanel.liveStatusExpanded {
   grid-template-columns: minmax(0, 1fr) 248px;
-}
-
-.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveDeskHeader {
-  grid-column: 1 / -1;
-  grid-row: 1;
-  grid-template-columns: auto minmax(176px, 1fr) auto;
-  min-height: 30px;
-}
-
-.liveDeskHeaderMeta {
-  display: flex;
-  align-items: center;
-  justify-content: end;
-  gap: 7px;
-  min-width: 0;
-}
-
-.liveDeskSceneMeta,
-.liveDeskState {
-  min-width: 0;
-  overflow: hidden;
-  color: #8f8881;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-}
-
-.liveDeskSceneMeta {
-  font-variant-numeric: tabular-nums;
-  text-transform: uppercase;
 }
 
 .liveStatusToggle {
@@ -30910,9 +30861,6 @@ h3 {
     grid-template-columns: minmax(0, 1fr) 238px;
   }
 
-  .liveDeskSceneMeta {
-    display: none;
-  }
 }
 
 /* T15 final cascade: keep the slim timeline authoritative over legacy desks. */
@@ -32097,4 +32045,48 @@ h3 {
 .fixtureTypeUnsupported strong,
 .fixtureTypeUnsupported span {
   font-size: 11px;
+}
+
+/* ---- T25-D: the Live Desk transport and view/status controls share one row.
+   The removed label/state row is returned to the matrix or Cue Pad surface;
+   KILL controls keep their T5 geometry and visual semantics. */
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel {
+  grid-template-rows: 32px minmax(0, 1fr) auto;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveTransportGrid {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  grid-template-columns: repeat(9, minmax(0, 1fr)) auto;
+  align-items: center;
+}
+
+.liveDeskToolbarActions {
+  display: flex;
+  align-items: center;
+  justify-content: end;
+  gap: 5px;
+  min-width: 0;
+}
+
+.liveDeskToolbarActions .liveDeskViewToggle,
+.liveDeskToolbarActions .liveStatusToggle {
+  flex: 0 0 auto;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel .liveDeskToolbarActions .liveDeskViewToggle button {
+  min-height: 24px;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .sceneMatrixPanel,
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveCuePadSurface {
+  grid-row: 2;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveStatusGrid {
+  grid-row: 2 / -1;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveFadeMeter {
+  grid-row: 3;
 }

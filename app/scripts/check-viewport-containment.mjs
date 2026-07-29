@@ -35,6 +35,8 @@ const workspaceOperatorOnlyMode = process.argv.includes("--workspace-operator-on
 const liveEditTypesOnlyMode = process.argv.includes("--live-edit-types-only");
 const controlEditPositionOnlyMode = process.argv.includes("--control-edit-position-only");
 const controlStageChromeOnlyMode = process.argv.includes("--control-stage-chrome-only");
+const controlModeSurfaceOnlyMode = process.argv.includes("--control-mode-surface-only");
+const liveDeskHeaderOnlyMode = process.argv.includes("--live-desk-header-only");
 const viewportTraceEnabled = process.env.SYNDOCAL_VIEWPORT_TRACE === "1";
 const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
   largeShowMode
@@ -2275,6 +2277,7 @@ async function measureTimelinePaneExpansionState(client) {
             (controlContextHeaderRect.y + controlContextHeaderRect.height)
           ) <= 1
         ),
+        liveDeskToolbarRect: measuredRect('.liveControlPanel > [data-live-desk-toolbar]'),
         sceneMatrixRect: measuredRect('.liveControlPanel > .sceneMatrixPanel'),
         liveControlPanelRect: measuredRect('.liveControlPanel'),
       },
@@ -2424,14 +2427,11 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
     )],
     ['t25LiveMasterRowRemoved', () => normalDensity.liveMasterRowCount === 0],
     ['t25ControlModeSegmentSharesPaneHeader', () => contextModeSegmentSharesHeader],
-    ['t25SceneMatrixHeightRebased', () => Boolean(
+    ['t25DSceneMatrixUsesReleasedHeaderHeight', () => Boolean(
       normalDensity.sceneMatrixRect?.height > 0 &&
+      normalDensity.liveControlPanelRect?.height > 0 &&
       before.persistentBandRect?.height > 0 &&
-      (
-        viewport.width !== primaryOperationalViewport.width ||
-        viewport.height !== primaryOperationalViewport.height ||
-        normalDensity.sceneMatrixRect.height >= 490
-      )
+      normalDensity.liveControlPanelRect.height - normalDensity.sceneMatrixRect.height <= 68
     )],
     ['expandToggleClicked', () => Boolean(expandToggleClicked)],
     ['expandedStateApplied', () => Boolean(expanded.timelinePaneExpanded)],
@@ -2588,6 +2588,254 @@ async function runTimelinePaneExpansionViewport(client, viewport) {
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
   return await runTimelinePaneExpansionCheck(client, viewport);
+}
+
+async function measureLiveDeskHeaderState(client) {
+  return await client.evaluate(`(async () => {
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const isVisible = (element) => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const measuredRect = (element) => {
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      const precision = (value) => Math.round(value * 100) / 100;
+      return {
+        x: precision(rect.x),
+        y: precision(rect.y),
+        right: precision(rect.right),
+        bottom: precision(rect.bottom),
+        width: precision(rect.width),
+        height: precision(rect.height),
+      };
+    };
+    const contained = (inner, outer) => Boolean(
+      inner && outer &&
+      inner.x >= outer.x - 1 &&
+      inner.y >= outer.y - 1 &&
+      inner.right <= outer.right + 1 &&
+      inner.bottom <= outer.bottom + 1
+    );
+    const toolbar = document.querySelector('[data-live-desk-toolbar]');
+    const toolbarActions = document.querySelector('[data-live-desk-toolbar-actions]');
+    const viewToggle = toolbarActions?.querySelector('.liveDeskViewToggle') ?? null;
+    const statusToggle = toolbarActions?.querySelector('[data-live-status-toggle]') ?? null;
+    const sceneReadout = document.querySelector('[data-live-desk-scene-readout]');
+    const statusInspector = document.querySelector('.liveControlPanel > .liveStatusGrid');
+    const matrix = document.querySelector('.liveControlPanel > .sceneMatrixPanel');
+    const cuePads = document.querySelector('.liveControlPanel > .liveCuePadSurface');
+    const fadeMeter = document.querySelector('.liveControlPanel > .liveFadeMeter');
+    const masterRow = document.querySelector('.liveControlPanel > .liveMasterGrid');
+    const statusItems = statusInspector
+      ? [...statusInspector.querySelectorAll(':scope > .liveStatusItem')]
+      : [];
+    const directTransportButtons = toolbar
+      ? [...toolbar.querySelectorAll(':scope > button')].filter(isVisible)
+      : [];
+    const toolbarControls = toolbar
+      ? [...toolbar.querySelectorAll(':scope > button, [data-live-desk-toolbar-actions] button')].filter(isVisible)
+      : [];
+    const controlCenters = toolbarControls.map((element) => {
+      const rect = element.getBoundingClientRect();
+      return rect.y + rect.height / 2;
+    });
+    const centerSpread = controlCenters.length > 0
+      ? Math.max(...controlCenters) - Math.min(...controlCenters)
+      : Number.POSITIVE_INFINITY;
+    const killButtons = [...document.querySelectorAll('.liveTransportGrid .killButton')].filter(isVisible);
+    const killClearButtons = [...document.querySelectorAll('.liveTransportGrid .killClear')].filter(isVisible);
+    const hasRedBorder = (element) => {
+      const parts = getComputedStyle(element).borderTopColor.match(/\\d+/g)?.map(Number) ?? [];
+      return parts.length >= 3 && parts[0] > parts[1] + 20 && parts[0] > parts[2] + 20;
+    };
+    const elementMetrics = (element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        width: Math.round(rect.width * 100) / 100,
+        height: Math.round(rect.height * 100) / 100,
+      };
+    };
+    const documentElement = document.documentElement;
+    const body = document.body;
+    const app = document.querySelector('.app');
+    const toolbarRect = measuredRect(toolbar);
+    const toolbarActionsRect = measuredRect(toolbarActions);
+    const viewToggleRect = measuredRect(viewToggle);
+    const statusToggleRect = measuredRect(statusToggle);
+    return {
+      toolbarRect,
+      toolbarActionsRect,
+      viewToggleRect,
+      statusToggleRect,
+      matrixRect: measuredRect(matrix),
+      cuePadRect: measuredRect(cuePads),
+      liveDeskHeaderCount: document.querySelectorAll('.liveControlPanel > .liveDeskHeader').length,
+      liveDeskLabelCount: [...document.querySelectorAll('.liveControlPanel h2')]
+        .filter((element) => (element.textContent || '').trim() === 'Live Desk').length,
+      liveDeskStateCount: document.querySelectorAll('.liveControlPanel .liveDeskState').length,
+      liveDeskSceneMetaCount: document.querySelectorAll('.liveControlPanel .liveDeskSceneMeta').length,
+      toolbarCount: document.querySelectorAll('.liveControlPanel > [data-live-desk-toolbar]').length,
+      toolbarActionsCount: document.querySelectorAll('.liveControlPanel [data-live-desk-toolbar-actions]').length,
+      directTransportButtonCount: directTransportButtons.length,
+      viewToggleButtonCount: viewToggle
+        ? [...viewToggle.querySelectorAll('button')].filter(isVisible).length
+        : 0,
+      statusToggleCount: isVisible(statusToggle) ? 1 : 0,
+      toolbarControlCount: toolbarControls.length,
+      toolbarControlCenterSpread: Math.round(centerSpread * 100) / 100,
+      toolbarActionsContained: contained(toolbarActionsRect, toolbarRect),
+      toolbarActionsRightAligned: Boolean(
+        toolbarRect && toolbarActionsRect && Math.abs(toolbarRect.right - toolbarActionsRect.right) <= 4
+      ),
+      viewToggleContained: contained(viewToggleRect, toolbarRect),
+      statusToggleContained: contained(statusToggleRect, toolbarRect),
+      sceneReadoutCount: document.querySelectorAll('[data-live-desk-scene-readout]').length,
+      sceneReadoutVisible: isVisible(sceneReadout),
+      sceneReadoutText: (sceneReadout?.textContent || '').trim(),
+      sceneReadoutInsideStatus: sceneReadout?.closest('.liveStatusGrid') === statusInspector,
+      statusExpanded: statusToggle?.getAttribute('aria-expanded') === 'true',
+      statusItemCount: statusItems.length,
+      visibleStatusItemCount: statusItems.filter(isVisible).length,
+      matrixCount: isVisible(matrix) ? 1 : 0,
+      cuePadSurfaceCount: isVisible(cuePads) ? 1 : 0,
+      matrixGridRow: matrix ? getComputedStyle(matrix).gridRowStart : '',
+      fadeGridRow: fadeMeter ? getComputedStyle(fadeMeter).gridRowStart : '',
+      masterRowPresent: Boolean(masterRow),
+      killButtonCount: killButtons.length,
+      killClearCount: killClearButtons.length,
+      killButtonsHatched: killButtons.length > 0 &&
+        killButtons.every((element) => getComputedStyle(element).backgroundImage.includes('linear-gradient')),
+      killButtonsRedBordered: killButtons.length > 0 && killButtons.every(hasRedBorder),
+      killButtonMetrics: killButtons.map(elementMetrics),
+      killClearMetrics: killClearButtons.map(elementMetrics),
+      documentAndAppScrollZero:
+        window.scrollX === 0 && window.scrollY === 0 &&
+        documentElement.scrollWidth === documentElement.clientWidth &&
+        documentElement.scrollHeight === documentElement.clientHeight &&
+        body.scrollWidth === documentElement.clientWidth &&
+        body.scrollHeight === documentElement.clientHeight &&
+        (!app || (app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight)),
+    };
+  })()`);
+}
+
+async function runLiveDeskHeaderViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: fixtureUrl("timeline") });
+  await waitForApp(client);
+  await seedViewportLocalStorage(client);
+  await client.send("Page.navigate", { url: fixtureUrl("timeline") });
+  await waitForApp(client);
+  await clickVisibleByText(client, '.workspaceTabs button', 'Control');
+  await clickVisibleByText(client, '.controlModeTabs button', 'Timeline');
+  await sleep(120);
+  const matrix = await measureLiveDeskHeaderState(client);
+  const statusOpened = await clickWorkspaceSelector(client, '[data-live-status-toggle]');
+  await sleep(100);
+  const expanded = await measureLiveDeskHeaderState(client);
+  const statusClosed = await clickWorkspaceSelector(client, '[data-live-status-toggle]');
+  await sleep(100);
+  const restored = await measureLiveDeskHeaderState(client);
+  await clickVisibleByText(client, '.liveDeskViewToggle button', 'Cue Pads');
+  const cuePadsSelected = true;
+  await sleep(100);
+  const pads = await measureLiveDeskHeaderState(client);
+  const killMetrics = [...matrix.killButtonMetrics, ...matrix.killClearMetrics];
+  const checks = {
+    legacyLiveDeskHeaderRowRemoved:
+      matrix.liveDeskHeaderCount === 0 &&
+      matrix.liveDeskLabelCount === 0 &&
+      matrix.liveDeskStateCount === 0 &&
+      matrix.liveDeskSceneMetaCount === 0,
+    oneToolbarOwnsNineTransportActions:
+      matrix.toolbarCount === 1 &&
+      matrix.directTransportButtonCount === 9,
+    viewAndStatusControlsIntegratedAtRight:
+      matrix.toolbarActionsCount === 1 &&
+      matrix.viewToggleButtonCount === 2 &&
+      matrix.statusToggleCount === 1 &&
+      matrix.toolbarActionsContained &&
+      matrix.toolbarActionsRightAligned &&
+      matrix.viewToggleContained &&
+      matrix.statusToggleContained,
+    toolbarControlsShareOneVisualRow:
+      matrix.toolbarControlCount === 12 &&
+      matrix.toolbarControlCenterSpread <= 1 &&
+      matrix.toolbarRect?.height === 32,
+    sceneReadoutMovedIntoExpandedStatus:
+      statusOpened &&
+      matrix.sceneReadoutCount === 1 &&
+      !matrix.sceneReadoutVisible &&
+      expanded.statusExpanded &&
+      expanded.sceneReadoutVisible &&
+      expanded.sceneReadoutInsideStatus &&
+      /^(Lighting|Video) · \d+ scenes$/.test(expanded.sceneReadoutText),
+    statusCollapseRestoresHiddenSceneReadout:
+      statusClosed &&
+      !restored.statusExpanded &&
+      !restored.sceneReadoutVisible,
+    statusInspectorKeepsTwoOfTwelveCellsCollapsed:
+      matrix.statusItemCount === 12 &&
+      matrix.visibleStatusItemCount === 2 &&
+      expanded.statusItemCount === 12 &&
+      expanded.visibleStatusItemCount === 12,
+    matrixAndFadeUseReleasedRows:
+      matrix.matrixGridRow === '2' &&
+      matrix.fadeGridRow === '3' &&
+      !matrix.masterRowPresent,
+    primaryMatrixHeightIncreased:
+      viewport.width !== primaryOperationalViewport.width ||
+      viewport.height !== primaryOperationalViewport.height ||
+      (matrix.matrixRect?.height ?? 0) >= 525,
+    matrixAndCuePadsShareTheSameToolbar:
+      cuePadsSelected &&
+      pads.matrixCount === 0 &&
+      pads.cuePadSurfaceCount === 1 &&
+      pads.toolbarCount === 1 &&
+      pads.liveDeskHeaderCount === 0 &&
+      pads.toolbarRect?.height === matrix.toolbarRect?.height &&
+      pads.toolbarRect?.y === matrix.toolbarRect?.y,
+    killZoneKeepsThreeBlackoutsAndClear:
+      matrix.killButtonCount === 3 &&
+      matrix.killClearCount === 1,
+    killZoneKeepsHatching:
+      matrix.killButtonsHatched,
+    killZoneKeepsRedBorders:
+      matrix.killButtonsRedBordered,
+    killZoneKeepsCompactDimensions:
+      killMetrics.length === 4 &&
+      killMetrics.every((metric) =>
+        metric.width >= 54 &&
+        metric.height >= 26 &&
+        metric.height <= 32
+      ),
+    matrixAndCuePadModesKeepOuterScrollZero:
+      matrix.documentAndAppScrollZero &&
+      expanded.documentAndAppScrollZero &&
+      restored.documentAndAppScrollZero &&
+      pads.documentAndAppScrollZero,
+  };
+  const failedChecks = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  return {
+    label: `live-desk-header-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    failedChecks,
+    checks,
+    matrix,
+    expanded,
+    restored,
+    pads,
+  };
 }
 
 async function measureMappingExpansionState(client) {
@@ -4472,6 +4720,47 @@ async function measure(client, label) {
       controlModeTabCount: document.querySelectorAll('.controlModeTabs button').length,
       visibleLiveControlPanelCount: visibleCount('.liveControlPanel'),
       liveControlPanelHeight: Math.round(document.querySelector('.liveControlPanel')?.getBoundingClientRect().height ?? 0),
+      visibleLegacyLiveDeskHeaderCount: visibleCount('.liveControlPanel > .liveDeskHeader'),
+      visibleLiveDeskToolbarCount: visibleCount('.liveControlPanel > [data-live-desk-toolbar]'),
+      visibleLiveDeskDirectTransportButtonCount: visibleCount(
+        '.liveControlPanel > [data-live-desk-toolbar] > button'
+      ),
+      visibleLiveDeskToolbarActionsCount: visibleCount(
+        '.liveControlPanel > [data-live-desk-toolbar] > [data-live-desk-toolbar-actions]'
+      ),
+      visibleLiveDeskViewButtonCount: visibleCount(
+        '.liveControlPanel > [data-live-desk-toolbar] [data-live-desk-toolbar-actions] .liveDeskViewToggle button'
+      ),
+      visibleLiveDeskStatusToggleCount: visibleCount(
+        '.liveControlPanel > [data-live-desk-toolbar] [data-live-status-toggle]'
+      ),
+      liveDeskToolbarControlsShareOneRow: (() => {
+        const controls = [...document.querySelectorAll(
+          '.liveControlPanel > [data-live-desk-toolbar] > button, ' +
+          '.liveControlPanel > [data-live-desk-toolbar] [data-live-desk-toolbar-actions] button'
+        )].filter((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+        });
+        const centers = controls.map((element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.y + rect.height / 2;
+        });
+        return controls.length === 12 && Math.max(...centers) - Math.min(...centers) <= 1;
+      })(),
+      liveDeskToolbarGridRow: getComputedStyle(
+        document.querySelector('.liveControlPanel > [data-live-desk-toolbar]') ?? document.body
+      ).gridRowStart,
+      liveSceneMatrixGridRow: getComputedStyle(
+        document.querySelector('.liveControlPanel > .sceneMatrixPanel') ?? document.body
+      ).gridRowStart,
+      liveDeskSceneReadoutCount: document.querySelectorAll('[data-live-desk-scene-readout]').length,
+      liveDeskSceneReadoutInsideStatus: (() => {
+        const readout = document.querySelector('[data-live-desk-scene-readout]');
+        const status = document.querySelector('.liveControlPanel > .liveStatusGrid');
+        return Boolean(readout && status && readout.closest('.liveStatusGrid') === status);
+      })(),
       visibleLiveFadeMeterCount: visibleCount('.liveControlPanel > .liveFadeMeter'),
       visibleLiveMasterGridCount: visibleCount('.liveControlPanel > .liveMasterGrid'),
       liveFadeMeterGridRow: getComputedStyle(document.querySelector('.liveControlPanel > .liveFadeMeter') ?? document.body).gridRowStart,
@@ -5869,9 +6158,20 @@ function hasExpectedControlModeSurface(result) {
     const upperPaneHeight = result.workspacePaneRects?.upper?.height ?? 0;
     if (upperPaneHeight <= 0 || Math.abs(result.liveControlPanelHeight - upperPaneHeight) > 4) return false;
     if (
+      result.visibleLegacyLiveDeskHeaderCount !== 0 ||
+      result.visibleLiveDeskToolbarCount !== 1 ||
+      result.visibleLiveDeskDirectTransportButtonCount !== 9 ||
+      result.visibleLiveDeskToolbarActionsCount !== 1 ||
+      result.visibleLiveDeskViewButtonCount !== 2 ||
+      result.visibleLiveDeskStatusToggleCount !== 1 ||
+      !result.liveDeskToolbarControlsShareOneRow ||
+      result.liveDeskToolbarGridRow !== "1" ||
+      result.liveSceneMatrixGridRow !== "2" ||
+      result.liveDeskSceneReadoutCount !== 1 ||
+      !result.liveDeskSceneReadoutInsideStatus ||
       result.visibleLiveFadeMeterCount !== 1 ||
       result.visibleLiveMasterGridCount !== 0 ||
-      result.liveFadeMeterGridRow !== "4" ||
+      result.liveFadeMeterGridRow !== "3" ||
       result.liveMasterGridRow !== "absent" ||
       !result.liveFadeAboveMaster ||
       !result.liveMatrixAboveFade
@@ -8919,16 +9219,16 @@ async function runWorkspaceSplitViewport(client, viewport) {
     initial.liveStatus.toggleExpanded === false;
   checks.liveStatusInspectorIsNamedRegion =
     initial.liveStatus.inspectorRole === 'region' && initial.liveStatus.inspectorName.trim().length > 0;
-  checks.liveStatusClosedShowsTwoCellsAtExpectedWidth =
+  checks.liveStatusClosedShowsTwoOfTwelveCellsAtExpectedWidth =
     initial.liveStatus.expanded === false &&
     initial.liveStatus.visibleItemCount === 2 &&
-    initial.liveStatus.totalItemCount === 11 &&
+    initial.liveStatus.totalItemCount === 12 &&
     Math.abs(initial.liveStatus.inspectorWidth - expectedClosedStatusWidth) <= 2;
   checks.liveTransportIsNineButtonsInOneRow =
     initial.liveStatus.transportButtonCount === 9 && initial.liveStatus.transportRowCount === 1;
-  checks.liveMatrixFadeMasterUseRowsThreeFourFive =
-    initial.liveStatus.matrixRow === "3" &&
-    initial.liveStatus.fadeRow === "4" &&
+  checks.liveMatrixFadeMasterUseRowsTwoThreeAndNoMaster =
+    initial.liveStatus.matrixRow === "2" &&
+    initial.liveStatus.fadeRow === "3" &&
     initial.liveStatus.masterRow === "absent" &&
     initial.liveStatus.matrixFadeMasterDoNotOverlap;
   checks.sceneMatrixHeaderRemoved = initial.liveStatus.sceneMatrixHeaderCount === 0;
@@ -8936,11 +9236,11 @@ async function runWorkspaceSplitViewport(client, viewport) {
   const liveStatusOpened = await clickWorkspaceSelector(client, '[data-live-status-toggle]');
   await sleep(100);
   const expandedLiveStatus = await readWorkspaceSplitState(client);
-  checks.liveStatusExpandedShowsElevenCellsAtExpectedWidth =
+  checks.liveStatusExpandedShowsTwelveCellsAtExpectedWidth =
     liveStatusOpened &&
     expandedLiveStatus.liveStatus.expanded &&
     expandedLiveStatus.liveStatus.toggleExpanded &&
-    expandedLiveStatus.liveStatus.visibleItemCount === 11 &&
+    expandedLiveStatus.liveStatus.visibleItemCount === 12 &&
     Math.abs(expandedLiveStatus.liveStatus.inspectorWidth - expectedExpandedStatusWidth) <= 2;
   checks.liveStatusExpansionHasExpectedWidthRatio =
     expandedLiveStatus.liveStatus.inspectorWidth / Math.max(1, initial.liveStatus.inspectorWidth) >= 1.3;
@@ -15210,6 +15510,70 @@ async function main() {
       }
       return;
     }
+    if (liveDeskHeaderOnlyMode) {
+      const liveDeskHeaderResults = [];
+      for (const viewport of viewports) {
+        const result = await runLiveDeskHeaderViewport(client, viewport);
+        liveDeskHeaderResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `header=${result.matrix.toolbarRect?.height ?? 0} ` +
+            `matrix=${result.matrix.matrixRect?.height ?? 0} ` +
+            `actions=${result.matrix.directTransportButtonCount}+${result.matrix.viewToggleButtonCount}+${result.matrix.statusToggleCount} ` +
+            `kill=${result.matrix.killButtonCount}/${result.matrix.killClearCount} ` +
+            `hatch=${result.matrix.killButtonsHatched ? 1 : 0} red=${result.matrix.killButtonsRedBordered ? 1 : 0} ` +
+            `dimensions=${JSON.stringify([...result.matrix.killButtonMetrics, ...result.matrix.killClearMetrics])} ` +
+            `readout=${JSON.stringify(result.expanded.sceneReadoutText)} ` +
+            `pads=${result.pads.cuePadSurfaceCount} scroll=${result.matrix.documentAndAppScrollZero && result.pads.documentAndAppScrollZero ? "zero" : "overflow"} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = liveDeskHeaderResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Live Desk one-line header failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
+    if (controlModeSurfaceOnlyMode) {
+      const controlModeResults = [];
+      for (const viewport of viewports) {
+        const viewportControlResults = (await runViewport(client, viewport))
+          .filter((result) => result.label.startsWith("control-"));
+        controlModeResults.push(...viewportControlResults);
+        const failures = viewportControlResults.filter((result) => !hasExpectedControlModeSurface(result));
+        console.log(
+          `${failures.length === 0 ? "pass" : "fail"} control-mode-surface-${viewport.width}x${viewport.height} ` +
+            `phases=${viewportControlResults.length} ` +
+            `labels=${JSON.stringify(viewportControlResults.map((result) => result.label))} ` +
+            `failed=${JSON.stringify(failures.map((result) => ({
+              label: result.label,
+              toolbar: [
+                result.visibleLegacyLiveDeskHeaderCount,
+                result.visibleLiveDeskToolbarCount,
+                result.visibleLiveDeskDirectTransportButtonCount,
+                result.visibleLiveDeskToolbarActionsCount,
+                result.visibleLiveDeskViewButtonCount,
+                result.visibleLiveDeskStatusToggleCount,
+                result.liveDeskToolbarControlsShareOneRow,
+                result.liveDeskToolbarGridRow,
+              ],
+              matrixRow: result.liveSceneMatrixGridRow,
+              fadeRow: result.liveFadeMeterGridRow,
+              masterRow: result.liveMasterGridRow,
+              sceneReadout: [
+                result.liveDeskSceneReadoutCount,
+                result.liveDeskSceneReadoutInsideStatus,
+              ],
+              editTabs: result.visibleEditDeskTabCount,
+            })))}`,
+        );
+      }
+      const failures = controlModeResults.filter((result) => !hasExpectedControlModeSurface(result));
+      if (failures.length > 0) {
+        throw new Error(`Control mode surface focus failed: ${JSON.stringify(failures.map((result) => result.label))}`);
+      }
+      return;
+    }
     if (timelineExpansionOnlyMode) {
       const timelineExpansionResults = [];
       for (const viewport of viewports) {
@@ -15222,6 +15586,7 @@ async function main() {
             `lane=${laneHeight(result.before)}->${laneHeight(result.expanded)}->${laneHeight(result.restored)} ` +
             `mixer=${mixerHeight(result.before)}->${mixerHeight(result.expanded)}->${mixerHeight(result.restored)} ` +
             `matrix=${result.before.t25Density?.sceneMatrixRect?.height ?? 0} ` +
+            `liveToolbar=${result.before.t25Density?.liveDeskToolbarRect?.height ?? 0} ` +
             `band=${result.before.persistentBandRect?.height ?? 0} ` +
             `topbar=${result.before.t25Density?.topbarRect?.width ?? 0}x${result.before.t25Density?.topbarRect?.height ?? 0}` +
               `/${result.before.t25Density?.topbarScrollWidth ?? 0} ` +

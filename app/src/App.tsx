@@ -14959,47 +14959,6 @@ export default function App() {
           data-workspace-pane="upper"
           data-live-status-expanded={liveStatusExpanded() ? "true" : "false"}
         >
-          <div class="panelHeader liveDeskHeader">
-            <h2>Live Desk</h2>
-            <nav class="liveDeskViewToggle" aria-label="Live desk view">
-              <button
-                type="button"
-                class={controlLiveView() === "matrix" ? "active" : ""}
-                aria-pressed={controlLiveView() === "matrix"}
-                onClick={() => setControlLiveView("matrix")}
-              >
-                Matrix
-              </button>
-              <button
-                type="button"
-                class={controlLiveView() === "pads" ? "active" : ""}
-                aria-pressed={controlLiveView() === "pads"}
-                onClick={() => setControlLiveView("pads")}
-              >
-                Cue Pads
-              </button>
-            </nav>
-            <div class="liveDeskHeaderMeta">
-              <span class="liveDeskSceneMeta">
-                {timelineTrack()} · {snapshot().cues.length} scenes
-              </span>
-              <button
-                type="button"
-                class="liveStatusToggle"
-                data-live-status-toggle
-                aria-controls="live-status-inspector"
-                aria-expanded={liveStatusExpanded()}
-                aria-label={liveStatusExpanded() ? "Hide live status details" : "Show live status details"}
-                onClick={() => setLiveStatusExpanded((expanded) => !expanded)}
-              >
-                <svg viewBox="0 0 16 16" aria-hidden="true">
-                  <path d="M3 3h10v10H3zM6 5v6M8 5h3M8 8h3M8 11h3" />
-                </svg>
-                <span>Status</span>
-              </button>
-              <span class="liveDeskState">{snapshot().blackout || snapshot().video.blackout ? "Guarded" : "Ready"}</span>
-            </div>
-          </div>
           <div id="live-status-inspector" class="liveStatusGrid" role="region" aria-label="Live status details">
             <div class="liveStatusItem liveCueStatusCell">
               <span>Active cue</span>
@@ -15026,6 +14985,10 @@ export default function App() {
                 </Show>
                 {nextCue()?.label ?? "None"}
               </strong>
+            </div>
+            <div class="liveStatusItem liveDeskSceneStatus">
+              <span>Show scenes</span>
+              <strong data-live-desk-scene-readout>{timelineTrack()} · {snapshot().cues.length} scenes</strong>
             </div>
             <div class="liveStatusItem">
               <span>Fixtures</span>
@@ -15066,7 +15029,7 @@ export default function App() {
               <strong class="tabularNums" data-no-localize>{formatShowTimecode(snapshot().timeline.position_ms)}</strong>
             </div>
           </div>
-          <div class="liveTransportGrid">
+          <div class="liveTransportGrid" data-live-desk-toolbar>
             <button onClick={triggerPreviousCue} disabled={snapshot().cues.length === 0}>
               Back
             </button>
@@ -15114,6 +15077,40 @@ export default function App() {
             <button disabled={!globalFixtureFlagState().anyFlagged} onClick={() => void clearFixtureFlags("all")}>
               Clear Flags
             </button>
+            <div class="liveDeskToolbarActions" data-live-desk-toolbar-actions>
+              <nav class="liveDeskViewToggle" aria-label="Live desk view">
+                <button
+                  type="button"
+                  class={controlLiveView() === "matrix" ? "active" : ""}
+                  aria-pressed={controlLiveView() === "matrix"}
+                  onClick={() => setControlLiveView("matrix")}
+                >
+                  Matrix
+                </button>
+                <button
+                  type="button"
+                  class={controlLiveView() === "pads" ? "active" : ""}
+                  aria-pressed={controlLiveView() === "pads"}
+                  onClick={() => setControlLiveView("pads")}
+                >
+                  Cue Pads
+                </button>
+              </nav>
+              <button
+                type="button"
+                class="liveStatusToggle"
+                data-live-status-toggle
+                aria-controls="live-status-inspector"
+                aria-expanded={liveStatusExpanded()}
+                aria-label={liveStatusExpanded() ? "Hide live status details" : "Show live status details"}
+                onClick={() => setLiveStatusExpanded((expanded) => !expanded)}
+              >
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M3 3h10v10H3zM6 5v6M8 5h3M8 8h3M8 11h3" />
+                </svg>
+                <span>Status</span>
+              </button>
+            </div>
           </div>
           <Show when={controlLiveView() === "matrix"}>
             <SceneMatrixPanel

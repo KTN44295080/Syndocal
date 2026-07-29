@@ -941,6 +941,7 @@ const japaneseText: Record<string, string> = {
   "Live status details": "ライブステータス詳細",
   "Show live status details": "ライブステータス詳細を表示",
   "Hide live status details": "ライブステータス詳細を隠す",
+  "Show scenes": "ショーのシーン",
   Sample: "サンプル",
   "Phase 1 Smoke": "Phase 1スモーク",
   "Overall budget": "総合性能予算",
@@ -2257,6 +2258,7 @@ const japaneseText: Record<string, string> = {
 };
 
 const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
+  [/^(Lighting|Video) · (\d+) scenes$/, (track, count) => `${track === "Lighting" ? "照明" : "映像"}・${count}シーン`],
   [/^(\d+) fixture types$/, (count) => `灯体タイプ ${count}種類`],
   [/^(\d+) fixtures \/ (\d+) types$/, (fixtures, types) => `灯体 ${fixtures}台 / ${types}種類`],
   [
