@@ -895,11 +895,20 @@ type TimelineSnapMode = "Off" | "Beat" | "Bar" | "Grid";
 type VideoOutputPreviewMode = "output" | "test";
 type EffectTargetMode = "fixture" | "selection" | "group" | "video";
 type CueCaptureScopeMode = "all" | "lighting" | "effects" | "selectedFixture" | "selectedGroup" | "video";
+type ControlFaderWriteMode = "live" | "edit";
 type TimelineLightingAutomationRowScope = "all" | "current";
 type TimelineVideoAutomationRowScope = "all" | "layer";
 type SelectedTimelineAutomation = {
   kind: "lighting" | "video";
   automationId: number;
+};
+type ControlEditCaptureTarget =
+  | { kind: "selectedFixture"; fixtureId: number }
+  | { kind: "selectedGroup"; groupId: string };
+type ViewportControlEditHistoryEntry = {
+  cueId: number;
+  beforeTargets: CueSummary["targets"];
+  afterTargets: CueSummary["targets"];
 };
 
 interface VjFirstRunSetupResult {
@@ -1464,6 +1473,12 @@ export default function App() {
   const [selectedCueListId, setSelectedCueListId] = createSignal(1);
   const [selectedSceneCueId, setSelectedSceneCueId] = createSignal<number | null>(null);
   const [selectedSceneEffectId, setSelectedSceneEffectId] = createSignal<number | null>(null);
+  const [controlFaderWriteMode, setControlFaderWriteMode] =
+    createSignal<ControlFaderWriteMode>("live");
+  const [viewportControlEditUndo, setViewportControlEditUndo] =
+    createSignal<ViewportControlEditHistoryEntry[]>([]);
+  const [viewportControlEditRedo, setViewportControlEditRedo] =
+    createSignal<ViewportControlEditHistoryEntry[]>([]);
   const [cueListLabel, setCueListLabel] = createSignal("Main");
   const [cueMetadataDrafts, setCueMetadataDrafts] = createSignal<Record<number, CueMetadataDraft>>({});
   const [cuePadBank, setCuePadBank] = createSignal(0);
@@ -2136,6 +2151,7 @@ export default function App() {
     || viewportFixture === "touch-composed"
     || viewportFixture === "fx-visual"
     || viewportFixture === "live-edit-types"
+    || viewportFixture === "edit-live"
   ) {
     const sceneBlockLargeFixture = viewportFixture === "scene-block-large";
     const sceneBlockHourFixture = viewportFixture === "scene-block-hour";
@@ -2146,9 +2162,11 @@ export default function App() {
     const fxVisualFixture = viewportFixture === "fx-visual";
     const cueFixture = cueRecallFixture || cueRecallLargeFixture || fxVisualFixture;
     const cueNodeGraphFixture = viewportFixture === "cue-node-graph";
-    const sceneMatrixFixture = viewportFixture === "scene-matrix" || viewportFixture === "workspace-operator";
+    const editLiveFixture = viewportFixture === "edit-live";
+    const sceneMatrixFixture =
+      viewportFixture === "scene-matrix" || viewportFixture === "workspace-operator" || editLiveFixture;
     const touchComposedFixture = viewportFixture === "touch-composed";
-    const liveEditTypeFixture = viewportFixture === "live-edit-types";
+    const liveEditTypeFixture = viewportFixture === "live-edit-types" || editLiveFixture;
     const cueFixtureEffects = fxVisualFixture
       ? structuredClone(viewportFixtureData.fxVisualizationEffects)
       : cueRecallLargeFixture
@@ -2643,6 +2661,13 @@ export default function App() {
     __syndocalPauseSceneBlockFixtureChurn?: () => void;
     __syndocalReadAutoVjFixtureSnapshot?: () => EngineSnapshot;
     __syndocalReadOperatorVjFixtureSnapshot?: () => EngineSnapshot;
+    __syndocalReadEditLiveFixtureSnapshot?: () => EngineSnapshot;
+    __syndocalReadEditLiveFixtureHistory?: () => ProjectHistoryStatus;
+    __syndocalSetControlFixtureSelection?: (
+      fixtureIds: number[],
+      selectedFixtureId: number | null,
+      groupId: string,
+    ) => void;
   };
   if (viewportFixture === "scene-block-large") {
     sceneBlockFixtureWindow.__syndocalSetSceneBlockFixtureState = (positionMs, playing) => {
@@ -2662,6 +2687,21 @@ export default function App() {
   }
   if (viewportFixture === "operator-vj") {
     sceneBlockFixtureWindow.__syndocalReadOperatorVjFixtureSnapshot = () => snapshot();
+  }
+  if (viewportFixture === "edit-live") {
+    sceneBlockFixtureWindow.__syndocalReadEditLiveFixtureSnapshot = () => snapshot();
+    sceneBlockFixtureWindow.__syndocalReadEditLiveFixtureHistory = () => projectHistoryStatus();
+  }
+  if (viewportFixture === "edit-live" || viewportFixture === "workspace-operator") {
+    sceneBlockFixtureWindow.__syndocalSetControlFixtureSelection = (
+      fixtureIds,
+      selectedFixture,
+      groupId,
+    ) => {
+      setSelectedMappingFixtureIds(fixtureIds);
+      setSelectedFixtureId(selectedFixture);
+      setSelectedFixtureGroupFilter(groupId);
+    };
   }
   // Viewport fixtures seed their own primary workspace. Pane windows remain
   // authoritative and must re-select the surface they were opened to host.
@@ -2683,6 +2723,9 @@ export default function App() {
     delete sceneBlockFixtureWindow.__syndocalPauseSceneBlockFixtureChurn;
     delete sceneBlockFixtureWindow.__syndocalReadAutoVjFixtureSnapshot;
     delete sceneBlockFixtureWindow.__syndocalReadOperatorVjFixtureSnapshot;
+    delete sceneBlockFixtureWindow.__syndocalReadEditLiveFixtureSnapshot;
+    delete sceneBlockFixtureWindow.__syndocalReadEditLiveFixtureHistory;
+    delete sceneBlockFixtureWindow.__syndocalSetControlFixtureSelection;
   });
   let lastRecoverySignature = projectRecoveryCheckpoint()?.signature ?? null;
   let lastDesktopBackupSignature: string | null = null;
@@ -7788,6 +7831,33 @@ export default function App() {
       setMessage("Undo canceled; unsaved Timeline edits were kept.");
       return;
     }
+    if (viewportFixture === "edit-live") {
+      const undoEntries = viewportControlEditUndo();
+      const entry = undoEntries[undoEntries.length - 1];
+      if (!entry) return;
+      const nextUndo = undoEntries.slice(0, -1);
+      const nextRedo = [...viewportControlEditRedo(), entry];
+      setSnapshot((current) => ({
+        ...current,
+        cues: current.cues.map((cue) =>
+          cue.id === entry.cueId
+            ? { ...cue, targets: cloneCueTargets(entry.beforeTargets) }
+            : cue
+        ),
+      }));
+      setViewportControlEditUndo(nextUndo);
+      setViewportControlEditRedo(nextRedo);
+      setProjectHistoryStatus({
+        can_undo: nextUndo.length > 0,
+        can_redo: true,
+        undo_depth: nextUndo.length,
+        redo_depth: nextRedo.length,
+        undo_label: nextUndo.length > 0 ? "Update Cue From Current" : null,
+        redo_label: "Update Cue From Current",
+      });
+      setMessage("Undid Update Cue From Current.");
+      return;
+    }
     try {
       const status = await invoke<ProjectHistoryStatus>("undo_project_transaction");
       setProjectHistoryStatus(status);
@@ -7810,6 +7880,33 @@ export default function App() {
     }
     if (!confirmDiscardTimelineEditorDrafts()) {
       setMessage("Redo canceled; unsaved Timeline edits were kept.");
+      return;
+    }
+    if (viewportFixture === "edit-live") {
+      const redoEntries = viewportControlEditRedo();
+      const entry = redoEntries[redoEntries.length - 1];
+      if (!entry) return;
+      const nextRedo = redoEntries.slice(0, -1);
+      const nextUndo = [...viewportControlEditUndo(), entry];
+      setSnapshot((current) => ({
+        ...current,
+        cues: current.cues.map((cue) =>
+          cue.id === entry.cueId
+            ? { ...cue, targets: cloneCueTargets(entry.afterTargets) }
+            : cue
+        ),
+      }));
+      setViewportControlEditUndo(nextUndo);
+      setViewportControlEditRedo(nextRedo);
+      setProjectHistoryStatus({
+        can_undo: true,
+        can_redo: nextRedo.length > 0,
+        undo_depth: nextUndo.length,
+        redo_depth: nextRedo.length,
+        undo_label: "Update Cue From Current",
+        redo_label: nextRedo.length > 0 ? "Update Cue From Current" : null,
+      });
+      setMessage("Redid Update Cue From Current.");
       return;
     }
     try {
@@ -8715,20 +8812,232 @@ export default function App() {
     }
   };
 
+  const pendingControlEditTargets = new Map<number, Map<string, ControlEditCaptureTarget>>();
+  let controlEditWriteTimer: number | null = null;
+  let controlEditFlushChain = Promise.resolve();
+  const cloneCueTargets = (targets: CueSummary["targets"]): CueSummary["targets"] =>
+    targets.map((target) => ({
+      fixture_id: target.fixture_id,
+      values: target.values.map((value) => ({ ...value })),
+    }));
+  const controlEditCueIdForWrite = () =>
+    workspaceTab() === "control"
+    && controlMode() === "edit"
+    && editDeskSurface() === "attributes"
+    && controlFaderWriteMode() === "edit"
+      ? selectedSceneCue()?.id ?? null
+      : null;
+  const controlEditTargetKey = (target: ControlEditCaptureTarget) =>
+    target.kind === "selectedFixture"
+      ? `fixture:${target.fixtureId}`
+      : `group:${target.groupId}`;
+  const captureViewportCueTargets = (
+    current: EngineSnapshot,
+    cue: CueSummary,
+    captureTargets: ControlEditCaptureTarget[],
+  ) => {
+    const fixtureIds = new Set<number>();
+    for (const target of captureTargets) {
+      if (target.kind === "selectedFixture") {
+        fixtureIds.add(target.fixtureId);
+      } else {
+        for (const fixture of current.fixtures) {
+          if (fixture.group_ids.some((groupId) => groupMatches(groupId, target.groupId))) {
+            fixtureIds.add(fixture.id);
+          }
+        }
+      }
+    }
+    const nextTargets = cloneCueTargets(cue.targets);
+    const localValues = faderValues();
+    for (const fixtureId of fixtureIds) {
+      const fixture = current.fixtures.find((candidate) => candidate.id === fixtureId);
+      if (!fixture) continue;
+      const captured = {
+        fixture_id: fixture.id,
+        values: fixture.controls.map((control) => ({
+          attribute: control.attribute,
+          value:
+            localValues[`${fixture.id}:${control.attribute}`]
+            ?? fixture.attribute_values.find((entry) => entry.attribute === control.attribute)?.value
+            ?? control.default_value,
+        })),
+      };
+      const existingIndex = nextTargets.findIndex((target) => target.fixture_id === fixture.id);
+      if (existingIndex >= 0) nextTargets[existingIndex] = captured;
+      else nextTargets.push(captured);
+    }
+    return nextTargets;
+  };
+  const updateViewportControlEditLook = (
+    cue: CueSummary,
+    captureTargets: ControlEditCaptureTarget[],
+  ) => {
+    let historyEntry: ViewportControlEditHistoryEntry | null = null;
+    setSnapshot((current) => {
+      const currentCue = current.cues.find((candidate) => candidate.id === cue.id);
+      if (!currentCue) return current;
+      const beforeTargets = cloneCueTargets(currentCue.targets);
+      const afterTargets = captureViewportCueTargets(current, currentCue, captureTargets);
+      if (JSON.stringify(beforeTargets) === JSON.stringify(afterTargets)) return current;
+      historyEntry = {
+        cueId: cue.id,
+        beforeTargets,
+        afterTargets: cloneCueTargets(afterTargets),
+      };
+      return {
+        ...current,
+        cues: current.cues.map((candidate) =>
+          candidate.id === cue.id ? { ...candidate, targets: afterTargets } : candidate
+        ),
+      };
+    });
+    if (!historyEntry) return;
+    const nextUndo = [...viewportControlEditUndo(), historyEntry];
+    setViewportControlEditUndo(nextUndo);
+    setViewportControlEditRedo([]);
+    setProjectHistoryStatus({
+      can_undo: true,
+      can_redo: false,
+      undo_depth: nextUndo.length,
+      redo_depth: 0,
+      undo_label: "Update Cue From Current",
+      redo_label: null,
+    });
+    setProjectDirty(true);
+  };
+  const runControlEditLookUpdate = async (
+    cueId: number,
+    captureTargets: ControlEditCaptureTarget[],
+  ) => {
+    const cue = snapshot().cues.find((candidate) => candidate.id === cueId);
+    if (!cue || captureTargets.length === 0) return;
+    if (viewportFixture === "edit-live") {
+      updateViewportControlEditLook(cue, captureTargets);
+      setMessage(`Updated cue ${cue.id} look from the current Store Scope.`);
+      return;
+    }
+    if (!isTauriRuntime()) return;
+    if (!operatorCommandAllowed(activeOperatorLockMode, "update_cue_from_current", true)) {
+      throw new Error(
+        activeOperatorLockMode === "Full"
+          ? "Operator Full Lock allows only status reads and emergency blackout controls."
+          : "Operator Partial Lock blocks programming and project replacement commands.",
+      );
+    }
+    const scopeSignature = captureTargets
+      .map(controlEditTargetKey)
+      .sort((left, right) => left.localeCompare(right))
+      .join(",");
+    const transactionId = await tauriInvoke<number>("begin_project_transaction", {
+      label: projectMutationLabel("update_cue_from_current"),
+      coalesceKey: `update_cue_from_current:cue:${cue.id}:${scopeSignature}`,
+    });
+    try {
+      for (const captureScope of captureTargets) {
+        await tauriInvoke("update_cue_from_current", {
+          cueId: cue.id,
+          label: cue.label,
+          fadeMs: cue.fade_ms,
+          captureScope,
+        });
+      }
+      const status = await tauriInvoke<ProjectHistoryStatus>("commit_project_transaction", {
+        transactionId,
+      });
+      window.dispatchEvent(
+        new CustomEvent<ProjectHistoryStatus>(projectHistoryChangedEvent, { detail: status }),
+      );
+      setMessage(`Updated cue ${cue.id} look from the current Store Scope.`);
+      await refreshSnapshot();
+    } catch (error) {
+      await tauriInvoke("cancel_project_transaction", { transactionId }).catch(() => undefined);
+      throw error;
+    }
+  };
+  const flushControlEditLookUpdates = () => {
+    if (controlEditWriteTimer !== null) {
+      window.clearTimeout(controlEditWriteTimer);
+      controlEditWriteTimer = null;
+    }
+    controlEditFlushChain = controlEditFlushChain.then(async () => {
+      const queued = [...pendingControlEditTargets.entries()].map(([cueId, targets]) => ({
+        cueId,
+        targets: [...targets.values()],
+      }));
+      pendingControlEditTargets.clear();
+      for (const entry of queued) {
+        try {
+          await runControlEditLookUpdate(entry.cueId, entry.targets);
+        } catch (error) {
+          setMessage(String(error));
+        }
+      }
+    });
+    return controlEditFlushChain;
+  };
+  const queueControlEditLookUpdate = (
+    cueId: number | null,
+    captureTarget: ControlEditCaptureTarget,
+  ) => {
+    if (cueId === null) return;
+    const targets = pendingControlEditTargets.get(cueId) ?? new Map<string, ControlEditCaptureTarget>();
+    targets.set(controlEditTargetKey(captureTarget), captureTarget);
+    pendingControlEditTargets.set(cueId, targets);
+    if (controlEditWriteTimer !== null) window.clearTimeout(controlEditWriteTimer);
+    controlEditWriteTimer = window.setTimeout(() => {
+      void flushControlEditLookUpdates();
+    }, 240);
+  };
+  const changeControlFaderWriteMode = (mode: ControlFaderWriteMode) => {
+    if (controlFaderWriteMode() === mode) return;
+    if (mode === "live") void flushControlEditLookUpdates();
+    setControlFaderWriteMode(mode);
+  };
+  createEffect(() => {
+    const armed =
+      workspaceTab() === "control"
+      && controlMode() === "edit"
+      && editDeskSurface() === "attributes"
+      && controlFaderWriteMode() === "edit";
+    if (!armed) return;
+    const flush = () => {
+      if (pendingControlEditTargets.size > 0) void flushControlEditLookUpdates();
+    };
+    window.addEventListener("pointerup", flush, true);
+    window.addEventListener("change", flush, true);
+    window.addEventListener("keyup", flush, true);
+    onCleanup(() => {
+      window.removeEventListener("pointerup", flush, true);
+      window.removeEventListener("change", flush, true);
+      window.removeEventListener("keyup", flush, true);
+    });
+  });
+  onCleanup(() => {
+    if (controlEditWriteTimer !== null) window.clearTimeout(controlEditWriteTimer);
+  });
+
   const setAttribute = async (fixtureId: number, attribute: string, value: number) => {
+    const editCueId = controlEditCueIdForWrite();
     setFaderValues((current) => ({ ...current, [`${fixtureId}:${attribute}`]: value }));
+    if (viewportFixture === "edit-live") {
+      queueControlEditLookUpdate(editCueId, { kind: "selectedFixture", fixtureId });
+      return;
+    }
     try {
       await invoke(snapshot().programmer.enabled ? "set_programmer_attribute" : "set_attribute", {
         fixtureId,
         attribute,
         value,
       });
+      queueControlEditLookUpdate(editCueId, { kind: "selectedFixture", fixtureId });
     } catch (error) {
       setMessage(String(error));
     }
   };
 
   const setGroupAttribute = async (groupId: string, attribute: string, value: number) => {
+    const editCueId = controlEditCueIdForWrite();
     const fixtureIds = snapshot()
       .fixtures
       .filter((fixture) => fixture.group_ids.includes(groupId))
@@ -8740,12 +9049,17 @@ export default function App() {
       }
       return next;
     });
+    if (viewportFixture === "edit-live") {
+      queueControlEditLookUpdate(editCueId, { kind: "selectedGroup", groupId });
+      return;
+    }
     try {
       await invoke(snapshot().programmer.enabled ? "set_programmer_group_attribute" : "set_group_attribute", {
         groupId,
         attribute,
         value,
       });
+      queueControlEditLookUpdate(editCueId, { kind: "selectedGroup", groupId });
     } catch (error) {
       setMessage(String(error));
     }
@@ -9723,6 +10037,7 @@ export default function App() {
   };
 
   const setFixtureColor = async (hexColor: string) => {
+    const editCueId = controlEditCueIdForWrite();
     const fixture = selectedControlReferenceFixture();
     const controls = selectedColorControls();
     if (!fixture || !controls) {
@@ -9753,6 +10068,15 @@ export default function App() {
       return next;
     });
 
+    if (viewportFixture === "edit-live") {
+      queueControlEditLookUpdate(
+        editCueId,
+        groupId
+          ? { kind: "selectedGroup", groupId }
+          : { kind: "selectedFixture", fixtureId: fixture.id },
+      );
+      return;
+    }
     try {
       for (const update of updates) {
         if (groupId) {
@@ -9769,6 +10093,12 @@ export default function App() {
           });
         }
       }
+      queueControlEditLookUpdate(
+        editCueId,
+        groupId
+          ? { kind: "selectedGroup", groupId }
+          : { kind: "selectedFixture", fixtureId: fixture.id },
+      );
       setMessage(`Set ${groupId ? `group ${groupId}` : fixture.label} color ${hexColor.toUpperCase()}`);
     } catch (error) {
       setMessage(String(error));
@@ -17164,6 +17494,19 @@ export default function App() {
             targetLabel={controlTargetLabel()}
             targetDetail={controlTargetDetail()}
             referenceLabel={controlReferenceLabel()}
+            writeMode={controlFaderWriteMode()}
+            editingSceneLabel={selectedSceneCue()?.label ?? null}
+            editingSceneIdentity={
+              selectedSceneCue()
+                ? cueIdentityCss(selectedSceneCue()!.id, selectedSceneCue()!.color, "fill")
+                : null
+            }
+            editingSceneIdentityText={
+              selectedSceneCue()
+                ? cueIdentityCss(selectedSceneCue()!.id, selectedSceneCue()!.color, "text")
+                : null
+            }
+            onWriteMode={changeControlFaderWriteMode}
             onCategory={setControlCategory}
           >
           <Show

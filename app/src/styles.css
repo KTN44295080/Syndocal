@@ -19459,6 +19459,8 @@ input[type="color"] {
   --ray-accent: #ed8435;
   --ray-accent-strong: #f3974f;
   --ray-success: #70c967;
+  --ray-edit: #4dbb78;
+  --ray-live: #d0a94a;
   --ray-cyan: #39b8cb;
   --ray-danger: #dc625b;
 }
@@ -29687,6 +29689,151 @@ h3 {
 
 .layoutSharedWorkspace.layoutControl.controlModeEdit .attributeTargetSummary > span:last-child {
   border-right: 0;
+}
+
+/* ---- T26-B: Control's fader deck owns a separate EDIT/LIVE state. The
+   compact header shares the existing target-summary row so the one-screen
+   desk does not lose fader travel. EDIT is intentionally distinct from the
+   KILL/danger token, while the armed badge follows the selected Cue identity. */
+.attributeTargetSummary.controlFaderWriteSummary {
+  display: flex;
+  flex-flow: row nowrap;
+  align-items: center;
+  gap: 0;
+  height: 26px;
+  min-height: 26px;
+  max-height: 26px;
+  overflow: hidden;
+}
+
+.attributeTargetSummary.controlFaderWriteSummary > span {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 24px;
+  min-height: 24px;
+  max-height: 24px;
+  overflow: hidden;
+}
+
+.controlFaderWriteHeader {
+  display: flex;
+  flex: 0 0 98px;
+  flex-flow: row nowrap;
+  align-items: stretch;
+  align-self: center;
+  min-width: 98px;
+  height: 24px;
+  min-height: 24px;
+  max-height: 24px;
+  overflow: visible;
+  border-right: 1px solid #393530;
+  background: #141719;
+}
+
+.controlFaderWriteHeader.edit {
+  flex: 0 1 286px;
+  min-width: 98px;
+  max-width: 286px;
+}
+
+.controlFaderWriteMode {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(44px, 1fr));
+  flex: 0 0 98px;
+  align-self: center;
+  width: 98px;
+  min-width: 98px;
+  height: 24px;
+  min-height: 24px;
+  max-height: 24px;
+  border-right: 1px solid #393530;
+}
+
+.attributeTargetSummary.controlFaderWriteSummary .controlFaderWriteMode > button {
+  display: flex;
+  align-items: center;
+  align-self: center;
+  justify-content: center;
+  min-width: 44px;
+  height: 24px;
+  min-height: 24px;
+  max-height: 24px;
+  border: 0;
+  border-right: 1px solid #393530;
+  border-radius: 0;
+  background: #1d2124;
+  padding: 1px 7px;
+  color: #9ca4a9;
+  font-size: 11px;
+}
+
+.attributeTargetSummary.controlFaderWriteSummary .controlFaderWriteMode > button > span {
+  display: block;
+  min-width: 0;
+  color: inherit;
+  line-height: 15px;
+  white-space: nowrap;
+}
+
+.attributeTargetSummary.controlFaderWriteSummary .controlFaderWriteMode > button:last-child {
+  border-right: 0;
+}
+
+.attributeTargetSummary.controlFaderWriteSummary .controlFaderWriteMode
+  > button[data-control-fader-write-mode-option="live"].active {
+  box-shadow: inset 0 -3px 0 var(--ray-live);
+  color: #f3d98a;
+}
+
+.attributeTargetSummary.controlFaderWriteSummary .controlFaderWriteMode
+  > button[data-control-fader-write-mode-option="edit"].active {
+  background: #183126;
+  box-shadow: inset 0 -3px 0 var(--ray-edit);
+  color: #b9ebcc;
+}
+
+.controlFaderEditState {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  align-self: center;
+  min-width: 0;
+  height: 24px;
+  min-height: 24px;
+  max-height: 24px;
+  gap: 4px;
+  overflow: hidden;
+  border-left: 3px solid var(--control-edit-identity);
+  background: color-mix(in srgb, var(--control-edit-identity) 16%, #171a1d);
+  padding: 2px 6px;
+  color: var(--control-edit-identity-text);
+  white-space: nowrap;
+}
+
+.controlFaderWriteHeader.live .controlFaderEditState {
+  display: none;
+}
+
+.controlFaderEditState strong,
+.controlFaderEditState span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.controlFaderEditState strong {
+  flex: 0 0 auto;
+}
+
+.controlFaderEditState span {
+  min-width: 0;
+}
+
+.controlFaderEditState.unselected {
+  border-left-color: var(--ray-edit);
+  background: #1d2822;
+  color: #b9c7be;
 }
 
 .attributeCategoryRail button > span {

@@ -35,6 +35,7 @@ const groupStrobeOnlyMode = process.argv.includes("--group-strobe-only");
 const fixtureCatalogOnlyMode = process.argv.includes("--fixture-catalog-only");
 const workspaceOperatorOnlyMode = process.argv.includes("--workspace-operator-only");
 const liveEditTypesOnlyMode = process.argv.includes("--live-edit-types-only");
+const editLiveOnlyMode = process.argv.includes("--edit-live-only");
 const controlEditPositionOnlyMode = process.argv.includes("--control-edit-position-only");
 const controlStageChromeOnlyMode = process.argv.includes("--control-stage-chrome-only");
 const controlModeSurfaceOnlyMode = process.argv.includes("--control-mode-surface-only");
@@ -43,6 +44,8 @@ const viewportTraceEnabled = process.env.SYNDOCAL_VIEWPORT_TRACE === "1";
 const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
   largeShowMode
     ? "large-show"
+    : editLiveOnlyMode
+      ? "edit-live"
     : liveEditTypesOnlyMode
       ? "live-edit-types"
     : cueRecallOnlyMode
@@ -16178,6 +16181,402 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
   };
 }
 
+async function readControlFaderWriteVisibility(client) {
+  return client.evaluate(`(() => {
+    const summary = document.querySelector('.attributeTargetSummary');
+    const header = document.querySelector('[data-control-fader-write-header]');
+    const summaryRect = summary?.getBoundingClientRect();
+    const headerRect = header?.getBoundingClientRect();
+    const rectWithin = (inner, outer) => Boolean(
+      inner &&
+      outer &&
+      inner.left >= outer.left - 1 &&
+      inner.top >= outer.top - 1 &&
+      inner.right <= outer.right + 1 &&
+      inner.bottom <= outer.bottom + 1
+    );
+    const nearestOverflowHidden = (element) => {
+      for (let ancestor = element?.parentElement; ancestor; ancestor = ancestor.parentElement) {
+        const style = getComputedStyle(ancestor);
+        if (
+          ['hidden', 'clip'].includes(style.overflowX) ||
+          ['hidden', 'clip'].includes(style.overflowY)
+        ) {
+          return ancestor;
+        }
+      }
+      return null;
+    };
+    const matchedRules = (element, properties) => {
+      if (!(element instanceof Element)) return [];
+      const matches = [];
+      const visit = (rules) => {
+        for (const rule of rules) {
+          if (rule instanceof CSSStyleRule) {
+            let matched = false;
+            try {
+              matched = element.matches(rule.selectorText);
+            } catch {
+              matched = false;
+            }
+            if (!matched) continue;
+            const declarations = Object.fromEntries(
+              properties
+                .map((property) => [property, rule.style.getPropertyValue(property)])
+                .filter(([, value]) => Boolean(value))
+            );
+            if (Object.keys(declarations).length > 0) {
+              matches.push({ selector: rule.selectorText, declarations });
+            }
+            continue;
+          }
+          if (!('cssRules' in rule)) continue;
+          if (rule instanceof CSSMediaRule && !matchMedia(rule.conditionText).matches) continue;
+          visit(rule.cssRules);
+        }
+      };
+      for (const sheet of document.styleSheets) {
+        try {
+          visit(sheet.cssRules);
+        } catch {
+          // Cross-origin sheets are not expected in this fixture.
+        }
+      }
+      return matches;
+    };
+    const buttonSpans = [...document.querySelectorAll('[data-control-fader-write-mode-option]')]
+      .map((button) => {
+        const span = button.querySelector('span');
+        const spanRect = span?.getBoundingClientRect();
+        const buttonRect = button.getBoundingClientRect();
+        const clipAncestor = nearestOverflowHidden(span);
+        const clipRect = clipAncestor?.getBoundingClientRect();
+        const buttonStyle = getComputedStyle(button);
+        const spanStyle = span ? getComputedStyle(span) : null;
+        const option = button.getAttribute('data-control-fader-write-mode-option') ?? '';
+        const pressed = button.getAttribute('aria-pressed') === 'true';
+        const expectedColor = option === 'live'
+          ? (pressed ? 'rgb(243, 217, 138)' : 'rgb(156, 164, 169)')
+          : (pressed ? 'rgb(185, 235, 204)' : 'rgb(156, 164, 169)');
+        return {
+          option,
+          pressed,
+          text: (span?.textContent ?? '').trim(),
+          spanWidth: spanRect?.width ?? 0,
+          spanHeight: spanRect?.height ?? 0,
+          spanColor: spanStyle?.color ?? '',
+          expectedColor,
+          buttonWidth: buttonRect.width,
+          buttonHeight: buttonRect.height,
+          buttonColor: buttonStyle.color,
+          buttonBackground: buttonStyle.backgroundColor,
+          buttonAlignSelf: buttonStyle.alignSelf,
+          nearestClip: clipAncestor
+            ? clipAncestor.className || clipAncestor.tagName
+            : '',
+          withinNearestClip: rectWithin(spanRect, clipRect),
+          withinSummary: rectWithin(spanRect, summaryRect),
+          buttonRules: matchedRules(button, ['height', 'min-height', 'max-height', 'align-self', 'color']),
+          spanRules: matchedRules(span, ['color']),
+        };
+      });
+    return {
+      summaryKind: ['empty', 'fixture', 'group', 'selection']
+        .find((kind) => summary?.classList.contains(kind)) ?? '',
+      summaryRect: summaryRect
+        ? { top: summaryRect.top, bottom: summaryRect.bottom, width: summaryRect.width, height: summaryRect.height }
+        : null,
+      headerRect: headerRect
+        ? { top: headerRect.top, bottom: headerRect.bottom, width: headerRect.width, height: headerRect.height }
+        : null,
+      headerContained: rectWithin(headerRect, summaryRect),
+      spansHaveWidth: buttonSpans.length === 2 && buttonSpans.every((entry) => entry.spanWidth > 0),
+      spansFitNearestClip:
+        buttonSpans.length === 2 && buttonSpans.every((entry) => entry.withinNearestClip),
+      spansFitSummary:
+        buttonSpans.length === 2 && buttonSpans.every((entry) => entry.withinSummary),
+      buttonsFixed24:
+        buttonSpans.length === 2 && buttonSpans.every((entry) => Math.abs(entry.buttonHeight - 24) <= 0.51),
+      textUsesDefinedColors:
+        buttonSpans.length === 2 &&
+        buttonSpans.every((entry) =>
+          entry.spanColor === entry.expectedColor && entry.buttonColor === entry.expectedColor
+        ),
+      buttonSpans,
+    };
+  })()`);
+}
+
+async function runEditLiveViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  const editLiveUrl = new URL(fixtureUrl("edit-live"));
+  editLiveUrl.searchParams.set("viewportRun", `${viewport.width}x${viewport.height}`);
+  await client.send("Page.navigate", { url: editLiveUrl.toString() });
+  await waitForApp(client);
+  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await clickVisibleByText(client, ".controlModeTabs button", "Live Edit");
+  await clickVisibleByText(client, ".attributeCategoryRail button", "Dimmer");
+  await sleep(120);
+
+  const readState = () => client.evaluate(`(() => {
+    const snapshot = window.__syndocalReadEditLiveFixtureSnapshot?.();
+    const history = window.__syndocalReadEditLiveFixtureHistory?.();
+    const cue = snapshot?.cues?.find((candidate) => candidate.id === 301);
+    const otherCue = snapshot?.cues?.find((candidate) => candidate.id === 302);
+    const header = document.querySelector('[data-control-fader-write-header]');
+    const summary = document.querySelector('.attributeTargetSummary');
+    const badge = document.querySelector('.controlFaderEditState');
+    const editButton = document.querySelector('[data-control-fader-write-mode-option="edit"]');
+    const liveButton = document.querySelector('[data-control-fader-write-mode-option="live"]');
+    const sceneCard = document.querySelector('[data-scene-matrix-cue-id="301"]');
+    const sceneBand = sceneCard?.querySelector('.sceneMatrixEditStripBand');
+    const app = document.querySelector('.app');
+    const headerRect = header?.getBoundingClientRect();
+    const summaryRect = summary?.getBoundingClientRect();
+    const badgeRect = badge?.getBoundingClientRect();
+    const badgeStyle = badge ? getComputedStyle(badge) : null;
+    const sceneBandStyle = sceneBand ? getComputedStyle(sceneBand) : null;
+    const summaryStyle = summary ? getComputedStyle(summary) : null;
+    return {
+      mode: summary?.getAttribute('data-control-fader-write-mode') ?? '',
+      editPressed: editButton?.getAttribute('aria-pressed') ?? '',
+      livePressed: liveButton?.getAttribute('aria-pressed') ?? '',
+      badgeState: badge?.getAttribute('data-control-fader-edit-state') ?? '',
+      badgeText: (badge?.textContent ?? '').replace(/\\s+/g, ' ').trim(),
+      badgeFullyVisible: Boolean(
+        badge &&
+        badgeRect &&
+        badgeRect.width > 0 &&
+        badgeRect.height > 0 &&
+        badge.scrollWidth <= badge.clientWidth + 1 &&
+        badge.scrollHeight <= badge.clientHeight + 1
+      ),
+      badgeBorderColor: badgeStyle?.borderLeftColor ?? '',
+      sceneBandColor: sceneBandStyle?.backgroundColor ?? '',
+      editIdentity: summaryStyle?.getPropertyValue('--control-edit-identity').trim() ?? '',
+      sceneIdentity: sceneCard
+        ? getComputedStyle(sceneCard).getPropertyValue('--cue-identity').trim()
+        : '',
+      headerContained: Boolean(
+        headerRect &&
+        summaryRect &&
+        headerRect.left >= summaryRect.left - 1 &&
+        headerRect.top >= summaryRect.top - 1 &&
+        headerRect.right <= summaryRect.right + 1 &&
+        headerRect.bottom <= summaryRect.bottom + 1
+      ),
+      cueTargets: JSON.stringify(cue?.targets ?? []),
+      cueDimmer: cue?.targets
+        ?.find((target) => target.fixture_id === 1)
+        ?.values?.find((value) => value.attribute === 'Dimmer')?.value ?? null,
+      otherCueTargets: JSON.stringify(otherCue?.targets ?? []),
+      history: {
+        undo: history?.can_undo === true,
+        redo: history?.can_redo === true,
+        undoDepth: history?.undo_depth ?? 0,
+        redoDepth: history?.redo_depth ?? 0,
+      },
+      documentAndAppScrollZero:
+        document.documentElement.scrollWidth <= innerWidth + 1 &&
+        document.documentElement.scrollHeight <= innerHeight + 1 &&
+        document.body.scrollWidth <= document.body.clientWidth + 1 &&
+        document.body.scrollHeight <= document.body.clientHeight + 1 &&
+        (!app || (app.scrollWidth <= app.clientWidth + 1 && app.scrollHeight <= app.clientHeight + 1)),
+    };
+  })()`);
+  const setFirstDimmer = async (value) => {
+    const changed = await client.evaluate(`(() => {
+      const input = document.querySelector('.fixtureTypeVerticalFader');
+      if (!(input instanceof HTMLInputElement)) return false;
+      input.value = ${JSON.stringify(String(value))};
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    })()`);
+    await sleep(360);
+    return changed;
+  };
+
+  let initial = await readState();
+  const selectedTargetVisibility = await readControlFaderWriteVisibility(client);
+
+  await client.evaluate(`window.__syndocalSetControlFixtureSelection?.([], null, '')`);
+  await sleep(120);
+  const emptyTargetVisibility = await readControlFaderWriteVisibility(client);
+
+  const operatorUrl = new URL(fixtureUrl("workspace-operator"));
+  operatorUrl.searchParams.set("viewportRun", `${viewport.width}x${viewport.height}`);
+  await client.send("Page.navigate", { url: operatorUrl.toString() });
+  await waitForApp(client);
+  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await clickVisibleByText(client, ".controlModeTabs button", "Live Edit");
+  await clickVisibleByText(client, ".attributeCategoryRail button", "Fader");
+  await client.evaluate(`window.__syndocalSetControlFixtureSelection?.([1], 1, '')`);
+  await sleep(120);
+  const operatorTargetVisibility = await readControlFaderWriteVisibility(client);
+
+  await client.send("Page.navigate", { url: editLiveUrl.toString() });
+  await waitForApp(client);
+  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await clickVisibleByText(client, ".controlModeTabs button", "Live Edit");
+  await clickVisibleByText(client, ".attributeCategoryRail button", "Dimmer");
+  await sleep(120);
+  initial = await readState();
+
+  const liveGesture = await setFirstDimmer(12_000);
+  const afterLive = await readState();
+
+  await clickVisibleSelector(client, '[data-control-fader-write-mode-option="edit"]');
+  await sleep(80);
+  const editUnselected = await readState();
+  const unselectedGesture = await setFirstDimmer(16_000);
+  const afterUnselected = await readState();
+
+  await clickVisibleSelector(client, '[data-scene-matrix-edit-strip="301"]');
+  await sleep(120);
+  const editSelected = await readState();
+  const editGesture = await setFirstDimmer(42_000);
+  const afterEdit = await readState();
+
+  await client.evaluate("document.activeElement instanceof HTMLElement && document.activeElement.blur()");
+  await pressKey(client, "KeyZ", "z", 2);
+  await sleep(120);
+  const afterUndo = await readState();
+  await pressKey(client, "KeyZ", "z", 10);
+  await sleep(120);
+  const afterRedo = await readState();
+
+  const conditions = [
+    ["liveIsDefault", () =>
+      initial.mode === "live" &&
+      initial.livePressed === "true" &&
+      initial.editPressed === "false"
+    ],
+    ["liveFaderGestureAvailable", () => liveGesture],
+    ["liveLeavesSceneLookUnchanged", () => afterLive.cueTargets === initial.cueTargets],
+    ["editUnselectedStateIsExplicit", () =>
+      editUnselected.mode === "edit" &&
+      editUnselected.editPressed === "true" &&
+      editUnselected.badgeState === "unselected" &&
+      editUnselected.badgeText.includes("No scene selected") &&
+      editUnselected.badgeFullyVisible
+    ],
+    ["editUnselectedGestureAvailable", () => unselectedGesture],
+    ["editUnselectedDoesNotWrite", () => afterUnselected.cueTargets === initial.cueTargets],
+    ["editSelectedBadgeNamesScene", () =>
+      editSelected.badgeState === "selected" &&
+      editSelected.badgeText.includes("EDIT:") &&
+      editSelected.badgeText.includes("Front Base") &&
+      editSelected.badgeFullyVisible
+    ],
+    ["editBadgeUsesSceneIdentity", () =>
+      Boolean(editSelected.editIdentity) &&
+      editSelected.editIdentity === editSelected.sceneIdentity &&
+      editSelected.badgeBorderColor === editSelected.sceneBandColor
+    ],
+    ["editFaderGestureAvailable", () => editGesture],
+    ["editWritesSelectedSceneLook", () => afterEdit.cueDimmer === 42_000],
+    ["editLeavesOtherSceneLookUnchanged", () => afterEdit.otherCueTargets === initial.otherCueTargets],
+    ["editWriteEntersUndoHistory", () => afterEdit.history.undo],
+    ["undoRestoresPreviousSceneLook", () =>
+      afterUndo.cueDimmer === 32_768 &&
+      afterUndo.history.redo
+    ],
+    ["redoRestoresEditedSceneLook", () => afterRedo.cueDimmer === 42_000],
+    ["selectedWriteModeTextHasNonZeroWidth", () => selectedTargetVisibility.spansHaveWidth],
+    ["selectedWriteModeTextFitsNearestClipAncestor", () =>
+      selectedTargetVisibility.spansFitNearestClip &&
+      selectedTargetVisibility.spansFitSummary
+    ],
+    ["emptyWriteModeTextHasNonZeroWidth", () =>
+      emptyTargetVisibility.summaryKind === "empty" &&
+      emptyTargetVisibility.spansHaveWidth
+    ],
+    ["emptyWriteModeTextFitsNearestClipAncestor", () =>
+      emptyTargetVisibility.spansFitNearestClip &&
+      emptyTargetVisibility.spansFitSummary
+    ],
+    ["operatorWriteModeTextHasNonZeroWidth", () => operatorTargetVisibility.spansHaveWidth],
+    ["operatorWriteModeTextFitsNearestClipAncestor", () =>
+      operatorTargetVisibility.spansFitNearestClip &&
+      operatorTargetVisibility.spansFitSummary
+    ],
+    ["writeModeButtonsStay24pxAcrossGeometries", () =>
+      [
+        selectedTargetVisibility,
+        emptyTargetVisibility,
+        operatorTargetVisibility,
+      ].every((state) => state.buttonsFixed24)
+    ],
+    ["writeModeTextUsesDefinedColorsAcrossGeometries", () =>
+      [
+        selectedTargetVisibility,
+        emptyTargetVisibility,
+        operatorTargetVisibility,
+      ].every((state) => state.textUsesDefinedColors)
+    ],
+    ["writeModeHeadersStayInsideSummaryAcrossGeometries", () =>
+      [
+        selectedTargetVisibility,
+        emptyTargetVisibility,
+        operatorTargetVisibility,
+      ].every((state) => state.headerContained)
+    ],
+    ["writeHeaderContained", () =>
+      [
+        initial,
+        editUnselected,
+        editSelected,
+        afterEdit,
+        afterUndo,
+        afterRedo,
+      ].every((state) => state.headerContained)
+    ],
+    ["documentAndAppScrollRemainZero", () =>
+      [
+        initial,
+        afterLive,
+        editUnselected,
+        afterUnselected,
+        editSelected,
+        afterEdit,
+        afterUndo,
+        afterRedo,
+      ].every((state) => state.documentAndAppScrollZero)
+    ],
+  ];
+  const checks = Object.fromEntries(conditions.map(([name, check]) => {
+    try {
+      return [name, Boolean(check())];
+    } catch {
+      return [name, false];
+    }
+  }));
+  const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  return {
+    label: `edit-live-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    initial,
+    afterLive,
+    editUnselected,
+    afterUnselected,
+    editSelected,
+    afterEdit,
+    afterUndo,
+    afterRedo,
+    selectedTargetVisibility,
+    emptyTargetVisibility,
+    operatorTargetVisibility,
+  };
+}
+
 async function runControlEditPositionViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -16350,6 +16749,42 @@ async function main() {
     console.log(
       `viewport contract primary-browser=${primaryOperationalViewport.width}x${primaryOperationalViewport.height} measured-client-size-browser=${measuredClientSizeViewport.width}x${measuredClientSizeViewport.height} extended-browser=${extendedCeilingViewport.width}x${extendedCeilingViewport.height} fallback-browsers=${compactFallbackViewports.map((viewport) => `${viewport.width}x${viewport.height}`).join(",")} screenshots=${captureAllViewportScreenshots ? "all" : "large-browser-fixtures"}`,
     );
+    if (editLiveOnlyMode) {
+      const editLiveResults = [];
+      for (const [viewportIndex, viewport] of viewports.entries()) {
+        const result = await runEditLiveViewport(client, viewport);
+        editLiveResults.push(result);
+        const textVisibility = (state) =>
+          `${state.summaryKind}:` +
+          state.buttonSpans
+            .map((entry) => `${entry.option}:${entry.buttonHeight}x${entry.spanWidth}`)
+            .join("+") +
+          `:${state.spansFitNearestClip && state.spansFitSummary ? "inside" : "clipped"}` +
+          `:${state.textUsesDefinedColors ? "defined" : "overridden"}`;
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `live=${result.initial.cueDimmer}->${result.afterLive.cueDimmer} ` +
+            `unselected=${result.editUnselected.badgeState}:${result.afterUnselected.cueDimmer} ` +
+            `edit=${JSON.stringify(result.editSelected.badgeText)}:${result.afterEdit.cueDimmer} ` +
+            `undo=${result.afterUndo.cueDimmer}/${result.afterUndo.history.redoDepth} ` +
+            `redo=${result.afterRedo.cueDimmer}/${result.afterRedo.history.undoDepth} ` +
+            `identity=${result.editSelected.badgeBorderColor} ` +
+            `text=${textVisibility(result.selectedTargetVisibility)}/` +
+              `${textVisibility(result.emptyTargetVisibility)}/` +
+              `${textVisibility(result.operatorTargetVisibility)} ` +
+            `scroll=${result.afterRedo.documentAndAppScrollZero ? "zero" : "overflow"} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+        if (viewportIndex < viewports.length - 1) {
+          await recycleBrowser();
+        }
+      }
+      const failures = editLiveResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Control EDIT/LIVE direct-write failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (controlStageChromeOnlyMode) {
       const chromeResults = [];
       for (const viewport of viewports) {

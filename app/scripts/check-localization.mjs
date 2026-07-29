@@ -110,6 +110,11 @@ assert.equal(
 assert.match(source, /"aria-valuetext"/, "dynamic meter aria-valuetext must be localized");
 assert.equal(localization.translateUiText("Blocks 13-24 / 500", "ja"), "ブロック 13-24 / 500");
 assert.equal(localization.translateUiText("SS", "ja"), "SS");
+assert.equal(localization.translateUiText("EDIT", "ja"), "EDIT");
+assert.equal(localization.translateUiText("EDIT:", "ja"), "EDIT:");
+assert.equal(localization.translateUiText("LIVE", "ja"), "LIVE");
+assert.equal(localization.translateUiText("Fader write mode", "ja"), "フェーダー書込モード");
+assert.equal(localization.translateUiText("No scene selected", "ja"), "シーン未選択");
 assert.equal(localization.translateUiText("Scene settings", "ja"), "シーン設定");
 assert.equal(localization.translateUiText("Static scene", "ja"), "Staticシーン");
 assert.equal(localization.translateUiText("Cue-owned FX", "ja"), "Cue所有FX");
@@ -513,7 +518,7 @@ await collectTsx(sourceRoot);
 
 const localeInvariantText = new Set([
   "Syndocal", "DMX", "MIDI", "OSC", "RDM", "ISF", "NDI", "Spout", "Syphon", "HAP", "FFmpeg",
-  "GO", "SET", "FLASH", "HTP", "LTP", "RGB", "BPM", "A", "B", "R", "G", "X", "Y", "Z", "Pan", "Tilt",
+  "GO", "SET", "FLASH", "EDIT", "EDIT:", "LIVE", "HTP", "LTP", "RGB", "BPM", "A", "B", "R", "G", "X", "Y", "Z", "Pan", "Tilt",
   "Dimmer", "Color", "Position", "Beam", "Speed", "Size", "Phase",
   "Sine", "Cosine", "Triangle", "Saw", "Square", "Random", "Perlin",
   "STEPS", "COLOR FX", "CHASER FX", "MOVE FX", "VALUE FX", "CURVE FX", "MAPPINGS", "COLOUR MAPPINGS",
