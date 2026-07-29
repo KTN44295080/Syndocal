@@ -31531,3 +31531,397 @@ h3 {
   white-space: nowrap;
   font-size: 10px;
 }
+
+/* ---- T25-B: picked fixtures become Daslight-style fixture-type columns.
+   This surface stays inside the existing attribute desk geometry; only the
+   selected fixture memo feeds it, and many types scroll within this row. */
+.attributeDeskSurface > .fixtureTypeColumnGrid {
+  display: flex;
+  order: 1;
+  flex: 1 1 100%;
+  align-items: stretch;
+  gap: 4px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto hidden;
+  overscroll-behavior-inline: contain;
+  scrollbar-color: #57524d #211f1c;
+}
+
+.fixtureTypeAttributeColumn {
+  display: grid;
+  grid-template-rows: 44px minmax(0, 1fr);
+  flex: 0 0 168px;
+  width: 168px;
+  min-width: 168px;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid #403c37;
+  border-radius: 1px;
+  background: #1b1917;
+}
+
+.fixtureTypeAttributeColumn.category-fader {
+  flex-basis: var(--fixture-type-column-width, 168px);
+  width: var(--fixture-type-column-width, 168px);
+  min-width: var(--fixture-type-column-width, 168px);
+}
+
+.fixtureTypeColumnHeader {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  height: 44px;
+  gap: 6px;
+  overflow: hidden;
+  border: 0;
+  border-bottom: 1px solid #403c37;
+  border-radius: 0;
+  background: #25221f;
+  padding: 2px 6px;
+  text-align: left;
+}
+
+.fixtureTypeColumnHeader:hover,
+.fixtureTypeColumnHeader:focus-visible {
+  background: #2d2925;
+}
+
+.fixtureTypeColumnHeader:focus-visible {
+  outline: 2px solid #f3974f;
+  outline-offset: -2px;
+}
+
+.fixtureTypeColumnHeader > span {
+  display: grid;
+  align-content: center;
+  min-width: 0;
+  gap: 1px;
+}
+
+.fixtureTypeColumnHeader strong,
+.fixtureTypeColumnHeader small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.fixtureTypeColumnHeader strong {
+  color: #ddd7d0;
+}
+
+.fixtureTypeColumnHeader small {
+  color: #a19a93;
+  font-variant-numeric: tabular-nums;
+}
+
+.fixtureTypeKindMark {
+  display: block;
+  width: 22px;
+  height: 22px;
+  border: 1px solid #77716b;
+  border-radius: 50%;
+  background: #1b1917;
+}
+
+.fixtureTypeKindMark.kind-bar {
+  width: 26px;
+  height: 8px;
+  border-radius: 1px;
+}
+
+.fixtureTypeKindMark.kind-panel {
+  width: 24px;
+  height: 18px;
+  border-radius: 1px;
+}
+
+.fixtureTypeKindMark.kind-moving {
+  border-radius: 50% 50% 2px 2px;
+}
+
+.fixtureTypeKindMark.kind-par {
+  border-radius: 4px;
+}
+
+.fixtureTypeColumnBody {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #1b1917;
+  padding: 4px;
+}
+
+.fixtureTypeDimmerControl {
+  display: grid;
+  grid-template-rows: 28px 24px minmax(72px, 1fr) 40px;
+  justify-items: center;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  gap: 3px;
+}
+
+.fixtureTypeDimmerIcon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #625d57;
+  border-radius: 50%;
+  background: #28241f;
+  color: #d9bd74;
+  font-size: 18px;
+}
+
+.fixtureTypePrimaryValue,
+.fixtureTypeRepresentativeSlider output,
+.fixtureTypeColorControl output,
+.fixtureTypePositionReadout output {
+  font-variant-numeric: tabular-nums;
+}
+
+.fixtureTypePrimaryValue {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #47423d;
+  background: #24211f;
+  color: #e2ded8;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.fixtureTypeVerticalFader {
+  width: 40px;
+  min-width: 40px;
+  height: 100%;
+  min-height: 72px;
+  margin: 0;
+  padding: 0;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  touch-action: none;
+  accent-color: #a29b94;
+}
+
+.fixtureTypeVerticalFader:focus-visible,
+.fixtureTypeColorPicker:focus-visible,
+.fixtureTypeRepresentativeSlider input:focus-visible {
+  outline: 2px solid #f3974f;
+  outline-offset: 1px;
+}
+
+.fixtureTypeOffButton {
+  width: 100%;
+  min-height: 40px;
+  border-color: #5a5147;
+  border-radius: 1px;
+  background: #24211f;
+  color: #d8d1c9;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.fixtureTypeTrimControls {
+  display: grid;
+  grid-template-columns: minmax(40px, 1fr) repeat(2, 40px);
+  width: 100%;
+  min-width: 0;
+  gap: 3px;
+}
+
+.fixtureTypeTrimControls > button {
+  min-width: 40px;
+  min-height: 40px;
+  border-radius: 1px;
+  padding: 0;
+}
+
+.fixtureTypeTrimControls > button:not(.fixtureTypeOffButton) {
+  color: #d8d1c9;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.fixtureTypeColorControl {
+  display: grid;
+  grid-template-rows: minmax(72px, 1fr) 28px 22px;
+  align-items: center;
+  justify-items: stretch;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  gap: 4px;
+}
+
+.fixtureTypeColorPicker {
+  width: 100%;
+  height: 100%;
+  min-height: 72px;
+  overflow: hidden;
+  border: 1px solid #55504a;
+  border-radius: 1px;
+  background: #1b1917;
+  padding: 3px;
+  cursor: pointer;
+}
+
+.fixtureTypeColorControl output,
+.fixtureTypeColorControl > span {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #403c37;
+  background: #24211f;
+  color: #d8d1c9;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.fixtureTypePositionControl {
+  display: grid;
+  grid-template-rows: minmax(86px, 1fr) 28px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  gap: 4px;
+}
+
+.fixtureTypePositionControl > .touchPanTiltPad {
+  align-self: center;
+  justify-self: center;
+  width: min(100%, 132px);
+  height: auto;
+  min-height: 86px;
+  max-height: 132px;
+  aspect-ratio: 1;
+}
+
+.fixtureTypePositionReadout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.fixtureTypePositionReadout output {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #403c37;
+  background: #24211f;
+  color: #d8d1c9;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.fixtureTypeSliderRack {
+  display: grid;
+  align-content: start;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  gap: 4px;
+  overflow: hidden auto;
+  overscroll-behavior-block: contain;
+}
+
+.fixtureTypeFaderBank {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.fixtureTypeFaderBank > .faderGrid {
+  display: flex;
+  align-items: stretch;
+  gap: 3px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.fixtureTypeFaderBank .attributeFaderColumn {
+  flex: 0 0 94px;
+}
+
+.fixtureTypeRepresentativeSlider {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  min-width: 0;
+  min-height: 54px;
+  gap: 2px 5px;
+  border: 1px solid #403c37;
+  background: #211e1b;
+  padding: 4px;
+  font-size: 11px;
+}
+
+.fixtureTypeRepresentativeSlider > span {
+  grid-column: 1 / -1;
+  min-width: 0;
+  overflow: hidden;
+  color: #d4cec7;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.fixtureTypeRepresentativeSlider input {
+  width: 100%;
+  min-width: 40px;
+  min-height: 40px;
+  margin: 0;
+  touch-action: none;
+  accent-color: #a29b94;
+}
+
+.fixtureTypeRepresentativeSlider output {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  overflow: hidden;
+  color: #ddd7d0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.fixtureTypeUnsupported {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  width: 100%;
+  height: 100%;
+  min-height: 72px;
+  gap: 5px;
+  border: 1px dashed #48433e;
+  background: #191715;
+  padding: 8px;
+  color: #8f8881;
+  text-align: center;
+}
+
+.fixtureTypeUnsupported strong,
+.fixtureTypeUnsupported span {
+  font-size: 11px;
+}

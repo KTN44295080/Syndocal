@@ -5,7 +5,7 @@ import type { ControlCategory } from "../uiModes";
 interface FaderAttributeEditorPanelProps {
   categories: AttributeCategoryRow[];
   activeCategory: ControlCategory;
-  targetKind: "fixture" | "group" | "empty";
+  targetKind: "fixture" | "group" | "selection" | "empty";
   targetLabel: string;
   targetDetail: string;
   referenceLabel: string;
@@ -27,7 +27,15 @@ export function FaderAttributeEditorPanel(props: FaderAttributeEditorPanelProps)
       <div class="attributeEditorBody">
         <div class={`attributeTargetSummary ${props.targetKind}`}>
           <span>
-            <small>{props.targetKind === "group" ? "Group target" : props.targetKind === "fixture" ? "Fixture target" : "No target"}</small>
+            <small>
+              {props.targetKind === "selection"
+                ? "Picked fixtures"
+                : props.targetKind === "group"
+                  ? "Group target"
+                  : props.targetKind === "fixture"
+                    ? "Fixture target"
+                    : "No target"}
+            </small>
             <strong>{props.targetLabel}</strong>
           </span>
           <span>

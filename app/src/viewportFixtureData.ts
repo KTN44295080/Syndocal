@@ -145,6 +145,125 @@ const viewportFixtureControls: AttributeControl[] = [
   },
 ];
 
+const viewportMegaBarControls: AttributeControl[] = [
+  viewportFixtureControls[0],
+  { ...viewportFixtureControls[3], offsets: [2] },
+  { ...viewportFixtureControls[4], offsets: [3] },
+  { ...viewportFixtureControls[5], offsets: [4] },
+  {
+    attribute: "ColorAmber",
+    channel_name: "Amber",
+    offsets: [5],
+    resolution: "EightBit",
+    default_value: 0,
+    functions: [],
+  },
+  {
+    attribute: "Shutter1",
+    channel_name: "Shutter",
+    offsets: [6],
+    resolution: "EightBit",
+    default_value: 0,
+    functions: [],
+  },
+];
+
+const viewportMovingSpotControls: AttributeControl[] = [
+  viewportFixtureControls[0],
+  viewportFixtureControls[1],
+  viewportFixtureControls[2],
+  {
+    attribute: "Gobo1",
+    channel_name: "Gobo",
+    offsets: [6],
+    resolution: "EightBit",
+    default_value: 0,
+    functions: [],
+  },
+  {
+    attribute: "Zoom",
+    channel_name: "Zoom",
+    offsets: [7],
+    resolution: "EightBit",
+    default_value: 0,
+    functions: [],
+  },
+  {
+    attribute: "Focus1",
+    channel_name: "Focus",
+    offsets: [8],
+    resolution: "EightBit",
+    default_value: 32_768,
+    functions: [],
+  },
+];
+
+const viewportLiveEditTypeFixture = (
+  id: number,
+  profileName: string,
+  manufacturer: string,
+  modeName: string,
+  controls: AttributeControl[],
+  x: number,
+  z: number,
+): PatchedFixtureSummary => ({
+  id,
+  label: `${profileName} ${id}`,
+  profile_source_path: `viewport://live-edit-types/${profileName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+  profile_name: profileName,
+  manufacturer,
+  mode_name: modeName,
+  universe: Math.floor((id - 1) / 32),
+  address: ((id - 1) % 32) * 12 + 1,
+  group_ids: ["front"],
+  position: { x, y: 3, z },
+  rotation: { pitch: 0, yaw: 0, roll: 0 },
+  geometries: [],
+  controls,
+  attribute_values: controls.map((control) => ({
+    attribute: control.attribute,
+    value: control.attribute === "ColorRed" ? 52_428 : control.default_value,
+  })),
+  limits: defaultFixtureLimits,
+  highlighted: false,
+  soloed: false,
+  parked: false,
+});
+
+const liveEditTypeFixtures: PatchedFixtureSummary[] = [
+  viewportLiveEditTypeFixture(
+    1,
+    "GENERIC",
+    "Generic",
+    "DIMMER",
+    [viewportFixtureControls[0]],
+    -8,
+    -4,
+  ),
+  ...Array.from({ length: 20 }, (_, index) =>
+    viewportLiveEditTypeFixture(
+      index + 2,
+      "MEGA BAR RGBA",
+      "Mega-Lite",
+      "11CH",
+      viewportMegaBarControls,
+      -6 + (index % 10) * 1.25,
+      -2 + Math.floor(index / 10) * 1.25,
+    )
+  ),
+  ...Array.from({ length: 20 }, (_, index) =>
+    viewportLiveEditTypeFixture(
+      index + 22,
+      "ROBIN POINTE",
+      "ROBE",
+      "MODE 1",
+      viewportMovingSpotControls,
+      -6 + (index % 10) * 1.25,
+      1 + Math.floor(index / 10) * 1.25,
+    )
+  ),
+];
+
 const profile: FixtureProfileSummary = {
   source_path: "viewport://syndocal-mini-par",
   manufacturer: "Syndocal",
@@ -1362,4 +1481,5 @@ export const viewportFixtureData = {
   layeredTimelineAudioClips,
   layeredTimelineSuperSceneCue,
   layeredTimelineSuperSceneEvent,
+  liveEditTypeFixtures,
 } as const;

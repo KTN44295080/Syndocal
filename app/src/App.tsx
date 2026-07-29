@@ -34,6 +34,7 @@ import { FaderAttributeEditorPanel } from "./components/FaderAttributeEditorPane
 import { FaderAuxiliaryAttributePanels } from "./components/FaderAuxiliaryAttributePanels";
 import { FaderFixtureControlPanel } from "./components/FaderFixtureControlPanel";
 import { FaderGridPanel } from "./components/FaderGridPanel";
+import { FixtureTypeAttributeColumns } from "./components/FixtureTypeAttributeColumns";
 import { FixtureCatalogPanel } from "./components/FixtureCatalogPanel";
 import { GroupLiveMixerStrip } from "./components/GroupLiveMixerStrip";
 import { FaderPrimaryAttributePanels } from "./components/FaderPrimaryAttributePanels";
@@ -558,6 +559,11 @@ import {
   mappingFixtureStageSize,
   type MappingFixtureVisualKind,
 } from "./fixtureVisuals";
+import {
+  commonFixtureTypeControls,
+  fixtureControlForAttribute,
+  groupPickedFixturesByType,
+} from "./fixtureTypeLiveEdit";
 import {
   beamPoints,
   stagePadding,
@@ -1878,6 +1884,7 @@ export default function App() {
     || viewportFixture === "workspace-operator"
     || viewportFixture === "touch-composed"
     || viewportFixture === "fx-visual"
+    || viewportFixture === "live-edit-types"
   ) {
     const sceneBlockLargeFixture = viewportFixture === "scene-block-large";
     const sceneBlockHourFixture = viewportFixture === "scene-block-hour";
@@ -1890,6 +1897,7 @@ export default function App() {
     const cueNodeGraphFixture = viewportFixture === "cue-node-graph";
     const sceneMatrixFixture = viewportFixture === "scene-matrix" || viewportFixture === "workspace-operator";
     const touchComposedFixture = viewportFixture === "touch-composed";
+    const liveEditTypeFixture = viewportFixture === "live-edit-types";
     const cueFixtureEffects = fxVisualFixture
       ? structuredClone(viewportFixtureData.fxVisualizationEffects)
       : cueRecallLargeFixture
@@ -1956,7 +1964,12 @@ export default function App() {
       setTimelineContextDrawer("none");
       setControlLiveView("matrix");
     }
-    setSelectedFixtureGroupFilter("front");
+    if (liveEditTypeFixture) {
+      setControlMode("edit");
+      setEditDeskSurface("attributes");
+      setControlCategory("dimmer");
+    }
+    setSelectedFixtureGroupFilter(liveEditTypeFixture ? "" : "front");
     setProfile(viewportFixtureData.profile);
     setGdtfPath(viewportFixtureData.profile.source_path);
     setSelectedMode(viewportFixtureData.profile.dmx_modes[0]?.name ?? "");
@@ -1967,8 +1980,12 @@ export default function App() {
     setPatchAddressStride(0);
     setGroupText("front");
     setSelectedFixtureId(1);
-    setSelectedMappingFixtureIds([1]);
-    setSelectedFixtureLabelDraft("Viewport Par L");
+    setSelectedMappingFixtureIds(
+      liveEditTypeFixture
+        ? viewportFixtureData.liveEditTypeFixtures.map((fixture) => fixture.id)
+        : [1],
+    );
+    setSelectedFixtureLabelDraft(liveEditTypeFixture ? "GENERIC 1" : "Viewport Par L");
     setSelectedFixtureUniverseDraft(0);
     setSelectedFixtureAddressDraft(1);
     setSelectedFixtureGroupText("front");
@@ -1977,6 +1994,8 @@ export default function App() {
       ...current,
       fixtures: cueNodeGraphFixture
         ? []
+        : liveEditTypeFixture
+          ? structuredClone(viewportFixtureData.liveEditTypeFixtures)
         : sceneMatrixFixture
           ? [
               { ...viewportPatchedFixture(1, "Front L", 1, -4, -2), group_ids: ["front"] },
@@ -2839,13 +2858,25 @@ export default function App() {
     const selectedIds = selectedMappingFixtureIdSet();
     return snapshot().fixtures.filter((fixture) => selectedIds.has(fixture.id));
   });
+  const mappingFixtureById = createMemo(() =>
+    new Map(snapshot().fixtures.map((fixture) => [fixture.id, fixture])),
+  );
   const orderedMappingSelectionFixtures = createMemo(() => {
-    const fixturesById = new Map(snapshot().fixtures.map((fixture) => [fixture.id, fixture]));
+    const fixturesById = mappingFixtureById();
     return selectedMappingFixtureIds().flatMap((fixtureId) => {
       const fixture = fixturesById.get(fixtureId);
       return fixture ? [fixture] : [];
     });
   });
+  const pickedFixtureTypeGroups = createMemo(() =>
+    groupPickedFixturesByType(orderedMappingSelectionFixtures()),
+  );
+  const hasMultiplePickedFixtures = createMemo(() =>
+    orderedMappingSelectionFixtures().length > 1,
+  );
+  const showFixtureTypeAttributeColumns = createMemo(() =>
+    !selectedFixtureGroupFilter() && hasMultiplePickedFixtures(),
+  );
   const mappingEffectOrderFixtures = createMemo(() => {
     if (effectTargetMode() === "selection") return orderedMappingSelectionFixtures();
     if (effectTargetMode() === "fixture") {
@@ -3196,6 +3227,9 @@ export default function App() {
     });
   };
   const selectedControlTargetFixtures = createMemo<PatchedFixtureSummary[]>(() => {
+    if (showFixtureTypeAttributeColumns()) {
+      return orderedMappingSelectionFixtures();
+    }
     const groupId = selectedFixtureGroupFilter();
     if (groupId) {
       return filteredFixtures();
@@ -3215,13 +3249,12 @@ export default function App() {
     const groupId = selectedFixtureGroupFilter();
     return groupId ? commonAttributeControls(selectedControlTargetFixtures()) : (selectedFixture()?.controls ?? []);
   });
+  const fixtureControlIsWritten = (fixture: PatchedFixtureSummary, control: AttributeControl) =>
+    faderValue(fixture.id, control.attribute, control.default_value) !== control.default_value;
   const controlIsWritten = (control: AttributeControl) =>
     selectedControlTargetFixtures().some((fixture) => {
-      const fixtureControl = fixture.controls.find((candidate) => candidate.attribute === control.attribute);
-      if (!fixtureControl) {
-        return false;
-      }
-      return faderValue(fixture.id, fixtureControl.attribute, fixtureControl.default_value) !== fixtureControl.default_value;
+      const fixtureControl = fixtureControlForAttribute(fixture, control.attribute);
+      return fixtureControl ? fixtureControlIsWritten(fixture, fixtureControl) : false;
     });
   const timelineAutomationControls = createMemo<AttributeControl[]>(() => {
     const groupId = selectedFixtureGroupFilter();
@@ -3431,6 +3464,17 @@ export default function App() {
     for (const category of controlCategories) {
       counts.set(category.id, 0);
     }
+    if (showFixtureTypeAttributeColumns()) {
+      for (const group of pickedFixtureTypeGroups()) {
+        const controls = commonFixtureTypeControls(group);
+        counts.set("fader", (counts.get("fader") ?? 0) + controls.length);
+        for (const control of controls) {
+          const category = controlCategoryForAttribute(control.attribute);
+          counts.set(category, (counts.get(category) ?? 0) + 1);
+        }
+      }
+      return counts;
+    }
     const controls = activeControls();
     counts.set("fader", controls.length);
     for (const control of controls) {
@@ -3439,11 +3483,17 @@ export default function App() {
     }
     return counts;
   });
-  const categoryHasVisualControl = (category: ControlCategory) =>
-    (category === "dimmer" && Boolean(selectedDimmerControl())) ||
-    (category === "position" && Boolean(selectedPositionControls())) ||
-    (category === "color" && Boolean(selectedColorControls())) ||
-    category === "fader";
+  const categoryHasVisualControl = (category: ControlCategory) => {
+    if (showFixtureTypeAttributeColumns()) {
+      return (controlCategoryCounts().get(category) ?? 0) > 0;
+    }
+    return (
+      (category === "dimmer" && Boolean(selectedDimmerControl())) ||
+      (category === "position" && Boolean(selectedPositionControls())) ||
+      (category === "color" && Boolean(selectedColorControls())) ||
+      category === "fader"
+    );
+  };
   const activeControlCategory = createMemo<ControlCategory>(() => {
     const requested = controlCategory();
     const counts = controlCategoryCounts();
@@ -3461,9 +3511,13 @@ export default function App() {
       ...category,
       count: counts.get(category.id) ?? 0,
       hasVisual: categoryHasVisualControl(category.id),
-      hasWritten: activeControls()
-        .filter((control) => category.id === "fader" || controlCategoryForAttribute(control.attribute) === category.id)
-        .some((control) => controlIsWritten(control)),
+      hasWritten: selectedControlTargetFixtures().some((fixture) =>
+        fixture.controls
+          .filter((control) =>
+            category.id === "fader" || controlCategoryForAttribute(control.attribute) === category.id
+          )
+          .some((control) => fixtureControlIsWritten(fixture, control))
+      ),
     }));
   });
   const visibleControls = createMemo(() => {
@@ -3491,23 +3545,38 @@ export default function App() {
       }))
       .filter((entry) => entry.functions.length > 0),
   );
-  const controlTargetLabel = createMemo(() =>
-    selectedFixtureGroupFilter()
+  const controlTargetLabel = createMemo(() => {
+    if (showFixtureTypeAttributeColumns()) {
+      return `${pickedFixtureTypeGroups().length} fixture types`;
+    }
+    return selectedFixtureGroupFilter()
       ? `Group ${selectedFixtureGroupFilter()}`
-      : selectedFixture()?.label ?? "No fixture selected",
-  );
-  const controlTargetKind = createMemo<"fixture" | "group" | "empty">(() =>
-    selectedFixtureGroupFilter() ? "group" : selectedFixture() ? "fixture" : "empty",
+      : selectedFixture()?.label ?? "No fixture selected";
+  });
+  const controlTargetKind = createMemo<"fixture" | "group" | "selection" | "empty">(() =>
+    showFixtureTypeAttributeColumns()
+      ? "selection"
+      : selectedFixtureGroupFilter()
+        ? "group"
+        : selectedFixture()
+          ? "fixture"
+          : "empty",
   );
   const controlTargetDetail = createMemo(() => {
     const targetCount = selectedControlTargetFixtures().length;
     const attributeCount = activeControls().length;
+    if (showFixtureTypeAttributeColumns()) {
+      return `${targetCount} fixtures / ${pickedFixtureTypeGroups().length} types`;
+    }
     if (selectedFixtureGroupFilter()) {
       return `${targetCount} fixture${targetCount === 1 ? "" : "s"} / ${attributeCount} common attr${attributeCount === 1 ? "" : "s"}`;
     }
     return attributeCount > 0 ? `${attributeCount} attr${attributeCount === 1 ? "" : "s"}` : "No controls";
   });
   const controlReferenceLabel = createMemo(() => {
+    if (showFixtureTypeAttributeColumns()) {
+      return "Fixture type columns";
+    }
     const reference = selectedControlReferenceFixture();
     if (!reference) {
       return "No readout";
@@ -6372,6 +6441,17 @@ export default function App() {
     setSelectedMappingFixtureIds([...currentIds, fixture.id]);
   };
 
+  const selectPickedFixtureType = (typeKey: string) => {
+    const group = pickedFixtureTypeGroups().find((candidate) => candidate.key === typeKey);
+    const firstFixture = group?.fixtures[0];
+    if (!group || !firstFixture) {
+      return;
+    }
+    setSelectedFixtureGroupFilter("");
+    activateFixture(firstFixture);
+    setSelectedMappingFixtureIds(group.fixtures.map((fixture) => fixture.id));
+  };
+
   const pickVisibleMappingFixtures = () => {
     const fixtures = mappingFilteredFixtures();
     if (fixtures.length === 0) {
@@ -8402,6 +8482,88 @@ export default function App() {
       });
     } catch (error) {
       setMessage(String(error));
+    }
+  };
+
+  const pickedFixtureTypeGroup = (typeKey: string) =>
+    pickedFixtureTypeGroups().find((group) => group.key === typeKey);
+
+  const setFixtureTypeControlValue = (
+    typeKey: string,
+    attribute: string,
+    value: number,
+  ) => {
+    const nextValue = clampDmxValue(value);
+    const group = pickedFixtureTypeGroup(typeKey);
+    if (!group) {
+      return;
+    }
+    for (const fixture of group.fixtures) {
+      const control = fixtureControlForAttribute(fixture, attribute);
+      if (control) {
+        void setAttribute(fixture.id, control.attribute, nextValue);
+      }
+    }
+  };
+
+  const resetFixtureTypeControlValue = (
+    typeKey: string,
+    attribute: string,
+  ) => {
+    const group = pickedFixtureTypeGroup(typeKey);
+    if (!group) {
+      return;
+    }
+    for (const fixture of group.fixtures) {
+      const control = fixtureControlForAttribute(fixture, attribute);
+      if (control) {
+        void setAttribute(fixture.id, control.attribute, control.default_value);
+      }
+    }
+  };
+
+  const setFixtureTypeColor = (typeKey: string, hexColor: string) => {
+    const group = pickedFixtureTypeGroup(typeKey);
+    const color = normalizeHexColor(hexColor);
+    if (!group || !color) {
+      return;
+    }
+    const values = {
+      red: Number.parseInt(color.slice(1, 3), 16) * 257,
+      green: Number.parseInt(color.slice(3, 5), 16) * 257,
+      blue: Number.parseInt(color.slice(5, 7), 16) * 257,
+    };
+    for (const fixture of group.fixtures) {
+      const red = findControlAttribute(fixture, colorCandidates.red);
+      const green = findControlAttribute(fixture, colorCandidates.green);
+      const blue = findControlAttribute(fixture, colorCandidates.blue);
+      if (!red || !green || !blue) {
+        continue;
+      }
+      void setAttribute(fixture.id, red, values.red);
+      void setAttribute(fixture.id, green, values.green);
+      void setAttribute(fixture.id, blue, values.blue);
+    }
+  };
+
+  const setFixtureTypePosition = (
+    typeKey: string,
+    panValue: number,
+    tiltValue: number,
+  ) => {
+    const group = pickedFixtureTypeGroup(typeKey);
+    if (!group) {
+      return;
+    }
+    for (const fixture of group.fixtures) {
+      const pan = findControlAttribute(fixture, ["Pan"]);
+      const tilt = findControlAttribute(fixture, ["Tilt"]);
+      if (!pan || !tilt) {
+        continue;
+      }
+      const source = sourcePanTiltValues(fixture, panValue, tiltValue);
+      void setAttribute(fixture.id, pan, source.pan);
+      void setAttribute(fixture.id, tilt, source.tilt);
     }
   };
 
@@ -16203,6 +16365,10 @@ export default function App() {
             referenceLabel={controlReferenceLabel()}
             onCategory={setControlCategory}
           >
+          <Show
+            when={showFixtureTypeAttributeColumns()}
+            fallback={
+              <>
           <FaderPrimaryAttributePanels
             dimmerControl={showDimmerPanel() ? selectedDimmerControl() : undefined}
             positionControls={showPositionPad() ? selectedPositionControls() : undefined}
@@ -16314,6 +16480,22 @@ export default function App() {
             onSetFixtureAttribute={setAttribute}
             onSetGroupAttribute={setGroupAttribute}
           />
+              </>
+            }
+          >
+            <FixtureTypeAttributeColumns
+              groups={pickedFixtureTypeGroups()}
+              activeCategory={activeControlCategory()}
+              valueForControl={(fixture, control) =>
+                faderValue(fixture.id, control.attribute, control.default_value)
+              }
+              onSelectType={selectPickedFixtureType}
+              onSetControl={setFixtureTypeControlValue}
+              onResetControl={resetFixtureTypeControlValue}
+              onSetColor={setFixtureTypeColor}
+              onSetPosition={setFixtureTypePosition}
+            />
+          </Show>
           </FaderAttributeEditorPanel>
           <Show when={controlMode() === "live" && timelineContextDrawer() === "cue"}>
           <aside

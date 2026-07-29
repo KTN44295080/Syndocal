@@ -12,8 +12,9 @@ interface FaderGridPanelProps {
   selectedGroupId?: string | null;
   valueForControl: (control: AttributeControl) => number;
   isControlWritten: (control: AttributeControl) => boolean;
-  onSetFixtureAttribute: (fixtureId: number, attribute: string, value: number) => void | Promise<void>;
-  onSetGroupAttribute: (groupId: string, attribute: string, value: number) => void | Promise<void>;
+  onSetControlValue?: (control: AttributeControl, value: number) => void;
+  onSetFixtureAttribute?: (fixtureId: number, attribute: string, value: number) => void | Promise<void>;
+  onSetGroupAttribute?: (groupId: string, attribute: string, value: number) => void | Promise<void>;
 }
 
 export function FaderGridPanel(props: FaderGridPanelProps) {
@@ -22,16 +23,21 @@ export function FaderGridPanel(props: FaderGridPanelProps) {
     Math.min(65_535, Math.max(0, Math.round(Number.isFinite(value) ? value : 0)));
 
   const setControlValue = (control: AttributeControl, value: number) => {
+    const nextValue = clampDmxValue(value);
+    if (props.onSetControlValue) {
+      props.onSetControlValue(control, nextValue);
+      return;
+    }
     const fixtureId = props.selectedFixtureId;
     if (fixtureId === null || fixtureId === undefined) {
       return;
     }
 
     const groupId = props.selectedGroupId;
-    if (groupId) {
-      void props.onSetGroupAttribute(groupId, control.attribute, clampDmxValue(value));
-    } else {
-      void props.onSetFixtureAttribute(fixtureId, control.attribute, clampDmxValue(value));
+    if (groupId && props.onSetGroupAttribute) {
+      void props.onSetGroupAttribute(groupId, control.attribute, nextValue);
+    } else if (props.onSetFixtureAttribute) {
+      void props.onSetFixtureAttribute(fixtureId, control.attribute, nextValue);
     }
   };
   const activeFunction = (control: AttributeControl, value: number) =>

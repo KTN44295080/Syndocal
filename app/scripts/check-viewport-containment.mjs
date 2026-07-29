@@ -32,10 +32,14 @@ const sceneLiveModifierOnlyMode = process.argv.includes("--scene-live-modifier-o
 const groupStrobeOnlyMode = process.argv.includes("--group-strobe-only");
 const fixtureCatalogOnlyMode = process.argv.includes("--fixture-catalog-only");
 const workspaceOperatorOnlyMode = process.argv.includes("--workspace-operator-only");
+const liveEditTypesOnlyMode = process.argv.includes("--live-edit-types-only");
+const controlEditPositionOnlyMode = process.argv.includes("--control-edit-position-only");
 const viewportTraceEnabled = process.env.SYNDOCAL_VIEWPORT_TRACE === "1";
 const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
   largeShowMode
     ? "large-show"
+    : liveEditTypesOnlyMode
+      ? "live-edit-types"
     : workspaceOperatorOnlyMode
       ? "workspace-operator"
     : sceneLiveModifierOnlyMode || groupStrobeOnlyMode || fixtureCatalogOnlyMode
@@ -14142,6 +14146,277 @@ async function runWorkspaceOperatorViewport(client, viewport) {
   };
 }
 
+async function runLiveEditFixtureTypesViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: fixtureUrl("live-edit-types") });
+  await waitForApp(client);
+  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await clickVisibleByText(client, ".controlModeTabs button", "Live Edit");
+  await clickVisibleByText(client, ".attributeCategoryRail button", "Dimmer");
+  await sleep(120);
+
+  const measureState = () => client.evaluate(`(async () => {
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const visible = (element) => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const contains = (outer, inner) => {
+      const outerRect = outer?.getBoundingClientRect();
+      const innerRect = inner?.getBoundingClientRect();
+      return Boolean(
+        outerRect &&
+        innerRect &&
+        innerRect.left >= outerRect.left - 1 &&
+        innerRect.top >= outerRect.top - 1 &&
+        innerRect.right <= outerRect.right + 1 &&
+        innerRect.bottom <= outerRect.bottom + 1
+      );
+    };
+    const grid = document.querySelector('.fixtureTypeColumnGrid');
+    const columns = [...document.querySelectorAll('[data-fixture-type-column]')].filter(visible);
+    const headers = columns.map((column) => column.querySelector('[data-fixture-type-select]')).filter(visible);
+    const primaryControls = columns
+      .map((column) => column.querySelector('[data-fixture-type-primary-control]'))
+      .filter(visible);
+    const offButtons = columns.map((column) => column.querySelector('.fixtureTypeOffButton')).filter(visible);
+    const faders = columns.map((column) => column.querySelector('.fixtureTypeVerticalFader')).filter(visible);
+    const trimButtons = columns.flatMap((column) =>
+      [...column.querySelectorAll('[data-fixture-type-trim-control]')].filter(visible)
+    );
+    const bankFaders = [...document.querySelectorAll('.fixtureTypeFaderBank .attributeFaderColumn')].filter(visible);
+    const bankVerticalInputs = bankFaders.map((fader) => fader.querySelector('.verticalFaderInput')).filter(visible);
+    const bankFineButtons = bankFaders.flatMap((fader) =>
+      [...fader.querySelectorAll('.attributeFaderFine button')].filter(visible)
+    );
+    const bankChannelLabels = bankFaders.map((fader) =>
+      (fader.querySelector('.attributeFaderChannel')?.textContent || '').trim()
+    );
+    const app = document.querySelector('.app');
+    const summary = document.querySelector('.attributeTargetSummary');
+    return {
+      columnCount: columns.length,
+      typeKeys: columns.map((column) => column.getAttribute('data-fixture-type-column') || ''),
+      fixtureCounts: columns.map((column) => Number(column.getAttribute('data-fixture-type-count') || 0)),
+      supportedStates: columns.map((column) => column.getAttribute('data-fixture-type-supported') || ''),
+      headerCount: headers.length,
+      headerLabels: headers.map((header) => (header.querySelector('strong')?.textContent || '').trim()),
+      headerMinimumHeight: headers.length > 0 ? Math.min(...headers.map((header) => header.getBoundingClientRect().height)) : 0,
+      primaryControlCount: primaryControls.length,
+      primaryControlKinds: primaryControls.map((control) => control.getAttribute('data-fixture-type-primary-control') || ''),
+      primaryControlsContained: primaryControls.every((control) => contains(control.closest('[data-fixture-type-column]'), control)),
+      offButtonCount: offButtons.length,
+      offButtonMinimumHeight: offButtons.length > 0 ? Math.min(...offButtons.map((button) => button.getBoundingClientRect().height)) : 0,
+      faderCount: faders.length,
+      faderMinimumWidth: faders.length > 0 ? Math.min(...faders.map((fader) => fader.getBoundingClientRect().width)) : 0,
+      trimButtonCount: trimButtons.length,
+      trimButtonMinimumHeight: trimButtons.length > 0 ? Math.min(...trimButtons.map((button) => button.getBoundingClientRect().height)) : 0,
+      bankFaderCount: bankFaders.length,
+      bankVerticalInputCount: bankVerticalInputs.length,
+      bankFineButtonCount: bankFineButtons.length,
+      bankChannelLabels,
+      categoryRailButtonCount: [...document.querySelectorAll('.attributeCategoryRail button')].filter(visible).length,
+      activeCategoryLabel: (document.querySelector('.attributeCategoryRail button.active')?.textContent || '').trim(),
+      selectionSummary: (summary?.textContent || '').replace(/\\s+/g, ' ').trim(),
+      selectionSummaryKind: summary?.className || '',
+      legacyFaderGridCount: [...document.querySelectorAll('.attributeDeskSurface > .faderGrid')].filter(visible).length,
+      legacyDimmerPanelCount: [...document.querySelectorAll('.attributeDeskSurface > .dimmerControlPanel')].filter(visible).length,
+      gridHorizontalOverflow: grid ? Math.max(0, grid.scrollWidth - grid.clientWidth) : -1,
+      documentAndAppScrollZero:
+        document.documentElement.scrollWidth <= innerWidth + 1 &&
+        document.documentElement.scrollHeight <= innerHeight + 1 &&
+        document.body.scrollWidth <= document.body.clientWidth + 1 &&
+        document.body.scrollHeight <= document.body.clientHeight + 1 &&
+        (!app || (app.scrollWidth <= app.clientWidth + 1 && app.scrollHeight <= app.clientHeight + 1)),
+    };
+  })()`);
+
+  const multiple = await measureState();
+  if (screenshotDir && shouldCaptureViewport(viewport)) {
+    mkdirSync(screenshotDir, { recursive: true });
+    const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+    writeFileSync(
+      join(screenshotDir, `live-edit-types-${viewport.width}x${viewport.height}.png`),
+      screenshot.data,
+      "base64",
+    );
+  }
+  await clickVisibleByText(client, ".attributeCategoryRail button", "Fader");
+  await sleep(120);
+  const faderBank = await measureState();
+  if (screenshotDir && shouldCaptureViewport(viewport)) {
+    const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+    writeFileSync(
+      join(screenshotDir, `live-edit-types-fader-bank-${viewport.width}x${viewport.height}.png`),
+      screenshot.data,
+      "base64",
+    );
+  }
+  await clickVisibleByText(client, ".attributeCategoryRail button", "Dimmer");
+  await sleep(80);
+  const narrowed = await client.evaluate(`(() => {
+    const header = [...document.querySelectorAll('[data-fixture-type-column]')]
+      .find((column) => Number(column.getAttribute('data-fixture-type-count') || 0) === 1)
+      ?.querySelector('[data-fixture-type-select]');
+    if (!(header instanceof HTMLButtonElement)) return false;
+    header.click();
+    return true;
+  })()`);
+  await sleep(120);
+  const single = await measureState();
+
+  const conditions = [
+    ["multipleTypeColumnsVisible", () => multiple.columnCount === 3],
+    ["multipleTypeFixtureCountIs41", () => multiple.fixtureCounts.reduce((sum, count) => sum + count, 0) === 41],
+    ["multipleTypeKeysAreDistinct", () => new Set(multiple.typeKeys).size === 3],
+    ["everyTypeColumnHasHeader", () => multiple.headerCount === multiple.columnCount && multiple.headerLabels.every(Boolean)],
+    ["everyTypeColumnHasPrimaryControl", () => multiple.primaryControlCount === multiple.columnCount && multiple.primaryControlsContained],
+    ["dimmerCategoryUsesPrimaryFaders", () => multiple.primaryControlKinds.every((kind) => kind === "dimmer")],
+    ["dimmerCategoryHasOffPerType", () => multiple.offButtonCount === multiple.columnCount],
+    ["dimmerCategoryHasFaderPerType", () => multiple.faderCount === multiple.columnCount],
+    ["dimmerCategoryHasTrimPerType", () => multiple.trimButtonCount === multiple.columnCount * 2],
+    ["typeColumnControlsMeetTargetFloor", () => multiple.headerMinimumHeight >= 40 && multiple.offButtonMinimumHeight >= 40 && multiple.faderMinimumWidth >= 40 && multiple.trimButtonMinimumHeight >= 40],
+    ["allTypeColumnsSupportDimmerFixture", () => multiple.supportedStates.every((state) => state === "true")],
+    ["multipleSelectionSummaryVisible", () => multiple.selectionSummaryKind.includes("selection") && multiple.selectionSummary.includes("41 fixtures") && multiple.selectionSummary.includes("3 fixture types")],
+    ["legacyEditorHiddenForMultipleSelection", () => multiple.legacyFaderGridCount === 0 && multiple.legacyDimmerPanelCount === 0],
+    ["categoryRailPreservedForMultipleSelection", () => multiple.categoryRailButtonCount === 8 && multiple.activeCategoryLabel.includes("Dimmer")],
+    ["faderCategoryPreservesTypeColumns", () => faderBank.columnCount === 3 && faderBank.primaryControlKinds.every((kind) => kind === "fader-bank")],
+    ["faderCategoryUsesChannelVerticalBank", () => faderBank.bankFaderCount === 13 && faderBank.bankVerticalInputCount === 13],
+    ["faderCategoryShowsChannelNumbers", () => faderBank.bankChannelLabels.length === 13 && faderBank.bankChannelLabels.every((label) => label.startsWith("CH "))],
+    ["faderCategoryHasTrimPerChannel", () => faderBank.bankFineButtonCount === faderBank.bankFaderCount * 2],
+    ["typeHeaderNarrowsSelection", () => narrowed],
+    ["typeColumnsHiddenForSingleSelection", () => single.columnCount === 0],
+    ["legacyEditorVisibleForSingleSelection", () => single.legacyFaderGridCount === 1 && single.legacyDimmerPanelCount === 1],
+    ["singleSelectionUsesFixtureSummary", () => single.selectionSummaryKind.includes("fixture") && single.selectionSummary.includes("GENERIC 1")],
+    ["categoryRailPreservedForSingleSelection", () => single.categoryRailButtonCount === 8 && single.activeCategoryLabel.includes("Dimmer")],
+    ["documentAndAppScrollRemainZero", () => multiple.documentAndAppScrollZero && single.documentAndAppScrollZero],
+  ];
+  const checks = Object.fromEntries(conditions.map(([name, check]) => {
+    try {
+      return [name, Boolean(check())];
+    } catch {
+      return [name, false];
+    }
+  }));
+  const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  return {
+    label: `live-edit-types-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    multiple,
+    faderBank,
+    single,
+    narrowed,
+  };
+}
+
+async function runControlEditPositionViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await seedViewportLocalStorage(client);
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+
+  await clickByText(client, "Setup");
+  await clickByText(client, "Mapping");
+  await clickByText(client, "Stage Map");
+  await clickByText(client, "Pick Visible");
+  await sleep(120);
+  await clickByText(client, "Wave Draft");
+  await sleep(180);
+  await clickByText(client, "Control");
+  await clickByText(client, "Live Edit");
+  await clickVisibleByText(client, ".attributeCategoryRail button", "Position");
+  await sleep(120);
+
+  const measurePositionConsole = () => client.evaluate(`(() => {
+    const visible = (element) => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        style.opacity !== "0"
+      );
+    };
+    const summary = document.querySelector(".attributeTargetSummary");
+    const positionTab = document.querySelector("#position-tool-tab-position");
+    const limitsTab = document.querySelector("#position-tool-tab-limits");
+    return {
+      positionTabVisible: visible(positionTab),
+      positionTabSelected: positionTab?.getAttribute("aria-selected") === "true",
+      positionPaneVisible: visible(document.querySelector("#position-tool-pane-position")),
+      limitsTabVisible: visible(limitsTab),
+      limitsTabSelected: limitsTab?.getAttribute("aria-selected") === "true",
+      limitsPaneVisible: visible(document.querySelector("#position-tool-pane-limits")),
+      panTiltPadVisible: visible(document.querySelector(".positionControlPanel .panTiltPad")),
+      fixtureTypeColumnCount: [...document.querySelectorAll("[data-fixture-type-column]")].filter(visible).length,
+      targetKind: summary?.classList.contains("group")
+        ? "group"
+        : summary?.classList.contains("fixture")
+          ? "fixture"
+          : summary?.classList.contains("selection")
+            ? "selection"
+            : "empty",
+      targetText: (summary?.textContent || "").replace(/\\s+/g, " ").trim(),
+    };
+  })()`);
+
+  const initial = await measurePositionConsole();
+  await client.evaluate("document.querySelector('#position-tool-tab-position')?.focus()");
+  await pressKey(client, "ArrowRight");
+  await sleep(120);
+  const limits = await measurePositionConsole();
+  await clickVisibleSelector(client, "#position-tool-tab-position");
+  await sleep(80);
+  const restored = await measurePositionConsole();
+
+  const conditions = [
+    ["positionTabVisible", () => initial.positionTabVisible],
+    ["positionTabSelected", () => initial.positionTabSelected],
+    ["positionPaneVisible", () => initial.positionPaneVisible],
+    ["limitsTabVisible", () => initial.limitsTabVisible],
+    ["panTiltPadVisible", () => initial.panTiltPadVisible],
+    ["legacyGroupEditorPreserved", () => initial.targetKind === "group" && initial.fixtureTypeColumnCount === 0],
+    ["arrowRightOpensLimits", () => limits.limitsTabSelected && limits.limitsPaneVisible],
+    ["positionTabRestoresPositionPane", () => restored.positionTabSelected && restored.positionPaneVisible],
+  ];
+  const checks = Object.fromEntries(conditions.map(([name, check]) => {
+    try {
+      return [name, Boolean(check())];
+    } catch {
+      return [name, false];
+    }
+  }));
+  const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  return {
+    label: `control-edit-position-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    initial,
+    limits,
+    restored,
+  };
+}
+
 async function main() {
   const browser = findBrowser();
   if (!browser) {
@@ -14215,6 +14490,46 @@ async function main() {
     console.log(
       `viewport contract primary-browser=${primaryOperationalViewport.width}x${primaryOperationalViewport.height} measured-client-size-browser=${measuredClientSizeViewport.width}x${measuredClientSizeViewport.height} extended-browser=${extendedCeilingViewport.width}x${extendedCeilingViewport.height} fallback-browsers=${compactFallbackViewports.map((viewport) => `${viewport.width}x${viewport.height}`).join(",")} screenshots=${captureAllViewportScreenshots ? "all" : "large-browser-fixtures"}`,
     );
+    if (controlEditPositionOnlyMode) {
+      const positionResults = [];
+      for (const viewport of viewports) {
+        const result = await runControlEditPositionViewport(client, viewport);
+        positionResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `tab=${result.initial.positionTabVisible}/${result.initial.positionTabSelected} ` +
+            `pad=${result.initial.panTiltPadVisible} limits=${result.limits.limitsPaneVisible} ` +
+            `restored=${result.restored.positionPaneVisible} target=${result.initial.targetKind} ` +
+            `columns=${result.initial.fixtureTypeColumnCount} failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = positionResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Control Live Edit Position console failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
+    if (liveEditTypesOnlyMode) {
+      const liveEditTypeResults = [];
+      for (const viewport of viewports) {
+        const result = await runLiveEditFixtureTypesViewport(client, viewport);
+        liveEditTypeResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `columns=${result.multiple.columnCount} fixtures=${result.multiple.fixtureCounts.join("+")} ` +
+            `controls=${result.multiple.primaryControlKinds.join("+")} ` +
+            `bank=${result.faderBank.bankFaderCount}/${result.faderBank.bankVerticalInputCount} ` +
+            `single=${result.single.legacyFaderGridCount}/${result.single.legacyDimmerPanelCount} ` +
+            `scroll=${result.multiple.documentAndAppScrollZero && result.single.documentAndAppScrollZero ? "zero" : "overflow"} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = liveEditTypeResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Live Edit fixture-type columns failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (workspaceOperatorOnlyMode) {
       const results = [];
       for (const viewport of viewports) {
@@ -14822,9 +15137,11 @@ async function main() {
     const sceneMatrixResults = [];
     const vjBankResults = [];
     const paneWindowResults = [];
+    const liveEditTypeResults = [];
     if (!workspaceShellOnlyMode) {
       for (const viewport of viewports) {
         await recycleBrowser();
+        liveEditTypeResults.push(await runLiveEditFixtureTypesViewport(client, viewport));
         cueRecallResults.push(await runCueRecallViewport(client, viewport));
         cueRecallLargeResults.push(await runCueRecallLargeViewport(client, viewport));
         effectStackLargeResults.push(await runEffectStackLargeViewport(client, viewport));
@@ -14855,6 +15172,7 @@ async function main() {
     const sceneMatrixFailures = sceneMatrixResults.filter((result) => !result.passed);
     const vjBankFailures = vjBankResults.filter((result) => !result.passed);
     const paneWindowFailures = paneWindowResults.filter((result) => !result.passed);
+    const liveEditTypeFailures = liveEditTypeResults.filter((result) => !result.passed);
     const setupSurfaceFailures = results.filter((result) => !hasExpectedSetupSurface(result));
     const persistentBandFailures = results.filter((result) => !hasExpectedPersistentWorkspaceBand(result));
     const persistentBandInvarianceFailures = results.filter((result) => !hasExpectedPersistentBandInvariance(result));
@@ -14980,6 +15298,11 @@ async function main() {
         `${result.passed ? "pass" : "fail"} ${result.label} pads=${result.pads.join("/")} drawers=${result.drawers.join("/")} monitorRatio=${result.monitorRatio} layerRows=${result.layerRows} kill=${result.killButtons} failed=${JSON.stringify(result.failedChecks)}`,
       );
     }
+    for (const result of liveEditTypeResults) {
+      console.log(
+        `${result.passed ? "pass" : "fail"} ${result.label} columns=${result.multiple.columnCount} fixtures=${result.multiple.fixtureCounts.join("+")} controls=${result.multiple.primaryControlKinds.join("+")} bank=${result.faderBank.bankFaderCount}/${result.faderBank.bankVerticalInputCount} single=${result.single.legacyFaderGridCount}/${result.single.legacyDimmerPanelCount} failed=${JSON.stringify(result.failedChecks)}`,
+      );
+    }
     if (
       failures.length > 0 ||
       cueRecallFailures.length > 0 ||
@@ -14990,6 +15313,7 @@ async function main() {
       sceneMatrixFailures.length > 0 ||
       vjBankFailures.length > 0 ||
       paneWindowFailures.length > 0 ||
+      liveEditTypeFailures.length > 0 ||
       keyboardNavigationFailures.length > 0 ||
       setupSurfaceFailures.length > 0 ||
       persistentBandFailures.length > 0 ||
@@ -15105,6 +15429,7 @@ async function main() {
             sceneMatrix: sceneMatrixFailures,
             vjBank: vjBankFailures,
             paneWindow: paneWindowFailures,
+            liveEditTypes: liveEditTypeFailures,
             keyboardNavigation: keyboardNavigationFailures,
             setupSurface: setupSurfaceFailures,
             persistentBand: persistentBandFailures,
@@ -15135,7 +15460,7 @@ async function main() {
         ),
       );
       throw new Error(
-        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${effectStackLargeFailures.length} large live-effect DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${mappingExpansionFailures.length} mapping expansion check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${killZoneFailures.length} kill zone check(s), ${statusLineFailures.length} status line check(s) failed.`,
+        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${effectStackLargeFailures.length} large live-effect DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${liveEditTypeFailures.length} Live Edit fixture-type check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${mappingExpansionFailures.length} mapping expansion check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${mappingWaveDraftFailures.length} mapping wave draft check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${killZoneFailures.length} kill zone check(s), ${statusLineFailures.length} status line check(s) failed.`,
       );
     }
   } finally {
