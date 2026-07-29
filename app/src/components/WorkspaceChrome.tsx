@@ -1,3 +1,4 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createSignal, For, onCleanup, Show, type JSX } from "solid-js";
 import {
   projectRecoverySourceLabel,
@@ -80,6 +81,64 @@ type WorkspaceChromeProps = {
   onRunSmoke: () => void;
 };
 
+const isTauriRuntime = () =>
+  typeof window !== "undefined" &&
+  Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
+
+type WindowControlAction = "minimize" | "toggleMaximize" | "close";
+
+function WindowControls() {
+  const runWindowControl = async (action: WindowControlAction) => {
+    if (!isTauriRuntime()) return;
+    const appWindow = getCurrentWindow();
+    if (action === "minimize") {
+      await appWindow.minimize();
+      return;
+    }
+    if (action === "toggleMaximize") {
+      await appWindow.toggleMaximize();
+      return;
+    }
+    // close(), unlike destroy(), raises the existing CloseRequested event so
+    // App owns recovery/dirty-editor confirmation before the window exits.
+    await appWindow.close();
+  };
+
+  return (
+    <div class="windowControls" data-window-controls role="group" aria-label="ウィンドウ操作">
+      <button
+        type="button"
+        data-window-control="minimize"
+        title="最小化"
+        aria-label="最小化"
+        onClick={() => void runWindowControl("minimize")}
+      >
+        <span class="windowControlGlyph minimize" aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        data-window-control="maximize"
+        title="最大化または元に戻す"
+        aria-label="最大化または元に戻す"
+        onClick={() => void runWindowControl("toggleMaximize")}
+      >
+        <span class="windowControlGlyph maximize" aria-hidden="true" />
+        <span class="windowControlGlyph restore" aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        class="windowCloseButton"
+        data-window-control="close"
+        title="閉じる"
+        aria-label="閉じる"
+        onClick={() => void runWindowControl("close")}
+      >
+        <span class="windowControlGlyph close" aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
+
 export function WorkspaceChrome(props: WorkspaceChromeProps) {
   let projectMenuRoot: HTMLDivElement | undefined;
   const [projectMenuOpen, setProjectMenuOpen] = createSignal(false);
@@ -142,7 +201,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
 
   return (
     <div class="workspaceChrome">
-      <header class="topbar">
+      <header class="topbar" data-tauri-drag-region>
         <div class="topbarLeft" ref={projectMenuRoot}>
           <button
             class={projectMenuOpen() ? "appMenuButton active" : "appMenuButton"}
@@ -406,9 +465,10 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
         <div
           class={props.projectDirty ? "topbarProject dirty" : "topbarProject"}
           title={props.currentProjectPath ?? "Unsaved project"}
+          data-tauri-drag-region
         >
-          <strong>Syndocal</strong>
-          <span>{props.projectLabel}</span>
+          <strong data-tauri-drag-region>Syndocal</strong>
+          <span data-tauri-drag-region>{props.projectLabel}</span>
           {props.operations}
         </div>
 
@@ -493,6 +553,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
             Load
           </button>
         </div>
+        <WindowControls />
       </header>
 
       <Show when={props.workspaceTab === "setup"}>

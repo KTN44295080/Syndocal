@@ -14,6 +14,11 @@ const controller = await readFile(
   new URL("../src/components/DesktopWindowModeController.tsx", import.meta.url),
   "utf8",
 );
+const workspaceChrome = await readFile(
+  new URL("../src/components/WorkspaceChrome.tsx", import.meta.url),
+  "utf8",
+);
+const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
 const main = await readFile(new URL("../src/main.tsx", import.meta.url), "utf8");
 const backend = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
@@ -23,6 +28,8 @@ const nativeAcceptance = await readFile(
 );
 
 assert.equal(config.app.windows[0].maximized, true, "the primary desktop window must start maximized");
+assert.equal(config.app.windows[0].decorations, false, "the primary desktop window must be frameless");
+assert.equal(config.app.windows[0].resizable, true, "the frameless primary window must stay resizable");
 assert.notEqual(
   nativeAcceptanceConfig.identifier,
   config.identifier,
@@ -32,6 +39,11 @@ assert.equal(nativeAcceptanceConfig.app.windows[0].title, "Syndocal QA - Native 
 assert.equal(nativeAcceptanceConfig.app.windows[0].width, 1920);
 assert.equal(nativeAcceptanceConfig.app.windows[0].height, 1080);
 assert.equal(nativeAcceptanceConfig.app.windows[0].maximized, true);
+assert.equal(
+  nativeAcceptanceConfig.app.windows[0].decorations,
+  false,
+  "native acceptance must exercise the frameless main-window contract",
+);
 assert.equal(packageJson.scripts["check:native-window"], "node scripts/run-native-window-acceptance.mjs");
 assert.ok(
   packageJson.scripts["check:release-ui"].includes("check:native-window"),
@@ -83,6 +95,15 @@ assert.ok(
   capability.permissions.includes("core:window:allow-set-fullscreen"),
   "the main window must be allowed to change fullscreen state",
 );
+for (const permission of [
+  "core:window:allow-close",
+  "core:window:allow-minimize",
+  "core:window:allow-start-dragging",
+  "core:window:allow-start-resize-dragging",
+  "core:window:allow-toggle-maximize",
+]) {
+  assert.ok(capability.permissions.includes(permission), `frameless chrome requires ${permission}`);
+}
 assert.ok(
   main.includes("shouldMountDesktopWindowModeController(window.location.search)"),
   "the app entrypoint must scope desktop window control by route",
@@ -114,6 +135,49 @@ assert.ok(
 assert.ok(controller.includes('window.addEventListener("resize"'), "native window-mode changes must be resynchronized");
 assert.ok(controller.includes('window.removeEventListener("keydown"'), "the global shortcut listener must be cleaned up");
 assert.ok(controller.includes('aria-live="polite"'), "window-mode feedback must be announced accessibly");
+assert.ok(
+  controller.includes("DESKTOP_RESIZE_DIRECTIONS") &&
+    controller.includes("await appWindow.startResizeDragging(direction)") &&
+    controller.includes("await appWindow.isFullscreen()") &&
+    controller.includes("await appWindow.isMaximized()") &&
+    controller.includes("<DesktopWindowResizeZones />"),
+  "windowed frameless mode must expose eight native resize-drag boundaries and suppress them while maximized/fullscreen",
+);
+assert.ok(
+  styles.includes(".desktopResizeZoneNorthEast") &&
+    styles.includes(".desktopResizeZoneSouthEast") &&
+    styles.includes(".desktopResizeZoneSouthWest") &&
+    styles.includes(".desktopResizeZoneNorthWest") &&
+    styles.includes('html[data-window-mode="maximized"] .desktopResizeZones') &&
+    styles.includes('html[data-window-mode="fullscreen"] .desktopResizeZones'),
+  "frameless resize zones must include corners and stay inactive outside windowed mode",
+);
+assert.ok(
+  workspaceChrome.includes('<header class="topbar" data-tauri-drag-region>') &&
+    workspaceChrome.includes("<strong data-tauri-drag-region>Syndocal</strong>") &&
+    workspaceChrome.includes("<span data-tauri-drag-region>{props.projectLabel}</span>") &&
+    workspaceChrome.includes('data-window-control="minimize"') &&
+    workspaceChrome.includes('data-window-control="maximize"') &&
+    workspaceChrome.includes('data-window-control="close"'),
+  "the T25-A topbar must own the drag region and all three browser-visible window controls",
+);
+assert.ok(
+  workspaceChrome.includes('aria-label="最小化"') &&
+    workspaceChrome.includes('aria-label="最大化または元に戻す"') &&
+    workspaceChrome.includes('aria-label="閉じる"'),
+  "window controls must expose Japanese accessible names",
+);
+assert.ok(
+  workspaceChrome.includes("await appWindow.minimize()") &&
+    workspaceChrome.includes("await appWindow.toggleMaximize()") &&
+    workspaceChrome.includes("await appWindow.close()") &&
+    !workspaceChrome.includes("appWindow.destroy()"),
+  "custom controls must use native minimize/toggle and route close through CloseRequested instead of a forced destroy",
+);
+assert.ok(
+  workspaceChrome.includes("if (!isTauriRuntime()) return"),
+  "window controls must remain browser-rendered no-ops outside Tauri",
+);
 assert.ok(
   controller.includes("const documentRoot = document.documentElement") &&
     controller.includes("documentRoot.setAttribute(") &&

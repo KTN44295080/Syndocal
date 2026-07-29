@@ -22,6 +22,19 @@ export default defineConfig({
             return "qa-fixtures";
           }
           if (
+            normalizedId.includes("/src/destructiveActions") ||
+            normalizedId.includes("/src/desktopWindowMode") ||
+            normalizedId.includes("/src/effectVisualization") ||
+            normalizedId.includes("/src/hotkeyHelpers") ||
+            normalizedId.includes("/src/projectRecentStorage") ||
+            normalizedId.includes("/src/projectRecoveryStorage") ||
+            normalizedId.includes("/src/uiModes") ||
+            normalizedId.includes("/src/workspaceLayoutStorage") ||
+            normalizedId.includes("/src/workspaceProfiles")
+          ) {
+            return "shared-helpers";
+          }
+          if (
             normalizedId.includes("/src/components/FixtureCatalogPanel") ||
             normalizedId.includes("/src/fixtureCatalog")
           ) {
@@ -143,11 +156,12 @@ export default defineConfig({
           }
           if (
             normalizedId.includes("/src/createAppKeyboardController") ||
-            normalizedId.includes("/src/destructiveActions") ||
             normalizedId.includes("/src/statusModel") ||
+            normalizedId.includes("/src/components/DesktopWindowModeController") ||
             normalizedId.includes("/src/components/AppStatusLine") ||
             normalizedId.includes("/src/components/GroupChip") ||
-            normalizedId.includes("/src/components/WorkspaceChrome")
+            normalizedId.includes("/src/components/WorkspaceChrome") ||
+            normalizedId.includes("/src/components/WorkspaceOperationsMenu")
           ) {
             return "workspace-chrome";
           }

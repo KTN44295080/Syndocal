@@ -13,6 +13,16 @@ const NOTICE_DURATION_MS = 4_000;
 const RESIZE_SETTLE_MS = 120;
 const DESKTOP_FULLSCREEN_SHORTCUT_EVENT = "desktop-window-toggle-fullscreen";
 const DESKTOP_ESCAPE_SHORTCUT_EVENT = "desktop-window-forward-escape";
+const DESKTOP_RESIZE_DIRECTIONS = [
+  "North",
+  "NorthEast",
+  "East",
+  "SouthEast",
+  "South",
+  "SouthWest",
+  "West",
+  "NorthWest",
+] as const;
 
 const isTauriRuntime = () =>
   typeof window !== "undefined" &&
@@ -32,6 +42,32 @@ const noticeForMode = (mode: DesktopWindowMode) => {
       return null;
   }
 };
+
+const DesktopWindowResizeZones = () => {
+  const startResize = async (
+    direction: (typeof DESKTOP_RESIZE_DIRECTIONS)[number],
+    event: PointerEvent,
+  ) => {
+    if (event.button !== 0 || !isTauriRuntime()) return;
+    const appWindow = getCurrentWindow();
+    if (await appWindow.isFullscreen() || await appWindow.isMaximized()) return;
+    event.preventDefault();
+    await appWindow.startResizeDragging(direction);
+  };
+
+  return (
+    <div class="desktopResizeZones" aria-hidden="true">
+      {DESKTOP_RESIZE_DIRECTIONS.map((direction) => (
+        <div
+          class={`desktopResizeZone desktopResizeZone${direction}`}
+          data-window-resize-direction={direction}
+          onPointerDown={(event) => void startResize(direction, event)}
+        />
+      ))}
+    </div>
+  );
+};
+
 export const DesktopWindowModeController: ParentComponent = (props) => {
   const [mode, setMode] = createSignal<DesktopWindowMode>("unknown");
   const [noticeVisible, setNoticeVisible] = createSignal(false);
@@ -224,6 +260,9 @@ export const DesktopWindowModeController: ParentComponent = (props) => {
   return (
     <>
       {props.children}
+      <Show when={isTauriRuntime()}>
+        <DesktopWindowResizeZones />
+      </Show>
       <Show when={noticeVisible() && notice()} keyed>
         {(visibleNotice) => (
           <output

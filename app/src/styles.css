@@ -31620,7 +31620,7 @@ h3 {
    The show-critical controls stay in fixed/contained tracks so removing three
    redundant rows cannot reintroduce the T10 sizing oscillator. */
 .topbar {
-  grid-template-columns: minmax(245px, 0.65fr) minmax(120px, 0.35fr) minmax(640px, 1.4fr);
+  grid-template-columns: minmax(245px, 0.65fr) minmax(120px, 0.35fr) minmax(520px, 1.4fr) 120px;
   min-height: 42px;
 }
 
@@ -31689,6 +31689,195 @@ h3 {
 .status .projectAction,
 .status .goButton {
   flex: 0 0 auto;
+}
+
+.windowControls {
+  display: grid;
+  grid-template-columns: repeat(3, 40px);
+  align-self: stretch;
+  justify-self: end;
+  width: 120px;
+  min-width: 120px;
+  height: 40px;
+  min-height: 40px;
+}
+
+.windowControls > button {
+  position: relative;
+  display: grid;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
+  place-items: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  color: #d6cfc8;
+}
+
+.windowControls > button:hover {
+  background: #3a3530;
+  color: #fff;
+}
+
+.windowControls > .windowCloseButton:hover {
+  background: #b42b31;
+}
+
+.windowControlGlyph {
+  position: absolute;
+  display: block;
+  width: 12px;
+  height: 12px;
+  pointer-events: none;
+}
+
+.windowControlGlyph.minimize::before {
+  position: absolute;
+  right: 0;
+  bottom: 2px;
+  left: 0;
+  height: 1px;
+  background: currentColor;
+  content: "";
+}
+
+.windowControlGlyph.maximize {
+  border: 1px solid currentColor;
+}
+
+.windowControlGlyph.restore {
+  display: none;
+}
+
+.windowControlGlyph.restore::before,
+.windowControlGlyph.restore::after {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border: 1px solid currentColor;
+  background: #25221f;
+  content: "";
+}
+
+.windowControlGlyph.restore::before {
+  top: 0;
+  right: 0;
+}
+
+.windowControlGlyph.restore::after {
+  bottom: 0;
+  left: 0;
+}
+
+html[data-window-mode="maximized"] .windowControlGlyph.maximize {
+  display: none;
+}
+
+html[data-window-mode="maximized"] .windowControlGlyph.restore {
+  display: block;
+}
+
+.windowControls > button:hover .windowControlGlyph.restore::before,
+.windowControls > button:hover .windowControlGlyph.restore::after {
+  background: #3a3530;
+}
+
+.windowControlGlyph.close::before,
+.windowControlGlyph.close::after {
+  position: absolute;
+  top: 5px;
+  left: 0;
+  width: 12px;
+  height: 1px;
+  background: currentColor;
+  content: "";
+}
+
+.windowControlGlyph.close::before {
+  transform: rotate(45deg);
+}
+
+.windowControlGlyph.close::after {
+  transform: rotate(-45deg);
+}
+
+.desktopResizeZone {
+  position: fixed;
+  z-index: 5000;
+}
+
+.desktopResizeZoneNorth,
+.desktopResizeZoneSouth {
+  right: 10px;
+  left: 10px;
+  height: 5px;
+}
+
+.desktopResizeZoneEast,
+.desktopResizeZoneWest {
+  top: 10px;
+  bottom: 10px;
+  width: 5px;
+}
+
+.desktopResizeZoneNorth {
+  top: 0;
+  cursor: n-resize;
+}
+
+.desktopResizeZoneNorthEast {
+  top: 0;
+  right: 0;
+  cursor: ne-resize;
+}
+
+.desktopResizeZoneEast {
+  right: 0;
+  cursor: e-resize;
+}
+
+.desktopResizeZoneSouthEast {
+  right: 0;
+  bottom: 0;
+  cursor: se-resize;
+}
+
+.desktopResizeZoneSouth {
+  bottom: 0;
+  cursor: s-resize;
+}
+
+.desktopResizeZoneSouthWest {
+  bottom: 0;
+  left: 0;
+  cursor: sw-resize;
+}
+
+.desktopResizeZoneWest {
+  left: 0;
+  cursor: w-resize;
+}
+
+.desktopResizeZoneNorthWest {
+  top: 0;
+  left: 0;
+  cursor: nw-resize;
+}
+
+.desktopResizeZoneNorthEast,
+.desktopResizeZoneSouthEast,
+.desktopResizeZoneSouthWest,
+.desktopResizeZoneNorthWest {
+  width: 10px;
+  height: 10px;
+}
+
+html[data-window-mode="maximized"] .desktopResizeZones,
+html[data-window-mode="fullscreen"] .desktopResizeZones {
+  display: none;
 }
 
 @media (max-width: 1500px) {

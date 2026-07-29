@@ -15,7 +15,8 @@
         "minWidth": 960,
         "minHeight": 640,
         "maximized": false,
-        "resizable": true
+        "resizable": true,
+        "decorations": false
       }
     ]
   },

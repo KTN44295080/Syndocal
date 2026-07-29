@@ -245,7 +245,7 @@ Web Remoteは信頼済みLAN用、Active / Standbyは専用共有storage用の�
 ## 回帰させない条件
 
 - アプリ全体を縦スクロールさせない。一画面デスクを維持し、必要なスクロールは各パネル内に閉じる。
-- Desktopは起動時最大化を既定とし、F11でwindow fullscreen、Escで解除できる状態を維持する。主browser visual gateは1920x1080、1920x1032はbrowser上のmeasured-work-area fixtureとする。native受入は1920x1032のWindows作業領域内で最大化client 1920x1009、F11 fullscreen client 1920x1080、Esc後の1920x1009完全復帰を別証拠として検査する。nativeの主証拠にはcurrent HEADのisolated QA buildまたは同一revisionのrelease artifactだけを使い、起動済みの旧binary／小窓binaryは比較・診断証拠に限定する。2048x1152は拡張上限回帰、1366x768／1280x720は小画面containment fallbackとして別に維持する。fallback通過だけでUIデザイン合格としない。
+- Desktopは起動時最大化を既定とし、F11でwindow fullscreen、Escで解除できる状態を維持する。主browser visual gateは1920x1080、1920x1032はbrowser上のmeasured-work-area fixtureとする。T25-E（2026-07-30）以降、本体ウィンドウはフレームレス（`decorations: false`、42pxトップバー=タイトルバー、右端に40x40の最小化/最大化/閉じる、8方向エッジリサイズ、ダブルクリック最大化）であり、native受入は1920x1032のWindows作業領域内で最大化client 1920x1032、F11 fullscreen client 1920x1080、Esc後の完全復帰を別証拠として検査する（装飾あり時代の1920x1009は履歴値）。閉じるは`close()`のCloseRequested経路を通り、復旧/未保存確認フローを迂回しない。nativeの主証拠にはcurrent HEADのisolated QA buildまたは同一revisionのrelease artifactだけを使い、起動済みの旧binary／小窓binaryは比較・診断証拠に限定する。2048x1152は拡張上限回帰、1366x768／1280x720は小画面containment fallbackとして別に維持する。fallback通過だけでUIデザイン合格としない。
 - SetupはLightingとVideoの専用画面を混在させず、タブで切り替える。
 - Controlは上段のCue/Transport、左下の2D Stage Map、右下のLive Edit/Timeline/Mixerを維持する。
 - 44Hz DMXスレッドに動画処理、ブロッキングI/O、動的アロケーションを持ち込まない。

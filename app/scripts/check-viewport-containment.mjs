@@ -2194,12 +2194,17 @@ async function measureTimelinePaneExpansionState(client) {
       ? [...topbarMasterCluster.querySelectorAll('input[type="range"]')].filter(isVisible)
       : [];
     const topbarTap = [...document.querySelectorAll('[data-topbar-tap]')].find(isVisible);
+    const windowControls = [...document.querySelectorAll('[data-window-controls]')].find(isVisible);
+    const windowControlButtons = windowControls
+      ? [...windowControls.querySelectorAll(':scope > [data-window-control]')].filter(isVisible)
+      : [];
     const controlContextHeader = [...document.querySelectorAll('[data-control-context-header]')].find(isVisible);
     const controlModeSegment = controlContextHeader?.querySelector('[data-control-mode-segment]') ?? null;
     const controlContextFaders = [...document.querySelectorAll('.controlContextPane > .faders')].find(isVisible);
     const topbarRect = measuredRect('.topbar');
     const topbarMasterClusterRect = measuredRect('[data-topbar-masters]');
     const topbarTapRect = measuredRect('[data-topbar-tap]');
+    const windowControlsRect = measuredRect('[data-window-controls]');
     const controlContextHeaderRect = measuredRect('[data-control-context-header]');
     const controlModeSegmentRect = measuredRect('[data-control-context-header] > [data-control-mode-segment]');
     const controlContextFadersRect = measuredRect('.controlContextPane > .faders');
@@ -2261,6 +2266,32 @@ async function measureTimelinePaneExpansionState(client) {
           ? Math.min(...topbarMasterSliders.map((slider) => slider.getBoundingClientRect().width))
           : 0,
         topbarTapRect,
+        topbarDragRegion: topbar?.hasAttribute('data-tauri-drag-region') ?? false,
+        topbarDragRegionSurfaceCount:
+          (topbar?.hasAttribute('data-tauri-drag-region') ? 1 : 0) +
+          (topbar?.querySelectorAll('[data-tauri-drag-region]').length ?? 0),
+        interactiveDragRegionCount: topbar?.querySelectorAll(
+          'button[data-tauri-drag-region], input[data-tauri-drag-region], select[data-tauri-drag-region], [role="menu"][data-tauri-drag-region]'
+        ).length ?? 0,
+        windowControlsRect,
+        windowControlCount: windowControlButtons.length,
+        windowControlActions: windowControlButtons.map((button) => button.getAttribute('data-window-control')),
+        windowControlAriaLabels: windowControlButtons.map((button) => button.getAttribute('aria-label') ?? ''),
+        windowControlTabIndexes: windowControlButtons.map((button) => button.tabIndex),
+        windowControlMetrics: windowControlButtons.map((button) => {
+          const rect = button.getBoundingClientRect();
+          return { width: rect.width, height: rect.height };
+        }),
+        windowControlsContained: rectContained(windowControlsRect, topbarRect),
+        windowControlCenterSpread: windowControlButtons.length > 0
+          ? Math.max(...windowControlButtons.map((button) => {
+              const rect = button.getBoundingClientRect();
+              return rect.y + rect.height / 2;
+            })) - Math.min(...windowControlButtons.map((button) => {
+              const rect = button.getBoundingClientRect();
+              return rect.y + rect.height / 2;
+            }))
+          : Number.POSITIVE_INFINITY,
         topbarBpmReadoutCount: topbar?.querySelectorAll('.bpmReadout').length ?? 0,
         topbarMasterClusterContained: rectContained(topbarMasterClusterRect, topbarRect),
         topbarTapContained: rectContained(topbarTapRect, topbarRect),
@@ -2428,6 +2459,26 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
     ['timelineExpandToggleNamed', () => Boolean(before.timelinePaneExpandToggleNamed)],
     ['t25TopbarIsSingleContainedRow', () => topbarIsSingleContainedRow],
     ['t25TopbarMastersBpmAndTapIntegrated', () => topbarMastersAndBpmAreIntegrated],
+    ['t25ETopbarOwnsDragRegionOnlyOnBackground', () => Boolean(
+      normalDensity.topbarDragRegion &&
+      normalDensity.topbarDragRegionSurfaceCount >= 4 &&
+      normalDensity.interactiveDragRegionCount === 0
+    )],
+    ['t25EWindowControlsExistInRequiredOrder', () => Boolean(
+      normalDensity.windowControlCount === 3 &&
+      JSON.stringify(normalDensity.windowControlActions) === JSON.stringify(['minimize', 'maximize', 'close'])
+    )],
+    ['t25EWindowControlsMeetHitTargetAndKeyboardContract', () => Boolean(
+      normalDensity.windowControlMetrics?.length === 3 &&
+      normalDensity.windowControlMetrics.every((metric) => metric.width >= 40 && metric.height >= 40) &&
+      normalDensity.windowControlTabIndexes?.every((tabIndex) => tabIndex === 0) &&
+      normalDensity.windowControlAriaLabels?.every((label) => label.length > 0)
+    )],
+    ['t25EWindowControlsShareTheSingleTopbarRow', () => Boolean(
+      normalDensity.windowControlsContained &&
+      normalDensity.windowControlsRect?.height === 40 &&
+      normalDensity.windowControlCenterSpread <= 1
+    )],
     ['t25ControlBreadcrumbRowRemoved', () => Boolean(
       normalDensity.controlBreadcrumbRowCount === 0 &&
       normalDensity.chromeControlModeRowCount === 0
@@ -2687,6 +2738,8 @@ async function measureLiveDeskHeaderState(client) {
       toolbarCount: document.querySelectorAll('.liveControlPanel > [data-live-desk-toolbar]').length,
       toolbarActionsCount: document.querySelectorAll('.liveControlPanel [data-live-desk-toolbar-actions]').length,
       directTransportButtonCount: directTransportButtons.length,
+      cueEditorToggleCount: [...document.querySelectorAll('.liveDeskToolbarActions .liveCueEditorToggle')]
+        .filter(isVisible).length,
       viewToggleButtonCount: viewToggle
         ? [...viewToggle.querySelectorAll('button')].filter(isVisible).length
         : 0,
@@ -2774,7 +2827,7 @@ async function runLiveDeskHeaderViewport(client, viewport) {
       matrix.viewToggleContained &&
       matrix.statusToggleContained,
     toolbarControlsShareOneVisualRow:
-      matrix.toolbarControlCount === 12 &&
+      matrix.toolbarControlCount === 13 &&
       matrix.toolbarControlCenterSpread <= 1 &&
       matrix.toolbarRect?.height === 32,
     sceneReadoutMovedIntoExpandedStatus:
@@ -17128,7 +17181,7 @@ async function main() {
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
             `header=${result.matrix.toolbarRect?.height ?? 0} ` +
             `matrix=${result.matrix.matrixRect?.height ?? 0} ` +
-            `actions=${result.matrix.directTransportButtonCount}+${result.matrix.viewToggleButtonCount}+${result.matrix.statusToggleCount} ` +
+            `actions=${result.matrix.directTransportButtonCount}+${result.matrix.cueEditorToggleCount}+${result.matrix.viewToggleButtonCount}+${result.matrix.statusToggleCount} ` +
             `kill=${result.matrix.killButtonCount}/${result.matrix.killClearCount} ` +
             `hatch=${result.matrix.killButtonsHatched ? 1 : 0} red=${result.matrix.killButtonsRedBordered ? 1 : 0} ` +
             `dimensions=${JSON.stringify([...result.matrix.killButtonMetrics, ...result.matrix.killClearMetrics])} ` +
@@ -17200,6 +17253,8 @@ async function main() {
             `band=${result.before.persistentBandRect?.height ?? 0} ` +
             `topbar=${result.before.t25Density?.topbarRect?.width ?? 0}x${result.before.t25Density?.topbarRect?.height ?? 0}` +
               `/${result.before.t25Density?.topbarScrollWidth ?? 0} ` +
+            `windowControls=${result.before.t25Density?.windowControlCount ?? 0}` +
+              `/${JSON.stringify(result.before.t25Density?.windowControlMetrics ?? [])} ` +
             `masterSliderMin=${result.before.t25Density?.topbarMasterMinimumSliderWidth ?? 0} ` +
             `contextHeader=${result.before.t25Density?.controlContextHeaderRect?.height ?? 0} ` +
             `surface=${result.expanded.timelineShowSurfaceRect?.height ?? 0} ` +

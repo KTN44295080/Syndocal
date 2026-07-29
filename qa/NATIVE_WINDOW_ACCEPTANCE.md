@@ -20,11 +20,12 @@ The release UI order is:
 4. Compact containment fallbacks at 1366x768 and 1280x720.
 
 On this workstation the 1920x1080 monitor has a 1920x1032 Windows work area.
-The decorated Tauri window's actual maximized content client is 1920x1009; the
-remaining 23 pixels are native title-bar chrome. Earlier notes that called
-1920x1032 the native client size conflated the Windows work area with the app
-content client. F11 removes both taskbar and title-bar reservations and must
-produce a real 1920x1080 client.
+Since T25-E (2026-07-30) the main window is frameless (`decorations: false`)
+with the integrated top bar acting as the title bar, so the maximized content
+client equals the full work area: 1920x1032. The pre-T25-E decorated client
+was 1920x1009 (23 pixels of native title-bar chrome); that value is historical
+only. F11 removes the taskbar reservation as well and must produce a real
+1920x1080 client; Esc must restore the exact 1920x1032 maximized client.
 
 ## Commands
 
@@ -80,7 +81,19 @@ original maximized dimensions.
 
 ## Latest verified run
 
-The current working revision passed on 2026-07-14 03:22:33 JST. The native
+The T25-E frameless revision passed supervisor native acceptance on 2026-07-30
+(WebView2 CDP + Win32 window-rect evidence): maximized client 1920x1032, F11
+fullscreen client 1920x1080, Esc restore to the pre-F11 client. Frameless
+window operations were verified natively in the same run: top-bar drag region
+moved the window by exact commanded deltas (three drags, cross-checked against
+`GetWindowRect` because `window.screenX` is stale in WebView2), double-click
+on the bar toggled maximize both ways, the 40x40 minimize/maximize/close
+controls worked (`IsIconic` true on the `Tauri Window` class handle after
+minimize; close exited the process cleanly through the `CloseRequested` path),
+and an 8-direction edge resize grew the restored window 1280x800 -> 1380x850
+with exact deltas.
+
+The prior decorated-window run passed on 2026-07-14 03:22:33 JST. The native
 client measured 1920x1009 maximized, 1920x1080 after F11, and 1920x1009 after
 Esc. All three exact-window screenshots passed the non-blank visual gate:
 maximized/fullscreen/restored sampled-color counts were 63/64/67, dark-pixel
