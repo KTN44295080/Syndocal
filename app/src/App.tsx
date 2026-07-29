@@ -11169,6 +11169,84 @@ export default function App() {
     }
   };
 
+  const reorderSceneMatrixCue = async (
+    sourceCueId: number,
+    targetCueId: number,
+    position: "before" | "after",
+  ) => {
+    if (sourceCueId === targetCueId) return;
+    const cues = snapshot().cues;
+    const sourceCue = cues.find((cue) => cue.id === sourceCueId);
+    const targetCue = cues.find((cue) => cue.id === targetCueId);
+    if (!sourceCue || !targetCue) {
+      setMessage("Drop the Cue on another cell in this column or on a Timeline lane.");
+      return;
+    }
+    const columnKey = (cue: CueSummary) => cue.group_id?.trim() || "Show";
+    if (columnKey(sourceCue) !== columnKey(targetCue)) {
+      setMessage("Cues can only be reordered within the same Scene Matrix column.");
+      return;
+    }
+    if (sourceCue.cue_list_id !== targetCue.cue_list_id) {
+      setMessage("Cues must share a Cue List before they can be reordered.");
+      return;
+    }
+
+    const cueList = cues.filter((cue) => cue.cue_list_id === sourceCue.cue_list_id);
+    const sourceIndex = cueList.findIndex((cue) => cue.id === sourceCueId);
+    const withoutSource = cueList.filter((cue) => cue.id !== sourceCueId);
+    const targetIndex = withoutSource.findIndex((cue) => cue.id === targetCueId);
+    if (sourceIndex < 0 || targetIndex < 0) return;
+    const insertionIndex = targetIndex + (position === "after" ? 1 : 0);
+    const moveCount = insertionIndex - sourceIndex;
+    if (moveCount === 0) return;
+    const delta = moveCount < 0 ? -1 : 1;
+    const stepCount = Math.abs(moveCount);
+
+    const applyMoveSteps = (currentCues: CueSummary[]) => {
+      const next = [...currentCues];
+      for (let step = 0; step < stepCount; step += 1) {
+        const cueIndex = next.findIndex((cue) => cue.id === sourceCueId);
+        if (cueIndex < 0) break;
+        const cueListId = next[cueIndex].cue_list_id;
+        let adjacentIndex = cueIndex;
+        if (delta < 0) {
+          for (let index = cueIndex - 1; index >= 0; index -= 1) {
+            if (next[index].cue_list_id === cueListId) {
+              adjacentIndex = index;
+              break;
+            }
+          }
+        } else {
+          for (let index = cueIndex + 1; index < next.length; index += 1) {
+            if (next[index].cue_list_id === cueListId) {
+              adjacentIndex = index;
+              break;
+            }
+          }
+        }
+        if (adjacentIndex === cueIndex) break;
+        [next[cueIndex], next[adjacentIndex]] = [next[adjacentIndex], next[cueIndex]];
+      }
+      return next;
+    };
+
+    try {
+      if (viewportFixture !== "scene-matrix" && viewportFixture !== "workspace-operator") {
+        for (let step = 0; step < stepCount; step += 1) {
+          await invoke("move_cue", { cueId: sourceCueId, delta });
+        }
+      }
+      setSnapshot((current) => ({
+        ...current,
+        cues: applyMoveSteps(current.cues),
+      }));
+      setMessage("Cue order updated.");
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
   const duplicateCue = async (cue: CueSummary) => {
     const draft = cueMetadataDraft(cue);
     const baseLabel = draft.label.trim() || cue.label;
@@ -11529,10 +11607,15 @@ export default function App() {
     loopCount: 1,
   });
 
-  const beginTimelineCueDrag = (cue: CueSummary, point: TimelineCueDragPoint) => {
+  const beginTimelineCueDrag = (
+    cue: CueSummary,
+    point: TimelineCueDragPoint,
+    sourceSurface: TimelineCueDragState["source_surface"] = "cue-editor",
+  ) => {
     setTimelineCueDrag({
       cue_id: cue.id,
       cue_label: cue.label,
+      source_surface: sourceSurface,
       pointer_id: point.pointerId,
       start_client_x: point.clientX,
       start_client_y: point.clientY,
@@ -11557,7 +11640,30 @@ export default function App() {
       : null;
     setTimelineCueDrag(null);
     if (!drag || canceled || (!drag.moved && !moved)) return;
-    const target = document.elementFromPoint(point.clientX, point.clientY)
+    const hitElement = document.elementFromPoint(point.clientX, point.clientY);
+    const matrixTarget = drag.source_surface === "scene-matrix"
+      ? hitElement?.closest<HTMLElement>("[data-scene-matrix-cue-id]")
+      : null;
+    if (matrixTarget) {
+      const targetCueId = Number(matrixTarget.dataset.sceneMatrixCueId);
+      const targetRect = matrixTarget.getBoundingClientRect();
+      if (Number.isFinite(targetCueId)) {
+        await reorderSceneMatrixCue(
+          drag.cue_id,
+          targetCueId,
+          point.clientY < targetRect.top + targetRect.height / 2 ? "before" : "after",
+        );
+      }
+      return;
+    }
+    if (
+      drag.source_surface === "scene-matrix" &&
+      hitElement?.closest("[data-scene-matrix-column]")
+    ) {
+      setMessage("Drop the Cue on another cell in this column or on a Timeline lane.");
+      return;
+    }
+    const target = hitElement
       ?.closest<HTMLElement>("[data-timeline-layer-id]");
     const layerId = Number(target?.dataset.timelineLayerId);
     const layer = timelineLayers().find((candidate) => candidate.id === layerId);

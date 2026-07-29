@@ -293,7 +293,7 @@ try {
     record("expand-and-restore-timeline-pane", 2, 2, expanded === "true" && restored === "false", "2 clicks");
   }
 
-  // ---- Tasks 4-6: live scene operation from the always-visible matrix.
+  // ---- Tasks 4-7: live scene operation from the always-visible matrix.
   // The Daslight side has not been counted for these exact fixture/task
   // starting states, so these are Syndocal regression budgets only.
   {
@@ -362,9 +362,22 @@ try {
       `speed ${resetState.speed}`,
     );
 
+    await opClick(trigger.x, trigger.y); // op 1
+    const released = JSON.parse(await evalJs(`(() => JSON.stringify({
+      active: document.querySelector('[data-scene-matrix-cue-id="303"]')?.getAttribute('data-scene-matrix-active') || '',
+      stripPresent: Boolean(document.querySelector('[data-cue-live-modifier="303"]')),
+    }))()`));
+    record(
+      "release-active-scene-from-matrix",
+      1,
+      1,
+      released.active === "false" && released.stripPresent === false,
+      "未計測",
+    );
+
   }
 
-  // ---- Tasks 7-11: switch to the project-saved Touch surface, operate it,
+  // ---- Tasks 8-12: switch to the project-saved Touch surface, operate it,
   // then create one control in Edit mode. Fixture preparation is not counted;
   // every task action below is a real CDP pointer gesture.
   {
@@ -436,7 +449,7 @@ try {
     );
   }
 
-  // ---- Tasks 12-13: effect-family and recipe selection. These assert the
+  // ---- Tasks 13-14: effect-family and recipe selection. These assert the
   // visible programming state, while Daslight same-task counts stay unmeasured.
   {
     await navigateFixture("fx-visual");

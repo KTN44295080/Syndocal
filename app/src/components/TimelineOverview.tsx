@@ -507,6 +507,28 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     const drag = props.cueDrag;
     return drag?.moved && Number.isFinite(drag.client_x) && Number.isFinite(drag.client_y) ? drag : null;
   });
+  const matrixCueDropState = () => {
+    const drag = safeCueDrag();
+    if (!drag || drag.source_surface !== "scene-matrix" || typeof document === "undefined") return null;
+    const sourceCard = document.querySelector<HTMLElement>(
+      `[data-scene-matrix-cue-id="${drag.cue_id}"]`,
+    );
+    const targetCard = document
+      .elementFromPoint(drag.client_x, drag.client_y)
+      ?.closest<HTMLElement>("[data-scene-matrix-cue-id]");
+    if (!sourceCard || !targetCard) return null;
+    const sourceColumn = sourceCard.closest<HTMLElement>("[data-scene-matrix-column]");
+    const targetColumn = targetCard.closest<HTMLElement>("[data-scene-matrix-column]");
+    const sameColumn =
+      sourceColumn?.dataset.sceneMatrixColumn === targetColumn?.dataset.sceneMatrixColumn;
+    const sameCueList =
+      sourceCard.dataset.sceneMatrixCueListId === targetCard.dataset.sceneMatrixCueListId;
+    return sameColumn &&
+      sameCueList &&
+      targetCard.dataset.sceneMatrixCueId !== String(drag.cue_id)
+      ? "matrix" as const
+      : "rejected" as const;
+  };
   let cachedEventsById = new Map<number, TimelineOverviewEvent>();
   const stableEvents = createMemo(() => {
     const nextCache = new Map<number, TimelineOverviewEvent>();
@@ -2814,9 +2836,11 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       <Show when={safeCueDrag()}>
         {(drag) => {
           const targetLayerId = () => cueDragTargetLayerId();
-          const dropState = () => targetLayerId() === null
-            ? "outside"
-            : cueDropStateForLayer(targetLayerId()!);
+          const dropState = () => matrixCueDropState() ?? (
+            targetLayerId() === null
+              ? "outside"
+              : cueDropStateForLayer(targetLayerId()!)
+          );
           return (
             <div
               class={`timelineCueDragGhost ${dropState()}`}

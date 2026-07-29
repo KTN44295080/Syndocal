@@ -1,6 +1,7 @@
 export interface TimelineCueDragState {
   cue_id: number;
   cue_label: string;
+  source_surface?: "cue-editor" | "scene-matrix";
   pointer_id: number;
   start_client_x: number;
   start_client_y: number;

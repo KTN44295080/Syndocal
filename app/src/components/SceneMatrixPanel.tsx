@@ -29,12 +29,16 @@ interface SceneMatrixPanelProps {
     segment: number,
   ) => void | Promise<void>;
   onClearCueLiveModifier?: (cueId: number) => void | Promise<void>;
-  onReleaseCue?: (cueId: number) => void | Promise<void>;
+  onReleaseCue: (cueId: number) => void | Promise<void>;
   onTriggerCue: (cueId: number) => void | Promise<void>;
   onEditCue: (cueId: number) => void;
   onOpenSuperScene: (cueId: number) => void | Promise<void>;
   onOpenCueEditor: () => void;
-  onBeginTimelineCueDrag: (cue: CueSummary, point: TimelineCueDragPoint) => void;
+  onBeginTimelineCueDrag: (
+    cue: CueSummary,
+    point: TimelineCueDragPoint,
+    sourceSurface?: "scene-matrix",
+  ) => void;
   onMoveTimelineCueDrag: (point: TimelineCueDragPoint) => void;
   onEndTimelineCueDrag: (point: TimelineCueDragPoint, moved: boolean, canceled: boolean) => void;
   timelineTrack: TimelineTrackKind;
@@ -48,6 +52,10 @@ interface SceneMatrixColumn {
 
 export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
   const [dragCueId, setDragCueId] = createSignal<number | null>(null);
+  const [dropIndicator, setDropIndicator] = createSignal<{
+    cueId: number;
+    position: "before" | "after";
+  } | null>(null);
   let dragPointer: {
     pointerId: number;
     startClientX: number;
@@ -81,6 +89,40 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
     };
   };
 
+  const updateDropIndicator = (
+    event: PointerEvent & { currentTarget: HTMLElement },
+  ) => {
+    if (!dragPointer?.moved) {
+      setDropIndicator(null);
+      return;
+    }
+    const sourceCard = event.currentTarget.closest<HTMLElement>("[data-scene-matrix-cue-id]");
+    const targetCard = document
+      .elementFromPoint(event.clientX, event.clientY)
+      ?.closest<HTMLElement>("[data-scene-matrix-cue-id]");
+    const sourceColumn = sourceCard?.closest<HTMLElement>("[data-scene-matrix-column]");
+    const targetColumn = targetCard?.closest<HTMLElement>("[data-scene-matrix-column]");
+    const targetCueId = Number(targetCard?.dataset.sceneMatrixCueId);
+    const sameColumn = sourceColumn?.dataset.sceneMatrixColumn === targetColumn?.dataset.sceneMatrixColumn;
+    const sameCueList =
+      sourceCard?.dataset.sceneMatrixCueListId === targetCard?.dataset.sceneMatrixCueListId;
+    if (
+      !targetCard ||
+      !Number.isFinite(targetCueId) ||
+      targetCueId === dragPointer.cue.id ||
+      !sameColumn ||
+      !sameCueList
+    ) {
+      setDropIndicator(null);
+      return;
+    }
+    const targetRect = targetCard.getBoundingClientRect();
+    setDropIndicator({
+      cueId: targetCueId,
+      position: event.clientY < targetRect.top + targetRect.height / 2 ? "before" : "after",
+    });
+  };
+
   const moveDrag = (event: PointerEvent & { currentTarget: HTMLElement }) => {
     if (!dragPointer || dragPointer.pointerId !== event.pointerId) return;
     const crossedThreshold = Math.hypot(
@@ -91,14 +133,19 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
       dragPointer.moved = true;
       event.currentTarget.setPointerCapture(event.pointerId);
       setDragCueId(dragPointer.cue.id);
-      props.onBeginTimelineCueDrag(dragPointer.cue, {
-        pointerId: event.pointerId,
-        clientX: dragPointer.startClientX,
-        clientY: dragPointer.startClientY,
-      });
+      props.onBeginTimelineCueDrag(
+        dragPointer.cue,
+        {
+          pointerId: event.pointerId,
+          clientX: dragPointer.startClientX,
+          clientY: dragPointer.startClientY,
+        },
+        "scene-matrix",
+      );
     }
     if (!dragPointer.moved) return;
     event.preventDefault();
+    updateDropIndicator(event);
     props.onMoveTimelineCueDrag({
       pointerId: event.pointerId,
       clientX: event.clientX,
@@ -118,6 +165,7 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
     const cueId = dragPointer.cue.id;
     dragPointer = null;
     setDragCueId(null);
+    setDropIndicator(null);
     if (!moved) return;
     event.preventDefault();
     suppressClickCueId = cueId;
@@ -212,7 +260,7 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                           const flashRelease = (event: PointerEvent) => {
                             if (!flashMode()) return;
                             event.stopPropagation();
-                            void props.onReleaseCue?.(cue.id);
+                            void props.onReleaseCue(cue.id);
                           };
                           return (
                             <article
@@ -223,8 +271,14 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                 "--cue-identity-text": cueIdentityCss(cue.id, cue.color, "text"),
                               }}
                               data-scene-matrix-cue-id={cue.id}
+                              data-scene-matrix-cue-list-id={cue.cue_list_id}
                               data-scene-matrix-cue-hue={hue()}
                               data-scene-matrix-active={isActive(cue) ? "true" : "false"}
+                              data-scene-matrix-drop-position={
+                                dropIndicator()?.cueId === cue.id
+                                  ? dropIndicator()!.position
+                                  : undefined
+                              }
                               data-timeline-cue-drag-source={cue.id}
                               onPointerDown={(event) => beginDrag(event, cue)}
                               onPointerMove={moveDrag}
@@ -237,7 +291,11 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                 classList={{ flash: flashMode() }}
                                 data-scene-flash-cue={flashMode() ? cue.id : undefined}
                                 aria-label={
-                                  flashMode() ? `Flash Cue ${cue.label}` : `Trigger Cue ${cue.label}`
+                                  flashMode()
+                                    ? `Flash Cue ${cue.label}`
+                                    : isActive(cue)
+                                      ? `Release Cue ${cue.label}`
+                                      : `Trigger Cue ${cue.label}`
                                 }
                                 onPointerDown={(event) => {
                                   if (!flashMode()) return;
@@ -262,7 +320,7 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                   if (!flashMode()) return;
                                   if (event.key === " " || event.key === "Enter") {
                                     event.preventDefault();
-                                    void props.onReleaseCue?.(cue.id);
+                                    void props.onReleaseCue(cue.id);
                                   }
                                 }}
                                 onClick={(event) => {
@@ -275,7 +333,11 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                     event.preventDefault();
                                     return;
                                   }
-                                  void props.onTriggerCue(cue.id);
+                                  if (isActive(cue)) {
+                                    void props.onReleaseCue(cue.id);
+                                  } else {
+                                    void props.onTriggerCue(cue.id);
+                                  }
                                 }}
                               >
                                 <span data-no-localize class="sceneMatrixCueNumber">{cue.cue_number || cue.id}</span>
@@ -341,8 +403,8 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                   type="button"
                                   class="cueTimelineDragHandle"
                                   classList={{ dragging: dragCueId() === cue.id }}
-                                  title={`Drag Cue ${cue.label} to Timeline`}
-                                  aria-label={`Drag Cue ${cue.label} to Timeline`}
+                                  title={`Drag Cue ${cue.label} to reorder this column or place on Timeline`}
+                                  aria-label={`Drag Cue ${cue.label} to reorder this column or place on Timeline`}
                                   onClick={(event) => event.preventDefault()}
                                 >
                                   <span aria-hidden="true" data-no-localize>⠿</span>

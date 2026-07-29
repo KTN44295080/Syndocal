@@ -13633,6 +13633,11 @@ input[type="color"] {
   background: #183025;
 }
 
+.timelineCueDragGhost.matrix {
+  border-color: #6c8cac;
+  background: #1b2a38;
+}
+
 .timelineCueDragGhost.rejected {
   border-color: #a15261;
   background: #321a20;
@@ -31202,6 +31207,26 @@ h3 {
 .sceneMatrixCard {
   position: relative;
   grid-template-columns: minmax(0, 1fr) max-content;
+}
+
+.sceneMatrixCard[data-scene-matrix-drop-position="before"]::before,
+.sceneMatrixCard[data-scene-matrix-drop-position="after"]::after {
+  position: absolute;
+  z-index: 2;
+  right: 0;
+  left: 0;
+  height: 3px;
+  background: #6c8cac;
+  content: "";
+  pointer-events: none;
+}
+
+.sceneMatrixCard[data-scene-matrix-drop-position="before"]::before {
+  top: 0;
+}
+
+.sceneMatrixCard[data-scene-matrix-drop-position="after"]::after {
+  bottom: 0;
 }
 
 .sceneMatrixCardFooter {

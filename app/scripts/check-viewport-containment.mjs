@@ -9974,6 +9974,9 @@ async function measureSceneMatrixInteractionState(client, cueId) {
       markerCount: markers.length,
       markers,
       cuePlacementCount: cueItem?.querySelectorAll('.cueTimelinePlacementChip').length ?? -1,
+      frontColumnCueIds: [...document.querySelectorAll(
+        '[data-scene-matrix-column="front"] [data-scene-matrix-cue-id]',
+      )].map((card) => card.getAttribute('data-scene-matrix-cue-id')),
       activeCardIds: [...document.querySelectorAll('[data-scene-matrix-cue-id]')]
         .filter((card) => card.getAttribute('data-scene-matrix-active') === 'true' && card.classList.contains('active'))
         .map((card) => card.getAttribute('data-scene-matrix-cue-id')),
@@ -10530,6 +10533,85 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       ghostCleared: !stateAfter.ghostPresent,
     };
   }
+  let sameColumnReorder = null;
+  const reorderGeometry = await client.evaluate(`(() => {
+    const source = document.querySelector(
+      '[data-scene-matrix-cue-id="302"] .cueTimelineDragHandle',
+    );
+    const target = document.querySelector('[data-scene-matrix-cue-id="301"]');
+    target?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    source?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    if (!source || !target) return null;
+    const sourceRect = source.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const sourceX = sourceRect.left + sourceRect.width / 2;
+    const sourceY = sourceRect.top + sourceRect.height / 2;
+    const targetX = targetRect.left + targetRect.width / 2;
+    const targetY = targetRect.top + Math.min(6, targetRect.height * 0.2);
+    return {
+      sourceX,
+      sourceY,
+      sourceHandleHit: document.elementFromPoint(sourceX, sourceY)
+        ?.closest('.cueTimelineDragHandle') === source,
+      targetX,
+      targetY,
+      targetHitCueId: document.elementFromPoint(targetX, targetY)
+        ?.closest('[data-scene-matrix-cue-id]')
+        ?.getAttribute('data-scene-matrix-cue-id') ?? '',
+    };
+  })()`);
+  if (reorderGeometry) {
+    const stateBefore = await measureSceneMatrixInteractionState(client, 302);
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: reorderGeometry.sourceX,
+      y: reorderGeometry.sourceY,
+      button: "left",
+      buttons: 1,
+      clickCount: 1,
+    });
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: reorderGeometry.sourceX + 6,
+      y: reorderGeometry.sourceY,
+      button: "left",
+      buttons: 1,
+    });
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: reorderGeometry.targetX,
+      y: reorderGeometry.targetY,
+      button: "left",
+      buttons: 1,
+    });
+    await sleep(50);
+    const during = await client.evaluate(`(() => {
+      const indicator = document.querySelector('[data-scene-matrix-drop-position]');
+      return {
+        dropState: document.querySelector('[data-timeline-cue-drag-ghost]')
+          ?.getAttribute('data-timeline-drop-state') ?? '',
+        indicatorCueId: indicator?.getAttribute('data-scene-matrix-cue-id') ?? '',
+        indicatorPosition: indicator?.getAttribute('data-scene-matrix-drop-position') ?? '',
+      };
+    })()`);
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: reorderGeometry.targetX,
+      y: reorderGeometry.targetY,
+      button: "left",
+      buttons: 0,
+      clickCount: 1,
+    });
+    await sleep(180);
+    const stateAfter = await measureSceneMatrixInteractionState(client, 302);
+    sameColumnReorder = {
+      ...reorderGeometry,
+      ...during,
+      before: stateBefore,
+      after: stateAfter,
+      ghostCleared: !stateAfter.ghostPresent,
+    };
+  }
   const after = await measureSceneMatrixPane(client);
   const expectedColumns = [
     "front",
@@ -10637,6 +10719,23 @@ async function runSceneMatrixPaneCheck(client, viewport) {
     ["matrixDragDoesNotRecallCue", () =>
       JSON.stringify(oneGestureDrag?.before.activeCardIds) === JSON.stringify(["302"]) &&
       JSON.stringify(oneGestureDrag?.after.activeCardIds) === JSON.stringify(["302"])],
+    ["matrixReorderDragShowsGhostAndInsertionIndicator", () =>
+      sameColumnReorder?.sourceHandleHit === true &&
+      sameColumnReorder.targetHitCueId === "301" &&
+      sameColumnReorder.dropState === "matrix" &&
+      sameColumnReorder.indicatorCueId === "301" &&
+      sameColumnReorder.indicatorPosition === "before" &&
+      sameColumnReorder.ghostCleared],
+    ["matrixOneGestureDragReordersWithinColumn", () =>
+      JSON.stringify(sameColumnReorder?.before.frontColumnCueIds) === JSON.stringify(["301", "302"]) &&
+      JSON.stringify(sameColumnReorder?.after.frontColumnCueIds) === JSON.stringify(["302", "301"])],
+    ["matrixReorderDragDoesNotRecallOrPlaceCue", () =>
+      JSON.stringify(sameColumnReorder?.before.activeCardIds) === JSON.stringify(["302"]) &&
+      JSON.stringify(sameColumnReorder?.after.activeCardIds) === JSON.stringify(["302"]) &&
+      sameColumnReorder?.after.markerCount === sameColumnReorder?.before.markerCount &&
+      (sameColumnReorder?.before.cuePlacementCount < 0
+        ? sameColumnReorder?.after.cuePlacementCount < 0
+        : sameColumnReorder?.after.cuePlacementCount === sameColumnReorder?.before.cuePlacementCount)],
     ["matrixActiveCueHighlightFollowedSubThresholdClick", () => JSON.stringify(after.activeCardIds) === JSON.stringify(["302"])],
     ["matrixColumnsUseInternalScrollport", () =>
       before.internalScrollport &&
@@ -10677,6 +10776,7 @@ async function runSceneMatrixPaneCheck(client, viewport) {
     alternateView,
     subThresholdClick,
     oneGestureDrag,
+    sameColumnReorder,
   };
 }
 
@@ -14405,9 +14505,10 @@ async function dispatchFlashPointer(client, selector, press) {
   return true;
 }
 
-// T17 acceptance: the Scene Matrix cell and the Touch pad drive the same
-// latched live-modifier path, flash pads are strictly momentary, and the
-// latch resets on reset/retrigger while document/.app scroll stays zero.
+// T17/T25-H acceptance: the Scene Matrix cell and the Touch pad drive the same
+// latched live-modifier path, an active Matrix cell releases its Cue and strip,
+// flash pads stay strictly momentary, and authored values return after release
+// plus a fresh trigger while document/.app scroll stays zero.
 async function runSceneLiveModifierViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -14475,8 +14576,26 @@ async function runSceneLiveModifierViewport(client, viewport) {
     document.querySelector('[data-scene-matrix-cue-id="303"] .sceneMatrixTrigger')?.click();
   });
   await sleep(48);
-  const retriggered = await readSceneLiveModifierState(client, 303);
-  if (retriggered.override !== "false") failed.push(`retrigger-override=${retriggered.override}`);
+  const released = await readSceneLiveModifierState(client, 303);
+  if (released.activeCardIds.includes("303")) failed.push("toggle-release-still-active");
+  if (released.stripCueId !== null || released.override !== null) {
+    failed.push(`toggle-release-strip=${released.stripCueId}/${released.override}`);
+  }
+  await evaluatePageFunction(client, () => {
+    document.querySelector('[data-scene-matrix-cue-id="303"] .sceneMatrixTrigger')?.click();
+  });
+  await sleep(48);
+  const reactivated = await readSceneLiveModifierState(client, 303);
+  if (
+    !reactivated.activeCardIds.includes("303") ||
+    reactivated.stripCueId !== "303" ||
+    reactivated.override !== "false" ||
+    reactivated.readouts.join("|") !== "x2|50%|25%"
+  ) {
+    failed.push(
+      `reactivated=${reactivated.activeCardIds.join("+")}/${reactivated.stripCueId}/${reactivated.override}/${reactivated.readouts.join("|")}`,
+    );
+  }
 
   await dispatchFlashPointer(client, '[data-scene-flash-cue="320"]', true);
   await sleep(48);
@@ -14518,7 +14637,8 @@ async function runSceneLiveModifierViewport(client, viewport) {
     authored,
     latched,
     playback,
-    retriggered,
+    released,
+    reactivated,
     flash: { down: flashDown.activeCardIds, up: flashUp.activeCardIds },
     touchFlash: { down: touchDown.touchActivePadIds, up: touchUp.touchActivePadIds },
   };
@@ -15473,7 +15593,8 @@ async function main() {
         console.log(
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
             `authored=${result.authored.readouts.join("/")} latch=${result.latched.readouts[0]} ` +
-            `retrigger=${result.retriggered.override} ` +
+            `toggleRelease=${result.released.activeCardIds.join("+") || "none"}/${result.released.stripCueId ?? "none"} ` +
+            `reactivated=${result.reactivated.override} ` +
             `flash=${result.flash.down.join("+") || "none"}->${result.flash.up.join("+") || "none"} ` +
             `touchFlash=${result.touchFlash.down.join("+") || "none"}->${result.touchFlash.up.join("+") || "none"} ` +
             `failed=${JSON.stringify(result.failedChecks)}`,
@@ -16231,7 +16352,7 @@ async function main() {
     }
     for (const result of sceneMatrixResults) {
       console.log(
-        `${result.passed ? "pass" : "fail"} ${result.label} columns=${JSON.stringify(result.before.columns)} active=${JSON.stringify(result.before.activeCardIds)}->${JSON.stringify(result.after.activeCardIds)} width=${Math.round(result.before.paneWidthCoverage * 1000) / 1000} handle=${Math.round(result.before.minDragHandleHitSize * 100) / 100}px click=302:${result.subThresholdClick?.before.activeCardIds.join("+") || "?"}->${result.subThresholdClick?.after.activeCardIds.join("+") || "?"} drag=${result.oneGestureDrag?.sourceCueId ?? "?"}@${result.oneGestureDrag?.targetLayerId ?? "?"} events=${result.oneGestureDrag?.before.markerCount ?? "?"}->${result.oneGestureDrag?.after.markerCount ?? "?"} placements=${result.oneGestureDrag?.before.cuePlacementCount ?? "?"}->${result.oneGestureDrag?.after.cuePlacementCount ?? "?"} failed=${JSON.stringify(result.failedChecks)}`,
+        `${result.passed ? "pass" : "fail"} ${result.label} columns=${JSON.stringify(result.before.columns)} active=${JSON.stringify(result.before.activeCardIds)}->${JSON.stringify(result.after.activeCardIds)} width=${Math.round(result.before.paneWidthCoverage * 1000) / 1000} handle=${Math.round(result.before.minDragHandleHitSize * 100) / 100}px click=302:${result.subThresholdClick?.before.activeCardIds.join("+") || "?"}->${result.subThresholdClick?.after.activeCardIds.join("+") || "?"} drag=${result.oneGestureDrag?.sourceCueId ?? "?"}@${result.oneGestureDrag?.targetLayerId ?? "?"} events=${result.oneGestureDrag?.before.markerCount ?? "?"}->${result.oneGestureDrag?.after.markerCount ?? "?"} placements=${result.oneGestureDrag?.before.cuePlacementCount ?? "?"}->${result.oneGestureDrag?.after.cuePlacementCount ?? "?"} reorder=${result.sameColumnReorder?.before.frontColumnCueIds.join(">") || "?"}->${result.sameColumnReorder?.after.frontColumnCueIds.join(">") || "?"} indicator=${result.sameColumnReorder?.indicatorCueId ?? "?"}:${result.sameColumnReorder?.indicatorPosition ?? "?"} failed=${JSON.stringify(result.failedChecks)}`,
       );
     }
     for (const result of paneWindowResults) {
