@@ -40,6 +40,7 @@ const controlEditPositionOnlyMode = process.argv.includes("--control-edit-positi
 const controlStageChromeOnlyMode = process.argv.includes("--control-stage-chrome-only");
 const controlModeSurfaceOnlyMode = process.argv.includes("--control-mode-surface-only");
 const liveDeskHeaderOnlyMode = process.argv.includes("--live-desk-header-only");
+const topbarPulseOnlyMode = process.argv.includes("--topbar-pulse-only");
 const viewportTraceEnabled = process.env.SYNDOCAL_VIEWPORT_TRACE === "1";
 const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
   largeShowMode
@@ -102,6 +103,8 @@ const requestedViewport = requestedViewportMatch
   : null;
 const viewports = requestedViewport
   ? [requestedViewport]
+  : topbarPulseOnlyMode
+    ? [compactFallbackViewports[1]]
   : largeShowMode
     ? [primaryOperationalViewport]
     : audioReactiveOnlyMode
@@ -777,6 +780,7 @@ function installLiveAudioMockInPage() {
     status: stoppedStatus(),
     deviceGeneration: 0,
     asioGeneration: 0,
+    levelsPaused: false,
   };
   const invoke = async (command, args = {}) => {
     if (command === "get_live_video_monitor_frame") {
@@ -946,6 +950,9 @@ function installLiveAudioMockInPage() {
     }
     if (command === "live_audio_input_status") return clone(mock.status);
     if (command === "live_audio_input_levels") {
+      if (mock.levelsPaused) {
+        await new Promise(() => {});
+      }
       return {
         running: mock.status.running,
         stale: mock.status.stale,
@@ -6624,10 +6631,12 @@ function hasExpectedSetupSurface(result) {
       result.videoSetupMapPaneHeight >= 200 &&
       result.videoSetupMapPaneOverflowPx <= 1 &&
       result.videoSetupMappingLastControlReachable &&
+      result.videoSetupProjectorSurfaceContained &&
       result.videoSetupPreviewContained &&
       result.visibleVideoSetupActionDockCount === 1 &&
       result.videoSetupActionDockHeight >= 40 &&
       result.videoSetupActionDockLastActionReachable &&
+      result.videoSetupActionDockInViewport &&
       result.visibleVideoSetupDisplayActionCount === 1 &&
       result.visibleSetupVideoOutputDeckCount >= 1 &&
       result.visibleSetupVideoOutputActiveDeckCount >= 1 &&
@@ -7288,6 +7297,292 @@ async function openMixerDrawer(client, drawerId, stripSelector) {
     `Mixer drawer ${drawerId} open`,
   );
   await sleep(60);
+}
+
+function readTopbarPulseStateInPage() {
+  const visible = (element) => {
+    if (!(element instanceof HTMLElement)) return false;
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+  };
+  const rectOf = (element) => {
+    if (!element) return null;
+    const rect = element.getBoundingClientRect();
+    const round = (value) => Math.round(value * 100) / 100;
+    return {
+      x: round(rect.x),
+      y: round(rect.y),
+      width: round(rect.width),
+      height: round(rect.height),
+      right: round(rect.right),
+      bottom: round(rect.bottom),
+      centerY: round(rect.y + rect.height / 2),
+    };
+  };
+  const topbar = document.querySelector(".topbar");
+  const status = topbar?.querySelector(".status");
+  const pulse = topbar?.querySelector("[data-topbar-pulse]");
+  const topbarRect = rectOf(topbar);
+  const pulseRect = rectOf(pulse);
+  const rmsFill = pulse?.querySelector(".topbarPulseTrack > i");
+  const peakFill = pulse?.querySelector(".topbarPulseTrack > b");
+  const controlGroups = {
+    go: [...(topbar?.querySelectorAll(".goButton") ?? [])].filter(visible),
+    masters: [...(topbar?.querySelectorAll("[data-topbar-master]") ?? [])].filter(visible),
+    bpm: [...(topbar?.querySelectorAll(".bpmReadout") ?? [])].filter(visible),
+    tap: [...(topbar?.querySelectorAll("[data-topbar-tap]") ?? [])].filter(visible),
+    pulse: [...(topbar?.querySelectorAll("[data-topbar-pulse]") ?? [])].filter(visible),
+    live: [...(topbar?.querySelectorAll(".pill") ?? [])].filter(visible),
+    dmx: [...(topbar?.querySelectorAll(".outputMetric") ?? [])].filter(visible),
+    project: [...(topbar?.querySelectorAll(".projectAction") ?? [])].filter(visible),
+    window: [...(topbar?.querySelectorAll("[data-window-controls] button") ?? [])].filter(visible),
+  };
+  const atomicControls = Object.values(controlGroups).flat();
+  const atomicRects = atomicControls.map(rectOf).filter(Boolean).sort((left, right) => left.x - right.x);
+  const controlCenterSpread = atomicRects.length > 0
+    ? Math.max(...atomicRects.map((rect) => rect.centerY)) - Math.min(...atomicRects.map((rect) => rect.centerY))
+    : Number.POSITIVE_INFINITY;
+  const controlsContained = Boolean(topbarRect) && atomicRects.every((rect) =>
+    rect.x >= topbarRect.x - 0.5 &&
+    rect.right <= topbarRect.right + 0.5 &&
+    rect.y >= topbarRect.y - 0.5 &&
+    rect.bottom <= topbarRect.bottom + 0.5
+  );
+  const controlsOverlap = atomicRects.some((rect, index) => {
+    const next = atomicRects[index + 1];
+    return Boolean(next && rect.right > next.x + 0.5);
+  });
+  return {
+    viewport: { width: window.innerWidth, height: window.innerHeight },
+    topbarRect,
+    pulseRect,
+    pulseText: (pulse?.querySelector(".topbarPulseLabel")?.textContent ?? "").trim(),
+    pulseAriaLabel: pulse?.getAttribute("aria-label") ?? "",
+    meterAriaNow: Number(pulse?.querySelector('[role="meter"]')?.getAttribute("aria-valuenow") ?? -1),
+    lit: pulse?.getAttribute("data-pulse-lit") ?? "",
+    fresh: pulse?.getAttribute("data-pulse-fresh") ?? "",
+    stale: pulse?.getAttribute("data-pulse-stale") ?? "",
+    staleMs: Number(pulse?.getAttribute("data-pulse-stale-ms") ?? -1),
+    rmsOpacity: rmsFill?.style.opacity ?? "",
+    rmsTransform: rmsFill?.style.transform ?? "",
+    peakOpacity: peakFill?.style.opacity ?? "",
+    peakTransform: peakFill?.style.transform ?? "",
+    controlCounts: Object.fromEntries(
+      Object.entries(controlGroups).map(([key, elements]) => [key, elements.length]),
+    ),
+    controlsContained,
+    controlsOverlap,
+    controlCenterSpread: Math.round(controlCenterSpread * 100) / 100,
+    statusOverflowX: status instanceof HTMLElement ? status.scrollWidth - status.clientWidth : Number.POSITIVE_INFINITY,
+  };
+}
+
+async function readTopbarPulseState(client) {
+  return client.evaluate("(" + readTopbarPulseStateInPage.toString() + ")()");
+}
+
+async function runTopbarPulseViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await client.evaluate("window.localStorage.clear()");
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await installLiveAudioInvokeMock(client);
+  await sleep(320);
+
+  const stopped = await readTopbarPulseState(client);
+  const stoppedLevelCalls = await client.evaluate(
+    "(window.__syndocalLiveAudioMock?.calls ?? []).filter((call) => call.command === 'live_audio_input_levels').length",
+  );
+  const pulseClicked = await client.evaluate(`(() => {
+    const pulse = document.querySelector('[data-topbar-pulse]');
+    if (!(pulse instanceof HTMLButtonElement)) return false;
+    pulse.click();
+    return true;
+  })()`);
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const setup = [...document.querySelectorAll('.workspaceTabs button')].find((button) =>
+        button.getAttribute('aria-pressed') === 'true' && (button.textContent ?? '').trim() === 'Setup'
+      );
+      const outputs = [...document.querySelectorAll('.setupModeTabs button')].find((button) =>
+        button.getAttribute('aria-pressed') === 'true' && (button.textContent ?? '').trim() === 'Outputs'
+      );
+      const settings = document.querySelector('#setup-output-audio-input');
+      return Boolean(setup && outputs && settings && settings.getBoundingClientRect().height > 0);
+    })()`,
+    "PULSE Setup Outputs audio-input route",
+  );
+  await sleep(80);
+  const route = await client.evaluate(`(() => {
+    const settings = document.querySelector('#setup-output-audio-input');
+    const rect = settings?.getBoundingClientRect();
+    return {
+      setupActive: [...document.querySelectorAll('.workspaceTabs button')].some((button) =>
+        button.getAttribute('aria-pressed') === 'true' && (button.textContent ?? '').trim() === 'Setup'
+      ),
+      outputsActive: [...document.querySelectorAll('.setupModeTabs button')].some((button) =>
+        button.getAttribute('aria-pressed') === 'true' && (button.textContent ?? '').trim() === 'Outputs'
+      ),
+      settingsVisible: Boolean(rect && rect.width > 0 && rect.height > 0),
+      settingsFocused: document.activeElement === settings,
+      railCount: settings?.querySelectorAll('.liveAudioInputBar').length ?? 0,
+    };
+  })()`);
+
+  const refreshClicked = await client.evaluate(`(() => {
+    const button = document.querySelector(
+      '#setup-output-audio-input [data-live-audio-action="refresh"]'
+    );
+    if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+    button.click();
+    return true;
+  })()`);
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const calls = window.__syndocalLiveAudioMock?.calls ?? [];
+      const transport = document.querySelector(
+        '#setup-output-audio-input [data-live-audio-action="transport"]'
+      );
+      return calls.some((call) => call.command === 'get_live_audio_input_capabilities') &&
+        transport instanceof HTMLButtonElement && !transport.disabled;
+    })()`,
+    "Setup Outputs live-audio capability resolution",
+  );
+  const startClicked = await client.evaluate(`(() => {
+    const button = document.querySelector(
+      '#setup-output-audio-input [data-live-audio-action="transport"]'
+    );
+    if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+    button.click();
+    return true;
+  })()`);
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const pulse = document.querySelector('[data-topbar-pulse]');
+      const calls = window.__syndocalLiveAudioMock?.calls ?? [];
+      return pulse?.getAttribute('data-pulse-lit') === 'true' &&
+        calls.some((call) => call.command === 'live_audio_input_levels');
+    })()`,
+    "PULSE RMS/Peak telemetry injection",
+  );
+  const active = await readTopbarPulseState(client);
+  const activeLevelCalls = await client.evaluate(
+    "(window.__syndocalLiveAudioMock?.calls ?? []).filter((call) => call.command === 'live_audio_input_levels').length",
+  );
+
+  const pausedAt = Date.now();
+  await client.evaluate("window.__syndocalLiveAudioMock.levelsPaused = true");
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const pulse = document.querySelector('[data-topbar-pulse]');
+      return pulse?.getAttribute('data-pulse-stale') === 'true' &&
+        pulse?.getAttribute('data-pulse-lit') === 'false';
+    })()`,
+    "PULSE frontend stale fail-closed state",
+  );
+  const staleElapsedMs = Date.now() - pausedAt;
+  const stale = await readTopbarPulseState(client);
+  const appSource = readFileSync(resolve(appRoot, "src", "App.tsx"), "utf8");
+  const pollingLoopAssignments =
+    appSource.match(/liveAudioInputLevelsTimer = window\.setInterval/g) ?? [];
+
+  const checks = {
+    pulseExists:
+      stopped.controlCounts.pulse === 1 &&
+      stopped.pulseText === "PULSE",
+    pulseInsideFortyTwoPixelTopbarRow:
+      stopped.topbarRect?.height >= 41.5 &&
+      stopped.topbarRect?.height <= 42.5 &&
+      stopped.controlsContained &&
+      stopped.controlCenterSpread <= 1,
+    pulseCompactAt1280:
+      stopped.viewport.width === 1280 &&
+      stopped.pulseRect?.width <= 60 &&
+      stopped.pulseRect?.height === 40,
+    existingTopbarControlsCoexistAt1280:
+      stopped.controlCounts.go === 1 &&
+      stopped.controlCounts.masters === 2 &&
+      stopped.controlCounts.bpm === 1 &&
+      stopped.controlCounts.tap === 1 &&
+      stopped.controlCounts.live === 1 &&
+      stopped.controlCounts.dmx === 1 &&
+      stopped.controlCounts.project === 2 &&
+      stopped.controlCounts.window === 3 &&
+      stopped.statusOverflowX <= 1 &&
+      !stopped.controlsOverlap,
+    stoppedDefaultsDark:
+      stopped.lit === "false" &&
+      stopped.fresh === "false" &&
+      stopped.meterAriaNow === 0 &&
+      stopped.rmsOpacity === "0" &&
+      stopped.peakOpacity === "0" &&
+      stopped.rmsTransform === "scaleY(0)" &&
+      stopped.peakTransform === "scaleY(0)",
+    stoppedDoesNotPollLevels: stoppedLevelCalls === 0,
+    injectedRmsPeakLightsMeter:
+      refreshClicked &&
+      startClicked &&
+      activeLevelCalls > 0 &&
+      active.lit === "true" &&
+      active.fresh === "true" &&
+      active.stale === "false" &&
+      active.meterAriaNow === 91 &&
+      active.rmsOpacity === "1" &&
+      active.peakOpacity === "1" &&
+      active.rmsTransform === "scaleY(0.64)" &&
+      active.peakTransform === "scaleY(0.91)",
+    missingTelemetryFailsClosedAfter250Ms:
+      stale.staleMs === 250 &&
+      staleElapsedMs >= 250 &&
+      stale.lit === "false" &&
+      stale.fresh === "false" &&
+      stale.stale === "true" &&
+      stale.meterAriaNow === 0 &&
+      stale.rmsOpacity === "0" &&
+      stale.peakOpacity === "0",
+    clickJumpsToSetupOutputsAudioInput:
+      pulseClicked &&
+      route.setupActive &&
+      route.outputsActive &&
+      route.settingsVisible &&
+      route.settingsFocused &&
+      route.railCount === 1,
+    pulseHasJapaneseSettingsLabel:
+      stopped.pulseAriaLabel === "音声入力設定を開く",
+    existingTelemetryPollLoopIsStateGated:
+      pollingLoopAssignments.length === 1 &&
+      appSource.includes("const liveAudioInputLevelsPollingActive = createMemo") &&
+      appSource.includes("if (!liveAudioInputLevelsPollingActive())") &&
+      !appSource.includes("const liveAudioInputLevelsTimer = isTauriRuntime()"),
+  };
+  const failedChecks = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  return {
+    label: `topbar-pulse-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    stoppedLevelCalls,
+    activeLevelCalls,
+    staleElapsedMs,
+    stopped,
+    route,
+    active,
+    stale,
+  };
 }
 
 async function runLiveAudioAcceptanceViewport(client, viewport, locale) {
@@ -16802,6 +17097,27 @@ async function main() {
     console.log(
       `viewport contract primary-browser=${primaryOperationalViewport.width}x${primaryOperationalViewport.height} measured-client-size-browser=${measuredClientSizeViewport.width}x${measuredClientSizeViewport.height} extended-browser=${extendedCeilingViewport.width}x${extendedCeilingViewport.height} fallback-browsers=${compactFallbackViewports.map((viewport) => `${viewport.width}x${viewport.height}`).join(",")} screenshots=${captureAllViewportScreenshots ? "all" : "large-browser-fixtures"}`,
     );
+    if (topbarPulseOnlyMode) {
+      const results = [];
+      for (const viewport of viewports) {
+        const result = await runTopbarPulseViewport(client, viewport);
+        results.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `size=${result.stopped.topbarRect?.height ?? 0}/${result.stopped.pulseRect?.width ?? 0}x${result.stopped.pulseRect?.height ?? 0} ` +
+            `controls=${JSON.stringify(result.stopped.controlCounts)} overflow=${result.stopped.statusOverflowX} ` +
+            `polls=${result.stoppedLevelCalls}->${result.activeLevelCalls} ` +
+            `level=${result.active.meterAriaNow}% stale=${result.staleElapsedMs}ms/${result.stale.staleMs}ms ` +
+            `route=${result.route.setupActive}/${result.route.outputsActive}/${result.route.settingsFocused} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = results.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Topbar PULSE viewport failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (editLiveOnlyMode) {
       const editLiveResults = [];
       for (const [viewportIndex, viewport] of viewports.entries()) {
@@ -17726,7 +18042,7 @@ async function main() {
         ? ` patch=${result.visiblePatchActionRowCount}/${result.visiblePatchAutoButtonCount}/${result.visiblePatchPrimaryButtonCount}/${result.visiblePatchNextFreeButtonCount}/${result.visiblePatchFootprintCount}/${result.visibleDmxAddressGridCount}/${result.dmxAddressCellCount}/${result.dmxAddressOccupiedCellCount}/${result.dmxAddressPlannedCellCount}/${result.visibleDmxFixtureBlockCount}/${result.compactMappingStageWidth}x${result.compactMappingStageHeight}/${result.visibleDmxGridSummaryCount}/${result.visibleFixtureSetupEditorCount}/${result.visibleUseProfileForPatchButtonCount}/${result.visibleDuplicateFixtureButtonCount} continuous=${result.patchGridMetrics?.addressCount ?? 0}:${result.patchGridMetrics?.firstAddress ?? "?"}..${result.patchGridMetrics?.lastAddress ?? "?"} pages=${result.patchGridMetrics?.pageSelectorCount ?? "?"} geometry=${result.patchGridMetrics?.columnCount ?? "?"}x${result.patchGridMetrics?.rowCount ?? "?"} cell=${result.patchGridMetrics?.minCellWidth ?? "?"}x${result.patchGridMetrics?.minCellHeight ?? "?"} scroll=${result.patchGridMetrics?.clientWidth ?? "?"}x${result.patchGridMetrics?.clientHeight ?? "?"}->${result.patchGridMetrics?.scrollWidth ?? "?"}x${result.patchGridMetrics?.scrollHeight ?? "?"} end=${result.patchGridMetrics?.endReachable ? 1 : 0} outer=${result.patchGridMetrics?.outerScrollUnchangedAtEnd ? 0 : 1} keys=${result.patchGridMetrics?.arrowRightAddress ?? "?"}/${result.patchGridMetrics?.arrowDownAddress ?? "?"}/${result.patchGridMetrics?.controlEndAddress ?? "?"}`
         : "";
       const outputSetupSuffix = result.label.startsWith("setup-video-")
-        ? ` outputSetup=${result.visibleSetupVideoPanelCount}/${result.visibleSetupVideoOutputDeckCount}/${result.visibleSetupVideoOutputActiveDeckCount}/${result.visibleSetupVideoOutputDetailPaneCount}/${result.visibleVideoOutputMappingPanelCount}/${result.visibleVideoOutputBlendControlsCount}/${result.visibleProjectorMapEditorCount}/${result.visibleProjectorMapHandleCount}/${result.visibleProjectorKeystoneHandleCount}/${result.visibleProjectorScaleHandleCount}/${result.visibleProjectorRotateHandleCount}/${result.visibleProjectorAspectModeButtonCount}/${result.visibleProjectorAspectPresetButtonCount}/${result.visibleProjectorResetPoseButtonCount}/${result.videoSetupSidebarWidth}w/${result.videoSetupOutputDeskWidth}w panes=${result.videoSetupRoutingPaneWidth}/${result.videoSetupMapPaneWidth}/${result.videoSetupInspectorPaneWidth} mapH=${result.videoSetupMapPaneHeight} overflow=${result.videoSetupMapPaneOverflowPx} reachable=${result.videoSetupMappingLastControlReachable ? 1 : 0}/${result.videoSetupPreviewContained ? 1 : 0}/${result.videoSetupActionDockLastActionReachable ? 1 : 0} dock=${result.visibleVideoSetupActionDockCount}/${result.videoSetupActionDockHeight} actions=${result.videoSetupCriticalActionInViewportCount}`
+        ? ` outputSetup=${result.visibleSetupVideoPanelCount}/${result.visibleSetupVideoOutputDeckCount}/${result.visibleSetupVideoOutputActiveDeckCount}/${result.visibleSetupVideoOutputDetailPaneCount}/${result.visibleVideoOutputMappingPanelCount}/${result.visibleVideoOutputBlendControlsCount}/${result.visibleProjectorMapEditorCount}/${result.visibleProjectorMapHandleCount}/${result.visibleProjectorKeystoneHandleCount}/${result.visibleProjectorScaleHandleCount}/${result.visibleProjectorRotateHandleCount}/${result.visibleProjectorAspectModeButtonCount}/${result.visibleProjectorAspectPresetButtonCount}/${result.visibleProjectorResetPoseButtonCount}/${result.videoSetupSidebarWidth}w/${result.videoSetupOutputDeskWidth}w panes=${result.videoSetupRoutingPaneWidth}/${result.videoSetupMapPaneWidth}/${result.videoSetupInspectorPaneWidth} mapH=${result.videoSetupMapPaneHeight} overflow=${result.videoSetupMapPaneOverflowPx} reachable=${result.videoSetupMappingLastControlReachable ? 1 : 0}/${result.videoSetupPreviewContained ? 1 : 0}/${result.videoSetupActionDockLastActionReachable ? 1 : 0} dock=${result.visibleVideoSetupActionDockCount}/${result.videoSetupActionDockHeight} actions=${result.videoSetupCriticalActionInViewportCount} videoSetupProjectorSurfaceContained=${result.videoSetupProjectorSurfaceContained} videoSetupActionDockLastActionReachable=${result.videoSetupActionDockLastActionReachable} videoSetupActionDockInViewport=${result.videoSetupActionDockInViewport}`
         : "";
       const waveDraftSuffix = result.label.startsWith("mapping-wave-draft-")
         ? ` waveDraft=${result.effectTargetValue}/${result.effectTypeValue}/${result.effectCommonAttributeValue || 'none'}`

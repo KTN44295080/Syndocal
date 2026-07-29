@@ -14,6 +14,7 @@
     "check:desktop-window": "node scripts/check-desktop-window-mode.mjs",
     "check:window-chrome": "node scripts/check-viewport-containment.mjs --timeline-expansion-only",
     "check:live-desk-header": "node scripts/check-viewport-containment.mjs --live-desk-header-only",
+    "check:topbar-pulse": "node scripts/check-viewport-containment.mjs --topbar-pulse-only",
     "check:native-window": "node scripts/run-native-window-acceptance.mjs",
     "check:empty-states": "node scripts/check-empty-state-guidance.mjs",
     "check:cue-effect-recall": "node scripts/check-cue-effect-recall.mjs",

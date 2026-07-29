@@ -3100,6 +3100,7 @@ h3 {
   background: #15181b;
   padding: 7px;
   overflow: hidden auto;
+  container-type: size;
 }
 
 .videoSetupMapPane .mappingReadout,
@@ -3111,14 +3112,15 @@ h3 {
 }
 
 .videoSetupMapPane .projectorMapEditor {
+  order: -1;
   border-color: #3b4247;
   padding: 6px;
 }
 
 .videoSetupMapPane .projectorMapSurface {
   width: 100%;
-  height: min(42vh, 520px);
-  min-height: 240px;
+  height: clamp(96px, calc(100cqh - 28px), 520px);
+  min-height: 0;
   aspect-ratio: auto;
   border-radius: 0;
   background: #090c0e;
@@ -3216,10 +3218,6 @@ h3 {
     min-height: 72px;
   }
 
-  .videoSetupMapPane .projectorMapSurface {
-    height: 260px;
-    min-height: 220px;
-  }
 }
 
 .timelineOverviewLayered .timelineLayerSectionHeader {
@@ -27917,7 +27915,8 @@ h3 {
 
 /* Compact the inherited full-canvas desks inside T10's fixed context slot. */
 .layoutSharedWorkspace.layoutSetup.setupMode-video .videoSetupInspectorPane {
-  grid-template-rows: 34px minmax(58px, 0.7fr) minmax(78px, 1fr) minmax(72px, 0.85fr);
+  gap: 0;
+  grid-template-rows: 34px minmax(44px, 0.45fr) minmax(58px, 0.7fr) minmax(96px, 1.15fr);
 }
 
 .layoutSharedWorkspace.layoutSetup.setupMode-video .videoSetupInspectorPane > .videoOutputPreviewCard,
@@ -27929,13 +27928,6 @@ h3 {
 
 .layoutSharedWorkspace.layoutSetup.setupMode-video .videoSetupInspectorPane > .videoOutputPreviewCard .emptyState {
   min-height: 42px;
-}
-
-@media (max-height: 720px) {
-  .layoutSharedWorkspace.layoutSetup.setupMode-video .videoSetupInspectorPane {
-    gap: 0;
-    grid-template-rows: 34px minmax(58px, 0.7fr) minmax(78px, 1fr) minmax(68px, 0.85fr);
-  }
 }
 
 .layoutSharedWorkspace.layoutControl.controlModeEdit .controlContextPane .positionConsoleSurface {
@@ -31620,7 +31612,7 @@ h3 {
    The show-critical controls stay in fixed/contained tracks so removing three
    redundant rows cannot reintroduce the T10 sizing oscillator. */
 .topbar {
-  grid-template-columns: minmax(245px, 0.65fr) minmax(120px, 0.35fr) minmax(520px, 1.4fr) 120px;
+  grid-template-columns: minmax(245px, 0.65fr) minmax(120px, 0.35fr) minmax(570px, 1.4fr) 120px;
   min-height: 42px;
 }
 
@@ -31683,10 +31675,81 @@ h3 {
   padding: 0;
 }
 
+.status .topbarPulseMeter {
+  display: grid;
+  grid-template-columns: auto 9px;
+  flex: 0 0 58px;
+  align-items: center;
+  width: 58px;
+  min-width: 58px;
+  height: 40px;
+  min-height: 40px;
+  gap: 4px;
+  border-color: #45413d;
+  background: #1b1917;
+  padding: 0 5px;
+  color: #837d77;
+}
+
+.topbarPulseLabel {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.topbarPulseTrack {
+  position: relative;
+  display: block;
+  width: 9px;
+  height: 28px;
+  overflow: hidden;
+  border: 1px solid #4a4642;
+  border-radius: 2px;
+  background: #0f0e0d;
+}
+
+.topbarPulseTrack > i,
+.topbarPulseTrack > b {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  left: 1px;
+  height: calc(100% - 2px);
+  border-radius: 1px;
+  transform: scaleY(0);
+  transform-origin: bottom;
+}
+
+.topbarPulseTrack > i {
+  background: #69d98d;
+  box-shadow: 0 0 4px rgb(105 217 141 / 0.58);
+}
+
+.topbarPulseTrack > b {
+  right: 3px;
+  left: 3px;
+  background: #f2c14e;
+  box-shadow: 0 0 3px rgb(242 193 78 / 0.7);
+}
+
+.status .topbarPulseMeter.active {
+  border-color: #38734c;
+  color: #dff6e6;
+}
+
+.status .topbarPulseMeter.active .topbarPulseTrack {
+  border-color: #58a875;
+}
+
 .status .bpmReadout,
 .status .pill,
 .status .metric,
 .status .projectAction,
+.status .topbarPulseMeter,
 .status .goButton {
   flex: 0 0 auto;
 }
@@ -31881,8 +31944,7 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
 }
 
 @media (max-width: 1500px) {
-  .topbar .tickMetric,
-  .topbar .projectAction {
+  .topbar .tickMetric {
     display: none;
   }
 
@@ -31890,6 +31952,100 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
     flex-basis: 210px;
     width: clamp(200px, 18vw, 250px);
   }
+}
+
+.setupOutputAudioInput {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--ray-border);
+  background: #141719;
+}
+
+.setupOutputAudioInput:focus-visible {
+  outline: 1px solid #f4a259;
+  outline-offset: -2px;
+}
+
+.setupOutputAudioInputHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  min-height: 30px;
+  border-bottom: 1px solid var(--ray-border);
+  padding: 4px 7px;
+}
+
+.setupOutputAudioInputHeader strong,
+.setupOutputAudioInputHeader span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.setupOutputAudioInputHeader strong {
+  color: #e2ddd8;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.setupOutputAudioInputHeader span {
+  color: #8f8881;
+  font-size: 11px;
+}
+
+.setupOutputAudioInput .liveAudioInputBar {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto auto;
+  gap: 4px;
+  min-height: 0;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  padding: 5px;
+}
+
+.setupOutputAudioInput .liveAudioInputControls,
+.setupOutputAudioInput .liveAudioMeters {
+  grid-column: 1;
+}
+
+.setupOutputAudioInput .liveAudioMeters {
+  min-height: 24px;
+}
+
+.setupOutputAudioInput .liveAudioTelemetry,
+.setupOutputAudioInput .liveAudioConfigControls {
+  grid-column: 1;
+  grid-row: auto;
+}
+
+.setupOutputAudioInput .liveAudioConfigControls {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  overflow: visible;
+}
+
+.setupOutputAudioInput .liveAudioConfigFormat {
+  grid-column: 1 / -1;
+}
+
+.setupOutputAudioInput .liveAudioTelemetry {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  overflow: visible;
+}
+
+.setupOutputAudioInput .liveAudioTelemetry > span {
+  width: auto;
+}
+
+.setupOutputAudioInput .liveAudioTelemetry > .liveAudioTelemetryIo {
+  grid-column: 1 / -1;
 }
 
 .layoutControl .liveControlPanel {

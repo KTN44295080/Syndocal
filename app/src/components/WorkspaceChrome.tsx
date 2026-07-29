@@ -17,6 +17,7 @@ import type {
 import { setupAreaForSubTab, setupAreas, setupSubTabs, setupSubTabsForArea } from "../uiModes";
 import type { SetupSubTab, WorkspaceTab } from "../uiModes";
 import type { UiLocale } from "../uiLocalization";
+import { TopbarPulseMeter } from "./TopbarPulseMeter";
 
 type WorkspaceChromeProps = {
   workspaceTab: WorkspaceTab;
@@ -26,6 +27,12 @@ type WorkspaceChromeProps = {
   lightingMaster: number;
   videoMaster: number;
   bpm: number;
+  liveAudioInputRunning: boolean;
+  liveAudioInputStale: boolean;
+  liveAudioInputSafetyClearPending: boolean;
+  liveAudioInputTelemetryFresh: boolean;
+  liveAudioInputRms: number;
+  liveAudioInputPeak: number;
   tickMs: number;
   jitterUs: number;
   packetBytes: number;
@@ -56,6 +63,7 @@ type WorkspaceChromeProps = {
   onLightingMaster: (level: number) => void | Promise<void>;
   onVideoMaster: (level: number) => void | Promise<void>;
   onTapBpm: () => void | Promise<void>;
+  onOpenLiveAudioInputSettings: () => void;
   onNewProject: () => void;
   onSaveUserTemplate: () => void;
   onLoadUserTemplate: () => void;
@@ -530,6 +538,15 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
           >
             Tap
           </button>
+          <TopbarPulseMeter
+            running={props.liveAudioInputRunning}
+            engineStale={props.liveAudioInputStale}
+            safetyClearPending={props.liveAudioInputSafetyClearPending}
+            telemetryFresh={props.liveAudioInputTelemetryFresh}
+            rms={props.liveAudioInputRms}
+            peak={props.liveAudioInputPeak}
+            onOpenSettings={props.onOpenLiveAudioInputSettings}
+          />
           <span class={props.blackout || props.videoBlackout ? "pill danger" : "pill ok"}>{liveLabel()}</span>
           <span
             class="metric tickMetric"

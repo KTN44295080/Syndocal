@@ -136,6 +136,7 @@ import {
   type TimelineCueDragState,
 } from "./timelineCueDrag";
 import { WorkspaceChrome } from "./components/WorkspaceChrome";
+import { TOPBAR_PULSE_STALE_MS } from "./components/TopbarPulseMeter";
 import { WorkspaceOperationsMenu } from "./components/WorkspaceOperationsMenu";
 import { OperatorLockOverlay } from "./components/OperatorLockOverlay";
 import { WorkspaceSplitHandle } from "./components/WorkspaceSplitHandle";
@@ -1620,6 +1621,24 @@ export default function App() {
   });
   const [liveAudioInputStatusKnown, setLiveAudioInputStatusKnown] = createSignal(!isTauriRuntime());
   const [liveAudioInputBusy, setLiveAudioInputBusy] = createSignal(false);
+  const [liveAudioInputTelemetryFresh, setLiveAudioInputTelemetryFresh] = createSignal(false);
+  let liveAudioInputTelemetryAcceptedAt = 0;
+  const clearLiveAudioInputTelemetryFreshness = () => {
+    liveAudioInputTelemetryAcceptedAt = 0;
+    setLiveAudioInputTelemetryFresh(false);
+  };
+  const acceptLiveAudioInputTelemetry = () => {
+    liveAudioInputTelemetryAcceptedAt = performance.now();
+    setLiveAudioInputTelemetryFresh(true);
+  };
+  const expireLiveAudioInputTelemetry = () => {
+    if (
+      liveAudioInputTelemetryFresh() &&
+      performance.now() - liveAudioInputTelemetryAcceptedAt >= TOPBAR_PULSE_STALE_MS
+    ) {
+      clearLiveAudioInputTelemetryFreshness();
+    }
+  };
   const liveAudioStatusRequests = createLiveAudioInputStatusRequestGate();
   const [videoPreviewDiagnostics, setVideoPreviewDiagnostics] = createSignal<VideoPreviewDiagnostics | null>(null);
   const [videoOutputRenderPlans, setVideoOutputRenderPlans] = createSignal<VideoOutputRenderPlan[] | null>(null);
@@ -6695,6 +6714,17 @@ export default function App() {
         return;
       }
       panel.focus({ preventScroll: true });
+    });
+  };
+  const openLiveAudioInputSettings = () => {
+    setWorkspaceTab("setup");
+    selectSetupMode("video");
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const target = document.getElementById("setup-output-audio-input");
+        target?.focus({ preventScroll: true });
+        target?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      });
     });
   };
 
@@ -13208,6 +13238,7 @@ export default function App() {
       return;
     }
     invalidateLiveAudioInputLevels();
+    clearLiveAudioInputTelemetryFreshness();
     const requestEpoch = liveAudioStatusRequests.beginCommand();
     setLiveAudioInputBusy(true);
     setLiveAudioInputStatusKnown(false);
@@ -13225,6 +13256,11 @@ export default function App() {
       if (liveAudioStatusRequests.accepts(requestEpoch)) {
         setLiveAudioInputStatus(nextStatus);
         setLiveAudioInputStatusKnown(true);
+        if (nextStatus.running && !nextStatus.stale && !nextStatus.safety_clear_pending) {
+          acceptLiveAudioInputTelemetry();
+        } else {
+          clearLiveAudioInputTelemetryFreshness();
+        }
         setMessage("Live audio FFT input started.");
       }
     } catch (error) {
@@ -13242,6 +13278,7 @@ export default function App() {
   const stopLiveAudioInput = async () => {
     if (liveAudioInputBusy()) return;
     invalidateLiveAudioInputLevels();
+    clearLiveAudioInputTelemetryFreshness();
     const requestEpoch = liveAudioStatusRequests.beginCommand();
     setLiveAudioInputBusy(true);
     setLiveAudioInputStatusKnown(false);
@@ -13277,6 +13314,9 @@ export default function App() {
         invalidateLiveAudioInputLevels();
         setLiveAudioInputStatus(nextStatus);
         setLiveAudioInputStatusKnown(true);
+        if (!nextStatus.running || nextStatus.stale || nextStatus.safety_clear_pending) {
+          clearLiveAudioInputTelemetryFreshness();
+        }
       }
     } catch (error) {
       if (liveAudioStatusRequests.accepts(requestEpoch)) {
@@ -13308,6 +13348,7 @@ export default function App() {
           feature_sequence: 0,
           last_error: `Live audio status unavailable: ${String(error)}`,
         }));
+        clearLiveAudioInputTelemetryFreshness();
         setLiveAudioInputStatusKnown(false);
       }
     } finally {
@@ -13315,6 +13356,7 @@ export default function App() {
     }
   };
   const refreshLiveAudioInputLevels = async () => {
+    expireLiveAudioInputTelemetry();
     const current = liveAudioInputStatus();
     if (
       liveAudioInputLevelsPollInFlight ||
@@ -13337,6 +13379,11 @@ export default function App() {
         return;
       }
       const safe = levels.running && !levels.stale && !levels.safety_clear_pending;
+      if (safe) {
+        acceptLiveAudioInputTelemetry();
+      } else {
+        clearLiveAudioInputTelemetryFreshness();
+      }
       setLiveAudioInputStatus((status) => {
         if (!status.running) return status;
         const presentationSafe = safe && !status.stale && !status.safety_clear_pending;
@@ -13367,6 +13414,7 @@ export default function App() {
       });
     } catch {
       if (epoch === liveAudioInputLevelsEpoch) {
+        clearLiveAudioInputTelemetryFreshness();
         setLiveAudioInputStatus((status) =>
           status.running
             ? {
@@ -13406,9 +13454,34 @@ export default function App() {
       if (backendReady) void refreshLiveAudioInputDevices(false);
     });
   }
-  const liveAudioInputLevelsTimer = isTauriRuntime()
-    ? window.setInterval(() => void refreshLiveAudioInputLevels(), 33)
-    : null;
+  let liveAudioInputLevelsTimer: number | null = null;
+  const stopLiveAudioInputLevelsPolling = () => {
+    if (liveAudioInputLevelsTimer === null) return;
+    window.clearInterval(liveAudioInputLevelsTimer);
+    liveAudioInputLevelsTimer = null;
+  };
+  const liveAudioInputLevelsPollingActive = createMemo(() => {
+    const status = liveAudioInputStatus();
+    return (
+      liveAudioInputStatusKnown() &&
+      status.running &&
+      !liveAudioInputBusy() &&
+      isTauriRuntime()
+    );
+  });
+  createEffect(() => {
+    if (!liveAudioInputLevelsPollingActive()) {
+      stopLiveAudioInputLevelsPolling();
+      clearLiveAudioInputTelemetryFreshness();
+      return;
+    }
+    if (liveAudioInputLevelsTimer !== null) return;
+    void refreshLiveAudioInputLevels();
+    liveAudioInputLevelsTimer = window.setInterval(
+      () => void refreshLiveAudioInputLevels(),
+      33,
+    );
+  });
   const videoOutputMetricsTimer = isTauriRuntime()
     ? window.setInterval(() => {
         if (videoOutputWindowStatuses()?.some((status) => status.live_open)) {
@@ -13433,9 +13506,8 @@ export default function App() {
     liveAudioInputCapabilitiesEpoch += 1;
     liveAudioInputDevicesRefreshEpoch += 1;
     invalidateLiveAudioInputLevels();
-    if (liveAudioInputLevelsTimer !== null) {
-      window.clearInterval(liveAudioInputLevelsTimer);
-    }
+    stopLiveAudioInputLevelsPolling();
+    clearLiveAudioInputTelemetryFreshness();
     if (videoOutputMetricsTimer !== null) {
       window.clearInterval(videoOutputMetricsTimer);
     }
@@ -15947,6 +16019,12 @@ export default function App() {
         lightingMaster={snapshot().lighting_master}
         videoMaster={snapshot().video.master_opacity}
         bpm={snapshot().clock.bpm}
+        liveAudioInputRunning={liveAudioInputStatus().running}
+        liveAudioInputStale={liveAudioInputStatus().stale}
+        liveAudioInputSafetyClearPending={liveAudioInputStatus().safety_clear_pending}
+        liveAudioInputTelemetryFresh={liveAudioInputTelemetryFresh()}
+        liveAudioInputRms={liveAudioInputStatus().rms}
+        liveAudioInputPeak={liveAudioInputStatus().peak}
         tickMs={Math.round(snapshot().telemetry.last_tick_interval_us / 1000)}
         jitterUs={Math.round(snapshot().telemetry.tick_jitter_stddev_us)}
         packetBytes={snapshot().telemetry.last_packet_bytes}
@@ -15998,6 +16076,7 @@ export default function App() {
         onLightingMaster={setLightingMaster}
         onVideoMaster={setVideoMasterOpacity}
         onTapBpm={tapBpm}
+        onOpenLiveAudioInputSettings={openLiveAudioInputSettings}
         onNewProject={newProject}
         onSaveUserTemplate={() => void saveUserTemplate()}
         onLoadUserTemplate={() => void loadUserTemplate()}
@@ -16798,6 +16877,31 @@ export default function App() {
           previewMode={videoOutputPreviewMode()}
           previewInfo={videoOutputPreviewInfo()}
           previewUrl={videoOutputPreviewUrl()}
+          liveAudioInput={{
+            get liveAudioInputBackends() { return liveAudioInputBackends(); },
+            get selectedLiveAudioInputBackend() { return selectedLiveAudioInputBackend(); },
+            get liveAudioInputBackendsKnown() { return liveAudioInputBackendsKnown(); },
+            get liveAudioInputBackendsBusy() { return liveAudioInputBackendsBusy(); },
+            get liveAudioInputBackendError() { return liveAudioInputBackendError(); },
+            get liveAudioInputDevices() { return liveAudioInputDevices(); },
+            get selectedLiveAudioInputDevice() { return selectedLiveAudioInputDevice(); },
+            get liveAudioInputCapabilities() { return liveAudioInputCapabilities(); },
+            get liveAudioInputCapabilitiesBusy() { return liveAudioInputCapabilitiesBusy(); },
+            get liveAudioInputSampleRate() { return liveAudioInputSampleRate(); },
+            get liveAudioInputBufferFrames() { return liveAudioInputBufferFrames(); },
+            get liveAudioInputChannelMix() { return liveAudioInputChannelMix(); },
+            get liveAudioInputStatus() { return liveAudioInputStatus(); },
+            get liveAudioInputStatusKnown() { return liveAudioInputStatusKnown(); },
+            get liveAudioInputBusy() { return liveAudioInputBusy(); },
+            onSetLiveAudioInputBackend: selectLiveAudioInputBackend,
+            onSetLiveAudioInputDevice: selectLiveAudioInputDevice,
+            onSetLiveAudioInputSampleRate: selectLiveAudioInputSampleRate,
+            onSetLiveAudioInputBufferFrames: setLiveAudioInputBufferFrames,
+            onSetLiveAudioInputChannelMix: setLiveAudioInputChannelMix,
+            onRefreshLiveAudioInputDevices: refreshLiveAudioInputDevices,
+            onStartLiveAudioInput: startLiveAudioInput,
+            onStopLiveAudioInput: stopLiveAudioInput,
+          }}
           configDraftFor={videoOutputConfigDraft}
           onCompositionLabel={setVideoCompositionLabel}
           onToggleCompositionLayer={toggleVideoCompositionLayer}

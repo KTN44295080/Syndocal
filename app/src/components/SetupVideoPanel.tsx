@@ -1,4 +1,5 @@
 import type { VideoOutputConfigDraft } from "../editorDrafts";
+import type { ComponentProps } from "solid-js";
 import type {
   CompositionSummary,
   VideoLayerSummary,
@@ -8,6 +9,7 @@ import type {
   VideoOutputSummary,
 } from "../types";
 import { VideoCompositionSetupPanel } from "./VideoCompositionSetupPanel";
+import { LiveAudioInputRail } from "./LiveAudioInputRail";
 import { VideoOutputCreatePanel } from "./VideoOutputCreatePanel";
 import { VideoOutputListPanel } from "./VideoOutputListPanel";
 
@@ -38,6 +40,7 @@ type SetupVideoPanelProps = {
   previewMode: VideoOutputPreviewMode;
   previewInfo: string;
   previewUrl: string;
+  liveAudioInput: ComponentProps<typeof LiveAudioInputRail>;
   configDraftFor: (output: VideoOutputSummary) => VideoOutputConfigDraft;
   onCompositionLabel: (value: string) => void;
   onToggleCompositionLayer: (layerId: number, checked: boolean) => void;
@@ -126,6 +129,19 @@ export function SetupVideoPanel(props: SetupVideoPanelProps) {
                   onEndpoint={props.onOutputEndpoint}
                   onAddOutput={props.onAddOutput}
                 />
+                <div
+                  id="setup-output-audio-input"
+                  class="setupOutputAudioInput"
+                  role="region"
+                  aria-label="Audio input settings"
+                  tabIndex={-1}
+                >
+                  <div class="setupOutputAudioInputHeader">
+                    <strong>Audio Input</strong>
+                    <span>Live analysis</span>
+                  </div>
+                  <LiveAudioInputRail {...props.liveAudioInput} compact />
+                </div>
               </div>
             }
             outputs={props.outputs}
