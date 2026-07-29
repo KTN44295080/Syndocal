@@ -12,6 +12,7 @@ interface FaderAuxiliaryAttributePanelsProps {
   showGoboWheel: boolean;
   showOptics: boolean;
   showCategoryQuick: boolean;
+  showFunctions: boolean;
   targetLabel: string;
   categoryLabel: string;
   attributeCount: number;
@@ -93,7 +94,7 @@ export function FaderAuxiliaryAttributePanels(props: FaderAuxiliaryAttributePane
           onApplyLook={props.onApplyLook}
         />
       </Show>
-      <Show when={props.functionEntries.length > 0}>
+      <Show when={props.showFunctions && props.functionEntries.length > 0}>
         <ChannelFunctionPanel
           categoryLabel={props.categoryLabel}
           entries={props.functionEntries}

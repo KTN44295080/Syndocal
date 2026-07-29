@@ -5,6 +5,7 @@ import {
   sortedChannelFunctions,
 } from "../channelFunctionHelpers";
 import type { AttributeControl } from "../types";
+import { VerticalFaderInput } from "./VerticalFaderInput";
 
 interface FaderGridPanelProps {
   controls: AttributeControl[];
@@ -12,6 +13,7 @@ interface FaderGridPanelProps {
   selectedGroupId?: string | null;
   valueForControl: (control: AttributeControl) => number;
   isControlWritten: (control: AttributeControl) => boolean;
+  fullWidth?: boolean;
   onSetControlValue?: (control: AttributeControl, value: number) => void;
   onSetFixtureAttribute?: (fixtureId: number, attribute: string, value: number) => void | Promise<void>;
   onSetGroupAttribute?: (groupId: string, attribute: string, value: number) => void | Promise<void>;
@@ -77,7 +79,12 @@ export function FaderGridPanel(props: FaderGridPanelProps) {
   const fineStep = (control: AttributeControl) => (control.resolution === "SixteenBit" ? 1 : 257);
 
   return (
-    <div class="faderGrid" role="group" aria-label="Attribute faders">
+    <div
+      classList={{ faderGrid: true, faderChannelBank: props.fullWidth }}
+      role="group"
+      aria-label="Attribute faders"
+      data-fader-view-channel-bank={props.fullWidth ? "true" : undefined}
+    >
       <For each={props.controls}>
         {(control) => {
           const value = () => clampDmxValue(props.valueForControl(control));
@@ -105,9 +112,9 @@ export function FaderGridPanel(props: FaderGridPanelProps) {
               <output class="attributeFaderValue">
                 {written() ? displayValue(control, value()) : "OFF"}
               </output>
-              <input
-                class="verticalFaderInput"
-                type="range"
+              <VerticalFaderInput
+                chromeClass="attributeVerticalFaderChrome"
+                inputClass="verticalFaderInput"
                 min="0"
                 max="65535"
                 value={value()}

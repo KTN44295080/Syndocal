@@ -1,4 +1,5 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
+import { VerticalFaderInput } from "./VerticalFaderInput";
 
 import {
   createTouchControl,
@@ -414,9 +415,10 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
         return (
           <label class="touchPlacedFader">
             <span>{control.label}</span>
-            <input
+            <VerticalFaderInput
+              chromeClass="touchPlacedVerticalFaderChrome"
+              inputClass="touchPlacedVerticalFaderInput"
               aria-label={control.label}
-              type="range"
               min="0"
               max="1"
                step="0.01"

@@ -12,6 +12,7 @@ import type { AttributeControl, PatchedFixtureSummary } from "../types";
 import type { ControlCategory } from "../uiModes";
 import { FaderGridPanel } from "./FaderGridPanel";
 import { TouchPanTiltPad } from "./TouchPanTiltPad";
+import { VerticalFaderInput } from "./VerticalFaderInput";
 
 interface FixtureTypeAttributeColumnsProps {
   groups: FixtureTypeSelectionGroup[];
@@ -75,9 +76,13 @@ export function FixtureTypeAttributeColumns(props: FixtureTypeAttributeColumnsPr
 
   return (
     <section
-      class="fixtureTypeColumnGrid"
+      classList={{
+        fixtureTypeColumnGrid: true,
+        faderChannelBank: props.activeCategory === "fader",
+      }}
       aria-label="Fixture type columns"
       data-fixture-type-column-count={props.groups.length}
+      data-fader-view-channel-bank={props.activeCategory === "fader" ? "true" : undefined}
     >
       <For each={props.groups}>
         {(group) => {
@@ -219,9 +224,9 @@ export function FixtureTypeAttributeColumns(props: FixtureTypeAttributeColumnsPr
                         <output class="fixtureTypePrimaryValue">
                           {isMixed(control()) ? "Mixed" : percentLabel(valueFor(control()))}
                         </output>
-                        <input
-                          class="fixtureTypeVerticalFader"
-                          type="range"
+                        <VerticalFaderInput
+                          chromeClass="fixtureTypeVerticalFaderChrome"
+                          inputClass="fixtureTypeVerticalFader"
                           min="0"
                           max="65535"
                           value={valueFor(control())}

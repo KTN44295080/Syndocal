@@ -34,6 +34,7 @@ import { FaderAttributeEditorPanel } from "./components/FaderAttributeEditorPane
 import { FaderAuxiliaryAttributePanels } from "./components/FaderAuxiliaryAttributePanels";
 import { FaderFixtureControlPanel } from "./components/FaderFixtureControlPanel";
 import { FaderGridPanel } from "./components/FaderGridPanel";
+import { ChannelFunctionPanel } from "./components/ChannelFunctionPanel";
 import { FixtureTypeAttributeColumns } from "./components/FixtureTypeAttributeColumns";
 import { FixtureCatalogPanel } from "./components/FixtureCatalogPanel";
 import { GroupLiveMixerStrip } from "./components/GroupLiveMixerStrip";
@@ -3534,7 +3535,7 @@ export default function App() {
   const showCategoryQuickPanel = createMemo(() =>
     Boolean(selectedFixture()) &&
     visibleControls().length > 0 &&
-    !["dimmer", "color", "position"].includes(activeControlCategory()),
+    !["dimmer", "color", "position", "fader"].includes(activeControlCategory()),
   );
   const categoryQuickLooks = createMemo(() => quickLooksForCategory(activeControlCategory()));
   const visibleFunctionControls = createMemo(() =>
@@ -16554,6 +16555,7 @@ export default function App() {
             showGoboWheel={showGoboWheelPanel()}
             showOptics={showOpticsPanel()}
             showCategoryQuick={showCategoryQuickPanel()}
+            showFunctions={activeControlCategory() !== "fader"}
             targetLabel={controlTargetLabel()}
             categoryLabel={activeControlCategoryLabel()}
             attributeCount={visibleControls().length}
@@ -16587,6 +16589,7 @@ export default function App() {
           />
           <FaderGridPanel
             controls={visibleControls()}
+            fullWidth={activeControlCategory() === "fader"}
             selectedFixtureId={selectedControlReferenceFixture()?.id ?? null}
             selectedGroupId={selectedFixtureGroupFilter()}
             valueForControl={(control) => {
@@ -17439,7 +17442,25 @@ export default function App() {
             activeCount={nonZeroDmxCount()}
             cells={dmxCells()}
             onUniverseChange={setRawDmxUniverse}
-          />
+          >
+            <Show when={visibleFunctionControls().length > 0}>
+              <div class="dmxGdtfFunctionReadout">
+                <ChannelFunctionPanel
+                  categoryLabel={activeControlCategoryLabel()}
+                  entries={visibleFunctionControls()}
+                  currentValue={currentControlValue}
+                  clampDmxValue={clampDmxValue}
+                  functionContainsValue={channelFunctionContainsValue}
+                  functionBandStyle={channelFunctionBandStyle}
+                  functionLabel={channelFunctionLabel}
+                  functionRangeLabel={channelFunctionRangeLabel}
+                  functionDetail={channelFunctionDetail}
+                  functionSwatchColor={channelFunctionSwatchColor}
+                  onApplyFunction={(control, fn) => void applyChannelFunction(control, fn)}
+                />
+              </div>
+            </Show>
+          </DmxRawMonitor>
         </section>
         </Show>
         </MappingPersistentWorkspaceBand>

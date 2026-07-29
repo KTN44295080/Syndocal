@@ -29114,14 +29114,11 @@ h3 {
   grid-template-rows: auto minmax(48px, 1fr) auto;
 }
 
-.touchPlacedFader input[type="range"] {
+.touchPlacedFader .touchPlacedVerticalFaderChrome {
   width: 48px;
   min-width: 48px;
   height: 100%;
   min-height: 48px;
-  padding: 0;
-  direction: rtl;
-  writing-mode: vertical-lr;
 }
 
 .touchPlacedDial {
@@ -30018,28 +30015,25 @@ h3 {
   color: #7d7872;
 }
 
-.attributeDeskSurface .fader input.verticalFaderInput {
+.attributeDeskSurface .attributeVerticalFaderChrome {
   width: 40px;
   min-width: 40px;
   height: 100%;
   min-height: 72px;
   margin: 0;
   justify-self: center;
-  padding: 0;
-  writing-mode: vertical-lr;
-  direction: rtl;
-  transform: none;
-  touch-action: none;
-  accent-color: #a29b94;
 }
 
-.attributeDeskSurface .attributeFaderColumn.off input.verticalFaderInput {
+.attributeDeskSurface .attributeFaderColumn.off .attributeVerticalFaderChrome {
   opacity: 0.48;
 }
 
-.attributeDeskSurface .fader input.verticalFaderInput:focus-visible {
-  outline: 2px solid #f3974f;
-  outline-offset: 1px;
+.attributeDeskSurface.category-fader > .faderGrid.faderChannelBank {
+  flex: 1 0 100%;
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .attributeFaderFine {
@@ -31854,21 +31848,14 @@ h3 {
   font-weight: 800;
 }
 
-.fixtureTypeVerticalFader {
+.fixtureTypeVerticalFaderChrome {
   width: 40px;
   min-width: 40px;
   height: 100%;
   min-height: 72px;
   margin: 0;
-  padding: 0;
-  writing-mode: vertical-lr;
-  direction: rtl;
-  transform: none;
-  touch-action: none;
-  accent-color: #a29b94;
 }
 
-.fixtureTypeVerticalFader:focus-visible,
 .fixtureTypeColorPicker:focus-visible {
   outline: 2px solid #f3974f;
   outline-offset: 1px;
@@ -32042,6 +32029,127 @@ h3 {
 .fixtureTypeUnsupported strong,
 .fixtureTypeUnsupported span {
   font-size: 11px;
+}
+
+/* ---- T25-I: every Live Edit vertical fader keeps its native range input for
+   pointer, keyboard, and accessibility behavior while this graphite chrome
+   supplies the visible recessed track and Daslight-style gripped cap. */
+.verticalFaderChrome {
+  position: relative;
+  display: block;
+  overflow: visible;
+  --syndocal-fader-position: 100%;
+}
+
+.verticalFaderTrack {
+  position: absolute;
+  z-index: 0;
+  top: 5px;
+  bottom: 5px;
+  left: 50%;
+  width: 8px;
+  border: 1px solid #47433f;
+  border-radius: 999px;
+  background: #11100f;
+  box-shadow:
+    inset 0 0 0 1px #080807,
+    inset 0 0 5px #000000;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.verticalFaderThumb {
+  position: absolute;
+  z-index: 1;
+  top: clamp(8px, var(--syndocal-fader-position), calc(100% - 8px));
+  left: 50%;
+  width: 32px;
+  height: 16px;
+  border: 1px solid #aaa49d;
+  border-radius: 999px;
+  background: #79736d;
+  box-shadow:
+    0 1px 2px #000000,
+    inset 0 1px 0 #c8c2bb,
+    inset 0 -1px 0 #4d4945;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+.verticalFaderGrip {
+  position: absolute;
+  top: 50%;
+  left: 7px;
+  right: 7px;
+  height: 2px;
+  background: #393633;
+  transform: translateY(-50%);
+}
+
+.verticalFaderChrome > input.verticalFaderNativeInput {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  width: 100%;
+  min-width: 100%;
+  height: 100%;
+  min-height: 100%;
+  margin: 0;
+  border: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: ns-resize;
+  direction: rtl;
+  opacity: 0;
+  outline: 0;
+  padding: 0;
+  touch-action: none;
+  transform: none;
+  writing-mode: vertical-lr;
+}
+
+.verticalFaderChrome:has(> .verticalFaderNativeInput:focus-visible) {
+  outline: 2px solid #f3974f;
+  outline-offset: 1px;
+}
+
+.verticalFaderChrome:has(> .verticalFaderNativeInput:disabled) {
+  cursor: default;
+  opacity: 0.38;
+}
+
+.verticalFaderChrome:has(> .verticalFaderNativeInput:disabled) .verticalFaderNativeInput {
+  cursor: default;
+}
+
+.layoutControl.controlModeEdit .faders.editDesk-dmx > .rawMonitor {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  height: 100%;
+  overflow: hidden;
+}
+
+.layoutControl.controlModeEdit .faders.editDesk-dmx > .rawMonitor > .rawGrid {
+  max-height: none;
+}
+
+.dmxGdtfFunctionReadout {
+  min-width: 0;
+  max-height: 46%;
+  overflow: hidden auto;
+}
+
+.dmxGdtfFunctionReadout > .channelFunctionPanel {
+  width: 100%;
+  min-width: 0;
+  border-color: #403c37;
+  background: #1b1917;
+  padding: 4px;
+}
+
+.dmxGdtfFunctionReadout > .channelFunctionPanel > summary {
+  min-height: 40px;
+  cursor: pointer;
 }
 
 /* ---- T25-D: the Live Desk transport and view/status controls share one row.

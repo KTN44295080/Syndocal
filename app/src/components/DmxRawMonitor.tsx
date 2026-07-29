@@ -1,4 +1,4 @@
-import { For } from "solid-js";
+import { For, type JSX } from "solid-js";
 import type { DmxUniversePreview } from "../types";
 
 interface DmxRawCell {
@@ -11,6 +11,7 @@ interface DmxRawMonitorProps {
   activeUniverse: number;
   activeCount: number;
   cells: DmxRawCell[];
+  children?: JSX.Element;
   onUniverseChange: (universe: number) => void;
 }
 
@@ -36,6 +37,7 @@ export function DmxRawMonitor(props: DmxRawMonitorProps) {
           )}
         </For>
       </div>
+      {props.children}
     </div>
   );
 }

@@ -15121,6 +15121,29 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
         vertical: rect.height > rect.width,
       };
     });
+    const faderChromes = desk
+      ? [...desk.querySelectorAll('.verticalFaderChrome')].filter(visible)
+      : [];
+    const faderThumbs = faderChromes
+      .map((chrome) => chrome.querySelector('.verticalFaderThumb'))
+      .filter(visible);
+    const faderTracks = faderChromes
+      .map((chrome) => chrome.querySelector('.verticalFaderTrack'))
+      .filter(visible);
+    const faderGrips = faderThumbs
+      .map((thumb) => thumb.querySelector('.verticalFaderGrip'))
+      .filter(visible);
+    const faderNativeInputs = faderChromes
+      .map((chrome) => chrome.querySelector('.verticalFaderNativeInput'))
+      .filter(visible);
+    const faderThumbRects = faderThumbs.map((thumb) => thumb.getBoundingClientRect());
+    const faderTrackStyles = faderTracks.map((track) => getComputedStyle(track));
+    const faderGripRects = faderGrips.map((grip) => grip.getBoundingClientRect());
+    const faderChannelBank = desk
+      ? [...desk.querySelectorAll('[data-fader-view-channel-bank="true"]')].find(visible)
+      : null;
+    const faderChannelBankRect = faderChannelBank?.getBoundingClientRect();
+    const deskRect = desk?.getBoundingClientRect();
     const positionPadRects = fixtureTypePositionPads.map((pad) => {
       const rect = pad.getBoundingClientRect();
       return {
@@ -15166,6 +15189,32 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
       deskVerticalRangeCount: deskRangeRects.filter((rect) => rect.vertical).length,
       deskHorizontalRangeCount: deskRangeRects.filter((rect) => !rect.vertical).length,
       deskRangeRects,
+      faderChromeCount: faderChromes.length,
+      faderThumbMinimumWidth: faderThumbRects.length > 0
+        ? Math.min(...faderThumbRects.map((rect) => rect.width))
+        : 0,
+      faderThumbMinimumHeight: faderThumbRects.length > 0
+        ? Math.min(...faderThumbRects.map((rect) => rect.height))
+        : 0,
+      faderTrackInsetCount: faderTrackStyles.filter((style) =>
+        style.boxShadow.includes('inset') &&
+        style.borderStyle === 'solid' &&
+        style.backgroundColor === 'rgb(17, 16, 15)'
+      ).length,
+      faderGripLineCount: faderGripRects.filter((rect) => rect.width >= 12 && rect.height >= 2).length,
+      faderNativeAppearanceNoneCount: faderNativeInputs.filter((input) => {
+        const style = getComputedStyle(input);
+        return style.appearance === 'none' && style.webkitAppearance === 'none';
+      }).length,
+      faderCategoryActionCount: desk
+        ? [...desk.querySelectorAll('.categoryQuickPanel')].filter(visible).length
+        : 0,
+      faderGdtfFunctionPanelCount: desk
+        ? [...desk.querySelectorAll('.channelFunctionPanel')].filter(visible).length
+        : 0,
+      faderChannelBankWidthRatio: faderChannelBankRect && deskRect && desk.clientWidth > 0
+        ? faderChannelBankRect.width / desk.clientWidth
+        : 0,
       visibleOpticsNativeRangeCount: desk
         ? [...desk.querySelectorAll('.opticsControlCard > input[type="range"]')].filter(visible).length
         : 0,
@@ -15192,6 +15241,75 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
   })()`);
 
   const multiple = await measureState();
+  const keyboardBefore = await client.evaluate(`(() => {
+    const input = document.querySelector('.fixtureTypeVerticalFader');
+    if (!(input instanceof HTMLInputElement)) return null;
+    input.focus();
+    const value = Number(input.value);
+    const minimum = Number(input.min);
+    const maximum = Number(input.max);
+    return {
+      value,
+      key: value >= maximum ? 'ArrowDown' : 'ArrowUp',
+      ariaLabel: input.getAttribute('aria-label') || '',
+      ariaValueText: input.getAttribute('aria-valuetext') || '',
+      ariaOrientation: input.getAttribute('aria-orientation') || '',
+      active: document.activeElement === input,
+      minimum,
+      maximum,
+    };
+  })()`);
+  if (keyboardBefore) {
+    const virtualKeyCode = keyboardBefore.key === "ArrowDown" ? 40 : 38;
+    await client.send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      key: keyboardBefore.key,
+      code: keyboardBefore.key,
+      windowsVirtualKeyCode: virtualKeyCode,
+      nativeVirtualKeyCode: virtualKeyCode,
+    });
+    await client.send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: keyboardBefore.key,
+      code: keyboardBefore.key,
+      windowsVirtualKeyCode: virtualKeyCode,
+      nativeVirtualKeyCode: virtualKeyCode,
+    });
+    await sleep(80);
+  }
+  const keyboardAfter = await client.evaluate(`(() => {
+    const input = document.querySelector('.fixtureTypeVerticalFader');
+    const chrome = input?.closest('.verticalFaderChrome');
+    if (!(input instanceof HTMLInputElement) || !(chrome instanceof HTMLElement)) return null;
+    const style = getComputedStyle(chrome);
+    return {
+      value: Number(input.value),
+      active: document.activeElement === input,
+      focusOutlineWidth: Number.parseFloat(style.outlineWidth) || 0,
+      focusOutlineStyle: style.outlineStyle,
+      focusOutlineColor: style.outlineColor,
+    };
+  })()`);
+  const keyboardProbe = {
+    before: keyboardBefore,
+    after: keyboardAfter,
+    valueChanged: Boolean(
+      keyboardBefore &&
+      keyboardAfter &&
+      keyboardBefore.value !== keyboardAfter.value
+    ),
+    ariaPreserved: Boolean(
+      keyboardBefore?.ariaLabel &&
+      keyboardBefore?.ariaValueText &&
+      keyboardBefore?.ariaOrientation === "vertical"
+    ),
+    focusVisible: Boolean(
+      keyboardBefore?.active &&
+      keyboardAfter?.active &&
+      keyboardAfter.focusOutlineWidth >= 2 &&
+      keyboardAfter.focusOutlineStyle === "solid"
+    ),
+  };
   const multipleCategoryStates = { Dimmer: multiple };
   if (screenshotDir && shouldCaptureViewport(viewport)) {
     mkdirSync(screenshotDir, { recursive: true });
@@ -15234,11 +15352,37 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
     await sleep(80);
     singleCategoryStates[category] = await measureState();
   }
+  await clickVisibleByText(client, ".editDeskTabs button", "DMX");
+  await sleep(80);
+  const dmxFunctionReadout = await client.evaluate(`(() => {
+    const visible = (element) => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const rawMonitor = document.querySelector('.faders.editDesk-dmx > .rawMonitor');
+    const panels = rawMonitor
+      ? [...rawMonitor.querySelectorAll('.dmxGdtfFunctionReadout > .channelFunctionPanel')].filter(visible)
+      : [];
+    return {
+      rawMonitorVisible: visible(rawMonitor),
+      panelCount: panels.length,
+      labels: panels.map((panel) =>
+        (panel.querySelector('.channelFunctionSummaryIdentity > strong')?.textContent || '').trim()
+      ),
+    };
+  })()`);
   const position = multipleCategoryStates.Position;
   const color = multipleCategoryStates.Color;
+  const singleFaderBank = singleCategoryStates.Fader;
   const genericCategoryStates = ["Gobo", "Beam", "Focus", "Other"].map(
     (category) => multipleCategoryStates[category]
   );
+  const customFaderStates = [
+    ...Object.values(multipleCategoryStates),
+    ...Object.values(singleCategoryStates),
+  ].filter((state) => state.faderChromeCount > 0);
   const everyMeasuredRangeIsVertical = (states) =>
     states.every((state) =>
       state.deskRangeCount > 0
@@ -15265,6 +15409,48 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
     ["faderCategoryUsesChannelVerticalBank", () => faderBank.bankFaderCount === 26 && faderBank.bankVerticalInputCount === 26],
     ["faderCategoryShowsChannelNumbers", () => faderBank.bankChannelLabels.length === 26 && faderBank.bankChannelLabels.every((label) => label.startsWith("CH "))],
     ["faderCategoryHasTrimPerChannel", () => faderBank.bankFineButtonCount === faderBank.bankFaderCount * 2],
+    ["verticalFadersUseCustomAppearanceNoneChrome", () =>
+      customFaderStates.length > 0 &&
+      customFaderStates.every((state) =>
+        state.faderNativeAppearanceNoneCount === state.faderChromeCount
+      )
+    ],
+    ["faderCapsMeetRenderedSizeFloor", () =>
+      customFaderStates.every((state) =>
+        state.faderThumbMinimumWidth >= 28 &&
+        state.faderThumbMinimumHeight >= 12
+      )
+    ],
+    ["faderTracksRenderInsetGraphiteStyle", () =>
+      customFaderStates.every((state) =>
+        state.faderTrackInsetCount === state.faderChromeCount
+      )
+    ],
+    ["faderCapsRenderGripLines", () =>
+      customFaderStates.every((state) =>
+        state.faderGripLineCount === state.faderChromeCount
+      )
+    ],
+    ["faderViewHasNoCategoryActionCards", () =>
+      faderBank.faderCategoryActionCount === 0 &&
+      singleFaderBank.faderCategoryActionCount === 0
+    ],
+    ["faderViewHasNoGdtfFunctionPanel", () =>
+      faderBank.faderGdtfFunctionPanelCount === 0 &&
+      singleFaderBank.faderGdtfFunctionPanelCount === 0
+    ],
+    ["faderChannelBankUsesAtLeastNinetyPercentWidth", () =>
+      faderBank.faderChannelBankWidthRatio >= 0.9 &&
+      singleFaderBank.faderChannelBankWidthRatio >= 0.9
+    ],
+    ["faderArrowKeyChangesNativeRangeValue", () => keyboardProbe.valueChanged],
+    ["faderFocusVisibilityPreserved", () => keyboardProbe.focusVisible],
+    ["faderAriaPreserved", () => keyboardProbe.ariaPreserved],
+    ["gdtfFunctionReadoutLivesOnDmxTab", () =>
+      dmxFunctionReadout.rawMonitorVisible &&
+      dmxFunctionReadout.panelCount === 1 &&
+      dmxFunctionReadout.labels.every((label) => label === "GDTF Functions")
+    ],
     ["dimmerFadersRenderTallerThanWide", () => multiple.deskRangeCount === 3 && multiple.deskVerticalRangeCount === 3 && multiple.deskHorizontalRangeCount === 0],
     ["faderBankRendersTallerThanWide", () => faderBank.deskRangeCount === 26 && faderBank.deskVerticalRangeCount === 26 && faderBank.deskHorizontalRangeCount === 0],
     ["positionCategoryUsesCompactPanTiltPads", () => position.fixtureTypePositionPadCount === 2 && position.fixtureTypePositionPadsSquare],
@@ -15319,6 +15505,9 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
     faderBank,
     single,
     singleCategoryStates,
+    singleFaderBank,
+    keyboardProbe,
+    dmxFunctionReadout,
     narrowed,
   };
 }
@@ -15546,6 +15735,11 @@ async function main() {
             `controls=${result.multiple.primaryControlKinds.join("+")} ` +
             `bank=${result.faderBank.bankFaderCount}/${result.faderBank.bankVerticalInputCount} ` +
             `orientation=${result.faderBank.deskVerticalRangeCount}/${result.faderBank.deskHorizontalRangeCount} ` +
+            `chrome=${Math.round(result.faderBank.faderThumbMinimumWidth * 10) / 10}x${Math.round(result.faderBank.faderThumbMinimumHeight * 10) / 10}/${result.faderBank.faderTrackInsetCount}/${result.faderBank.faderGripLineCount} ` +
+            `pure=${result.faderBank.faderCategoryActionCount}+${result.singleFaderBank.faderCategoryActionCount}/${result.faderBank.faderGdtfFunctionPanelCount}+${result.singleFaderBank.faderGdtfFunctionPanelCount} ` +
+            `width=${Math.round(result.faderBank.faderChannelBankWidthRatio * 1000) / 1000}/${Math.round(result.singleFaderBank.faderChannelBankWidthRatio * 1000) / 1000} ` +
+            `keyboard=${result.keyboardProbe.valueChanged}/${result.keyboardProbe.focusVisible}/${result.keyboardProbe.ariaPreserved} ` +
+            `dmx=${result.dmxFunctionReadout.panelCount} ` +
             `position=${result.multipleCategoryStates.Position.fixtureTypePositionPadCount}/${result.multipleCategoryStates.Position.positionExtraFaderCount} ` +
             `single=${result.single.legacyFaderGridCount}/${result.single.legacyDimmerPanelCount} ` +
             `scroll=${result.multiple.documentAndAppScrollZero && result.single.documentAndAppScrollZero ? "zero" : "overflow"} ` +
@@ -16395,7 +16589,7 @@ async function main() {
     }
     for (const result of liveEditTypeResults) {
       console.log(
-        `${result.passed ? "pass" : "fail"} ${result.label} columns=${result.multiple.columnCount} fixtures=${result.multiple.fixtureCounts.join("+")} controls=${result.multiple.primaryControlKinds.join("+")} bank=${result.faderBank.bankFaderCount}/${result.faderBank.bankVerticalInputCount} single=${result.single.legacyFaderGridCount}/${result.single.legacyDimmerPanelCount} failed=${JSON.stringify(result.failedChecks)}`,
+        `${result.passed ? "pass" : "fail"} ${result.label} columns=${result.multiple.columnCount} fixtures=${result.multiple.fixtureCounts.join("+")} controls=${result.multiple.primaryControlKinds.join("+")} bank=${result.faderBank.bankFaderCount}/${result.faderBank.bankVerticalInputCount} chrome=${Math.round(result.faderBank.faderThumbMinimumWidth * 10) / 10}x${Math.round(result.faderBank.faderThumbMinimumHeight * 10) / 10}/${result.faderBank.faderTrackInsetCount} pure=${result.faderBank.faderCategoryActionCount}+${result.singleFaderBank.faderCategoryActionCount}/${result.faderBank.faderGdtfFunctionPanelCount}+${result.singleFaderBank.faderGdtfFunctionPanelCount} width=${Math.round(result.faderBank.faderChannelBankWidthRatio * 1000) / 1000}/${Math.round(result.singleFaderBank.faderChannelBankWidthRatio * 1000) / 1000} keyboard=${result.keyboardProbe.valueChanged}/${result.keyboardProbe.focusVisible}/${result.keyboardProbe.ariaPreserved} dmx=${result.dmxFunctionReadout.panelCount} single=${result.single.legacyFaderGridCount}/${result.single.legacyDimmerPanelCount} failed=${JSON.stringify(result.failedChecks)}`,
       );
     }
     if (
