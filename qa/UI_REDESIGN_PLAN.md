@@ -266,6 +266,14 @@ timeline窓692/659/628、popped-main 376+896、全状態スクロール0/0）。
 - **T25-I フェーダー外装＋FADERビュー純化（2026-07-29ユーザー比較指摘）**: (1)「デフォルトのスライダーすぎる」→ 全縦フェーダー（タイプ別カラム/チャンネルバンク/単灯）へ専用外装: inset彫り込みトラック＋グリップ線入りピル型キャップ（Daslightキャップ様式、ユーザー提供スクショ裁定）。ネイティブrange要素の見た目依存を廃止。(2)「カテゴリ操作とその右の項目はDaslightにはない」→ FADERビューからカテゴリ操作カード（ゼロ/中域/Full/Default）とGDTF機能パネルを撤去し、チャンネルバンクを全幅化。カテゴリ操作は各カテゴリビュー既存ボタン（出力/Half/Full/バンプ等）で代替済みのため機能損失なし、GDTF readoutはDMXタブへ残置。断言: fader外装のスタイル断言（トラックinset/キャップ寸法）、FADERビューのカテゴリ操作/GDTF不在断言、バンク全幅断言。
 - F8（Matrix列密度~1.7倍差）はT25-Aの行整理後に再計測して列幅コンパクト化を判断。
 
+## T26系: シーン中心オーサリング（2026-07-29ユーザーのDaslightモデル解説起点・最重要ワークフロー変更）
+
+ユーザー解説によるDaslightの確定モデル（スクショ2枚で裏付け）: (1)シーン新規作成→右ペインにFX種類chooser（STEPS/COLOR FX/CHASER FX/MOVE FX/VALUE FX/CURVE FX/MAPPINGS/COLOR MAPPINGS/SUPER SCENE）が常駐、未選択ならStatic。(2)FX選択→右ペインが当該FXエディタ（例: CURVE FX=波形プレビュー+Rate/Size/Phase/Offset/Phasing+Attribute value+Beams+Features）。(3)シーンの中身はシーン選択状態で下段EDITフェーダー（Mappingで灯体選択→操作）で作り、**その値がそのままシーンへ上書き保存**。(4)EDIT/LIVEトグルの本義: EDIT=フェーダー値がシーンへ上書き保存／LIVE=シーンへ保存されないライブオーバーライド。現Syndocalは部品（cue-owned FX/Store Scope/Update Look/Programmer/T16 chooser/T17モディファイア）を持つが直結動線に組まれておらず、ユーザー評価は「シーン作成・編集は大きく劣る・操作しにくい」。
+
+- **T26-A シーン設定右ペイン**: シーン選択（トリガー=選択を兼ねる、Daslight同様。T25-Hトグルリリースとの整合設計）→右ペイン（現・実行中/次のキューのレール領域を拡張）にシーン設定を常駐: 新規/FXなし=FX chooser（T16の9ファミリーを流用）＋Staticプロパティ（fade/duration系）、FX持ち=当該FXエディタ（T16エディタ群のシーン文脈再配置）。FXワークスペースへの遷移なしでシーンのFXを作成・編集できること。
+- **T26-B EDIT/LIVE直結書込**: ControlフェーダーデッキへEDIT/LIVEトグル（Daslight位置）。EDIT=選択シーンがある状態でのフェーダー/タイプ別カラム/Mapping操作を、既存Update Look/Programmer staged経路の自動化で**選択シーンへ即時上書き**。LIVE=現行の非破壊ライブ操作（T17ラッチ/programmer live）。EDIT中は誤上書き防止の明示視覚状態（EDITバッジ・シーン名表示、Daslightの「EDIT: <シーン名>」ヘッダ同等）。Undo/Redoで書込単位を取り消せること。
+- 実装順: T25-G/I完了後に着手。protocol変更は原則不要見込み（既存コマンド編成）だが、自動Update粒度で必要が生じたら承認を取る。受入はDaslightモデル4点との1:1突合＋操作手数（シーン新規→FX選択→中身作成→保存の一連）のDaslight同数以下。
+
 ## 実装体制
 
 - 実装は2レーン並行（2026-07-17ユーザー承認）: **Codex gpt-5.6-sol**（メイン作業ツリー、cue/エンジン系）+
