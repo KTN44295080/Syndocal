@@ -3827,31 +3827,32 @@ h3 {
 
 .sceneMatrixCard {
   position: relative;
-  grid-template-columns: minmax(0, 1fr) 124px;
+  grid-template-columns: minmax(0, 1fr) 138px;
 }
 
 .sceneMatrixCardFooter {
-  grid-template-columns: minmax(0, 1fr) 26px 40px;
+  grid-template-columns: minmax(0, 1fr) 40px 40px;
+  padding-right: 0;
 }
 
-.sceneMatrixEditCue {
-  display: inline-flex;
+.sceneMatrixEditStrip {
+  position: relative;
+  display: inline-grid;
   grid-column: 2;
   grid-row: 1 / span 2;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  min-width: 26px;
+  place-items: stretch;
+  width: 40px;
+  min-width: 40px;
   height: 40px;
   min-height: 40px;
-  border-color: #3c4247;
+  overflow: hidden;
+  border: 0;
   background: #191d20;
-  color: #c8cdd1;
   padding: 0;
 }
 
 .sceneMatrixCardFooter .cueTimelineDragHandle {
-  grid-column: 3;
+  grid-column: 2;
 }
 
 @media (max-width: 1320px) {
@@ -31224,27 +31225,67 @@ h3 {
 }
 
 .sceneMatrixCardFooter {
-  grid-template-columns: max-content 26px 40px;
+  grid-template-columns: minmax(0, 1fr) 40px 40px;
+  padding-right: 0;
 }
 
-.sceneMatrixEditCue {
-  display: inline-flex;
-  grid-column: 2;
+.sceneMatrixCardFooter > .sceneMatrixFlashBadge {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.sceneMatrixEditStrip {
+  position: relative;
+  z-index: 1;
+  display: inline-grid;
+  grid-column: 3;
   grid-row: 1 / span 2;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  min-width: 26px;
+  place-items: stretch;
+  width: 40px;
+  min-width: 40px;
   height: 40px;
   min-height: 40px;
-  border-color: #3c4247;
+  overflow: hidden;
+  border: 0;
   background: #191d20;
-  color: #c8cdd1;
   padding: 0;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.sceneMatrixEditStrip:hover {
+  border: 0;
+  background: #252b2f;
+}
+
+.sceneMatrixEditStrip:focus-visible {
+  outline: 2px solid var(--cue-identity);
+  outline-offset: -2px;
+}
+
+.sceneMatrixEditStripBand {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: block;
+  width: 12px;
+  background: var(--cue-identity);
+  pointer-events: auto;
+}
+
+.sceneMatrixCard.selected .sceneMatrixEditStrip {
+  background: #2b3135;
+  box-shadow: inset 0 0 0 1px var(--cue-identity);
+}
+
+.sceneMatrixCard.selected .sceneMatrixEditStripBand {
+  width: 14px;
+  border-left: 3px solid var(--cue-identity-text);
 }
 
 .sceneMatrixCardFooter .cueTimelineDragHandle {
-  grid-column: 3;
+  grid-column: 2;
 }
 
 .sceneMatrixEmptyAction {
@@ -32175,8 +32216,16 @@ h3 {
 }
 
 .liveDeskToolbarActions .liveDeskViewToggle,
-.liveDeskToolbarActions .liveStatusToggle {
+.liveDeskToolbarActions .liveStatusToggle,
+.liveDeskToolbarActions .liveCueEditorToggle {
   flex: 0 0 auto;
+}
+
+.liveCueEditorToggle {
+  min-width: 84px;
+  min-height: 25px;
+  padding: 2px 7px;
+  font-size: 11px;
 }
 
 .layout.layoutSharedWorkspace.layoutControl .liveControlPanel .liveDeskToolbarActions .liveDeskViewToggle button {
@@ -32194,4 +32243,342 @@ h3 {
 
 .layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveFadeMeter {
   grid-row: 3;
+}
+
+/* ---- T26-A: selection keeps the Scene Matrix primary while the existing
+   status rail becomes a scene-owned authoring inspector. The rail grows only
+   while a scene is selected; all scrolling remains inside the rail. */
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel:has(.sceneSettingsPane) {
+  grid-template-columns: minmax(0, 1fr) clamp(340px, 28vw, 420px);
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveStatusGrid.sceneSettingsVisible {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: 42px minmax(0, 1fr);
+  grid-auto-rows: auto;
+  align-content: stretch;
+  overflow: hidden;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveStatusGrid.sceneSettingsVisible > .liveStatusItem {
+  display: grid;
+  min-height: 42px;
+  padding: 4px 7px;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveStatusGrid.sceneSettingsVisible > .sceneSettingsPane {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  min-width: 0;
+  min-height: 0;
+}
+
+.sceneMatrixCard.selected {
+  outline: 2px solid var(--cue-identity);
+  outline-offset: -2px;
+  box-shadow: inset 0 0 0 1px #080909;
+}
+
+.sceneMatrixCard.selected:not(.active) {
+  background: #252b2f;
+}
+
+.sceneSettingsPane {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border-top: 3px solid var(--cue-identity);
+  background: #141719;
+  color: #eef0f2;
+}
+
+.sceneSettingsHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto 40px;
+  align-items: center;
+  gap: 6px;
+  min-height: 46px;
+  border-bottom: 1px solid #353b3f;
+  padding: 3px 4px 3px 8px;
+}
+
+.sceneSettingsHeader > div {
+  display: grid;
+  min-width: 0;
+}
+
+.sceneSettingsHeader > div > span,
+.sceneSettingsSection > header > span {
+  color: #929ba1;
+  font-size: 11px;
+}
+
+.sceneSettingsHeader > div > strong {
+  overflow: hidden;
+  color: var(--cue-identity-text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sceneSettingsKind {
+  min-width: 42px;
+  border: 1px solid #4c555b;
+  padding: 2px 5px;
+  color: #c5ccd0;
+  font-size: 11px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.sceneSettingsKind.fx {
+  border-color: var(--cue-identity);
+  color: var(--cue-identity-text);
+}
+
+.sceneSettingsEditSource {
+  min-width: 84px;
+  min-height: 40px;
+  padding: 3px 7px;
+  font-size: 11px;
+}
+
+.sceneSettingsClose {
+  display: inline-grid;
+  place-items: center;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
+  padding: 0;
+  font-size: 18px;
+}
+
+.sceneSettingsScroller {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+  scrollbar-width: thin;
+}
+
+.sceneSettingsPane button,
+.sceneSettingsPane input,
+.sceneSettingsPane select,
+.sceneSettingsPane summary {
+  min-height: 40px !important;
+}
+
+.sceneSettingsPane button {
+  min-width: 40px;
+}
+
+.sceneSettingsPane button,
+.sceneSettingsPane input,
+.sceneSettingsPane select,
+.sceneSettingsPane label,
+.sceneSettingsPane span,
+.sceneSettingsPane small,
+.sceneSettingsPane summary {
+  font-size: max(11px, 1em) !important;
+}
+
+.sceneSettingsSection {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid #343a3e;
+  background: #1b1f22;
+  padding: 6px;
+}
+
+.sceneSettingsSection > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  border-bottom: 1px solid #30363a;
+  padding-bottom: 4px;
+}
+
+.sceneSettingsSection > header > strong,
+.sceneAddFxDisclosure > summary {
+  font-size: 12px;
+}
+
+.sceneSettingsPropertyGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.sceneSettingsPropertyGrid label,
+.sceneSettingsAttribute {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  color: #aeb5ba;
+  font-size: 11px;
+}
+
+.sceneSettingsPropertyGrid input,
+.sceneSettingsAttribute select {
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+}
+
+.sceneSettingsWideField,
+.sceneIdentityColorField {
+  grid-column: 1 / -1;
+}
+
+.sceneIdentityColorField > span {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 5px;
+}
+
+.sceneIdentityColorField input[type="color"] {
+  min-width: 48px;
+  padding: 2px;
+}
+
+.sceneIdentityColorField button,
+.sceneSettingsSave {
+  min-height: 40px;
+}
+
+.sceneFxChooserSection .effectFamilyChooser,
+.sceneAddFxDisclosure .effectFamilyChooser {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 3px;
+  min-height: 0;
+  overflow: visible;
+}
+
+.sceneFxChooserSection .effectFamilyChooser button,
+.sceneAddFxDisclosure .effectFamilyChooser button {
+  min-width: 0;
+  min-height: 48px;
+  padding: 3px;
+}
+
+.sceneFxChooserSection .effectFamilyChooser button strong,
+.sceneAddFxDisclosure .effectFamilyChooser button strong {
+  font-size: 11px;
+  white-space: normal;
+}
+
+.sceneOwnedFxList {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.sceneOwnedFxList button {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 1px 5px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 4px 6px;
+  text-align: left;
+}
+
+.sceneOwnedFxList button > span {
+  grid-row: 1 / span 2;
+  color: #89939a;
+  font-variant-numeric: tabular-nums;
+}
+
+.sceneOwnedFxList button > strong,
+.sceneOwnedFxList button > small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sceneOwnedFxList button > small {
+  color: #929ba1;
+  font-size: 11px;
+}
+
+.sceneOwnedFxList button.active {
+  border-color: var(--cue-identity);
+  background: #2a3034;
+  box-shadow: inset 3px 0 0 var(--cue-identity);
+}
+
+.sceneFxEditor {
+  overflow: hidden;
+}
+
+.sceneFxEditor > .sceneSettingsAttribute {
+  margin-bottom: 2px;
+}
+
+.sceneFxEditor .colorEffectEditor,
+.sceneFxEditor .chaserEffectEditor,
+.sceneFxEditor .moveEffectEditorPanel,
+.sceneFxEditor .valueEffectEditor,
+.sceneFxEditor .curveEffectEditor,
+.sceneFxEditor .mappingEffectEditor,
+.sceneFxEditor .colorMappingEffectEditor,
+.sceneFxEditor .effectActionControls {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.sceneFxEditor .effectActionControls {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.sceneFxEditor .effectActionControls button {
+  min-height: 40px;
+}
+
+.sceneFxEditor .curveEffectPointRow {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.sceneFxEditor .curveEffectPointRow > .moveEffectPointSelect {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.sceneFxEditor .curveEffectPointRow > .moveEffectPointAction {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.sceneSettingsEmpty {
+  margin: 0;
+  border: 1px solid #343a3e;
+  padding: 12px;
+  color: #aeb5ba;
+  font-size: 11px;
+  text-align: center;
+}
+
+.sceneAddFxDisclosure {
+  padding: 0;
+}
+
+.sceneAddFxDisclosure > summary {
+  min-height: 40px;
+  cursor: pointer;
+  padding: 10px;
+}
+
+.sceneAddFxDisclosure[open] > .effectFamilyChooser {
+  margin: 0 6px 6px;
 }

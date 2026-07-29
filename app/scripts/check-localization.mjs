@@ -109,11 +109,24 @@ assert.equal(
 );
 assert.match(source, /"aria-valuetext"/, "dynamic meter aria-valuetext must be localized");
 assert.equal(localization.translateUiText("Blocks 13-24 / 500", "ja"), "ブロック 13-24 / 500");
-assert.equal(
-  localization.translateUiText("Edit Source for Cue Opening Wash", "ja"),
-  "キュー Opening Wash のソースを編集",
-);
 assert.equal(localization.translateUiText("SS", "ja"), "SS");
+assert.equal(localization.translateUiText("Scene settings", "ja"), "シーン設定");
+assert.equal(localization.translateUiText("Static scene", "ja"), "Staticシーン");
+assert.equal(localization.translateUiText("Cue-owned FX", "ja"), "Cue所有FX");
+assert.equal(localization.translateUiText("Save cue-owned FX", "ja"), "Cue所有FXを保存");
+assert.equal(localization.translateUiText("Edit Source", "ja"), "ソースを編集");
+assert.equal(
+  localization.translateUiText("Edit scene settings for Cue Opening Wash", "ja"),
+  "キュー Opening Wash のシーン設定を編集",
+);
+assert.equal(
+  localization.translateUiText("Created cue-owned Curve FX for scene 302.", "ja"),
+  "シーン 302 にCue所有 Curve FXを作成しました。",
+);
+assert.equal(
+  localization.translateUiText("Saved cue-owned Curve FX for scene 302.", "ja"),
+  "シーン 302 のCue所有 Curve FXを保存しました。",
+);
 assert.equal(
   localization.translateUiText("Open Super Scene Opening Wash", "ja"),
   "Super Scene Opening Wash を開く",

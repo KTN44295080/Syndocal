@@ -117,6 +117,7 @@ export default defineConfig({
             normalizedId.includes("/src/components/DimmerControlPanel") ||
             normalizedId.includes("/src/components/OpticsControlPanel") ||
             normalizedId.includes("/src/components/PositionControlPanel") ||
+            normalizedId.includes("/src/components/SceneMatrixPanel") ||
             normalizedId.includes("/src/components/WheelSlotPanel")
           ) {
             return "control-panels";
@@ -134,6 +135,7 @@ export default defineConfig({
             normalizedId.includes("/src/components/ColorEffectEditorPanel") ||
             normalizedId.includes("/src/components/EffectSourceControlsPanel") ||
             normalizedId.includes("/src/components/SampleEffectPresetPanel") ||
+            normalizedId.includes("/src/components/SceneSettingsPane") ||
             normalizedId.includes("/src/components/VideoEffectTargetPanel") ||
             normalizedId.includes("/src/moveEffect")
           ) {

@@ -18,6 +18,7 @@ interface SceneMatrixPanelProps {
   groupIds: string[];
   activeCueId: number | null | undefined;
   activeGroupCueIds: Record<string, number>;
+  selectedCueId?: number | null;
   activeFade?: ActiveFadeSummary | null;
   cueLiveModifiers?: CueLiveModifierState[];
   onSetCueLiveModifier?: (
@@ -31,7 +32,7 @@ interface SceneMatrixPanelProps {
   onClearCueLiveModifier?: (cueId: number) => void | Promise<void>;
   onReleaseCue: (cueId: number) => void | Promise<void>;
   onTriggerCue: (cueId: number) => void | Promise<void>;
-  onEditCue: (cueId: number) => void;
+  onSelectCue: (cueId: number) => void;
   onOpenSuperScene: (cueId: number) => void | Promise<void>;
   onOpenCueEditor: () => void;
   onBeginTimelineCueDrag: (
@@ -79,7 +80,10 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
   });
 
   const beginDrag = (event: PointerEvent & { currentTarget: HTMLElement }, cue: CueSummary) => {
-    if (event.button !== 0) return;
+    if (
+      event.button !== 0
+      || !event.currentTarget.classList.contains("cueTimelineDragHandle")
+    ) return;
     dragPointer = {
       pointerId: event.pointerId,
       startClientX: event.clientX,
@@ -265,7 +269,10 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                           return (
                             <article
                               class="sceneMatrixCard"
-                              classList={{ active: isActive(cue) }}
+                              classList={{
+                                active: isActive(cue),
+                                selected: props.selectedCueId === cue.id,
+                              }}
                               style={{
                                 "--cue-identity": cueIdentityCss(cue.id, cue.color, "fill"),
                                 "--cue-identity-text": cueIdentityCss(cue.id, cue.color, "text"),
@@ -274,16 +281,13 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                               data-scene-matrix-cue-list-id={cue.cue_list_id}
                               data-scene-matrix-cue-hue={hue()}
                               data-scene-matrix-active={isActive(cue) ? "true" : "false"}
+                              data-scene-matrix-selected={props.selectedCueId === cue.id ? "true" : "false"}
                               data-scene-matrix-drop-position={
                                 dropIndicator()?.cueId === cue.id
                                   ? dropIndicator()!.position
                                   : undefined
                               }
                               data-timeline-cue-drag-source={cue.id}
-                              onPointerDown={(event) => beginDrag(event, cue)}
-                              onPointerMove={moveDrag}
-                              onPointerUp={(event) => finishDrag(event, false)}
-                              onPointerCancel={(event) => finishDrag(event, true)}
                             >
                               <button
                                 type="button"
@@ -383,31 +387,54 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                 </Show>
                                 <button
                                   type="button"
-                                  class="sceneMatrixEditCue"
-                                  data-scene-matrix-edit-cue={cue.id}
-                                  title={`Edit Source for Cue ${cue.label}`}
-                                  aria-label={`Edit Source for Cue ${cue.label}`}
+                                  class="cueTimelineDragHandle"
+                                  classList={{ dragging: dragCueId() === cue.id }}
+                                  title={`Drag Cue ${cue.label} to reorder this column or place on Timeline`}
+                                  aria-label={`Drag Cue ${cue.label} to reorder this column or place on Timeline`}
+                                  onPointerDown={(event) => {
+                                    event.stopPropagation();
+                                    beginDrag(event, cue);
+                                  }}
+                                  onPointerMove={(event) => {
+                                    event.stopPropagation();
+                                    moveDrag(event);
+                                  }}
+                                  onPointerUp={(event) => {
+                                    event.stopPropagation();
+                                    finishDrag(event, false);
+                                  }}
+                                  onPointerCancel={(event) => {
+                                    event.stopPropagation();
+                                    finishDrag(event, true);
+                                  }}
+                                  onClick={(event) => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                  }}
+                                >
+                                  <span aria-hidden="true" data-no-localize>⠿</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  class="sceneMatrixEditStrip"
+                                  data-scene-matrix-edit-strip={cue.id}
+                                  title={`Edit scene settings for Cue ${cue.label}`}
+                                  aria-label={`Edit scene settings for Cue ${cue.label}`}
+                                  aria-pressed={props.selectedCueId === cue.id}
                                   onPointerDown={(event) => event.stopPropagation()}
                                   onPointerMove={(event) => event.stopPropagation()}
                                   onPointerUp={(event) => event.stopPropagation()}
                                   onPointerCancel={(event) => event.stopPropagation()}
                                   onClick={(event) => {
-                                    event.preventDefault();
                                     event.stopPropagation();
-                                    props.onEditCue(cue.id);
+                                    props.onSelectCue(cue.id);
                                   }}
                                 >
-                                  <span aria-hidden="true" data-no-localize>✎</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  class="cueTimelineDragHandle"
-                                  classList={{ dragging: dragCueId() === cue.id }}
-                                  title={`Drag Cue ${cue.label} to reorder this column or place on Timeline`}
-                                  aria-label={`Drag Cue ${cue.label} to reorder this column or place on Timeline`}
-                                  onClick={(event) => event.preventDefault()}
-                                >
-                                  <span aria-hidden="true" data-no-localize>⠿</span>
+                                  <span
+                                    class="sceneMatrixEditStripBand"
+                                    aria-hidden="true"
+                                    data-no-localize
+                                  />
                                 </button>
                               </div>
                               <Show when={isActive(cue)}>

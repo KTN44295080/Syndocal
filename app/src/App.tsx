@@ -5,6 +5,10 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { CueManagementPanel } from "./components/CueManagementPanel";
 import { SceneMatrixPanel } from "./components/SceneMatrixPanel";
+import {
+  SceneSettingsPane,
+  type SceneEffectEditorModel,
+} from "./components/SceneSettingsPane";
 import { AppStatusLine } from "./components/AppStatusLine";
 import { ArtRdmPanel } from "./components/ArtRdmPanel";
 import { ChaserEffectEditorPanel } from "./components/ChaserEffectEditorPanel";
@@ -230,6 +234,7 @@ import type {
   DmxInputStatus,
   EffectBlendMode,
   EffectKind,
+  EffectParamsSnapshot,
   EffectSummary,
   EngineSnapshot,
   EngineSnapshotSyncResponse,
@@ -999,6 +1004,229 @@ const inferredCueAuthoredBeats = (effects: EffectSummary[], targets: CueEffectTa
   return candidates.every((candidate) => Math.abs(candidate - first) <= 1e-6) ? first : null;
 };
 
+const cueOwnedEffectSummary = (
+  target: CueEffectTarget,
+  source: EffectSummary | null,
+): EffectSummary | null => {
+  const params = target.params;
+  if (!params) return source;
+  const shell = (
+    effectType: EffectKind,
+    label: string,
+    fixtureIds: number[],
+    targetGroupIds: string[],
+    attribute: string,
+    periodMs: number | null,
+    clockSync: EffectSummary["clock_sync"],
+    low: number,
+    high: number,
+    phase: number,
+    blendMode: EffectBlendMode,
+  ): EffectSummary => ({
+    id: target.effect_id,
+    label,
+    effect_type: effectType,
+    fixture_ids: fixtureIds,
+    target_group_ids: targetGroupIds,
+    attribute,
+    video_targets: [],
+    shape: source?.shape ?? "Sine",
+    period_ms: periodMs,
+    clock_sync: clockSync,
+    low,
+    high,
+    phase,
+    blend_mode: blendMode,
+    enabled: target.enabled,
+    color: null,
+    chaser: null,
+    move_effect: null,
+    value: null,
+    curve: null,
+    mapping: null,
+    color_mapping: null,
+  });
+  if ("Lfo" in params) {
+    const request = params.Lfo;
+    return {
+      ...shell(
+        "Lfo",
+        request.label,
+        request.fixture_ids,
+        request.target_group_ids,
+        request.attribute,
+        request.period_ms,
+        request.clock_sync,
+        request.low,
+        request.high,
+        request.phase,
+        request.blend_mode,
+      ),
+      video_targets: request.video_targets,
+      shape: request.shape,
+    };
+  }
+  if ("PositionWave" in params) {
+    const request = params.PositionWave;
+    return {
+      ...shell(
+        "PositionWave",
+        request.label,
+        request.fixture_ids,
+        request.target_group_ids,
+        request.attribute,
+        source?.period_ms ?? null,
+        request.clock_sync,
+        request.low,
+        request.high,
+        request.phase,
+        request.blend_mode,
+      ),
+      video_targets: request.video_targets,
+      shape: request.shape,
+      origin: request.origin,
+      direction: request.direction,
+      speed: request.speed,
+      wavelength: request.wavelength,
+    };
+  }
+  if ("Color" in params) {
+    const request = params.Color;
+    return {
+      ...shell(
+        "Color",
+        request.label,
+        request.fixture_ids,
+        request.target_group_ids,
+        "",
+        request.period_ms,
+        request.clock_sync,
+        0,
+        65_535,
+        request.phase,
+        request.blend_mode,
+      ),
+      color: request,
+    };
+  }
+  if ("Chaser" in params) {
+    const request = params.Chaser;
+    const fixtureIds = [...new Set(request.steps.flatMap((step) => step.fixture_ids))];
+    const groupIds = [...new Set(request.steps.flatMap((step) => step.target_group_ids))];
+    const feature = request.features[0];
+    return {
+      ...shell(
+        "Chaser",
+        request.label,
+        fixtureIds,
+        groupIds,
+        feature?.attribute ?? "",
+        request.step_duration_ms,
+        request.clock_sync,
+        feature?.low ?? 0,
+        feature?.high ?? 65_535,
+        request.phase,
+        request.blend_mode,
+      ),
+      chaser: request,
+    };
+  }
+  if ("Move" in params) {
+    const request = params.Move;
+    return {
+      ...shell(
+        "Move",
+        request.label,
+        request.fixture_ids,
+        request.target_group_ids,
+        "Pan/Tilt",
+        request.period_ms,
+        request.clock_sync,
+        0,
+        65_535,
+        request.phase,
+        request.blend_mode,
+      ),
+      move_effect: request,
+    };
+  }
+  if ("Value" in params) {
+    const request = params.Value;
+    return {
+      ...shell(
+        "Value",
+        request.label,
+        request.fixture_ids,
+        request.target_group_ids,
+        request.attribute,
+        request.period_ms,
+        request.clock_sync,
+        request.low,
+        request.high,
+        request.phase,
+        request.blend_mode,
+      ),
+      value: request,
+    };
+  }
+  if ("Curve" in params) {
+    const request = params.Curve;
+    return {
+      ...shell(
+        "Curve",
+        request.label,
+        request.fixture_ids,
+        request.target_group_ids,
+        request.attribute,
+        request.period_ms,
+        request.clock_sync,
+        request.low,
+        request.high,
+        request.phase,
+        request.blend_mode,
+      ),
+      curve: request,
+    };
+  }
+  if ("Mapping" in params) {
+    const request = params.Mapping;
+    return {
+      ...shell(
+        "Mapping",
+        request.label,
+        request.fixture_ids,
+        request.target_group_ids,
+        request.attribute,
+        request.period_ms,
+        request.clock_sync,
+        request.low,
+        request.high,
+        request.phase,
+        request.blend_mode,
+      ),
+      shape: request.shape,
+      mapping: request,
+    };
+  }
+  const request = params.ColorMapping;
+  return {
+    ...shell(
+      "ColorMapping",
+      request.label,
+      request.fixture_ids,
+      request.target_group_ids,
+      "Colour Mapping",
+      request.period_ms,
+      request.clock_sync,
+      0,
+      65_535,
+      request.phase,
+      request.blend_mode,
+    ),
+    color_mapping: request,
+  };
+};
+
 
 export default function App() {
   const outputWindowId = readVideoOutputWindowId();
@@ -1234,6 +1462,8 @@ export default function App() {
   const [cueEffectCaptureTargets, setCueEffectCaptureTargets] = createSignal<CueEffectTarget[]>([]);
   const [cueEffectCaptureStateOverrideIds, setCueEffectCaptureStateOverrideIds] = createSignal<number[]>([]);
   const [selectedCueListId, setSelectedCueListId] = createSignal(1);
+  const [selectedSceneCueId, setSelectedSceneCueId] = createSignal<number | null>(null);
+  const [selectedSceneEffectId, setSelectedSceneEffectId] = createSignal<number | null>(null);
   const [cueListLabel, setCueListLabel] = createSignal("Main");
   const [cueMetadataDrafts, setCueMetadataDrafts] = createSignal<Record<number, CueMetadataDraft>>({});
   const [cuePadBank, setCuePadBank] = createSignal(0);
@@ -1547,6 +1777,26 @@ export default function App() {
   const [waveWavelength, setWaveWavelength] = createSignal(2);
   const [snapshot, setSnapshot] = createSignal<EngineSnapshot>(createInitialEngineSnapshot());
   const [snapshotRevision, setSnapshotRevision] = createSignal<number | null>(null);
+  let loadSceneEffectDraft = (_cueId: number, _effectId: number) => {};
+  const selectSceneCue = (cueId: number) => {
+    const cue = snapshot().cues.find((candidate) => candidate.id === cueId);
+    if (!cue) return;
+    const currentEffectId = selectedSceneEffectId();
+    const effectId = cue.effect_targets.some((target) => target.effect_id === currentEffectId)
+      ? currentEffectId
+      : cue.effect_targets[0]?.effect_id ?? null;
+    setSelectedSceneCueId(cueId);
+    setSelectedSceneEffectId(effectId);
+    if (effectId !== null) loadSceneEffectDraft(cueId, effectId);
+  };
+  const closeSceneSettings = () => {
+    setSelectedSceneCueId(null);
+    setSelectedSceneEffectId(null);
+  };
+  const openCueEditor = () => {
+    setTimelineDeskSurface("show");
+    setTimelineContextDrawer("cue");
+  };
   const snapshotCues = createMemo(() => snapshot().cues);
   const timelineChildCue = createMemo(() => {
     const cueId = timelineChildCueId();
@@ -5614,6 +5864,21 @@ export default function App() {
   const activeCue = createMemo(() => {
     const activeCueId = snapshot().active_cue_id;
     return snapshot().cues.find((cue) => cue.id === activeCueId) ?? null;
+  });
+  const selectedSceneCue = createMemo(() => {
+    const cueId = selectedSceneCueId();
+    return cueId === null
+      ? null
+      : snapshot().cues.find((cue) => cue.id === cueId) ?? null;
+  });
+  const selectedSceneEffects = createMemo(() => {
+    const cue = selectedSceneCue();
+    if (!cue) return [];
+    const effectsById = new Map(snapshot().effects.map((effect) => [effect.id, effect]));
+    return cue.effect_targets.flatMap((target) => {
+      const effect = cueOwnedEffectSummary(target, effectsById.get(target.effect_id) ?? null);
+      return effect ? [effect] : [];
+    });
   });
   // T7: persisted identity colors. Components that only carry cue ids receive
   // this map; components with full CueSummary objects read cue.color directly.
@@ -10760,6 +11025,8 @@ export default function App() {
         effectTargets: cueEffectCaptureTargets(),
       });
       setCueLabel(`Cue ${snapshot().cues.length + 2}`);
+      setSelectedSceneCueId(cueId);
+      setSelectedSceneEffectId(null);
       setMessage(`Created cue ${cueId}`);
       await refreshSnapshot();
     } catch (error) {
@@ -13552,6 +13819,20 @@ export default function App() {
     | { effectType: "Mapping"; request: MappingEffectRequest }
     | { effectType: "ColorMapping"; request: ColorMappingEffectRequest };
 
+  const effectParamsSnapshotFromDraft = (draft: EffectRequestDraft): EffectParamsSnapshot => {
+    switch (draft.effectType) {
+      case "Lfo": return { Lfo: draft.request };
+      case "PositionWave": return { PositionWave: draft.request };
+      case "Color": return { Color: draft.request };
+      case "Chaser": return { Chaser: draft.request };
+      case "Move": return { Move: draft.request };
+      case "Value": return { Value: draft.request };
+      case "Curve": return { Curve: draft.request };
+      case "Mapping": return { Mapping: draft.request };
+      case "ColorMapping": return { ColorMapping: draft.request };
+    }
+  };
+
   const buildEffectRequestFromForm = (): EffectRequestDraft | null => {
     const fixture = selectedFixture();
     const attribute = selectedEffectAttribute();
@@ -13848,7 +14129,7 @@ export default function App() {
   const addEffect = async () => {
     const draft = buildEffectRequestFromForm();
     if (!draft) {
-      return;
+      return null;
     }
     try {
       const effectId = draft.effectType === "Lfo"
@@ -13871,8 +14152,10 @@ export default function App() {
       setEditingEffectId(null);
       setMessage(`Added ${draft.effectType === "PositionWave" ? "position wave" : draft.effectType === "Color" ? "color" : draft.effectType === "Chaser" ? "Chaser" : draft.effectType === "Move" ? "Move" : draft.effectType === "Value" ? "Value" : draft.effectType === "Curve" ? "Curve" : draft.effectType === "Mapping" ? "Mapping" : draft.effectType === "ColorMapping" ? "Colour Mapping" : "LFO"} effect ${effectId}`);
       await refreshSnapshot();
+      return effectId;
     } catch (error) {
       setMessage(String(error));
+      return null;
     }
   };
 
@@ -14167,6 +14450,371 @@ export default function App() {
           : targetPlan.message,
     );
   };
+
+  const sceneEffectForCue = (cueId: number, effectId: number) => {
+    const cue = snapshot().cues.find((candidate) => candidate.id === cueId);
+    const target = cue?.effect_targets.find((candidate) => candidate.effect_id === effectId);
+    if (!cue || !target) return null;
+    const source = snapshot().effects.find((candidate) => candidate.id === effectId) ?? null;
+    return cueOwnedEffectSummary(target, source);
+  };
+
+  loadSceneEffectDraft = (cueId: number, effectId: number) => {
+    const effect = sceneEffectForCue(cueId, effectId);
+    if (effect) useEffectAsDraft(effect);
+  };
+
+  const selectSceneEffect = (effectId: number) => {
+    const cue = selectedSceneCue();
+    if (!cue || !cue.effect_targets.some((target) => target.effect_id === effectId)) return;
+    setSelectedSceneEffectId(effectId);
+    loadSceneEffectDraft(cue.id, effectId);
+  };
+
+  const persistSceneEffectTargets = async (
+    cueId: number,
+    effectTargets: CueEffectTarget[],
+  ) => {
+    if (viewportFixture === "scene-matrix") {
+      setSnapshot((current) => ({
+        ...current,
+        cues: current.cues.map((cue) =>
+          cue.id === cueId
+            ? { ...cue, effect_targets: effectTargets.map((target) => ({ ...target })) }
+            : cue
+        ),
+      }));
+      return true;
+    }
+    try {
+      await invoke("set_cue_effect_targets", { cueId, effectTargets });
+      await refreshSnapshot();
+      return true;
+    } catch (error) {
+      setMessage(String(error));
+      return false;
+    }
+  };
+
+  const prepareSceneEffectTarget = (cue: CueSummary) => {
+    const fixtureIds = [...new Set(cue.targets.map((target) => target.fixture_id))]
+      .filter((fixtureId) => snapshot().fixtures.some((fixture) => fixture.id === fixtureId));
+    const attribute = cue.targets
+      .flatMap((target) => target.values)
+      .find((value) => value.attribute.trim())?.attribute
+      ?? snapshot().fixtures
+        .find((fixture) => fixture.id === fixtureIds[0])
+        ?.controls[0]?.attribute
+      ?? "";
+    setEditingEffectId(null);
+    setEffectVideoTargetLinked(false);
+    setSelectedMappingFixtureIds(fixtureIds);
+    if (fixtureIds.length > 0) {
+      setEffectTargetMode("selection");
+      const firstFixture = snapshot().fixtures.find((fixture) => fixture.id === fixtureIds[0]);
+      if (firstFixture) activateFixture(firstFixture);
+    } else if (cue.group_id?.trim()) {
+      setEffectTargetMode("group");
+      setEffectTargetGroups(cue.group_id);
+    } else {
+      setEffectTargetMode("fixture");
+    }
+    setEffectAttribute(attribute);
+  };
+
+  const createSceneEffect = async (family: EffectChooserFamily) => {
+    const cue = selectedSceneCue();
+    if (!cue) return;
+    if (family === "STEPS") {
+      openTimelineSourceCue(cue.id);
+      return;
+    }
+    if (family === "SUPER SCENE") {
+      const opened = await openOrCreateSuperScene(cue.id);
+      if (!opened) return;
+      setWorkspaceTab("control");
+      setControlMode("live");
+      setTimelineDeskSurface("show");
+      setTimelineContextDrawer("none");
+      return;
+    }
+    prepareSceneEffectTarget(cue);
+    await selectEffectFamily(family);
+    const draft = buildEffectRequestFromForm();
+    if (!draft) return;
+    const params = effectParamsSnapshotFromDraft(draft);
+    if (viewportFixture === "scene-matrix") {
+      const effectId = Math.max(900, ...snapshot().effects.map((effect) => effect.id)) + 1;
+      const effectTarget: CueEffectTarget = { effect_id: effectId, enabled: true, params };
+      const effect = cueOwnedEffectSummary(effectTarget, null);
+      if (!effect) return;
+      setSnapshot((current) => ({
+        ...current,
+        effects: [...current.effects, effect],
+        cues: current.cues.map((candidate) =>
+          candidate.id === cue.id
+            ? { ...candidate, effect_targets: [...candidate.effect_targets, effectTarget] }
+            : candidate
+        ),
+      }));
+      setSelectedSceneEffectId(effectId);
+      useEffectAsDraft(effect);
+      setMessage(`Created cue-owned ${draft.effectType} FX for scene ${cue.id}.`);
+      return;
+    }
+    const effectId = await addEffect();
+    if (effectId === null) return;
+    const currentCue = snapshot().cues.find((candidate) => candidate.id === cue.id) ?? cue;
+    const saved = await persistSceneEffectTargets(cue.id, [
+      ...currentCue.effect_targets,
+      { effect_id: effectId, enabled: true, params },
+    ]);
+    if (!saved) return;
+    setSelectedSceneEffectId(effectId);
+    loadSceneEffectDraft(cue.id, effectId);
+    setMessage(`Created cue-owned ${draft.effectType} FX for scene ${cue.id}.`);
+  };
+
+  const saveSceneEffectDraft = async () => {
+    const cue = selectedSceneCue();
+    const effectId = selectedSceneEffectId();
+    if (!cue || effectId === null) return;
+    const draft = buildEffectRequestFromForm();
+    if (!draft) return;
+    const params = effectParamsSnapshotFromDraft(draft);
+    const effectTargets = cue.effect_targets.map((target) =>
+      target.effect_id === effectId ? { ...target, enabled: true, params } : target
+    );
+    const saved = await persistSceneEffectTargets(cue.id, effectTargets);
+    if (!saved) return;
+    const effect = cueOwnedEffectSummary(
+      { ...effectTargets.find((target) => target.effect_id === effectId)!, params },
+      snapshot().effects.find((candidate) => candidate.id === effectId) ?? null,
+    );
+    if (effect) useEffectAsDraft(effect);
+    setMessage(`Saved cue-owned ${draft.effectType} FX for scene ${cue.id}.`);
+  };
+
+  const sceneEffectEditor = createMemo<SceneEffectEditorModel>(() => ({
+    effectType: effectType(),
+    attribute: selectedEffectAttribute(),
+    attributeOptions: effectTargetControls().map((control) => control.attribute),
+    onAttribute: setEffectAttribute,
+    color: {
+      stops: colorEffectStops(),
+      algorithm: colorEffectAlgorithm(),
+      interpolation: colorEffectInterpolation(),
+      periodMs: effectPeriod(),
+      bpm: snapshot().clock.bpm,
+      clockSyncBeats: effectClockSyncBeats(),
+      fixtureSpread: colorEffectFixtureSpread(),
+      spatialPattern: colorEffectSpatialPattern(),
+      onStops: setColorEffectStops,
+      onAlgorithm: setColorEffectAlgorithm,
+      onInterpolation: setColorEffectInterpolation,
+      onPeriodMs: setEffectPeriod,
+      onClockSyncBeats: setEffectClockSyncPreset,
+      onFixtureSpread: setColorEffectFixtureSpread,
+      onSpatialPattern: setColorEffectSpatialPattern,
+    },
+    chaser: {
+      steps: chaserSteps(),
+      features: chaserFeatures(),
+      fixtureOptions: snapshot().fixtures.map((fixture) => ({ id: fixture.id, label: fixture.label })),
+      attributeOptions: chaserAttributeOptions(),
+      attributeCoverage: chaserAttributeCoverage(),
+      currentTargetLabel: effectTargetSummary(),
+      currentTargetSteps: chaserCurrentTargetSteps(),
+      stepDurationMs: chaserStepDuration(),
+      bpm: snapshot().clock.bpm,
+      clockSyncBeats: effectClockSyncBeats(),
+      direction: chaserDirection(),
+      wings: chaserWings(),
+      activeStepCount: chaserActiveStepCount(),
+      dutyCycle: chaserDutyCycle(),
+      overlap: chaserOverlap(),
+      phase: effectPhase(),
+      fixtureSpread: chaserFixtureSpread(),
+      randomSeed: chaserRandomSeed(),
+      error: currentChaserDraftError(),
+      onSteps: setChaserSteps,
+      onFeatures: setChaserFeatures,
+      onStepDurationMs: setChaserStepDuration,
+      onClockSyncBeats: setEffectClockSyncPreset,
+      onDirection: setChaserDirection,
+      onWings: setChaserWings,
+      onActiveStepCount: setChaserActiveStepCount,
+      onDutyCycle: setChaserDutyCycle,
+      onOverlap: setChaserOverlap,
+      onFixtureSpread: setChaserFixtureSpread,
+      onRandomSeed: setChaserRandomSeed,
+    },
+    move: {
+      points: movePathPoints(),
+      closed: movePathClosed(),
+      interpolation: moveInterpolation(),
+      coordinateMode: moveCoordinateMode(),
+      center: { x: moveCenterX(), y: moveCenterY() },
+      size: { x: moveSizeX(), y: moveSizeY() },
+      rotation: moveRotationDegrees(),
+      periodMs: effectPeriod(),
+      bpm: snapshot().clock.bpm,
+      clockSyncBeats: effectClockSyncBeats(),
+      direction: moveDirection(),
+      phase: effectPhase(),
+      spread: moveFixtureSpread(),
+      onPoints: (points) => {
+        setMovePathRecipe("Custom");
+        setMovePathPoints(points);
+      },
+      onClosed: (closed) => {
+        setMovePathRecipe("Custom");
+        setMovePathClosed(closed);
+      },
+      onInterpolation: setMoveInterpolation,
+      onCoordinateMode: setMoveCoordinateMode,
+      onCenter: (center) => {
+        setMoveCenterX(center.x);
+        setMoveCenterY(center.y);
+      },
+      onSize: (size) => {
+        setMoveSizeX(size.x);
+        setMoveSizeY(size.y);
+      },
+      onRotation: setMoveRotationDegrees,
+      onPeriodMs: setEffectPeriod,
+      onClockSyncBeats: setEffectClockSyncPreset,
+      onDirection: setMoveDirection,
+      onPhase: setEffectPhase,
+      onSpread: setMoveFixtureSpread,
+    },
+    value: {
+      points: valuePoints(),
+      interpolation: valueInterpolation(),
+      mode: valueMode(),
+      direction: valueDirection(),
+      periodMs: effectPeriod(),
+      bpm: snapshot().clock.bpm,
+      clockSyncBeats: effectClockSyncBeats(),
+      phase: effectPhase(),
+      spread: valueFixtureSpread(),
+      onPoints: setValuePoints,
+      onInterpolation: setValueInterpolation,
+      onMode: setValueMode,
+      onDirection: setValueDirection,
+      onPeriodMs: setEffectPeriod,
+      onClockSyncBeats: setEffectClockSyncPreset,
+      onPhase: setEffectPhase,
+      onSpread: setValueFixtureSpread,
+    },
+    curve: {
+      points: curvePoints(),
+      mode: curveMode(),
+      direction: curveDirection(),
+      periodMs: effectPeriod(),
+      bpm: snapshot().clock.bpm,
+      clockSyncBeats: effectClockSyncBeats(),
+      phase: effectPhase(),
+      spread: curveFixtureSpread(),
+      onPoints: setCurvePoints,
+      onMode: setCurveMode,
+      onDirection: setCurveDirection,
+      onPeriodMs: setEffectPeriod,
+      onClockSyncBeats: setEffectClockSyncPreset,
+      onPhase: setEffectPhase,
+      onSpread: setCurveFixtureSpread,
+    },
+    mapping: {
+      shape: effectShape(),
+      mode: mappingMode(),
+      direction: mappingDirection(),
+      periodMs: effectPeriod(),
+      bpm: snapshot().clock.bpm,
+      clockSyncBeats: effectClockSyncBeats(),
+      phase: effectPhase(),
+      spread: mappingFixtureSpread(),
+      repetitions: mappingRepetitions(),
+      fixtures: mappingEffectOrderFixtures().map((fixture) => ({ id: fixture.id, label: fixture.label })),
+      orderEditable: effectTargetMode() === "selection",
+      onShape: setEffectShape,
+      onMode: setMappingMode,
+      onDirection: setMappingDirection,
+      onPeriodMs: setEffectPeriod,
+      onClockSyncBeats: setEffectClockSyncPreset,
+      onPhase: setEffectPhase,
+      onSpread: setMappingFixtureSpread,
+      onRepetitions: setMappingRepetitions,
+      onFixtureOrder: setSelectedMappingFixtureIds,
+    },
+    colorMapping: {
+      sourceKind: colorMappingSourceKind(),
+      width: colorMappingWidth(),
+      height: colorMappingHeight(),
+      frames: colorMappingFrames(),
+      cells: colorMappingCells(),
+      fixtures: effectTargetFixtures().map((fixture) => ({
+        id: fixture.id,
+        label: fixture.label,
+        x: fixture.position.x,
+        z: fixture.position.z,
+      })),
+      playbackDirection: colorMappingPlaybackDirection(),
+      periodMs: effectPeriod(),
+      bpm: snapshot().clock.bpm,
+      clockSyncBeats: effectClockSyncBeats(),
+      phase: effectPhase(),
+      offsetU: colorMappingOffsetU(),
+      offsetV: colorMappingOffsetV(),
+      scaleU: colorMappingScaleU(),
+      scaleV: colorMappingScaleV(),
+      rotationDegrees: colorMappingRotationDegrees(),
+      wrapMode: colorMappingWrapMode(),
+      sampling: colorMappingSampling(),
+      onRaster: (kind, width, height, frames) => {
+        setColorMappingSourceKind(kind);
+        setColorMappingWidth(width);
+        setColorMappingHeight(height);
+        setColorMappingFrames(frames);
+      },
+      onCells: setColorMappingCells,
+      onPlaybackDirection: setColorMappingPlaybackDirection,
+      onPeriodMs: setEffectPeriod,
+      onClockSyncBeats: setEffectClockSyncPreset,
+      onPhase: setEffectPhase,
+      onOffsetU: setColorMappingOffsetU,
+      onOffsetV: setColorMappingOffsetV,
+      onScaleU: setColorMappingScaleU,
+      onScaleV: setColorMappingScaleV,
+      onRotationDegrees: setColorMappingRotationDegrees,
+      onWrapMode: setColorMappingWrapMode,
+      onSampling: setColorMappingSampling,
+    },
+    action: {
+      showLightRange: effectTargetMode() !== "video"
+        && !["Color", "ColorMapping", "Chaser", "Move"].includes(effectType()),
+      showPhase: !["Move", "Value", "Curve", "Mapping", "ColorMapping"].includes(effectType()),
+      lockBlendMode: effectType() === "Move",
+      low: effectLow(),
+      high: effectHigh(),
+      phase: effectPhase(),
+      blendMode: effectBlendMode(),
+      addDisabled: effectSubmitDisabled(),
+      submitLabel: "Save cue-owned FX",
+      editing: true,
+      editingLabel: selectedSceneEffects()
+        .find((effect) => effect.id === selectedSceneEffectId())?.label ?? null,
+      onLow: setEffectLow,
+      onHigh: setEffectHigh,
+      onPhase: setEffectPhase,
+      onBlendMode: setEffectBlendMode,
+      onSubmitEffect: saveSceneEffectDraft,
+      onCancelEdit: () => {
+        const cue = selectedSceneCue();
+        const effectId = selectedSceneEffectId();
+        if (cue && effectId !== null) loadSceneEffectDraft(cue.id, effectId);
+      },
+    },
+  }));
 
   const saveEffectPreset = async (effectId: number) => {
     try {
@@ -15071,7 +15719,14 @@ export default function App() {
           data-workspace-pane="upper"
           data-live-status-expanded={liveStatusExpanded() ? "true" : "false"}
         >
-          <div id="live-status-inspector" class="liveStatusGrid" role="region" aria-label="Live status details">
+          <div
+            id="live-status-inspector"
+            class="liveStatusGrid"
+            classList={{ sceneSettingsVisible: Boolean(selectedSceneCue()) }}
+            role="region"
+            aria-label="Live status details"
+            data-scene-settings-visible={selectedSceneCue() ? "true" : "false"}
+          >
             <div class="liveStatusItem liveCueStatusCell">
               <span>Active cue</span>
               <strong data-no-localize>
@@ -15098,6 +15753,7 @@ export default function App() {
                 {nextCue()?.label ?? "None"}
               </strong>
             </div>
+            <Show when={selectedSceneCue()} fallback={<>
             <div class="liveStatusItem liveDeskSceneStatus">
               <span>Show scenes</span>
               <strong data-live-desk-scene-readout>{timelineTrack()} · {snapshot().cues.length} scenes</strong>
@@ -15140,6 +15796,25 @@ export default function App() {
               <span>Timecode</span>
               <strong class="tabularNums" data-no-localize>{formatShowTimecode(snapshot().timeline.position_ms)}</strong>
             </div>
+            </>}>
+              {(cue) => (
+                <SceneSettingsPane
+                  cue={cue()}
+                  draft={cueMetadataDraft(cue())}
+                  effects={selectedSceneEffects()}
+                  selectedEffectId={selectedSceneEffectId()}
+                  activeFamily={effectChooserFamily()}
+                  editor={sceneEffectEditor()}
+                  onDraft={(patch) => updateCueMetadataDraft(cue(), patch)}
+                  onSaveMetadata={() => setCueMetadata(cue())}
+                  onSetColor={(color) => setCueColor(cue().id, color)}
+                  onClose={closeSceneSettings}
+                  onEditSource={() => openTimelineSourceCue(cue().id)}
+                  onSelectEffect={selectSceneEffect}
+                  onSelectFamily={createSceneEffect}
+                />
+              )}
+            </Show>
           </div>
           <div class="liveTransportGrid" data-live-desk-toolbar>
             <button onClick={triggerPreviousCue} disabled={snapshot().cues.length === 0}>
@@ -15190,6 +15865,16 @@ export default function App() {
               Clear Flags
             </button>
             <div class="liveDeskToolbarActions" data-live-desk-toolbar-actions>
+              <button
+                type="button"
+                class="liveCueEditorToggle"
+                data-scene-matrix-open-cue-editor
+                aria-label="Open Cue editor"
+                title="Open Cue editor"
+                onClick={openCueEditor}
+              >
+                Cue editor
+              </button>
               <nav class="liveDeskViewToggle" aria-label="Live desk view">
                 <button
                   type="button"
@@ -15232,6 +15917,7 @@ export default function App() {
               groupIds={sceneMatrixGroupIds()}
               activeCueId={snapshot().active_cue_id}
               activeGroupCueIds={snapshot().active_group_cue_ids ?? {}}
+              selectedCueId={selectedSceneCueId()}
               activeFade={snapshot().active_fade}
               cueLiveModifiers={snapshot().cue_live_modifiers}
               onSetCueLiveModifier={setCueLiveModifierLive}
@@ -15239,12 +15925,9 @@ export default function App() {
               onReleaseCue={releaseCueById}
               timelineTrack={timelineTrack()}
               onTriggerCue={triggerCue}
-              onEditCue={openTimelineSourceCue}
+              onSelectCue={selectSceneCue}
               onOpenSuperScene={(cueId) => void openOrCreateSuperScene(cueId)}
-              onOpenCueEditor={() => {
-                setTimelineDeskSurface("show");
-                setTimelineContextDrawer("cue");
-              }}
+              onOpenCueEditor={openCueEditor}
               onBeginTimelineCueDrag={beginTimelineCueDrag}
               onMoveTimelineCueDrag={moveTimelineCueDrag}
               onEndTimelineCueDrag={(point, moved, canceled) => void endTimelineCueDrag(point, moved, canceled)}
