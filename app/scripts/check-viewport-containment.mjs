@@ -6106,7 +6106,7 @@ function hasExpectedControlModeSurface(result) {
         "VALUE FX": 4,
         "CURVE FX": 2,
         "MAPPINGS": 3,
-        "COLOR MAPPINGS": 1,
+        "COLOUR MAPPINGS": 1,
       };
       const expectedTargetRequiredCountByFamily = {
         "COLOR FX": 1,
@@ -6115,7 +6115,7 @@ function hasExpectedControlModeSurface(result) {
         "VALUE FX": 0,
         "CURVE FX": 0,
         "MAPPINGS": 0,
-        "COLOR MAPPINGS": 1,
+        "COLOUR MAPPINGS": 1,
       };
       return (
         hasFxDesk &&
@@ -14103,7 +14103,7 @@ const fxVisualFamilyOrder = [
   "VALUE FX",
   "CURVE FX",
   "MAPPINGS",
-  "COLOR MAPPINGS",
+  "COLOUR MAPPINGS",
   "SUPER SCENE",
 ];
 
@@ -14114,7 +14114,7 @@ const fxVisualRecipeFamilies = [
   ["VALUE FX", "Value", 5],
   ["CURVE FX", "Curve", 1],
   ["MAPPINGS", "Mapping", 3],
-  ["COLOR MAPPINGS", "ColorMapping", 1],
+  ["COLOUR MAPPINGS", "ColorMapping", 1],
 ];
 
 async function readFxVisualSurface(client) {
@@ -14407,6 +14407,19 @@ async function readSceneLiveModifierState(client, cueId) {
             (element.textContent ?? "").trim(),
           )
         : [],
+      labels: strip
+        ? [...strip.querySelectorAll(".cueLiveModifierRow > span")].map((element) =>
+            (element.textContent ?? "").trim(),
+          )
+        : [],
+      parameterAriaLabels: strip
+        ? ["speed", "size", "phase"].map((control) =>
+            strip.querySelector(`[data-cue-live-modifier-${control}="${cueId}"]`)
+              ?.getAttribute("aria-label") ?? "",
+          )
+        : [],
+      resetLabel: (strip?.querySelector(".cueLiveModifierReset")?.textContent ?? "").trim(),
+      locale: document.documentElement.lang,
       direction: strip?.querySelector(`[data-cue-live-modifier-direction="${cueId}"]`)?.value ?? null,
       segment: strip?.querySelector(`[data-cue-live-modifier-segment="${cueId}"]`)?.value ?? null,
       resetDisabled: strip?.querySelector(".cueLiveModifierReset")?.disabled ?? null,
@@ -14518,7 +14531,10 @@ async function runSceneLiveModifierViewport(client, viewport) {
   });
   await client.send("Page.navigate", { url: fixtureUrl("scene-matrix") });
   await waitForApp(client);
-  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await client.evaluate("window.localStorage.setItem('syndocal.uiLocale.v1','ja')");
+  await client.send("Page.navigate", { url: fixtureUrl("scene-matrix") });
+  await waitForApp(client);
+  await clickVisibleByText(client, ".workspaceTabs button", "コントロール");
   await sleep(64);
   const failed = [];
 
@@ -14532,6 +14548,17 @@ async function runSceneLiveModifierViewport(client, viewport) {
   if (authored.readouts.join("|") !== "x2|50%|25%") {
     failed.push(`authored-readouts=${authored.readouts.join("|")}`);
   }
+  if (authored.locale !== "ja") failed.push(`locale=${authored.locale}`);
+  if (authored.labels.join("|") !== "Speed|Size|Phase|再生") {
+    failed.push(`modifier-labels=${authored.labels.join("|")}`);
+  }
+  if (
+    authored.parameterAriaLabels.join("|") !==
+    "キュー Back Sweep のライブSpeed|キュー Back Sweep のライブSize|キュー Back Sweep のライブPhase"
+  ) {
+    failed.push(`modifier-aria=${authored.parameterAriaLabels.join("|")}`);
+  }
+  if (authored.resetLabel !== "リセット") failed.push(`reset-label=${authored.resetLabel}`);
   if (authored.direction !== "Authored" || authored.segment !== "0") {
     failed.push(`authored-playback=${authored.direction}/${authored.segment}`);
   }
@@ -14607,7 +14634,7 @@ async function runSceneLiveModifierViewport(client, viewport) {
   if (flashUp.activeCardIds.includes("320")) failed.push("flash-still-active-on-up");
   if (!flashUp.containmentZero) failed.push("matrix-containment");
 
-  await clickVisibleByText(client, ".workspaceTabs button", "Touch");
+  await clickVisibleByText(client, ".workspaceTabs button", "タッチ");
   await sleep(96);
   // The matrix flash release cleared the active cue; bring the latched-strip
   // scene back through the Touch pad so both surfaces prove the same path.
@@ -14825,7 +14852,7 @@ async function runFxVisualViewport(client, viewport) {
       return mapping?.effectType === "Mapping" && mapping.visibleMappingEditorCount === 1 && mapping.visibleMappingOrderRowCount >= 1 && mapping.visibleMappingRepetitionInputCount === 2 && mapping.mappingEditorHorizontalOverflowPx <= 1;
     }],
     ["independentColorMappingEditorReachable", () => {
-      const mapping = recipeFamilies.find((entry) => entry.family === "COLOR MAPPINGS");
+      const mapping = recipeFamilies.find((entry) => entry.family === "COLOUR MAPPINGS");
       return mapping?.effectType === "ColorMapping" && mapping.visibleColorMappingEditorCount === 1 && mapping.visibleColorMappingPreviewCount === 1 && mapping.visibleColorMappingControlCount === 10 && mapping.colorMappingEditorHorizontalOverflowPx <= 1;
     }],
     ["rackEightActualPreviews", () => JSON.stringify(initial.previewKinds) === JSON.stringify(["Lfo", "Color", "Move", "Value", "Curve", "Mapping", "ColorMapping", "Chaser"])],
@@ -15592,6 +15619,7 @@ async function main() {
         liveModifierResults.push(result);
         console.log(
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `labels=${result.authored.labels.join("/")} reset=${result.authored.resetLabel} ` +
             `authored=${result.authored.readouts.join("/")} latch=${result.latched.readouts[0]} ` +
             `toggleRelease=${result.released.activeCardIds.join("+") || "none"}/${result.released.stripCueId ?? "none"} ` +
             `reactivated=${result.reactivated.override} ` +
@@ -15615,7 +15643,7 @@ async function main() {
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
             `families=${result.initial.familyNames.join("/")} active=${result.initial.activeFamilies.join("+") || "none"} ` +
             `recipes=${result.recipeFamilies.map((entry) => `${entry.family}:${entry.cardCount}:${entry.effectType}`).join(",")} ` +
-            `colourMap=${(() => { const entry = result.recipeFamilies.find((candidate) => candidate.family === "COLOR MAPPINGS"); return entry ? `${entry.visibleColorMappingEditorCount}/${entry.visibleColorMappingPreviewCount}/${entry.visibleColorMappingControlCount}/overflow:${entry.colorMappingEditorHorizontalOverflowPx}` : "missing"; })()} ` +
+            `colourMap=${(() => { const entry = result.recipeFamilies.find((candidate) => candidate.family === "COLOUR MAPPINGS"); return entry ? `${entry.visibleColorMappingEditorCount}/${entry.visibleColorMappingPreviewCount}/${entry.visibleColorMappingControlCount}/overflow:${entry.colorMappingEditorHorizontalOverflowPx}` : "missing"; })()} ` +
             `panes=${Math.round(result.initial.workbenchRect.width)}:` +
               `${Math.round(result.initial.libraryPaneRect.width)}/${Math.round(result.initial.inspectorPaneRect.width)}/${Math.round(result.initial.rackPaneRect.width)} ` +
             `previews=${result.initial.previews.map((entry) => `${entry.kind}:${Math.round(entry.width)}x${Math.round(entry.height)}`).join(",")} ` +
@@ -15646,7 +15674,7 @@ async function main() {
             overflow: preview.horizontalOverflowPx,
           })) ?? [],
           rackScroll: result.initial?.effectListScrollMetrics ?? null,
-          colorMappingEditor: result.recipeFamilies?.find((entry) => entry.family === "COLOR MAPPINGS") ?? null,
+          colorMappingEditor: result.recipeFamilies?.find((entry) => entry.family === "COLOUR MAPPINGS") ?? null,
         })))}`);
       }
       return;

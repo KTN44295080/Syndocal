@@ -223,7 +223,18 @@ assert.equal(
 );
 assert.equal(localization.translateUiText("Custom fixture", "ja"), "Custom fixture");
 assert.equal(localization.translateUiText("Effect family chooser", "ja"), "エフェクトファミリーチューザー");
-assert.equal(localization.translateUiText("COLOR FX", "ja"), "カラーFX");
+for (const family of [
+  "STEPS",
+  "COLOR FX",
+  "CHASER FX",
+  "MOVE FX",
+  "VALUE FX",
+  "CURVE FX",
+  "MAPPINGS",
+  "COLOUR MAPPINGS",
+]) {
+  assert.equal(localization.translateUiText(family, "ja"), family);
+}
 assert.equal(localization.translateUiText("SUPER SCENE", "ja"), "SUPER SCENE");
 assert.equal(localization.translateUiText("Current effect waveform preview", "ja"), "現在のエフェクト波形プレビュー");
 assert.equal(localization.translateUiText("Move graphical preview", "ja"), "ムーブのグラフィカルプレビュー");
@@ -281,16 +292,93 @@ for (const dynamicAriaPrefix of [
     `Value FX must keep its localized ${dynamicAriaPrefix.trim()} aria-label contract`,
   );
 }
-assert.equal(localization.translateUiText("Perlin", "ja"), "パーリン");
+for (const shape of ["Sine", "Cosine", "Triangle", "Saw", "Square", "Random", "Perlin"]) {
+  assert.equal(localization.translateUiText(shape, "ja"), shape);
+}
+for (const category of ["Dimmer", "Color", "Position", "Beam"]) {
+  assert.equal(localization.translateUiText(category, "ja"), category);
+}
 assert.equal(localization.translateUiText("Live modifier defaults", "ja"), "ライブモディファイア初期値");
-assert.equal(localization.translateUiText("Live speed for Cue 新宝島", "ja"), "キュー 新宝島 のライブ速度");
+assert.equal(localization.translateUiText("Live speed for Cue 新宝島", "ja"), "キュー 新宝島 のライブSpeed");
+assert.equal(localization.translateUiText("Live size for Cue 新宝島", "ja"), "キュー 新宝島 のライブSize");
+assert.equal(localization.translateUiText("Live phase for Cue 新宝島", "ja"), "キュー 新宝島 のライブPhase");
+assert.equal(localization.translateUiText("Default live speed for 新宝島", "ja"), "新宝島 のライブSpeed初期値");
+assert.equal(localization.translateUiText("Default live size for 新宝島", "ja"), "新宝島 のライブSize初期値");
+assert.equal(localization.translateUiText("Default live phase for 新宝島", "ja"), "新宝島 のライブPhase初期値");
 assert.equal(
   localization.translateUiText("Reset live modifier for Cue Amber", "ja"),
   "キュー Amber のライブモディファイアをリセット",
 );
 assert.equal(localization.translateUiText("Flash Cue Strobe", "ja"), "キュー Strobe をフラッシュ");
 assert.equal(localization.translateUiText("Flash mode for White", "ja"), "White のフラッシュモード");
-assert.equal(localization.translateUiText("Size", "ja"), "サイズ");
+for (const modifier of ["Speed", "Size", "Phase"]) {
+  assert.equal(localization.translateUiText(modifier, "ja"), modifier);
+}
+for (const [sourceText, expectedJapaneseDisplay] of [
+  ["Beam feature records", "Beam特徴量レコード"],
+  ["Beam feature mismatches", "Beam特徴量不一致"],
+  ["Color graphical preview", "Colorのグラフィカルプレビュー"],
+  ["Move FX", "MOVE FX"],
+  ["Move phase percent", "ムーブPhase（パーセント）"],
+  ["Move phase percent value", "ムーブPhase（パーセント）の値"],
+  ["Value FX", "VALUE FX"],
+  ["Value phase percent", "バリューPhase（パーセント）"],
+  ["Value phase percent value", "バリューPhase（パーセント）の値"],
+  ["Curve FX", "CURVE FX"],
+  ["Curve phase percent", "カーブPhase（パーセント）"],
+  ["Curve phase percent value", "カーブPhase（パーセント）の値"],
+  ["Mapping phase percent", "マッピングPhase（パーセント）"],
+  ["Mapping phase percent value", "マッピングPhase（パーセント）の値"],
+  ["2D Colour Mapping", "2D COLOUR MAPPINGS"],
+  ["Colour Mapping (2D media)", "COLOUR MAPPINGS（2Dメディア）"],
+  ["Colour Mapping clock sync presets", "COLOUR MAPPINGSクロック同期プリセット"],
+  ["Colour Mapping effect editor", "COLOUR MAPPINGSエフェクトエディター"],
+  ["Colour Mapping text", "COLOUR MAPPINGSテキスト"],
+  ["Colour Mapping text color", "COLOUR MAPPINGSテキストColor"],
+  ["Phase %", "Phase %"],
+  ["Phase / Spread", "Phase / 分散"],
+  ["Chaser size percent", "チェイサーのSize（パーセント）"],
+  ["Random seed", "Randomシード"],
+  ["Beam order", "Beam順序"],
+  ["Chaser beam steps", "チェイサーのBeamステップ"],
+  ["phase", "Phase"],
+  ["% size", "% Size"],
+  ["Preview speed", "プレビューSpeed"],
+  ["Decrease preview speed", "プレビューSpeedを下げる"],
+  ["Increase preview speed", "プレビューSpeedを上げる"],
+  ["Dimmer Limits", "Dimmer制限"],
+  ["Video Position", "映像Position"],
+  ["Position Wave", "Positionウェーブ"],
+  ["Position Favorites", "Positionのお気に入り"],
+  ["Clear Color", "Colorをクリア"],
+  ["Color picker", "Colorピッカー"],
+  ["Open color picker", "Colorピッカーを開く"],
+  ["Set dimmer off", "DimmerをOFFにする"],
+  ["Additional color channel sliders", "追加Colorチャンネルスライダー"],
+  ["Colour Mappings", "COLOUR MAPPINGS"],
+  ["Curve Saw", "カーブ・Saw"],
+  ["Color effect editor", "Colorエフェクトエディター"],
+  ["Color palette stops", "Colorパレットストップ"],
+  ["Color flow", "Colorフロー"],
+  ["Beam-space pattern", "Beam空間パターン"],
+  ["Color beam-space pattern", "ColorのBeam空間パターン"],
+  ["Random fill", "Randomフィル"],
+  ["Perlin mapping", "Perlinマッピング"],
+  ["Color width %", "Color幅（%）"],
+  ["Fixture color phase spread", "灯体Color Phaseスプレッド"],
+  ["Fixture color phase spread percent", "灯体Color Phaseスプレッド（%）"],
+  ["Color effect clock sync presets", "Colorエフェクトのクロック同期プリセット"],
+  ["Dimmer visual level", "Dimmer表示レベル"],
+  ["Open Control/Edit with a Position Wave draft for the picked fixtures", "選択灯体のPositionウェーブ下書きをコントロール／編集で開く"],
+  ["Position favorite label", "Positionお気に入り名"],
+  ["Position ms", "Position ms"],
+  ["Position wave clock sync presets", "Positionウェーブクロック同期プリセット"],
+  ["Position wave speed presets", "PositionウェーブSpeedプリセット"],
+  ["Position wave wavelength presets", "Positionウェーブ波長プリセット"],
+  ["speed", "Speed"],
+]) {
+  assert.equal(localization.translateUiText(sourceText, "ja"), expectedJapaneseDisplay);
+}
 assert.equal(localization.translateUiText("Save", "en"), "Save");
 
 const accessibleSceneBlock = {
@@ -369,9 +457,6 @@ for (const operatorText of [
   "Playback",
   "Attributes",
   "Effects",
-  "Position",
-  "Color",
-  "Dimmer",
   "Fixtures",
   "Lighting",
   "DMX Output",
@@ -416,8 +501,12 @@ await collectTsx(sourceRoot);
 const localeInvariantText = new Set([
   "Syndocal", "DMX", "MIDI", "OSC", "RDM", "ISF", "NDI", "Spout", "Syphon", "HAP", "FFmpeg",
   "GO", "SET", "FLASH", "HTP", "LTP", "RGB", "BPM", "A", "B", "R", "G", "X", "Y", "Z", "Pan", "Tilt",
+  "Dimmer", "Color", "Position", "Beam", "Speed", "Size", "Phase",
+  "Sine", "Cosine", "Triangle", "Saw", "Square", "Random", "Perlin",
+  "STEPS", "COLOR FX", "CHASER FX", "MOVE FX", "VALUE FX", "CURVE FX", "MAPPINGS", "COLOUR MAPPINGS",
+  "Phase %", "Position ms",
   "Art-Net", "sACN", "sACN / E1.31", "sACN E1.31", "Enttec USB PRO", "Syphon Server", "Spout Sender",
-  "NDI Sender", "Perlin", "Bezier", "Linear", "Full", "Half", "Scale X", "Scale Y",
+  "NDI Sender", "Bezier", "Linear", "Full", "Half", "Scale X", "Scale Y",
   "ms", "x", "U", "ch", "CH", "deg", "m", "Hz", "P", "S", "O", "V", "D", "H", "L",
   "f", "· BUF", "f · CB", "· CB", "C→W", "I/O", "k ·", "kHz", "OVR", "XRUN", "Q",
   "Key R", "Key G", "Key B", "Key Threshold", "Pan +", "Pan -", "Tilt +", "Tilt -",

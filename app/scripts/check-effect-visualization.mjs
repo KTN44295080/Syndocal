@@ -54,7 +54,7 @@ const expectedFamilies = [
   "VALUE FX",
   "CURVE FX",
   "MAPPINGS",
-  "COLOR MAPPINGS",
+  "COLOUR MAPPINGS",
   "SUPER SCENE",
 ];
 assert.deepEqual(
@@ -415,8 +415,8 @@ for (const preset of ["wave", "ball", "fan"]) {
 
 assert.match(
   appSource,
-  /family === "COLOR MAPPINGS"[\s\S]*?\? "ColorMapping"/,
-  "the COLOR MAPPINGS family must select the independent ColorMapping kind",
+  /family === "COLOUR MAPPINGS"[\s\S]*?\? "ColorMapping"/,
+  "the COLOUR MAPPINGS family must select the independent ColorMapping kind",
 );
 assert.equal(
   chooser.sampleEffectPresetOptions.find((option) => option.value === "colour-chase")?.engine,

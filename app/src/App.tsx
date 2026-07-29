@@ -4000,7 +4000,7 @@ export default function App() {
     if (nextType === "Value") return "VALUE FX";
     if (nextType === "Curve") return "CURVE FX";
     if (nextType === "Mapping") return "MAPPINGS";
-    if (nextType === "ColorMapping") return "COLOR MAPPINGS";
+    if (nextType === "ColorMapping") return "COLOUR MAPPINGS";
     if (nextType === "PositionWave") return "MAPPINGS";
     return "CURVE FX";
   };
@@ -11426,7 +11426,7 @@ export default function App() {
     if (firstPreset) setSampleEffectPreset(firstPreset.value);
     const nextType: EffectKind = family === "COLOR FX"
       ? "Color"
-      : family === "COLOR MAPPINGS"
+      : family === "COLOUR MAPPINGS"
         ? "ColorMapping"
       : family === "CHASER FX"
         ? "Chaser"

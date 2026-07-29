@@ -23,7 +23,7 @@ export type EffectChooserFamily =
   | "VALUE FX"
   | "CURVE FX"
   | "MAPPINGS"
-  | "COLOR MAPPINGS"
+  | "COLOUR MAPPINGS"
   | "SUPER SCENE";
 
 export type EffectRecipeFamily = Exclude<EffectChooserFamily, "STEPS" | "SUPER SCENE">;
@@ -47,7 +47,7 @@ export const effectChooserFamilies: EffectChooserFamily[] = [
   "VALUE FX",
   "CURVE FX",
   "MAPPINGS",
-  "COLOR MAPPINGS",
+  "COLOUR MAPPINGS",
   "SUPER SCENE",
 ];
 
@@ -166,7 +166,7 @@ export const sampleEffectPresetOptions: SampleEffectPresetOption[] = [
   {
     value: "colour-chase",
     label: "Colour Chase",
-    family: "COLOR MAPPINGS",
+    family: "COLOUR MAPPINGS",
     engine: "ColorMapping",
     target: "2D fixture cells",
     description: "Embedded RGB16 video frames sampled across the current 2D fixture layout.",
@@ -187,7 +187,7 @@ const chooserFamilyCode = (family: EffectChooserFamily) => {
     case "VALUE FX": return "VL";
     case "CURVE FX": return "CV";
     case "MAPPINGS": return "MP";
-    case "COLOR MAPPINGS": return "CM";
+    case "COLOUR MAPPINGS": return "CM";
     case "SUPER SCENE": return "SS";
   }
 };
@@ -252,7 +252,7 @@ export function SampleEffectPresetPanel(props: SampleEffectPresetPanelProps) {
       case "VALUE FX": return "VL";
       case "CURVE FX": return "CV";
       case "MAPPINGS": return "MP";
-      case "COLOR MAPPINGS": return "CM";
+      case "COLOUR MAPPINGS": return "CM";
     }
   };
 
