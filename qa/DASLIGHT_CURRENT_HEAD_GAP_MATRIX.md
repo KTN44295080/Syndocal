@@ -12,7 +12,7 @@
 | Scene配置 | 常設Scene MatrixからTimelineへ1 drag | 実測1 drag | 同 | 13タスクoperation-count gateで回帰固定 |
 | Timeline layer mute | 1 click | 実測1 click | 同 | gate維持 |
 | Timeline pane expand/restore | 2操作 | 実測2操作 | 同 | gate維持 |
-| Scene trigger / Live speed / reset | すべて1 gesture、DOM runtime truthまで検証 | 未計測 | 未計測 | Daslight同一開始状態を実測 |
+| Scene trigger / Live speed / reset | すべて1 gesture、DOM runtime truthまで検証 | **2026-07-29実測**: trigger=1クリック（ユーザー実操作、Shinkan実ショー・B-WineRed FX）。live speed=トリガーでDIMMER/SPEED/PHASE/SIZEダイヤルパネルが自動表示→1ドラッグ。停止=⏸1クリック（構造） | **同**（trigger/live speed）。resetは未計測 | 証跡: audit-2026-07-29/dl-16-triggered.png。SyndocalのT17ストリップとDaslightのダイヤルパネルは「アクティブシーンへライブ操作が自動表示」の同型モデル |
 | Touch live / flash / Edit / control追加 | 各1 gesture、flashはdown/up、追加は件数増加を検証 | 未計測 | 未計測 | Daslight remote/touch面を同一タスク実測 |
 | FX family / recipe選択 | 各1 click、active familyとrecipe選択を検証 | 未計測 | 未計測 | 作成、target適用、Cue保存まで比較を拡張 |
 | Independent FX | 7系統が独立body/runtime/editor。Colour Mappingは埋め込みimage/text/video、matrix cell、UV/sampling/playbackを持ち、GDTF CIE xyY付き3–16 emitterはcalibrated fixed-anchor mixingを共有する。metadata無し追加emittersはzero | Daslightは7独立generator群 | ソフトウェア構造差は解消。Shinkan動的FXの別プロセスArt-Net受信PASS | プリセット量と実灯体/商用visualizer目視は外部比較 |
