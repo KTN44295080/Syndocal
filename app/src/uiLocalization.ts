@@ -1515,6 +1515,7 @@ const japaneseText: Record<string, string> = {
   "Edge Blend / Black Level": "エッジブレンド／ブラックレベル",
   "Edit Map": "マップを編集",
   "Editable 2D stage map": "編集可能な2Dステージマップ",
+  "Edit in Mapping": "マッピングで編集",
   Editing: "編集中",
   "Effect waveform presets": "エフェクト波形プリセット",
   Empty: "空",

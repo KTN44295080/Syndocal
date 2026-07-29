@@ -15990,6 +15990,10 @@ export default function App() {
           onTogglePaneWindow={togglePaneWindow}
           onLowerSplitRatio={setLowerSplitRatio}
           onSelectionsDrawerOpen={setSelectionsDrawerOpen}
+          onOpenMapping={() => {
+            setWorkspaceTab("setup");
+            selectSetupMode("mapping");
+          }}
           workspace={workspaceTab() === "control" ? "control" : "setup"}
           mappingWorkspaceExpanded={workspaceTab() === "setup" && setupSubTab() === "mapping"}
           controlMode={controlMode()}
@@ -16203,12 +16207,17 @@ export default function App() {
               if (mappingStageTool() === "pan") return;
               event.stopPropagation();
               const fixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
+              if (workspaceTab() === "control") {
+                if (fixture) selectMappingFixture(fixture, event);
+                return;
+              }
               if (fixture && mappingStageTool() === "rotate") selectMappingFixture(fixture, event);
               beginMappingFixtureDrag(event, fixtureId);
             },
           }}
           selection={{
             selectedFixtureCount: selectedMappingFixtures().length,
+            selectedFixtures: selectedMappingFixtures(),
             filteredFixtureCount: mappingFilteredFixtures().length,
             fixtureSearch: mappingFixtureSearch(),
             groupText: mappingSelectionGroupText(),

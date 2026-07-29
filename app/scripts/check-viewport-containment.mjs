@@ -34,6 +34,7 @@ const fixtureCatalogOnlyMode = process.argv.includes("--fixture-catalog-only");
 const workspaceOperatorOnlyMode = process.argv.includes("--workspace-operator-only");
 const liveEditTypesOnlyMode = process.argv.includes("--live-edit-types-only");
 const controlEditPositionOnlyMode = process.argv.includes("--control-edit-position-only");
+const controlStageChromeOnlyMode = process.argv.includes("--control-stage-chrome-only");
 const viewportTraceEnabled = process.env.SYNDOCAL_VIEWPORT_TRACE === "1";
 const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
   largeShowMode
@@ -2069,6 +2070,7 @@ async function measurePersistentBand(client, label) {
       visiblePersistentSelectionsCount: visibleElements('[data-workspace-selection-drawer][open]').length,
       visiblePersistentContextCount: visibleElements('[data-persistent-band-part="context"]').length,
       visibleSelectionDrawerToggleCount: visibleElements('[data-workspace-selection-drawer-toggle]').length,
+      visibleControlStageSelectionListCount: visibleElements('[data-control-stage-selection-list]').length,
       selectionDrawerOpen: drawer instanceof HTMLDetailsElement && drawer.open,
       selectionDrawerExpandedMatches:
         drawer instanceof HTMLDetailsElement &&
@@ -2638,13 +2640,15 @@ async function measureMappingExpansionState(client) {
       persistentBandRects: {
         groups: measuredRect('[data-persistent-band-part="groups"]'),
         stage: measuredRect('[data-workspace-pane="lower-left"]'),
-        selections: measuredRect('[data-workspace-selection-drawer]'),
+        selections: measuredRect('[data-workspace-selection-drawer], [data-control-stage-selection-list]'),
         context: measuredRect('[data-workspace-pane="lower-right"]'),
       },
       horizontalSplitterRect: measuredRect('[data-workspace-splitter="upper-lower"]'),
       verticalSplitterRect: measuredRect('[data-workspace-splitter="lower-left-right"]'),
       mappingTopPanelRect: measuredRect('.mappingSetupTopPanel'),
       selectionDrawerOpen: drawer instanceof HTMLDetailsElement && drawer.open,
+      visibleControlSelectionListCount: [...document.querySelectorAll('[data-control-stage-selection-list]')]
+        .filter(isVisible).length,
       visibleConfigControls,
       stageContain,
       mappingGridRows: mappingGrid ? getComputedStyle(mappingGrid).gridTemplateRows : '',
@@ -2716,6 +2720,14 @@ async function runMappingExpansionCheck(client, viewport) {
   const partNames = ["groups", "stage", "selections", "context"];
   const allPartsPresent = (state) => partNames.every((part) => Boolean(state.persistentBandRects[part]));
   const allPartsRestored = (state) => partNames.every((part) =>
+    persistentBandRectsWithinTolerance(
+      before.persistentBandRects[part],
+      state.persistentBandRects[part],
+      0.5,
+    )
+  );
+  const stableHostPartNames = ["groups", "stage", "context"];
+  const stableHostsRestored = (state) => stableHostPartNames.every((part) =>
     persistentBandRectsWithinTolerance(
       before.persistentBandRects[part],
       state.persistentBandRects[part],
@@ -2802,7 +2814,10 @@ async function runMappingExpansionCheck(client, viewport) {
         restoredWorkspace.configRect === null &&
         restoredWorkspace.horizontalSplitterRect
       )],
-    ["mappingWorkspaceExitRestoresFourRectsWithinHalfPixel", () => allPartsRestored(restoredWorkspace)],
+    ["mappingWorkspaceExitRestoresStableHostsAndUsesControlSelectionList", () =>
+      stableHostsRestored(restoredWorkspace) &&
+      restoredWorkspace.visibleControlSelectionListCount === 1 &&
+      Boolean(restoredWorkspace.persistentBandRects.selections)],
     ["mappingExitKeepsDocumentAndAppScrollZero", () =>
       Boolean(
         restoredSubtab.documentAndAppScrollZero &&
@@ -2850,6 +2865,249 @@ async function runMappingExpansionViewport(client, viewport) {
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
   return await runMappingExpansionCheck(client, viewport);
+}
+
+async function exerciseControlStageInteractions(client) {
+  const selectedFixture = await client.evaluate(`(() => {
+    const fixture = document.querySelector('.controlStageContext .stageFixture');
+    if (!fixture) return false;
+    const rect = fixture.getBoundingClientRect();
+    const init = {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      buttons: 1,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
+      pointerId: 1,
+      pointerType: 'mouse',
+      isPrimary: true,
+    };
+    fixture.dispatchEvent(new PointerEvent('pointerdown', init));
+    fixture.dispatchEvent(new PointerEvent('pointerup', { ...init, buttons: 0 }));
+    return true;
+  })()`);
+  await sleep(80);
+
+  await clickVisibleSelector(client, '[data-control-stage-tool-icon="pan"]');
+  await sleep(50);
+  const panModeActivated = await client.evaluate(
+    `Boolean(document.querySelector('.controlStageContext .editableStage.panMode'))`,
+  );
+  await clickVisibleSelector(client, '[data-control-stage-tool-icon="select"]');
+  await sleep(50);
+  const selectModeRestored = await client.evaluate(
+    `Boolean(document.querySelector('.controlStageContext .editableStage.selectMode'))`,
+  );
+  const stageRect = await client.evaluate(`(() => {
+    const stage = document.querySelector('.controlStageContext .editableStage');
+    if (!(stage instanceof SVGSVGElement)) return null;
+    const rect = stage.getBoundingClientRect();
+    return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+  })()`);
+  let marqueeWorked = false;
+  if (stageRect) {
+    const startX = stageRect.x + Math.max(8, stageRect.width * 0.04);
+    const startY = stageRect.y + Math.max(8, stageRect.height * 0.04);
+    const endX = startX + Math.max(28, stageRect.width * 0.08);
+    const endY = startY + Math.max(24, stageRect.height * 0.08);
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: startX,
+      y: startY,
+      button: "left",
+      buttons: 1,
+      clickCount: 1,
+    });
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: endX,
+      y: endY,
+      button: "left",
+      buttons: 1,
+    });
+    await sleep(40);
+    marqueeWorked = await client.evaluate(
+      `Boolean(document.querySelector('.controlStageContext .mappingMarquee'))`,
+    );
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: endX,
+      y: endY,
+      button: "left",
+      buttons: 0,
+      clickCount: 1,
+    });
+    await sleep(40);
+  }
+  const selectionRestoredAfterMarquee = await client.evaluate(`(() => {
+    const fixture = document.querySelector('.controlStageContext .stageFixture');
+    if (!fixture) return false;
+    const rect = fixture.getBoundingClientRect();
+    const init = {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      buttons: 1,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
+      pointerId: 2,
+      pointerType: 'mouse',
+      isPrimary: true,
+    };
+    fixture.dispatchEvent(new PointerEvent('pointerdown', init));
+    fixture.dispatchEvent(new PointerEvent('pointerup', { ...init, buttons: 0 }));
+    return true;
+  })()`);
+  await sleep(60);
+  const wheelZoom = await client.evaluate(`(async () => {
+    const stage = document.querySelector('.controlStageContext .editableStage');
+    if (!(stage instanceof SVGSVGElement)) return { before: '', after: '', changed: false };
+    const before = stage.getAttribute('viewBox') ?? '';
+    const rect = stage.getBoundingClientRect();
+    stage.dispatchEvent(new WheelEvent('wheel', {
+      bubbles: true,
+      cancelable: true,
+      deltaY: -120,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
+    }));
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const after = stage.getAttribute('viewBox') ?? '';
+    return { before, after, changed: before.length > 0 && after.length > 0 && before !== after };
+  })()`);
+  return {
+    selectedFixture: selectedFixture && selectionRestoredAfterMarquee,
+    marqueeWorked,
+    panModeActivated,
+    selectModeRestored,
+    wheelZoom,
+  };
+}
+
+async function runControlStageChromeViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await seedViewportLocalStorage(client);
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+
+  await clickByText(client, "Control");
+  await clickByText(client, "Live Edit");
+  await sleep(120);
+  const interactions = await exerciseControlStageInteractions(client);
+  const control = await measure(
+    client,
+    `control-stage-chrome-control-${viewport.width}x${viewport.height}`,
+  );
+
+  await clickVisibleSelector(client, '[data-control-stage-mapping-link]');
+  await sleep(160);
+  const mappingJumpArrived = await client.evaluate(`(() => (
+    Boolean(document.querySelector('.layoutSetup.setupMode-mapping')) &&
+    Boolean(document.querySelector('.mappingWorkspaceExpanded'))
+  ))()`);
+  const selectionDrawerOpened = await ensureMappingSelectionDrawerOpen(client);
+  await sleep(80);
+  const setup = await measure(
+    client,
+    `control-stage-chrome-mapping-${viewport.width}x${viewport.height}`,
+  );
+
+  const controlChromeSelector = '[data-control-stage-chrome="true"] [data-control-stage-chrome-operation]';
+  const conditions = [
+    ["controlChromeOperationCountAtMost12", () =>
+      control.controlStageChromeOperationCount <= 12 &&
+      control.controlStageChromeOperationCount === 7],
+    ["controlChromeCountSelectorRecorded", () => controlChromeSelector.length > 0],
+    ["controlLetterToolRailAbsent", () => control.visibleControlMappingToolRailCount === 0],
+    ["controlReadoutRowAbsent", () => control.visibleControlMappingViewportReadoutCount === 0],
+    ["controlLegacyViewControlsAbsent", () => control.visibleControlMappingViewControlsCount === 0],
+    ["controlSnapRowAbsent", () => control.visibleControlMappingSnapControlsCount === 0],
+    ["controlLayerToggleRowAbsent", () => control.visibleControlMappingLayerToggleCount === 0],
+    ["controlSelectionDrawerAndEditorsAbsent", () =>
+      control.visibleControlSelectionDrawerCount === 0 &&
+      control.visibleControlSelectionSearchCount === 0 &&
+      control.visibleControlSelectionEditActionCount === 0],
+    ["controlSelectionNameListPresent", () =>
+      control.visibleControlStageSelectionListCount === 1 &&
+      control.visibleControlStageSelectionNameCount >= 1],
+    ["controlToolRowHasFourItems", () =>
+      control.visibleControlStageToolRowCount === 1 &&
+      control.visibleControlStageToolItemCount === 4 &&
+      control.visibleControlStageToolIconCount === 4 &&
+      control.visibleControlStageZoomRangeCount === 1 &&
+      control.controlStageToolItemsShareOneRow],
+    ["controlMappingJumpPresentAndWorks", () =>
+      control.visibleControlStageMappingLinkCount === 1 && mappingJumpArrived],
+    ["controlClickSelectionMarqueePanAndWheelZoomWork", () =>
+      interactions.selectedFixture &&
+      interactions.marqueeWorked &&
+      interactions.panModeActivated &&
+      interactions.selectModeRestored &&
+      interactions.wheelZoom.changed],
+    ["mappingFullToolRailHasAllElevenItems", () =>
+      setup.visibleMappingFullToolRailCount === 1 &&
+      setup.visibleMappingFullToolRailButtonCount === 11 &&
+      JSON.stringify(setup.mappingFullToolRailLabels) === JSON.stringify(["S", "P", "R", "H", "L", "B", "G", "V", "O", "%", "?"])],
+    ["mappingFullToolRailAlwaysVisibleWithoutScroll", () =>
+      setup.mappingFullToolRailVerticalOverflowPx === 0 &&
+      setup.mappingFullToolRailClippedButtonCount === 0],
+    ["mappingReadoutFitAndZoomControlsRemain", () =>
+      setup.visibleMappingViewportReadoutCount === 1 &&
+      setup.visibleMappingFitSelectionCount === 1 &&
+      setup.visibleMappingZoomOutCount === 1 &&
+      setup.visibleMappingZoomSliderCount === 1 &&
+      setup.visibleMappingZoomReadoutCount === 1 &&
+      setup.visibleMappingZoomInCount === 1 &&
+      setup.visibleMappingResetViewportCount === 1],
+    ["mappingSnapControlsRemain", () =>
+      setup.visibleMappingSnapRowCount === 1 &&
+      setup.visibleMappingSnapPresetButtonCount === 5 &&
+      setup.visibleMappingSnapSizeInputCount === 1],
+    ["mappingLayerTogglesRemain", () =>
+      setup.visibleMappingLayerToggleRowCount === 1 &&
+      setup.visibleMappingLayerToggleInputCount === 6],
+    ["mappingSelectionFullEditingRemains", () =>
+      selectionDrawerOpened &&
+      setup.mappingSelectionSearchCount === 1 &&
+      setup.mappingSelectionDuplicateCount === 1 &&
+      setup.mappingSelectionRemoveCount === 1 &&
+      setup.mappingSelectionClearCount === 1 &&
+      setup.mappingGroupEditorCount === 1 &&
+      setup.mappingGroupActionCount === 3],
+    ["mappingStageConfigurationRemains", () =>
+      setup.visibleMappingExpandedStageConfigCount === 1 &&
+      setup.visibleMappingExpandedStageConfigControlCount >= 20],
+    ["controlAndMappingKeepOuterScrollZero", () =>
+      isContained(control) && isContained(setup)],
+  ];
+  const checks = Object.fromEntries(conditions.map(([name, check]) => {
+    try {
+      return [name, check()];
+    } catch {
+      return [name, false];
+    }
+  }));
+  const failedChecks = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  return {
+    label: `control-stage-chrome-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    selector: controlChromeSelector,
+    interactions,
+    control,
+    setup,
+  };
 }
 
 async function measureLayeredTimelineDeskState(client) {
@@ -3420,6 +3678,12 @@ async function measure(client, label) {
         const style = window.getComputedStyle(element);
         return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
       }).length;
+    const visibleElements = (selector, root = document) => [...root.querySelectorAll(selector)]
+      .filter((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      });
     const measuredRect = (selector) => {
       const element = document.querySelector(selector);
       if (!element) return null;
@@ -3874,6 +4138,49 @@ async function measure(client, label) {
       visiblePersistentSelectionsCount: visibleCount('[data-workspace-selection-drawer][open]'),
       visiblePersistentContextCount: visibleCount('[data-persistent-band-part="context"]'),
       visibleSelectionDrawerToggleCount: visibleCount('[data-workspace-selection-drawer-toggle]'),
+      visibleControlStageChromeCount: visibleCount('[data-control-stage-chrome="true"]'),
+      controlStageChromeOperationCount: visibleCount(
+        '[data-control-stage-chrome="true"] [data-control-stage-chrome-operation]'
+      ),
+      visibleControlStageToolRowCount: visibleCount('[data-control-stage-tool-row]'),
+      visibleControlStageToolItemCount: visibleCount('[data-control-stage-tool-item]'),
+      visibleControlStageToolIconCount: visibleCount('[data-control-stage-tool-icon]'),
+      visibleControlStageZoomRangeCount: visibleCount(
+        '[data-control-stage-tool-row] input[type="range"]'
+      ),
+      visibleControlStageMappingLinkCount: visibleCount('[data-control-stage-mapping-link]'),
+      visibleControlStageSelectionListCount: visibleCount('[data-control-stage-selection-list]'),
+      visibleControlStageSelectionNameCount: visibleCount(
+        '[data-control-stage-selection-list] [role="listitem"]'
+      ),
+      controlStageToolItemsShareOneRow: (() => {
+        const items = visibleElements('[data-control-stage-tool-item], [data-control-stage-mapping-link]');
+        if (items.length !== 5) return false;
+        const tops = items.map((item) => item.getBoundingClientRect().top);
+        return Math.max(...tops) - Math.min(...tops) <= 1;
+      })(),
+      visibleControlMappingToolRailCount: visibleCount('.controlStageContext .mappingToolRail'),
+      visibleControlMappingViewportReadoutCount: visibleCount(
+        '.controlStageContext [data-mapping-viewport-readout]'
+      ),
+      visibleControlMappingViewControlsCount: visibleCount(
+        '.controlStageContext [data-mapping-view-controls]'
+      ),
+      visibleControlMappingSnapControlsCount: visibleCount(
+        '.controlStageContext [data-mapping-snap-controls]'
+      ),
+      visibleControlMappingLayerToggleCount: visibleCount(
+        '.controlStageContext [data-mapping-layer-toggles]'
+      ),
+      visibleControlSelectionDrawerCount: visibleCount(
+        '.mappingWorkspaceLeftPane > [data-workspace-selection-drawer]'
+      ),
+      visibleControlSelectionSearchCount: visibleCount(
+        '.controlStageContext [data-mapping-selection-search]'
+      ),
+      visibleControlSelectionEditActionCount: visibleCount(
+        '.controlStageContext [data-mapping-selection-action], .controlStageContext [data-mapping-group-action]'
+      ),
       visibleWorkspaceSplitterCount: visibleCount('[data-workspace-splitter]'),
       persistentBandRects: {
         groups: measuredRect('[data-persistent-band-part="groups"]'),
@@ -3938,6 +4245,89 @@ async function measure(client, label) {
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'use in effects').length,
       mappingWaveDraftButtonCount: [...document.querySelectorAll('.mappingSelectionPanel button')]
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'wave draft').length,
+      visibleMappingFullToolRailCount: visibleCount('.setupMode-mapping [data-mapping-tool-rail]'),
+      visibleMappingFullToolRailButtonCount: visibleCount(
+        '.setupMode-mapping [data-mapping-tool-rail] [data-mapping-tool]'
+      ),
+      mappingFullToolRailLabels: visibleElements(
+        '.setupMode-mapping [data-mapping-tool-rail] [data-mapping-tool]'
+      ).map((button) => (button.textContent || '').trim()),
+      mappingFullToolRailVerticalOverflowPx: (() => {
+        const rail = visibleElements('.setupMode-mapping [data-mapping-tool-rail]')[0];
+        return rail ? Math.max(0, rail.scrollHeight - rail.clientHeight) : -1;
+      })(),
+      mappingFullToolRailClippedButtonCount: (() => {
+        const rail = visibleElements('.setupMode-mapping [data-mapping-tool-rail]')[0];
+        if (!rail) return -1;
+        const bounds = rail.getBoundingClientRect();
+        return visibleElements('[data-mapping-tool]', rail).filter((button) => {
+          const rect = button.getBoundingClientRect();
+          return (
+            rect.left < bounds.left - 1 ||
+            rect.right > bounds.right + 1 ||
+            rect.top < bounds.top - 1 ||
+            rect.bottom > bounds.bottom + 1
+          );
+        }).length;
+      })(),
+      visibleMappingViewportReadoutCount: visibleCount(
+        '.setupMode-mapping [data-mapping-viewport-readout]'
+      ),
+      visibleMappingFitSelectionCount: visibleCount(
+        '.setupMode-mapping [data-mapping-viewport-action="fit-selection"]'
+      ),
+      visibleMappingZoomOutCount: visibleCount(
+        '.setupMode-mapping [data-mapping-viewport-action="zoom-out"]'
+      ),
+      visibleMappingZoomSliderCount: visibleCount(
+        '.setupMode-mapping [data-mapping-viewport-action="zoom-slider"]'
+      ),
+      visibleMappingZoomReadoutCount: visibleCount('.setupMode-mapping [data-mapping-zoom-readout]'),
+      visibleMappingZoomInCount: visibleCount(
+        '.setupMode-mapping [data-mapping-viewport-action="zoom-in"]'
+      ),
+      visibleMappingResetViewportCount: visibleCount(
+        '.setupMode-mapping [data-mapping-viewport-action="reset"]'
+      ),
+      visibleMappingSnapRowCount: visibleCount('.setupMode-mapping [data-mapping-snap-controls]'),
+      visibleMappingSnapPresetButtonCount: visibleCount(
+        '.setupMode-mapping [data-mapping-snap-controls] button'
+      ),
+      visibleMappingSnapSizeInputCount: visibleCount(
+        '.setupMode-mapping [data-mapping-snap-controls] input[type="number"]'
+      ),
+      visibleMappingLayerToggleRowCount: visibleCount(
+        '.setupMode-mapping [data-mapping-layer-toggles]'
+      ),
+      visibleMappingLayerToggleInputCount: visibleCount(
+        '.setupMode-mapping [data-mapping-layer-toggles] input[type="checkbox"]'
+      ),
+      mappingSelectionSearchCount: document.querySelectorAll(
+        '.setupMode-mapping [data-mapping-selection-search]'
+      ).length,
+      mappingSelectionDuplicateCount: document.querySelectorAll(
+        '.setupMode-mapping [data-mapping-selection-action="duplicate"]'
+      ).length,
+      mappingSelectionRemoveCount: document.querySelectorAll(
+        '.setupMode-mapping [data-mapping-selection-action="remove"]'
+      ).length,
+      mappingSelectionClearCount: document.querySelectorAll(
+        '.setupMode-mapping [data-mapping-selection-action="clear"]'
+      ).length,
+      mappingGroupEditorCount: document.querySelectorAll(
+        '.setupMode-mapping [data-mapping-group-editor]'
+      ).length,
+      mappingGroupActionCount: document.querySelectorAll(
+        '.setupMode-mapping [data-mapping-group-action]'
+      ).length,
+      visibleMappingExpandedStageConfigCount: visibleCount(
+        '.setupMode-mapping [data-mapping-expanded-stage-config]'
+      ),
+      visibleMappingExpandedStageConfigControlCount: visibleElements(
+        '.setupMode-mapping [data-mapping-expanded-stage-config] button, ' +
+        '.setupMode-mapping [data-mapping-expanded-stage-config] input, ' +
+        '.setupMode-mapping [data-mapping-expanded-stage-config] select'
+      ).length,
       visibleMappingHotkeyHelpCount: visibleCount('.mappingHotkeyHelp'),
       mappingHotkeyHelpKeyCount: document.querySelectorAll('.mappingHotkeyHelp kbd').length,
       mappingFilterVerticalClipCount: [...document.querySelectorAll('.setupMode-mapping .mappingGroupStrip, .setupMode-mapping .mappingTypeStrip')]
@@ -5146,11 +5536,15 @@ function hasExpectedPersistentWorkspaceBand(result) {
   const oldControlPreviewAbsent = !result.label.startsWith("control-") || (
     result.visibleControlStagePanelCount === 0 && result.visibleControlStageCount === 0
   );
+  const expectedSelectionSurfacePresent =
+    result.visibleSelectionDrawerToggleCount +
+      result.visibleControlStageSelectionListCount ===
+    1;
   return (
     result.visiblePersistentBandCount === 1 &&
     result.visiblePersistentGroupsCount === 1 &&
     result.visiblePersistentStageCount === 1 &&
-    result.visibleSelectionDrawerToggleCount === 1 &&
+    expectedSelectionSurfacePresent &&
     result.visiblePersistentContextCount === 1 &&
     result.visibleWorkspaceSplitterCount === (mappingExpanded ? 1 : 2) &&
     rects.groups?.width >= 428 && rects.groups?.height >= 24 &&
@@ -5176,6 +5570,32 @@ function hasExpectedLayeredTimelineDesk(result) {
   return !result.label.startsWith("persistent-band-invariance-") || result.layeredTimelineDesk?.passed === true;
 }
 
+function hasExpectedControlStageChrome(result) {
+  if (!result.label.startsWith("control-live-") && !result.label.startsWith("control-edit-")) {
+    return true;
+  }
+  return (
+    result.visibleControlStageChromeCount === 1 &&
+    result.controlStageChromeOperationCount <= 12 &&
+    result.controlStageChromeOperationCount === 7 &&
+    result.visibleControlStageToolRowCount === 1 &&
+    result.visibleControlStageToolItemCount === 4 &&
+    result.visibleControlStageToolIconCount === 4 &&
+    result.visibleControlStageZoomRangeCount === 1 &&
+    result.visibleControlStageMappingLinkCount === 1 &&
+    result.visibleControlStageSelectionListCount === 1 &&
+    result.controlStageToolItemsShareOneRow &&
+    result.visibleControlMappingToolRailCount === 0 &&
+    result.visibleControlMappingViewportReadoutCount === 0 &&
+    result.visibleControlMappingViewControlsCount === 0 &&
+    result.visibleControlMappingSnapControlsCount === 0 &&
+    result.visibleControlMappingLayerToggleCount === 0 &&
+    result.visibleControlSelectionDrawerCount === 0 &&
+    result.visibleControlSelectionSearchCount === 0 &&
+    result.visibleControlSelectionEditActionCount === 0
+  );
+}
+
 function hasExpectedControlModeSurface(result) {
   if (!result.label.startsWith("control-")) {
     return true;
@@ -5189,7 +5609,9 @@ function hasExpectedControlModeSurface(result) {
       result.visibleLiveControlPanelCount !== 1 ||
       result.visiblePersistentBandCount !== 1 ||
       result.visiblePersistentStageCount !== 1 ||
-      result.visibleSelectionDrawerToggleCount !== 1 ||
+      result.visibleSelectionDrawerToggleCount !== 0 ||
+      result.visibleControlStageSelectionListCount !== 1 ||
+      !hasExpectedControlStageChrome(result) ||
       result.visiblePersistentContextCount !== 1 ||
       result.visibleWorkspaceSplitterCount !== 2 ||
       result.visibleControlStagePanelCount !== 0 ||
@@ -5795,6 +6217,31 @@ function hasExpectedSetupSurface(result) {
       result.visibleMappingProjectorActionButtonCount >= 4 &&
       result.visibleMappingProjectorResetPoseButtonCount === 0 &&
       result.visibleStageVideoSurfaceCount === 0 &&
+      result.visibleMappingFullToolRailCount === 1 &&
+      result.visibleMappingFullToolRailButtonCount === 11 &&
+      JSON.stringify(result.mappingFullToolRailLabels) === JSON.stringify(["S", "P", "R", "H", "L", "B", "G", "V", "O", "%", "?"]) &&
+      result.mappingFullToolRailVerticalOverflowPx === 0 &&
+      result.mappingFullToolRailClippedButtonCount === 0 &&
+      result.visibleMappingViewportReadoutCount === 1 &&
+      result.visibleMappingFitSelectionCount === 1 &&
+      result.visibleMappingZoomOutCount === 1 &&
+      result.visibleMappingZoomSliderCount === 1 &&
+      result.visibleMappingZoomReadoutCount === 1 &&
+      result.visibleMappingZoomInCount === 1 &&
+      result.visibleMappingResetViewportCount === 1 &&
+      result.visibleMappingSnapRowCount === 1 &&
+      result.visibleMappingSnapPresetButtonCount === 5 &&
+      result.visibleMappingSnapSizeInputCount === 1 &&
+      result.visibleMappingLayerToggleRowCount === 1 &&
+      result.visibleMappingLayerToggleInputCount === 6 &&
+      result.mappingSelectionSearchCount === 1 &&
+      result.mappingSelectionDuplicateCount === 1 &&
+      result.mappingSelectionRemoveCount === 1 &&
+      result.mappingSelectionClearCount === 1 &&
+      result.mappingGroupEditorCount === 1 &&
+      result.mappingGroupActionCount === 3 &&
+      result.visibleMappingExpandedStageConfigCount === 1 &&
+      result.visibleMappingExpandedStageConfigControlCount >= 20 &&
       result.mappingFilterVerticalClipCount === 0 &&
       result.mappingViewportChildOverlapCount === 0 &&
       result.mappingStageHeight >= 180 &&
@@ -14490,6 +14937,27 @@ async function main() {
     console.log(
       `viewport contract primary-browser=${primaryOperationalViewport.width}x${primaryOperationalViewport.height} measured-client-size-browser=${measuredClientSizeViewport.width}x${measuredClientSizeViewport.height} extended-browser=${extendedCeilingViewport.width}x${extendedCeilingViewport.height} fallback-browsers=${compactFallbackViewports.map((viewport) => `${viewport.width}x${viewport.height}`).join(",")} screenshots=${captureAllViewportScreenshots ? "all" : "large-browser-fixtures"}`,
     );
+    if (controlStageChromeOnlyMode) {
+      const chromeResults = [];
+      for (const viewport of viewports) {
+        const result = await runControlStageChromeViewport(client, viewport);
+        chromeResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `selector=${JSON.stringify(result.selector)} ` +
+            `controls=${result.control.controlStageChromeOperationCount}/12 ` +
+            `tools=${result.control.visibleControlStageToolItemCount}/${result.control.visibleControlStageToolIconCount}/${result.control.visibleControlStageZoomRangeCount} ` +
+            `selection=${result.control.visibleControlStageSelectionListCount}/${result.control.visibleControlStageSelectionNameCount} ` +
+            `mappingRail=${result.setup.visibleMappingFullToolRailButtonCount}:${result.setup.mappingFullToolRailVerticalOverflowPx}/${result.setup.mappingFullToolRailClippedButtonCount} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = chromeResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Control stage chrome failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (controlEditPositionOnlyMode) {
       const positionResults = [];
       for (const viewport of viewports) {

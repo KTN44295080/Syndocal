@@ -8,6 +8,7 @@ import { MappingStageObjectsLayer, type MappingStageObject2D } from "./MappingSt
 import { MappingVideoSurfacesLayer, type MappingVideoSurface2D } from "./MappingVideoSurfacesLayer";
 
 interface MappingStageLayersPanelProps {
+  readOnly?: boolean;
   showStageObjects: boolean;
   showProjectors: boolean;
   showBeams: boolean;
@@ -45,6 +46,7 @@ export function MappingStageLayersPanel(props: MappingStageLayersPanelProps) {
       <Show when={props.showStageObjects}>
         <MappingStageObjectsLayer
           objects={props.stageObjects}
+          readOnly={props.readOnly}
           isDragging={props.isDraggingStageObject}
           onBeginDrag={props.onBeginStageObjectDrag}
           onBeginRotate={props.onBeginStageObjectRotate}
@@ -76,6 +78,7 @@ export function MappingStageLayersPanel(props: MappingStageLayersPanelProps) {
         labelZoom={props.labelZoom}
         showLevels={props.showLevels}
         placePreview={props.placePreview}
+        readOnly={props.readOnly}
         isDragging={props.isDraggingFixture}
         isYawDragging={props.isYawDragging}
         onBeginYawDrag={props.onBeginFixtureYawDrag}

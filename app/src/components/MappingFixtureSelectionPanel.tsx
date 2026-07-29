@@ -49,6 +49,7 @@ export function MappingFixtureSelectionToolsPanel(props: MappingFixtureSelection
         <label>
           Search
           <input
+            data-mapping-selection-search
             type="search"
             value={props.search}
             onInput={(event) => props.onSearch(event.currentTarget.value)}
@@ -67,15 +68,24 @@ export function MappingFixtureSelectionToolsPanel(props: MappingFixtureSelection
             Pick Visible
             <span>{props.filteredCount}</span>
           </button>
-          <button onClick={() => void props.onDuplicateSelected()} disabled={!hasSelection()}>
+          <button
+            data-mapping-selection-action="duplicate"
+            onClick={() => void props.onDuplicateSelected()}
+            disabled={!hasSelection()}
+          >
             Duplicate
             <span>{props.selectedCount}</span>
           </button>
-          <button onClick={() => void props.onRemoveSelected()} disabled={!hasSelection()}>
+          <button
+            data-mapping-selection-action="remove"
+            onClick={() => void props.onRemoveSelected()}
+            disabled={!hasSelection()}
+          >
             Remove
             <span>{props.selectedCount}</span>
           </button>
           <button
+            data-mapping-selection-action="clear"
             onClick={() => void props.onClearSelection()}
             disabled={!hasSelection()}
             title="Clear the current 2D mapping fixture pick (Ctrl+Shift+A)"
@@ -89,6 +99,7 @@ export function MappingFixtureSelectionToolsPanel(props: MappingFixtureSelection
         <label>
           Selected Groups
           <input
+            data-mapping-group-editor
             type="text"
             value={props.groupText}
             onInput={(event) => props.onGroupText(event.currentTarget.value)}
@@ -97,18 +108,21 @@ export function MappingFixtureSelectionToolsPanel(props: MappingFixtureSelection
         </label>
         <div class="mappingSelectionQuickActions">
           <button
+            data-mapping-group-action="add"
             onClick={() => void props.onApplyGroups("add")}
             disabled={!hasSelection() || !hasGroupTokens()}
           >
             Add
           </button>
           <button
+            data-mapping-group-action="remove"
             onClick={() => void props.onApplyGroups("remove")}
             disabled={!hasSelection() || !hasGroupTokens()}
           >
             Remove
           </button>
           <button
+            data-mapping-group-action="set"
             onClick={() => void props.onApplyGroups("set")}
             disabled={!hasSelection() || !hasGroupTokens()}
           >

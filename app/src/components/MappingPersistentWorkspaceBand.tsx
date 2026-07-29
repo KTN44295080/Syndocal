@@ -7,6 +7,7 @@ import { MappingEditableStageShell } from "./MappingEditableStageShell";
 import { MappingGroupRibbon, type MappingFilterStripsProps } from "./MappingFilterStrips";
 import { MappingHotkeyHelp } from "./MappingHotkeyHelp";
 import {
+  MappingControlSelections,
   MappingSelectionsColumn,
   MappingSetupContextPanel,
   type MappingSelectionPanelProps,
@@ -14,7 +15,7 @@ import {
 import { MappingStageConfigPanel } from "./MappingStageConfigPanel";
 import { MappingStageLayersPanel } from "./MappingStageLayersPanel";
 import { MappingToolRail } from "./MappingToolRail";
-import { MappingViewportControls } from "./MappingViewportControls";
+import { ControlStageToolbar, MappingViewportControls } from "./MappingViewportControls";
 import { WorkspaceSplitHandle } from "./WorkspaceSplitHandle";
 
 type WithoutChildren<T> = Omit<T, "children">;
@@ -42,6 +43,7 @@ type MappingPersistentWorkspaceBandProps = {
   onSelectionsDrawerOpen: (open: boolean) => void;
   onControlMode: (mode: ControlMode) => void;
   onCloseHotkeyHelp: () => void;
+  onOpenMapping: () => void;
   children?: JSX.Element;
 };
 
@@ -105,6 +107,16 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
     }
   });
 
+  createEffect(() => {
+    if (
+      props.workspace === "control" &&
+      props.toolRail.stageTool !== "select" &&
+      props.toolRail.stageTool !== "pan"
+    ) {
+      props.toolRail.onStageTool("select");
+    }
+  });
+
   const selectControlMode = (mode: ControlMode) => {
     if (mode !== "live") {
       setTimelinePaneExpanded(false);
@@ -117,6 +129,7 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
       class={`mappingPersistentWorkspaceBand${props.mappingWorkspaceExpanded ? " mappingWorkspaceExpanded" : ""}${timelinePaneExpanded() ? " timelinePaneExpanded" : ""}${props.poppedPanes.includes("stage") ? " stagePanePopped" : ""}${props.poppedPanes.includes("timeline") ? " timelinePanePopped" : ""}`}
       data-mapping-workspace-expanded={props.mappingWorkspaceExpanded ? "true" : "false"}
       data-timeline-pane-expanded={timelinePaneExpanded() ? "true" : "false"}
+      data-control-stage-chrome={props.workspace === "control" ? "true" : undefined}
       data-workspace-pane="lower"
       aria-label="Persistent workspace band"
     >
@@ -129,6 +142,7 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
           selectedGroupId={props.filters.selectedGroupId}
           groupRows={props.filters.groupRows}
           onSelectGroup={props.filters.onSelectGroup}
+          controlChrome={props.workspace === "control"}
         />
         <Show when={props.poppedPanes.includes("timeline")}>
           <button
@@ -146,46 +160,75 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
           </button>
         </Show>
         <section class="mappingWorkspaceLeftPane" data-workspace-pane="lower-left" aria-label="Groups and Stage pane">
-          <section class="mappingPersistentStage" aria-label="Editable 2D stage map">
-            <MappingToolRail {...props.toolRail} />
-            <div class="mappingStageViewport">
-              <div class="mappingViewportToolbar">
-                <MappingViewportControls {...props.viewportControls} />
+          <section
+            class={`mappingPersistentStage${props.workspace === "control" ? " controlStageContext" : " setupStageContext"}`}
+            aria-label={props.workspace === "control" ? "2D fixture and projection surface mapping stage" : "Editable 2D stage map"}
+          >
+            <Show
+              when={props.workspace === "setup"}
+              fallback={
+                <div class="mappingStageViewport controlStageViewport">
+                  <ControlStageToolbar
+                    stageTool={props.toolRail.stageTool}
+                    canFitVisible={props.viewportControls.canFitVisible}
+                    zoomValue={props.viewportControls.zoomValue}
+                    onStageTool={props.toolRail.onStageTool}
+                    onFitVisible={props.viewportControls.onFitVisible}
+                    onZoomLevel={props.viewportControls.onZoomLevel}
+                    onOpenMapping={props.onOpenMapping}
+                  />
+                  <MappingControlSelections
+                    selectedFixtureCount={props.selection.selectedFixtureCount}
+                    selectedFixtures={props.selection.selectedFixtures}
+                  />
+                  <MappingEditableStageShell {...props.editableStage}>
+                    <MappingStageLayersPanel {...props.stageLayers} readOnly />
+                  </MappingEditableStageShell>
+                </div>
+              }
+            >
+              <MappingToolRail {...props.toolRail} />
+              <div class="mappingStageViewport">
+                <div class="mappingViewportToolbar">
+                  <MappingViewportControls {...props.viewportControls} />
+                </div>
+                <MappingEditableStageShell {...props.editableStage}>
+                  <MappingStageLayersPanel {...props.stageLayers} />
+                </MappingEditableStageShell>
               </div>
-              <MappingEditableStageShell {...props.editableStage}>
-                <MappingStageLayersPanel {...props.stageLayers} />
-              </MappingEditableStageShell>
-            </div>
-            <Show when={props.hotkeyHelpOpen}>
-              <MappingHotkeyHelp onClose={props.onCloseHotkeyHelp} />
+              <Show when={props.hotkeyHelpOpen}>
+                <MappingHotkeyHelp onClose={props.onCloseHotkeyHelp} />
+              </Show>
             </Show>
           </section>
-          <details
-            class="mappingSelectionsDrawer"
-            data-workspace-selection-drawer
-            open={props.selectionsDrawerOpen}
-            onToggle={(event) => props.onSelectionsDrawerOpen(event.currentTarget.open)}
-          >
-            <summary
-              data-persistent-band-part="selections-drawer"
-              data-workspace-selection-drawer-toggle
-              aria-expanded={props.selectionsDrawerOpen}
+          <Show when={props.workspace === "setup"}>
+            <details
+              class="mappingSelectionsDrawer"
+              data-workspace-selection-drawer
+              open={props.selectionsDrawerOpen}
+              onToggle={(event) => props.onSelectionsDrawerOpen(event.currentTarget.open)}
             >
-              <span>Selections</span>
-              <strong>{props.selection.selectedFixtureCount} / {props.filters.filteredFixtureCount}</strong>
-            </summary>
-            <div class="mappingSelectionsDrawerBody">
-              <MappingSelectionsColumn
-                {...props.selection}
-                typeFilters={{
-                  filteredFixtureCount: props.filters.filteredFixtureCount,
-                  selectedTypeKey: props.filters.selectedTypeKey,
-                  fixtureTypeRows: props.filters.fixtureTypeRows,
-                  onSelectType: props.filters.onSelectType,
-                }}
-              />
-            </div>
-          </details>
+              <summary
+                data-persistent-band-part="selections-drawer"
+                data-workspace-selection-drawer-toggle
+                aria-expanded={props.selectionsDrawerOpen}
+              >
+                <span>Selections</span>
+                <strong>{props.selection.selectedFixtureCount} / {props.filters.filteredFixtureCount}</strong>
+              </summary>
+              <div class="mappingSelectionsDrawerBody">
+                <MappingSelectionsColumn
+                  {...props.selection}
+                  typeFilters={{
+                    filteredFixtureCount: props.filters.filteredFixtureCount,
+                    selectedTypeKey: props.filters.selectedTypeKey,
+                    fixtureTypeRows: props.filters.fixtureTypeRows,
+                    onSelectType: props.filters.onSelectType,
+                  }}
+                />
+              </div>
+            </details>
+          </Show>
         </section>
         <WorkspaceSplitHandle
           axis="vertical"

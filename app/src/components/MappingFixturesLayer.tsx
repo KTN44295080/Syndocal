@@ -32,6 +32,7 @@ export type MappingPlacePreview2D = Pick<
 > & { x: number; z: number };
 
 type MappingFixturesLayerProps = {
+  readOnly?: boolean;
   fixtures: MappingFixture2D[];
   selectedFixtureIds: Set<number>;
   selectedFixtureId: number | null;
@@ -80,7 +81,8 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
             fixture.parked ? "parked" : "",
           ].filter(Boolean).join(" ");
           const yawDragging = () => props.isYawDragging(fixture.id);
-          const showYawHandle = () => selected() || props.selectedFixtureId === fixture.id || yawDragging();
+          const showYawHandle = () =>
+            !props.readOnly && (selected() || props.selectedFixtureId === fixture.id || yawDragging());
           return (
             <>
               <g
@@ -131,7 +133,7 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
       <For each={labelLayout().labels}>
         {(layout) => <StageFixtureLabel layout={layout} />}
       </For>
-      <Show when={props.placePreview}>
+      <Show when={!props.readOnly && props.placePreview}>
         {(preview) => (
           <g
             class={`stagePlacePreview kind-${preview().visualKind}`}

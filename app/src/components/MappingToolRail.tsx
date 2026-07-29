@@ -21,8 +21,9 @@ type MappingToolRailProps = {
 
 export function MappingToolRail(props: MappingToolRailProps) {
   return (
-    <div class="mappingToolRail" aria-label="2D mapping tools">
+    <div class="mappingToolRail" data-mapping-tool-rail aria-label="2D mapping tools">
       <button
+        data-mapping-tool="select"
         class={props.stageTool === "select" ? "active" : ""}
         onClick={() => props.onStageTool("select")}
         title="Select fixture or projection surface (S)"
@@ -31,6 +32,7 @@ export function MappingToolRail(props: MappingToolRailProps) {
         S
       </button>
       <button
+        data-mapping-tool="place"
         class={props.stageTool === "place" ? "active" : ""}
         onClick={() => props.onStageTool("place")}
         title="Place selected fixture (P)"
@@ -39,6 +41,7 @@ export function MappingToolRail(props: MappingToolRailProps) {
         P
       </button>
       <button
+        data-mapping-tool="rotate"
         class={props.stageTool === "rotate" ? "active" : ""}
         onClick={() => props.onStageTool("rotate")}
         title="Set selected fixture yaw (R)"
@@ -47,6 +50,7 @@ export function MappingToolRail(props: MappingToolRailProps) {
         R
       </button>
       <button
+        data-mapping-tool="pan"
         class={props.stageTool === "pan" ? "active" : ""}
         onClick={() => props.onStageTool("pan")}
         title="Pan stage view (H)"
@@ -56,6 +60,7 @@ export function MappingToolRail(props: MappingToolRailProps) {
       </button>
       <div class="mappingToolDivider" />
       <button
+        data-mapping-tool="labels"
         class={props.showLabels ? "active" : ""}
         onClick={props.onToggleLabels}
         title="Toggle labels (L)"
@@ -64,6 +69,7 @@ export function MappingToolRail(props: MappingToolRailProps) {
         L
       </button>
       <button
+        data-mapping-tool="beams"
         class={props.showBeams ? "active" : ""}
         onClick={props.onToggleBeams}
         title="Toggle beams (B)"
@@ -72,6 +78,7 @@ export function MappingToolRail(props: MappingToolRailProps) {
         B
       </button>
       <button
+        data-mapping-tool="geometry"
         class={props.showGeometry ? "active" : ""}
         onClick={props.onToggleGeometry}
         title="Toggle GDTF geometry nodes (G)"
@@ -80,6 +87,7 @@ export function MappingToolRail(props: MappingToolRailProps) {
         G
       </button>
       <button
+        data-mapping-tool="projectors"
         class={props.showProjectors ? "active" : ""}
         onClick={props.onToggleProjectors}
         title="Toggle projection surfaces (V)"
@@ -88,6 +96,7 @@ export function MappingToolRail(props: MappingToolRailProps) {
         V
       </button>
       <button
+        data-mapping-tool="objects"
         class={props.showStageObjects ? "active" : ""}
         onClick={props.onToggleStageObjects}
         title="Toggle stage reference objects (O)"
@@ -96,6 +105,7 @@ export function MappingToolRail(props: MappingToolRailProps) {
         O
       </button>
       <button
+        data-mapping-tool="levels"
         class={props.showLevels ? "active" : ""}
         onClick={props.onToggleLevels}
         title="Toggle fixture level readouts (Shift+5)"
@@ -105,6 +115,7 @@ export function MappingToolRail(props: MappingToolRailProps) {
       </button>
       <div class="mappingToolDivider" />
       <button
+        data-mapping-tool="help"
         class={props.helpOpen ? "active" : ""}
         onClick={props.onToggleHelp}
         title="Keyboard shortcut help (?)"

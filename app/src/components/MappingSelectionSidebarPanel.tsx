@@ -1,4 +1,4 @@
-import type { ComponentProps } from "solid-js";
+import { For, Show, type ComponentProps } from "solid-js";
 import type {
   PatchedFixtureSummary,
   StageObjectKind,
@@ -27,6 +27,7 @@ type MappingSelectionEvent = Pick<MouseEvent, "ctrlKey" | "metaKey" | "shiftKey"
 
 export interface MappingSelectionPanelProps {
   selectedFixtureCount: number;
+  selectedFixtures: PatchedFixtureSummary[];
   filteredFixtureCount: number;
   fixtureSearch: string;
   groupText: string;
@@ -132,6 +133,45 @@ export function MappingSelectionsColumn(props: MappingSelectionsColumnProps) {
         onSelectFixture={props.onSelectFixture}
       />
     </aside>
+  );
+}
+
+export function MappingControlSelections(props: Pick<
+  MappingSelectionPanelProps,
+  "selectedFixtureCount" | "selectedFixtures"
+>) {
+  return (
+    <section
+      class="controlStageSelections"
+      data-control-stage-chrome-operation="selections"
+      data-control-stage-selection-list
+      data-persistent-band-part="selections"
+      aria-label="Fixture selections"
+    >
+      <div class="controlStageSelectionsHeader">
+        <strong>Selections</strong>
+        <span>{props.selectedFixtureCount}</span>
+      </div>
+      <div class="controlStageSelectionNames" role="list">
+        <Show
+          when={props.selectedFixtures.length > 0}
+          fallback={<span class="empty">No fixture selected</span>}
+        >
+          <For each={props.selectedFixtures.slice(0, 6)}>
+            {(fixture) => (
+              <span role="listitem" title={fixture.label} data-no-localize>
+                {fixture.label}
+              </span>
+            )}
+          </For>
+          <Show when={props.selectedFixtures.length > 6}>
+            <span class="overflowCount" data-no-localize>
+              +{props.selectedFixtures.length - 6}
+            </span>
+          </Show>
+        </Show>
+      </div>
+    </section>
   );
 }
 

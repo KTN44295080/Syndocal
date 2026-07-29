@@ -28,7 +28,9 @@ export type MappingFilterStripsProps = {
 export type MappingGroupRibbonProps = Pick<
   MappingFilterStripsProps,
   "fixtureCount" | "selectedGroupId" | "groupRows" | "onSelectGroup"
->;
+> & {
+  controlChrome?: boolean;
+};
 
 export type MappingFixtureTypeStripProps = Pick<
   MappingFilterStripsProps,
@@ -37,7 +39,11 @@ export type MappingFixtureTypeStripProps = Pick<
 
 export function MappingGroupRibbon(props: MappingGroupRibbonProps) {
   return (
-    <div class="mappingGroupStrip" data-persistent-band-part="groups">
+    <div
+      class="mappingGroupStrip"
+      data-persistent-band-part="groups"
+      data-control-stage-chrome-operation={props.controlChrome ? "groups" : undefined}
+    >
       <span>Groups</span>
       <button
         class={!props.selectedGroupId ? "active" : ""}

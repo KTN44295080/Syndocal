@@ -18,6 +18,7 @@ export interface MappingStageObject2D {
 
 type MappingStageObjectsLayerProps = {
   objects: MappingStageObject2D[];
+  readOnly?: boolean;
   isDragging: (objectId: number) => boolean;
   onBeginDrag: (event: PointerEvent, objectId: number) => void;
   onBeginRotate: (event: PointerEvent, objectId: number) => void;
@@ -35,7 +36,9 @@ export function MappingStageObjectsLayer(props: MappingStageObjectsLayerProps) {
             <g
               class={`${stageObjectClass(object)} ${object.selected ? "selected" : ""} ${props.isDragging(object.id) ? "dragging" : ""}`}
               transform={`translate(${object.x} ${object.z}) rotate(${object.rotationDeg})`}
-              onPointerDown={(event) => props.onBeginDrag(event, object.id)}
+              onPointerDown={(event) => {
+                if (!props.readOnly) props.onBeginDrag(event, object.id);
+              }}
             >
               <StageObjectGlyph
                 kind={object.kind}
@@ -44,7 +47,7 @@ export function MappingStageObjectsLayer(props: MappingStageObjectsLayerProps) {
                 color={object.color}
                 label={object.label}
               />
-              <Show when={object.selected}>
+              <Show when={object.selected && !props.readOnly}>
                 <line
                   class="stageObjectHandleLine"
                   x1="0"
