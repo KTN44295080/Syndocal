@@ -63,7 +63,7 @@ import {
   type SampleEffectPreset,
 } from "./components/SampleEffectPresetPanel";
 import { SetupMappingWorkspace } from "./components/SetupMappingWorkspace";
-import { MappingPersistentWorkspaceBand } from "./components/MappingPersistentWorkspaceBand";
+import { ControlModeSegment, MappingPersistentWorkspaceBand } from "./components/MappingPersistentWorkspaceBand";
 import { SetupVideoPanel } from "./components/SetupVideoPanel";
 import { StagePreview2D } from "./components/StagePreview2D";
 import { VideoControlPanel } from "./components/VideoControlPanel";
@@ -14690,9 +14690,10 @@ export default function App() {
       <WorkspaceChrome
         workspaceTab={workspaceTab()}
         setupSubTab={setupSubTab()}
-        controlMode={controlMode()}
         blackout={snapshot().blackout}
         videoBlackout={snapshot().video.blackout}
+        lightingMaster={snapshot().lighting_master}
+        videoMaster={snapshot().video.master_opacity}
         bpm={snapshot().clock.bpm}
         tickMs={Math.round(snapshot().telemetry.last_tick_interval_us / 1000)}
         jitterUs={Math.round(snapshot().telemetry.tick_jitter_stddev_us)}
@@ -14741,8 +14742,10 @@ export default function App() {
         nextCueLabel={nextCue()?.label ?? "No cue"}
         onWorkspaceTab={setWorkspaceTab}
         onSetupSubTab={selectSetupMode}
-        onControlMode={selectControlMode}
         onGo={() => void triggerNextCue()}
+        onLightingMaster={setLightingMaster}
+        onVideoMaster={setVideoMasterOpacity}
+        onTapBpm={tapBpm}
         onNewProject={newProject}
         onSaveUserTemplate={() => void saveUserTemplate()}
         onLoadUserTemplate={() => void loadUserTemplate()}
@@ -15042,44 +15045,6 @@ export default function App() {
               </div>
             )}
           </Show>
-          <div class="liveMasterGrid">
-            <label>
-              Lighting Master
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.01"
-                value={snapshot().lighting_master}
-                onChange={(event) => void setLightingMaster(Number(event.currentTarget.value))}
-              />
-            </label>
-            <label>
-              Video Master
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.01"
-                value={snapshot().video.master_opacity}
-                onChange={(event) => void setVideoMasterOpacity(Number(event.currentTarget.value))}
-              />
-            </label>
-            <label>
-              BPM
-              <input
-                type="number"
-                min="20"
-                max="300"
-                step="0.1"
-                value={bpmDraft()}
-                onInput={(event) => setBpmDraft(event.currentTarget.value)}
-              />
-            </label>
-            <button class="primary" onClick={tapBpm}>
-              Tap
-            </button>
-          </div>
         </section>
         </Show>
         <Show when={workspaceTab() === "touch"}>
@@ -15594,6 +15559,14 @@ export default function App() {
         <VideoControlPanel
           mixer={controlMode() === "mixer"}
           layerCount={snapshot().video.layers.length}
+          modeTabs={
+            <ControlModeSegment
+              class="mixerContextModeTabs"
+              controlMode={controlMode()}
+              operatorLockMode={operatorLockMode()}
+              onControlMode={selectControlMode}
+            />
+          }
           previewDiagnostics={{
             get layerCount() { return snapshot().video.layers.length; },
             get info() { return videoPreviewInfo(); },
@@ -15840,6 +15813,7 @@ export default function App() {
           defaultRatio={defaultWorkspaceLayout.top_split_ratio}
           minFirstPx={280}
           minSecondPx={310}
+          firstTrackBonusPx={workspaceTab() === "control" ? 36 : 0}
           label="Resize upper and lower workspace panes"
           splitter="upper-lower"
           onCommit={setTopSplitRatio}
@@ -15857,6 +15831,56 @@ export default function App() {
           workspace={workspaceTab() === "control" ? "control" : "setup"}
           mappingWorkspaceExpanded={workspaceTab() === "setup" && setupSubTab() === "mapping"}
           controlMode={controlMode()}
+          controlHeaderTitle={faderDeskTitle()}
+          controlHeaderTools={
+            <>
+              <Show when={controlMode() === "live"}>
+                <nav class="timelineDeskTabs" aria-label="Timeline desk surface">
+                  <button
+                    type="button"
+                    class={timelineDeskSurface() === "show" ? "active" : ""}
+                    title="Show Timeline"
+                    aria-label="Show Timeline"
+                    aria-pressed={timelineDeskSurface() === "show"}
+                    data-timeline-desk-surface="show"
+                    onClick={() => selectTimelineDeskSurface("show")}
+                  >
+                    <span class="timelineToolIcon" aria-hidden="true" data-no-localize>▤</span>
+                  </button>
+                  <button
+                    type="button"
+                    class={timelineDeskSurface() === "automation" ? "active" : ""}
+                    title="Automation"
+                    aria-label="Automation"
+                    aria-pressed={timelineDeskSurface() === "automation"}
+                    data-timeline-desk-surface="automation"
+                    onClick={() => selectTimelineDeskSurface("automation")}
+                  >
+                    <span class="timelineToolIcon" aria-hidden="true" data-no-localize>∿</span>
+                  </button>
+                  <button
+                    type="button"
+                    class={timelineDeskSurface() === "playback" ? "active" : ""}
+                    title="Playback"
+                    aria-label="Playback"
+                    aria-pressed={timelineDeskSurface() === "playback"}
+                    data-timeline-desk-surface="playback"
+                    onClick={() => selectTimelineDeskSurface("playback")}
+                  >
+                    <span class="timelineToolIcon" aria-hidden="true" data-no-localize>▦</span>
+                  </button>
+                </nav>
+              </Show>
+              <Show when={controlMode() === "edit"}>
+                <nav class="editDeskTabs" aria-label="Live edit desk surface">
+                  <button class={editDeskSurface() === "attributes" ? "active" : ""} onClick={() => setEditDeskSurface("attributes")}>Attributes</button>
+                  <button class={editDeskSurface() === "effects" ? "active" : ""} onClick={() => setEditDeskSurface("effects")}>Effects</button>
+                  <button class={editDeskSurface() === "dmx" ? "active" : ""} onClick={() => setEditDeskSurface("dmx")}>DMX</button>
+                </nav>
+              </Show>
+            </>
+          }
+          operatorLockMode={operatorLockMode()}
           onControlMode={selectControlMode}
           stageConfig={{
             stageMap: snapshot().stage_map,
@@ -16103,56 +16127,6 @@ export default function App() {
           class={`panel faders controlPanel timelineDesk-${timelineDeskSurface()} timelineDrawer-${timelineContextDrawer()} editDesk-${editDeskSurface()}`}
           data-timeline-context-drawer={timelineContextDrawer()}
         >
-          <div class="panelHeader">
-            <h2>{faderDeskTitle()}</h2>
-            <Show when={controlMode() === "live"}>
-              <nav class="timelineDeskTabs" aria-label="Timeline desk surface">
-                <button
-                  type="button"
-                  class={timelineDeskSurface() === "show" ? "active" : ""}
-                  title="Show Timeline"
-                  aria-label="Show Timeline"
-                  aria-pressed={timelineDeskSurface() === "show"}
-                  data-timeline-desk-surface="show"
-                  onClick={() => selectTimelineDeskSurface("show")}
-                >
-                  <span class="timelineToolIcon" aria-hidden="true" data-no-localize>▤</span>
-                </button>
-                <button
-                  type="button"
-                  class={timelineDeskSurface() === "automation" ? "active" : ""}
-                  title="Automation"
-                  aria-label="Automation"
-                  aria-pressed={timelineDeskSurface() === "automation"}
-                  data-timeline-desk-surface="automation"
-                  onClick={() => selectTimelineDeskSurface("automation")}
-                >
-                  <span class="timelineToolIcon" aria-hidden="true" data-no-localize>∿</span>
-                </button>
-                <button
-                  type="button"
-                  class={timelineDeskSurface() === "playback" ? "active" : ""}
-                  title="Playback"
-                  aria-label="Playback"
-                  aria-pressed={timelineDeskSurface() === "playback"}
-                  data-timeline-desk-surface="playback"
-                  onClick={() => selectTimelineDeskSurface("playback")}
-                >
-                  <span class="timelineToolIcon" aria-hidden="true" data-no-localize>▦</span>
-                </button>
-              </nav>
-            </Show>
-            <Show when={controlMode() === "edit"}>
-              <nav class="editDeskTabs" aria-label="Live edit desk surface">
-                <button class={editDeskSurface() === "attributes" ? "active" : ""} onClick={() => setEditDeskSurface("attributes")}>Attributes</button>
-                <button class={editDeskSurface() === "effects" ? "active" : ""} onClick={() => setEditDeskSurface("effects")}>Effects</button>
-                <button class={editDeskSurface() === "dmx" ? "active" : ""} onClick={() => setEditDeskSurface("dmx")}>DMX</button>
-              </nav>
-            </Show>
-            <Show when={controlMode() === "mixer"}>
-              <span>{selectedFixtureGroupFilter() ? `Group ${selectedFixtureGroupFilter()}` : selectedFixture()?.label}</span>
-            </Show>
-          </div>
           <Show when={controlMode() === "live"}>
             <GroupLiveMixerStrip
               groupId={selectedFixtureGroupFilter()}

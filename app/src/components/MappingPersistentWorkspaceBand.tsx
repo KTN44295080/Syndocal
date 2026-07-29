@@ -1,4 +1,5 @@
 import { createEffect, createSignal, For, onCleanup, Show, type ComponentProps, type JSX } from "solid-js";
+import type { OperatorLockMode } from "../types";
 import type { ControlMode } from "../uiModes";
 import { controlModes } from "../uiModes";
 import { defaultWorkspaceLayout } from "../workspaceLayoutStorage";
@@ -22,6 +23,9 @@ type MappingPersistentWorkspaceBandProps = {
   workspace: "setup" | "control";
   mappingWorkspaceExpanded: boolean;
   controlMode: ControlMode;
+  controlHeaderTitle: JSX.Element;
+  controlHeaderTools?: JSX.Element;
+  operatorLockMode: OperatorLockMode | null;
   filters: MappingFilterStripsProps;
   toolRail: ComponentProps<typeof MappingToolRail>;
   viewportControls: ComponentProps<typeof MappingViewportControls>;
@@ -40,6 +44,40 @@ type MappingPersistentWorkspaceBandProps = {
   onCloseHotkeyHelp: () => void;
   children?: JSX.Element;
 };
+
+type ControlModeSegmentProps = {
+  controlMode: ControlMode;
+  operatorLockMode: OperatorLockMode | null;
+  class?: string;
+  onControlMode: (mode: ControlMode) => void;
+  children?: JSX.Element;
+};
+
+export function ControlModeSegment(props: ControlModeSegmentProps) {
+  return (
+    <nav
+      class={`controlModeTabs contextModeTabs${props.class ? ` ${props.class}` : ""}`}
+      aria-label="Control mode"
+      data-control-mode-segment
+    >
+      <For each={controlModes}>
+        {(mode) => (
+          <button
+            class={props.controlMode === mode.id ? "active" : ""}
+            title={mode.description}
+            aria-keyshortcuts={mode.id === "mixer" ? "M" : mode.label[0]}
+            onClick={() => props.onControlMode(mode.id)}
+            aria-pressed={props.controlMode === mode.id}
+            disabled={props.operatorLockMode === "Partial" && mode.id === "edit"}
+          >
+            {mode.label}
+          </button>
+        )}
+      </For>
+      {props.children}
+    </nav>
+  );
+}
 
 export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspaceBandProps) {
   const [timelinePaneExpanded, setTimelinePaneExpanded] = createSignal(false);
@@ -169,20 +207,16 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
             when={props.workspace === "setup"}
             fallback={
               <>
-                <nav class="controlModeTabs contextModeTabs" aria-label="Control mode">
-                  <For each={controlModes}>
-                    {(mode) => (
-                      <button
-                        class={props.controlMode === mode.id ? "active" : ""}
-                        title={mode.description}
-                        aria-keyshortcuts={mode.id === "mixer" ? "M" : mode.label[0]}
-                        onClick={() => selectControlMode(mode.id)}
-                        aria-pressed={props.controlMode === mode.id}
-                      >
-                        {mode.label}
-                      </button>
-                    )}
-                  </For>
+                <header class="panelHeader controlContextHeader" data-control-context-header>
+                  <h2>{props.controlHeaderTitle}</h2>
+                  <div class="controlContextHeaderTools">
+                    {props.controlHeaderTools}
+                  </div>
+                  <ControlModeSegment
+                    controlMode={props.controlMode}
+                    operatorLockMode={props.operatorLockMode}
+                    onControlMode={selectControlMode}
+                  >
                   <Show when={props.controlMode === "live"}>
                     <button
                       type="button"
@@ -222,9 +256,10 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
                   >
                     <svg viewBox="0 0 16 16" aria-hidden="true">
                       <path d="M2 6h12M2 6v6h12V6M6 3h7v3" />
-                    </svg>
-                  </button>
-                </nav>
+                      </svg>
+                    </button>
+                  </ControlModeSegment>
+                </header>
                 {props.children}
               </>
             }

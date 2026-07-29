@@ -1,4 +1,4 @@
-import { Show, createSignal, type ComponentProps } from "solid-js";
+import { Show, createSignal, type ComponentProps, type JSX } from "solid-js";
 import { VideoLayerListPanel } from "./VideoLayerListPanel";
 import { VideoMasterControlsPanel, VideoOutputControlListPanel } from "./VideoControlOutputsPanel";
 import { VideoPreviewDiagnosticsPanel } from "./VideoPreviewDiagnosticsPanel";
@@ -19,6 +19,7 @@ import { MixerDrawerBar, loadMixerDrawerOpen, saveMixerDrawerOpen, type MixerDra
 interface VideoControlPanelProps {
   mixer: boolean;
   layerCount: number;
+  modeTabs?: JSX.Element;
   previewDiagnostics: ComponentProps<typeof VideoPreviewDiagnosticsPanel>;
   renderPlanStatus: ComponentProps<typeof VideoOutputRenderPlanStatusPanel>;
   backendStatus: ComponentProps<typeof VideoBackendStatusPanel>;
@@ -64,6 +65,7 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
       <div class="panelHeader">
         <h2>Video Control</h2>
         <span>{props.layerCount} layer(s)</span>
+        {props.modeTabs}
       </div>
       <div class="videoMixerDiagnostics">
         <VideoPreviewDiagnosticsPanel {...props.previewDiagnostics} />

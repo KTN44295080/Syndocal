@@ -31286,3 +31286,248 @@ h3 {
     min-width: 0;
   }
 }
+
+/* ---- T25-A: one-line chrome and pane-header density.
+   The show-critical controls stay in fixed/contained tracks so removing three
+   redundant rows cannot reintroduce the T10 sizing oscillator. */
+.topbar {
+  grid-template-columns: minmax(245px, 0.65fr) minmax(120px, 0.35fr) minmax(640px, 1.4fr);
+  min-height: 42px;
+}
+
+.topbar > *,
+.status,
+.topbarMasterCluster,
+.topbarMasterControl {
+  min-width: 0;
+}
+
+.status {
+  width: 100%;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.topbarMasterCluster {
+  display: flex;
+  flex: 1 1 280px;
+  align-items: center;
+  gap: 5px;
+  width: clamp(200px, 19vw, 340px);
+  max-width: 340px;
+}
+
+.topbarMasterControl {
+  display: grid;
+  grid-template-columns: auto minmax(80px, 1fr);
+  flex: 1 1 0;
+  align-items: center;
+  min-height: 40px;
+  gap: 4px;
+  overflow: hidden;
+  color: #b9b0a8;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.topbarMasterControl > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbarMasterControl > input[type="range"] {
+  width: 100%;
+  min-width: 80px;
+  height: 20px;
+  min-height: 20px;
+  margin: 0;
+  padding: 0;
+}
+
+.status .topbarTapButton {
+  flex: 0 0 40px;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
+  padding: 0;
+}
+
+.status .bpmReadout,
+.status .pill,
+.status .metric,
+.status .projectAction,
+.status .goButton {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 1500px) {
+  .topbar .tickMetric,
+  .topbar .projectAction {
+    display: none;
+  }
+
+  .topbarMasterCluster {
+    flex-basis: 210px;
+    width: clamp(200px, 18vw, 250px);
+  }
+}
+
+.layoutControl .liveControlPanel {
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel {
+  grid-template-rows: 30px 32px minmax(0, 1fr) auto;
+}
+
+.controlContextPane {
+  grid-template-rows: 34px minmax(0, 1fr);
+}
+
+.controlContextPane > .controlContextHeader {
+  display: grid;
+  grid-row: 1;
+  grid-template-columns: auto auto minmax(258px, 1fr);
+  align-items: center;
+  min-width: 0;
+  min-height: 34px;
+  gap: 5px;
+  overflow: hidden;
+  border-bottom: 1px solid #3b3732;
+  background: #25221f;
+  padding: 2px 4px 2px 7px;
+}
+
+.controlContextHeader > h2 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.controlContextHeaderTools,
+.controlContextHeaderTools > nav {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 1px;
+}
+
+.controlContextHeaderTools button {
+  min-width: 0;
+  min-height: 27px;
+  height: 27px;
+  padding-inline: 7px;
+}
+
+.controlContextHeader > .contextModeTabs {
+  display: flex;
+  justify-self: stretch;
+  width: 100%;
+  min-width: 258px;
+  min-height: 28px;
+  height: 28px;
+  overflow: hidden;
+  border: 1px solid #403b36;
+  background: #181614;
+}
+
+.controlContextHeader > .contextModeTabs > button {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 27px;
+  height: 27px;
+  overflow: hidden;
+  padding-inline: 4px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+}
+
+.controlContextHeader > .contextModeTabs > .timelinePaneExpandToggle {
+  display: grid;
+  flex: 0 0 27px;
+  place-items: center;
+  width: 27px;
+  min-width: 27px;
+  border-left: 1px solid #3b3732;
+  padding: 0;
+  color: #aaa19a;
+}
+
+.controlContextHeader > .contextModeTabs > .timelinePaneExpandToggle:hover,
+.controlContextHeader > .contextModeTabs > .timelinePaneExpandToggle.expanded {
+  background: #2c2925;
+  color: #eee8e2;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeEdit .controlContextPane > .faders {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeEdit .controlContextPane > .faders > .fixtureEditSurface,
+.layoutSharedWorkspace.layoutControl.controlModeEdit .controlContextPane > .faders > .effectEditor,
+.layoutSharedWorkspace.layoutControl.controlModeEdit .controlContextPane > .faders > .rawMonitor {
+  grid-row: 1;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane > .faders {
+  grid-template-rows: 34px minmax(0, 1fr);
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane > .faders > .groupLiveMixerStrip {
+  grid-row: 1;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane > .faders > .cuePanel,
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane > .faders > .timelinePanel,
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane > .faders > .playbackDeskSurface {
+  grid-row: 2;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .mappingPersistentWorkspaceBand.timelinePaneExpanded .controlContextPane > .faders.timelineDesk-show {
+  grid-template-rows: 34px minmax(0, 1fr);
+}
+
+.app.paneWindow-timeline .controlContextPane,
+.app.paneWindow-programmer .controlContextPane {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.app.paneWindow .controlContextPane > .controlContextHeader {
+  display: none;
+}
+
+.app.paneWindow-timeline .controlContextPane > .faders,
+.app.paneWindow-programmer .controlContextPane > .faders {
+  grid-row: 1 !important;
+}
+
+.layoutControl.controlModeMixer .videoControlPanelMixer > .panelHeader {
+  gap: 8px;
+}
+
+.videoControlPanelMixer > .panelHeader > .mixerContextModeTabs {
+  display: flex;
+  width: min(360px, 42vw);
+  min-height: 28px;
+  height: 28px;
+  margin-left: auto;
+  overflow: hidden;
+  border: 1px solid #403b36;
+  background: #181614;
+}
+
+.videoControlPanelMixer > .panelHeader > .mixerContextModeTabs > button {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 27px;
+  height: 27px;
+  overflow: hidden;
+  padding-inline: 6px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+}

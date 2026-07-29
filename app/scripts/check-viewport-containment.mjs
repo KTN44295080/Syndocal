@@ -24,6 +24,7 @@ const patchOnlyMode = process.argv.includes("--patch-only");
 const persistentBandOnlyMode = process.argv.includes("--persistent-band-only");
 const mappingExpansionOnlyMode = process.argv.includes("--mapping-expansion-only");
 const timelineExpansionOnlyMode = process.argv.includes("--timeline-expansion-only");
+const paneWindowOnlyMode = process.argv.includes("--pane-window-only");
 const workspaceSplitOnlyMode = process.argv.includes("--workspace-split-only");
 const workspaceShellOnlyMode = process.argv.includes("--workspace-shell-only");
 const fxVisualOnlyMode = process.argv.includes("--fx-visual-only");
@@ -2172,6 +2173,28 @@ async function measureTimelinePaneExpansionState(client) {
     const timelineFaders = [...document.querySelectorAll('.controlContextPane > .faders')].find(isVisible);
     const timelineShowSurface = [...document.querySelectorAll('.timelineShowSurface')].find(isVisible);
     const liveMixerStyle = liveMixer ? getComputedStyle(liveMixer) : null;
+    const topbar = [...document.querySelectorAll('.topbar')].find(isVisible);
+    const topbarMasterCluster = [...document.querySelectorAll('[data-topbar-masters]')].find(isVisible);
+    const topbarMasterSliders = topbarMasterCluster
+      ? [...topbarMasterCluster.querySelectorAll('input[type="range"]')].filter(isVisible)
+      : [];
+    const topbarTap = [...document.querySelectorAll('[data-topbar-tap]')].find(isVisible);
+    const controlContextHeader = [...document.querySelectorAll('[data-control-context-header]')].find(isVisible);
+    const controlModeSegment = controlContextHeader?.querySelector('[data-control-mode-segment]') ?? null;
+    const controlContextFaders = [...document.querySelectorAll('.controlContextPane > .faders')].find(isVisible);
+    const topbarRect = measuredRect('.topbar');
+    const topbarMasterClusterRect = measuredRect('[data-topbar-masters]');
+    const topbarTapRect = measuredRect('[data-topbar-tap]');
+    const controlContextHeaderRect = measuredRect('[data-control-context-header]');
+    const controlModeSegmentRect = measuredRect('[data-control-context-header] > [data-control-mode-segment]');
+    const controlContextFadersRect = measuredRect('.controlContextPane > .faders');
+    const rectContained = (inner, outer) => Boolean(
+      inner && outer &&
+      inner.x >= outer.x - 1 &&
+      inner.y >= outer.y - 1 &&
+      inner.x + inner.width <= outer.x + outer.width + 1 &&
+      inner.y + inner.height <= outer.y + outer.height + 1
+    );
     return {
       persistentBandRect: measuredRect('.mappingPersistentWorkspaceBand'),
       persistentBandRects: {
@@ -2212,6 +2235,43 @@ async function measureTimelinePaneExpansionState(client) {
         const identity = liveMixer?.querySelector('.groupLiveMixerIdentity');
         return identity ? getComputedStyle(identity).display : '';
       })(),
+      t25Density: {
+        topbarRect,
+        topbarClientWidth: topbar?.clientWidth ?? 0,
+        topbarScrollWidth: topbar?.scrollWidth ?? 0,
+        topbarMasterClusterRect,
+        topbarMasterCount: topbarMasterCluster?.querySelectorAll('[data-topbar-master]').length ?? 0,
+        topbarMasterSliderCount: topbarMasterSliders.length,
+        topbarMasterMinimumSliderWidth: topbarMasterSliders.length > 0
+          ? Math.min(...topbarMasterSliders.map((slider) => slider.getBoundingClientRect().width))
+          : 0,
+        topbarTapRect,
+        topbarBpmReadoutCount: topbar?.querySelectorAll('.bpmReadout').length ?? 0,
+        topbarMasterClusterContained: rectContained(topbarMasterClusterRect, topbarRect),
+        topbarTapContained: rectContained(topbarTapRect, topbarRect),
+        controlBreadcrumbRowCount: document.querySelectorAll('.controlWorkspaceHeader').length,
+        chromeControlModeRowCount: document.querySelectorAll('.workspaceChrome > .controlModeTabs').length,
+        liveMasterRowCount: document.querySelectorAll('.liveControlPanel > .liveMasterGrid').length,
+        liveBpmInputCount: document.querySelectorAll('.liveControlPanel input[type="number"]').length,
+        directContextModeRowCount: document.querySelectorAll('.controlContextPane > .contextModeTabs').length,
+        controlContextHeaderRect,
+        controlModeSegmentRect,
+        controlContextFadersRect,
+        controlModeSegmentCount: controlContextHeader?.querySelectorAll(':scope > [data-control-mode-segment]').length ?? 0,
+        controlModeButtonCount: controlModeSegment?.querySelectorAll('button').length ?? 0,
+        controlModeSegmentContained: rectContained(controlModeSegmentRect, controlContextHeaderRect),
+        contextBodyFollowsSharedHeader: Boolean(
+          controlContextHeaderRect &&
+          controlContextFadersRect &&
+          controlContextFaders &&
+          Math.abs(
+            controlContextFadersRect.y -
+            (controlContextHeaderRect.y + controlContextHeaderRect.height)
+          ) <= 1
+        ),
+        sceneMatrixRect: measuredRect('.liveControlPanel > .sceneMatrixPanel'),
+        liveControlPanelRect: measuredRect('.liveControlPanel'),
+      },
       viewport: [innerWidth, innerHeight],
       documentAndAppScrollZero:
         window.scrollX === 0 && window.scrollY === 0 &&
@@ -2311,6 +2371,32 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
     expanded.liveMixerDirectChildCount >= 5 &&
     expanded.liveMixerCenterSpread <= 1 &&
     expanded.liveMixerIdentityDisplay === 'flex';
+  const normalDensity = before.t25Density ?? {};
+  const topbarIsSingleContainedRow = Boolean(
+    normalDensity.topbarRect &&
+    normalDensity.topbarRect.height <= 44 &&
+    normalDensity.topbarScrollWidth <= normalDensity.topbarClientWidth + 1 &&
+    normalDensity.topbarMasterClusterContained &&
+    normalDensity.topbarTapContained
+  );
+  const topbarMastersAndBpmAreIntegrated = Boolean(
+    normalDensity.topbarMasterCount === 2 &&
+    normalDensity.topbarMasterSliderCount === 2 &&
+    normalDensity.topbarMasterMinimumSliderWidth >= 80 &&
+    normalDensity.topbarBpmReadoutCount === 1 &&
+    normalDensity.topbarTapRect?.width >= 40 &&
+    normalDensity.topbarTapRect?.height >= 40 &&
+    normalDensity.liveBpmInputCount === 0
+  );
+  const contextModeSegmentSharesHeader = Boolean(
+    normalDensity.directContextModeRowCount === 0 &&
+    normalDensity.controlContextHeaderRect &&
+    normalDensity.controlContextHeaderRect.height <= 36 &&
+    normalDensity.controlModeSegmentCount === 1 &&
+    normalDensity.controlModeButtonCount >= 5 &&
+    normalDensity.controlModeSegmentContained &&
+    normalDensity.contextBodyFollowsSharedHeader
+  );
   const splitterAriaMatchesRendered = (state) => Boolean(
     state &&
     Number.isFinite(state.minimum) &&
@@ -2324,6 +2410,23 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
   const timelinePaneExpansionConditions = [
     ['timelineExpandToggleVisible', () => Boolean(before.timelinePaneExpandToggleVisible)],
     ['timelineExpandToggleNamed', () => Boolean(before.timelinePaneExpandToggleNamed)],
+    ['t25TopbarIsSingleContainedRow', () => topbarIsSingleContainedRow],
+    ['t25TopbarMastersBpmAndTapIntegrated', () => topbarMastersAndBpmAreIntegrated],
+    ['t25ControlBreadcrumbRowRemoved', () => Boolean(
+      normalDensity.controlBreadcrumbRowCount === 0 &&
+      normalDensity.chromeControlModeRowCount === 0
+    )],
+    ['t25LiveMasterRowRemoved', () => normalDensity.liveMasterRowCount === 0],
+    ['t25ControlModeSegmentSharesPaneHeader', () => contextModeSegmentSharesHeader],
+    ['t25SceneMatrixHeightRebased', () => Boolean(
+      normalDensity.sceneMatrixRect?.height > 0 &&
+      before.persistentBandRect?.height > 0 &&
+      (
+        viewport.width !== primaryOperationalViewport.width ||
+        viewport.height !== primaryOperationalViewport.height ||
+        normalDensity.sceneMatrixRect.height >= 490
+      )
+    )],
     ['expandToggleClicked', () => Boolean(expandToggleClicked)],
     ['expandedStateApplied', () => Boolean(expanded.timelinePaneExpanded)],
     ['expandedContextWidthGrew', () => Boolean(expandedContextWidth > beforeContextWidth + 1)],
@@ -3976,12 +4079,22 @@ async function measure(client, label) {
       visibleLiveControlPanelCount: visibleCount('.liveControlPanel'),
       liveControlPanelHeight: Math.round(document.querySelector('.liveControlPanel')?.getBoundingClientRect().height ?? 0),
       visibleLiveFadeMeterCount: visibleCount('.liveControlPanel > .liveFadeMeter'),
+      visibleLiveMasterGridCount: visibleCount('.liveControlPanel > .liveMasterGrid'),
       liveFadeMeterGridRow: getComputedStyle(document.querySelector('.liveControlPanel > .liveFadeMeter') ?? document.body).gridRowStart,
-      liveMasterGridRow: getComputedStyle(document.querySelector('.liveControlPanel > .liveMasterGrid') ?? document.body).gridRowStart,
+      liveMasterGridRow: (() => {
+        const master = document.querySelector('.liveControlPanel > .liveMasterGrid');
+        return master ? getComputedStyle(master).gridRowStart : 'absent';
+      })(),
       liveFadeAboveMaster: (() => {
         const fade = document.querySelector('.liveControlPanel > .liveFadeMeter')?.getBoundingClientRect();
         const master = document.querySelector('.liveControlPanel > .liveMasterGrid')?.getBoundingClientRect();
-        return Boolean(fade && master && fade.bottom <= master.top + 1);
+        const panel = document.querySelector('.liveControlPanel')?.getBoundingClientRect();
+        return Boolean(fade && !master && panel && fade.bottom <= panel.bottom + 1);
+      })(),
+      liveMatrixAboveFade: (() => {
+        const matrix = document.querySelector('.liveControlPanel > .sceneMatrixPanel')?.getBoundingClientRect();
+        const fade = document.querySelector('.liveControlPanel > .liveFadeMeter')?.getBoundingClientRect();
+        return Boolean(matrix && fade && matrix.bottom <= fade.top + 1);
       })(),
       visibleControlStagePanelCount: visibleCount('.controlStagePanel'),
       visibleControlStageCount: visibleCount('.controlStage'),
@@ -5331,9 +5444,11 @@ function hasExpectedControlModeSurface(result) {
     if (upperPaneHeight <= 0 || Math.abs(result.liveControlPanelHeight - upperPaneHeight) > 4) return false;
     if (
       result.visibleLiveFadeMeterCount !== 1 ||
+      result.visibleLiveMasterGridCount !== 0 ||
       result.liveFadeMeterGridRow !== "4" ||
-      result.liveMasterGridRow !== "5" ||
-      !result.liveFadeAboveMaster
+      result.liveMasterGridRow !== "absent" ||
+      !result.liveFadeAboveMaster ||
+      !result.liveMatrixAboveFade
     ) return false;
     if (result.label.startsWith("control-live-playback-")) {
       return (
@@ -7962,11 +8077,14 @@ async function readWorkspaceSplitState(client) {
         ),
         matrixRow: getComputedStyle(document.querySelector('.liveControlPanel > .sceneMatrixPanel') ?? document.body).gridRowStart,
         fadeRow: getComputedStyle(document.querySelector('.liveControlPanel > .liveFadeMeter') ?? document.body).gridRowStart,
-        masterRow: getComputedStyle(document.querySelector('.liveControlPanel > .liveMasterGrid') ?? document.body).gridRowStart,
+        masterRow: (() => {
+          const master = document.querySelector('.liveControlPanel > .liveMasterGrid');
+          return master ? getComputedStyle(master).gridRowStart : 'absent';
+        })(),
         matrixFadeMasterDoNotOverlap: Boolean(
-          sceneMatrixRect && liveFadeRect && liveMasterRect &&
+          sceneMatrixRect && liveFadeRect && !liveMasterRect &&
           sceneMatrixRect.bottom <= liveFadeRect.y + 1 &&
-          liveFadeRect.bottom <= liveMasterRect.y + 1
+          liveFadeRect.bottom <= (livePanel?.getBoundingClientRect().bottom ?? 0) + 1
         ),
         transportButtonCount: visibleTransportButtons.length,
         transportRowCount: transportRows.size,
@@ -8360,7 +8478,7 @@ async function runWorkspaceSplitViewport(client, viewport) {
   checks.liveMatrixFadeMasterUseRowsThreeFourFive =
     initial.liveStatus.matrixRow === "3" &&
     initial.liveStatus.fadeRow === "4" &&
-    initial.liveStatus.masterRow === "5" &&
+    initial.liveStatus.masterRow === "absent" &&
     initial.liveStatus.matrixFadeMasterDoNotOverlap;
   checks.sceneMatrixHeaderRemoved = initial.liveStatus.sceneMatrixHeaderCount === 0;
   checks.liveStatusClosedDoesNotOverlapMatrix = initial.liveStatus.matrixStatusDoNotOverlap;
@@ -14241,6 +14359,28 @@ async function main() {
       }
       return;
     }
+    if (paneWindowOnlyMode) {
+      const paneWindowResults = [];
+      for (const viewport of viewports) {
+        await client.send("Page.navigate", { url: fixtureUrl("timeline") });
+        await waitForApp(client);
+        const result = await runPaneWindowViewport(client, viewport);
+        paneWindowResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `stageWin=${result.stageWin.join("/")} ` +
+            `timelineWin=${result.timelineWin.join("/")} ` +
+            `poppedMain=${result.poppedMain.join("/")} ` +
+            `poppedTimelineMain=${result.poppedTimelineMain.join("/")} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = paneWindowResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Pane window viewport failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (workspaceSplitOnlyMode) {
       const workspaceSplitResults = [];
       for (const viewport of viewports) {
@@ -14298,6 +14438,12 @@ async function main() {
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
             `lane=${laneHeight(result.before)}->${laneHeight(result.expanded)}->${laneHeight(result.restored)} ` +
             `mixer=${mixerHeight(result.before)}->${mixerHeight(result.expanded)}->${mixerHeight(result.restored)} ` +
+            `matrix=${result.before.t25Density?.sceneMatrixRect?.height ?? 0} ` +
+            `band=${result.before.persistentBandRect?.height ?? 0} ` +
+            `topbar=${result.before.t25Density?.topbarRect?.width ?? 0}x${result.before.t25Density?.topbarRect?.height ?? 0}` +
+              `/${result.before.t25Density?.topbarScrollWidth ?? 0} ` +
+            `masterSliderMin=${result.before.t25Density?.topbarMasterMinimumSliderWidth ?? 0} ` +
+            `contextHeader=${result.before.t25Density?.controlContextHeaderRect?.height ?? 0} ` +
             `surface=${result.expanded.timelineShowSurfaceRect?.height ?? 0} ` +
             `contain=${JSON.stringify(result.expanded.timelineFrameContain)} ` +
             `faderRows=${JSON.stringify(result.expanded.timelineFadersGridRows)} ` +

@@ -6,6 +6,7 @@ type WorkspaceSplitHandleProps = {
   defaultRatio: number;
   minFirstPx: number;
   minSecondPx: number;
+  firstTrackBonusPx?: number;
   label: string;
   splitter: "upper-lower" | "lower-left-right";
   onCommit: (ratio: number) => void;
@@ -58,8 +59,12 @@ export function WorkspaceSplitHandle(props: WorkspaceSplitHandleProps) {
     const contentLayoutPx = Math.max(1, parentClientPx - paddingStartLayoutPx - paddingEndLayoutPx);
     const handleLayoutPx = horizontal ? (handle?.offsetHeight ?? 0) : (handle?.offsetWidth ?? 0);
     const gapLayoutPx = finiteCssPixels(horizontal ? parentStyle.rowGap : parentStyle.columnGap);
-    const usableLayoutPx = Math.max(1, contentLayoutPx - handleLayoutPx - gapLayoutPx * 2);
-    const rawMinimum = props.minFirstPx / usableLayoutPx;
+    const firstTrackBonusPx = Math.max(0, props.firstTrackBonusPx ?? 0);
+    const usableLayoutPx = Math.max(
+      1,
+      contentLayoutPx - handleLayoutPx - gapLayoutPx * 2 - firstTrackBonusPx,
+    );
+    const rawMinimum = Math.max(0, props.minFirstPx - firstTrackBonusPx) / usableLayoutPx;
     const rawMaximum = 1 - props.minSecondPx / usableLayoutPx;
     let minimumRatio: number;
     let maximumRatio: number;
@@ -96,47 +101,34 @@ export function WorkspaceSplitHandle(props: WorkspaceSplitHandleProps) {
     handle.setAttribute("aria-valuetext", `${ratioPercent}%`);
   };
 
-  const renderedRatio = (geometry: SplitGeometry) => {
-    if (!handle) return geometry.minimumRatio;
-    const horizontal = props.axis === "horizontal";
-    const handleRect = handle.getBoundingClientRect();
-    const handleCenterClientPx = horizontal
-      ? handleRect.top + handleRect.height / 2
-      : handleRect.left + handleRect.width / 2;
-    const handleCenterLayoutPx =
-      (handleCenterClientPx - geometry.contentStartClientPx) / geometry.visualScale;
-    return clamp(
-      (
-        handleCenterLayoutPx -
-        geometry.gapLayoutPx -
-        geometry.handleLayoutPx / 2
-      ) / geometry.usableLayoutPx,
-      geometry.minimumRatio,
-      geometry.maximumRatio,
-    );
-  };
-
   const applyVisualRatio = (parent: HTMLElement, ratio: number) => {
     const geometry = splitGeometry(parent);
     const nextRatio = clamp(ratio, geometry.minimumRatio, geometry.maximumRatio);
+    const firstTrackBonusPx = Math.max(0, props.firstTrackBonusPx ?? 0);
     // Resolve the preferred ratio to concrete track sizes. With `minmax(min, fr)`
     // CSS Grid can freeze one track at its minimum and give all spare pixels to
     // the other track, which makes the rendered boundary diverge from the clamp.
     // ResizeObserver reapplies these layout-pixel sizes whenever the root changes.
     parent.style.setProperty(
       "--workspace-first-grow",
-      `${nextRatio * geometry.usableLayoutPx}px`,
+      `${firstTrackBonusPx + nextRatio * geometry.usableLayoutPx}px`,
     );
     parent.style.setProperty(
       "--workspace-second-grow",
       `${(1 - nextRatio) * geometry.usableLayoutPx}px`,
     );
-    // `ratio` is the persisted preference. At compact sizes CSS minimum tracks
-    // can clamp its visual result, so accessibility and gestures must use the
-    // rendered splitter boundary without overwriting that preference.
-    const rendered = renderedRatio(geometry);
-    updateAriaValues(geometry.minimumRatio, geometry.maximumRatio, rendered);
-    return rendered;
+    // `ratio` remains the persisted preference. The T25 Control bonus belongs
+    // only to the first visual track, so expose the actual rendered boundary to
+    // assistive technology without overwriting the stored preference.
+    const visualUsableLayoutPx = firstTrackBonusPx + geometry.usableLayoutPx;
+    const visualRatio = (firstTrackBonusPx + nextRatio * geometry.usableLayoutPx) /
+      visualUsableLayoutPx;
+    const visualMinimum = (firstTrackBonusPx + geometry.minimumRatio * geometry.usableLayoutPx) /
+      visualUsableLayoutPx;
+    const visualMaximum = (firstTrackBonusPx + geometry.maximumRatio * geometry.usableLayoutPx) /
+      visualUsableLayoutPx;
+    updateAriaValues(visualMinimum, visualMaximum, visualRatio);
+    return nextRatio;
   };
 
   const pointerRatio = (event: PointerEvent, parent: HTMLElement) => {
@@ -145,7 +137,10 @@ export function WorkspaceSplitHandle(props: WorkspaceSplitHandleProps) {
     const layoutCoordinate =
       (clientCoordinate - geometry.contentStartClientPx) / geometry.visualScale;
     return (
-      layoutCoordinate - geometry.gapLayoutPx - geometry.handleLayoutPx / 2
+      layoutCoordinate -
+      geometry.gapLayoutPx -
+      geometry.handleLayoutPx / 2 -
+      Math.max(0, props.firstTrackBonusPx ?? 0)
     ) / geometry.usableLayoutPx;
   };
 

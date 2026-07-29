@@ -13,16 +13,17 @@ import type {
   ProjectHistoryStatus,
   OperatorLockMode,
 } from "../types";
-import { controlModes, setupAreaForSubTab, setupAreas, setupSubTabs, setupSubTabsForArea } from "../uiModes";
-import type { ControlMode, SetupSubTab, WorkspaceTab } from "../uiModes";
+import { setupAreaForSubTab, setupAreas, setupSubTabs, setupSubTabsForArea } from "../uiModes";
+import type { SetupSubTab, WorkspaceTab } from "../uiModes";
 import type { UiLocale } from "../uiLocalization";
 
 type WorkspaceChromeProps = {
   workspaceTab: WorkspaceTab;
   setupSubTab: SetupSubTab;
-  controlMode: ControlMode;
   blackout: boolean;
   videoBlackout: boolean;
+  lightingMaster: number;
+  videoMaster: number;
   bpm: number;
   tickMs: number;
   jitterUs: number;
@@ -50,8 +51,10 @@ type WorkspaceChromeProps = {
   operations: JSX.Element;
   onWorkspaceTab: (tab: WorkspaceTab) => void;
   onSetupSubTab: (tab: SetupSubTab) => void;
-  onControlMode: (mode: ControlMode) => void;
   onGo: () => void;
+  onLightingMaster: (level: number) => void | Promise<void>;
+  onVideoMaster: (level: number) => void | Promise<void>;
+  onTapBpm: () => void | Promise<void>;
   onNewProject: () => void;
   onSaveUserTemplate: () => void;
   onLoadUserTemplate: () => void;
@@ -419,10 +422,54 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
           >
             GO
           </button>
+          <div class="topbarMasterCluster" data-topbar-masters>
+            <label
+              class="topbarMasterControl"
+              title={`${Math.round(props.lightingMaster * 100)}%`}
+              data-topbar-master="lighting"
+            >
+              <span>Lighting</span>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={props.lightingMaster}
+                aria-label="Lighting Master"
+                onInput={(event) => void props.onLightingMaster(Number(event.currentTarget.value))}
+              />
+            </label>
+            <label
+              class="topbarMasterControl"
+              title={`${Math.round(props.videoMaster * 100)}%`}
+              data-topbar-master="video"
+            >
+              <span>Video</span>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={props.videoMaster}
+                aria-label="Video Master"
+                onInput={(event) => void props.onVideoMaster(Number(event.currentTarget.value))}
+              />
+            </label>
+          </div>
           <span class="bpmReadout">
             <small>BPM</small>
             <strong>{props.bpm.toFixed(0)}</strong>
           </span>
+          <button
+            class="topbarTapButton"
+            type="button"
+            data-topbar-tap
+            title="Tap"
+            aria-label="Tap"
+            onClick={() => void props.onTapBpm()}
+          >
+            Tap
+          </button>
           <span class={props.blackout || props.videoBlackout ? "pill danger" : "pill ok"}>{liveLabel()}</span>
           <span
             class="metric tickMetric"
@@ -480,34 +527,6 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
             </For>
           </nav>
         </div>
-      </Show>
-      <Show when={props.workspaceTab === "control"}>
-        <Show
-          when={props.controlMode === "mixer"}
-          fallback={
-            <div class="controlWorkspaceHeader" aria-label="Control workspace header">
-              <strong>Live Desk</strong>
-              <span>{controlModes.find((mode) => mode.id === props.controlMode)?.label}</span>
-            </div>
-          }
-        >
-          <nav class="controlModeTabs" aria-label="Control mode">
-            <For each={controlModes}>
-              {(mode) => (
-                <button
-                  class={props.controlMode === mode.id ? "active" : ""}
-                  title={mode.description}
-                  aria-keyshortcuts={mode.label[0]}
-                  onClick={() => props.onControlMode(mode.id)}
-                  aria-pressed={props.controlMode === mode.id}
-                  disabled={props.operatorLockMode === "Partial" && mode.id === "edit"}
-                >
-                  {mode.label}
-                </button>
-              )}
-            </For>
-          </nav>
-        </Show>
       </Show>
     </div>
   );
