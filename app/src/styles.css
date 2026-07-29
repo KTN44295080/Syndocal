@@ -1117,15 +1117,6 @@ h3 {
   font-size: 11px;
 }
 
-.goButton {
-  min-width: 48px;
-  border-color: #6c625a;
-  background: #2a2521;
-  color: #f4eee8;
-  font-size: 14px;
-  font-weight: 900;
-}
-
 .bpmReadout {
   display: inline-grid;
   grid-template-columns: auto auto;
@@ -19653,19 +19644,6 @@ h3 {
   font-size: 11px;
 }
 
-.goButton {
-  min-width: 48px;
-  border-color: #71685f;
-  background: #312d29;
-  color: #fff;
-  font-size: 14px !important;
-}
-
-.goButton:not(:disabled) {
-  border-color: var(--ray-accent);
-  background: #6f3b1c;
-}
-
 .bpmReadout {
   gap: 5px;
   min-height: 27px;
@@ -31749,8 +31727,7 @@ h3 {
 .status .pill,
 .status .metric,
 .status .projectAction,
-.status .topbarPulseMeter,
-.status .goButton {
+.status .topbarPulseMeter {
   flex: 0 0 auto;
 }
 

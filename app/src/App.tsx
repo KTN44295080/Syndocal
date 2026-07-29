@@ -16069,11 +16069,8 @@ export default function App() {
             onUnlock={unlockOperator}
           />
         }
-        canGo={snapshot().cues.length > 0}
-        nextCueLabel={nextCue()?.label ?? "No cue"}
         onWorkspaceTab={setWorkspaceTab}
         onSetupSubTab={selectSetupMode}
-        onGo={() => void triggerNextCue()}
         onLightingMaster={setLightingMaster}
         onVideoMaster={setVideoMasterOpacity}
         onTapBpm={tapBpm}

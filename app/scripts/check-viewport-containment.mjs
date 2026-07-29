@@ -7328,7 +7328,7 @@ function readTopbarPulseStateInPage() {
   const rmsFill = pulse?.querySelector(".topbarPulseTrack > i");
   const peakFill = pulse?.querySelector(".topbarPulseTrack > b");
   const controlGroups = {
-    go: [...(topbar?.querySelectorAll(".goButton") ?? [])].filter(visible),
+    go: [...(topbar?.querySelectorAll(".goButton") ?? [])],
     masters: [...(topbar?.querySelectorAll("[data-topbar-master]") ?? [])].filter(visible),
     bpm: [...(topbar?.querySelectorAll(".bpmReadout") ?? [])].filter(visible),
     tap: [...(topbar?.querySelectorAll("[data-topbar-tap]") ?? [])].filter(visible),
@@ -7511,8 +7511,9 @@ async function runTopbarPulseViewport(client, viewport) {
       stopped.viewport.width === 1280 &&
       stopped.pulseRect?.width <= 60 &&
       stopped.pulseRect?.height === 40,
-    existingTopbarControlsCoexistAt1280:
-      stopped.controlCounts.go === 1 &&
+    topbarGoAbsent:
+      stopped.controlCounts.go === 0,
+    remainingTopbarControlsCoexistAt1280:
       stopped.controlCounts.masters === 2 &&
       stopped.controlCounts.bpm === 1 &&
       stopped.controlCounts.tap === 1 &&

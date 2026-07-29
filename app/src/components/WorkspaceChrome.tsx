@@ -53,13 +53,10 @@ type WorkspaceChromeProps = {
   applicationUpdateError: string | null;
   uiScale: 90 | 100 | 110;
   uiLocale: UiLocale;
-  canGo: boolean;
-  nextCueLabel: string;
   operatorLockMode: OperatorLockMode | null;
   operations: JSX.Element;
   onWorkspaceTab: (tab: WorkspaceTab) => void;
   onSetupSubTab: (tab: SetupSubTab) => void;
-  onGo: () => void;
   onLightingMaster: (level: number) => void | Promise<void>;
   onVideoMaster: (level: number) => void | Promise<void>;
   onTapBpm: () => void | Promise<void>;
@@ -481,15 +478,6 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
         </div>
 
         <div class="status">
-          <button
-            class="goButton"
-            type="button"
-            title={`GO: ${props.nextCueLabel}`}
-            disabled={!props.canGo}
-            onClick={props.onGo}
-          >
-            GO
-          </button>
           <div class="topbarMasterCluster" data-topbar-masters>
             <label
               class="topbarMasterControl"
