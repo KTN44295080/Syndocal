@@ -26,6 +26,7 @@ export interface FixtureTypeColorControls {
 export interface FixtureTypePositionControls {
   pan: AttributeControl;
   tilt: AttributeControl;
+  usesFixtureLimits: boolean;
 }
 
 const normalizedAttribute = (attribute: string) => attribute.toLowerCase();
@@ -112,11 +113,56 @@ export const fixtureTypeColorControls = (
   return red && green && blue ? { red, green, blue } : null;
 };
 
+const axisTokens = (control: AttributeControl) =>
+  `${control.attribute} ${control.channel_name}`
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+
+const controlForPositionAxis = (
+  controls: readonly AttributeControl[],
+  axis: "pan" | "tilt",
+) => {
+  const exact = controlForCandidateNames(controls, [axis]);
+  if (exact) {
+    return exact;
+  }
+  const coordinate = axis === "pan" ? "x" : "y";
+  const orientation = axis === "pan" ? "horizontal" : "vertical";
+  return controls.find((control) => {
+    const tokens = axisTokens(control);
+    return (
+      tokens.includes(axis) ||
+      tokens.includes(orientation) ||
+      (
+        tokens.includes(coordinate) &&
+        tokens.some((token) => ["axis", "move", "movement", "position"].includes(token))
+      )
+    );
+  });
+};
+
 export const fixtureTypePositionControls = (
   group: FixtureTypeSelectionGroup,
 ): FixtureTypePositionControls | null => {
   const controls = fixtureTypeControlsForCategory(group, "position");
-  const pan = controlForCandidateNames(controls, ["Pan"]);
-  const tilt = controlForCandidateNames(controls, ["Tilt"]);
-  return pan && tilt ? { pan, tilt } : null;
+  const pan = controlForPositionAxis(controls, "pan");
+  const tilt = controlForPositionAxis(controls, "tilt");
+  if (pan && tilt && pan !== tilt) {
+    return {
+      pan,
+      tilt,
+      usesFixtureLimits:
+        normalizedAttribute(pan.attribute) === "pan" &&
+        normalizedAttribute(tilt.attribute) === "tilt",
+    };
+  }
+  if (controls.length < 2) {
+    return null;
+  }
+  return {
+    pan: controls[0],
+    tilt: controls[1],
+    usesFixtureLimits: false,
+  };
 };

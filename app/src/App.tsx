@@ -8548,22 +8548,27 @@ export default function App() {
 
   const setFixtureTypePosition = (
     typeKey: string,
+    panAttribute: string,
+    tiltAttribute: string,
     panValue: number,
     tiltValue: number,
+    usesFixtureLimits: boolean,
   ) => {
     const group = pickedFixtureTypeGroup(typeKey);
     if (!group) {
       return;
     }
     for (const fixture of group.fixtures) {
-      const pan = findControlAttribute(fixture, ["Pan"]);
-      const tilt = findControlAttribute(fixture, ["Tilt"]);
+      const pan = fixtureControlForAttribute(fixture, panAttribute);
+      const tilt = fixtureControlForAttribute(fixture, tiltAttribute);
       if (!pan || !tilt) {
         continue;
       }
-      const source = sourcePanTiltValues(fixture, panValue, tiltValue);
-      void setAttribute(fixture.id, pan, source.pan);
-      void setAttribute(fixture.id, tilt, source.tilt);
+      const source = usesFixtureLimits
+        ? sourcePanTiltValues(fixture, panValue, tiltValue)
+        : { pan: clampDmxValue(panValue), tilt: clampDmxValue(tiltValue) };
+      void setAttribute(fixture.id, pan.attribute, source.pan);
+      void setAttribute(fixture.id, tilt.attribute, source.tilt);
     }
   };
 

@@ -196,6 +196,66 @@ const viewportMovingSpotControls: AttributeControl[] = [
     default_value: 32_768,
     functions: [],
   },
+  {
+    attribute: "Generic: PanTiltSpeed",
+    channel_name: "Pan/Tilt speed",
+    offsets: [9],
+    resolution: "EightBit",
+    default_value: 8_192,
+    functions: [],
+  },
+  {
+    attribute: "Generic: PositionMacro",
+    channel_name: "Position macro",
+    offsets: [10],
+    resolution: "EightBit",
+    default_value: 8_192,
+    functions: [],
+  },
+  {
+    attribute: "Generic: AutoSound",
+    channel_name: "Auto sound",
+    offsets: [11],
+    resolution: "EightBit",
+    default_value: 0,
+    functions: [],
+  },
+];
+
+const viewportSingleFixtureControls: AttributeControl[] = [
+  ...viewportFixtureControls,
+  {
+    attribute: "Gobo1",
+    channel_name: "Gobo",
+    offsets: [10],
+    resolution: "EightBit",
+    default_value: 0,
+    functions: [],
+  },
+  {
+    attribute: "Zoom",
+    channel_name: "Zoom",
+    offsets: [11],
+    resolution: "EightBit",
+    default_value: 0,
+    functions: [],
+  },
+  {
+    attribute: "Focus1",
+    channel_name: "Focus",
+    offsets: [12],
+    resolution: "EightBit",
+    default_value: 32_768,
+    functions: [],
+  },
+  {
+    attribute: "Generic: AutoSound",
+    channel_name: "Auto sound",
+    offsets: [13],
+    resolution: "EightBit",
+    default_value: 0,
+    functions: [],
+  },
 ];
 
 const viewportLiveEditTypeFixture = (
@@ -235,8 +295,8 @@ const liveEditTypeFixtures: PatchedFixtureSummary[] = [
     1,
     "GENERIC",
     "Generic",
-    "DIMMER",
-    [viewportFixtureControls[0]],
+    "FULL",
+    viewportSingleFixtureControls,
     -8,
     -4,
   ),

@@ -30023,6 +30023,7 @@ h3 {
   padding: 0;
   writing-mode: vertical-lr;
   direction: rtl;
+  transform: none;
   touch-action: none;
   accent-color: #a29b94;
 }
@@ -31684,7 +31685,12 @@ h3 {
   background: #1b1917;
 }
 
-.fixtureTypeAttributeColumn.category-fader {
+.fixtureTypeAttributeColumn.category-fader,
+.fixtureTypeAttributeColumn.category-position,
+.fixtureTypeAttributeColumn.category-gobo,
+.fixtureTypeAttributeColumn.category-beam,
+.fixtureTypeAttributeColumn.category-focus,
+.fixtureTypeAttributeColumn.category-other {
   flex-basis: var(--fixture-type-column-width, 168px);
   width: var(--fixture-type-column-width, 168px);
   min-width: var(--fixture-type-column-width, 168px);
@@ -31803,7 +31809,6 @@ h3 {
 }
 
 .fixtureTypePrimaryValue,
-.fixtureTypeRepresentativeSlider output,
 .fixtureTypeColorControl output,
 .fixtureTypePositionReadout output {
   font-variant-numeric: tabular-nums;
@@ -31833,13 +31838,13 @@ h3 {
   padding: 0;
   writing-mode: vertical-lr;
   direction: rtl;
+  transform: none;
   touch-action: none;
   accent-color: #a29b94;
 }
 
 .fixtureTypeVerticalFader:focus-visible,
-.fixtureTypeColorPicker:focus-visible,
-.fixtureTypeRepresentativeSlider input:focus-visible {
+.fixtureTypeColorPicker:focus-visible {
   outline: 2px solid #f3974f;
   outline-offset: 1px;
 }
@@ -31915,14 +31920,28 @@ h3 {
 
 .fixtureTypePositionControl {
   display: grid;
-  grid-template-rows: minmax(86px, 1fr) 28px;
+  grid-template-columns: minmax(0, 1fr);
   width: 100%;
   height: 100%;
   min-height: 0;
   gap: 4px;
 }
 
-.fixtureTypePositionControl > .touchPanTiltPad {
+.fixtureTypePositionControl.hasExtraFaders {
+  grid-template-columns: 132px minmax(94px, 1fr);
+}
+
+.fixtureTypePositionPrimary {
+  display: grid;
+  grid-template-rows: minmax(86px, 1fr) 28px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  gap: 4px;
+}
+
+.fixtureTypePositionPrimary > .touchPanTiltPad {
   align-self: center;
   justify-self: center;
   width: min(100%, 132px);
@@ -31951,18 +31970,9 @@ h3 {
   font-size: 11px;
 }
 
-.fixtureTypeSliderRack {
-  display: grid;
-  align-content: start;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  gap: 4px;
-  overflow: hidden auto;
-  overscroll-behavior-block: contain;
-}
-
-.fixtureTypeFaderBank {
+.fixtureTypeFaderBank,
+.fixtureTypeCategoryFaderBank,
+.fixtureTypePositionExtraBank {
   width: 100%;
   height: 100%;
   min-width: 0;
@@ -31970,7 +31980,9 @@ h3 {
   overflow: hidden;
 }
 
-.fixtureTypeFaderBank > .faderGrid {
+.fixtureTypeFaderBank > .faderGrid,
+.fixtureTypeCategoryFaderBank > .faderGrid,
+.fixtureTypePositionExtraBank > .faderGrid {
   display: flex;
   align-items: stretch;
   gap: 3px;
@@ -31981,50 +31993,10 @@ h3 {
   overflow: hidden;
 }
 
-.fixtureTypeFaderBank .attributeFaderColumn {
+.fixtureTypeFaderBank .attributeFaderColumn,
+.fixtureTypeCategoryFaderBank .attributeFaderColumn,
+.fixtureTypePositionExtraBank .attributeFaderColumn {
   flex: 0 0 94px;
-}
-
-.fixtureTypeRepresentativeSlider {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 42px;
-  min-width: 0;
-  min-height: 54px;
-  gap: 2px 5px;
-  border: 1px solid #403c37;
-  background: #211e1b;
-  padding: 4px;
-  font-size: 11px;
-}
-
-.fixtureTypeRepresentativeSlider > span {
-  grid-column: 1 / -1;
-  min-width: 0;
-  overflow: hidden;
-  color: #d4cec7;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-}
-
-.fixtureTypeRepresentativeSlider input {
-  width: 100%;
-  min-width: 40px;
-  min-height: 40px;
-  margin: 0;
-  touch-action: none;
-  accent-color: #a29b94;
-}
-
-.fixtureTypeRepresentativeSlider output {
-  display: grid;
-  place-items: center;
-  min-width: 0;
-  overflow: hidden;
-  color: #ddd7d0;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
 }
 
 .fixtureTypeUnsupported {

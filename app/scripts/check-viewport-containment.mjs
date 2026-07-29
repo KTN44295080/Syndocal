@@ -14946,6 +14946,41 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
     const bankChannelLabels = bankFaders.map((fader) =>
       (fader.querySelector('.attributeFaderChannel')?.textContent || '').trim()
     );
+    const fixtureTypePositionPads = grid
+      ? [...grid.querySelectorAll('[data-fixture-type-position-pad] .touchPanTiltPad')].filter(visible)
+      : [];
+    const fixtureTypeColorPickers = grid
+      ? [...grid.querySelectorAll('.fixtureTypeColorPicker')].filter(visible)
+      : [];
+    const categoryBankFaders = grid
+      ? [...grid.querySelectorAll('.fixtureTypeCategoryFaderBank .attributeFaderColumn')].filter(visible)
+      : [];
+    const positionExtraFaders = grid
+      ? [...grid.querySelectorAll('.fixtureTypePositionExtraBank .attributeFaderColumn')].filter(visible)
+      : [];
+    const representativeSliders = grid
+      ? [...grid.querySelectorAll('.fixtureTypeRepresentativeSlider')].filter(visible)
+      : [];
+    const desk = document.querySelector('.attributeDeskSurface');
+    const deskRangeInputs = desk
+      ? [...desk.querySelectorAll('input[type="range"]')].filter(visible)
+      : [];
+    const deskRangeRects = deskRangeInputs.map((input) => {
+      const rect = input.getBoundingClientRect();
+      return {
+        className: input.className || '',
+        width: Math.round(rect.width * 10) / 10,
+        height: Math.round(rect.height * 10) / 10,
+        vertical: rect.height > rect.width,
+      };
+    });
+    const positionPadRects = fixtureTypePositionPads.map((pad) => {
+      const rect = pad.getBoundingClientRect();
+      return {
+        width: Math.round(rect.width * 10) / 10,
+        height: Math.round(rect.height * 10) / 10,
+      };
+    });
     const app = document.querySelector('.app');
     const summary = document.querySelector('.attributeTargetSummary');
     return {
@@ -14969,6 +15004,30 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
       bankVerticalInputCount: bankVerticalInputs.length,
       bankFineButtonCount: bankFineButtons.length,
       bankChannelLabels,
+      fixtureTypePositionPadCount: fixtureTypePositionPads.length,
+      fixtureTypePositionPadsSquare: positionPadRects.every((rect) =>
+        rect.width >= 72 &&
+        rect.height >= 72 &&
+        rect.width / Math.max(1, rect.height) >= 0.75 &&
+        rect.width / Math.max(1, rect.height) <= 1.35
+      ),
+      fixtureTypeColorPickerCount: fixtureTypeColorPickers.length,
+      categoryBankFaderCount: categoryBankFaders.length,
+      positionExtraFaderCount: positionExtraFaders.length,
+      representativeSliderCount: representativeSliders.length,
+      deskRangeCount: deskRangeInputs.length,
+      deskVerticalRangeCount: deskRangeRects.filter((rect) => rect.vertical).length,
+      deskHorizontalRangeCount: deskRangeRects.filter((rect) => !rect.vertical).length,
+      deskRangeRects,
+      visibleOpticsNativeRangeCount: desk
+        ? [...desk.querySelectorAll('.opticsControlCard > input[type="range"]')].filter(visible).length
+        : 0,
+      visiblePositionConsoleCount: desk
+        ? [...desk.querySelectorAll('.positionConsoleSurface')].filter(visible).length
+        : 0,
+      visibleSingleColorPanelCount: desk
+        ? [...desk.querySelectorAll('.colorControlPanel')].filter(visible).length
+        : 0,
       categoryRailButtonCount: [...document.querySelectorAll('.attributeCategoryRail button')].filter(visible).length,
       activeCategoryLabel: (document.querySelector('.attributeCategoryRail button.active')?.textContent || '').trim(),
       selectionSummary: (summary?.textContent || '').replace(/\\s+/g, ' ').trim(),
@@ -14986,6 +15045,7 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
   })()`);
 
   const multiple = await measureState();
+  const multipleCategoryStates = { Dimmer: multiple };
   if (screenshotDir && shouldCaptureViewport(viewport)) {
     mkdirSync(screenshotDir, { recursive: true });
     const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
@@ -14995,9 +15055,12 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
       "base64",
     );
   }
-  await clickVisibleByText(client, ".attributeCategoryRail button", "Fader");
-  await sleep(120);
-  const faderBank = await measureState();
+  for (const category of ["Color", "Position", "Gobo", "Beam", "Focus", "Other", "Fader"]) {
+    await clickVisibleByText(client, ".attributeCategoryRail button", category);
+    await sleep(80);
+    multipleCategoryStates[category] = await measureState();
+  }
+  const faderBank = multipleCategoryStates.Fader;
   if (screenshotDir && shouldCaptureViewport(viewport)) {
     const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
     writeFileSync(
@@ -15018,6 +15081,23 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
   })()`);
   await sleep(120);
   const single = await measureState();
+  const singleCategoryStates = { Dimmer: single };
+  for (const category of ["Color", "Position", "Gobo", "Beam", "Focus", "Other", "Fader"]) {
+    await clickVisibleByText(client, ".attributeCategoryRail button", category);
+    await sleep(80);
+    singleCategoryStates[category] = await measureState();
+  }
+  const position = multipleCategoryStates.Position;
+  const color = multipleCategoryStates.Color;
+  const genericCategoryStates = ["Gobo", "Beam", "Focus", "Other"].map(
+    (category) => multipleCategoryStates[category]
+  );
+  const everyMeasuredRangeIsVertical = (states) =>
+    states.every((state) =>
+      state.deskRangeCount > 0
+        ? state.deskVerticalRangeCount === state.deskRangeCount && state.deskHorizontalRangeCount === 0
+        : state.deskHorizontalRangeCount === 0
+    );
 
   const conditions = [
     ["multipleTypeColumnsVisible", () => multiple.columnCount === 3],
@@ -15035,15 +15115,44 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
     ["legacyEditorHiddenForMultipleSelection", () => multiple.legacyFaderGridCount === 0 && multiple.legacyDimmerPanelCount === 0],
     ["categoryRailPreservedForMultipleSelection", () => multiple.categoryRailButtonCount === 8 && multiple.activeCategoryLabel.includes("Dimmer")],
     ["faderCategoryPreservesTypeColumns", () => faderBank.columnCount === 3 && faderBank.primaryControlKinds.every((kind) => kind === "fader-bank")],
-    ["faderCategoryUsesChannelVerticalBank", () => faderBank.bankFaderCount === 13 && faderBank.bankVerticalInputCount === 13],
-    ["faderCategoryShowsChannelNumbers", () => faderBank.bankChannelLabels.length === 13 && faderBank.bankChannelLabels.every((label) => label.startsWith("CH "))],
+    ["faderCategoryUsesChannelVerticalBank", () => faderBank.bankFaderCount === 26 && faderBank.bankVerticalInputCount === 26],
+    ["faderCategoryShowsChannelNumbers", () => faderBank.bankChannelLabels.length === 26 && faderBank.bankChannelLabels.every((label) => label.startsWith("CH "))],
     ["faderCategoryHasTrimPerChannel", () => faderBank.bankFineButtonCount === faderBank.bankFaderCount * 2],
+    ["dimmerFadersRenderTallerThanWide", () => multiple.deskRangeCount === 3 && multiple.deskVerticalRangeCount === 3 && multiple.deskHorizontalRangeCount === 0],
+    ["faderBankRendersTallerThanWide", () => faderBank.deskRangeCount === 26 && faderBank.deskVerticalRangeCount === 26 && faderBank.deskHorizontalRangeCount === 0],
+    ["positionCategoryUsesCompactPanTiltPads", () => position.fixtureTypePositionPadCount === 2 && position.fixtureTypePositionPadsSquare],
+    ["positionCategoryKeepsExtraAttributesVertical", () => position.positionExtraFaderCount === 2 && position.deskHorizontalRangeCount === 0],
+    ["genericCategoriesUseVerticalFaderBanks", () =>
+      genericCategoryStates.every((state) =>
+        state.categoryBankFaderCount > 0 &&
+        state.primaryControlKinds.every((kind) => ["vertical-fader-bank", "unsupported"].includes(kind))
+      )
+    ],
+    ["typeColumnsHaveNoRepresentativeHorizontalSliders", () =>
+      Object.values(multipleCategoryStates).every((state) => state.representativeSliderCount === 0)
+    ],
+    ["allTypeCategoryRangesRenderTallerThanWide", () =>
+      everyMeasuredRangeIsVertical(Object.values(multipleCategoryStates))
+    ],
+    ["colorCategoryKeepsPickerControl", () => color.fixtureTypeColorPickerCount === 2 && color.deskHorizontalRangeCount === 0],
     ["typeHeaderNarrowsSelection", () => narrowed],
     ["typeColumnsHiddenForSingleSelection", () => single.columnCount === 0],
     ["legacyEditorVisibleForSingleSelection", () => single.legacyFaderGridCount === 1 && single.legacyDimmerPanelCount === 1],
     ["singleSelectionUsesFixtureSummary", () => single.selectionSummaryKind.includes("fixture") && single.selectionSummary.includes("GENERIC 1")],
     ["categoryRailPreservedForSingleSelection", () => single.categoryRailButtonCount === 8 && single.activeCategoryLabel.includes("Dimmer")],
-    ["documentAndAppScrollRemainZero", () => multiple.documentAndAppScrollZero && single.documentAndAppScrollZero],
+    ["singleEditorRangesRenderTallerThanWide", () =>
+      everyMeasuredRangeIsVertical(Object.values(singleCategoryStates))
+    ],
+    ["singlePositionConsolePreserved", () => singleCategoryStates.Position.visiblePositionConsoleCount === 1],
+    ["singleColorUsesDedicatedControl", () => singleCategoryStates.Color.visibleSingleColorPanelCount === 1],
+    ["singleOpticsNativeHorizontalRangeRemoved", () =>
+      singleCategoryStates.Beam.visibleOpticsNativeRangeCount === 0 &&
+      singleCategoryStates.Focus.visibleOpticsNativeRangeCount === 0
+    ],
+    ["documentAndAppScrollRemainZero", () =>
+      [...Object.values(multipleCategoryStates), ...Object.values(singleCategoryStates)]
+        .every((state) => state.documentAndAppScrollZero)
+    ],
   ];
   const checks = Object.fromEntries(conditions.map(([name, check]) => {
     try {
@@ -15059,8 +15168,10 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
     checks,
     failedChecks,
     multiple,
+    multipleCategoryStates,
     faderBank,
     single,
+    singleCategoryStates,
     narrowed,
   };
 }
@@ -15287,6 +15398,8 @@ async function main() {
             `columns=${result.multiple.columnCount} fixtures=${result.multiple.fixtureCounts.join("+")} ` +
             `controls=${result.multiple.primaryControlKinds.join("+")} ` +
             `bank=${result.faderBank.bankFaderCount}/${result.faderBank.bankVerticalInputCount} ` +
+            `orientation=${result.faderBank.deskVerticalRangeCount}/${result.faderBank.deskHorizontalRangeCount} ` +
+            `position=${result.multipleCategoryStates.Position.fixtureTypePositionPadCount}/${result.multipleCategoryStates.Position.positionExtraFaderCount} ` +
             `single=${result.single.legacyFaderGridCount}/${result.single.legacyDimmerPanelCount} ` +
             `scroll=${result.multiple.documentAndAppScrollZero && result.single.documentAndAppScrollZero ? "zero" : "overflow"} ` +
             `failed=${JSON.stringify(result.failedChecks)}`,

@@ -91,14 +91,6 @@ export function OpticsControlPanel(props: OpticsControlPanelProps) {
                   <i />
                 </span>
               </div>
-              <input
-                type="range"
-                min="0"
-                max="65535"
-                value={entry.value}
-                aria-label={`${entry.control.attribute} value`}
-                onInput={(event) => props.onSetValue(entry.control, Number(event.currentTarget.value))}
-              />
               <div class="visualNumberGrid opticsDirectGrid">
                 <label>
                   %

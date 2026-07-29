@@ -21,7 +21,14 @@ interface FixtureTypeAttributeColumnsProps {
   onSetControl: (typeKey: string, attribute: string, value: number) => void;
   onResetControl: (typeKey: string, attribute: string) => void;
   onSetColor: (typeKey: string, color: string) => void;
-  onSetPosition: (typeKey: string, pan: number, tilt: number) => void;
+  onSetPosition: (
+    typeKey: string,
+    panAttribute: string,
+    tiltAttribute: string,
+    pan: number,
+    tilt: number,
+    usesFixtureLimits: boolean,
+  ) => void;
 }
 
 const clampDmxValue = (value: number) =>
@@ -87,6 +94,12 @@ export function FixtureTypeAttributeColumns(props: FixtureTypeAttributeColumnsPr
           const positionControls = createMemo(() =>
             props.activeCategory === "position" ? fixtureTypePositionControls(group) : null
           );
+          const positionExtraControls = createMemo(() => {
+            const controls = positionControls();
+            return controls
+              ? categoryControls().filter((control) => control !== controls.pan && control !== controls.tilt)
+              : [];
+          });
           const valueFor = (control: AttributeControl) => {
             const fixture = referenceFixture();
             return fixture ? clampDmxValue(props.valueForControl(fixture, control)) : control.default_value;
@@ -112,10 +125,27 @@ export function FixtureTypeAttributeColumns(props: FixtureTypeAttributeColumnsPr
             if (!controls || !fixture) {
               return { pan: 32_768, tilt: 32_768 };
             }
-            return effectivePanTiltValues(
-              fixture,
-              valueFor(controls.pan),
-              valueFor(controls.tilt),
+            return controls.usesFixtureLimits
+              ? effectivePanTiltValues(
+                  fixture,
+                  valueFor(controls.pan),
+                  valueFor(controls.tilt),
+                )
+              : {
+                  pan: valueFor(controls.pan),
+                  tilt: valueFor(controls.tilt),
+                };
+          };
+          const isControlWritten = (control: AttributeControl) =>
+            group.fixtures.some((fixture) => {
+              const fixtureControl = fixtureControlForAttribute(fixture, control.attribute);
+              return fixtureControl
+                ? props.valueForControl(fixture, fixtureControl) !== fixtureControl.default_value
+                : false;
+            });
+          const setControlValue = (control: AttributeControl, value: number, keyPrefix: string) => {
+            scheduleWrite(`${keyPrefix}:${group.key}:${control.attribute}`, () =>
+              props.onSetControl(group.key, control.attribute, value)
             );
           };
           const setPointerPosition = (event: PointerEvent) => {
@@ -124,10 +154,25 @@ export function FixtureTypeAttributeColumns(props: FixtureTypeAttributeColumnsPr
             const y = Math.min(1, Math.max(0, (event.clientY - bounds.top) / Math.max(1, bounds.height)));
             const pan = Math.round(x * 65_535);
             const tilt = Math.round((1 - y) * 65_535);
-            scheduleWrite(`position:${group.key}`, () =>
-              props.onSetPosition(group.key, pan, tilt)
-            );
+            const controls = positionControls();
+            if (controls) {
+              scheduleWrite(`position:${group.key}`, () =>
+                props.onSetPosition(
+                  group.key,
+                  controls.pan.attribute,
+                  controls.tilt.attribute,
+                  pan,
+                  tilt,
+                  controls.usesFixtureLimits,
+                )
+              );
+            }
           };
+          const faderBankWidth = () => Math.max(168, categoryControls().length * 97 + 8);
+          const positionColumnWidth = () =>
+            positionControls()
+              ? Math.max(168, 144 + positionExtraControls().length * 97)
+              : faderBankWidth();
 
           return (
             <article
@@ -136,9 +181,14 @@ export function FixtureTypeAttributeColumns(props: FixtureTypeAttributeColumnsPr
               data-fixture-type-count={group.fixtures.length}
               data-fixture-type-category={props.activeCategory}
               data-fixture-type-supported={categoryControls().length > 0 ? "true" : "false"}
-              style={props.activeCategory === "fader"
-                ? { "--fixture-type-column-width": `${Math.max(168, categoryControls().length * 97 + 8)}px` }
-                : undefined}
+              style={
+                props.activeCategory === "fader" ||
+                !["dimmer", "color", "position"].includes(props.activeCategory)
+                  ? { "--fixture-type-column-width": `${faderBankWidth()}px` }
+                  : props.activeCategory === "position" && categoryControls().length > 0
+                    ? { "--fixture-type-column-width": `${positionColumnWidth()}px` }
+                    : undefined
+              }
             >
               <button
                 type="button"
@@ -251,25 +301,51 @@ export function FixtureTypeAttributeColumns(props: FixtureTypeAttributeColumnsPr
                     </div>
                   </Match>
                   <Match when={positionControls()}>
-                    <div
-                      class="fixtureTypePositionControl"
-                      data-fixture-type-primary-control="position"
-                    >
-                      <TouchPanTiltPad
-                        panValue={positionValue().pan}
-                        tiltValue={positionValue().tilt}
-                        limitOverlayStyle={fullLimitOverlay}
-                        onPointerValue={setPointerPosition}
-                      />
-                      <div class="fixtureTypePositionReadout">
-                        <output>
-                          <span>Pan</span> {percentLabel(positionValue().pan)}
-                        </output>
-                        <output>
-                          <span>Tilt</span> {percentLabel(positionValue().tilt)}
-                        </output>
+                    {(controls) => (
+                      <div
+                        classList={{
+                          fixtureTypePositionControl: true,
+                          hasExtraFaders: positionExtraControls().length > 0,
+                        }}
+                        data-fixture-type-primary-control="position"
+                        data-fixture-type-position-pad
+                      >
+                        <div class="fixtureTypePositionPrimary">
+                          <TouchPanTiltPad
+                            panValue={positionValue().pan}
+                            tiltValue={positionValue().tilt}
+                            limitOverlayStyle={fullLimitOverlay}
+                            onPointerValue={setPointerPosition}
+                          />
+                          <div class="fixtureTypePositionReadout">
+                            <output title={controls().pan.attribute}>
+                              <span data-no-localize>{controls().pan.attribute}</span>{" "}
+                              {percentLabel(positionValue().pan)}
+                            </output>
+                            <output title={controls().tilt.attribute}>
+                              <span data-no-localize>{controls().tilt.attribute}</span>{" "}
+                              {percentLabel(positionValue().tilt)}
+                            </output>
+                          </div>
+                        </div>
+                        <Show when={positionExtraControls().length > 0}>
+                          <div
+                            class="fixtureTypePositionExtraBank"
+                            data-fixture-type-position-extra-bank
+                          >
+                            <FaderGridPanel
+                              controls={positionExtraControls()}
+                              selectedFixtureId={referenceFixture()?.id ?? null}
+                              valueForControl={valueFor}
+                              isControlWritten={isControlWritten}
+                              onSetControlValue={(control, value) =>
+                                setControlValue(control, value, "position-extra")
+                              }
+                            />
+                          </div>
+                        </Show>
                       </div>
-                    </div>
+                    )}
                   </Match>
                   <Match when={props.activeCategory === "fader" && categoryControls().length > 0}>
                     <div
@@ -280,49 +356,27 @@ export function FixtureTypeAttributeColumns(props: FixtureTypeAttributeColumnsPr
                         controls={categoryControls()}
                         selectedFixtureId={referenceFixture()?.id ?? null}
                         valueForControl={valueFor}
-                        isControlWritten={(control) =>
-                          group.fixtures.some((fixture) => {
-                            const fixtureControl = fixtureControlForAttribute(fixture, control.attribute);
-                            return fixtureControl
-                              ? props.valueForControl(fixture, fixtureControl) !== fixtureControl.default_value
-                              : false;
-                          })
-                        }
+                        isControlWritten={isControlWritten}
                         onSetControlValue={(control, value) =>
-                          scheduleWrite(`fader:${group.key}:${control.attribute}`, () =>
-                            props.onSetControl(group.key, control.attribute, value)
-                          )
+                          setControlValue(control, value, "fader")
                         }
                       />
                     </div>
                   </Match>
                   <Match when={categoryControls().length > 0}>
                     <div
-                      class="fixtureTypeSliderRack"
-                      data-fixture-type-primary-control="sliders"
+                      class="fixtureTypeCategoryFaderBank"
+                      data-fixture-type-primary-control="vertical-fader-bank"
                     >
-                      <For each={categoryControls()}>
-                        {(control) => (
-                          <label class="fixtureTypeRepresentativeSlider">
-                            <span data-no-localize>{control.attribute}</span>
-                            <input
-                              type="range"
-                              min="0"
-                              max="65535"
-                              value={valueFor(control)}
-                              aria-label={control.attribute}
-                              aria-valuetext={isMixed(control) ? "Mixed values" : percentLabel(valueFor(control))}
-                              onInput={(event) => {
-                                const value = Number(event.currentTarget.value);
-                                scheduleWrite(`control:${group.key}:${control.attribute}`, () =>
-                                  props.onSetControl(group.key, control.attribute, value)
-                                );
-                              }}
-                            />
-                            <output>{isMixed(control) ? "Mixed" : percentLabel(valueFor(control))}</output>
-                          </label>
-                        )}
-                      </For>
+                      <FaderGridPanel
+                        controls={categoryControls()}
+                        selectedFixtureId={referenceFixture()?.id ?? null}
+                        valueForControl={valueFor}
+                        isControlWritten={isControlWritten}
+                        onSetControlValue={(control, value) =>
+                          setControlValue(control, value, "category")
+                        }
+                      />
                     </div>
                   </Match>
                 </Switch>
