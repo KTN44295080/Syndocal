@@ -270,7 +270,7 @@ timeline窓692/659/628、popped-main 376+896、全状態スクロール0/0）。
 
 ユーザー解説によるDaslightの確定モデル（スクショ2枚で裏付け）: (1)シーン新規作成→右ペインにFX種類chooser（STEPS/COLOR FX/CHASER FX/MOVE FX/VALUE FX/CURVE FX/MAPPINGS/COLOR MAPPINGS/SUPER SCENE）が常駐、未選択ならStatic。(2)FX選択→右ペインが当該FXエディタ（例: CURVE FX=波形プレビュー+Rate/Size/Phase/Offset/Phasing+Attribute value+Beams+Features）。(3)シーンの中身はシーン選択状態で下段EDITフェーダー（Mappingで灯体選択→操作）で作り、**その値がそのままシーンへ上書き保存**。(4)EDIT/LIVEトグルの本義: EDIT=フェーダー値がシーンへ上書き保存／LIVE=シーンへ保存されないライブオーバーライド。現Syndocalは部品（cue-owned FX/Store Scope/Update Look/Programmer/T16 chooser/T17モディファイア）を持つが直結動線に組まれておらず、ユーザー評価は「シーン作成・編集は大きく劣る・操作しにくい」。
 
-- **T26-A シーン設定右ペイン**: シーン選択（トリガー=選択を兼ねる、Daslight同様。T25-Hトグルリリースとの整合設計）→右ペイン（現・実行中/次のキューのレール領域を拡張）にシーン設定を常駐: 新規/FXなし=FX chooser（T16の9ファミリーを流用）＋Staticプロパティ（fade/duration系）、FX持ち=当該FXエディタ（T16エディタ群のシーン文脈再配置）。FXワークスペースへの遷移なしでシーンのFXを作成・編集できること。
+- **T26-A シーン設定右ペイン**（**意味論訂正 2026-07-29ユーザー「Daslightでは選択(編集)と再生が違う。押したら再生、右にある色つきの部分を押すと編集モード」**: セル本体クリック=再生のみ（編集選択の副作用なし、T25-Hトグルリリース維持）。**セル右端のidentity色ストリップ=編集選択専用クリックゾーン**（dl-16のB-WineRed右端ピンク帯が実例）。✎は右端ストリップへ統合または廃止。初版の「トリガー=選択を兼ねる」は誤りとして訂正ラウンドで置換）→右ペイン（現・実行中/次のキューのレール領域を拡張）にシーン設定を常駐: 新規/FXなし=FX chooser（T16の9ファミリーを流用）＋Staticプロパティ（fade/duration系）、FX持ち=当該FXエディタ（T16エディタ群のシーン文脈再配置）。FXワークスペースへの遷移なしでシーンのFXを作成・編集できること。
 - **T26-B EDIT/LIVE直結書込**: ControlフェーダーデッキへEDIT/LIVEトグル（Daslight位置）。EDIT=選択シーンがある状態でのフェーダー/タイプ別カラム/Mapping操作を、既存Update Look/Programmer staged経路の自動化で**選択シーンへ即時上書き**。LIVE=現行の非破壊ライブ操作（T17ラッチ/programmer live）。EDIT中は誤上書き防止の明示視覚状態（EDITバッジ・シーン名表示、Daslightの「EDIT: <シーン名>」ヘッダ同等）。Undo/Redoで書込単位を取り消せること。
 - 実装順: T25-G/I完了後に着手。protocol変更は原則不要見込み（既存コマンド編成）だが、自動Update粒度で必要が生じたら承認を取る。受入はDaslightモデル4点との1:1突合＋操作手数（シーン新規→FX選択→中身作成→保存の一連）のDaslight同数以下。
 
