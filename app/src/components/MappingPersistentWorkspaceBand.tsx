@@ -171,10 +171,20 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
                   <ControlStageToolbar
                     stageTool={props.toolRail.stageTool}
                     canFitVisible={props.viewportControls.canFitVisible}
+                    canFitSelection={props.viewportControls.canFitSelection}
                     zoomValue={props.viewportControls.zoomValue}
+                    canZoomOut={props.viewportControls.canZoomOut}
+                    canZoomIn={props.viewportControls.canZoomIn}
+                    selectedFixtureCount={props.selection.selectedFixtureCount}
+                    canPickVisible={props.selection.filteredFixtureCount > 0}
                     onStageTool={props.toolRail.onStageTool}
                     onFitVisible={props.viewportControls.onFitVisible}
+                    onFitSelection={props.viewportControls.onFitSelection}
+                    onZoomOut={props.viewportControls.onZoomOut}
+                    onZoomIn={props.viewportControls.onZoomIn}
                     onZoomLevel={props.viewportControls.onZoomLevel}
+                    onPickVisible={props.selection.onPickVisible}
+                    onClearSelection={props.selection.onClearSelection}
                     onOpenMapping={props.onOpenMapping}
                   />
                   <MappingControlSelections

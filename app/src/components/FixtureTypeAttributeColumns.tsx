@@ -173,10 +173,10 @@ export function FixtureTypeAttributeColumns(props: FixtureTypeAttributeColumnsPr
               );
             }
           };
-          const faderBankWidth = () => Math.max(168, categoryControls().length * 97 + 8);
+          const faderBankWidth = () => Math.max(168, categoryControls().length * 56 + 6);
           const positionColumnWidth = () =>
             positionControls()
-              ? Math.max(168, 144 + positionExtraControls().length * 97)
+              ? Math.max(168, 144 + positionExtraControls().length * 56)
               : faderBankWidth();
 
           return (

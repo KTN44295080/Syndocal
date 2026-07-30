@@ -7,6 +7,29 @@ import {
 import type { AttributeControl } from "../types";
 import { VerticalFaderInput } from "./VerticalFaderInput";
 
+type AttributeFaderGlyph =
+  | "dimmer"
+  | "shutter"
+  | "strobe"
+  | "pan"
+  | "tilt"
+  | "gobo"
+  | "zoom"
+  | "focus"
+  | "generic";
+
+const attributeFaderGlyphPaths: Record<AttributeFaderGlyph, string> = {
+  dimmer: "M8 6a2 2 0 1 0 0 4 2 2 0 0 0 0-4ZM8 2v2m0 8v2M2 8h2m8 0h2",
+  shutter: "M8 3a5 5 0 1 0 0 10A5 5 0 0 0 8 3Zm-4 9 8-8",
+  strobe: "M9.4 1.8 4.5 8.7h3.3l-1.2 5.5 4.9-7H8.2z",
+  pan: "M2 8h12M5 5 2 8l3 3M11 5l3 3-3 3",
+  tilt: "M8 2v12M5 5l3-3 3 3M5 11l3 3 3-3",
+  gobo: "M8 3a5 5 0 1 0 0 10A5 5 0 0 0 8 3Zm0 2v2m-2 3 2-1 2 1",
+  zoom: "M7 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm3 7 3 3M5 7h4M7 5v4",
+  focus: "M3 6V3h3m4 0h3v3m0 4v3h-3m-4 0H3v-3M8 6v4M6 8h4",
+  generic: "m8 2 5 6-5 6-5-6 5-6Zm0 4.8a1.2 1.2 0 1 0 0 2.4 1.2 1.2 0 0 0 0-2.4Z",
+};
+
 interface FaderGridPanelProps {
   controls: AttributeControl[];
   selectedFixtureId?: number | null;
@@ -52,10 +75,11 @@ export function FaderGridPanel(props: FaderGridPanelProps) {
     const fn = activeFunction(control, value);
     return fn ? channelFunctionLabel(fn) : control.attribute || "No Func";
   };
-  const shortLabel = (control: AttributeControl, value: number) => {
-    const label = displayLabel(control, value).replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-    return (label.split(/\s+/)[0] || "No Func").slice(0, 7);
-  };
+  const normalizedAttributeText = (control: AttributeControl, value: number) =>
+    `${control.attribute} ${control.channel_name} ${displayLabel(control, value)}`
+      .replace(/([a-z])([A-Z])/g, "$1 $2")
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, " ");
   const swatchColor = (control: AttributeControl, value: number) => {
     const fn = activeFunction(control, value);
     const wheelColor = fn?.wheel_slot_color?.trim();
@@ -64,16 +88,37 @@ export function FaderGridPanel(props: FaderGridPanelProps) {
     }
     const normalized = (fn
       ? normalizedFunctionText(control, fn)
-      : `${control.attribute} ${control.channel_name}`.toLowerCase()
+      : normalizedAttributeText(control, value)
     ).replace(/[^\p{L}\p{N}]+/gu, " ");
     if (/\b(red)\b/.test(normalized)) return "#e4564f";
     if (/\b(green)\b/.test(normalized)) return "#57b85b";
     if (/\b(blue)\b/.test(normalized)) return "#5686d8";
     if (/\b(amber|orange)\b/.test(normalized)) return "#d79243";
+    if (/\b(cyan)\b/.test(normalized)) return "#4abdc3";
+    if (/\b(magenta)\b/.test(normalized)) return "#c75da8";
+    if (/\b(yellow|lime)\b/.test(normalized)) return "#d5ca55";
     if (/\b(uv|violet)\b/.test(normalized)) return "#8d6bc4";
     if (/\b(white|open|clear)\b/.test(normalized)) return "#d9dde0";
+    if (/\b(colou?r|rgb|hue|saturation)\b/.test(normalized)) return "#a9b2bc";
     return null;
   };
+  const attributeGlyph = (control: AttributeControl, value: number): AttributeFaderGlyph => {
+    const normalized = normalizedAttributeText(control, value);
+    if (/\b(dimmer|intensity)\b/.test(normalized)) return "dimmer";
+    if (/\b(shutter|iris)\b/.test(normalized)) return "shutter";
+    if (/\b(strobe|flash)\b/.test(normalized)) return "strobe";
+    if (/\bpan\b/.test(normalized)) return "pan";
+    if (/\btilt\b/.test(normalized)) return "tilt";
+    if (/\b(gobo|pattern)\b/.test(normalized)) return "gobo";
+    if (/\bzoom\b/.test(normalized)) return "zoom";
+    if (/\bfocus\b/.test(normalized)) return "focus";
+    return "generic";
+  };
+  const attributeGlyphSvg = (glyph: AttributeFaderGlyph) => (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d={attributeFaderGlyphPaths[glyph]} />
+    </svg>
+  );
   const displayValue = (control: AttributeControl, value: number) =>
     control.resolution === "SixteenBit" ? `${clampDmxValue(value)}` : `${Math.round(clampDmxValue(value) / 257)}`;
   const fineStep = (control: AttributeControl) => (control.resolution === "SixteenBit" ? 1 : 257);
@@ -90,6 +135,7 @@ export function FaderGridPanel(props: FaderGridPanelProps) {
           const value = () => clampDmxValue(props.valueForControl(control));
           const written = () => props.isControlWritten(control);
           const swatch = () => swatchColor(control, value());
+          const glyph = () => attributeGlyph(control, value());
           return (
             <div classList={{ fader: true, attributeFaderColumn: true, written: written(), off: !written() }}>
               <div class="attributeFaderWriteRow">
@@ -101,14 +147,17 @@ export function FaderGridPanel(props: FaderGridPanelProps) {
                 />
                 <small class="attributeFaderChannel">CH {control.offsets.join("/") || "-"}</small>
               </div>
-              <span class="attributeFaderIcon" title={displayLabel(control, value())}>
-                <Show when={swatch()} fallback={<b>{shortLabel(control, value())}</b>}>
+              <span
+                class="attributeFaderIcon"
+                data-attribute-glyph={swatch() ? "color" : glyph()}
+                title={`${control.attribute} / ${displayLabel(control, value())}`}
+                role="img"
+                aria-label={control.attribute}
+              >
+                <Show when={swatch()} fallback={attributeGlyphSvg(glyph())}>
                   {(color) => <i style={{ "background-color": color() }} />}
                 </Show>
               </span>
-              <strong class="attributeFaderLabel" title={`${control.attribute} / ${control.channel_name}`}>
-                {control.attribute}
-              </strong>
               <output class="attributeFaderValue">
                 {written() ? displayValue(control, value()) : "OFF"}
               </output>

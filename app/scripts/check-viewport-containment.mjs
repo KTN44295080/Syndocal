@@ -2078,6 +2078,10 @@ async function measurePersistentBand(client, label) {
     };
     const drawer = document.querySelector('[data-workspace-selection-drawer]');
     const drawerToggle = document.querySelector('[data-workspace-selection-drawer-toggle]');
+    const controlStageToolRow = visibleElements('[data-control-stage-tool-row]')[0];
+    const controlStageToolItems = visibleElements(
+      '[data-control-stage-tool-item], [data-control-stage-mapping-link]'
+    );
     return {
       label: ${JSON.stringify(label)},
       visiblePersistentBandCount: visibleElements('.mappingPersistentWorkspaceBand').length,
@@ -2094,6 +2098,14 @@ async function measurePersistentBand(client, label) {
       visibleWorkspaceSplitterCount: visibleElements('[data-workspace-splitter]').length,
       visibleControlStagePanelCount: visibleElements('.controlStagePanel').length,
       visibleControlStageCount: visibleElements('.controlStage').length,
+      controlStageToolItemsShareOneRow: (() => {
+        if (controlStageToolItems.length !== 10) return false;
+        const tops = controlStageToolItems.map((item) => item.getBoundingClientRect().top);
+        return Math.max(...tops) - Math.min(...tops) <= 1;
+      })(),
+      controlStageToolRowHorizontalOverflowPx: controlStageToolRow
+        ? Math.max(0, controlStageToolRow.scrollWidth - controlStageToolRow.clientWidth)
+        : -1,
       persistentBandRects: {
         groups: measuredRect('[data-persistent-band-part="groups"]'),
         stage: measuredRect('[data-workspace-pane="lower-left"]'),
@@ -3337,9 +3349,9 @@ async function runControlStageChromeViewport(client, viewport) {
 
   const controlChromeSelector = '[data-control-stage-chrome="true"] [data-control-stage-chrome-operation]';
   const conditions = [
-    ["controlChromeOperationCountAtMost12", () =>
+    ["controlChromeOperationCountIs12WithinCeiling", () =>
       control.controlStageChromeOperationCount <= 12 &&
-      control.controlStageChromeOperationCount === 7],
+      control.controlStageChromeOperationCount === 12],
     ["controlChromeCountSelectorRecorded", () => controlChromeSelector.length > 0],
     ["controlLetterToolRailAbsent", () => control.visibleControlMappingToolRailCount === 0],
     ["controlReadoutRowAbsent", () => control.visibleControlMappingViewportReadoutCount === 0],
@@ -3353,11 +3365,14 @@ async function runControlStageChromeViewport(client, viewport) {
     ["controlSelectionNameListPresent", () =>
       control.visibleControlStageSelectionListCount === 1 &&
       control.visibleControlStageSelectionNameCount >= 1],
-    ["controlToolRowHasFourItems", () =>
+    ["controlToolRowHasNineItemsAndEightSvgIcons", () =>
       control.visibleControlStageToolRowCount === 1 &&
-      control.visibleControlStageToolItemCount === 4 &&
-      control.visibleControlStageToolIconCount === 4 &&
+      control.visibleControlStageToolItemCount === 9 &&
+      control.visibleControlStageToolIconCount === 8 &&
       control.visibleControlStageZoomRangeCount === 1 &&
+      control.controlStageToolRowActionCount === 10 &&
+      control.controlStageToolRowHeight === 32 &&
+      control.controlStageToolRowHorizontalOverflowPx === 0 &&
       control.controlStageToolItemsShareOneRow],
     ["controlMappingJumpPresentAndWorks", () =>
       control.visibleControlStageMappingLinkCount === 1 && mappingJumpArrived],
@@ -4464,13 +4479,24 @@ async function measure(client, label) {
         '[data-control-stage-tool-row] input[type="range"]'
       ),
       visibleControlStageMappingLinkCount: visibleCount('[data-control-stage-mapping-link]'),
+      controlStageToolRowActionCount: visibleCount(
+        '[data-control-stage-tool-row] [data-control-stage-chrome-operation]'
+      ),
+      controlStageToolRowHeight: (() => {
+        const row = visibleElements('[data-control-stage-tool-row]')[0];
+        return row ? Math.round(row.getBoundingClientRect().height * 10) / 10 : 0;
+      })(),
+      controlStageToolRowHorizontalOverflowPx: (() => {
+        const row = visibleElements('[data-control-stage-tool-row]')[0];
+        return row ? Math.max(0, row.scrollWidth - row.clientWidth) : -1;
+      })(),
       visibleControlStageSelectionListCount: visibleCount('[data-control-stage-selection-list]'),
       visibleControlStageSelectionNameCount: visibleCount(
         '[data-control-stage-selection-list] [role="listitem"]'
       ),
       controlStageToolItemsShareOneRow: (() => {
         const items = visibleElements('[data-control-stage-tool-item], [data-control-stage-mapping-link]');
-        if (items.length !== 5) return false;
+        if (items.length !== 10) return false;
         const tops = items.map((item) => item.getBoundingClientRect().top);
         return Math.max(...tops) - Math.min(...tops) <= 1;
       })(),
@@ -5936,12 +5962,15 @@ function hasExpectedControlStageChrome(result) {
   return (
     result.visibleControlStageChromeCount === 1 &&
     result.controlStageChromeOperationCount <= 12 &&
-    result.controlStageChromeOperationCount === 7 &&
+    result.controlStageChromeOperationCount === 12 &&
     result.visibleControlStageToolRowCount === 1 &&
-    result.visibleControlStageToolItemCount === 4 &&
-    result.visibleControlStageToolIconCount === 4 &&
+    result.visibleControlStageToolItemCount === 9 &&
+    result.visibleControlStageToolIconCount === 8 &&
     result.visibleControlStageZoomRangeCount === 1 &&
     result.visibleControlStageMappingLinkCount === 1 &&
+    result.controlStageToolRowActionCount === 10 &&
+    result.controlStageToolRowHeight === 32 &&
+    result.controlStageToolRowHorizontalOverflowPx === 0 &&
     result.visibleControlStageSelectionListCount === 1 &&
     result.controlStageToolItemsShareOneRow &&
     result.visibleControlMappingToolRailCount === 0 &&
@@ -9839,6 +9868,21 @@ async function runPersistentBandInvarianceViewport(client, viewport) {
   const mappingExpansion = await runMappingExpansionCheck(client, viewport);
   const timelinePaneExpansion = await runTimelinePaneExpansionCheck(client, viewport);
   const layeredTimelineDesk = await runLayeredTimelineDeskCheck(client, viewport);
+  const checks = {
+    setupBeforeOuterContained: setupBefore.outerContained,
+    controlOuterContained: control.outerContained,
+    setupAfterOuterContained: setupAfter.outerContained,
+    setupBeforePersistentWorkspaceBand: hasExpectedPersistentWorkspaceBand(setupBefore),
+    controlPersistentWorkspaceBand: hasExpectedPersistentWorkspaceBand(control),
+    setupAfterPersistentWorkspaceBand: hasExpectedPersistentWorkspaceBand(setupAfter),
+    persistentBandInvariant: comparison.invariant,
+    controlStageToolItemsShareOneRow: control.controlStageToolItemsShareOneRow,
+    controlStageToolRowHorizontalOverflowZero:
+      control.controlStageToolRowHorizontalOverflowPx === 0,
+    mappingExpansionPassed: mappingExpansion.passed,
+    timelinePaneExpansionPassed: timelinePaneExpansion.passed,
+    layeredTimelineDeskPassed: layeredTimelineDesk.passed,
+  };
   const containment = {
     ...setupAfter,
     label: `persistent-band-invariance-${viewport.width}x${viewport.height}`,
@@ -9851,16 +9895,13 @@ async function runPersistentBandInvarianceViewport(client, viewport) {
   };
   return {
     passed:
-      setupBefore.outerContained &&
-      control.outerContained &&
-      setupAfter.outerContained &&
-      hasExpectedPersistentWorkspaceBand(setupBefore) &&
-      hasExpectedPersistentWorkspaceBand(control) &&
+      Object.values(checks).every(Boolean) &&
       hasExpectedPersistentWorkspaceBand(containment) &&
       hasExpectedPersistentBandInvariance(containment) &&
       hasExpectedMappingExpansion(containment) &&
       hasExpectedTimelinePaneExpansion(containment) &&
       hasExpectedLayeredTimelineDesk(containment),
+    checks,
     containment,
   };
 }
@@ -16275,10 +16316,24 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
     const trimButtons = columns.flatMap((column) =>
       [...column.querySelectorAll('[data-fixture-type-trim-control]')].filter(visible)
     );
-    const bankFaders = [...document.querySelectorAll('.fixtureTypeFaderBank .attributeFaderColumn')].filter(visible);
+    const bankFaders = [...document.querySelectorAll(
+      '[data-fader-view-channel-bank="true"] .attributeFaderColumn'
+    )].filter(visible);
     const bankVerticalInputs = bankFaders.map((fader) => fader.querySelector('.verticalFaderInput')).filter(visible);
     const bankFineButtons = bankFaders.flatMap((fader) =>
       [...fader.querySelectorAll('.attributeFaderFine button')].filter(visible)
+    );
+    const bankAttributeIcons = bankFaders
+      .map((fader) => fader.querySelector('.attributeFaderIcon'))
+      .filter(visible);
+    const bankAttributeGlyphs = bankAttributeIcons
+      .map((icon) => icon.querySelector('svg'))
+      .filter(visible);
+    const bankAttributeSwatches = bankAttributeIcons
+      .map((icon) => icon.querySelector('i'))
+      .filter(visible);
+    const bankTextLabels = bankFaders.flatMap((fader) =>
+      [...fader.querySelectorAll('.attributeFaderLabel')].filter(visible)
     );
     const bankChannelLabels = bankFaders.map((fader) =>
       (fader.querySelector('.attributeFaderChannel')?.textContent || '').trim()
@@ -16334,6 +16389,14 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
       : null;
     const faderChannelBankRect = faderChannelBank?.getBoundingClientRect();
     const deskRect = desk?.getBoundingClientRect();
+    const bankFaderRects = bankFaders.map((fader) => fader.getBoundingClientRect());
+    const bankFineButtonRects = bankFineButtons.map((button) => button.getBoundingClientRect());
+    const fullyVisibleBankFaderCount = deskRect
+      ? bankFaderRects.filter((rect) =>
+          rect.left >= Math.max(0, deskRect.left) - 1 &&
+          rect.right <= Math.min(innerWidth, deskRect.right) + 1
+        ).length
+      : 0;
     const positionPadRects = fixtureTypePositionPads.map((pad) => {
       const rect = pad.getBoundingClientRect();
       return {
@@ -16364,6 +16427,25 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
       bankVerticalInputCount: bankVerticalInputs.length,
       bankFineButtonCount: bankFineButtons.length,
       bankChannelLabels,
+      bankFaderMinimumWidth: bankFaderRects.length > 0
+        ? Math.min(...bankFaderRects.map((rect) => rect.width))
+        : 0,
+      bankFaderMaximumWidth: bankFaderRects.length > 0
+        ? Math.max(...bankFaderRects.map((rect) => rect.width))
+        : 0,
+      bankFineButtonMinimumWidth: bankFineButtonRects.length > 0
+        ? Math.min(...bankFineButtonRects.map((rect) => rect.width))
+        : 0,
+      bankFineButtonMinimumHeight: bankFineButtonRects.length > 0
+        ? Math.min(...bankFineButtonRects.map((rect) => rect.height))
+        : 0,
+      bankAttributeIconCount: bankAttributeIcons.length,
+      bankAttributeGlyphCount: bankAttributeGlyphs.length,
+      bankAttributeSwatchCount: bankAttributeSwatches.length,
+      bankAttributeIconTitleCount: bankAttributeIcons.filter((icon) => Boolean(icon.getAttribute('title'))).length,
+      bankAttributeIconAriaCount: bankAttributeIcons.filter((icon) => Boolean(icon.getAttribute('aria-label'))).length,
+      bankTextLabelCount: bankTextLabels.length,
+      fullyVisibleBankFaderCount,
       fixtureTypePositionPadCount: fixtureTypePositionPads.length,
       fixtureTypePositionPadsSquare: positionPadRects.every((rect) =>
         rect.width >= 72 &&
@@ -16599,6 +16681,33 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
     ["faderCategoryUsesChannelVerticalBank", () => faderBank.bankFaderCount === 26 && faderBank.bankVerticalInputCount === 26],
     ["faderCategoryShowsChannelNumbers", () => faderBank.bankChannelLabels.length === 26 && faderBank.bankChannelLabels.every((label) => label.startsWith("CH "))],
     ["faderCategoryHasTrimPerChannel", () => faderBank.bankFineButtonCount === faderBank.bankFaderCount * 2],
+    ["faderColumnsUseCompact54pxContract", () =>
+      [faderBank, singleFaderBank].every((state) =>
+        state.bankFaderCount > 0 &&
+        state.bankFaderMinimumWidth >= 53.5 &&
+        state.bankFaderMaximumWidth <= 54.5
+      )
+    ],
+    ["faderFineButtonsUseCompact23pxContract", () =>
+      [faderBank, singleFaderBank].every((state) =>
+        state.bankFineButtonCount === state.bankFaderCount * 2 &&
+        state.bankFineButtonMinimumWidth >= 22.5 &&
+        state.bankFineButtonMinimumHeight >= 25.5
+      )
+    ],
+    ["faderAttributeIconsReplaceTextLabelRows", () =>
+      [faderBank, singleFaderBank].every((state) =>
+        state.bankAttributeIconCount === state.bankFaderCount &&
+        state.bankAttributeGlyphCount + state.bankAttributeSwatchCount === state.bankFaderCount &&
+        state.bankAttributeIconTitleCount === state.bankFaderCount &&
+        state.bankAttributeIconAriaCount === state.bankFaderCount &&
+        state.bankTextLabelCount === 0
+      )
+    ],
+    ["compactFadersShowAtLeastTwelveChannelsAt1280", () =>
+      viewport.width !== 1280 ||
+      faderBank.fullyVisibleBankFaderCount >= 12
+    ],
     ["verticalFadersUseCustomAppearanceNoneChrome", () =>
       customFaderStates.length > 0 &&
       customFaderStates.every((state) =>
@@ -17377,6 +17486,10 @@ async function main() {
             `columns=${result.multiple.columnCount} fixtures=${result.multiple.fixtureCounts.join("+")} ` +
             `controls=${result.multiple.primaryControlKinds.join("+")} ` +
             `bank=${result.faderBank.bankFaderCount}/${result.faderBank.bankVerticalInputCount} ` +
+            `column=${Math.round(result.faderBank.bankFaderMinimumWidth * 10) / 10}px ` +
+            `fine=${Math.round(result.faderBank.bankFineButtonMinimumWidth * 10) / 10}x${Math.round(result.faderBank.bankFineButtonMinimumHeight * 10) / 10}px ` +
+            `visibleCh=${result.faderBank.fullyVisibleBankFaderCount}/${result.singleFaderBank.fullyVisibleBankFaderCount} ` +
+            `icons=${result.faderBank.bankAttributeIconCount}/${result.faderBank.bankTextLabelCount} ` +
             `orientation=${result.faderBank.deskVerticalRangeCount}/${result.faderBank.deskHorizontalRangeCount} ` +
             `chrome=${Math.round(result.faderBank.faderThumbMinimumWidth * 10) / 10}x${Math.round(result.faderBank.faderThumbMinimumHeight * 10) / 10}/${result.faderBank.faderTrackInsetCount}/${result.faderBank.faderGripLineCount} ` +
             `pure=${result.faderBank.faderCategoryActionCount}+${result.singleFaderBank.faderCategoryActionCount}/${result.faderBank.faderGdtfFunctionPanelCount}+${result.singleFaderBank.faderGdtfFunctionPanelCount} ` +
@@ -17655,6 +17768,7 @@ async function main() {
             `expandedRects=${JSON.stringify(result.expanded.persistentBandRects)} ` +
             `restoredSubtabRects=${JSON.stringify(result.restoredSubtab.persistentBandRects)} ` +
             `restoredWorkspaceRects=${JSON.stringify(result.restoredWorkspace.persistentBandRects)} ` +
+            `checks=${JSON.stringify(result.checks)} ` +
             `failed=${JSON.stringify(result.failedChecks)}`,
         );
       }
@@ -17771,6 +17885,7 @@ async function main() {
           `${result.passed ? "pass" : "fail"} ${result.containment.label} ` +
             `rects=${JSON.stringify(result.containment.persistentBandRectsByWorkspace)} ` +
             `deltas=${JSON.stringify(result.containment.persistentBandRectDeltas)} ` +
+            `checks=${JSON.stringify(result.checks)} ` +
             `mappingExpansion=${result.containment.mappingExpansion?.passed ? "pass" : "fail"} ` +
             `mappingFailed=${JSON.stringify(result.containment.mappingExpansion?.failedChecks ?? [])} ` +
             `timelineExpansion=${result.containment.timelinePaneExpansion?.passed ? "pass" : "fail"} ` +

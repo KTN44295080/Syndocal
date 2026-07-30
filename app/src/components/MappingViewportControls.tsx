@@ -42,70 +42,117 @@ type MappingViewportControlsProps = {
 
 type ControlStageToolbarProps = Pick<
   MappingViewportControlsProps,
-  "stageTool" | "canFitVisible" | "zoomValue" | "onFitVisible" | "onZoomLevel"
+  | "stageTool"
+  | "canFitVisible"
+  | "canFitSelection"
+  | "zoomValue"
+  | "canZoomOut"
+  | "canZoomIn"
+  | "onFitVisible"
+  | "onFitSelection"
+  | "onZoomOut"
+  | "onZoomIn"
+  | "onZoomLevel"
 > & {
+  selectedFixtureCount: number;
+  canPickVisible: boolean;
   onStageTool: (tool: MappingStageTool) => void;
+  onPickVisible: () => void;
+  onClearSelection: () => void;
   onOpenMapping: () => void;
 };
+
+type ControlStageIconButtonProps = {
+  icon: string;
+  path: string;
+  title: string;
+  active?: boolean;
+  pressed?: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+};
+
+function ControlStageIconButton(props: ControlStageIconButtonProps) {
+  return (
+    <button
+      type="button"
+      class={props.active ? "active" : ""}
+      data-control-stage-chrome-operation
+      data-control-stage-tool-item
+      data-control-stage-tool-icon={props.icon}
+      title={props.title}
+      aria-label={props.title}
+      aria-pressed={props.pressed}
+      disabled={props.disabled}
+      onClick={props.onClick}
+    >
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path d={props.path} />
+      </svg>
+    </button>
+  );
+}
 
 export function ControlStageToolbar(props: ControlStageToolbarProps) {
   return (
     <div class="controlStageToolbar" data-control-stage-tool-row aria-label="2D mapping viewport">
-      <button
-        type="button"
-        class={props.stageTool === "select" ? "active" : ""}
-        data-control-stage-chrome-operation
-        data-control-stage-tool-item
-        data-control-stage-tool-icon="select"
+      <ControlStageIconButton
+        icon="select"
+        path="M3 2.5 12.5 8 8.4 9.2 6.2 13.5z"
         title="Select fixture or projection surface (S)"
-        aria-label="Select fixture or projection surface"
-        aria-pressed={props.stageTool === "select"}
+        active={props.stageTool === "select"}
+        pressed={props.stageTool === "select"}
         onClick={() => props.onStageTool("select")}
-      >
-        <svg viewBox="0 0 16 16" aria-hidden="true">
-          <path d="M3 2.5 12.5 8 8.4 9.2 6.2 13.5z" />
-        </svg>
-      </button>
-      <button
-        type="button"
-        class={props.stageTool === "pan" ? "active" : ""}
-        data-control-stage-chrome-operation
-        data-control-stage-tool-item
-        data-control-stage-tool-icon="pan"
+      />
+      <ControlStageIconButton
+        icon="pan"
+        path="M5 8V4.5M7.5 7V3.5M10 7V4.5M12.5 8V6M5 7.5 3.5 7a1 1 0 0 0-1.2 1.4l2.5 4.2c.4.6 1 1 1.8 1h3.7c1.6 0 2.7-1.1 2.7-2.7V8"
         title="Pan stage view (H)"
-        aria-label="Pan stage view"
-        aria-pressed={props.stageTool === "pan"}
+        active={props.stageTool === "pan"}
+        pressed={props.stageTool === "pan"}
         onClick={() => props.onStageTool("pan")}
-      >
-        <svg viewBox="0 0 16 16" aria-hidden="true">
-          <path d="M5 8V4.5M7.5 7V3.5M10 7V4.5M12.5 8V6M5 7.5 3.5 7a1 1 0 0 0-1.2 1.4l2.5 4.2c.4.6 1 1 1.8 1h3.7c1.6 0 2.7-1.1 2.7-2.7V8" />
-        </svg>
-      </button>
-      <button
-        type="button"
-        data-control-stage-chrome-operation
-        data-control-stage-tool-item
-        data-control-stage-tool-icon="fit"
+      />
+      <ControlStageIconButton
+        icon="fit"
+        path="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"
         title="Fit visible stage items (F)"
-        aria-label="Fit visible stage items (F)"
         disabled={!props.canFitVisible}
         onClick={props.onFitVisible}
-      >
-        <svg viewBox="0 0 16 16" aria-hidden="true">
-          <path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10" />
-        </svg>
-      </button>
+      />
+      <ControlStageIconButton
+        icon="fit-selection"
+        path="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10M8 6.3a1.7 1.7 0 1 0 0 3.4 1.7 1.7 0 0 0 0-3.4Z"
+        title="Fit selected items (Shift+F)"
+        disabled={!props.canFitSelection}
+        onClick={props.onFitSelection}
+      />
+      <ControlStageIconButton
+        icon="pick-visible"
+        path="M3 5V3h2M11 3h2v2M13 11v2h-2M5 13H3v-2M5.5 8h5M8 5.5v5"
+        title="Pick Visible"
+        disabled={!props.canPickVisible}
+        onClick={props.onPickVisible}
+      />
+      <ControlStageIconButton
+        icon="clear-pick"
+        path="m4 4 8 8M12 4l-8 8"
+        title="Clear Pick"
+        disabled={props.selectedFixtureCount === 0}
+        onClick={props.onClearSelection}
+      />
+      <ControlStageIconButton
+        icon="zoom-out"
+        path="M4 8h8"
+        title="Zoom out (-)"
+        disabled={!props.canZoomOut}
+        onClick={props.onZoomOut}
+      />
       <label
         class="controlStageZoom"
         data-control-stage-chrome-operation
         data-control-stage-tool-item
-        data-control-stage-tool-icon="zoom"
         title="Zoom level"
       >
-        <svg viewBox="0 0 16 16" aria-hidden="true">
-          <circle cx="7" cy="7" r="4" />
-          <path d="m10 10 3.5 3.5" />
-        </svg>
         <input
           type="range"
           min="1"
@@ -116,11 +163,20 @@ export function ControlStageToolbar(props: ControlStageToolbarProps) {
           onInput={(event) => props.onZoomLevel(Number(event.currentTarget.value))}
         />
       </label>
+      <ControlStageIconButton
+        icon="zoom-in"
+        path="M4 8h8M8 4v8"
+        title="Zoom in (+)"
+        disabled={!props.canZoomIn}
+        onClick={props.onZoomIn}
+      />
       <button
         type="button"
         class="controlStageMappingLink"
         data-control-stage-chrome-operation
         data-control-stage-mapping-link
+        title="Edit in Mapping"
+        aria-label="Edit in Mapping"
         onClick={props.onOpenMapping}
       >
         Edit in Mapping

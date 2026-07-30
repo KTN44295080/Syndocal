@@ -41,6 +41,9 @@ export default defineConfig({
           ) {
             return "fixture-catalog";
           }
+          if (normalizedId.includes("/src/components/FaderGridPanel")) {
+            return "fader-controls";
+          }
           if (
             normalizedId.includes("/src/components/CueManagementPanel") ||
             normalizedId.includes("/src/components/TimelineCueEventsPanel") ||
