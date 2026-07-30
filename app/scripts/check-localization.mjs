@@ -125,6 +125,17 @@ assert.equal(
   "キュー Opening Wash のシーン設定を編集",
 );
 assert.equal(
+  localization.translateUiText("Jump to scene bank Front", "ja"),
+  "シーンバンク Front へ移動",
+);
+assert.equal(
+  localization.translateUiText(
+    "Drag Cue Opening Wash to reorder, move between banks, or place on Timeline",
+    "ja",
+  ),
+  "キュー Opening Wash をドラッグして並べ替え、バンク間移動、またはタイムラインへ配置",
+);
+assert.equal(
   localization.translateUiText("Created cue-owned Curve FX for scene 302.", "ja"),
   "シーン 302 にCue所有 Curve FXを作成しました。",
 );

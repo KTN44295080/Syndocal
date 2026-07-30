@@ -8,6 +8,7 @@ import type {
   TimelineLayerSummary,
   TimelineTrackKind,
 } from "../types";
+import type { CueIdentitySource } from "../identityColor";
 import type { TimelineCueDragState } from "../timelineCueDrag";
 import type { TimelineContextDrawer } from "../uiModes";
 import { timelineLayerIdForEvent } from "../timelineLayers";
@@ -58,7 +59,7 @@ interface AudioBeatMarker {
 interface TimelineCueEventsPanelProps {
   contextDrawer: TimelineContextDrawer;
   childTimelineLabel: string | null;
-  cueColors?: Record<number, string>;
+  cueIdentities?: Record<number, CueIdentitySource>;
   positionMs: number;
   bpm: number;
   durationMs: number;
@@ -689,7 +690,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
       <TimelineOverview
         events={props.overviewEvents}
         layerItemCounts={timelineLayerItemCounts()}
-        cueColors={props.cueColors}
+        cueIdentities={props.cueIdentities}
         audioClips={props.audioClips}
         audioAnalysis={props.audioAnalysis}
         layers={props.timelineLayers}
@@ -1193,7 +1194,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         inspectorOnly={!blockDrawerBrowserMode()}
         positionMs={props.positionMs}
         bpm={props.bpm}
-        cueColors={props.cueColors}
+        cueIdentities={props.cueIdentities}
         executionLive={props.executingLive}
         selectedCueId={props.selectedCueId}
         startMs={props.eventTimeMs}

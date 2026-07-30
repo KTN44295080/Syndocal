@@ -26,6 +26,8 @@ export default defineConfig({
             normalizedId.includes("/src/desktopWindowMode") ||
             normalizedId.includes("/src/effectVisualization") ||
             normalizedId.includes("/src/hotkeyHelpers") ||
+            normalizedId.includes("/src/identityColor") ||
+            normalizedId.includes("/src/sceneMatrixBankMove") ||
             normalizedId.includes("/src/projectRecentStorage") ||
             normalizedId.includes("/src/projectRecoveryStorage") ||
             normalizedId.includes("/src/numberDisplay") ||

@@ -1571,7 +1571,7 @@ export interface CueSummary {
   effect_targets: CueEffectTarget[];
   steps?: CueStepSummary[];
   child_timeline?: ChildTimelineSummary | null;
-  /** T7 persistent identity color (#rrggbb); absent keeps the hash-derived hue. */
+  /** Persistent identity color (#rrggbb); absent inherits the group identity before cue hash fallback. */
   color?: string | null;
   /** T17 authored live-modifier dial defaults; absent means neutral, no flash. */
   live_modifiers?: CueLiveModifierSettings | null;

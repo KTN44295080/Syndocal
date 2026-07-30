@@ -33,6 +33,7 @@ export interface SceneEffectEditorModel {
 
 interface SceneSettingsPaneProps {
   cue: CueSummary;
+  groupColors?: Record<string, string>;
   draft: CueMetadataDraft;
   effects: EffectSummary[];
   selectedEffectId: number | null;
@@ -66,8 +67,20 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
       data-selected-scene-id={props.cue.id}
       data-scene-settings-kind={props.effects.length > 0 ? "FX" : "STATIC"}
       style={{
-        "--cue-identity": cueIdentityCss(props.cue.id, props.cue.color, "fill"),
-        "--cue-identity-text": cueIdentityCss(props.cue.id, props.cue.color, "text"),
+        "--cue-identity": cueIdentityCss(
+          props.cue.id,
+          props.cue.color,
+          "fill",
+          props.cue.group_id,
+          props.cue.group_id ? props.groupColors?.[props.cue.group_id] : null,
+        ),
+        "--cue-identity-text": cueIdentityCss(
+          props.cue.id,
+          props.cue.color,
+          "text",
+          props.cue.group_id,
+          props.cue.group_id ? props.groupColors?.[props.cue.group_id] : null,
+        ),
       }}
     >
       <header class="sceneSettingsHeader">

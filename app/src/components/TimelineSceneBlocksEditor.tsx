@@ -1,7 +1,7 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import type { TimelineEventDraft } from "../editorDrafts";
 import { confirmTimelinePlacementRemoval } from "../destructiveActions";
-import { cueIdentityCss } from "../identityColor";
+import { cueIdentityCss, type CueIdentitySource } from "../identityColor";
 import {
   reconcileTimelineSceneBlockJumpTarget,
   reconcileTimelineSceneBlockPickerTarget,
@@ -35,7 +35,7 @@ interface TimelineSceneBlocksEditorProps {
   inspectorOnly?: boolean;
   positionMs: number;
   bpm: number;
-  cueColors?: Record<number, string>;
+  cueIdentities?: Record<number, CueIdentitySource>;
   executionLive: boolean;
   selectedCueId: number | null;
   startMs: number;
@@ -848,7 +848,15 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                     <span
                       class="sceneBlockFinderChip"
                       aria-hidden="true"
-                      style={{ background: cueIdentityCss(event.cue_id, props.cueColors?.[event.cue_id], "band") }}
+                      style={{
+                        background: cueIdentityCss(
+                          event.cue_id,
+                          props.cueIdentities?.[event.cue_id]?.color,
+                          "band",
+                          props.cueIdentities?.[event.cue_id]?.groupId,
+                          props.cueIdentities?.[event.cue_id]?.groupColor,
+                        ),
+                      }}
                     />
                     <span class="sceneBlockFinderName" data-no-localize>
                       <small>#{event.id}</small> {event.cue_label}
@@ -886,7 +894,15 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                       <span
                         class="sceneBlockFinderChip"
                         aria-hidden="true"
-                        style={{ background: cueIdentityCss(row().cue_id, props.cueColors?.[row().cue_id], "band") }}
+                        style={{
+                          background: cueIdentityCss(
+                            row().cue_id,
+                            props.cueIdentities?.[row().cue_id]?.color,
+                            "band",
+                            props.cueIdentities?.[row().cue_id]?.groupId,
+                            props.cueIdentities?.[row().cue_id]?.groupColor,
+                          ),
+                        }}
                       />
                       <strong data-no-localize>#{row().id} {row().cue_label}</strong>
                       <Show when={inspectorDirty()}>
@@ -1083,7 +1099,15 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                 <article
                   class={`sceneBlockRow ${isBlock() ? "linkedBlock" : "legacyPoint"} ${playbackStatus().under_playhead ? "underPlayhead" : ""} ${playbackStatus().live ? "live" : ""} ${isDirty() ? "dirty" : ""} ${props.selectedEventId === event.id ? "selected" : ""}`}
                   role="listitem"
-                  style={{ "--identity": cueIdentityCss(event.cue_id, props.cueColors?.[event.cue_id], "fill") }}
+                  style={{
+                    "--identity": cueIdentityCss(
+                      event.cue_id,
+                      props.cueIdentities?.[event.cue_id]?.color,
+                      "fill",
+                      props.cueIdentities?.[event.cue_id]?.groupId,
+                      props.cueIdentities?.[event.cue_id]?.groupColor,
+                    ),
+                  }}
                   data-scene-block-id={event.id}
                   data-source-cue-id={draft().cue_id}
                   data-dirty={isDirty() ? "true" : "false"}

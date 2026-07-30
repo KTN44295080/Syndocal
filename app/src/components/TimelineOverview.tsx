@@ -13,7 +13,12 @@ import {
   packTimelineOverlapClusterBadges,
   TIMELINE_OVERLAP_BADGE_WIDTH_PX,
 } from "../timelineOverlapClusters";
-import { cueIdentityCss, cueIdentityHue, identityCssColor } from "../identityColor";
+import {
+  cueIdentityCss,
+  cueIdentityHue,
+  identityCssColor,
+  type CueIdentitySource,
+} from "../identityColor";
 import { formatCompactClock } from "../clockDisplay";
 import type {
   AudioAnalysisSummary,
@@ -92,7 +97,7 @@ export interface TimelineOverviewOverlapCluster {
 interface TimelineOverviewProps {
   layers: TimelineLayerSummary[];
   legacyMode: boolean;
-  cueColors?: Record<number, string>;
+  cueIdentities?: Record<number, CueIdentitySource>;
   cueDrag: TimelineCueDragState | null;
   events: TimelineOverviewEvent[];
   layerItemCounts: ReadonlyMap<number, number>;
@@ -513,19 +518,22 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     const sourceCard = document.querySelector<HTMLElement>(
       `[data-scene-matrix-cue-id="${drag.cue_id}"]`,
     );
-    const targetCard = document
-      .elementFromPoint(drag.client_x, drag.client_y)
-      ?.closest<HTMLElement>("[data-scene-matrix-cue-id]");
-    if (!sourceCard || !targetCard) return null;
+    const hitElement = document.elementFromPoint(drag.client_x, drag.client_y);
+    const targetCard = hitElement?.closest<HTMLElement>("[data-scene-matrix-cue-id]");
+    if (!sourceCard) return null;
     const sourceColumn = sourceCard.closest<HTMLElement>("[data-scene-matrix-column]");
-    const targetColumn = targetCard.closest<HTMLElement>("[data-scene-matrix-column]");
+    const targetColumn = hitElement?.closest<HTMLElement>("[data-scene-matrix-column]");
+    if (!targetColumn) return null;
     const sameColumn =
       sourceColumn?.dataset.sceneMatrixColumn === targetColumn?.dataset.sceneMatrixColumn;
     const sameCueList =
+      !targetCard ||
       sourceCard.dataset.sceneMatrixCueListId === targetCard.dataset.sceneMatrixCueListId;
-    return sameColumn &&
-      sameCueList &&
-      targetCard.dataset.sceneMatrixCueId !== String(drag.cue_id)
+    return sameCueList &&
+      (!sameColumn || (
+        targetCard &&
+        targetCard.dataset.sceneMatrixCueId !== String(drag.cue_id)
+      ))
       ? "matrix" as const
       : "rejected" as const;
   };
@@ -2443,9 +2451,27 @@ export function TimelineOverview(props: TimelineOverviewProps) {
             data-timeline-fade-out-ms={eventPreviewFadeMs(event, "out")}
             data-timeline-preview-rate={eventPreviewRate(event) ?? undefined}
             style={{
-              "--identity": cueIdentityCss(event.cue_id, props.cueColors?.[event.cue_id], "fill"),
-              "--identity-band": cueIdentityCss(event.cue_id, props.cueColors?.[event.cue_id], "band"),
-              "--identity-text": cueIdentityCss(event.cue_id, props.cueColors?.[event.cue_id], "text"),
+              "--identity": cueIdentityCss(
+                event.cue_id,
+                props.cueIdentities?.[event.cue_id]?.color,
+                "fill",
+                props.cueIdentities?.[event.cue_id]?.groupId,
+                props.cueIdentities?.[event.cue_id]?.groupColor,
+              ),
+              "--identity-band": cueIdentityCss(
+                event.cue_id,
+                props.cueIdentities?.[event.cue_id]?.color,
+                "band",
+                props.cueIdentities?.[event.cue_id]?.groupId,
+                props.cueIdentities?.[event.cue_id]?.groupColor,
+              ),
+              "--identity-text": cueIdentityCss(
+                event.cue_id,
+                props.cueIdentities?.[event.cue_id]?.color,
+                "text",
+                props.cueIdentities?.[event.cue_id]?.groupId,
+                props.cueIdentities?.[event.cue_id]?.groupColor,
+              ),
             }}
             data-timeline-preview-start-ms={eventPreviewStartMs(event)}
             data-timeline-preview-end-ms={eventPreviewEndMs(event)}

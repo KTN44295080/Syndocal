@@ -10007,6 +10007,9 @@ async function measureSceneMatrixPane(client) {
     };
     const pane = document.querySelector('.liveControlPanel > .sceneMatrixPanel');
     const scroller = document.querySelector('.sceneMatrixScroller');
+    const bankJumpStrip = document.querySelector('.sceneMatrixBankJumpStrip');
+    const bankJumpButtons = [...document.querySelectorAll('[data-scene-matrix-bank-jump]')]
+      .filter(isVisible);
     const columns = [...document.querySelectorAll('[data-scene-matrix-column]')].filter(isVisible);
     const headers = [...document.querySelectorAll('[data-scene-matrix-group-hue]')].filter(isVisible);
     const cards = [...document.querySelectorAll('[data-scene-matrix-cue-id]')].filter(isVisible);
@@ -10163,6 +10166,25 @@ async function measureSceneMatrixPane(client) {
     const groupColorInputs = [...document.querySelectorAll('[data-group-color-input]')].filter(isVisible);
     const backHeader = headers.find((header) =>
       header.closest('[data-scene-matrix-column]')?.getAttribute('data-scene-matrix-column') === 'back');
+    const columnIdentityById = Object.fromEntries(columns.map((column) => [
+      column.getAttribute('data-scene-matrix-column') ?? '',
+      {
+        fill: column.style.getPropertyValue('--group-identity'),
+        text: column.style.getPropertyValue('--group-identity-text'),
+      },
+    ]));
+    const cardIdentityById = Object.fromEntries(cards.map((card) => {
+      const band = card.querySelector('.sceneMatrixEditStripBand');
+      return [
+        card.getAttribute('data-scene-matrix-cue-id') ?? '',
+        {
+          fill: card.style.getPropertyValue('--cue-identity'),
+          text: card.style.getPropertyValue('--cue-identity-text'),
+          strip: band ? getComputedStyle(band).backgroundColor : '',
+          border: getComputedStyle(card).borderLeftColor,
+        },
+      ];
+    }));
     const documentElement = document.documentElement;
     const body = document.body;
     const app = document.querySelector('.app');
@@ -10206,6 +10228,22 @@ async function measureSceneMatrixPane(client) {
       headerHues: headers.map((header) => header.getAttribute('data-scene-matrix-group-hue')),
       cardHues: cards.map((card) => card.getAttribute('data-scene-matrix-cue-hue')),
       cardIds: cards.map((card) => card.getAttribute('data-scene-matrix-cue-id')),
+      columnIdentityById,
+      cardIdentityById,
+      bankJumpChipCount: bankJumpButtons.length,
+      bankJumpChipIds: bankJumpButtons.map((button) =>
+        button.getAttribute('data-scene-matrix-bank-jump') ?? ''),
+      bankJumpActiveIds: bankJumpButtons
+        .filter((button) => button.getAttribute('aria-current') === 'true')
+        .map((button) => button.getAttribute('data-scene-matrix-bank-jump') ?? ''),
+      bankJumpOneLine: bankJumpButtons.length > 0 &&
+        new Set(bankJumpButtons.map((button) => Math.round(button.getBoundingClientRect().top))).size === 1,
+      bankJumpStripHeight: bankJumpStrip?.getBoundingClientRect().height ?? 0,
+      bankJumpIdentityTextMatchesColumns: bankJumpButtons.every((button) => {
+        const columnId = button.getAttribute('data-scene-matrix-bank-jump') ?? '';
+        return button.style.getPropertyValue('--group-identity-text') ===
+          columnIdentityById[columnId]?.text;
+      }),
       groupColorInputCount: groupColorInputs.length,
       cueColorInputCount: [...document.querySelectorAll('[data-cue-color-input]')].filter(isVisible).length,
       coloredCardIdentity: document.querySelector('[data-scene-matrix-cue-id="301"]')?.style.getPropertyValue('--cue-identity') ?? '',
@@ -10540,6 +10578,65 @@ async function exerciseSceneMatrixHorizontalScroll(client) {
   })()`);
 }
 
+async function exerciseSceneMatrixBankJump(client) {
+  return await client.evaluate(`(async () => {
+    const settle = () => new Promise((resolveFrame) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const scroller = document.querySelector('.sceneMatrixScroller');
+    const targetId = 'bank-12';
+    const targetColumn = document.querySelector(
+      '[data-scene-matrix-column="' + targetId + '"]',
+    );
+    const targetChip = document.querySelector(
+      '[data-scene-matrix-bank-jump="' + targetId + '"]',
+    );
+    if (
+      !(scroller instanceof HTMLElement) ||
+      !(targetColumn instanceof HTMLElement) ||
+      !(targetChip instanceof HTMLButtonElement)
+    ) {
+      return { available: false };
+    }
+    scroller.scrollLeft = 0;
+    await settle();
+    const beforeScrollLeft = scroller.scrollLeft;
+    const beforeActiveIds = [...document.querySelectorAll(
+      '[data-scene-matrix-bank-jump][aria-current="true"]',
+    )].map((button) => button.getAttribute('data-scene-matrix-bank-jump') ?? '');
+    targetChip.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    targetChip.click();
+    await settle();
+    await settle();
+    const scrollerRect = scroller.getBoundingClientRect();
+    const columnRect = targetColumn.getBoundingClientRect();
+    const afterScrollLeft = scroller.scrollLeft;
+    const activeIds = [...document.querySelectorAll(
+      '[data-scene-matrix-bank-jump][aria-current="true"]',
+    )].map((button) => button.getAttribute('data-scene-matrix-bank-jump') ?? '');
+    const leadingEdgeVisible = columnRect.left >= scrollerRect.left - 2
+      && columnRect.left < scrollerRect.right - 2;
+    const visibleWidth = Math.max(
+      0,
+      Math.min(columnRect.right, scrollerRect.right) -
+        Math.max(columnRect.left, scrollerRect.left),
+    );
+    scroller.scrollLeft = 0;
+    await settle();
+    return {
+      available: true,
+      targetId,
+      beforeScrollLeft,
+      afterScrollLeft,
+      scrollDelta: afterScrollLeft - beforeScrollLeft,
+      beforeActiveIds,
+      activeIds,
+      leadingEdgeVisible,
+      visibleWidth,
+      resetScrollLeft: scroller.scrollLeft,
+    };
+  })()`);
+}
+
 async function measureSceneMatrixInteractionState(client, cueId) {
   return await client.evaluate(`(() => {
     const markers = [...document.querySelectorAll('.timelineOverview .timelineMarker.sceneBlock[data-timeline-event-id]')]
@@ -10558,6 +10655,13 @@ async function measureSceneMatrixInteractionState(client, cueId) {
       frontColumnCueIds: [...document.querySelectorAll(
         '[data-scene-matrix-column="front"] [data-scene-matrix-cue-id]',
       )].map((card) => card.getAttribute('data-scene-matrix-cue-id')),
+      backColumnCueIds: [...document.querySelectorAll(
+        '[data-scene-matrix-column="back"] [data-scene-matrix-cue-id]',
+      )].map((card) => card.getAttribute('data-scene-matrix-cue-id')),
+      cueGroupId: document.querySelector(
+        '[data-scene-matrix-cue-id="${cueId}"]',
+      )?.closest('[data-scene-matrix-column]')
+        ?.getAttribute('data-scene-matrix-column') ?? '',
       activeCardIds: [...document.querySelectorAll('[data-scene-matrix-cue-id]')]
         .filter((card) => card.getAttribute('data-scene-matrix-active') === 'true' && card.classList.contains('active'))
         .map((card) => card.getAttribute('data-scene-matrix-cue-id')),
@@ -10570,7 +10674,12 @@ async function measureSceneMatrixInteractionState(client, cueId) {
   })()`);
 }
 
-async function exerciseSceneMatrixStripReorder(client, sourceCueId, targetCueId) {
+async function exerciseSceneMatrixStripReorder(
+  client,
+  sourceCueId,
+  targetCueId,
+  position = "before",
+) {
   const geometry = await client.evaluate(`(() => {
     const source = document.querySelector(
       '[data-scene-matrix-edit-strip="${sourceCueId}"]',
@@ -10598,7 +10707,9 @@ async function exerciseSceneMatrixStripReorder(client, sourceCueId, targetCueId)
       innerHeight,
     );
     if (targetVisibleBottom - targetVisibleTop < 2) return null;
-    const targetY = targetVisibleTop + Math.min(6, (targetVisibleBottom - targetVisibleTop) * 0.2);
+    const targetY = ${JSON.stringify(position)} === 'after'
+      ? targetVisibleBottom - Math.min(6, (targetVisibleBottom - targetVisibleTop) * 0.2)
+      : targetVisibleTop + Math.min(6, (targetVisibleBottom - targetVisibleTop) * 0.2);
     const sourceHit = document.elementFromPoint(sourceX, sourceY);
     const targetHit = document.elementFromPoint(targetX, targetY);
     return {
@@ -10649,11 +10760,16 @@ async function exerciseSceneMatrixStripReorder(client, sourceCueId, targetCueId)
   await sleep(50);
   const during = await client.evaluate(`(() => {
     const indicator = document.querySelector('[data-scene-matrix-drop-position]');
+    const targetColumn = document.querySelector(
+      '[data-scene-matrix-column][data-scene-matrix-drop-target="true"]',
+    );
     return {
       dropState: document.querySelector('[data-timeline-cue-drag-ghost]')
         ?.getAttribute('data-timeline-drop-state') ?? '',
       indicatorCueId: indicator?.getAttribute('data-scene-matrix-cue-id') ?? '',
       indicatorPosition: indicator?.getAttribute('data-scene-matrix-drop-position') ?? '',
+      targetColumnId: targetColumn?.getAttribute('data-scene-matrix-column') ?? '',
+      targetColumnHighlighted: Boolean(targetColumn),
     };
   })()`);
   await client.send("Input.dispatchMouseEvent", {
@@ -10674,6 +10790,96 @@ async function exerciseSceneMatrixStripReorder(client, sourceCueId, targetCueId)
     before: stateBefore,
     after: stateAfter,
     ghostCleared: !stateAfter.ghostPresent,
+  };
+}
+
+async function installSceneMatrixBankMoveCapture(client) {
+  return await evaluatePageFunction(client, () => {
+    const installedWithoutExistingInternals = window.__TAURI_INTERNALS__ === undefined;
+    window.__syndocalSceneMatrixBankMoveCapture = {
+      installedWithoutExistingInternals,
+      commands: [],
+      beginArgs: null,
+      metadataArgs: null,
+      moveArgs: [],
+      commitArgs: null,
+      cancelCount: 0,
+    };
+    window.__TAURI_INTERNALS__ = {
+      invoke: async (command, args) => {
+        const capture = window.__syndocalSceneMatrixBankMoveCapture;
+        capture.commands.push(command);
+        if (command === "begin_project_transaction") {
+          capture.beginArgs = structuredClone(args);
+          return 27_001;
+        }
+        if (command === "set_cue_metadata") {
+          capture.metadataArgs = structuredClone(args);
+          return undefined;
+        }
+        if (command === "move_cue") {
+          capture.moveArgs.push(structuredClone(args));
+          return undefined;
+        }
+        if (command === "commit_project_transaction") {
+          capture.commitArgs = structuredClone(args);
+          return {
+            can_undo: true,
+            can_redo: false,
+            undo_depth: 1,
+            redo_depth: 0,
+            undo_label: "Move Cue Between Scene Banks",
+            redo_label: null,
+          };
+        }
+        if (command === "cancel_project_transaction") {
+          capture.cancelCount += 1;
+          return undefined;
+        }
+        throw new Error(`Unexpected Scene Matrix bank-move command: ${command}`);
+      },
+    };
+    return installedWithoutExistingInternals;
+  });
+}
+
+async function finishSceneMatrixBankMoveCapture(client) {
+  return await evaluatePageFunction(client, () => {
+    const capture = structuredClone(window.__syndocalSceneMatrixBankMoveCapture);
+    delete window.__syndocalSceneMatrixBankMoveCapture;
+    delete window.__TAURI_INTERNALS__;
+    return capture;
+  });
+}
+
+async function exerciseSceneMatrixCrossBankMoveAndUndo(client) {
+  const captureInstalled = await installSceneMatrixBankMoveCapture(client);
+  const move = await exerciseSceneMatrixStripReorder(client, 302, 320, "after");
+  const menuOpened = await evaluatePageFunction(client, () => {
+    const button = document.querySelector(".appMenuButton");
+    if (!(button instanceof HTMLButtonElement)) return false;
+    button.click();
+    return true;
+  });
+  await sleep(30);
+  const undoControl = await evaluatePageFunction(client, () => {
+    const button = document.querySelector('[aria-keyshortcuts^="Control+Z"]');
+    const enabled = button instanceof HTMLButtonElement && !button.disabled;
+    if (enabled) button.click();
+    return {
+      found: button instanceof HTMLButtonElement,
+      enabled,
+    };
+  });
+  await sleep(120);
+  const afterUndo = await measureSceneMatrixInteractionState(client, 302);
+  const capture = await finishSceneMatrixBankMoveCapture(client);
+  return {
+    captureInstalled,
+    capture,
+    move,
+    undoControl: { ...undoControl, menuOpened },
+    afterUndo,
   };
 }
 
@@ -11037,6 +11243,7 @@ async function runSceneMatrixPaneCheck(client, viewport) {
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(120);
   const before = await measureSceneMatrixPane(client);
+  const bankJump = await exerciseSceneMatrixBankJump(client);
   const horizontalScroll = await exerciseSceneMatrixHorizontalScroll(client);
   await clickVisibleByText(client, ".liveDeskViewToggle button", "Cue Pads");
   await sleep(80);
@@ -11326,7 +11533,7 @@ async function runSceneMatrixPaneCheck(client, viewport) {
         entry.tagName === "BUTTON" &&
         entry.thresholdPx === 4 &&
         entry.touchAction === "none" &&
-        entry.title === `Drag Cue ${entry.label} to reorder this column or place on Timeline`)],
+        entry.title === `Drag Cue ${entry.label} to reorder, move between banks, or place on Timeline`)],
     ["matrixEditStripsNameTheirNonTriggerSelection", () =>
       before.editStrips.length === expectedCardCount &&
       before.editStrips.every((entry) =>
@@ -11334,13 +11541,12 @@ async function runSceneMatrixPaneCheck(client, viewport) {
         && entry.label.length > 0
         && entry.name === `Edit scene settings for Cue ${entry.label}`) &&
       new Set(before.editStrips.map((entry) => entry.name)).size === expectedCardCount],
-    ["matrixEditStripsExposeIdentityBandAndFortyPixelHitArea", () =>
+    ["matrixEditStripsMatchSixteenPixelIdentityBandWithFortyEightPixelHeight", () =>
       before.editStrips.every((entry) =>
-        entry.hitWidth >= 40
-        && entry.hitHeight >= 40
-        && entry.visualWidth >= 10
-        && entry.visualWidth <= 14
-        && entry.visualHeight >= 40
+        Math.abs(entry.hitWidth - 16) <= 0.1
+        && entry.hitHeight >= 48
+        && Math.abs(entry.visualWidth - entry.hitWidth) <= 0.1
+        && entry.visualHeight >= 48
         && entry.visualColor === entry.identityColor
         && entry.rightEdgeAligned)],
     ["matrixEditStripsReplaceLegacyHandleWithoutLosingDragSources", () =>
@@ -11430,12 +11636,31 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       horizontalScroll.showVisibleAtMax &&
       horizontalScroll.showHitColumnAtMax === "Show" &&
       horizontalScroll.resetAtOrigin],
+    ["matrixBankJumpStripUsesExistingSingleRowBudget", () =>
+      before.bankJumpChipCount === expectedColumns.length
+      && JSON.stringify(before.bankJumpChipIds) === JSON.stringify(expectedColumns)
+      && before.bankJumpOneLine
+      && before.bankJumpStripHeight > 0
+      && before.bankJumpStripHeight <= 30
+      && before.bankJumpIdentityTextMatchesColumns],
+    ["matrixBankChipClickBringsColumnLeadingEdgeIntoViewAndActivatesIt", () =>
+      bankJump.available
+      && Math.abs(bankJump.beforeScrollLeft) <= 1
+      && bankJump.scrollDelta > 1
+      && bankJump.leadingEdgeVisible
+      && bankJump.visibleWidth > 2
+      && JSON.stringify(bankJump.activeIds) === JSON.stringify([bankJump.targetId])
+      && Math.abs(bankJump.resetScrollLeft) <= 1],
     ["matrixDocumentAndAppScrollZero", () => before.documentAndAppScrollZero && after.documentAndAppScrollZero],
-    // T7: the fixture persists #ff3366 on cue 301 (hue 345) and #22aa88 on the
-    // back group (hue 165); persisted colors must win over the hash palette
-    // while the header hue ATTRIBUTE keeps the deterministic hash value.
-    ["matrixPersistedCueColorWinsHashHue", () =>
-      (before.coloredCardIdentity || "").startsWith("hsl(345")],
+    // Cue identity priority is explicit cue > owning bank > cue hash.
+    ["matrixExplicitCueColorStillWinsBankInheritance", () =>
+      (before.coloredCardIdentity || "").startsWith("hsl(345")
+      && before.cardIdentityById["301"].fill !== before.columnIdentityById.front.fill],
+    ["matrixUncoloredCueCellAndStripInheritOwningBankIdentity", () =>
+      before.cardIdentityById["302"].fill === before.columnIdentityById.front.fill
+      && before.cardIdentityById["302"].strip === before.cardIdentityById["302"].border
+      && before.cardIdentityById["303"].fill === before.columnIdentityById.back.fill
+      && before.cardIdentityById["303"].strip === before.cardIdentityById["303"].border],
     ["matrixPersistedGroupColorWinsHashHue", () =>
       (before.backHeaderIdentity || "").startsWith("hsl(165")],
     ["matrixGroupColorPickerPerGroupColumn", () => before.groupColorInputCount === expectedColumns.length - 1],
@@ -11456,6 +11681,7 @@ async function runSceneMatrixPaneCheck(client, viewport) {
     before,
     after,
     horizontalScroll,
+    bankJump,
     alternateView,
     subThresholdClick,
     oneGestureDrag,
@@ -11478,6 +11704,13 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
   await sleep(120);
   const initialPane = await measureSceneMatrixPane(client);
   const reorder = await exerciseSceneMatrixStripReorder(client, 302, 301);
+  await client.send("Page.navigate", { url: fixtureUrl("scene-matrix") });
+  await waitForApp(client);
+  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
+  await sleep(120);
+  const crossBank = await exerciseSceneMatrixCrossBankMoveAndUndo(client);
   const conditions = [
     ["identityStripIsRealButtonAndOwnsElementFromPoint", () =>
       reorder?.sourceTagName === "BUTTON" &&
@@ -11486,6 +11719,12 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
     ["identityStripUsesFourPixelPressMoveThreshold", () =>
       reorder?.sourceThresholdPx === 4 &&
       reorder.activationMovePx === 6],
+    ["identityStripHitWidthMatchesSixteenPixelBandAndKeepsFortyEightPixelHeight", () =>
+      initialPane.editStrips.every((entry) =>
+        Math.abs(entry.hitWidth - 16) <= 0.1
+        && Math.abs(entry.visualWidth - entry.hitWidth) <= 0.1
+        && entry.hitHeight >= 48
+        && entry.visualHeight >= 48)],
     ["identityStripDragUsesRealCdpMouseSequence", () =>
       reorder?.pointerSequence === "mousePressed>mouseMoved>mouseMoved>mouseReleased"],
     ["identityStripDragShowsMatrixGhostAndInsertionIndicator", () =>
@@ -11493,6 +11732,8 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
       reorder.targetHitCueId === "301" &&
       reorder.indicatorCueId === "301" &&
       reorder.indicatorPosition === "before" &&
+      reorder.targetColumnId === "front" &&
+      reorder.targetColumnHighlighted &&
       reorder.ghostCleared],
     ["identityStripDragReordersWithinColumn", () =>
       JSON.stringify(reorder?.before.frontColumnCueIds) === JSON.stringify(["301", "302"]) &&
@@ -11511,6 +11752,53 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
     ["dedicatedDragHandleButtonRemainsAbsent", () =>
       initialPane.dedicatedDragHandleCount === 0 &&
       reorder?.dedicatedDragHandleCount === 0],
+    ["crossBankDragHighlightsTargetColumnAndInsertionPosition", () =>
+      crossBank.move?.dropState === "matrix"
+      && crossBank.move.targetHitCueId === "320"
+      && crossBank.move.indicatorCueId === "320"
+      && crossBank.move.indicatorPosition === "after"
+      && crossBank.move.targetColumnId === "back"
+      && crossBank.move.targetColumnHighlighted
+      && crossBank.move.ghostCleared],
+    ["crossBankDragMovesIntoTargetAndRemovesFromSourceWithoutClickMisfire", () =>
+      JSON.stringify(crossBank.move?.before.frontColumnCueIds) === JSON.stringify(["301", "302"])
+      && JSON.stringify(crossBank.move?.before.backColumnCueIds) === JSON.stringify(["303", "320"])
+      && JSON.stringify(crossBank.move?.after.frontColumnCueIds) === JSON.stringify(["301"])
+      && JSON.stringify(crossBank.move?.after.backColumnCueIds) === JSON.stringify(["303", "320", "302"])
+      && crossBank.move?.after.cueGroupId === "back"
+      && JSON.stringify(crossBank.move?.before.activeCardIds) === JSON.stringify(["301"])
+      && JSON.stringify(crossBank.move?.after.activeCardIds) === JSON.stringify(["301"])
+      && JSON.stringify(crossBank.move?.before.selectedCardIds) === JSON.stringify([])
+      && JSON.stringify(crossBank.move?.after.selectedCardIds) === JSON.stringify([])
+      && crossBank.move?.before.sceneSettingsCount === 0
+      && crossBank.move?.after.sceneSettingsCount === 0],
+    ["crossBankGestureUsesOneCoalescedTransaction", () =>
+      crossBank.captureInstalled
+      && crossBank.capture.installedWithoutExistingInternals
+      && JSON.stringify(crossBank.capture.commands) === JSON.stringify([
+        "begin_project_transaction",
+        "set_cue_metadata",
+        "move_cue",
+        "move_cue",
+        "commit_project_transaction",
+      ])
+      && crossBank.capture.beginArgs?.label === "Move Cue Between Scene Banks"
+      && crossBank.capture.beginArgs?.coalesceKey === "scene_matrix_bank_move:cue:302"
+      && crossBank.capture.metadataArgs?.cueId === 302
+      && crossBank.capture.metadataArgs?.groupId === "back"
+      && crossBank.capture.moveArgs.length === 2
+      && crossBank.capture.moveArgs.every((args) => args.cueId === 302 && args.delta === 1)
+      && crossBank.capture.commitArgs?.transactionId === 27_001
+      && crossBank.capture.cancelCount === 0],
+    ["singleUndoCompletelyRestoresCrossBankMove", () =>
+      crossBank.undoControl.found
+      && crossBank.undoControl.enabled
+      && JSON.stringify(crossBank.afterUndo.frontColumnCueIds) === JSON.stringify(["301", "302"])
+      && JSON.stringify(crossBank.afterUndo.backColumnCueIds) === JSON.stringify(["303", "320"])
+      && crossBank.afterUndo.cueGroupId === "front"
+      && JSON.stringify(crossBank.afterUndo.activeCardIds) === JSON.stringify(["301"])
+      && JSON.stringify(crossBank.afterUndo.selectedCardIds) === JSON.stringify([])
+      && crossBank.afterUndo.sceneSettingsCount === 0],
   ];
   const checks = Object.fromEntries(conditions.map(([name, check]) => {
     try {
@@ -11529,6 +11817,7 @@ async function runSceneMatrixStripDragViewport(client, viewport) {
     failedChecks,
     initialPane,
     reorder,
+    crossBank,
   };
 }
 
@@ -11598,6 +11887,7 @@ async function readSceneSettingsState(client) {
       selectedOutlineWidth: Number.parseFloat(selectedStyle?.outlineWidth ?? "0") || 0,
       selectedOutlineStyle: selectedStyle?.outlineStyle ?? "",
       selectedStripPressed: selectedStrip?.getAttribute("aria-pressed") ?? "",
+      selectedStripHitWidth: selectedStrip?.getBoundingClientRect().width ?? 0,
       selectedStripVisualWidth: selectedStripBand?.getBoundingClientRect().width ?? 0,
       selectedStripBorderLeftWidth: selectedStripBand
         ? Number.parseFloat(getComputedStyle(selectedStripBand).borderLeftWidth) || 0
@@ -11607,6 +11897,14 @@ async function readSceneSettingsState(client) {
         && selectedCard
         && getComputedStyle(selectedStripBand).backgroundColor
           === getComputedStyle(selectedCard).borderLeftColor
+      ),
+      sceneSettingsIdentityMatchesSelectedCell: Boolean(
+        pane
+        && selectedCard
+        && pane.style.getPropertyValue("--cue-identity") ===
+          selectedCard.style.getPropertyValue("--cue-identity")
+        && pane.style.getPropertyValue("--cue-identity-text") ===
+          selectedCard.style.getPropertyValue("--cue-identity-text")
       ),
       editStripCount: document.querySelectorAll("[data-scene-matrix-edit-strip]").length,
       dedicatedDragHandleCount: document.querySelectorAll(
@@ -12139,9 +12437,13 @@ async function runSceneSettingsViewport(client, viewport) {
       selectedStatic.selectedOutlineWidth >= 2
       && selectedStatic.selectedOutlineStyle === "solid"
       && selectedStatic.selectedStripPressed === "true"
-      && selectedStatic.selectedStripVisualWidth === 14
+      && Math.abs(selectedStatic.selectedStripHitWidth - 16) <= 0.1
+      && Math.abs(selectedStatic.selectedStripVisualWidth - 16) <= 0.1
       && selectedStatic.selectedStripBorderLeftWidth >= 3
       && selectedStatic.selectedStripIdentityMatches],
+    ["sceneSettingsPaneUsesSameInheritedIdentityAsSelectedCell", () =>
+      selectedStatic.sceneSettingsIdentityMatchesSelectedCell
+      && editSelected.sceneSettingsIdentityMatchesSelectedCell],
     ["pencilButtonRemovedAndEditSourceMovedIntoSettings", () =>
       initial.editStripCount === 15
       && initial.dedicatedDragHandleCount === 0
@@ -18963,6 +19265,11 @@ async function main() {
             `selected=${result.reorder?.before.selectedCardIds.join("+") || "none"}->` +
               `${result.reorder?.after.selectedCardIds.join("+") || "none"} ` +
             `indicator=${result.reorder?.indicatorCueId ?? "?"}:${result.reorder?.indicatorPosition ?? "?"} ` +
+            `cross=${result.crossBank.move?.before.cueGroupId ?? "?"}->` +
+              `${result.crossBank.move?.after.cueGroupId ?? "?"}->` +
+              `${result.crossBank.afterUndo.cueGroupId ?? "?"} ` +
+            `txn=${result.crossBank.capture.commands.join(">")} ` +
+            `coalesce=${result.crossBank.capture.beginArgs?.coalesceKey ?? "?"} ` +
             `failed=${JSON.stringify(result.failedChecks)}`,
         );
       }
@@ -18984,6 +19291,11 @@ async function main() {
             `baseHeight=${Math.round(Math.min(...result.before.baseCellHeights) * 100) / 100}px ` +
             `strip=${Math.round(Math.min(...result.before.editStrips.map((entry) => entry.hitWidth)) * 100) / 100}px/` +
               `${result.before.editStrips[0]?.thresholdPx ?? "?"}px ` +
+            `bankJump=${result.bankJump.targetId ?? "?"}@` +
+              `${Math.round((result.bankJump.afterScrollLeft ?? 0) * 100) / 100}px:` +
+              `${result.bankJump.leadingEdgeVisible ? "visible" : "hidden"} ` +
+            `inherit=${result.before.cardIdentityById["302"]?.fill === result.before.columnIdentityById.front?.fill}/` +
+              `${result.before.cardIdentityById["301"]?.fill !== result.before.columnIdentityById.front?.fill} ` +
             `longNames=${JSON.stringify(result.before.longSceneNames.map((entry) => ({
               label: entry.label,
               fit: entry.nameFullyDisplayed,

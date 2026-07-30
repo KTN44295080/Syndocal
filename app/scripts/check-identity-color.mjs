@@ -95,4 +95,28 @@ const bandLightness = Number(identity.identityCssColor(180, "band").match(/(\d+(
 const textLightness = Number(identity.identityCssColor(180, "text").match(/(\d+(?:\.\d+)?)%\)$/)[1]);
 assert.ok(bandLightness < textLightness, "band variant must be darker than text variant");
 
+// 5. Cue identity priority: explicit cue > owning group > ungrouped cue hash.
+for (const role of ["fill", "band", "text"]) {
+  assert.equal(
+    identity.cueIdentityCss(302, "#ff3366", role, "front", "#22aa88"),
+    identity.identityCssFromPersistent("#ff3366", role),
+    `explicit cue color must win for ${role}`,
+  );
+  assert.equal(
+    identity.cueIdentityCss(302, null, role, "front", "#22aa88"),
+    identity.identityCssFromPersistent("#22aa88", role),
+    `persisted group color must be the first fallback for ${role}`,
+  );
+  assert.equal(
+    identity.cueIdentityCss(302, null, role, "front", null),
+    identity.identityCssColor(identity.groupIdentityHue("front"), role),
+    `group hash must precede cue hash for ${role}`,
+  );
+  assert.equal(
+    identity.cueIdentityCss(302, null, role, null, null),
+    identity.identityCssColor(identity.cueIdentityHue(302), role),
+    `ungrouped cue hash must remain the final fallback for ${role}`,
+  );
+}
+
 console.log(`identity color helpers ok (${producedHues.size} distinct hues, accent hue ${accentHue.toFixed(1)}°)`);

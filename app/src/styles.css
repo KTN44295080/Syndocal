@@ -3825,7 +3825,7 @@ h3 {
 
 .sceneMatrixCard {
   position: relative;
-  grid-template-columns: minmax(0, 1fr) 138px;
+  grid-template-columns: minmax(0, 1fr) 16px;
 }
 
 .sceneMatrixEditStrip {
@@ -3834,10 +3834,10 @@ h3 {
   grid-column: 2;
   grid-row: 1 / span 2;
   place-items: stretch;
-  width: 40px;
-  min-width: 40px;
-  height: 40px;
-  min-height: 40px;
+  width: 16px;
+  min-width: 16px;
+  height: 48px;
+  min-height: 48px;
   overflow: hidden;
   border: 0;
   background: #191d20;
@@ -28158,6 +28158,63 @@ h3 {
   overscroll-behavior-inline: contain;
 }
 
+.sceneMatrixBankJumpStrip {
+  display: flex;
+  height: 28px;
+  max-height: 28px;
+  min-width: 0;
+  min-height: 28px;
+  flex: 0 0 28px;
+  align-items: center;
+  gap: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid #343a3e;
+  background: #1b2023;
+  padding: 2px 3px;
+  scrollbar-width: none;
+  white-space: nowrap;
+}
+
+.sceneMatrixBankJumpStrip::-webkit-scrollbar {
+  display: none;
+}
+
+.sceneMatrixBankJumpStrip button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-width: 54px;
+  min-height: 24px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  overflow: hidden;
+  border: 1px solid #343a3e;
+  border-radius: 2px;
+  background: #191d20;
+  padding: 1px 7px;
+  color: var(--group-identity-text);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.sceneMatrixBankJumpStrip button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sceneMatrixBankJumpStrip button small {
+  color: #879097;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sceneMatrixBankJumpStrip button.active {
+  border-color: var(--group-identity-text);
+  background: #292f33;
+  box-shadow: inset 0 -2px var(--group-identity-text);
+}
+
 .sceneMatrixColumns {
   display: flex;
   align-items: stretch;
@@ -30571,6 +30628,11 @@ h3 {
   background: #181c1f;
 }
 
+.sceneMatrixColumn[data-scene-matrix-drop-target="true"] {
+  border-color: var(--group-identity);
+  box-shadow: inset 0 0 0 1px var(--group-identity);
+}
+
 .sceneMatrixBankStrip {
   display: block;
   flex: 0 0 4px;
@@ -30603,7 +30665,7 @@ h3 {
 
 .sceneMatrixCard {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 40px;
+  grid-template-columns: minmax(0, 1fr) 16px;
   grid-template-rows: minmax(48px, auto) auto auto;
   min-height: 48px;
   overflow: hidden;
@@ -31439,7 +31501,7 @@ h3 {
 
 .sceneMatrixCard {
   position: relative;
-  grid-template-columns: minmax(0, 1fr) 40px;
+  grid-template-columns: minmax(0, 1fr) 16px;
 }
 
 .sceneMatrixCard[data-scene-matrix-drop-position="before"]::before,
@@ -31462,6 +31524,16 @@ h3 {
   bottom: 0;
 }
 
+.sceneMatrixCards[data-scene-matrix-column-drop-position="after"]::after {
+  display: block;
+  flex: 0 0 3px;
+  width: 100%;
+  min-height: 3px;
+  background: var(--group-identity);
+  content: "";
+  pointer-events: none;
+}
+
 .sceneMatrixEditStrip {
   position: relative;
   z-index: 1;
@@ -31469,8 +31541,8 @@ h3 {
   grid-column: 2;
   grid-row: 1;
   place-items: stretch;
-  width: 40px;
-  min-width: 40px;
+  width: 16px;
+  min-width: 16px;
   height: 100%;
   min-height: 48px;
   overflow: hidden;
@@ -31501,7 +31573,7 @@ h3 {
   right: 0;
   bottom: 0;
   display: block;
-  width: 12px;
+  width: 100%;
   background: var(--cue-identity);
   pointer-events: auto;
 }
@@ -31512,7 +31584,7 @@ h3 {
 }
 
 .sceneMatrixCard.selected .sceneMatrixEditStripBand {
-  width: 14px;
+  width: 100%;
   border-left: 3px solid var(--cue-identity-text);
 }
 

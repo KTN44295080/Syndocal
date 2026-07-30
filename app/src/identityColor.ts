@@ -59,6 +59,11 @@ export const groupIdentityHue = (groupId: string): number =>
   paletteHue(fnv1a(`group:${groupId}`));
 
 export type IdentityColorRole = "fill" | "band" | "text";
+export interface CueIdentitySource {
+  color?: string | null;
+  groupId?: string | null;
+  groupColor?: string | null;
+}
 
 /**
  * hsl() string for an identity hue. `fill` is the mid-saturation base block
@@ -123,14 +128,28 @@ export const identityCssFromPersistent = (
   return `hsl(${hue}, ${saturation}%, ${Math.round(clamp(hsl.l * 100, 40, 65))}%)`;
 };
 
-/** Cue identity css: persisted color wins, hash hue is the fallback. */
+/**
+ * Cue identity css: persisted cue color wins, then the owning group's
+ * persisted/hash identity, then the cue hash for ungrouped cues.
+ */
 export const cueIdentityCss = (
   cueId: number,
   color: string | null | undefined,
   role: IdentityColorRole,
-): string =>
-  (color ? identityCssFromPersistent(color, role) : null) ??
-  identityCssColor(cueIdentityHue(cueId), role);
+  groupId?: string | null,
+  groupColor?: string | null,
+): string => {
+  const persistedCue = color ? identityCssFromPersistent(color, role) : null;
+  if (persistedCue) return persistedCue;
+  const normalizedGroupId = groupId?.trim();
+  if (normalizedGroupId) {
+    return (
+      (groupColor ? identityCssFromPersistent(groupColor, role) : null) ??
+      identityCssColor(groupIdentityHue(normalizedGroupId), role)
+    );
+  }
+  return identityCssColor(cueIdentityHue(cueId), role);
+};
 
 /** Group identity css: persisted map entry wins, hash hue is the fallback. */
 export const groupIdentityCss = (

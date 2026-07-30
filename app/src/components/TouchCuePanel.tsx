@@ -60,7 +60,15 @@ export function TouchCuePanel(props: TouchCuePanelProps) {
               class={`liveCuePad ${pad.cue?.id === props.snapshot.active_cue_id ? "active" : ""} ${
                 pad.cue?.id === props.nextCue?.id ? "next" : ""
               }`}
-              style={pad.cue ? { "--identity": cueIdentityCss(pad.cue.id, pad.cue.color, "text") } : undefined}
+              style={pad.cue ? {
+                "--identity": cueIdentityCss(
+                  pad.cue.id,
+                  pad.cue.color,
+                  "text",
+                  pad.cue.group_id,
+                  pad.cue.group_id ? props.snapshot.group_colors?.[pad.cue.group_id] : null,
+                ),
+              } : undefined}
               disabled={!pad.cue}
               onClick={() => {
                 if (pad.cue) void props.onTriggerCue(pad.cue.id);

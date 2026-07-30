@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { cueIdentityCss, groupIdentityCss, groupIdentityHue } from "../identityColor";
 import { displayNumber } from "../numberDisplay";
 import type {
@@ -56,10 +56,14 @@ const SCENE_MATRIX_STRIP_DRAG_THRESHOLD_PX = 4;
 
 export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
   const [dragCueId, setDragCueId] = createSignal<number | null>(null);
+  const [activeBankId, setActiveBankId] = createSignal("Show");
+  const [dropTargetColumnId, setDropTargetColumnId] = createSignal<string | null>(null);
   const [dropIndicator, setDropIndicator] = createSignal<{
     cueId: number;
     position: "before" | "after";
   } | null>(null);
+  let scrollerElement: HTMLDivElement | undefined;
+  let preferredBankId: string | null = null;
   let dragPointer: {
     pointerId: number;
     startClientX: number;
@@ -82,6 +86,64 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
       : groupColumns;
   });
 
+  const syncVisibleBank = () => {
+    if (!scrollerElement) return;
+    const scrollerRect = scrollerElement.getBoundingClientRect();
+    if (preferredBankId) {
+      const preferredColumn = [...scrollerElement.querySelectorAll<HTMLElement>(
+        "[data-scene-matrix-column]",
+      )].find((column) => column.dataset.sceneMatrixColumn === preferredBankId);
+      if (preferredColumn) {
+        const preferredRect = preferredColumn.getBoundingClientRect();
+        const preferredVisibleWidth = Math.max(
+          0,
+          Math.min(preferredRect.right, scrollerRect.right) -
+            Math.max(preferredRect.left, scrollerRect.left),
+        );
+        if (preferredVisibleWidth >= 2) {
+          setActiveBankId(preferredBankId);
+          return;
+        }
+      }
+      preferredBankId = null;
+    }
+    let bestColumnId = columns()[0]?.id ?? "Show";
+    let bestVisibleWidth = -1;
+    for (const column of scrollerElement.querySelectorAll<HTMLElement>("[data-scene-matrix-column]")) {
+      const rect = column.getBoundingClientRect();
+      const visibleWidth = Math.max(
+        0,
+        Math.min(rect.right, scrollerRect.right) - Math.max(rect.left, scrollerRect.left),
+      );
+      if (visibleWidth > bestVisibleWidth) {
+        bestVisibleWidth = visibleWidth;
+        bestColumnId = column.dataset.sceneMatrixColumn ?? "Show";
+      }
+    }
+    setActiveBankId(bestColumnId);
+  };
+
+  const jumpToBank = (columnId: string) => {
+    if (!scrollerElement) return;
+    const target = [...scrollerElement.querySelectorAll<HTMLElement>("[data-scene-matrix-column]")]
+      .find((column) => column.dataset.sceneMatrixColumn === columnId);
+    if (!target) return;
+    preferredBankId = columnId;
+    scrollerElement.scrollTo({
+      left: Math.max(0, target.offsetLeft - 3),
+      behavior: "auto",
+    });
+    setActiveBankId(columnId);
+    window.requestAnimationFrame(syncVisibleBank);
+  };
+
+  onMount(() => {
+    syncVisibleBank();
+    const resizeObserver = new ResizeObserver(syncVisibleBank);
+    if (scrollerElement) resizeObserver.observe(scrollerElement);
+    onCleanup(() => resizeObserver.disconnect());
+  });
+
   const beginDrag = (event: PointerEvent & { currentTarget: HTMLElement }, cue: CueSummary) => {
     if (event.button !== 0 || !event.isPrimary) return;
     dragPointer = {
@@ -98,25 +160,33 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
   ) => {
     if (!dragPointer?.moved) {
       setDropIndicator(null);
+      setDropTargetColumnId(null);
       return;
     }
     const sourceCard = event.currentTarget.closest<HTMLElement>("[data-scene-matrix-cue-id]");
-    const targetCard = document
-      .elementFromPoint(event.clientX, event.clientY)
+    const hitElement = document.elementFromPoint(event.clientX, event.clientY);
+    const targetCard = hitElement
       ?.closest<HTMLElement>("[data-scene-matrix-cue-id]");
     const sourceColumn = sourceCard?.closest<HTMLElement>("[data-scene-matrix-column]");
-    const targetColumn = targetCard?.closest<HTMLElement>("[data-scene-matrix-column]");
+    const targetColumn = hitElement?.closest<HTMLElement>("[data-scene-matrix-column]");
+    const sourceColumnId = sourceColumn?.dataset.sceneMatrixColumn;
+    const targetColumnId = targetColumn?.dataset.sceneMatrixColumn;
     const targetCueId = Number(targetCard?.dataset.sceneMatrixCueId);
-    const sameColumn = sourceColumn?.dataset.sceneMatrixColumn === targetColumn?.dataset.sceneMatrixColumn;
-    const sameCueList =
-      sourceCard?.dataset.sceneMatrixCueListId === targetCard?.dataset.sceneMatrixCueListId;
+    const sameColumn = sourceColumnId === targetColumnId;
+    const sameCueList = !targetCard ||
+      sourceCard?.dataset.sceneMatrixCueListId === targetCard.dataset.sceneMatrixCueListId;
     if (
-      !targetCard ||
-      !Number.isFinite(targetCueId) ||
-      targetCueId === dragPointer.cue.id ||
-      !sameColumn ||
-      !sameCueList
+      !targetColumnId ||
+      !sameCueList ||
+      (sameColumn && !targetCard) ||
+      (targetCard && (!Number.isFinite(targetCueId) || targetCueId === dragPointer.cue.id))
     ) {
+      setDropIndicator(null);
+      setDropTargetColumnId(null);
+      return;
+    }
+    setDropTargetColumnId(targetColumnId);
+    if (!targetCard) {
       setDropIndicator(null);
       return;
     }
@@ -169,6 +239,7 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
     const cueId = dragPointer.cue.id;
     dragPointer = null;
     setDragCueId(null);
+    setDropTargetColumnId(null);
     setDropIndicator(null);
     if (!moved) return;
     event.preventDefault();
@@ -196,7 +267,36 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
       aria-label="Scene matrix grouped by scene bank"
       data-timeline-track={props.timelineTrack}
     >
-      <div class="sceneMatrixScroller">
+      <nav class="sceneMatrixBankJumpStrip" aria-label="Scene bank navigation">
+        <For each={columns()}>
+          {(column) => {
+            const columnId = () => column.id ?? "Show";
+            const groupText = () =>
+              groupIdentityCss(columnId(), props.groupColors, "text");
+            return (
+              <button
+                type="button"
+                classList={{ active: activeBankId() === columnId() }}
+                style={{ "--group-identity-text": groupText() }}
+                data-scene-matrix-bank-jump={columnId()}
+                aria-current={activeBankId() === columnId() ? "true" : undefined}
+                aria-label={`Jump to scene bank ${column.label}`}
+                onClick={() => jumpToBank(columnId())}
+              >
+                <span data-no-localize={column.id !== null ? true : undefined}>{column.label}</span>
+                <small>{column.cues.length}</small>
+              </button>
+            );
+          }}
+        </For>
+      </nav>
+      <div
+        class="sceneMatrixScroller"
+        ref={(element) => {
+          scrollerElement = element;
+        }}
+        onScroll={syncVisibleBank}
+      >
         <Show when={props.cues.length > 0} fallback={
           <div class="sceneMatrixEmptyAction">
             <strong>No scenes yet.</strong>
@@ -225,6 +325,9 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                     "--group-identity-text": groupCss("text"),
                   }}
                   data-scene-matrix-column={column.id ?? "Show"}
+                  data-scene-matrix-drop-target={
+                    dropTargetColumnId() === (column.id ?? "Show") ? "true" : undefined
+                  }
                   aria-label={`Scene matrix column ${column.label}`}
                 >
                   <i class="sceneMatrixBankStrip" aria-hidden="true" />
@@ -256,7 +359,14 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                       </span>
                     </Show>
                   </header>
-                  <div class="sceneMatrixCards">
+                  <div
+                    class="sceneMatrixCards"
+                    data-scene-matrix-column-drop-position={
+                      dropTargetColumnId() === (column.id ?? "Show") && !dropIndicator()
+                        ? "after"
+                        : undefined
+                    }
+                  >
                     <Show when={column.cues.length > 0} fallback={<p class="empty">No scenes in this column.</p>}>
                       <For each={column.cues}>
                         {(cue) => {
@@ -274,8 +384,20 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                 selected: props.selectedCueId === cue.id,
                               }}
                               style={{
-                                "--cue-identity": cueIdentityCss(cue.id, cue.color, "fill"),
-                                "--cue-identity-text": cueIdentityCss(cue.id, cue.color, "text"),
+                                "--cue-identity": cueIdentityCss(
+                                  cue.id,
+                                  cue.color,
+                                  "fill",
+                                  cue.group_id,
+                                  cue.group_id ? props.groupColors?.[cue.group_id] : null,
+                                ),
+                                "--cue-identity-text": cueIdentityCss(
+                                  cue.id,
+                                  cue.color,
+                                  "text",
+                                  cue.group_id,
+                                  cue.group_id ? props.groupColors?.[cue.group_id] : null,
+                                ),
                               }}
                               data-scene-matrix-cue-id={cue.id}
                               data-scene-matrix-cue-list-id={cue.cue_list_id}
@@ -408,7 +530,7 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                 classList={{ dragging: dragCueId() === cue.id }}
                                 data-scene-matrix-edit-strip={cue.id}
                                 data-scene-matrix-drag-threshold={SCENE_MATRIX_STRIP_DRAG_THRESHOLD_PX}
-                                title={`Drag Cue ${cue.label} to reorder this column or place on Timeline`}
+                                title={`Drag Cue ${cue.label} to reorder, move between banks, or place on Timeline`}
                                 aria-label={`Edit scene settings for Cue ${cue.label}`}
                                 aria-pressed={props.selectedCueId === cue.id}
                                 onPointerDown={(event) => {

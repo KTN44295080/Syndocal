@@ -41,6 +41,7 @@ const cueCaptureScopeLabel = (scope: CueCaptureScopeMode) => {
 interface CueManagementPanelProps {
   mode: "edit" | "live";
   onSetCueColor: (cueId: number, color: string | null) => void | Promise<void>;
+  groupColors?: Record<string, string>;
   onSetCueLiveModifierDefaults: (
     cueId: number,
     settings: CueLiveModifierSettings | null,
@@ -489,7 +490,15 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
             return (
               <div
                 class={cue.id === props.activeCueId ? "cueItem active" : "cueItem"}
-                style={{ "--identity": cueIdentityCss(cue.id, cue.color, "fill") }}
+                style={{
+                  "--identity": cueIdentityCss(
+                    cue.id,
+                    cue.color,
+                    "fill",
+                    cue.group_id,
+                    cue.group_id ? props.groupColors?.[cue.group_id] : null,
+                  ),
+                }}
                 data-cue-id={cue.id}
                 role="listitem"
                 aria-posinset={cueIndex() + 1}

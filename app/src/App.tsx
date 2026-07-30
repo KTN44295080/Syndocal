@@ -465,7 +465,11 @@ import {
   type WaveStageDragMode,
 } from "./mappingRuntime";
 import { stageObjectDefaultColor } from "./stageObjects";
-import { cueIdentityCss } from "./identityColor";
+import { cueIdentityCss, type CueIdentitySource } from "./identityColor";
+import {
+  applySceneMatrixCueMove,
+  sceneMatrixCueMetadataArgs,
+} from "./sceneMatrixBankMove";
 import {
   defaultVideoOutputMapping,
   outputAspectRatio,
@@ -913,6 +917,10 @@ type ViewportControlEditHistoryEntry = {
   cueId: number;
   beforeTargets: CueSummary["targets"];
   afterTargets: CueSummary["targets"];
+};
+type ViewportSceneMatrixBankMoveHistoryEntry = {
+  beforeCues: CueSummary[];
+  afterCues: CueSummary[];
 };
 
 interface VjFirstRunSetupResult {
@@ -1488,6 +1496,8 @@ export default function App() {
     createSignal<ViewportControlEditHistoryEntry[]>([]);
   const [viewportControlEditRedo, setViewportControlEditRedo] =
     createSignal<ViewportControlEditHistoryEntry[]>([]);
+  const [viewportSceneMatrixBankMoveUndo, setViewportSceneMatrixBankMoveUndo] =
+    createSignal<ViewportSceneMatrixBankMoveHistoryEntry | null>(null);
   const [cueListLabel, setCueListLabel] = createSignal("Main");
   const [cueMetadataDrafts, setCueMetadataDrafts] = createSignal<Record<number, CueMetadataDraft>>({});
   const [cuePadBank, setCuePadBank] = createSignal(0);
@@ -6004,12 +6014,17 @@ export default function App() {
       return effect ? [effect] : [];
     });
   });
-  // T7: persisted identity colors. Components that only carry cue ids receive
-  // this map; components with full CueSummary objects read cue.color directly.
-  const cueColors = createMemo<Record<number, string>>(() => {
-    const map: Record<number, string> = {};
+  // Components that only carry cue ids receive enough identity context to
+  // preserve cue > group > cue-hash priority across Timeline consumers.
+  const cueIdentities = createMemo<Record<number, CueIdentitySource>>(() => {
+    const map: Record<number, CueIdentitySource> = {};
+    const colors = snapshot().group_colors ?? {};
     for (const cue of snapshot().cues) {
-      if (cue.color) map[cue.id] = cue.color;
+      map[cue.id] = {
+        color: cue.color,
+        groupId: cue.group_id,
+        groupColor: cue.group_id ? colors[cue.group_id] : null,
+      };
     }
     return map;
   });
@@ -7921,6 +7936,25 @@ export default function App() {
     }
     if (!confirmDiscardTimelineEditorDrafts()) {
       setMessage("Undo canceled; unsaved Timeline edits were kept.");
+      return;
+    }
+    if (viewportFixture === "scene-matrix") {
+      const entry = viewportSceneMatrixBankMoveUndo();
+      if (!entry) return;
+      setSnapshot((current) => ({
+        ...current,
+        cues: structuredClone(entry.beforeCues),
+      }));
+      setViewportSceneMatrixBankMoveUndo(null);
+      setProjectHistoryStatus({
+        can_undo: false,
+        can_redo: false,
+        undo_depth: 0,
+        redo_depth: 0,
+        undo_label: null,
+        redo_label: null,
+      });
+      setMessage("Undid Move Cue Between Scene Banks.");
       return;
     }
     if (viewportFixture === "edit-live") {
@@ -11921,25 +11955,66 @@ export default function App() {
     }
   };
 
+  const runSceneMatrixBankMoveTransaction = async (
+    cue: CueSummary,
+    groupId: string | null,
+    delta: -1 | 1,
+    stepCount: number,
+  ) => {
+    if (!isTauriRuntime()) return null;
+    if (!operatorCommandAllowed(activeOperatorLockMode, "set_cue_metadata", true)) {
+      throw new Error(
+        activeOperatorLockMode === "Full"
+          ? "Operator Full Lock allows only status reads and emergency blackout controls."
+          : "Operator Partial Lock blocks programming and project replacement commands.",
+      );
+    }
+    const transactionId = await tauriInvoke<number>("begin_project_transaction", {
+      label: "Move Cue Between Scene Banks",
+      coalesceKey: `scene_matrix_bank_move:cue:${cue.id}`,
+    });
+    try {
+      await tauriInvoke("set_cue_metadata", sceneMatrixCueMetadataArgs(cue, groupId));
+      for (let step = 0; step < stepCount; step += 1) {
+        await tauriInvoke("move_cue", { cueId: cue.id, delta });
+      }
+      const status = await tauriInvoke<ProjectHistoryStatus>("commit_project_transaction", {
+        transactionId,
+      });
+      window.dispatchEvent(
+        new CustomEvent<ProjectHistoryStatus>(projectHistoryChangedEvent, { detail: status }),
+      );
+      return status;
+    } catch (error) {
+      await tauriInvoke("cancel_project_transaction", { transactionId }).catch(() => undefined);
+      throw error;
+    }
+  };
+
   const reorderSceneMatrixCue = async (
     sourceCueId: number,
-    targetCueId: number,
+    targetCueId: number | null,
     position: "before" | "after",
+    targetGroupId: string | null,
   ) => {
     if (sourceCueId === targetCueId) return;
     const cues = snapshot().cues;
     const sourceCue = cues.find((cue) => cue.id === sourceCueId);
-    const targetCue = cues.find((cue) => cue.id === targetCueId);
-    if (!sourceCue || !targetCue) {
+    const targetCue = targetCueId === null
+      ? null
+      : cues.find((cue) => cue.id === targetCueId) ?? null;
+    if (!sourceCue || (targetCueId !== null && !targetCue)) {
+      setMessage("Drop the Cue on a scene cell, bank column, or Timeline lane.");
+      return;
+    }
+    const sourceGroupId = sourceCue.group_id?.trim() || null;
+    const normalizedTargetGroupId = targetGroupId?.trim() || null;
+    const crossesBank = sourceGroupId !== normalizedTargetGroupId;
+    if (!crossesBank && !targetCue) {
       setMessage("Drop the Cue on another cell in this column or on a Timeline lane.");
       return;
     }
-    const columnKey = (cue: CueSummary) => cue.group_id?.trim() || "Show";
-    if (columnKey(sourceCue) !== columnKey(targetCue)) {
-      setMessage("Cues can only be reordered within the same Scene Matrix column.");
-      return;
-    }
-    if (sourceCue.cue_list_id !== targetCue.cue_list_id) {
+    if (targetCue && sourceCue.cue_list_id !== targetCue.cue_list_id) {
       setMessage("Cues must share a Cue List before they can be reordered.");
       return;
     }
@@ -11947,53 +12022,68 @@ export default function App() {
     const cueList = cues.filter((cue) => cue.cue_list_id === sourceCue.cue_list_id);
     const sourceIndex = cueList.findIndex((cue) => cue.id === sourceCueId);
     const withoutSource = cueList.filter((cue) => cue.id !== sourceCueId);
-    const targetIndex = withoutSource.findIndex((cue) => cue.id === targetCueId);
-    if (sourceIndex < 0 || targetIndex < 0) return;
-    const insertionIndex = targetIndex + (position === "after" ? 1 : 0);
+    const targetIndex = targetCue
+      ? withoutSource.findIndex((cue) => cue.id === targetCue.id)
+      : -1;
+    if (sourceIndex < 0 || (targetCue && targetIndex < 0)) return;
+    const insertionIndex = targetCue
+      ? targetIndex + (position === "after" ? 1 : 0)
+      : sourceIndex;
     const moveCount = insertionIndex - sourceIndex;
-    if (moveCount === 0) return;
-    const delta = moveCount < 0 ? -1 : 1;
+    if (!crossesBank && moveCount === 0) return;
+    const delta: -1 | 1 = moveCount < 0 ? -1 : 1;
     const stepCount = Math.abs(moveCount);
 
-    const applyMoveSteps = (currentCues: CueSummary[]) => {
-      const next = [...currentCues];
-      for (let step = 0; step < stepCount; step += 1) {
-        const cueIndex = next.findIndex((cue) => cue.id === sourceCueId);
-        if (cueIndex < 0) break;
-        const cueListId = next[cueIndex].cue_list_id;
-        let adjacentIndex = cueIndex;
-        if (delta < 0) {
-          for (let index = cueIndex - 1; index >= 0; index -= 1) {
-            if (next[index].cue_list_id === cueListId) {
-              adjacentIndex = index;
-              break;
-            }
-          }
-        } else {
-          for (let index = cueIndex + 1; index < next.length; index += 1) {
-            if (next[index].cue_list_id === cueListId) {
-              adjacentIndex = index;
-              break;
-            }
-          }
-        }
-        if (adjacentIndex === cueIndex) break;
-        [next[cueIndex], next[adjacentIndex]] = [next[adjacentIndex], next[cueIndex]];
-      }
-      return next;
-    };
-
     try {
-      if (viewportFixture !== "scene-matrix" && viewportFixture !== "workspace-operator") {
+      if (crossesBank) {
+        await runSceneMatrixBankMoveTransaction(
+          sourceCue,
+          normalizedTargetGroupId,
+          delta,
+          stepCount,
+        );
+      } else if (viewportFixture !== "scene-matrix" && viewportFixture !== "workspace-operator") {
         for (let step = 0; step < stepCount; step += 1) {
           await invoke("move_cue", { cueId: sourceCueId, delta });
         }
       }
-      setSnapshot((current) => ({
-        ...current,
-        cues: applyMoveSteps(current.cues),
-      }));
-      setMessage("Cue order updated.");
+
+      if (viewportFixture === "scene-matrix" || viewportFixture === "workspace-operator") {
+        const beforeCues = structuredClone(cues);
+        const afterCues = applySceneMatrixCueMove(
+          cues,
+          sourceCueId,
+          normalizedTargetGroupId,
+          crossesBank,
+          delta,
+          stepCount,
+        );
+        setSnapshot((current) => ({ ...current, cues: structuredClone(afterCues) }));
+        if (crossesBank && viewportFixture === "scene-matrix") {
+          setViewportSceneMatrixBankMoveUndo({ beforeCues, afterCues: structuredClone(afterCues) });
+          if (!isTauriRuntime()) {
+            setProjectHistoryStatus({
+              can_undo: true,
+              can_redo: false,
+              undo_depth: 1,
+              redo_depth: 0,
+              undo_label: "Move Cue Between Scene Banks",
+              redo_label: null,
+            });
+          }
+        }
+      } else {
+        await refreshSnapshot();
+      }
+      if (crossesBank) {
+        setCueMetadataDrafts((current) => {
+          const draft = current[sourceCueId];
+          return draft
+            ? { ...current, [sourceCueId]: { ...draft, group_id: normalizedTargetGroupId } }
+            : current;
+        });
+      }
+      setMessage(crossesBank ? "Cue moved between Scene Matrix banks." : "Cue order updated.");
     } catch (error) {
       setMessage(String(error));
     }
@@ -12393,26 +12483,23 @@ export default function App() {
     setTimelineCueDrag(null);
     if (!drag || canceled || (!drag.moved && !moved)) return;
     const hitElement = document.elementFromPoint(point.clientX, point.clientY);
-    const matrixTarget = drag.source_surface === "scene-matrix"
-      ? hitElement?.closest<HTMLElement>("[data-scene-matrix-cue-id]")
+    const matrixColumn = drag.source_surface === "scene-matrix"
+      ? hitElement?.closest<HTMLElement>("[data-scene-matrix-column]")
       : null;
-    if (matrixTarget) {
-      const targetCueId = Number(matrixTarget.dataset.sceneMatrixCueId);
-      const targetRect = matrixTarget.getBoundingClientRect();
-      if (Number.isFinite(targetCueId)) {
-        await reorderSceneMatrixCue(
-          drag.cue_id,
-          targetCueId,
-          point.clientY < targetRect.top + targetRect.height / 2 ? "before" : "after",
-        );
-      }
-      return;
-    }
-    if (
-      drag.source_surface === "scene-matrix" &&
-      hitElement?.closest("[data-scene-matrix-column]")
-    ) {
-      setMessage("Drop the Cue on another cell in this column or on a Timeline lane.");
+    if (matrixColumn) {
+      const matrixTarget = hitElement?.closest<HTMLElement>("[data-scene-matrix-cue-id]");
+      const rawTargetCueId = Number(matrixTarget?.dataset.sceneMatrixCueId);
+      const targetCueId = matrixTarget && Number.isFinite(rawTargetCueId)
+        ? rawTargetCueId
+        : null;
+      const targetRect = matrixTarget?.getBoundingClientRect();
+      const columnId = matrixColumn.dataset.sceneMatrixColumn ?? "Show";
+      await reorderSceneMatrixCue(
+        drag.cue_id,
+        targetCueId,
+        targetRect && point.clientY < targetRect.top + targetRect.height / 2 ? "before" : "after",
+        columnId === "Show" ? null : columnId,
+      );
       return;
     }
     const target = hitElement
@@ -16267,7 +16354,15 @@ export default function App() {
                   <i
                     class="liveCueIdentityChip"
                     aria-hidden="true"
-                    style={{ background: cueIdentityCss(activeCue()!.id, activeCue()!.color, "band") }}
+                    style={{
+                      background: cueIdentityCss(
+                        activeCue()!.id,
+                        activeCue()!.color,
+                        "band",
+                        activeCue()!.group_id,
+                        activeCue()!.group_id ? groupColors()[activeCue()!.group_id!] : null,
+                      ),
+                    }}
                   />
                 </Show>
                 {activeCue()?.label ?? "None"}
@@ -16280,7 +16375,15 @@ export default function App() {
                   <i
                     class="liveCueIdentityChip"
                     aria-hidden="true"
-                    style={{ background: cueIdentityCss(nextCue()!.id, nextCue()!.color, "band") }}
+                    style={{
+                      background: cueIdentityCss(
+                        nextCue()!.id,
+                        nextCue()!.color,
+                        "band",
+                        nextCue()!.group_id,
+                        nextCue()!.group_id ? groupColors()[nextCue()!.group_id!] : null,
+                      ),
+                    }}
                   />
                 </Show>
                 {nextCue()?.label ?? "None"}
@@ -16333,6 +16436,7 @@ export default function App() {
               {(cue) => (
                 <SceneSettingsPane
                   cue={cue()}
+                  groupColors={groupColors()}
                   draft={cueMetadataDraft(cue())}
                   effects={selectedSceneEffects()}
                   selectedEffectId={selectedSceneEffectId()}
@@ -16502,7 +16606,15 @@ export default function App() {
                       class={`liveCuePad ${pad.cue?.id === snapshot().active_cue_id ? "active" : ""} ${
                         pad.cue?.id === nextCue()?.id ? "next" : ""
                       }`}
-                      style={pad.cue ? { "--identity": cueIdentityCss(pad.cue.id, pad.cue.color, "text") } : undefined}
+                      style={pad.cue ? {
+                        "--identity": cueIdentityCss(
+                          pad.cue.id,
+                          pad.cue.color,
+                          "text",
+                          pad.cue.group_id,
+                          pad.cue.group_id ? groupColors()[pad.cue.group_id] : null,
+                        ),
+                      } : undefined}
                       disabled={!pad.cue}
                       onClick={() => {
                         if (pad.cue) {
@@ -17723,12 +17835,24 @@ export default function App() {
             editingSceneLabel={selectedSceneCue()?.label ?? null}
             editingSceneIdentity={
               selectedSceneCue()
-                ? cueIdentityCss(selectedSceneCue()!.id, selectedSceneCue()!.color, "fill")
+                ? cueIdentityCss(
+                    selectedSceneCue()!.id,
+                    selectedSceneCue()!.color,
+                    "fill",
+                    selectedSceneCue()!.group_id,
+                    selectedSceneCue()!.group_id ? groupColors()[selectedSceneCue()!.group_id!] : null,
+                  )
                 : null
             }
             editingSceneIdentityText={
               selectedSceneCue()
-                ? cueIdentityCss(selectedSceneCue()!.id, selectedSceneCue()!.color, "text")
+                ? cueIdentityCss(
+                    selectedSceneCue()!.id,
+                    selectedSceneCue()!.color,
+                    "text",
+                    selectedSceneCue()!.group_id,
+                    selectedSceneCue()!.group_id ? groupColors()[selectedSceneCue()!.group_id!] : null,
+                  )
                 : null
             }
             onWriteMode={changeControlFaderWriteMode}
@@ -17902,6 +18026,7 @@ export default function App() {
           <CueManagementPanel
             mode={controlMode() === "live" ? "live" : "edit"}
             onSetCueColor={setCueColor}
+            groupColors={groupColors()}
             onSetCueLiveModifierDefaults={setCueLiveModifierDefaults}
             cues={selectedCueListCues()}
             allCues={snapshot().cues}
@@ -17982,7 +18107,7 @@ export default function App() {
             <TimelineCueEventsPanel
               contextDrawer={timelineContextDrawer()}
               childTimelineLabel={timelineChildCue()?.label ?? null}
-              cueColors={cueColors()}
+              cueIdentities={cueIdentities()}
               positionMs={activeTimeline().position_ms}
               bpm={snapshot().clock.bpm}
               durationMs={activeTimeline().duration_ms}

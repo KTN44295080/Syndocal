@@ -22,6 +22,7 @@ const japaneseText: Record<string, string> = {
   Unsupported: "未対応",
   Warnings: "警告",
   "Scene banks": "シーンバンク",
+  "Scene bank navigation": "シーンバンクナビゲーション",
   "Value payloads converted": "値変換済み",
   "Value payloads skipped": "値スキップ",
   "Beam feature records": "Beam特徴量レコード",
@@ -187,12 +188,15 @@ const japaneseText: Record<string, string> = {
   "No scenes yet.": "シーンはまだありません。",
   "Open Cue editor": "Cueエディタを開く",
   "Cue order updated.": "キュー順を更新しました。",
+  "Cue moved between Scene Matrix banks.": "キューをシーンマトリクスのバンク間で移動しました。",
   "Cues can only be reordered within the same Scene Matrix column.":
     "キューは同じシーンマトリクス列の中でのみ並べ替えできます。",
   "Cues must share a Cue List before they can be reordered.":
     "並べ替えるキューは同じCue Listに所属している必要があります。",
   "Drop the Cue on another cell in this column or on a Timeline lane.":
     "キューをこの列の別セルまたはタイムラインレーンへドロップしてください。",
+  "Drop the Cue on a scene cell, bank column, or Timeline lane.":
+    "キューをシーンセル、バンク列、またはタイムラインレーンへドロップしてください。",
   "Browse Scene Blocks": "Scene Blockを一覧表示",
   "Show selected Block Properties": "選択中のBlock Propertiesを表示",
   "Show timeline lane details": "タイムラインレーンの詳細を表示",
@@ -2560,12 +2564,13 @@ const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
   ],
   [/^Place at the current playhead \((\d+) ms\)$/, (timeMs) => `現在の再生位置（${timeMs} ms）へ配置`],
   [/^Drag Cue (.+) to Timeline$/, (label) => `キュー ${label} をタイムラインへドラッグ`],
-  [/^Drag Cue (.+) to reorder this column or place on Timeline$/, (label) =>
-    `キュー ${label} をドラッグして列内で並べ替えるかタイムラインへ配置`],
+  [/^Drag Cue (.+) to reorder, move between banks, or place on Timeline$/, (label) =>
+    `キュー ${label} をドラッグして並べ替え、バンク間移動、またはタイムラインへ配置`],
   [/^Cue (.+) progress$/, (label) => `キュー ${label} の進行`],
   [/^Trigger Cue (.+)$/, (label) => `キュー ${label} を実行`],
   [/^Release Cue (.+)$/, (label) => `キュー ${label} をリリース`],
   [/^Edit scene settings for Cue (.+)$/, (label) => `キュー ${label} のシーン設定を編集`],
+  [/^Jump to scene bank (.+)$/, (label) => `シーンバンク ${label} へ移動`],
   [/^Scene matrix column (.+)$/, (label) => `シーンマトリクス列 ${label}`],
   [/^Identity color for group (.+)$/, (label) => `グループ ${label} の識別色`],
   [/^Clear identity color for group (.+)$/, (label) => `グループ ${label} の識別色をクリア`],
