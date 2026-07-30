@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     env,
     ffi::{OsStr, OsString},
     fs,
@@ -3174,6 +3174,12 @@ struct EngineSnapshotDelta {
     playback_master: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     active_cue_id: Option<Option<CueId>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_group_cue_ids: Option<BTreeMap<String, CueId>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cue_live_modifiers: Option<Vec<protocol::CueLiveModifierState>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    group_colors: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     active_fade: Option<Option<protocol::ActiveFadeSummary>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -19418,6 +19424,9 @@ fn engine_snapshot_delta(before: &EngineSnapshot, after: &EngineSnapshot) -> Eng
         playback_master: (before.playback_master != after.playback_master)
             .then_some(after.playback_master),
         active_cue_id: (before.active_cue_id != after.active_cue_id).then_some(after.active_cue_id),
+        active_group_cue_ids: changed!(active_group_cue_ids),
+        cue_live_modifiers: changed!(cue_live_modifiers),
+        group_colors: changed!(group_colors),
         active_fade: (before.active_fade != after.active_fade).then(|| after.active_fade.clone()),
         programmer: changed!(programmer),
         timeline: changed!(timeline),
@@ -26519,6 +26528,59 @@ mod tests {
         assert!(object.contains_key("blackout"));
         assert!(object.contains_key("clock"));
         assert!(object.contains_key("stage_map"));
+    }
+
+    #[test]
+    fn engine_snapshot_delta_reports_grouped_cue_activation_and_release() {
+        let mut project_snapshot = EngineSnapshot::default();
+        project_snapshot.cues = vec![protocol::CueSummary {
+            id: 4,
+            label: "Grouped cue".to_string(),
+            group_id: Some("Bar".to_string()),
+            ..protocol::CueSummary::default()
+        }];
+
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine.load_project_snapshot(project_snapshot).unwrap();
+        let before_activation = engine.snapshot();
+
+        engine.send(EngineCommand::TriggerCue(4)).unwrap();
+        let mut activated = engine.snapshot();
+        for _ in 0..40 {
+            if activated.active_group_cue_ids.get("Bar") == Some(&4) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+            activated = engine.snapshot();
+        }
+        assert_eq!(activated.active_group_cue_ids.get("Bar"), Some(&4));
+
+        let activation_delta = engine_snapshot_delta(&before_activation, &activated);
+        assert_eq!(
+            activation_delta.active_group_cue_ids,
+            Some(activated.active_group_cue_ids.clone())
+        );
+
+        engine.send(EngineCommand::ReleaseCue(4)).unwrap();
+        let mut released = engine.snapshot();
+        for _ in 0..40 {
+            if released.active_group_cue_ids.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+            released = engine.snapshot();
+        }
+        assert!(released.active_group_cue_ids.is_empty());
+
+        let release_delta = engine_snapshot_delta(&activated, &released);
+        assert_eq!(release_delta.active_group_cue_ids, Some(BTreeMap::new()));
+        assert_eq!(
+            serde_json::to_value(release_delta).unwrap()["active_group_cue_ids"],
+            json!({})
+        );
     }
 
     #[test]

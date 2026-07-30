@@ -119,4 +119,38 @@ for (const role of ["fill", "band", "text"]) {
   );
 }
 
+// 6. Scene Matrix identity is execution state, not selection state.
+// Idle cards keep a neutral strip/border while active cards opt into the cue
+// identity. Selection remains a thin app-wide neutral workspace outline.
+assert.match(
+  stylesSource,
+  /\.sceneMatrixEditStripBand\s*\{[^}]*background:\s*var\(--ui-border\);[^}]*\}/s,
+  "idle Scene Matrix strips must use the neutral UI border token",
+);
+assert.match(
+  stylesSource,
+  /\.sceneMatrixCard\s*\{[^}]*border:\s*1px solid var\(--ui-border\);[^}]*border-left-width:\s*3px;[^}]*\}/s,
+  "idle Scene Matrix cards must keep a neutral border",
+);
+assert.match(
+  stylesSource,
+  /\.sceneMatrixCard\.active\s+\.sceneMatrixEditStripBand\s*\{[^}]*background:\s*var\(--cue-identity\);[^}]*\}/s,
+  "executing Scene Matrix strips must use the cue identity color",
+);
+assert.match(
+  stylesSource,
+  /\.sceneMatrixCard\.active\s*\{[^}]*border-color:\s*var\(--cue-identity\);[^}]*\}/s,
+  "executing Scene Matrix cards must use the cue identity border",
+);
+assert.match(
+  stylesSource,
+  /\.sceneMatrixCard\.selected\s*\{[^}]*outline:\s*1px solid var\(--ui-selection-line\);[^}]*\}/s,
+  "Scene Matrix selection must use the thin neutral workspace-selection token",
+);
+assert.match(
+  stylesSource,
+  /\.sceneMatrixCuePrimaryRow\s*\{[^}]*color:\s*var\(--cue-identity-text\);[^}]*\}/s,
+  "Scene Matrix scene names must retain identity-colored text while idle",
+);
+
 console.log(`identity color helpers ok (${producedHues.size} distinct hues, accent hue ${accentHue.toFixed(1)}°)`);

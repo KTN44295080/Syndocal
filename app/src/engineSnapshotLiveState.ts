@@ -8,8 +8,26 @@ import type {
 export const mergeEngineSnapshotSyncResponse = (
   current: EngineSnapshot,
   response: EngineSnapshotSyncResponse,
-): EngineSnapshot =>
-  response.full ?? ({ ...current, ...(response.delta ?? {}) } as EngineSnapshot);
+): EngineSnapshot => {
+  if (response.full) return response.full;
+  const {
+    active_group_cue_ids: activeGroupCueIds,
+    cue_live_modifiers: cueLiveModifiers,
+    group_colors: groupColors,
+    ...delta
+  } = response.delta ?? {};
+  return {
+    ...current,
+    ...delta,
+    ...(activeGroupCueIds === undefined
+      ? {}
+      : { active_group_cue_ids: activeGroupCueIds }),
+    ...(cueLiveModifiers === undefined
+      ? {}
+      : { cue_live_modifiers: cueLiveModifiers }),
+    ...(groupColors === undefined ? {} : { group_colors: groupColors }),
+  } as EngineSnapshot;
+};
 
 const activeSnapshotCues = (snapshot: EngineSnapshot) => {
   const activeCueIds = new Set<number>(Object.values(snapshot.active_group_cue_ids ?? {}));

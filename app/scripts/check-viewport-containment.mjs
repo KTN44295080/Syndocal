@@ -11302,6 +11302,15 @@ async function measureSceneMatrixPane(client) {
     const dedicatedDragHandles = cards
       .map((card) => card.querySelector('.cueTimelineDragHandle'))
       .filter(isVisible);
+    const colorProbe = document.createElement('span');
+    colorProbe.style.position = 'fixed';
+    colorProbe.style.visibility = 'hidden';
+    colorProbe.style.pointerEvents = 'none';
+    document.body.append(colorProbe);
+    const resolveColor = (value) => {
+      colorProbe.style.color = value;
+      return getComputedStyle(colorProbe).color;
+    };
     const editStrips = cards.map((card) => {
       const button = card.querySelector('[data-scene-matrix-edit-strip]');
       const band = button?.querySelector('.sceneMatrixEditStripBand');
@@ -11309,6 +11318,7 @@ async function measureSceneMatrixPane(client) {
       const buttonRect = button?.getBoundingClientRect() ?? null;
       const bandRect = band?.getBoundingClientRect() ?? null;
       const cardRect = card.getBoundingClientRect();
+      const cardStyle = getComputedStyle(card);
       const matrixScrollerRect = scroller?.getBoundingClientRect() ?? null;
       const cardScrollerRect = card.closest('.sceneMatrixCards')?.getBoundingClientRect() ?? null;
       const centerX = bandRect ? bandRect.left + bandRect.width / 2 : 0;
@@ -11325,12 +11335,25 @@ async function measureSceneMatrixPane(client) {
         thresholdPx: Number(button?.getAttribute('data-scene-matrix-drag-threshold') ?? -1),
         touchAction: button ? getComputedStyle(button).touchAction : '',
         rendered: isVisible(button),
+        active:
+          card.getAttribute('data-scene-matrix-active') === 'true'
+          && card.classList.contains('active'),
+        selected:
+          card.getAttribute('data-scene-matrix-selected') === 'true'
+          && card.classList.contains('selected'),
         hitWidth: buttonRect?.width ?? 0,
         hitHeight: buttonRect?.height ?? 0,
         visualWidth: bandRect?.width ?? 0,
         visualHeight: bandRect?.height ?? 0,
         visualColor: band ? getComputedStyle(band).backgroundColor : '',
-        identityColor: getComputedStyle(card).borderLeftColor,
+        identityColor: resolveColor(cardStyle.getPropertyValue('--cue-identity')),
+        neutralColor: resolveColor(cardStyle.getPropertyValue('--ui-border')),
+        borderColors: [
+          cardStyle.borderTopColor,
+          cardStyle.borderRightColor,
+          cardStyle.borderBottomColor,
+          cardStyle.borderLeftColor,
+        ],
         rightEdgeAligned: Boolean(bandRect && Math.abs(bandRect.right - cardRect.right) <= 2),
         centerInVisibleScrollport: Boolean(
           bandRect
@@ -11361,6 +11384,7 @@ async function measureSceneMatrixPane(client) {
           ?.getAttribute('data-scene-matrix-edit-strip') ?? '',
       };
     });
+    colorProbe.remove();
     const dragSources = cards.filter((card) => card.hasAttribute('data-timeline-cue-drag-source'));
     const cueLayouts = cards.map((card) => {
       const trigger = card.querySelector('.sceneMatrixTrigger');
@@ -13061,14 +13085,26 @@ async function runSceneMatrixPaneCheck(client, viewport) {
         && entry.label.length > 0
         && entry.name === `Edit scene settings for Cue ${entry.label}`) &&
       new Set(before.editStrips.map((entry) => entry.name)).size === expectedCardCount],
-    ["matrixEditStripsMatchSixteenPixelIdentityBandWithFortyEightPixelHeight", () =>
-      before.editStrips.every((entry) =>
+    ["matrixEditStripsKeepSixteenPixelHitBandAndGateIdentityToExecution", () =>
+      before.editStrips.some((entry) => entry.active)
+      && before.editStrips.some((entry) => !entry.active)
+      && before.editStrips.every((entry) =>
         Math.abs(entry.hitWidth - 16) <= 0.1
         && entry.hitHeight >= 48
         && Math.abs(entry.visualWidth - entry.hitWidth) <= 0.1
         && entry.visualHeight >= 48
-        && entry.visualColor === entry.identityColor
-        && entry.rightEdgeAligned)],
+        && entry.rightEdgeAligned)
+      && before.editStrips
+        .filter((entry) => entry.active)
+        .every((entry) =>
+          entry.visualColor === entry.identityColor
+          && entry.borderColors.every((color) => color === entry.identityColor))
+      && before.editStrips
+        .filter((entry) => !entry.active)
+        .every((entry) =>
+          entry.visualColor === entry.neutralColor
+          && entry.visualColor !== entry.identityColor
+          && entry.borderColors.every((color) => color === entry.neutralColor))],
     ["matrixEditStripsReplaceLegacyHandleWithoutLosingDragSources", () =>
       before.dedicatedDragHandleCount === 0 &&
       before.dragSourceCount === expectedCardCount],
@@ -13399,6 +13435,19 @@ async function readSceneSettingsState(client) {
     const selectedStyle = selectedCard ? getComputedStyle(selectedCard) : null;
     const selectedStrip = selectedCard?.querySelector("[data-scene-matrix-edit-strip]") ?? null;
     const selectedStripBand = selectedStrip?.querySelector(".sceneMatrixEditStripBand") ?? null;
+    const selectedStripBandStyle = selectedStripBand ? getComputedStyle(selectedStripBand) : null;
+    const resolveColor = (value) => {
+      if (!value.trim()) return "";
+      const probe = document.createElement("span");
+      probe.style.position = "fixed";
+      probe.style.visibility = "hidden";
+      probe.style.pointerEvents = "none";
+      probe.style.color = value;
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    };
     const editSourceButton = pane?.querySelector("[data-scene-settings-edit-source]") ?? null;
     const scenePropertyValue = (property) => {
       const input = pane?.querySelector(`[data-scene-property="${property}"]`);
@@ -13446,20 +13495,36 @@ async function readSceneSettingsState(client) {
       })),
       selectedCardIds: selectedCards.map((card) =>
         card.getAttribute("data-scene-matrix-cue-id") ?? ""),
+      selectedActive:
+        selectedCard?.getAttribute("data-scene-matrix-active") === "true"
+        && selectedCard.classList.contains("active"),
       selectedOutlineWidth: Number.parseFloat(selectedStyle?.outlineWidth ?? "0") || 0,
       selectedOutlineStyle: selectedStyle?.outlineStyle ?? "",
+      selectedOutlineColor: selectedStyle?.outlineColor ?? "",
+      selectedSelectionColor: resolveColor(
+        selectedStyle?.getPropertyValue("--ui-selection-line") ?? "",
+      ),
       selectedStripPressed: selectedStrip?.getAttribute("aria-pressed") ?? "",
       selectedStripHitWidth: selectedStrip?.getBoundingClientRect().width ?? 0,
       selectedStripVisualWidth: selectedStripBand?.getBoundingClientRect().width ?? 0,
       selectedStripBorderLeftWidth: selectedStripBand
-        ? Number.parseFloat(getComputedStyle(selectedStripBand).borderLeftWidth) || 0
+        ? Number.parseFloat(selectedStripBandStyle?.borderLeftWidth ?? "0") || 0
         : 0,
-      selectedStripIdentityMatches: Boolean(
-        selectedStripBand
-        && selectedCard
-        && getComputedStyle(selectedStripBand).backgroundColor
-          === getComputedStyle(selectedCard).borderLeftColor
+      selectedStripColor: selectedStripBandStyle?.backgroundColor ?? "",
+      selectedIdentityColor: resolveColor(
+        selectedStyle?.getPropertyValue("--cue-identity") ?? "",
       ),
+      selectedNeutralColor: resolveColor(
+        selectedStyle?.getPropertyValue("--ui-border") ?? "",
+      ),
+      selectedCardBorderColors: selectedStyle
+        ? [
+            selectedStyle.borderTopColor,
+            selectedStyle.borderRightColor,
+            selectedStyle.borderBottomColor,
+            selectedStyle.borderLeftColor,
+          ]
+        : [],
       sceneSettingsIdentityMatchesSelectedCell: Boolean(
         pane
         && selectedCard
@@ -14055,14 +14120,27 @@ async function runSceneSettingsViewport(client, viewport) {
         && gesture.movementPx < gesture.thresholdPx
         && gesture.centerHitOwnsStrip
         && gesture.centerHitStripId === gesture.stripId)],
-    ["editSelectionUsesCellOutlineAndEmphasizedIdentityStrip", () =>
-      selectedStatic.selectedOutlineWidth >= 2
-      && selectedStatic.selectedOutlineStyle === "solid"
-      && selectedStatic.selectedStripPressed === "true"
-      && Math.abs(selectedStatic.selectedStripHitWidth - 16) <= 0.1
-      && Math.abs(selectedStatic.selectedStripVisualWidth - 16) <= 0.1
-      && selectedStatic.selectedStripBorderLeftWidth >= 3
-      && selectedStatic.selectedStripIdentityMatches],
+    ["editSelectionUsesSubtleNeutralOutlineWithoutOverridingExecution", () =>
+      [selectedStatic, editSelected, releasedStatic].every((state) =>
+        state.selectedOutlineWidth === 1
+        && state.selectedOutlineStyle === "solid"
+        && state.selectedOutlineColor === state.selectedSelectionColor
+        && state.selectedStripPressed === "true"
+        && Math.abs(state.selectedStripHitWidth - 16) <= 0.1
+        && Math.abs(state.selectedStripVisualWidth - 16) <= 0.1
+        && state.selectedStripBorderLeftWidth === 1)
+      && [selectedStatic, editSelected].every((state) =>
+        state.selectedActive
+        && state.selectedStripColor === state.selectedIdentityColor
+        && state.selectedCardBorderColors.every(
+          (color) => color === state.selectedIdentityColor,
+        ))
+      && !releasedStatic.selectedActive
+      && releasedStatic.selectedStripColor === releasedStatic.selectedNeutralColor
+      && releasedStatic.selectedStripColor !== releasedStatic.selectedIdentityColor
+      && releasedStatic.selectedCardBorderColors.every(
+        (color) => color === releasedStatic.selectedNeutralColor,
+      )],
     ["sceneSettingsPaneUsesSameInheritedIdentityAsSelectedCell", () =>
       selectedStatic.sceneSettingsIdentityMatchesSelectedCell
       && editSelected.sceneSettingsIdentityMatchesSelectedCell],
