@@ -106,6 +106,8 @@ export type MappingDragState =
       fixtureIds: number[];
       startWorld: { x: number; z: number };
       currentWorld: { x: number; z: number };
+      startClient: { x: number; y: number };
+      currentClient: { x: number; y: number };
       startPositions: Record<number, PatchFixtureRequest["position"]>;
     }
   | {
@@ -114,6 +116,8 @@ export type MappingDragState =
       fixtureId: number;
       startWorld: { x: number; z: number };
       currentWorld: { x: number; z: number };
+      startClient: { x: number; y: number };
+      currentClient: { x: number; y: number };
       centerWorld: { x: number; z: number };
     }
   | {

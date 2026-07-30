@@ -201,7 +201,11 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
                     selectedFixtures={props.selection.selectedFixtures}
                   />
                   <MappingEditableStageShell {...props.editableStage}>
-                    <MappingStageLayersPanel {...props.stageLayers} readOnly />
+                    <MappingStageLayersPanel
+                      {...props.stageLayers}
+                      readOnly
+                      fixtureTransformsEditable
+                    />
                   </MappingEditableStageShell>
                 </div>
               }

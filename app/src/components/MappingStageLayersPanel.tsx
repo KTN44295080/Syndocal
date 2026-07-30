@@ -9,6 +9,7 @@ import { MappingVideoSurfacesLayer, type MappingVideoSurface2D } from "./Mapping
 
 interface MappingStageLayersPanelProps {
   readOnly?: boolean;
+  fixtureTransformsEditable?: boolean;
   showStageObjects: boolean;
   showProjectors: boolean;
   showBeams: boolean;
@@ -81,6 +82,7 @@ export function MappingStageLayersPanel(props: MappingStageLayersPanelProps) {
         showLevels={props.showLevels}
         placePreview={props.placePreview}
         readOnly={props.readOnly}
+        fixtureTransformsEditable={props.fixtureTransformsEditable}
         isDragging={props.isDraggingFixture}
         isYawDragging={props.isYawDragging}
         onBeginYawDrag={props.onBeginFixtureYawDrag}

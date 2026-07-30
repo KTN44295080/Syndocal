@@ -27,6 +27,8 @@ type FixtureTransformUpdate = {
   rotation?: PatchFixtureRequest["rotation"];
 };
 
+export const MAPPING_FIXTURE_DRAG_THRESHOLD_PX = 4;
+
 interface MappingInteractionControllerOptions {
   snapshot: Accessor<EngineSnapshot>;
   mappingViewportBox: Accessor<{ x: number; z: number; size: number }>;
@@ -163,6 +165,8 @@ export function createMappingInteractionController(options: MappingInteractionCo
       fixtureIds,
       startWorld: point,
       currentWorld: point,
+      startClient: { x: event.clientX, y: event.clientY },
+      currentClient: { x: event.clientX, y: event.clientY },
       startPositions,
     });
   };
@@ -184,6 +188,8 @@ export function createMappingInteractionController(options: MappingInteractionCo
       fixtureId,
       startWorld: point,
       currentWorld: point,
+      startClient: { x: event.clientX, y: event.clientY },
+      currentClient: { x: event.clientX, y: event.clientY },
       centerWorld: { x: fixture.position.x, z: fixture.position.z },
     });
   };
@@ -413,7 +419,15 @@ export function createMappingInteractionController(options: MappingInteractionCo
 
     const drag = options.mappingDrag();
     if (drag && drag.pointerId === event.pointerId) {
-      options.setMappingDrag({ ...drag, currentWorld: cursorWorld });
+      options.setMappingDrag({
+        ...drag,
+        currentWorld: cursorWorld,
+        ...(
+          drag.kind === "fixture" || drag.kind === "fixtureYaw"
+            ? { currentClient: { x: event.clientX, y: event.clientY } }
+            : {}
+        ),
+      });
       return;
     }
     const marquee = options.mappingMarquee();
@@ -429,8 +443,15 @@ export function createMappingInteractionController(options: MappingInteractionCo
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
+      const fixtureDragDistance = drag.kind === "fixture" || drag.kind === "fixtureYaw"
+        ? Math.hypot(
+            drag.currentClient.x - drag.startClient.x,
+            drag.currentClient.y - drag.startClient.y,
+          )
+        : Number.POSITIVE_INFINITY;
       if (drag.kind === "fixtureYaw") {
         options.setMappingDrag(null);
+        if (fixtureDragDistance < MAPPING_FIXTURE_DRAG_THRESHOLD_PX) return;
         const fixture = options.snapshot().fixtures.find((candidate) => candidate.id === drag.fixtureId);
         if (!fixture) return;
         const yaw = options.mappingFixtureYawFromPoint(drag.centerWorld, drag.currentWorld);
@@ -440,7 +461,10 @@ export function createMappingInteractionController(options: MappingInteractionCo
         return;
       }
       const delta = options.dragWorldDelta(drag);
-      if (Math.abs(delta.x) < 0.01 && Math.abs(delta.z) < 0.01) {
+      if (
+        (drag.kind === "fixture" && fixtureDragDistance < MAPPING_FIXTURE_DRAG_THRESHOLD_PX)
+        || (Math.abs(delta.x) < 0.01 && Math.abs(delta.z) < 0.01)
+      ) {
         options.setMappingDrag(null);
         return;
       }

@@ -1,6 +1,7 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import type { FixtureLiveColorSegment } from "../fixtureLiveColor";
 import type { MappingFixtureVisualKind } from "../fixtureVisuals";
+import { MAPPING_FIXTURE_DRAG_THRESHOLD_PX } from "../createMappingInteractionController";
 import { planStageFixtureLabels, type StageLabelViewport } from "../stageLabelLayout";
 import { StageFixtureGlyph, StageFixtureLabel } from "./StageGlyphs";
 
@@ -37,6 +38,7 @@ export type MappingPlacePreview2D = Pick<
 
 type MappingFixturesLayerProps = {
   readOnly?: boolean;
+  fixtureTransformsEditable?: boolean;
   fixtures: MappingFixture2D[];
   labelFixtures?: MappingFixture2D[];
   selectedFixtureIds: Set<number>;
@@ -87,7 +89,8 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
           ].filter(Boolean).join(" ");
           const yawDragging = () => props.isYawDragging(fixture.id);
           const showYawHandle = () =>
-            !props.readOnly && (selected() || props.selectedFixtureId === fixture.id || yawDragging());
+            (props.fixtureTransformsEditable ?? !props.readOnly) &&
+            (selected() || props.selectedFixtureId === fixture.id || yawDragging());
           return (
             <>
               <g
@@ -96,6 +99,7 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
                 data-live-color-applied={fixture.liveColorApplied ? "true" : "false"}
                 data-live-color-source={fixture.liveColorValueSource ?? "none"}
                 data-live-segment-count={fixture.liveSegments?.length ?? 1}
+                data-stage-fixture-drag-threshold={MAPPING_FIXTURE_DRAG_THRESHOLD_PX}
                 transform={`translate(${fixture.x} ${fixture.z}) rotate(${fixture.yaw})`}
                 onPointerDown={(event) => props.onFixturePointerDown(event, fixture.id)}
                 onPointerEnter={() => setHoveredFixtureId(fixture.id)}

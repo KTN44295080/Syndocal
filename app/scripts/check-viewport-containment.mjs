@@ -42,6 +42,7 @@ const editLiveOnlyMode = process.argv.includes("--edit-live-only");
 const colorWheelOnlyMode = process.argv.includes("--color-wheel-only");
 const controlEditPositionOnlyMode = process.argv.includes("--control-edit-position-only");
 const controlStageChromeOnlyMode = process.argv.includes("--control-stage-chrome-only");
+const controlStageFixtureEditOnlyMode = process.argv.includes("--control-stage-fixture-edit-only");
 const mappingLiveColorOnlyMode = process.argv.includes("--mapping-live-color-only");
 const mappingLiveSegmentsOnlyMode = process.argv.includes("--mapping-live-segments-only");
 const mappingLiveSnapshotOnlyMode = process.argv.includes("--mapping-live-snapshot-only");
@@ -61,6 +62,8 @@ const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
       ? "color-wheel"
     : editLiveOnlyMode
       ? "edit-live"
+    : controlStageFixtureEditOnlyMode
+      ? "control-stage-edit"
     : liveEditTypesOnlyMode || attributeCategoriesOnlyMode
       ? "live-edit-types"
     : cueRecallOnlyMode
@@ -120,6 +123,8 @@ const viewports = requestedViewport
   : topbarPulseOnlyMode
     ? [compactFallbackViewports[1]]
   : largeShowMode
+    ? [primaryOperationalViewport]
+  : controlStageFixtureEditOnlyMode
     ? [primaryOperationalViewport]
     : mappingLiveColorOnlyMode || mappingLiveSegmentsOnlyMode || mappingLiveSnapshotOnlyMode || barBeamsOnlyMode
       ? [primaryOperationalViewport]
@@ -3537,6 +3542,572 @@ async function runControlStageChromeViewport(client, viewport) {
     controlAfterHotkey,
     control,
     setup,
+  };
+}
+
+function installControlStageEditMockInPage() {
+  const clone = (value) => JSON.parse(JSON.stringify(value));
+  const source = window.__syndocalReadControlStageEditFixtureSnapshot?.();
+  if (!source) throw new Error("Control stage edit fixture snapshot bridge is unavailable");
+  const mock = {
+    calls: [],
+    current: clone(source),
+    pendingBefore: null,
+    undoSnapshots: [],
+    redoSnapshots: [],
+    transactionId: 0,
+  };
+  const historyStatus = (undoLabel = null, redoLabel = null) => ({
+    can_undo: mock.undoSnapshots.length > 0,
+    can_redo: mock.redoSnapshots.length > 0,
+    undo_depth: mock.undoSnapshots.length,
+    redo_depth: mock.redoSnapshots.length,
+    undo_label: undoLabel ?? (mock.undoSnapshots.length > 0 ? "Set Fixture Transform" : null),
+    redo_label: redoLabel ?? (mock.redoSnapshots.length > 0 ? "Set Fixture Transform" : null),
+  });
+  const invoke = async (command, args = {}) => {
+    mock.calls.push({ command, args: clone(args) });
+    if (command === "begin_project_transaction") {
+      mock.transactionId += 1;
+      mock.pendingBefore = clone(mock.current);
+      return mock.transactionId;
+    }
+    if (command === "set_fixture_transform") {
+      const fixture = mock.current.fixtures.find((candidate) => candidate.id === args.fixtureId);
+      if (!fixture) throw new Error(`Fixture ${args.fixtureId} was not found`);
+      fixture.position = clone(args.position);
+      fixture.rotation = clone(args.rotation);
+      return null;
+    }
+    if (command === "commit_project_transaction") {
+      if (mock.pendingBefore) {
+        mock.undoSnapshots.push(mock.pendingBefore);
+        mock.pendingBefore = null;
+        mock.redoSnapshots = [];
+      }
+      return historyStatus("Set Fixture Transform", null);
+    }
+    if (command === "cancel_project_transaction") {
+      if (mock.pendingBefore) mock.current = mock.pendingBefore;
+      mock.pendingBefore = null;
+      return historyStatus();
+    }
+    if (command === "undo_project_transaction") {
+      const previous = mock.undoSnapshots.pop();
+      if (previous) {
+        mock.redoSnapshots.push(clone(mock.current));
+        mock.current = previous;
+      }
+      return historyStatus(null, "Set Fixture Transform");
+    }
+    if (command === "get_project_history_status") return historyStatus();
+    if (command === "get_snapshot") return clone(mock.current);
+    if (command === "trigger_cue") {
+      const cue = mock.current.cues.find((candidate) => candidate.id === args.cueId);
+      if (cue) {
+        mock.current.active_cue_id = cue.id;
+        if (cue.group_id) {
+          mock.current.active_group_cue_ids = {
+            ...(mock.current.active_group_cue_ids ?? {}),
+            [cue.group_id]: cue.id,
+          };
+        }
+      }
+      return null;
+    }
+    if (command === "release_cue") {
+      const cue = mock.current.cues.find((candidate) => candidate.id === args.cueId);
+      if (mock.current.active_cue_id === args.cueId) mock.current.active_cue_id = null;
+      if (cue?.group_id && mock.current.active_group_cue_ids?.[cue.group_id] === args.cueId) {
+        delete mock.current.active_group_cue_ids[cue.group_id];
+      }
+      return null;
+    }
+    if (command === "get_operator_policy" || command === "get_video_preview_diagnostics") return null;
+    return null;
+  };
+  Object.defineProperty(window, "__TAURI_INTERNALS__", {
+    configurable: true,
+    writable: true,
+    value: { invoke },
+  });
+  window.__syndocalControlStageEditMock = mock;
+}
+
+function readControlStageEditStateInPage() {
+  const fixtureSnapshot = window.__syndocalReadControlStageEditFixtureSnapshot?.();
+  const fixture = fixtureSnapshot?.fixtures?.find((candidate) => candidate.id === 1) ?? null;
+  const node = document.querySelector('.controlStageContext [data-stage-fixture-id="1"]');
+  const hitTarget = node?.querySelector(".stageFixtureHitTarget") ?? null;
+  const yawHandle = document.querySelector(".controlStageContext .stageYawHandle");
+  const stage = document.querySelector(".controlStageContext .editableStage");
+  const app = document.querySelector(".app");
+  const transformCalls = window.__syndocalControlStageEditMock?.calls
+    ?.filter((call) => call.command === "set_fixture_transform") ?? [];
+  return {
+    fixture: fixture ? {
+      id: fixture.id,
+      position: { ...fixture.position },
+      rotation: { ...fixture.rotation },
+    } : null,
+    selectedFixtureIds: [...document.querySelectorAll(
+      ".controlStageContext [data-stage-fixture-id].selected",
+    )].map((element) => Number(element.getAttribute("data-stage-fixture-id"))),
+    dragThresholdPx: Number(node?.getAttribute("data-stage-fixture-drag-threshold") ?? -1),
+    yawHandleCount: yawHandle ? 1 : 0,
+    liveColorFixtureCount: document.querySelectorAll(
+      '.controlStageContext [data-stage-fixture-id][data-live-color-applied="true"]',
+    ).length,
+    multiSegmentFixtureCount: [...document.querySelectorAll(
+      ".controlStageContext [data-stage-fixture-id][data-live-segment-count]",
+    )].filter((element) => Number(element.getAttribute("data-live-segment-count")) > 1).length,
+    stageViewBox: stage?.getAttribute("viewBox") ?? "",
+    stageMode: stage?.classList.contains("panMode")
+      ? "pan"
+      : stage?.classList.contains("selectMode")
+        ? "select"
+        : "",
+    hitPoint: (() => {
+      const rect = hitTarget?.getBoundingClientRect();
+      if (!rect) return null;
+      const x = rect.left + rect.width / 2;
+      const y = rect.top + rect.height / 2;
+      return {
+        x,
+        y,
+        topHitFixtureId: Number(
+          document.elementFromPoint(x, y)
+            ?.closest("[data-stage-fixture-id]")
+            ?.getAttribute("data-stage-fixture-id") ?? -1,
+        ),
+      };
+    })(),
+    yawPoint: (() => {
+      const rect = yawHandle?.getBoundingClientRect();
+      const hitRect = hitTarget?.getBoundingClientRect();
+      const stageRect = stage?.getBoundingClientRect();
+      if (!rect || !hitRect || !stageRect) return null;
+      const x = rect.left + rect.width / 2;
+      const y = rect.top + rect.height / 2;
+      const centerX = hitRect.left + hitRect.width / 2;
+      const centerY = hitRect.top + hitRect.height / 2;
+      const radius = Math.max(24, Math.hypot(x - centerX, y - centerY));
+      const candidates = [
+        { x: centerX + radius, y: centerY },
+        { x: centerX - radius, y: centerY },
+        { x: centerX, y: centerY + radius },
+        { x: centerX, y: centerY - radius },
+      ];
+      const target = candidates.find((candidate) =>
+        candidate.x >= stageRect.left + 4
+        && candidate.x <= stageRect.right - 4
+        && candidate.y >= stageRect.top + 4
+        && candidate.y <= stageRect.bottom - 4
+        && Math.hypot(candidate.x - x, candidate.y - y) >= 8
+      ) ?? candidates[0];
+      return {
+        x,
+        y,
+        targetX: target.x,
+        targetY: target.y,
+        topHitOwnsHandle: document.elementFromPoint(x, y)?.closest(".stageYawHandle") === yawHandle,
+      };
+    })(),
+    transformCalls: transformCalls.map((call) => JSON.parse(JSON.stringify(call))),
+    mockCommands: window.__syndocalControlStageEditMock?.calls?.map((call) => call.command) ?? [],
+    stageObjectEditHandleCount: document.querySelectorAll(
+      ".controlStageContext .stageObjectRotateHandle, .controlStageContext .stageObjectResizeHandle",
+    ).length,
+    placePreviewCount: document.querySelectorAll(".controlStageContext .stagePlacePreview").length,
+    documentAndAppScrollZero:
+      window.scrollX === 0 && window.scrollY === 0
+      && document.documentElement.scrollWidth === document.documentElement.clientWidth
+      && document.documentElement.scrollHeight === document.documentElement.clientHeight
+      && document.body.scrollWidth === document.documentElement.clientWidth
+      && document.body.scrollHeight === document.documentElement.clientHeight
+      && (!app || (app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight)),
+  };
+}
+
+async function readControlStageEditState(client) {
+  return await client.evaluate(`(${readControlStageEditStateInPage.toString()})()`);
+}
+
+async function dispatchCdpMouseDrag(client, start, end, intermediate = null) {
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: start.x,
+    y: start.y,
+    button: "left",
+    buttons: 1,
+    clickCount: 1,
+  });
+  if (intermediate) {
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: intermediate.x,
+      y: intermediate.y,
+      button: "left",
+      buttons: 1,
+    });
+  }
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: end.x,
+    y: end.y,
+    button: "left",
+    buttons: 1,
+  });
+  await sleep(40);
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: end.x,
+    y: end.y,
+    button: "left",
+    buttons: 0,
+    clickCount: 1,
+  });
+}
+
+async function runControlStageFixtureEditViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: fixtureUrl("control-stage-edit") });
+  await waitForApp(client);
+  await client.evaluate(`(${installControlStageEditMockInPage.toString()})()`);
+
+  await clickByText(client, "Control");
+  await clickByText(client, "Live Edit");
+  await sleep(100);
+  await clickVisibleSelector(client, "[data-control-stage-mapping-link]");
+  await waitForClientCondition(
+    client,
+    `Boolean(document.querySelector(".layoutSetup.setupMode-mapping .mappingWorkspaceExpanded"))`,
+    "Control stage edit Mapping setup",
+  );
+  await clickVisibleByText(client, "[data-mapping-snap-controls] button", "0.5m");
+  const snapConfigured = await client.evaluate(`(() => {
+    const active = [...document.querySelectorAll("[data-mapping-snap-controls] button")]
+      .find((button) => button.classList.contains("active"));
+    return (active?.textContent ?? "").trim();
+  })()`);
+  await clickByText(client, "Control");
+  await clickByText(client, "Live Edit");
+  await clickVisibleSelector(client, '[data-control-stage-tool-icon="select"]');
+  await sleep(100);
+
+  await clickVisibleSelector(client, '[data-control-stage-tool-icon="clear-pick"]');
+  const initial = await readControlStageEditState(client);
+  if (!initial.hitPoint) throw new Error("Control stage fixture hit point was unavailable");
+
+  await dispatchCdpMouseDrag(
+    client,
+    initial.hitPoint,
+    { x: initial.hitPoint.x + 2, y: initial.hitPoint.y },
+  );
+  await sleep(100);
+  const afterClick = await readControlStageEditState(client);
+
+  const moveEnd = {
+    x: initial.hitPoint.x + 58,
+    y: initial.hitPoint.y + 22,
+  };
+  await dispatchCdpMouseDrag(
+    client,
+    initial.hitPoint,
+    moveEnd,
+    { x: initial.hitPoint.x + 12, y: initial.hitPoint.y + 5 },
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const fixture = window.__syndocalReadControlStageEditFixtureSnapshot?.()
+        ?.fixtures?.find((candidate) => candidate.id === 1);
+      return Boolean(
+        fixture
+        && (Math.abs(fixture.position.x - ${initial.fixture.position.x}) > 0.001
+          || Math.abs(fixture.position.z - ${initial.fixture.position.z}) > 0.001)
+      );
+    })()`,
+    "Control stage fixture drag mutation",
+  );
+  const afterMove = await readControlStageEditState(client);
+
+  await clickVisibleSelector(client, '[aria-label="Project menu"]');
+  await clickVisibleSelector(client, '[aria-keyshortcuts*="Control+Z"]');
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const fixture = window.__syndocalReadControlStageEditFixtureSnapshot?.()
+        ?.fixtures?.find((candidate) => candidate.id === 1);
+      return Boolean(
+        fixture
+        && Math.abs(fixture.position.x - ${initial.fixture.position.x}) <= 0.001
+        && Math.abs(fixture.position.z - ${initial.fixture.position.z}) <= 0.001
+      );
+    })()`,
+    "Control stage fixture Undo",
+  );
+  const afterUndo = await readControlStageEditState(client);
+
+  if (!afterUndo.yawPoint) throw new Error("Control stage yaw handle point was unavailable");
+  await dispatchCdpMouseDrag(
+    client,
+    { x: afterUndo.yawPoint.x, y: afterUndo.yawPoint.y },
+    { x: afterUndo.yawPoint.targetX, y: afterUndo.yawPoint.targetY },
+  );
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const fixture = window.__syndocalReadControlStageEditFixtureSnapshot?.()
+        ?.fixtures?.find((candidate) => candidate.id === 1);
+      return Boolean(fixture && Math.abs(fixture.rotation.yaw - ${afterUndo.fixture.rotation.yaw}) > 0.001);
+    })()`,
+    "Control stage fixture yaw mutation",
+  );
+  const afterYaw = await readControlStageEditState(client);
+
+  const transformCountBeforePan = afterYaw.transformCalls.length;
+  await clickVisibleSelector(client, '[data-control-stage-tool-icon="pan"]');
+  const beforePan = await readControlStageEditState(client);
+  await dispatchCdpMouseDrag(
+    client,
+    beforePan.hitPoint,
+    { x: beforePan.hitPoint.x + 36, y: beforePan.hitPoint.y + 18 },
+  );
+  await sleep(80);
+  const afterPan = await readControlStageEditState(client);
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseWheel",
+    x: afterPan.hitPoint.x,
+    y: afterPan.hitPoint.y,
+    deltaX: 0,
+    deltaY: -120,
+  });
+  await sleep(80);
+  const afterWheel = await readControlStageEditState(client);
+  await clickVisibleSelector(client, '[data-control-stage-tool-icon="select"]');
+
+  const layerBefore = await client.evaluate(`(() => {
+    const button = document.querySelector('[data-control-stage-layer-toggle="beams"]');
+    return {
+      pressed: button?.getAttribute("aria-pressed") ?? "",
+      beamCount: document.querySelectorAll(".controlStageContext .stageBeam").length,
+    };
+  })()`);
+  await clickVisibleSelector(client, '[data-control-stage-layer-toggle="beams"]');
+  await sleep(60);
+  const layerAfter = await client.evaluate(`(() => {
+    const button = document.querySelector('[data-control-stage-layer-toggle="beams"]');
+    return {
+      pressed: button?.getAttribute("aria-pressed") ?? "",
+      beamCount: document.querySelectorAll(".controlStageContext .stageBeam").length,
+      transformCallCount: window.__syndocalControlStageEditMock?.calls
+        ?.filter((call) => call.command === "set_fixture_transform").length ?? -1,
+    };
+  })()`);
+
+  await clickVisibleSelector(client, '[data-control-stage-tool-icon="pick-visible"]');
+  await sleep(60);
+  const pickVisible = await client.evaluate(`(() => ({
+    selectedCount: document.querySelectorAll(
+      ".controlStageContext [data-stage-fixture-id].selected",
+    ).length,
+    transformCallCount: window.__syndocalControlStageEditMock?.calls
+      ?.filter((call) => call.command === "set_fixture_transform").length ?? -1,
+  }))()`);
+  await clickVisibleSelector(client, '[data-control-stage-tool-icon="clear-pick"]');
+  await sleep(60);
+  const clearPick = await client.evaluate(`(() => ({
+    selectedCount: document.querySelectorAll(
+      ".controlStageContext [data-stage-fixture-id].selected",
+    ).length,
+    transformCallCount: window.__syndocalControlStageEditMock?.calls
+      ?.filter((call) => call.command === "set_fixture_transform").length ?? -1,
+  }))()`);
+
+  await clickByText(client, "Timeline");
+  await clickByText(client, "Show");
+  await waitForClientCondition(
+    client,
+    `Boolean(document.querySelector('[data-scene-matrix-cue-id="302"] .sceneMatrixTrigger'))`,
+    "Control stage edit trigger regression surface",
+  );
+  const matrixBefore = await client.evaluate(`(() => ({
+    activeIds: [...document.querySelectorAll('[data-scene-matrix-active="true"]')]
+      .map((card) => card.getAttribute("data-scene-matrix-cue-id")),
+    selectedIds: [...document.querySelectorAll('[data-scene-matrix-selected="true"]')]
+      .map((card) => card.getAttribute("data-scene-matrix-cue-id")),
+    transformCallCount: window.__syndocalControlStageEditMock?.calls
+      ?.filter((call) => call.command === "set_fixture_transform").length ?? -1,
+  }))()`);
+  const triggerPoint = await client.evaluate(`(() => {
+    const trigger = document.querySelector('[data-scene-matrix-cue-id="302"] .sceneMatrixTrigger');
+    trigger?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const rect = trigger?.getBoundingClientRect();
+    if (!rect) return null;
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    return {
+      x,
+      y,
+      topHitCueId: document.elementFromPoint(x, y)
+        ?.closest("[data-scene-matrix-cue-id]")
+        ?.getAttribute("data-scene-matrix-cue-id") ?? "",
+    };
+  })()`);
+  if (!triggerPoint) throw new Error("Control stage edit trigger point was unavailable");
+  await dispatchCdpMouseDrag(client, triggerPoint, triggerPoint);
+  await waitForClientCondition(
+    client,
+    `document.querySelector('[data-scene-matrix-cue-id="302"]')
+      ?.getAttribute("data-scene-matrix-active") === "true"`,
+    "Control stage edit trigger click",
+  );
+  const stripPoint = await client.evaluate(`(() => {
+    const strip = document.querySelector('[data-scene-matrix-edit-strip="301"]');
+    strip?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const rect = strip?.getBoundingClientRect();
+    if (!rect) return null;
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    return {
+      x,
+      y,
+      topHitStripId: document.elementFromPoint(x, y)
+        ?.closest("[data-scene-matrix-edit-strip]")
+        ?.getAttribute("data-scene-matrix-edit-strip") ?? "",
+    };
+  })()`);
+  if (!stripPoint) throw new Error("Control stage edit strip point was unavailable");
+  await dispatchCdpMouseDrag(client, stripPoint, stripPoint);
+  await waitForClientCondition(
+    client,
+    `document.querySelector('[data-scene-matrix-cue-id="301"]')
+      ?.getAttribute("data-scene-matrix-selected") === "true"`,
+    "Control stage edit identity-strip click",
+  );
+  const matrixAfter = await client.evaluate(`(() => ({
+    activeIds: [...document.querySelectorAll('[data-scene-matrix-active="true"]')]
+      .map((card) => card.getAttribute("data-scene-matrix-cue-id")),
+    selectedIds: [...document.querySelectorAll('[data-scene-matrix-selected="true"]')]
+      .map((card) => card.getAttribute("data-scene-matrix-cue-id")),
+    sceneSettingsCount: document.querySelectorAll(".sceneSettingsPane").length,
+    transformCallCount: window.__syndocalControlStageEditMock?.calls
+      ?.filter((call) => call.command === "set_fixture_transform").length ?? -1,
+  }))()`);
+  const final = await readControlStageEditState(client);
+
+  const samePosition = (left, right) =>
+    Math.abs(left.x - right.x) <= 0.001
+    && Math.abs(left.y - right.y) <= 0.001
+    && Math.abs(left.z - right.z) <= 0.001;
+  const snappedToHalfMeter = (value) => Math.abs(value * 2 - Math.round(value * 2)) <= 0.001;
+  const conditions = [
+    ["controlStageFixtureClickSelectsWithoutMoving", () =>
+      initial.hitPoint.topHitFixtureId === 1
+      && afterClick.selectedFixtureIds.includes(1)
+      && afterClick.transformCalls.length === 0
+      && samePosition(afterClick.fixture.position, initial.fixture.position)],
+    ["controlStageFixtureDragUsesSharedFourPixelThreshold", () =>
+      initial.dragThresholdPx === 4
+      && afterClick.dragThresholdPx === 4
+      && afterMove.transformCalls.length === 1],
+    ["controlStageFixtureDragMovesAndUsesSharedSnap", () =>
+      snapConfigured === "0.5m"
+      && !samePosition(afterMove.fixture.position, initial.fixture.position)
+      && snappedToHalfMeter(afterMove.fixture.position.x)
+      && snappedToHalfMeter(afterMove.fixture.position.z)],
+    ["controlStageFixtureMoveUsesExistingTransactionalCommand", () =>
+      afterMove.mockCommands.includes("begin_project_transaction")
+      && afterMove.mockCommands.includes("set_fixture_transform")
+      && afterMove.mockCommands.includes("commit_project_transaction")
+      && afterMove.mockCommands.includes("get_snapshot")],
+    ["controlStageFixtureMoveUndoRestoresCoordinates", () =>
+      samePosition(afterUndo.fixture.position, initial.fixture.position)
+      && afterUndo.mockCommands.includes("undo_project_transaction")],
+    ["controlStageSelectedFixtureShowsYawHandleAndRotates", () =>
+      afterUndo.yawHandleCount === 1
+      && afterUndo.yawPoint.topHitOwnsHandle
+      && afterYaw.fixture.rotation.yaw !== afterUndo.fixture.rotation.yaw
+      && afterYaw.transformCalls.length === 2],
+    ["controlStageKeepsOtherStageAuthoringSetupOnly", () =>
+      initial.stageObjectEditHandleCount === 0
+      && initial.placePreviewCount === 0
+      && afterYaw.stageObjectEditHandleCount === 0
+      && afterYaw.placePreviewCount === 0],
+    ["controlStagePanAndWheelDoNotMoveFixture", () =>
+      beforePan.stageMode === "pan"
+      && afterPan.stageViewBox !== afterWheel.stageViewBox
+      && samePosition(afterWheel.fixture.position, afterYaw.fixture.position)
+      && afterWheel.fixture.rotation.yaw === afterYaw.fixture.rotation.yaw
+      && afterWheel.transformCalls.length === transformCountBeforePan],
+    ["controlStageLayerToggleDoesNotWriteFixtureTransform", () =>
+      layerBefore.pressed !== layerAfter.pressed
+      && layerAfter.transformCallCount === transformCountBeforePan],
+    ["controlStagePickToolbarDoesNotWriteFixtureTransform", () =>
+      pickVisible.selectedCount === 8
+      && clearPick.selectedCount === 0
+      && pickVisible.transformCallCount === transformCountBeforePan
+      && clearPick.transformCallCount === transformCountBeforePan],
+    ["controlStageLiveColorAndSegmentsSurviveEditing", () =>
+      initial.liveColorFixtureCount > 0
+      && initial.multiSegmentFixtureCount > 0
+      && afterYaw.liveColorFixtureCount === initial.liveColorFixtureCount
+      && afterYaw.multiSegmentFixtureCount === initial.multiSegmentFixtureCount],
+    ["controlStageEditDoesNotRegressMatrixTriggerOrStrip", () =>
+      triggerPoint.topHitCueId === "302"
+      && stripPoint.topHitStripId === "301"
+      && JSON.stringify(matrixBefore.activeIds) === JSON.stringify(["301"])
+      && JSON.stringify(matrixAfter.activeIds) === JSON.stringify(["302"])
+      && JSON.stringify(matrixAfter.selectedIds) === JSON.stringify(["301"])
+      && matrixAfter.sceneSettingsCount === 1
+      && matrixBefore.transformCallCount === transformCountBeforePan
+      && matrixAfter.transformCallCount === transformCountBeforePan],
+    ["controlStageFixtureEditKeepsOuterScrollZero", () =>
+      initial.documentAndAppScrollZero
+      && afterMove.documentAndAppScrollZero
+      && afterUndo.documentAndAppScrollZero
+      && afterYaw.documentAndAppScrollZero
+      && final.documentAndAppScrollZero],
+  ];
+  const checks = Object.fromEntries(conditions.map(([name, check]) => {
+    try {
+      return [name, Boolean(check())];
+    } catch {
+      return [name, false];
+    }
+  }));
+  const failedChecks = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  return {
+    label: `control-stage-fixture-edit-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    snapConfigured,
+    initial,
+    afterClick,
+    afterMove,
+    afterUndo,
+    afterYaw,
+    beforePan,
+    afterPan,
+    afterWheel,
+    layerBefore,
+    layerAfter,
+    pickVisible,
+    clearPick,
+    matrixBefore,
+    matrixAfter,
+    triggerPoint,
+    stripPoint,
+    final,
   };
 }
 
@@ -10036,6 +10607,7 @@ async function measureSceneMatrixPane(client) {
     const progressBars = cards.map((card) => card.querySelector('[data-scene-matrix-progress] progress')).filter(isVisible);
     const bankStrips = columns.map((column) => column.querySelector('.sceneMatrixBankStrip')).filter(isVisible);
     const cardScrollers = columns.map((column) => column.querySelector('.sceneMatrixCards')).filter(isVisible);
+    const liveModifierStrips = [...document.querySelectorAll('[data-cue-live-modifier]')].filter(isVisible);
     const dedicatedDragHandles = cards
       .map((card) => card.querySelector('.cueTimelineDragHandle'))
       .filter(isVisible);
@@ -10214,6 +10786,40 @@ async function measureSceneMatrixPane(client) {
         Math.max(0, Math.min(paneRect.bottom, statusRect.bottom) - Math.max(paneRect.top, statusRect.top))
       : Number.POSITIVE_INFINITY;
     const scrollerStyle = scroller ? getComputedStyle(scroller) : null;
+    const scrollerRect = scroller?.getBoundingClientRect() ?? null;
+    const columnWidths = columns.map((column) => column.getBoundingClientRect().width);
+    const fullyVisibleColumnIds = scrollerRect
+      ? columns
+          .filter((column) => {
+            const rect = column.getBoundingClientRect();
+            return rect.left >= scrollerRect.left - 1 && rect.right <= scrollerRect.right + 1;
+          })
+          .map((column) => column.getAttribute('data-scene-matrix-column') ?? '')
+      : [];
+    const liveModifierLayouts = liveModifierStrips.map((strip) => {
+      const rect = strip.getBoundingClientRect();
+      const cardRect = strip.closest('[data-scene-matrix-cue-id]')?.getBoundingClientRect() ?? null;
+      const ranges = [...strip.querySelectorAll('input[type="range"]')];
+      const controls = [...strip.querySelectorAll('input, select, button')];
+      return {
+        cueId: strip.getAttribute('data-cue-live-modifier') ?? '',
+        width: rect.width,
+        clientWidth: strip.clientWidth,
+        scrollWidth: strip.scrollWidth,
+        minRangeWidth: ranges.length > 0
+          ? Math.min(...ranges.map((range) => range.getBoundingClientRect().width))
+          : 0,
+        containedByCard: Boolean(
+          cardRect
+          && rect.left >= cardRect.left - 1
+          && rect.right <= cardRect.right + 1
+        ),
+        controlsContained: controls.every((control) => {
+          const controlRect = control.getBoundingClientRect();
+          return controlRect.left >= rect.left - 1 && controlRect.right <= rect.right + 1;
+        }),
+      };
+    });
     return {
       paneVisible: isVisible(pane),
       paneInPrimaryLiveDesk: pane?.parentElement?.classList.contains('liveControlPanel') === true,
@@ -10241,6 +10847,9 @@ async function measureSceneMatrixPane(client) {
         ? Math.min(...matrixTextNodes.map((element) => parseFloat(getComputedStyle(element).fontSize) || 0))
         : 0,
       columns: columns.map((column) => column.getAttribute('data-scene-matrix-column')),
+      columnWidths,
+      fullyVisibleColumnIds,
+      fullyVisibleColumnCount: fullyVisibleColumnIds.length,
       headerHues: headers.map((header) => header.getAttribute('data-scene-matrix-group-hue')),
       cardHues: cards.map((card) => card.getAttribute('data-scene-matrix-cue-hue')),
       cardIds: cards.map((card) => card.getAttribute('data-scene-matrix-cue-id')),
@@ -10305,6 +10914,7 @@ async function measureSceneMatrixPane(client) {
       cueLayouts,
       cellHeights: cueLayouts.map((layout) => layout.cardHeight),
       baseCellHeights: cueLayouts.map((layout) => layout.baseCellHeight),
+      liveModifierLayouts,
       longSceneNames: cueLayouts.filter((layout) =>
         ['BackBar-Amber', 'Bar-StrobeAMber'].includes(layout.label)),
       minCellHitSize: triggers.length > 0
@@ -11668,6 +12278,11 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       alternateView.activeView === "Cue Pads"],
     ["matrixExpectedGroupColumns", () =>
       JSON.stringify(before.columns) === JSON.stringify(expectedColumns) && before.cardIds.length === expectedCardCount],
+    ["matrixColumnsUseDaslightDensityWidth", () =>
+      before.columnWidths.length === expectedColumns.length
+      && before.columnWidths.every((width) => width >= 150 && width <= 160)],
+    ["matrixShowsAtLeastTenBanksAt1920", () =>
+      viewport.width !== 1920 || before.fullyVisibleColumnCount >= 10],
     ["matrixHeaderHueAttributesPresent", () => validHueAttributes(before.headerHues, expectedColumns.length)],
     ["matrixCardHueAttributesPresent", () => validHueAttributes(before.cardHues, expectedCardCount)],
     ["matrixBankIdentityStripsVisible", () =>
@@ -11693,15 +12308,25 @@ async function runSceneMatrixPaneCheck(client, viewport) {
         layout.superSceneAlignedWithMetaRow &&
         /^(STATIC|FX)$/.test(layout.kindLabel) &&
         /^\d+ms$/.test(layout.timeLabel))],
-    ["matrixLongShowNamesFullyDisplayAt1920", () =>
+    ["matrixLongShowNamesFullyDisplayAtCompressedWidth", () =>
       viewport.width !== 1920 ||
       (
         before.longSceneNames.length === 2 &&
         before.longSceneNames.every((layout) =>
           layout.nameFullyDisplayed &&
           layout.nameScrollWidth <= layout.nameClientWidth + 1 &&
-          layout.columnWidth >= 180)
+          layout.columnWidth >= 150 &&
+          layout.columnWidth <= 160)
       )],
+    ["matrixExpandedLiveModifierFitsCompressedColumn", () =>
+      before.liveModifierLayouts.length === 1
+      && before.liveModifierLayouts.every((layout) =>
+        layout.width >= 140
+        && layout.width <= 156
+        && layout.scrollWidth <= layout.clientWidth + 1
+        && layout.minRangeWidth >= 40
+        && layout.containedByCard
+        && layout.controlsContained)],
     ["matrixSuperSceneBadgeCoexistsWithFx", () =>
       before.superSceneBadges.length === 1 &&
       before.superSceneBadges[0].cueId === "303" &&
@@ -19797,6 +20422,33 @@ async function main() {
       }
       return;
     }
+    if (controlStageFixtureEditOnlyMode) {
+      const stageEditResults = [];
+      for (const viewport of viewports) {
+        const result = await runControlStageFixtureEditViewport(client, viewport);
+        stageEditResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `threshold=${result.initial.dragThresholdPx}px ` +
+            `position=${JSON.stringify(result.initial.fixture?.position)}->` +
+              `${JSON.stringify(result.afterMove.fixture?.position)}->` +
+              `${JSON.stringify(result.afterUndo.fixture?.position)} ` +
+            `yaw=${result.afterUndo.fixture?.rotation?.yaw}->${result.afterYaw.fixture?.rotation?.yaw} ` +
+            `snap=${result.snapConfigured} ` +
+            `live=${result.initial.liveColorFixtureCount}/${result.initial.multiSegmentFixtureCount} ` +
+            `trigger=${JSON.stringify(result.matrixBefore.activeIds)}->${JSON.stringify(result.matrixAfter.activeIds)} ` +
+            `strip=${JSON.stringify(result.matrixAfter.selectedIds)} ` +
+            `commands=${result.afterYaw.mockCommands.join(">")} ` +
+            `scroll=${result.final.documentAndAppScrollZero ? "zero" : "overflow"} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = stageEditResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Control stage fixture editing failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (controlStageChromeOnlyMode) {
       const chromeResults = [];
       for (const viewport of viewports) {
@@ -20453,6 +21105,8 @@ async function main() {
         console.log(
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
             `columns=${JSON.stringify(result.before.columns)} ` +
+            `bankWidth=${Math.round(Math.min(...result.before.columnWidths) * 100) / 100}px ` +
+            `visibleBanks=${result.before.fullyVisibleColumnCount} ` +
             `cell=${Math.round(result.before.minCellHitSize * 100) / 100}px ` +
             `baseHeight=${Math.round(Math.min(...result.before.baseCellHeights) * 100) / 100}px ` +
             `strip=${Math.round(Math.min(...result.before.editStrips.map((entry) => entry.hitWidth)) * 100) / 100}px/` +
@@ -20472,6 +21126,11 @@ async function main() {
               fit: entry.nameFullyDisplayed,
               width: `${entry.nameScrollWidth}/${entry.nameClientWidth}`,
               column: entry.columnWidth,
+            })))} ` +
+            `modifier=${JSON.stringify(result.before.liveModifierLayouts.map((entry) => ({
+              width: entry.width,
+              range: entry.minRangeWidth,
+              contained: entry.containedByCard && entry.controlsContained,
             })))} ` +
             `width=${Math.round(result.before.paneWidthCoverage * 1000) / 1000} ` +
             `scroll=${result.before.documentAndAppScrollZero ? "zero" : "overflow"} ` +
@@ -21266,7 +21925,7 @@ async function main() {
     }
     for (const result of sceneMatrixResults) {
       console.log(
-        `${result.passed ? "pass" : "fail"} ${result.label} columns=${JSON.stringify(result.before.columns)} active=${JSON.stringify(result.before.activeCardIds)}->${JSON.stringify(result.after.activeCardIds)} width=${Math.round(result.before.paneWidthCoverage * 1000) / 1000} baseHeight=${Math.round(Math.min(...result.before.baseCellHeights) * 100) / 100}px strip=${Math.round(Math.min(...result.before.editStrips.map((entry) => entry.hitWidth)) * 100) / 100}px/${result.before.editStrips[0]?.thresholdPx ?? "?"}px long=${JSON.stringify(result.before.longSceneNames.map((entry) => [entry.label, entry.nameFullyDisplayed, entry.nameScrollWidth, entry.nameClientWidth, entry.columnWidth]))} click=302:${result.subThresholdClick?.before.activeCardIds.join("+") || "?"}->${result.subThresholdClick?.after.activeCardIds.join("+") || "?"} drag=${result.oneGestureDrag?.sourceCueId ?? "?"}@${result.oneGestureDrag?.targetLayerId ?? "?"} events=${result.oneGestureDrag?.before.markerCount ?? "?"}->${result.oneGestureDrag?.after.markerCount ?? "?"} placements=${result.oneGestureDrag?.before.cuePlacementCount ?? "?"}->${result.oneGestureDrag?.after.cuePlacementCount ?? "?"} reorder=${result.sameColumnReorder?.before.frontColumnCueIds.join(">") || "?"}->${result.sameColumnReorder?.after.frontColumnCueIds.join(">") || "?"} indicator=${result.sameColumnReorder?.indicatorCueId ?? "?"}:${result.sameColumnReorder?.indicatorPosition ?? "?"} failed=${JSON.stringify(result.failedChecks)}`,
+        `${result.passed ? "pass" : "fail"} ${result.label} columns=${JSON.stringify(result.before.columns)} bankWidth=${Math.round(Math.min(...result.before.columnWidths) * 100) / 100}px visibleBanks=${result.before.fullyVisibleColumnCount} active=${JSON.stringify(result.before.activeCardIds)}->${JSON.stringify(result.after.activeCardIds)} width=${Math.round(result.before.paneWidthCoverage * 1000) / 1000} baseHeight=${Math.round(Math.min(...result.before.baseCellHeights) * 100) / 100}px strip=${Math.round(Math.min(...result.before.editStrips.map((entry) => entry.hitWidth)) * 100) / 100}px/${result.before.editStrips[0]?.thresholdPx ?? "?"}px long=${JSON.stringify(result.before.longSceneNames.map((entry) => [entry.label, entry.nameFullyDisplayed, entry.nameScrollWidth, entry.nameClientWidth, entry.columnWidth]))} modifier=${JSON.stringify(result.before.liveModifierLayouts.map((entry) => [entry.width, entry.minRangeWidth, entry.containedByCard && entry.controlsContained]))} click=302:${result.subThresholdClick?.before.activeCardIds.join("+") || "?"}->${result.subThresholdClick?.after.activeCardIds.join("+") || "?"} drag=${result.oneGestureDrag?.sourceCueId ?? "?"}@${result.oneGestureDrag?.targetLayerId ?? "?"} events=${result.oneGestureDrag?.before.markerCount ?? "?"}->${result.oneGestureDrag?.after.markerCount ?? "?"} placements=${result.oneGestureDrag?.before.cuePlacementCount ?? "?"}->${result.oneGestureDrag?.after.cuePlacementCount ?? "?"} reorder=${result.sameColumnReorder?.before.frontColumnCueIds.join(">") || "?"}->${result.sameColumnReorder?.after.frontColumnCueIds.join(">") || "?"} indicator=${result.sameColumnReorder?.indicatorCueId ?? "?"}:${result.sameColumnReorder?.indicatorPosition ?? "?"} failed=${JSON.stringify(result.failedChecks)}`,
       );
     }
     for (const result of paneWindowResults) {

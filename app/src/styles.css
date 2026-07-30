@@ -29654,7 +29654,7 @@ h3 {
 }
 
 .sceneMatrixColumn {
-  flex-basis: clamp(180px, 18vw, 244px);
+  flex: 0 0 156px;
   position: relative;
   overflow: hidden;
   border-color: #343a3e;
@@ -29677,7 +29677,7 @@ h3 {
 .sceneMatrixColumnHeader {
   min-height: 28px;
   border-bottom: 1px solid #373d41;
-  padding: 4px 6px;
+  padding: 4px;
   background: #22272a;
 }
 
@@ -29692,7 +29692,7 @@ h3 {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 3px;
+  padding: 2px;
   scrollbar-width: thin;
 }
 
@@ -29720,7 +29720,7 @@ h3 {
   align-items: stretch;
   min-height: 48px;
   gap: 2px;
-  padding: 4px 6px;
+  padding: 4px;
 }
 
 .sceneMatrixCuePrimaryRow,
@@ -29731,7 +29731,7 @@ h3 {
 }
 
 .sceneMatrixCuePrimaryRow {
-  gap: 5px;
+  gap: 3px;
   color: var(--cue-identity-text);
   line-height: 1.2;
 }
@@ -29885,8 +29885,10 @@ h3 {
 .cueLiveModifierStrip {
   grid-column: 1 / -1;
   display: grid;
-  gap: 3px;
-  padding: 3px 4px 4px;
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 3px;
   border-top: 1px solid #2c3239;
   background: #16191d;
 }
@@ -29897,9 +29899,10 @@ h3 {
 
 .cueLiveModifierRow {
   display: grid;
-  grid-template-columns: 40px minmax(0, 1fr) 44px;
+  grid-template-columns: 30px minmax(0, 1fr) 34px;
   align-items: center;
-  gap: 5px;
+  gap: 2px;
+  min-width: 0;
   font-size: 11px;
   color: #9aa2ab;
 }
@@ -29918,7 +29921,15 @@ h3 {
 }
 
 .cueLiveModifierModeRow {
-  grid-template-columns: 40px minmax(74px, 1fr) minmax(62px, 0.72fr);
+  grid-template-columns: 30px minmax(0, 1fr);
+}
+
+.cueLiveModifierModeRow > span {
+  grid-row: 1 / span 2;
+}
+
+.cueLiveModifierModeRow > select {
+  grid-column: 2;
 }
 
 .cueLiveModifierModeRow select {

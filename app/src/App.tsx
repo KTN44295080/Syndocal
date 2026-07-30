@@ -2160,11 +2160,18 @@ export default function App() {
     || viewportFixture === "live-edit-types"
     || viewportFixture === "edit-live"
     || viewportFixture === "color-wheel"
+    || viewportFixture === "control-stage-edit"
   ) {
     const sceneBlockLargeFixture = viewportFixture === "scene-block-large";
     const sceneBlockHourFixture = viewportFixture === "scene-block-hour";
     const timelineLayeredFixture = viewportFixture === "timeline-layered";
-    const timelineFixture = viewportFixture === "timeline" || timelineLayeredFixture || sceneBlockLargeFixture || sceneBlockHourFixture;
+    const controlStageEditFixture = viewportFixture === "control-stage-edit";
+    const timelineFixture =
+      viewportFixture === "timeline"
+      || timelineLayeredFixture
+      || sceneBlockLargeFixture
+      || sceneBlockHourFixture
+      || controlStageEditFixture;
     const cueRecallFixture = viewportFixture === "cue-recall";
     const cueRecallLargeFixture = viewportFixture === "cue-recall-large";
     const fxVisualFixture = viewportFixture === "fx-visual";
@@ -2172,7 +2179,10 @@ export default function App() {
     const cueNodeGraphFixture = viewportFixture === "cue-node-graph";
     const editLiveFixture = viewportFixture === "edit-live";
     const sceneMatrixFixture =
-      viewportFixture === "scene-matrix" || viewportFixture === "workspace-operator" || editLiveFixture;
+      viewportFixture === "scene-matrix"
+      || viewportFixture === "workspace-operator"
+      || editLiveFixture
+      || controlStageEditFixture;
     const touchComposedFixture = viewportFixture === "touch-composed";
     const liveEditTypeFixture = viewportFixture === "live-edit-types" || editLiveFixture;
     const colorWheelFixture = viewportFixture === "color-wheel";
@@ -2270,6 +2280,12 @@ export default function App() {
     setSelectedFixtureAddressDraft(1);
     setSelectedFixtureGroupText("front");
     setSelectedFixtureLimitsDraft(defaultFixtureLimits);
+    const controlStageEditFixtures = controlStageEditFixture
+      ? structuredClone(viewportFixtureData.mappingLiveColorFixtures)
+      : null;
+    if (controlStageEditFixtures) {
+      setLiveFixtures(controlStageEditFixtures);
+    }
     setSnapshot((current) => ({
       ...current,
       fixtures: cueNodeGraphFixture
@@ -2278,17 +2294,19 @@ export default function App() {
           ? structuredClone(
               colorWheelFixture ? viewportFixtureData.colorWheelFixtures : viewportFixtureData.liveEditTypeFixtures,
             )
-        : sceneMatrixFixture
-          ? [
-              { ...viewportPatchedFixture(1, "Front L", 1, -4, -2), group_ids: ["front"] },
-              { ...viewportPatchedFixture(2, "Front R", 9, 0, -2), group_ids: ["front"] },
-              { ...viewportPatchedFixture(3, "Back", 17, 4, -2), group_ids: ["back"] },
-            ]
-        : [
-            viewportPatchedFixture(1, "Video", 1, -4, -2),
-            viewportPatchedFixture(2, "Save", 9, 0, -2),
-            viewportPatchedFixture(3, "Output", 17, 4, -2),
-          ],
+          : controlStageEditFixtures
+            ? controlStageEditFixtures
+            : sceneMatrixFixture
+              ? [
+                  { ...viewportPatchedFixture(1, "Front L", 1, -4, -2), group_ids: ["front"] },
+                  { ...viewportPatchedFixture(2, "Front R", 9, 0, -2), group_ids: ["front"] },
+                  { ...viewportPatchedFixture(3, "Back", 17, 4, -2), group_ids: ["back"] },
+                ]
+              : [
+                  viewportPatchedFixture(1, "Video", 1, -4, -2),
+                  viewportPatchedFixture(2, "Save", 9, 0, -2),
+                  viewportPatchedFixture(3, "Output", 17, 4, -2),
+                ],
       active_fade: cueNodeGraphFixture
         ? null
         : {
@@ -2711,6 +2729,7 @@ export default function App() {
     __syndocalReadOperatorVjFixtureSnapshot?: () => EngineSnapshot;
     __syndocalReadEditLiveFixtureSnapshot?: () => EngineSnapshot;
     __syndocalReadEditLiveFixtureHistory?: () => ProjectHistoryStatus;
+    __syndocalReadControlStageEditFixtureSnapshot?: () => EngineSnapshot;
     __syndocalSetMappingLiveDmx?: (channelValues: Record<number, number>) => void;
     __syndocalCloneCueSnapshot?: () => void;
     __syndocalCloneFixtureSnapshot?: () => number;
@@ -2742,6 +2761,9 @@ export default function App() {
   if (viewportFixture === "edit-live") {
     sceneBlockFixtureWindow.__syndocalReadEditLiveFixtureSnapshot = () => snapshot();
     sceneBlockFixtureWindow.__syndocalReadEditLiveFixtureHistory = () => projectHistoryStatus();
+  }
+  if (viewportFixture === "control-stage-edit") {
+    sceneBlockFixtureWindow.__syndocalReadControlStageEditFixtureSnapshot = () => snapshot();
   }
   if (viewportFixture === "scene-matrix") {
     sceneBlockFixtureWindow.__syndocalCloneCueSnapshot = () => {
@@ -2821,6 +2843,7 @@ export default function App() {
     delete sceneBlockFixtureWindow.__syndocalReadOperatorVjFixtureSnapshot;
     delete sceneBlockFixtureWindow.__syndocalReadEditLiveFixtureSnapshot;
     delete sceneBlockFixtureWindow.__syndocalReadEditLiveFixtureHistory;
+    delete sceneBlockFixtureWindow.__syndocalReadControlStageEditFixtureSnapshot;
     delete sceneBlockFixtureWindow.__syndocalSetMappingLiveDmx;
     delete sceneBlockFixtureWindow.__syndocalCloneCueSnapshot;
     delete sceneBlockFixtureWindow.__syndocalCloneFixtureSnapshot;
@@ -17346,7 +17369,7 @@ export default function App() {
               event.stopPropagation();
               const fixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
               if (workspaceTab() === "control") {
-                if (fixture) selectMappingFixture(fixture, event);
+                beginMappingFixtureDrag(event, fixtureId);
                 return;
               }
               if (fixture && mappingStageTool() === "rotate") selectMappingFixture(fixture, event);
