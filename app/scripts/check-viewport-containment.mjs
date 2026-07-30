@@ -38,6 +38,7 @@ const workspaceOperatorOnlyMode = process.argv.includes("--workspace-operator-on
 const liveEditTypesOnlyMode = process.argv.includes("--live-edit-types-only");
 const attributeCategoriesOnlyMode = process.argv.includes("--attribute-categories-only");
 const editLiveOnlyMode = process.argv.includes("--edit-live-only");
+const colorWheelOnlyMode = process.argv.includes("--color-wheel-only");
 const controlEditPositionOnlyMode = process.argv.includes("--control-edit-position-only");
 const controlStageChromeOnlyMode = process.argv.includes("--control-stage-chrome-only");
 const controlModeSurfaceOnlyMode = process.argv.includes("--control-mode-surface-only");
@@ -47,6 +48,8 @@ const viewportTraceEnabled = process.env.SYNDOCAL_VIEWPORT_TRACE === "1";
 const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
   largeShowMode
     ? "large-show"
+    : colorWheelOnlyMode
+      ? "color-wheel"
     : editLiveOnlyMode
       ? "edit-live"
     : liveEditTypesOnlyMode || attributeCategoriesOnlyMode
@@ -16588,6 +16591,12 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
     const bankAttributeSwatches = bankAttributeIcons
       .map((icon) => icon.querySelector('i'))
       .filter(visible);
+    const bankAttributeGlyphDetails = bankAttributeIcons.map((icon) => ({
+      attribute: icon.getAttribute('aria-label') || '',
+      title: icon.getAttribute('title') || '',
+      glyph: icon.getAttribute('data-attribute-glyph') || '',
+      path: icon.querySelector('svg path')?.getAttribute('d') || '',
+    }));
     const bankTextLabels = bankFaders.flatMap((fader) =>
       [...fader.querySelectorAll('.attributeFaderLabel')].filter(visible)
     );
@@ -16734,6 +16743,7 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
       bankAttributeSwatchCount: bankAttributeSwatches.length,
       bankAttributeIconTitleCount: bankAttributeIcons.filter((icon) => Boolean(icon.getAttribute('title'))).length,
       bankAttributeIconAriaCount: bankAttributeIcons.filter((icon) => Boolean(icon.getAttribute('aria-label'))).length,
+      bankAttributeGlyphDetails,
       bankTextLabelCount: bankTextLabels.length,
       fullyVisibleBankFaderCount,
       fixtureTypePositionPadCount: fixtureTypePositionPads.length,
@@ -17031,6 +17041,18 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
         state.bankTextLabelCount === 0
       )
     ],
+    ["panTiltSpeedUsesClockGaugeGlyphAndKeepsAttributeA11y", () => {
+      const speedGlyphs = faderBank.bankAttributeGlyphDetails.filter((entry) =>
+        ["Generic: PanTiltSpeed", "PTSpeed", "MovementSpeed"].includes(entry.attribute)
+      );
+      return (
+        speedGlyphs.length === 1 &&
+        speedGlyphs[0].glyph === "speed" &&
+        speedGlyphs[0].path.includes("a5.75 5.75") &&
+        speedGlyphs[0].path.includes("M8 4v4l3 1.75") &&
+        speedGlyphs[0].title.startsWith(`${speedGlyphs[0].attribute} /`)
+      );
+    }],
     ["compactFaderVisibilityUsesMeasuredDeckWidthAndHorizontalScroll", () =>
       faderBank.widthDerivedVisibleChannelFloor > 0 &&
       faderBank.fullyVisibleBankFaderCount >= faderBank.widthDerivedVisibleChannelFloor &&
@@ -17474,6 +17496,396 @@ async function readControlFaderWriteVisibility(client) {
       buttonSpans,
     };
   })()`);
+}
+
+async function runColorWheelViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: fixtureUrl("color-wheel") });
+  await waitForApp(client);
+  await waitForClientCondition(
+    client,
+    "document.querySelectorAll('.colorWheelSlotGrid button').length === 15 && Boolean(document.querySelector('[data-color-wheel-picker] .colorPlane'))",
+    "ColorMacro 15-function wheel HSV picker fixture",
+  );
+  await sleep(100);
+
+  const readState = () => evaluatePageFunction(client, () => {
+    const visible = (element) => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+    };
+    const app = document.querySelector(".app");
+    const picker = document.querySelector("[data-color-wheel-picker]");
+    const pickerRect = picker?.getBoundingClientRect();
+    const desk = document.querySelector(".attributeDeskSurface");
+    const deskRect = desk?.getBoundingClientRect();
+    const buttons = [...document.querySelectorAll(".colorWheelSlotGrid button")];
+    const activeButton = buttons.find((button) => button.classList.contains("active"));
+    const buttonByLabel = (label) =>
+      buttons.find((button) => (button.querySelector("strong")?.textContent || "").trim() === label);
+    const swatchColor = (label) => {
+      const swatch = buttonByLabel(label)?.querySelector(".colorWheelSlotSwatch");
+      return swatch ? getComputedStyle(swatch).backgroundColor : "";
+    };
+    const directDmx = document.querySelector(
+      '.colorWheelSlotPanel .wheelSlotDirectGrid input[type="number"][max="65535"]',
+    );
+    const pickerInput = document.querySelector('[data-color-wheel-picker] input[type="color"]');
+    const hueInput = document.querySelector('[data-color-wheel-picker] .hsvDirectGrid input[type="number"]');
+    const approximation = document.querySelector("[data-color-wheel-approximation] strong");
+    const summary = document.querySelector(".attributeTargetSummary");
+    const activeSwatch = activeButton?.querySelector(".colorWheelSlotSwatch");
+    const faderSwatch = document.querySelector('.attributeFaderIcon[data-attribute-glyph="color"] i');
+    return {
+      pickerVisible: visible(picker),
+      pickerColorPlaneVisible: visible(document.querySelector("[data-color-wheel-picker] .colorPlane")),
+      pickerColorInputVisible: visible(pickerInput),
+      pickerValue: pickerInput instanceof HTMLInputElement ? pickerInput.value.toLowerCase() : "",
+      pickerHue: hueInput instanceof HTMLInputElement ? Number(hueInput.value) : Number.NaN,
+      pickerHsvNumberInputCount: picker
+        ? [...picker.querySelectorAll('.hsvDirectGrid input[type="number"]')].filter(visible).length
+        : 0,
+      pickerSaturationVisible: visible(
+        document.querySelector('[data-color-wheel-picker] .colorSaturationStrip input[type="range"]'),
+      ),
+      approximationVisible: visible(approximation),
+      approximationText: (approximation?.textContent || "").trim(),
+      rgbControlPanelCount: [...document.querySelectorAll(".colorControlPanel")].filter(visible).length,
+      slotCount: buttons.length,
+      slotMinimumHeight: buttons.length > 0
+        ? Math.min(...buttons.map((button) => button.getBoundingClientRect().height))
+        : 0,
+      orangeSwatchColor: swatchColor("Orange"),
+      blueSwatchColor: swatchColor("Blue"),
+      lightBlueSwatchColor: swatchColor("Light Blue"),
+      redSwatchColor: swatchColor("Red"),
+      whiteSwatchColor: swatchColor("White"),
+      activeSwatchColor: activeSwatch ? getComputedStyle(activeSwatch).backgroundColor : "",
+      faderSwatchColor: faderSwatch ? getComputedStyle(faderSwatch).backgroundColor : "",
+      activeLabel: (activeButton?.querySelector("strong")?.textContent || "").trim(),
+      activeDetail: (activeButton?.querySelector("small")?.textContent || "").trim(),
+      activeHighlighted:
+        Boolean(activeButton?.classList.contains("active")) &&
+        activeButton?.getAttribute("aria-pressed") === "true",
+      directDmxValue: directDmx instanceof HTMLInputElement ? Number(directDmx.value) : Number.NaN,
+      targetIsGroup: Boolean(summary?.classList.contains("group")),
+      targetText: (summary?.textContent || "").replace(/\s+/g, " ").trim(),
+      pickerContained:
+        Boolean(pickerRect && deskRect) &&
+        pickerRect.top >= deskRect.top - 1 &&
+        pickerRect.bottom <= deskRect.bottom + 1,
+      documentAndAppScrollZero:
+        document.documentElement.scrollWidth <= innerWidth + 1 &&
+        document.documentElement.scrollHeight <= innerHeight + 1 &&
+        document.body.scrollWidth <= document.body.clientWidth + 1 &&
+        document.body.scrollHeight <= document.body.clientHeight + 1 &&
+        (!app || (app.scrollWidth <= app.clientWidth + 1 && app.scrollHeight <= app.clientHeight + 1)),
+    };
+  });
+
+  const setPickerColor = async (color, expectedLabel) => {
+    const dispatched = await evaluatePageFunction(client, (nextColor) => {
+      const input = document.querySelector('[data-color-wheel-picker] input[type="color"]');
+      if (!(input instanceof HTMLInputElement)) return false;
+      input.value = nextColor;
+      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      return true;
+    }, color);
+    if (dispatched) {
+      await waitForClientCondition(
+        client,
+        `document.querySelector('.colorWheelSlotGrid button.active strong')?.textContent?.trim() === ${JSON.stringify(expectedLabel)}`,
+        `nearest ${expectedLabel} color wheel slot`,
+      );
+      await sleep(60);
+    }
+    return { dispatched, state: await readState() };
+  };
+
+  const setPickerFromColorPlane = async (hue, expectedLabel) => {
+    const point = await evaluatePageFunction(client, (nextHue) => {
+      const plane = document.querySelector("[data-color-wheel-picker] .colorPlane");
+      if (!(plane instanceof HTMLElement)) return null;
+      const rect = plane.getBoundingClientRect();
+      const x = rect.left + (nextHue / 360) * rect.width;
+      const y = rect.top + Math.min(1, rect.height * 0.005);
+      return {
+        x,
+        y,
+        hit: Boolean(document.elementFromPoint(x, y)?.closest(".colorPlane")),
+      };
+    }, hue);
+    if (!point) {
+      return { dispatched: false, hit: false, state: await readState() };
+    }
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: point.x,
+      y: point.y,
+      button: "left",
+      buttons: 1,
+      clickCount: 1,
+    });
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: point.x,
+      y: point.y,
+      button: "left",
+      buttons: 0,
+      clickCount: 1,
+    });
+    await waitForClientCondition(
+      client,
+      `document.querySelector('.colorWheelSlotGrid button.active strong')?.textContent?.trim() === ${JSON.stringify(expectedLabel)}`,
+      `pointer-picked nearest ${expectedLabel} color wheel slot`,
+    );
+    await sleep(60);
+    return { dispatched: true, hit: point.hit, state: await readState() };
+  };
+
+  const selectGroupReference = async (index) => {
+    const point = await evaluatePageFunction(client, (fixtureIndex) => {
+      const fixtures = [...document.querySelectorAll(".controlStageContext .stageFixture")];
+      const fixture = fixtures[fixtureIndex];
+      if (!(fixture instanceof SVGElement)) return null;
+      const rect = fixture.getBoundingClientRect();
+      const x = rect.left + rect.width / 2;
+      const y = rect.top + rect.height / 2;
+      return {
+        x,
+        y,
+        hit: Boolean(document.elementFromPoint(x, y)?.closest(".stageFixture")),
+      };
+    }, index);
+    if (!point) {
+      return { selected: false, hit: false, state: await readState() };
+    }
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: point.x,
+      y: point.y,
+      button: "left",
+      buttons: 1,
+      clickCount: 1,
+    });
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: point.x,
+      y: point.y,
+      button: "left",
+      buttons: 0,
+      clickCount: 1,
+    });
+    await sleep(50);
+    return { selected: true, hit: point.hit, state: await readState() };
+  };
+
+  const readAllGroupReferences = async () => {
+    const states = [];
+    for (let index = 0; index < 4; index += 1) {
+      states.push(await selectGroupReference(index));
+    }
+    return states;
+  };
+
+  const initial = await readState();
+  const orange = await setPickerFromColorPlane(22, "Orange");
+  const orangeGroupReferences = await readAllGroupReferences();
+  const blue = await setPickerColor("#0000ff", "Blue");
+  const blueGroupReferences = await readAllGroupReferences();
+  const red = await setPickerColor("#ff0000", "Red");
+  const redOnSecondGroupFixture = await selectGroupReference(1);
+  const white = await setPickerColor("#ffffff", "White");
+  const whiteGroupReferences = await readAllGroupReferences();
+  const directBlueDispatched = await evaluatePageFunction(client, () => {
+    const button = [...document.querySelectorAll(".colorWheelSlotGrid button")].find((candidate) =>
+      (candidate.querySelector("strong")?.textContent || "").trim() === "Blue"
+    );
+    if (!(button instanceof HTMLButtonElement)) return false;
+    button.click();
+    return true;
+  });
+  if (directBlueDispatched) {
+    await waitForClientCondition(
+      client,
+      "document.querySelector('.colorWheelSlotGrid button.active strong')?.textContent?.trim() === 'Blue'",
+      "direct Blue color wheel slot",
+    );
+    await sleep(60);
+  }
+  const directBlue = await readState();
+
+  const conditions = [
+    ["wheelOnlyFixtureShowsSharedHsvPicker", () =>
+      initial.pickerVisible &&
+      initial.pickerColorPlaneVisible &&
+      initial.pickerColorInputVisible &&
+      initial.pickerHsvNumberInputCount === 3 &&
+      initial.pickerSaturationVisible
+    ],
+    ["wheelOnlyFixtureDoesNotRenderRgbPicker", () => initial.rgbControlPanelCount === 0],
+    ["wheelPickerUsesRenderedSlotSwatchColors", () =>
+      initial.slotCount === 15 &&
+      initial.redSwatchColor === "rgb(255, 0, 0)" &&
+      initial.whiteSwatchColor === "rgb(255, 255, 255)"
+    ],
+    ["colorMacro15NormalizesDaslightBgrRepresentativeColors", () =>
+      initial.orangeSwatchColor === "rgb(255, 127, 0)" &&
+      initial.blueSwatchColor === "rgb(0, 0, 255)" &&
+      initial.lightBlueSwatchColor === "rgb(0, 255, 255)"
+    ],
+    ["wheelPickerAndSlotsMeetContainmentAndTargetFloors", () =>
+      initial.pickerContained && initial.slotMinimumHeight >= 40
+    ],
+    ["wheelPickerTargetsExistingGroupPath", () =>
+      initial.targetIsGroup && initial.targetText.includes("Group moving")
+    ],
+    ["initialPickerMatchesCurrentBlueSlot", () =>
+      initial.pickerValue === "#0000ff" &&
+      initial.activeLabel === "Blue" &&
+      initial.activeDetail.endsWith("28%-31%") &&
+      initial.activeSwatchColor === "rgb(0, 0, 255)" &&
+      initial.faderSwatchColor === "rgb(0, 0, 255)" &&
+      initial.approximationText === "→ Blue (28%-31%)"
+    ],
+    ["orangePointerUsesImmediateHue22Pick", () =>
+      orange.dispatched &&
+      orange.hit &&
+      orange.state.pickerHue >= 21 &&
+      orange.state.pickerHue <= 23 &&
+      orange.state.activeLabel === "Orange" &&
+      orange.state.faderSwatchColor === "rgb(255, 127, 0)"
+    ],
+    ["orangePointerWritesOrangeSlotMidpointDmx", () => orange.state.directDmxValue === 8_867],
+    ["orangePointerShowsApproximationTarget", () =>
+      orange.state.approximationVisible &&
+      orange.state.approximationText === "→ Orange (12%-15%)"
+    ],
+    ["orangePointerHighlightsAppliedSlot", () => orange.state.activeHighlighted],
+    ["groupOrangePickerWritesAllFourFixtures", () =>
+      orangeGroupReferences.length === 4 &&
+      orangeGroupReferences.every(({ selected, hit, state }) =>
+        selected &&
+        hit &&
+        state.targetIsGroup &&
+        state.targetText.includes("Group moving") &&
+        state.targetText.includes("Ref stage evolution mini spot 30") &&
+        state.activeLabel === "Orange" &&
+        state.directDmxValue === 8_867 &&
+        state.approximationText === "→ Orange (12%-15%)"
+      )
+    ],
+    ["bluePickerSelectsNearestBlueSlot", () =>
+      blue.dispatched && blue.state.pickerValue === "#0000ff" && blue.state.activeLabel === "Blue"
+    ],
+    ["bluePickerWritesBlueSlotMidpointDmx", () => blue.state.directDmxValue === 19_147],
+    ["bluePickerShowsApproximationTarget", () =>
+      blue.state.approximationVisible && blue.state.approximationText === "→ Blue (28%-31%)"
+    ],
+    ["bluePickerHighlightsAppliedSlot", () => blue.state.activeHighlighted],
+    ["groupBluePickerWritesAllFourFixtures", () =>
+      blueGroupReferences.length === 4 &&
+      blueGroupReferences.every(({ selected, hit, state }) =>
+        selected &&
+        hit &&
+        state.targetIsGroup &&
+        state.targetText.includes("Group moving") &&
+        state.targetText.includes("Ref stage evolution mini spot 30") &&
+        state.activeLabel === "Blue" &&
+        state.directDmxValue === 19_147 &&
+        state.approximationText === "→ Blue (28%-31%)"
+      )
+    ],
+    ["redPickerSelectsNearestRedSlot", () =>
+      red.dispatched && red.state.pickerValue === "#ff0000" && red.state.activeLabel === "Red"
+    ],
+    ["redPickerWritesRedSlotMidpointDmx", () => red.state.directDmxValue === 16_577],
+    ["redPickerShowsApproximationTarget", () =>
+      red.state.approximationVisible && red.state.approximationText === "→ Red (24%-27%)"
+    ],
+    ["redPickerHighlightsAppliedSlot", () => red.state.activeHighlighted],
+    ["groupPickerWriteReachesSecondFixture", () =>
+      redOnSecondGroupFixture.selected &&
+      redOnSecondGroupFixture.hit &&
+      redOnSecondGroupFixture.state.targetText.includes("Ref stage evolution mini spot 30 2") &&
+      redOnSecondGroupFixture.state.activeLabel === "Red" &&
+      redOnSecondGroupFixture.state.directDmxValue === 16_577
+    ],
+    ["whitePickerSelectsNearestWhiteSlot", () =>
+      white.dispatched && white.state.pickerValue === "#ffffff" && white.state.activeLabel === "White"
+    ],
+    ["whitePickerWritesWhiteSlotMidpointDmx", () => white.state.directDmxValue === 1_157],
+    ["whitePickerShowsApproximationTarget", () =>
+      white.state.approximationVisible && white.state.approximationText === "→ White (0%-4%)"
+    ],
+    ["whitePickerHighlightsAppliedSlot", () => white.state.activeHighlighted],
+    ["groupWhitePickerWritesAllFourFixtures", () =>
+      whiteGroupReferences.length === 4 &&
+      whiteGroupReferences.every(({ selected, hit, state }) =>
+        selected &&
+        hit &&
+        state.targetIsGroup &&
+        state.targetText.includes("Group moving") &&
+        state.targetText.includes("Ref stage evolution mini spot 30") &&
+        state.activeLabel === "White" &&
+        state.directDmxValue === 1_157 &&
+        state.approximationText === "→ White (0%-4%)"
+      )
+    ],
+    ["directWheelSlotClickStillAppliesExactBlueSlot", () =>
+      directBlueDispatched &&
+      directBlue.activeLabel === "Blue" &&
+      directBlue.directDmxValue === 19_147 &&
+      directBlue.approximationText === "→ Blue (28%-31%)" &&
+      directBlue.activeHighlighted
+    ],
+    ["colorWheelInteractionsKeepDocumentAndAppScrollZero", () =>
+      [
+        initial,
+        orange.state,
+        ...orangeGroupReferences.map((entry) => entry.state),
+        blue.state,
+        ...blueGroupReferences.map((entry) => entry.state),
+        red.state,
+        redOnSecondGroupFixture.state,
+        white.state,
+        ...whiteGroupReferences.map((entry) => entry.state),
+        directBlue,
+      ]
+        .every((state) => state.documentAndAppScrollZero)
+    ],
+  ];
+  const checks = Object.fromEntries(conditions.map(([name, check]) => {
+    try {
+      return [name, Boolean(check())];
+    } catch {
+      return [name, false];
+    }
+  }));
+  const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  return {
+    label: `color-wheel-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    initial,
+    orange: orange.state,
+    orangeGroupReferences,
+    blue: blue.state,
+    blueGroupReferences,
+    red: red.state,
+    redOnSecondGroupFixture: redOnSecondGroupFixture.state,
+    white: white.state,
+    whiteGroupReferences,
+    directBlue,
+  };
 }
 
 async function runEditLiveViewport(client, viewport) {
@@ -17939,6 +18351,34 @@ async function main() {
       const failures = results.filter((result) => !result.passed);
       if (failures.length > 0) {
         throw new Error(`Topbar PULSE viewport failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
+    if (colorWheelOnlyMode) {
+      const colorWheelResults = [];
+      for (const [viewportIndex, viewport] of viewports.entries()) {
+        const result = await runColorWheelViewport(client, viewport);
+        colorWheelResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `picker=${result.initial.pickerVisible}/${result.initial.rgbControlPanelCount} ` +
+            `slots=${result.initial.slotCount}@${Math.round(result.initial.slotMinimumHeight)}px ` +
+            `orange22=${result.orange.activeLabel}:${result.orange.directDmxValue}:${JSON.stringify(result.orange.approximationText)} ` +
+            `blue=${result.blue.activeLabel}:${result.blue.directDmxValue}:${JSON.stringify(result.blue.approximationText)} ` +
+            `red=${result.red.activeLabel}:${result.red.directDmxValue}:${JSON.stringify(result.red.approximationText)} ` +
+            `group2=${result.redOnSecondGroupFixture.targetText.includes("Ref stage evolution mini spot 30 2")}:${result.redOnSecondGroupFixture.activeLabel}:${result.redOnSecondGroupFixture.directDmxValue} ` +
+            `white=${result.white.activeLabel}:${result.white.directDmxValue}:${JSON.stringify(result.white.approximationText)} ` +
+            `direct=${result.directBlue.activeLabel}:${result.directBlue.directDmxValue} ` +
+            `scroll=${result.directBlue.documentAndAppScrollZero ? "zero" : "overflow"} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+        if (viewportIndex < viewports.length - 1) {
+          await recycleBrowser();
+        }
+      }
+      const failures = colorWheelResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Color wheel HSV approximation failed: ${JSON.stringify(failures)}`);
       }
       return;
     }

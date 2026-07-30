@@ -1,6 +1,7 @@
 import { For, Show } from "solid-js";
 import {
   channelFunctionLabel,
+  channelFunctionWheelColor,
   normalizedFunctionText,
   sortedChannelFunctions,
 } from "../channelFunctionHelpers";
@@ -13,6 +14,7 @@ type AttributeFaderGlyph =
   | "strobe"
   | "pan"
   | "tilt"
+  | "speed"
   | "gobo"
   | "zoom"
   | "focus"
@@ -24,6 +26,7 @@ const attributeFaderGlyphPaths: Record<AttributeFaderGlyph, string> = {
   strobe: "M9.4 1.8 4.5 8.7h3.3l-1.2 5.5 4.9-7H8.2z",
   pan: "M2 8h12M5 5 2 8l3 3M11 5l3 3-3 3",
   tilt: "M8 2v12M5 5l3-3 3 3M5 11l3 3 3-3",
+  speed: "M8 2.25a5.75 5.75 0 1 0 0 11.5 5.75 5.75 0 0 0 0-11.5ZM8 4v4l3 1.75M8 2.25v1M13.75 8h-1M8 13.75v-1M2.25 8h1",
   gobo: "M8 3a5 5 0 1 0 0 10A5 5 0 0 0 8 3Zm0 2v2m-2 3 2-1 2 1",
   zoom: "M7 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm3 7 3 3M5 7h4M7 5v4",
   focus: "M3 6V3h3m4 0h3v3m0 4v3h-3m-4 0H3v-3M8 6v4M6 8h4",
@@ -82,8 +85,8 @@ export function FaderGridPanel(props: FaderGridPanelProps) {
       .replace(/[^\p{L}\p{N}]+/gu, " ");
   const swatchColor = (control: AttributeControl, value: number) => {
     const fn = activeFunction(control, value);
-    const wheelColor = fn?.wheel_slot_color?.trim();
-    if (wheelColor && /^#[0-9a-f]{6}$/i.test(wheelColor)) {
+    const wheelColor = fn ? channelFunctionWheelColor(control, fn) : null;
+    if (wheelColor) {
       return wheelColor;
     }
     const normalized = (fn
@@ -104,9 +107,14 @@ export function FaderGridPanel(props: FaderGridPanelProps) {
   };
   const attributeGlyph = (control: AttributeControl, value: number): AttributeFaderGlyph => {
     const normalized = normalizedAttributeText(control, value);
+    const compactIdentity = `${control.attribute} ${control.channel_name}`
+      .replace(/([a-z])([A-Z])/g, "$1 $2")
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "");
     if (/\b(dimmer|intensity)\b/.test(normalized)) return "dimmer";
     if (/\b(shutter|iris)\b/.test(normalized)) return "shutter";
     if (/\b(strobe|flash)\b/.test(normalized)) return "strobe";
+    if (/(pantilt|pt|movement|move|position)speed/.test(compactIdentity)) return "speed";
     if (/\bpan\b/.test(normalized)) return "pan";
     if (/\btilt\b/.test(normalized)) return "tilt";
     if (/\b(gobo|pattern)\b/.test(normalized)) return "gobo";

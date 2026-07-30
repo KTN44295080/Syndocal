@@ -162,6 +162,7 @@ import {
   verifyOperatorPassword,
 } from "./operatorPolicy";
 import { type ColorWheelFunctionEntry, type GoboSlotPattern, type GoboWheelFunctionEntry } from "./components/WheelSlotPanel";
+import { nearestColorWheelEntry } from "./colorWheelApproximation";
 import {
   customProfileAttributeDraftChannelLabel,
   customProfileAttributeDraftsFromText,
@@ -503,6 +504,7 @@ import {
   channelFunctionLabel,
   channelFunctionRangeLabel,
   channelFunctionValue,
+  channelFunctionWheelColor,
   goboPatternForFunction,
   indexedFunctionValue,
   isColorWheelFunction,
@@ -1374,6 +1376,11 @@ export default function App() {
   const [positionFavorites, setPositionFavorites] = createSignal<PositionFavorite[]>(loadPositionFavorites());
   const [colorAutoWhite, setColorAutoWhite] = createSignal(false);
   const [colorFavorites, setColorFavorites] = createSignal<string[]>(loadColorFavorites());
+  const [colorWheelPickerSelection, setColorWheelPickerSelection] = createSignal<{
+    targetKey: string;
+    color: string;
+    entryKey: string;
+  } | null>(null);
   const [wheelMediaUrls, setWheelMediaUrls] = createSignal<Record<string, string>>({});
   const [wheelMediaLoading, setWheelMediaLoading] = createSignal<Record<string, true>>({});
   const [wheelMediaMissing, setWheelMediaMissing] = createSignal<Record<string, true>>({});
@@ -2172,6 +2179,7 @@ export default function App() {
     || viewportFixture === "fx-visual"
     || viewportFixture === "live-edit-types"
     || viewportFixture === "edit-live"
+    || viewportFixture === "color-wheel"
   ) {
     const sceneBlockLargeFixture = viewportFixture === "scene-block-large";
     const sceneBlockHourFixture = viewportFixture === "scene-block-hour";
@@ -2187,6 +2195,7 @@ export default function App() {
       viewportFixture === "scene-matrix" || viewportFixture === "workspace-operator" || editLiveFixture;
     const touchComposedFixture = viewportFixture === "touch-composed";
     const liveEditTypeFixture = viewportFixture === "live-edit-types" || editLiveFixture;
+    const colorWheelFixture = viewportFixture === "color-wheel";
     const cueFixtureEffects = fxVisualFixture
       ? structuredClone(viewportFixtureData.fxVisualizationEffects)
       : cueRecallLargeFixture
@@ -2253,12 +2262,12 @@ export default function App() {
       setTimelineContextDrawer("none");
       setControlLiveView("matrix");
     }
-    if (liveEditTypeFixture) {
+    if (liveEditTypeFixture || colorWheelFixture) {
       setControlMode("edit");
       setEditDeskSurface("attributes");
-      setControlCategory("dimmer");
+      setControlCategory(colorWheelFixture ? "color" : "dimmer");
     }
-    setSelectedFixtureGroupFilter(liveEditTypeFixture ? "" : "front");
+    setSelectedFixtureGroupFilter(colorWheelFixture ? "moving" : liveEditTypeFixture ? "" : "front");
     setProfile(viewportFixtureData.profile);
     setGdtfPath(viewportFixtureData.profile.source_path);
     setSelectedMode(viewportFixtureData.profile.dmx_modes[0]?.name ?? "");
@@ -2270,11 +2279,14 @@ export default function App() {
     setGroupText("front");
     setSelectedFixtureId(1);
     setSelectedMappingFixtureIds(
-      liveEditTypeFixture
-        ? viewportFixtureData.liveEditTypeFixtures.map((fixture) => fixture.id)
+      liveEditTypeFixture || colorWheelFixture
+        ? (colorWheelFixture ? viewportFixtureData.colorWheelFixtures : viewportFixtureData.liveEditTypeFixtures)
+            .map((fixture) => fixture.id)
         : [1],
     );
-    setSelectedFixtureLabelDraft(liveEditTypeFixture ? "GENERIC 1" : "Viewport Par L");
+    setSelectedFixtureLabelDraft(
+      colorWheelFixture ? "stage evolution mini spot 30 1" : liveEditTypeFixture ? "GENERIC 1" : "Viewport Par L",
+    );
     setSelectedFixtureUniverseDraft(0);
     setSelectedFixtureAddressDraft(1);
     setSelectedFixtureGroupText("front");
@@ -2283,8 +2295,10 @@ export default function App() {
       ...current,
       fixtures: cueNodeGraphFixture
         ? []
-        : liveEditTypeFixture
-          ? structuredClone(viewportFixtureData.liveEditTypeFixtures)
+        : liveEditTypeFixture || colorWheelFixture
+          ? structuredClone(
+              colorWheelFixture ? viewportFixtureData.colorWheelFixtures : viewportFixtureData.liveEditTypeFixtures,
+            )
         : sceneMatrixFixture
           ? [
               { ...viewportPatchedFixture(1, "Front L", 1, -4, -2), group_ids: ["front"] },
@@ -3931,7 +3945,7 @@ export default function App() {
     const to = clampDmxValue(fn.dmx_to);
     const left = (Math.min(from, to) / 65_535) * 100;
     const width = Math.max(1, ((Math.abs(to - from) + 1) / 65_535) * 100);
-    const swatch = normalizeHexColor(fn.wheel_slot_color);
+    const swatch = channelFunctionWheelColor(control, fn);
     const normalized = normalizedFunctionText(control, fn);
     const background =
       swatch ??
@@ -3954,7 +3968,7 @@ export default function App() {
     control: AttributeControl,
     fn: NonNullable<AttributeControl["functions"]>[number],
   ) => {
-    const swatch = normalizeHexColor(fn.wheel_slot_color);
+    const swatch = channelFunctionWheelColor(control, fn);
     if (swatch) {
       return swatch;
     }
@@ -4002,6 +4016,52 @@ export default function App() {
         }),
     );
   });
+  const colorWheelPickerTargetKey = () => {
+    const groupId = selectedFixtureGroupFilter();
+    return groupId ? `group:${groupId}` : `fixture:${selectedControlReferenceFixture()?.id ?? "none"}`;
+  };
+  const colorWheelEntryKey = (entry: ColorWheelFunctionEntry) =>
+    `${entry.control.attribute}\u0000${entry.fn.dmx_from}\u0000${entry.fn.dmx_to}`;
+  const colorWheelPickerResolution = createMemo(() => {
+    const entries = colorWheelEntries();
+    const selection = colorWheelPickerSelection();
+    if (selection?.targetKey === colorWheelPickerTargetKey()) {
+      const entry =
+        entries.find((candidate) => colorWheelEntryKey(candidate) === selection.entryKey) ??
+        nearestColorWheelEntry(entries, selection.color);
+      if (entry) {
+        return { color: selection.color, entry };
+      }
+    }
+    const entry = entries.find((candidate) => candidate.active) ?? entries[0];
+    return {
+      color: entry?.color ?? "#ffffff",
+      entry,
+    };
+  });
+  const colorWheelPickerColor = createMemo(() => {
+    return colorWheelPickerResolution().color;
+  });
+  const colorWheelPickerHsv = createMemo(() => {
+    const color = colorWheelPickerColor();
+    return rgbToHsv(
+      Number.parseInt(color.slice(1, 3), 16),
+      Number.parseInt(color.slice(3, 5), 16),
+      Number.parseInt(color.slice(5, 7), 16),
+    );
+  });
+  const colorWheelApproximationLabel = createMemo(() => {
+    const entry = colorWheelPickerResolution().entry;
+    return entry ? `→ ${entry.label} (${channelFunctionRangeLabel(entry.fn)})` : "";
+  });
+  const colorWheelPreviewForSaturation = (saturation: number) => {
+    const hsv = colorWheelPickerHsv();
+    const { red, green, blue } = hsvToRgb(hsv.hue, clamp01(saturation), Math.max(0.05, hsv.value));
+    return rgbToHex(red, green, blue);
+  };
+  const colorWheelSaturationRamp = createMemo(() =>
+    `linear-gradient(to right, ${colorWheelPreviewForSaturation(0)}, ${colorWheelPreviewForSaturation(0.35)}, ${colorWheelPreviewForSaturation(1)})`,
+  );
   const goboWheelEntries = createMemo<GoboWheelFunctionEntry[]>(() => {
     if (activeControlCategory() !== "gobo") {
       return [];
@@ -4039,6 +4099,7 @@ export default function App() {
     });
   });
   const showColorWheelPanel = createMemo(() => activeControlCategory() === "color" && colorWheelEntries().length > 0);
+  const showColorWheelPickerPanel = createMemo(() => showColorWheelPanel() && !selectedColorControls());
   const showGoboWheelPanel = createMemo(() => activeControlCategory() === "gobo" && goboWheelEntries().length > 0);
   const showOpticsPanel = createMemo(() =>
     (activeControlCategory() === "beam" || activeControlCategory() === "focus") && opticsEntries().length > 0,
@@ -9051,7 +9112,7 @@ export default function App() {
   const setAttribute = async (fixtureId: number, attribute: string, value: number) => {
     const editCueId = controlEditCueIdForWrite();
     setFaderValues((current) => ({ ...current, [`${fixtureId}:${attribute}`]: value }));
-    if (viewportFixture === "edit-live") {
+    if (viewportFixture === "edit-live" || viewportFixture === "color-wheel") {
       queueControlEditLookUpdate(editCueId, { kind: "selectedFixture", fixtureId });
       return;
     }
@@ -9080,7 +9141,7 @@ export default function App() {
       }
       return next;
     });
-    if (viewportFixture === "edit-live") {
+    if (viewportFixture === "edit-live" || viewportFixture === "color-wheel") {
       queueControlEditLookUpdate(editCueId, { kind: "selectedGroup", groupId });
       return;
     }
@@ -10679,6 +10740,68 @@ export default function App() {
     setMessage(
       `Applied ${control.attribute} ${channelFunctionLabel(fn)} to ${groupId ? `group ${groupId}` : fixture.label}`,
     );
+  };
+
+  const rememberColorWheelPickerEntry = (
+    control: AttributeControl,
+    fn: NonNullable<AttributeControl["functions"]>[number],
+  ) => {
+    const entry = colorWheelEntries().find((candidate) =>
+      candidate.control.attribute === control.attribute &&
+      candidate.fn.dmx_from === fn.dmx_from &&
+      candidate.fn.dmx_to === fn.dmx_to
+    );
+    if (entry) {
+      setColorWheelPickerSelection({
+        targetKey: colorWheelPickerTargetKey(),
+        color: entry.color,
+        entryKey: colorWheelEntryKey(entry),
+      });
+    }
+  };
+
+  const applyColorWheelFunction = (
+    control: AttributeControl,
+    fn: NonNullable<AttributeControl["functions"]>[number],
+  ) => {
+    rememberColorWheelPickerEntry(control, fn);
+    void applyChannelFunction(control, fn);
+  };
+
+  const setColorWheelPickerColor = (hexColor: string) => {
+    const color = normalizeHexColor(hexColor);
+    const entry = color ? nearestColorWheelEntry(colorWheelEntries(), color) : undefined;
+    if (!color || !entry) {
+      return;
+    }
+    setColorWheelPickerSelection({
+      targetKey: colorWheelPickerTargetKey(),
+      color,
+      entryKey: colorWheelEntryKey(entry),
+    });
+    void applyChannelFunction(entry.control, entry.fn);
+  };
+
+  const setColorWheelPickerHsvValue = (updates: Partial<{ hue: number; saturation: number; value: number }>) => {
+    const hsv = colorWheelPickerHsv();
+    const { red, green, blue } = hsvToRgb(
+      updates.hue ?? hsv.hue,
+      updates.saturation ?? hsv.saturation,
+      updates.value ?? hsv.value,
+    );
+    setColorWheelPickerColor(rgbToHex(red, green, blue));
+  };
+
+  const setColorWheelPickerFromPointer = (event: PointerEvent) => {
+    const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const x = clamp01((event.clientX - bounds.left) / Math.max(1, bounds.width));
+    const y = clamp01((event.clientY - bounds.top) / Math.max(1, bounds.height));
+    const current = colorWheelPickerHsv();
+    setColorWheelPickerHsvValue({
+      hue: x * 360,
+      saturation: current.saturation > 0.05 ? current.saturation : 1,
+      value: 1 - y,
+    });
   };
 
   const setFixtureHighlight = async (fixtureId: number, enabled: boolean) => {
@@ -17680,6 +17803,7 @@ export default function App() {
           />
           <FaderAuxiliaryAttributePanels
             showColorWheel={showColorWheelPanel()}
+            showColorWheelPicker={showColorWheelPickerPanel()}
             showGoboWheel={showGoboWheelPanel()}
             showOptics={showOpticsPanel()}
             showCategoryQuick={showCategoryQuickPanel()}
@@ -17689,6 +17813,10 @@ export default function App() {
             attributeCount={visibleControls().length}
             colorWheelEntries={colorWheelEntries()}
             goboWheelEntries={goboWheelEntries()}
+            colorWheelPickerColor={colorWheelPickerColor()}
+            colorWheelPickerHsv={colorWheelPickerHsv()}
+            colorWheelSaturationRamp={colorWheelSaturationRamp()}
+            colorWheelApproximationLabel={colorWheelApproximationLabel()}
             wheelMediaUrlFor={wheelMediaUrlForCurrentFixture}
             wheelSlotMediaPath={wheelSlotMediaPath}
             opticsTitle={opticsPanelTitle()}
@@ -17708,9 +17836,13 @@ export default function App() {
             quickLooks={categoryQuickLooks()}
             functionEntries={visibleFunctionControls()}
             currentValue={currentControlValue}
+            onColorWheelPointerColor={setColorWheelPickerFromPointer}
+            onSetColorWheelColor={setColorWheelPickerColor}
+            onSetColorWheelHsv={setColorWheelPickerHsvValue}
             onOpticsPointerValue={setOpticsValueFromPointer}
             onOpticsKeyValue={setOpticsValueFromKey}
             onSetValue={setControlAttributeValue}
+            onApplyColorFunction={applyColorWheelFunction}
             onApplyFunction={(control, fn) => void applyChannelFunction(control, fn)}
             onSetValueMode={(mode) => void applyVisibleControlValues(mode)}
             onApplyLook={(look) => void applyCategoryQuickLook(look)}

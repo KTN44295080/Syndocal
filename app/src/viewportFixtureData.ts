@@ -261,6 +261,124 @@ const viewportSingleFixtureControls: AttributeControl[] = [
   },
 ];
 
+const viewportColorWheelControls: AttributeControl[] = [
+  {
+    attribute: "Generic: ColorMacro",
+    channel_name: "Color wheel",
+    offsets: [1],
+    resolution: "EightBit",
+    default_value: 19_018,
+    functions: [
+      {
+        name: "White",
+        attribute: "Generic: ColorMacro",
+        dmx_from: 0,
+        dmx_to: 2_313,
+        wheel_slot_color: "#ffffff",
+      },
+      {
+        name: "Magenta",
+        attribute: "Generic: ColorMacro",
+        dmx_from: 2_570,
+        dmx_to: 4_883,
+        wheel_slot_color: "#ff00ff",
+      },
+      {
+        name: "Light Blue",
+        attribute: "Generic: ColorMacro",
+        dmx_from: 5_140,
+        dmx_to: 7_453,
+        wheel_slot_color: "#ffff00",
+      },
+      {
+        name: "Orange",
+        attribute: "Generic: ColorMacro",
+        dmx_from: 7_710,
+        dmx_to: 10_023,
+        wheel_slot_color: "#007fff",
+      },
+      {
+        name: "Green",
+        attribute: "Generic: ColorMacro",
+        dmx_from: 10_280,
+        dmx_to: 12_593,
+        wheel_slot_color: "#00ff00",
+      },
+      {
+        name: "Yellow",
+        attribute: "Generic: ColorMacro",
+        dmx_from: 12_850,
+        dmx_to: 15_163,
+        wheel_slot_color: "#00ffff",
+      },
+      {
+        name: "Red",
+        attribute: "Generic: ColorMacro",
+        dmx_from: 15_420,
+        dmx_to: 17_733,
+        wheel_slot_color: "#0000ff",
+      },
+      {
+        name: "Blue",
+        attribute: "Generic: ColorMacro",
+        dmx_from: 17_990,
+        dmx_to: 20_303,
+        wheel_slot_color: "#ff0000",
+      },
+      {
+        name: "Blue+Red",
+        attribute: "Generic: ColorMacro",
+        dmx_from: 20_560,
+        dmx_to: 22_873,
+        wheel_slot_color: "#ff0000",
+      },
+      {
+        name: "Red+Yellow",
+        attribute: "Generic: ColorMacro",
+        dmx_from: 23_130,
+        dmx_to: 25_443,
+        wheel_slot_color: "#0000ff",
+      },
+      {
+        name: "Yellow+Green",
+        attribute: "Generic: ColorMacro",
+        dmx_from: 25_700,
+        dmx_to: 28_013,
+        wheel_slot_color: "#00ffff",
+      },
+      {
+        name: "Green+Orange",
+        attribute: "Generic: ColorMacro",
+        dmx_from: 28_270,
+        dmx_to: 30_583,
+        wheel_slot_color: "#00ff00",
+      },
+      {
+        name: "Orange/Light Blue",
+        attribute: "Generic: ColorMacro",
+        dmx_from: 30_840,
+        dmx_to: 33_153,
+        wheel_slot_color: "#007fff",
+      },
+      {
+        name: "Light Blue/Magenta",
+        attribute: "Generic: ColorMacro",
+        dmx_from: 33_410,
+        dmx_to: 35_723,
+        wheel_slot_color: "#ffff00",
+      },
+      {
+        name: "Clockwise Rotation",
+        attribute: "Generic: ColorMacro",
+        dmx_from: 35_980,
+        dmx_to: 65_535,
+        physical_from: 0,
+        physical_to: 100,
+      },
+    ],
+  },
+];
+
 const viewportLiveEditTypeFixture = (
   id: number,
   profileName: string,
@@ -326,6 +444,19 @@ const liveEditTypeFixtures: PatchedFixtureSummary[] = [
     )
   ),
 ];
+
+const colorWheelFixtures: PatchedFixtureSummary[] = [1, 2, 3, 4].map((id, index) => ({
+  ...viewportLiveEditTypeFixture(
+    id,
+    "stage evolution mini spot 30",
+    "Stage Evolution",
+    "ColorMacro 15",
+    viewportColorWheelControls,
+    -4.5 + index * 3,
+    0,
+  ),
+  group_ids: ["moving"],
+}));
 
 const profile: FixtureProfileSummary = {
   source_path: "viewport://syndocal-mini-par",
@@ -1554,4 +1685,5 @@ export const viewportFixtureData = {
   layeredTimelineSuperSceneCue,
   layeredTimelineSuperSceneEvent,
   liveEditTypeFixtures,
+  colorWheelFixtures,
 } as const;

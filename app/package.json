@@ -28,6 +28,7 @@
     "check:scene-matrix-strip-drag": "node scripts/check-viewport-containment.mjs --scene-matrix-strip-drag-only",
     "check:edit-live": "node scripts/check-viewport-containment.mjs --edit-live-only",
     "check:attribute-categories": "node scripts/check-viewport-containment.mjs --attribute-categories-only",
+    "check:color-wheel": "node scripts/check-viewport-containment.mjs --color-wheel-only",
     "check:cue-store-form": "node scripts/check-viewport-containment.mjs --cue-recall-only",
     "check:effect-draft": "node scripts/check-effect-draft-helpers.mjs",
     "check:fx-visual": "node scripts/check-effect-visualization.mjs",

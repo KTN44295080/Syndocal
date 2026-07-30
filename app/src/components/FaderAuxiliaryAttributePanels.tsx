@@ -5,10 +5,12 @@ import { ChannelFunctionPanel, type ChannelFunctionControlEntry } from "./Channe
 import { FaderWheelSlotPanels } from "./FaderWheelSlotPanels";
 import { OpticsControlPanel, type OpticsControlEntry } from "./OpticsControlPanel";
 import type { ColorWheelFunctionEntry, GoboWheelFunctionEntry } from "./WheelSlotPanel";
+import type { HsvColor } from "./HsvColorPicker";
 import type { AttributeControl, ChannelFunctionSummary } from "../types";
 
 interface FaderAuxiliaryAttributePanelsProps {
   showColorWheel: boolean;
+  showColorWheelPicker: boolean;
   showGoboWheel: boolean;
   showOptics: boolean;
   showCategoryQuick: boolean;
@@ -18,6 +20,10 @@ interface FaderAuxiliaryAttributePanelsProps {
   attributeCount: number;
   colorWheelEntries: ColorWheelFunctionEntry[];
   goboWheelEntries: GoboWheelFunctionEntry[];
+  colorWheelPickerColor: string;
+  colorWheelPickerHsv: HsvColor;
+  colorWheelSaturationRamp: string;
+  colorWheelApproximationLabel: string;
   wheelMediaUrlFor: (media: string | null | undefined) => string | null;
   wheelSlotMediaPath: (media: string | null | undefined) => string | null;
   opticsTitle: string;
@@ -37,9 +43,13 @@ interface FaderAuxiliaryAttributePanelsProps {
   quickLooks: CategoryQuickLook[];
   functionEntries: ChannelFunctionControlEntry[];
   currentValue: (control: AttributeControl) => number;
+  onColorWheelPointerColor: (event: PointerEvent) => void;
+  onSetColorWheelColor: (hexColor: string) => void;
+  onSetColorWheelHsv: (updates: Partial<HsvColor>) => void;
   onOpticsPointerValue: (event: PointerEvent, control: AttributeControl) => void;
   onOpticsKeyValue: (event: KeyboardEvent, control: AttributeControl, value: number) => void;
   onSetValue: (control: AttributeControl, value: number) => void;
+  onApplyColorFunction: (control: AttributeControl, fn: ChannelFunctionSummary) => void;
   onApplyFunction: (control: AttributeControl, fn: ChannelFunctionSummary) => void;
   onSetValueMode: (mode: CategoryQuickValueMode) => void;
   onApplyLook: (look: CategoryQuickLook) => void;
@@ -50,16 +60,25 @@ export function FaderAuxiliaryAttributePanels(props: FaderAuxiliaryAttributePane
     <>
       <FaderWheelSlotPanels
         showColorWheel={props.showColorWheel}
+        showColorWheelPicker={props.showColorWheelPicker}
         showGoboWheel={props.showGoboWheel}
         targetLabel={props.targetLabel}
         colorEntries={props.colorWheelEntries}
         goboEntries={props.goboWheelEntries}
+        colorWheelPickerColor={props.colorWheelPickerColor}
+        colorWheelPickerHsv={props.colorWheelPickerHsv}
+        colorWheelSaturationRamp={props.colorWheelSaturationRamp}
+        colorWheelApproximationLabel={props.colorWheelApproximationLabel}
         wheelMediaUrlFor={props.wheelMediaUrlFor}
         wheelSlotMediaPath={props.wheelSlotMediaPath}
         functionLabel={props.functionLabel}
         functionRangeLabel={props.functionRangeLabel}
         functionDetail={props.functionDetail}
+        onColorWheelPointerColor={props.onColorWheelPointerColor}
+        onSetColorWheelColor={props.onSetColorWheelColor}
+        onSetColorWheelHsv={props.onSetColorWheelHsv}
         onSetValue={props.onSetValue}
+        onApplyColorFunction={props.onApplyColorFunction}
         onApplyFunction={props.onApplyFunction}
       />
       <Show when={props.showOptics}>

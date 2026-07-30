@@ -1,6 +1,7 @@
 import { For, Show } from "solid-js";
 import type { JSX } from "solid-js";
 import type { AttributeControl, ChannelFunctionSummary } from "../types";
+import { HsvColorAdjustments, HsvColorPicker, type HsvColor } from "./HsvColorPicker";
 
 export interface ColorWheelFunctionEntry {
   control: AttributeControl;
@@ -190,49 +191,83 @@ function WheelSlotPanel<T>(props: WheelSlotPanelProps<T>) {
 }
 
 interface ColorWheelSlotPanelProps {
+  showPicker: boolean;
   targetLabel: string;
   entries: ColorWheelFunctionEntry[];
+  pickerColor: string;
+  pickerHsv: HsvColor;
+  pickerSaturationRamp: string;
+  approximationLabel: string;
   wheelMediaUrlFor: (media: string | null | undefined) => string | null;
   wheelSlotMediaPath: (media: string | null | undefined) => string | null;
   functionLabel: (fn: ChannelFunctionSummary) => string;
   functionRangeLabel: (fn: ChannelFunctionSummary) => string;
   functionDetail: (fn: ChannelFunctionSummary) => string;
+  onPointerColor: (event: PointerEvent) => void;
+  onSetColor: (hexColor: string) => void;
+  onSetHsv: (updates: Partial<HsvColor>) => void;
   onSetValue: (control: AttributeControl, value: number) => void;
   onApplyFunction: (control: AttributeControl, fn: ChannelFunctionSummary) => void;
 }
 
 export function ColorWheelSlotPanel(props: ColorWheelSlotPanelProps) {
   return (
-    <WheelSlotPanel
-      title="Wheel Slots"
-      countLabel={`${props.entries.length} color function(s)`}
-      targetLabel={props.targetLabel}
-      entries={props.entries}
-      itemClass="colorWheelSlot"
-      emptyMessage="No color wheel functions in this category."
-      inactiveMessage="Current DMX value is outside listed color wheel slots."
-      entryValue={(entry) => entry.currentValue}
-      onSetValue={(entry, value) => props.onSetValue(entry.control, value)}
-      itemActive={(entry) => entry.active}
-      itemLabel={(entry) => entry.label}
-      itemDetail={(entry) =>
-        `${entry.control.attribute} / ${
-          props.wheelSlotMediaPath(entry.fn.wheel_slot_media) ?? props.functionRangeLabel(entry.fn)
-        }`
-      }
-      itemTitle={(entry) =>
-        `${entry.control.attribute} / ${props.functionLabel(entry.fn)} / ${props.functionRangeLabel(entry.fn)} / ${props.functionDetail(entry.fn)}`
-      }
-      itemIcon={(entry) => (
-        <Show
-          when={props.wheelMediaUrlFor(entry.fn.wheel_slot_media)}
-          fallback={<span class="colorWheelSlotSwatch" style={{ "background-color": entry.color }} />}
-        >
-          {(url) => <img class="wheelSlotImage color" src={url()} alt="" />}
-        </Show>
-      )}
-      onApply={(entry) => props.onApplyFunction(entry.control, entry.fn)}
-    />
+    <>
+      <Show when={props.showPicker}>
+        <div class="visualControlPanel colorWheelPickerPanel" data-color-wheel-picker>
+          <div class="visualControlHeader">
+            <div>
+              <strong>Wheel Color</strong>
+              <span>Generic HSV</span>
+            </div>
+            <span title={props.targetLabel}>{props.targetLabel}</span>
+          </div>
+          <HsvColorPicker
+            color={props.pickerColor}
+            hsv={props.pickerHsv}
+            approximationLabel={props.approximationLabel}
+            onPointerColor={props.onPointerColor}
+            onSetColor={props.onSetColor}
+            onSetHsv={props.onSetHsv}
+          />
+          <HsvColorAdjustments
+            hsv={props.pickerHsv}
+            saturationRamp={props.pickerSaturationRamp}
+            onSetHsv={props.onSetHsv}
+          />
+        </div>
+      </Show>
+      <WheelSlotPanel
+        title="Wheel Slots"
+        countLabel={`${props.entries.length} color function(s)`}
+        targetLabel={props.targetLabel}
+        entries={props.entries}
+        itemClass="colorWheelSlot"
+        emptyMessage="No color wheel functions in this category."
+        inactiveMessage="Current DMX value is outside listed color wheel slots."
+        entryValue={(entry) => entry.currentValue}
+        onSetValue={(entry, value) => props.onSetValue(entry.control, value)}
+        itemActive={(entry) => entry.active}
+        itemLabel={(entry) => entry.label}
+        itemDetail={(entry) =>
+          `${entry.control.attribute} / ${
+            props.wheelSlotMediaPath(entry.fn.wheel_slot_media) ?? props.functionRangeLabel(entry.fn)
+          }`
+        }
+        itemTitle={(entry) =>
+          `${entry.control.attribute} / ${props.functionLabel(entry.fn)} / ${props.functionRangeLabel(entry.fn)} / ${props.functionDetail(entry.fn)}`
+        }
+        itemIcon={(entry) => (
+          <Show
+            when={props.wheelMediaUrlFor(entry.fn.wheel_slot_media)}
+            fallback={<span class="colorWheelSlotSwatch" style={{ "background-color": entry.color }} />}
+          >
+            {(url) => <img class="wheelSlotImage color" src={url()} alt="" />}
+          </Show>
+        )}
+        onApply={(entry) => props.onApplyFunction(entry.control, entry.fn)}
+      />
+    </>
   );
 }
 

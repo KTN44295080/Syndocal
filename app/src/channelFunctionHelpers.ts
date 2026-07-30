@@ -59,6 +59,20 @@ export const channelFunctionLabel = (fn: ChannelFunction) =>
 export const channelFunctionRangeLabel = (fn: ChannelFunction) =>
   `${formatShortDmxPercent(fn.dmx_from)}-${formatShortDmxPercent(fn.dmx_to)}`;
 
+const daslightColorMacroAttributePattern = /^generic:\s*colormacro(?:\s+\d+)?$/i;
+
+export const channelFunctionWheelColor = (control: AttributeControl, fn: ChannelFunction) => {
+  const color = normalizeHexColor(fn.wheel_slot_color);
+  if (!color || !daslightColorMacroAttributePattern.test(control.attribute.trim())) {
+    return color;
+  }
+  // Daslight SSLPRESETCOLOR is a Windows COLORREF (0x00BBGGRR). The .dvc
+  // importer preserves that low-24-bit byte order in wheel_slot_color, so
+  // normalize it at the frontend boundary before the swatch is rendered or
+  // used as a nearest-slot representative color.
+  return `#${color.slice(5, 7)}${color.slice(3, 5)}${color.slice(1, 3)}`;
+};
+
 export const channelFunctionDetail = (fn: ChannelFunction) => {
   if (fn.emitter) {
     if (fn.emitter.color) {
@@ -84,7 +98,7 @@ export const channelFunctionDetail = (fn: ChannelFunction) => {
 };
 
 export const isColorWheelFunction = (control: AttributeControl, fn: ChannelFunction) => {
-  if (normalizeHexColor(fn.wheel_slot_color)) {
+  if (channelFunctionWheelColor(control, fn)) {
     return true;
   }
   const text = normalizedFunctionText(control, fn);
