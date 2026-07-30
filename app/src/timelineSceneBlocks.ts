@@ -12,6 +12,7 @@ export interface TimelineSceneBlockAddDraft {
   duration_beats: number | null;
   conform_to_tempo: boolean;
   loop_fill: boolean;
+  source_offset_ms: number;
   fade_in_ms: number;
   fade_out_ms: number;
   loop_count: number;
@@ -75,6 +76,7 @@ const timelineEventDraftFromEvent = (event: TimelineCueEventSummary): TimelineEv
   duration_beats: event.duration_beats ?? null,
   conform_to_tempo: event.conform_to_tempo ?? false,
   loop_fill: event.loop_fill ?? false,
+  source_offset_ms: event.source_offset_ms ?? 0,
   fade_in_ms: event.fade_in_ms ?? 0,
   fade_out_ms: event.fade_out_ms ?? 0,
   loop_count: event.loop_count ?? 1,
@@ -237,6 +239,7 @@ export const buildTimelineSceneBlockRows = (events: TimelineCueEventSummary[], c
     return {
       ...event,
       duration_ms: event.duration_ms ?? 0,
+      source_offset_ms: event.source_offset_ms ?? 0,
       fade_in_ms: event.fade_in_ms ?? 0,
       fade_out_ms: event.fade_out_ms ?? 0,
       loop_count: event.loop_count ?? 1,
@@ -264,6 +267,7 @@ export const timelineSceneBlockRowsEqual = (
     (event.duration_beats ?? null) === (candidate.duration_beats ?? null) &&
     (event.conform_to_tempo ?? false) === (candidate.conform_to_tempo ?? false) &&
     (event.loop_fill ?? false) === (candidate.loop_fill ?? false) &&
+    (event.source_offset_ms ?? 0) === (candidate.source_offset_ms ?? 0) &&
     (event.rate ?? null) === (candidate.rate ?? null) &&
     (event.fade_in_ms ?? 0) === (candidate.fade_in_ms ?? 0) &&
     (event.fade_out_ms ?? 0) === (candidate.fade_out_ms ?? 0) &&
@@ -308,6 +312,7 @@ export const timelineEventDraftMatchesSummary = (
   draft.duration_beats === (event.duration_beats ?? null) &&
   draft.conform_to_tempo === (event.conform_to_tempo ?? false) &&
   draft.loop_fill === (event.loop_fill ?? false) &&
+  draft.source_offset_ms === (event.source_offset_ms ?? 0) &&
   draft.fade_in_ms === (event.fade_in_ms ?? 0) &&
   draft.fade_out_ms === (event.fade_out_ms ?? 0) &&
   draft.loop_count === (event.loop_count ?? 1) &&
@@ -529,6 +534,7 @@ export const normalizeTimelineEventDraft = (
     duration_beats: event.duration_beats ?? null,
     conform_to_tempo: event.conform_to_tempo ?? false,
     loop_fill: event.loop_fill ?? false,
+    source_offset_ms: event.source_offset_ms ?? 0,
     fade_in_ms: event.fade_in_ms ?? 0,
     fade_out_ms: event.fade_out_ms ?? 0,
     loop_count: event.loop_count ?? 1,
@@ -570,6 +576,9 @@ export const normalizeTimelineEventDraft = (
       : null,
     conform_to_tempo: conformToTempo,
     loop_fill: conformToTempo && source.loop_fill,
+    source_offset_ms: durationMs > 0
+      ? Math.max(0, Math.round(finiteOr(source.source_offset_ms, 0)))
+      : 0,
     fade_in_ms: durationMs > 0 ? Math.round(clamp(finiteOr(source.fade_in_ms, 0), 0, durationMs)) : 0,
     fade_out_ms: durationMs > 0 ? Math.round(clamp(finiteOr(source.fade_out_ms, 0), 0, durationMs)) : 0,
     loop_count: loopCount,
@@ -599,6 +608,7 @@ export const normalizeTimelineSceneBlockAddDraft = (
       : null,
     conform_to_tempo: draft.conform_to_tempo,
     loop_fill: draft.conform_to_tempo && draft.loop_fill,
+    source_offset_ms: Math.max(0, Math.round(finiteOr(draft.source_offset_ms, 0))),
     fade_in_ms: Math.round(clamp(finiteOr(draft.fade_in_ms, 0), 0, Math.max(1, draft.duration_ms))),
     fade_out_ms: Math.round(clamp(finiteOr(draft.fade_out_ms, 0), 0, Math.max(1, draft.duration_ms))),
     loop_count: Math.round(clamp(finiteOr(draft.loop_count, 1), 1, 256)),
@@ -664,6 +674,7 @@ export const createTimelineSceneBlockController = (options: TimelineSceneBlockCo
       durationBeats: next.duration_beats,
       conformToTempo: next.conform_to_tempo,
       loopFill: next.loop_fill,
+      sourceOffsetMs: next.source_offset_ms,
       fadeInMs: next.fade_in_ms,
       fadeOutMs: next.fade_out_ms,
       loopCount: next.loop_count,
@@ -697,6 +708,7 @@ export const createTimelineSceneBlockController = (options: TimelineSceneBlockCo
         durationBeats: next.duration_beats,
         conformToTempo: next.conform_to_tempo,
         loopFill: next.loop_fill,
+        sourceOffsetMs: next.source_offset_ms,
         fadeInMs: next.fade_in_ms,
         fadeOutMs: next.fade_out_ms,
         loopCount: next.loop_count,
@@ -784,6 +796,7 @@ export const createTimelineSceneBlockController = (options: TimelineSceneBlockCo
           duration_beats: conformToTempo ? durationMs * options.getBpm() / 60_000 : null,
           conform_to_tempo: conformToTempo,
           loop_fill: conformToTempo && placement.stretchMode === "WINDOW",
+          source_offset_ms: 0,
           fade_in_ms: 0,
           fade_out_ms: 0,
           loop_count: placement.loopCount ?? options.getAddLoopCount(),

@@ -4973,6 +4973,7 @@ export default function App() {
         loop_count: event.loop_count,
         conform_to_tempo: event.conform_to_tempo ?? false,
         loop_fill: event.loop_fill ?? false,
+        source_offset_ms: event.source_offset_ms ?? 0,
         rate: event.rate ?? null,
         authored_beats: cueAuthoredBeatsById.get(event.cue_id) ?? null,
         total_duration_ms: timelineSceneBlockSpanMs(event),
@@ -7299,6 +7300,7 @@ export default function App() {
             : Number(args.durationBeats),
           conform_to_tempo: conformToTempo,
           loop_fill: loopFill,
+          source_offset_ms: Math.max(0, Number(args?.sourceOffsetMs ?? 0)),
           rate: conformToTempo && !loopFill && authoredBeats !== null && durationMs > 0
             ? (authoredBeats * 60_000 / snapshot().clock.bpm) / durationMs
             : null,
@@ -7339,6 +7341,9 @@ export default function App() {
             && args?.durationBeats !== undefined ? Number(args.durationBeats) : null,
           conform_to_tempo: conformToTempo,
           loop_fill: loopFill,
+          source_offset_ms: command === "set_timeline_scene_block"
+            ? Math.max(0, Number(args?.sourceOffsetMs ?? source.source_offset_ms ?? 0))
+            : 0,
           rate: conformToTempo && !loopFill && authoredBeats !== null && durationMs > 0
             ? (authoredBeats * 60_000 / snapshot().clock.bpm) / durationMs
             : null,
@@ -7392,6 +7397,7 @@ export default function App() {
               : Number(args.durationBeats),
             conform_to_tempo: Boolean(args?.conformToTempo),
             loop_fill: Boolean(args?.loopFill),
+            source_offset_ms: Math.max(0, Number(args?.sourceOffsetMs ?? 0)),
             rate: Boolean(args?.conformToTempo) && !Boolean(args?.loopFill)
               ? (() => {
                   const cue = current.cues.find((candidate) => candidate.id === Number(args?.cueId));
@@ -7445,6 +7451,9 @@ export default function App() {
                 loop_fill: command === "set_timeline_scene_block"
                   ? Boolean(args?.loopFill)
                   : false,
+                source_offset_ms: command === "set_timeline_scene_block"
+                  ? Math.max(0, Number(args?.sourceOffsetMs ?? event.source_offset_ms ?? 0))
+                  : 0,
                 rate: command === "set_timeline_scene_block" && Boolean(args?.conformToTempo) && !Boolean(args?.loopFill)
                   ? (() => {
                       const cue = current.cues.find((candidate) => candidate.id === Number(args?.cueId ?? event.cue_id));

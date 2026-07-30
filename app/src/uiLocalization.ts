@@ -63,8 +63,6 @@ const japaneseText: Record<string, string> = {
   "Scene block duration was zero": "シーンブロックの長さが0でした",
   "ALLOWLOOP without CONFORM_TO_TEMPO remains a fixed one-pass block":
     "CONFORM_TO_TEMPOを伴わないALLOWLOOPは固定長の1回再生ブロックとして扱います",
-  "Daslight source POSITION offset has no Scene Block field":
-    "DaslightのソースPOSITIONオフセットに対応するシーンブロック項目がありません",
   "Unsupported Daslight timeline block type": "未対応のDaslightタイムラインブロック種別です",
   "Touch layout": "タッチレイアウト",
   Shortcuts: "ショートカット",
@@ -331,6 +329,7 @@ const japaneseText: Record<string, string> = {
   Points: "ポイント",
   LINKED: "連動",
   "Source Cue": "ソースキュー",
+  "Source Cue · Lane": "ソースキュー · レーン",
   "Source Cue edits update every placed instance.": "ソースキューの編集は配置済みの全インスタンスに反映されます。",
   "After jumps apply to Timeline Play only. External MTC/LTC timecode remains authoritative.":
     "後続ジャンプはタイムライン再生時のみ適用されます。外部MTC/LTCタイムコードが優先されます。",
@@ -373,6 +372,7 @@ const japaneseText: Record<string, string> = {
   Actions: "操作",
   "Start ms": "開始 ms",
   "Duration ms": "長さ ms",
+  "Source Offset ms": "ソースオフセット ms",
   "Finder": "ファインダー",
   "Scene Block editor view": "シーンブロックエディタ表示",
   "Block Properties": "ブロックプロパティ",

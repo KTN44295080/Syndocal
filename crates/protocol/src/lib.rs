@@ -1672,6 +1672,8 @@ pub struct TimelineCueEventSummary {
     #[serde(default)]
     pub loop_fill: bool,
     #[serde(default)]
+    pub source_offset_ms: u64,
+    #[serde(default)]
     pub rate: Option<f32>,
     #[serde(default)]
     pub fade_in_ms: u64,
@@ -1696,6 +1698,7 @@ impl Default for TimelineCueEventSummary {
             duration_beats: None,
             conform_to_tempo: false,
             loop_fill: false,
+            source_offset_ms: 0,
             rate: None,
             fade_in_ms: 0,
             fade_out_ms: 0,
@@ -3700,6 +3703,7 @@ mod tests {
         assert_eq!(event.duration_beats, None);
         assert!(!event.conform_to_tempo);
         assert!(!event.loop_fill);
+        assert_eq!(event.source_offset_ms, 0);
         assert_eq!(event.rate, None);
         assert_eq!(event.fade_in_ms, 0);
         assert_eq!(event.fade_out_ms, 0);
@@ -3814,6 +3818,7 @@ mod tests {
             duration_beats: Some(4.0),
             conform_to_tempo: true,
             loop_fill: true,
+            source_offset_ms: 375,
             rate: Some(1.25),
             fade_in_ms: 350,
             fade_out_ms: 700,
@@ -3828,6 +3833,7 @@ mod tests {
         let encoded_value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
         assert_eq!(encoded_value["track"], "Lighting");
         assert_eq!(encoded_value["layer_id"], 7);
+        assert_eq!(encoded_value["source_offset_ms"], 375);
     }
 
     #[test]

@@ -2826,6 +2826,18 @@ fn parse_super_scenes(
                         let fade_out = parse_u64_attribute(block, "FADEOUT")
                             .unwrap_or(0)
                             .min(block_duration.saturating_sub(fade_in));
+                        let position = parse_i64_attribute(block, "POSITION").unwrap_or(0);
+                        let source_offset_ms = u64::try_from(position.max(0)).unwrap_or(0);
+                        if position < 0 {
+                            report.approximate.add(
+                                1,
+                                format!(
+                                    "Scene block: {}",
+                                    block.attribute("NAME").unwrap_or("Untitled")
+                                ),
+                                "Negative source offset was clamped to zero",
+                            );
+                        }
                         events.push(TimelineCueEventSummary {
                             id: next_event_id,
                             cue_id: cues[source_index].id,
@@ -2838,6 +2850,7 @@ fn parse_super_scenes(
                             duration_beats: conform.then_some(duration_beats),
                             conform_to_tempo: conform,
                             loop_fill: conform && allow_loop,
+                            source_offset_ms,
                             rate: Some(speed),
                             fade_in_ms: fade_in,
                             fade_out_ms: fade_out,
@@ -2853,21 +2866,18 @@ fn parse_super_scenes(
                                 "Scene block: {}",
                                 block.attribute("NAME").unwrap_or("Untitled")
                             ),
-                            format!(
-                                "{start_ms}..{end_ms} ms -> cue {}",
-                                cues[source_index].label
-                            ),
-                        );
-                        if parse_i64_attribute(block, "POSITION").unwrap_or(0) != 0 {
-                            report.skipped.add(
-                                1,
+                            if source_offset_ms > 0 {
                                 format!(
-                                    "Scene block: {}",
-                                    block.attribute("NAME").unwrap_or("Untitled")
-                                ),
-                                "Daslight source POSITION offset has no Scene Block field",
-                            );
-                        }
+                                    "{start_ms}..{end_ms} ms -> cue {} +offset {source_offset_ms} ms",
+                                    cues[source_index].label
+                                )
+                            } else {
+                                format!(
+                                    "{start_ms}..{end_ms} ms -> cue {}",
+                                    cues[source_index].label
+                                )
+                            },
+                        );
                     }
                     Some(other) => report.skipped.add(
                         1,
@@ -3559,11 +3569,51 @@ mod tests {
         assert_eq!(child.events.len(), 1);
         assert!(child.events[0].conform_to_tempo);
         assert!(child.events[0].loop_fill);
+        assert_eq!(child.events[0].source_offset_ms, 0);
         assert_eq!(outcome.report.summary.values_decoded, 1);
         assert_eq!(outcome.report.summary.values_skipped, 0);
         assert_eq!(outcome.report.summary.beam_records, 1);
         assert_eq!(outcome.report.summary.beam_feature_checks, 1);
         assert_eq!(outcome.report.summary.beam_feature_mismatches, 0);
+    }
+
+    #[test]
+    fn dvc_scene_block_position_maps_positive_and_clamps_negative_offsets() {
+        let positive_source = synthetic_dvc().replacen(
+            r#"TYPE="1" NAME="Static" START="0" END="1000" POSITION="0""#,
+            r#"TYPE="1" NAME="Static" START="0" END="1000" POSITION="250""#,
+            1,
+        );
+        let positive = import_bytes(positive_source.as_bytes(), "positive-position.dvc").unwrap();
+        let positive_event = &positive.project.snapshot.cues[1]
+            .child_timeline
+            .as_ref()
+            .unwrap()
+            .events[0];
+        assert_eq!(positive_event.source_offset_ms, 250);
+        assert!(positive.report.converted.details.iter().any(|detail| {
+            detail.item == "Scene block: Static" && detail.message.contains("+offset 250 ms")
+        }));
+        assert!(!positive.report.skipped.details.iter().any(|detail| {
+            detail.message == "Daslight source POSITION offset has no Scene Block field"
+        }));
+
+        let negative_source = synthetic_dvc().replacen(
+            r#"TYPE="1" NAME="Static" START="0" END="1000" POSITION="0""#,
+            r#"TYPE="1" NAME="Static" START="0" END="1000" POSITION="-250""#,
+            1,
+        );
+        let negative = import_bytes(negative_source.as_bytes(), "negative-position.dvc").unwrap();
+        let negative_event = &negative.project.snapshot.cues[1]
+            .child_timeline
+            .as_ref()
+            .unwrap()
+            .events[0];
+        assert_eq!(negative_event.source_offset_ms, 0);
+        assert!(negative.report.approximate.details.iter().any(|detail| {
+            detail.item == "Scene block: Static"
+                && detail.message == "Negative source offset was clamped to zero"
+        }));
     }
 
     #[test]
@@ -4259,6 +4309,31 @@ mod tests {
         crate::validate_project_file(&outcome.project).unwrap();
         assert_eq!(outcome.report.summary.effects_converted, 22);
         assert_eq!(outcome.report.summary.effects_skipped, 8);
+        let imported_scene_blocks = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .filter_map(|cue| cue.child_timeline.as_ref())
+            .flat_map(|child| &child.events)
+            .collect::<Vec<_>>();
+        let positive_scene_block_offsets = imported_scene_blocks
+            .iter()
+            .filter(|event| event.source_offset_ms > 0)
+            .count();
+        let clamped_negative_offsets = outcome
+            .report
+            .approximate
+            .details
+            .iter()
+            .filter(|detail| detail.message == "Negative source offset was clamped to zero")
+            .count();
+        assert_eq!(imported_scene_blocks.len(), 229);
+        assert_eq!(positive_scene_block_offsets, 29);
+        assert_eq!(clamped_negative_offsets, 9);
+        assert!(!outcome.report.skipped.details.iter().any(|detail| {
+            detail.message == "Daslight source POSITION offset has no Scene Block field"
+        }));
         let spatial_counts =
             outcome
                 .project

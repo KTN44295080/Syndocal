@@ -16575,6 +16575,9 @@ async function runSceneBlockLargeViewport(client, viewport) {
     let inspectorStepCountLabel = '';
     let startCommitApplied = false;
     let dirtyChipAfterCommit = true;
+    let sourceOffsetFieldPresent = false;
+    let sourceOffsetCommitApplied = false;
+    let sourceOffsetDirtyCleared = false;
     if (firstRow) {
       firstRow.click();
       await raf2(); await raf2();
@@ -16606,6 +16609,30 @@ async function runSceneBlockLargeViewport(client, viewport) {
         startInput.dispatchEvent(new Event('blur'));
         await raf2(); await raf2();
       }
+      const sourceOffsetInput = inspector?.querySelector('[data-scene-block-inspector-source-offset]');
+      sourceOffsetFieldPresent = sourceOffsetInput instanceof HTMLInputElement;
+      if (sourceOffsetInput instanceof HTMLInputElement) {
+        const beforeOffsetMs = Number(sourceOffsetInput.value);
+        const targetOffsetMs = beforeOffsetMs + 100;
+        sourceOffsetInput.focus();
+        sourceOffsetInput.value = String(targetOffsetMs);
+        sourceOffsetInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        sourceOffsetInput.blur();
+        sourceOffsetInput.dispatchEvent(new Event('blur'));
+        await raf2(); await raf2();
+        sourceOffsetCommitApplied = Number(inspector
+          ?.querySelector('[data-scene-block-inspector-source-offset]')?.value) === targetOffsetMs;
+        sourceOffsetDirtyCleared = !document.querySelector('[data-scene-block-inspector-dirty]');
+        const restoredOffsetInput = inspector?.querySelector('[data-scene-block-inspector-source-offset]');
+        if (restoredOffsetInput instanceof HTMLInputElement) {
+          restoredOffsetInput.focus();
+          restoredOffsetInput.value = String(beforeOffsetMs);
+          restoredOffsetInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+          restoredOffsetInput.blur();
+          restoredOffsetInput.dispatchEvent(new Event('blur'));
+          await raf2(); await raf2();
+        }
+      }
     }
     return {
       splitVisible,
@@ -16616,6 +16643,9 @@ async function runSceneBlockLargeViewport(client, viewport) {
       inspectorStepCountLabel,
       startCommitApplied,
       dirtyChipAfterCommit,
+      sourceOffsetFieldPresent,
+      sourceOffsetCommitApplied,
+      sourceOffsetDirtyCleared,
     };
   })()`);
   await client.evaluate(`document.querySelector('[data-scene-block-view-toggle="list"]')?.click()`);
@@ -17324,6 +17354,9 @@ async function runSceneBlockLargeViewport(client, viewport) {
     ['finderStats.inspectorStepCountLabel === "3 Static step(s)"', () => Boolean(finderStats?.inspectorStepCountLabel === '3 Static step(s)')],
     ['finderStats.startCommitApplied', () => Boolean(finderStats?.startCommitApplied)],
     ['finderStats.dirtyChipAfterCommit', () => Boolean(finderStats?.dirtyChipAfterCommit)],
+    ['finderStats.sourceOffsetFieldPresent', () => Boolean(finderStats?.sourceOffsetFieldPresent)],
+    ['finderStats.sourceOffsetCommitApplied', () => Boolean(finderStats?.sourceOffsetCommitApplied)],
+    ['finderStats.sourceOffsetDirtyCleared', () => Boolean(finderStats?.sourceOffsetDirtyCleared)],
     ['markerDragStats !== null', () => Boolean(markerDragStats !== null)],
     ['Math.abs(markerDragStats.tinyMoveX - markerDragStats.initialX) < 1', () => Boolean(Math.abs(markerDragStats.tinyMoveX - markerDragStats.initialX) < 1)],
     ['Math.abs(markerDragStats.committedMoveX - markerDragStats.expectedCommittedX) < 2', () => Boolean(Math.abs(markerDragStats.committedMoveX - markerDragStats.expectedCommittedX) < 2)],

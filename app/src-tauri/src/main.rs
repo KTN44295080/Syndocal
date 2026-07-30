@@ -7744,6 +7744,7 @@ fn add_timeline_scene_block(
     duration_beats: Option<f64>,
     conform_to_tempo: bool,
     loop_fill: bool,
+    source_offset_ms: u64,
     fade_in_ms: u64,
     fade_out_ms: u64,
     loop_count: u16,
@@ -7775,6 +7776,7 @@ fn add_timeline_scene_block(
         duration_beats,
         conform_to_tempo,
         loop_fill,
+        source_offset_ms,
         fade_in_ms.min(duration_ms),
         fade_out_ms.min(duration_ms),
         loop_count,
@@ -7797,6 +7799,7 @@ fn set_timeline_scene_block(
     duration_beats: Option<f64>,
     conform_to_tempo: bool,
     loop_fill: bool,
+    source_offset_ms: u64,
     fade_in_ms: u64,
     fade_out_ms: u64,
     loop_count: u16,
@@ -7835,6 +7838,7 @@ fn set_timeline_scene_block(
         duration_beats,
         conform_to_tempo,
         loop_fill,
+        source_offset_ms,
         fade_in_ms.min(duration_ms),
         fade_out_ms.min(duration_ms),
         loop_count,
@@ -32358,6 +32362,7 @@ f 1 2 3
                 duration_beats: Some(4.0),
                 conform_to_tempo: true,
                 loop_fill: true,
+                source_offset_ms: 375,
                 fade_in_ms: 350,
                 fade_out_ms: 500,
                 rate: Some(1.5),
@@ -32375,6 +32380,7 @@ f 1 2 3
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 rate: None,
@@ -32513,6 +32519,7 @@ f 1 2 3
             event.remove("duration_beats");
             event.remove("conform_to_tempo");
             event.remove("loop_fill");
+            event.remove("source_offset_ms");
             event.remove("rate");
             event.remove("loop_count");
             event.remove("jump_to_event_id");
@@ -32531,6 +32538,7 @@ f 1 2 3
                 && event.duration_beats.is_none()
                 && !event.conform_to_tempo
                 && !event.loop_fill
+                && event.source_offset_ms == 0
                 && event.rate.is_none()
                 && event.loop_count == 1
                 && event.jump_to_event_id.is_none()
@@ -32566,6 +32574,7 @@ f 1 2 3
             event.remove("duration_beats");
             event.remove("conform_to_tempo");
             event.remove("loop_fill");
+            event.remove("source_offset_ms");
             event.remove("rate");
         }
         let legacy: ProjectFile = serde_json::from_value(legacy).unwrap();
@@ -32575,6 +32584,7 @@ f 1 2 3
                 && event.duration_beats.is_none()
                 && !event.conform_to_tempo
                 && !event.loop_fill
+                && event.source_offset_ms == 0
                 && event.rate.is_none()
         }));
         validate_project_file(&legacy).unwrap();
@@ -32800,6 +32810,7 @@ f 1 2 3
             duration_beats: Some(8.0),
             conform_to_tempo: true,
             loop_fill: true,
+            source_offset_ms: 0,
             fade_in_ms: 0,
             fade_out_ms: 0,
             rate: Some(99.0),
@@ -33098,7 +33109,7 @@ f 1 2 3
     }
 
     #[test]
-    fn project_super_scene_sdc_roundtrip_preserves_child_timeline_and_f7_clip() {
+    fn project_file_super_scene_sdc_roundtrip_preserves_child_timeline_source_offset_and_f7_clip() {
         let mut project = project_with_timeline_scene_blocks();
         project.snapshot.cues.push(protocol::CueSummary {
             id: 8,
@@ -33117,6 +33128,7 @@ f 1 2 3
                 track: TimelineTrackKind::Lighting,
                 layer_id: Some(32),
                 duration_ms: 1_000,
+                source_offset_ms: 625,
                 ..protocol::TimelineCueEventSummary::default()
             }],
             audio_clips: vec![TimelineAudioClipSummary {
@@ -33150,6 +33162,23 @@ f 1 2 3
                 .id,
             302
         );
+
+        let mut legacy = serde_json::to_value(project).unwrap();
+        legacy["snapshot"]["cues"][0]["child_timeline"]["events"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("source_offset_ms");
+        let legacy: ProjectFile = serde_json::from_value(legacy).unwrap();
+        assert_eq!(
+            legacy.snapshot.cues[0]
+                .child_timeline
+                .as_ref()
+                .unwrap()
+                .events[0]
+                .source_offset_ms,
+            0
+        );
+        validate_project_file(&legacy).unwrap();
     }
 
     #[test]

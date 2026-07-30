@@ -1681,6 +1681,8 @@ export interface TimelineCueEventSummary {
   conform_to_tempo?: boolean;
   /** Keeps duration_ms as the block window and derives retrigger count to fill it. */
   loop_fill?: boolean;
+  /** Cue-content phase offset at Scene Block activation; omitted legacy values default to zero. */
+  source_offset_ms?: number;
   /** Derived display/cadence multiplier; recomputed by the engine on load. */
   rate?: number | null;
   /** Scene Block fade-in override, clamped to the block window. */

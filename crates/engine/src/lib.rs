@@ -735,6 +735,7 @@ pub enum EngineCommand {
         duration_beats: Option<f64>,
         conform_to_tempo: bool,
         loop_fill: bool,
+        source_offset_ms: u64,
         fade_in_ms: u64,
         fade_out_ms: u64,
         loop_count: u16,
@@ -753,6 +754,7 @@ pub enum EngineCommand {
         duration_beats: Option<f64>,
         conform_to_tempo: bool,
         loop_fill: bool,
+        source_offset_ms: u64,
         fade_in_ms: u64,
         fade_out_ms: u64,
         loop_count: u16,
@@ -2178,6 +2180,7 @@ impl EngineHandle {
         duration_beats: Option<f64>,
         conform_to_tempo: bool,
         loop_fill: bool,
+        source_offset_ms: u64,
         fade_in_ms: u64,
         fade_out_ms: u64,
         loop_count: u16,
@@ -2195,6 +2198,7 @@ impl EngineHandle {
             duration_beats,
             conform_to_tempo,
             loop_fill,
+            source_offset_ms,
             fade_in_ms,
             fade_out_ms,
             loop_count,
@@ -2221,6 +2225,7 @@ impl EngineHandle {
         duration_beats: Option<f64>,
         conform_to_tempo: bool,
         loop_fill: bool,
+        source_offset_ms: u64,
         fade_in_ms: u64,
         fade_out_ms: u64,
         loop_count: u16,
@@ -2238,6 +2243,7 @@ impl EngineHandle {
             duration_beats,
             conform_to_tempo,
             loop_fill,
+            source_offset_ms,
             fade_in_ms,
             fade_out_ms,
             loop_count,
@@ -2969,10 +2975,12 @@ enum RuntimeCueStepClock {
     },
     Timeline {
         starts_at_ms: u64,
+        source_offset_ms: u64,
     },
     ChildTimeline {
         transport_index: usize,
         starts_at_ms: u64,
+        source_offset_ms: u64,
     },
 }
 
@@ -3629,6 +3637,7 @@ struct RuntimeTimelineEvent {
     duration_beats: Option<f64>,
     conform_to_tempo: bool,
     loop_fill: bool,
+    source_offset_ms: u64,
     iteration_period_ms: u64,
     rate: Option<f32>,
     fade_in_ms: u64,
@@ -8241,6 +8250,7 @@ impl EngineRuntime {
                 duration_beats,
                 conform_to_tempo,
                 loop_fill,
+                source_offset_ms,
                 fade_in_ms,
                 fade_out_ms,
                 loop_count,
@@ -8275,6 +8285,7 @@ impl EngineRuntime {
                         duration_beats,
                         conform_to_tempo,
                         loop_fill,
+                        source_offset_ms,
                         iteration_period_ms: duration_ms,
                         rate: None,
                         fade_in_ms: fade_in_ms.min(duration_ms),
@@ -8306,6 +8317,7 @@ impl EngineRuntime {
                 duration_beats,
                 conform_to_tempo,
                 loop_fill,
+                source_offset_ms,
                 fade_in_ms,
                 fade_out_ms,
                 loop_count,
@@ -8340,6 +8352,7 @@ impl EngineRuntime {
                         duration_beats,
                         conform_to_tempo,
                         loop_fill,
+                        source_offset_ms,
                         iteration_period_ms: duration_ms,
                         rate: None,
                         fade_in_ms: fade_in_ms.min(duration_ms),
@@ -12806,8 +12819,10 @@ impl EngineRuntime {
             let created_at = if iteration == previous_iteration {
                 saved_created_at
             } else {
-                now.checked_sub(Duration::from_millis(elapsed_ms))
-                    .unwrap_or(now)
+                now.checked_sub(Duration::from_millis(
+                    elapsed_ms.saturating_add(event.source_offset_ms),
+                ))
+                .unwrap_or(now)
             };
             let key = RuntimeEffectActivationKey::Timeline {
                 event_id,
@@ -12956,7 +12971,10 @@ impl EngineRuntime {
                     sequence: self.cues[cue_index].step_sequence.clone(),
                     key: None,
                     rate: 1.0,
-                    clock: RuntimeCueStepClock::Timeline { starts_at_ms: 0 },
+                    clock: RuntimeCueStepClock::Timeline {
+                        starts_at_ms: 0,
+                        source_offset_ms: 0,
+                    },
                 });
             }
             self.timeline_step_activation_ranges[event_index] = RuntimeCueStepActivationRange {
@@ -12989,6 +13007,7 @@ impl EngineRuntime {
                         clock: RuntimeCueStepClock::ChildTimeline {
                             transport_index,
                             starts_at_ms: 0,
+                            source_offset_ms: 0,
                         },
                     });
                 }
@@ -13062,7 +13081,10 @@ impl EngineRuntime {
             self.activate_step_range(
                 range,
                 key,
-                RuntimeCueStepClock::Timeline { starts_at_ms },
+                RuntimeCueStepClock::Timeline {
+                    starts_at_ms,
+                    source_offset_ms: event.source_offset_ms,
+                },
                 rate,
             );
         }
@@ -13115,18 +13137,26 @@ impl EngineRuntime {
                 position_offset_ms,
             } => position_offset_ms
                 .saturating_add(now.saturating_duration_since(started_at).as_millis() as u64),
-            RuntimeCueStepClock::Timeline { starts_at_ms } => {
-                self.timeline_position_ms.saturating_sub(starts_at_ms)
-            }
+            RuntimeCueStepClock::Timeline {
+                starts_at_ms,
+                source_offset_ms,
+            } => self
+                .timeline_position_ms
+                .saturating_sub(starts_at_ms)
+                .saturating_add(source_offset_ms),
             RuntimeCueStepClock::ChildTimeline {
                 transport_index,
                 starts_at_ms,
+                source_offset_ms,
             } => {
                 let transport = self.child_transports.get(transport_index)?;
                 if !transport.active {
                     return None;
                 }
-                transport.position_ms.saturating_sub(starts_at_ms)
+                transport
+                    .position_ms
+                    .saturating_sub(starts_at_ms)
+                    .saturating_add(source_offset_ms)
             }
         };
         Some(
@@ -13504,7 +13534,9 @@ impl EngineRuntime {
                     iteration: destination_iteration,
                 });
                 activation.effect.created_at = now
-                    .checked_sub(Duration::from_millis(elapsed_ms))
+                    .checked_sub(Duration::from_millis(
+                        elapsed_ms.saturating_add(event.source_offset_ms),
+                    ))
                     .unwrap_or(now);
             }
         }
@@ -13540,7 +13572,10 @@ impl EngineRuntime {
                 cue_id,
                 iteration,
             });
-            activation.clock = RuntimeCueStepClock::Timeline { starts_at_ms };
+            activation.clock = RuntimeCueStepClock::Timeline {
+                starts_at_ms,
+                source_offset_ms: event.source_offset_ms,
+            };
             activation.rate = valid_effect_rate(event.rate.unwrap_or(1.0));
         }
         self.active_step_activation_indices
@@ -15062,6 +15097,7 @@ impl EngineRuntime {
             duration_beats: None,
             conform_to_tempo: false,
             loop_fill: false,
+            source_offset_ms: 0,
             iteration_period_ms: 0,
             rate: None,
             fade_in_ms: 0,
@@ -15223,6 +15259,7 @@ impl EngineRuntime {
                 duration_beats: update.duration_beats,
                 conform_to_tempo: update.conform_to_tempo,
                 loop_fill: update.loop_fill,
+                source_offset_ms: self.timeline_events[index].source_offset_ms,
                 iteration_period_ms: update.duration_ms,
                 rate: None,
                 fade_in_ms: update.fade_in_ms.min(update.duration_ms),
@@ -15639,13 +15676,20 @@ impl EngineRuntime {
             step_range,
             rate,
             step_rate: rate,
-            created_at: if dispatch.pre_wait_ms == 0 {
+            created_at: (if dispatch.pre_wait_ms == 0 {
                 now
             } else {
                 due_at
-            },
+            })
+            .checked_sub(Duration::from_millis(event.source_offset_ms))
+            .unwrap_or(if dispatch.pre_wait_ms == 0 {
+                now
+            } else {
+                due_at
+            }),
             step_clock: RuntimeCueStepClock::Timeline {
                 starts_at_ms: event.time_ms,
+                source_offset_ms: event.source_offset_ms,
             },
         });
         self.enqueue_pending_cue(PendingCueTrigger {
@@ -16973,37 +17017,51 @@ impl EngineRuntime {
             let parent_rate = self.child_transports[transport_index].rate;
             let due_at = now + Duration::from_millis(dispatch.pre_wait_ms);
             let elapsed_child_ms = current_position_ms.saturating_sub(occurrence.time_ms);
-            let elapsed_parent_ms = ((elapsed_child_ms as f64) / f64::from(parent_rate))
-                .floor()
-                .clamp(0.0, u64::MAX as f64) as u64;
             let timeline_effect_activation = self.child_transports[transport_index]
                 .events
                 .get(occurrence.event_index)
                 .filter(|event| {
                     event.duration_ms > 0 && (!range.is_empty() || !step_range.is_empty())
                 })
-                .map(|_| PendingTimelineEffectActivation {
-                    event_id: occurrence.event_id,
-                    cue_id: occurrence.cue_id,
-                    iteration: occurrence.iteration,
-                    child_parent: Some((
-                        self.child_transports[transport_index].parent_event_id,
-                        self.child_transports[transport_index].parent_iteration,
-                    )),
-                    range,
-                    step_range,
-                    rate: valid_effect_rate(parent_rate * event_rate),
-                    step_rate: valid_effect_rate(event_rate),
-                    created_at: if dispatch.pre_wait_ms == 0 {
-                        now.checked_sub(Duration::from_millis(elapsed_parent_ms))
-                            .unwrap_or(now)
+                .map(|event| {
+                    let activation_child_elapsed_ms =
+                        event
+                            .source_offset_ms
+                            .saturating_add(if dispatch.pre_wait_ms == 0 {
+                                elapsed_child_ms
+                            } else {
+                                0
+                            });
+                    let activation_parent_elapsed_ms =
+                        ((activation_child_elapsed_ms as f64) / f64::from(parent_rate))
+                            .floor()
+                            .clamp(0.0, u64::MAX as f64) as u64;
+                    let activation_at = if dispatch.pre_wait_ms == 0 {
+                        now
                     } else {
                         due_at
-                    },
-                    step_clock: RuntimeCueStepClock::ChildTimeline {
-                        transport_index,
-                        starts_at_ms: occurrence.time_ms,
-                    },
+                    };
+                    PendingTimelineEffectActivation {
+                        event_id: occurrence.event_id,
+                        cue_id: occurrence.cue_id,
+                        iteration: occurrence.iteration,
+                        child_parent: Some((
+                            self.child_transports[transport_index].parent_event_id,
+                            self.child_transports[transport_index].parent_iteration,
+                        )),
+                        range,
+                        step_range,
+                        rate: valid_effect_rate(parent_rate * event_rate),
+                        step_rate: valid_effect_rate(event_rate),
+                        created_at: activation_at
+                            .checked_sub(Duration::from_millis(activation_parent_elapsed_ms))
+                            .unwrap_or(activation_at),
+                        step_clock: RuntimeCueStepClock::ChildTimeline {
+                            transport_index,
+                            starts_at_ms: occurrence.time_ms,
+                            source_offset_ms: event.source_offset_ms,
+                        },
+                    }
                 });
             has_immediate_trigger |= dispatch.pre_wait_ms == 0;
             let fade_override_ms = self.child_transports[transport_index]
@@ -17356,12 +17414,22 @@ impl EngineRuntime {
                 })
                 .map(|event| {
                     let elapsed_ms = current_position.saturating_sub(occurrence.time_ms);
-                    let created_at = if dispatch.pre_wait_ms == 0 {
-                        now.checked_sub(Duration::from_millis(elapsed_ms))
-                            .unwrap_or(now)
+                    let activation_elapsed_ms =
+                        event
+                            .source_offset_ms
+                            .saturating_add(if dispatch.pre_wait_ms == 0 {
+                                elapsed_ms
+                            } else {
+                                0
+                            });
+                    let activation_at = if dispatch.pre_wait_ms == 0 {
+                        now
                     } else {
                         due_at
                     };
+                    let created_at = activation_at
+                        .checked_sub(Duration::from_millis(activation_elapsed_ms))
+                        .unwrap_or(activation_at);
                     PendingTimelineEffectActivation {
                         event_id: occurrence.event_id,
                         cue_id,
@@ -17374,6 +17442,7 @@ impl EngineRuntime {
                         created_at,
                         step_clock: RuntimeCueStepClock::Timeline {
                             starts_at_ms: occurrence.time_ms,
+                            source_offset_ms: event.source_offset_ms,
                         },
                     }
                 });
@@ -19892,6 +19961,7 @@ fn timeline_event_summary(event: &RuntimeTimelineEvent) -> TimelineCueEventSumma
         duration_beats: event.duration_beats,
         conform_to_tempo: event.conform_to_tempo,
         loop_fill: event.loop_fill,
+        source_offset_ms: event.source_offset_ms,
         rate: event.rate,
         fade_in_ms: event.fade_in_ms,
         fade_out_ms: event.fade_out_ms,
@@ -19923,6 +19993,7 @@ fn runtime_timeline_event_from_summary(event: &TimelineCueEventSummary) -> Runti
         duration_beats: event.duration_beats,
         conform_to_tempo: event.conform_to_tempo,
         loop_fill: event.loop_fill,
+        source_offset_ms: event.source_offset_ms,
         iteration_period_ms: event.duration_ms,
         // `rate` is derived runtime state. Never trust a persisted display value.
         rate: None,
@@ -29847,6 +29918,7 @@ mod tests {
             duration_beats: None,
             conform_to_tempo: false,
             loop_fill: false,
+            source_offset_ms: 0,
             fade_in_ms: 0,
             fade_out_ms: 0,
             iteration_period_ms: duration_ms,
@@ -30704,6 +30776,7 @@ mod tests {
                     duration_beats: None,
                     conform_to_tempo: false,
                     loop_fill: false,
+                    source_offset_ms: 0,
                     fade_in_ms: 0,
                     fade_out_ms: 0,
                     rate: None,
@@ -32136,6 +32209,7 @@ mod tests {
                         duration_beats: None,
                         conform_to_tempo: false,
                         loop_fill: false,
+                        source_offset_ms: 0,
                         fade_in_ms: 0,
                         fade_out_ms: 0,
                         rate: None,
@@ -32153,6 +32227,7 @@ mod tests {
                         duration_beats: None,
                         conform_to_tempo: false,
                         loop_fill: false,
+                        source_offset_ms: 0,
                         fade_in_ms: 0,
                         fade_out_ms: 0,
                         rate: None,
@@ -32476,6 +32551,7 @@ mod tests {
                         duration_beats: None,
                         conform_to_tempo: false,
                         loop_fill: false,
+                        source_offset_ms: 0,
                         fade_in_ms: 0,
                         fade_out_ms: 0,
                         rate: None,
@@ -32493,6 +32569,7 @@ mod tests {
                         duration_beats: None,
                         conform_to_tempo: false,
                         loop_fill: false,
+                        source_offset_ms: 0,
                         fade_in_ms: 0,
                         fade_out_ms: 0,
                         rate: None,
@@ -51176,6 +51253,7 @@ mod tests {
             duration_beats: None,
             conform_to_tempo: false,
             loop_fill: false,
+            source_offset_ms: 0,
             fade_in_ms: 0,
             fade_out_ms: 0,
             iteration_period_ms: 0,
@@ -51266,6 +51344,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -51287,6 +51366,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -51308,6 +51388,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -51329,6 +51410,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -51434,6 +51516,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -51455,6 +51538,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -51533,6 +51617,7 @@ mod tests {
             duration_beats: None,
             conform_to_tempo: false,
             loop_fill: false,
+            source_offset_ms: 0,
             fade_in_ms: 0,
             fade_out_ms: 0,
             iteration_period_ms: 0,
@@ -51613,6 +51698,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -51634,6 +51720,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -51655,6 +51742,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -51758,6 +51846,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -51779,6 +51868,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -51800,6 +51890,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -51906,6 +51997,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -51927,6 +52019,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -51948,6 +52041,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -52010,6 +52104,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -52063,6 +52158,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -52084,6 +52180,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -52105,6 +52202,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -52180,6 +52278,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -52201,6 +52300,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -52391,6 +52491,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: true,
                 loop_fill: true,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: duration_ms,
@@ -52487,6 +52588,7 @@ mod tests {
                 duration_beats: Some(8.0),
                 conform_to_tempo: true,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 1_000,
@@ -53873,6 +53975,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -53954,6 +54057,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -54007,6 +54111,7 @@ mod tests {
             duration_beats: None,
             conform_to_tempo: false,
             loop_fill: false,
+            source_offset_ms: 0,
             fade_in_ms: 0,
             fade_out_ms: 0,
             iteration_period_ms: 0,
@@ -54088,6 +54193,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -54172,6 +54278,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -54193,6 +54300,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -54214,6 +54322,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -54280,6 +54389,7 @@ mod tests {
             duration_beats: None,
             conform_to_tempo: false,
             loop_fill: false,
+            source_offset_ms: 0,
             fade_in_ms: 0,
             fade_out_ms: 0,
             event_id: 20,
@@ -54302,6 +54412,7 @@ mod tests {
             duration_beats: None,
             conform_to_tempo: false,
             loop_fill: false,
+            source_offset_ms: 0,
             fade_in_ms: 0,
             fade_out_ms: 0,
             event_id: 10,
@@ -54328,6 +54439,7 @@ mod tests {
             duration_beats: None,
             conform_to_tempo: false,
             loop_fill: false,
+            source_offset_ms: 0,
             fade_in_ms: 0,
             fade_out_ms: 0,
             event_id: 10,
@@ -54380,6 +54492,7 @@ mod tests {
                     duration_beats: None,
                     conform_to_tempo: false,
                     loop_fill: false,
+                    source_offset_ms: 0,
                     fade_in_ms: 0,
                     fade_out_ms: 0,
                     iteration_period_ms: 0,
@@ -54554,6 +54667,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -54575,6 +54689,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -54718,6 +54833,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -54739,6 +54855,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -55022,6 +55139,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -55043,6 +55161,7 @@ mod tests {
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
+                source_offset_ms: 0,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 iteration_period_ms: 0,
@@ -55123,6 +55242,7 @@ mod tests {
             duration_beats: None,
             conform_to_tempo: false,
             loop_fill: false,
+            source_offset_ms: 0,
             fade_in_ms: 0,
             fade_out_ms: 0,
             iteration_period_ms: 0,
@@ -55305,6 +55425,7 @@ mod tests {
             duration_beats: None,
             conform_to_tempo: false,
             loop_fill: false,
+            source_offset_ms: 0,
             fade_in_ms: 0,
             fade_out_ms: 0,
             event_id: 100,
@@ -56198,6 +56319,134 @@ mod tests {
         eprintln!(
             "child cue-step measurement: parent_elapsed_ms=125 parent_rate=2.0 child_position_ms={} dimmer={value}",
             runtime.child_transports[0].position_ms
+        );
+    }
+
+    #[test]
+    fn child_timeline_scene_block_source_offset_advances_owned_chaser_and_seek_phase() {
+        let mut runtime = runtime_with_chaser_fixtures(1);
+        let chaser = test_chaser_request(&[1]);
+        let chaser_period_ms = chaser.step_duration_ms * u64::try_from(chaser.steps.len()).unwrap();
+        let half_period_ms = chaser_period_ms / 2;
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![CueEffectTarget {
+                effect_id: 901,
+                enabled: true,
+                params: Some(EffectParamsSnapshot::Chaser(chaser)),
+                transition_ms: None,
+            }],
+        );
+        runtime.apply_command(EngineCommand::CreateCue {
+            cue_id: 2,
+            label: "Offset Super Scene".to_string(),
+            fade_ms: 0,
+            authored_beats: None,
+            targets: Vec::new(),
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: Vec::new(),
+        });
+        runtime
+            .set_cue_child_timeline_state(
+                2,
+                Some(ChildTimelineSummary {
+                    events: vec![
+                        TimelineCueEventSummary {
+                            id: 201,
+                            cue_id: 1,
+                            time_ms: 0,
+                            track: TimelineTrackKind::Lighting,
+                            duration_ms: 1_000,
+                            source_offset_ms: 0,
+                            ..TimelineCueEventSummary::default()
+                        },
+                        TimelineCueEventSummary {
+                            id: 202,
+                            cue_id: 1,
+                            time_ms: 0,
+                            track: TimelineTrackKind::Lighting,
+                            duration_ms: 1_000,
+                            source_offset_ms: half_period_ms,
+                            ..TimelineCueEventSummary::default()
+                        },
+                    ],
+                    duration_ms: 1_000,
+                    ..ChildTimelineSummary::default()
+                }),
+            )
+            .unwrap();
+        runtime.timeline_events = vec![timeline_test_event(200, 2, 1_000, 0, 1_000, 1)];
+        let live_at = Instant::now() + Duration::from_secs(1);
+        runtime.rebuild_effect_activations(live_at);
+        runtime.timeline_playing = true;
+        runtime.timeline_position_ms = 999;
+        runtime.last_tick_interval = Duration::from_millis(1);
+        runtime.advance_timeline(live_at);
+
+        let measure = |runtime: &EngineRuntime, event_id: TimelineEventId, at: Instant| {
+            let activation = runtime
+                .active_effect_activation_indices
+                .iter()
+                .filter_map(|index| runtime.effect_activations.get(*index))
+                .find(|activation| {
+                    matches!(
+                        activation.key,
+                        Some(RuntimeEffectActivationKey::ChildTimeline {
+                            event_id: candidate,
+                            ..
+                        }) if candidate == event_id
+                    )
+                })
+                .expect("child Scene Block must own an active Chaser instance");
+            let RuntimeEffectKind::Chaser(chaser) = &activation.effect.kind else {
+                panic!("child Scene Block test effect must be a Chaser");
+            };
+            let elapsed_ms = at
+                .saturating_duration_since(activation.effect.created_at)
+                .as_millis() as u64;
+            let step_position = ((elapsed_ms as f64) * f64::from(activation.rate)
+                / chaser.request.step_duration_ms as f64)
+                .floor() as u64;
+            let clock = runtime.clock.snapshot(at);
+            let level = evaluate_chaser_effect_at_rate(
+                chaser,
+                0,
+                1,
+                activation.effect.created_at,
+                at,
+                &clock,
+                activation.rate,
+            );
+            (elapsed_ms, step_position, level)
+        };
+
+        let live_zero = measure(&runtime, 201, live_at);
+        let live_offset = measure(&runtime, 202, live_at);
+        assert_eq!(live_zero, (0, 0, u16::MAX));
+        assert_eq!(live_offset, (half_period_ms, 1, 0));
+
+        runtime.deactivate_all_timeline_effect_activations();
+        runtime.deactivate_all_child_transports();
+        runtime.timeline_position_ms = 1_000;
+        let seek_at = live_at + Duration::from_secs(1);
+        runtime.establish_child_transports_at_position(seek_at);
+        let seek_zero = measure(&runtime, 201, seek_at);
+        let seek_offset = measure(&runtime, 202, seek_at);
+        assert_eq!(seek_zero, live_zero);
+        assert_eq!(seek_offset, live_offset);
+        eprintln!(
+            "source-offset chaser measurement: wall_clock_ms=0 period_ms={chaser_period_ms} offset0_ms={} offset0_step={} offset0_level={} offset_half_ms={} offset_half_step={} offset_half_level={} seek_offset_half_step={} seek_offset_half_level={}",
+            live_zero.0,
+            live_zero.1,
+            live_zero.2,
+            live_offset.0,
+            live_offset.1,
+            live_offset.2,
+            seek_offset.1,
+            seek_offset.2,
         );
     }
 

@@ -46,6 +46,7 @@ const editorDraftsFromUnknown = (candidate: unknown): ProjectRecoveryCheckpoint[
       duration_beats: draft.duration_beats ?? null,
       conform_to_tempo: draft.conform_to_tempo ?? false,
       loop_fill: draft.loop_fill ?? false,
+      source_offset_ms: draft.source_offset_ms ?? 0,
       fade_in_ms: draft.fade_in_ms ?? 0,
       fade_out_ms: draft.fade_out_ms ?? 0,
     };

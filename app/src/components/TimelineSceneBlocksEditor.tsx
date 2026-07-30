@@ -975,13 +975,30 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                           }}
                         />
                       </label>
-                      <span class="sceneBlockInspectorLane">
-                        <small>Lane</small>
-                        <strong data-no-localize>{finderLaneLabel(row())}</strong>
-                      </span>
+                      <label>
+                        Source Offset ms
+                        <input
+                          type="number"
+                          min="0"
+                          data-scene-block-inspector-source-offset
+                          value={draft().source_offset_ms}
+                          onKeyDown={blurOnEnter}
+                          onBlur={(inputEvent) => {
+                            const offsetMs = Math.max(
+                              0,
+                              Math.round(Number(inputEvent.currentTarget.value) || 0),
+                            );
+                            if (offsetMs !== draft().source_offset_ms) {
+                              commitInspectorPatch({ source_offset_ms: offsetMs });
+                            }
+                          }}
+                        />
+                      </label>
                     </div>
                     <div class="sceneBlockInspectorSource">
-                      <small>Source Cue</small>
+                      <small>
+                        Source Cue · Lane <span data-no-localize>{finderLaneLabel(row())}</span>
+                      </small>
                       <span data-no-localize>{sourceCue() ? sourceCueOptionLabel(sourceCue()!) : `Missing Cue ${draft().cue_id}`}</span>
                       <span class="tabularNums" data-scene-block-step-count>
                         {`${sourceCue()?.step_count ?? 0} Static step(s)`}
@@ -1233,6 +1250,20 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                               : {}),
                           });
                         }}
+                      />
+                    </label>
+                    <label>
+                      Source Offset ms
+                      <input
+                        type="number"
+                        min="0"
+                        value={draft().source_offset_ms}
+                        onInput={(inputEvent) => props.onUpdateEventDraft(event, {
+                          source_offset_ms: Math.max(
+                            0,
+                            Math.round(Number(inputEvent.currentTarget.value) || 0),
+                          ),
+                        })}
                       />
                     </label>
                     <label>
