@@ -72,10 +72,10 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
     >
       <header class="sceneSettingsHeader">
         <div>
-          <span>Scene settings</span>
+          <span class="uiMicroLabel">Scene settings</span>
           <strong data-no-localize title={props.cue.label}>{props.cue.label}</strong>
         </div>
-        <span class={`sceneSettingsKind ${props.effects.length > 0 ? "fx" : "static"}`}>
+        <span class={`sceneSettingsKind uiMicroLabel ${props.effects.length > 0 ? "fx" : "static"}`}>
           {props.effects.length > 0 ? "FX" : "STATIC"}
         </span>
         <button
@@ -104,8 +104,8 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
             <>
               <section class="sceneSettingsSection sceneStaticProperties" data-scene-static-properties>
                 <header>
-                  <strong>Scene properties</strong>
-                  <span>Static scene</span>
+                  <strong class="uiMicroLabel">Scene properties</strong>
+                  <span class="uiMicroLabel">Static scene</span>
                 </header>
                 <div class="sceneSettingsPropertyGrid">
                   <label class="sceneSettingsWideField">
@@ -214,7 +214,7 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
               </section>
               <section class="sceneSettingsSection sceneFxChooserSection" data-scene-static-fx-chooser>
                 <header>
-                  <strong>Add FX</strong>
+                  <strong class="uiMicroLabel">Add FX</strong>
                   <span>Select a family to create a cue-owned FX.</span>
                 </header>
                 <EffectFamilyChooser
@@ -227,7 +227,7 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
         >
           <section class="sceneSettingsSection sceneOwnedFxSection">
             <header>
-              <strong>Cue-owned FX</strong>
+              <strong class="uiMicroLabel">Cue-owned FX</strong>
               <span>{props.effects.length} FX</span>
             </header>
             <nav class="sceneOwnedFxList" aria-label="Cue-owned FX list">
@@ -258,7 +258,7 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
               data-scene-settings-effect-editor={props.editor.effectType}
             >
               <header>
-                <strong>FX editor</strong>
+                <strong class="uiMicroLabel">FX editor</strong>
                 <span>{props.editor.effectType}</span>
               </header>
               <Show

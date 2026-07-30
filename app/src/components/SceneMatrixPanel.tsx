@@ -364,7 +364,7 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                 >
                                   <span class="sceneMatrixTypeBadges">
                                     <span
-                                      class={`sceneMatrixKindBadge ${cue.effect_targets.length > 0 ? "fx" : "static"}`}
+                                      class={`sceneMatrixKindBadge uiMicroLabel ${cue.effect_targets.length > 0 ? "fx" : "static"}`}
                                       data-scene-matrix-kind={cue.effect_targets.length > 0 ? "FX" : "STATIC"}
                                       data-no-localize
                                     >

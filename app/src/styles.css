@@ -19429,13 +19429,26 @@ input[type="color"] {
   background: #101214;
   font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   font-size: 12px;
-  --ray-bg: #101214;
-  --ray-surface: #171a1d;
-  --ray-surface-raised: #1d2125;
-  --ray-surface-control: #252a2f;
+  --ui-label-size: 11px;
+  --ui-label-tracking: 0.065em;
+  --ui-label-color: #929ba1;
+  --ui-surface-app: #101214;
+  --ui-surface-panel: #171a1d;
+  --ui-surface-control: #22272a;
+  --ui-border-width: 1px;
+  --ui-border: #343a3e;
+  --ui-radius-control: 2px;
+  --ui-radius-card: 4px;
+  --ui-selection-line: #d4d9dc;
+  --ui-range-accent: #747d84;
+  --ui-focus-ring: #f2c14e;
+  --ray-bg: var(--ui-surface-app);
+  --ray-surface: var(--ui-surface-panel);
+  --ray-surface-raised: var(--ui-surface-panel);
+  --ray-surface-control: var(--ui-surface-control);
   --ray-surface-hover: #2e343a;
-  --ray-border: #30363b;
-  --ray-border-strong: #485057;
+  --ray-border: var(--ui-border);
+  --ray-border-strong: var(--ui-border);
   --ray-text: #f1f3f5;
   --ray-text-muted: #a7afb6;
   --ray-text-faint: #6e777e;
@@ -19463,7 +19476,7 @@ button,
 .buttonLink {
   min-height: 30px;
   border-color: var(--ray-border-strong);
-  border-radius: 3px;
+  border-radius: var(--ui-radius-control);
   background: var(--ray-surface-control);
   color: #e8e2dc;
   font-weight: 600;
@@ -19478,16 +19491,16 @@ button:hover,
 
 button.primary,
 .app button.primary {
-  border-color: #9c5c2c;
-  background: #39302a;
-  color: #f2e9e1;
+  border-color: var(--ui-border);
+  background: var(--ui-surface-control);
+  color: var(--ray-text);
   box-shadow: none;
 }
 
 button.primary:hover,
 .app button.primary:hover {
-  border-color: #d87b34;
-  background: #49372b;
+  border-color: #596168;
+  background: var(--ray-surface-hover);
 }
 
 .app button.active,
@@ -19495,16 +19508,16 @@ button.primary:hover,
   border-color: #8c8178;
   background: #4a433d;
   color: #fff;
-  box-shadow: inset 2px 0 0 var(--ray-accent);
+  box-shadow: inset 2px 0 0 var(--ui-selection-line);
 }
 
 input,
 select,
 textarea {
   min-height: 30px;
-  border-color: #413c37;
-  border-radius: 3px;
-  background: #171513;
+  border-color: var(--ui-border);
+  border-radius: var(--ui-radius-control);
+  background: var(--ui-surface-control);
   color: #f2ede8;
   padding: 5px 7px;
 }
@@ -19526,7 +19539,7 @@ select:focus-visible,
 textarea:focus-visible,
 a[href]:focus-visible,
 [tabindex]:not([tabindex="-1"]):focus-visible {
-  outline: 1px solid #f4a259;
+  outline: 2px solid var(--ui-focus-ring);
   outline-offset: 1px;
 }
 
@@ -19564,9 +19577,9 @@ h3 {
   grid-template-columns: minmax(245px, 0.8fr) minmax(180px, 0.52fr) minmax(330px, 1fr);
   gap: 6px;
   min-height: 36px;
-  border: 1px solid var(--ray-border);
+  border: var(--ui-border-width) solid var(--ui-border);
   border-radius: 0;
-  background: #25221f;
+  background: var(--ui-surface-panel);
   padding: 0 5px;
 }
 
@@ -19612,7 +19625,7 @@ h3 {
   border-color: transparent;
   background: transparent;
   color: #fff;
-  box-shadow: inset 0 -2px 0 #f2eee9;
+  box-shadow: inset 0 -1px 0 var(--ui-selection-line);
 }
 
 .topbarProject {
@@ -19710,8 +19723,8 @@ h3 {
 .setupModeTabs,
 .controlModeTabs {
   min-height: 33px;
-  border: 1px solid var(--ray-border);
-  background: #282521;
+  border: 1px solid var(--ui-border);
+  background: var(--ui-surface-panel);
 }
 
 .setupModeTabs button,
@@ -19737,9 +19750,9 @@ h3 {
 .app .controlModeTabs button.active,
 .app .controlModeTabs button[aria-pressed="true"] {
   border-color: transparent var(--ray-border) transparent transparent;
-  background: #171513;
+  background: var(--ui-surface-control);
   color: #fff;
-  box-shadow: inset 0 -2px 0 var(--ray-accent);
+  box-shadow: inset 0 -1px 0 var(--ui-selection-line);
 }
 
 /* Setup keeps the DasLight-style single toolbar while separating work domains. */
@@ -19749,8 +19762,8 @@ h3 {
   min-width: 0;
   min-height: 33px;
   overflow: hidden;
-  border: 1px solid var(--ray-border);
-  background: #282521;
+  border: 1px solid var(--ui-border);
+  background: var(--ui-surface-panel);
 }
 
 .setupAreaTabs,
@@ -19792,16 +19805,16 @@ h3 {
 
 .app .setupAreaTabs button.active,
 .app .setupAreaTabs button[aria-pressed="true"] {
-  background: #171513;
+  background: var(--ui-surface-control);
   color: #fff;
-  box-shadow: inset 0 2px 0 var(--ray-accent);
+  box-shadow: inset 0 1px 0 var(--ui-selection-line);
 }
 
 .app .setupNavigation .setupModeTabs button.active,
 .app .setupNavigation .setupModeTabs button[aria-pressed="true"] {
-  background: #211e1b;
+  background: var(--ui-surface-control);
   color: #fff;
-  box-shadow: inset 0 -2px 0 #d8d0c9;
+  box-shadow: inset 0 -1px 0 var(--ui-selection-line);
 }
 
 .layoutSetup.setupMode-library,
@@ -33101,4 +33114,193 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
 
 .sceneAddFxDisclosure[open] > .effectFamilyChooser {
   margin: 0 6px 6px;
+}
+
+/* ---- T27-A: shared visual language.
+   These tokens reskin the existing fixed desk without changing any row,
+   target, or pane geometry. Identity, GO, KILL, and functional preview
+   colors remain owned by their existing semantic selectors. */
+.uiMicroLabel,
+.panelHeader h2,
+.panelHeader h3,
+.sectionHeader h2,
+.sectionHeader h3,
+.controlContextHeader > h2,
+.setupOutputAudioInputHeader strong,
+.sceneMatrixHeader .eyebrow,
+.sceneSettingsSection > header > strong,
+.effectPaneHeader strong,
+.sampleEffectPresetHeader strong,
+.colorEffectClockHeader strong,
+.chaserPreviewHeader strong,
+.chaserClockHeader strong,
+.moveEffectSectionHeader strong,
+.valueEffectSectionHeader strong,
+.fixtureCatalogSection > header strong {
+  color: var(--ui-label-color);
+  font-size: var(--ui-label-size);
+  font-weight: 700;
+  font-variant-caps: all-small-caps;
+  letter-spacing: var(--ui-label-tracking);
+  line-height: 1.15;
+  text-transform: uppercase;
+}
+
+.sceneSettingsPane .uiMicroLabel {
+  font-size: var(--ui-label-size) !important;
+}
+
+.sceneMatrixTrigger strong,
+.attributeTargetSummary strong,
+.liveStatusItem strong,
+.sceneSettingsHeader > div > strong,
+.sceneOwnedFxList button > strong {
+  font-variant-caps: normal;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.panel,
+.liveControlPanel,
+.sceneMatrixPanel,
+.controlContextPane,
+.mappingWorkspaceLeftPane,
+.workspaceContextPane,
+.sceneSettingsPane,
+.setupOutputAudioInput,
+.appStatusLine {
+  border-color: var(--ui-border);
+  background: var(--ui-surface-panel);
+}
+
+.sceneMatrixColumn,
+.liveStatusItem,
+.sceneSettingsSection,
+.fixtureTypeColumn,
+.attributeFaderColumn {
+  border-color: var(--ui-border);
+  border-radius: var(--ui-radius-card);
+  background: var(--ui-surface-control);
+}
+
+.sceneMatrixCard {
+  border-top-color: var(--ui-border);
+  border-right-color: var(--ui-border);
+  border-bottom-color: var(--ui-border);
+  border-radius: var(--ui-radius-card);
+  background: var(--ui-surface-control);
+}
+
+.attributeTargetSummary > span,
+.attributeTargetSummary.controlFaderWriteSummary,
+.controlFaderWriteHeader,
+.controlFaderWriteMode,
+.liveDeskViewToggle,
+.controlContextHeader > .contextModeTabs,
+.videoControlPanelMixer > .panelHeader > .mixerContextModeTabs {
+  border-color: var(--ui-border);
+  border-radius: var(--ui-radius-control);
+  background: var(--ui-surface-control);
+}
+
+.sceneSettingsSection > header,
+.sceneSettingsHeader,
+.controlContextPane > .controlContextHeader,
+.sceneMatrixHeader,
+.sceneMatrixColumnHeader {
+  border-color: var(--ui-border);
+  background: var(--ui-surface-panel);
+}
+
+input[type="range"] {
+  accent-color: var(--ui-range-accent) !important;
+}
+
+input[type="checkbox"] {
+  accent-color: var(--ui-selection-line);
+}
+
+.layoutControl.controlModeLive .liveControlPanel > .liveFadeMeter progress {
+  accent-color: #cfd6db;
+}
+
+.sceneMatrixProgress progress,
+.cueLiveModifierRow input[type="range"] {
+  accent-color: var(--cue-identity, var(--ui-range-accent)) !important;
+}
+
+.app .workspaceTabs button.active,
+.app .workspaceTabs button[aria-pressed="true"] {
+  border-color: transparent;
+  background: transparent;
+  color: #fff;
+  box-shadow: inset 0 -1px 0 var(--ui-selection-line);
+}
+
+.app .setupAreaTabs button.active,
+.app .setupAreaTabs button[aria-pressed="true"],
+.app .setupModeTabs button.active,
+.app .setupModeTabs button[aria-pressed="true"],
+.app .controlModeTabs button.active,
+.app .controlModeTabs button[aria-pressed="true"],
+.viewToggle button.active,
+.editDeskTabs button.active,
+.positionToolTabs button.active,
+.effectRackTabs button.active,
+.app .effectRackTabs button[aria-pressed="true"],
+.timelineDeskTabs button.active,
+.liveDeskViewToggle button.active,
+.controlContextHeader > .contextModeTabs > button.active,
+.controlContextHeader > .contextModeTabs > button[aria-pressed="true"],
+.videoControlPanelMixer > .panelHeader > .mixerContextModeTabs > button.active,
+.videoControlPanelMixer > .panelHeader > .mixerContextModeTabs > button[aria-pressed="true"],
+.touchSurfaceModeToggle button.active,
+.touchPageTabs button.active,
+.panePopoutToggle.expanded,
+.liveStatusToggle[aria-expanded="true"] {
+  border-color: var(--ui-border);
+  background: var(--ui-surface-control);
+  color: #fff;
+  box-shadow: inset 0 -1px 0 var(--ui-selection-line);
+}
+
+.effectFamilyChooser button.active,
+.app .effectFamilyChooser button[aria-pressed="true"],
+.workspaceOperationsPopover button.active,
+.layoutSetup.setupMode-video .videoOutputDeck.active,
+.videoSetupInspectorPane > .videoOutputActionDock button[aria-pressed="true"],
+.videoControlPanelMixer .videoClipUtilities[open] > summary,
+.autoVjEligiblePicker[open] > summary,
+.sampleEffectPresetCard.active,
+.app .sampleEffectPresetCard[aria-pressed="true"],
+.mappingTransformInspector.selected,
+.mappingSelectionPanel button.active,
+.mappingViewControls button.active,
+.attributeCategoryRail button.active,
+.app .effectFamilyRail button[aria-pressed="true"],
+.app .moveEffectRecipeButtons button[aria-pressed="true"],
+.app .moveEffectSegmented button[aria-pressed="true"],
+.mixerDrawerBar.open {
+  border-color: #5b6369;
+  background: var(--ui-surface-control);
+  color: #fff;
+  box-shadow: inset 2px 0 0 var(--ui-selection-line);
+}
+
+.groupChip.active {
+  box-shadow: inset 3px 0 0 var(--identity, var(--ui-selection-line));
+}
+
+.layoutControl.controlModeLive .liveControlPanel .liveCuePad.active {
+  box-shadow: inset 3px 0 0 var(--identity, var(--ui-selection-line));
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a[href]:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible,
+.verticalFaderChrome:has(> .verticalFaderNativeInput:focus-visible) {
+  outline: 2px solid var(--ui-focus-ring) !important;
 }

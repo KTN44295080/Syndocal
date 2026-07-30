@@ -81,7 +81,7 @@ export function FaderAttributeEditorPanel(props: FaderAttributeEditorPanelProps)
             </div>
           </div>
           <span>
-            <small>
+            <small class="uiMicroLabel">
               {props.targetKind === "selection"
                 ? "Picked fixtures"
                 : props.targetKind === "group"
@@ -93,11 +93,11 @@ export function FaderAttributeEditorPanel(props: FaderAttributeEditorPanelProps)
             <strong>{props.targetLabel}</strong>
           </span>
           <span>
-            <small>Scope</small>
+            <small class="uiMicroLabel">Scope</small>
             <strong>{props.targetDetail}</strong>
           </span>
           <span>
-            <small>Readout</small>
+            <small class="uiMicroLabel">Readout</small>
             <strong>{props.referenceLabel}</strong>
           </span>
         </div>

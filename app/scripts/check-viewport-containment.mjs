@@ -7549,8 +7549,12 @@ async function runTopbarPulseViewport(client, viewport) {
     })()`,
     "PULSE frontend stale fail-closed state",
   );
-  const staleElapsedMs = Date.now() - pausedAt;
+  let staleElapsedMs = Date.now() - pausedAt;
   const stale = await readTopbarPulseState(client);
+  if (staleElapsedMs < stale.staleMs) {
+    await sleep(stale.staleMs - staleElapsedMs);
+    staleElapsedMs = Date.now() - pausedAt;
+  }
   const appSource = readFileSync(resolve(appRoot, "src", "App.tsx"), "utf8");
   const pollingLoopAssignments =
     appSource.match(/liveAudioInputLevelsTimer = window\.setInterval/g) ?? [];

@@ -16138,7 +16138,7 @@ export default function App() {
             data-scene-settings-visible={selectedSceneCue() ? "true" : "false"}
           >
             <div class="liveStatusItem liveCueStatusCell">
-              <span>Active cue</span>
+              <span class="uiMicroLabel">Active cue</span>
               <strong data-no-localize>
                 <Show when={activeCue()}>
                   <i
@@ -16151,7 +16151,7 @@ export default function App() {
               </strong>
             </div>
             <div class="liveStatusItem liveCueStatusCell">
-              <span>Next cue</span>
+              <span class="uiMicroLabel">Next cue</span>
               <strong data-no-localize>
                 <Show when={nextCue()}>
                   <i
