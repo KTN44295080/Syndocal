@@ -25,6 +25,7 @@
     "check:fixture-catalog-viewport": "node scripts/check-viewport-containment.mjs --fixture-catalog-only",
     "check:scene-live-viewport": "node scripts/check-viewport-containment.mjs --scene-live-modifier-only",
     "check:scene-settings": "node scripts/check-viewport-containment.mjs --scene-settings-only",
+    "check:scene-matrix-strip-drag": "node scripts/check-viewport-containment.mjs --scene-matrix-strip-drag-only",
     "check:edit-live": "node scripts/check-viewport-containment.mjs --edit-live-only",
     "check:cue-store-form": "node scripts/check-viewport-containment.mjs --cue-recall-only",
     "check:effect-draft": "node scripts/check-effect-draft-helpers.mjs",

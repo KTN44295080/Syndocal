@@ -1117,6 +1117,15 @@ h3 {
   font-size: 11px;
 }
 
+.goButton {
+  min-width: 48px;
+  border-color: #6c625a;
+  background: #2a2521;
+  color: #f4eee8;
+  font-size: 14px;
+  font-weight: 900;
+}
+
 .bpmReadout {
   display: inline-grid;
   grid-template-columns: auto auto;
@@ -3819,11 +3828,6 @@ h3 {
   grid-template-columns: minmax(0, 1fr) 138px;
 }
 
-.sceneMatrixCardFooter {
-  grid-template-columns: minmax(0, 1fr) 40px 40px;
-  padding-right: 0;
-}
-
 .sceneMatrixEditStrip {
   position: relative;
   display: inline-grid;
@@ -3838,10 +3842,6 @@ h3 {
   border: 0;
   background: #191d20;
   padding: 0;
-}
-
-.sceneMatrixCardFooter .cueTimelineDragHandle {
-  grid-column: 2;
 }
 
 @media (max-width: 1320px) {
@@ -5152,12 +5152,6 @@ progress {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
   gap: 8px;
-}
-
-.liveGoButton {
-  min-height: 44px;
-  font-size: 17px;
-  font-weight: 700;
 }
 
 .liveStagePanel {
@@ -19644,6 +19638,19 @@ h3 {
   font-size: 11px;
 }
 
+.goButton {
+  min-width: 48px;
+  border-color: #71685f;
+  background: #312d29;
+  color: #fff;
+  font-size: 14px !important;
+}
+
+.goButton:not(:disabled) {
+  border-color: var(--ray-accent);
+  background: #6f3b1c;
+}
+
 .bpmReadout {
   gap: 5px;
   min-height: 27px;
@@ -21094,7 +21101,6 @@ h3 {
   overflow: auto;
 }
 
-.app .liveGoButton.primary,
 .app .touchGoDeck button.primary {
   border-color: var(--ray-accent-strong);
   background: #b85b1b;
@@ -21637,11 +21643,6 @@ h3 {
   padding: 0 5px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.layoutControl .liveControlPanel .liveGoButton {
-  min-height: 28px;
-  font-size: 13px;
 }
 
 .layoutControl .liveControlPanel > .liveCuePadHeader {
@@ -28263,16 +28264,6 @@ h3 {
   font-variant-numeric: tabular-nums;
 }
 
-.sceneMatrixCardFooter {
-  display: flex;
-  flex: 0 0 38px;
-  flex-direction: column;
-  align-items: center;
-  justify-content: space-between;
-  gap: 2px;
-  padding: 4px 4px 3px 0;
-}
-
 .sceneMatrixReplaceBadge {
   max-width: 34px;
   overflow: hidden;
@@ -28281,11 +28272,6 @@ h3 {
   line-height: 1.1;
   text-align: center;
   text-transform: uppercase;
-}
-
-.sceneMatrixCardFooter .cueTimelineDragHandle {
-  min-width: 28px;
-  min-height: 26px;
 }
 
 /* ---- UI redesign T3: Scene Block Finder + fixed Block Properties inspector.
@@ -30392,11 +30378,6 @@ h3 {
   font-size: 11px;
 }
 
-.layoutControl .liveControlPanel .liveTransportGrid .liveGoButton {
-  min-height: 26px;
-  font-size: 12px;
-}
-
 .layoutControl .liveControlPanel .liveTransportGrid .killButton {
   border-left-width: 2px;
 }
@@ -30561,8 +30542,8 @@ h3 {
 
 .sceneMatrixCard {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 96px;
-  grid-template-rows: minmax(42px, auto) auto;
+  grid-template-columns: minmax(0, 1fr) 40px;
+  grid-template-rows: minmax(48px, auto) auto auto;
   min-height: 48px;
   overflow: hidden;
   border-left-width: 3px;
@@ -30576,29 +30557,58 @@ h3 {
 }
 
 .sceneMatrixTrigger {
+  display: grid;
   grid-column: 1;
   grid-row: 1;
-  min-height: 42px;
-  gap: 5px;
-  padding: 5px;
+  grid-template-rows: minmax(0, 1fr) auto;
+  align-items: stretch;
+  min-height: 48px;
+  gap: 2px;
+  padding: 4px 6px;
 }
 
-.sceneMatrixCardFooter {
-  display: grid;
-  grid-column: 2;
-  grid-row: 1;
-  grid-template-columns: minmax(0, 1fr) 40px;
-  grid-template-rows: auto auto;
-  align-content: center;
-  gap: 2px;
-  width: auto;
-  padding: 3px;
+.sceneMatrixCuePrimaryRow,
+.sceneMatrixCueMetaRow {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.sceneMatrixCuePrimaryRow {
+  gap: 5px;
+  color: var(--cue-identity-text);
+  line-height: 1.2;
+}
+
+.sceneMatrixCuePrimaryRow strong {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--cue-identity-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sceneMatrixCueMetaRow {
+  gap: 3px;
+  min-height: 15px;
+  color: #aab2b7;
+}
+
+.sceneMatrixCueMetaRow.hasSuperScene {
+  padding-right: 28px;
+}
+
+.sceneMatrixCueMetaRow > small {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: #939ca2;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
 }
 
 .sceneMatrixTypeBadges {
   display: flex;
-  grid-column: 1;
-  grid-row: 1;
   align-items: center;
   flex-wrap: nowrap;
   gap: 2px;
@@ -30609,10 +30619,12 @@ h3 {
 .sceneMatrixReplaceBadge,
 .sceneMatrixProgress > span {
   overflow: hidden;
-  border: 1px solid #4a5054;
+  border: 0;
   border-radius: 1px;
-  padding: 1px 3px;
+  padding: 0 2px;
   color: #c4cbd0;
+  font-variant-caps: all-small-caps;
+  letter-spacing: 0.04em;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
@@ -30630,7 +30642,6 @@ h3 {
 }
 
 .sceneMatrixKindBadge.fx {
-  border-color: var(--cue-identity);
   color: var(--cue-identity-text);
 }
 
@@ -30638,6 +30649,8 @@ h3 {
   min-width: max-content;
   min-height: 0;
   border-color: var(--cue-identity);
+  border-style: solid;
+  border-width: 1px;
   border-radius: 1px;
   background: #171b1e;
   color: var(--cue-identity-text);
@@ -30651,27 +30664,26 @@ h3 {
 }
 
 .sceneMatrixReplaceBadge {
-  grid-column: 1;
-  grid-row: 2;
-  max-width: none;
+  flex: 0 1 auto;
+  max-width: 72px;
   padding-inline: 2px;
   color: #aab2b7;
   line-height: 1.05;
-  white-space: normal;
+  white-space: nowrap;
 }
 
-.sceneMatrixCardFooter .cueTimelineDragHandle {
-  grid-column: 2;
-  grid-row: 1 / span 2;
-  width: 40px;
-  min-width: 40px;
-  height: 40px;
-  min-height: 40px;
-  padding: 0;
-  touch-action: none;
+.sceneMatrixSuperSceneAction {
+  z-index: 1;
+  grid-column: 1;
+  grid-row: 1;
+  align-self: end;
+  justify-self: end;
+  width: 24px;
+  height: 18px;
+  margin: 0 4px 4px 0;
 }
 
-.sceneMatrixCardFooter .cueTimelineDragHandle:focus-visible {
+.sceneMatrixSuperSceneAction:focus-visible {
   outline: 2px solid var(--cue-identity);
   outline-offset: 1px;
 }
@@ -31366,7 +31378,7 @@ h3 {
 
 .sceneMatrixCard {
   position: relative;
-  grid-template-columns: minmax(0, 1fr) max-content;
+  grid-template-columns: minmax(0, 1fr) 40px;
 }
 
 .sceneMatrixCard[data-scene-matrix-drop-position="before"]::before,
@@ -31389,33 +31401,23 @@ h3 {
   bottom: 0;
 }
 
-.sceneMatrixCardFooter {
-  grid-template-columns: minmax(0, 1fr) 40px 40px;
-  padding-right: 0;
-}
-
-.sceneMatrixCardFooter > .sceneMatrixFlashBadge {
-  grid-column: 1;
-  grid-row: 2;
-}
-
 .sceneMatrixEditStrip {
   position: relative;
   z-index: 1;
   display: inline-grid;
-  grid-column: 3;
-  grid-row: 1 / span 2;
+  grid-column: 2;
+  grid-row: 1;
   place-items: stretch;
   width: 40px;
   min-width: 40px;
-  height: 40px;
-  min-height: 40px;
+  height: 100%;
+  min-height: 48px;
   overflow: hidden;
   border: 0;
   background: #191d20;
   padding: 0;
-  cursor: pointer;
-  touch-action: manipulation;
+  cursor: grab;
+  touch-action: none;
 }
 
 .sceneMatrixEditStrip:hover {
@@ -31426,6 +31428,10 @@ h3 {
 .sceneMatrixEditStrip:focus-visible {
   outline: 2px solid var(--cue-identity);
   outline-offset: -2px;
+}
+
+.sceneMatrixEditStrip.dragging {
+  cursor: grabbing;
 }
 
 .sceneMatrixEditStripBand {
@@ -31447,10 +31453,6 @@ h3 {
 .sceneMatrixCard.selected .sceneMatrixEditStripBand {
   width: 14px;
   border-left: 3px solid var(--cue-identity-text);
-}
-
-.sceneMatrixCardFooter .cueTimelineDragHandle {
-  grid-column: 2;
 }
 
 .sceneMatrixEmptyAction {
@@ -31775,7 +31777,8 @@ h3 {
 .status .pill,
 .status .metric,
 .status .projectAction,
-.status .topbarPulseMeter {
+.status .topbarPulseMeter,
+.status .goButton {
   flex: 0 0 auto;
 }
 

@@ -19,6 +19,7 @@ const sceneBlockOnlyMode = process.argv.includes("--scene-block-only");
 const sceneBlockHourOnlyMode = process.argv.includes("--scene-block-hour-only");
 const sceneBlockOverlapOnlyMode = process.argv.includes("--scene-block-overlap-only");
 const sceneMatrixOnlyMode = process.argv.includes("--scene-matrix-only");
+const sceneMatrixStripDragOnlyMode = process.argv.includes("--scene-matrix-strip-drag-only");
 const sceneSettingsOnlyMode = process.argv.includes("--scene-settings-only");
 const cueRecallOnlyMode = process.argv.includes("--cue-recall-only");
 const timelineSlimOnlyMode = process.argv.includes("--timeline-slim-only");
@@ -53,7 +54,7 @@ const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
       ? "cue-recall"
     : workspaceOperatorOnlyMode
       ? "workspace-operator"
-    : sceneSettingsOnlyMode || sceneLiveModifierOnlyMode || groupStrobeOnlyMode || fixtureCatalogOnlyMode
+    : sceneSettingsOnlyMode || sceneMatrixStripDragOnlyMode || sceneLiveModifierOnlyMode || groupStrobeOnlyMode || fixtureCatalogOnlyMode
       ? "scene-matrix"
       : fxVisualOnlyMode
         ? "fx-visual"
@@ -2715,6 +2716,12 @@ async function measureLiveDeskHeaderState(client) {
     const toolbarControls = toolbar
       ? [...toolbar.querySelectorAll(':scope > button, [data-live-desk-toolbar-actions] button')].filter(isVisible)
       : [];
+    const transportGoButtons = toolbar
+      ? [...toolbar.querySelectorAll('.liveGoButton, :scope > button')]
+        .filter((button) =>
+          button.classList.contains('liveGoButton')
+          || (button.textContent || '').trim() === 'GO')
+      : [];
     const controlCenters = toolbarControls.map((element) => {
       const rect = element.getBoundingClientRect();
       return rect.y + rect.height / 2;
@@ -2757,6 +2764,7 @@ async function measureLiveDeskHeaderState(client) {
       toolbarCount: document.querySelectorAll('.liveControlPanel > [data-live-desk-toolbar]').length,
       toolbarActionsCount: document.querySelectorAll('.liveControlPanel [data-live-desk-toolbar-actions]').length,
       directTransportButtonCount: directTransportButtons.length,
+      transportGoButtonCount: transportGoButtons.length,
       cueEditorToggleCount: [...document.querySelectorAll('.liveDeskToolbarActions .liveCueEditorToggle')]
         .filter(isVisible).length,
       viewToggleButtonCount: viewToggle
@@ -2834,9 +2842,11 @@ async function runLiveDeskHeaderViewport(client, viewport) {
       matrix.liveDeskLabelCount === 0 &&
       matrix.liveDeskStateCount === 0 &&
       matrix.liveDeskSceneMetaCount === 0,
-    oneToolbarOwnsNineTransportActions:
+    oneToolbarOwnsEightTransportActions:
       matrix.toolbarCount === 1 &&
-      matrix.directTransportButtonCount === 9,
+      matrix.directTransportButtonCount === 8,
+    transportRowGoAbsent:
+      matrix.transportGoButtonCount === 0,
     viewAndStatusControlsIntegratedAtRight:
       matrix.toolbarActionsCount === 1 &&
       matrix.viewToggleButtonCount === 2 &&
@@ -2846,7 +2856,7 @@ async function runLiveDeskHeaderViewport(client, viewport) {
       matrix.viewToggleContained &&
       matrix.statusToggleContained,
     toolbarControlsShareOneVisualRow:
-      matrix.toolbarControlCount === 13 &&
+      matrix.toolbarControlCount === 12 &&
       matrix.toolbarControlCenterSpread <= 1 &&
       matrix.toolbarRect?.height === 32,
     sceneReadoutMovedIntoExpandedStatus:
@@ -4818,6 +4828,11 @@ async function measure(client, label) {
       visibleLiveDeskDirectTransportButtonCount: visibleCount(
         '.liveControlPanel > [data-live-desk-toolbar] > button'
       ),
+      liveTransportGoButtonCount: document.querySelectorAll(
+        '.liveControlPanel > [data-live-desk-toolbar] .liveGoButton'
+      ).length + [...document.querySelectorAll(
+        '.liveControlPanel > [data-live-desk-toolbar] > button'
+      )].filter((button) => (button.textContent || '').trim() === 'GO').length,
       visibleLiveDeskToolbarActionsCount: visibleCount(
         '.liveControlPanel > [data-live-desk-toolbar] > [data-live-desk-toolbar-actions]'
       ),
@@ -4843,7 +4858,7 @@ async function measure(client, label) {
           const rect = element.getBoundingClientRect();
           return rect.y + rect.height / 2;
         });
-        return controls.length === 13 && Math.max(...centers) - Math.min(...centers) <= 1;
+        return controls.length === 12 && Math.max(...centers) - Math.min(...centers) <= 1;
       })(),
       liveDeskToolbarGridRow: getComputedStyle(
         document.querySelector('.liveControlPanel > [data-live-desk-toolbar]') ?? document.body
@@ -6260,7 +6275,8 @@ function hasExpectedControlModeSurface(result) {
     if (
       result.visibleLegacyLiveDeskHeaderCount !== 0 ||
       result.visibleLiveDeskToolbarCount !== 1 ||
-      result.visibleLiveDeskDirectTransportButtonCount !== 9 ||
+      result.visibleLiveDeskDirectTransportButtonCount !== 8 ||
+      result.liveTransportGoButtonCount !== 0 ||
       result.visibleLiveDeskToolbarActionsCount !== 1 ||
       result.visibleLiveDeskCueEditorButtonCount !== 1 ||
       result.visibleLiveDeskViewButtonCount !== 2 ||
@@ -7351,8 +7367,14 @@ function readTopbarPulseStateInPage() {
   };
   const topbar = document.querySelector(".topbar");
   const status = topbar?.querySelector(".status");
+  const go = topbar?.querySelector(".goButton");
+  const masterCluster = topbar?.querySelector(".topbarMasterCluster");
+  const bpm = topbar?.querySelector(".bpmReadout");
   const pulse = topbar?.querySelector("[data-topbar-pulse]");
   const topbarRect = rectOf(topbar);
+  const goRect = rectOf(go);
+  const masterClusterRect = rectOf(masterCluster);
+  const bpmRect = rectOf(bpm);
   const pulseRect = rectOf(pulse);
   const rmsFill = pulse?.querySelector(".topbarPulseTrack > i");
   const peakFill = pulse?.querySelector(".topbarPulseTrack > b");
@@ -7385,6 +7407,12 @@ function readTopbarPulseStateInPage() {
   return {
     viewport: { width: window.innerWidth, height: window.innerHeight },
     topbarRect,
+    goRect,
+    masterClusterRect,
+    bpmRect,
+    goVisible: visible(go),
+    goDisabled: go instanceof HTMLButtonElement ? go.disabled : true,
+    goTitle: go?.getAttribute("title") ?? "",
     pulseRect,
     pulseText: (pulse?.querySelector(".topbarPulseLabel")?.textContent ?? "").trim(),
     pulseAriaLabel: pulse?.getAttribute("aria-label") ?? "",
@@ -7540,9 +7568,19 @@ async function runTopbarPulseViewport(client, viewport) {
       stopped.viewport.width === 1280 &&
       stopped.pulseRect?.width <= 60 &&
       stopped.pulseRect?.height === 40,
-    topbarGoAbsent:
-      stopped.controlCounts.go === 0,
-    remainingTopbarControlsCoexistAt1280:
+    topbarGoRestoredBetweenMastersAndBpm:
+      stopped.controlCounts.go === 1 &&
+      stopped.goVisible &&
+      !stopped.goDisabled &&
+      stopped.goTitle.startsWith("GO: ") &&
+      stopped.goTitle !== "GO: No cue" &&
+      stopped.masterClusterRect &&
+      stopped.goRect &&
+      stopped.bpmRect &&
+      stopped.masterClusterRect.right <= stopped.goRect.x + 0.5 &&
+      stopped.goRect.right <= stopped.bpmRect.x + 0.5,
+    allTopbarControlsCoexistAt1280:
+      stopped.controlCounts.go === 1 &&
       stopped.controlCounts.masters === 2 &&
       stopped.controlCounts.bpm === 1 &&
       stopped.controlCounts.tap === 1 &&
@@ -9611,8 +9649,8 @@ async function runWorkspaceSplitViewport(client, viewport) {
     initial.liveStatus.visibleItemCount === 2 &&
     initial.liveStatus.totalItemCount === 12 &&
     Math.abs(initial.liveStatus.inspectorWidth - expectedClosedStatusWidth) <= 2;
-  checks.liveTransportIsNineButtonsInOneRow =
-    initial.liveStatus.transportButtonCount === 9 && initial.liveStatus.transportRowCount === 1;
+  checks.liveTransportIsEightButtonsInOneRow =
+    initial.liveStatus.transportButtonCount === 8 && initial.liveStatus.transportRowCount === 1;
   checks.liveMatrixFadeMasterUseRowsTwoThreeAndNoMaster =
     initial.liveStatus.matrixRow === "2" &&
     initial.liveStatus.fadeRow === "3" &&
@@ -9965,36 +10003,40 @@ async function measureSceneMatrixPane(client) {
     const headers = [...document.querySelectorAll('[data-scene-matrix-group-hue]')].filter(isVisible);
     const cards = [...document.querySelectorAll('[data-scene-matrix-cue-id]')].filter(isVisible);
     const triggers = cards.map((card) => card.querySelector('.sceneMatrixTrigger')).filter(isVisible);
+    const primaryRows = cards.map((card) => card.querySelector('[data-scene-matrix-primary-row]')).filter(isVisible);
+    const metaRows = cards.map((card) => card.querySelector('[data-scene-matrix-meta-row]')).filter(isVisible);
+    const cueNames = cards.map((card) => card.querySelector('[data-scene-matrix-cue-name]')).filter(isVisible);
+    const timeLabels = cards.map((card) => card.querySelector('[data-scene-matrix-time]')).filter(isVisible);
     const kindBadges = cards.map((card) => card.querySelector('[data-scene-matrix-kind]')).filter(isVisible);
     const superSceneBadges = cards.map((card) => card.querySelector('[data-scene-matrix-super-scene]')).filter(isVisible);
     const progressBars = cards.map((card) => card.querySelector('[data-scene-matrix-progress] progress')).filter(isVisible);
     const bankStrips = columns.map((column) => column.querySelector('.sceneMatrixBankStrip')).filter(isVisible);
     const cardScrollers = columns.map((column) => column.querySelector('.sceneMatrixCards')).filter(isVisible);
-    const dragHandles = cards.map((card) => card.querySelector('.cueTimelineDragHandle')).filter(isVisible);
+    const dedicatedDragHandles = cards
+      .map((card) => card.querySelector('.cueTimelineDragHandle'))
+      .filter(isVisible);
     const editStrips = cards.map((card) => {
       const button = card.querySelector('[data-scene-matrix-edit-strip]');
       const band = button?.querySelector('.sceneMatrixEditStripBand');
-      const dragHandle = card.querySelector('.cueTimelineDragHandle');
       const label = (card.querySelector('.sceneMatrixTrigger strong')?.textContent || '').trim();
       const buttonRect = button?.getBoundingClientRect() ?? null;
       const bandRect = band?.getBoundingClientRect() ?? null;
       const cardRect = card.getBoundingClientRect();
-      const dragRect = dragHandle?.getBoundingClientRect() ?? null;
       const matrixScrollerRect = scroller?.getBoundingClientRect() ?? null;
       const cardScrollerRect = card.closest('.sceneMatrixCards')?.getBoundingClientRect() ?? null;
-      const overlapArea = buttonRect && dragRect
-        ? Math.max(0, Math.min(buttonRect.right, dragRect.right) - Math.max(buttonRect.left, dragRect.left)) *
-          Math.max(0, Math.min(buttonRect.bottom, dragRect.bottom) - Math.max(buttonRect.top, dragRect.top))
-        : Number.POSITIVE_INFINITY;
       const centerX = bandRect ? bandRect.left + bandRect.width / 2 : 0;
       const centerY = bandRect ? bandRect.top + bandRect.height / 2 : 0;
       const centerHit = bandRect ? document.elementFromPoint(centerX, centerY) : null;
       return {
         cueId: card.getAttribute('data-scene-matrix-cue-id') || '',
         label,
+        tagName: button?.tagName ?? '',
         name: (button?.getAttribute('aria-label') || '').trim(),
+        title: (button?.getAttribute('title') || '').trim(),
         pressed: button?.getAttribute('aria-pressed') ?? '',
         text: (button?.textContent || '').trim(),
+        thresholdPx: Number(button?.getAttribute('data-scene-matrix-drag-threshold') ?? -1),
+        touchAction: button ? getComputedStyle(button).touchAction : '',
         rendered: isVisible(button),
         hitWidth: buttonRect?.width ?? 0,
         hitHeight: buttonRect?.height ?? 0,
@@ -10003,7 +10045,6 @@ async function measureSceneMatrixPane(client) {
         visualColor: band ? getComputedStyle(band).backgroundColor : '',
         identityColor: getComputedStyle(card).borderLeftColor,
         rightEdgeAligned: Boolean(bandRect && Math.abs(bandRect.right - cardRect.right) <= 2),
-        separatedFromDrag: overlapArea <= 0.01,
         centerInVisibleScrollport: Boolean(
           bandRect
           && matrixScrollerRect
@@ -10034,6 +10075,60 @@ async function measureSceneMatrixPane(client) {
       };
     });
     const dragSources = cards.filter((card) => card.hasAttribute('data-timeline-cue-drag-source'));
+    const cueLayouts = cards.map((card) => {
+      const trigger = card.querySelector('.sceneMatrixTrigger');
+      const primary = card.querySelector('[data-scene-matrix-primary-row]');
+      const meta = card.querySelector('[data-scene-matrix-meta-row]');
+      const number = card.querySelector('.sceneMatrixCueNumber');
+      const name = card.querySelector('[data-scene-matrix-cue-name]');
+      const kind = card.querySelector('[data-scene-matrix-kind]');
+      const time = card.querySelector('[data-scene-matrix-time]');
+      const superScene = card.querySelector('[data-scene-matrix-super-scene]');
+      const cardRect = card.getBoundingClientRect();
+      const triggerRect = trigger?.getBoundingClientRect() ?? null;
+      const primaryRect = primary?.getBoundingClientRect() ?? null;
+      const metaRect = meta?.getBoundingClientRect() ?? null;
+      const superSceneRect = superScene?.getBoundingClientRect() ?? null;
+      const columnRect = card.closest('[data-scene-matrix-column]')?.getBoundingClientRect() ?? null;
+      return {
+        cueId: card.getAttribute('data-scene-matrix-cue-id') ?? '',
+        label: (name?.textContent || '').trim(),
+        cardHeight: cardRect.height,
+        baseCellHeight: triggerRect?.height ?? 0,
+        columnWidth: columnRect?.width ?? 0,
+        primaryWidthCoverage: triggerRect && primaryRect && triggerRect.width > 0
+          ? primaryRect.width / triggerRect.width
+          : 0,
+        primaryBeforeMeta: Boolean(
+          primaryRect
+          && metaRect
+          && primaryRect.top < metaRect.top
+          && primaryRect.bottom <= metaRect.top + 1
+        ),
+        nameFullyDisplayed: Boolean(
+          name
+          && name.scrollWidth <= name.clientWidth + 1
+          && name.scrollHeight <= name.clientHeight + 1
+        ),
+        nameClientWidth: name?.clientWidth ?? 0,
+        nameScrollWidth: name?.scrollWidth ?? 0,
+        nameSingleLine: name ? getComputedStyle(name).whiteSpace === 'nowrap' : false,
+        nameIdentityMatchesNumber: Boolean(
+          name
+          && number
+          && getComputedStyle(name).color === getComputedStyle(number).color
+        ),
+        kindInMetaRow: kind?.closest('[data-scene-matrix-meta-row]') === meta,
+        timeInMetaRow: time?.closest('[data-scene-matrix-meta-row]') === meta,
+        superSceneAlignedWithMetaRow: !superSceneRect || Boolean(
+          metaRect
+          && superSceneRect.top + superSceneRect.height / 2 >= metaRect.top - 1
+          && superSceneRect.top + superSceneRect.height / 2 <= metaRect.bottom + 1
+        ),
+        kindLabel: (kind?.textContent || '').trim(),
+        timeLabel: (time?.textContent || '').trim(),
+      };
+    });
     const timelineLanes = [...document.querySelectorAll('.timelineShowSurface [data-timeline-layer-id]')].filter(isVisible);
     const liveViewButtons = [...document.querySelectorAll('.liveDeskViewToggle button')].filter(isVisible);
     const badgeRenderState = (badge) => {
@@ -10047,6 +10142,8 @@ async function measureSceneMatrixPane(client) {
         fullyRendered,
         flexShrink: style.flexShrink,
         whiteSpace: style.whiteSpace,
+        fontVariantCaps: style.fontVariantCaps,
+        fontSize: Number.parseFloat(style.fontSize) || 0,
       };
     };
     const matrixTextNodes = pane
@@ -10133,24 +10230,26 @@ async function measureSceneMatrixPane(client) {
       bankStripColors: bankStrips.map((strip) => getComputedStyle(strip).backgroundColor),
       progressBarCount: progressBars.length,
       progressValues: progressBars.map((progress) => Number(progress.value)),
+      primaryRowCount: primaryRows.length,
+      metaRowCount: metaRows.length,
+      cueNameCount: cueNames.length,
+      timeLabelCount: timeLabels.length,
+      cueLayouts,
+      cellHeights: cueLayouts.map((layout) => layout.cardHeight),
+      baseCellHeights: cueLayouts.map((layout) => layout.baseCellHeight),
+      longSceneNames: cueLayouts.filter((layout) =>
+        ['BackBar-Amber', 'Bar-StrobeAMber'].includes(layout.label)),
       minCellHitSize: triggers.length > 0
         ? Math.min(...triggers.map((trigger) => {
             const rect = trigger.getBoundingClientRect();
             return Math.min(rect.width, rect.height);
           }))
         : 0,
-      dragHandleCount: dragHandles.length,
+      dedicatedDragHandleCount: dedicatedDragHandles.length,
       editStrips,
       legacyEditCueButtonCount: document.querySelectorAll('[data-scene-matrix-edit-cue]').length,
       pencilGlyphCount: [...document.querySelectorAll('[data-scene-matrix-cue-id] span')]
         .filter((span) => (span.textContent || '').trim() === '✎').length,
-      minDragHandleHitSize: dragHandles.length > 0
-        ? Math.min(...dragHandles.map((handle) => {
-            const rect = handle.getBoundingClientRect();
-            return Math.min(rect.width, rect.height);
-          }))
-        : 0,
-      dragHandleTouchActions: dragHandles.map((handle) => getComputedStyle(handle).touchAction),
       dragSourceCount: dragSources.length,
       visibleTimelineLaneCount: timelineLanes.length,
       timelineShowSurfaceVisible: isVisible(document.querySelector('.timelineShowSurface')),
@@ -10461,6 +10560,113 @@ async function measureSceneMatrixInteractionState(client, cueId) {
       ghostPresent: Boolean(document.querySelector('[data-timeline-cue-drag-ghost]')),
     };
   })()`);
+}
+
+async function exerciseSceneMatrixStripReorder(client, sourceCueId, targetCueId) {
+  const geometry = await client.evaluate(`(() => {
+    const source = document.querySelector(
+      '[data-scene-matrix-edit-strip="${sourceCueId}"]',
+    );
+    const target = document.querySelector(
+      '[data-scene-matrix-cue-id="${targetCueId}"]',
+    );
+    target?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    source?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    if (!(source instanceof HTMLButtonElement) || !(target instanceof HTMLElement)) return null;
+    const sourceRect = source.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const targetScrollerRect = target.closest('.sceneMatrixCards')?.getBoundingClientRect() ?? null;
+    const sourceX = sourceRect.left + sourceRect.width / 2;
+    const sourceY = sourceRect.top + sourceRect.height / 2;
+    const targetX = targetRect.left + targetRect.width * 0.45;
+    const targetVisibleTop = Math.max(
+      targetRect.top,
+      targetScrollerRect?.top ?? targetRect.top,
+      0,
+    );
+    const targetVisibleBottom = Math.min(
+      targetRect.bottom,
+      targetScrollerRect?.bottom ?? targetRect.bottom,
+      innerHeight,
+    );
+    if (targetVisibleBottom - targetVisibleTop < 2) return null;
+    const targetY = targetVisibleTop + Math.min(6, (targetVisibleBottom - targetVisibleTop) * 0.2);
+    const sourceHit = document.elementFromPoint(sourceX, sourceY);
+    const targetHit = document.elementFromPoint(targetX, targetY);
+    return {
+      sourceX,
+      sourceY,
+      sourceTagName: source.tagName,
+      sourceThresholdPx: Number(source.getAttribute('data-scene-matrix-drag-threshold') ?? -1),
+      sourceTopHitOwnsStrip:
+        sourceHit === source || Boolean(sourceHit && source.contains(sourceHit)),
+      sourceTopHitCueId: sourceHit
+        ?.closest('[data-scene-matrix-edit-strip]')
+        ?.getAttribute('data-scene-matrix-edit-strip') ?? '',
+      targetX,
+      targetY,
+      targetHitCueId: targetHit
+        ?.closest('[data-scene-matrix-cue-id]')
+        ?.getAttribute('data-scene-matrix-cue-id') ?? '',
+      dedicatedDragHandleCount: document.querySelectorAll(
+        '[data-scene-matrix-cue-id] .cueTimelineDragHandle',
+      ).length,
+    };
+  })()`);
+  if (!geometry) return null;
+  const activationMovePx = geometry.sourceThresholdPx + 2;
+  const stateBefore = await measureSceneMatrixInteractionState(client, sourceCueId);
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: geometry.sourceX,
+    y: geometry.sourceY,
+    button: "left",
+    buttons: 1,
+    clickCount: 1,
+  });
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: geometry.sourceX + activationMovePx,
+    y: geometry.sourceY,
+    button: "left",
+    buttons: 1,
+  });
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: geometry.targetX,
+    y: geometry.targetY,
+    button: "left",
+    buttons: 1,
+  });
+  await sleep(50);
+  const during = await client.evaluate(`(() => {
+    const indicator = document.querySelector('[data-scene-matrix-drop-position]');
+    return {
+      dropState: document.querySelector('[data-timeline-cue-drag-ghost]')
+        ?.getAttribute('data-timeline-drop-state') ?? '',
+      indicatorCueId: indicator?.getAttribute('data-scene-matrix-cue-id') ?? '',
+      indicatorPosition: indicator?.getAttribute('data-scene-matrix-drop-position') ?? '',
+    };
+  })()`);
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: geometry.targetX,
+    y: geometry.targetY,
+    button: "left",
+    buttons: 0,
+    clickCount: 1,
+  });
+  await sleep(180);
+  const stateAfter = await measureSceneMatrixInteractionState(client, sourceCueId);
+  return {
+    ...geometry,
+    ...during,
+    activationMovePx,
+    pointerSequence: "mousePressed>mouseMoved>mouseMoved>mouseReleased",
+    before: stateBefore,
+    after: stateAfter,
+    ghostCleared: !stateAfter.ghostPresent,
+  };
 }
 
 // T6: the vj-bank fixture carries 14 clips so bank 1 must show all 12 pads
@@ -10843,7 +11049,7 @@ async function runSceneMatrixPaneCheck(client, viewport) {
   await sleep(80);
   const interactionGeometry = await client.evaluate(`(() => {
     const clickSource = document.querySelector('[data-scene-matrix-cue-id="302"] .sceneMatrixTrigger');
-    const dragSource = document.querySelector('[data-scene-matrix-cue-id="303"] .cueTimelineDragHandle');
+    const dragSource = document.querySelector('[data-scene-matrix-edit-strip="303"]');
     clickSource?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     dragSource?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     const lane = [...document.querySelectorAll('.timelineOverview [data-timeline-layer-kind="Lighting"][data-timeline-layer-id]')]
@@ -10853,7 +11059,7 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       })
       .sort((left, right) => right.getBoundingClientRect().width - left.getBoundingClientRect().width)[0];
     if (!clickSource || !dragSource || !lane) return null;
-    const visibleHitPoint = (source, cueId, requireHandle = false) => {
+    const visibleHitPoint = (source, cueId, requireStrip = false) => {
       const rect = source.getBoundingClientRect();
       for (const yRatio of [0.5, 0.25, 0.75]) {
         for (const xRatio of [0.45, 0.25, 0.7]) {
@@ -10863,8 +11069,8 @@ async function runSceneMatrixPaneCheck(client, viewport) {
           const hitCueId = hitElement
             ?.closest('[data-scene-matrix-cue-id]')
             ?.getAttribute('data-scene-matrix-cue-id');
-          const handleHit = hitElement?.closest('.cueTimelineDragHandle') === source;
-          if (hitCueId === cueId && (!requireHandle || handleHit)) return { x, y, hitCueId, handleHit };
+          const stripHit = hitElement?.closest('[data-scene-matrix-edit-strip]') === source;
+          if (hitCueId === cueId && (!requireStrip || stripHit)) return { x, y, hitCueId, stripHit };
         }
       }
       return null;
@@ -10880,7 +11086,7 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       dragSourceX: dragPoint.x,
       dragSourceY: dragPoint.y,
       dragHitCueId: dragPoint.hitCueId,
-      dragHandleHit: dragPoint.handleHit,
+      dragStripHit: dragPoint.stripHit,
       laneX: laneRect.left + laneRect.width * 0.6,
       laneY: laneRect.top + laneRect.height / 2,
       laneId: Number(lane.getAttribute('data-timeline-layer-id')),
@@ -11002,7 +11208,7 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       sourceCueId: 303,
       sourceCueLabel: "Back Sweep",
       hitCueId: interactionGeometry.dragHitCueId,
-      sourceHandleHit: interactionGeometry.dragHandleHit,
+      sourceStripHit: interactionGeometry.dragStripHit,
       targetLayerId: interactionGeometry.laneId,
       targetLayerKind: interactionGeometry.laneKind,
       before: stateBefore,
@@ -11011,85 +11217,7 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       ghostCleared: !stateAfter.ghostPresent,
     };
   }
-  let sameColumnReorder = null;
-  const reorderGeometry = await client.evaluate(`(() => {
-    const source = document.querySelector(
-      '[data-scene-matrix-cue-id="302"] .cueTimelineDragHandle',
-    );
-    const target = document.querySelector('[data-scene-matrix-cue-id="301"]');
-    target?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    source?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    if (!source || !target) return null;
-    const sourceRect = source.getBoundingClientRect();
-    const targetRect = target.getBoundingClientRect();
-    const sourceX = sourceRect.left + sourceRect.width / 2;
-    const sourceY = sourceRect.top + sourceRect.height / 2;
-    const targetX = targetRect.left + targetRect.width / 2;
-    const targetY = targetRect.top + Math.min(6, targetRect.height * 0.2);
-    return {
-      sourceX,
-      sourceY,
-      sourceHandleHit: document.elementFromPoint(sourceX, sourceY)
-        ?.closest('.cueTimelineDragHandle') === source,
-      targetX,
-      targetY,
-      targetHitCueId: document.elementFromPoint(targetX, targetY)
-        ?.closest('[data-scene-matrix-cue-id]')
-        ?.getAttribute('data-scene-matrix-cue-id') ?? '',
-    };
-  })()`);
-  if (reorderGeometry) {
-    const stateBefore = await measureSceneMatrixInteractionState(client, 302);
-    await client.send("Input.dispatchMouseEvent", {
-      type: "mousePressed",
-      x: reorderGeometry.sourceX,
-      y: reorderGeometry.sourceY,
-      button: "left",
-      buttons: 1,
-      clickCount: 1,
-    });
-    await client.send("Input.dispatchMouseEvent", {
-      type: "mouseMoved",
-      x: reorderGeometry.sourceX + 6,
-      y: reorderGeometry.sourceY,
-      button: "left",
-      buttons: 1,
-    });
-    await client.send("Input.dispatchMouseEvent", {
-      type: "mouseMoved",
-      x: reorderGeometry.targetX,
-      y: reorderGeometry.targetY,
-      button: "left",
-      buttons: 1,
-    });
-    await sleep(50);
-    const during = await client.evaluate(`(() => {
-      const indicator = document.querySelector('[data-scene-matrix-drop-position]');
-      return {
-        dropState: document.querySelector('[data-timeline-cue-drag-ghost]')
-          ?.getAttribute('data-timeline-drop-state') ?? '',
-        indicatorCueId: indicator?.getAttribute('data-scene-matrix-cue-id') ?? '',
-        indicatorPosition: indicator?.getAttribute('data-scene-matrix-drop-position') ?? '',
-      };
-    })()`);
-    await client.send("Input.dispatchMouseEvent", {
-      type: "mouseReleased",
-      x: reorderGeometry.targetX,
-      y: reorderGeometry.targetY,
-      button: "left",
-      buttons: 0,
-      clickCount: 1,
-    });
-    await sleep(180);
-    const stateAfter = await measureSceneMatrixInteractionState(client, 302);
-    sameColumnReorder = {
-      ...reorderGeometry,
-      ...during,
-      before: stateBefore,
-      after: stateAfter,
-      ghostCleared: !stateAfter.ghostPresent,
-    };
-  }
+  const sameColumnReorder = await exerciseSceneMatrixStripReorder(client, 302, 301);
   const after = await measureSceneMatrixPane(client);
   const expectedColumns = [
     "front",
@@ -11129,7 +11257,35 @@ async function runSceneMatrixPaneCheck(client, viewport) {
     ["matrixBankIdentityStripsVisible", () =>
       before.bankStripCount === expectedColumns.length && before.bankStripColors.every((color) => color !== "rgba(0, 0, 0, 0)")],
     ["matrixStaticAndFxBadgesPresent", () =>
-      before.kindBadgeCounts.STATIC === 14 && before.kindBadgeCounts.FX === 1],
+      before.kindBadgeCounts.STATIC === 14 &&
+      before.kindBadgeCounts.FX === 1 &&
+      before.kindBadges.every((badge) =>
+        badge.fontVariantCaps === "all-small-caps" &&
+        badge.fontSize === 11)],
+    ["matrixCellsUsePrimaryNameAndSecondaryMetadataRows", () =>
+      before.primaryRowCount === expectedCardCount &&
+      before.metaRowCount === expectedCardCount &&
+      before.cueNameCount === expectedCardCount &&
+      before.timeLabelCount === expectedCardCount &&
+      before.cueLayouts.every((layout) =>
+        layout.primaryWidthCoverage >= 0.9 &&
+        layout.primaryBeforeMeta &&
+        layout.nameSingleLine &&
+        layout.nameIdentityMatchesNumber &&
+        layout.kindInMetaRow &&
+        layout.timeInMetaRow &&
+        layout.superSceneAlignedWithMetaRow &&
+        /^(STATIC|FX)$/.test(layout.kindLabel) &&
+        /^\d+ms$/.test(layout.timeLabel))],
+    ["matrixLongShowNamesFullyDisplayAt1920", () =>
+      viewport.width !== 1920 ||
+      (
+        before.longSceneNames.length === 2 &&
+        before.longSceneNames.every((layout) =>
+          layout.nameFullyDisplayed &&
+          layout.nameScrollWidth <= layout.nameClientWidth + 1 &&
+          layout.columnWidth >= 180)
+      )],
     ["matrixSuperSceneBadgeCoexistsWithFx", () =>
       before.superSceneBadges.length === 1 &&
       before.superSceneBadges[0].cueId === "303" &&
@@ -11155,10 +11311,14 @@ async function runSceneMatrixPaneCheck(client, viewport) {
     ["matrixActiveCueProgressVisible", () =>
       before.progressBarCount === 1 && before.progressValues.length === 1 && Math.abs(before.progressValues[0] - 0.42) <= 0.001],
     ["matrixCellsMeetFortyPixelHitArea", () => before.minCellHitSize >= 40],
-    ["matrixDragHandlesMeetFortyPixelTouchContract", () =>
-      before.dragHandleCount === expectedCardCount &&
-      before.minDragHandleHitSize >= 40 &&
-      before.dragHandleTouchActions.every((touchAction) => touchAction === "none")],
+    ["matrixDedicatedDragHandlesRemovedAndEditStripsOwnDrag", () =>
+      before.dedicatedDragHandleCount === 0 &&
+      before.editStrips.length === expectedCardCount &&
+      before.editStrips.every((entry) =>
+        entry.tagName === "BUTTON" &&
+        entry.thresholdPx === 4 &&
+        entry.touchAction === "none" &&
+        entry.title === `Drag Cue ${entry.label} to reorder this column or place on Timeline`)],
     ["matrixEditStripsNameTheirNonTriggerSelection", () =>
       before.editStrips.length === expectedCardCount &&
       before.editStrips.every((entry) =>
@@ -11175,8 +11335,9 @@ async function runSceneMatrixPaneCheck(client, viewport) {
         && entry.visualHeight >= 40
         && entry.visualColor === entry.identityColor
         && entry.rightEdgeAligned)],
-    ["matrixEditStripsDoNotStealDragHandleHitArea", () =>
-      before.editStrips.every((entry) => entry.separatedFromDrag)],
+    ["matrixEditStripsReplaceLegacyHandleWithoutLosingDragSources", () =>
+      before.dedicatedDragHandleCount === 0 &&
+      before.dragSourceCount === expectedCardCount],
     ["matrixEditStripCentersOwnTopHit", () =>
       before.editStrips.some((entry) => entry.centerInVisibleScrollport)
       && before.editStrips
@@ -11212,7 +11373,7 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       oneGestureDrag.ghostCleared &&
       oneGestureDrag.sourceCueId === 303 &&
       oneGestureDrag.hitCueId === "303" &&
-      oneGestureDrag.sourceHandleHit === true &&
+      oneGestureDrag.sourceStripHit === true &&
       oneGestureDrag.targetLayerKind === "Lighting" &&
       oneGestureDrag.after.markerCount === oneGestureDrag.before.markerCount + 1 &&
       (oneGestureDrag.before.cuePlacementCount < 0
@@ -11226,7 +11387,11 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       JSON.stringify(oneGestureDrag?.before.activeCardIds) === JSON.stringify(["302"]) &&
       JSON.stringify(oneGestureDrag?.after.activeCardIds) === JSON.stringify(["302"])],
     ["matrixReorderDragShowsGhostAndInsertionIndicator", () =>
-      sameColumnReorder?.sourceHandleHit === true &&
+      sameColumnReorder?.sourceTagName === "BUTTON" &&
+      sameColumnReorder?.sourceThresholdPx === 4 &&
+      sameColumnReorder?.activationMovePx === 6 &&
+      sameColumnReorder?.sourceTopHitOwnsStrip === true &&
+      sameColumnReorder?.sourceTopHitCueId === "302" &&
       sameColumnReorder.targetHitCueId === "301" &&
       sameColumnReorder.dropState === "matrix" &&
       sameColumnReorder.indicatorCueId === "301" &&
@@ -11238,6 +11403,10 @@ async function runSceneMatrixPaneCheck(client, viewport) {
     ["matrixReorderDragDoesNotRecallOrPlaceCue", () =>
       JSON.stringify(sameColumnReorder?.before.activeCardIds) === JSON.stringify(["302"]) &&
       JSON.stringify(sameColumnReorder?.after.activeCardIds) === JSON.stringify(["302"]) &&
+      JSON.stringify(sameColumnReorder?.before.selectedCardIds) === JSON.stringify([]) &&
+      JSON.stringify(sameColumnReorder?.after.selectedCardIds) === JSON.stringify([]) &&
+      sameColumnReorder?.before.sceneSettingsCount === 0 &&
+      sameColumnReorder?.after.sceneSettingsCount === 0 &&
       sameColumnReorder?.after.markerCount === sameColumnReorder?.before.markerCount &&
       (sameColumnReorder?.before.cuePlacementCount < 0
         ? sameColumnReorder?.after.cuePlacementCount < 0
@@ -11283,6 +11452,75 @@ async function runSceneMatrixPaneCheck(client, viewport) {
     subThresholdClick,
     oneGestureDrag,
     sameColumnReorder,
+  };
+}
+
+async function runSceneMatrixStripDragViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: fixtureUrl("scene-matrix") });
+  await waitForApp(client);
+  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
+  await sleep(120);
+  const initialPane = await measureSceneMatrixPane(client);
+  const reorder = await exerciseSceneMatrixStripReorder(client, 302, 301);
+  const conditions = [
+    ["identityStripIsRealButtonAndOwnsElementFromPoint", () =>
+      reorder?.sourceTagName === "BUTTON" &&
+      reorder.sourceTopHitOwnsStrip &&
+      reorder.sourceTopHitCueId === "302"],
+    ["identityStripUsesFourPixelPressMoveThreshold", () =>
+      reorder?.sourceThresholdPx === 4 &&
+      reorder.activationMovePx === 6],
+    ["identityStripDragUsesRealCdpMouseSequence", () =>
+      reorder?.pointerSequence === "mousePressed>mouseMoved>mouseMoved>mouseReleased"],
+    ["identityStripDragShowsMatrixGhostAndInsertionIndicator", () =>
+      reorder?.dropState === "matrix" &&
+      reorder.targetHitCueId === "301" &&
+      reorder.indicatorCueId === "301" &&
+      reorder.indicatorPosition === "before" &&
+      reorder.ghostCleared],
+    ["identityStripDragReordersWithinColumn", () =>
+      JSON.stringify(reorder?.before.frontColumnCueIds) === JSON.stringify(["301", "302"]) &&
+      JSON.stringify(reorder?.after.frontColumnCueIds) === JSON.stringify(["302", "301"])],
+    ["identityStripDragDoesNotClickSelectRecallOrPlace", () =>
+      JSON.stringify(reorder?.before.activeCardIds) === JSON.stringify(["301"]) &&
+      JSON.stringify(reorder?.after.activeCardIds) === JSON.stringify(["301"]) &&
+      JSON.stringify(reorder?.before.selectedCardIds) === JSON.stringify([]) &&
+      JSON.stringify(reorder?.after.selectedCardIds) === JSON.stringify([]) &&
+      reorder?.before.sceneSettingsCount === 0 &&
+      reorder?.after.sceneSettingsCount === 0 &&
+      reorder?.after.markerCount === reorder?.before.markerCount &&
+      (reorder?.before.cuePlacementCount < 0
+        ? reorder?.after.cuePlacementCount < 0
+        : reorder?.after.cuePlacementCount === reorder?.before.cuePlacementCount)],
+    ["dedicatedDragHandleButtonRemainsAbsent", () =>
+      initialPane.dedicatedDragHandleCount === 0 &&
+      reorder?.dedicatedDragHandleCount === 0],
+  ];
+  const checks = Object.fromEntries(conditions.map(([name, check]) => {
+    try {
+      return [name, Boolean(check())];
+    } catch {
+      return [name, false];
+    }
+  }));
+  const failedChecks = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  return {
+    label: `scene-matrix-strip-drag-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    initialPane,
+    reorder,
   };
 }
 
@@ -11363,6 +11601,9 @@ async function readSceneSettingsState(client) {
           === getComputedStyle(selectedCard).borderLeftColor
       ),
       editStripCount: document.querySelectorAll("[data-scene-matrix-edit-strip]").length,
+      dedicatedDragHandleCount: document.querySelectorAll(
+        "[data-scene-matrix-cue-id] .cueTimelineDragHandle",
+      ).length,
       legacyPencilButtonCount: document.querySelectorAll("[data-scene-matrix-edit-cue]").length,
       pencilGlyphCount: [...document.querySelectorAll("[data-scene-matrix-cue-id] span")]
         .filter((span) => (span.textContent || "").trim() === "✎").length,
@@ -11550,6 +11791,9 @@ async function clickSceneSettingsStrip(client, selector) {
     if (!(button instanceof HTMLButtonElement)) {
       return {
         dispatched: false,
+        sourceTagName: "",
+        thresholdPx: -1,
+        movementPx: 0,
         centerHitOwnsStrip: false,
         stripId: "",
         centerHitStripId: "",
@@ -11569,6 +11813,9 @@ async function clickSceneSettingsStrip(client, selector) {
     const centerHit = document.elementFromPoint(x, y);
     return {
       dispatched: false,
+      sourceTagName: button.tagName,
+      thresholdPx: Number(button.getAttribute("data-scene-matrix-drag-threshold") ?? -1),
+      movementPx: 0,
       centerHitOwnsStrip: Boolean(
         centerHit
         && (centerHit === button || button.contains(centerHit))
@@ -11872,9 +12119,12 @@ async function runSceneSettingsViewport(client, viewport) {
       && editSelected.selectedSceneId === "301"
       && JSON.stringify(editSelected.selectedCardIds) === JSON.stringify(["301"])
       && JSON.stringify(editSelected.activeCardIds) === JSON.stringify(activeBeforeEdit)],
-    ["editStripBandCenterOwnsTopHitForPointerClicks", () =>
+    ["identityStripSubThresholdPointerClickOwnsTopHitAndOpensSettings", () =>
       [selectStripGesture, editStripGesture, reopenStripGesture].every((gesture) =>
         gesture.dispatched
+        && gesture.sourceTagName === "BUTTON"
+        && gesture.thresholdPx === 4
+        && gesture.movementPx < gesture.thresholdPx
         && gesture.centerHitOwnsStrip
         && gesture.centerHitStripId === gesture.stripId)],
     ["editSelectionUsesCellOutlineAndEmphasizedIdentityStrip", () =>
@@ -11886,6 +12136,7 @@ async function runSceneSettingsViewport(client, viewport) {
       && selectedStatic.selectedStripIdentityMatches],
     ["pencilButtonRemovedAndEditSourceMovedIntoSettings", () =>
       initial.editStripCount === 15
+      && initial.dedicatedDragHandleCount === 0
       && initial.legacyPencilButtonCount === 0
       && initial.pencilGlyphCount === 0
       && selectedStatic.editSourceVisible
@@ -17388,6 +17639,9 @@ async function main() {
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
             `size=${result.stopped.topbarRect?.height ?? 0}/${result.stopped.pulseRect?.width ?? 0}x${result.stopped.pulseRect?.height ?? 0} ` +
             `controls=${JSON.stringify(result.stopped.controlCounts)} overflow=${result.stopped.statusOverflowX} ` +
+            `goOrder=${result.stopped.masterClusterRect?.right ?? "?"}<${result.stopped.goRect?.x ?? "?"}-` +
+              `${result.stopped.goRect?.right ?? "?"}<${result.stopped.bpmRect?.x ?? "?"} ` +
+            `goTitle=${JSON.stringify(result.stopped.goTitle)} ` +
             `polls=${result.stoppedLevelCalls}->${result.activeLevelCalls} ` +
             `level=${result.active.meterAriaNow}% stale=${result.staleElapsedMs}ms/${result.stale.staleMs}ms ` +
             `route=${result.route.setupActive}/${result.route.outputsActive}/${result.route.settingsFocused} ` +
@@ -17574,6 +17828,7 @@ async function main() {
             `precision=${result.selectedStatic.scenePropertyValues.authoredBeats}->${result.saveRoundTrip.metadataArgs?.authoredBeats ?? "none"} ` +
             `drawerPrecision=${result.cueEditAuthoredBeats.initialValue}->${result.cueEditSaveRoundTrip.metadataArgs?.authoredBeats ?? "none"} ` +
             `topHit=${result.selectStripGesture.centerHitTag}.${result.selectStripGesture.centerHitClass || "none"} ` +
+            `click=${result.selectStripGesture.movementPx}px<${result.selectStripGesture.thresholdPx}px ` +
             `release=${result.releasedStatic.activeCardIds.join("+") || "none"}:${result.releasedStatic.selectedSceneId} ` +
             `edit=${result.editSelected.selectedSceneId}/${result.editSelected.activeCardIds.join("+") || "none"} ` +
             `chooser=${result.selectedStatic.chooserButtonCount}@${Math.round(result.selectedStatic.chooserMinimumHitSize)}px ` +
@@ -17788,6 +18043,7 @@ async function main() {
             `header=${result.matrix.toolbarRect?.height ?? 0} ` +
             `matrix=${result.matrix.matrixRect?.height ?? 0} ` +
             `actions=${result.matrix.directTransportButtonCount}+${result.matrix.cueEditorToggleCount}+${result.matrix.viewToggleButtonCount}+${result.matrix.statusToggleCount} ` +
+            `transportGo=${result.matrix.transportGoButtonCount} ` +
             `kill=${result.matrix.killButtonCount}/${result.matrix.killClearCount} ` +
             `hatch=${result.matrix.killButtonsHatched ? 1 : 0} red=${result.matrix.killButtonsRedBordered ? 1 : 0} ` +
             `dimensions=${JSON.stringify([...result.matrix.killButtonMetrics, ...result.matrix.killClearMetrics])} ` +
@@ -17809,10 +18065,18 @@ async function main() {
           .filter((result) => result.label.startsWith("control-"));
         controlModeResults.push(...viewportControlResults);
         const failures = viewportControlResults.filter((result) => !hasExpectedControlModeSurface(result));
+        const liveContracts = viewportControlResults
+          .filter((result) => result.label.startsWith("control-live-"))
+          .map((result) => ({
+            label: result.label,
+            allAssertionsTrue: hasExpectedControlModeSurface(result),
+            liveDeskToolbarControlsShareOneRow: result.liveDeskToolbarControlsShareOneRow,
+          }));
         console.log(
           `${failures.length === 0 ? "pass" : "fail"} control-mode-surface-${viewport.width}x${viewport.height} ` +
             `phases=${viewportControlResults.length} ` +
             `labels=${JSON.stringify(viewportControlResults.map((result) => result.label))} ` +
+            `liveContracts=${JSON.stringify(liveContracts)} ` +
             `failed=${JSON.stringify(failures.map((result) => ({
               label: result.label,
               toolbar: [
@@ -17926,6 +18190,32 @@ async function main() {
       }
       return;
     }
+    if (sceneMatrixStripDragOnlyMode) {
+      const stripDragResults = [];
+      for (const viewport of viewports) {
+        const result = await runSceneMatrixStripDragViewport(client, viewport);
+        stripDragResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `threshold=${result.reorder?.sourceThresholdPx ?? "?"}px ` +
+            `move=${result.reorder?.activationMovePx ?? "?"}px ` +
+            `topHit=${result.reorder?.sourceTopHitCueId ?? "?"} ` +
+            `order=${result.reorder?.before.frontColumnCueIds.join(">") ?? "?"}->` +
+              `${result.reorder?.after.frontColumnCueIds.join(">") ?? "?"} ` +
+            `active=${result.reorder?.before.activeCardIds.join("+") ?? "?"}->` +
+              `${result.reorder?.after.activeCardIds.join("+") ?? "?"} ` +
+            `selected=${result.reorder?.before.selectedCardIds.join("+") || "none"}->` +
+              `${result.reorder?.after.selectedCardIds.join("+") || "none"} ` +
+            `indicator=${result.reorder?.indicatorCueId ?? "?"}:${result.reorder?.indicatorPosition ?? "?"} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = stripDragResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Scene Matrix identity-strip drag failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (sceneMatrixOnlyMode) {
       const sceneMatrixResults = [];
       for (const viewport of viewports) {
@@ -17935,7 +18225,15 @@ async function main() {
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
             `columns=${JSON.stringify(result.before.columns)} ` +
             `cell=${Math.round(result.before.minCellHitSize * 100) / 100}px ` +
-            `handle=${Math.round(result.before.minDragHandleHitSize * 100) / 100}px ` +
+            `baseHeight=${Math.round(Math.min(...result.before.baseCellHeights) * 100) / 100}px ` +
+            `strip=${Math.round(Math.min(...result.before.editStrips.map((entry) => entry.hitWidth)) * 100) / 100}px/` +
+              `${result.before.editStrips[0]?.thresholdPx ?? "?"}px ` +
+            `longNames=${JSON.stringify(result.before.longSceneNames.map((entry) => ({
+              label: entry.label,
+              fit: entry.nameFullyDisplayed,
+              width: `${entry.nameScrollWidth}/${entry.nameClientWidth}`,
+              column: entry.columnWidth,
+            })))} ` +
             `width=${Math.round(result.before.paneWidthCoverage * 1000) / 1000} ` +
             `scroll=${result.before.documentAndAppScrollZero ? "zero" : "overflow"} ` +
             `click=302 active=${result.subThresholdClick?.before.activeCardIds.join("+") || "?"}->` +
@@ -18390,7 +18688,7 @@ async function main() {
     }
     for (const result of sceneMatrixResults) {
       console.log(
-        `${result.passed ? "pass" : "fail"} ${result.label} columns=${JSON.stringify(result.before.columns)} active=${JSON.stringify(result.before.activeCardIds)}->${JSON.stringify(result.after.activeCardIds)} width=${Math.round(result.before.paneWidthCoverage * 1000) / 1000} handle=${Math.round(result.before.minDragHandleHitSize * 100) / 100}px click=302:${result.subThresholdClick?.before.activeCardIds.join("+") || "?"}->${result.subThresholdClick?.after.activeCardIds.join("+") || "?"} drag=${result.oneGestureDrag?.sourceCueId ?? "?"}@${result.oneGestureDrag?.targetLayerId ?? "?"} events=${result.oneGestureDrag?.before.markerCount ?? "?"}->${result.oneGestureDrag?.after.markerCount ?? "?"} placements=${result.oneGestureDrag?.before.cuePlacementCount ?? "?"}->${result.oneGestureDrag?.after.cuePlacementCount ?? "?"} reorder=${result.sameColumnReorder?.before.frontColumnCueIds.join(">") || "?"}->${result.sameColumnReorder?.after.frontColumnCueIds.join(">") || "?"} indicator=${result.sameColumnReorder?.indicatorCueId ?? "?"}:${result.sameColumnReorder?.indicatorPosition ?? "?"} failed=${JSON.stringify(result.failedChecks)}`,
+        `${result.passed ? "pass" : "fail"} ${result.label} columns=${JSON.stringify(result.before.columns)} active=${JSON.stringify(result.before.activeCardIds)}->${JSON.stringify(result.after.activeCardIds)} width=${Math.round(result.before.paneWidthCoverage * 1000) / 1000} baseHeight=${Math.round(Math.min(...result.before.baseCellHeights) * 100) / 100}px strip=${Math.round(Math.min(...result.before.editStrips.map((entry) => entry.hitWidth)) * 100) / 100}px/${result.before.editStrips[0]?.thresholdPx ?? "?"}px long=${JSON.stringify(result.before.longSceneNames.map((entry) => [entry.label, entry.nameFullyDisplayed, entry.nameScrollWidth, entry.nameClientWidth, entry.columnWidth]))} click=302:${result.subThresholdClick?.before.activeCardIds.join("+") || "?"}->${result.subThresholdClick?.after.activeCardIds.join("+") || "?"} drag=${result.oneGestureDrag?.sourceCueId ?? "?"}@${result.oneGestureDrag?.targetLayerId ?? "?"} events=${result.oneGestureDrag?.before.markerCount ?? "?"}->${result.oneGestureDrag?.after.markerCount ?? "?"} placements=${result.oneGestureDrag?.before.cuePlacementCount ?? "?"}->${result.oneGestureDrag?.after.cuePlacementCount ?? "?"} reorder=${result.sameColumnReorder?.before.frontColumnCueIds.join(">") || "?"}->${result.sameColumnReorder?.after.frontColumnCueIds.join(">") || "?"} indicator=${result.sameColumnReorder?.indicatorCueId ?? "?"}:${result.sameColumnReorder?.indicatorPosition ?? "?"} failed=${JSON.stringify(result.failedChecks)}`,
       );
     }
     for (const result of paneWindowResults) {

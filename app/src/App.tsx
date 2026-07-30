@@ -16050,6 +16050,8 @@ export default function App() {
         applicationUpdateError={applicationUpdateError()}
         uiScale={uiScale()}
         uiLocale={uiLocale()}
+        canGo={snapshot().cues.length > 0}
+        nextCueLabel={nextCue()?.label ?? "No cue"}
         operatorLockMode={operatorLockMode()}
         operations={
           <WorkspaceOperationsMenu
@@ -16071,6 +16073,7 @@ export default function App() {
         }
         onWorkspaceTab={setWorkspaceTab}
         onSetupSubTab={selectSetupMode}
+        onGo={() => void triggerNextCue()}
         onLightingMaster={setLightingMaster}
         onVideoMaster={setVideoMasterOpacity}
         onTapBpm={tapBpm}
@@ -16226,9 +16229,6 @@ export default function App() {
           <div class="liveTransportGrid" data-live-desk-toolbar>
             <button onClick={triggerPreviousCue} disabled={snapshot().cues.length === 0}>
               Back
-            </button>
-            <button class="primary liveGoButton" onClick={triggerNextCue} disabled={snapshot().cues.length === 0}>
-              GO
             </button>
             <button
               onClick={() => void setCueFadePaused(!snapshot().active_fade?.paused)}

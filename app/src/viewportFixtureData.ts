@@ -1248,11 +1248,16 @@ const sceneMatrixCues: CueSummary[] = [
   },
   ...Array.from({ length: 10 }, (_, index): CueSummary => {
     const bankNumber = index + 3;
+    const fixtureLabel = index === 0
+      ? "BackBar-Amber"
+      : index === 1
+        ? "Bar-StrobeAMber"
+        : `Bank ${bankNumber} Scene`;
     return {
       ...cueRecallCue,
       id: 305 + index,
       cue_number: String(5 + index),
-      label: `Bank ${bankNumber} Scene`,
+      label: fixtureLabel,
       group_id: `bank-${String(bankNumber).padStart(2, "0")}`,
       recall_mode: "Coexist",
       node_graph_targets: [],

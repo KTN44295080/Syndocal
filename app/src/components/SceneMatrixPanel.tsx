@@ -52,6 +52,8 @@ interface SceneMatrixColumn {
   cues: CueSummary[];
 }
 
+const SCENE_MATRIX_STRIP_DRAG_THRESHOLD_PX = 4;
+
 export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
   const [dragCueId, setDragCueId] = createSignal<number | null>(null);
   const [dropIndicator, setDropIndicator] = createSignal<{
@@ -81,10 +83,7 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
   });
 
   const beginDrag = (event: PointerEvent & { currentTarget: HTMLElement }, cue: CueSummary) => {
-    if (
-      event.button !== 0
-      || !event.currentTarget.classList.contains("cueTimelineDragHandle")
-    ) return;
+    if (event.button !== 0 || !event.isPrimary) return;
     dragPointer = {
       pointerId: event.pointerId,
       startClientX: event.clientX,
@@ -133,7 +132,7 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
     const crossedThreshold = Math.hypot(
         event.clientX - dragPointer.startClientX,
         event.clientY - dragPointer.startClientY,
-      ) > 4;
+      ) > SCENE_MATRIX_STRIP_DRAG_THRESHOLD_PX;
     if (!dragPointer.moved && crossedThreshold) {
       dragPointer.moved = true;
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -345,99 +344,105 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                   }
                                 }}
                               >
-                                <span data-no-localize class="sceneMatrixCueNumber">{cue.cue_number || cue.id}</span>
-                                <strong data-no-localize title={cue.label}>{cue.label}</strong>
-                                <small>{displayNumber(cue.fade_ms, 0)}ms</small>
-                              </button>
-                              <div class="sceneMatrixCardFooter">
-                                <div class="sceneMatrixTypeBadges">
-                                  <span
-                                    class={`sceneMatrixKindBadge ${cue.effect_targets.length > 0 ? "fx" : "static"}`}
-                                    data-scene-matrix-kind={cue.effect_targets.length > 0 ? "FX" : "STATIC"}
-                                  >
-                                    {cue.effect_targets.length > 0 ? "FX" : "STATIC"}
-                                  </span>
-                                  <Show when={cue.child_timeline}>
-                                    <button
-                                      type="button"
-                                      class="sceneMatrixKindBadge superScene"
-                                      data-scene-matrix-super-scene={cue.id}
-                                      title={`Open Super Scene ${cue.label}`}
-                                      aria-label={`Open Super Scene ${cue.label}`}
-                                      onPointerDown={(event) => event.stopPropagation()}
-                                      onPointerMove={(event) => event.stopPropagation()}
-                                      onPointerUp={(event) => event.stopPropagation()}
-                                      onPointerCancel={(event) => event.stopPropagation()}
-                                      onClick={(event) => {
-                                        event.preventDefault();
-                                        event.stopPropagation();
-                                        void props.onOpenSuperScene(cue.id);
-                                      }}
-                                    >
-                                      SS
-                                    </button>
-                                  </Show>
-                                </div>
-                                <Show when={flashMode()}>
-                                  <span class="sceneMatrixFlashBadge" data-scene-flash-badge={cue.id}>
-                                    FLASH
-                                  </span>
-                                </Show>
-                                <Show when={(cue.recall_mode ?? "Coexist") === "ReplaceGroup"}>
-                                  <span class="sceneMatrixReplaceBadge">Replace group</span>
-                                </Show>
-                                <button
-                                  type="button"
-                                  class="cueTimelineDragHandle"
-                                  classList={{ dragging: dragCueId() === cue.id }}
-                                  title={`Drag Cue ${cue.label} to reorder this column or place on Timeline`}
-                                  aria-label={`Drag Cue ${cue.label} to reorder this column or place on Timeline`}
-                                  onPointerDown={(event) => {
-                                    event.stopPropagation();
-                                    beginDrag(event, cue);
-                                  }}
-                                  onPointerMove={(event) => {
-                                    event.stopPropagation();
-                                    moveDrag(event);
-                                  }}
-                                  onPointerUp={(event) => {
-                                    event.stopPropagation();
-                                    finishDrag(event, false);
-                                  }}
-                                  onPointerCancel={(event) => {
-                                    event.stopPropagation();
-                                    finishDrag(event, true);
-                                  }}
-                                  onClick={(event) => {
-                                    event.preventDefault();
-                                    event.stopPropagation();
-                                  }}
+                                <span
+                                  class="sceneMatrixCuePrimaryRow"
+                                  data-scene-matrix-primary-row
                                 >
-                                  <span aria-hidden="true" data-no-localize>⠿</span>
-                                </button>
+                                  <span data-no-localize class="sceneMatrixCueNumber">{cue.cue_number || cue.id}</span>
+                                  <strong
+                                    data-no-localize
+                                    data-scene-matrix-cue-name
+                                    title={cue.label}
+                                  >
+                                    {cue.label}
+                                  </strong>
+                                </span>
+                                <span
+                                  class="sceneMatrixCueMetaRow"
+                                  classList={{ hasSuperScene: Boolean(cue.child_timeline) }}
+                                  data-scene-matrix-meta-row
+                                >
+                                  <span class="sceneMatrixTypeBadges">
+                                    <span
+                                      class={`sceneMatrixKindBadge ${cue.effect_targets.length > 0 ? "fx" : "static"}`}
+                                      data-scene-matrix-kind={cue.effect_targets.length > 0 ? "FX" : "STATIC"}
+                                      data-no-localize
+                                    >
+                                      {cue.effect_targets.length > 0 ? "FX" : "STATIC"}
+                                    </span>
+                                  </span>
+                                  <Show when={flashMode()}>
+                                    <span class="sceneMatrixFlashBadge" data-scene-flash-badge={cue.id}>
+                                      FLASH
+                                    </span>
+                                  </Show>
+                                  <Show when={(cue.recall_mode ?? "Coexist") === "ReplaceGroup"}>
+                                    <span class="sceneMatrixReplaceBadge">Replace group</span>
+                                  </Show>
+                                  <small data-scene-matrix-time>{displayNumber(cue.fade_ms, 0)}ms</small>
+                                </span>
+                              </button>
+                              <Show when={cue.child_timeline}>
                                 <button
                                   type="button"
-                                  class="sceneMatrixEditStrip"
-                                  data-scene-matrix-edit-strip={cue.id}
-                                  title={`Edit scene settings for Cue ${cue.label}`}
-                                  aria-label={`Edit scene settings for Cue ${cue.label}`}
-                                  aria-pressed={props.selectedCueId === cue.id}
+                                  class="sceneMatrixKindBadge superScene sceneMatrixSuperSceneAction"
+                                  data-scene-matrix-super-scene={cue.id}
+                                  title={`Open Super Scene ${cue.label}`}
+                                  aria-label={`Open Super Scene ${cue.label}`}
                                   onPointerDown={(event) => event.stopPropagation()}
                                   onPointerMove={(event) => event.stopPropagation()}
                                   onPointerUp={(event) => event.stopPropagation()}
                                   onPointerCancel={(event) => event.stopPropagation()}
                                   onClick={(event) => {
+                                    event.preventDefault();
                                     event.stopPropagation();
-                                    props.onSelectCue(cue.id);
+                                    void props.onOpenSuperScene(cue.id);
                                   }}
                                 >
-                                  <span
-                                    class="sceneMatrixEditStripBand"
-                                    aria-hidden="true"
-                                    data-no-localize
-                                  />
+                                  SS
                                 </button>
-                              </div>
+                              </Show>
+                              <button
+                                type="button"
+                                class="sceneMatrixEditStrip"
+                                classList={{ dragging: dragCueId() === cue.id }}
+                                data-scene-matrix-edit-strip={cue.id}
+                                data-scene-matrix-drag-threshold={SCENE_MATRIX_STRIP_DRAG_THRESHOLD_PX}
+                                title={`Drag Cue ${cue.label} to reorder this column or place on Timeline`}
+                                aria-label={`Edit scene settings for Cue ${cue.label}`}
+                                aria-pressed={props.selectedCueId === cue.id}
+                                onPointerDown={(event) => {
+                                  event.stopPropagation();
+                                  beginDrag(event, cue);
+                                }}
+                                onPointerMove={(event) => {
+                                  event.stopPropagation();
+                                  moveDrag(event);
+                                }}
+                                onPointerUp={(event) => {
+                                  event.stopPropagation();
+                                  finishDrag(event, false);
+                                }}
+                                onPointerCancel={(event) => {
+                                  event.stopPropagation();
+                                  finishDrag(event, true);
+                                }}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  if (suppressClickCueId === cue.id) {
+                                    suppressClickCueId = null;
+                                    event.preventDefault();
+                                    return;
+                                  }
+                                  props.onSelectCue(cue.id);
+                                }}
+                              >
+                                <span
+                                  class="sceneMatrixEditStripBand"
+                                  aria-hidden="true"
+                                  data-no-localize
+                                />
+                              </button>
                               <Show when={isActive(cue)}>
                                 <div class="sceneMatrixProgress" data-scene-matrix-progress={cue.id}>
                                   <span>LIVE</span>
