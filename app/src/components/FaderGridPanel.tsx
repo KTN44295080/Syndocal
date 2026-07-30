@@ -1,4 +1,5 @@
-import { For, Show } from "solid-js";
+import { For, Show, createEffect, createSignal, onCleanup } from "solid-js";
+import { createStore, reconcile } from "solid-js/store";
 import {
   channelFunctionLabel,
   channelFunctionWheelColor,
@@ -41,12 +42,64 @@ interface FaderGridPanelProps {
   valueForControl: (control: AttributeControl) => number;
   isControlWritten: (control: AttributeControl) => boolean;
   fullWidth?: boolean;
+  onPointerCaptureChange?: (captured: boolean) => void;
   onSetControlValue?: (control: AttributeControl, value: number) => void;
   onSetFixtureAttribute?: (fixtureId: number, attribute: string, value: number) => void | Promise<void>;
   onSetGroupAttribute?: (groupId: string, attribute: string, value: number) => void | Promise<void>;
 }
 
+interface StableFaderControl {
+  id: string;
+  control: AttributeControl;
+}
+
+const attributeControlId = (control: AttributeControl) =>
+  [
+    control.attribute.toLowerCase(),
+    control.geometry?.toLowerCase() ?? "",
+    control.offsets.join(","),
+  ].join(":");
+
+const stableFaderControls = (controls: readonly AttributeControl[]): StableFaderControl[] =>
+  controls.map((control) => ({
+    id: attributeControlId(control),
+    control,
+  }));
+
 export function FaderGridPanel(props: FaderGridPanelProps) {
+  const [stableControls, setStableControls] = createStore<StableFaderControl[]>(
+    stableFaderControls(props.controls),
+  );
+  const capturedControlIds = new Set<string>();
+  const [pointerCaptureRevision, setPointerCaptureRevision] = createSignal(0);
+  let reportedPointerCapture = false;
+  createEffect(() => {
+    pointerCaptureRevision();
+    const nextControls = props.controls;
+    // Snapshot metadata can refresh around the active control, but replacing
+    // its keyed row while the native range owns capture would end the drag.
+    // Keep the structure frozen until capture ends; valueForControl remains
+    // reactive and continues to update the existing input node.
+    if (capturedControlIds.size > 0) return;
+    setStableControls(reconcile(stableFaderControls(nextControls), { key: "id" }));
+  });
+  const setControlPointerCapture = (controlId: string, captured: boolean) => {
+    if (captured) {
+      capturedControlIds.add(controlId);
+    } else {
+      capturedControlIds.delete(controlId);
+    }
+    const anyCaptured = capturedControlIds.size > 0;
+    if (reportedPointerCapture !== anyCaptured) {
+      reportedPointerCapture = anyCaptured;
+      props.onPointerCaptureChange?.(anyCaptured);
+    }
+    setPointerCaptureRevision((revision) => revision + 1);
+  };
+  onCleanup(() => {
+    if (reportedPointerCapture) props.onPointerCaptureChange?.(false);
+    capturedControlIds.clear();
+  });
   const hasSelectedFixture = () => props.selectedFixtureId !== null && props.selectedFixtureId !== undefined;
   const clampDmxValue = (value: number) =>
     Math.min(65_535, Math.max(0, Math.round(Number.isFinite(value) ? value : 0)));
@@ -84,6 +137,8 @@ export function FaderGridPanel(props: FaderGridPanelProps) {
       .replace(/([a-z])([A-Z])/g, "$1 $2")
       .toLowerCase()
       .replace(/[^\p{L}\p{N}]+/gu, " ");
+  const classificationAttributeText = (control: AttributeControl, value: number) =>
+    normalizedAttributeText(control, value).replace(/\b(\p{L}+)\d+\b/gu, "$1");
   const swatchColor = (control: AttributeControl, value: number) => {
     const fn = activeFunction(control, value);
     const wheelColor = fn ? channelFunctionWheelColor(control, fn) : null;
@@ -92,8 +147,10 @@ export function FaderGridPanel(props: FaderGridPanelProps) {
     }
     const normalized = (fn
       ? normalizedFunctionText(control, fn)
-      : normalizedAttributeText(control, value)
-    ).replace(/[^\p{L}\p{N}]+/gu, " ");
+      : classificationAttributeText(control, value)
+    )
+      .replace(/[^\p{L}\p{N}]+/gu, " ")
+      .replace(/\b(\p{L}+)\d+\b/gu, "$1");
     if (/\b(red)\b/.test(normalized)) return "#e4564f";
     if (/\b(green)\b/.test(normalized)) return "#57b85b";
     if (/\b(blue)\b/.test(normalized)) return "#5686d8";
@@ -107,10 +164,11 @@ export function FaderGridPanel(props: FaderGridPanelProps) {
     return null;
   };
   const attributeGlyph = (control: AttributeControl, value: number): AttributeFaderGlyph => {
-    const normalized = normalizedAttributeText(control, value);
+    const normalized = classificationAttributeText(control, value);
     const compactIdentity = `${control.attribute} ${control.channel_name}`
       .replace(/([a-z])([A-Z])/g, "$1 $2")
       .toLowerCase()
+      .replace(/\b([a-z]+)\d+\b/g, "$1")
       .replace(/[^a-z0-9]/g, "");
     if (/\b(dimmer|intensity)\b/.test(normalized)) return "dimmer";
     if (/\b(shutter|iris)\b/.test(normalized)) return "shutter";
@@ -141,14 +199,18 @@ export function FaderGridPanel(props: FaderGridPanelProps) {
       data-wheel-scroll-surface={props.fullWidth ? "fader-channel-band" : undefined}
       onWheel={props.fullWidth ? handleHorizontalWheel : undefined}
     >
-      <For each={props.controls}>
-        {(control) => {
-          const value = () => clampDmxValue(props.valueForControl(control));
-          const written = () => props.isControlWritten(control);
-          const swatch = () => swatchColor(control, value());
-          const glyph = () => attributeGlyph(control, value());
+      <For each={stableControls}>
+        {(entry) => {
+          const control = () => entry.control;
+          const value = () => clampDmxValue(props.valueForControl(control()));
+          const written = () => props.isControlWritten(control());
+          const swatch = () => swatchColor(control(), value());
+          const glyph = () => attributeGlyph(control(), value());
           return (
-            <div classList={{ fader: true, attributeFaderColumn: true, written: written(), off: !written() }}>
+            <div
+              classList={{ fader: true, attributeFaderColumn: true, written: written(), off: !written() }}
+              data-fader-control-id={entry.id}
+            >
               <div class="attributeFaderWriteRow">
                 <span
                   class="attributeFaderWriteIndicator"
@@ -156,21 +218,21 @@ export function FaderGridPanel(props: FaderGridPanelProps) {
                   title={written() ? "Written value" : "Default value, off"}
                   aria-label={written() ? "Written value" : "Default value, off"}
                 />
-                <small class="attributeFaderChannel">CH {control.offsets.join("/") || "-"}</small>
+                <small class="attributeFaderChannel">CH {control().offsets.join("/") || "-"}</small>
               </div>
               <span
                 class="attributeFaderIcon"
                 data-attribute-glyph={swatch() ? "color" : glyph()}
-                title={`${control.attribute} / ${displayLabel(control, value())}`}
+                title={`${control().attribute} / ${displayLabel(control(), value())}`}
                 role="img"
-                aria-label={control.attribute}
+                aria-label={control().attribute}
               >
                 <Show when={swatch()} fallback={attributeGlyphSvg(glyph())}>
                   {(color) => <i style={{ "background-color": color() }} />}
                 </Show>
               </span>
               <output class="attributeFaderValue">
-                {written() ? displayValue(control, value()) : "OFF"}
+                {written() ? displayValue(control(), value()) : "OFF"}
               </output>
               <VerticalFaderInput
                 chromeClass="attributeVerticalFaderChrome"
@@ -178,16 +240,17 @@ export function FaderGridPanel(props: FaderGridPanelProps) {
                 min="0"
                 max="65535"
                 value={value()}
-                aria-label={control.attribute}
-                aria-valuetext={written() ? `${displayValue(control, value())} DMX` : "OFF"}
-                onInput={(event) => setControlValue(control, Number(event.currentTarget.value))}
+                aria-label={control().attribute}
+                aria-valuetext={written() ? `${displayValue(control(), value())} DMX` : "OFF"}
+                onPointerCaptureChange={(captured) => setControlPointerCapture(entry.id, captured)}
+                onInput={(event) => setControlValue(control(), Number(event.currentTarget.value))}
               />
               <div class="attributeFaderFine" role="group" aria-label="Fine adjustment">
                 <button
                   type="button"
                   aria-label="Decrease value"
                   title="Decrease value"
-                  onClick={() => setControlValue(control, value() - fineStep(control))}
+                  onClick={() => setControlValue(control(), value() - fineStep(control()))}
                 >
                   −
                 </button>
@@ -195,7 +258,7 @@ export function FaderGridPanel(props: FaderGridPanelProps) {
                   type="button"
                   aria-label="Increase value"
                   title="Increase value"
-                  onClick={() => setControlValue(control, value() + fineStep(control))}
+                  onClick={() => setControlValue(control(), value() + fineStep(control()))}
                 >
                   +
                 </button>

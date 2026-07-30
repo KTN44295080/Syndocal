@@ -1,4 +1,5 @@
-import { For, Match, Show, Switch, createMemo, onCleanup } from "solid-js";
+import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { createStore, reconcile } from "solid-js/store";
 import { effectivePanTiltValues } from "../fixtureLimits";
 import { handleHorizontalWheel } from "../horizontalWheel";
 import {
@@ -52,8 +53,28 @@ const fullLimitOverlay = {
 export function FixtureTypeAttributeColumns(props: FixtureTypeAttributeColumnsProps) {
   let animationFrame: number | null = null;
   const pendingWrites = new Map<string, () => void>();
+  const [stableGroups, setStableGroups] = createStore<FixtureTypeSelectionGroup[]>(props.groups);
+  const capturedGroupKeys = new Set<string>();
+  const [pointerCaptureRevision, setPointerCaptureRevision] = createSignal(0);
+  createEffect(() => {
+    pointerCaptureRevision();
+    const nextGroups = props.groups;
+    // A fixture snapshot recreates the group view-models. Hold the keyed
+    // structure while any descendant range owns pointer capture; its value
+    // signals keep flowing through the existing input node.
+    if (capturedGroupKeys.size > 0) return;
+    setStableGroups(reconcile(nextGroups, { key: "key" }));
+  });
+  const setGroupPointerCapture = (groupKey: string, captured: boolean) => {
+    if (captured) {
+      capturedGroupKeys.add(groupKey);
+    } else {
+      capturedGroupKeys.delete(groupKey);
+    }
+    setPointerCaptureRevision((revision) => revision + 1);
+  };
   const supportedGroups = createMemo(() =>
-    props.groups.filter((group) =>
+    stableGroups.filter((group) =>
       fixtureTypeControlsForCategory(group, props.activeCategory).length > 0
     )
   );
@@ -78,6 +99,7 @@ export function FixtureTypeAttributeColumns(props: FixtureTypeAttributeColumnsPr
       cancelAnimationFrame(animationFrame);
     }
     pendingWrites.clear();
+    capturedGroupKeys.clear();
   });
 
   return (
@@ -240,6 +262,9 @@ export function FixtureTypeAttributeColumns(props: FixtureTypeAttributeColumnsPr
                           value={valueFor(control())}
                           aria-label={control().attribute}
                           aria-valuetext={isMixed(control()) ? "Mixed values" : percentLabel(valueFor(control()))}
+                          onPointerCaptureChange={(captured) =>
+                            setGroupPointerCapture(group.key, captured)
+                          }
                           onInput={(event) => {
                             const value = Number(event.currentTarget.value);
                             scheduleWrite(`control:${group.key}:${control().attribute}`, () =>
@@ -351,6 +376,9 @@ export function FixtureTypeAttributeColumns(props: FixtureTypeAttributeColumnsPr
                               selectedFixtureId={referenceFixture()?.id ?? null}
                               valueForControl={valueFor}
                               isControlWritten={isControlWritten}
+                              onPointerCaptureChange={(captured) =>
+                                setGroupPointerCapture(group.key, captured)
+                              }
                               onSetControlValue={(control, value) =>
                                 setControlValue(control, value, "position-extra")
                               }
@@ -370,6 +398,9 @@ export function FixtureTypeAttributeColumns(props: FixtureTypeAttributeColumnsPr
                         selectedFixtureId={referenceFixture()?.id ?? null}
                         valueForControl={valueFor}
                         isControlWritten={isControlWritten}
+                        onPointerCaptureChange={(captured) =>
+                          setGroupPointerCapture(group.key, captured)
+                        }
                         onSetControlValue={(control, value) =>
                           setControlValue(control, value, "fader")
                         }
@@ -386,6 +417,9 @@ export function FixtureTypeAttributeColumns(props: FixtureTypeAttributeColumnsPr
                         selectedFixtureId={referenceFixture()?.id ?? null}
                         valueForControl={valueFor}
                         isControlWritten={isControlWritten}
+                        onPointerCaptureChange={(captured) =>
+                          setGroupPointerCapture(group.key, captured)
+                        }
                         onSetControlValue={(control, value) =>
                           setControlValue(control, value, "category")
                         }

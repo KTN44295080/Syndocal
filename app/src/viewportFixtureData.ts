@@ -148,27 +148,46 @@ const viewportFixtureControls: AttributeControl[] = [
   },
 ];
 
+const viewportSegmentColorControl = (
+  role: "Red" | "Green" | "Blue" | "Amber",
+  segment: number,
+  offset: number,
+): AttributeControl => ({
+  attribute: `${role}${segment}`,
+  channel_name: `${role} ${segment}`,
+  offsets: [offset],
+  resolution: "EightBit",
+  default_value: 0,
+  functions: [],
+});
+
 const viewportMegaBarControls: AttributeControl[] = [
-  viewportFixtureControls[0],
-  { ...viewportFixtureControls[3], offsets: [2] },
-  { ...viewportFixtureControls[4], offsets: [3] },
-  { ...viewportFixtureControls[5], offsets: [4] },
   {
-    attribute: "ColorAmber",
-    channel_name: "Amber",
-    offsets: [5],
+    attribute: "Dimmer1",
+    channel_name: "Dimmer 1",
+    offsets: [1],
     resolution: "EightBit",
     default_value: 0,
     functions: [],
   },
   {
-    attribute: "Shutter1",
-    channel_name: "Shutter",
-    offsets: [6],
+    attribute: "Strobe2",
+    channel_name: "Strobe 2",
+    offsets: [2],
     resolution: "EightBit",
     default_value: 0,
     functions: [],
   },
+  ...Array.from({ length: 8 }, (_, index) => {
+    const segment = index + 1;
+    const firstOffset = 3 + index * 4;
+    return [
+      viewportSegmentColorControl("Red", segment, firstOffset),
+      viewportSegmentColorControl("Green", segment, firstOffset + 1),
+      viewportSegmentColorControl("Blue", segment, firstOffset + 2),
+      viewportSegmentColorControl("Amber", segment, firstOffset + 3),
+    ];
+  }).flat(),
 ];
 
 const viewportMovingSpotControls: AttributeControl[] = [
@@ -638,15 +657,18 @@ const liveEditTypeFixtures: PatchedFixtureSummary[] = [
     -4,
   ),
   ...Array.from({ length: 20 }, (_, index) =>
-    viewportLiveEditTypeFixture(
-      index + 2,
-      "MEGA BAR RGBA",
-      "Mega-Lite",
-      "11CH",
-      viewportMegaBarControls,
-      -6 + (index % 10) * 1.25,
-      -2 + Math.floor(index / 10) * 1.25,
-    )
+    ({
+      ...viewportLiveEditTypeFixture(
+        index + 2,
+        "MEGA BAR RGBA",
+        "Mega-Lite",
+        "34CH 8 segment",
+        viewportMegaBarControls,
+        -6 + (index % 10) * 1.25,
+        -2 + Math.floor(index / 10) * 1.25,
+      ),
+      group_ids: ["front", "mega"],
+    })
   ),
   ...Array.from({ length: 20 }, (_, index) =>
     viewportLiveEditTypeFixture(
@@ -1552,6 +1574,7 @@ const sceneMatrixCues: CueSummary[] = [
     label: "Front Base",
     group_id: "front",
     recall_mode: "Coexist",
+    targets: structuredClone(cueRecallCue.targets),
     node_graph_targets: [],
     effect_targets: [],
   },
@@ -1566,6 +1589,7 @@ const sceneMatrixCues: CueSummary[] = [
     authored_beats: 0.94716597,
     pre_wait_ms: 250,
     follow_ms: 1_500,
+    targets: structuredClone(cueRecallCue.targets),
     node_graph_targets: [],
     effect_targets: [],
   },

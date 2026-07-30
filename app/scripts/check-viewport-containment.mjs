@@ -17520,6 +17520,170 @@ async function runWorkspaceOperatorViewport(client, viewport) {
   };
 }
 
+async function runFaderDragPersistenceProbe(client, descriptor) {
+  await evaluatePageFunction(client, (selection) => {
+    window.__syndocalSetControlFixtureSelection?.(
+      selection.fixtureIds,
+      selection.selectedFixtureId,
+      selection.groupId,
+    );
+  }, descriptor);
+  await sleep(80);
+  await clickVisibleByText(client, ".editDeskTabs button", "Attributes");
+  await sleep(60);
+  await clickVisibleByText(client, ".attributeCategoryRail button", "Fader");
+  await sleep(100);
+
+  const start = await evaluatePageFunction(client, (selection) => {
+    const findInput = () => {
+      if (selection.scope === "type") {
+        const column = [...document.querySelectorAll("[data-fixture-type-column]")]
+          .find((candidate) =>
+            (candidate.querySelector(".fixtureTypeColumnHeader strong")?.textContent || "").trim()
+              .startsWith(selection.typeLabel)
+          );
+        return column?.querySelector(`input[aria-label="${CSS.escape(selection.attribute)}"]`) ?? null;
+      }
+      return document.querySelector(
+        `.attributeDeskSurface > .faderGrid input[aria-label="${CSS.escape(selection.attribute)}"]`,
+      );
+    };
+    const input = findInput();
+    if (!(input instanceof HTMLInputElement)) return null;
+    input.scrollIntoView({ block: "nearest", inline: "center" });
+    const rect = input.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const startY = rect.bottom - Math.max(8, rect.height * 0.12);
+    const probe = {
+      node: input,
+      pointerId: null,
+      events: [],
+      inputValues: [Number(input.value)],
+    };
+    input.addEventListener("pointerdown", (event) => {
+      probe.pointerId = event.pointerId;
+      probe.events.push("pointerdown");
+    });
+    input.addEventListener("gotpointercapture", () => probe.events.push("gotpointercapture"));
+    input.addEventListener("pointermove", () => probe.events.push("pointermove"));
+    input.addEventListener("pointerup", () => probe.events.push("pointerup"));
+    input.addEventListener("lostpointercapture", () => probe.events.push("lostpointercapture"));
+    input.addEventListener("input", () => {
+      probe.events.push("input");
+      probe.inputValues.push(Number(input.value));
+    });
+    window.__syndocalFaderDragProbe = probe;
+    return {
+      x,
+      startY,
+      moveYs: [0.68, 0.48, 0.28].map((ratio) => rect.top + rect.height * ratio),
+      hitOwnInput: document.elementFromPoint(x, startY) === input,
+      initialValue: Number(input.value),
+      stableId: input.closest("[data-fader-control-id]")?.getAttribute("data-fader-control-id") ?? "",
+    };
+  }, descriptor);
+  if (!start) {
+    return {
+      descriptor,
+      available: false,
+      start: null,
+      cloneRevisions: [],
+      steps: [],
+      released: null,
+      pointerSequence: "",
+    };
+  }
+
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: start.x,
+    y: start.startY,
+    button: "left",
+    buttons: 1,
+    clickCount: 1,
+  });
+  await sleep(50);
+
+  const cloneRevisions = [];
+  const steps = [];
+  for (const y of start.moveYs) {
+    cloneRevisions.push(await client.evaluate(
+      "window.__syndocalCloneFixtureSnapshot?.() ?? -1",
+    ));
+    await sleep(50);
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: start.x,
+      y,
+      button: "left",
+      buttons: 1,
+    });
+    await sleep(50);
+    steps.push(await evaluatePageFunction(client, (selection) => {
+      const probe = window.__syndocalFaderDragProbe;
+      const current = selection.scope === "type"
+        ? [...document.querySelectorAll("[data-fixture-type-column]")]
+            .find((candidate) =>
+              (candidate.querySelector(".fixtureTypeColumnHeader strong")?.textContent || "").trim()
+                .startsWith(selection.typeLabel)
+            )
+            ?.querySelector(`input[aria-label="${CSS.escape(selection.attribute)}"]`)
+        : document.querySelector(
+            `.attributeDeskSurface > .faderGrid input[aria-label="${CSS.escape(selection.attribute)}"]`,
+          );
+      return {
+        sameNode: Boolean(probe?.node && current && probe.node.isSameNode(current)),
+        originalNodeConnected: probe?.node?.isConnected === true,
+        pointerId: probe?.pointerId ?? null,
+        pointerCapture: Boolean(
+          probe?.node &&
+          probe.pointerId !== null &&
+          probe.node.hasPointerCapture(probe.pointerId)
+        ),
+        captureEventActive: Boolean(
+          probe &&
+          probe.events.lastIndexOf("gotpointercapture") >
+            probe.events.lastIndexOf("lostpointercapture")
+        ),
+        captureMarker: probe?.node?.getAttribute("data-fader-pointer-captured") ?? "",
+        value: current instanceof HTMLInputElement ? Number(current.value) : Number.NaN,
+      };
+    }, descriptor));
+  }
+
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: start.x,
+    y: start.moveYs[start.moveYs.length - 1],
+    button: "left",
+    buttons: 0,
+    clickCount: 1,
+  });
+  await sleep(60);
+  const released = await client.evaluate(`(() => {
+    const probe = window.__syndocalFaderDragProbe;
+    return {
+      events: [...(probe?.events ?? [])],
+      inputValues: [...(probe?.inputValues ?? [])],
+      pointerCapture: Boolean(
+        probe?.node &&
+        probe.pointerId !== null &&
+        probe.node.hasPointerCapture(probe.pointerId)
+      ),
+      captureMarker: probe?.node?.getAttribute("data-fader-pointer-captured") ?? "",
+    };
+  })()`);
+  return {
+    descriptor,
+    available: true,
+    start,
+    cloneRevisions,
+    steps,
+    released,
+    pointerSequence: "mousePressed>mouseMoved>mouseMoved>mouseMoved>mouseReleased",
+  };
+}
+
 async function runLiveEditFixtureTypesViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -17585,10 +17749,16 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
       .map((icon) => icon.querySelector('i'))
       .filter(visible);
     const bankAttributeGlyphDetails = bankAttributeIcons.map((icon) => ({
+      fixtureType:
+        (icon.closest('[data-fixture-type-column]')?.querySelector('.fixtureTypeColumnHeader strong')?.textContent || '')
+          .trim()
+          .split(' / ')[0] ||
+        ((document.querySelector('.attributeTargetSummary')?.textContent || '').includes('MEGA BAR RGBA') ? 'MEGA BAR RGBA' : 'GENERIC'),
       attribute: icon.getAttribute('aria-label') || '',
       title: icon.getAttribute('title') || '',
       glyph: icon.getAttribute('data-attribute-glyph') || '',
       path: icon.querySelector('svg path')?.getAttribute('d') || '',
+      swatchColor: icon.querySelector('i') ? getComputedStyle(icon.querySelector('i')).backgroundColor : '',
     }));
     const bankTextLabels = bankFaders.flatMap((fader) =>
       [...fader.querySelectorAll('.attributeFaderLabel')].filter(visible)
@@ -17968,6 +18138,31 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
       ),
     };
   })()`);
+  const allFixtureIds = Array.from({ length: 41 }, (_, index) => index + 1);
+  const fixtureTypeDrag = await runFaderDragPersistenceProbe(client, {
+    scope: "type",
+    fixtureIds: allFixtureIds,
+    selectedFixtureId: 1,
+    groupId: "",
+    typeLabel: "MEGA BAR RGBA",
+    attribute: "Red1",
+  });
+  const groupDrag = await runFaderDragPersistenceProbe(client, {
+    scope: "group",
+    fixtureIds: Array.from({ length: 20 }, (_, index) => index + 2),
+    selectedFixtureId: 2,
+    groupId: "mega",
+    typeLabel: "",
+    attribute: "Red1",
+  });
+  const singleDrag = await runFaderDragPersistenceProbe(client, {
+    scope: "single",
+    fixtureIds: [1],
+    selectedFixtureId: 1,
+    groupId: "",
+    typeLabel: "",
+    attribute: "Dimmer",
+  });
   const position = multipleCategoryStates.Position;
   const color = multipleCategoryStates.Color;
   const singleFaderBank = singleCategoryStates.Fader;
@@ -17993,6 +18188,40 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
       state.deskRangeCount > 0
         ? state.deskVerticalRangeCount === state.deskRangeCount && state.deskHorizontalRangeCount === 0
         : state.deskHorizontalRangeCount === 0
+    );
+  const dragPersistsAcrossSnapshotDiffs = (probe) =>
+    probe.available &&
+    probe.start.hitOwnInput &&
+    Boolean(probe.start.stableId) &&
+    probe.cloneRevisions.length === 3 &&
+    new Set(probe.cloneRevisions).size === 3 &&
+    probe.cloneRevisions.every((revision) => revision > 0) &&
+    probe.steps.length === 3 &&
+    probe.steps.every((step) =>
+      step.sameNode &&
+      step.originalNodeConnected &&
+      step.captureEventActive &&
+      step.captureMarker === "true"
+    ) &&
+    probe.steps.every((step, index) =>
+      index === 0 || step.value !== probe.steps[index - 1].value
+    ) &&
+    new Set(probe.released.inputValues).size >= 4 &&
+    probe.released.events.includes("pointerdown") &&
+    probe.released.events.includes("gotpointercapture") &&
+    probe.released.events.includes("pointerup") &&
+    probe.released.events.includes("lostpointercapture") &&
+    !probe.released.pointerCapture &&
+    probe.released.captureMarker === "" &&
+    probe.pointerSequence === "mousePressed>mouseMoved>mouseMoved>mouseMoved>mouseReleased";
+  const megaGlyphDetails = faderBank.bankAttributeGlyphDetails.filter(
+    (entry) => entry.fixtureType === "MEGA BAR RGBA"
+  );
+  const numberedGlyph = (attribute) =>
+    megaGlyphDetails.find((entry) => entry.attribute === attribute);
+  const simpleGlyph = (attribute) =>
+    faderBank.bankAttributeGlyphDetails.find(
+      (entry) => entry.fixtureType === "GENERIC" && entry.attribute === attribute
     );
 
   const conditions = [
@@ -18031,8 +18260,8 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
       )
     ],
     ["faderCategoryPreservesTypeColumns", () => faderBank.columnCount === 3 && faderBank.primaryControlKinds.every((kind) => kind === "fader-bank")],
-    ["faderCategoryUsesChannelVerticalBank", () => faderBank.bankFaderCount === 26 && faderBank.bankVerticalInputCount === 26],
-    ["faderCategoryShowsChannelNumbers", () => faderBank.bankChannelLabels.length === 26 && faderBank.bankChannelLabels.every((label) => label.startsWith("CH "))],
+    ["faderCategoryUsesChannelVerticalBank", () => faderBank.bankFaderCount === 54 && faderBank.bankVerticalInputCount === 54],
+    ["faderCategoryShowsChannelNumbers", () => faderBank.bankChannelLabels.length === 54 && faderBank.bankChannelLabels.every((label) => label.startsWith("CH "))],
     ["faderCategoryHasTrimPerChannel", () => faderBank.bankFineButtonCount === faderBank.bankFaderCount * 2],
     ["faderColumnsUseCompact54pxContract", () =>
       [faderBank, singleFaderBank].every((state) =>
@@ -18069,6 +18298,38 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
         speedGlyphs[0].title.startsWith(`${speedGlyphs[0].attribute} /`)
       );
     }],
+    ["megaBar34ChannelProfileClassifiesNumberedAttributesWithoutGenericDiamonds", () =>
+      megaGlyphDetails.length === 34 &&
+      megaGlyphDetails.every((entry) => entry.glyph !== "generic") &&
+      megaGlyphDetails.every((entry) => entry.title.startsWith(`${entry.attribute} /`))
+    ],
+    ["megaBarNumberedColorAttributesUseBaseColorDots", () =>
+      numberedGlyph("Red1")?.glyph === "color" &&
+      numberedGlyph("Red1")?.swatchColor === "rgb(228, 86, 79)" &&
+      numberedGlyph("Green2")?.glyph === "color" &&
+      numberedGlyph("Green2")?.swatchColor === "rgb(87, 184, 91)" &&
+      numberedGlyph("Amber3")?.glyph === "color" &&
+      numberedGlyph("Amber3")?.swatchColor === "rgb(215, 146, 67)"
+    ],
+    ["megaBarNumberedNonColorAttributesUseBaseGlyphs", () =>
+      numberedGlyph("Dimmer1")?.glyph === "dimmer" &&
+      numberedGlyph("Strobe2")?.glyph === "strobe"
+    ],
+    ["simpleAttributeGlyphClassificationRemainsUnchanged", () =>
+      simpleGlyph("ColorRed")?.glyph === "color" &&
+      Boolean(simpleGlyph("ColorRed")?.swatchColor) &&
+      simpleGlyph("Pan")?.glyph === "pan" &&
+      simpleGlyph("Tilt")?.glyph === "tilt"
+    ],
+    ["singleFixtureFaderDragSurvivesThreeSnapshotDiffs", () =>
+      dragPersistsAcrossSnapshotDiffs(singleDrag)
+    ],
+    ["groupFaderDragSurvivesThreeSnapshotDiffs", () =>
+      dragPersistsAcrossSnapshotDiffs(groupDrag)
+    ],
+    ["fixtureTypeColumnFaderDragSurvivesThreeSnapshotDiffs", () =>
+      dragPersistsAcrossSnapshotDiffs(fixtureTypeDrag)
+    ],
     ["compactFaderVisibilityUsesMeasuredDeckWidthAndHorizontalScroll", () =>
       faderBank.widthDerivedVisibleChannelFloor > 0 &&
       faderBank.fullyVisibleBankFaderCount >= faderBank.widthDerivedVisibleChannelFloor &&
@@ -18121,7 +18382,7 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
       dmxFunctionReadout.labels.every((label) => label === "GDTF Functions")
     ],
     ["dimmerFadersRenderTallerThanWide", () => multiple.deskRangeCount === 3 && multiple.deskVerticalRangeCount === 3 && multiple.deskHorizontalRangeCount === 0],
-    ["faderBankRendersTallerThanWide", () => faderBank.deskRangeCount === 26 && faderBank.deskVerticalRangeCount === 26 && faderBank.deskHorizontalRangeCount === 0],
+    ["faderBankRendersTallerThanWide", () => faderBank.deskRangeCount === 54 && faderBank.deskVerticalRangeCount === 54 && faderBank.deskHorizontalRangeCount === 0],
     ["positionCategoryUsesCompactPanTiltPads", () => position.fixtureTypePositionPadCount === 2 && position.fixtureTypePositionPadsSquare],
     ["positionCategoryKeepsExtraAttributesVertical", () => position.positionExtraFaderCount === 2 && position.deskHorizontalRangeCount === 0],
     ["genericCategoriesUseVerticalFaderBanks", () =>
@@ -18136,7 +18397,11 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
     ["allTypeCategoryRangesRenderTallerThanWide", () =>
       everyMeasuredRangeIsVertical(Object.values(multipleCategoryStates))
     ],
-    ["colorCategoryKeepsPickerControl", () => color.fixtureTypeColorPickerCount === 2 && color.deskHorizontalRangeCount === 0],
+    ["colorCategoryKeepsSimpleRgbPickerAndSegmentFaderBank", () =>
+      color.fixtureTypeColorPickerCount === 1 &&
+      color.categoryBankFaderCount === 32 &&
+      color.deskHorizontalRangeCount === 0
+    ],
     ["typeHeaderNarrowsSelection", () => narrowed],
     ["typeColumnsHiddenForSingleSelection", () => single.columnCount === 0],
     ["legacyEditorVisibleForSingleSelection", () => single.legacyFaderGridCount === 1 && single.legacyDimmerPanelCount === 1],
@@ -18187,6 +18452,9 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
     singleFaderBank,
     keyboardProbe,
     dmxFunctionReadout,
+    fixtureTypeDrag,
+    groupDrag,
+    singleDrag,
     narrowed,
   };
 }
@@ -19518,11 +19786,16 @@ async function main() {
               `+${result.faderBank.faderChannelBankHorizontalOverflow}px` +
               `:${result.faderBank.widthDerivedVisibleChannelFloor}ch-floor ` +
             `icons=${result.faderBank.bankAttributeIconCount}/${result.faderBank.bankTextLabelCount} ` +
+            `megaGlyphs=${result.faderBank.bankAttributeGlyphDetails.filter((entry) => entry.fixtureType === "MEGA BAR RGBA").length}:` +
+              `${result.faderBank.bankAttributeGlyphDetails.filter((entry) => entry.fixtureType === "MEGA BAR RGBA" && entry.glyph === "generic").length}generic ` +
             `orientation=${result.faderBank.deskVerticalRangeCount}/${result.faderBank.deskHorizontalRangeCount} ` +
             `chrome=${Math.round(result.faderBank.faderThumbMinimumWidth * 10) / 10}x${Math.round(result.faderBank.faderThumbMinimumHeight * 10) / 10}/${result.faderBank.faderTrackInsetCount}/${result.faderBank.faderGripLineCount} ` +
             `pure=${result.faderBank.faderCategoryActionCount}+${result.singleFaderBank.faderCategoryActionCount}/${result.faderBank.faderGdtfFunctionPanelCount}+${result.singleFaderBank.faderGdtfFunctionPanelCount} ` +
             `width=${Math.round(result.faderBank.faderChannelBankWidthRatio * 1000) / 1000}/${Math.round(result.singleFaderBank.faderChannelBankWidthRatio * 1000) / 1000} ` +
             `keyboard=${result.keyboardProbe.valueChanged}/${result.keyboardProbe.focusVisible}/${result.keyboardProbe.ariaPreserved} ` +
+            `drag=${[result.singleDrag, result.groupDrag, result.fixtureTypeDrag]
+              .map((probe) => `${probe.steps.filter((step) => step.sameNode && step.captureEventActive && step.captureMarker === "true").length}/3`)
+              .join("+")} ` +
             `dmx=${result.dmxFunctionReadout.panelCount} ` +
             `position=${result.multipleCategoryStates.Position.fixtureTypePositionPadCount}/${result.multipleCategoryStates.Position.positionExtraFaderCount} ` +
             `supported=${Object.entries(result.multipleCategoryStates)

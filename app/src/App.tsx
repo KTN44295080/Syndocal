@@ -2765,6 +2765,7 @@ export default function App() {
     __syndocalReadEditLiveFixtureHistory?: () => ProjectHistoryStatus;
     __syndocalSetMappingLiveDmx?: (channelValues: Record<number, number>) => void;
     __syndocalCloneCueSnapshot?: () => void;
+    __syndocalCloneFixtureSnapshot?: () => number;
     __syndocalSetControlFixtureSelection?: (
       fixtureIds: number[],
       selectedFixtureId: number | null,
@@ -2807,6 +2808,19 @@ export default function App() {
       }));
     };
   }
+  let fixtureSnapshotCloneRevision = 0;
+  if (viewportFixture === "live-edit-types" || viewportFixture === "edit-live") {
+    sceneBlockFixtureWindow.__syndocalCloneFixtureSnapshot = () => {
+      fixtureSnapshotCloneRevision += 1;
+      setSnapshot((current) => {
+        const fixtures = structuredClone(current.fixtures);
+        const churnFixture = fixtures[fixtures.length - 1];
+        if (churnFixture) churnFixture.highlighted = !churnFixture.highlighted;
+        return { ...current, fixtures };
+      });
+      return fixtureSnapshotCloneRevision;
+    };
+  }
   if (viewportFixture === "mapping-live-color") {
     sceneBlockFixtureWindow.__syndocalSetMappingLiveDmx = (channelValues) => {
       const currentValues = liveDmxPreviews().find((preview) => preview.universe === 0)?.values ?? [];
@@ -2822,7 +2836,11 @@ export default function App() {
       setSnapshot((current) => ({ ...current, dmx_preview: values, dmx_previews: previews }));
     };
   }
-  if (viewportFixture === "edit-live" || viewportFixture === "workspace-operator") {
+  if (
+    viewportFixture === "edit-live"
+    || viewportFixture === "live-edit-types"
+    || viewportFixture === "workspace-operator"
+  ) {
     sceneBlockFixtureWindow.__syndocalSetControlFixtureSelection = (
       fixtureIds,
       selectedFixture,
@@ -2857,6 +2875,7 @@ export default function App() {
     delete sceneBlockFixtureWindow.__syndocalReadEditLiveFixtureHistory;
     delete sceneBlockFixtureWindow.__syndocalSetMappingLiveDmx;
     delete sceneBlockFixtureWindow.__syndocalCloneCueSnapshot;
+    delete sceneBlockFixtureWindow.__syndocalCloneFixtureSnapshot;
     delete sceneBlockFixtureWindow.__syndocalSetControlFixtureSelection;
   });
   let lastRecoverySignature = projectRecoveryCheckpoint()?.signature ?? null;

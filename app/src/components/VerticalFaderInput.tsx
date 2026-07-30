@@ -1,4 +1,4 @@
-import { splitProps, type JSX } from "solid-js";
+import { createSignal, onCleanup, splitProps, type JSX } from "solid-js";
 
 type VerticalFaderInputProps = Omit<
   JSX.InputHTMLAttributes<HTMLInputElement>,
@@ -6,6 +6,7 @@ type VerticalFaderInputProps = Omit<
 > & {
   chromeClass?: string;
   inputClass?: string;
+  onPointerCaptureChange?: (captured: boolean) => void;
 };
 
 const numericValue = (
@@ -23,7 +24,24 @@ export function VerticalFaderInput(props: VerticalFaderInputProps) {
     "min",
     "max",
     "value",
+    "onPointerCaptureChange",
   ]);
+  const activePointerIds = new Set<number>();
+  const [pointerCaptured, setPointerCaptured] = createSignal(false);
+  const updatePointerCaptureState = () => {
+    const captured = activePointerIds.size > 0;
+    if (pointerCaptured() === captured) return;
+    setPointerCaptured(captured);
+    local.onPointerCaptureChange?.(captured);
+  };
+  const retainPointerCapture = (event: PointerEvent & { currentTarget: HTMLInputElement }) => {
+    activePointerIds.add(event.pointerId);
+    updatePointerCaptureState();
+  };
+  const releasePointerCapture = (event: PointerEvent) => {
+    activePointerIds.delete(event.pointerId);
+    updatePointerCaptureState();
+  };
   const visualPosition = () => {
     const minimum = numericValue(local.min, 0);
     const maximum = numericValue(local.max, 100);
@@ -33,6 +51,11 @@ export function VerticalFaderInput(props: VerticalFaderInputProps) {
       : Math.min(1, Math.max(0, (value - minimum) / (maximum - minimum)));
     return (1 - normalized) * 100;
   };
+  onCleanup(() => {
+    if (activePointerIds.size === 0) return;
+    activePointerIds.clear();
+    local.onPointerCaptureChange?.(false);
+  });
 
   return (
     <span
@@ -51,6 +74,10 @@ export function VerticalFaderInput(props: VerticalFaderInputProps) {
         max={local.max}
         value={local.value}
         aria-orientation="vertical"
+        data-fader-pointer-captured={pointerCaptured() ? "true" : undefined}
+        onGotPointerCapture={retainPointerCapture}
+        onLostPointerCapture={releasePointerCapture}
+        onPointerCancel={releasePointerCapture}
       />
     </span>
   );
