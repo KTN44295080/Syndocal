@@ -37,7 +37,7 @@ export function MappingVideoSurfacesLayer(props: MappingVideoSurfacesLayerProps)
             ].filter(Boolean).join(" ")}
             transform={`translate(${surface.x} ${surface.z}) rotate(${surface.rotationDeg})`}
             onPointerDown={(event) => {
-              if (props.stageTool === "pan") {
+              if (event.button === 1 || props.stageTool === "pan") {
                 return;
               }
               event.stopPropagation();

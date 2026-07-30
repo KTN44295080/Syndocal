@@ -352,7 +352,8 @@ export function createMappingInteractionController(options: MappingInteractionCo
   };
 
   const beginMappingViewportPan = (event: PointerEvent & { currentTarget: SVGSVGElement }) => {
-    if (event.button !== 0 || options.mappingStageTool() !== "pan") return;
+    const isMiddleButtonPan = event.button === 1;
+    if (!isMiddleButtonPan && (event.button !== 0 || options.mappingStageTool() !== "pan")) return;
     const rect = event.currentTarget.getBoundingClientRect();
     const box = options.mappingViewportBox();
     event.preventDefault();
@@ -403,11 +404,21 @@ export function createMappingInteractionController(options: MappingInteractionCo
   const handleMappingStagePointerDown = async (
     event: PointerEvent & { currentTarget: SVGSVGElement },
   ) => {
+    if (event.button === 1) {
+      beginMappingViewportPan(event);
+      return;
+    }
     if (event.button !== 0) return;
     if (options.mappingStageTool() === "place") await placeSelectedFixtureFromStage(event);
     else if (options.mappingStageTool() === "rotate") await rotateSelectedFixtureFromStage(event);
     else if (options.mappingStageTool() === "pan") beginMappingViewportPan(event);
     else beginMappingMarquee(event);
+  };
+
+  const handleMappingStageAuxClick = (
+    event: MouseEvent & { currentTarget: SVGSVGElement },
+  ) => {
+    if (event.button === 1) event.preventDefault();
   };
 
   const handleMappingStagePointerMove = (event: PointerEvent & { currentTarget: SVGSVGElement }) => {
@@ -578,6 +589,7 @@ export function createMappingInteractionController(options: MappingInteractionCo
     beginMappingStageObjectRotate,
     beginMappingStageObjectResize,
     handleMappingStagePointerDown,
+    handleMappingStageAuxClick,
     handleMappingStagePointerMove,
     finishMappingStageDrag,
   };

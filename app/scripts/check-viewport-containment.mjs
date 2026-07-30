@@ -43,6 +43,8 @@ const colorWheelOnlyMode = process.argv.includes("--color-wheel-only");
 const controlEditPositionOnlyMode = process.argv.includes("--control-edit-position-only");
 const controlStageChromeOnlyMode = process.argv.includes("--control-stage-chrome-only");
 const controlStageFixtureEditOnlyMode = process.argv.includes("--control-stage-fixture-edit-only");
+const stageMiddlePanOnlyMode = process.argv.includes("--stage-middle-pan-only");
+const contextMenuOnlyMode = process.argv.includes("--context-menu-only");
 const mappingLiveColorOnlyMode = process.argv.includes("--mapping-live-color-only");
 const mappingLiveSegmentsOnlyMode = process.argv.includes("--mapping-live-segments-only");
 const mappingLiveSnapshotOnlyMode = process.argv.includes("--mapping-live-snapshot-only");
@@ -62,7 +64,7 @@ const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
       ? "color-wheel"
     : editLiveOnlyMode
       ? "edit-live"
-    : controlStageFixtureEditOnlyMode
+    : controlStageFixtureEditOnlyMode || stageMiddlePanOnlyMode || contextMenuOnlyMode
       ? "control-stage-edit"
     : liveEditTypesOnlyMode || attributeCategoriesOnlyMode
       ? "live-edit-types"
@@ -124,7 +126,7 @@ const viewports = requestedViewport
     ? [compactFallbackViewports[1]]
   : largeShowMode
     ? [primaryOperationalViewport]
-  : controlStageFixtureEditOnlyMode
+  : controlStageFixtureEditOnlyMode || stageMiddlePanOnlyMode || contextMenuOnlyMode
     ? [primaryOperationalViewport]
     : mappingLiveColorOnlyMode || mappingLiveSegmentsOnlyMode || mappingLiveSnapshotOnlyMode || barBeamsOnlyMode
       ? [primaryOperationalViewport]
@@ -3870,6 +3872,539 @@ async function dispatchCdpMouseDrag(client, start, end, intermediate = null) {
     buttons: 0,
     clickCount: 1,
   });
+}
+
+function readStageMiddlePanStateInPage(scopeSelector) {
+  const root = document.querySelector(scopeSelector);
+  const stage = root?.querySelector(".editableStage");
+  const fixtureHitTarget = root?.querySelector('[data-stage-fixture-id="1"] .stageFixtureHitTarget');
+  const stageRect = stage?.getBoundingClientRect();
+  const fixtureRect = fixtureHitTarget?.getBoundingClientRect();
+  const viewBoxValues = (stage?.getAttribute("viewBox") ?? "")
+    .trim()
+    .split(/\s+/)
+    .map(Number);
+  const viewBox = viewBoxValues.length === 4 && viewBoxValues.every(Number.isFinite)
+    ? {
+        x: viewBoxValues[0],
+        z: viewBoxValues[1],
+        width: viewBoxValues[2],
+        height: viewBoxValues[3],
+        centerX: viewBoxValues[0] + viewBoxValues[2] / 2,
+        centerZ: viewBoxValues[1] + viewBoxValues[3] / 2,
+      }
+    : null;
+  const tool = ["select", "place", "rotate", "pan"]
+    .find((candidate) => stage?.classList.contains(`${candidate}Mode`)) ?? "";
+  const pointFromRect = (rect) => rect
+    ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+    : null;
+  const fixturePoint = pointFromRect(fixtureRect);
+  return {
+    viewBox,
+    tool,
+    stagePoint: pointFromRect(stageRect),
+    fixturePoint: fixturePoint
+      ? {
+          ...fixturePoint,
+          topHitFixtureId: Number(
+            document.elementFromPoint(fixturePoint.x, fixturePoint.y)
+              ?.closest("[data-stage-fixture-id]")
+              ?.getAttribute("data-stage-fixture-id") ?? -1,
+          ),
+        }
+      : null,
+    stageRect: stageRect
+      ? {
+          left: stageRect.left,
+          top: stageRect.top,
+          right: stageRect.right,
+          bottom: stageRect.bottom,
+          width: stageRect.width,
+          height: stageRect.height,
+        }
+      : null,
+    fixture: (() => {
+      const snapshot = window.__syndocalReadControlStageEditFixtureSnapshot?.();
+      const fixture = snapshot?.fixtures?.find((candidate) => candidate.id === 1);
+      return fixture
+        ? {
+            id: fixture.id,
+            position: { ...fixture.position },
+            rotation: { ...fixture.rotation },
+          }
+        : null;
+    })(),
+  };
+}
+
+async function readStageMiddlePanState(client, scopeSelector) {
+  return await client.evaluate(
+    `(${readStageMiddlePanStateInPage.toString()})(${JSON.stringify(scopeSelector)})`,
+  );
+}
+
+function middlePanDragEnd(state, distance = 56) {
+  if (!state.viewBox || !state.stageRect) {
+    throw new Error("Middle-pan stage geometry is unavailable");
+  }
+  const start = state.fixturePoint ?? state.stagePoint;
+  if (!start) {
+    throw new Error("Middle-pan start point is unavailable");
+  }
+  const maximumX = Math.max(0, 100 - state.viewBox.width);
+  const maximumZ = Math.max(0, 100 - state.viewBox.height);
+  const preferredDeltaX = state.viewBox.x <= maximumX / 2 ? -distance : distance;
+  const preferredDeltaY = state.viewBox.z <= maximumZ / 2 ? -distance : distance;
+  const insideDelta = (coordinate, preferred, minimum, maximum) => {
+    if (coordinate + preferred >= minimum && coordinate + preferred <= maximum) return preferred;
+    if (coordinate - preferred >= minimum && coordinate - preferred <= maximum) return -preferred;
+    return Math.max(minimum - coordinate, Math.min(maximum - coordinate, preferred));
+  };
+  const deltaX = insideDelta(
+    start.x,
+    preferredDeltaX,
+    state.stageRect.left + 8,
+    state.stageRect.right - 8,
+  );
+  const deltaY = insideDelta(
+    start.y,
+    preferredDeltaY,
+    state.stageRect.top + 8,
+    state.stageRect.bottom - 8,
+  );
+  return {
+    start,
+    end: { x: start.x + deltaX, y: start.y + deltaY },
+  };
+}
+
+function leftFixtureDragEnd(state, distanceX = 48, distanceY = 20) {
+  if (!state.fixturePoint || !state.stageRect) {
+    throw new Error("Left-drag fixture geometry is unavailable");
+  }
+  const horizontal = state.fixturePoint.x + distanceX <= state.stageRect.right - 8
+    ? distanceX
+    : -distanceX;
+  const vertical = state.fixturePoint.y + distanceY <= state.stageRect.bottom - 8
+    ? distanceY
+    : -distanceY;
+  return {
+    x: state.fixturePoint.x + horizontal,
+    y: state.fixturePoint.y + vertical,
+  };
+}
+
+async function installMiddlePanEventProbe(client) {
+  await client.evaluate(`(() => {
+    window.__syndocalMiddlePanEvents = [];
+    const record = (event) => {
+      if (event.button !== 1) return;
+      const target = event.target instanceof Element ? event.target : null;
+      const entry = {
+        type: event.type,
+        button: event.button,
+        cancelable: event.cancelable,
+        scope: target?.closest(".controlStageContext")
+          ? "control"
+          : target?.closest(".setupStageContext")
+            ? "setup"
+            : "other",
+        defaultPrevented: event.defaultPrevented,
+      };
+      window.__syndocalMiddlePanEvents.push(entry);
+    };
+    const finalize = (event) => {
+      if (event.button !== 1) return;
+      const entry = [...window.__syndocalMiddlePanEvents]
+        .reverse()
+        .find((candidate) => candidate.type === event.type);
+      if (entry) entry.defaultPrevented = event.defaultPrevented;
+    };
+    window.addEventListener("pointerdown", record, true);
+    window.addEventListener("auxclick", record, true);
+    window.addEventListener("pointerdown", finalize);
+    window.addEventListener("auxclick", finalize);
+  })()`);
+}
+
+async function dispatchCdpMiddleDrag(client, start, end) {
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: start.x,
+    y: start.y,
+    button: "middle",
+    buttons: 4,
+    clickCount: 1,
+  });
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: (start.x + end.x) / 2,
+    y: (start.y + end.y) / 2,
+    button: "middle",
+    buttons: 4,
+  });
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: end.x,
+    y: end.y,
+    button: "middle",
+    buttons: 4,
+  });
+  await sleep(40);
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: end.x,
+    y: end.y,
+    button: "middle",
+    buttons: 0,
+    clickCount: 1,
+  });
+}
+
+async function probeStageMiddleAuxClick(client, scopeSelector) {
+  return await client.evaluate(`(() => {
+    const stage = document.querySelector(${JSON.stringify(scopeSelector)})?.querySelector(".editableStage");
+    if (!(stage instanceof SVGSVGElement)) return null;
+    const event = new MouseEvent("auxclick", {
+      bubbles: true,
+      cancelable: true,
+      button: 1,
+      buttons: 0,
+    });
+    const dispatchReturned = stage.dispatchEvent(event);
+    return {
+      defaultPrevented: event.defaultPrevented,
+      dispatchReturned,
+    };
+  })()`);
+}
+
+const viewBoxMoved = (before, after) => Boolean(
+  before?.viewBox
+  && after?.viewBox
+  && (
+    Math.abs(after.viewBox.centerX - before.viewBox.centerX) > 0.01
+    || Math.abs(after.viewBox.centerZ - before.viewBox.centerZ) > 0.01
+  )
+);
+
+const sameViewBox = (before, after) => Boolean(
+  before?.viewBox
+  && after?.viewBox
+  && ["x", "z", "width", "height"].every(
+    (key) => Math.abs(before.viewBox[key] - after.viewBox[key]) <= 0.001,
+  )
+);
+
+async function runStageMiddlePanViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: fixtureUrl("control-stage-edit") });
+  await waitForApp(client);
+  await client.evaluate(`(${installControlStageEditMockInPage.toString()})()`);
+
+  await clickByText(client, "Control");
+  await clickByText(client, "Live Edit");
+  await clickVisibleSelector(client, '[data-control-stage-tool-icon="select"]');
+  await sleep(80);
+
+  const controlBeforeZoom = await readStageMiddlePanState(client, ".controlStageContext");
+  const controlZoomPoint = controlBeforeZoom.fixturePoint ?? controlBeforeZoom.stagePoint;
+  if (!controlZoomPoint) throw new Error("Control stage zoom point is unavailable");
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseWheel",
+    x: controlZoomPoint.x,
+    y: controlZoomPoint.y,
+    deltaX: 0,
+    deltaY: -240,
+  });
+  await sleep(80);
+  const controlBeforePan = await readStageMiddlePanState(client, ".controlStageContext");
+  await installMiddlePanEventProbe(client);
+  const controlDrag = middlePanDragEnd(controlBeforePan);
+  await dispatchCdpMiddleDrag(client, controlDrag.start, controlDrag.end);
+  await sleep(80);
+  const controlAfterPan = await readStageMiddlePanState(client, ".controlStageContext");
+  const controlAuxClick = await probeStageMiddleAuxClick(client, ".controlStageContext");
+  await sleep(20);
+  const controlEvents = await client.evaluate(
+    `window.__syndocalMiddlePanEvents.filter((entry) => entry.scope === "control")`,
+  );
+
+  const leftDragStart = controlAfterPan.fixturePoint;
+  if (!leftDragStart) throw new Error("Control stage fixture point after middle pan is unavailable");
+  const leftDragEnd = leftFixtureDragEnd(controlAfterPan);
+  await dispatchCdpMouseDrag(client, leftDragStart, leftDragEnd, {
+    x: (leftDragStart.x + leftDragEnd.x) / 2,
+    y: (leftDragStart.y + leftDragEnd.y) / 2,
+  });
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const fixture = window.__syndocalReadControlStageEditFixtureSnapshot?.()
+        ?.fixtures?.find((candidate) => candidate.id === 1);
+      return Boolean(
+        fixture
+        && (
+          Math.abs(fixture.position.x - ${controlAfterPan.fixture?.position.x ?? 0}) > 0.001
+          || Math.abs(fixture.position.z - ${controlAfterPan.fixture?.position.z ?? 0}) > 0.001
+        )
+      );
+    })()`,
+    "left fixture drag after middle-button pan",
+  );
+  const controlAfterLeftDrag = await readStageMiddlePanState(client, ".controlStageContext");
+
+  await clickVisibleSelector(client, "[data-control-stage-mapping-link]");
+  await waitForClientCondition(
+    client,
+    `Boolean(document.querySelector(".layoutSetup.setupMode-mapping .mappingWorkspaceExpanded"))`,
+    "Setup Mapping after Control middle-pan check",
+  );
+  await clickVisibleSelector(client, '[data-mapping-tool="rotate"]');
+  await sleep(80);
+  const setupBeforePan = await readStageMiddlePanState(client, ".setupStageContext");
+  const setupDrag = middlePanDragEnd(setupBeforePan);
+  await dispatchCdpMiddleDrag(client, setupDrag.start, setupDrag.end);
+  await sleep(80);
+  const setupAfterPan = await readStageMiddlePanState(client, ".setupStageContext");
+  const setupAuxClick = await probeStageMiddleAuxClick(client, ".setupStageContext");
+  await sleep(20);
+  const allMiddleEvents = await client.evaluate("window.__syndocalMiddlePanEvents");
+  const setupEvents = allMiddleEvents.filter((entry) => entry.scope === "setup");
+
+  const fixtureMovedByLeftDrag = Boolean(
+    controlAfterPan.fixture
+    && controlAfterLeftDrag.fixture
+    && (
+      Math.abs(controlAfterLeftDrag.fixture.position.x - controlAfterPan.fixture.position.x) > 0.001
+      || Math.abs(controlAfterLeftDrag.fixture.position.z - controlAfterPan.fixture.position.z) > 0.001
+    )
+  );
+  const conditions = [
+    ["controlWheelZoomStillWorks", () =>
+      controlBeforeZoom.viewBox
+      && controlBeforePan.viewBox
+      && controlBeforePan.viewBox.width < controlBeforeZoom.viewBox.width],
+    ["controlMiddleButtonPanMovesViewBoxCenter", () => viewBoxMoved(controlBeforePan, controlAfterPan)],
+    ["controlMiddleButtonPanPreservesSelectTool", () =>
+      controlBeforePan.tool === "select" && controlAfterPan.tool === "select"],
+    ["controlMiddlePointerDownPreventsBrowserDefault", () =>
+      controlEvents.some((entry) =>
+        entry.type === "pointerdown" && entry.button === 1 && entry.defaultPrevented
+      )],
+    ["controlMiddleAuxClickPreventsBrowserAutoscroll", () =>
+      controlAuxClick?.defaultPrevented === true && controlAuxClick.dispatchReturned === false],
+    ["leftFixtureDragStillMovesFixture", () => fixtureMovedByLeftDrag],
+    ["leftFixtureDragDoesNotPanViewBox", () => sameViewBox(controlAfterPan, controlAfterLeftDrag)],
+    ["leftFixtureDragPreservesSelectTool", () => controlAfterLeftDrag.tool === "select"],
+    ["setupMiddleButtonPanMovesViewBoxCenter", () => viewBoxMoved(setupBeforePan, setupAfterPan)],
+    ["setupMiddleButtonPanPreservesRotateTool", () =>
+      setupBeforePan.tool === "rotate" && setupAfterPan.tool === "rotate"],
+    ["setupMiddlePointerDownPreventsBrowserDefault", () =>
+      setupEvents.some((entry) =>
+        entry.type === "pointerdown" && entry.button === 1 && entry.defaultPrevented
+      )],
+    ["setupMiddleAuxClickPreventsBrowserAutoscroll", () =>
+      setupAuxClick?.defaultPrevented === true && setupAuxClick.dispatchReturned === false],
+    ["middleDragStartedOverFixtureInBothWorkspaces", () =>
+      (controlBeforePan.fixturePoint?.topHitFixtureId ?? -1) > 0
+      && (setupBeforePan.fixturePoint?.topHitFixtureId ?? -1) > 0],
+  ];
+  const checks = Object.fromEntries(conditions.map(([name, check]) => {
+    try {
+      return [name, Boolean(check())];
+    } catch {
+      return [name, false];
+    }
+  }));
+  const failedChecks = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  return {
+    label: `stage-middle-pan-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    pointerSequence: "mousePressed:middle>mouseMoved:middle>mouseMoved:middle>mouseReleased:middle",
+    control: {
+      beforeZoom: controlBeforeZoom,
+      beforePan: controlBeforePan,
+      afterPan: controlAfterPan,
+      afterLeftDrag: controlAfterLeftDrag,
+      panDelta: {
+        x: controlAfterPan.viewBox.centerX - controlBeforePan.viewBox.centerX,
+        z: controlAfterPan.viewBox.centerZ - controlBeforePan.viewBox.centerZ,
+      },
+      fixtureDelta: {
+        x: controlAfterLeftDrag.fixture.position.x - controlAfterPan.fixture.position.x,
+        z: controlAfterLeftDrag.fixture.position.z - controlAfterPan.fixture.position.z,
+      },
+      events: controlEvents,
+      auxClick: controlAuxClick,
+    },
+    setup: {
+      beforePan: setupBeforePan,
+      afterPan: setupAfterPan,
+      panDelta: {
+        x: setupAfterPan.viewBox.centerX - setupBeforePan.viewBox.centerX,
+        z: setupAfterPan.viewBox.centerZ - setupBeforePan.viewBox.centerZ,
+      },
+      events: setupEvents,
+      auxClick: setupAuxClick,
+    },
+  };
+}
+
+async function dispatchCdpContextMenu(client, point) {
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: point.x,
+    y: point.y,
+    button: "right",
+    buttons: 2,
+    clickCount: 1,
+  });
+  await sleep(20);
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: point.x,
+    y: point.y,
+    button: "right",
+    buttons: 0,
+    clickCount: 1,
+  });
+  await sleep(40);
+  await client.send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Escape", code: "Escape" });
+  await client.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape" });
+}
+
+async function installContextMenuProbe(client) {
+  return await client.evaluate(`(() => {
+    const app = document.querySelector(".app");
+    const stage = document.querySelector(".controlStageContext .editableStage");
+    if (!(app instanceof HTMLElement) || !(stage instanceof SVGSVGElement)) return null;
+    const host = document.createElement("div");
+    host.setAttribute("data-contextmenu-probe-host", "");
+    Object.assign(host.style, {
+      position: "fixed",
+      left: "12px",
+      top: "96px",
+      display: "grid",
+      gap: "8px",
+      zIndex: "2147483647",
+      background: "#111",
+      padding: "8px",
+    });
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = "Context menu input";
+    input.dataset.contextmenuProbe = "input";
+    const textarea = document.createElement("textarea");
+    textarea.value = "Context menu textarea";
+    textarea.dataset.contextmenuProbe = "textarea";
+    const contentEditable = document.createElement("div");
+    contentEditable.contentEditable = "true";
+    contentEditable.textContent = "Context menu contenteditable";
+    contentEditable.dataset.contextmenuProbe = "contenteditable";
+    Object.assign(contentEditable.style, {
+      width: "220px",
+      minHeight: "28px",
+      background: "#fff",
+      color: "#000",
+    });
+    host.append(input, textarea, contentEditable);
+    app.append(host);
+    window.__syndocalContextMenuEvents = [];
+    window.addEventListener("contextmenu", (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const probe = target?.closest("[data-contextmenu-probe]");
+      const entry = {
+        key: probe?.getAttribute("data-contextmenu-probe")
+          ?? (target?.closest(".editableStage") ? "non-edit-stage" : "other"),
+        targetTag: target?.tagName?.toLowerCase() ?? "",
+        defaultPrevented: event.defaultPrevented,
+      };
+      window.__syndocalContextMenuEvents.push(entry);
+      queueMicrotask(() => {
+        entry.defaultPrevented = event.defaultPrevented;
+      });
+    }, true);
+    const point = (element) => {
+      const rect = element.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    };
+    return {
+      nonEditStage: point(stage),
+      input: point(input),
+      textarea: point(textarea),
+      contenteditable: point(contentEditable),
+    };
+  })()`);
+}
+
+async function runContextMenuViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: fixtureUrl("control-stage-edit") });
+  await waitForApp(client);
+  await clickByText(client, "Control");
+  await clickByText(client, "Live Edit");
+  await sleep(80);
+  const points = await installContextMenuProbe(client);
+  if (!points) throw new Error("Context-menu probe targets are unavailable");
+  for (const key of ["nonEditStage", "input", "textarea", "contenteditable"]) {
+    await dispatchCdpContextMenu(client, points[key]);
+  }
+  const events = await client.evaluate("window.__syndocalContextMenuEvents");
+  const lastEvent = (key) => [...events].reverse().find((entry) => entry.key === key) ?? null;
+  const results = {
+    nonEditStage: lastEvent("non-edit-stage"),
+    input: lastEvent("input"),
+    textarea: lastEvent("textarea"),
+    contenteditable: lastEvent("contenteditable"),
+  };
+  const conditions = [
+    ["nonEditableStageContextMenuIsDefaultPrevented", () =>
+      results.nonEditStage?.defaultPrevented === true],
+    ["inputContextMenuRemainsDefault", () => results.input?.defaultPrevented === false],
+    ["textareaContextMenuRemainsDefault", () => results.textarea?.defaultPrevented === false],
+    ["contenteditableContextMenuRemainsDefault", () =>
+      results.contenteditable?.defaultPrevented === false],
+    ["allRealCdpRightClicksReachedExpectedTargets", () =>
+      Boolean(results.nonEditStage?.targetTag)
+      && results.input?.targetTag === "input"
+      && results.textarea?.targetTag === "textarea"
+      && results.contenteditable?.targetTag === "div"],
+  ];
+  const checks = Object.fromEntries(conditions.map(([name, check]) => {
+    try {
+      return [name, Boolean(check())];
+    } catch {
+      return [name, false];
+    }
+  }));
+  const failedChecks = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  return {
+    label: `context-menu-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    pointerSequence: "mousePressed:right>mouseReleased:right",
+    results,
+    events,
+  };
 }
 
 async function runControlStageFixtureEditViewport(client, viewport) {
@@ -20578,6 +21113,53 @@ async function main() {
       const failures = editLiveResults.filter((result) => !result.passed);
       if (failures.length > 0) {
         throw new Error(`Control EDIT/LIVE direct-write failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
+    if (stageMiddlePanOnlyMode) {
+      const middlePanResults = [];
+      for (const viewport of viewports) {
+        const result = await runStageMiddlePanViewport(client, viewport);
+        middlePanResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `pointer=${result.pointerSequence} ` +
+            `controlPan=${result.control.panDelta.x.toFixed(3)},${result.control.panDelta.z.toFixed(3)} ` +
+            `setupPan=${result.setup.panDelta.x.toFixed(3)},${result.setup.panDelta.z.toFixed(3)} ` +
+            `tools=${result.control.beforePan.tool}->${result.control.afterPan.tool}/` +
+              `${result.setup.beforePan.tool}->${result.setup.afterPan.tool} ` +
+            `leftFixture=${result.control.fixtureDelta.x.toFixed(3)},${result.control.fixtureDelta.z.toFixed(3)} ` +
+            `defaults=${result.control.events.some((entry) => entry.type === "pointerdown" && entry.defaultPrevented)}/` +
+              `${result.control.auxClick?.defaultPrevented}/` +
+              `${result.setup.events.some((entry) => entry.type === "pointerdown" && entry.defaultPrevented)}/` +
+              `${result.setup.auxClick?.defaultPrevented} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = middlePanResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Stage middle-button pan failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
+    if (contextMenuOnlyMode) {
+      const contextMenuResults = [];
+      for (const viewport of viewports) {
+        const result = await runContextMenuViewport(client, viewport);
+        contextMenuResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `pointer=${result.pointerSequence} ` +
+            `prevented=non-edit:${result.results.nonEditStage?.defaultPrevented}/` +
+              `input:${result.results.input?.defaultPrevented}/` +
+              `textarea:${result.results.textarea?.defaultPrevented}/` +
+              `contenteditable:${result.results.contenteditable?.defaultPrevented} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = contextMenuResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Application context-menu suppression failed: ${JSON.stringify(failures)}`);
       }
       return;
     }

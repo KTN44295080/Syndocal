@@ -22,12 +22,24 @@ export type MappingSelectionAction =
   | "flip180";
 export type MappingViewportAction = "fitVisible" | "fitSelection" | "zoomIn" | "zoomOut" | "reset";
 
+export const isEditableContextMenuTarget = (target: EventTarget | null) => {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  const editableTarget = target.closest("input, textarea, [contenteditable]");
+  if (!(editableTarget instanceof HTMLElement)) {
+    return false;
+  }
+  const tagName = editableTarget.tagName.toLowerCase();
+  return editableTarget.isContentEditable || tagName === "input" || tagName === "textarea";
+};
+
 export const isEditableShortcutTarget = (target: EventTarget | null) => {
   if (!(target instanceof HTMLElement)) {
     return false;
   }
   const tagName = target.tagName.toLowerCase();
-  return target.isContentEditable || tagName === "input" || tagName === "textarea" || tagName === "select";
+  return isEditableContextMenuTarget(target) || tagName === "select";
 };
 
 export const controlCueHotkeyIndex = (code: string) => {

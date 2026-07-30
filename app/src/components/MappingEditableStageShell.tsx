@@ -11,6 +11,7 @@ type StagePoint = {
 
 type SvgPointerEvent = PointerEvent & { currentTarget: SVGSVGElement };
 type SvgWheelEvent = WheelEvent & { currentTarget: SVGSVGElement };
+type SvgMouseEvent = MouseEvent & { currentTarget: SVGSVGElement };
 
 export type MappingSnapLine = {
   axis: "x" | "z";
@@ -36,6 +37,7 @@ type MappingEditableStageShellProps = {
   snapLines: MappingSnapLine[];
   marqueeBox: MappingMarqueeBox | null;
   onPointerDown: (event: SvgPointerEvent) => MaybePromise;
+  onAuxClick: (event: SvgMouseEvent) => void;
   onPointerMove: (event: SvgPointerEvent) => void;
   onPointerUp: (event: SvgPointerEvent) => MaybePromise;
   onPointerLeave: () => void;
@@ -66,6 +68,7 @@ export function MappingEditableStageShell(props: MappingEditableStageShellProps)
       role="img"
       aria-label="2D fixture and projection surface mapping stage"
       onPointerDown={(event) => void props.onPointerDown(event)}
+      onAuxClick={(event) => props.onAuxClick(event)}
       onPointerMove={(event) => props.onPointerMove(event)}
       onPointerUp={(event) => void props.onPointerUp(event)}
       onPointerCancel={(event) => void props.onPointerUp(event)}

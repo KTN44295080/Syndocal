@@ -335,6 +335,7 @@ import {
 import {
   controlCueHotkeyIndex,
   isEditableShortcutTarget,
+  isEditableContextMenuTarget,
   mappingLayerToggleFromHotkey,
   mappingSelectionActionFromHotkey,
   mappingSelectionFlagFromHotkey,
@@ -14015,6 +14016,7 @@ export default function App() {
     beginMappingStageObjectRotate,
     beginMappingStageObjectResize,
     handleMappingStagePointerDown,
+    handleMappingStageAuxClick,
     handleMappingStagePointerMove,
     finishMappingStageDrag,
   } = createMappingInteractionController({
@@ -15809,6 +15811,12 @@ export default function App() {
     handleControlKeyDown(event);
   };
 
+  const handleAppContextMenu = (event: MouseEvent) => {
+    if (!isEditableContextMenuTarget(event.target)) {
+      event.preventDefault();
+    }
+  };
+
   let nativeCloseApproved = false;
   let closeRequestListenerDisposed = false;
   let unlistenCloseRequested: (() => void) | undefined;
@@ -15838,6 +15846,7 @@ export default function App() {
   };
 
   window.addEventListener("keydown", handleAppKeyDown);
+  window.addEventListener("contextmenu", handleAppContextMenu, true);
   if (!paneWindow || paneWindow === "timeline") {
     window.addEventListener("beforeunload", handleBeforeUnload);
   }
@@ -15867,6 +15876,7 @@ export default function App() {
     closeRequestListenerDisposed = true;
     unlistenCloseRequested?.();
     window.removeEventListener("keydown", handleAppKeyDown);
+    window.removeEventListener("contextmenu", handleAppContextMenu, true);
     window.removeEventListener("beforeunload", handleBeforeUnload);
   });
 
@@ -17388,6 +17398,7 @@ export default function App() {
             snapLines: mappingSnapLines(),
             marqueeBox: mappingMarqueeBox(),
             onPointerDown: handleMappingStagePointerDown,
+            onAuxClick: handleMappingStageAuxClick,
             onPointerMove: handleMappingStagePointerMove,
             onPointerUp: finishMappingStageDrag,
             onPointerLeave: () => setMappingStageCursorWorld(null),
@@ -17432,7 +17443,7 @@ export default function App() {
             onSelectVideoOutput: setSelectedVideoOutputId,
             onBeginFixtureYawDrag: beginMappingFixtureYawDrag,
             onFixturePointerDown: (event, fixtureId) => {
-              if (mappingStageTool() === "pan") return;
+              if (event.button === 1 || mappingStageTool() === "pan") return;
               event.stopPropagation();
               const fixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
               if (workspaceTab() === "control") {
