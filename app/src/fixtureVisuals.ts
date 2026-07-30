@@ -25,21 +25,21 @@ export const fixtureVisualKind = (fixture: PatchedFixtureSummary): MappingFixtur
   return "point";
 };
 
-// Compact, Daslight-grade stage glyph footprints (stage units on the 100-unit viewBox).
-// Type-differentiated so par/wash squares, moving-head circles, and bars/strips read
-// distinctly while staying small enough to stay legible at 2,000 fixtures.
-export const mappingFixtureStageSize = (visualKind: MappingFixtureVisualKind) =>
-  visualKind === "bar"
-    ? { width: 5.2, height: 1.0 }
-    : visualKind === "panel"
-      ? { width: 3.8, height: 2.6 }
-      : visualKind === "laser"
-        ? { width: 2.6, height: 2.6 }
-        : visualKind === "moving"
-          ? { width: 2.6, height: 2.6 }
-          : visualKind === "point"
-            ? { width: 2.2, height: 2.2 }
-            : { width: 2.4, height: 2.4 };
+// The stage minor grid is five SVG units. A fixture owns one complete grid cell,
+// and multi-cell fixtures extend by one adjacent cell per independently rendered
+// segment. visualKind remains part of the signature for call-site readability;
+// facing marks and CSS still provide the type distinction.
+export const mappingFixtureGridUnit = 5;
+export const mappingFixtureCellGap = 0.6;
+export const mappingFixtureCellInkSize = mappingFixtureGridUnit - mappingFixtureCellGap;
+
+export const mappingFixtureStageSize = (
+  _visualKind: MappingFixtureVisualKind,
+  segmentCount = 1,
+) => ({
+  width: mappingFixtureGridUnit * Math.max(1, Math.floor(segmentCount)),
+  height: mappingFixtureGridUnit,
+});
 
 export const fixtureTypeKey = (fixture: PatchedFixtureSummary) =>
   `${fixture.manufacturer}::${fixture.profile_name}::${fixture.mode_name}`;

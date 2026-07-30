@@ -2,8 +2,7 @@ export const stageFixtureLabelMaxCharacters = 12;
 export const stageFixtureLabelDeclutterThreshold = 25;
 export const stageFixtureLabelRestoreZoom = 1.5;
 
-const stageFixtureLabelOffsetX = 3.5;
-const stageFixtureLabelBaselineOffsetZ = -3.5;
+export const stageFixtureLabelFootprintGap = 1.25;
 // The SVG label font is 4px; 1.05em per code unit conservatively bounds wide glyphs.
 const stageFixtureLabelCharacterWidth = 4.2;
 const stageFixtureLabelStrokeAllowance = 1.2;
@@ -101,16 +100,23 @@ const fixtureIntersectsViewport = (fixture: StageLabelFixture, viewport: StageLa
   );
 };
 
-const stageFixtureLabelRect = (fixture: StageLabelFixture, displayLabel: string): StageLabelRect => ({
-  x: fixture.x + stageFixtureLabelOffsetX - stageFixtureLabelStrokeAllowance / 2,
-  z:
-    fixture.z +
-    stageFixtureLabelBaselineOffsetZ -
-    stageFixtureLabelHeight +
-    stageFixtureLabelStrokeAllowance / 2,
-  width: displayLabel.length * stageFixtureLabelCharacterWidth + stageFixtureLabelStrokeAllowance,
-  height: stageFixtureLabelHeight,
+const stageFixtureLabelPosition = (fixture: StageLabelFixture) => ({
+  x: fixture.x + Math.max(0, fixture.width) / 2 + stageFixtureLabelFootprintGap,
+  z: fixture.z - Math.max(0, fixture.height) / 2 - stageFixtureLabelFootprintGap,
 });
+
+const stageFixtureLabelRect = (fixture: StageLabelFixture, displayLabel: string): StageLabelRect => {
+  const position = stageFixtureLabelPosition(fixture);
+  return {
+    x: position.x - stageFixtureLabelStrokeAllowance / 2,
+    z:
+      position.z -
+      stageFixtureLabelHeight +
+      stageFixtureLabelStrokeAllowance / 2,
+    width: displayLabel.length * stageFixtureLabelCharacterWidth + stageFixtureLabelStrokeAllowance,
+    height: stageFixtureLabelHeight,
+  };
+};
 
 const compareStageFixtureLabelPriority = (
   left: StageFixtureLabelCandidate,
@@ -157,13 +163,14 @@ export const planStageFixtureLabels = (
       continue;
     }
     const displayLabel = shortenStageFixtureLabel(fixture.label);
+    const position = stageFixtureLabelPosition(fixture);
     const rect = stageFixtureLabelRect(fixture, displayLabel);
     candidates.push({
       fixtureId: fixture.id,
       displayLabel,
       fullLabel: fixture.label,
-      x: fixture.x + stageFixtureLabelOffsetX,
-      z: fixture.z + stageFixtureLabelBaselineOffsetZ,
+      x: position.x,
+      z: position.z,
       rect,
       addressOrder: fixture.addressOrder,
       picked,

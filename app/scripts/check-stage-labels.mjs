@@ -30,8 +30,8 @@ const fixture = (
   label,
   x,
   z,
-  width: 3,
-  height: 3,
+  width: 5,
+  height: 5,
   addressOrder,
   highlighted,
 });
@@ -69,6 +69,28 @@ assert.equal(
   13,
   "the twelve-character rule must count Unicode characters rather than bytes",
 );
+
+const singleCellLabel = layout.planStageFixtureLabels({
+  fixtures: [fixture(100, { x: 20, z: 20, label: "Single" })],
+  viewport,
+  zoom: 1,
+  showLabels: true,
+}).labels[0];
+assert.equal(singleCellLabel.x, 23.75, "a 5-unit single-cell glyph label must clear its right edge by 1.25 units");
+assert.equal(singleCellLabel.z, 16.25, "a 5-unit single-cell glyph label must clear its top edge by 1.25 units");
+
+const multiCellLabel = layout.planStageFixtureLabels({
+  fixtures: [{
+    ...fixture(101, { x: 20, z: 20, label: "Mega Bar" }),
+    width: 40,
+    height: 5,
+  }],
+  viewport,
+  zoom: 1,
+  showLabels: true,
+}).labels[0];
+assert.equal(multiCellLabel.x, 41.25, "an eight-cell glyph label must anchor beyond the complete 40-unit footprint");
+assert.equal(multiCellLabel.z, 16.25, "multi-cell labels keep the same one-cell vertical clearance");
 
 assert.equal(
   winningFixtureId([fixture(1), fixture(2)], { pickedFixtureId: 2, hoveredFixtureId: 1 }),
@@ -141,4 +163,4 @@ const labelsOffResult = layout.planStageFixtureLabels({
 });
 assert.equal(labelsOffResult.labels.length, 0, "the explicit labels toggle must override zoom and priority states");
 
-console.log("T24-A stage label shortening, density, priority, zoom restore, and 41-fixture overlap contracts ok");
+console.log("T24-A stage label footprint anchoring, shortening, density, priority, zoom restore, and 41-fixture overlap contracts ok");

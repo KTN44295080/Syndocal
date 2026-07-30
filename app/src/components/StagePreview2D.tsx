@@ -294,11 +294,7 @@ export function StagePreview2D(props: StagePreview2DProps) {
                 height={fixture.height}
                 color={fixture.color}
                 segments={fixture.liveSegments}
-                hitTargetRadius={Math.max(
-                  props.compact ? 3.2 : 3.8,
-                  fixture.width / 2 + 1.5,
-                  fixture.height / 2 + 1.5,
-                )}
+                hitTargetRadius={6}
                 title={`${fixture.label} / ${fixture.dmxLabel} / ${fixture.groupLabel}`}
               />
             </g>

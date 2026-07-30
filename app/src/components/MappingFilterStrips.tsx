@@ -1,5 +1,6 @@
 import { For } from "solid-js";
 import { mappingTypeGlyphClass, type MappingFixtureVisualKind } from "../fixtureVisuals";
+import { handleHorizontalWheel } from "../horizontalWheel";
 
 export interface MappingGroupStripRow {
   groupId: string;
@@ -43,6 +44,8 @@ export function MappingGroupRibbon(props: MappingGroupRibbonProps) {
       class="mappingGroupStrip"
       data-persistent-band-part="groups"
       data-control-stage-chrome-operation={props.controlChrome ? "groups" : undefined}
+      data-wheel-scroll-surface="group-chips"
+      onWheel={handleHorizontalWheel}
     >
       <span>Groups</span>
       <button
@@ -69,7 +72,11 @@ export function MappingGroupRibbon(props: MappingGroupRibbonProps) {
 
 export function MappingFixtureTypeStrip(props: MappingFixtureTypeStripProps) {
   return (
-    <div class="mappingTypeStrip">
+    <div
+      class="mappingTypeStrip"
+      data-wheel-scroll-surface="fixture-type-chips"
+      onWheel={handleHorizontalWheel}
+    >
       <span>Types</span>
       <button
         class={!props.selectedTypeKey ? "active" : ""}

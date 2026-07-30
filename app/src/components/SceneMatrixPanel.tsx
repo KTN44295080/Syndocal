@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { cueIdentityCss, groupIdentityCss, groupIdentityHue } from "../identityColor";
+import { handleHorizontalWheel } from "../horizontalWheel";
 import { displayNumber } from "../numberDisplay";
 import type {
   ActiveFadeSummary,
@@ -151,6 +152,22 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
     window.requestAnimationFrame(syncVisibleBank);
   };
 
+  const handleMatrixWheel = (event: WheelEvent & { currentTarget: HTMLDivElement }) => {
+    const columnScroller = event.target instanceof Element
+      ? event.target.closest<HTMLElement>("[data-scene-matrix-column-scroll]")
+      : null;
+    const verticalWheelDominant = Math.abs(event.deltaY) >= Math.abs(event.deltaX);
+    if (
+      !event.shiftKey &&
+      verticalWheelDominant &&
+      columnScroller &&
+      columnScroller.scrollHeight > columnScroller.clientHeight + 1
+    ) {
+      return;
+    }
+    handleHorizontalWheel(event);
+  };
+
   onMount(() => {
     syncVisibleBank();
     const resizeObserver = new ResizeObserver(syncVisibleBank);
@@ -281,7 +298,12 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
       aria-label="Scene matrix grouped by scene bank"
       data-timeline-track={props.timelineTrack}
     >
-      <nav class="sceneMatrixBankJumpStrip" aria-label="Scene bank navigation">
+      <nav
+        class="sceneMatrixBankJumpStrip"
+        aria-label="Scene bank navigation"
+        data-wheel-scroll-surface="scene-bank-chips"
+        onWheel={handleHorizontalWheel}
+      >
         <For each={columns()}>
           {(column) => {
             const columnId = () => column.id ?? "Show";
@@ -310,6 +332,8 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
           scrollerElement = element;
         }}
         onScroll={syncVisibleBank}
+        data-wheel-scroll-surface="scene-matrix-banks"
+        onWheel={handleMatrixWheel}
       >
         <Show when={stableCues.length > 0} fallback={
           <div class="sceneMatrixEmptyAction">
@@ -375,6 +399,7 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                   </header>
                   <div
                     class="sceneMatrixCards"
+                    data-scene-matrix-column-scroll
                     data-scene-matrix-column-drop-position={
                       dropTargetColumnId() === (column.id ?? "Show") && !dropIndicator()
                         ? "after"

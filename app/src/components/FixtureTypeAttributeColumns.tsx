@@ -1,5 +1,6 @@
 import { For, Match, Show, Switch, createMemo, onCleanup } from "solid-js";
 import { effectivePanTiltValues } from "../fixtureLimits";
+import { handleHorizontalWheel } from "../horizontalWheel";
 import {
   fixtureControlForAttribute,
   fixtureTypeColorControls,
@@ -88,6 +89,8 @@ export function FixtureTypeAttributeColumns(props: FixtureTypeAttributeColumnsPr
       aria-label="Fixture type columns"
       data-fixture-type-column-count={supportedGroups().length}
       data-fader-view-channel-bank={props.activeCategory === "fader" ? "true" : undefined}
+      data-wheel-scroll-surface="fixture-type-columns"
+      onWheel={handleHorizontalWheel}
     >
       <For each={supportedGroups()}>
         {(group) => {

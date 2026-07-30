@@ -5,6 +5,7 @@ import {
   normalizedFunctionText,
   sortedChannelFunctions,
 } from "../channelFunctionHelpers";
+import { handleHorizontalWheel } from "../horizontalWheel";
 import type { AttributeControl } from "../types";
 import { VerticalFaderInput } from "./VerticalFaderInput";
 
@@ -137,6 +138,8 @@ export function FaderGridPanel(props: FaderGridPanelProps) {
       role="group"
       aria-label="Attribute faders"
       data-fader-view-channel-bank={props.fullWidth ? "true" : undefined}
+      data-wheel-scroll-surface={props.fullWidth ? "fader-channel-band" : undefined}
+      onWheel={props.fullWidth ? handleHorizontalWheel : undefined}
     >
       <For each={props.controls}>
         {(control) => {

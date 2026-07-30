@@ -1,4 +1,5 @@
 import type { JSX } from "solid-js";
+import { handleHorizontalWheel } from "../horizontalWheel";
 import { AttributeCategoryRail, type AttributeCategoryRow } from "./AttributeCategoryRail";
 import type { ControlCategory } from "../uiModes";
 
@@ -101,7 +102,12 @@ export function FaderAttributeEditorPanel(props: FaderAttributeEditorPanelProps)
             <strong>{props.referenceLabel}</strong>
           </span>
         </div>
-        <div class={`attributeDeskSurface category-${props.activeCategory}`} aria-label="Attribute fader desk">
+        <div
+          class={`attributeDeskSurface category-${props.activeCategory}`}
+          aria-label="Attribute fader desk"
+          data-wheel-scroll-surface="fader-deck"
+          onWheel={handleHorizontalWheel}
+        >
           {props.children}
         </div>
       </div>

@@ -27019,7 +27019,7 @@ h3 {
 
 .controlStageToolbar {
   display: grid;
-  grid-template-columns: repeat(7, 28px) 110px 28px auto;
+  grid-template-columns: repeat(7, 28px) minmax(54px, 110px) 28px repeat(4, 28px) minmax(72px, 96px);
   align-items: center;
   gap: 4px;
   min-width: 0;
@@ -27078,6 +27078,11 @@ h3 {
   color: #aaa098;
 }
 
+.controlStageToolbar > .controlStageZoom {
+  width: 100%;
+  grid-template-columns: minmax(54px, 1fr);
+}
+
 .controlStageZoom input {
   width: 100%;
   min-width: 54px;
@@ -27086,12 +27091,28 @@ h3 {
 }
 
 .controlStageToolbar > .controlStageMappingLink {
-  width: auto;
+  display: inline-flex;
+  width: 100%;
+  max-width: 96px;
   min-width: 0;
-  padding-inline: 4px;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding-inline: 5px;
   color: #d9d1c8;
   font-size: 10px;
   white-space: nowrap;
+}
+
+.controlStageToolbar > .controlStageMappingLink svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+
+.controlStageToolbar > .controlStageMappingLink span {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .controlStageSelections {

@@ -175,6 +175,10 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
                     zoomValue={props.viewportControls.zoomValue}
                     canZoomOut={props.viewportControls.canZoomOut}
                     canZoomIn={props.viewportControls.canZoomIn}
+                    showLabels={props.viewportControls.showLabels}
+                    showBeams={props.viewportControls.showBeams}
+                    showProjectors={props.viewportControls.showProjectors}
+                    showStageObjects={props.viewportControls.showStageObjects}
                     selectedFixtureCount={props.selection.selectedFixtureCount}
                     canPickVisible={props.selection.filteredFixtureCount > 0}
                     onStageTool={props.toolRail.onStageTool}
@@ -183,6 +187,10 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
                     onZoomOut={props.viewportControls.onZoomOut}
                     onZoomIn={props.viewportControls.onZoomIn}
                     onZoomLevel={props.viewportControls.onZoomLevel}
+                    onShowLabels={props.viewportControls.onShowLabels}
+                    onShowBeams={props.viewportControls.onShowBeams}
+                    onShowProjectors={props.viewportControls.onShowProjectors}
+                    onShowStageObjects={props.viewportControls.onShowStageObjects}
                     onPickVisible={props.selection.onPickVisible}
                     onClearSelection={props.selection.onClearSelection}
                     onOpenMapping={props.onOpenMapping}

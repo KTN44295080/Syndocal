@@ -307,6 +307,18 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
       });
     });
   });
+  const segmentSkeletonCache = new WeakMap<
+    PatchedFixtureSummary,
+    ReturnType<typeof fixtureLiveSegmentSkeleton>
+  >();
+  const fixtureSegmentSkeleton = (fixture: PatchedFixtureSummary) => {
+    let skeleton = segmentSkeletonCache.get(fixture);
+    if (!skeleton) {
+      skeleton = fixtureLiveSegmentSkeleton(fixture);
+      segmentSkeletonCache.set(fixture, skeleton);
+    }
+    return skeleton;
+  };
   const visualizerFixtures = createMemo<VisualizerFixture[]>(() => {
     const fixtures = options.mappingFilteredFixtures();
     if (fixtures.length === 0) {
@@ -332,7 +344,10 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
       const yaw = mappingFixtureYaw(fixture);
       const yawHandle = mappingFixtureYawHandle(point, yaw);
       const visualKind = fixtureVisualKind(fixture);
-      const size = mappingFixtureStageSize(visualKind);
+      const size = mappingFixtureStageSize(
+        visualKind,
+        Math.max(1, fixtureSegmentSkeleton(fixture).length),
+      );
       return {
         id: fixture.id,
         label: fixture.label,
@@ -367,10 +382,6 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
       liveSegments?: ReturnType<typeof fixtureLiveColor>["segments"];
     };
   }>();
-  const segmentSkeletonCache = new WeakMap<
-    PatchedFixtureSummary,
-    ReturnType<typeof fixtureLiveSegmentSkeleton>
-  >();
   const mappingStageFixtures = createMemo(() => {
     const baseFixtures = visualizerFixtures();
     const sourceFixtures = options.mappingFilteredFixtures();
@@ -390,12 +401,7 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
       const source = sourceById.get(base.id);
       const visible = fixtureIntersectsLiveColorViewport(base, viewport);
       const liveSource = liveSourceById.get(base.id);
-      let segmentSkeleton = source ? segmentSkeletonCache.get(source) : undefined;
-      if (source && !segmentSkeleton) {
-        segmentSkeleton = fixtureLiveSegmentSkeleton(source);
-        segmentSkeletonCache.set(source, segmentSkeleton);
-      }
-      segmentSkeleton ??= [];
+      const segmentSkeleton = source ? fixtureSegmentSkeleton(source) : [];
       const live = source && visible
         ? fixtureLiveColor(source, previewsByUniverse, liveSource?.attribute_values)
         : null;

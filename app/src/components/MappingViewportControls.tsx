@@ -48,11 +48,19 @@ type ControlStageToolbarProps = Pick<
   | "zoomValue"
   | "canZoomOut"
   | "canZoomIn"
+  | "showLabels"
+  | "showBeams"
+  | "showProjectors"
+  | "showStageObjects"
   | "onFitVisible"
   | "onFitSelection"
   | "onZoomOut"
   | "onZoomIn"
   | "onZoomLevel"
+  | "onShowLabels"
+  | "onShowBeams"
+  | "onShowProjectors"
+  | "onShowStageObjects"
 > & {
   selectedFixtureCount: number;
   canPickVisible: boolean;
@@ -69,6 +77,7 @@ type ControlStageIconButtonProps = {
   active?: boolean;
   pressed?: boolean;
   disabled?: boolean;
+  layer?: "beams" | "labels" | "projectors" | "objects";
   onClick: () => void;
 };
 
@@ -80,6 +89,7 @@ function ControlStageIconButton(props: ControlStageIconButtonProps) {
       data-control-stage-chrome-operation
       data-control-stage-tool-item
       data-control-stage-tool-icon={props.icon}
+      data-control-stage-layer-toggle={props.layer}
       title={props.title}
       aria-label={props.title}
       aria-pressed={props.pressed}
@@ -170,6 +180,42 @@ export function ControlStageToolbar(props: ControlStageToolbarProps) {
         disabled={!props.canZoomIn}
         onClick={props.onZoomIn}
       />
+      <ControlStageIconButton
+        icon="beams"
+        path="M8 2.2 3.2 13h9.6L8 2.2Zm0 3.2v5.4"
+        title="Toggle beams (B)"
+        active={props.showBeams}
+        pressed={props.showBeams}
+        layer="beams"
+        onClick={() => props.onShowBeams(!props.showBeams)}
+      />
+      <ControlStageIconButton
+        icon="labels"
+        path="M3 3.2h10M8 3.2v9.6M5.5 12.8h5"
+        title="Toggle labels (L)"
+        active={props.showLabels}
+        pressed={props.showLabels}
+        layer="labels"
+        onClick={() => props.onShowLabels(!props.showLabels)}
+      />
+      <ControlStageIconButton
+        icon="projectors"
+        path="M2.5 4.2h7.7v7.6H2.5zM10.2 6.2l3.3-1.5v6.6l-3.3-1.5"
+        title="Toggle projection surfaces (V)"
+        active={props.showProjectors}
+        pressed={props.showProjectors}
+        layer="projectors"
+        onClick={() => props.onShowProjectors(!props.showProjectors)}
+      />
+      <ControlStageIconButton
+        icon="objects"
+        path="m8 2.5 5 2.7v5.6L8 13.5l-5-2.7V5.2L8 2.5Zm0 0v5.6m5-2.9L8 8.1 3 5.2"
+        title="Toggle stage reference objects (O)"
+        active={props.showStageObjects}
+        pressed={props.showStageObjects}
+        layer="objects"
+        onClick={() => props.onShowStageObjects(!props.showStageObjects)}
+      />
       <button
         type="button"
         class="controlStageMappingLink"
@@ -179,7 +225,10 @@ export function ControlStageToolbar(props: ControlStageToolbarProps) {
         aria-label="Edit in Mapping"
         onClick={props.onOpenMapping}
       >
-        Edit in Mapping
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M2.5 3.5h6v6h-6zM7.5 8.5l5.7-5.7M9.5 2.8h3.7v3.7" />
+        </svg>
+        <span>Mapping</span>
       </button>
     </div>
   );

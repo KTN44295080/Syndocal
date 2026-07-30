@@ -1,6 +1,9 @@
 import { Show } from "solid-js";
 import type { FixtureLiveColorSegment } from "../fixtureLiveColor";
-import type { MappingFixtureVisualKind } from "../fixtureVisuals";
+import {
+  mappingFixtureCellGap,
+  type MappingFixtureVisualKind,
+} from "../fixtureVisuals";
 import type { StageFixtureLabelLayout } from "../stageLabelLayout";
 import type { StageObjectKind } from "../types";
 
@@ -29,87 +32,72 @@ export function StageFixtureGlyph(props: StageFixtureGlyphProps) {
   const shapeClass = () => props.shapeClass ?? "stageFixtureShape";
   const tickLength = () => stageFixtureFacingTickLength(props.width, props.height);
   const segments = () => props.segments?.length && props.segments.length > 1 ? props.segments : null;
-  const segmentRadius = () => {
+  const segmentPitch = () => {
     const count = segments()?.length ?? 1;
-    return Math.max(0.24, Math.min(props.height * 0.38, props.width / (count * 2.2)));
+    return props.width / count;
   };
   const segmentX = (index: number) => {
-    const count = segments()?.length ?? 1;
-    if (count <= 1) return 0;
-    const radius = segmentRadius();
-    return -props.width / 2 + radius + index * ((props.width - radius * 2) / (count - 1));
+    return -props.width / 2 + mappingFixtureCellGap / 2 + index * segmentPitch();
   };
+  const segmentWidth = () => Math.max(0.4, segmentPitch() - mappingFixtureCellGap);
+  const segmentHeight = () => Math.max(0.4, props.height - mappingFixtureCellGap);
+  const fixtureCornerRadius = () => Math.min(0.8, props.height * 0.2);
 
   return (
     <>
       <Show when={props.hitTargetRadius}>
         {(radius) => (
-          <circle
+          <rect
             class={props.hitTargetClass ?? "stageFixtureHitTarget"}
-            cx="0"
-            cy="0"
-            r={radius()}
+            x={-Math.max(radius(), props.width / 2 + 1.5)}
+            y={-Math.max(radius(), props.height / 2 + 1.5)}
+            width={Math.max(radius(), props.width / 2 + 1.5) * 2}
+            height={Math.max(radius(), props.height / 2 + 1.5) * 2}
+            rx="1"
+            ry="1"
           />
         )}
       </Show>
       <Show
         when={segments()}
         fallback={
-          <Show
-            when={props.visualKind === "moving"}
-            fallback={
-              <Show
-                when={props.visualKind === "laser"}
-                fallback={
-                  <rect
-                    data-stage-fixture-shape
-                    class={shapeClass()}
-                    x={-props.width / 2}
-                    y={-props.height / 2}
-                    width={props.width}
-                    height={props.height}
-                    fill={props.color}
-                  />
-                }
-              >
-                <polygon
-                  data-stage-fixture-shape
-                  class={shapeClass()}
-                  points={`0,${-props.height / 2} ${props.width / 2},${props.height / 2} ${-props.width / 2},${props.height / 2}`}
-                  fill={props.color}
-                />
-              </Show>
-            }
-          >
-            <circle
-              data-stage-fixture-shape
-              class={shapeClass()}
-              cx="0"
-              cy="0"
-              r={Math.max(props.width, props.height) / 2}
-              fill={props.color}
-            />
-          </Show>
+          <rect
+            data-stage-fixture-shape
+            class={shapeClass()}
+            x={-props.width / 2}
+            y={-props.height / 2}
+            width={props.width}
+            height={props.height}
+            rx={fixtureCornerRadius()}
+            ry={fixtureCornerRadius()}
+            fill={props.color}
+          />
         }
       >
         {(liveSegments) => (
           <>
             <rect
               data-stage-fixture-shape
+              data-stage-fixture-outline
               class={`${shapeClass()} stageFixtureSegmentOutline`}
               x={-props.width / 2}
               y={-props.height / 2}
               width={props.width}
               height={props.height}
+              rx={fixtureCornerRadius()}
+              ry={fixtureCornerRadius()}
               fill="none"
             />
             {liveSegments().map((segment, index) => (
-              <circle
+              <rect
                 data-stage-fixture-segment={index + 1}
                 class="stageFixtureSegment"
-                cx={segmentX(index)}
-                cy="0"
-                r={segmentRadius()}
+                x={segmentX(index)}
+                y={-segmentHeight() / 2}
+                width={segmentWidth()}
+                height={segmentHeight()}
+                rx={fixtureCornerRadius()}
+                ry={fixtureCornerRadius()}
                 fill={segment.color}
                 stroke="none"
               />

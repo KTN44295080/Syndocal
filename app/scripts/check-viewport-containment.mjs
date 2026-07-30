@@ -3352,6 +3352,24 @@ async function runControlStageChromeViewport(client, viewport) {
   await clickByText(client, "Live Edit");
   await sleep(120);
   const interactions = await exerciseControlStageInteractions(client);
+  const controlLayerToggle = await client.evaluate(`(async () => {
+    const settle = () => new Promise((resolveFrame) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const button = document.querySelector('[data-control-stage-layer-toggle="beams"]');
+    const before = {
+      pressed: button?.getAttribute('aria-pressed') ?? '',
+      beamCount: document.querySelectorAll('.controlStageContext .stageBeam').length,
+    };
+    if (button instanceof HTMLButtonElement) button.click();
+    await settle();
+    return {
+      before,
+      after: {
+        pressed: button?.getAttribute('aria-pressed') ?? '',
+        beamCount: document.querySelectorAll('.controlStageContext .stageBeam').length,
+      },
+    };
+  })()`);
   const control = await measure(
     client,
     `control-stage-chrome-control-${viewport.width}x${viewport.height}`,
@@ -3363,6 +3381,31 @@ async function runControlStageChromeViewport(client, viewport) {
     Boolean(document.querySelector('.layoutSetup.setupMode-mapping')) &&
     Boolean(document.querySelector('.mappingWorkspaceExpanded'))
   ))()`);
+  const setupAfterControlToggle = await client.evaluate(`(() => ({
+    beamToolActive: document.querySelector('[data-mapping-tool="beams"]')?.classList.contains('active') ?? null,
+    beamCheckboxChecked: [...document.querySelectorAll('[data-mapping-layer-toggles] label')]
+      .find((label) => (label.textContent || '').trim() === 'Beams')
+      ?.querySelector('input')?.checked ?? null,
+  }))()`);
+  await client.send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "b", code: "KeyB" });
+  await client.send("Input.dispatchKeyEvent", { type: "keyUp", key: "b", code: "KeyB" });
+  await sleep(80);
+  const setupAfterHotkey = await client.evaluate(`(() => ({
+    beamToolActive: document.querySelector('[data-mapping-tool="beams"]')?.classList.contains('active') ?? null,
+    beamCheckboxChecked: [...document.querySelectorAll('[data-mapping-layer-toggles] label')]
+      .find((label) => (label.textContent || '').trim() === 'Beams')
+      ?.querySelector('input')?.checked ?? null,
+  }))()`);
+  await clickByText(client, "Control");
+  await clickByText(client, "Live Edit");
+  await sleep(120);
+  const controlAfterHotkey = await client.evaluate(`(() => ({
+    beamTogglePressed: document.querySelector('[data-control-stage-layer-toggle="beams"]')
+      ?.getAttribute('aria-pressed') ?? '',
+    beamCount: document.querySelectorAll('.controlStageContext .stageBeam').length,
+  }))()`);
+  await clickVisibleSelector(client, '[data-control-stage-mapping-link]');
+  await sleep(120);
   const selectionDrawerOpened = await ensureMappingSelectionDrawerOpen(client);
   await sleep(80);
   const setup = await measure(
@@ -3372,9 +3415,9 @@ async function runControlStageChromeViewport(client, viewport) {
 
   const controlChromeSelector = '[data-control-stage-chrome="true"] [data-control-stage-chrome-operation]';
   const conditions = [
-    ["controlChromeOperationCountIs12WithinCeiling", () =>
-      control.controlStageChromeOperationCount <= 12 &&
-      control.controlStageChromeOperationCount === 12],
+    ["controlChromeOperationCountIs16WithinUserRenegotiatedCeiling", () =>
+      control.controlStageChromeOperationCount <= 16 &&
+      control.controlStageChromeOperationCount === 16],
     ["controlChromeCountSelectorRecorded", () => controlChromeSelector.length > 0],
     ["controlLetterToolRailAbsent", () => control.visibleControlMappingToolRailCount === 0],
     ["controlReadoutRowAbsent", () => control.visibleControlMappingViewportReadoutCount === 0],
@@ -3388,17 +3431,39 @@ async function runControlStageChromeViewport(client, viewport) {
     ["controlSelectionNameListPresent", () =>
       control.visibleControlStageSelectionListCount === 1 &&
       control.visibleControlStageSelectionNameCount >= 1],
-    ["controlToolRowHasNineItemsAndEightSvgIcons", () =>
+    ["controlToolRowHasThirteenItemsAndTwelveSvgIcons", () =>
       control.visibleControlStageToolRowCount === 1 &&
-      control.visibleControlStageToolItemCount === 9 &&
-      control.visibleControlStageToolIconCount === 8 &&
+      control.visibleControlStageToolItemCount === 13 &&
+      control.visibleControlStageToolIconCount === 12 &&
       control.visibleControlStageZoomRangeCount === 1 &&
-      control.controlStageToolRowActionCount === 10 &&
+      control.controlStageToolRowActionCount === 14 &&
       control.controlStageToolRowHeight === 32 &&
       control.controlStageToolRowHorizontalOverflowPx === 0 &&
       control.controlStageToolItemsShareOneRow],
+    ["controlLayerTogglesExposeFourSvgNamedPressedButtons", () =>
+      control.visibleControlStageLayerToggleCount === 4 &&
+      control.visibleControlStageLayerToggleSvgCount === 4 &&
+      JSON.stringify(control.controlStageLayerToggleIds) ===
+        JSON.stringify(["beams", "labels", "projectors", "objects"]) &&
+      control.controlStageLayerToggleNames.every((name) => name.length > 0)],
+    ["controlLayerToggleSharesSetupSignalAndMappingHotkey", () =>
+      controlLayerToggle.before.pressed === "true" &&
+      controlLayerToggle.before.beamCount > 0 &&
+      controlLayerToggle.after.pressed === "false" &&
+      controlLayerToggle.after.beamCount === 0 &&
+      setupAfterControlToggle.beamToolActive === false &&
+      setupAfterControlToggle.beamCheckboxChecked === false &&
+      setupAfterHotkey.beamToolActive === true &&
+      setupAfterHotkey.beamCheckboxChecked === true &&
+      controlAfterHotkey.beamTogglePressed === "true" &&
+      controlAfterHotkey.beamCount > 0],
     ["controlMappingJumpPresentAndWorks", () =>
-      control.visibleControlStageMappingLinkCount === 1 && mappingJumpArrived],
+      control.visibleControlStageMappingLinkCount === 1 &&
+      control.controlStageMappingLinkWidth > 0 &&
+      control.controlStageMappingLinkWidth <= 120 &&
+      control.controlStageMappingLinkSvgCount === 1 &&
+      control.controlStageMappingLinkText === "Mapping" &&
+      mappingJumpArrived],
     ["controlClickSelectionMarqueePanAndWheelZoomWork", () =>
       interactions.selectedFixture &&
       interactions.marqueeWorked &&
@@ -3458,6 +3523,10 @@ async function runControlStageChromeViewport(client, viewport) {
     failedChecks,
     selector: controlChromeSelector,
     interactions,
+    controlLayerToggle,
+    setupAfterControlToggle,
+    setupAfterHotkey,
+    controlAfterHotkey,
     control,
     setup,
   };
@@ -4498,10 +4567,34 @@ async function measure(client, label) {
       visibleControlStageToolRowCount: visibleCount('[data-control-stage-tool-row]'),
       visibleControlStageToolItemCount: visibleCount('[data-control-stage-tool-item]'),
       visibleControlStageToolIconCount: visibleCount('[data-control-stage-tool-icon]'),
+      visibleControlStageLayerToggleCount: visibleCount('[data-control-stage-layer-toggle]'),
+      visibleControlStageLayerToggleSvgCount: visibleCount('[data-control-stage-layer-toggle] svg'),
+      controlStageLayerToggleIds: visibleElements('[data-control-stage-layer-toggle]')
+        .map((button) => button.getAttribute('data-control-stage-layer-toggle') ?? ''),
+      controlStageLayerToggleNames: visibleElements('[data-control-stage-layer-toggle]')
+        .map((button) => (
+          button.getAttribute('aria-label') ||
+          button.getAttribute('title') ||
+          ''
+        ).trim()),
+      controlStageLayerTogglePressed: Object.fromEntries(
+        visibleElements('[data-control-stage-layer-toggle]').map((button) => [
+          button.getAttribute('data-control-stage-layer-toggle') ?? '',
+          button.getAttribute('aria-pressed') ?? '',
+        ])
+      ),
       visibleControlStageZoomRangeCount: visibleCount(
         '[data-control-stage-tool-row] input[type="range"]'
       ),
       visibleControlStageMappingLinkCount: visibleCount('[data-control-stage-mapping-link]'),
+      controlStageMappingLinkWidth: (() => {
+        const link = visibleElements('[data-control-stage-mapping-link]')[0];
+        return link ? Math.round(link.getBoundingClientRect().width * 10) / 10 : 0;
+      })(),
+      controlStageMappingLinkSvgCount: visibleCount('[data-control-stage-mapping-link] svg'),
+      controlStageMappingLinkText: (
+        document.querySelector('[data-control-stage-mapping-link] span')?.textContent || ''
+      ).trim(),
       controlStageToolRowActionCount: visibleCount(
         '[data-control-stage-tool-row] [data-control-stage-chrome-operation]'
       ),
@@ -4519,7 +4612,7 @@ async function measure(client, label) {
       ),
       controlStageToolItemsShareOneRow: (() => {
         const items = visibleElements('[data-control-stage-tool-item], [data-control-stage-mapping-link]');
-        if (items.length !== 10) return false;
+        if (items.length !== 14) return false;
         const tops = items.map((item) => item.getBoundingClientRect().top);
         return Math.max(...tops) - Math.min(...tops) <= 1;
       })(),
@@ -5989,14 +6082,18 @@ function hasExpectedControlStageChrome(result) {
   }
   return (
     result.visibleControlStageChromeCount === 1 &&
-    result.controlStageChromeOperationCount <= 12 &&
-    result.controlStageChromeOperationCount === 12 &&
+    result.controlStageChromeOperationCount <= 16 &&
+    result.controlStageChromeOperationCount === 16 &&
     result.visibleControlStageToolRowCount === 1 &&
-    result.visibleControlStageToolItemCount === 9 &&
-    result.visibleControlStageToolIconCount === 8 &&
+    result.visibleControlStageToolItemCount === 13 &&
+    result.visibleControlStageToolIconCount === 12 &&
+    result.visibleControlStageLayerToggleCount === 4 &&
+    result.visibleControlStageLayerToggleSvgCount === 4 &&
     result.visibleControlStageZoomRangeCount === 1 &&
     result.visibleControlStageMappingLinkCount === 1 &&
-    result.controlStageToolRowActionCount === 10 &&
+    result.controlStageMappingLinkWidth > 0 &&
+    result.controlStageMappingLinkWidth <= 120 &&
+    result.controlStageToolRowActionCount === 14 &&
     result.controlStageToolRowHeight === 32 &&
     result.controlStageToolRowHorizontalOverflowPx === 0 &&
     result.visibleControlStageSelectionListCount === 1 &&
@@ -10596,6 +10693,150 @@ async function exerciseSceneMatrixHorizontalScroll(client) {
   })()`);
 }
 
+async function exerciseSceneMatrixWheelScroll(client) {
+  const geometry = await client.evaluate(`(async () => {
+    const settle = () => new Promise((resolveFrame) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const scroller = document.querySelector('.sceneMatrixScroller');
+    const header = document.querySelector('.sceneMatrixColumnHeader');
+    const stage = document.querySelector('.controlStageContext .editableStage');
+    if (!(scroller instanceof HTMLElement) || !(header instanceof HTMLElement)) {
+      return { available: false };
+    }
+    scroller.scrollLeft = 0;
+    await settle();
+    const headerRect = header.getBoundingClientRect();
+    return {
+      available: true,
+      x: headerRect.left + Math.min(headerRect.width - 4, Math.max(4, headerRect.width / 2)),
+      y: headerRect.top + Math.min(headerRect.height - 4, Math.max(4, headerRect.height / 2)),
+      initialScrollLeft: scroller.scrollLeft,
+      maxScrollLeft: Math.max(0, scroller.scrollWidth - scroller.clientWidth),
+      stageViewBox: stage?.getAttribute('viewBox') ?? '',
+    };
+  })()`);
+  if (!geometry.available) return geometry;
+
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseWheel",
+    x: geometry.x,
+    y: geometry.y,
+    deltaX: 0,
+    deltaY: 180,
+  });
+  await sleep(100);
+  const plain = await client.evaluate(`(() => {
+    const scroller = document.querySelector('.sceneMatrixScroller');
+    const stage = document.querySelector('.controlStageContext .editableStage');
+    return {
+      scrollLeft: scroller?.scrollLeft ?? -1,
+      stageViewBox: stage?.getAttribute('viewBox') ?? '',
+    };
+  })()`);
+
+  await client.evaluate(`(() => {
+    const scroller = document.querySelector('.sceneMatrixScroller');
+    if (scroller instanceof HTMLElement) scroller.scrollLeft = 0;
+  })()`);
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseWheel",
+    x: geometry.x,
+    y: geometry.y,
+    modifiers: 8,
+    deltaX: 0,
+    deltaY: 180,
+  });
+  await sleep(100);
+  const shifted = await client.evaluate(`(() => {
+    const scroller = document.querySelector('.sceneMatrixScroller');
+    const stage = document.querySelector('.controlStageContext .editableStage');
+    return {
+      scrollLeft: scroller?.scrollLeft ?? -1,
+      stageViewBox: stage?.getAttribute('viewBox') ?? '',
+    };
+  })()`);
+
+  const verticalGeometry = await client.evaluate(`(async () => {
+    const settle = () => new Promise((resolveFrame) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const scroller = document.querySelector('.sceneMatrixScroller');
+    const columnScroller = document.querySelector(
+      '[data-scene-matrix-column="front"] [data-scene-matrix-column-scroll]'
+    );
+    if (!(scroller instanceof HTMLElement) || !(columnScroller instanceof HTMLElement)) {
+      return { available: false };
+    }
+    scroller.scrollLeft = 0;
+    columnScroller.scrollTop = 0;
+    const originalStyle = columnScroller.getAttribute('style');
+    columnScroller.style.height = '56px';
+    columnScroller.style.maxHeight = '56px';
+    columnScroller.style.flex = '0 0 56px';
+    columnScroller.style.overflowY = 'auto';
+    await settle();
+    const rect = columnScroller.getBoundingClientRect();
+    window.__sceneMatrixWheelColumnRestore = { columnScroller, originalStyle };
+    return {
+      available: columnScroller.scrollHeight > columnScroller.clientHeight + 1,
+      x: rect.left + rect.width / 2,
+      y: rect.top + Math.min(rect.height - 3, Math.max(3, rect.height / 2)),
+      scrollHeight: columnScroller.scrollHeight,
+      clientHeight: columnScroller.clientHeight,
+    };
+  })()`);
+  let vertical = { available: false, columnScrollTop: -1, matrixScrollLeft: -1, stageViewBox: "" };
+  if (verticalGeometry.available) {
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseWheel",
+      x: verticalGeometry.x,
+      y: verticalGeometry.y,
+      deltaX: 0,
+      deltaY: 120,
+    });
+    await sleep(100);
+    vertical = await client.evaluate(`(() => {
+      const scroller = document.querySelector('.sceneMatrixScroller');
+      const state = window.__sceneMatrixWheelColumnRestore;
+      const stage = document.querySelector('.controlStageContext .editableStage');
+      return {
+        available: true,
+        columnScrollTop: state?.columnScroller?.scrollTop ?? -1,
+        matrixScrollLeft: scroller?.scrollLeft ?? -1,
+        stageViewBox: stage?.getAttribute('viewBox') ?? '',
+      };
+    })()`);
+  }
+  const outer = await client.evaluate(`(() => {
+    const scroller = document.querySelector('.sceneMatrixScroller');
+    const state = window.__sceneMatrixWheelColumnRestore;
+    if (state?.columnScroller instanceof HTMLElement) {
+      if (state.originalStyle === null) state.columnScroller.removeAttribute('style');
+      else state.columnScroller.setAttribute('style', state.originalStyle);
+    }
+    delete window.__sceneMatrixWheelColumnRestore;
+    if (scroller instanceof HTMLElement) scroller.scrollLeft = 0;
+    const app = document.querySelector('.app');
+    return {
+      documentLeft: document.documentElement.scrollLeft,
+      documentTop: document.documentElement.scrollTop,
+      bodyLeft: document.body.scrollLeft,
+      bodyTop: document.body.scrollTop,
+      appLeft: app?.scrollLeft ?? 0,
+      appTop: app?.scrollTop ?? 0,
+    };
+  })()`);
+  return {
+    ...geometry,
+    plain,
+    shifted,
+    verticalGeometry,
+    vertical,
+    outer,
+    plainDelta: plain.scrollLeft - geometry.initialScrollLeft,
+    shiftedDelta: shifted.scrollLeft,
+  };
+}
+
 async function exerciseSceneMatrixBankJump(client) {
   return await client.evaluate(`(async () => {
     const settle = () => new Promise((resolveFrame) =>
@@ -11261,6 +11502,7 @@ async function runSceneMatrixPaneCheck(client, viewport) {
   await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
   await sleep(120);
   const before = await measureSceneMatrixPane(client);
+  const wheelScroll = await exerciseSceneMatrixWheelScroll(client);
   const bankJump = await exerciseSceneMatrixBankJump(client);
   const horizontalScroll = await exerciseSceneMatrixHorizontalScroll(client);
   await clickVisibleByText(client, ".liveDeskViewToggle button", "Cue Pads");
@@ -11467,6 +11709,40 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       const hue = Number(value);
       return Number.isFinite(hue) && hue >= 0 && hue <= 359;
     });
+  const horizontalWheelInventory = {
+    sceneMatrixBanks: readFileSync(
+      join(appRoot, "src", "components", "SceneMatrixPanel.tsx"),
+      "utf8",
+    ).includes('data-wheel-scroll-surface="scene-matrix-banks"'),
+    sceneBankChips: readFileSync(
+      join(appRoot, "src", "components", "SceneMatrixPanel.tsx"),
+      "utf8",
+    ).includes('data-wheel-scroll-surface="scene-bank-chips"'),
+    groupAndTypeChips: (() => {
+      const source = readFileSync(
+        join(appRoot, "src", "components", "MappingFilterStrips.tsx"),
+        "utf8",
+      );
+      return source.includes('data-wheel-scroll-surface="group-chips"')
+        && source.includes('data-wheel-scroll-surface="fixture-type-chips"');
+    })(),
+    faderDeckAndChannelBand: (() => {
+      const deskSource = readFileSync(
+        join(appRoot, "src", "components", "FaderAttributeEditorPanel.tsx"),
+        "utf8",
+      );
+      const faderSource = readFileSync(
+        join(appRoot, "src", "components", "FaderGridPanel.tsx"),
+        "utf8",
+      );
+      return deskSource.includes('data-wheel-scroll-surface="fader-deck"')
+        && faderSource.includes('"fader-channel-band"');
+    })(),
+    fixtureTypeColumns: readFileSync(
+      join(appRoot, "src", "components", "FixtureTypeAttributeColumns.tsx"),
+      "utf8",
+    ).includes('data-wheel-scroll-surface="fixture-type-columns"'),
+  };
   const conditions = [
     ["matrixPrimarySurfaceVisibleByDefault", () =>
       before.paneVisible &&
@@ -11654,6 +11930,23 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       horizontalScroll.showVisibleAtMax &&
       horizontalScroll.showHitColumnAtMax === "Show" &&
       horizontalScroll.resetAtOrigin],
+    ["matrixCdpPlainAndShiftWheelScrollBanksHorizontally", () =>
+      wheelScroll.available &&
+      wheelScroll.maxScrollLeft > 1 &&
+      wheelScroll.plainDelta > 1 &&
+      wheelScroll.shiftedDelta > 1],
+    ["matrixPlainWheelPrefersHoveredOverflowingColumn", () =>
+      wheelScroll.verticalGeometry?.available &&
+      wheelScroll.vertical?.columnScrollTop > 1 &&
+      Math.abs(wheelScroll.vertical?.matrixScrollLeft ?? -1) <= 1],
+    ["matrixWheelDoesNotZoomStageOrMoveOuterScroll", () =>
+      wheelScroll.stageViewBox.length > 0 &&
+      wheelScroll.plain?.stageViewBox === wheelScroll.stageViewBox &&
+      wheelScroll.shifted?.stageViewBox === wheelScroll.stageViewBox &&
+      wheelScroll.vertical?.stageViewBox === wheelScroll.stageViewBox &&
+      Object.values(wheelScroll.outer ?? {}).every((value) => value === 0)],
+    ["horizontalWheelSurfaceInventoryUsesSharedHandler", () =>
+      Object.values(horizontalWheelInventory).every(Boolean)],
     ["matrixBankJumpStripUsesExistingSingleRowBudget", () =>
       before.bankJumpChipCount === expectedColumns.length
       && JSON.stringify(before.bankJumpChipIds) === JSON.stringify(expectedColumns)
@@ -11704,6 +11997,8 @@ async function runSceneMatrixPaneCheck(client, viewport) {
     before,
     after,
     horizontalScroll,
+    wheelScroll,
+    horizontalWheelInventory,
     bankJump,
     alternateView,
     subThresholdClick,
@@ -15858,6 +16153,18 @@ async function readMappingLiveColorSurface(client, rootSelector) {
     const inspect = (id) => {
       const node = fixture(id);
       const shape = node?.querySelector('[data-stage-fixture-shape]') ?? null;
+      const hitTarget = node?.querySelector('.stageFixtureHitTarget') ?? null;
+      const outline = node?.querySelector('[data-stage-fixture-outline]') ?? null;
+      const segmentElements = [...(node?.querySelectorAll('[data-stage-fixture-segment]') ?? [])];
+      const numberAttribute = (element, name) => Number(element?.getAttribute(name) ?? Number.NaN);
+      const screenRect = (element) => {
+        const rect = element?.getBoundingClientRect();
+        return rect ? {
+          width: Math.round(rect.width * 100) / 100,
+          height: Math.round(rect.height * 100) / 100,
+        } : null;
+      };
+      const matrix = node instanceof SVGGraphicsElement ? node.getScreenCTM() : null;
       return {
         found: Boolean(node),
         className: node?.getAttribute('class') ?? '',
@@ -15865,11 +16172,32 @@ async function readMappingLiveColorSurface(client, rootSelector) {
         liveColorApplied: node?.getAttribute('data-live-color-applied') ?? '',
         liveColorSource: node?.getAttribute('data-live-color-source') ?? '',
         segmentCount: Number(node?.getAttribute('data-live-segment-count') ?? 0),
-        segmentColors: [...(node?.querySelectorAll('[data-stage-fixture-segment]') ?? [])]
-          .map((segment) => segment.getAttribute('fill')),
+        segmentColors: segmentElements.map((segment) => segment.getAttribute('fill')),
+        segmentXs: segmentElements.map((segment) => numberAttribute(segment, 'x')),
+        segmentWidths: segmentElements.map((segment) => numberAttribute(segment, 'width')),
+        segmentHeights: segmentElements.map((segment) => numberAttribute(segment, 'height')),
+        segmentScreenRects: segmentElements.map(screenRect),
         hitTargetCount: node?.querySelectorAll('.stageFixtureHitTarget').length ?? 0,
+        hitTargetScreenRect: screenRect(hitTarget),
+        hitTargetSvgWidth: numberAttribute(hitTarget, 'width'),
+        hitTargetSvgHeight: numberAttribute(hitTarget, 'height'),
+        hitTargetMinCssPx: (() => {
+          const rect = hitTarget?.getBoundingClientRect();
+          return rect ? Math.round(Math.min(rect.width, rect.height) * 100) / 100 : 0;
+        })(),
         shapeTag: shape?.tagName.toLowerCase() ?? '',
         shapeFill: shape?.getAttribute('fill') ?? '',
+        shapeWidth: numberAttribute(shape, 'width'),
+        shapeHeight: numberAttribute(shape, 'height'),
+        shapeRx: numberAttribute(shape, 'rx'),
+        shapeScreenRect: screenRect(shape),
+        outlineWidth: numberAttribute(outline, 'width'),
+        outlineHeight: numberAttribute(outline, 'height'),
+        outlineScreenRect: screenRect(outline),
+        gridUnitCssPx: matrix ? {
+          x: Math.round(Math.hypot(matrix.a, matrix.b) * 5 * 100) / 100,
+          y: Math.round(Math.hypot(matrix.c, matrix.d) * 5 * 100) / 100,
+        } : null,
       };
     };
     return {
@@ -19114,8 +19442,10 @@ async function main() {
         console.log(
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
             `selector=${JSON.stringify(result.selector)} ` +
-            `controls=${result.control.controlStageChromeOperationCount}/12 ` +
+            `controls=${result.control.controlStageChromeOperationCount}/16 ` +
             `tools=${result.control.visibleControlStageToolItemCount}/${result.control.visibleControlStageToolIconCount}/${result.control.visibleControlStageZoomRangeCount} ` +
+            `layers=${result.control.visibleControlStageLayerToggleCount}:${JSON.stringify(result.control.controlStageLayerTogglePressed)} ` +
+            `mappingLink=${result.control.controlStageMappingLinkWidth}px ` +
             `selection=${result.control.visibleControlStageSelectionListCount}/${result.control.visibleControlStageSelectionNameCount} ` +
             `mappingRail=${result.setup.visibleMappingFullToolRailButtonCount}:${result.setup.mappingFullToolRailVerticalOverflowPx}/${result.setup.mappingFullToolRailClippedButtonCount} ` +
             `failed=${JSON.stringify(result.failedChecks)}`,
@@ -19688,6 +20018,9 @@ async function main() {
             `bankJump=${result.bankJump.targetId ?? "?"}@` +
               `${Math.round((result.bankJump.afterScrollLeft ?? 0) * 100) / 100}px:` +
               `${result.bankJump.leadingEdgeVisible ? "visible" : "hidden"} ` +
+            `wheel=${Math.round((result.wheelScroll.plainDelta ?? 0) * 100) / 100}px/` +
+              `${Math.round((result.wheelScroll.shiftedDelta ?? 0) * 100) / 100}px ` +
+            `columnWheel=${Math.round((result.wheelScroll.vertical?.columnScrollTop ?? 0) * 100) / 100}px ` +
             `matrixTop=${Math.round(result.before.bankJumpToColumnHeaderTop * 100) / 100}px ` +
               `gap=${Math.round(result.before.bankJumpToColumnTopGap * 100) / 100}px ` +
             `inherit=${result.before.cardIdentityById["302"]?.fill === result.before.columnIdentityById.front?.fill}/` +
@@ -19901,6 +20234,54 @@ async function main() {
             megaSegmentColorsFromDmx: JSON.stringify(result.setup.mega.segmentColors) === JSON.stringify(expectedSegments),
             megaYawFollow: result.setup.mega.transform.includes("rotate(30)"),
             fixtureUnitHitTarget: result.setup.mega.hitTargetCount === 1,
+            singleCellOwnsOneFiveByFiveMinorGridUnit:
+              result.setup.single.shapeTag === "rect"
+              && result.setup.single.shapeWidth === 5
+              && result.setup.single.shapeHeight === 5
+              && result.setup.single.shapeRx > 0
+              && result.control.single.shapeWidth === 5
+              && result.stagePreviewInitial.single.shapeWidth === 5,
+            megaBarOwnsEightContinuousFiveUnitCells:
+              result.setup.mega.outlineWidth === 40
+              && result.setup.mega.outlineHeight === 5
+              && result.setup.mega.segmentWidths.every((width) => Math.abs(width - 4.4) <= 0.001)
+              && result.setup.mega.segmentHeights.every((height) => Math.abs(height - 4.4) <= 0.001)
+              && result.setup.mega.segmentXs.slice(1).every((x, index) =>
+                Math.abs(x - result.setup.mega.segmentXs[index] - 5) <= 0.001)
+              && result.setup.mega.segmentXs[0] === -19.7,
+            megaBarUsesThinSixTenthsUnitInterCellGaps:
+              result.setup.mega.segmentXs.slice(1).every((x, index) =>
+                Math.abs(
+                  x -
+                  result.setup.mega.segmentXs[index] -
+                  result.setup.mega.segmentWidths[index] -
+                  0.6
+                ) <= 0.001),
+            multiCellSelectionUsesWholeFootprintOutline:
+              result.setup.mega.className.includes("picked")
+              && result.setup.mega.outlineWidth === 40
+              && result.setup.mega.outlineHeight === 5,
+            gridGlyphHitTargetsMeetTwelveCssPixelFloor:
+              [
+                result.setup.single,
+                result.setup.mega,
+                result.control.single,
+                result.control.mega,
+              ].every((fixture) => fixture.hitTargetMinCssPx >= 12),
+            hiddenStagePreviewKeepsTwelveUnitHitTargetStructure:
+              result.stagePreviewInitial.single.hitTargetSvgWidth >= 12
+              && result.stagePreviewInitial.single.hitTargetSvgHeight >= 12
+              && result.stagePreviewInitial.mega.hitTargetSvgWidth >= 12
+              && result.stagePreviewInitial.mega.hitTargetSvgHeight >= 12,
+            glyphGridUnitHasMeasuredCssSize:
+              [
+                result.setup.single,
+                result.setup.mega,
+                result.control.single,
+                result.stagePreviewInitial.single,
+              ].every((fixture) =>
+                (fixture.gridUnitCssPx?.x ?? 0) > 0
+                && (fixture.gridUnitCssPx?.y ?? 0) > 0),
             gdtfGeometrySegmentCount: result.setup.geometry.segmentCount === 3,
             gdtfGeometryColorsFromDmx: JSON.stringify(result.setup.geometry.segmentColors) === JSON.stringify([
               "rgb(255, 0, 0)",
@@ -19909,9 +20290,10 @@ async function main() {
             ]),
             unlitSegmentShapePreserved: result.setup.mega.segmentColors[7] === dark,
             controlSegmentParity: JSON.stringify(result.control.mega.segmentColors) === JSON.stringify(expectedSegments),
-            singleCellTraditionalGlyph: result.setup.single.segmentCount === 1
+            singleCellRoundedGridGlyph: result.setup.single.segmentCount === 1
               && result.setup.single.segmentColors.length === 0
-              && result.setup.single.shapeTag === "rect",
+              && result.setup.single.shapeTag === "rect"
+              && result.setup.single.shapeRx > 0,
             singleCellControlParity: result.control.single.segmentCount === 1
               && result.control.single.segmentColors.length === 0
               && result.control.single.shapeTag === "rect",
@@ -19929,6 +20311,14 @@ async function main() {
           `${JSON.stringify(result.initial.attributeFallback.segmentColors)} ` +
         `stagePreview=${result.stagePreviewInitial.single.shapeFill}:` +
           `${result.stagePreviewInitial.mega.segmentCount} ` +
+        `glyph=${result.setup.single.shapeWidth}x${result.setup.single.shapeHeight}:` +
+          `${result.setup.single.gridUnitCssPx?.x ?? 0}x${result.setup.single.gridUnitCssPx?.y ?? 0}px ` +
+        `megaFootprint=${result.setup.mega.outlineWidth}x${result.setup.mega.outlineHeight}:` +
+          `${result.setup.mega.outlineScreenRect?.width ?? 0}x${result.setup.mega.outlineScreenRect?.height ?? 0}px ` +
+        `hitMin=${Math.min(
+          result.setup.single.hitTargetMinCssPx,
+          result.control.single.hitTargetMinCssPx,
+        )}px ` +
         `unlit=${result.setup.unlit.liveColorSource}:${result.setup.unlit.shapeFill} ` +
         `single=${result.setup.single.shapeTag}:${result.setup.single.shapeFill} ` +
         `dimmer=${result.setup.dimmerOnly.shapeFill} wheel=${result.setup.wheel.shapeFill} ` +
