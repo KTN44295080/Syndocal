@@ -44,6 +44,19 @@ export const browserPoppedPanes = (): PaneWindowKind[] => {
   return value.split(",").map((pane) => pane.trim()).filter(isPaneWindowKind);
 };
 
+const viewportEmitterFunctions = (
+  attribute: string,
+  emitterName: string,
+  color: { x: number; y: number; luminance: number },
+): NonNullable<AttributeControl["functions"]> =>
+  Array.from({ length: 7 }, (_, index) => ({
+    name: `${emitterName} ${index + 1}`,
+    attribute,
+    dmx_from: Math.floor((index * 65_536) / 7),
+    dmx_to: Math.floor(((index + 1) * 65_536) / 7) - 1,
+    emitter: { name: emitterName, color },
+  }));
+
 const viewportFixtureControls: AttributeControl[] = [
   {
     attribute: "Dimmer",
@@ -51,7 +64,12 @@ const viewportFixtureControls: AttributeControl[] = [
     offsets: [1],
     resolution: "EightBit",
     default_value: 0,
-    functions: [],
+    functions: [{
+      name: "Dimmer",
+      attribute: "Dimmer",
+      dmx_from: 0,
+      dmx_to: 65_535,
+    }],
   },
   {
     attribute: "Pan",
@@ -75,16 +93,11 @@ const viewportFixtureControls: AttributeControl[] = [
     offsets: [6],
     resolution: "EightBit",
     default_value: 0,
-    functions: [{
-      name: "Red emitter",
-      attribute: "ColorRed",
-      dmx_from: 0,
-      dmx_to: 65_535,
-      emitter: {
-        name: "Red LED",
-        color: { x: 0.64, y: 0.33, luminance: 0.2126 },
-      },
-    }],
+    functions: viewportEmitterFunctions(
+      "ColorRed",
+      "Red LED",
+      { x: 0.64, y: 0.33, luminance: 0.2126 },
+    ),
   },
   {
     attribute: "ColorGreen",
@@ -92,16 +105,11 @@ const viewportFixtureControls: AttributeControl[] = [
     offsets: [7],
     resolution: "EightBit",
     default_value: 0,
-    functions: [{
-      name: "Green emitter",
-      attribute: "ColorGreen",
-      dmx_from: 0,
-      dmx_to: 65_535,
-      emitter: {
-        name: "Green LED",
-        color: { x: 0.3, y: 0.6, luminance: 0.7152 },
-      },
-    }],
+    functions: viewportEmitterFunctions(
+      "ColorGreen",
+      "Green LED",
+      { x: 0.3, y: 0.6, luminance: 0.7152 },
+    ),
   },
   {
     attribute: "ColorBlue",
@@ -109,16 +117,11 @@ const viewportFixtureControls: AttributeControl[] = [
     offsets: [8],
     resolution: "EightBit",
     default_value: 0,
-    functions: [{
-      name: "Blue emitter",
-      attribute: "ColorBlue",
-      dmx_from: 0,
-      dmx_to: 65_535,
-      emitter: {
-        name: "Blue LED",
-        color: { x: 0.15, y: 0.06, luminance: 0.0722 },
-      },
-    }],
+    functions: viewportEmitterFunctions(
+      "ColorBlue",
+      "Blue LED",
+      { x: 0.15, y: 0.06, luminance: 0.0722 },
+    ),
   },
   {
     attribute: "Shutter1",

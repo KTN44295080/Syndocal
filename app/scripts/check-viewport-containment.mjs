@@ -36,6 +36,7 @@ const groupStrobeOnlyMode = process.argv.includes("--group-strobe-only");
 const fixtureCatalogOnlyMode = process.argv.includes("--fixture-catalog-only");
 const workspaceOperatorOnlyMode = process.argv.includes("--workspace-operator-only");
 const liveEditTypesOnlyMode = process.argv.includes("--live-edit-types-only");
+const attributeCategoriesOnlyMode = process.argv.includes("--attribute-categories-only");
 const editLiveOnlyMode = process.argv.includes("--edit-live-only");
 const controlEditPositionOnlyMode = process.argv.includes("--control-edit-position-only");
 const controlStageChromeOnlyMode = process.argv.includes("--control-stage-chrome-only");
@@ -48,7 +49,7 @@ const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
     ? "large-show"
     : editLiveOnlyMode
       ? "edit-live"
-    : liveEditTypesOnlyMode
+    : liveEditTypesOnlyMode || attributeCategoriesOnlyMode
       ? "live-edit-types"
     : cueRecallOnlyMode
       ? "cue-recall"
@@ -16644,8 +16645,42 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
       : null;
     const faderChannelBankRect = faderChannelBank?.getBoundingClientRect();
     const deskRect = desk?.getBoundingClientRect();
+    const fixtureEditSurface = document.querySelector('.fixtureEditSurface');
+    const categoryRail = fixtureEditSurface?.querySelector(':scope > .attributeCategoryRail');
+    const categoryRailRect = categoryRail?.getBoundingClientRect();
+    const categoryRailButtonRects = categoryRail
+      ? [...categoryRail.querySelectorAll('button')].filter(visible).map((button) => button.getBoundingClientRect())
+      : [];
     const bankFaderRects = bankFaders.map((fader) => fader.getBoundingClientRect());
     const bankFineButtonRects = bankFineButtons.map((button) => button.getBoundingClientRect());
+    const bankFaderGaps = bankFaders
+      .map((fader) => Number.parseFloat(getComputedStyle(fader.parentElement).columnGap))
+      .filter(Number.isFinite);
+    const bankFaderPitch =
+      bankFaderRects.length > 0
+        ? Math.min(...bankFaderRects.map((rect) => rect.width)) +
+          (bankFaderGaps.length > 0 ? Math.max(...bankFaderGaps) : 0)
+        : 0;
+    const fixtureTypeColumnCount = faderChannelBank?.matches('.fixtureTypeColumnGrid')
+      ? faderChannelBank.querySelectorAll(':scope > .fixtureTypeAttributeColumn').length
+      : 0;
+    const faderChannelBankChromeWidth =
+      fixtureTypeColumnCount > 0
+        ? fixtureTypeColumnCount * 10 + Math.max(0, fixtureTypeColumnCount - 1) * 4
+        : 0;
+    const widthDerivedVisibleChannelFloor =
+      faderChannelBank && bankFaderPitch > 0
+        ? Math.min(
+            bankFaders.length,
+            Math.max(
+              0,
+              Math.floor(
+                (faderChannelBank.clientWidth - faderChannelBankChromeWidth) /
+                  bankFaderPitch
+              )
+            )
+          )
+        : 0;
     const fullyVisibleBankFaderCount = deskRect
       ? bankFaderRects.filter((rect) =>
           rect.left >= Math.max(0, deskRect.left) - 1 &&
@@ -16742,6 +16777,15 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
       faderChannelBankWidthRatio: faderChannelBankRect && deskRect && desk.clientWidth > 0
         ? faderChannelBankRect.width / desk.clientWidth
         : 0,
+      faderChannelBankClientWidth: faderChannelBank?.clientWidth ?? 0,
+      faderChannelBankScrollWidth: faderChannelBank?.scrollWidth ?? 0,
+      faderChannelBankHorizontalOverflow: faderChannelBank
+        ? Math.max(0, faderChannelBank.scrollWidth - faderChannelBank.clientWidth)
+        : -1,
+      faderChannelBankColumnCount: fixtureTypeColumnCount,
+      faderChannelBankChromeWidth,
+      bankFaderPitch,
+      widthDerivedVisibleChannelFloor,
       visibleOpticsNativeRangeCount: desk
         ? [...desk.querySelectorAll('.opticsControlCard > input[type="range"]')].filter(visible).length
         : 0,
@@ -16752,6 +16796,24 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
         ? [...desk.querySelectorAll('.colorControlPanel')].filter(visible).length
         : 0,
       categoryRailButtonCount: [...document.querySelectorAll('.attributeCategoryRail button')].filter(visible).length,
+      categoryRailWidth: categoryRailRect?.width ?? 0,
+      categoryRailHeight: categoryRailRect?.height ?? 0,
+      categoryRailButtonLeftSpread: categoryRailButtonRects.length > 0
+        ? Math.max(...categoryRailButtonRects.map((rect) => rect.left)) -
+          Math.min(...categoryRailButtonRects.map((rect) => rect.left))
+        : -1,
+      categoryRailButtonsUseOneVerticalColumn:
+        categoryRailButtonRects.length === 8 &&
+        categoryRailButtonRects.every((rect, index) =>
+          index === 0 || rect.top >= categoryRailButtonRects[index - 1].bottom - 1
+        ),
+      categoryRailLeftOfDesk: Boolean(
+        categoryRailRect &&
+        deskRect &&
+        categoryRailRect.right <= deskRect.left + 1 &&
+        categoryRailRect.top <= deskRect.top + 1 &&
+        categoryRailRect.bottom >= deskRect.bottom - 1
+      ),
       activeCategoryLabel: (document.querySelector('.attributeCategoryRail button.active')?.textContent || '').trim(),
       selectionSummary: (summary?.textContent || '').replace(/\\s+/g, ' ').trim(),
       selectionSummaryKind: summary?.className || '',
@@ -16932,6 +16994,16 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
     ["multipleSelectionSummaryVisible", () => multiple.selectionSummaryKind.includes("selection") && multiple.selectionSummary.includes("41 fixtures") && multiple.selectionSummary.includes("3 fixture types")],
     ["legacyEditorHiddenForMultipleSelection", () => multiple.legacyFaderGridCount === 0 && multiple.legacyDimmerPanelCount === 0],
     ["categoryRailPreservedForMultipleSelection", () => multiple.categoryRailButtonCount === 8 && multiple.activeCategoryLabel.includes("Dimmer")],
+    ["allMultipleSelectionCategoriesKeepTheRailLeftAndVertical", () =>
+      Object.values(multipleCategoryStates).every((state) =>
+        state.categoryRailButtonCount === 8 &&
+        state.categoryRailWidth >= 85.5 &&
+        state.categoryRailWidth <= 86.5 &&
+        state.categoryRailButtonLeftSpread <= 1 &&
+        state.categoryRailButtonsUseOneVerticalColumn &&
+        state.categoryRailLeftOfDesk
+      )
+    ],
     ["faderCategoryPreservesTypeColumns", () => faderBank.columnCount === 3 && faderBank.primaryControlKinds.every((kind) => kind === "fader-bank")],
     ["faderCategoryUsesChannelVerticalBank", () => faderBank.bankFaderCount === 26 && faderBank.bankVerticalInputCount === 26],
     ["faderCategoryShowsChannelNumbers", () => faderBank.bankChannelLabels.length === 26 && faderBank.bankChannelLabels.every((label) => label.startsWith("CH "))],
@@ -16959,8 +17031,13 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
         state.bankTextLabelCount === 0
       )
     ],
-    ["compactFadersShowAtLeastTwelveChannelsAt1280", () =>
-      viewport.width !== 1280 ||
+    ["compactFaderVisibilityUsesMeasuredDeckWidthAndHorizontalScroll", () =>
+      faderBank.widthDerivedVisibleChannelFloor > 0 &&
+      faderBank.fullyVisibleBankFaderCount >= faderBank.widthDerivedVisibleChannelFloor &&
+      faderBank.faderChannelBankHorizontalOverflow > 0
+    ],
+    ["compactFadersKeepAtLeastTwelveChannelsAt1920", () =>
+      viewport.width !== 1920 ||
       faderBank.fullyVisibleBankFaderCount >= 12
     ],
     ["verticalFadersUseCustomAppearanceNoneChrome", () =>
@@ -17027,6 +17104,16 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
     ["legacyEditorVisibleForSingleSelection", () => single.legacyFaderGridCount === 1 && single.legacyDimmerPanelCount === 1],
     ["singleSelectionUsesFixtureSummary", () => single.selectionSummaryKind.includes("fixture") && single.selectionSummary.includes("GENERIC 1")],
     ["categoryRailPreservedForSingleSelection", () => single.categoryRailButtonCount === 8 && single.activeCategoryLabel.includes("Dimmer")],
+    ["allSingleSelectionCategoriesKeepTheRailLeftAndVertical", () =>
+      Object.values(singleCategoryStates).every((state) =>
+        state.categoryRailButtonCount === 8 &&
+        state.categoryRailWidth >= 85.5 &&
+        state.categoryRailWidth <= 86.5 &&
+        state.categoryRailButtonLeftSpread <= 1 &&
+        state.categoryRailButtonsUseOneVerticalColumn &&
+        state.categoryRailLeftOfDesk
+      )
+    ],
     ["singleEditorRangesRenderTallerThanWide", () =>
       everyMeasuredRangeIsVertical(Object.values(singleCategoryStates))
     ],
@@ -17063,6 +17150,203 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
     keyboardProbe,
     dmxFunctionReadout,
     narrowed,
+  };
+}
+
+async function runAttributeCategoriesViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: fixtureUrl("live-edit-types") });
+  await waitForApp(client);
+  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await clickVisibleByText(client, ".controlModeTabs button", "Live Edit");
+  await clickVisibleByText(client, ".attributeCategoryRail button", "Dimmer");
+  await sleep(120);
+
+  const narrowed = await client.evaluate(`(() => {
+    const header = [...document.querySelectorAll('[data-fixture-type-column]')]
+      .find((column) => Number(column.getAttribute('data-fixture-type-count') || 0) === 1)
+      ?.querySelector('[data-fixture-type-select]');
+    if (!(header instanceof HTMLButtonElement)) return false;
+    header.click();
+    return true;
+  })()`);
+  await sleep(120);
+
+  const measurePanel = () => client.evaluate(`(async () => {
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const precision = (value) => Math.round(value * 10) / 10;
+    const rect = (element) => {
+      const bounds = element?.getBoundingClientRect();
+      return bounds
+        ? {
+            x: precision(bounds.x),
+            y: precision(bounds.y),
+            left: precision(bounds.left),
+            top: precision(bounds.top),
+            right: precision(bounds.right),
+            bottom: precision(bounds.bottom),
+            width: precision(bounds.width),
+            height: precision(bounds.height),
+          }
+        : null;
+    };
+    const contained = (innerRect, outerRect) => Boolean(
+      innerRect &&
+      outerRect &&
+      innerRect.left >= outerRect.left - 1 &&
+      innerRect.top >= outerRect.top - 1 &&
+      innerRect.right <= outerRect.right + 1 &&
+      innerRect.bottom <= outerRect.bottom + 1
+    );
+    const panel = document.querySelector('.attributeDeskSurface > .channelFunctionPanel');
+    const summary = panel?.querySelector(':scope > summary');
+    const readouts = summary?.querySelector('.channelFunctionSummaryReadouts');
+    const firstReadout = readouts?.querySelector('.channelFunctionSummaryChip');
+    const list = panel?.querySelector(':scope > .channelFunctionList');
+    const groups = list ? [...list.querySelectorAll(':scope > .channelFunctionGroup')] : [];
+    const panelRect = rect(panel);
+    const summaryRect = rect(summary);
+    const readoutsRect = rect(readouts);
+    const firstReadoutRect = rect(firstReadout);
+    const listRect = rect(list);
+    const groupRects = groups.map(rect);
+    const functionButtons = list ? [...list.querySelectorAll('.channelFunctionGrid button')] : [];
+    const functionButtonRects = functionButtons.map(rect);
+    const app = document.querySelector('.app');
+    return {
+      panelCount: panel ? 1 : 0,
+      open: panel instanceof HTMLDetailsElement && panel.open,
+      label: (summary?.querySelector('.channelFunctionSummaryIdentity > strong')?.textContent || '').trim(),
+      firstReadoutText: (firstReadout?.textContent || '').replace(/\\s+/g, ' ').trim(),
+      panelRect,
+      summaryRect,
+      readoutsRect,
+      firstReadoutRect,
+      listRect,
+      groupRects,
+      groupCount: groups.length,
+      functionButtonCount: functionButtons.length,
+      panelOverflowY: panel ? getComputedStyle(panel).overflowY : '',
+      panelClientHeight: panel?.clientHeight ?? 0,
+      panelScrollHeight: panel?.scrollHeight ?? 0,
+      panelScrollTop: panel?.scrollTop ?? -1,
+      listOverflowY: list ? getComputedStyle(list).overflowY : '',
+      listClientHeight: list?.clientHeight ?? 0,
+      listScrollHeight: list?.scrollHeight ?? 0,
+      listScrollTop: list?.scrollTop ?? 0,
+      summaryContainedInPanel: contained(summaryRect, panelRect),
+      firstReadoutContainedInPanel: contained(firstReadoutRect, panelRect),
+      firstReadoutContainedInSummary: contained(firstReadoutRect, summaryRect),
+      firstReadoutContainedInReadouts: contained(firstReadoutRect, readoutsRect),
+      firstGroupContainedInList: contained(groupRects[0], listRect),
+      lastGroupContainedInList: contained(groupRects[groupRects.length - 1], listRect),
+      firstFunctionContainedInList: contained(functionButtonRects[0], listRect),
+      lastFunctionContainedInList: contained(functionButtonRects[functionButtonRects.length - 1], listRect),
+      firstFunctionContainedInPanel: contained(functionButtonRects[0], panelRect),
+      lastFunctionContainedInPanel: contained(functionButtonRects[functionButtonRects.length - 1], panelRect),
+      allGroupsContainedInList: groupRects.every((groupRect) => contained(groupRect, listRect)),
+      documentAndAppScrollZero:
+        document.documentElement.scrollWidth <= innerWidth + 1 &&
+        document.documentElement.scrollHeight <= innerHeight + 1 &&
+        document.body.scrollWidth <= document.body.clientWidth + 1 &&
+        document.body.scrollHeight <= document.body.clientHeight + 1 &&
+        (!app || (app.scrollWidth <= app.clientWidth + 1 && app.scrollHeight <= app.clientHeight + 1)),
+    };
+  })()`);
+
+  const dimmerClosed = await measurePanel();
+  const dimmerOpened = await client.evaluate(`(() => {
+    const panel = document.querySelector('.attributeDeskSurface > .channelFunctionPanel');
+    if (!(panel instanceof HTMLDetailsElement)) return false;
+    panel.open = true;
+    return true;
+  })()`);
+  await sleep(80);
+  const dimmerOpen = await measurePanel();
+
+  await clickVisibleByText(client, ".attributeCategoryRail button", "Color");
+  await sleep(80);
+  const colorOpened = await client.evaluate(`(() => {
+    const panel = document.querySelector('.attributeDeskSurface > .channelFunctionPanel');
+    if (!(panel instanceof HTMLDetailsElement)) return false;
+    panel.open = true;
+    const desk = panel.closest('.attributeDeskSurface');
+    if (desk instanceof HTMLElement) {
+      desk.scrollLeft = desk.scrollWidth;
+    }
+    return true;
+  })()`);
+  await sleep(80);
+  const colorStart = await measurePanel();
+  const colorScrollRequested = await client.evaluate(`(() => {
+    const panel = document.querySelector('.attributeDeskSurface > .channelFunctionPanel');
+    if (!(panel instanceof HTMLDetailsElement)) return false;
+    panel.scrollTop = panel.scrollHeight;
+    return true;
+  })()`);
+  await sleep(80);
+  const colorEnd = await measurePanel();
+  const colorNeedsScroll = colorStart.panelScrollHeight > colorStart.panelClientHeight + 1;
+
+  const checks = {
+    narrowedToGenericFixture: narrowed,
+    dimmerFunctionPanelPresent:
+      dimmerClosed.panelCount === 1 &&
+      dimmerClosed.label.includes("GDTF") &&
+      dimmerClosed.firstReadoutText.includes("Dimmer") &&
+      dimmerClosed.firstReadoutText.includes("0%-100%"),
+    dimmerFirstFunctionRowFullyVisible:
+      dimmerClosed.summaryContainedInPanel &&
+      dimmerClosed.firstReadoutContainedInPanel &&
+      dimmerClosed.firstReadoutContainedInSummary &&
+      dimmerClosed.firstReadoutContainedInReadouts,
+    dimmerOpenKeepsFirstFunctionGroupVisible:
+      dimmerOpened &&
+      dimmerOpen.open &&
+      dimmerOpen.groupCount === 1 &&
+      dimmerOpen.panelOverflowY === "auto" &&
+      dimmerOpen.panelScrollTop === 0 &&
+      dimmerOpen.summaryContainedInPanel &&
+      dimmerOpen.firstFunctionContainedInPanel,
+    multirowFunctionListOwnsScrolling:
+      colorOpened &&
+      colorStart.open &&
+      colorStart.groupCount >= 3 &&
+      colorNeedsScroll &&
+      colorStart.panelScrollHeight > colorStart.panelClientHeight &&
+      colorStart.panelOverflowY === "auto" &&
+      colorStart.panelScrollTop === 0 &&
+      colorStart.summaryContainedInPanel &&
+      colorStart.firstFunctionContainedInPanel,
+    multirowFunctionListEndBoundaryReachable:
+      colorScrollRequested &&
+      colorEnd.panelScrollTop > 0 &&
+      colorEnd.summaryContainedInPanel &&
+      colorEnd.lastFunctionContainedInPanel,
+    documentAndAppScrollRemainZero:
+      dimmerClosed.documentAndAppScrollZero &&
+      dimmerOpen.documentAndAppScrollZero &&
+      colorStart.documentAndAppScrollZero &&
+      colorEnd.documentAndAppScrollZero,
+  };
+  const failedChecks = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  return {
+    label: `attribute-categories-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    dimmerClosed,
+    dimmerOpen,
+    colorStart,
+    colorEnd,
+    colorNeedsScroll,
   };
 }
 
@@ -17734,6 +18018,30 @@ async function main() {
       }
       return;
     }
+    if (attributeCategoriesOnlyMode) {
+      const results = [];
+      for (const viewport of viewports) {
+        const result = await runAttributeCategoriesViewport(client, viewport);
+        results.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `dimmerRow=${JSON.stringify(result.dimmerClosed.firstReadoutRect)} ` +
+            `panel=${JSON.stringify(result.dimmerClosed.panelRect)} ` +
+            `contained=${result.dimmerClosed.firstReadoutContainedInPanel}/` +
+              `${result.dimmerClosed.firstReadoutContainedInSummary}/` +
+              `${result.dimmerClosed.firstReadoutContainedInReadouts} ` +
+            `groups=${result.colorStart.groupCount} ` +
+            `scroll=${result.colorStart.panelClientHeight}->${result.colorStart.panelScrollHeight}` +
+              `@${result.colorEnd.panelScrollTop}:${result.colorNeedsScroll ? "scroll" : "fit"} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = results.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Attribute category function-row viewport failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (liveEditTypesOnlyMode) {
       const liveEditTypeResults = [];
       for (const viewport of viewports) {
@@ -17747,6 +18055,10 @@ async function main() {
             `column=${Math.round(result.faderBank.bankFaderMinimumWidth * 10) / 10}px ` +
             `fine=${Math.round(result.faderBank.bankFineButtonMinimumWidth * 10) / 10}x${Math.round(result.faderBank.bankFineButtonMinimumHeight * 10) / 10}px ` +
             `visibleCh=${result.faderBank.fullyVisibleBankFaderCount}/${result.singleFaderBank.fullyVisibleBankFaderCount} ` +
+            `rail=${Math.round(result.faderBank.categoryRailWidth * 10) / 10}px:left-vertical ` +
+            `deck=${result.faderBank.faderChannelBankClientWidth}/${result.faderBank.faderChannelBankScrollWidth}` +
+              `+${result.faderBank.faderChannelBankHorizontalOverflow}px` +
+              `:${result.faderBank.widthDerivedVisibleChannelFloor}ch-floor ` +
             `icons=${result.faderBank.bankAttributeIconCount}/${result.faderBank.bankTextLabelCount} ` +
             `orientation=${result.faderBank.deskVerticalRangeCount}/${result.faderBank.deskHorizontalRangeCount} ` +
             `chrome=${Math.round(result.faderBank.faderThumbMinimumWidth * 10) / 10}x${Math.round(result.faderBank.faderThumbMinimumHeight * 10) / 10}/${result.faderBank.faderTrackInsetCount}/${result.faderBank.faderGripLineCount} ` +
@@ -18707,7 +19019,7 @@ async function main() {
     }
     for (const result of liveEditTypeResults) {
       console.log(
-        `${result.passed ? "pass" : "fail"} ${result.label} columns=${result.multiple.columnCount} fixtures=${result.multiple.fixtureCounts.join("+")} controls=${result.multiple.primaryControlKinds.join("+")} bank=${result.faderBank.bankFaderCount}/${result.faderBank.bankVerticalInputCount} chrome=${Math.round(result.faderBank.faderThumbMinimumWidth * 10) / 10}x${Math.round(result.faderBank.faderThumbMinimumHeight * 10) / 10}/${result.faderBank.faderTrackInsetCount} pure=${result.faderBank.faderCategoryActionCount}+${result.singleFaderBank.faderCategoryActionCount}/${result.faderBank.faderGdtfFunctionPanelCount}+${result.singleFaderBank.faderGdtfFunctionPanelCount} width=${Math.round(result.faderBank.faderChannelBankWidthRatio * 1000) / 1000}/${Math.round(result.singleFaderBank.faderChannelBankWidthRatio * 1000) / 1000} keyboard=${result.keyboardProbe.valueChanged}/${result.keyboardProbe.focusVisible}/${result.keyboardProbe.ariaPreserved} dmx=${result.dmxFunctionReadout.panelCount} single=${result.single.legacyFaderGridCount}/${result.single.legacyDimmerPanelCount} failed=${JSON.stringify(result.failedChecks)}`,
+        `${result.passed ? "pass" : "fail"} ${result.label} columns=${result.multiple.columnCount} fixtures=${result.multiple.fixtureCounts.join("+")} controls=${result.multiple.primaryControlKinds.join("+")} bank=${result.faderBank.bankFaderCount}/${result.faderBank.bankVerticalInputCount} visibleCh=${result.faderBank.fullyVisibleBankFaderCount}/${result.singleFaderBank.fullyVisibleBankFaderCount} rail=${Math.round(result.faderBank.categoryRailWidth * 10) / 10}px:left-vertical deck=${result.faderBank.faderChannelBankClientWidth}/${result.faderBank.faderChannelBankScrollWidth}+${result.faderBank.faderChannelBankHorizontalOverflow}px:${result.faderBank.widthDerivedVisibleChannelFloor}ch-floor chrome=${Math.round(result.faderBank.faderThumbMinimumWidth * 10) / 10}x${Math.round(result.faderBank.faderThumbMinimumHeight * 10) / 10}/${result.faderBank.faderTrackInsetCount} pure=${result.faderBank.faderCategoryActionCount}+${result.singleFaderBank.faderCategoryActionCount}/${result.faderBank.faderGdtfFunctionPanelCount}+${result.singleFaderBank.faderGdtfFunctionPanelCount} width=${Math.round(result.faderBank.faderChannelBankWidthRatio * 1000) / 1000}/${Math.round(result.singleFaderBank.faderChannelBankWidthRatio * 1000) / 1000} keyboard=${result.keyboardProbe.valueChanged}/${result.keyboardProbe.focusVisible}/${result.keyboardProbe.ariaPreserved} dmx=${result.dmxFunctionReadout.panelCount} single=${result.single.legacyFaderGridCount}/${result.single.legacyDimmerPanelCount} failed=${JSON.stringify(result.failedChecks)}`,
       );
     }
     if (
