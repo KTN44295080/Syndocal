@@ -150,8 +150,6 @@ export default defineConfig({
           }
           if (
             normalizedId.includes("/src/components/EffectActionControlsPanel") ||
-            normalizedId.includes("/src/components/EffectGroupTargetPanel") ||
-            normalizedId.includes("/src/components/EffectListPanel") ||
             normalizedId.includes("/src/components/MoveEffectEditorPanel") ||
             normalizedId.includes("/src/components/ValueEffectEditorPanel") ||
             normalizedId.includes("/src/components/CurveEffectEditorPanel") ||
@@ -159,10 +157,8 @@ export default defineConfig({
             normalizedId.includes("/src/components/ColorMappingEffectEditorPanel") ||
             normalizedId.includes("/src/components/ChaserEffectEditorPanel") ||
             normalizedId.includes("/src/components/ColorEffectEditorPanel") ||
-            normalizedId.includes("/src/components/EffectSourceControlsPanel") ||
-            normalizedId.includes("/src/components/SampleEffectPresetPanel") ||
+            normalizedId.includes("/src/components/EffectFamilyChooser") ||
             normalizedId.includes("/src/components/SceneSettingsPane") ||
-            normalizedId.includes("/src/components/VideoEffectTargetPanel") ||
             normalizedId.includes("/src/moveEffect")
           ) {
             return "effect-panels";

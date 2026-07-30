@@ -3,7 +3,6 @@ import type { NodeGraphAudioRuntimeStatus, NodeGraphSummary } from "../types";
 
 interface AudioReactiveVjStripProps {
   graphs: NodeGraphSummary[];
-  onOpenRack: () => void;
   onSetEnabled: (graphId: number, enabled: boolean) => void | Promise<void>;
 }
 
@@ -48,9 +47,9 @@ export function AudioReactiveVjStrip(props: AudioReactiveVjStripProps) {
       <Show
         when={graphs().length > 0}
         fallback={
-          <div class="audioReactiveVjEmpty">
+          <div class="audioReactiveVjEmpty textPretty">
             <span>No audio mappings</span>
-            <button onClick={props.onOpenRack}>Create Mapping</button>
+            <small>Load a project containing an audio Node Graph mapping.</small>
           </div>
         }
       >
@@ -88,7 +87,6 @@ export function AudioReactiveVjStrip(props: AudioReactiveVjStripProps) {
         </div>
         <div class="audioReactiveVjActions">
           <Show when={graphs().length > 2}><span>+{graphs().length - 2}</span></Show>
-          <button aria-label="Open Audio Reactive Rack" onClick={props.onOpenRack}>Open Rack</button>
         </div>
       </Show>
     </section>

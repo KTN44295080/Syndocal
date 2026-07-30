@@ -8,17 +8,14 @@ import { SceneMatrixPanel } from "./components/SceneMatrixPanel";
 import {
   SceneSettingsPane,
   type SceneEffectEditorModel,
+  type SceneSettingsSurface,
 } from "./components/SceneSettingsPane";
 import { AppStatusLine } from "./components/AppStatusLine";
 import { ArtRdmPanel } from "./components/ArtRdmPanel";
-import { ChaserEffectEditorPanel } from "./components/ChaserEffectEditorPanel";
-import { ColorEffectEditorPanel, defaultColorEffectStops } from "./components/ColorEffectEditorPanel";
+import { defaultColorEffectStops } from "./components/ColorEffectEditorPanel";
 import {
-  ColorMappingEffectEditorPanel,
   defaultColorMappingRaster,
 } from "./components/ColorMappingEffectEditorPanel";
-import { CurveEffectEditorPanel } from "./components/CurveEffectEditorPanel";
-import { MappingEffectEditorPanel } from "./components/MappingEffectEditorPanel";
 import { CustomProfileEditorPanel } from "./components/CustomProfileEditorPanel";
 import {
   type DmxAddressCell,
@@ -30,10 +27,6 @@ import { DmxOutputConfigPanel } from "./components/DmxOutputConfigPanel";
 import { DmxInputPanel } from "./components/DmxInputPanel";
 import { DmxRawMonitor } from "./components/DmxRawMonitor";
 import { DvcImportReportPanel } from "./components/DvcImportReportPanel";
-import { EffectActionControlsPanel } from "./components/EffectActionControlsPanel";
-import { EffectGroupTargetPanel } from "./components/EffectGroupTargetPanel";
-import { EffectListPanel } from "./components/EffectListPanel";
-import { EffectSourceControlsPanel } from "./components/EffectSourceControlsPanel";
 import { ControlFaderWriteHeader } from "./components/ControlFaderWriteHeader";
 import { FaderAttributeEditorPanel } from "./components/FaderAttributeEditorPanel";
 import { FaderAuxiliaryAttributePanels } from "./components/FaderAuxiliaryAttributePanels";
@@ -47,9 +40,6 @@ import { FaderPrimaryAttributePanels } from "./components/FaderPrimaryAttributeP
 import { LightingRuntimeControlsPanel } from "./components/LightingRuntimeControlsPanel";
 import { LoadedProfileSummaryPanel } from "./components/LoadedProfileSummaryPanel";
 import { MidiControlMappingPanel } from "./components/MidiControlMappingPanel";
-import { MoveEffectEditorPanel } from "./components/MoveEffectEditorPanel";
-import { ValueEffectEditorPanel } from "./components/ValueEffectEditorPanel";
-import { NodeGraphEditorPanel } from "./components/NodeGraphEditorPanel";
 import { OscControlMappingPanel } from "./components/OscControlMappingPanel";
 import { OutputDiagnosticsPanel } from "./components/OutputDiagnosticsPanel";
 import { type OpticsControlEntry } from "./components/OpticsControlPanel";
@@ -61,21 +51,15 @@ import { PlaybackExecutorPanel } from "./components/PlaybackExecutorPanel";
 import { ReferencePalettePanel } from "./components/ReferencePalettePanel";
 import { RemoteControlPanel } from "./components/RemoteControlPanel";
 import {
-  EffectFamilyChooser,
-  SampleEffectPresetPanel,
-  sampleEffectPresetOptions,
-  sampleEffectPresetSupportsTarget,
   type EffectChooserFamily,
   type EffectRecipeFamily,
-  type SampleEffectPreset,
-} from "./components/SampleEffectPresetPanel";
+} from "./components/EffectFamilyChooser";
 import { SetupMappingWorkspace } from "./components/SetupMappingWorkspace";
 import { ControlModeSegment, MappingPersistentWorkspaceBand } from "./components/MappingPersistentWorkspaceBand";
 import { SetupVideoPanel } from "./components/SetupVideoPanel";
 import { StagePreview2D } from "./components/StagePreview2D";
 import { VideoControlPanel } from "./components/VideoControlPanel";
 import { defaultAutoVjSnapshot } from "./components/AutoVjStrip";
-import { VideoEffectTargetPanel } from "./components/VideoEffectTargetPanel";
 import { readVideoOutputTestPattern, readVideoOutputWindowId, VideoOutputWindow } from "./components/VideoOutputWindow";
 import { TimelineCueEventsPanel } from "./components/TimelineCueEventsPanel";
 import { TimelineLightingAutomationPanel } from "./components/TimelineLightingAutomationPanel";
@@ -185,7 +169,6 @@ import {
   reserveDmxAddressRange,
 } from "./dmxAddressing";
 import { confirmCueRemoval, confirmDestructiveAction } from "./destructiveActions";
-import { liveAudioNodeAvailability } from "./liveAudioInputPresentation";
 import { createLiveAudioInputStatusRequestGate } from "./liveAudioInputStatusSync";
 import type {
   ApplicationUpdateCheck,
@@ -196,10 +179,6 @@ import type {
   ArtRdmRequest,
   ArtRdmResponse,
   AudioAnalysisSummary,
-  AudioReactiveCurve,
-  AudioReactiveFeature,
-  AudioSpectrumBand,
-  AudioSpectrumSource,
   AutoVjConfig,
   AutomationKeyframeSummary,
   AutomationInterpolation,
@@ -278,8 +257,6 @@ import type {
   ValueEffectMode,
   ValueEffectPoint,
   ValueEffectRequest,
-  NodeGraphSummary,
-  NodeGraphTransformOp,
   OscControlAction,
   OscControlMapping,
   OscInputConfig,
@@ -418,7 +395,7 @@ import { createMappingViewportModel } from "./createMappingViewportModel";
 import { createMappingRenderModel } from "./createMappingRenderModel";
 import { liveDmxPollIntervalMs } from "./fixtureLiveColor";
 import { createMappingInteractionController } from "./createMappingInteractionController";
-import { createMappingLayoutController, mappingFixtureSelectionCenter } from "./createMappingLayoutController";
+import { createMappingLayoutController } from "./createMappingLayoutController";
 import {
   createOutputDiagnosticsController,
   defaultOutput,
@@ -962,13 +939,6 @@ interface LiveAudioInputLevels {
   feature_sequence: number;
 }
 
-interface EffectTargetOverride {
-  fixture_ids: number[];
-  target_group_ids: string[];
-  attribute: string;
-  video_targets: VideoEffectTarget[];
-}
-
 type CueCaptureScopeRequest =
   | { kind: "all" }
   | { kind: "lightingOnly" }
@@ -1496,6 +1466,8 @@ export default function App() {
   const [selectedCueListId, setSelectedCueListId] = createSignal(1);
   const [selectedSceneCueId, setSelectedSceneCueId] = createSignal<number | null>(null);
   const [selectedSceneEffectId, setSelectedSceneEffectId] = createSignal<number | null>(null);
+  const [sceneSettingsSurface, setSceneSettingsSurface] =
+    createSignal<SceneSettingsSurface>("contents");
   const [controlFaderWriteMode, setControlFaderWriteMode] =
     createSignal<ControlFaderWriteMode>("live");
   const [viewportControlEditUndo, setViewportControlEditUndo] =
@@ -1714,9 +1686,6 @@ export default function App() {
     createSignal<TimelineVideoAutomationRowScope>("all");
   const [effectShape, setEffectShape] = createSignal<LfoShape>("Sine");
   const [effectType, setEffectType] = createSignal<EffectKind>("Curve");
-  const nodeGraphEffectType = createMemo<"Lfo" | "PositionWave">(() =>
-    effectType() === "PositionWave" ? "PositionWave" : "Lfo",
-  );
   const [effectTargetMode, setEffectTargetMode] = createSignal<EffectTargetMode>("fixture");
   const [effectTargetGroups, setEffectTargetGroups] = createSignal("");
   const [effectVideoLayerId, setEffectVideoLayerId] = createSignal<number | null>(null);
@@ -1727,9 +1696,7 @@ export default function App() {
   const [effectVideoPositionY, setEffectVideoPositionY] = createSignal(0);
   const [effectVideoPositionZ, setEffectVideoPositionZ] = createSignal(0);
   const [effectVideoTargetLinked, setEffectVideoTargetLinked] = createSignal(false);
-  const [sampleEffectPreset, setSampleEffectPreset] = createSignal<SampleEffectPreset>("curve");
   const [effectChooserFamily, setEffectChooserFamily] = createSignal<EffectRecipeFamily>("CURVE FX");
-  const [effectRackSurface, setEffectRackSurface] = createSignal<"stack" | "graphs">("stack");
   const [editingEffectId, setEditingEffectId] = createSignal<number | null>(null);
   const [effectPeriod, setEffectPeriod] = createSignal(1000);
   const [effectClockSyncBeats, setEffectClockSyncBeats] = createSignal<number | null>(null);
@@ -1806,24 +1773,6 @@ export default function App() {
   const [effectPhase, setEffectPhase] = createSignal(0);
   const [effectBlendMode, setEffectBlendMode] = createSignal<EffectBlendMode>("Override");
   const [effectAttribute, setEffectAttribute] = createSignal("");
-  const [nodeGraphLabel, setNodeGraphLabel] = createSignal("Graph 1");
-  const [nodeGraphSourceMode, setNodeGraphSourceMode] = createSignal<"Effect" | "Audio">("Effect");
-  const [nodeGraphAudioBand, setNodeGraphAudioBand] = createSignal<AudioSpectrumBand>("Bass");
-  const [nodeGraphAudioSource, setNodeGraphAudioSource] = createSignal<AudioSpectrumSource>("Timeline");
-  const [nodeGraphAudioFeature, setNodeGraphAudioFeature] = createSignal<AudioReactiveFeature>("LegacyBand");
-  const [nodeGraphAudioBandIndex, setNodeGraphAudioBandIndex] = createSignal(0);
-  const [nodeGraphAudioGain, setNodeGraphAudioGain] = createSignal(1);
-  const [nodeGraphAudioBias, setNodeGraphAudioBias] = createSignal(0);
-  const [nodeGraphAudioGate, setNodeGraphAudioGate] = createSignal(0);
-  const [nodeGraphAudioAttackMs, setNodeGraphAudioAttackMs] = createSignal(20);
-  const [nodeGraphAudioReleaseMs, setNodeGraphAudioReleaseMs] = createSignal(180);
-  const [nodeGraphAudioHoldMs, setNodeGraphAudioHoldMs] = createSignal(0);
-  const [nodeGraphAudioCurve, setNodeGraphAudioCurve] = createSignal<AudioReactiveCurve>("Linear");
-  const [nodeGraphAudioInvert, setNodeGraphAudioInvert] = createSignal(false);
-  const [nodeGraphTransformOp, setNodeGraphTransformOp] = createSignal<NodeGraphTransformOp>("Scale");
-  const [nodeGraphTransformAmount, setNodeGraphTransformAmount] = createSignal(1);
-  const [nodeGraphTransformMin, setNodeGraphTransformMin] = createSignal(0);
-  const [nodeGraphTransformMax, setNodeGraphTransformMax] = createSignal(1);
   const [waveOriginX, setWaveOriginX] = createSignal(0);
   const [waveOriginY, setWaveOriginY] = createSignal(0);
   const [waveOriginZ, setWaveOriginZ] = createSignal(0);
@@ -1858,11 +1807,13 @@ export default function App() {
       : cue.effect_targets[0]?.effect_id ?? null;
     setSelectedSceneCueId(cueId);
     setSelectedSceneEffectId(effectId);
+    setSceneSettingsSurface("contents");
     if (effectId !== null) loadSceneEffectDraft(cueId, effectId);
   };
   const closeSceneSettings = () => {
     setSelectedSceneCueId(null);
     setSelectedSceneEffectId(null);
+    setSceneSettingsSurface("contents");
   };
   const openCueEditor = () => {
     setTimelineDeskSurface("show");
@@ -2279,12 +2230,11 @@ export default function App() {
     const activeCueId = fixtureCues[0].id;
     setWorkspaceTab(touchComposedFixture ? "touch" : "control");
     if (fxVisualFixture) {
-      setControlMode("edit");
-      setEditDeskSurface("effects");
-      setEffectRackSurface("stack");
+      setControlMode("live");
+      setTimelineDeskSurface("show");
+      setSceneSettingsSurface("fx");
       setEffectChooserFamily("VALUE FX");
       setEffectType("Value");
-      setSampleEffectPreset("pulse");
     }
     if (sceneMatrixFixture) {
       setTimelineDeskSurface("show");
@@ -2445,9 +2395,6 @@ export default function App() {
     };
     setWorkspaceTab("control");
     setControlMode("mixer");
-    setNodeGraphSourceMode("Audio");
-    setNodeGraphAudioSource("Live");
-    setNodeGraphAudioFeature("KickStrength");
     setLiveAudioInputStatus((current) => ({
       ...current,
       running: true,
@@ -4495,8 +4442,6 @@ export default function App() {
     if (!preserveChooserFamily) {
       const family = chooserFamilyForEffectType(nextType);
       setEffectChooserFamily(family);
-      const firstPreset = sampleEffectPresetOptions.find((option) => option.family === family);
-      if (firstPreset) setSampleEffectPreset(firstPreset.value);
     }
     if (nextType === "Color") {
       setEffectVideoTargetLinked(false);
@@ -6104,6 +6049,12 @@ export default function App() {
       return effect ? [effect] : [];
     });
   });
+  const selectedSceneIsRunning = createMemo(() => {
+    const cueId = selectedSceneCueId();
+    if (cueId === null) return false;
+    return snapshot().active_cue_id === cueId
+      || Object.values(snapshot().active_group_cue_ids ?? {}).includes(cueId);
+  });
   // Components that only carry cue ids receive enough identity context to
   // preserve cue > group > cue-hash priority across Timeline consumers.
   const cueIdentities = createMemo<Record<number, CueIdentitySource>>(() => {
@@ -6216,7 +6167,7 @@ export default function App() {
   const cueOwnedEffectCount = createMemo(() =>
     snapshotCues().reduce((count, cue) => count + cue.effect_targets.length, 0));
   const faderDeskTitle = createMemo(() => {
-    if (controlMode() === "edit") return editDeskSurface() === "effects" ? "Lighting FX" : "Faders";
+    if (controlMode() === "edit") return editDeskSurface() === "faders" ? "Faders" : "Attributes";
     if (controlMode() !== "live") return "Faders";
     switch (timelineDeskSurface()) {
       case "automation": return "Automation";
@@ -6984,63 +6935,16 @@ export default function App() {
     setMessage(count > 0 ? `Cleared ${count} mapped fixture pick${count === 1 ? "" : "s"}.` : "No mapped fixtures are picked.");
   };
 
-  const prepareMappingSelectionEffectTarget = () => {
-    const fixtures = selectedMappingFixtures();
-    if (fixtures.length === 0) {
-      setMessage("Select one or more fixtures on the 2D mapping stage first.");
-      return null;
-    }
-    const activeFixture = selectedFixture();
-    if (!activeFixture || !fixtures.some((fixture) => fixture.id === activeFixture.id)) {
-      activateFixture(fixtures[0]);
-    }
-    const center = mappingFixtureSelectionCenter(fixtures);
-    const averageY = fixtures.reduce((sum, fixture) => sum + fixture.position.y, 0) / fixtures.length;
-    setWaveOriginX(Number(center.x.toFixed(3)));
-    setWaveOriginY(Number(averageY.toFixed(3)));
-    setWaveOriginZ(Number(center.z.toFixed(3)));
-    setEffectTargetMode("selection");
+  const openSceneFxFromMapping = () => {
     setWorkspaceTab("control");
-    setControlMode("edit");
-    setEditDeskSurface("effects");
-    return { center, averageY };
-  };
-
-  const useMappingSelectionAsEffectTarget = () => {
-    const fixtures = selectedMappingFixtures();
-    if (!prepareMappingSelectionEffectTarget()) {
-      return;
-    }
-    setMessage(`Using ${fixtures.length} mapped fixture${fixtures.length === 1 ? "" : "s"} as the effect target.`);
-  };
-
-  const useMappingSelectionAsWaveEffectTarget = () => {
-    const fixtures = selectedMappingFixtures();
-    if (!prepareMappingSelectionEffectTarget()) {
-      return;
-    }
-    const controls = commonAttributeControls(fixtures);
-    const preferredAttribute =
-      controls.find((control) => ["dimmer", "intensity", "masterintensity"].includes(control.attribute.toLowerCase())) ??
-      controls[0];
-    if (preferredAttribute) {
-      setEffectAttribute(preferredAttribute.attribute);
-    }
-    selectEffectType("Mapping");
-    setEffectShape("Sine");
-    setEffectBlendMode("Override");
-    setEffectLow(0);
-    setEffectHigh(65_535);
-    setEffectPhase(0);
-    setMappingMode("Absolute");
-    setMappingDirection("Forward");
-    setMappingFixtureSpread(1);
-    setMappingRepetitions(1);
-    setEffectClockSyncPreset(1);
+    setControlMode("live");
+    setTimelineDeskSurface("show");
+    setTimelineContextDrawer("none");
+    setSceneSettingsSurface("fx");
     setMessage(
-      preferredAttribute
-        ? `Prepared a fixture-order Mapping draft for ${fixtures.length} mapped fixture${fixtures.length === 1 ? "" : "s"} on ${preferredAttribute.attribute}.`
-        : `Prepared a fixture-order Mapping draft for ${fixtures.length} mapped fixture${fixtures.length === 1 ? "" : "s"}, but no common light attribute was found.`,
+      selectedSceneCue()
+        ? `Opened Scene FX for ${selectedSceneCue()!.label}.`
+        : "Select a scene with its right-edge identity strip, then open the FX surface.",
     );
   };
 
@@ -11673,6 +11577,7 @@ export default function App() {
       setCueLabel(`Cue ${snapshot().cues.length + 2}`);
       setSelectedSceneCueId(cueId);
       setSelectedSceneEffectId(null);
+      setSceneSettingsSurface("contents");
       setMessage(`Created cue ${cueId}`);
       await refreshSnapshot();
     } catch (error) {
@@ -12392,8 +12297,6 @@ export default function App() {
     }
     const recipeFamily = family as EffectRecipeFamily;
     setEffectChooserFamily(recipeFamily);
-    const firstPreset = sampleEffectPresetOptions.find((option) => option.family === recipeFamily);
-    if (firstPreset) setSampleEffectPreset(firstPreset.value);
     const nextType: EffectKind = family === "COLOR FX"
       ? "Color"
       : family === "COLOUR MAPPINGS"
@@ -14976,8 +14879,6 @@ export default function App() {
     setEffectType(effect.effect_type);
     const effectFamily = chooserFamilyForEffectType(effect.effect_type);
     setEffectChooserFamily(effectFamily);
-    const firstFamilyPreset = sampleEffectPresetOptions.find((option) => option.family === effectFamily);
-    if (firstFamilyPreset) setSampleEffectPreset(firstFamilyPreset.value);
     if (effect.effect_type === "Chaser") {
       const chaser = effect.chaser;
       if (!chaser) {
@@ -15216,7 +15117,7 @@ export default function App() {
     cueId: number,
     effectTargets: CueEffectTarget[],
   ) => {
-    if (viewportFixture === "scene-matrix") {
+    if (viewportFixture) {
       setSnapshot((current) => ({
         ...current,
         cues: current.cues.map((cue) =>
@@ -15284,7 +15185,7 @@ export default function App() {
     const draft = buildEffectRequestFromForm();
     if (!draft) return;
     const params = effectParamsSnapshotFromDraft(draft);
-    if (viewportFixture === "scene-matrix") {
+    if (viewportFixture) {
       const effectId = Math.max(900, ...snapshot().effects.map((effect) => effect.id)) + 1;
       const effectTarget: CueEffectTarget = { effect_id: effectId, enabled: true, params };
       const effect = cueOwnedEffectSummary(effectTarget, null);
@@ -15557,417 +15458,10 @@ export default function App() {
     },
   }));
 
-  const saveEffectPreset = async (effectId: number) => {
-    try {
-      const path = await invoke<string | null>("save_effect_preset", { effectId });
-      setMessage(path ? `Saved effect preset ${path}` : "Effect preset save canceled.");
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  type EffectTargetOverrideOptions = {
-    forceVideoTarget?: boolean;
-    requireLightTarget?: boolean;
-    wholeFixtureColor?: boolean;
-    wholeFixtureMove?: boolean;
-    allowPartialLightAttribute?: boolean;
-    deferLightAttributeValidation?: boolean;
-  };
-
-  const effectPresetFileTargetOverrideOptions: EffectTargetOverrideOptions = {
-    deferLightAttributeValidation: true,
-  };
-
-  const sampleEffectTargetOverrideOptions = (preset: SampleEffectPreset): EffectTargetOverrideOptions =>
-    preset === "shared"
-      ? { forceVideoTarget: true, requireLightTarget: true }
-      : preset === "wave" || preset === "ball" || preset === "fan"
-        ? { requireLightTarget: true }
-      : preset === "chase"
-        ? { requireLightTarget: true, allowPartialLightAttribute: true }
-      : preset === "spectrum" || preset === "colour-chase"
-        ? { requireLightTarget: true, wholeFixtureColor: true }
-      : preset === "circle"
-        ? { requireLightTarget: true, wholeFixtureMove: true }
-        : {};
-
-  const effectTargetOverrideError = (options: EffectTargetOverrideOptions = {}) => {
-    const targetMode = effectTargetMode();
-    const fixture = selectedFixture();
-    const attribute = options.allowPartialLightAttribute ? selectedChaserAttribute() : selectedEffectAttribute();
-    if (options.requireLightTarget && targetMode === "video") {
-      return "Select a fixture or group target for this shared lighting + video preset.";
-    }
-    if (options.wholeFixtureColor && effectVideoTargetLinked()) {
-      return "Whole-fixture colour effects cannot link a video parameter.";
-    }
-    if (options.wholeFixtureMove && (targetMode === "video" || effectVideoTargetLinked())) {
-      return "Move effects target paired Pan/Tilt fixture controls and cannot link a video parameter.";
-    }
-    const wholeFixtureTarget = options.wholeFixtureColor || options.wholeFixtureMove;
-    const requiresLightAttribute = !wholeFixtureTarget && !options.deferLightAttributeValidation;
-    if (targetMode === "fixture" && (!fixture || (requiresLightAttribute && !attribute))) {
-      return "Select a fixture and attribute first.";
-    }
-    if (targetMode === "selection") {
-      if (selectedMappingFixtures().length === 0) {
-        return "Select one or more fixtures on the 2D mapping stage first.";
-      }
-      if (requiresLightAttribute && !attribute) {
-        return "Select a fixture profile attribute before targeting a map selection.";
-      }
-    }
-    if (targetMode === "group") {
-      if (parseGroupIds(effectTargetGroups()).length === 0) {
-        return "Enter at least one target group.";
-      }
-      if (requiresLightAttribute && !attribute) {
-        return "Select a fixture profile attribute before targeting a group.";
-      }
-    }
-    if (options.wholeFixtureMove && moveCompatibleTargetFixtures().length === 0) {
-      return "The current target has no fixture with exactly one paired Pan and Tilt control.";
-    }
-    if (!wholeFixtureTarget && (targetMode === "video" || effectVideoTargetLinked() || options.forceVideoTarget) && selectedEffectVideoLayerId() === null) {
-      return targetMode === "video"
-        ? "Add a video layer before loading a video effect preset."
-        : "Add a video layer before loading this lighting + video preset.";
-    }
-    return "";
-  };
-
-  const sampleEffectTargetOverrideError = (preset: SampleEffectPreset) => {
-    const targetError = effectTargetOverrideError(sampleEffectTargetOverrideOptions(preset));
-    if (targetError) return targetError;
-    return "";
-  };
-
-  const effectTargetOverrideFromForm = (options: EffectTargetOverrideOptions = {}): EffectTargetOverride | null => {
-    if (effectTargetOverrideError(options)) {
-      return null;
-    }
-    const targetMode = effectTargetMode();
-    const fixture = selectedFixture();
-    const attribute = options.allowPartialLightAttribute ? selectedChaserAttribute() : selectedEffectAttribute();
-    const wholeFixtureTarget = options.wholeFixtureColor || options.wholeFixtureMove;
-    const videoTargets = wholeFixtureTarget
-      ? []
-      : buildEffectVideoTargets(true, Boolean(options.forceVideoTarget));
-    return {
-      fixture_ids:
-        targetMode === "selection"
-          ? selectedMappingFixtures().map((candidate) => candidate.id)
-          : targetMode === "fixture" && fixture
-            ? [fixture.id]
-            : [],
-      target_group_ids: targetMode === "group" ? parseGroupIds(effectTargetGroups()) : [],
-      attribute: targetMode === "video" || wholeFixtureTarget ? "" : attribute,
-      video_targets: videoTargets,
-    };
-  };
-
-  const nodeGraphTargetLabel = (graph: NodeGraphSummary) => {
-    const outputs = graph.nodes
-      .filter((node) => node.kind === "Output" && node.output)
-      .map((node) => node.output!)
-      .flatMap((output) => [
-        output.fixture_ids.length > 0 ? `${output.fixture_ids.length} fixture(s)` : "",
-        output.target_group_ids.length > 0 ? `groups ${output.target_group_ids.join(",")}` : "",
-        output.video_targets.length > 0
-          ? `video ${output.video_targets.flatMap((target) => target.layer_ids).length} layer target(s)`
-          : "",
-        output.attribute ? output.attribute : "",
-      ])
-      .filter(Boolean);
-    return outputs.length > 0 ? outputs.join(" / ") : "no target";
-  };
-
-  const nodeGraphSourceLabel = () =>
-    nodeGraphSourceMode() === "Audio"
-      ? `${nodeGraphAudioSource() === "Live" ? "Live" : "Timeline"} Audio ${nodeGraphAudioFeature() === "LegacyBand" ? nodeGraphAudioBand() : nodeGraphAudioFeature()}`
-      : nodeGraphEffectType() === "PositionWave"
-        ? "Position Wave"
-        : "LFO";
-
-  const nodeGraphTransformLabel = () => {
-    const op = nodeGraphTransformOp();
-    if (op === "Invert" || op === "Abs") {
-      return op;
-    }
-    if (op === "Clamp") {
-      return `${op} ${nodeGraphTransformMin()}-${nodeGraphTransformMax()}`;
-    }
-    return `${op} ${nodeGraphTransformAmount()}`;
-  };
-
-  const nodeGraphClockSync = () => {
-    const beats = effectClockSyncBeats();
-    return beats === null ? null : { beats };
-  };
-
-  const nodeGraphSourceDetail = () => {
-    if (nodeGraphSourceMode() === "Audio") {
-      const availability = nodeGraphAudioSource() === "Live"
-        ? liveAudioNodeAvailability(liveAudioInputStatus(), liveAudioInputStatusKnown())
-        : audioAnalysis()?.spectrum.length ? "FFT ready" : "No FFT";
-      return `${nodeGraphAudioGain().toFixed(1)}x ${nodeGraphAudioBias() >= 0 ? "+" : ""}${nodeGraphAudioBias().toFixed(2)} / ${availability}`;
-    }
-    const sync = nodeGraphClockSync();
-    return sync ? `${effectShape()} / ${sync.beats}b` : effectShape();
-  };
-
-  const buildNodeGraphFromForm = (): NodeGraphSummary | null => {
-    const target = effectTargetOverrideFromForm();
-    if (!target) {
-      return null;
-    }
-    const lightLow = Math.max(0, Math.min(65_535, Math.round(effectLow())));
-    const lightHigh = Math.max(0, Math.min(65_535, Math.round(effectHigh())));
-    const label =
-      nodeGraphLabel().trim() ||
-      `${effectTargetMode() === "video" ? effectVideoParam() : selectedEffectAttribute()} ${nodeGraphSourceLabel()}`;
-    const clockSync = nodeGraphClockSync();
-    const sourceNode =
-      nodeGraphSourceMode() === "Audio"
-        ? {
-            id: 1,
-            label: `Audio ${nodeGraphAudioBand()}`,
-            kind: "Audio" as const,
-            x: 18,
-            y: 26,
-            lfo: null,
-            position_wave: null,
-            audio: {
-              source: nodeGraphAudioSource(),
-              band: nodeGraphAudioBand(),
-              feature: nodeGraphAudioFeature(),
-              band_index: nodeGraphAudioBandIndex(),
-              gain: nodeGraphAudioGain(),
-              bias: nodeGraphAudioBias(),
-              attack_ms: Math.max(0, Math.min(60_000, Math.round(nodeGraphAudioAttackMs()))),
-              release_ms: Math.max(0, Math.min(60_000, Math.round(nodeGraphAudioReleaseMs()))),
-              gate: Math.max(0, Math.min(1, nodeGraphAudioGate())),
-              curve: nodeGraphAudioCurve(),
-              invert: nodeGraphAudioInvert(),
-              hold_ms: Math.max(0, Math.min(60_000, Math.round(nodeGraphAudioHoldMs()))),
-            },
-            transform: null,
-            output: null,
-          }
-        : nodeGraphEffectType() === "PositionWave"
-        ? {
-            id: 1,
-            label: "Wave",
-            kind: "PositionWave" as const,
-            x: 18,
-            y: 26,
-            lfo: null,
-            position_wave: {
-              shape: effectShape(),
-              origin: { x: waveOriginX(), y: waveOriginY(), z: waveOriginZ() },
-              direction: { x: waveDirectionX(), y: waveDirectionY(), z: waveDirectionZ() },
-              speed: waveSpeed(),
-              wavelength: waveWavelength(),
-              clock_sync: clockSync,
-              phase: effectPhase(),
-            },
-            audio: null,
-            transform: null,
-            output: null,
-          }
-        : {
-            id: 1,
-            label: "LFO",
-            kind: "Lfo" as const,
-            x: 18,
-            y: 26,
-            lfo: {
-              shape: effectShape(),
-              period_ms: Math.max(10, Math.round(effectPeriod())),
-              clock_sync: clockSync,
-              phase: effectPhase(),
-              amplitude: 1,
-              bias: 0,
-            },
-            position_wave: null,
-            audio: null,
-            transform: null,
-            output: null,
-          };
-    return {
-      id: 0,
-      label,
-      enabled: true,
-      nodes: [
-        sourceNode,
-        {
-          id: 2,
-          label: nodeGraphTransformOp(),
-          kind: "Transform",
-          x: 50,
-          y: 26,
-          lfo: null,
-          position_wave: null,
-          audio: null,
-          transform: {
-            op: nodeGraphSourceMode() === "Audio" ? "Scale" : nodeGraphTransformOp(),
-            amount: nodeGraphSourceMode() === "Audio" ? 1 : nodeGraphTransformAmount(),
-            min: nodeGraphSourceMode() === "Audio" ? 0 : nodeGraphTransformMin(),
-            max: nodeGraphSourceMode() === "Audio" ? 1 : nodeGraphTransformMax(),
-          },
-          output: null,
-        },
-        {
-          id: 3,
-          label: "Output",
-          kind: "Output",
-          x: 82,
-          y: 26,
-          lfo: null,
-          position_wave: null,
-          audio: null,
-          transform: null,
-          output: {
-            fixture_ids: target.fixture_ids,
-            target_group_ids: target.target_group_ids,
-            attribute: target.attribute,
-            video_targets: target.video_targets,
-            low: lightLow,
-            high: lightHigh,
-            blend_mode: effectBlendMode(),
-          },
-        },
-      ],
-      edges: [
-        { from_node: 1, from_port: "value", to_node: 2, to_port: "input" },
-        { from_node: 2, from_port: "value", to_node: 3, to_port: "input" },
-      ],
-    };
-  };
-
-  const saveNodeGraphFromForm = async () => {
-    const graph = buildNodeGraphFromForm();
-    if (!graph) {
-      setMessage(effectTargetOverrideError() || "Select a valid node graph target.");
-      return;
-    }
-    try {
-      const graphId = await invoke<number>("save_node_graph", { graph });
-      setNodeGraphLabel(`Graph ${snapshot().node_graphs.length + 2}`);
-      setMessage(`Saved node graph ${graphId}.`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const openAudioReactiveRack = () => {
-    setControlMode("edit");
-    setEditDeskSurface("effects");
-    setEffectRackSurface("graphs");
-    setNodeGraphSourceMode("Audio");
-  };
-
   const setNodeGraphEnabled = async (graphId: number, enabled: boolean) => {
     try {
       await invoke("set_node_graph_enabled", { graphId, enabled });
       setMessage(`${enabled ? "Enabled" : "Disabled"} node graph ${graphId}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const removeNodeGraph = async (graphId: number) => {
-    try {
-      await invoke("remove_node_graph", { graphId });
-      setMessage(`Removed node graph ${graphId}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const saveNodeGraphPreset = async (graphId: number) => {
-    try {
-      const path = await invoke<string | null>("save_node_graph_preset_file", { graphId });
-      setMessage(path ? `Saved node graph preset ${path}` : "Node graph preset save canceled.");
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const loadNodeGraphPreset = async () => {
-    try {
-      const graphId = await invoke<number | null>("load_node_graph_preset_file");
-      if (graphId === null) {
-        setMessage("Node graph preset load canceled.");
-        return;
-      }
-      setMessage(`Loaded node graph preset as graph ${graphId}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const loadEffectPreset = async () => {
-    try {
-      const effectId = await invoke<number | null>("load_effect_preset");
-      if (effectId === null) {
-        setMessage("Effect preset load canceled.");
-        return;
-      }
-      setMessage(`Loaded effect preset as effect ${effectId}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const loadSampleEffectPreset = async (preset: SampleEffectPreset, useCurrentTarget = false) => {
-    if (useCurrentTarget && !sampleEffectPresetSupportsTarget(preset)) {
-      setMessage("This sample cannot be retargeted to the current effect target.");
-      return;
-    }
-    const targetOverrideOptions = sampleEffectTargetOverrideOptions(preset);
-    const targetOverride = useCurrentTarget ? effectTargetOverrideFromForm(targetOverrideOptions) : null;
-    if (useCurrentTarget && !targetOverride) {
-      setMessage(sampleEffectTargetOverrideError(preset));
-      return;
-    }
-    try {
-      const effectId = await invoke<number>("load_sample_effect_preset", {
-        preset,
-        targetOverride,
-      });
-      setMessage(
-        useCurrentTarget
-          ? preset === "shared"
-            ? `Loaded sample ${preset} effect as effect ${effectId} for current lighting + video targets`
-            : `Loaded sample ${preset} effect as effect ${effectId} for current target`
-          : `Loaded sample ${preset} effect as effect ${effectId}`,
-      );
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const loadEffectPresetForCurrentTarget = async () => {
-    const targetOverride = effectTargetOverrideFromForm(effectPresetFileTargetOverrideOptions);
-    if (!targetOverride) {
-      setMessage(effectTargetOverrideError(effectPresetFileTargetOverrideOptions));
-      return;
-    }
-    try {
-      const effectId = await invoke<number | null>("load_effect_preset_for_target", { targetOverride });
-      if (effectId === null) {
-        setMessage("Effect preset load canceled.");
-        return;
-      }
-      setMessage(`Loaded effect preset as effect ${effectId} for current target`);
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
@@ -16200,6 +15694,15 @@ export default function App() {
     if (mode === "live") {
       setTimelineDeskSurface("show");
       setTimelineContextDrawer((current) => current === "cue" ? "cue" : "none");
+    }
+  };
+
+  const selectEditDeskSurface = (surface: EditDeskSurface) => {
+    setEditDeskSurface(surface);
+    if (surface === "faders") {
+      setControlCategory("fader");
+    } else if (controlCategory() === "fader") {
+      setControlCategory("dimmer");
     }
   };
 
@@ -16569,10 +16072,17 @@ export default function App() {
                   effects={selectedSceneEffects()}
                   selectedEffectId={selectedSceneEffectId()}
                   activeFamily={effectChooserFamily()}
+                  activeSurface={sceneSettingsSurface()}
+                  running={selectedSceneIsRunning()}
+                  liveStates={snapshot().cue_live_modifiers}
                   editor={sceneEffectEditor()}
+                  onSurface={setSceneSettingsSurface}
                   onDraft={(patch) => updateCueMetadataDraft(cue(), patch)}
                   onSaveMetadata={() => setCueMetadata(cue())}
                   onSetColor={(color) => setCueColor(cue().id, color)}
+                  onSetLiveModifier={setCueLiveModifierLive}
+                  onClearLiveModifier={clearCueLiveModifierLive}
+                  onSetLiveModifierDefaults={setCueLiveModifierDefaults}
                   onClose={closeSceneSettings}
                   onEditSource={() => openTimelineSourceCue(cue().id)}
                   onSelectEffect={selectSceneEffect}
@@ -17486,7 +16996,6 @@ export default function App() {
           }}
           audioReactive={{
             get graphs() { return snapshot().node_graphs; },
-            onOpenRack: openAudioReactiveRack,
             onSetEnabled: setNodeGraphEnabled,
           }}
           layerList={{
@@ -17627,9 +17136,20 @@ export default function App() {
               </Show>
               <Show when={controlMode() === "edit"}>
                 <nav class="editDeskTabs" aria-label="Live edit desk surface">
-                  <button class={editDeskSurface() === "attributes" ? "active" : ""} onClick={() => setEditDeskSurface("attributes")}>Attributes</button>
-                  <button class={editDeskSurface() === "effects" ? "active" : ""} onClick={() => setEditDeskSurface("effects")}>Effects</button>
-                  <button class={editDeskSurface() === "dmx" ? "active" : ""} onClick={() => setEditDeskSurface("dmx")}>DMX</button>
+                  <button
+                    class={editDeskSurface() === "faders" ? "active" : ""}
+                    aria-pressed={editDeskSurface() === "faders"}
+                    onClick={() => selectEditDeskSurface("faders")}
+                  >
+                    Faders
+                  </button>
+                  <button
+                    class={editDeskSurface() === "attributes" ? "active" : ""}
+                    aria-pressed={editDeskSurface() === "attributes"}
+                    onClick={() => selectEditDeskSurface("attributes")}
+                  >
+                    Attributes
+                  </button>
                 </nav>
                 <ControlFaderWriteHeader
                   targetKind={controlTargetKind()}
@@ -17887,8 +17407,7 @@ export default function App() {
             onMirrorSelection: mirrorSelectedMappingFixtures,
             onRotateSelection: rotateSelectedMappingFixtures,
             onControlActive: () => setWorkspaceTab("control"),
-            onUseSelectionAsEffectTarget: useMappingSelectionAsEffectTarget,
-            onUseSelectionAsWaveEffectTarget: useMappingSelectionAsWaveEffectTarget,
+            onOpenSceneFx: openSceneFxFromMapping,
             onSetFixtureTransform: setFixtureTransform,
             onSetFixtureHighlight: setFixtureHighlight,
             onSetFixtureSolo: setFixtureSolo,
@@ -17984,9 +17503,14 @@ export default function App() {
             />
           </div>
           <FaderAttributeEditorPanel
-            categories={controlCategoryRows()}
+            categories={controlCategoryRows().filter((category) =>
+              editDeskSurface() === "attributes" ? category.id !== "fader" : category.id === "fader"
+            )}
             activeCategory={activeControlCategory()}
-            onCategory={setControlCategory}
+            onCategory={(category) => {
+              setControlCategory(category);
+              setEditDeskSurface(category === "fader" ? "faders" : "attributes");
+            }}
           >
           <Show
             when={showFixtureTypeAttributeColumns()}
@@ -18390,592 +17914,6 @@ export default function App() {
             />
             </div>
           </div>
-          <div class="effectEditor">
-            <div class="effectWorkspaceHeader">
-              <div>
-                <strong>FX Workspace</strong>
-                <span data-cue-owned-effect-count={cueOwnedEffectCount()}>
-                  {activeEffectCount()} active · {snapshot().effects.length} stacked · {translateUiText(
-                    `Cue-owned ${cueOwnedEffectCount()}`,
-                    uiLocale(),
-                  )} · {snapshot().clock.bpm.toFixed(1)} BPM
-                </span>
-              </div>
-              <div class="panelHeaderActions">
-                <button onClick={loadEffectPreset}>Load File</button>
-                <button
-                  onClick={loadEffectPresetForCurrentTarget}
-                  disabled={Boolean(effectTargetOverrideError(effectPresetFileTargetOverrideOptions))}
-                >
-                  Load Target
-                </button>
-              </div>
-            </div>
-            <EffectFamilyChooser
-              activeFamily={effectChooserFamily()}
-              onSelectFamily={selectEffectFamily}
-            />
-            <div class={`effectWorkbench ${effectType() === "Move" ? "moveEffectWorkbench" : ""}`}>
-            <section class="effectLibraryPane" aria-label="Effect Library">
-            <SampleEffectPresetPanel
-              activeFamily={effectChooserFamily()}
-              selectedPreset={sampleEffectPreset()}
-              targetErrorForPreset={sampleEffectTargetOverrideError}
-              onSelectPreset={setSampleEffectPreset}
-              onLoadPreset={(preset) => loadSampleEffectPreset(preset)}
-              onLoadPresetForTarget={(preset) => loadSampleEffectPreset(preset, true)}
-            />
-            </section>
-            <section class="effectInspectorPane" aria-label="Effect Inspector">
-            <header class="effectPaneHeader">
-              <div>
-                <strong>Inspector</strong>
-                <span>{editingEffectId() === null ? "New effect" : `Editing #${editingEffectId()}`}</span>
-              </div>
-              <span>{effectType() === "PositionWave" ? "SPATIAL" : effectType() === "Mapping" ? "FIXTURE ORDER" : effectType() === "ColorMapping" ? "2D RGB MAP" : effectType() === "Color" ? "MULTI-COLOR" : effectType() === "Chaser" ? "CHASE" : effectType() === "Move" ? "PAN/TILT PATH" : effectType() === "Value" ? "ENVELOPE" : "MODULATOR"}</span>
-            </header>
-            <div class="effectForm">
-              <div class="effectTargetHint">
-                <strong>{effectTargetMode() === "selection" ? "Map selection" : effectTargetMode()}</strong>
-                <span title={`${effectTargetSummary()} / ${effectDraftSummary()}`}>
-                  <span data-no-localize>{effectTargetSummary()}</span> / {effectDraftSummary()}
-                </span>
-              </div>
-              <Show when={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "ColorMapping" && effectType() !== "Chaser" && effectType() !== "Move"}>
-                <label>
-                  Attribute
-                  <select
-                    value={selectedEffectAttribute()}
-                    disabled={effectTargetControls().length === 0}
-                    onInput={(event) => setEffectAttribute(event.currentTarget.value)}
-                  >
-                    <For each={effectTargetControls()}>
-                      {(control) => <option value={control.attribute}>{control.attribute}</option>}
-                    </For>
-                  </select>
-                </label>
-              </Show>
-              <div class="split">
-                <label>
-                  Target
-                  <select
-                    value={effectTargetMode()}
-                    onInput={(event) => {
-                      const nextMode = event.currentTarget.value as EffectTargetMode;
-                      setEffectTargetMode(nextMode);
-                      if (nextMode === "video") {
-                        setEffectVideoTargetLinked(false);
-                      }
-                    }}
-                  >
-                    <option value="fixture">Selected fixture</option>
-                    <option value="selection">Map selection ({selectedMappingFixtures().length})</option>
-                    <option value="group">Group</option>
-                    <option value="video" disabled={effectType() === "Color" || effectType() === "ColorMapping" || effectType() === "Chaser" || effectType() === "Move" || effectType() === "Value" || effectType() === "Curve" || effectType() === "Mapping"}>Video layer</option>
-                  </select>
-                </label>
-                <label>
-                  Type
-                  <select
-                    value={effectType()}
-                    onInput={(event) => selectEffectType(event.currentTarget.value as EffectKind)}
-                  >
-                    <option value="Lfo">LFO</option>
-                    <option value="PositionWave">Position Wave</option>
-                    <option value="Color">Multi-color</option>
-                    <option value="Chaser">Chaser</option>
-                    <option value="Move">Move (Pan/Tilt path)</option>
-                    <option value="Value">Value (envelope)</option>
-                    <option value="Curve">Curve (cubic function)</option>
-                    <option value="Mapping">Mapping (fixture order)</option>
-                    <option value="ColorMapping">Colour Mapping (2D media)</option>
-                  </select>
-                </label>
-              </div>
-              <Show when={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "ColorMapping" && effectType() !== "Chaser" && effectType() !== "Move" && effectType() !== "Value" && effectType() !== "Curve" && effectType() !== "Mapping"}>
-                <label class="checkbox inlineCheckbox effectLinkedVideoToggle">
-                  <input
-                    type="checkbox"
-                    checked={effectVideoTargetLinked()}
-                    disabled={snapshot().video.layers.length === 0}
-                    onChange={(event) => setEffectVideoTargetLinked(event.currentTarget.checked)}
-                  />
-                  Link video layer
-                </label>
-              </Show>
-              <Show when={effectTargetMode() === "group"}>
-                <EffectGroupTargetPanel
-                  value={effectTargetGroups()}
-                  groups={fixtureGroupRows()}
-                  groupColors={groupColors()}
-                  activeGroupIds={parseGroupIds(effectTargetGroups())}
-                  onValue={setEffectTargetGroups}
-                  onToggleGroup={toggleEffectTargetGroup}
-                />
-              </Show>
-              <Show when={effectType() !== "Color" && effectType() !== "ColorMapping" && effectType() !== "Chaser" && effectType() !== "Move" && effectType() !== "Value" && effectType() !== "Curve" && effectType() !== "Mapping" && (effectTargetMode() === "video" || effectVideoTargetLinked())}>
-                <VideoEffectTargetPanel
-                  layers={snapshot().video.layers}
-                  outputsCount={snapshot().video.outputs.length}
-                  selectedLayerId={selectedEffectVideoLayerId()}
-                  param={effectVideoParam()}
-                  low={effectVideoLow()}
-                  high={effectVideoHigh()}
-                  effectType={effectType()}
-                  positionX={effectVideoPositionX()}
-                  positionY={effectVideoPositionY()}
-                  positionZ={effectVideoPositionZ()}
-                  hasSelectedStageObject={Boolean(selectedStageObject())}
-                  onSetLayerId={setEffectVideoLayerId}
-                  onSetParam={setEffectVideoParam}
-                  onSetLow={setEffectVideoLow}
-                  onSetHigh={setEffectVideoHigh}
-                  onUseSelectedOutput={setEffectVideoPositionFromSelectedOutput}
-                  onUseWaveOrigin={setEffectVideoPositionFromWaveOrigin}
-                  onUseStageCenter={setEffectVideoPositionFromStageCenter}
-                  onUseSelectedStageObject={setEffectVideoPositionFromSelectedStageObject}
-                  onSetPositionX={setEffectVideoPositionX}
-                  onSetPositionY={setEffectVideoPositionY}
-                  onSetPositionZ={setEffectVideoPositionZ}
-                />
-              </Show>
-              <Show when={effectType() === "Lfo" || effectType() === "PositionWave"}>
-              <EffectSourceControlsPanel
-                effectType={effectType()}
-                shape={effectShape()}
-                low={effectLow()}
-                high={effectHigh()}
-                phase={effectPhase()}
-                periodMs={effectPeriod()}
-                bpm={snapshot().clock.bpm}
-                clockSyncBeats={effectClockSyncBeats()}
-                stageViewBoxSize={stageViewBoxSize}
-                originX={waveOriginX()}
-                originY={waveOriginY()}
-                originZ={waveOriginZ()}
-                directionX={waveDirectionX()}
-                directionY={waveDirectionY()}
-                directionZ={waveDirectionZ()}
-                speed={waveSpeed()}
-                wavelength={waveWavelength()}
-                stageOrigin={stageOrigin2d()}
-                stageBounds={stageWorldBounds()}
-                originPoint={waveOriginSvgPoint()}
-                directionPoint={waveDirectionSvgPoint()}
-                videoTargetPoint={effectVideoTargetSvgPoint()}
-                directionIsRadial={waveDirectionIsRadial()}
-                radialRadius={waveRadialRadius()}
-                fixtures={visualizerFixtures()}
-                videoSurfaces={visualizerVideoSurfaces2d()}
-                stageObjects={visualizerStageObjects2d()}
-                targetFixtureIds={waveTargetFixtureIds()}
-                selectedFixtureId={selectedFixtureId()}
-                selectedVideoOutputId={selectedVideoOutputId()}
-                videoTargetMode={effectTargetMode() === "video" || effectVideoTargetLinked()}
-                dragging={waveStageDrag()}
-                hasSelectedFixture={Boolean(selectedFixture())}
-                hasSelectedStageObject={Boolean(selectedStageObject())}
-                onShape={setEffectShape}
-                onPeriodMs={setEffectPeriod}
-                onClockSyncBeats={setEffectClockSyncPreset}
-                onUseStageCenter={setWaveOriginFromStageCenter}
-                onUseSelectedFixture={setWaveOriginFromSelectedFixture}
-                onUseSelectedStageObject={setWaveOriginFromSelectedStageObject}
-                onDirectionPreset={setWaveDirectionPreset}
-                onStagePointerDown={startWaveStageDrag}
-                onStagePointerMove={moveWaveStageDrag}
-                onStagePointerUp={endWaveStageDrag}
-                onPickVideoSurface={(surfaceId) => {
-                  const output = snapshot().video.outputs.find((candidate) => candidate.id === surfaceId);
-                  if (output) {
-                    setEffectVideoPositionFromVideoOutput(output);
-                  }
-                }}
-                onOriginX={setWaveOriginX}
-                onOriginY={setWaveOriginY}
-                onOriginZ={setWaveOriginZ}
-                onDirectionX={setWaveDirectionX}
-                onDirectionY={setWaveDirectionY}
-                onDirectionZ={setWaveDirectionZ}
-                onSpeed={setWaveSpeed}
-                onWavelength={setWaveWavelength}
-              />
-              </Show>
-              <Show when={effectType() === "Color"}>
-                <ColorEffectEditorPanel
-                  stops={colorEffectStops()}
-                  algorithm={colorEffectAlgorithm()}
-                  interpolation={colorEffectInterpolation()}
-                  periodMs={effectPeriod()}
-                  bpm={snapshot().clock.bpm}
-                  clockSyncBeats={effectClockSyncBeats()}
-                  fixtureSpread={colorEffectFixtureSpread()}
-                  spatialPattern={colorEffectSpatialPattern()}
-                  onStops={setColorEffectStops}
-                  onAlgorithm={setColorEffectAlgorithm}
-                  onInterpolation={setColorEffectInterpolation}
-                  onPeriodMs={setEffectPeriod}
-                  onClockSyncBeats={setEffectClockSyncPreset}
-                  onFixtureSpread={setColorEffectFixtureSpread}
-                  onSpatialPattern={setColorEffectSpatialPattern}
-                />
-              </Show>
-              <Show when={effectType() === "Chaser"}>
-                <ChaserEffectEditorPanel
-                  steps={chaserSteps()}
-                  features={chaserFeatures()}
-                  fixtureOptions={snapshot().fixtures.map((fixture) => ({ id: fixture.id, label: fixture.label }))}
-                  attributeOptions={chaserAttributeOptions()}
-                  attributeCoverage={chaserAttributeCoverage()}
-                  currentTargetLabel={effectTargetSummary()}
-                  currentTargetSteps={chaserCurrentTargetSteps()}
-                  stepDurationMs={chaserStepDuration()}
-                  bpm={snapshot().clock.bpm}
-                  clockSyncBeats={effectClockSyncBeats()}
-                  direction={chaserDirection()}
-                  wings={chaserWings()}
-                  activeStepCount={chaserActiveStepCount()}
-                  dutyCycle={chaserDutyCycle()}
-                  overlap={chaserOverlap()}
-                  phase={effectPhase()}
-                  fixtureSpread={chaserFixtureSpread()}
-                  randomSeed={chaserRandomSeed()}
-                  error={currentChaserDraftError()}
-                  onSteps={setChaserSteps}
-                  onFeatures={setChaserFeatures}
-                  onStepDurationMs={setChaserStepDuration}
-                  onClockSyncBeats={setEffectClockSyncPreset}
-                  onDirection={setChaserDirection}
-                  onWings={setChaserWings}
-                  onActiveStepCount={setChaserActiveStepCount}
-                  onDutyCycle={setChaserDutyCycle}
-                  onOverlap={setChaserOverlap}
-                  onFixtureSpread={setChaserFixtureSpread}
-                  onRandomSeed={setChaserRandomSeed}
-                />
-              </Show>
-              <Show when={effectType() === "Move"}>
-                <div class="moveEffectRecipeBar" aria-label="Move path recipes">
-                  <span>Path recipe</span>
-                  <div class="moveEffectRecipeButtons" role="group" aria-label="Move path recipe presets">
-                    <For each={movePathRecipes}>
-                      {(recipe) => (
-                        <button
-                          type="button"
-                          class={movePathRecipe() === recipe ? "active" : ""}
-                          aria-pressed={movePathRecipe() === recipe}
-                          onClick={() => applyMovePathRecipe(recipe)}
-                        >
-                          {recipe}
-                        </button>
-                      )}
-                    </For>
-                  </div>
-                  <Show when={movePathRecipe() === "Custom"}>
-                    <small>Custom path loaded</small>
-                  </Show>
-                </div>
-                <Show when={currentMoveDraftError()}>
-                  {(error) => <p class="moveEffectDraftError" role="status">{error()}</p>}
-                </Show>
-                <MoveEffectEditorPanel
-                  points={movePathPoints()}
-                  closed={movePathClosed()}
-                  interpolation={moveInterpolation()}
-                  coordinateMode={moveCoordinateMode()}
-                  center={{ x: moveCenterX(), y: moveCenterY() }}
-                  size={{ x: moveSizeX(), y: moveSizeY() }}
-                  rotation={moveRotationDegrees()}
-                  periodMs={effectPeriod()}
-                  bpm={snapshot().clock.bpm}
-                  clockSyncBeats={effectClockSyncBeats()}
-                  direction={moveDirection()}
-                  phase={effectPhase()}
-                  spread={moveFixtureSpread()}
-                  onPoints={(points) => {
-                    setMovePathRecipe("Custom");
-                    setMovePathPoints(points);
-                  }}
-                  onClosed={(closed) => {
-                    setMovePathRecipe("Custom");
-                    setMovePathClosed(closed);
-                  }}
-                  onInterpolation={setMoveInterpolation}
-                  onCoordinateMode={setMoveCoordinateMode}
-                  onCenter={(center) => {
-                    setMoveCenterX(center.x);
-                    setMoveCenterY(center.y);
-                  }}
-                  onSize={(size) => {
-                    setMoveSizeX(size.x);
-                    setMoveSizeY(size.y);
-                  }}
-                  onRotation={setMoveRotationDegrees}
-                  onPeriodMs={setEffectPeriod}
-                  onClockSyncBeats={setEffectClockSyncPreset}
-                  onDirection={setMoveDirection}
-                  onPhase={setEffectPhase}
-                  onSpread={setMoveFixtureSpread}
-                />
-              </Show>
-              <Show when={effectType() === "Value"}>
-                <Show when={currentValueDraftError()}>
-                  {(error) => <p class="moveEffectDraftError" role="status">{error()}</p>}
-                </Show>
-                <ValueEffectEditorPanel
-                  points={valuePoints()}
-                  interpolation={valueInterpolation()}
-                  mode={valueMode()}
-                  direction={valueDirection()}
-                  periodMs={effectPeriod()}
-                  bpm={snapshot().clock.bpm}
-                  clockSyncBeats={effectClockSyncBeats()}
-                  phase={effectPhase()}
-                  spread={valueFixtureSpread()}
-                  onPoints={setValuePoints}
-                  onInterpolation={setValueInterpolation}
-                  onMode={setValueMode}
-                  onDirection={setValueDirection}
-                  onPeriodMs={setEffectPeriod}
-                  onClockSyncBeats={setEffectClockSyncPreset}
-                  onPhase={setEffectPhase}
-                  onSpread={setValueFixtureSpread}
-                />
-              </Show>
-              <Show when={effectType() === "Curve"}>
-                <Show when={currentCurveDraftError()}>
-                  {(error) => <p class="moveEffectDraftError" role="status">{error()}</p>}
-                </Show>
-                <CurveEffectEditorPanel
-                  points={curvePoints()}
-                  mode={curveMode()}
-                  direction={curveDirection()}
-                  periodMs={effectPeriod()}
-                  bpm={snapshot().clock.bpm}
-                  clockSyncBeats={effectClockSyncBeats()}
-                  phase={effectPhase()}
-                  spread={curveFixtureSpread()}
-                  onPoints={setCurvePoints}
-                  onMode={setCurveMode}
-                  onDirection={setCurveDirection}
-                  onPeriodMs={setEffectPeriod}
-                  onClockSyncBeats={setEffectClockSyncPreset}
-                  onPhase={setEffectPhase}
-                  onSpread={setCurveFixtureSpread}
-                />
-              </Show>
-              <Show when={effectType() === "Mapping"}>
-                <Show when={currentMappingDraftError()}>
-                  {(error) => <p class="moveEffectDraftError" role="status">{error()}</p>}
-                </Show>
-                <MappingEffectEditorPanel
-                  shape={effectShape()}
-                  mode={mappingMode()}
-                  direction={mappingDirection()}
-                  periodMs={effectPeriod()}
-                  bpm={snapshot().clock.bpm}
-                  clockSyncBeats={effectClockSyncBeats()}
-                  phase={effectPhase()}
-                  spread={mappingFixtureSpread()}
-                  repetitions={mappingRepetitions()}
-                  fixtures={mappingEffectOrderFixtures().map((fixture) => ({ id: fixture.id, label: fixture.label }))}
-                  orderEditable={effectTargetMode() === "selection"}
-                  onShape={setEffectShape}
-                  onMode={setMappingMode}
-                  onDirection={setMappingDirection}
-                  onPeriodMs={setEffectPeriod}
-                  onClockSyncBeats={setEffectClockSyncPreset}
-                  onPhase={setEffectPhase}
-                  onSpread={setMappingFixtureSpread}
-                  onRepetitions={setMappingRepetitions}
-                  onFixtureOrder={setSelectedMappingFixtureIds}
-                />
-              </Show>
-              <Show when={effectType() === "ColorMapping"}>
-                <Show when={currentColorMappingDraftError()}>
-                  {(error) => <p class="moveEffectDraftError" role="status">{error()}</p>}
-                </Show>
-                <ColorMappingEffectEditorPanel
-                  sourceKind={colorMappingSourceKind()}
-                  width={colorMappingWidth()}
-                  height={colorMappingHeight()}
-                  frames={colorMappingFrames()}
-                  cells={colorMappingCells()}
-                  fixtures={effectTargetFixtures().map((fixture) => ({ id: fixture.id, label: fixture.label, x: fixture.position.x, z: fixture.position.z }))}
-                  playbackDirection={colorMappingPlaybackDirection()}
-                  periodMs={effectPeriod()}
-                  bpm={snapshot().clock.bpm}
-                  clockSyncBeats={effectClockSyncBeats()}
-                  phase={effectPhase()}
-                  offsetU={colorMappingOffsetU()}
-                  offsetV={colorMappingOffsetV()}
-                  scaleU={colorMappingScaleU()}
-                  scaleV={colorMappingScaleV()}
-                  rotationDegrees={colorMappingRotationDegrees()}
-                  wrapMode={colorMappingWrapMode()}
-                  sampling={colorMappingSampling()}
-                  onRaster={(kind, width, height, frames) => {
-                    setColorMappingSourceKind(kind);
-                    setColorMappingWidth(width);
-                    setColorMappingHeight(height);
-                    setColorMappingFrames(frames);
-                  }}
-                  onCells={setColorMappingCells}
-                  onPlaybackDirection={setColorMappingPlaybackDirection}
-                  onPeriodMs={setEffectPeriod}
-                  onClockSyncBeats={setEffectClockSyncPreset}
-                  onPhase={setEffectPhase}
-                  onOffsetU={setColorMappingOffsetU}
-                  onOffsetV={setColorMappingOffsetV}
-                  onScaleU={setColorMappingScaleU}
-                  onScaleV={setColorMappingScaleV}
-                  onRotationDegrees={setColorMappingRotationDegrees}
-                  onWrapMode={setColorMappingWrapMode}
-                  onSampling={setColorMappingSampling}
-                />
-              </Show>
-            </div>
-            <EffectActionControlsPanel
-              showLightRange={effectTargetMode() !== "video" && effectType() !== "Color" && effectType() !== "ColorMapping" && effectType() !== "Chaser" && effectType() !== "Move"}
-              showPhase={effectType() !== "Move" && effectType() !== "Value" && effectType() !== "Curve" && effectType() !== "Mapping" && effectType() !== "ColorMapping"}
-              lockBlendMode={effectType() === "Move"}
-              low={effectLow()}
-              high={effectHigh()}
-              phase={effectPhase()}
-              blendMode={effectBlendMode()}
-              addDisabled={effectSubmitDisabled()}
-              submitLabel={editingEffectId() === null ? "Add Effect" : `Update Effect ${editingEffectId()}`}
-              editing={editingEffectId() !== null}
-              editingLabel={editingEffectSummary()?.label ?? null}
-              onLow={setEffectLow}
-              onHigh={setEffectHigh}
-              onPhase={setEffectPhase}
-              onBlendMode={setEffectBlendMode}
-              onSubmitEffect={updateEditingEffect}
-              onCancelEdit={cancelEffectEdit}
-            />
-            </section>
-            <section class="effectRackPane" aria-label="Live FX Rack">
-              <header class="effectPaneHeader">
-                <div>
-                  <strong>Live Rack</strong>
-                  <span>{effectRackSurface() === "stack" ? `${snapshot().effects.length} effects` : `${snapshot().node_graphs.length} graphs`}</span>
-                </div>
-                <nav class="effectRackTabs" aria-label="FX rack surface">
-                  <button class={effectRackSurface() === "stack" ? "active" : ""} aria-pressed={effectRackSurface() === "stack"} onClick={() => setEffectRackSurface("stack")}>Stack</button>
-                  <button class={effectRackSurface() === "graphs" ? "active" : ""} aria-pressed={effectRackSurface() === "graphs"} onClick={() => setEffectRackSurface("graphs")}>Graphs</button>
-                </nav>
-              </header>
-            <Show when={effectRackSurface() === "graphs"}>
-            <NodeGraphEditorPanel
-              graphCount={snapshot().node_graphs.length}
-              label={nodeGraphLabel()}
-              transformOp={nodeGraphTransformOp()}
-              transformAmount={nodeGraphTransformAmount()}
-              transformMin={nodeGraphTransformMin()}
-              transformMax={nodeGraphTransformMax()}
-              effectType={nodeGraphEffectType()}
-              sourceMode={nodeGraphSourceMode()}
-              audioBand={nodeGraphAudioBand()}
-              audioSource={nodeGraphAudioSource()}
-              audioFeature={nodeGraphAudioFeature()}
-              audioBandIndex={nodeGraphAudioBandIndex()}
-              audioGain={nodeGraphAudioGain()}
-              audioBias={nodeGraphAudioBias()}
-              audioGate={nodeGraphAudioGate()}
-              audioAttackMs={nodeGraphAudioAttackMs()}
-              audioReleaseMs={nodeGraphAudioReleaseMs()}
-              audioHoldMs={nodeGraphAudioHoldMs()}
-              audioCurve={nodeGraphAudioCurve()}
-              audioInvert={nodeGraphAudioInvert()}
-              sourceLabel={nodeGraphSourceLabel()}
-              sourceDetail={nodeGraphSourceDetail()}
-              transformLabel={nodeGraphTransformLabel()}
-              targetMode={effectTargetMode()}
-              canSave={!effectTargetOverrideError()}
-              saveError={effectTargetOverrideError()}
-              graphs={snapshot().node_graphs}
-              targetLabel={nodeGraphTargetLabel}
-              onLoadPreset={loadNodeGraphPreset}
-              onLabel={setNodeGraphLabel}
-              onSourceMode={setNodeGraphSourceMode}
-              onAudioBand={setNodeGraphAudioBand}
-              onAudioSource={setNodeGraphAudioSource}
-              onAudioFeature={setNodeGraphAudioFeature}
-              onAudioBandIndex={setNodeGraphAudioBandIndex}
-              onAudioGain={setNodeGraphAudioGain}
-              onAudioBias={setNodeGraphAudioBias}
-              onAudioGate={setNodeGraphAudioGate}
-              onAudioAttackMs={setNodeGraphAudioAttackMs}
-              onAudioReleaseMs={setNodeGraphAudioReleaseMs}
-              onAudioHoldMs={setNodeGraphAudioHoldMs}
-              onAudioCurve={setNodeGraphAudioCurve}
-              onAudioInvert={setNodeGraphAudioInvert}
-              onTransformOp={setNodeGraphTransformOp}
-              onTransformAmount={setNodeGraphTransformAmount}
-              onTransformMin={setNodeGraphTransformMin}
-              onTransformMax={setNodeGraphTransformMax}
-              onSaveGraph={saveNodeGraphFromForm}
-              onResetTransform={() => {
-                setNodeGraphTransformOp("Scale");
-                setNodeGraphTransformAmount(1);
-                setNodeGraphTransformMin(0);
-                setNodeGraphTransformMax(1);
-                setNodeGraphAudioGain(1);
-                setNodeGraphAudioBias(0);
-                setNodeGraphAudioGate(0);
-                setNodeGraphAudioAttackMs(20);
-                setNodeGraphAudioReleaseMs(180);
-                setNodeGraphAudioHoldMs(0);
-                setNodeGraphAudioCurve("Linear");
-                setNodeGraphAudioInvert(false);
-              }}
-              onSetGraphEnabled={setNodeGraphEnabled}
-              onSaveGraphPreset={saveNodeGraphPreset}
-              onRemoveGraph={removeNodeGraph}
-            />
-            </Show>
-            <Show when={effectRackSurface() === "stack"}>
-            <EffectListPanel
-              effects={snapshot().effects}
-              cueOwnedEffectCount={cueOwnedEffectCount()}
-              onMoveEffect={moveEffect}
-              onSetEnabled={setEffectEnabled}
-              onUseOutputPosition={setEffectVideoTargetsFromSelectedOutput}
-              onDuplicateEffect={duplicateEffect}
-              onUseAsDraft={useEffectAsDraft}
-              onSavePreset={saveEffectPreset}
-              onRemoveEffect={removeEffect}
-            />
-            </Show>
-            </section>
-            </div>
-          </div>
-          <DmxRawMonitor
-            previews={dmxPreviewOptions()}
-            activeUniverse={activeDmxPreviewUniverse()}
-            activeCount={nonZeroDmxCount()}
-            cells={dmxCells()}
-            onUniverseChange={setRawDmxUniverse}
-          >
-            <Show when={visibleFunctionControls().length > 0}>
-              <div class="dmxGdtfFunctionReadout">
-                <ChannelFunctionPanel
-                  categoryLabel={activeControlCategoryLabel()}
-                  entries={visibleFunctionControls()}
-                  currentValue={currentControlValue}
-                  clampDmxValue={clampDmxValue}
-                  functionContainsValue={channelFunctionContainsValue}
-                  functionBandStyle={channelFunctionBandStyle}
-                  functionLabel={channelFunctionLabel}
-                  functionRangeLabel={channelFunctionRangeLabel}
-                  functionDetail={channelFunctionDetail}
-                  functionSwatchColor={channelFunctionSwatchColor}
-                  onApplyFunction={(control, fn) => void applyChannelFunction(control, fn)}
-                />
-              </div>
-            </Show>
-          </DmxRawMonitor>
         </section>
         </Show>
         </MappingPersistentWorkspaceBand>
@@ -19017,6 +17955,31 @@ export default function App() {
             onStartFullDiscovery={startArtRdmFullDiscovery}
           />
           </div>
+          <DmxRawMonitor
+            previews={dmxPreviewOptions()}
+            activeUniverse={activeDmxPreviewUniverse()}
+            activeCount={nonZeroDmxCount()}
+            cells={dmxCells()}
+            onUniverseChange={setRawDmxUniverse}
+          >
+            <Show when={visibleFunctionControls().length > 0}>
+              <div class="dmxGdtfFunctionReadout">
+                <ChannelFunctionPanel
+                  categoryLabel={activeControlCategoryLabel()}
+                  entries={visibleFunctionControls()}
+                  currentValue={currentControlValue}
+                  clampDmxValue={clampDmxValue}
+                  functionContainsValue={channelFunctionContainsValue}
+                  functionBandStyle={channelFunctionBandStyle}
+                  functionLabel={channelFunctionLabel}
+                  functionRangeLabel={channelFunctionRangeLabel}
+                  functionDetail={channelFunctionDetail}
+                  functionSwatchColor={channelFunctionSwatchColor}
+                  onApplyFunction={(control, fn) => void applyChannelFunction(control, fn)}
+                />
+              </div>
+            </Show>
+          </DmxRawMonitor>
           <OutputDiagnosticsPanel
             protocolLabel={outputProtocolLabel(output().protocol)}
             testChannel={dmxTestChannel()}

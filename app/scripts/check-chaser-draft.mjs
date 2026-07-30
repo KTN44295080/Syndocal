@@ -124,38 +124,24 @@ assert.match(appSource, /"update_chaser_effect"/);
 assert.match(appSource, /effectTargetFixtures\(\)\.map\(\(fixture\) => fixture\.id\)/);
 assert.match(appSource, /chaserStepsFromTargets\([\s\S]*?\[\],[\s\S]*?false/);
 assert.match(appSource, /const chaserAttributeOptions = createMemo/);
-assert.match(appSource, /attributeCoverage=\{chaserAttributeCoverage\(\)\}/);
+assert.match(appSource, /attributeCoverage:\s*chaserAttributeCoverage\(\)/);
 assert.match(appSource, /prepareChaserDraftFromCurrentTarget = \(forceReset = false\)/);
 assert.match(appSource, /prepareChaserDraftFromCurrentTarget\(nextType !== previousType\)/);
 assert.match(appSource, /forceReset \? 1 : Math\.max\(1, Math\.min\(current, maxActiveSteps\)\)/);
 assert.match(componentSource, /chaserFeatureCoverage/);
-assert.match(appSource, /createMemo<"Lfo" \| "PositionWave">/);
-assert.match(
-  appSource,
-  /effectPresetFileTargetOverrideOptions[\s\S]*?deferLightAttributeValidation: true/,
-  "user preset target selection must defer attribute requirements until the preset type is known",
+const sceneSettingsSource = await readFile(
+  new URL("../src/components/SceneSettingsPane.tsx", import.meta.url),
+  "utf8",
 );
-assert.match(
-  appSource,
-  /effectTargetOverrideFromForm\(effectPresetFileTargetOverrideOptions\)/,
-  "mixed-fixture multi-feature Chaser files must reach backend type-aware validation",
-);
-assert.match(
-  appSource,
-  /disabled=\{Boolean\(effectTargetOverrideError\(effectPresetFileTargetOverrideOptions\)\)\}/,
-  "Load Target must not be disabled only because mixed fixtures have no common attribute",
-);
+assert.match(sceneSettingsSource, /data-scene-fx-chooser/);
+assert.match(sceneSettingsSource, /<ChaserEffectEditorPanel \{\.\.\.props\.editor\.chaser\} \/>/);
+assert.match(sceneSettingsSource, /data-scene-settings-effect-editor=\{props\.editor\.effectType\}/);
 
-const listSource = await readFile(new URL("../src/components/EffectListPanel.tsx", import.meta.url), "utf8");
-assert.match(listSource, /const effectsPerPage = 10/);
-assert.match(listSource, /<For each=\{visibleEffects\(\)\}>/);
-assert.match(listSource, /aria-rowcount=\{props\.effects\.length\}/);
-
-const samplePanelSource = await readFile(new URL("../src/components/SampleEffectPresetPanel.tsx", import.meta.url), "utf8");
+const tauriSource = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
 assert.match(
-  samplePanelSource,
-  /value: "chase",[\s\S]*?engine: "Chaser",[\s\S]*?requiresTarget: true/,
-  "Chase must require an explicit current target instead of offering a broken embedded target action",
+  tauriSource,
+  /sample_effect_requires_target[\s\S]*?"chase"/,
+  "the removed global sample library must not remove backend Chase target validation",
 );
 
 console.log("Chaser draft, fixture order, responsive preview, and DOM boundaries ok");

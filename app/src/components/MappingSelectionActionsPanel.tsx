@@ -28,8 +28,7 @@ type MappingSelectionActionsPanelProps = {
   onDuplicate: () => MaybePromise;
   onRemove: () => MaybePromise;
   onControlActive: () => void;
-  onUseSelectionAsEffectTarget: () => void;
-  onUseSelectionAsWaveEffectTarget: () => void;
+  onOpenSceneFx: () => void;
   onClearSelection: () => MaybePromise;
 };
 
@@ -74,16 +73,12 @@ export function MappingSelectionActionsPanel(props: MappingSelectionActionsPanel
           </button>
         </div>
         <div class="mappingEffectActions">
-          <button onClick={() => props.onUseSelectionAsEffectTarget()} disabled={!hasSelection()} title="Use picked fixtures as the Control/Edit effect target">
-            Use in Effects
-          </button>
           <button
             class="primary"
-            onClick={() => props.onUseSelectionAsWaveEffectTarget()}
-            disabled={!hasSelection()}
-            title="Open Control/Edit with a Position Wave draft for the picked fixtures"
+            onClick={() => props.onOpenSceneFx()}
+            title="Open the selected scene's FX surface"
           >
-            Wave Draft
+            Open Scene FX
           </button>
         </div>
         <div class="mappingNudgePanel">

@@ -24,11 +24,19 @@ const visualization = await importTypeScript(
   "effectVisualization.ts",
 );
 const chooser = await importTypeScript(
-  "../src/components/SampleEffectPresetPanel.tsx",
-  "SampleEffectPresetPanel.tsx",
+  "../src/components/EffectFamilyChooser.tsx",
+  "EffectFamilyChooser.tsx",
   { solid: true },
 );
 const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const sceneSettingsSource = await readFile(
+  new URL("../src/components/SceneSettingsPane.tsx", import.meta.url),
+  "utf8",
+);
+const tauriSource = await readFile(
+  new URL("../src-tauri/src/main.rs", import.meta.url),
+  "utf8",
+);
 const moveEditorSource = await readFile(
   new URL("../src/components/MoveEffectEditorPanel.tsx", import.meta.url),
   "utf8",
@@ -68,23 +76,15 @@ assert.equal(
   chooser.effectChooserFamilies.length,
   "every chooser family must be unique",
 );
-const initialPreset = appSource.match(
-  /createSignal<SampleEffectPreset>\("([^"]+)"\)/,
-)?.[1];
 const initialFamily = appSource.match(
   /createSignal<EffectRecipeFamily>\("([^"]+)"\)/,
 )?.[1];
-assert.ok(initialPreset, "App must declare an initial effect recipe");
 assert.ok(initialFamily, "App must declare an initial effect chooser family");
-assert.equal(
-  chooser.sampleEffectPresetOptions.find((option) => option.value === initialPreset)?.family,
-  initialFamily,
-  "the normal startup recipe must be visible in the initially selected family",
-);
+assert.equal(initialFamily, "CURVE FX", "the scene FX chooser must start on the Curve family");
 assert.match(
-  appSource,
-  /const useMappingSelectionAsWaveEffectTarget = \(\) => \{[\s\S]*?selectEffectType\("Mapping"\);[\s\S]*?setMappingFixtureSpread\(1\);[\s\S]*?setMappingRepetitions\(1\);[\s\S]*?\n  \};/,
-  "the 2D Mapping route must prepare the independent fixture-order Mapping draft",
+  sceneSettingsSource,
+  /data-scene-fx-chooser[\s\S]*?<EffectFamilyChooser/,
+  "the nine-family chooser must live on the Scene Settings FX surface",
 );
 
 const closeTo = (actual, expected, message, epsilon = 1e-10) => {
@@ -379,10 +379,10 @@ assert.match(
   /family === "CURVE FX"\s*\? "Curve"/,
   "the CURVE FX family must select the independent Curve kind",
 );
-assert.equal(
-  chooser.sampleEffectPresetOptions.find((option) => option.value === "curve")?.engine,
-  "Curve",
-  "the Curve Saw recipe must load the independent Curve body",
+assert.match(
+  tauriSource,
+  /"curve"\s*\|\s*"curve-saw"/,
+  "the backend Curve sample preset command must remain available after removing its global UI entry",
 );
 
 assert.match(
@@ -406,10 +406,10 @@ assert.match(
   "the MAPPINGS family must select the independent Mapping kind",
 );
 for (const preset of ["wave", "ball", "fan"]) {
-  assert.equal(
-    chooser.sampleEffectPresetOptions.find((option) => option.value === preset)?.engine,
-    "Mapping",
-    `${preset} must load the independent fixture-order Mapping body`,
+  assert.match(
+    tauriSource,
+    new RegExp(`"${preset}"`),
+    `${preset} must remain available in the backend sample preset command`,
   );
 }
 
@@ -418,10 +418,10 @@ assert.match(
   /family === "COLOUR MAPPINGS"[\s\S]*?\? "ColorMapping"/,
   "the COLOUR MAPPINGS family must select the independent ColorMapping kind",
 );
-assert.equal(
-  chooser.sampleEffectPresetOptions.find((option) => option.value === "colour-chase")?.engine,
-  "ColorMapping",
-  "the Colour Chase recipe must load the independent 2D ColorMapping body",
+assert.match(
+  tauriSource,
+  /"colour-chase"/,
+  "the Colour Chase backend sample preset must remain available",
 );
 assert.match(
   colorMappingEditorSource,

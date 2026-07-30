@@ -37,9 +37,8 @@ assert.equal(localization.translateUiText("0 percent", "ja"), "0パーセント"
 assert.equal(localization.translateUiText("Checking", "ja"), "確認中");
 assert.equal(localization.translateUiText("Clear Pending", "ja"), "クリア待ち");
 assert.equal(localization.translateUiText("Audio Reactive", "ja"), "オーディオリアクティブ");
-assert.equal(localization.translateUiText("Create Mapping", "ja"), "マッピングを作成");
 assert.equal(localization.translateUiText("Audio feature input level", "ja"), "音声特徴量の入力レベル");
-assert.equal(localization.translateUiText("Open Rack", "ja"), "ラックを開く");
+assert.equal(localization.translateUiText("Open Scene FX", "ja"), "シーンFXを開く");
 assert.equal(
   localization.translateUiText("Built-in FX for Program Texture (layer 12)", "ja"),
   "Program Texture（レイヤー12）の内蔵FX",
@@ -78,10 +77,6 @@ assert.equal(localization.translateUiText("Video output selection", "ja"), "映�
 assert.equal(localization.translateUiText("Live", "ja"), "ライブ");
 assert.equal(localization.translateUiText("BO", "ja"), "BO");
 assert.equal(localization.translateUiText("Off", "ja"), "OFF");
-assert.equal(
-  localization.translateUiText("Open Audio Reactive Rack", "ja"),
-  "オーディオリアクティブ・ラックを開く",
-);
 assert.equal(localization.translateUiText("SAFE ZERO", "ja"), "安全ゼロ");
 assert.equal(
   localization.translateUiText("System default audio input", "ja"),
@@ -546,7 +541,7 @@ const localeInvariantText = new Set([
   "COM3 or /dev/ttyUSB0", "Crop B", "Crop L", "Crop R", "Crop T", "ctl", "ctrl", "Cue #", "DECK A",
   "DECK B", "deg / Sat", "Dimmer@1:8, Pan@2:16, Tilt@4:16, ColorRed@6:8", "Dir X", "Dir Y", "Dir Z",
   "DMXKing ultraDMX", "e/", "Enttec Open DMX", "ENTTEC USB Pro", "fps", "front, bars",
-  "front, movers, floor", "FX", "SS", "GDTF", "GDTF Share", "GET", "Hi", "HL",
+  "front, movers, floor", "FX", "FX面", "FX面を表示", "SS", "GDTF", "GDTF Share", "GET", "Hi", "HL",
   "https://gdtf-share.com/.../fixture.gdtf", "Key H", "Key V", "Keystone H", "Keystone V", "Keystone X",
   "Keystone Y", "LFO", "LIVE LINK", "m /", "MID", "MIB targets (", "ms ·", "ms · max", "NACK reason 0x",
   "PID (hex)", "Port-Address",
@@ -559,7 +554,6 @@ const localizedDynamicTextAllow = new Set([
   "ChaserEffectEditorPanel.tsx:preset.label",
   "ColorEffectEditorPanel.tsx:preset.label",
   "CueCapturePreviewPanel.tsx:row.label",
-  "EffectSourceControlsPanel.tsx:preset.label",
   "MappingHotkeyHelp.tsx:group.label",
   "MappingProjectorControlsPanel.tsx:preset.label",
   "OpticsControlPanel.tsx:preset.label",

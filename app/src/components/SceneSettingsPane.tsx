@@ -1,11 +1,20 @@
 import { For, Show, type ComponentProps } from "solid-js";
+import { authoredCueLiveModifier } from "../cueLiveModifier";
 import type { CueMetadataDraft } from "../editorDrafts";
 import { cueIdentityCss } from "../identityColor";
 import { displayNumber } from "../numberDisplay";
-import type { CueSummary, EffectKind, EffectSummary } from "../types";
+import type {
+  CueLiveDirection,
+  CueLiveModifierSettings,
+  CueLiveModifierState,
+  CueSummary,
+  EffectKind,
+  EffectSummary,
+} from "../types";
 import { ChaserEffectEditorPanel } from "./ChaserEffectEditorPanel";
 import { ColorEffectEditorPanel } from "./ColorEffectEditorPanel";
 import { ColorMappingEffectEditorPanel } from "./ColorMappingEffectEditorPanel";
+import { CueLiveModifierStrip } from "./CueLiveModifierStrip";
 import { CurveEffectEditorPanel } from "./CurveEffectEditorPanel";
 import { EffectActionControlsPanel } from "./EffectActionControlsPanel";
 import { MappingEffectEditorPanel } from "./MappingEffectEditorPanel";
@@ -13,8 +22,10 @@ import { MoveEffectEditorPanel } from "./MoveEffectEditorPanel";
 import {
   EffectFamilyChooser,
   type EffectChooserFamily,
-} from "./SampleEffectPresetPanel";
+} from "./EffectFamilyChooser";
 import { ValueEffectEditorPanel } from "./ValueEffectEditorPanel";
+
+export type SceneSettingsSurface = "contents" | "fx" | "settings";
 
 export interface SceneEffectEditorModel {
   effectType: EffectKind;
@@ -38,10 +49,27 @@ interface SceneSettingsPaneProps {
   effects: EffectSummary[];
   selectedEffectId: number | null;
   activeFamily: EffectChooserFamily;
+  activeSurface: SceneSettingsSurface;
+  running: boolean;
+  liveStates?: CueLiveModifierState[];
   editor: SceneEffectEditorModel;
+  onSurface: (surface: SceneSettingsSurface) => void;
   onDraft: (patch: Partial<CueMetadataDraft>) => void;
   onSaveMetadata: () => void | Promise<void>;
   onSetColor: (color: string | null) => void | Promise<void>;
+  onSetLiveModifier: (
+    cueId: number,
+    speed: number,
+    size: number,
+    phase: number,
+    direction: CueLiveDirection,
+    segment: number,
+  ) => void | Promise<void>;
+  onClearLiveModifier: (cueId: number) => void | Promise<void>;
+  onSetLiveModifierDefaults: (
+    cueId: number,
+    settings: CueLiveModifierSettings | null,
+  ) => void | Promise<void>;
   onClose: () => void;
   onEditSource: () => void;
   onSelectEffect: (effectId: number) => void;
@@ -55,9 +83,30 @@ const optionalNumber = (value: string) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+const SurfaceIcon = (props: { surface: SceneSettingsSurface }) => (
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <Show when={props.surface === "contents"}>
+      <path d="M5 4.5h14v4H5zM5 10h14v4H5zM5 15.5h14v4H5z" />
+    </Show>
+    <Show when={props.surface === "fx"}>
+      <path d="m12 2 1.5 5.2L19 5.5l-3.3 4.6L21 12l-5.3 1.9 3.3 4.6-5.5-1.7L12 22l-1.5-5.2L5 18.5l3.3-4.6L3 12l5.3-1.9L5 5.5l5.5 1.7z" />
+    </Show>
+    <Show when={props.surface === "settings"}>
+      <path d="M4 6h10v2H4zm14-2h2v6h-2zM10 11h10v2H10zm-6-2h2v6H4zm0 8h10v2H4zm14-2h2v6h-2z" />
+    </Show>
+  </svg>
+);
+
 export function SceneSettingsPane(props: SceneSettingsPaneProps) {
   const selectedEffect = () =>
     props.effects.find((effect) => effect.id === props.selectedEffectId) ?? null;
+  const sceneKind = () => (props.effects.length > 0 ? "FX" : "STATIC");
+  const setFlashMode = (flash: boolean) => {
+    void props.onSetLiveModifierDefaults(props.cue.id, {
+      ...authoredCueLiveModifier(props.cue),
+      flash,
+    });
+  };
 
   return (
     <section
@@ -65,7 +114,8 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
       aria-label="Scene settings"
       data-scene-settings
       data-selected-scene-id={props.cue.id}
-      data-scene-settings-kind={props.effects.length > 0 ? "FX" : "STATIC"}
+      data-scene-settings-kind={sceneKind()}
+      data-scene-settings-surface={props.activeSurface}
       style={{
         "--cue-identity": cueIdentityCss(
           props.cue.id,
@@ -88,8 +138,8 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
           <span class="uiMicroLabel">Scene settings</span>
           <strong data-no-localize title={props.cue.label}>{props.cue.label}</strong>
         </div>
-        <span class={`sceneSettingsKind uiMicroLabel ${props.effects.length > 0 ? "fx" : "static"}`}>
-          {props.effects.length > 0 ? "FX" : "STATIC"}
+        <span class={`sceneSettingsKind uiMicroLabel ${sceneKind().toLowerCase()}`}>
+          {sceneKind()}
         </span>
         <button
           type="button"
@@ -110,220 +160,363 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
         </button>
       </header>
 
-      <div class="sceneSettingsScroller">
-        <Show
-          when={props.effects.length > 0}
-          fallback={
-            <>
-              <section class="sceneSettingsSection sceneStaticProperties" data-scene-static-properties>
+      <div class="sceneSettingsBody">
+        <div class="sceneSettingsScroller">
+          <Show when={props.activeSurface === "contents"}>
+            <section class="sceneSettingsSection sceneContentsSurface" data-scene-contents>
+              <header>
+                <strong class="uiMicroLabel">Scene properties</strong>
+                <span>{sceneKind() === "STATIC" ? "Static scene" : "FX scene"}</span>
+              </header>
+              <div class="sceneSettingsPropertyGrid">
+                <label class="sceneSettingsWideField">
+                  Label
+                  <input
+                    value={props.draft.label}
+                    onInput={(event) => props.onDraft({ label: event.currentTarget.value })}
+                  />
+                </label>
+                <label class="sceneIdentityColorField">
+                  Identity color
+                  <span>
+                    <input
+                      type="color"
+                      value={props.cue.color ?? "#6d7880"}
+                      aria-label="Scene identity color"
+                      onChange={(event) => void props.onSetColor(event.currentTarget.value)}
+                    />
+                    <button
+                      type="button"
+                      disabled={!props.cue.color}
+                      onClick={() => void props.onSetColor(null)}
+                    >
+                      Clear color
+                    </button>
+                  </span>
+                </label>
+                <label>
+                  Fade in / out (ms)
+                  <input
+                    type="number"
+                    class="tabularNums"
+                    data-scene-property="fade-ms"
+                    min="0"
+                    step="10"
+                    value={displayNumber(props.draft.fade_ms, 0)}
+                    onInput={(event) => props.onDraft({ fade_ms: Number(event.currentTarget.value) })}
+                    onBlur={(event) => {
+                      event.currentTarget.value = displayNumber(props.draft.fade_ms, 0);
+                    }}
+                  />
+                </label>
+                <label>
+                  Duration (beats)
+                  <input
+                    type="number"
+                    class="tabularNums"
+                    data-scene-property="authored-beats"
+                    min="0.25"
+                    max="1024"
+                    step="0.25"
+                    placeholder="Auto"
+                    value={displayNumber(props.draft.authored_beats, 3)}
+                    onInput={(event) => props.onDraft({
+                      authored_beats: optionalNumber(event.currentTarget.value),
+                    })}
+                    onBlur={(event) => {
+                      event.currentTarget.value = displayNumber(props.draft.authored_beats, 3);
+                    }}
+                  />
+                </label>
+                <label>
+                  Pre-wait (ms)
+                  <input
+                    type="number"
+                    class="tabularNums"
+                    data-scene-property="pre-wait-ms"
+                    min="0"
+                    step="10"
+                    value={displayNumber(props.draft.pre_wait_ms, 0)}
+                    onInput={(event) => props.onDraft({
+                      pre_wait_ms: Number(event.currentTarget.value),
+                    })}
+                    onBlur={(event) => {
+                      event.currentTarget.value = displayNumber(props.draft.pre_wait_ms, 0);
+                    }}
+                  />
+                </label>
+                <label>
+                  Follow (ms)
+                  <input
+                    type="number"
+                    class="tabularNums"
+                    data-scene-property="follow-ms"
+                    min="0"
+                    step="10"
+                    placeholder="No follow"
+                    value={displayNumber(props.draft.follow_ms, 0)}
+                    onInput={(event) => props.onDraft({
+                      follow_ms: optionalNumber(event.currentTarget.value),
+                    })}
+                    onBlur={(event) => {
+                      event.currentTarget.value = displayNumber(props.draft.follow_ms, 0);
+                    }}
+                  />
+                </label>
+              </div>
+              <button
+                type="button"
+                class="sceneSettingsSave"
+                data-save-scene-properties
+                onClick={() => void props.onSaveMetadata()}
+              >
+                Save scene properties
+              </button>
+            </section>
+            <Show when={props.running}>
+              <section
+                class="sceneSettingsSection sceneRuntimeControls"
+                data-scene-settings-live-controls
+              >
                 <header>
-                  <strong class="uiMicroLabel">Scene properties</strong>
-                  <span class="uiMicroLabel">Static scene</span>
+                  <strong class="uiMicroLabel">Runtime controls</strong>
+                  <span data-no-localize>LIVE</span>
                 </header>
-                <div class="sceneSettingsPropertyGrid">
-                  <label class="sceneSettingsWideField">
-                    Label
-                    <input
-                      value={props.draft.label}
-                      onInput={(event) => props.onDraft({ label: event.currentTarget.value })}
-                    />
-                  </label>
-                  <label class="sceneIdentityColorField">
-                    Identity color
-                    <span>
-                      <input
-                        type="color"
-                        value={props.cue.color ?? "#6d7880"}
-                        aria-label="Scene identity color"
-                        onChange={(event) => void props.onSetColor(event.currentTarget.value)}
-                      />
-                      <button
-                        type="button"
-                        disabled={!props.cue.color}
-                        onClick={() => void props.onSetColor(null)}
-                      >
-                        Clear color
-                      </button>
-                    </span>
-                  </label>
-                  <label>
-                    Fade in / out (ms)
-                    <input
-                      type="number"
-                      class="tabularNums"
-                      data-scene-property="fade-ms"
-                      min="0"
-                      step="10"
-                      value={displayNumber(props.draft.fade_ms, 0)}
-                      onInput={(event) => props.onDraft({ fade_ms: Number(event.currentTarget.value) })}
-                      onBlur={(event) => {
-                        event.currentTarget.value = displayNumber(props.draft.fade_ms, 0);
-                      }}
-                    />
-                  </label>
-                  <label>
-                    Duration (beats)
-                    <input
-                      type="number"
-                      class="tabularNums"
-                      data-scene-property="authored-beats"
-                      min="0.25"
-                      max="1024"
-                      step="0.25"
-                      placeholder="Auto"
-                      value={displayNumber(props.draft.authored_beats, 3)}
-                      onInput={(event) => props.onDraft({
-                        authored_beats: optionalNumber(event.currentTarget.value),
-                      })}
-                      onBlur={(event) => {
-                        event.currentTarget.value = displayNumber(props.draft.authored_beats, 3);
-                      }}
-                    />
-                  </label>
-                  <label>
-                    Pre-wait (ms)
-                    <input
-                      type="number"
-                      class="tabularNums"
-                      data-scene-property="pre-wait-ms"
-                      min="0"
-                      step="10"
-                      value={displayNumber(props.draft.pre_wait_ms, 0)}
-                      onInput={(event) => props.onDraft({
-                        pre_wait_ms: Number(event.currentTarget.value),
-                      })}
-                      onBlur={(event) => {
-                        event.currentTarget.value = displayNumber(props.draft.pre_wait_ms, 0);
-                      }}
-                    />
-                  </label>
-                  <label>
-                    Follow (ms)
-                    <input
-                      type="number"
-                      class="tabularNums"
-                      data-scene-property="follow-ms"
-                      min="0"
-                      step="10"
-                      placeholder="No follow"
-                      value={displayNumber(props.draft.follow_ms, 0)}
-                      onInput={(event) => props.onDraft({
-                        follow_ms: optionalNumber(event.currentTarget.value),
-                      })}
-                      onBlur={(event) => {
-                        event.currentTarget.value = displayNumber(props.draft.follow_ms, 0);
-                      }}
-                    />
-                  </label>
-                </div>
-                <button
-                  type="button"
-                  class="sceneSettingsSave"
-                  data-save-scene-properties
-                  onClick={() => void props.onSaveMetadata()}
-                >
-                  Save scene properties
-                </button>
-              </section>
-              <section class="sceneSettingsSection sceneFxChooserSection" data-scene-static-fx-chooser>
-                <header>
-                  <strong class="uiMicroLabel">Add FX</strong>
-                  <span>Select a family to create a cue-owned FX.</span>
-                </header>
-                <EffectFamilyChooser
-                  activeFamily={props.activeFamily}
-                  onSelectFamily={props.onSelectFamily}
+                <CueLiveModifierStrip
+                  cue={props.cue}
+                  liveStates={props.liveStates}
+                  onSetCueLiveModifier={props.onSetLiveModifier}
+                  onClearCueLiveModifier={props.onClearLiveModifier}
                 />
               </section>
-            </>
-          }
-        >
-          <section class="sceneSettingsSection sceneOwnedFxSection">
-            <header>
-              <strong class="uiMicroLabel">Cue-owned FX</strong>
-              <span>{props.effects.length} FX</span>
-            </header>
-            <nav class="sceneOwnedFxList" aria-label="Cue-owned FX list">
-              <For each={props.effects}>
-                {(effect, index) => (
-                  <button
-                    type="button"
-                    class={effect.id === props.selectedEffectId ? "active" : ""}
-                    aria-pressed={effect.id === props.selectedEffectId}
-                    data-scene-owned-effect={effect.id}
-                    onClick={() => props.onSelectEffect(effect.id)}
-                  >
-                    <span>{index() + 1}</span>
-                    <strong data-no-localize title={effect.label}>{effect.label}</strong>
-                    <small>{effect.effect_type}</small>
-                  </button>
-                )}
-              </For>
-            </nav>
-          </section>
-
-          <Show
-            when={selectedEffect()}
-            fallback={<p class="sceneSettingsEmpty">Select a cue-owned FX to edit it.</p>}
-          >
-            <section
-              class="sceneSettingsSection sceneFxEditor"
-              data-scene-settings-effect-editor={props.editor.effectType}
-            >
-              <header>
-                <strong class="uiMicroLabel">FX editor</strong>
-                <span>{props.editor.effectType}</span>
-              </header>
-              <Show
-                when={!["Color", "ColorMapping", "Chaser", "Move"].includes(props.editor.effectType)}
-              >
-                <label class="sceneSettingsAttribute">
-                  Attribute
-                  <select
-                    data-scene-property="effect-attribute"
-                    value={props.editor.attribute}
-                    disabled={props.editor.attributeOptions.length === 0}
-                    onInput={(event) => props.editor.onAttribute(event.currentTarget.value)}
-                  >
-                    <For each={props.editor.attributeOptions}>
-                      {(attribute) => <option value={attribute}>{attribute}</option>}
-                    </For>
-                  </select>
-                </label>
-              </Show>
-              <Show when={props.editor.effectType === "Color"}>
-                <ColorEffectEditorPanel {...props.editor.color} />
-              </Show>
-              <Show when={props.editor.effectType === "Chaser"}>
-                <ChaserEffectEditorPanel {...props.editor.chaser} />
-              </Show>
-              <Show when={props.editor.effectType === "Move"}>
-                <MoveEffectEditorPanel {...props.editor.move} />
-              </Show>
-              <Show when={props.editor.effectType === "Value"}>
-                <ValueEffectEditorPanel {...props.editor.value} />
-              </Show>
-              <Show when={props.editor.effectType === "Curve"}>
-                <CurveEffectEditorPanel {...props.editor.curve} />
-              </Show>
-              <Show when={props.editor.effectType === "Mapping"}>
-                <MappingEffectEditorPanel {...props.editor.mapping} />
-              </Show>
-              <Show when={props.editor.effectType === "ColorMapping"}>
-                <ColorMappingEffectEditorPanel {...props.editor.colorMapping} />
-              </Show>
-              <EffectActionControlsPanel {...props.editor.action} />
-            </section>
+            </Show>
           </Show>
 
-          <details class="sceneSettingsSection sceneAddFxDisclosure">
-            <summary>Add another FX</summary>
-            <EffectFamilyChooser
-              activeFamily={props.activeFamily}
-              onSelectFamily={props.onSelectFamily}
-            />
-          </details>
-        </Show>
+          <Show when={props.activeSurface === "fx"}>
+            <section class="sceneSettingsSection sceneFxChooserSection" data-scene-fx-chooser>
+              <header>
+                <strong class="uiMicroLabel">Add FX</strong>
+                <span>Select a family to create a cue-owned FX.</span>
+              </header>
+              <EffectFamilyChooser
+                activeFamily={props.activeFamily}
+                onSelectFamily={props.onSelectFamily}
+              />
+            </section>
+
+            <Show
+              when={props.effects.length > 0}
+              fallback={
+                <p class="sceneSettingsEmpty textPretty">
+                  Select an FX family above to add the first cue-owned FX.
+                </p>
+              }
+            >
+              <section class="sceneSettingsSection sceneOwnedFxSection">
+                <header>
+                  <strong class="uiMicroLabel">Cue-owned FX</strong>
+                  <span>{props.effects.length} FX</span>
+                </header>
+                <nav class="sceneOwnedFxList" aria-label="Cue-owned FX list">
+                  <For each={props.effects}>
+                    {(effect, index) => (
+                      <button
+                        type="button"
+                        class={effect.id === props.selectedEffectId ? "active" : ""}
+                        aria-pressed={effect.id === props.selectedEffectId}
+                        data-scene-owned-effect={effect.id}
+                        onClick={() => props.onSelectEffect(effect.id)}
+                      >
+                        <span>{index() + 1}</span>
+                        <strong data-no-localize title={effect.label}>{effect.label}</strong>
+                        <small>{effect.effect_type}</small>
+                      </button>
+                    )}
+                  </For>
+                </nav>
+              </section>
+
+              <Show
+                when={selectedEffect()}
+                fallback={<p class="sceneSettingsEmpty">Select a cue-owned FX to edit it.</p>}
+              >
+                <section
+                  class="sceneSettingsSection sceneFxEditor"
+                  data-scene-settings-effect-editor={props.editor.effectType}
+                >
+                  <header>
+                    <strong class="uiMicroLabel">FX editor</strong>
+                    <span>{props.editor.effectType}</span>
+                  </header>
+                  <Show
+                    when={!["Color", "ColorMapping", "Chaser", "Move"].includes(props.editor.effectType)}
+                  >
+                    <label class="sceneSettingsAttribute">
+                      Attribute
+                      <select
+                        data-scene-property="effect-attribute"
+                        value={props.editor.attribute}
+                        disabled={props.editor.attributeOptions.length === 0}
+                        onInput={(event) => props.editor.onAttribute(event.currentTarget.value)}
+                      >
+                        <For each={props.editor.attributeOptions}>
+                          {(attribute) => <option value={attribute}>{attribute}</option>}
+                        </For>
+                      </select>
+                    </label>
+                  </Show>
+                  <Show when={props.editor.effectType === "Color"}>
+                    <ColorEffectEditorPanel {...props.editor.color} />
+                  </Show>
+                  <Show when={props.editor.effectType === "Chaser"}>
+                    <ChaserEffectEditorPanel {...props.editor.chaser} />
+                  </Show>
+                  <Show when={props.editor.effectType === "Move"}>
+                    <MoveEffectEditorPanel {...props.editor.move} />
+                  </Show>
+                  <Show when={props.editor.effectType === "Value"}>
+                    <ValueEffectEditorPanel {...props.editor.value} />
+                  </Show>
+                  <Show when={props.editor.effectType === "Curve"}>
+                    <CurveEffectEditorPanel {...props.editor.curve} />
+                  </Show>
+                  <Show when={props.editor.effectType === "Mapping"}>
+                    <MappingEffectEditorPanel {...props.editor.mapping} />
+                  </Show>
+                  <Show when={props.editor.effectType === "ColorMapping"}>
+                    <ColorMappingEffectEditorPanel {...props.editor.colorMapping} />
+                  </Show>
+                  <EffectActionControlsPanel {...props.editor.action} />
+                </section>
+              </Show>
+            </Show>
+          </Show>
+
+          <Show when={props.activeSurface === "settings"}>
+            <section class="sceneSettingsSection sceneAdvancedSurface" data-scene-advanced-settings>
+              <header>
+                <strong class="uiMicroLabel">Advanced scene properties</strong>
+                <span>Existing Syndocal settings</span>
+              </header>
+              <div class="sceneAdvancedKind">
+                <span>Scene type</span>
+                <strong data-no-localize>{sceneKind()}</strong>
+                <small>
+                  Scene pin state is derived from cue-owned FX; Syndocal has no independent pin toggle.
+                </small>
+              </div>
+              <div class="sceneSettingsPropertyGrid">
+                <label>
+                  Cue number
+                  <input
+                    class="tabularNums"
+                    value={props.draft.cue_number}
+                    onInput={(event) => props.onDraft({ cue_number: event.currentTarget.value })}
+                  />
+                </label>
+                <label>
+                  Group
+                  <input
+                    value={props.draft.group_id ?? ""}
+                    onInput={(event) => props.onDraft({
+                      group_id: event.currentTarget.value.trim() || null,
+                    })}
+                  />
+                </label>
+                <label class="sceneSettingsWideField">
+                  Recall mode
+                  <select
+                    value={props.draft.recall_mode}
+                    onInput={(event) => props.onDraft({
+                      recall_mode: event.currentTarget.value as CueMetadataDraft["recall_mode"],
+                    })}
+                  >
+                    <option value="Coexist">Coexist</option>
+                    <option value="ReplaceGroup">Replace group</option>
+                  </select>
+                </label>
+              </div>
+              <div class="sceneAdvancedToggles">
+                <label class="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={props.draft.tracking}
+                    onChange={(event) => props.onDraft({ tracking: event.currentTarget.checked })}
+                  />
+                  Tracking
+                </label>
+                <label class="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={props.draft.mark}
+                    onChange={(event) => props.onDraft({ mark: event.currentTarget.checked })}
+                  />
+                  Mark
+                </label>
+                <label class="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={props.cue.live_modifiers?.flash ?? false}
+                    onChange={(event) => setFlashMode(event.currentTarget.checked)}
+                  />
+                  Flash mode
+                </label>
+              </div>
+              <label class="sceneSettingsNotes">
+                Notes
+                <textarea
+                  rows="4"
+                  value={props.draft.notes}
+                  onInput={(event) => props.onDraft({ notes: event.currentTarget.value })}
+                />
+              </label>
+              <button
+                type="button"
+                class="sceneSettingsSave"
+                data-save-scene-advanced
+                onClick={() => void props.onSaveMetadata()}
+              >
+                Save scene properties
+              </button>
+            </section>
+          </Show>
+        </div>
+
+        <nav class="sceneSettingsSurfaceRail" aria-label="シーン設定の表示切替">
+          <button
+            type="button"
+            classList={{ active: props.activeSurface === "contents" }}
+            aria-label="コンテンツ面を表示"
+            title="コンテンツ"
+            aria-pressed={props.activeSurface === "contents"}
+            data-scene-settings-surface-control="contents"
+            onClick={() => props.onSurface("contents")}
+          >
+            <SurfaceIcon surface="contents" />
+          </button>
+          <button
+            type="button"
+            classList={{ active: props.activeSurface === "fx" }}
+            aria-label="FX面を表示"
+            title="FX面"
+            aria-pressed={props.activeSurface === "fx"}
+            data-scene-settings-surface-control="fx"
+            onClick={() => props.onSurface("fx")}
+          >
+            <SurfaceIcon surface="fx" />
+          </button>
+          <button
+            type="button"
+            classList={{ active: props.activeSurface === "settings" }}
+            aria-label="設定面を表示"
+            title="設定"
+            aria-pressed={props.activeSurface === "settings"}
+            data-scene-settings-surface-control="settings"
+            onClick={() => props.onSurface("settings")}
+          >
+            <SurfaceIcon surface="settings" />
+          </button>
+        </nav>
       </div>
     </section>
   );

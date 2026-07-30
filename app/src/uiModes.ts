@@ -5,7 +5,7 @@ export type ControlMode = "edit" | "live" | "mixer";
 export type ControlCategory = "dimmer" | "color" | "position" | "gobo" | "beam" | "focus" | "other" | "fader";
 export type TimelineDeskSurface = "show" | "automation" | "playback";
 export type TimelineContextDrawer = "none" | "cue" | "block";
-export type EditDeskSurface = "attributes" | "effects" | "dmx";
+export type EditDeskSurface = "faders" | "attributes";
 
 export const setupAreas: { id: SetupArea; label: string; description: string; defaultTab: SetupSubTab }[] = [
   { id: "lighting", label: "Lighting", description: "Fixture library, profiles, and DMX patch", defaultTab: "patch" },

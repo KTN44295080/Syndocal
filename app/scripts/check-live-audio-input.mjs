@@ -186,12 +186,15 @@ assert.equal(requestGate.beginPoll(), 1, "polling must resume after the older re
 
 assert.ok(app.includes("stale: false"), "the frontend status default must be healthy/stopped");
 assert.ok(app.includes("safety_clear_pending: false"));
-assert.ok(app.includes("liveAudioNodeAvailability(liveAudioInputStatus(), liveAudioInputStatusKnown())"));
+assert.ok(
+  app.includes("get graphs() { return snapshot().node_graphs; }"),
+  "the compact Audio Reactive status strip must keep reading backend Node Graph state",
+);
 assert.ok(app.includes("const requestEpoch = liveAudioStatusRequests.beginPoll()"));
 assert.ok(app.includes("void refreshLiveAudioInputStatus();"), "status discovery must not depend on the stale frontend default");
 assert.ok(app.includes("{ backend: backendId, deviceId: deviceId || null, sampleRate }"));
 assert.ok(app.includes('"live_audio_input_backends"'));
-assert.ok(app.includes('{\n          backend: backendId,\n        }'));
+assert.match(app, /list_audio_input_devices[\s\S]*?backend:\s*backendId/);
 assert.ok(app.includes('backendId === "wasapi_shared"'));
 assert.ok(app.includes('backend: selectedLiveAudioInputBackend()'));
 assert.ok(app.includes('liveAudioInputSampleRate() === null || liveAudioInputBufferFrames() === null'));

@@ -54,7 +54,7 @@ const allowedTimelineDeskSurfaces: TimelineDeskSurface[] = ["show", "automation"
 // from a previous process would restore stale editing context. Only stable
 // drawers participate in workspace persistence.
 const allowedPersistedTimelineContextDrawers: TimelineContextDrawer[] = ["none", "cue"];
-const allowedEditDeskSurfaces: EditDeskSurface[] = ["attributes", "effects", "dmx"];
+const allowedEditDeskSurfaces: EditDeskSurface[] = ["faders", "attributes"];
 const allowedControlCategories: ControlCategory[] = [
   "dimmer",
   "color",

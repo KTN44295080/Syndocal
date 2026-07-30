@@ -79,8 +79,7 @@ export interface MappingSelectionPanelProps {
   onMirrorSelection: (axis: MappingAxis) => MaybePromise;
   onRotateSelection: (degrees: number) => MaybePromise;
   onControlActive: () => void;
-  onUseSelectionAsEffectTarget: () => void;
-  onUseSelectionAsWaveEffectTarget: () => void;
+  onOpenSceneFx: () => void;
   onSetFixtureTransform: (
     fixture: PatchedFixtureSummary,
     updates: Partial<Pick<PatchedFixtureSummary, "position" | "rotation">>,
@@ -219,8 +218,7 @@ export function MappingSetupContextPanel(props: MappingSelectionPanelProps) {
         onDuplicate={props.onDuplicateSelected}
         onRemove={props.onRemoveSelected}
         onControlActive={props.onControlActive}
-        onUseSelectionAsEffectTarget={props.onUseSelectionAsEffectTarget}
-        onUseSelectionAsWaveEffectTarget={props.onUseSelectionAsWaveEffectTarget}
+        onOpenSceneFx={props.onOpenSceneFx}
         onClearSelection={props.onClearSelection}
       />
       <MappingFixtureInspectorPanel
