@@ -2707,6 +2707,7 @@ export default function App() {
     __syndocalReadOperatorVjFixtureSnapshot?: () => EngineSnapshot;
     __syndocalReadEditLiveFixtureSnapshot?: () => EngineSnapshot;
     __syndocalReadEditLiveFixtureHistory?: () => ProjectHistoryStatus;
+    __syndocalCloneCueSnapshot?: () => void;
     __syndocalSetControlFixtureSelection?: (
       fixtureIds: number[],
       selectedFixtureId: number | null,
@@ -2735,6 +2736,19 @@ export default function App() {
   if (viewportFixture === "edit-live") {
     sceneBlockFixtureWindow.__syndocalReadEditLiveFixtureSnapshot = () => snapshot();
     sceneBlockFixtureWindow.__syndocalReadEditLiveFixtureHistory = () => projectHistoryStatus();
+  }
+  if (viewportFixture === "scene-matrix") {
+    sceneBlockFixtureWindow.__syndocalCloneCueSnapshot = () => {
+      setSnapshot((current) => ({
+        ...current,
+        cues: current.cues.map((cue) => ({
+          ...cue,
+          live_modifiers: cue.live_modifiers ? { ...cue.live_modifiers } : cue.live_modifiers,
+          steps: cue.steps?.map((step) => ({ ...step })),
+          effect_targets: cue.effect_targets.map((target) => ({ ...target })),
+        })),
+      }));
+    };
   }
   if (viewportFixture === "edit-live" || viewportFixture === "workspace-operator") {
     sceneBlockFixtureWindow.__syndocalSetControlFixtureSelection = (
@@ -2769,6 +2783,7 @@ export default function App() {
     delete sceneBlockFixtureWindow.__syndocalReadOperatorVjFixtureSnapshot;
     delete sceneBlockFixtureWindow.__syndocalReadEditLiveFixtureSnapshot;
     delete sceneBlockFixtureWindow.__syndocalReadEditLiveFixtureHistory;
+    delete sceneBlockFixtureWindow.__syndocalCloneCueSnapshot;
     delete sceneBlockFixtureWindow.__syndocalSetControlFixtureSelection;
   });
   let lastRecoverySignature = projectRecoveryCheckpoint()?.signature ?? null;

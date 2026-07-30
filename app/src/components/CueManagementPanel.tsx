@@ -1,4 +1,5 @@
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import { createStore, reconcile } from "solid-js/store";
 import type { CueMetadataDraft } from "../editorDrafts";
 import type {
   ActiveFadeSummary,
@@ -124,6 +125,13 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
   const [cuePage, setCuePage] = createSignal(0);
   const [cueEditing, setCueEditing] = createSignal(false);
   const [timelineDragCueId, setTimelineDragCueId] = createSignal<number | null>(null);
+  // Preserve cue-editor controls across snapshot polling. Solid's keyed <For>
+  // otherwise sees each deserialized Cue object as a replacement and remounts
+  // native selects/inputs while an operator is using them.
+  const [stableCues, setStableCues] = createStore<CueSummary[]>(props.cues);
+  createEffect(() => {
+    setStableCues(reconcile(props.cues, { key: "id" }));
+  });
   let timelineDragPointer: {
     cueId: number;
     pointerId: number;
@@ -132,10 +140,10 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
     moved: boolean;
   } | null = null;
   let cuePanelElement: HTMLDivElement | undefined;
-  const cuePageCount = createMemo(() => Math.max(1, Math.ceil(props.cues.length / cuesPerPage)));
+  const cuePageCount = createMemo(() => Math.max(1, Math.ceil(stableCues.length / cuesPerPage)));
   const visibleCues = createMemo(() => {
     const start = cuePage() * cuesPerPage;
-    return props.cues.slice(start, start + cuesPerPage);
+    return stableCues.slice(start, start + cuesPerPage);
   });
 
   createEffect(() => {
@@ -205,7 +213,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
   createEffect(() => {
     const revision = props.revealCueRevision;
     const revealCueId = props.revealCueId;
-    const cues = props.cues;
+    const cues = stableCues;
     if (revision === lastRevealRevision || revealCueId === null) return;
     const revealIndex = cues.findIndex((cue) => cue.id === revealCueId);
     if (revealIndex < 0) return;
@@ -229,7 +237,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
     if (revealPriorityActive && activeCueId === activeCueIdAtReveal) return;
     if (activeCueId !== activeCueIdAtReveal) revealPriorityActive = false;
     if (activeCueId === null || activeCueId === undefined) return;
-    const activeIndex = props.cues.findIndex((cue) => cue.id === activeCueId);
+    const activeIndex = stableCues.findIndex((cue) => cue.id === activeCueId);
     if (activeIndex >= 0) setCuePage(Math.floor(activeIndex / cuesPerPage));
   });
 
@@ -242,7 +250,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
       <div class="panelHeader">
         <h2>Cues</h2>
         <div class="cuePanelHeaderActions">
-          <span>{props.cues.length}</span>
+          <span>{stableCues.length}</span>
           <Show when={props.mode === "live"}>
             <button
               type="button"
@@ -377,10 +385,10 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
         onSelectFixture={props.onSelectFixture}
       />
       <div class="buttonRow">
-        <button onClick={() => void props.onTriggerPreviousCue()} disabled={props.cues.length === 0}>
+        <button onClick={() => void props.onTriggerPreviousCue()} disabled={stableCues.length === 0}>
           Back
         </button>
-        <button class="primary" onClick={() => void props.onTriggerNextCue()} disabled={props.cues.length === 0}>
+        <button class="primary" onClick={() => void props.onTriggerNextCue()} disabled={stableCues.length === 0}>
           GO
         </button>
         <button
@@ -408,7 +416,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
         </nav>
       </Show>
       <div id="cue-list-items" class="cueList" role="list">
-        <Show when={props.cues.length === 0}>
+        <Show when={stableCues.length === 0}>
           <p class="empty">
             {props.hasCueSources || props.cueEffectCaptureTargets.length > 0
               ? "No cues. Choose a scope, then Store Cue."
@@ -502,7 +510,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                 data-cue-id={cue.id}
                 role="listitem"
                 aria-posinset={cueIndex() + 1}
-                aria-setsize={props.cues.length}
+                aria-setsize={stableCues.length}
               >
                 <div class="cueMetaLine">
                   <div class="cueTitleRow">
@@ -982,7 +990,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                   <button class="cueEditOnly" onClick={() => void props.onMoveCue(cue.id, -1)} disabled={cueIndex() === 0}>
                     Up
                   </button>
-                  <button class="cueEditOnly" onClick={() => void props.onMoveCue(cue.id, 1)} disabled={cueIndex() === props.cues.length - 1}>
+                  <button class="cueEditOnly" onClick={() => void props.onMoveCue(cue.id, 1)} disabled={cueIndex() === stableCues.length - 1}>
                     Down
                   </button>
                   <button

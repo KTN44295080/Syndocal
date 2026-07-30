@@ -51,6 +51,11 @@ const fullLimitOverlay = {
 export function FixtureTypeAttributeColumns(props: FixtureTypeAttributeColumnsProps) {
   let animationFrame: number | null = null;
   const pendingWrites = new Map<string, () => void>();
+  const supportedGroups = createMemo(() =>
+    props.groups.filter((group) =>
+      fixtureTypeControlsForCategory(group, props.activeCategory).length > 0
+    )
+  );
 
   const scheduleWrite = (key: string, write: () => void) => {
     pendingWrites.set(key, write);
@@ -81,10 +86,10 @@ export function FixtureTypeAttributeColumns(props: FixtureTypeAttributeColumnsPr
         faderChannelBank: props.activeCategory === "fader",
       }}
       aria-label="Fixture type columns"
-      data-fixture-type-column-count={props.groups.length}
+      data-fixture-type-column-count={supportedGroups().length}
       data-fader-view-channel-bank={props.activeCategory === "fader" ? "true" : undefined}
     >
-      <For each={props.groups}>
+      <For each={supportedGroups()}>
         {(group) => {
           const referenceFixture = () => group.fixtures[0];
           const categoryControls = createMemo(() =>
@@ -185,7 +190,7 @@ export function FixtureTypeAttributeColumns(props: FixtureTypeAttributeColumnsPr
               data-fixture-type-column={group.key}
               data-fixture-type-count={group.fixtures.length}
               data-fixture-type-category={props.activeCategory}
-              data-fixture-type-supported={categoryControls().length > 0 ? "true" : "false"}
+              data-fixture-type-supported="true"
               style={
                 props.activeCategory === "fader" ||
                 !["dimmer", "color", "position"].includes(props.activeCategory)
@@ -385,15 +390,6 @@ export function FixtureTypeAttributeColumns(props: FixtureTypeAttributeColumnsPr
                     </div>
                   </Match>
                 </Switch>
-                <Show when={categoryControls().length === 0}>
-                  <div
-                    class="fixtureTypeUnsupported"
-                    data-fixture-type-primary-control="unsupported"
-                  >
-                    <strong>Unsupported</strong>
-                    <span>Not supported by this fixture type.</span>
-                  </div>
-                </Show>
               </div>
             </article>
           );

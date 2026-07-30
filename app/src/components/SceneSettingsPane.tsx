@@ -280,6 +280,7 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
                 <label class="sceneSettingsAttribute">
                   Attribute
                   <select
+                    data-scene-property="effect-attribute"
                     value={props.editor.attribute}
                     disabled={props.editor.attributeOptions.length === 0}
                     onInput={(event) => props.editor.onAttribute(event.currentTarget.value)}

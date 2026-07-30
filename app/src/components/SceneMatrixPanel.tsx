@@ -1,4 +1,5 @@
-import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createStore, reconcile } from "solid-js/store";
 import { cueIdentityCss, groupIdentityCss, groupIdentityHue } from "../identityColor";
 import { displayNumber } from "../numberDisplay";
 import type {
@@ -73,18 +74,31 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
   } | null = null;
   let suppressClickCueId: number | null = null;
 
-  const columns = createMemo<SceneMatrixColumn[]>(() => {
+  // Engine snapshots deserialize every Cue into a fresh object. Keep the
+  // rendered Cue objects keyed by id so a polling-only snapshot cannot remount
+  // an active card and dismiss its native select/input interaction.
+  const [stableCues, setStableCues] = createStore<CueSummary[]>(props.cues);
+  createEffect(() => {
+    setStableCues(reconcile(props.cues, { key: "id" }));
+  });
+
+  const calculatedColumns = createMemo<SceneMatrixColumn[]>(() => {
     const groupSet = new Set(props.groupIds);
     const groupColumns = props.groupIds.map((groupId) => ({
       id: groupId,
       label: groupId,
-      cues: props.cues.filter((cue) => cue.group_id === groupId),
+      cues: stableCues.filter((cue) => cue.group_id === groupId),
     }));
-    const showCues = props.cues.filter((cue) => !cue.group_id || !groupSet.has(cue.group_id));
+    const showCues = stableCues.filter((cue) => !cue.group_id || !groupSet.has(cue.group_id));
     return showCues.length > 0
       ? [...groupColumns, { id: null, label: "Show", cues: showCues }]
       : groupColumns;
   });
+  const [stableColumns, setStableColumns] = createStore<SceneMatrixColumn[]>([]);
+  createEffect(() => {
+    setStableColumns(reconcile(calculatedColumns(), { key: "id" }));
+  });
+  const columns = () => stableColumns;
 
   const syncVisibleBank = () => {
     if (!scrollerElement) return;
@@ -297,7 +311,7 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
         }}
         onScroll={syncVisibleBank}
       >
-        <Show when={props.cues.length > 0} fallback={
+        <Show when={stableCues.length > 0} fallback={
           <div class="sceneMatrixEmptyAction">
             <strong>No scenes yet.</strong>
             <button

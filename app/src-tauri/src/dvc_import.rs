@@ -856,7 +856,10 @@ fn parse_scenes(
                 group_id: Some(bank_name.clone()),
                 fade_ms: fade_in,
                 notes: notes.join(" | "),
-                color: scene.attribute("COLOR").and_then(dvc_argb_to_rgb),
+                // Daslight presents scene titles with their bank identity.
+                // Leaving the Cue color empty preserves Syndocal's existing
+                // cue > bank > hash priority and lets imported scenes inherit.
+                color: None,
                 effect_targets: parsed_effects.targets,
                 ..CueSummary::default()
             };
@@ -3541,6 +3544,8 @@ mod tests {
         assert_eq!(outcome.project.snapshot.fixtures[0].address, 1);
         assert_eq!(outcome.project.snapshot.group_colors["Bank 1"], "#112233");
         assert_eq!(outcome.project.snapshot.cues.len(), 2);
+        assert!(outcome.project.snapshot.cues[0].color.is_none());
+        assert!(outcome.project.snapshot.cues[1].color.is_none());
         assert_eq!(
             outcome.project.snapshot.cues[0].targets[0].values[0].value,
             65_535

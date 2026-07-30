@@ -1093,7 +1093,6 @@ const japaneseText: Record<string, string> = {
   "No target": "対象なし",
   "No scene selected": "シーン未選択",
   "No written values": "書込値なし",
-  "Not supported by this fixture type.": "この灯体タイプでは未対応です。",
   "Open color picker": "Colorピッカーを開く",
   "Picked fixtures": "選択灯体",
   "Select only this fixture type": "この灯体タイプだけを選択",

@@ -10193,6 +10193,9 @@ async function measureSceneMatrixPane(client) {
     const paneRect = pane?.getBoundingClientRect() ?? null;
     const liveRect = livePanel?.getBoundingClientRect() ?? null;
     const statusRect = status?.getBoundingClientRect() ?? null;
+    const bankJumpStripRect = bankJumpStrip?.getBoundingClientRect() ?? null;
+    const firstColumnRect = columns[0]?.getBoundingClientRect() ?? null;
+    const firstColumnHeaderRect = headers[0]?.getBoundingClientRect() ?? null;
     const overlapArea = paneRect && statusRect
       ? Math.max(0, Math.min(paneRect.right, statusRect.right) - Math.max(paneRect.left, statusRect.left)) *
         Math.max(0, Math.min(paneRect.bottom, statusRect.bottom) - Math.max(paneRect.top, statusRect.top))
@@ -10239,6 +10242,12 @@ async function measureSceneMatrixPane(client) {
       bankJumpOneLine: bankJumpButtons.length > 0 &&
         new Set(bankJumpButtons.map((button) => Math.round(button.getBoundingClientRect().top))).size === 1,
       bankJumpStripHeight: bankJumpStrip?.getBoundingClientRect().height ?? 0,
+      bankJumpToColumnTopGap: bankJumpStripRect && firstColumnRect
+        ? firstColumnRect.top - bankJumpStripRect.bottom
+        : Number.POSITIVE_INFINITY,
+      bankJumpToColumnHeaderTop: bankJumpStripRect && firstColumnHeaderRect
+        ? firstColumnHeaderRect.top - bankJumpStripRect.top
+        : Number.POSITIVE_INFINITY,
       bankJumpIdentityTextMatchesColumns: bankJumpButtons.every((button) => {
         const columnId = button.getAttribute('data-scene-matrix-bank-jump') ?? '';
         return button.style.getPropertyValue('--group-identity-text') ===
@@ -11643,6 +11652,11 @@ async function runSceneMatrixPaneCheck(client, viewport) {
       && before.bankJumpStripHeight > 0
       && before.bankJumpStripHeight <= 30
       && before.bankJumpIdentityTextMatchesColumns],
+    ["matrixBankChipRowEndsWithinThirtySixPixelsOfColumnHeaders", () =>
+      before.bankJumpToColumnTopGap >= 0
+      && before.bankJumpToColumnTopGap <= 4
+      && before.bankJumpToColumnHeaderTop > before.bankJumpStripHeight
+      && before.bankJumpToColumnHeaderTop <= 36.5],
     ["matrixBankChipClickBringsColumnLeadingEdgeIntoViewAndActivatesIt", () =>
       bankJump.available
       && Math.abs(bankJump.beforeScrollLeft) <= 1
@@ -16270,6 +16284,107 @@ async function setSceneLiveModifierSelect(client, cueId, control, value) {
   );
 }
 
+async function exerciseSceneSnapshotControlStability(client, cueId) {
+  await evaluatePageFunction(client, () => {
+    document.querySelector('[data-scene-matrix-edit-strip="301"]')?.click();
+  });
+  await waitForClientCondition(
+    client,
+    "document.querySelector('[data-scene-property=\"follow-ms\"]')",
+    "static Scene settings Follow input",
+  );
+
+  const initialized = await evaluatePageFunction(client, (cueId) => {
+    const direction = document.querySelector(`[data-cue-live-modifier-direction="${cueId}"]`);
+    const segment = document.querySelector(`[data-cue-live-modifier-segment="${cueId}"]`);
+    const follow = document.querySelector('[data-scene-property="follow-ms"]');
+    window.__syndocalSnapshotControlProbe = { direction, segment, follow };
+    direction?.focus();
+    return {
+      cloneAvailable: typeof window.__syndocalCloneCueSnapshot === "function",
+      directionPresent: direction instanceof HTMLSelectElement,
+      segmentPresent: segment instanceof HTMLSelectElement,
+      followPresent: follow instanceof HTMLInputElement,
+      directionFocused: document.activeElement === direction,
+    };
+  }, cueId);
+
+  await client.evaluate("window.__syndocalCloneCueSnapshot?.()");
+  await sleep(64);
+  const directionAfterClone = await evaluatePageFunction(client, (cueId) => {
+    const probe = window.__syndocalSnapshotControlProbe;
+    const current = document.querySelector(`[data-cue-live-modifier-direction="${cueId}"]`);
+    const sameNode = Boolean(probe?.direction?.isSameNode(current));
+    const focused = document.activeElement === current;
+    probe?.segment?.focus();
+    return {
+      sameNode,
+      focused,
+      segmentFocusedForNextClone: document.activeElement === probe?.segment,
+    };
+  }, cueId);
+
+  await client.evaluate("window.__syndocalCloneCueSnapshot?.()");
+  await sleep(64);
+  const segmentAfterClone = await evaluatePageFunction(client, (cueId) => {
+    const probe = window.__syndocalSnapshotControlProbe;
+    const direction = document.querySelector(`[data-cue-live-modifier-direction="${cueId}"]`);
+    const segment = document.querySelector(`[data-cue-live-modifier-segment="${cueId}"]`);
+    const sameNode = Boolean(probe?.segment?.isSameNode(segment));
+    const focused = document.activeElement === segment;
+    if (direction instanceof HTMLSelectElement) {
+      direction.value = "Reverse";
+      direction.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    if (segment instanceof HTMLSelectElement) {
+      segment.value = "2";
+      segment.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    return { sameNode, focused };
+  }, cueId);
+  await sleep(64);
+
+  const optionSelectionAfterClone = await evaluatePageFunction(client, (cueId) => {
+    const probe = window.__syndocalSnapshotControlProbe;
+    const direction = document.querySelector(`[data-cue-live-modifier-direction="${cueId}"]`);
+    const segment = document.querySelector(`[data-cue-live-modifier-segment="${cueId}"]`);
+    probe?.follow?.focus();
+    return {
+      directionSameNode: Boolean(probe?.direction?.isSameNode(direction)),
+      segmentSameNode: Boolean(probe?.segment?.isSameNode(segment)),
+      directionValue: direction instanceof HTMLSelectElement ? direction.value : null,
+      segmentValue: segment instanceof HTMLSelectElement ? segment.value : null,
+      followFocusedForNextClone: document.activeElement === probe?.follow,
+    };
+  }, cueId);
+
+  await client.evaluate("window.__syndocalCloneCueSnapshot?.()");
+  await sleep(64);
+  const followAfterClone = await evaluatePageFunction(client, () => {
+    const probe = window.__syndocalSnapshotControlProbe;
+    const current = document.querySelector('[data-scene-property="follow-ms"]');
+    return {
+      sameNode: Boolean(probe?.follow?.isSameNode(current)),
+      focused: document.activeElement === current,
+    };
+  });
+
+  await evaluatePageFunction(client, (cueId) => {
+    document.querySelector(`[data-cue-live-modifier-reset="${cueId}"]`)?.click();
+    delete window.__syndocalSnapshotControlProbe;
+  }, cueId);
+  await sleep(64);
+
+  return {
+    initialized,
+    directionAfterClone,
+    segmentAfterClone,
+    optionSelectionAfterClone,
+    followAfterClone,
+    cloneCount: 3,
+  };
+}
+
 async function dispatchFlashPointer(client, selector, press) {
   const center = await evaluatePageFunction(
     client,
@@ -16357,6 +16472,46 @@ async function runSceneLiveModifierViewport(client, viewport) {
   if (authored.resetDisabled !== true) failed.push("reset-enabled-at-authored");
   if (authored.matrixFlashCells < 1) failed.push("no-matrix-flash-cell");
 
+  const snapshotControlStability = await exerciseSceneSnapshotControlStability(client, 303);
+  if (!snapshotControlStability.initialized.cloneAvailable) {
+    failed.push("snapshot-clone-bridge-unavailable");
+  }
+  if (
+    !snapshotControlStability.initialized.directionPresent ||
+    !snapshotControlStability.initialized.segmentPresent ||
+    !snapshotControlStability.initialized.followPresent ||
+    !snapshotControlStability.initialized.directionFocused
+  ) {
+    failed.push(`stable-controls-initial=${JSON.stringify(snapshotControlStability.initialized)}`);
+  }
+  if (
+    !snapshotControlStability.directionAfterClone.sameNode ||
+    !snapshotControlStability.directionAfterClone.focused ||
+    !snapshotControlStability.directionAfterClone.segmentFocusedForNextClone
+  ) {
+    failed.push(`direction-remounted=${JSON.stringify(snapshotControlStability.directionAfterClone)}`);
+  }
+  if (
+    !snapshotControlStability.segmentAfterClone.sameNode ||
+    !snapshotControlStability.segmentAfterClone.focused
+  ) {
+    failed.push(`segment-remounted=${JSON.stringify(snapshotControlStability.segmentAfterClone)}`);
+  }
+  if (
+    !snapshotControlStability.optionSelectionAfterClone.directionSameNode ||
+    !snapshotControlStability.optionSelectionAfterClone.segmentSameNode ||
+    snapshotControlStability.optionSelectionAfterClone.directionValue !== "Reverse" ||
+    snapshotControlStability.optionSelectionAfterClone.segmentValue !== "2" ||
+    !snapshotControlStability.optionSelectionAfterClone.followFocusedForNextClone
+  ) {
+    failed.push(`post-clone-selection=${JSON.stringify(snapshotControlStability.optionSelectionAfterClone)}`);
+  }
+  if (
+    !snapshotControlStability.followAfterClone.sameNode ||
+    !snapshotControlStability.followAfterClone.focused
+  ) {
+    failed.push(`follow-input-remounted=${JSON.stringify(snapshotControlStability.followAfterClone)}`);
+  }
   await setSceneLiveModifierSlider(client, 303, "speed", 3);
   await sleep(48);
   const latched = await readSceneLiveModifierState(client, 303);
@@ -16460,6 +16615,7 @@ async function runSceneLiveModifierViewport(client, viewport) {
     reactivated,
     flash: { down: flashDown.activeCardIds, up: flashUp.activeCardIds },
     touchFlash: { down: touchDown.touchActivePadIds, up: touchUp.touchActivePadIds },
+    snapshotControlStability,
   };
 }
 
@@ -16872,6 +17028,9 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
     const primaryControls = columns
       .map((column) => column.querySelector('[data-fixture-type-primary-control]'))
       .filter(visible);
+    const unsupportedPlaceholders = grid
+      ? [...grid.querySelectorAll('.fixtureTypeUnsupported, [data-fixture-type-primary-control="unsupported"]')]
+      : [];
     const offButtons = columns.map((column) => column.querySelector('.fixtureTypeOffButton')).filter(visible);
     const faders = columns.map((column) => column.querySelector('.fixtureTypeVerticalFader')).filter(visible);
     const trimButtons = columns.flatMap((column) =>
@@ -17012,6 +17171,9 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
       typeKeys: columns.map((column) => column.getAttribute('data-fixture-type-column') || ''),
       fixtureCounts: columns.map((column) => Number(column.getAttribute('data-fixture-type-count') || 0)),
       supportedStates: columns.map((column) => column.getAttribute('data-fixture-type-supported') || ''),
+      unsupportedPlaceholderCount: unsupportedPlaceholders.length,
+      unsupportedPlaceholderText: unsupportedPlaceholders
+        .map((placeholder) => (placeholder.textContent || '').replace(/\s+/g, ' ').trim()),
       headerCount: headers.length,
       headerLabels: headers.map((header) => (header.querySelector('strong')?.textContent || '').trim()),
       headerMinimumHeight: headers.length > 0 ? Math.min(...headers.map((header) => header.getBoundingClientRect().height)) : 0,
@@ -17280,6 +17442,16 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
   const genericCategoryStates = ["Gobo", "Beam", "Focus", "Other"].map(
     (category) => multipleCategoryStates[category]
   );
+  const expectedSupportedTypeColumnCounts = {
+    Dimmer: 3,
+    Color: 2,
+    Position: 2,
+    Gobo: 2,
+    Beam: 3,
+    Focus: 2,
+    Other: 2,
+    Fader: 3,
+  };
   const customFaderStates = [
     ...Object.values(multipleCategoryStates),
     ...Object.values(singleCategoryStates),
@@ -17303,6 +17475,16 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
     ["dimmerCategoryHasTrimPerType", () => multiple.trimButtonCount === multiple.columnCount * 2],
     ["typeColumnControlsMeetTargetFloor", () => multiple.headerMinimumHeight >= 40 && multiple.offButtonMinimumHeight >= 40 && multiple.faderMinimumWidth >= 40 && multiple.trimButtonMinimumHeight >= 40],
     ["allTypeColumnsSupportDimmerFixture", () => multiple.supportedStates.every((state) => state === "true")],
+    ["unsupportedFixtureTypeColumnsAreHiddenPerCategory", () =>
+      Object.entries(expectedSupportedTypeColumnCounts).every(([category, expectedCount]) => {
+        const state = multipleCategoryStates[category];
+        return state.columnCount === expectedCount
+          && state.primaryControlCount === expectedCount
+          && state.supportedStates.every((supported) => supported === "true")
+          && state.unsupportedPlaceholderCount === 0
+          && state.unsupportedPlaceholderText.length === 0;
+      })
+    ],
     ["multipleSelectionSummaryVisible", () => multiple.selectionSummaryKind.includes("selection") && multiple.selectionSummary.includes("41 fixtures") && multiple.selectionSummary.includes("3 fixture types")],
     ["legacyEditorHiddenForMultipleSelection", () => multiple.legacyFaderGridCount === 0 && multiple.legacyDimmerPanelCount === 0],
     ["categoryRailPreservedForMultipleSelection", () => multiple.categoryRailButtonCount === 8 && multiple.activeCategoryLabel.includes("Dimmer")],
@@ -17413,7 +17595,7 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
     ["genericCategoriesUseVerticalFaderBanks", () =>
       genericCategoryStates.every((state) =>
         state.categoryBankFaderCount > 0 &&
-        state.primaryControlKinds.every((kind) => ["vertical-fader-bank", "unsupported"].includes(kind))
+        state.primaryControlKinds.every((kind) => kind === "vertical-fader-bank")
       )
     ],
     ["typeColumnsHaveNoRepresentativeHorizontalSliders", () =>
@@ -18809,6 +18991,10 @@ async function main() {
             `keyboard=${result.keyboardProbe.valueChanged}/${result.keyboardProbe.focusVisible}/${result.keyboardProbe.ariaPreserved} ` +
             `dmx=${result.dmxFunctionReadout.panelCount} ` +
             `position=${result.multipleCategoryStates.Position.fixtureTypePositionPadCount}/${result.multipleCategoryStates.Position.positionExtraFaderCount} ` +
+            `supported=${Object.entries(result.multipleCategoryStates)
+              .map(([category, state]) => `${category}:${state.columnCount}`)
+              .join("+")} unsupported=${Object.values(result.multipleCategoryStates)
+              .reduce((sum, state) => sum + state.unsupportedPlaceholderCount, 0)} ` +
             `single=${result.single.legacyFaderGridCount}/${result.single.legacyDimmerPanelCount} ` +
             `scroll=${result.multiple.documentAndAppScrollZero && result.single.documentAndAppScrollZero ? "zero" : "overflow"} ` +
             `failed=${JSON.stringify(result.failedChecks)}`,
@@ -18939,6 +19125,10 @@ async function main() {
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
             `labels=${result.authored.labels.join("/")} reset=${result.authored.resetLabel} ` +
             `authored=${result.authored.readouts.join("/")} latch=${result.latched.readouts[0]} ` +
+            `stable=${result.snapshotControlStability.cloneCount}clones:` +
+              `${result.snapshotControlStability.directionAfterClone.sameNode}/` +
+              `${result.snapshotControlStability.segmentAfterClone.sameNode}/` +
+              `${result.snapshotControlStability.followAfterClone.sameNode} ` +
             `toggleRelease=${result.released.activeCardIds.join("+") || "none"}/${result.released.stripCueId ?? "none"} ` +
             `reactivated=${result.reactivated.override} ` +
             `flash=${result.flash.down.join("+") || "none"}->${result.flash.up.join("+") || "none"} ` +
@@ -19294,6 +19484,8 @@ async function main() {
             `bankJump=${result.bankJump.targetId ?? "?"}@` +
               `${Math.round((result.bankJump.afterScrollLeft ?? 0) * 100) / 100}px:` +
               `${result.bankJump.leadingEdgeVisible ? "visible" : "hidden"} ` +
+            `matrixTop=${Math.round(result.before.bankJumpToColumnHeaderTop * 100) / 100}px ` +
+              `gap=${Math.round(result.before.bankJumpToColumnTopGap * 100) / 100}px ` +
             `inherit=${result.before.cardIdentityById["302"]?.fill === result.before.columnIdentityById.front?.fill}/` +
               `${result.before.cardIdentityById["301"]?.fill !== result.before.columnIdentityById.front?.fill} ` +
             `longNames=${JSON.stringify(result.before.longSceneNames.map((entry) => ({
