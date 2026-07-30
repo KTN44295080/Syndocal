@@ -16115,35 +16115,76 @@ export default function App() {
             </Show>
           </div>
           <div class="liveTransportGrid" data-live-desk-toolbar>
-            <button onClick={triggerPreviousCue} disabled={snapshot().cues.length === 0}>
-              Back
+            <button
+              type="button"
+              class="liveDeskIconButton liveTransportIconButton"
+              data-live-transport-action="back"
+              title="Back"
+              aria-label="Back"
+              onClick={triggerPreviousCue}
+              disabled={snapshot().cues.length === 0}
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M5 4v12M15 5l-7 5 7 5z" />
+              </svg>
             </button>
             <button
+              type="button"
+              class="liveDeskIconButton liveTransportIconButton"
+              data-live-transport-action="fade"
+              title={snapshot().active_fade?.paused ? "Resume Fade" : "Pause Fade"}
+              aria-label={snapshot().active_fade?.paused ? "Resume Fade" : "Pause Fade"}
+              aria-pressed={Boolean(snapshot().active_fade?.paused)}
               onClick={() => void setCueFadePaused(!snapshot().active_fade?.paused)}
               disabled={!snapshot().active_fade}
             >
-              {snapshot().active_fade?.paused ? "Resume Fade" : "Pause Fade"}
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M3.5 15.5 16.5 4.5" />
+                <Show
+                  when={snapshot().active_fade?.paused}
+                  fallback={<path d="M7 5.5 14 10l-7 4.5z" />}
+                >
+                  <path d="M7 5.5v9M12.5 5.5v9" />
+                </Show>
+              </svg>
             </button>
             <button
+              type="button"
+              class="liveDeskIconButton liveTransportIconButton"
+              data-live-transport-action="timeline"
+              title={snapshot().timeline.playing ? "Pause Timeline" : "Play Timeline"}
+              aria-label={snapshot().timeline.playing ? "Pause Timeline" : "Play Timeline"}
+              aria-pressed={snapshot().timeline.playing}
               onClick={() => void (snapshot().timeline.playing ? pauseTimeline() : playTimeline())}
               disabled={!snapshot().timeline.playing && snapshot().timeline.duration_ms === 0}
             >
-              {snapshot().timeline.playing ? "Pause Timeline" : "Play Timeline"}
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M3.5 16h13M5 14v4M10 14v4M15 14v4" />
+                <Show
+                  when={snapshot().timeline.playing}
+                  fallback={<path d="M7 4.5 14 9l-7 4.5z" />}
+                >
+                  <path d="M7 4.5v9M12.5 4.5v9" />
+                </Show>
+              </svg>
             </button>
             <button
               class={`killButton${snapshot().blackout ? " engaged" : ""}`}
+              data-live-transport-action="dmx-blackout"
               onClick={() => void setBlackout(!snapshot().blackout)}
             >
               {snapshot().blackout ? "Clear DMX BO" : "DMX BO"}
             </button>
             <button
               class={`killButton${snapshot().video.blackout ? " engaged" : ""}`}
+              data-live-transport-action="video-blackout"
               onClick={() => void setVideoBlackout(!snapshot().video.blackout)}
             >
               {snapshot().video.blackout ? "Clear Video BO" : "Video BO"}
             </button>
             <button
               class={`killButton${snapshot().blackout && snapshot().video.blackout ? " engaged" : ""}`}
+              data-live-transport-action="all-blackout"
               onClick={() => void setAllBlackout(true)}
               disabled={snapshot().blackout && snapshot().video.blackout}
             >
@@ -16151,56 +16192,82 @@ export default function App() {
             </button>
             <button
               class="killClear"
+              data-live-transport-action="all-clear"
               onClick={() => void setAllBlackout(false)}
               disabled={!snapshot().blackout && !snapshot().video.blackout}
             >
               All Clear
             </button>
-            <button disabled={!globalFixtureFlagState().anyFlagged} onClick={() => void clearFixtureFlags("all")}>
-              Clear Flags
+            <button
+              type="button"
+              class="liveDeskIconButton liveTransportIconButton"
+              data-live-transport-action="clear-flags"
+              title="Clear Flags"
+              aria-label="Clear Flags"
+              disabled={!globalFixtureFlagState().anyFlagged}
+              onClick={() => void clearFixtureFlags("all")}
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M5 17V3.5M5 4h8l-1.5 3L13 10H5M10 13l5 5M15 13l-5 5" />
+              </svg>
             </button>
             <div class="liveDeskToolbarActions" data-live-desk-toolbar-actions>
               <button
                 type="button"
-                class="liveCueEditorToggle"
+                class={`liveDeskIconButton liveDeskViewIconButton liveCueEditorToggle${timelineContextDrawer() === "cue" ? " active" : ""}`}
                 data-scene-matrix-open-cue-editor
-                aria-label="Open Cue editor"
-                title="Open Cue editor"
+                data-live-desk-view-action="cue-editor"
+                aria-label="Cue editor"
+                title="Cue editor"
+                aria-pressed={timelineContextDrawer() === "cue"}
                 onClick={openCueEditor}
               >
-                Cue editor
+                <svg viewBox="0 0 20 20" aria-hidden="true">
+                  <path d="M4 4.5h8M4 8h7M4 11.5h4M11 15.5l4.8-4.8 1.5 1.5-4.8 4.8-2.5.5z" />
+                </svg>
               </button>
               <nav class="liveDeskViewToggle" aria-label="Live desk view">
                 <button
                   type="button"
-                  class={controlLiveView() === "matrix" ? "active" : ""}
+                  class={`liveDeskIconButton liveDeskViewIconButton${controlLiveView() === "matrix" ? " active" : ""}`}
+                  data-live-desk-view-action="matrix"
+                  title="Matrix"
+                  aria-label="Matrix"
                   aria-pressed={controlLiveView() === "matrix"}
                   onClick={() => setControlLiveView("matrix")}
                 >
-                  Matrix
+                  <svg viewBox="0 0 20 20" aria-hidden="true">
+                    <path d="M3.5 3.5h5v5h-5zM11.5 3.5h5v5h-5zM3.5 11.5h5v5h-5zM11.5 11.5h5v5h-5z" />
+                  </svg>
                 </button>
                 <button
                   type="button"
-                  class={controlLiveView() === "pads" ? "active" : ""}
+                  class={`liveDeskIconButton liveDeskViewIconButton${controlLiveView() === "pads" ? " active" : ""}`}
+                  data-live-desk-view-action="cue-pads"
+                  title="Cue Pads"
+                  aria-label="Cue Pads"
                   aria-pressed={controlLiveView() === "pads"}
                   onClick={() => setControlLiveView("pads")}
                 >
-                  Cue Pads
+                  <svg viewBox="0 0 20 20" aria-hidden="true">
+                    <path d="M4 4h3v3H4zM8.5 4h3v3h-3zM13 4h3v3h-3zM4 8.5h3v3H4zM8.5 8.5h3v3h-3zM13 8.5h3v3h-3zM4 13h3v3H4zM8.5 13h3v3h-3zM13 13h3v3h-3z" />
+                  </svg>
                 </button>
               </nav>
               <button
                 type="button"
-                class="liveStatusToggle"
+                class="liveDeskIconButton liveDeskViewIconButton liveStatusToggle"
                 data-live-status-toggle
+                data-live-desk-view-action="status"
                 aria-controls="live-status-inspector"
                 aria-expanded={liveStatusExpanded()}
                 aria-label={liveStatusExpanded() ? "Hide live status details" : "Show live status details"}
+                title={liveStatusExpanded() ? "Hide live status details" : "Show live status details"}
                 onClick={() => setLiveStatusExpanded((expanded) => !expanded)}
               >
-                <svg viewBox="0 0 16 16" aria-hidden="true">
-                  <path d="M3 3h10v10H3zM6 5v6M8 5h3M8 8h3M8 11h3" />
+                <svg viewBox="0 0 20 20" aria-hidden="true">
+                  <path d="M3.5 3.5h13v13h-13zM7 6v8M9.5 6.5H14M9.5 10H14M9.5 13.5H14" />
                 </svg>
-                <span>Status</span>
               </button>
             </div>
           </div>

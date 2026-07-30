@@ -2727,6 +2727,7 @@ async function measureLiveDeskHeaderState(client) {
     const toolbarActions = document.querySelector('[data-live-desk-toolbar-actions]');
     const viewToggle = toolbarActions?.querySelector('.liveDeskViewToggle') ?? null;
     const statusToggle = toolbarActions?.querySelector('[data-live-status-toggle]') ?? null;
+    const topbar = document.querySelector('.topbar');
     const sceneReadout = document.querySelector('[data-live-desk-scene-readout]');
     const statusInspector = document.querySelector('.liveControlPanel > .liveStatusGrid');
     const matrix = document.querySelector('.liveControlPanel > .sceneMatrixPanel');
@@ -2741,6 +2742,9 @@ async function measureLiveDeskHeaderState(client) {
       : [];
     const toolbarControls = toolbar
       ? [...toolbar.querySelectorAll(':scope > button, [data-live-desk-toolbar-actions] button')].filter(isVisible)
+      : [];
+    const viewActionButtons = toolbarActions
+      ? [...toolbarActions.querySelectorAll('[data-live-desk-view-action]')].filter(isVisible)
       : [];
     const transportGoButtons = toolbar
       ? [...toolbar.querySelectorAll('.liveGoButton, :scope > button')]
@@ -2768,6 +2772,37 @@ async function measureLiveDeskHeaderState(client) {
         height: Math.round(rect.height * 100) / 100,
       };
     };
+    const actionMetrics = (element, attribute) => {
+      const icon = element.querySelector(':scope > svg');
+      const style = getComputedStyle(element);
+      return {
+        action: element.getAttribute(attribute) ?? '',
+        ...elementMetrics(element),
+        text: (element.textContent || '').trim(),
+        title: element.getAttribute('title') ?? '',
+        ariaLabel: element.getAttribute('aria-label') ?? '',
+        pressed: element.getAttribute('aria-pressed') ?? '',
+        expanded: element.getAttribute('aria-expanded') ?? '',
+        svgCount: element.querySelectorAll(':scope > svg').length,
+        iconWidth: icon ? Math.round(icon.getBoundingClientRect().width * 100) / 100 : 0,
+        iconHeight: icon ? Math.round(icon.getBoundingClientRect().height * 100) / 100 : 0,
+        color: style.color,
+        backgroundColor: style.backgroundColor,
+        boxShadow: style.boxShadow,
+        className: element.className,
+      };
+    };
+    const focusProbe = viewActionButtons[0] ?? null;
+    focusProbe?.focus({ preventScroll: true });
+    const focusProbeStyle = focusProbe ? getComputedStyle(focusProbe) : null;
+    const focusVisible = Boolean(
+      focusProbe &&
+      document.activeElement === focusProbe &&
+      focusProbeStyle &&
+      focusProbeStyle.outlineStyle !== 'none' &&
+      Number.parseFloat(focusProbeStyle.outlineWidth) >= 2
+    );
+    focusProbe?.blur();
     const documentElement = document.documentElement;
     const body = document.body;
     const app = document.querySelector('.app');
@@ -2780,6 +2815,7 @@ async function measureLiveDeskHeaderState(client) {
       toolbarActionsRect,
       viewToggleRect,
       statusToggleRect,
+      topbarRect: measuredRect(topbar),
       matrixRect: measuredRect(matrix),
       cuePadRect: measuredRect(cuePads),
       liveDeskHeaderCount: document.querySelectorAll('.liveControlPanel > .liveDeskHeader').length,
@@ -2799,12 +2835,28 @@ async function measureLiveDeskHeaderState(client) {
       statusToggleCount: isVisible(statusToggle) ? 1 : 0,
       toolbarControlCount: toolbarControls.length,
       toolbarControlCenterSpread: Math.round(centerSpread * 100) / 100,
+      toolbarClientWidth: toolbar?.clientWidth ?? 0,
+      toolbarScrollWidth: toolbar?.scrollWidth ?? 0,
+      toolbarFitsAvailableWidth: Boolean(
+        toolbar &&
+        toolbarRect &&
+        toolbar.scrollWidth <= toolbar.clientWidth + 1 &&
+        toolbarControls.every((element) => contained(measuredRect(element), toolbarRect))
+      ),
       toolbarActionsContained: contained(toolbarActionsRect, toolbarRect),
       toolbarActionsRightAligned: Boolean(
         toolbarRect && toolbarActionsRect && Math.abs(toolbarRect.right - toolbarActionsRect.right) <= 4
       ),
       viewToggleContained: contained(viewToggleRect, toolbarRect),
       statusToggleContained: contained(statusToggleRect, toolbarRect),
+      transportButtonMetrics: directTransportButtons.map((element) =>
+        actionMetrics(element, 'data-live-transport-action')),
+      viewActionButtonMetrics: viewActionButtons.map((element) =>
+        actionMetrics(element, 'data-live-desk-view-action')),
+      iconSizeToken: getComputedStyle(document.documentElement).getPropertyValue('--ui-icon-size').trim(),
+      iconButtonWidthToken: getComputedStyle(document.documentElement)
+        .getPropertyValue('--ui-icon-button-width').trim(),
+      iconButtonFocusVisible: focusVisible,
       sceneReadoutCount: document.querySelectorAll('[data-live-desk-scene-readout]').length,
       sceneReadoutVisible: isVisible(sceneReadout),
       sceneReadoutText: (sceneReadout?.textContent || '').trim(),
@@ -2862,6 +2914,14 @@ async function runLiveDeskHeaderViewport(client, viewport) {
   await sleep(100);
   const pads = await measureLiveDeskHeaderState(client);
   const killMetrics = [...matrix.killButtonMetrics, ...matrix.killClearMetrics];
+  const transportIconMetrics = matrix.transportButtonMetrics.filter((metric) =>
+    ['back', 'fade', 'timeline', 'clear-flags'].includes(metric.action));
+  const transportTextMetrics = matrix.transportButtonMetrics.filter((metric) =>
+    ['dmx-blackout', 'video-blackout', 'all-blackout', 'all-clear'].includes(metric.action));
+  const viewIconMetrics = matrix.viewActionButtonMetrics;
+  const expectedTransportIconActions = ['back', 'fade', 'timeline', 'clear-flags'];
+  const expectedTransportTextActions = ['dmx-blackout', 'video-blackout', 'all-blackout', 'all-clear'];
+  const expectedViewIconActions = ['cue-editor', 'matrix', 'cue-pads', 'status'];
   const checks = {
     legacyLiveDeskHeaderRowRemoved:
       matrix.liveDeskHeaderCount === 0 &&
@@ -2871,9 +2931,33 @@ async function runLiveDeskHeaderViewport(client, viewport) {
     oneToolbarOwnsEightTransportActions:
       matrix.toolbarCount === 1 &&
       matrix.directTransportButtonCount === 8,
+    transportLabelsReplacedByFourNamedSvgIcons:
+      JSON.stringify(transportIconMetrics.map((metric) => metric.action)) ===
+        JSON.stringify(expectedTransportIconActions) &&
+      transportIconMetrics.every((metric) =>
+        metric.text === '' &&
+        metric.svgCount === 1 &&
+        metric.title.length > 0 &&
+        metric.ariaLabel === metric.title),
+    blackoutAndAllClearKeepTextKillLanguage:
+      JSON.stringify(transportTextMetrics.map((metric) => metric.action)) ===
+        JSON.stringify(expectedTransportTextActions) &&
+      transportTextMetrics.every((metric) =>
+        metric.text.length > 0 &&
+        metric.svgCount === 0) &&
+      transportTextMetrics.slice(0, 3).every((metric) => metric.className.includes('killButton')) &&
+      transportTextMetrics[3]?.className.includes('killClear'),
     transportRowGoAbsent:
       matrix.transportGoButtonCount === 0,
-    viewAndStatusControlsIntegratedAtRight:
+    fourDisplaySwitchesAreNamedSvgIconTabs:
+      JSON.stringify(viewIconMetrics.map((metric) => metric.action)) ===
+        JSON.stringify(expectedViewIconActions) &&
+      viewIconMetrics.every((metric) =>
+        metric.text === '' &&
+        metric.svgCount === 1 &&
+        metric.title.length > 0 &&
+        metric.ariaLabel === metric.title),
+    iconViewAndStatusControlsIntegratedAtRight:
       matrix.toolbarActionsCount === 1 &&
       matrix.viewToggleButtonCount === 2 &&
       matrix.statusToggleCount === 1 &&
@@ -2881,6 +2965,25 @@ async function runLiveDeskHeaderViewport(client, viewport) {
       matrix.toolbarActionsRightAligned &&
       matrix.viewToggleContained &&
       matrix.statusToggleContained,
+    t27ATokensDriveCompactIconGeometryAndFocus:
+      matrix.iconSizeToken === '18px' &&
+      matrix.iconButtonWidthToken === '28px' &&
+      [...transportIconMetrics, ...viewIconMetrics].every((metric) =>
+        Math.abs(metric.width - 28) <= 0.01 &&
+        Math.abs(metric.iconWidth - 18) <= 0.01 &&
+        Math.abs(metric.iconHeight - 18) <= 0.01) &&
+      matrix.iconButtonFocusVisible,
+    activeIconTabsUseSelectionState:
+      viewIconMetrics.find((metric) => metric.action === 'matrix')?.pressed === 'true' &&
+      viewIconMetrics.find((metric) => metric.action === 'matrix')?.boxShadow !== 'none' &&
+      expanded.viewActionButtonMetrics.find((metric) => metric.action === 'status')?.expanded === 'true' &&
+      expanded.viewActionButtonMetrics.find((metric) => metric.action === 'status')?.boxShadow !== 'none',
+    topbarAndLiveToolbarKeepFortyTwoAndThirtyTwoPxRows:
+      matrix.topbarRect?.height === 42 &&
+      matrix.toolbarRect?.height === 32,
+    compactToolbarNaturallyFitsAvailableWidth:
+      matrix.toolbarFitsAvailableWidth &&
+      matrix.toolbarScrollWidth <= matrix.toolbarClientWidth + 1,
     toolbarControlsShareOneVisualRow:
       matrix.toolbarControlCount === 12 &&
       matrix.toolbarControlCenterSpread <= 1 &&
@@ -5558,6 +5661,12 @@ async function measure(client, label) {
       visibleLiveDeskDirectTransportButtonCount: visibleCount(
         '.liveControlPanel > [data-live-desk-toolbar] > button'
       ),
+      liveDeskTransportIconActions: visibleElements(
+        '.liveControlPanel > [data-live-desk-toolbar] > .liveTransportIconButton'
+      ).map((button) => button.getAttribute('data-live-transport-action') ?? ''),
+      liveDeskTextTransportActions: visibleElements(
+        '.liveControlPanel > [data-live-desk-toolbar] > button:not(.liveTransportIconButton)'
+      ).map((button) => button.getAttribute('data-live-transport-action') ?? ''),
       liveTransportGoButtonCount: document.querySelectorAll(
         '.liveControlPanel > [data-live-desk-toolbar] .liveGoButton'
       ).length + [...document.querySelectorAll(
@@ -5575,6 +5684,39 @@ async function measure(client, label) {
       visibleLiveDeskStatusToggleCount: visibleCount(
         '.liveControlPanel > [data-live-desk-toolbar] [data-live-status-toggle]'
       ),
+      liveDeskViewIconActions: visibleElements(
+        '.liveControlPanel > [data-live-desk-toolbar] [data-live-desk-view-action]'
+      ).map((button) => button.getAttribute('data-live-desk-view-action') ?? ''),
+      liveDeskIconButtonsNamedAndGraphic: (() => {
+        const buttons = visibleElements(
+          '.liveControlPanel > [data-live-desk-toolbar] .liveDeskIconButton'
+        );
+        return buttons.length === 8 && buttons.every((button) =>
+          (button.textContent || '').trim() === '' &&
+          button.querySelectorAll(':scope > svg').length === 1 &&
+          (button.getAttribute('title') ?? '').length > 0 &&
+          button.getAttribute('aria-label') === button.getAttribute('title'));
+      })(),
+      liveDeskIconButtonWidths: visibleElements(
+        '.liveControlPanel > [data-live-desk-toolbar] .liveDeskIconButton'
+      ).map((button) => Math.round(button.getBoundingClientRect().width * 100) / 100),
+      liveDeskIconSvgSizes: visibleElements(
+        '.liveControlPanel > [data-live-desk-toolbar] .liveDeskIconButton > svg'
+      ).map((icon) => {
+        const rect = icon.getBoundingClientRect();
+        return [
+          Math.round(rect.width * 100) / 100,
+          Math.round(rect.height * 100) / 100,
+        ];
+      }),
+      liveDeskToolbarFitsAvailableWidth: (() => {
+        const toolbar = document.querySelector('.liveControlPanel > [data-live-desk-toolbar]');
+        if (!toolbar) return false;
+        return toolbar.scrollWidth <= toolbar.clientWidth + 1;
+      })(),
+      liveDeskTopbarHeight: Math.round(
+        (document.querySelector('.topbar')?.getBoundingClientRect().height ?? 0) * 100
+      ) / 100,
       liveDeskToolbarControlsShareOneRow: (() => {
         const controls = [...document.querySelectorAll(
           '.liveControlPanel > [data-live-desk-toolbar] > button, ' +
@@ -6947,11 +7089,25 @@ function hasExpectedControlModeSurface(result) {
       result.visibleLegacyLiveDeskHeaderCount !== 0 ||
       result.visibleLiveDeskToolbarCount !== 1 ||
       result.visibleLiveDeskDirectTransportButtonCount !== 8 ||
+      JSON.stringify(result.liveDeskTransportIconActions) !==
+        JSON.stringify(["back", "fade", "timeline", "clear-flags"]) ||
+      JSON.stringify(result.liveDeskTextTransportActions) !==
+        JSON.stringify(["dmx-blackout", "video-blackout", "all-blackout", "all-clear"]) ||
       result.liveTransportGoButtonCount !== 0 ||
       result.visibleLiveDeskToolbarActionsCount !== 1 ||
       result.visibleLiveDeskCueEditorButtonCount !== 1 ||
       result.visibleLiveDeskViewButtonCount !== 2 ||
       result.visibleLiveDeskStatusToggleCount !== 1 ||
+      JSON.stringify(result.liveDeskViewIconActions) !==
+        JSON.stringify(["cue-editor", "matrix", "cue-pads", "status"]) ||
+      !result.liveDeskIconButtonsNamedAndGraphic ||
+      result.liveDeskIconButtonWidths.length !== 8 ||
+      result.liveDeskIconButtonWidths.some((width) => Math.abs(width - 28) > 0.01) ||
+      result.liveDeskIconSvgSizes.length !== 8 ||
+      result.liveDeskIconSvgSizes.some(([width, height]) =>
+        Math.abs(width - 18) > 0.01 || Math.abs(height - 18) > 0.01) ||
+      !result.liveDeskToolbarFitsAvailableWidth ||
+      result.liveDeskTopbarHeight !== 42 ||
       !result.liveDeskToolbarControlsShareOneRow ||
       result.liveDeskToolbarGridRow !== "1" ||
       result.liveSceneMatrixGridRow !== "2" ||
@@ -10932,7 +11088,9 @@ async function measureSceneMatrixPane(client) {
       visibleTimelineLaneCount: timelineLanes.length,
       timelineShowSurfaceVisible: isVisible(document.querySelector('.timelineShowSurface')),
       liveViewButtonCount: liveViewButtons.length,
-      activeLiveView: (liveViewButtons.find((button) => button.getAttribute('aria-pressed') === 'true')?.textContent || '').trim(),
+      activeLiveView: liveViewButtons
+        .find((button) => button.getAttribute('aria-pressed') === 'true')
+        ?.getAttribute('aria-label') ?? '',
       activeCardIds: cards
         .filter((card) => card.getAttribute('data-scene-matrix-active') === 'true' && card.classList.contains('active'))
         .map((card) => card.getAttribute('data-scene-matrix-cue-id')),
@@ -12033,8 +12191,9 @@ async function runSceneMatrixPaneCheck(client, viewport) {
     return {
       matrixCount: visible('.liveControlPanel > .sceneMatrixPanel'),
       cuePadSurfaceCount: visible('.liveControlPanel > .liveCuePadSurface'),
-      activeView: ([...document.querySelectorAll('.liveDeskViewToggle button')]
-        .find((button) => button.getAttribute('aria-pressed') === 'true')?.textContent || '').trim(),
+      activeView: [...document.querySelectorAll('.liveDeskViewToggle button')]
+        .find((button) => button.getAttribute('aria-pressed') === 'true')
+        ?.getAttribute('aria-label') ?? '',
     };
   })()`);
   await clickVisibleByText(client, ".liveDeskViewToggle button", "Matrix");
@@ -20900,9 +21059,12 @@ async function main() {
         liveDeskHeaderResults.push(result);
         console.log(
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
-            `header=${result.matrix.toolbarRect?.height ?? 0} ` +
+            `topbar=${result.matrix.topbarRect?.height ?? 0} header=${result.matrix.toolbarRect?.height ?? 0} ` +
             `matrix=${result.matrix.matrixRect?.height ?? 0} ` +
             `actions=${result.matrix.directTransportButtonCount}+${result.matrix.cueEditorToggleCount}+${result.matrix.viewToggleButtonCount}+${result.matrix.statusToggleCount} ` +
+            `transportWidths=${JSON.stringify(Object.fromEntries(result.matrix.transportButtonMetrics.map((metric) => [metric.action, metric.width])))} ` +
+            `viewWidths=${JSON.stringify(Object.fromEntries(result.matrix.viewActionButtonMetrics.map((metric) => [metric.action, metric.width])))} ` +
+            `fit=${result.matrix.toolbarClientWidth}/${result.matrix.toolbarScrollWidth} ` +
             `transportGo=${result.matrix.transportGoButtonCount} ` +
             `kill=${result.matrix.killButtonCount}/${result.matrix.killClearCount} ` +
             `hatch=${result.matrix.killButtonsHatched ? 1 : 0} red=${result.matrix.killButtonsRedBordered ? 1 : 0} ` +

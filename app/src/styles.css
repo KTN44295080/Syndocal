@@ -19303,6 +19303,8 @@ input[type="color"] {
   --ui-selection-line: #d4d9dc;
   --ui-range-accent: #747d84;
   --ui-focus-ring: #f2c14e;
+  --ui-icon-size: 18px;
+  --ui-icon-button-width: 28px;
   --ray-bg: var(--ui-surface-app);
   --ray-surface: var(--ui-surface-panel);
   --ray-surface-raised: var(--ui-surface-panel);
@@ -32632,4 +32634,91 @@ a[href]:focus-visible,
 [tabindex]:not([tabindex="-1"]):focus-visible,
 .verticalFaderChrome:has(> .verticalFaderNativeInput:focus-visible) {
   outline: 2px solid var(--ui-focus-ring) !important;
+}
+
+/* ---- T27-C: compact icon language for Live Desk transport and view tabs.
+   Blackout actions and All Clear stay text-led so restoring or killing output
+   remains explicit; Clear Flags is the low-risk housekeeping icon. */
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveTransportGrid {
+  grid-template-columns:
+    repeat(3, var(--ui-icon-button-width))
+    repeat(4, max-content)
+    var(--ui-icon-button-width)
+    minmax(0, 1fr);
+}
+
+.liveDeskIconButton {
+  display: inline-grid;
+  place-items: center;
+  width: var(--ui-icon-button-width);
+  min-width: var(--ui-icon-button-width);
+  border-color: var(--ui-border);
+  border-radius: var(--ui-radius-control);
+  background: var(--ui-surface-control);
+  color: var(--ray-text-muted);
+  padding: 0;
+}
+
+.liveDeskIconButton svg {
+  width: var(--ui-icon-size);
+  height: var(--ui-icon-size);
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.45;
+}
+
+.liveDeskIconButton:hover:not(:disabled) {
+  border-color: var(--ui-border);
+  background: var(--ray-surface-hover);
+  color: var(--ray-text);
+}
+
+.liveDeskIconButton.active,
+.liveDeskIconButton[aria-pressed="true"],
+.liveDeskIconButton[aria-expanded="true"] {
+  border-color: var(--ui-border);
+  background: var(--ui-surface-control);
+  color: #fff;
+  box-shadow: inset 0 -1px 0 var(--ui-selection-line);
+}
+
+.liveTransportGrid > .liveTransportIconButton {
+  width: var(--ui-icon-button-width);
+  min-width: var(--ui-icon-button-width);
+  padding: 0;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveTransportGrid > .killButton,
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveTransportGrid > .killClear {
+  min-width: 54px;
+}
+
+.liveDeskToolbarActions {
+  gap: 2px;
+}
+
+.liveDeskToolbarActions .liveDeskViewToggle {
+  gap: 1px;
+  padding: 1px;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel .liveDeskToolbarActions .liveDeskViewToggle button,
+.liveDeskToolbarActions .liveCueEditorToggle,
+.liveDeskToolbarActions .liveStatusToggle {
+  width: var(--ui-icon-button-width);
+  min-width: var(--ui-icon-button-width);
+  min-height: 26px;
+  padding: 0;
+}
+
+.liveDeskToolbarActions .liveStatusToggle {
+  grid-template-columns: 1fr;
+  gap: 0;
+}
+
+.liveDeskToolbarActions .liveStatusToggle svg {
+  width: var(--ui-icon-size);
+  height: var(--ui-icon-size);
 }
