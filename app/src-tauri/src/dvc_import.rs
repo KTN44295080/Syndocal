@@ -1045,13 +1045,17 @@ fn parse_scene_effects(
                 .and_then(|value| value.parse::<u16>().ok());
             let generator = match (rack_type, effect_type, generator_id) {
                 (Some(3), Some(6), Some(321)) => Some("Chaser #1"),
+                (Some(3), Some(6), Some(322)) => Some("Chaser #2"),
                 (Some(3), Some(6), Some(325)) => Some("Chaser random"),
                 (Some(4), Some(4), Some(223)) => Some("Line"),
                 (Some(4), Some(4), Some(224)) => Some("Polygon"),
                 (Some(8), Some(5), Some(3)) => Some("Inverse Ramp"),
                 (Some(8), Some(5), Some(7)) => Some("Sinus"),
+                (Some(8), Some(5), Some(10)) => Some("Strobe"),
                 (Some(2), Some(2), Some(121)) => Some("Burst"),
                 (Some(2), Some(2), Some(127)) => Some("Knight Rider"),
+                (Some(2), Some(2), Some(129)) => Some("Plasma"),
+                (Some(2), Some(2), Some(130)) => Some("Rainbow"),
                 (Some(2), Some(2), Some(131)) => Some("Random fill"),
                 (Some(2), Some(2), Some(133)) => Some("Sparkle"),
                 (Some(6), Some(8), Some(521)) => Some("Rainbow"),
@@ -1152,7 +1156,7 @@ fn convert_dvc_effect(
     fixture_refs: &HashMap<String, FixtureImportRef>,
 ) -> Result<ConvertedDvcEffect, String> {
     match (rack_type, effect_type, generator_id) {
-        (3, 6, 321 | 325) => convert_dvc_chaser_effect(
+        (3, 6, 321 | 322 | 325) => convert_dvc_chaser_effect(
             scene,
             scene_name,
             rack,
@@ -1186,7 +1190,15 @@ fn convert_dvc_effect(
             effect_id,
             fixture_refs,
         ),
-        (2, 2, 121 | 127 | 131 | 133) | (6, 8, 521 | 530) => {
+        (8, 5, 10) => convert_dvc_strobe_effect(
+            scene,
+            scene_name,
+            rack,
+            effect,
+            effect_id,
+            fixture_refs,
+        ),
+        (2, 2, 121 | 127 | 129 | 130 | 131 | 133) | (6, 8, 521 | 530) => {
             convert_dvc_color_spatial_effect(
                 scene,
                 scene_name,
@@ -1216,6 +1228,8 @@ fn convert_dvc_color_spatial_effect(
     let generator = match generator_id {
         121 => "Burst",
         127 => "Knight Rider",
+        129 => "Plasma",
+        130 => "Rainbow",
         131 => "Random fill",
         133 => "Sparkle",
         521 => "Rainbow",
@@ -1226,6 +1240,7 @@ fn convert_dvc_color_spatial_effect(
             ))
         }
     };
+    let mut generator_approximations = Vec::new();
     let recipe = match generator_id {
         127 => {
             require_exact_dvc_params(&params, &[2, 3, 10, 11, 12, 13, 14])?;
@@ -1264,6 +1279,65 @@ fn convert_dvc_color_spatial_effect(
                 number: dvc_u16_param(&params, 10, "Sparkle Number")?,
                 lifespan: dvc_percent_param(&params, 11, "Sparkle LifeSpan")?,
                 width: dvc_u16_param(&params, 12, "Sparkle Width")?,
+            }
+        }
+        129 => {
+            require_exact_dvc_params(&params, &[2, 3, 10, 11, 12, 13, 14, 15, 16, 17])?;
+            let grayscale = dvc_binary_param(&params, 2, "Plasma Grayscale")?;
+            let transform = dvc_finite_param(&params, 3, "Plasma Transform")?;
+            if grayscale {
+                generator_approximations.push(
+                    "Plasma Grayscale=1 is not reproduced; the verified RGB palette is retained"
+                        .to_string(),
+                );
+            }
+            if transform != 0.0 {
+                generator_approximations.push(format!(
+                    "Plasma Transform={transform} is not reproduced on the profile-order beam strip"
+                ));
+            }
+            generator_approximations
+                .push("Plasma pattern approximated from generator parameters".to_string());
+            ColorEffectSpatialRecipe::Plasma {
+                size_x: dvc_finite_param(&params, 10, "Size X")?,
+                param_x: dvc_finite_param(&params, 11, "Param X")?,
+                size_y: dvc_finite_param(&params, 12, "Size Y")?,
+                param_y: dvc_finite_param(&params, 13, "Param Y")?,
+                speed_x: dvc_finite_param(&params, 14, "Speed X")?,
+                param_sx: dvc_finite_param(&params, 15, "Param SX")?,
+                speed_y: dvc_finite_param(&params, 16, "Speed Y")?,
+                param_sy: dvc_finite_param(&params, 17, "Param SY")?,
+            }
+        }
+        130 => {
+            require_exact_dvc_params(&params, &[2, 3, 10, 11, 12])?;
+            let grayscale = dvc_binary_param(&params, 2, "Rainbow Grayscale")?;
+            let transform = dvc_finite_param(&params, 3, "Rainbow Transform")?;
+            if grayscale {
+                generator_approximations.push(
+                    "Rainbow Grayscale=1 is not reproduced; the verified RGB palette is retained"
+                        .to_string(),
+                );
+            }
+            if transform != 0.0 {
+                generator_approximations.push(format!(
+                    "Rainbow Transform={transform} is not reproduced on the profile-order beam strip"
+                ));
+            }
+            generator_approximations.push(
+                "Rainbow sweep timing approximated from EFFECT DURATION and SCENE SPEED"
+                    .to_string(),
+            );
+            let angle_degrees = dvc_finite_param(&params, 11, "Angle")?;
+            if angle_degrees.fract().abs() > f32::EPSILON {
+                return Err(format!(
+                    "Rainbow Angle PARAM 11 must be an integer, found {angle_degrees}"
+                ));
+            }
+            ColorEffectSpatialRecipe::ColorRainbow {
+                color_width: dvc_finite_param(&params, 10, "Color Width")?,
+                angle_degrees,
+                gradient: dvc_unit_param(&params, 12, "Gradient")? * 100.0,
             }
         }
         521 => {
@@ -1327,7 +1401,7 @@ fn convert_dvc_color_spatial_effect(
     }
     let selection_count = targets.ordered_steps.len();
     let beam_count = targets.beam_targets.len();
-    let mut approximations = Vec::new();
+    let mut approximations = generator_approximations;
     if omitted_spatial_targets > 0 {
         approximations.push(format!(
             "{omitted_spatial_targets} beam target(s) without a verified color segment or Dimmer attribute were omitted"
@@ -1363,6 +1437,25 @@ fn convert_dvc_color_spatial_effect(
             lifespan,
             width,
         } => format!("Number={number}; LifeSpan={lifespan}; Width={width}"),
+        ColorEffectSpatialRecipe::Plasma {
+            size_x,
+            param_x,
+            size_y,
+            param_y,
+            speed_x,
+            param_sx,
+            speed_y,
+            param_sy,
+        } => format!(
+            "SizeX={size_x}; ParamX={param_x}; SizeY={size_y}; ParamY={param_y}; SpeedX={speed_x}; ParamSX={param_sx}; SpeedY={speed_y}; ParamSY={param_sy}"
+        ),
+        ColorEffectSpatialRecipe::ColorRainbow {
+            color_width,
+            angle_degrees,
+            gradient,
+        } => format!(
+            "ColorWidth={color_width}; Angle={angle_degrees}; Gradient=raw*100={gradient}"
+        ),
         ColorEffectSpatialRecipe::Rainbow {
             vertical_symmetry,
             rotation_degrees,
@@ -1435,6 +1528,15 @@ fn convert_dvc_chaser_effect(
     effect_id: u64,
     fixture_refs: &HashMap<String, FixtureImportRef>,
 ) -> Result<ConvertedDvcEffect, String> {
+    if generator_id == 322 {
+        let targets = dvc_rack_targets(rack, fixture_refs)?;
+        if targets.ordered_steps.is_empty() {
+            return Err("BEAMS resolved to no Chaser steps".to_string());
+        }
+        return Err(
+            "Chaser #2 variant algorithm is unverified; populated BEAMS remain Skipped".to_string(),
+        );
+    }
     let generator = if generator_id == 321 {
         "Chaser #1"
     } else {
@@ -1888,6 +1990,119 @@ fn convert_dvc_sinus_effect(
     })
 }
 
+fn convert_dvc_strobe_effect(
+    scene: Node<'_, '_>,
+    scene_name: &str,
+    rack: Node<'_, '_>,
+    effect: Node<'_, '_>,
+    effect_id: u64,
+    fixture_refs: &HashMap<String, FixtureImportRef>,
+) -> Result<ConvertedDvcEffect, String> {
+    let params = dvc_effect_params(effect)?;
+    require_exact_dvc_params(&params, &[1, 2, 3, 4, 5])?;
+    let rate = dvc_param(&params, 1, "Rate")?;
+    let size = dvc_param(&params, 2, "Size")?;
+    let phase = dvc_param(&params, 3, "Phase")?;
+    let offset = dvc_param(&params, 4, "Offset")?;
+    let phasing = dvc_param(&params, 5, "Phasing")?;
+    if !rate.is_finite() || rate <= 0.0 {
+        return Err(format!(
+            "Rate must be finite and greater than 0, found {rate}"
+        ));
+    }
+    if !size.is_finite() || size < 0.0 {
+        return Err(format!(
+            "Size must be finite and greater than or equal to 0, found {size}"
+        ));
+    }
+    if !phase.is_finite() || !(0.0..=1.0).contains(&phase) {
+        return Err(format!("Phase must be within 0..1, found {phase}"));
+    }
+    if !offset.is_finite() || !phasing.is_finite() {
+        return Err("Offset and Phasing must be finite".to_string());
+    }
+    let duration_ms = effect
+        .attribute("DURATION")
+        .ok_or_else(|| "Strobe EFFECT is missing DURATION".to_string())?
+        .parse::<f64>()
+        .map_err(|error| format!("Strobe DURATION is invalid: {error}"))?;
+    let period = duration_ms / rate;
+    if !period.is_finite() || period < 10.0 || period > u64::MAX as f64 {
+        return Err(format!(
+            "DURATION / Rate must produce an LFO period of at least 10 ms, found {period}"
+        ));
+    }
+    let period_ms = period.round() as u64;
+    // Daslight Strobe is one-sided: Size scales the peak by half range while
+    // Offset moves the low/base. Thus Size=1 reaches half range and Size=2
+    // reaches full range for the verified Offset=0 specimen.
+    let raw_low = offset;
+    let raw_high = offset + size * 0.5;
+    let low = normalized_dmx(raw_low);
+    let high = normalized_dmx(raw_high);
+    let mut targets = dvc_rack_targets(rack, fixture_refs)?;
+    let incompatible_dimmer_targets = retain_dvc_dimmer_targets(&mut targets, fixture_refs);
+    if targets.fixture_ids.is_empty() {
+        return Err("BEAMS resolved to no Strobe fixture targets".to_string());
+    }
+
+    let mut approximations = vec![
+        "Strobe pulse width approximated to 2% of the period from the Daslight graph".to_string(),
+    ];
+    if incompatible_dimmer_targets > 0 {
+        approximations.push(format!(
+            "{incompatible_dimmer_targets} fixture target(s) without a Dimmer attribute were omitted"
+        ));
+    }
+    if targets.has_multi_beam_selection {
+        approximations.push("segment selection approximated to fixture".to_string());
+    }
+    if raw_low < 0.0 || raw_high > 1.0 {
+        approximations.push(format!(
+            "Size={size} and Offset={offset} produced raw range {raw_low:.3}..{raw_high:.3}; endpoints were clamped to DMX16"
+        ));
+    }
+    if phasing.abs() > f64::EPSILON {
+        approximations.push(format!(
+            "Phasing={phasing} is not reproduced by the LFO engine"
+        ));
+    }
+    let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
+    if let Some(clock_warning) = clock_warning {
+        approximations.push(clock_warning);
+    }
+
+    let request = LfoEffectRequest {
+        label: format!("{scene_name} (Strobe)"),
+        fixture_ids: targets.fixture_ids,
+        target_group_ids: Vec::new(),
+        attribute: "Dimmer".to_string(),
+        video_targets: Vec::new(),
+        shape: LfoShape::Strobe,
+        period_ms,
+        clock_sync,
+        low,
+        high,
+        phase: phase as f32,
+        blend_mode: EffectBlendMode::Override,
+    };
+    let note = format!(
+        "feature=Dimmer; shape=Strobe; pulses_per_period=10; pulse_width=2% graph-derived approximation; period_ms=round(DURATION/Rate)={period_ms}; low={low}; high={high}; phase={phase}; size={size}; offset={offset}; {clock_note}"
+    );
+    Ok(ConvertedDvcEffect {
+        target: CueEffectTarget {
+            effect_id,
+            enabled: true,
+            params: Some(EffectParamsSnapshot::Lfo(request)),
+            transition_ms: None,
+        },
+        generator: "Strobe",
+        note,
+        approximations,
+        warnings: Vec::new(),
+    })
+}
+
 fn dvc_effect_params(effect: Node<'_, '_>) -> Result<HashMap<u16, f64>, String> {
     let params_node = direct_child(effect, "PARAMS")
         .ok_or_else(|| "confirmed generator is missing PARAMS".to_string())?;
@@ -1969,9 +2184,9 @@ fn dvc_color_palette_and_params(
                     color_nodes.len()
                 ));
             }
-            if !(2..=8).contains(&color_nodes.len()) {
+            if !(2..=16).contains(&color_nodes.len()) {
                 return Err(format!(
-                    "palette requires 2..8 COLOR entries, found {}",
+                    "palette requires 2..16 COLOR entries, found {}",
                     color_nodes.len()
                 ));
             }
@@ -3994,6 +4209,188 @@ mod tests {
     }
 
     #[test]
+    fn dvc_strobe_conversion_scales_size_and_reports_graph_approximation() {
+        for (size, expected_high) in [(1.0, 32_768), (2.0, 65_535)] {
+            let xml = format!(
+                r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="8"><EFFECT TYPE="5" ID="10" DURATION="5000"><PARAMS NB="5"><PARAM ID="1" VAL="2"/><PARAM ID="2" VAL="{size}"/><PARAM ID="3" VAL="0"/><PARAM ID="4" VAL="0"/><PARAM ID="5" VAL="0"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#
+            );
+            let document = Document::parse(&xml).unwrap();
+            let scene = document.root_element();
+            let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+            let effect = direct_child(rack, "EFFECT").unwrap();
+            let converted = convert_dvc_effect(
+                scene,
+                "Fl-Strobe",
+                rack,
+                effect,
+                8,
+                5,
+                10,
+                1,
+                &effect_test_fixture_refs(),
+            )
+            .unwrap();
+            let Some(EffectParamsSnapshot::Lfo(request)) = converted.target.params else {
+                panic!("CURVE 10 must convert to cue-owned LFO params");
+            };
+            assert_eq!(request.shape, LfoShape::Strobe);
+            assert_eq!(request.period_ms, 2_500);
+            assert_eq!(request.low, 0);
+            assert_eq!(request.high, expected_high);
+            assert_eq!(request.phase, 0.0);
+            assert!(converted
+                .approximations
+                .iter()
+                .any(|note| note.contains("2% of the period")));
+            assert!(converted.note.contains("pulses_per_period=10"));
+        }
+    }
+
+    #[test]
+    fn dvc_plasma_conversion_parses_five_color_slash_palette_and_parameters() {
+        let document = Document::parse(
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="2"><EFFECT TYPE="2" ID="129" DURATION="5000"><PARAMS NB="11"><PARAM TYPE="4" ID="1"><COLORS NB="5"><COLOR VAL="0.94902/0.0196078/0.266667/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.2/0.1/0.3/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.4/0.3/0.2/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.6/0.5/0.4/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.8/0.7/0.6/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/></COLORS></PARAM><PARAM ID="2" VAL="0"/><PARAM ID="3" VAL="0"/><PARAM ID="10" VAL="1"/><PARAM ID="11" VAL="2"/><PARAM ID="12" VAL="1"/><PARAM ID="13" VAL="2"/><PARAM ID="14" VAL="-1"/><PARAM ID="15" VAL="2"/><PARAM ID="16" VAL="1"/><PARAM ID="17" VAL="-1"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
+        )
+        .unwrap();
+        let scene = document.root_element();
+        let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+        let effect = direct_child(rack, "EFFECT").unwrap();
+        let converted = convert_dvc_effect(
+            scene,
+            "B-WineRed (2)",
+            rack,
+            effect,
+            2,
+            2,
+            129,
+            1,
+            &effect_test_fixture_refs(),
+        )
+        .unwrap();
+        let Some(EffectParamsSnapshot::Color(request)) = converted.target.params else {
+            panic!("COLOR 129 must convert to cue-owned Color params");
+        };
+        assert_eq!(request.stops.len(), 5);
+        assert_eq!(
+            request.stops[0].color,
+            ColorEffectColor {
+                red: normalized_dmx(0.94902),
+                green: normalized_dmx(0.0196078),
+                blue: normalized_dmx(0.266667),
+            }
+        );
+        assert!(matches!(
+            request
+                .spatial_pattern
+                .as_ref()
+                .map(|pattern| &pattern.recipe),
+            Some(ColorEffectSpatialRecipe::Plasma {
+                size_x: 1.0,
+                param_x: 2.0,
+                size_y: 1.0,
+                param_y: 2.0,
+                speed_x: -1.0,
+                param_sx: 2.0,
+                speed_y: 1.0,
+                param_sy: -1.0,
+            })
+        ));
+        assert!(converted
+            .approximations
+            .iter()
+            .any(|note| note == "Plasma pattern approximated from generator parameters"));
+    }
+
+    #[test]
+    fn dvc_color_rainbow_conversion_maps_width_angle_and_gradient_times_100() {
+        let document = Document::parse(
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="2"><EFFECT TYPE="2" ID="130" DURATION="5000"><PARAMS NB="6"><PARAM TYPE="4" ID="1"><COLORS NB="5"><COLOR VAL="0/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.2/0.1/0.3/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.4/0.3/0.2/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.6/0.5/0.4/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.8/0.7/0.6/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/></COLORS></PARAM><PARAM ID="2" VAL="0"/><PARAM ID="3" VAL="0"/><PARAM ID="10" VAL="0.25"/><PARAM ID="11" VAL="45"/><PARAM ID="12" VAL="0.75"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
+        )
+        .unwrap();
+        let scene = document.root_element();
+        let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+        let effect = direct_child(rack, "EFFECT").unwrap();
+        let converted = convert_dvc_effect(
+            scene,
+            "PS-WineRed",
+            rack,
+            effect,
+            2,
+            2,
+            130,
+            1,
+            &effect_test_fixture_refs(),
+        )
+        .unwrap();
+        let Some(EffectParamsSnapshot::Color(request)) = converted.target.params else {
+            panic!("COLOR 130 must convert to cue-owned Color params");
+        };
+        assert!(matches!(
+            request
+                .spatial_pattern
+                .as_ref()
+                .map(|pattern| &pattern.recipe),
+            Some(ColorEffectSpatialRecipe::ColorRainbow {
+                color_width: 0.25,
+                angle_degrees: 45.0,
+                gradient: 75.0,
+            })
+        ));
+        assert!(converted
+            .approximations
+            .iter()
+            .any(|note| note.contains("sweep timing approximated")));
+    }
+
+    #[test]
+    fn dvc_chaser_322_uses_verified_label_and_keeps_variant_unverified() {
+        let document = Document::parse(
+            r#"<DLMFILE DASBUILD="test" VERSIONFILE="2"><SCENE NAME="SS-Blue" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="3"><EFFECT TYPE="6" ID="322" DURATION="5000"><PARAMS NB="1"><PARAM ID="10" VAL="1"/></PARAMS></EFFECT><BEAMS NB="0"/></RACK></RACKS></SCENE></DLMFILE>"#,
+        )
+        .unwrap();
+        let scene = document
+            .descendants()
+            .find(|node| node.has_tag_name("SCENE"))
+            .unwrap();
+        let mut report = DvcImportReport::new("synthetic-chaser-322.dvc", document.root_element());
+        let mut next_effect_id = 1;
+        let parsed = parse_scene_effects(
+            scene,
+            "SS-Blue",
+            &effect_test_fixture_refs(),
+            &mut next_effect_id,
+            &mut report,
+        );
+        assert!(parsed.targets.is_empty());
+        assert_eq!(report.summary.effects_skipped, 1);
+        assert!(report.skipped.details.iter().any(|detail| {
+            detail.item == "Effect: SS-Blue (Chaser #2)"
+                && detail.message.contains("BEAMS resolved to no Chaser steps")
+        }));
+
+        let populated = Document::parse(
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="3"><EFFECT TYPE="6" ID="322" DURATION="5000"><PARAMS NB="1"><PARAM ID="10" VAL="1"/></PARAMS></EFFECT><BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS></RACK></RACKS></SCENE>"#,
+        )
+        .unwrap();
+        let scene = populated.root_element();
+        let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+        let effect = direct_child(rack, "EFFECT").unwrap();
+        let error = convert_dvc_effect(
+            scene,
+            "Future populated 322",
+            rack,
+            effect,
+            3,
+            6,
+            322,
+            1,
+            &effect_test_fixture_refs(),
+        )
+        .unwrap_err();
+        assert!(error.contains("variant algorithm is unverified"));
+    }
+
+    #[test]
     fn dvc_cue_owned_fx_recall_activates_and_release_stops_output() {
         let outcome = import_bytes(synthetic_fx_dvc().as_bytes(), "synthetic-fx.dvc").unwrap();
         let cue_id = outcome.project.snapshot.cues[0].id;
@@ -4258,8 +4655,8 @@ mod tests {
         assert_eq!(outcome.report.summary.beam_records, 221);
         assert_eq!(outcome.report.summary.beam_feature_checks, 109);
         assert_eq!(outcome.report.summary.beam_feature_mismatches, 0);
-        assert_eq!(outcome.report.summary.effects_converted, 6);
-        assert_eq!(outcome.report.summary.effects_skipped, 1);
+        assert_eq!(outcome.report.summary.effects_converted, 7);
+        assert_eq!(outcome.report.summary.effects_skipped, 0);
         let chaser_count = outcome
             .project
             .snapshot
@@ -4285,8 +4682,31 @@ mod tests {
             .filter(|target| matches!(target.params, Some(EffectParamsSnapshot::Move(_))))
             .count();
         assert_eq!(chaser_count, 5);
-        assert_eq!(curve_count, 0);
+        assert_eq!(curve_count, 1);
         assert_eq!(move_count, 1);
+        let strobe = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .flat_map(|cue| &cue.effect_targets)
+            .find_map(|target| match target.params.as_ref() {
+                Some(EffectParamsSnapshot::Lfo(request))
+                    if request.label == "Fl-Strobe (Strobe)" =>
+                {
+                    Some(request)
+                }
+                _ => None,
+            })
+            .expect("Documents golden must convert Fl-Strobe to an owned LFO");
+        assert_eq!(strobe.shape, LfoShape::Strobe);
+        assert_eq!(strobe.period_ms, 2_500);
+        assert_eq!(strobe.low, 0);
+        assert_eq!(strobe.high, u16::MAX);
+        assert!(outcome.report.approximate.details.iter().any(|detail| {
+            detail.item == "Effect: Fl-Strobe (Strobe)"
+                && detail.message.contains("2% of the period")
+        }));
         assert!(outcome
             .report
             .approximate
@@ -4307,8 +4727,8 @@ mod tests {
         }
         let outcome = import_path(path).unwrap();
         crate::validate_project_file(&outcome.project).unwrap();
-        assert_eq!(outcome.report.summary.effects_converted, 22);
-        assert_eq!(outcome.report.summary.effects_skipped, 8);
+        assert_eq!(outcome.report.summary.effects_converted, 27);
+        assert_eq!(outcome.report.summary.effects_skipped, 3);
         let imported_scene_blocks = outcome
             .project
             .snapshot
@@ -4350,6 +4770,8 @@ mod tests {
                             ColorEffectSpatialRecipe::Burst { .. } => 121,
                             ColorEffectSpatialRecipe::RandomFill { .. } => 131,
                             ColorEffectSpatialRecipe::Sparkle { .. } => 133,
+                            ColorEffectSpatialRecipe::Plasma { .. } => 129,
+                            ColorEffectSpatialRecipe::ColorRainbow { .. } => 130,
                             ColorEffectSpatialRecipe::Rainbow { .. } => 521,
                             ColorEffectSpatialRecipe::Perlin { .. } => 530,
                         }),
@@ -4363,18 +4785,30 @@ mod tests {
         assert_eq!(spatial_counts.get(&121), Some(&1));
         assert_eq!(spatial_counts.get(&131), Some(&1));
         assert_eq!(spatial_counts.get(&133), Some(&1));
-        assert!(outcome
+        assert_eq!(spatial_counts.get(&129), Some(&2));
+        assert_eq!(spatial_counts.get(&130), Some(&3));
+        assert!(!outcome
             .report
             .skipped
             .details
             .iter()
             .any(|detail| { detail.message.contains("ID=129") || detail.item.contains("ID=129") }));
-        assert!(outcome
+        assert!(!outcome
             .report
             .skipped
             .details
             .iter()
             .any(|detail| { detail.message.contains("ID=130") || detail.item.contains("ID=130") }));
+        assert_eq!(
+            outcome
+                .report
+                .skipped
+                .details
+                .iter()
+                .filter(|detail| detail.message.contains("BEAMS resolved to no Chaser steps"))
+                .count(),
+            3
+        );
 
         let moves = outcome
             .project

@@ -110,3 +110,62 @@ VALUE FX と COLOR MAPPINGS はユーザーの全ショーに検体なし（実�
 2026-07-19（Shinkan2026 Desktop版、ユーザーが再ロードしMoving-Posバンクまで表示済み）: LIVE→EDIT切替1回、
 シーン選択3回（Left2Right/M-PolyLoop/M-CenterDivLoop）とキャプチャのみ。保存なし。編集対象は「M-CenterDivLoop」に残置。
 これでユーザーの全ショーに存在する全FXファミリーの照合が完了。
+
+## DVC-3c 完了: 残4種の実機照合（2026-07-31）
+
+ユーザー許可のもと監督が全自動操作（Shinkan-Left版をユーザーが手動ロード→観察後、新規スクラッチプロジェクトで逆引き）。
+既存プロジェクトへの保存は一切なし。証跡: `target/qa/ui-comparison/fx-id-*.png`, `wave-*-name.png`, `wavegraph-*.png`,
+スクラッチ検体 `target/qa/dvc-id-map/`（dvc-id-map.dvc + wave-1..12.dvc）。
+
+### CURVE FX 波形ID完全対応表（スクラッチ保存差分で全11種確定）
+
+新規プロジェクトにCURVE FXを置き、波形コンボを{DOWN}で1段ずつ進めてはCtrl+S保存→ファイル複製→ID読取。
+コンボ表示名はピクセルキャプチャで裏取り。アンカー2点（ID3=Inverse Ramp・ID7=Sinus、過去実測）と完全一致。
+
+| UI名 | ID | | UI名 | ID |
+|---|---|---|---|---|
+| Sinus | 7 | | Ramp | 5 |
+| Sinus3 | 8 | | Inverse Ramp | 3 ✓アンカー |
+| Tangeant | 11 | | Random | 6 |
+| Triangle | 12 | | **Strobe** | **10** ← Documents版Fl-Strobe |
+| Pulse | 4 | | Custom | 13 |
+| Square | 9 | | | |
+
+- グラフ窓の表示規則: **窓 = Rate/2 周期**（Rate=1で半周期、Rate=2で1周期、Rate=10で5周期を実測確認）。
+- **Strobe波形の実測**: 周期あたり**10本の等間隔パルス**（Rate=2窓で両端含む11エッジ、Rate=1半周期窓で5本）。
+  パルス幅は極細（周期の1〜2%程度、描画線幅レベル）。ベースは下限、ピークはSize=1.0でゼロ軸（半振幅）。
+  → **Size=2でフルレンジフラッシュ**。Documents版Fl-Strobeは Rate=2/Size=2/Phase=0/Offset=0/Phasing=0/
+  DURATION=5000 = 周期2500ms・250ms間隔のフルフラッシュ×10。
+- Pulse(4)は矩形ではなく減衰振動波、Square(9)は50%デューティ矩形（キャプチャ有）。波形切替でRate等は既定値へ戻る。
+
+### COLOR FX ID=129 = Plasma（B-WineRed (2) 実UI照合・全11パラメータ一致）
+
+UI: Size X=1/Param=2/Size Y=1/Param=2/Speed X=-1/Param=2/Speed Y=1/Param=-1、パレット5色、Grayscale off、
+Transform None、64 Beams。XML: ID1=COLORS(TYPE=4)パレット、ID2=Grayscale、ID3=Transform、
+ID10..17=(SizeX, ParamX, SizeY, ParamY, SpeedX, ParamSX, SpeedY, ParamSY) — 全て1対1一致。
+**パレット格納場所を確定**: `PARAM TYPE=4 ID=1` 内 `<COLORS NB=n><COLOR VAL="r/g/b/…(18要素)"/>`、
+先頭3要素が正規化RGB（スウォッチ5色と画素一致）。
+
+### COLOR FX ID=130 = Rainbow（PS-WineRed 実UI照合・全パラメータ一致）
+
+UI: Color Width=0.0/Angle=0/Gradient=100.0、パレット10色、2 Beams。XML: ID1=COLORSパレット(10色)、ID2=Grayscale、
+ID3=Transform、ID10=Color Width、ID11=Angle、ID12=Gradient(UI=VAL×100)。MAPPINGSの521 Rainbowとは別物
+（COLOR FX系はビームストリップ上の掃引、パラメータ構成も異なる）。
+
+### CHASER FX ID=322 = Chaser #2（SS-Blue 実UI照合）
+
+Daslight UI自身が「0 Beam(s)・Features空」を表示 — このFXは原本でも空（無発光）。321系と同じ
+「BEAMS resolved to no Chaser steps」スキップが正しい。ジェネレータ名のみ対応表に追加。
+
+### FXファミリー選択肢の全貌（新規シーンのFX追加メニュー実観察）
+
+STEPS / COLOR FX / CHASER FX / MOVE FX / VALUE FX / CURVE FX / MAPPINGS / COLOR MAPPINGS / SUPER SCENE。
+
+### 実機操作の記録（正直な状態申告・2026-07-31）
+
+Shinkan-Left版（ユーザー手動ロード）: シーン選択ダブルクリック3回（PS-WineRed/SS-Blue/Fl-Strobe）、
+波形ドロップダウン開閉（Esc復帰）、キャプチャのみ。**保存なし・未保存編集なし**。その後 File→New で
+スクラッチ「dvc-id-map.dvc」をデスクトップへ新規保存し（既存ファイル非接触）、波形切替+Ctrl+S×12回は
+全てスクラッチのみ。誤操作でOpen...ダイアログを1回開いたがESCで即キャンセル（ファイル未選択）。
+終了状態: Daslightはスクラッチプロジェクトを表示したままプライマリモニタに最大化（Shinkan-Leftは
+無変更のままクローズ済み。必要なら手動で開き直し）。スクラッチ検体はtarget/qa/dvc-id-map/へ回収済み。

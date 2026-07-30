@@ -231,7 +231,7 @@ export interface RemoteControlStatus {
 }
 
 export type ClockSource = "Manual" | "Tap" | "MidiClock" | "MidiTimecode" | "Ltc" | "AbletonLink";
-export type LfoShape = "Sine" | "Cosine" | "Triangle" | "Saw" | "Square" | "Random" | "Perlin";
+export type LfoShape = "Sine" | "Cosine" | "Triangle" | "Saw" | "Square" | "Strobe" | "Random" | "Perlin";
 export type EffectKind = "Lfo" | "PositionWave" | "Color" | "Chaser" | "Move" | "Value" | "Curve" | "Mapping" | "ColorMapping";
 export type EffectBlendMode = "Override" | "Add" | "Multiply";
 export type ColorEffectAlgorithm = "Cycle" | "Bounce" | "Sequence" | "Random";
@@ -1823,6 +1823,8 @@ export type ColorEffectSpatialRecipe =
   | { Burst: { color_width: number; gradient: number } }
   | { RandomFill: { point_width: number } }
   | { Sparkle: { number: number; lifespan: number; width: number } }
+  | { Plasma: { size_x: number; param_x: number; size_y: number; param_y: number; speed_x: number; param_sx: number; speed_y: number; param_sy: number } }
+  | { ColorRainbow: { color_width: number; angle_degrees: number; gradient: number } }
   | { Rainbow: { vertical_symmetry: boolean; rotation_degrees: number; color_width: number; angle_degrees: number; gradient: number } }
   | { Perlin: { octaves: number; zoom: number; direction_degrees: number; speed: number; amplitude: number } };
 

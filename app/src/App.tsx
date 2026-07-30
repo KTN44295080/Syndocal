@@ -14340,7 +14340,7 @@ export default function App() {
   };
   const colorEffectDraftValid = createMemo(() => {
     const stops = colorEffectStops();
-    if (stops.length < 2 || stops.length > 8) return false;
+    if (stops.length < 2 || stops.length > 16) return false;
     return stops.every((stop, index) =>
       Number.isFinite(stop.position)
       && stop.position >= 0
@@ -14762,7 +14762,7 @@ export default function App() {
     }
     if (colorEffect) {
       if (!colorEffectDraftValid()) {
-        setMessage("Color effects require 2 to 8 ordered palette stops with valid colors.");
+        setMessage("Color effects require 2 to 16 ordered palette stops with valid colors.");
         return null;
       }
       return {

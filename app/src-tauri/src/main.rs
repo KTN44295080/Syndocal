@@ -24355,8 +24355,8 @@ fn validate_color_effect_request(request: &ColorEffectRequest) -> Result<(), Str
     if request.fixture_ids.is_empty() && request.target_group_ids.is_empty() {
         return Err("Color effect must target at least one fixture or group".to_string());
     }
-    if !(2..=8).contains(&request.stops.len()) {
-        return Err("Color effect requires between 2 and 8 stops".to_string());
+    if !(2..=16).contains(&request.stops.len()) {
+        return Err("Color effect requires between 2 and 16 stops".to_string());
     }
     let mut previous_position = None;
     for stop in &request.stops {
@@ -36193,7 +36193,7 @@ f 1 2 3
         request.stops.truncate(1);
         assert!(validate_color_effect_request(&request)
             .unwrap_err()
-            .contains("between 2 and 8"));
+            .contains("between 2 and 16"));
 
         request = sample_color_effect_request();
         request.stops[1].position = request.stops[0].position;

@@ -1344,7 +1344,7 @@ const japaneseText: Record<string, string> = {
   "Color effect editor": "Colorエフェクトエディター",
   "Palette stops": "パレットストップ",
   "Color palette stops": "Colorパレットストップ",
-  "/ 8 stops": "/ 8ストップ",
+  "/ 16 stops": "/ 16ストップ",
   spread: "スプレッド",
   "Color flow": "Colorフロー",
   "Beam-space pattern": "Beam空間パターン",
@@ -1392,11 +1392,11 @@ const japaneseText: Record<string, string> = {
     "灯体全体のカラー出力用マルチカラー案を準備しました。",
   "RGB / RGBW / Wheel": "RGB / RGBW / ホイール",
   "Fixture order": "灯体順",
-  "A color effect requires 2 to 8 palette stops.": "カラーエフェクトには2〜8個のパレットストップが必要です。",
+  "A color effect requires 2 to 16 palette stops.": "カラーエフェクトには2〜16個のパレットストップが必要です。",
   "Palette colors and positions must be within range.": "パレットの色と位置を有効範囲内に設定してください。",
   "Each palette stop needs a unique position.": "各パレットストップには重複しない位置が必要です。",
-  "Color effects require 2 to 8 ordered palette stops with valid colors.":
-    "カラーエフェクトには、有効な色を持つ位置順のパレットストップが2〜8個必要です。",
+  "Color effects require 2 to 16 ordered palette stops with valid colors.":
+    "カラーエフェクトには、有効な色を持つ位置順のパレットストップが2〜16個必要です。",
   "Seven-stop HSV spectrum rendered across the fixture's complete colour system.":
     "灯体のカラーシステム全体へ出力する7ストップHSVスペクトラムです。",
   "Ordered multi-colour steps spread deterministically across the current fixtures.":
@@ -2694,7 +2694,7 @@ const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
   [/^(\d+) active$/, (count) => `${count}有効`],
   [/^Path point (\d+), X (.+), Y (.+)$/, (index, x, y) => `パスポイント${index}、X ${x}、Y ${y}`],
   [/^(\d+) imported beam targets$/, (count) => `インポート済みビームターゲット ${count}件`],
-  [/^(\d+) \/ 8 stops$/, (count) => `${count} / 8ストップ`],
+  [/^(\d+) \/ 16 stops$/, (count) => `${count} / 16ストップ`],
   [/^spread (\d+)%$/, (percent) => `スプレッド ${percent}%`],
   [/^LOOP ON · (.+)–(.+)$/, (start, end) => `ループ ON · ${start}–${end}`],
   [/^Stage (.+) in Preview without changing Program$/, (label) => `Programを変えずに${label}をPreviewへ送る`],

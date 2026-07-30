@@ -38,6 +38,8 @@ export const evaluateLfoShape = (shape: LfoShape, phase: number): number => {
       return normalized;
     case "Square":
       return normalized < 0.5 ? 1 : 0;
+    case "Strobe":
+      return (normalized * 10) % 1 < 0.2 ? 1 : 0;
     case "Random":
       return hashUnitFloat(Math.floor(normalized * 16) >>> 0);
     case "Perlin": {

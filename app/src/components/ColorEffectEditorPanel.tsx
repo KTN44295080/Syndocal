@@ -147,8 +147,8 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
   };
 
   const stopError = createMemo(() => {
-    if (props.stops.length < 2 || props.stops.length > 8) {
-      return "A color effect requires 2 to 8 palette stops.";
+    if (props.stops.length < 2 || props.stops.length > 16) {
+      return "A color effect requires 2 to 16 palette stops.";
     }
     if (
       props.stops.some(
@@ -223,7 +223,7 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
 
   const addStop = () => {
     const stops = orderedStops();
-    if (stops.length >= 8) return;
+    if (stops.length >= 16) return;
     if (stops.length === 0) {
       publishStops(defaultColorEffectStops.slice(0, 2).map((stop) => ({ ...stop, color: { ...stop.color } })));
       return;
@@ -380,8 +380,8 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
           </For>
         </div>
         <div class="colorEffectPaletteFooter">
-          <span class="tabularNums">{orderedStops().length} / 8 stops</span>
-          <button type="button" onClick={addStop} disabled={orderedStops().length >= 8}>Add stop</button>
+          <span class="tabularNums">{orderedStops().length} / 16 stops</span>
+          <button type="button" onClick={addStop} disabled={orderedStops().length >= 16}>Add stop</button>
         </div>
         <Show when={stopError()}>
           {(error) => <p class="fieldError textPretty" role="alert">{error()}</p>}

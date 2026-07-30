@@ -1884,6 +1884,7 @@ pub enum LfoShape {
     Triangle,
     Saw,
     Square,
+    Strobe,
     Random,
     Perlin,
 }
@@ -2161,6 +2162,21 @@ pub enum ColorEffectSpatialRecipe {
         number: u16,
         lifespan: f32,
         width: u16,
+    },
+    Plasma {
+        size_x: f32,
+        param_x: f32,
+        size_y: f32,
+        param_y: f32,
+        speed_x: f32,
+        param_sx: f32,
+        speed_y: f32,
+        param_sy: f32,
+    },
+    ColorRainbow {
+        color_width: f32,
+        angle_degrees: f32,
+        gradient: f32,
     },
     Rainbow {
         vertical_symmetry: bool,

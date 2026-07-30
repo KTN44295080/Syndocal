@@ -22615,8 +22615,8 @@ fn validate_runtime_color_effect_request(request: &ColorEffectRequest) -> Result
     if request.fixture_ids.is_empty() && request.target_group_ids.is_empty() {
         return Err("Color effect must target at least one fixture or group".to_string());
     }
-    if !(2..=8).contains(&request.stops.len()) {
-        return Err("Color effect requires between 2 and 8 stops".to_string());
+    if !(2..=16).contains(&request.stops.len()) {
+        return Err("Color effect requires between 2 and 16 stops".to_string());
     }
     let mut previous = None;
     for stop in &request.stops {
@@ -22709,6 +22709,37 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
                 return Err("Sparkle number and width must be at least 1".to_string());
             }
             percent("lifespan", *lifespan)
+        }
+        ColorEffectSpatialRecipe::Plasma {
+            size_x,
+            param_x,
+            size_y,
+            param_y,
+            speed_x,
+            param_sx,
+            speed_y,
+            param_sy,
+        } => {
+            if [
+                *size_x, *param_x, *size_y, *param_y, *speed_x, *param_sx, *speed_y, *param_sy,
+            ]
+            .into_iter()
+            .all(f32::is_finite)
+            {
+                Ok(())
+            } else {
+                Err("Plasma parameters must be finite".to_string())
+            }
+        }
+        ColorEffectSpatialRecipe::ColorRainbow {
+            color_width,
+            angle_degrees,
+            gradient,
+        } => {
+            if !color_width.is_finite() || !angle_degrees.is_finite() {
+                return Err("Color Rainbow width and angle must be finite".to_string());
+            }
+            percent("gradient", *gradient)
         }
         ColorEffectSpatialRecipe::Rainbow {
             rotation_degrees,
@@ -25864,6 +25895,39 @@ fn evaluate_color_spatial_effect_at_rate(
             }
             black_color()
         }
+        ColorEffectSpatialRecipe::Plasma {
+            size_x,
+            param_x,
+            size_y,
+            param_y,
+            speed_x,
+            param_sx,
+            speed_y,
+            param_sy,
+        } => {
+            let time = time_phase as f32;
+            let opposite = 1.0 - strip_position;
+            let x = strip_position * *size_x + time * *speed_x;
+            let y = opposite * *size_y + time * *speed_y;
+            let wave_x = (std::f32::consts::TAU * x * *param_x).sin();
+            let wave_y = (std::f32::consts::TAU * y * *param_y).sin();
+            let wave_sx =
+                (std::f32::consts::TAU * (strip_position * *size_x + time * *param_sx)).sin();
+            let wave_sy = (std::f32::consts::TAU * (opposite * *size_y + time * *param_sy)).sin();
+            let value = (0.5 + (wave_x + wave_y + wave_sx + wave_sy) * 0.125).clamp(0.0, 1.0);
+            spatial_palette_color(request, value, 100.0)
+        }
+        ColorEffectSpatialRecipe::ColorRainbow {
+            color_width,
+            angle_degrees,
+            gradient,
+        } => {
+            let angle = angle_degrees.to_radians();
+            let projected = strip_position * angle.cos() + (1.0 - strip_position) * angle.sin();
+            let width_scale = 1.0 + color_width.abs();
+            let position = (projected * width_scale + time_phase as f32).rem_euclid(1.0);
+            spatial_palette_color(request, position, *gradient)
+        }
         ColorEffectSpatialRecipe::Rainbow {
             vertical_symmetry,
             rotation_degrees,
@@ -26889,6 +26953,11 @@ fn projected_distance(position: Vec3, origin: Vec3, direction: Vec3) -> f32 {
     (dx * direction.x + dy * direction.y + dz * direction.z) / direction_len
 }
 
+const STROBE_PULSES_PER_PERIOD: f32 = 10.0;
+/// Daslight's graph only resolves this very narrow pulse to roughly 1-2% of a
+/// period. DVC-3c deliberately uses the conservative 2% graph-derived approximation.
+const STROBE_PULSE_WIDTH_FRACTION: f32 = 0.02;
+
 fn evaluate_lfo_shape(shape: &LfoShape, phase: f32) -> f32 {
     let phase = phase.rem_euclid(1.0);
     match shape {
@@ -26904,6 +26973,14 @@ fn evaluate_lfo_shape(shape: &LfoShape, phase: f32) -> f32 {
         LfoShape::Saw => phase,
         LfoShape::Square => {
             if phase < 0.5 {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        LfoShape::Strobe => {
+            let pulse_phase = (phase * STROBE_PULSES_PER_PERIOD).fract();
+            if pulse_phase < STROBE_PULSE_WIDTH_FRACTION * STROBE_PULSES_PER_PERIOD {
                 1.0
             } else {
                 0.0
@@ -46506,6 +46583,9 @@ mod tests {
         assert!((evaluate_lfo_shape(&LfoShape::Triangle, 0.25) - 0.5).abs() < 0.001);
         assert!((evaluate_lfo_shape(&LfoShape::Saw, 0.25) - 0.25).abs() < 0.001);
         assert_eq!(evaluate_lfo_shape(&LfoShape::Square, 0.25), 1.0);
+        assert_eq!(evaluate_lfo_shape(&LfoShape::Strobe, 0.0), 1.0);
+        assert_eq!(evaluate_lfo_shape(&LfoShape::Strobe, 0.05), 0.0);
+        assert_eq!(evaluate_lfo_shape(&LfoShape::Strobe, 0.1), 1.0);
         assert_eq!(
             evaluate_lfo_shape(&LfoShape::Random, 0.01),
             evaluate_lfo_shape(&LfoShape::Random, 0.02)
@@ -46520,6 +46600,70 @@ mod tests {
                 - evaluate_lfo_shape(&LfoShape::Perlin, 1.0))
             .abs()
                 < 0.001
+        );
+    }
+
+    #[test]
+    fn strobe_lfo_emits_ten_two_percent_pulses_per_period() {
+        let sample_count = 10_000_u32;
+        let mut pulse_count = 0_u32;
+        let mut high_samples = 0_u32;
+        let mut was_high = false;
+        for sample in 0..sample_count {
+            let phase = sample as f32 / sample_count as f32;
+            let high = evaluate_lfo_shape(&LfoShape::Strobe, phase) == 1.0;
+            if high {
+                high_samples += 1;
+            }
+            if high && !was_high {
+                pulse_count += 1;
+            }
+            was_high = high;
+        }
+
+        assert_eq!(pulse_count, 10);
+        println!(
+            "strobe pulse train: samples={sample_count}, pulses={pulse_count}, high_samples={high_samples}"
+        );
+        assert!(
+            (1_990..=2_010).contains(&high_samples),
+            "high_samples={high_samples}"
+        );
+        assert_eq!(evaluate_lfo_shape(&LfoShape::Strobe, 0.0), 1.0);
+        assert_eq!(evaluate_lfo_shape(&LfoShape::Strobe, 0.05), 0.0);
+        assert_eq!(evaluate_lfo_shape(&LfoShape::Strobe, 0.1), 1.0);
+    }
+
+    #[test]
+    fn strobe_lfo_owned_cue_recall_flashes_dimmer_low_and_high() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let request = test_lfo_request(
+            "Fl-Strobe",
+            LfoShape::Strobe,
+            2_500,
+            0.0,
+            EffectBlendMode::Override,
+            0,
+            u16::MAX,
+        );
+        create_effect_only_cue(&mut runtime, 1, vec![owned_lfo_target(10, request)]);
+
+        let recalled_at = Instant::now();
+        runtime.request_cue(1, recalled_at);
+        assert_eq!(runtime.active_effect_activation_indices.len(), 1);
+
+        let first_flash = runtime.render_dmx_frame_for_universe(0, recalled_at)[0];
+        let mid_gap =
+            runtime.render_dmx_frame_for_universe(0, recalled_at + Duration::from_millis(125))[0];
+        let second_flash =
+            runtime.render_dmx_frame_for_universe(0, recalled_at + Duration::from_millis(250))[0];
+        println!(
+            "Fl-Strobe recall samples: t=0ms {first_flash}, t=125ms {mid_gap}, t=250ms {second_flash}"
+        );
+        assert_eq!(
+            [first_flash, mid_gap, second_flash],
+            [255, 0, 255],
+            "Fl-Strobe-like recall must flash Dimmer at 0/250 ms and return low at 125 ms"
         );
     }
 
@@ -47143,7 +47287,7 @@ mod tests {
         one_stop.stops.truncate(1);
         assert!(validate_runtime_color_effect_request(&one_stop)
             .unwrap_err()
-            .contains("between 2 and 8"));
+            .contains("between 2 and 16"));
 
         let mut unordered = valid.clone();
         unordered.stops[1].position = 0.0;
@@ -47251,6 +47395,43 @@ mod tests {
             })
             .count();
         assert!((1..=6).contains(&lit), "lit={lit}");
+    }
+
+    #[test]
+    fn color_spatial_plasma_is_smooth_deterministic_and_parameter_driven() {
+        let request = test_spatial_color_request(ColorEffectSpatialRecipe::Plasma {
+            size_x: 1.0,
+            param_x: 2.0,
+            size_y: 1.0,
+            param_y: 2.0,
+            speed_x: -1.0,
+            param_sx: 2.0,
+            speed_y: 1.0,
+            param_sy: -1.0,
+        });
+        let target = test_spatial_color_target(2, 5, 0.5, 0.5);
+        let first = evaluate_test_spatial_color(&request, &target, 250);
+        let repeated = evaluate_test_spatial_color(&request, &target, 250);
+        let moved = evaluate_test_spatial_color(&request, &target, 375);
+        assert_eq!(first, repeated);
+        assert_ne!(first, moved);
+    }
+
+    #[test]
+    fn color_spatial_color_rainbow_sweeps_profile_order_with_gradient() {
+        let request = test_spatial_color_request(ColorEffectSpatialRecipe::ColorRainbow {
+            color_width: 0.0,
+            angle_degrees: 0.0,
+            gradient: 100.0,
+        });
+        let left =
+            evaluate_test_spatial_color(&request, &test_spatial_color_target(0, 3, 0.0, 0.5), 250);
+        let right =
+            evaluate_test_spatial_color(&request, &test_spatial_color_target(2, 3, 1.0, 0.5), 250);
+        assert_eq!(left, right);
+        let center =
+            evaluate_test_spatial_color(&request, &test_spatial_color_target(1, 3, 0.5, 0.5), 250);
+        assert_ne!(left, center);
     }
 
     #[test]
