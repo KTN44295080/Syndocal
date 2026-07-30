@@ -23,6 +23,7 @@ interface MappingStageLayersPanelProps {
   beamFixtures: MappingBeamFixture[];
   geometryNodes: MappingGeometryNode2D[];
   fixtures: MappingFixture2D[];
+  labelFixtures?: MappingFixture2D[];
   selectedFixtureIds: Set<number>;
   selectedFixtureId: number | null;
   selectedGroupId: string | null;
@@ -69,6 +70,7 @@ export function MappingStageLayersPanel(props: MappingStageLayersPanelProps) {
       </Show>
       <MappingFixturesLayer
         fixtures={props.fixtures}
+        labelFixtures={props.labelFixtures}
         selectedFixtureIds={props.selectedFixtureIds}
         selectedFixtureId={props.selectedFixtureId}
         selectedGroupId={props.selectedGroupId}

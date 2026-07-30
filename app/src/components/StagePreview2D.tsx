@@ -1,4 +1,5 @@
 import { createMemo, createSignal, For, onCleanup, onMount } from "solid-js";
+import type { FixtureLiveColorSegment } from "../fixtureLiveColor";
 import type { MappingFixtureVisualKind } from "../fixtureVisuals";
 import { planStageFixtureLabels } from "../stageLabelLayout";
 import { stageViewBoxSize } from "../stageGeometry";
@@ -22,6 +23,9 @@ export interface StagePreviewFixture {
   beamPoints: string;
   intensity: number;
   color: string;
+  liveColorApplied?: boolean;
+  liveColorValueSource?: "preview" | "attribute";
+  liveSegments?: FixtureLiveColorSegment[];
   inGroupFilter: boolean;
   highlighted: boolean;
   soloed: boolean;
@@ -270,6 +274,10 @@ export function StagePreview2D(props: StagePreview2DProps) {
           return (
             <g
               class={className()}
+              data-stage-fixture-id={fixture.id}
+              data-live-color-applied={fixture.liveColorApplied ? "true" : "false"}
+              data-live-color-source={fixture.liveColorValueSource ?? "none"}
+              data-live-segment-count={fixture.liveSegments?.length ?? 1}
               transform={`translate(${fixture.x} ${fixture.z}) rotate(${fixture.yaw})`}
               onPointerDown={(event) => {
                 event.stopPropagation();
@@ -285,6 +293,7 @@ export function StagePreview2D(props: StagePreview2DProps) {
                 width={fixture.width}
                 height={fixture.height}
                 color={fixture.color}
+                segments={fixture.liveSegments}
                 hitTargetRadius={Math.max(
                   props.compact ? 3.2 : 3.8,
                   fixture.width / 2 + 1.5,

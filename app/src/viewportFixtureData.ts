@@ -379,6 +379,222 @@ const viewportColorWheelControls: AttributeControl[] = [
   },
 ];
 
+const mappingLiveDimmerControl = (offset: number, attribute = "Dimmer"): AttributeControl => ({
+  attribute,
+  channel_name: attribute,
+  offsets: [offset],
+  resolution: "EightBit",
+  default_value: 0,
+  functions: [],
+});
+
+const mappingLiveColorControl = (
+  role: "Red" | "Green" | "Blue" | "Amber",
+  segment: number,
+  offset: number,
+): AttributeControl => ({
+  attribute: `${role}${segment}`,
+  channel_name: `${role} ${segment}`,
+  offsets: [offset],
+  resolution: "EightBit",
+  default_value: 0,
+  functions: [],
+});
+
+const mappingLiveMegaBarControls: AttributeControl[] = [
+  mappingLiveDimmerControl(1),
+  ...Array.from({ length: 8 }, (_, index) => {
+    const segment = index + 1;
+    const firstOffset = 2 + index * 4;
+    return [
+      mappingLiveColorControl("Red", segment, firstOffset),
+      mappingLiveColorControl("Green", segment, firstOffset + 1),
+      mappingLiveColorControl("Blue", segment, firstOffset + 2),
+      mappingLiveColorControl("Amber", segment, firstOffset + 3),
+    ];
+  }).flat(),
+];
+
+const mappingLiveFixture = (
+  id: number,
+  label: string,
+  profileName: string,
+  modeName: string,
+  address: number,
+  x: number,
+  z: number,
+  controls: AttributeControl[],
+  yaw = 0,
+): PatchedFixtureSummary => ({
+  id,
+  label,
+  profile_source_path: `viewport://mapping-live-color/${id}`,
+  profile_name: profileName,
+  manufacturer: "Syndocal QA",
+  mode_name: modeName,
+  universe: 0,
+  address,
+  group_ids: ["front"],
+  position: { x, y: 2.5, z },
+  rotation: { pitch: 0, yaw, roll: 0 },
+  geometries: [],
+  controls,
+  attribute_values: controls.map((control) => ({
+    attribute: control.attribute,
+    value: control.default_value,
+  })),
+  limits: defaultFixtureLimits,
+  highlighted: false,
+  soloed: false,
+  parked: false,
+});
+
+const mappingLiveFixtureWithValues = (
+  fixture: PatchedFixtureSummary,
+  values: Record<string, number>,
+): PatchedFixtureSummary => ({
+  ...fixture,
+  attribute_values: fixture.attribute_values.map((entry) => ({
+    ...entry,
+    value: values[entry.attribute] ?? entry.value,
+  })),
+});
+
+const mappingLiveColorFixtures: PatchedFixtureSummary[] = [
+  mappingLiveFixture(
+    1,
+    "Mega Bar RGBA 8",
+    "MEGA BAR RGBA",
+    "33CH 8 segment",
+    1,
+    -5,
+    -1,
+    mappingLiveMegaBarControls,
+    30,
+  ),
+  mappingLiveFixture(
+    2,
+    "Single RGB",
+    "Single RGB PAR",
+    "4CH",
+    40,
+    0,
+    -1,
+    [
+      mappingLiveDimmerControl(1),
+      { ...viewportFixtureControls[3], offsets: [2] },
+      { ...viewportFixtureControls[4], offsets: [3] },
+      { ...viewportFixtureControls[5], offsets: [4] },
+    ],
+  ),
+  mappingLiveFixture(
+    3,
+    "Dimmer Only",
+    "Conventional Dimmer",
+    "1CH",
+    50,
+    5,
+    -1,
+    [mappingLiveDimmerControl(1)],
+  ),
+  mappingLiveFixture(
+    4,
+    "Daslight Color Wheel",
+    "Wheel Spot",
+    "2CH",
+    60,
+    0,
+    4,
+    [
+      mappingLiveDimmerControl(1),
+      { ...viewportColorWheelControls[0], offsets: [2] },
+    ],
+  ),
+  {
+    ...mappingLiveFixture(
+      5,
+      "GDTF Cell Bar",
+      "GDTF Subgeometry Bar",
+      "10CH 3 cell",
+      70,
+      0,
+      8,
+      [
+        mappingLiveDimmerControl(1),
+        ...(["Cell 1", "Cell 2", "Cell 3"] as const).flatMap((geometry, index) => {
+          const firstOffset = 2 + index * 3;
+          return [
+            { ...viewportFixtureControls[3], offsets: [firstOffset], geometry },
+            { ...viewportFixtureControls[4], offsets: [firstOffset + 1], geometry },
+            { ...viewportFixtureControls[5], offsets: [firstOffset + 2], geometry },
+          ];
+        }),
+      ],
+    ),
+    geometries: (["Cell 1", "Cell 2", "Cell 3"] as const).map((name) => ({
+      name,
+      kind: "Geometry",
+      parent: "Body",
+      matrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+    })),
+  },
+  mappingLiveFixtureWithValues(
+    mappingLiveFixture(
+      6,
+      "Attribute Fallback RGBA 3",
+      "Attribute-only Cell Bar",
+      "13CH 3 segment",
+      90,
+      -5,
+      8,
+      [
+        mappingLiveDimmerControl(1),
+        ...Array.from({ length: 3 }, (_, index) => {
+          const segment = index + 1;
+          const firstOffset = 2 + index * 4;
+          return [
+            mappingLiveColorControl("Red", segment, firstOffset),
+            mappingLiveColorControl("Green", segment, firstOffset + 1),
+            mappingLiveColorControl("Blue", segment, firstOffset + 2),
+            mappingLiveColorControl("Amber", segment, firstOffset + 3),
+          ];
+        }).flat(),
+      ],
+      -20,
+    ),
+    {
+      Dimmer: 32_768,
+      Red1: 65_535,
+      Green2: 65_535,
+      Amber3: 65_535,
+    },
+  ),
+  mappingLiveFixture(
+    7,
+    "Unlit RGB",
+    "Unlit RGB PAR",
+    "4CH",
+    110,
+    5,
+    8,
+    [
+      mappingLiveDimmerControl(1),
+      { ...viewportFixtureControls[3], offsets: [2] },
+      { ...viewportFixtureControls[4], offsets: [3] },
+      { ...viewportFixtureControls[5], offsets: [4] },
+    ],
+  ),
+];
+
+const mappingLiveSnapshotFixtures: PatchedFixtureSummary[] =
+  mappingLiveColorFixtures.map((fixture) => ({
+    ...fixture,
+    attribute_values: fixture.controls.map((control) => ({
+      attribute: control.attribute,
+      value: 65_535,
+    })),
+  }));
+
 const viewportLiveEditTypeFixture = (
   id: number,
   profileName: string,
@@ -1270,6 +1486,27 @@ const cueRecallCue: CueSummary = {
   effect_targets: [{ effect_id: cueRecallEffect.id, enabled: true }],
 };
 
+const mappingLiveSnapshotAmberCue: CueSummary = {
+  ...cueRecallCue,
+  id: 28_301,
+  cue_number: "3.1",
+  label: "Amber",
+  group_id: "Bar",
+  fade_ms: 0,
+  targets: [{
+    fixture_id: 1,
+    values: mappingLiveSnapshotFixtures[0].controls.map((control) => ({
+      attribute: control.attribute,
+      value: control.attribute === "Dimmer" || control.attribute.startsWith("Amber")
+        ? 65_535
+        : 0,
+    })),
+  }],
+  steps: [],
+  node_graph_targets: [],
+  effect_targets: [],
+};
+
 const fxVisualizationCue: CueSummary = {
   ...cueRecallCue,
   id: 401,
@@ -1686,4 +1923,7 @@ export const viewportFixtureData = {
   layeredTimelineSuperSceneEvent,
   liveEditTypeFixtures,
   colorWheelFixtures,
+  mappingLiveColorFixtures,
+  mappingLiveSnapshotFixtures,
+  mappingLiveSnapshotAmberCue,
 } as const;

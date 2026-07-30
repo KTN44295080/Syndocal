@@ -1,4 +1,5 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
+import type { FixtureLiveColorSegment } from "../fixtureLiveColor";
 import type { MappingFixtureVisualKind } from "../fixtureVisuals";
 import { planStageFixtureLabels, type StageLabelViewport } from "../stageLabelLayout";
 import { StageFixtureGlyph, StageFixtureLabel } from "./StageGlyphs";
@@ -20,6 +21,9 @@ export interface MappingFixture2D {
   yawHandleZ: number;
   intensity: number;
   color: string;
+  liveColorApplied?: boolean;
+  liveColorValueSource?: "preview" | "attribute";
+  liveSegments?: FixtureLiveColorSegment[];
   inGroupFilter: boolean;
   highlighted: boolean;
   soloed: boolean;
@@ -34,6 +38,7 @@ export type MappingPlacePreview2D = Pick<
 type MappingFixturesLayerProps = {
   readOnly?: boolean;
   fixtures: MappingFixture2D[];
+  labelFixtures?: MappingFixture2D[];
   selectedFixtureIds: Set<number>;
   selectedFixtureId: number | null;
   selectedGroupId: string | null;
@@ -53,7 +58,7 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
   const [hoveredFixtureId, setHoveredFixtureId] = createSignal<number | null>(null);
   const labelLayout = createMemo(() =>
     planStageFixtureLabels({
-      fixtures: props.fixtures,
+      fixtures: props.labelFixtures ?? props.fixtures,
       viewport: props.labelViewport,
       zoom: props.labelZoom,
       showLabels: props.showLabels,
@@ -87,6 +92,10 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
             <>
               <g
                 class={className()}
+                data-stage-fixture-id={fixture.id}
+                data-live-color-applied={fixture.liveColorApplied ? "true" : "false"}
+                data-live-color-source={fixture.liveColorValueSource ?? "none"}
+                data-live-segment-count={fixture.liveSegments?.length ?? 1}
                 transform={`translate(${fixture.x} ${fixture.z}) rotate(${fixture.yaw})`}
                 onPointerDown={(event) => props.onFixturePointerDown(event, fixture.id)}
                 onPointerEnter={() => setHoveredFixtureId(fixture.id)}
@@ -99,6 +108,7 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
                   width={fixture.width}
                   height={fixture.height}
                   color={fixture.color}
+                  segments={fixture.liveSegments}
                   hitTargetRadius={Math.max(6, fixture.width / 2 + 1.5, fixture.height / 2 + 1.5)}
                   title={`${fixture.label} / ${fixture.dmxLabel} / ${fixture.groupLabel}`}
                 />

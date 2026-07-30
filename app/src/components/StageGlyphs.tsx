@@ -1,4 +1,5 @@
 import { Show } from "solid-js";
+import type { FixtureLiveColorSegment } from "../fixtureLiveColor";
 import type { MappingFixtureVisualKind } from "../fixtureVisuals";
 import type { StageFixtureLabelLayout } from "../stageLabelLayout";
 import type { StageObjectKind } from "../types";
@@ -14,6 +15,7 @@ type StageFixtureGlyphProps = {
   hitTargetClass?: string;
   hitTargetRadius?: number;
   showFacingMark?: boolean;
+  segments?: FixtureLiveColorSegment[];
   title?: string;
 };
 
@@ -26,6 +28,17 @@ export const stageFixtureFacingTickLength = (width: number, height: number) =>
 export function StageFixtureGlyph(props: StageFixtureGlyphProps) {
   const shapeClass = () => props.shapeClass ?? "stageFixtureShape";
   const tickLength = () => stageFixtureFacingTickLength(props.width, props.height);
+  const segments = () => props.segments?.length && props.segments.length > 1 ? props.segments : null;
+  const segmentRadius = () => {
+    const count = segments()?.length ?? 1;
+    return Math.max(0.24, Math.min(props.height * 0.38, props.width / (count * 2.2)));
+  };
+  const segmentX = (index: number) => {
+    const count = segments()?.length ?? 1;
+    if (count <= 1) return 0;
+    const radius = segmentRadius();
+    return -props.width / 2 + radius + index * ((props.width - radius * 2) / (count - 1));
+  };
 
   return (
     <>
@@ -40,36 +53,69 @@ export function StageFixtureGlyph(props: StageFixtureGlyphProps) {
         )}
       </Show>
       <Show
-        when={props.visualKind === "moving"}
+        when={segments()}
         fallback={
           <Show
-            when={props.visualKind === "laser"}
+            when={props.visualKind === "moving"}
             fallback={
-              <rect
-                class={shapeClass()}
-                x={-props.width / 2}
-                y={-props.height / 2}
-                width={props.width}
-                height={props.height}
-                fill={props.color}
-              />
+              <Show
+                when={props.visualKind === "laser"}
+                fallback={
+                  <rect
+                    data-stage-fixture-shape
+                    class={shapeClass()}
+                    x={-props.width / 2}
+                    y={-props.height / 2}
+                    width={props.width}
+                    height={props.height}
+                    fill={props.color}
+                  />
+                }
+              >
+                <polygon
+                  data-stage-fixture-shape
+                  class={shapeClass()}
+                  points={`0,${-props.height / 2} ${props.width / 2},${props.height / 2} ${-props.width / 2},${props.height / 2}`}
+                  fill={props.color}
+                />
+              </Show>
             }
           >
-            <polygon
+            <circle
+              data-stage-fixture-shape
               class={shapeClass()}
-              points={`0,${-props.height / 2} ${props.width / 2},${props.height / 2} ${-props.width / 2},${props.height / 2}`}
+              cx="0"
+              cy="0"
+              r={Math.max(props.width, props.height) / 2}
               fill={props.color}
             />
           </Show>
         }
       >
-        <circle
-          class={shapeClass()}
-          cx="0"
-          cy="0"
-          r={Math.max(props.width, props.height) / 2}
-          fill={props.color}
-        />
+        {(liveSegments) => (
+          <>
+            <rect
+              data-stage-fixture-shape
+              class={`${shapeClass()} stageFixtureSegmentOutline`}
+              x={-props.width / 2}
+              y={-props.height / 2}
+              width={props.width}
+              height={props.height}
+              fill="none"
+            />
+            {liveSegments().map((segment, index) => (
+              <circle
+                data-stage-fixture-segment={index + 1}
+                class="stageFixtureSegment"
+                cx={segmentX(index)}
+                cy="0"
+                r={segmentRadius()}
+                fill={segment.color}
+                stroke="none"
+              />
+            ))}
+          </>
+        )}
       </Show>
       <Show when={stageFixtureHasFacingTick(props.visualKind)}>
         <line

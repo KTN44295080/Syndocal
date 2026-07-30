@@ -41,6 +41,9 @@ const editLiveOnlyMode = process.argv.includes("--edit-live-only");
 const colorWheelOnlyMode = process.argv.includes("--color-wheel-only");
 const controlEditPositionOnlyMode = process.argv.includes("--control-edit-position-only");
 const controlStageChromeOnlyMode = process.argv.includes("--control-stage-chrome-only");
+const mappingLiveColorOnlyMode = process.argv.includes("--mapping-live-color-only");
+const mappingLiveSegmentsOnlyMode = process.argv.includes("--mapping-live-segments-only");
+const mappingLiveSnapshotOnlyMode = process.argv.includes("--mapping-live-snapshot-only");
 const controlModeSurfaceOnlyMode = process.argv.includes("--control-mode-surface-only");
 const liveDeskHeaderOnlyMode = process.argv.includes("--live-desk-header-only");
 const topbarPulseOnlyMode = process.argv.includes("--topbar-pulse-only");
@@ -48,6 +51,10 @@ const viewportTraceEnabled = process.env.SYNDOCAL_VIEWPORT_TRACE === "1";
 const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
   largeShowMode
     ? "large-show"
+    : mappingLiveSnapshotOnlyMode
+      ? "mapping-live-snapshot"
+    : mappingLiveColorOnlyMode || mappingLiveSegmentsOnlyMode
+      ? "mapping-live-color"
     : colorWheelOnlyMode
       ? "color-wheel"
     : editLiveOnlyMode
@@ -112,6 +119,8 @@ const viewports = requestedViewport
     ? [compactFallbackViewports[1]]
   : largeShowMode
     ? [primaryOperationalViewport]
+    : mappingLiveColorOnlyMode || mappingLiveSegmentsOnlyMode || mappingLiveSnapshotOnlyMode
+      ? [primaryOperationalViewport]
     : audioReactiveOnlyMode
       ? [primaryOperationalViewport, compactFallbackViewports[0]]
       : fullscreenVjOnlyMode || operatorVjOnlyMode
@@ -15842,6 +15851,180 @@ async function runSceneBlockLargeViewport(client, viewport) {
   };
 }
 
+async function readMappingLiveColorSurface(client, rootSelector) {
+  return client.evaluate(`(() => {
+    const root = document.querySelector(${JSON.stringify(rootSelector)});
+    const fixture = (id) => root?.querySelector('[data-stage-fixture-id="' + id + '"]') ?? null;
+    const inspect = (id) => {
+      const node = fixture(id);
+      const shape = node?.querySelector('[data-stage-fixture-shape]') ?? null;
+      return {
+        found: Boolean(node),
+        className: node?.getAttribute('class') ?? '',
+        transform: node?.getAttribute('transform') ?? '',
+        liveColorApplied: node?.getAttribute('data-live-color-applied') ?? '',
+        liveColorSource: node?.getAttribute('data-live-color-source') ?? '',
+        segmentCount: Number(node?.getAttribute('data-live-segment-count') ?? 0),
+        segmentColors: [...(node?.querySelectorAll('[data-stage-fixture-segment]') ?? [])]
+          .map((segment) => segment.getAttribute('fill')),
+        hitTargetCount: node?.querySelectorAll('.stageFixtureHitTarget').length ?? 0,
+        shapeTag: shape?.tagName.toLowerCase() ?? '',
+        shapeFill: shape?.getAttribute('fill') ?? '',
+      };
+    };
+    return {
+      bridgeAvailable: typeof window.__syndocalSetMappingLiveDmx === 'function',
+      shapeFills: [...(root?.querySelectorAll('[data-stage-fixture-shape]') ?? [])]
+        .map((shape) => shape.getAttribute('fill')),
+      segmentFills: [...(root?.querySelectorAll('[data-stage-fixture-segment]') ?? [])]
+        .map((segment) => segment.getAttribute('fill')),
+      mega: inspect(1),
+      single: inspect(2),
+      dimmerOnly: inspect(3),
+      wheel: inspect(4),
+      geometry: inspect(5),
+      attributeFallback: inspect(6),
+      unlit: inspect(7),
+    };
+  })()`);
+}
+
+async function runMappingLiveSnapshotViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await waitForClientCondition(
+    client,
+    `document.querySelector('.setupStageContext [data-stage-fixture-id="1"] [data-stage-fixture-segment="1"]')?.getAttribute('fill') === 'rgb(255, 168, 0)'`,
+    "mapping snapshot delta Amber fixture",
+  );
+  const setup = await readMappingLiveColorSurface(client, ".setupStageContext");
+  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await waitForClientCondition(
+    client,
+    `document.querySelector('.controlStageContext [data-stage-fixture-id="7"] [data-stage-fixture-shape]')?.getAttribute('fill') === 'rgb(31, 38, 46)'`,
+    "mapping snapshot delta Control stage",
+  );
+  const control = await readMappingLiveColorSurface(client, ".controlStageContext");
+  return { viewport, setup, control };
+}
+
+async function runMappingLiveColorViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await waitForClientCondition(
+    client,
+    "document.querySelectorAll('.setupStageContext [data-stage-fixture-id]').length === 7",
+    "mapping live-color fixture stage",
+  );
+  const initial = await readMappingLiveColorSurface(client, ".setupStageContext");
+  await clickVisibleByText(client, ".workspaceTabs button", "Touch");
+  await waitForClientCondition(
+    client,
+    "document.querySelectorAll('.touchStagePanel [data-stage-fixture-id]').length === 7",
+    "StagePreview2D live fixture surface",
+  );
+  const stagePreviewInitial = await readMappingLiveColorSurface(client, ".touchStagePanel");
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await waitForClientCondition(
+    client,
+    "document.querySelectorAll('.setupStageContext [data-stage-fixture-id]').length === 7",
+    "mapping live-color fixture stage reload",
+  );
+  await client.evaluate(`(async () => {
+    const slider = document.querySelector('[data-mapping-viewport-action="zoom-slider"]');
+    if (slider instanceof HTMLInputElement) {
+      slider.value = '4';
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    }
+  })()`);
+  await waitForClientCondition(
+    client,
+    `document.querySelector('.setupStageContext [data-stage-fixture-id="6"]')?.getAttribute('data-live-color-applied') === 'false'`,
+    "mapping segment structure without live color model",
+  );
+  const structureOnly = await readMappingLiveColorSurface(client, ".setupStageContext");
+  await client.evaluate(`(async () => {
+    const slider = document.querySelector('[data-mapping-viewport-action="zoom-slider"]');
+    if (slider instanceof HTMLInputElement) {
+      slider.value = '1';
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    }
+  })()`);
+  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await sleep(120);
+  const attributeControl = await readMappingLiveColorSurface(client, ".controlStageContext");
+  await client.evaluate(`window.__syndocalSetMappingLiveDmx?.(${JSON.stringify({
+    1: 128,
+    2: 255,
+    7: 255,
+    12: 255,
+    17: 255,
+    18: 255,
+    19: 255,
+    23: 255,
+    24: 255,
+    26: 255,
+    27: 255,
+    28: 255,
+    40: 255,
+    41: 64,
+    42: 128,
+    43: 255,
+    50: 64,
+    60: 255,
+    61: 64,
+    70: 255,
+    71: 255,
+    75: 255,
+    79: 255,
+  })})`);
+  await waitForClientCondition(
+    client,
+    `document.querySelector('.controlStageContext [data-stage-fixture-id="1"] [data-stage-fixture-segment="1"]')?.getAttribute('fill') === 'rgb(128, 0, 0)'`,
+    "mapping live-color DMX injection",
+  );
+  const control = await readMappingLiveColorSurface(client, ".controlStageContext");
+  await clickVisibleByText(client, ".workspaceTabs button", "Setup");
+  await waitForClientCondition(
+    client,
+    `document.querySelector('.setupStageContext [data-stage-fixture-id="1"] [data-stage-fixture-segment="1"]')?.getAttribute('fill') === 'rgb(128, 0, 0)'`,
+    "setup mapping live-color surface",
+  );
+  const setup = await readMappingLiveColorSurface(client, ".setupStageContext");
+  await client.evaluate(`window.__syndocalSetMappingLiveDmx?.(${JSON.stringify({ 1: 64 })})`);
+  await waitForClientCondition(
+    client,
+    `document.querySelector('.setupStageContext [data-stage-fixture-id="1"] [data-stage-fixture-segment="1"]')?.getAttribute('fill') === 'rgb(64, 0, 0)'`,
+    "mapping live-color second DMX injection",
+  );
+  const updated = await readMappingLiveColorSurface(client, ".setupStageContext");
+  return {
+    viewport,
+    initial,
+    stagePreviewInitial,
+    attributeControl,
+    structureOnly,
+    setup,
+    control,
+    updated,
+  };
+}
+
 async function runLargeShowViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -15877,8 +16060,29 @@ async function runLargeShowViewport(client, viewport) {
       reachedLastFixture: afterRows.some((row) => (row.textContent || '').includes('Large Fixture 2000')),
     };
   })()`);
+  const liveColorWindow = await client.evaluate(`(async () => {
+    const stage = document.querySelector('.setupStageContext');
+    const fixtures = () => [...(stage?.querySelectorAll('[data-stage-fixture-id]') ?? [])];
+    const applied = () => fixtures().filter((fixture) => fixture.getAttribute('data-live-color-applied') === 'true').length;
+    const beforeApplied = applied();
+    const slider = document.querySelector('[data-mapping-viewport-action="zoom-slider"]');
+    if (slider instanceof HTMLInputElement) {
+      slider.value = '4';
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    }
+    const totalStageFixtures = fixtures().length;
+    const afterApplied = applied();
+    return {
+      totalStageFixtures,
+      beforeApplied,
+      afterApplied,
+      afterSkipped: totalStageFixtures - afterApplied,
+      zoomValue: slider instanceof HTMLInputElement ? Number(slider.value) : null,
+    };
+  })()`);
   const containment = await measure(client, `large-show-${viewport.width}x${viewport.height}`);
-  return { stats, containment };
+  return { stats: stats ? { ...stats, ...liveColorWindow } : stats, containment };
 }
 
 async function runEmptyVjViewport(client, viewport) {
@@ -19510,6 +19714,231 @@ async function main() {
       }
       return;
     }
+    if (mappingLiveSnapshotOnlyMode) {
+      const result = await runMappingLiveSnapshotViewport(client, viewports[0]);
+      const appSource = readFileSync(join(appRoot, "src", "App.tsx"), "utf8");
+      const liveStateSource = readFileSync(join(appRoot, "src", "engineSnapshotLiveState.ts"), "utf8");
+      const fixtureSource = readFileSync(join(appRoot, "src", "viewportFixtureData.ts"), "utf8");
+      const dark = "rgb(31, 38, 46)";
+      const amber = "rgb(255, 168, 0)";
+      const visibleFills = [...result.setup.shapeFills, ...result.setup.segmentFills]
+        .filter((fill) => fill && fill !== "none");
+      const checks = {
+        directModelBridgeAbsent: result.setup.bridgeAvailable === false,
+        realSnapshotDeltaMergeUsed:
+          appSource.includes("mergeEngineSnapshotSyncResponse(latestEngineSnapshot, response)")
+          && appSource.includes("return applyEngineSnapshotSyncResponse(response, syncUiState)")
+          && liveStateSource.includes("response.full ?? ({ ...current, ...(response.delta ?? {}) }"),
+        snapshotDeltaOmitsFixtureReplacement:
+          appSource.includes('viewportFixture === "mapping-live-snapshot"')
+          && appSource.includes("active_cue_id: viewportFixtureData.mappingLiveSnapshotAmberCue.id"),
+        whiteProfileHomeValuesInFixture:
+          fixtureSource.includes("const mappingLiveSnapshotFixtures")
+          && fixtureSource.includes("value: 65_535"),
+        previewArraysEmpty:
+          appSource.includes('viewportFixture === "mapping-live-snapshot"')
+          && appSource.includes("dmx_preview: []")
+          && appSource.includes("dmx_previews: []"),
+        setupAmberFromSnapshotAttributes:
+          result.setup.mega.liveColorSource === "attribute"
+          && result.setup.mega.segmentCount === 8
+          && result.setup.mega.segmentColors.length === 8
+          && result.setup.mega.segmentColors.every((fill) => fill === amber),
+        setupUnlitDark:
+          result.setup.unlit.liveColorSource === "attribute"
+          && result.setup.unlit.shapeFill === dark,
+        setupNoWhiteDefault:
+          visibleFills.length > 0
+          && visibleFills.every((fill) => fill !== "rgb(255, 255, 255)"),
+        controlAmberParity:
+          JSON.stringify(result.control.mega.segmentColors)
+            === JSON.stringify(result.setup.mega.segmentColors),
+        controlUnlitDark:
+          result.control.unlit.liveColorSource === "attribute"
+          && result.control.unlit.shapeFill === dark,
+        controlNoWhiteDefault:
+          [...result.control.shapeFills, ...result.control.segmentFills]
+            .filter((fill) => fill && fill !== "none")
+            .every((fill) => fill !== "rgb(255, 255, 255)"),
+      };
+      const failedChecks = Object.entries(checks)
+        .filter(([, passed]) => !passed)
+        .map(([name]) => name);
+      const passed = failedChecks.length === 0;
+      console.log(
+        `${passed ? "pass" : "fail"} T28 snapshot-delta live mapping color ` +
+        `bridge=${result.setup.bridgeAvailable} ` +
+        `mega=${result.setup.mega.segmentCount}:${JSON.stringify(result.setup.mega.segmentColors)} ` +
+        `unlit=${result.setup.unlit.liveColorSource}:${result.setup.unlit.shapeFill} ` +
+        `white=${visibleFills.filter((fill) => fill === "rgb(255, 255, 255)").length} ` +
+        `checks=${JSON.stringify(checks)}`,
+      );
+      if (!passed) {
+        throw new Error(`T28 snapshot-delta live mapping color failed: ${JSON.stringify({
+          failedChecks,
+          result,
+        })}`);
+      }
+      return;
+    }
+    if (mappingLiveColorOnlyMode || mappingLiveSegmentsOnlyMode) {
+      const result = await runMappingLiveColorViewport(client, viewports[0]);
+      const appSource = readFileSync(join(appRoot, "src", "App.tsx"), "utf8");
+      const liveColorSource = readFileSync(join(appRoot, "src", "fixtureLiveColor.ts"), "utf8");
+      const stagePreviewSource = readFileSync(join(appRoot, "src", "components", "StagePreview2D.tsx"), "utf8");
+      const dark = "rgb(31, 38, 46)";
+      const expectedSegments = [
+        "rgb(128, 0, 0)",
+        "rgb(0, 128, 0)",
+        "rgb(0, 0, 128)",
+        "rgb(128, 84, 0)",
+        "rgb(128, 128, 0)",
+        "rgb(0, 128, 128)",
+        "rgb(128, 128, 128)",
+        dark,
+      ];
+      const checks = mappingLiveColorOnlyMode
+        ? {
+            bridgeAvailable: result.initial.bridgeAvailable,
+            existingReadOnlyDeltaRoute: appSource.includes('invoke<EngineSnapshotSyncResponse>("get_snapshot_delta"')
+              && appSource.includes("<DmxRawMonitor")
+              && appSource.includes("previews={dmxPreviewOptions()}"),
+            singleExistingPollLoop: (appSource.match(/let snapshotPollTimer/g) ?? []).length === 1
+              && !liveColorSource.includes("setInterval")
+              && !liveColorSource.includes("setTimeout"),
+            thirtyHzStageCadence: /liveDmxPollHz\s*=\s*30/.test(liveColorSource)
+              && appSource.includes("liveMappingStageVisible()")
+              && appSource.includes("liveDmxPollIntervalMs"),
+            sharedColorDerivationHelper: liveColorSource.includes("type ControlValueReader")
+              && liveColorSource.includes("previewControlValueReader")
+              && liveColorSource.includes("attributeControlValueReader")
+              && liveColorSource.includes("const segmentLiveColor")
+              && liveColorSource.includes("segmentLiveColor(group, readControlValue)"),
+            liveAttributeDeltaRoute: appSource.includes("setLiveFixtures(snapshotLiveFixtures(next))")
+              && appSource.includes("liveFixtures,")
+              && appSource.includes("setLiveDmxPreviews(engineDmxPreviews(next))"),
+            stagePreviewLivePropsWired: appSource.includes("fixtures={mappingStageFixtures()}")
+              && stagePreviewSource.includes("segments={fixture.liveSegments}")
+              && stagePreviewSource.includes("data-live-color-applied")
+              && stagePreviewSource.includes("data-live-segment-count"),
+            previewEmptyFixturePresent: result.initial.attributeFallback.found,
+            previewEmptyUsesAttributeValues: result.initial.attributeFallback.liveColorSource === "attribute"
+              && result.initial.attributeFallback.liveColorApplied === "true",
+            previewEmptyRgbFromAttributes: JSON.stringify(result.initial.attributeFallback.segmentColors) === JSON.stringify([
+              "rgb(128, 0, 0)",
+              "rgb(0, 128, 0)",
+              "rgb(128, 84, 0)",
+            ]),
+            previewEmptySetupControlParity:
+              JSON.stringify(result.attributeControl.attributeFallback.segmentColors)
+                === JSON.stringify(result.initial.attributeFallback.segmentColors)
+              && result.attributeControl.attributeFallback.liveColorSource === "attribute",
+            initialMegaDark: result.initial.mega.segmentColors.length === 8
+              && result.initial.mega.segmentColors.every((color) => color === dark),
+            initialSingleDark: result.initial.single.shapeFill === dark,
+            initialDimmerDark: result.initial.dimmerOnly.shapeFill === dark,
+            initialWheelDark: result.initial.wheel.shapeFill === dark,
+            setupUnlitFixtureDark: result.initial.unlit.shapeFill === dark
+              && result.initial.unlit.liveColorApplied === "true"
+              && result.initial.unlit.shapeFill !== "rgb(255, 255, 255)",
+            controlUnlitFixtureDark: result.attributeControl.unlit.shapeFill === dark
+              && result.attributeControl.unlit.liveColorApplied === "true"
+              && result.attributeControl.unlit.shapeFill !== "rgb(255, 255, 255)",
+            stagePreviewUnlitFixtureDark: result.stagePreviewInitial.unlit.shapeFill === dark
+              && result.stagePreviewInitial.unlit.liveColorApplied === "true"
+              && result.stagePreviewInitial.unlit.liveColorSource === "attribute"
+              && result.stagePreviewInitial.unlit.shapeFill !== "rgb(255, 255, 255)",
+            setupRgbFromDmx: result.setup.single.shapeFill === "rgb(64, 128, 255)",
+            previewInjectionUsesPreview: result.setup.single.liveColorSource === "preview"
+              && result.setup.mega.liveColorSource === "preview",
+            previewUnlitFixtureDark: result.setup.unlit.shapeFill === dark
+              && result.setup.unlit.liveColorApplied === "true"
+              && result.setup.unlit.liveColorSource === "preview"
+              && result.setup.unlit.shapeFill !== "rgb(255, 255, 255)",
+            setupDimmerOnlyWhite: result.setup.dimmerOnly.shapeFill === "rgb(64, 64, 64)",
+            setupWheelBgrCorrected: result.setup.wheel.shapeFill === "rgb(255, 0, 0)",
+            setupLiveApplied: [result.setup.mega, result.setup.single, result.setup.dimmerOnly, result.setup.wheel]
+              .every((fixture) => fixture.liveColorApplied === "true"),
+            controlMatchesSetup: JSON.stringify(result.control.mega.segmentColors) === JSON.stringify(result.setup.mega.segmentColors)
+              && result.control.single.shapeFill === result.setup.single.shapeFill
+              && result.control.dimmerOnly.shapeFill === result.setup.dimmerOnly.shapeFill
+              && result.control.wheel.shapeFill === result.setup.wheel.shapeFill,
+            secondInjectionUpdatesBrightness: result.updated.mega.segmentColors[0] === "rgb(64, 0, 0)",
+            selectionContractPreserved: result.setup.mega.className.includes("picked")
+              && result.control.mega.className.includes("picked"),
+          }
+        : {
+            megaSegmentCount: result.setup.mega.segmentCount === 8
+              && result.setup.mega.segmentColors.length === 8,
+            previewEmptySegmentCount: result.initial.attributeFallback.segmentCount === 3
+              && result.initial.attributeFallback.segmentColors.length === 3,
+            previewEmptySegmentColorsFromAttributes:
+              JSON.stringify(result.initial.attributeFallback.segmentColors) === JSON.stringify([
+                "rgb(128, 0, 0)",
+                "rgb(0, 128, 0)",
+                "rgb(128, 84, 0)",
+              ]),
+            previewEmptySegmentShapePreserved:
+              result.initial.attributeFallback.hitTargetCount === 1
+              && result.initial.attributeFallback.liveColorSource === "attribute",
+            segmentStructureIndependentFromLiveModel:
+              result.structureOnly.attributeFallback.liveColorApplied === "false"
+              && result.structureOnly.attributeFallback.liveColorSource === "none"
+              && result.structureOnly.attributeFallback.segmentCount === 3
+              && result.structureOnly.attributeFallback.segmentColors.every((color) => color === dark),
+            previewEmptySegmentSetupControlParity:
+              JSON.stringify(result.attributeControl.attributeFallback.segmentColors)
+                === JSON.stringify(result.initial.attributeFallback.segmentColors),
+            stagePreviewMegaSegmentsWired: result.stagePreviewInitial.mega.segmentCount === 8
+              && result.stagePreviewInitial.mega.segmentColors.length === 8
+              && result.stagePreviewInitial.mega.segmentColors.every((color) => color === dark),
+            stagePreviewAttributeSegmentsWired:
+              JSON.stringify(result.stagePreviewInitial.attributeFallback.segmentColors) === JSON.stringify([
+                "rgb(128, 0, 0)",
+                "rgb(0, 128, 0)",
+                "rgb(128, 84, 0)",
+              ]),
+            megaSegmentColorsFromDmx: JSON.stringify(result.setup.mega.segmentColors) === JSON.stringify(expectedSegments),
+            megaYawFollow: result.setup.mega.transform.includes("rotate(30)"),
+            fixtureUnitHitTarget: result.setup.mega.hitTargetCount === 1,
+            gdtfGeometrySegmentCount: result.setup.geometry.segmentCount === 3,
+            gdtfGeometryColorsFromDmx: JSON.stringify(result.setup.geometry.segmentColors) === JSON.stringify([
+              "rgb(255, 0, 0)",
+              "rgb(0, 255, 0)",
+              "rgb(0, 0, 255)",
+            ]),
+            unlitSegmentShapePreserved: result.setup.mega.segmentColors[7] === dark,
+            controlSegmentParity: JSON.stringify(result.control.mega.segmentColors) === JSON.stringify(expectedSegments),
+            singleCellTraditionalGlyph: result.setup.single.segmentCount === 1
+              && result.setup.single.segmentColors.length === 0
+              && result.setup.single.shapeTag === "rect",
+            singleCellControlParity: result.control.single.segmentCount === 1
+              && result.control.single.segmentColors.length === 0
+              && result.control.single.shapeTag === "rect",
+            selectionContractPreserved: result.setup.mega.className.includes("picked")
+              && result.control.mega.className.includes("picked"),
+          };
+      const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+      const passed = failedChecks.length === 0;
+      const phase = mappingLiveColorOnlyMode ? "T28-A live mapping color" : "T28-B multi-segment mapping";
+      console.log(
+        `${passed ? "pass" : "fail"} ${phase} ` +
+        `mega=${result.setup.mega.segmentCount}:${JSON.stringify(result.setup.mega.segmentColors)} ` +
+        `previewEmpty=${result.initial.attributeFallback.liveColorSource}:` +
+          `${result.initial.attributeFallback.segmentCount}:` +
+          `${JSON.stringify(result.initial.attributeFallback.segmentColors)} ` +
+        `stagePreview=${result.stagePreviewInitial.single.shapeFill}:` +
+          `${result.stagePreviewInitial.mega.segmentCount} ` +
+        `unlit=${result.setup.unlit.liveColorSource}:${result.setup.unlit.shapeFill} ` +
+        `single=${result.setup.single.shapeTag}:${result.setup.single.shapeFill} ` +
+        `dimmer=${result.setup.dimmerOnly.shapeFill} wheel=${result.setup.wheel.shapeFill} ` +
+        `updated=${result.updated.mega.segmentColors[0]} checks=${JSON.stringify(checks)}`,
+      );
+      if (!passed) {
+        throw new Error(`${phase} failed: ${JSON.stringify({ failedChecks, result })}`);
+      }
+      return;
+    }
     if (largeShowMode) {
       const result = await runLargeShowViewport(client, viewports[0]);
       const passed = Boolean(
@@ -19520,6 +19949,12 @@ async function main() {
         result.stats.viewportHeight > 0 &&
         result.stats.scrollHeight > result.stats.viewportHeight &&
         result.stats.reachedLastFixture &&
+        result.stats.totalStageFixtures === 2_000 &&
+        result.stats.beforeApplied === 2_000 &&
+        result.stats.afterApplied > 0 &&
+        result.stats.afterApplied < 2_000 &&
+        result.stats.afterSkipped === 2_000 - result.stats.afterApplied &&
+        result.stats.zoomValue === 4 &&
         isContained(result.containment)
       );
       console.log(`${passed ? "pass" : "fail"} large-show virtualization ${JSON.stringify(result.stats)}`);

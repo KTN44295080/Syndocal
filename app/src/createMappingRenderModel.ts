@@ -1,4 +1,10 @@
 import { createMemo, type Accessor } from "solid-js";
+import {
+  dmxPreviewMap,
+  fixtureIntersectsLiveColorViewport,
+  fixtureLiveColor,
+  fixtureLiveSegmentSkeleton,
+} from "./fixtureLiveColor";
 import { readFixtureAttribute } from "./fixtureControlRuntime";
 import { fixtureTypeKey, fixtureVisualKind, mappingFixtureStageSize } from "./fixtureVisuals";
 import {
@@ -19,13 +25,24 @@ import {
 } from "./numericHelpers";
 import { beamPoints, stagePadding, stageViewBoxSize, stageWorldToSvgPoint, type StageWorldBounds } from "./stageGeometry";
 import { stageObjectDefaultColor } from "./stageObjects";
-import type { EngineSnapshot, PatchFixtureRequest, PatchedFixtureSummary, StageObjectSummary, VideoOutputMapping, VideoOutputSummary } from "./types";
+import type {
+  DmxUniversePreview,
+  EngineSnapshot,
+  PatchFixtureRequest,
+  PatchedFixtureSummary,
+  StageObjectSummary,
+  VideoOutputMapping,
+  VideoOutputSummary,
+} from "./types";
 import { mappingVideoOutputCornerGain, mappingVideoOutputCorners } from "./videoOutputMapping";
 
 interface MappingRenderModelOptions {
   mappingDrag: Accessor<MappingDragState | null>;
   mappingShowGeometry: Accessor<boolean>;
   mappingFilteredFixtures: Accessor<PatchedFixtureSummary[]>;
+  liveFixtures: Accessor<PatchedFixtureSummary[]>;
+  mappingViewportBox: Accessor<{ x: number; z: number; size: number }>;
+  dmxPreviews: Accessor<DmxUniversePreview[]>;
   stageWorldBounds: Accessor<StageWorldBounds>;
   selectedMappingFixtureIdSet: Accessor<Set<number>>;
   selectedFixtureGroupFilter: Accessor<string | null>;
@@ -341,6 +358,72 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
       };
     });
   });
+  const mappingStageFixtureCache = new Map<number, {
+    base: VisualizerFixture;
+    signature: string;
+    fixture: VisualizerFixture & {
+      liveColorApplied: boolean;
+      liveColorValueSource?: ReturnType<typeof fixtureLiveColor>["valueSource"];
+      liveSegments?: ReturnType<typeof fixtureLiveColor>["segments"];
+    };
+  }>();
+  const segmentSkeletonCache = new WeakMap<
+    PatchedFixtureSummary,
+    ReturnType<typeof fixtureLiveSegmentSkeleton>
+  >();
+  const mappingStageFixtures = createMemo(() => {
+    const baseFixtures = visualizerFixtures();
+    const sourceFixtures = options.mappingFilteredFixtures();
+    const sourceById = new Map(sourceFixtures.map((fixture) => [fixture.id, fixture]));
+    const liveSourceById = new Map(options.liveFixtures().map((fixture) => [fixture.id, fixture]));
+    const previewsByUniverse = dmxPreviewMap(options.dmxPreviews());
+    const viewportBox = options.mappingViewportBox();
+    const viewport = {
+      x: viewportBox.x,
+      z: viewportBox.z,
+      width: viewportBox.size,
+      height: viewportBox.size,
+    };
+    const liveIds = new Set<number>();
+    const fixtures = baseFixtures.map((base) => {
+      liveIds.add(base.id);
+      const source = sourceById.get(base.id);
+      const visible = fixtureIntersectsLiveColorViewport(base, viewport);
+      const liveSource = liveSourceById.get(base.id);
+      let segmentSkeleton = source ? segmentSkeletonCache.get(source) : undefined;
+      if (source && !segmentSkeleton) {
+        segmentSkeleton = fixtureLiveSegmentSkeleton(source);
+        segmentSkeletonCache.set(source, segmentSkeleton);
+      }
+      segmentSkeleton ??= [];
+      const live = source && visible
+        ? fixtureLiveColor(source, previewsByUniverse, liveSource?.attribute_values)
+        : null;
+      const liveSegments = segmentSkeleton.length > 1
+        ? live?.segments ?? segmentSkeleton
+        : undefined;
+      const signature = live
+        ? `live:${live.valueSource}:${live.color}:${live.intensity}:${liveSegments?.map((segment) => segment.color).join("|") ?? "single"}`
+        : `offscreen:${liveSegments?.map((segment) => segment.key).join("|") ?? "single"}`;
+      const cached = mappingStageFixtureCache.get(base.id);
+      if (cached?.base === base && cached.signature === signature) {
+        return cached.fixture;
+      }
+      const fixture = {
+        ...base,
+        ...(live ? { color: live.color, intensity: live.intensity } : {}),
+        liveColorApplied: Boolean(live),
+        liveColorValueSource: live?.valueSource,
+        liveSegments,
+      };
+      mappingStageFixtureCache.set(base.id, { base, signature, fixture });
+      return fixture;
+    });
+    for (const fixtureId of mappingStageFixtureCache.keys()) {
+      if (!liveIds.has(fixtureId)) mappingStageFixtureCache.delete(fixtureId);
+    }
+    return fixtures;
+  });
   const visualizerVideoSurfaces2d = createMemo<VisualizerVideoSurface2d[]>(() => {
     const bounds = options.stageWorldBounds();
     return options.snapshot().video.outputs.map((output) => {
@@ -403,6 +486,7 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
     isDraggingMappingStageObject,
     mappingGeometryNodes2d,
     visualizerFixtures,
+    mappingStageFixtures,
     visualizerVideoSurfaces2d,
     visualizerStageObjects2d,
   };

@@ -27,7 +27,11 @@ export default defineConfig({
             normalizedId.includes("/src/effectVisualization") ||
             normalizedId.includes("/src/hotkeyHelpers") ||
             normalizedId.includes("/src/identityColor") ||
+            normalizedId.includes("/src/channelFunctionHelpers") ||
+            normalizedId.includes("/src/fixtureControlRuntime") ||
+            normalizedId.includes("/src/numericHelpers") ||
             normalizedId.includes("/src/sceneMatrixBankMove") ||
+            normalizedId.includes("/src/snapshotRequestGuard") ||
             normalizedId.includes("/src/projectRecentStorage") ||
             normalizedId.includes("/src/projectRecoveryStorage") ||
             normalizedId.includes("/src/numberDisplay") ||
@@ -82,7 +86,9 @@ export default defineConfig({
             normalizedId.includes("/src/components/VideoPreviewDiagnosticsPanel") ||
             normalizedId.includes("/src/components/VideoRuntimeStatusPanels") ||
             normalizedId.includes("/src/components/VideoSourceCreatePanel") ||
-            normalizedId.includes("/src/createVideoRuntimeController")
+            normalizedId.includes("/src/createLiveVideoMonitorController") ||
+            normalizedId.includes("/src/createVideoRuntimeController") ||
+            normalizedId.includes("/src/liveVideoMonitorPacket")
           ) {
             return "video-control-panels";
           }
@@ -95,6 +101,7 @@ export default defineConfig({
             normalizedId.includes("/src/createMappingInteractionController") ||
             normalizedId.includes("/src/createMappingLayoutController") ||
             normalizedId.includes("/src/createStageMapController") ||
+            normalizedId.includes("/src/fixtureLiveColor") ||
             normalizedId.includes("/src/mappingRuntime") ||
             normalizedId.includes("/src/stageLabelLayout") ||
             normalizedId.includes("/src/components/SetupMappingWorkspace") ||

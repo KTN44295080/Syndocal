@@ -415,6 +415,7 @@ import type { CueEffectRecallChange } from "./cueEffectRecall";
 import { createSnapshotRequestGuard } from "./snapshotRequestGuard";
 import { createMappingViewportModel } from "./createMappingViewportModel";
 import { createMappingRenderModel } from "./createMappingRenderModel";
+import { liveDmxPollIntervalMs } from "./fixtureLiveColor";
 import { createMappingInteractionController } from "./createMappingInteractionController";
 import { createMappingLayoutController, mappingFixtureSelectionCenter } from "./createMappingLayoutController";
 import {
@@ -424,6 +425,10 @@ import {
   outputProtocolLabel,
 } from "./createOutputDiagnosticsController";
 import { createInitialEngineSnapshot } from "./initialEngineSnapshot";
+import {
+  mergeEngineSnapshotSyncResponse,
+  snapshotLiveFixtures,
+} from "./engineSnapshotLiveState";
 import { groupStrobeCompatibleFixtureCount } from "./groupStrobe";
 import { createTimelineOverviewAutomationController } from "./createTimelineOverviewAutomationController";
 import { createTimelineKeyframeController } from "./createTimelineKeyframeController";
@@ -1827,7 +1832,20 @@ export default function App() {
   const [waveStageDrag, setWaveStageDrag] = createSignal<WaveStageDragMode | null>(null);
   const [waveSpeed, setWaveSpeed] = createSignal(1);
   const [waveWavelength, setWaveWavelength] = createSignal(2);
-  const [snapshot, setSnapshot] = createSignal<EngineSnapshot>(createInitialEngineSnapshot());
+  const initialEngineSnapshot = createInitialEngineSnapshot();
+  const [snapshot, setSnapshot] = createSignal<EngineSnapshot>(initialEngineSnapshot);
+  const engineDmxPreviews = (next: EngineSnapshot) => {
+    const previews = (next.dmx_previews ?? []).filter((preview) => preview.values.length > 0);
+    const legacyPreview = next.dmx_preview ?? [];
+    return previews.length > 0
+      ? previews
+      : legacyPreview.length > 0
+        ? [{ universe: next.output.universe, values: legacyPreview }]
+        : [];
+  };
+  const [liveDmxPreviews, setLiveDmxPreviews] = createSignal(engineDmxPreviews(initialEngineSnapshot));
+  const [liveFixtures, setLiveFixtures] = createSignal(snapshotLiveFixtures(initialEngineSnapshot));
+  let latestEngineSnapshot = initialEngineSnapshot;
   const [snapshotRevision, setSnapshotRevision] = createSignal<number | null>(null);
   let loadSceneEffectDraft = (_cueId: number, _effectId: number) => {};
   const selectSceneCue = (cueId: number) => {
@@ -2656,6 +2674,44 @@ export default function App() {
         auto_vj: defaultAutoVjSnapshot(),
       },
     }));
+  } else if (viewportFixture === "mapping-live-color") {
+    const fixtures = structuredClone(viewportFixtureData.mappingLiveColorFixtures);
+    setWorkspaceTab("setup");
+    setSetupSubTab("mapping");
+    setControlMode("edit");
+    setSelectedFixtureGroupFilter("front");
+    setSelectedFixtureId(1);
+    setSelectedMappingFixtureIds([1]);
+    setLiveDmxPreviews([]);
+    setLiveFixtures(fixtures);
+    setSnapshot((current) => ({
+      ...current,
+      fixtures,
+      dmx_preview: [],
+      dmx_previews: [],
+    }));
+  } else if (viewportFixture === "mapping-live-snapshot") {
+    const fixtures = structuredClone(viewportFixtureData.mappingLiveSnapshotFixtures);
+    const cue = structuredClone(viewportFixtureData.mappingLiveSnapshotAmberCue);
+    const fixtureSnapshot: EngineSnapshot = {
+      ...snapshot(),
+      fixtures,
+      cues: [cue],
+      active_cue_id: null,
+      active_group_cue_ids: {},
+      dmx_preview: [],
+      dmx_previews: [],
+    };
+    setWorkspaceTab("setup");
+    setSetupSubTab("mapping");
+    setControlMode("edit");
+    setSelectedFixtureGroupFilter("front");
+    setSelectedFixtureId(1);
+    setSelectedMappingFixtureIds([1]);
+    latestEngineSnapshot = fixtureSnapshot;
+    setLiveDmxPreviews([]);
+    setLiveFixtures(snapshotLiveFixtures(fixtureSnapshot));
+    setSnapshot(fixtureSnapshot);
   } else if (viewportFixture === "large-show") {
     const fixtures = Array.from({ length: 2_000 }, (_, index) => {
       const id = index + 1;
@@ -2707,6 +2763,7 @@ export default function App() {
     __syndocalReadOperatorVjFixtureSnapshot?: () => EngineSnapshot;
     __syndocalReadEditLiveFixtureSnapshot?: () => EngineSnapshot;
     __syndocalReadEditLiveFixtureHistory?: () => ProjectHistoryStatus;
+    __syndocalSetMappingLiveDmx?: (channelValues: Record<number, number>) => void;
     __syndocalCloneCueSnapshot?: () => void;
     __syndocalSetControlFixtureSelection?: (
       fixtureIds: number[],
@@ -2750,6 +2807,21 @@ export default function App() {
       }));
     };
   }
+  if (viewportFixture === "mapping-live-color") {
+    sceneBlockFixtureWindow.__syndocalSetMappingLiveDmx = (channelValues) => {
+      const currentValues = liveDmxPreviews().find((preview) => preview.universe === 0)?.values ?? [];
+      const values = Array.from({ length: 512 }, (_, index) => currentValues[index] ?? 0);
+      for (const [channelText, value] of Object.entries(channelValues)) {
+        const channel = Number(channelText);
+        if (Number.isInteger(channel) && channel >= 1 && channel <= 512) {
+          values[channel - 1] = Math.max(0, Math.min(255, Math.round(value)));
+        }
+      }
+      const previews = [{ universe: 0, values }];
+      setLiveDmxPreviews(previews);
+      setSnapshot((current) => ({ ...current, dmx_preview: values, dmx_previews: previews }));
+    };
+  }
   if (viewportFixture === "edit-live" || viewportFixture === "workspace-operator") {
     sceneBlockFixtureWindow.__syndocalSetControlFixtureSelection = (
       fixtureIds,
@@ -2783,6 +2855,7 @@ export default function App() {
     delete sceneBlockFixtureWindow.__syndocalReadOperatorVjFixtureSnapshot;
     delete sceneBlockFixtureWindow.__syndocalReadEditLiveFixtureSnapshot;
     delete sceneBlockFixtureWindow.__syndocalReadEditLiveFixtureHistory;
+    delete sceneBlockFixtureWindow.__syndocalSetMappingLiveDmx;
     delete sceneBlockFixtureWindow.__syndocalCloneCueSnapshot;
     delete sceneBlockFixtureWindow.__syndocalSetControlFixtureSelection;
   });
@@ -4617,17 +4690,13 @@ export default function App() {
     }
     return snapshot().effects.find((effect) => effect.id === effectId) ?? null;
   });
-  const dmxPreviewOptions = createMemo(() =>
-    snapshot().dmx_previews.length > 0
-      ? snapshot().dmx_previews
-      : [{ universe: snapshot().output.universe, values: snapshot().dmx_preview }],
-  );
+  const dmxPreviewOptions = createMemo(() => liveDmxPreviews());
   const activeDmxPreview = createMemo(() => {
     const previews = dmxPreviewOptions();
     return previews.find((preview) => preview.universe === rawDmxUniverse()) ?? previews[0];
   });
   const activeDmxPreviewUniverse = createMemo(() => activeDmxPreview()?.universe ?? snapshot().output.universe);
-  const activeDmxPreviewValues = createMemo(() => activeDmxPreview()?.values ?? snapshot().dmx_preview);
+  const activeDmxPreviewValues = createMemo(() => activeDmxPreview()?.values ?? []);
   const dmxCells = createMemo(() =>
     activeDmxPreviewValues().map((value, index) => ({
       channel: index + 1,
@@ -6161,6 +6230,10 @@ export default function App() {
   const sharedWorkspaceVisible = createMemo(
     () => workspaceTab() === "setup" || (workspaceTab() === "control" && controlMode() !== "mixer"),
   );
+  const liveMappingStageVisible = createMemo(
+    () => (workspaceTab() === "setup" && setupSubTab() === "mapping")
+      || (workspaceTab() === "control" && controlMode() !== "mixer"),
+  );
   const remoteConfig = createMemo<RemoteControlConfig>(() => ({
     bind_ip: remoteBindIp(),
     port: remotePort(),
@@ -6503,12 +6576,16 @@ export default function App() {
     isDraggingMappingStageObject,
     mappingGeometryNodes2d,
     visualizerFixtures,
+    mappingStageFixtures,
     visualizerVideoSurfaces2d,
     visualizerStageObjects2d,
   } = createMappingRenderModel({
     mappingDrag,
     mappingShowGeometry,
     mappingFilteredFixtures,
+    liveFixtures,
+    mappingViewportBox,
+    dmxPreviews: dmxPreviewOptions,
     stageWorldBounds,
     selectedMappingFixtureIdSet,
     selectedFixtureGroupFilter,
@@ -8133,6 +8210,9 @@ export default function App() {
     syncProjectState = true,
     resetEditorDrafts = false,
   ) => {
+    latestEngineSnapshot = next;
+    setLiveDmxPreviews(engineDmxPreviews(next));
+    setLiveFixtures(snapshotLiveFixtures(next));
     if (resetEditorDrafts) {
       setSelectedTimelineSceneBlockEventId(null);
       setVideoOutputConfigDrafts({});
@@ -8246,7 +8326,31 @@ export default function App() {
       void runFullSnapshotRefreshes();
     });
 
-  const refreshSnapshotDelta = async () => {
+  let lastSnapshotUiApplyAt = 0;
+  const applyEngineSnapshotSyncResponse = (
+    response: EngineSnapshotSyncResponse,
+    syncUiState: boolean,
+  ) => {
+    const next = mergeEngineSnapshotSyncResponse(latestEngineSnapshot, response);
+    latestEngineSnapshot = next;
+    setLiveDmxPreviews(engineDmxPreviews(next));
+    setLiveFixtures(snapshotLiveFixtures(next));
+    setSnapshotRevision(response.revision);
+    if (syncUiState || response.full) {
+      applyEngineSnapshot(next, false);
+      lastSnapshotUiApplyAt = performance.now();
+    }
+    return next;
+  };
+  if (viewportFixture === "mapping-live-snapshot") {
+    applyEngineSnapshotSyncResponse({
+      revision: 28,
+      delta: {
+        active_cue_id: viewportFixtureData.mappingLiveSnapshotAmberCue.id,
+      },
+    }, true);
+  }
+  const refreshSnapshotDelta = async (syncUiState = true) => {
     const requestGeneration = snapshotRequestGuard.beginDelta();
     if (requestGeneration === null) return null;
     try {
@@ -8256,10 +8360,7 @@ export default function App() {
       if (!snapshotRequestGuard.canApplyDelta(requestGeneration)) {
         return null;
       }
-      const next = response.full ?? ({ ...snapshot(), ...(response.delta ?? {}) } as EngineSnapshot);
-      setSnapshotRevision(response.revision);
-      applyEngineSnapshot(next, false);
-      return next;
+      return applyEngineSnapshotSyncResponse(response, syncUiState);
     } catch (error) {
       if (!snapshotRequestGuard.canApplyDelta(requestGeneration)) {
         return null;
@@ -8275,9 +8376,15 @@ export default function App() {
     if (!isTauriRuntime()) {
       return;
     }
-    const intervalMs = document.hidden ? 2_000 : workspaceTab() === "setup" ? 1_000 : 250;
+    const uiIntervalMs = workspaceTab() === "setup" ? 1_000 : 250;
+    const intervalMs = document.hidden
+      ? 2_000
+      : liveMappingStageVisible()
+        ? liveDmxPollIntervalMs
+        : uiIntervalMs;
     snapshotPollTimer = window.setTimeout(async () => {
-      await refreshSnapshotDelta();
+      const syncUiState = performance.now() - lastSnapshotUiApplyAt >= uiIntervalMs;
+      await refreshSnapshotDelta(syncUiState);
       scheduleSnapshotPoll();
     }, intervalMs);
   };
@@ -16713,7 +16820,7 @@ export default function App() {
             className="touchStage"
             patternId="touch-stage-grid"
             stageOrigin={stageOrigin2d()}
-            fixtures={visualizerFixtures()}
+            fixtures={mappingStageFixtures()}
             videoSurfaces={visualizerVideoSurfaces2d()}
             stageObjects={visualizerStageObjects2d()}
             selectedFixtureId={selectedFixtureId()}
@@ -17659,7 +17766,8 @@ export default function App() {
             videoSurfaces: visualizerVideoSurfaces2d(),
             beamFixtures: visualizerFixtures(),
             geometryNodes: mappingGeometryNodes2d(),
-            fixtures: visualizerFixtures(),
+            fixtures: mappingStageFixtures(),
+            labelFixtures: visualizerFixtures(),
             selectedFixtureIds: selectedMappingFixtureIdSet(),
             selectedFixtureId: selectedFixtureId(),
             selectedGroupId: selectedFixtureGroupFilter(),

@@ -9171,6 +9171,14 @@ progress {
   cursor: inherit;
 }
 
+.stageFixtureSegment {
+  pointer-events: none;
+}
+
+.stageFixtureSegmentOutline {
+  pointer-events: none;
+}
+
 .stageFixtureCenterLine {
   stroke: rgba(255, 255, 255, 0.48);
   stroke-width: 0.42;
