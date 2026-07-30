@@ -1,6 +1,7 @@
-import { createMemo, createSignal, For, onCleanup, onMount } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import type { FixtureLiveColorSegment } from "../fixtureLiveColor";
 import type { MappingFixtureVisualKind } from "../fixtureVisuals";
+import type { VisualizerFixtureBeam } from "../mappingRuntime";
 import { planStageFixtureLabels } from "../stageLabelLayout";
 import { stageViewBoxSize } from "../stageGeometry";
 import { stageObjectClass } from "../stageObjects";
@@ -21,6 +22,7 @@ export interface StagePreviewFixture {
   height: number;
   yaw: number;
   beamPoints: string;
+  beams?: VisualizerFixtureBeam[];
   intensity: number;
   color: string;
   liveColorApplied?: boolean;
@@ -71,6 +73,7 @@ type StagePreview2DProps = {
   surfaceMinOpacity: number;
   beamMinOpacity: number;
   beamIntensityScale: number;
+  showBeams?: boolean;
   compact?: boolean;
   showLabels?: boolean;
   viewAspectRatio?: number;
@@ -248,16 +251,29 @@ export function StagePreview2D(props: StagePreview2DProps) {
           </g>
         )}
       </For>
-      <For each={props.fixtures}>
-        {(fixture) => (
-          <polygon
-            class="stageBeam"
-            points={fixture.beamPoints}
-            fill={fixture.color}
-            opacity={Math.max(props.beamMinOpacity, fixture.intensity * props.beamIntensityScale)}
-          />
-        )}
-      </For>
+      <Show when={props.showBeams !== false}>
+        <For each={props.fixtures.filter((fixture) => fixture.liveColorApplied !== false)}>
+          {(fixture) => (
+            <For each={fixture.beams ?? [{
+              cellIndex: 1,
+              points: fixture.beamPoints,
+              intensity: fixture.intensity,
+              color: fixture.color,
+            }]}>
+              {(beam) => (
+                <polygon
+                  class="stageBeam"
+                  data-stage-beam-fixture-id={fixture.id}
+                  data-stage-beam-cell={beam.cellIndex}
+                  points={beam.points}
+                  fill={beam.color}
+                  opacity={Math.max(props.beamMinOpacity, beam.intensity * props.beamIntensityScale)}
+                />
+              )}
+            </For>
+          )}
+        </For>
+      </Show>
       <For each={props.fixtures}>
         {(fixture) => {
           const className = () => [

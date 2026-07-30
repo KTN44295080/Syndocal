@@ -44,6 +44,7 @@ const controlStageChromeOnlyMode = process.argv.includes("--control-stage-chrome
 const mappingLiveColorOnlyMode = process.argv.includes("--mapping-live-color-only");
 const mappingLiveSegmentsOnlyMode = process.argv.includes("--mapping-live-segments-only");
 const mappingLiveSnapshotOnlyMode = process.argv.includes("--mapping-live-snapshot-only");
+const barBeamsOnlyMode = process.argv.includes("--bar-beams-only");
 const controlModeSurfaceOnlyMode = process.argv.includes("--control-mode-surface-only");
 const liveDeskHeaderOnlyMode = process.argv.includes("--live-desk-header-only");
 const topbarPulseOnlyMode = process.argv.includes("--topbar-pulse-only");
@@ -53,7 +54,7 @@ const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
     ? "large-show"
     : mappingLiveSnapshotOnlyMode
       ? "mapping-live-snapshot"
-    : mappingLiveColorOnlyMode || mappingLiveSegmentsOnlyMode
+    : mappingLiveColorOnlyMode || mappingLiveSegmentsOnlyMode || barBeamsOnlyMode
       ? "mapping-live-color"
     : colorWheelOnlyMode
       ? "color-wheel"
@@ -119,7 +120,7 @@ const viewports = requestedViewport
     ? [compactFallbackViewports[1]]
   : largeShowMode
     ? [primaryOperationalViewport]
-    : mappingLiveColorOnlyMode || mappingLiveSegmentsOnlyMode || mappingLiveSnapshotOnlyMode
+    : mappingLiveColorOnlyMode || mappingLiveSegmentsOnlyMode || mappingLiveSnapshotOnlyMode || barBeamsOnlyMode
       ? [primaryOperationalViewport]
     : audioReactiveOnlyMode
       ? [primaryOperationalViewport, compactFallbackViewports[0]]
@@ -2338,6 +2339,9 @@ async function measureTimelinePaneExpansionState(client) {
         controlContextFadersRect,
         controlModeSegmentCount: controlContextHeader?.querySelectorAll(':scope > [data-control-mode-segment]').length ?? 0,
         controlModeButtonCount: controlModeSegment?.querySelectorAll('button').length ?? 0,
+        controlModeSemanticButtonCount: controlModeSegment?.querySelectorAll('[data-control-mode-option]').length ?? 0,
+        controlModeSemanticButtonWidths: [...(controlModeSegment?.querySelectorAll('[data-control-mode-option]') ?? [])]
+          .map((button) => Math.round(button.getBoundingClientRect().width * 100) / 100),
         controlModeSegmentContained: rectContained(controlModeSegmentRect, controlContextHeaderRect),
         contextBodyFollowsSharedHeader: Boolean(
           controlContextHeaderRect &&
@@ -2474,6 +2478,9 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
     normalDensity.controlContextHeaderRect.height <= 36 &&
     normalDensity.controlModeSegmentCount === 1 &&
     normalDensity.controlModeButtonCount >= 5 &&
+    normalDensity.controlModeSemanticButtonCount === 3 &&
+    normalDensity.controlModeSemanticButtonWidths.length === 3 &&
+    normalDensity.controlModeSemanticButtonWidths.every((width) => width > 0 && width <= 86) &&
     normalDensity.controlModeSegmentContained &&
     normalDensity.contextBodyFollowsSharedHeader
   );
@@ -4927,6 +4934,51 @@ async function measure(client, label) {
       visibleDuplicateFixtureButtonCount: [...document.querySelectorAll('.fixtureSetupEditor button')]
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'duplicate fixture').length,
       controlModeTabCount: document.querySelectorAll('.controlModeTabs button').length,
+      controlModeSemanticTabCount: visibleCount('[data-control-mode-option]'),
+      controlModeSemanticTabWidths: [...document.querySelectorAll('[data-control-mode-option]')]
+        .filter((button) => {
+          const rect = button.getBoundingClientRect();
+          const style = getComputedStyle(button);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+        })
+        .map((button) => Math.round(button.getBoundingClientRect().width * 100) / 100),
+      controlModeSemanticTabLabels: [...document.querySelectorAll('[data-control-mode-option]')]
+        .filter((button) => button.getBoundingClientRect().width > 0)
+        .map((button) => (button.textContent || '').trim()),
+      controlModeSegmentWidth: Math.round(
+        ([...document.querySelectorAll('[data-control-mode-segment]')]
+          .find((element) => element.getBoundingClientRect().width > 0)
+          ?.getBoundingClientRect().width ?? 0) * 100
+      ) / 100,
+      controlSharedHeaderHeight: Math.round(
+        ([...document.querySelectorAll(
+          '[data-control-context-header], .videoControlPanelMixer > .panelHeader'
+        )].find((element) => element.getBoundingClientRect().width > 0)
+          ?.getBoundingClientRect().height ?? 0) * 100
+      ) / 100,
+      controlSharedHeaderRowCount: (() => {
+        const root = [...document.querySelectorAll(
+          '[data-control-context-header], .videoControlPanelMixer > .panelHeader'
+        )].find((element) => element.getBoundingClientRect().width > 0);
+        if (!root) return 0;
+        const children = [...root.children].filter((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+        });
+        const centers = children.map((element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.top + rect.height / 2;
+        });
+        if (centers.length === 0) return 0;
+        return Math.max(...centers) - Math.min(...centers) <= 2 ? 1 : 2;
+      })(),
+      editDeskTabWidths: [...document.querySelectorAll('.editDeskTabs button')]
+        .filter((button) => button.getBoundingClientRect().width > 0)
+        .map((button) => Math.round(button.getBoundingClientRect().width * 100) / 100),
+      visibleControlFaderWriteHeaderCount: visibleCount('[data-control-fader-write-header]'),
+      visibleControlFaderCompactReadoutCount: visibleCount('[data-control-fader-compact-readout]'),
+      legacyAttributeTargetSummaryCount: document.querySelectorAll('.attributeTargetSummary').length,
       visibleLiveControlPanelCount: visibleCount('.liveControlPanel'),
       liveControlPanelHeight: Math.round(document.querySelector('.liveControlPanel')?.getBoundingClientRect().height ?? 0),
       visibleLegacyLiveDeskHeaderCount: visibleCount('.liveControlPanel > .liveDeskHeader'),
@@ -5516,8 +5568,9 @@ async function measure(client, label) {
         const tools = document.querySelector('.positionToolDeck')?.getBoundingClientRect();
         return Boolean(primary && tools && tools.left >= primary.right - 1 && Math.abs(primary.top - tools.top) <= 2);
       })(),
-      visibleAttributeTargetSummaryCount: visibleCount('.attributeTargetSummary'),
-      visibleGroupAttributeTargetSummaryCount: visibleCount('.attributeTargetSummary.group'),
+      visibleGroupControlFaderWriteHeaderCount: visibleCount(
+        '[data-control-fader-write-header][data-control-fader-target-kind="group"]'
+      ),
       effectTargetHintCount: visibleCount('.effectTargetHint'),
       effectTargetHintText: [...document.querySelectorAll('.effectTargetHint')]
         .map((element) => (element.textContent || '').trim().replace(/\\s+/g, ' '))
@@ -6117,6 +6170,16 @@ function hasExpectedControlModeSurface(result) {
     return false;
   }
   if (
+    result.controlModeSemanticTabCount !== 3 ||
+    result.controlModeSemanticTabWidths.length !== 3 ||
+    result.controlModeSemanticTabWidths.some((width) => width <= 0 || width > 86) ||
+    result.controlSharedHeaderRowCount !== 1 ||
+    result.controlSharedHeaderHeight <= 0 ||
+    result.controlSharedHeaderHeight > 36
+  ) {
+    return false;
+  }
+  if (
     !result.label.startsWith("control-mixer-") &&
     (
       result.visibleLiveControlPanelCount !== 1 ||
@@ -6149,8 +6212,9 @@ function hasExpectedControlModeSurface(result) {
       result.positionConsoleHeight >= 80 &&
       result.positionToolPaneHeight >= 60 &&
       result.positionToolPaneLastControlReachable &&
-      result.visibleAttributeTargetSummaryCount >= 1 &&
-      result.visibleGroupAttributeTargetSummaryCount >= 1 &&
+      result.visibleControlFaderWriteHeaderCount === 1 &&
+      result.visibleGroupControlFaderWriteHeaderCount === 1 &&
+      result.legacyAttributeTargetSummaryCount === 0 &&
       result.visibleEditDeskTabCount === 3 &&
       result.controlWorkSurfaceUnsafeOverflowCount === 0 &&
       result.visibleCuePanelCount === 0 &&
@@ -6192,8 +6256,9 @@ function hasExpectedControlModeSurface(result) {
     return (
       result.visibleColorPlaneCount >= 1 &&
       result.visibleColorReadoutCount >= 1 &&
-      result.visibleAttributeTargetSummaryCount >= 1 &&
-      result.visibleGroupAttributeTargetSummaryCount >= 1 &&
+      result.visibleControlFaderWriteHeaderCount === 1 &&
+      result.visibleGroupControlFaderWriteHeaderCount === 1 &&
+      result.legacyAttributeTargetSummaryCount === 0 &&
       result.visibleEditDeskTabCount === 3 &&
       result.controlWorkSurfaceUnsafeOverflowCount === 0 &&
       result.visibleCuePanelCount === 0 &&
@@ -16213,6 +16278,7 @@ async function readMappingLiveColorSurface(client, rootSelector) {
       geometry: inspect(5),
       attributeFallback: inspect(6),
       unlit: inspect(7),
+      quad: inspect(8),
     };
   })()`);
 }
@@ -16253,14 +16319,14 @@ async function runMappingLiveColorViewport(client, viewport) {
   await waitForApp(client);
   await waitForClientCondition(
     client,
-    "document.querySelectorAll('.setupStageContext [data-stage-fixture-id]').length === 7",
+    "document.querySelectorAll('.setupStageContext [data-stage-fixture-id]').length === 8",
     "mapping live-color fixture stage",
   );
   const initial = await readMappingLiveColorSurface(client, ".setupStageContext");
   await clickVisibleByText(client, ".workspaceTabs button", "Touch");
   await waitForClientCondition(
     client,
-    "document.querySelectorAll('.touchStagePanel [data-stage-fixture-id]').length === 7",
+    "document.querySelectorAll('.touchStagePanel [data-stage-fixture-id]').length === 8",
     "StagePreview2D live fixture surface",
   );
   const stagePreviewInitial = await readMappingLiveColorSurface(client, ".touchStagePanel");
@@ -16268,7 +16334,7 @@ async function runMappingLiveColorViewport(client, viewport) {
   await waitForApp(client);
   await waitForClientCondition(
     client,
-    "document.querySelectorAll('.setupStageContext [data-stage-fixture-id]').length === 7",
+    "document.querySelectorAll('.setupStageContext [data-stage-fixture-id]').length === 8",
     "mapping live-color fixture stage reload",
   );
   await client.evaluate(`(async () => {
@@ -16320,6 +16386,12 @@ async function runMappingLiveColorViewport(client, viewport) {
     71: 255,
     75: 255,
     79: 255,
+    120: 255,
+    121: 255,
+    125: 255,
+    129: 255,
+    130: 255,
+    131: 128,
   })})`);
   await waitForClientCondition(
     client,
@@ -16351,6 +16423,98 @@ async function runMappingLiveColorViewport(client, viewport) {
     control,
     updated,
   };
+}
+
+async function runBarBeamsViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await clickVisibleByText(client, "[data-control-mode-segment] button", "Live Edit");
+  await waitForClientCondition(
+    client,
+    "document.querySelectorAll('.controlStageContext [data-stage-fixture-id]').length === 8",
+    "bar beam control-stage fixtures",
+  );
+  await client.evaluate(`window.__syndocalSetMappingLiveDmx?.(${JSON.stringify({
+    1: 128,
+    2: 255,
+    7: 255,
+    12: 255,
+    17: 255,
+    18: 255,
+    19: 255,
+    23: 255,
+    24: 255,
+    26: 255,
+    27: 255,
+    28: 255,
+    40: 255,
+    41: 64,
+    42: 128,
+    43: 255,
+    50: 64,
+    60: 255,
+    61: 64,
+    70: 255,
+    71: 255,
+    75: 255,
+    79: 255,
+    120: 255,
+    121: 255,
+    125: 255,
+    129: 255,
+    130: 255,
+    131: 128,
+  })})`);
+  await waitForClientCondition(
+    client,
+    `document.querySelector('.controlStageContext [data-stage-beam-fixture-id="1"][data-stage-beam-cell="1"]')?.getAttribute('fill') === 'rgb(128, 0, 0)'`,
+    "eight-cell beam live color",
+  );
+  const on = await client.evaluate(`(() => {
+    const stage = document.querySelector('.controlStageContext');
+    const inspect = (fixtureId) => {
+      const beams = [...(stage?.querySelectorAll('[data-stage-beam-fixture-id="' + fixtureId + '"]') ?? [])];
+      return {
+        count: beams.length,
+        cells: beams.map((beam) => Number(beam.getAttribute('data-stage-beam-cell'))),
+        colors: beams.map((beam) => beam.getAttribute('fill')),
+        origins: beams.map((beam) => (beam.getAttribute('points') || '').split(' ')[0]),
+        opacities: beams.map((beam) => Number(beam.getAttribute('opacity'))),
+      };
+    };
+    const visibleFixtureIds = new Set(
+      [...(stage?.querySelectorAll('[data-stage-fixture-id][data-live-color-applied="true"]') ?? [])]
+        .map((fixture) => fixture.getAttribute('data-stage-fixture-id'))
+    );
+    const beamFixtureIds = [...(stage?.querySelectorAll('[data-stage-beam-fixture-id]') ?? [])]
+      .map((beam) => beam.getAttribute('data-stage-beam-fixture-id'));
+    return {
+      mega: inspect(1),
+      quad: inspect(8),
+      single: inspect(2),
+      total: beamFixtureIds.length,
+      onlyVisibleFixtures: beamFixtureIds.every((id) => visibleFixtureIds.has(id)),
+      togglePressed: stage?.querySelector('[data-control-stage-layer-toggle="beams"]')?.getAttribute('aria-pressed') ?? '',
+    };
+  })()`);
+  const off = await client.evaluate(`(async () => {
+    const stage = document.querySelector('.controlStageContext');
+    const button = stage?.querySelector('[data-control-stage-layer-toggle="beams"]');
+    if (button instanceof HTMLButtonElement) button.click();
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    return {
+      count: stage?.querySelectorAll('.stageBeam').length ?? -1,
+      togglePressed: button?.getAttribute('aria-pressed') ?? '',
+    };
+  })()`);
+  return { viewport, on, off };
 }
 
 async function runLargeShowViewport(client, viewport) {
@@ -16393,6 +16557,7 @@ async function runLargeShowViewport(client, viewport) {
     const fixtures = () => [...(stage?.querySelectorAll('[data-stage-fixture-id]') ?? [])];
     const applied = () => fixtures().filter((fixture) => fixture.getAttribute('data-live-color-applied') === 'true').length;
     const beforeApplied = applied();
+    const beforeBeamCount = stage?.querySelectorAll('[data-stage-beam-fixture-id]').length ?? 0;
     const slider = document.querySelector('[data-mapping-viewport-action="zoom-slider"]');
     if (slider instanceof HTMLInputElement) {
       slider.value = '4';
@@ -16401,10 +16566,13 @@ async function runLargeShowViewport(client, viewport) {
     }
     const totalStageFixtures = fixtures().length;
     const afterApplied = applied();
+    const afterBeamCount = stage?.querySelectorAll('[data-stage-beam-fixture-id]').length ?? 0;
     return {
       totalStageFixtures,
       beforeApplied,
+      beforeBeamCount,
       afterApplied,
+      afterBeamCount,
       afterSkipped: totalStageFixtures - afterApplied,
       zoomValue: slider instanceof HTMLInputElement ? Number(slider.value) : null,
     };
@@ -17753,7 +17921,7 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
         (icon.closest('[data-fixture-type-column]')?.querySelector('.fixtureTypeColumnHeader strong')?.textContent || '')
           .trim()
           .split(' / ')[0] ||
-        ((document.querySelector('.attributeTargetSummary')?.textContent || '').includes('MEGA BAR RGBA') ? 'MEGA BAR RGBA' : 'GENERIC'),
+        (/\\d+$/.test(icon.getAttribute('aria-label') || '') ? 'MEGA BAR RGBA' : 'GENERIC'),
       attribute: icon.getAttribute('aria-label') || '',
       title: icon.getAttribute('title') || '',
       glyph: icon.getAttribute('data-attribute-glyph') || '',
@@ -17867,7 +18035,13 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
       };
     });
     const app = document.querySelector('.app');
-    const summary = document.querySelector('.attributeTargetSummary');
+    const writeHeader = document.querySelector('[data-control-fader-write-header]');
+    const compactReadout = document.querySelector('[data-control-fader-compact-readout]');
+    const sharedHeader = document.querySelector('[data-control-context-header]');
+    const sharedHeaderRect = sharedHeader?.getBoundingClientRect();
+    const deskTop = deskRect?.top ?? Number.NaN;
+    const editorBody = document.querySelector('.attributeEditorBody');
+    const editorBodyRect = editorBody?.getBoundingClientRect();
     return {
       columnCount: columns.length,
       typeKeys: columns.map((column) => column.getAttribute('data-fixture-type-column') || ''),
@@ -17991,8 +18165,15 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
         categoryRailRect.bottom >= deskRect.bottom - 1
       ),
       activeCategoryLabel: (document.querySelector('.attributeCategoryRail button.active')?.textContent || '').trim(),
-      selectionSummary: (summary?.textContent || '').replace(/\\s+/g, ' ').trim(),
-      selectionSummaryKind: summary?.className || '',
+      compactReadout: (compactReadout?.textContent || '').replace(/\\s+/g, ' ').trim(),
+      controlTargetKind: writeHeader?.getAttribute('data-control-fader-target-kind') || '',
+      legacyTargetSummaryCount: document.querySelectorAll('.attributeTargetSummary').length,
+      sharedHeaderHeight: sharedHeaderRect?.height ?? 0,
+      faderDeskStartsAtEditorBodyTop: Boolean(
+        editorBodyRect &&
+        Number.isFinite(deskTop) &&
+        Math.abs(deskTop - editorBodyRect.top) <= 1
+      ),
       legacyFaderGridCount: [...document.querySelectorAll('.attributeDeskSurface > .faderGrid')].filter(visible).length,
       legacyDimmerPanelCount: [...document.querySelectorAll('.attributeDeskSurface > .dimmerControlPanel')].filter(visible).length,
       gridHorizontalOverflow: grid ? Math.max(0, grid.scrollWidth - grid.clientWidth) : -1,
@@ -18246,7 +18427,17 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
           && state.unsupportedPlaceholderText.length === 0;
       })
     ],
-    ["multipleSelectionSummaryVisible", () => multiple.selectionSummaryKind.includes("selection") && multiple.selectionSummary.includes("41 fixtures") && multiple.selectionSummary.includes("3 fixture types")],
+    ["multipleSelectionCompactRangeVisible", () =>
+      multiple.controlTargetKind === "selection"
+      && multiple.compactReadout.includes("41 fixtures/")
+      && multiple.compactReadout.includes("attrs")
+      && multiple.compactReadout.includes(" · U0 A")
+    ],
+    ["legacyTargetSummaryRowRemovedForMultipleSelection", () =>
+      multiple.legacyTargetSummaryCount === 0
+      && multiple.faderDeskStartsAtEditorBodyTop
+      && Math.abs(multiple.sharedHeaderHeight - 34) <= 1
+    ],
     ["legacyEditorHiddenForMultipleSelection", () => multiple.legacyFaderGridCount === 0 && multiple.legacyDimmerPanelCount === 0],
     ["categoryRailPreservedForMultipleSelection", () => multiple.categoryRailButtonCount === 8 && multiple.activeCategoryLabel.includes("Dimmer")],
     ["allMultipleSelectionCategoriesKeepTheRailLeftAndVertical", () =>
@@ -18405,7 +18596,12 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
     ["typeHeaderNarrowsSelection", () => narrowed],
     ["typeColumnsHiddenForSingleSelection", () => single.columnCount === 0],
     ["legacyEditorVisibleForSingleSelection", () => single.legacyFaderGridCount === 1 && single.legacyDimmerPanelCount === 1],
-    ["singleSelectionUsesFixtureSummary", () => single.selectionSummaryKind.includes("fixture") && single.selectionSummary.includes("GENERIC 1")],
+    ["singleSelectionUsesCompactFixtureRange", () =>
+      single.controlTargetKind === "fixture"
+      && single.compactReadout.includes("1 fixture/")
+      && single.compactReadout.includes(" · U0 A")
+      && !single.compactReadout.includes("GENERIC 1")
+    ],
     ["categoryRailPreservedForSingleSelection", () => single.categoryRailButtonCount === 8 && single.activeCategoryLabel.includes("Dimmer")],
     ["allSingleSelectionCategoriesKeepTheRailLeftAndVertical", () =>
       Object.values(singleCategoryStates).every((state) =>
@@ -18658,10 +18854,16 @@ async function runAttributeCategoriesViewport(client, viewport) {
 
 async function readControlFaderWriteVisibility(client) {
   return client.evaluate(`(() => {
-    const summary = document.querySelector('.attributeTargetSummary');
     const header = document.querySelector('[data-control-fader-write-header]');
-    const summaryRect = summary?.getBoundingClientRect();
+    const sharedHeader = document.querySelector('[data-control-context-header]');
+    const compactReadout = document.querySelector('[data-control-fader-compact-readout]');
+    const editorBody = document.querySelector('.attributeEditorBody');
+    const desk = document.querySelector('.attributeDeskSurface');
+    const sharedHeaderRect = sharedHeader?.getBoundingClientRect();
     const headerRect = header?.getBoundingClientRect();
+    const compactReadoutRect = compactReadout?.getBoundingClientRect();
+    const editorBodyRect = editorBody?.getBoundingClientRect();
+    const deskRect = desk?.getBoundingClientRect();
     const rectWithin = (inner, outer) => Boolean(
       inner &&
       outer &&
@@ -18750,26 +18952,48 @@ async function readControlFaderWriteVisibility(client) {
             ? clipAncestor.className || clipAncestor.tagName
             : '',
           withinNearestClip: rectWithin(spanRect, clipRect),
-          withinSummary: rectWithin(spanRect, summaryRect),
+          withinSharedHeader: rectWithin(spanRect, sharedHeaderRect),
           buttonRules: matchedRules(button, ['height', 'min-height', 'max-height', 'align-self', 'color']),
           spanRules: matchedRules(span, ['color']),
         };
       });
     return {
-      summaryKind: ['empty', 'fixture', 'group', 'selection']
-        .find((kind) => summary?.classList.contains(kind)) ?? '',
-      summaryRect: summaryRect
-        ? { top: summaryRect.top, bottom: summaryRect.bottom, width: summaryRect.width, height: summaryRect.height }
+      targetKind: header?.getAttribute('data-control-fader-target-kind') ?? '',
+      sharedHeaderRect: sharedHeaderRect
+        ? { top: sharedHeaderRect.top, bottom: sharedHeaderRect.bottom, width: sharedHeaderRect.width, height: sharedHeaderRect.height }
         : null,
       headerRect: headerRect
         ? { top: headerRect.top, bottom: headerRect.bottom, width: headerRect.width, height: headerRect.height }
         : null,
-      headerContained: rectWithin(headerRect, summaryRect),
+      headerContained: rectWithin(headerRect, sharedHeaderRect),
+      compactReadoutText: (compactReadout?.textContent ?? '').replace(/\\s+/g, ' ').trim(),
+      compactReadoutVisible: Boolean(compactReadoutRect?.width && compactReadoutRect?.height),
+      compactReadoutContained:
+        !compactReadoutRect?.width || rectWithin(compactReadoutRect, sharedHeaderRect),
+      legacyTargetSummaryCount: document.querySelectorAll('.attributeTargetSummary').length,
+      sharedHeaderSingleRow: (() => {
+        if (!sharedHeader) return false;
+        const children = [...sharedHeader.children].filter((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+        });
+        const centers = children.map((element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.top + rect.height / 2;
+        });
+        return centers.length > 0 && Math.max(...centers) - Math.min(...centers) <= 2;
+      })(),
+      deskStartsAtEditorBodyTop: Boolean(
+        editorBodyRect &&
+        deskRect &&
+        Math.abs(deskRect.top - editorBodyRect.top) <= 1
+      ),
       spansHaveWidth: buttonSpans.length === 2 && buttonSpans.every((entry) => entry.spanWidth > 0),
       spansFitNearestClip:
         buttonSpans.length === 2 && buttonSpans.every((entry) => entry.withinNearestClip),
-      spansFitSummary:
-        buttonSpans.length === 2 && buttonSpans.every((entry) => entry.withinSummary),
+      spansFitSharedHeader:
+        buttonSpans.length === 2 && buttonSpans.every((entry) => entry.withinSharedHeader),
       buttonsFixed24:
         buttonSpans.length === 2 && buttonSpans.every((entry) => Math.abs(entry.buttonHeight - 24) <= 0.51),
       textUsesDefinedColors:
@@ -18824,7 +19048,8 @@ async function runColorWheelViewport(client, viewport) {
     const pickerInput = document.querySelector('[data-color-wheel-picker] input[type="color"]');
     const hueInput = document.querySelector('[data-color-wheel-picker] .hsvDirectGrid input[type="number"]');
     const approximation = document.querySelector("[data-color-wheel-approximation] strong");
-    const summary = document.querySelector(".attributeTargetSummary");
+    const writeHeader = document.querySelector("[data-control-fader-write-header]");
+    const compactReadout = document.querySelector("[data-control-fader-compact-readout]");
     const activeSwatch = activeButton?.querySelector(".colorWheelSlotSwatch");
     const faderSwatch = document.querySelector('.attributeFaderIcon[data-attribute-glyph="color"] i');
     return {
@@ -18859,8 +19084,8 @@ async function runColorWheelViewport(client, viewport) {
         Boolean(activeButton?.classList.contains("active")) &&
         activeButton?.getAttribute("aria-pressed") === "true",
       directDmxValue: directDmx instanceof HTMLInputElement ? Number(directDmx.value) : Number.NaN,
-      targetIsGroup: Boolean(summary?.classList.contains("group")),
-      targetText: (summary?.textContent || "").replace(/\s+/g, " ").trim(),
+      targetIsGroup: writeHeader?.getAttribute("data-control-fader-target-kind") === "group",
+      targetText: (compactReadout?.textContent || "").replace(/\s+/g, " ").trim(),
       pickerContained:
         Boolean(pickerRect && deskRect) &&
         pickerRect.top >= deskRect.top - 1 &&
@@ -19028,8 +19253,8 @@ async function runColorWheelViewport(client, viewport) {
     ["wheelPickerAndSlotsMeetContainmentAndTargetFloors", () =>
       initial.pickerContained && initial.slotMinimumHeight >= 40
     ],
-    ["wheelPickerTargetsExistingGroupPath", () =>
-      initial.targetIsGroup && initial.targetText.includes("Group moving")
+    ["wheelPickerTargetsCompactGroupRange", () =>
+      initial.targetIsGroup && /^4 fixtures\/\d+ attrs? · U0 A\d+$/.test(initial.targetText)
     ],
     ["initialPickerMatchesCurrentBlueSlot", () =>
       initial.pickerValue === "#0000ff" &&
@@ -19059,8 +19284,7 @@ async function runColorWheelViewport(client, viewport) {
         selected &&
         hit &&
         state.targetIsGroup &&
-        state.targetText.includes("Group moving") &&
-        state.targetText.includes("Ref stage evolution mini spot 30") &&
+        /^4 fixtures\/\d+ attrs? · U0 A\d+$/.test(state.targetText) &&
         state.activeLabel === "Orange" &&
         state.directDmxValue === 8_867 &&
         state.approximationText === "→ Orange (12%-15%)"
@@ -19080,8 +19304,7 @@ async function runColorWheelViewport(client, viewport) {
         selected &&
         hit &&
         state.targetIsGroup &&
-        state.targetText.includes("Group moving") &&
-        state.targetText.includes("Ref stage evolution mini spot 30") &&
+        /^4 fixtures\/\d+ attrs? · U0 A\d+$/.test(state.targetText) &&
         state.activeLabel === "Blue" &&
         state.directDmxValue === 19_147 &&
         state.approximationText === "→ Blue (28%-31%)"
@@ -19098,7 +19321,7 @@ async function runColorWheelViewport(client, viewport) {
     ["groupPickerWriteReachesSecondFixture", () =>
       redOnSecondGroupFixture.selected &&
       redOnSecondGroupFixture.hit &&
-      redOnSecondGroupFixture.state.targetText.includes("Ref stage evolution mini spot 30 2") &&
+      redOnSecondGroupFixture.state.targetText.endsWith(" · U0 A13") &&
       redOnSecondGroupFixture.state.activeLabel === "Red" &&
       redOnSecondGroupFixture.state.directDmxValue === 16_577
     ],
@@ -19116,8 +19339,7 @@ async function runColorWheelViewport(client, viewport) {
         selected &&
         hit &&
         state.targetIsGroup &&
-        state.targetText.includes("Group moving") &&
-        state.targetText.includes("Ref stage evolution mini spot 30") &&
+        /^4 fixtures\/\d+ attrs? · U0 A\d+$/.test(state.targetText) &&
         state.activeLabel === "White" &&
         state.directDmxValue === 1_157 &&
         state.approximationText === "→ White (0%-4%)"
@@ -19194,21 +19416,27 @@ async function runEditLiveViewport(client, viewport) {
     const cue = snapshot?.cues?.find((candidate) => candidate.id === 301);
     const otherCue = snapshot?.cues?.find((candidate) => candidate.id === 302);
     const header = document.querySelector('[data-control-fader-write-header]');
-    const summary = document.querySelector('.attributeTargetSummary');
+    const sharedHeader = document.querySelector('[data-control-context-header]');
+    const compactReadout = document.querySelector('[data-control-fader-compact-readout]');
+    const editorBody = document.querySelector('.attributeEditorBody');
+    const desk = document.querySelector('.attributeDeskSurface');
     const badge = document.querySelector('.controlFaderEditState');
     const editButton = document.querySelector('[data-control-fader-write-mode-option="edit"]');
     const liveButton = document.querySelector('[data-control-fader-write-mode-option="live"]');
     const sceneCard = document.querySelector('[data-scene-matrix-cue-id="301"]');
     const sceneBand = sceneCard?.querySelector('.sceneMatrixEditStripBand');
+    const editStrip = sceneCard?.querySelector('[data-scene-matrix-edit-strip]');
     const app = document.querySelector('.app');
     const headerRect = header?.getBoundingClientRect();
-    const summaryRect = summary?.getBoundingClientRect();
+    const sharedHeaderRect = sharedHeader?.getBoundingClientRect();
+    const editorBodyRect = editorBody?.getBoundingClientRect();
+    const deskRect = desk?.getBoundingClientRect();
     const badgeRect = badge?.getBoundingClientRect();
     const badgeStyle = badge ? getComputedStyle(badge) : null;
     const sceneBandStyle = sceneBand ? getComputedStyle(sceneBand) : null;
-    const summaryStyle = summary ? getComputedStyle(summary) : null;
+    const headerStyle = header ? getComputedStyle(header) : null;
     return {
-      mode: summary?.getAttribute('data-control-fader-write-mode') ?? '',
+      mode: header?.getAttribute('data-control-fader-write-mode') ?? '',
       editPressed: editButton?.getAttribute('aria-pressed') ?? '',
       livePressed: liveButton?.getAttribute('aria-pressed') ?? '',
       badgeState: badge?.getAttribute('data-control-fader-edit-state') ?? '',
@@ -19223,18 +19451,47 @@ async function runEditLiveViewport(client, viewport) {
       ),
       badgeBorderColor: badgeStyle?.borderLeftColor ?? '',
       sceneBandColor: sceneBandStyle?.backgroundColor ?? '',
-      editIdentity: summaryStyle?.getPropertyValue('--control-edit-identity').trim() ?? '',
+      editIdentity: headerStyle?.getPropertyValue('--control-edit-identity').trim() ?? '',
       sceneIdentity: sceneCard
         ? getComputedStyle(sceneCard).getPropertyValue('--cue-identity').trim()
         : '',
       headerContained: Boolean(
         headerRect &&
-        summaryRect &&
-        headerRect.left >= summaryRect.left - 1 &&
-        headerRect.top >= summaryRect.top - 1 &&
-        headerRect.right <= summaryRect.right + 1 &&
-        headerRect.bottom <= summaryRect.bottom + 1
+        sharedHeaderRect &&
+        headerRect.left >= sharedHeaderRect.left - 1 &&
+        headerRect.top >= sharedHeaderRect.top - 1 &&
+        headerRect.right <= sharedHeaderRect.right + 1 &&
+        headerRect.bottom <= sharedHeaderRect.bottom + 1
       ),
+      compactReadoutText: (compactReadout?.textContent ?? '').replace(/\\s+/g, ' ').trim(),
+      targetKind: header?.getAttribute('data-control-fader-target-kind') ?? '',
+      legacyTargetSummaryCount: document.querySelectorAll('.attributeTargetSummary').length,
+      sharedHeaderHeight: sharedHeaderRect?.height ?? 0,
+      sharedHeaderSingleRow: (() => {
+        if (!sharedHeader) return false;
+        const children = [...sharedHeader.children].filter((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+        });
+        const centers = children.map((element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.top + rect.height / 2;
+        });
+        return centers.length > 0 && Math.max(...centers) - Math.min(...centers) <= 2;
+      })(),
+      deskStartsAtEditorBodyTop: Boolean(
+        editorBodyRect &&
+        deskRect &&
+        Math.abs(deskRect.top - editorBodyRect.top) <= 1
+      ),
+      modeTabWidths: [...document.querySelectorAll('[data-control-mode-option]')]
+        .filter((button) => button.getBoundingClientRect().width > 0)
+        .map((button) => Math.round(button.getBoundingClientRect().width * 100) / 100),
+      editDeskTabWidths: [...document.querySelectorAll('.editDeskTabs button')]
+        .filter((button) => button.getBoundingClientRect().width > 0)
+        .map((button) => Math.round(button.getBoundingClientRect().width * 100) / 100),
+      editStripThresholdPx: Number(editStrip?.getAttribute('data-scene-matrix-drag-threshold') ?? -1),
       cueTargets: JSON.stringify(cue?.targets ?? []),
       cueDimmer: cue?.targets
         ?.find((target) => target.fixture_id === 1)
@@ -19302,7 +19559,42 @@ async function runEditLiveViewport(client, viewport) {
   const unselectedGesture = await setFirstDimmer(16_000);
   const afterUnselected = await readState();
 
-  await clickVisibleSelector(client, '[data-scene-matrix-edit-strip="301"]');
+  const editStripSubThresholdGesture = await client.evaluate(`(() => {
+    const strip = document.querySelector('[data-scene-matrix-edit-strip="301"]');
+    if (!(strip instanceof HTMLElement)) return null;
+    const rect = strip.getBoundingClientRect();
+    return {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+      thresholdPx: Number(strip.getAttribute('data-scene-matrix-drag-threshold') ?? -1),
+      movementPx: 3,
+    };
+  })()`);
+  if (editStripSubThresholdGesture) {
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: editStripSubThresholdGesture.x,
+      y: editStripSubThresholdGesture.y,
+      button: "left",
+      buttons: 1,
+      clickCount: 1,
+    });
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: editStripSubThresholdGesture.x + editStripSubThresholdGesture.movementPx,
+      y: editStripSubThresholdGesture.y,
+      button: "left",
+      buttons: 1,
+    });
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: editStripSubThresholdGesture.x + editStripSubThresholdGesture.movementPx,
+      y: editStripSubThresholdGesture.y,
+      button: "left",
+      buttons: 0,
+      clickCount: 1,
+    });
+  }
   await sleep(120);
   const editSelected = await readState();
   const editGesture = await setFirstDimmer(42_000);
@@ -19356,20 +19648,20 @@ async function runEditLiveViewport(client, viewport) {
     ["selectedWriteModeTextHasNonZeroWidth", () => selectedTargetVisibility.spansHaveWidth],
     ["selectedWriteModeTextFitsNearestClipAncestor", () =>
       selectedTargetVisibility.spansFitNearestClip &&
-      selectedTargetVisibility.spansFitSummary
+      selectedTargetVisibility.spansFitSharedHeader
     ],
     ["emptyWriteModeTextHasNonZeroWidth", () =>
-      emptyTargetVisibility.summaryKind === "empty" &&
+      emptyTargetVisibility.targetKind === "empty" &&
       emptyTargetVisibility.spansHaveWidth
     ],
     ["emptyWriteModeTextFitsNearestClipAncestor", () =>
       emptyTargetVisibility.spansFitNearestClip &&
-      emptyTargetVisibility.spansFitSummary
+      emptyTargetVisibility.spansFitSharedHeader
     ],
     ["operatorWriteModeTextHasNonZeroWidth", () => operatorTargetVisibility.spansHaveWidth],
     ["operatorWriteModeTextFitsNearestClipAncestor", () =>
       operatorTargetVisibility.spansFitNearestClip &&
-      operatorTargetVisibility.spansFitSummary
+      operatorTargetVisibility.spansFitSharedHeader
     ],
     ["writeModeButtonsStay24pxAcrossGeometries", () =>
       [
@@ -19385,12 +19677,43 @@ async function runEditLiveViewport(client, viewport) {
         operatorTargetVisibility,
       ].every((state) => state.textUsesDefinedColors)
     ],
-    ["writeModeHeadersStayInsideSummaryAcrossGeometries", () =>
+    ["writeModeHeadersStayInsideSharedHeaderAcrossGeometries", () =>
       [
         selectedTargetVisibility,
         emptyTargetVisibility,
         operatorTargetVisibility,
       ].every((state) => state.headerContained)
+    ],
+    ["legacyTargetSummaryRowRemovedAcrossGeometries", () =>
+      [
+        selectedTargetVisibility,
+        emptyTargetVisibility,
+        operatorTargetVisibility,
+      ].every((state) =>
+        state.legacyTargetSummaryCount === 0 &&
+        state.sharedHeaderSingleRow &&
+        state.deskStartsAtEditorBodyTop
+      )
+    ],
+    ["compactRangeReadoutReplacesTargetLabels", () =>
+      selectedTargetVisibility.compactReadoutText.includes("fixtures/") &&
+      selectedTargetVisibility.compactReadoutText.includes(" · U0 A") &&
+      !selectedTargetVisibility.compactReadoutText.includes("Group target") &&
+      !selectedTargetVisibility.compactReadoutText.includes("Fixture target")
+    ],
+    ["sharedHeaderAndContextTabsStayCompact", () =>
+      initial.sharedHeaderSingleRow &&
+      Math.abs(initial.sharedHeaderHeight - 34) <= 1 &&
+      initial.modeTabWidths.length === 3 &&
+      initial.modeTabWidths.every((width) => width > 0 && width <= 86) &&
+      initial.editDeskTabWidths.length === 3 &&
+      initial.editDeskTabWidths.every((width) => width > 0 && width <= 100)
+    ],
+    ["sceneEditStripKeepsFourPxSubThresholdClick", () =>
+      editStripSubThresholdGesture?.thresholdPx === 4 &&
+      editStripSubThresholdGesture.movementPx < editStripSubThresholdGesture.thresholdPx &&
+      editSelected.badgeState === "selected" &&
+      editSelected.editStripThresholdPx === 4
     ],
     ["writeHeaderContained", () =>
       [
@@ -19436,6 +19759,7 @@ async function runEditLiveViewport(client, viewport) {
     afterEdit,
     afterUndo,
     afterRedo,
+    editStripSubThresholdGesture,
     selectedTargetVisibility,
     emptyTargetVisibility,
     operatorTargetVisibility,
@@ -19480,7 +19804,8 @@ async function runControlEditPositionViewport(client, viewport) {
         style.opacity !== "0"
       );
     };
-    const summary = document.querySelector(".attributeTargetSummary");
+    const writeHeader = document.querySelector("[data-control-fader-write-header]");
+    const compactReadout = document.querySelector("[data-control-fader-compact-readout]");
     const positionTab = document.querySelector("#position-tool-tab-position");
     const limitsTab = document.querySelector("#position-tool-tab-limits");
     return {
@@ -19492,14 +19817,8 @@ async function runControlEditPositionViewport(client, viewport) {
       limitsPaneVisible: visible(document.querySelector("#position-tool-pane-limits")),
       panTiltPadVisible: visible(document.querySelector(".positionControlPanel .panTiltPad")),
       fixtureTypeColumnCount: [...document.querySelectorAll("[data-fixture-type-column]")].filter(visible).length,
-      targetKind: summary?.classList.contains("group")
-        ? "group"
-        : summary?.classList.contains("fixture")
-          ? "fixture"
-          : summary?.classList.contains("selection")
-            ? "selection"
-            : "empty",
-      targetText: (summary?.textContent || "").replace(/\\s+/g, " ").trim(),
+      targetKind: writeHeader?.getAttribute("data-control-fader-target-kind") ?? "empty",
+      targetText: (compactReadout?.textContent || "").replace(/\\s+/g, " ").trim(),
     };
   })()`);
 
@@ -19650,7 +19969,7 @@ async function main() {
             `orange22=${result.orange.activeLabel}:${result.orange.directDmxValue}:${JSON.stringify(result.orange.approximationText)} ` +
             `blue=${result.blue.activeLabel}:${result.blue.directDmxValue}:${JSON.stringify(result.blue.approximationText)} ` +
             `red=${result.red.activeLabel}:${result.red.directDmxValue}:${JSON.stringify(result.red.approximationText)} ` +
-            `group2=${result.redOnSecondGroupFixture.targetText.includes("Ref stage evolution mini spot 30 2")}:${result.redOnSecondGroupFixture.activeLabel}:${result.redOnSecondGroupFixture.directDmxValue} ` +
+            `group2=${result.redOnSecondGroupFixture.targetText.endsWith(" · U0 A13")}:${result.redOnSecondGroupFixture.activeLabel}:${result.redOnSecondGroupFixture.directDmxValue} ` +
             `white=${result.white.activeLabel}:${result.white.directDmxValue}:${JSON.stringify(result.white.approximationText)} ` +
             `direct=${result.directBlue.activeLabel}:${result.directBlue.directDmxValue} ` +
             `scroll=${result.directBlue.documentAndAppScrollZero ? "zero" : "overflow"} ` +
@@ -19672,11 +19991,11 @@ async function main() {
         const result = await runEditLiveViewport(client, viewport);
         editLiveResults.push(result);
         const textVisibility = (state) =>
-          `${state.summaryKind}:` +
+          `${state.targetKind}:` +
           state.buttonSpans
             .map((entry) => `${entry.option}:${entry.buttonHeight}x${entry.spanWidth}`)
             .join("+") +
-          `:${state.spansFitNearestClip && state.spansFitSummary ? "inside" : "clipped"}` +
+          `:${state.spansFitNearestClip && state.spansFitSharedHeader ? "inside" : "clipped"}` +
           `:${state.textUsesDefinedColors ? "defined" : "overridden"}`;
         console.log(
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
@@ -19686,6 +20005,11 @@ async function main() {
             `undo=${result.afterUndo.cueDimmer}/${result.afterUndo.history.redoDepth} ` +
             `redo=${result.afterRedo.cueDimmer}/${result.afterRedo.history.undoDepth} ` +
             `identity=${result.editSelected.badgeBorderColor} ` +
+            `header=${Math.round(result.initial.sharedHeaderHeight * 100) / 100}px/1row ` +
+            `modeTabs=${JSON.stringify(result.initial.modeTabWidths)} ` +
+            `deskTabs=${JSON.stringify(result.initial.editDeskTabWidths)} ` +
+            `reclaimed=26px threshold=${result.editStripSubThresholdGesture?.movementPx ?? "?"}<${result.editStripSubThresholdGesture?.thresholdPx ?? "?"} ` +
+            `readout=${JSON.stringify(result.selectedTargetVisibility.compactReadoutText)} ` +
             `text=${textVisibility(result.selectedTargetVisibility)}/` +
               `${textVisibility(result.emptyTargetVisibility)}/` +
               `${textVisibility(result.operatorTargetVisibility)} ` +
@@ -19803,6 +20127,8 @@ async function main() {
               .join("+")} unsupported=${Object.values(result.multipleCategoryStates)
               .reduce((sum, state) => sum + state.unsupportedPlaceholderCount, 0)} ` +
             `single=${result.single.legacyFaderGridCount}/${result.single.legacyDimmerPanelCount} ` +
+            `header=${Math.round(result.multiple.sharedHeaderHeight * 100) / 100}px/1row ` +
+            `readout=${JSON.stringify(result.multiple.compactReadout)}->${JSON.stringify(result.single.compactReadout)} ` +
             `scroll=${result.multiple.documentAndAppScrollZero && result.single.documentAndAppScrollZero ? "zero" : "overflow"} ` +
             `failed=${JSON.stringify(result.failedChecks)}`,
         );
@@ -20127,11 +20453,27 @@ async function main() {
             allAssertionsTrue: hasExpectedControlModeSurface(result),
             liveDeskToolbarControlsShareOneRow: result.liveDeskToolbarControlsShareOneRow,
           }));
+        const focusMetrics = Object.fromEntries([
+          ["edit", viewportControlResults.find((result) =>
+            result.label === `control-edit-${viewport.width}x${viewport.height}`)],
+          ["timeline", viewportControlResults.find((result) =>
+            result.label === `control-live-${viewport.width}x${viewport.height}`)],
+          ["vj", viewportControlResults.find((result) =>
+            result.label === `control-mixer-${viewport.width}x${viewport.height}`)],
+        ].map(([mode, result]) => [mode, result ? {
+          rows: result.controlSharedHeaderRowCount,
+          height: result.controlSharedHeaderHeight,
+          modeTabWidths: result.controlModeSemanticTabWidths,
+          editDeskTabWidths: result.editDeskTabWidths,
+          writeHeader: result.visibleControlFaderWriteHeaderCount,
+          legacySummary: result.legacyAttributeTargetSummaryCount,
+        } : null]));
         console.log(
           `${failures.length === 0 ? "pass" : "fail"} control-mode-surface-${viewport.width}x${viewport.height} ` +
             `phases=${viewportControlResults.length} ` +
-            `labels=${JSON.stringify(viewportControlResults.map((result) => result.label))} ` +
-            `liveContracts=${JSON.stringify(liveContracts)} ` +
+            `focus=${JSON.stringify(focusMetrics)} ` +
+            `liveContracts=${liveContracts.every((contract) =>
+              contract.allAssertionsTrue && contract.liveDeskToolbarControlsShareOneRow) ? "all-pass" : JSON.stringify(liveContracts)} ` +
             `failed=${JSON.stringify(failures.map((result) => ({
               label: result.label,
               toolbar: [
@@ -20317,6 +20659,67 @@ async function main() {
       const failures = sceneMatrixResults.filter((result) => !result.passed);
       if (failures.length > 0) {
         throw new Error(`Scene Matrix viewport failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
+    if (barBeamsOnlyMode) {
+      const result = await runBarBeamsViewport(client, viewports[0]);
+      const renderModelSource = readFileSync(join(appRoot, "src", "createMappingRenderModel.ts"), "utf8");
+      const beamLayerSource = readFileSync(join(appRoot, "src", "components", "MappingBeamsLayer.tsx"), "utf8");
+      const expectedMegaColors = [
+        "rgb(128, 0, 0)",
+        "rgb(0, 128, 0)",
+        "rgb(0, 0, 128)",
+        "rgb(128, 84, 0)",
+        "rgb(128, 128, 0)",
+        "rgb(0, 128, 128)",
+        "rgb(128, 128, 128)",
+        "rgb(31, 38, 46)",
+      ];
+      const expectedQuadColors = [
+        "rgb(255, 0, 0)",
+        "rgb(0, 255, 0)",
+        "rgb(0, 0, 255)",
+        "rgb(255, 128, 0)",
+      ];
+      const checks = {
+        megaBarEmitsExactlyEightBeams:
+          result.on.mega.count === 8
+          && JSON.stringify(result.on.mega.cells) === JSON.stringify([1, 2, 3, 4, 5, 6, 7, 8]),
+        megaBeamColorsComeFromOwnLiveCells:
+          JSON.stringify(result.on.mega.colors) === JSON.stringify(expectedMegaColors),
+        quadBarEmitsExactlyFourBeams:
+          result.on.quad.count === 4
+          && JSON.stringify(result.on.quad.cells) === JSON.stringify([1, 2, 3, 4]),
+        quadBeamColorsComeFromOwnLiveCells:
+          JSON.stringify(result.on.quad.colors) === JSON.stringify(expectedQuadColors),
+        cellOriginsSpanTheRotatedBar:
+          new Set(result.on.mega.origins).size === 8
+          && new Set(result.on.quad.origins).size === 4,
+        existingSingleCellBeamStaysSingle: result.on.single.count === 1,
+        existingBeamGeometryAndIntensityScaleReused:
+          renderModelSource.includes("beamPoints(x, z, base.beamYaw, segment.intensity)")
+          && beamLayerSource.includes("fixture.beams ?? [{")
+          && beamLayerSource.includes("points: fixture.beamPoints"),
+        beamsOnlyBuiltForLiveViewportFixtures: result.on.onlyVisibleFixtures,
+        beamToggleStartsOn: result.on.togglePressed === "true",
+        beamToggleOffRemovesEveryBeam:
+          result.off.togglePressed === "false" && result.off.count === 0,
+      };
+      const failedChecks = Object.entries(checks)
+        .filter(([, passed]) => !passed)
+        .map(([name]) => name);
+      const passed = failedChecks.length === 0;
+      console.log(
+        `${passed ? "pass" : "fail"} bar beams ${result.viewport.width}x${result.viewport.height} ` +
+        `mega=${result.on.mega.count}:${JSON.stringify(result.on.mega.colors)} ` +
+        `quad=${result.on.quad.count}:${JSON.stringify(result.on.quad.colors)} ` +
+        `single=${result.on.single.count} visibleOnly=${result.on.onlyVisibleFixtures} ` +
+        `toggle=${result.on.togglePressed}->${result.off.togglePressed} off=${result.off.count} ` +
+        `checks=${JSON.stringify(checks)}`,
+      );
+      if (!passed) {
+        throw new Error(`Bar beam viewport failed: ${JSON.stringify({ failedChecks, result })}`);
       }
       return;
     }
@@ -20616,6 +21019,8 @@ async function main() {
         result.stats.beforeApplied === 2_000 &&
         result.stats.afterApplied > 0 &&
         result.stats.afterApplied < 2_000 &&
+        result.stats.beforeBeamCount === result.stats.beforeApplied &&
+        result.stats.afterBeamCount === result.stats.afterApplied &&
         result.stats.afterSkipped === 2_000 - result.stats.afterApplied &&
         result.stats.zoomValue === 4 &&
         isContained(result.containment)
@@ -20995,7 +21400,7 @@ async function main() {
         ? ` waveDraft=${result.effectTargetValue}/${result.effectTypeValue}/${result.effectCommonAttributeValue || 'none'}`
         : "";
       const editVisualSuffix = result.label.startsWith("control-edit-position-") || result.label.startsWith("control-edit-color-")
-        ? ` editVisual=${result.visiblePanTiltPadCount}/${result.visiblePositionReadoutCount}/${result.visibleColorPlaneCount}/${result.visibleColorReadoutCount}/${result.visibleGroupControlBannerCount}/${result.visibleAttributeTargetSummaryCount}/${result.visibleGroupAttributeTargetSummaryCount}`
+        ? ` editVisual=${result.visiblePanTiltPadCount}/${result.visiblePositionReadoutCount}/${result.visibleColorPlaneCount}/${result.visibleColorReadoutCount}/${result.visibleGroupControlBannerCount}/${result.visibleControlFaderWriteHeaderCount}/${result.visibleGroupControlFaderWriteHeaderCount}`
         : "";
       const positionVisualSuffix = result.label.startsWith("control-edit-position-")
         ? ` positionDesk=${result.positionConsoleWidth}x${result.positionConsoleHeight} pad=${result.positionPadWidth}x${result.positionPadHeight} tools=${result.positionToolDeckWidth}w tabs=${result.visiblePositionToolTabCount}/${result.visibleActivePositionToolTabCount} live=${result.visiblePositionDirectControlCount}/${result.visiblePositionNudgeButtonCount}/${result.visiblePositionTargetButtonCount}/${result.visiblePositionTransformButtonCount}/${result.visiblePositionFavoriteButtonCount} limits=${result.visibleControlLimitPanelCount} overflow=${result.positionConsoleHorizontalOverflowPx}/${result.positionToolPaneHorizontalOverflowPx}/${result.positionToolPaneVerticalOverflowPx}`

@@ -6,7 +6,12 @@ import {
   fixtureLiveSegmentSkeleton,
 } from "./fixtureLiveColor";
 import { readFixtureAttribute } from "./fixtureControlRuntime";
-import { fixtureTypeKey, fixtureVisualKind, mappingFixtureStageSize } from "./fixtureVisuals";
+import {
+  fixtureTypeKey,
+  fixtureVisualKind,
+  mappingFixtureGridUnit,
+  mappingFixtureStageSize,
+} from "./fixtureVisuals";
 import {
   mappingGeometryClass,
   surfaceWorldHalfSize,
@@ -363,6 +368,7 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
         yaw,
         yawHandleX: yawHandle.x,
         yawHandleZ: yawHandle.z,
+        beamYaw: yaw + panDegrees,
         beamPoints: beamPoints(point.x, point.z, yaw + panDegrees, intensity),
         intensity,
         color,
@@ -408,8 +414,22 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
       const liveSegments = segmentSkeleton.length > 1
         ? live?.segments ?? segmentSkeleton
         : undefined;
+      const beams = live && liveSegments
+        ? liveSegments.map((segment, index) => {
+            const localX = (index - (liveSegments.length - 1) / 2) * mappingFixtureGridUnit;
+            const offset = rotateStageOffsetYaw({ x: localX, z: 0 }, base.yaw);
+            const x = base.x + offset.x;
+            const z = base.z + offset.z;
+            return {
+              cellIndex: index + 1,
+              points: beamPoints(x, z, base.beamYaw, segment.intensity),
+              intensity: segment.intensity,
+              color: segment.color,
+            };
+          })
+        : undefined;
       const signature = live
-        ? `live:${live.valueSource}:${live.color}:${live.intensity}:${liveSegments?.map((segment) => segment.color).join("|") ?? "single"}`
+        ? `live:${live.valueSource}:${live.color}:${live.intensity}:${liveSegments?.map((segment) => `${segment.color}:${segment.intensity}`).join("|") ?? "single"}`
         : `offscreen:${liveSegments?.map((segment) => segment.key).join("|") ?? "single"}`;
       const cached = mappingStageFixtureCache.get(base.id);
       if (cached?.base === base && cached.signature === signature) {
@@ -421,6 +441,7 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
         liveColorApplied: Boolean(live),
         liveColorValueSource: live?.valueSource,
         liveSegments,
+        beams,
       };
       mappingStageFixtureCache.set(base.id, { base, signature, fixture });
       return fixture;

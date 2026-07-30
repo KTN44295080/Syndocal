@@ -34,6 +34,7 @@ import { EffectActionControlsPanel } from "./components/EffectActionControlsPane
 import { EffectGroupTargetPanel } from "./components/EffectGroupTargetPanel";
 import { EffectListPanel } from "./components/EffectListPanel";
 import { EffectSourceControlsPanel } from "./components/EffectSourceControlsPanel";
+import { ControlFaderWriteHeader } from "./components/ControlFaderWriteHeader";
 import { FaderAttributeEditorPanel } from "./components/FaderAttributeEditorPanel";
 import { FaderAuxiliaryAttributePanels } from "./components/FaderAuxiliaryAttributePanels";
 import { FaderFixtureControlPanel } from "./components/FaderFixtureControlPanel";
@@ -4007,26 +4008,12 @@ export default function App() {
           ? "fixture"
           : "empty",
   );
-  const controlTargetDetail = createMemo(() => {
+  const controlCompactReadout = createMemo(() => {
     const targetCount = selectedControlTargetFixtures().length;
     const attributeCount = activeControls().length;
-    if (showFixtureTypeAttributeColumns()) {
-      return `${targetCount} fixtures / ${pickedFixtureTypeGroups().length} types`;
-    }
-    if (selectedFixtureGroupFilter()) {
-      return `${targetCount} fixture${targetCount === 1 ? "" : "s"} / ${attributeCount} common attr${attributeCount === 1 ? "" : "s"}`;
-    }
-    return attributeCount > 0 ? `${attributeCount} attr${attributeCount === 1 ? "" : "s"}` : "No controls";
-  });
-  const controlReferenceLabel = createMemo(() => {
-    if (showFixtureTypeAttributeColumns()) {
-      return "Fixture type columns";
-    }
     const reference = selectedControlReferenceFixture();
-    if (!reference) {
-      return "No readout";
-    }
-    return selectedFixtureGroupFilter() ? `Ref ${reference.label}` : `U${reference.universe} A${reference.address}`;
+    const range = `${targetCount} fixture${targetCount === 1 ? "" : "s"}/${attributeCount} attr${attributeCount === 1 ? "" : "s"}`;
+    return `${range} · ${reference ? `U${reference.universe} A${reference.address}` : "No readout"}`;
   });
   const activeControlCategoryLabel = createMemo(() =>
     controlCategories.find((category) => category.id === activeControlCategory())?.label ?? activeControlCategory(),
@@ -16849,6 +16836,7 @@ export default function App() {
             surfaceMinOpacity={0.2}
             beamMinOpacity={0.06}
             beamIntensityScale={0.48}
+            showBeams={mappingShowBeams()}
             showLabels={mappingShowLabels()}
             onSelectVideoOutput={setSelectedVideoOutputId}
             onSelectFixture={(fixtureId) => {
@@ -17643,6 +17631,35 @@ export default function App() {
                   <button class={editDeskSurface() === "effects" ? "active" : ""} onClick={() => setEditDeskSurface("effects")}>Effects</button>
                   <button class={editDeskSurface() === "dmx" ? "active" : ""} onClick={() => setEditDeskSurface("dmx")}>DMX</button>
                 </nav>
+                <ControlFaderWriteHeader
+                  targetKind={controlTargetKind()}
+                  compactReadout={controlCompactReadout()}
+                  writeMode={controlFaderWriteMode()}
+                  editingSceneLabel={selectedSceneCue()?.label ?? null}
+                  editingSceneIdentity={
+                    selectedSceneCue()
+                      ? cueIdentityCss(
+                          selectedSceneCue()!.id,
+                          selectedSceneCue()!.color,
+                          "fill",
+                          selectedSceneCue()!.group_id,
+                          selectedSceneCue()!.group_id ? groupColors()[selectedSceneCue()!.group_id!] : null,
+                        )
+                      : null
+                  }
+                  editingSceneIdentityText={
+                    selectedSceneCue()
+                      ? cueIdentityCss(
+                          selectedSceneCue()!.id,
+                          selectedSceneCue()!.color,
+                          "text",
+                          selectedSceneCue()!.group_id,
+                          selectedSceneCue()!.group_id ? groupColors()[selectedSceneCue()!.group_id!] : null,
+                        )
+                      : null
+                  }
+                  onWriteMode={changeControlFaderWriteMode}
+                />
               </Show>
             </>
           }
@@ -17783,7 +17800,7 @@ export default function App() {
             stageTool: mappingStageTool(),
             stageObjects: visualizerStageObjects2d(),
             videoSurfaces: visualizerVideoSurfaces2d(),
-            beamFixtures: visualizerFixtures(),
+            beamFixtures: mappingStageFixtures().filter((fixture) => fixture.liveColorApplied),
             geometryNodes: mappingGeometryNodes2d(),
             fixtures: mappingStageFixtures(),
             labelFixtures: visualizerFixtures(),
@@ -17969,35 +17986,6 @@ export default function App() {
           <FaderAttributeEditorPanel
             categories={controlCategoryRows()}
             activeCategory={activeControlCategory()}
-            targetKind={controlTargetKind()}
-            targetLabel={controlTargetLabel()}
-            targetDetail={controlTargetDetail()}
-            referenceLabel={controlReferenceLabel()}
-            writeMode={controlFaderWriteMode()}
-            editingSceneLabel={selectedSceneCue()?.label ?? null}
-            editingSceneIdentity={
-              selectedSceneCue()
-                ? cueIdentityCss(
-                    selectedSceneCue()!.id,
-                    selectedSceneCue()!.color,
-                    "fill",
-                    selectedSceneCue()!.group_id,
-                    selectedSceneCue()!.group_id ? groupColors()[selectedSceneCue()!.group_id!] : null,
-                  )
-                : null
-            }
-            editingSceneIdentityText={
-              selectedSceneCue()
-                ? cueIdentityCss(
-                    selectedSceneCue()!.id,
-                    selectedSceneCue()!.color,
-                    "text",
-                    selectedSceneCue()!.group_id,
-                    selectedSceneCue()!.group_id ? groupColors()[selectedSceneCue()!.group_id!] : null,
-                  )
-                : null
-            }
-            onWriteMode={changeControlFaderWriteMode}
             onCategory={setControlCategory}
           >
           <Show

@@ -434,6 +434,19 @@ const mappingLiveMegaBarControls: AttributeControl[] = [
   }).flat(),
 ];
 
+const mappingLiveQuadBarControls: AttributeControl[] = [
+  mappingLiveDimmerControl(1),
+  ...Array.from({ length: 4 }, (_, index) => {
+    const segment = index + 1;
+    const firstOffset = 2 + index * 3;
+    return [
+      mappingLiveColorControl("Red", segment, firstOffset),
+      mappingLiveColorControl("Green", segment, firstOffset + 1),
+      mappingLiveColorControl("Blue", segment, firstOffset + 2),
+    ];
+  }).flat(),
+];
+
 const mappingLiveFixture = (
   id: number,
   label: string,
@@ -603,6 +616,17 @@ const mappingLiveColorFixtures: PatchedFixtureSummary[] = [
       { ...viewportFixtureControls[5], offsets: [4] },
     ],
   ),
+  mappingLiveFixture(
+    8,
+    "Quad Bar RGB 4",
+    "QUAD BAR RGB",
+    "13CH 4 segment",
+    120,
+    5,
+    4,
+    mappingLiveQuadBarControls,
+    -15,
+  ),
 ];
 
 const mappingLiveSnapshotFixtures: PatchedFixtureSummary[] =
@@ -610,7 +634,9 @@ const mappingLiveSnapshotFixtures: PatchedFixtureSummary[] =
     ...fixture,
     attribute_values: fixture.controls.map((control) => ({
       attribute: control.attribute,
-      value: 65_535,
+      value: fixture.id === 8
+        ? (["Dimmer", "Red1", "Green2", "Blue3", "Red4"].includes(control.attribute) ? 65_535 : 0)
+        : 65_535,
     })),
   }));
 

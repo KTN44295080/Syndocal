@@ -15,6 +15,13 @@ export type MappingStageObjectResizeMode = "width" | "depth" | "both";
 export type MappingBulkGroupMode = "add" | "remove" | "set";
 export type WaveStageDragMode = "origin" | "direction" | "videoTarget";
 
+export interface VisualizerFixtureBeam {
+  cellIndex: number;
+  points: string;
+  intensity: number;
+  color: string;
+}
+
 export interface VisualizerFixture {
   id: number;
   label: string;
@@ -30,7 +37,9 @@ export interface VisualizerFixture {
   yaw: number;
   yawHandleX: number;
   yawHandleZ: number;
+  beamYaw: number;
   beamPoints: string;
+  beams?: VisualizerFixtureBeam[];
   intensity: number;
   color: string;
   inGroupFilter: boolean;

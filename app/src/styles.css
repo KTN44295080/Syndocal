@@ -21865,21 +21865,22 @@ h3 {
 }
 
 .timelineDeskTabs {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(70px, 1fr));
+  display: flex;
   gap: 1px;
-  min-width: 250px;
+  width: fit-content;
+  min-width: 0;
 }
 
 .editDeskTabs {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(72px, 1fr));
+  display: flex;
   gap: 1px;
-  min-width: 270px;
+  width: fit-content;
+  min-width: 0;
 }
 
 .editDeskTabs button {
-  min-width: 0;
+  flex: 0 0 auto;
+  min-width: fit-content;
   min-height: 24px;
   border-radius: 1px;
   padding: 0 7px;
@@ -22492,7 +22493,7 @@ h3 {
 }
 
 .layoutControl.controlModeEdit.editDesk-effects .editDeskTabs {
-  min-width: 300px;
+  min-width: 0;
 }
 
 .layoutControl.controlModeEdit.editDesk-effects .editDeskTabs button {
@@ -29739,85 +29740,31 @@ h3 {
   }
 }
 
-/* ---- T13: Control / Live Edit follows a vertical Daslight-style fader desk.
-   Authored state remains in App; this block only composes the fixed context
-   pane as a horizontal dock and keeps overflow away from the app shell. */
+/* ---- T29: the fader deck starts directly below the shared Control header.
+   The former 26px target-summary track was folded into that header. */
 .layoutSharedWorkspace.layoutControl.controlModeEdit .attributeEditorBody {
-  grid-template-rows: 26px minmax(0, 1fr);
-  overflow: hidden;
-}
-
-.layoutSharedWorkspace.layoutControl.controlModeEdit .attributeTargetSummary {
-  display: flex;
-  min-width: 0;
-  overflow: hidden;
-  border: 1px solid #393530;
-  background: #1a1816;
-}
-
-.layoutSharedWorkspace.layoutControl.controlModeEdit .attributeTargetSummary > span {
-  grid-template-columns: auto minmax(0, 1fr);
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 24px;
-  overflow: hidden;
-  border: 0;
-  border-right: 1px solid #393530;
-  background: transparent;
-  padding: 2px 5px;
-}
-
-.layoutSharedWorkspace.layoutControl.controlModeEdit .attributeTargetSummary > span:first-child {
-  flex-grow: 1.15;
-}
-
-.layoutSharedWorkspace.layoutControl.controlModeEdit .attributeTargetSummary > span:last-child {
-  border-right: 0;
-}
-
-/* ---- T26-B: Control's fader deck owns a separate EDIT/LIVE state. The
-   compact header shares the existing target-summary row so the one-screen
-   desk does not lose fader travel. EDIT is intentionally distinct from the
-   KILL/danger token, while the armed badge follows the selected Cue identity. */
-.attributeTargetSummary.controlFaderWriteSummary {
-  display: flex;
-  flex-flow: row nowrap;
-  align-items: center;
-  gap: 0;
-  height: 26px;
-  min-height: 26px;
-  max-height: 26px;
-  overflow: hidden;
-}
-
-.attributeTargetSummary.controlFaderWriteSummary > span {
-  flex: 1 1 0;
-  min-width: 0;
-  height: 24px;
-  min-height: 24px;
-  max-height: 24px;
+  grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
 }
 
 .controlFaderWriteHeader {
   display: flex;
-  flex: 0 0 98px;
+  flex: 1 1 300px;
   flex-flow: row nowrap;
-  align-items: stretch;
+  align-items: center;
   align-self: center;
   min-width: 98px;
+  max-width: 420px;
   height: 24px;
   min-height: 24px;
   max-height: 24px;
-  overflow: visible;
-  border-right: 1px solid #393530;
+  overflow: hidden;
+  border: 1px solid #393530;
   background: #141719;
 }
 
 .controlFaderWriteHeader.edit {
-  flex: 0 1 286px;
-  min-width: 98px;
-  max-width: 286px;
+  flex-basis: 420px;
 }
 
 .controlFaderWriteMode {
@@ -29833,7 +29780,7 @@ h3 {
   border-right: 1px solid #393530;
 }
 
-.attributeTargetSummary.controlFaderWriteSummary .controlFaderWriteMode > button {
+.controlFaderWriteHeader .controlFaderWriteMode > button {
   display: flex;
   align-items: center;
   align-self: center;
@@ -29851,7 +29798,7 @@ h3 {
   font-size: 11px;
 }
 
-.attributeTargetSummary.controlFaderWriteSummary .controlFaderWriteMode > button > span {
+.controlFaderWriteHeader .controlFaderWriteMode > button > span {
   display: block;
   min-width: 0;
   color: inherit;
@@ -29859,17 +29806,17 @@ h3 {
   white-space: nowrap;
 }
 
-.attributeTargetSummary.controlFaderWriteSummary .controlFaderWriteMode > button:last-child {
+.controlFaderWriteHeader .controlFaderWriteMode > button:last-child {
   border-right: 0;
 }
 
-.attributeTargetSummary.controlFaderWriteSummary .controlFaderWriteMode
+.controlFaderWriteHeader .controlFaderWriteMode
   > button[data-control-fader-write-mode-option="live"].active {
   box-shadow: inset 0 -3px 0 var(--ray-live);
   color: #f3d98a;
 }
 
-.attributeTargetSummary.controlFaderWriteSummary .controlFaderWriteMode
+.controlFaderWriteHeader .controlFaderWriteMode
   > button[data-control-fader-write-mode-option="edit"].active {
   background: #183126;
   box-shadow: inset 0 -3px 0 var(--ray-edit);
@@ -29878,7 +29825,7 @@ h3 {
 
 .controlFaderEditState {
   display: flex;
-  flex: 1 1 auto;
+  flex: 0 1 150px;
   align-items: center;
   align-self: center;
   min-width: 0;
@@ -29918,6 +29865,37 @@ h3 {
   border-left-color: var(--ray-edit);
   background: #1d2822;
   color: #b9c7be;
+}
+
+.controlFaderCompactReadout {
+  display: block;
+  flex: 1 1 170px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 6px;
+  color: #b8b3ad;
+  font-size: 11px;
+  line-height: 22px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layoutControl.controlModeEdit .controlContextHeader .editDeskTabs button {
+  padding-inline: 5px;
+}
+
+@media (max-width: 1500px) {
+  .controlFaderCompactReadout {
+    display: none;
+  }
+
+  .controlFaderWriteHeader {
+    flex: 0 1 98px;
+  }
+
+  .controlFaderWriteHeader.edit {
+    flex-basis: 210px;
+  }
 }
 
 .attributeCategoryRail button > span {
@@ -32253,7 +32231,7 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
 .controlContextPane > .controlContextHeader {
   display: grid;
   grid-row: 1;
-  grid-template-columns: auto auto minmax(258px, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   min-width: 0;
   min-height: 34px;
@@ -32279,6 +32257,10 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
   gap: 1px;
 }
 
+.controlContextHeaderTools {
+  overflow: hidden;
+}
+
 .controlContextHeaderTools button {
   min-width: 0;
   min-height: 27px;
@@ -32288,9 +32270,9 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
 
 .controlContextHeader > .contextModeTabs {
   display: flex;
-  justify-self: stretch;
-  width: 100%;
-  min-width: 258px;
+  justify-self: end;
+  width: fit-content;
+  min-width: 0;
   min-height: 28px;
   height: 28px;
   overflow: hidden;
@@ -32299,7 +32281,7 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
 }
 
 .controlContextHeader > .contextModeTabs > button {
-  flex: 1 1 0;
+  flex: 0 0 auto;
   min-width: 0;
   min-height: 27px;
   height: 27px;
@@ -32375,7 +32357,7 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
 
 .videoControlPanelMixer > .panelHeader > .mixerContextModeTabs {
   display: flex;
-  width: min(360px, 42vw);
+  width: fit-content;
   min-height: 28px;
   height: 28px;
   margin-left: auto;
@@ -32385,7 +32367,7 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
 }
 
 .videoControlPanelMixer > .panelHeader > .mixerContextModeTabs > button {
-  flex: 1 1 0;
+  flex: 0 0 auto;
   min-width: 0;
   min-height: 27px;
   height: 27px;

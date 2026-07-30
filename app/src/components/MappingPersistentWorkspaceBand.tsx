@@ -66,6 +66,7 @@ export function ControlModeSegment(props: ControlModeSegmentProps) {
         {(mode) => (
           <button
             class={props.controlMode === mode.id ? "active" : ""}
+            data-control-mode-option={mode.id}
             title={mode.description}
             aria-keyshortcuts={mode.id === "mixer" ? "M" : mode.label[0]}
             onClick={() => props.onControlMode(mode.id)}
