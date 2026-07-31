@@ -247,14 +247,14 @@ export function ControlStageToolbar(props: ControlStageToolbarProps) {
         class="controlStageMappingLink"
         data-control-stage-chrome-operation
         data-control-stage-mapping-link
-        title="Edit in Mapping"
-        aria-label="Edit in Mapping"
+        title="Edit in Stage"
+        aria-label="Edit in Stage"
         onClick={props.onOpenMapping}
       >
         <svg viewBox="0 0 16 16" aria-hidden="true">
           <path d="M2.5 3.5h6v6h-6zM7.5 8.5l5.7-5.7M9.5 2.8h3.7v3.7" />
         </svg>
-        <span>Mapping</span>
+        <span>Stage</span>
       </button>
     </div>
   );

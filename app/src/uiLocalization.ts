@@ -1544,7 +1544,7 @@ const japaneseText: Record<string, string> = {
   "Edge Blend / Black Level": "エッジブレンド／ブラックレベル",
   "Edit Map": "マップを編集",
   "Editable 2D stage map": "編集可能な2Dステージマップ",
-  "Edit in Mapping": "マッピングで編集",
+  "Edit in Stage": "ステージで編集",
   Editing: "編集中",
   "Effect waveform presets": "エフェクト波形プリセット",
   Empty: "空",
@@ -1786,7 +1786,7 @@ const japaneseText: Record<string, string> = {
   "/ wavelength": "/ 波長",
   "+ Cue Point": "+ キューポイント",
   "active /": "有効 /",
-  "Active in Setup / Mapping": "セットアップ／マッピングで有効",
+  "Active in Setup / Stage": "セットアップ／ステージで有効",
   "Assign each fixture, video layer, or video output to one part. Lighting adds IFCB Delay; video holds until Part Delay. Blank Part Fade inherits the Cue Fade.":
     "各灯体、映像レイヤー、映像出力を1つのパートへ割り当てます。照明はIFCBディレイを加え、映像はパートディレイまで保持します。空のパートフェードはキューフェードを継承します。",
   attr: "属性",
@@ -1888,7 +1888,7 @@ const japaneseText: Record<string, string> = {
   "Open All": "全て開く",
   "Open Control category": "コントロールカテゴリを開く",
   "Open Control/Edit with a Position Wave draft for the picked fixtures": "選択灯体のPositionウェーブ下書きをコントロール／編集で開く",
-  "Open Stage Map": "ステージマップを開く",
+  "Open Stage": "ステージを開く",
   "Open Window": "ウィンドウを開く",
   Opposite: "反対",
   "Origin X": "原点X",
@@ -2057,7 +2057,8 @@ const japaneseText: Record<string, string> = {
   speed: "Speed",
   "Spout input": "Spout入力",
   "Stage Bounds": "ステージ範囲",
-  "Stage Map": "ステージマップ",
+  "Full-screen view of the Setup 2D stage band for lighting fixture layout":
+    "照明灯体配置用セットアップ2Dステージ帯の全画面表示",
   "Stage edits": "ステージ編集",
   "Stage edits routes faders to the Programmer. Live Preview reaches DMX; Blind changes only the editor preview. Commit writes staged values to the live base state.":
     "ステージ編集ではフェーダーをプログラマーへ送ります。ライブプレビューはDMXへ反映し、ブラインドは編集プレビューだけを変更します。確定すると仮値をライブ基準値へ書き込みます。",

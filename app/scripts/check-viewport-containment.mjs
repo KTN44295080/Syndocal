@@ -169,7 +169,7 @@ const setupTabs = [
   { area: "Lighting", tab: "Profiles", id: "profiles" },
   { area: "Lighting", tab: "Patch", id: "patch" },
   { area: "Video", tab: "Outputs", id: "video" },
-  { area: "Mapping", tab: "Stage Map", id: "mapping" },
+  { area: "Stage", tab: "Stage", id: "mapping" },
   { area: "I/O", tab: "DMX", id: "dmx" },
   { area: "I/O", tab: "MIDI", id: "midi" },
   { area: "I/O", tab: "OSC", id: "osc" },
@@ -2066,8 +2066,8 @@ async function checkKeyboardNavigation(client) {
 
   await pressKey(client, "F1");
   await sleep(60);
-  await clickByText(client, "Mapping");
-  await clickByText(client, "Stage Map");
+  await clickByText(client, "Stage");
+  await clickByText(client, "Stage");
   await sleep(80);
   const setupEditableGuard = await client.evaluate(`(async () => {
     const visible = (element) => {
@@ -3247,8 +3247,8 @@ async function runMappingExpansionCheck(client, viewport) {
   const drawerOpened = await ensureMappingSelectionDrawerOpen(client);
   const before = await measureMappingExpansionState(client);
 
-  await clickByText(client, "Mapping");
-  await clickByText(client, "Stage Map");
+  await clickByText(client, "Stage");
+  await clickByText(client, "Stage");
   await sleep(160);
   const expanded = await measureMappingExpansionState(client);
 
@@ -3257,8 +3257,8 @@ async function runMappingExpansionCheck(client, viewport) {
   await sleep(160);
   const restoredSubtab = await measureMappingExpansionState(client);
 
-  await clickByText(client, "Mapping");
-  await clickByText(client, "Stage Map");
+  await clickByText(client, "Stage");
+  await clickByText(client, "Stage");
   await sleep(160);
   const expandedAgain = await measureMappingExpansionState(client);
   await clickByText(client, "Control");
@@ -3413,8 +3413,8 @@ async function runMappingExpansionViewport(client, viewport) {
   await seedViewportLocalStorage(client);
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
-  await clickByText(client, "Mapping");
-  await clickByText(client, "Stage Map");
+  await clickByText(client, "Stage");
+  await clickByText(client, "Stage");
   await sleep(160);
   const setupMappingKeyboard = await measure(
     client,
@@ -3465,8 +3465,8 @@ async function runSetupMappingSequenceViewport(client, viewport) {
   await waitForApp(client);
 
   await clickByText(client, "Setup");
-  await clickByText(client, "Mapping");
-  await clickByText(client, "Stage Map");
+  await clickByText(client, "Stage");
+  await clickByText(client, "Stage");
   await sleep(160);
   const mapping = await measureSetupMappingPickStates(
     client,
@@ -3641,8 +3641,8 @@ async function runControlStageChromeViewport(client, viewport) {
   await client.evaluate(`window.__syndocalSetControlFixtureSelection?.([], null, '')`);
   await sleep(40);
 
-  await clickByText(client, "Mapping");
-  await clickByText(client, "Stage Map");
+  await clickByText(client, "Stage");
+  await clickByText(client, "Stage");
   await sleep(120);
   const initialSetupMapping = await measure(
     client,
@@ -3813,7 +3813,7 @@ async function runControlStageChromeViewport(client, viewport) {
       control.controlStageMappingLinkWidth > 0 &&
       control.controlStageMappingLinkWidth <= 120 &&
       control.controlStageMappingLinkSvgCount === 1 &&
-      control.controlStageMappingLinkText === "Mapping" &&
+      control.controlStageMappingLinkText === "Stage" &&
       mappingJumpArrived],
     ["controlClickSelectionMarqueePanAndWheelZoomWork", () =>
       interactions.selectedFixture &&
@@ -10870,8 +10870,8 @@ async function runViewport(client, viewport) {
   traceViewport(`keyboard control measured ${viewport.width}x${viewport.height}`);
   await pressKey(client, "F1");
   await sleep(80);
-  await clickByText(client, "Mapping");
-  await clickByText(client, "Stage Map");
+  await clickByText(client, "Stage");
+  await clickByText(client, "Stage");
   await sleep(120);
   results.push(await measure(client, `setup-mapping-keyboard-${viewport.width}x${viewport.height}`));
   await client.evaluate(`document.querySelector('button[aria-label="Keyboard shortcut help"]')?.click()`);
@@ -12146,8 +12146,8 @@ async function runWorkspaceSplitViewport(client, viewport) {
   checks.reloadKeepsOuterScrollZero = afterReload.outerScrollZero;
 
   await clickVisibleByText(client, ".workspaceTabs button", "Setup");
-  await clickByText(client, "Mapping");
-  await clickByText(client, "Stage Map");
+  await clickByText(client, "Stage");
+  await clickByText(client, "Stage");
   await sleep(120);
   const setupBefore = await readWorkspaceSplitState(client);
   await clickVisibleByText(client, ".workspaceTabs button", "Control");
@@ -12155,8 +12155,8 @@ async function runWorkspaceSplitViewport(client, viewport) {
   await sleep(120);
   const control = await readWorkspaceSplitState(client);
   await clickVisibleByText(client, ".workspaceTabs button", "Setup");
-  await clickByText(client, "Mapping");
-  await clickByText(client, "Stage Map");
+  await clickByText(client, "Stage");
+  await clickByText(client, "Stage");
   await sleep(120);
   const setupAfter = await readWorkspaceSplitState(client);
   checks.setupControlSwitchPreservesSplitRatios =
@@ -18989,8 +18989,8 @@ async function runLargeShowViewport(client, viewport) {
   await waitForApp(client);
   await pressKey(client, "F1");
   await sleep(120);
-  await clickByText(client, "Mapping");
-  await clickByText(client, "Stage Map");
+  await clickByText(client, "Stage");
+  await clickByText(client, "Stage");
   await sleep(250);
 
   const stats = await client.evaluate(`(async () => {

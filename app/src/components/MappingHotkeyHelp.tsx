@@ -75,7 +75,7 @@ export function MappingHotkeyHelp(props: MappingHotkeyHelpProps) {
       <div class="mappingHotkeyHelpHeader">
         <div>
           <h3>Mapping Shortcuts</h3>
-          <span>Active in Setup / Mapping</span>
+          <span>Active in Setup / Stage</span>
         </div>
         <button type="button" onClick={props.onClose} aria-label="Close mapping shortcut help" title="Close (Esc)">
           x
