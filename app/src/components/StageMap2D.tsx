@@ -1,5 +1,11 @@
 import { For, Show } from "solid-js";
 import { stageViewBoxSize } from "../stageGeometry";
+import {
+  stageFixtureYawHandlePoint,
+  stageOverlayHandleWorldOffsetFromEdge,
+  stageOverlayHandleWorldRadius,
+  stageOverlayHandleWorldSize,
+} from "../stageOverlayLayout";
 import type { GeometryModelMeshKind, VideoOutputMapping } from "../types";
 
 const clampRange = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -28,8 +34,6 @@ export interface VisualizerFixture {
   height: number;
   inGroupFilter: boolean;
   yaw: number;
-  yawHandleX: number;
-  yawHandleZ: number;
   beamPoints: string;
   intensity: number;
   color: string;
@@ -119,6 +123,7 @@ interface StageFixtureDragRef {
 }
 
 interface StageMap2DProps {
+  overlayWorldPerCssPixel: () => number;
   mappingStageViewBox: () => string;
   mappingStageTool: () => string;
   stageFixtureDrag: () => StageFixtureDragRef | null;
@@ -327,10 +332,10 @@ export const StageMap2D = (props: StageMap2DProps) => (
                   {(corner) => (
                     <rect
                       class="stageVideoSurfaceCornerHandle"
-                      x={corner.x - 1.2}
-                      y={corner.z - 1.2}
-                      width="2.4"
-                      height="2.4"
+                      x={corner.x - stageOverlayHandleWorldSize(props.overlayWorldPerCssPixel()) / 2}
+                      y={corner.z - stageOverlayHandleWorldSize(props.overlayWorldPerCssPixel()) / 2}
+                      width={stageOverlayHandleWorldSize(props.overlayWorldPerCssPixel())}
+                      height={stageOverlayHandleWorldSize(props.overlayWorldPerCssPixel())}
                       onPointerDown={(event) => props.beginStageVideoSurfaceCornerDrag(event, surface.id, corner.key)}
                       onPointerMove={(event) => props.dragStageVideoSurfaceCorner(event, surface.id, corner.key)}
                       onPointerUp={(event) => void props.endStageVideoSurfaceCornerDrag(event, surface.id, corner.key)}
@@ -345,13 +350,13 @@ export const StageMap2D = (props: StageMap2DProps) => (
                   x1="0"
                   y1={-surface.height / 2}
                   x2="0"
-                  y2={-surface.height / 2 - 5}
+                  y2={-surface.height / 2 - stageOverlayHandleWorldOffsetFromEdge(props.overlayWorldPerCssPixel())}
                 />
                 <circle
                   class="stageVideoSurfaceRotateHandle"
                   cx="0"
-                  cy={-surface.height / 2 - 5}
-                  r="1.45"
+                  cy={-surface.height / 2 - stageOverlayHandleWorldOffsetFromEdge(props.overlayWorldPerCssPixel())}
+                  r={stageOverlayHandleWorldRadius(props.overlayWorldPerCssPixel())}
                   onPointerDown={(event) => props.beginStageVideoSurfaceRotationDrag(event, surface.id)}
                   onPointerMove={(event) => props.dragStageVideoSurfaceRotation(event, surface.id)}
                   onPointerUp={(event) => void props.endStageVideoSurfaceRotationDrag(event, surface.id)}
@@ -361,10 +366,10 @@ export const StageMap2D = (props: StageMap2DProps) => (
                 </circle>
                 <rect
                   class="stageVideoSurfaceScaleHandle"
-                  x={surface.width / 2 - 1.35}
-                  y={surface.height / 2 - 1.35}
-                  width="2.7"
-                  height="2.7"
+                  x={surface.width / 2 - stageOverlayHandleWorldSize(props.overlayWorldPerCssPixel()) / 2}
+                  y={surface.height / 2 - stageOverlayHandleWorldSize(props.overlayWorldPerCssPixel()) / 2}
+                  width={stageOverlayHandleWorldSize(props.overlayWorldPerCssPixel())}
+                  height={stageOverlayHandleWorldSize(props.overlayWorldPerCssPixel())}
                   onPointerDown={(event) => props.beginStageVideoSurfaceScaleDrag(event, surface.id)}
                   onPointerMove={(event) => props.dragStageVideoSurfaceScale(event, surface.id)}
                   onPointerUp={(event) => void props.endStageVideoSurfaceScaleDrag(event, surface.id)}
@@ -463,16 +468,16 @@ export const StageMap2D = (props: StageMap2DProps) => (
                   : "stageYawLine"}
                 x1={fixture.x}
                 y1={fixture.z}
-                x2={fixture.yawHandleX}
-                y2={fixture.yawHandleZ}
+                x2={stageFixtureYawHandlePoint(fixture, props.overlayWorldPerCssPixel()).x}
+                y2={stageFixtureYawHandlePoint(fixture, props.overlayWorldPerCssPixel()).z}
               />
               <circle
                 class={props.stageFixtureDrag()?.mode === "yaw" && props.stageFixtureDrag()?.fixture_id === fixture.id
                   ? "stageYawHandle dragging"
                   : "stageYawHandle"}
-                cx={fixture.yawHandleX}
-                cy={fixture.yawHandleZ}
-                r="2.3"
+                cx={stageFixtureYawHandlePoint(fixture, props.overlayWorldPerCssPixel()).x}
+                cy={stageFixtureYawHandlePoint(fixture, props.overlayWorldPerCssPixel()).z}
+                r={stageOverlayHandleWorldRadius(props.overlayWorldPerCssPixel())}
                 onPointerDown={(event) => props.beginStageFixtureYawDrag(event, fixture.id)}
                 onPointerMove={(event) => props.dragStageFixtureYaw(event, fixture.id)}
                 onPointerUp={(event) => void props.endStageFixtureYawDrag(event, fixture.id)}

@@ -35,8 +35,6 @@ export interface VisualizerFixture {
   width: number;
   height: number;
   yaw: number;
-  yawHandleX: number;
-  yawHandleZ: number;
   beamYaw: number;
   beamPoints: string;
   beams?: VisualizerFixtureBeam[];

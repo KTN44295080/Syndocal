@@ -4,9 +4,14 @@ import type { MappingFixtureVisualKind } from "../fixtureVisuals";
 import { MAPPING_FIXTURE_DRAG_THRESHOLD_PX } from "../createMappingInteractionController";
 import { planStageFixtureLabels, type StageLabelViewport } from "../stageLabelLayout";
 import {
+  stageFixtureYawHandlePoint,
+  stageOverlayHandleMinimumHitSizePx,
+  stageOverlayHandleScreenSizePx,
+  stageOverlayHandleWorldRadius,
+} from "../stageOverlayLayout";
+import {
   StageFixtureGlyph,
   StageFixtureLabel,
-  stageFixtureLabelWorldPerCssPixel,
 } from "./StageGlyphs";
 
 export interface MappingFixture2D {
@@ -22,8 +27,6 @@ export interface MappingFixture2D {
   width: number;
   height: number;
   yaw: number;
-  yawHandleX: number;
-  yawHandleZ: number;
   intensity: number;
   color: string;
   liveColorApplied?: boolean;
@@ -51,7 +54,7 @@ type MappingFixturesLayerProps = {
   selectedTypeKey: string | null;
   showLabels: boolean;
   labelViewport: StageLabelViewport;
-  labelViewportPixelSize: { width: number; height: number };
+  worldPerCssPixel: number;
   labelZoom: number;
   showLevels: boolean;
   placePreview: MappingPlacePreview2D | null;
@@ -74,9 +77,6 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
       hoveredFixtureId: hoveredFixtureId(),
     }),
   );
-  const labelWorldPerCssPixel = createMemo(() =>
-    stageFixtureLabelWorldPerCssPixel(props.labelViewport, props.labelViewportPixelSize));
-
   return (
     <>
       <For each={props.fixtures}>
@@ -94,10 +94,6 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
             fixture.soloed ? "soloed" : "",
             fixture.parked ? "parked" : "",
           ].filter(Boolean).join(" ");
-          const yawDragging = () => props.isYawDragging(fixture.id);
-          const showYawHandle = () =>
-            (props.fixtureTransformsEditable ?? !props.readOnly) &&
-            (selected() || props.selectedFixtureId === fixture.id || yawDragging());
           return (
             <>
               <g
@@ -124,24 +120,6 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
                   title={`${fixture.label} / ${fixture.dmxLabel} / ${fixture.groupLabel}`}
                 />
               </g>
-              <Show when={showYawHandle()}>
-                <line
-                  class={yawDragging() ? "stageYawLine dragging" : "stageYawLine"}
-                  x1={fixture.x}
-                  y1={fixture.z}
-                  x2={fixture.yawHandleX}
-                  y2={fixture.yawHandleZ}
-                />
-                <circle
-                  class={yawDragging() ? "stageYawHandle dragging" : "stageYawHandle"}
-                  cx={fixture.yawHandleX}
-                  cy={fixture.yawHandleZ}
-                  r="2.3"
-                  onPointerDown={(event) => props.onBeginYawDrag(event, fixture.id)}
-                >
-                  <title data-no-localize>{fixture.label} yaw {fixture.yaw} deg</title>
-                </circle>
-              </Show>
               <Show when={props.showLevels}>
                 <text class={fixture.inGroupFilter ? "stageLevelLabel" : "stageLevelLabel muted"} x={fixture.x + 3.5} y={fixture.z + 5}>
                   {Math.round(fixture.intensity * 100)}%
@@ -151,11 +129,45 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
           );
         }}
       </For>
+      <For each={props.fixtures}>
+        {(fixture) => {
+          const selected = () => props.selectedFixtureIds.has(fixture.id);
+          const yawDragging = () => props.isYawDragging(fixture.id);
+          const showYawHandle = () =>
+            (props.fixtureTransformsEditable ?? !props.readOnly) &&
+            (selected() || props.selectedFixtureId === fixture.id || yawDragging());
+          const yawHandlePoint = () => stageFixtureYawHandlePoint(fixture, props.worldPerCssPixel);
+          const yawHandleRadius = () => stageOverlayHandleWorldRadius(props.worldPerCssPixel);
+          return (
+            <Show when={showYawHandle()}>
+              <line
+                class={yawDragging() ? "stageYawLine dragging" : "stageYawLine"}
+                x1={fixture.x}
+                y1={fixture.z}
+                x2={yawHandlePoint().x}
+                y2={yawHandlePoint().z}
+              />
+              <circle
+                data-stage-overlay-handle="fixture-yaw"
+                data-stage-overlay-handle-screen-size={stageOverlayHandleScreenSizePx}
+                data-stage-overlay-handle-min-hit-size={stageOverlayHandleMinimumHitSizePx}
+                class={yawDragging() ? "stageYawHandle dragging" : "stageYawHandle"}
+                cx={yawHandlePoint().x}
+                cy={yawHandlePoint().z}
+                r={yawHandleRadius()}
+                onPointerDown={(event) => props.onBeginYawDrag(event, fixture.id)}
+              >
+                <title data-no-localize>{fixture.label} yaw {fixture.yaw} deg</title>
+              </circle>
+            </Show>
+          );
+        }}
+      </For>
       <For each={labelLayout().labels}>
         {(layout) => (
           <StageFixtureLabel
             layout={layout}
-            worldPerCssPixel={labelWorldPerCssPixel()}
+            worldPerCssPixel={props.worldPerCssPixel}
           />
         )}
       </For>

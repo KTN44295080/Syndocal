@@ -1678,9 +1678,16 @@ export default function App() {
     mappingStageResizeObserver?.disconnect();
     const measure = () => {
       const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      const contentWidth = rect.width
+        - (Number.parseFloat(style.borderLeftWidth) || 0)
+        - (Number.parseFloat(style.borderRightWidth) || 0);
+      const contentHeight = rect.height
+        - (Number.parseFloat(style.borderTopWidth) || 0)
+        - (Number.parseFloat(style.borderBottomWidth) || 0);
       setMappingStageViewportPixelSize({
-        width: Math.max(1, element.clientWidth || rect.width),
-        height: Math.max(1, element.clientHeight || rect.height),
+        width: Math.max(1, contentWidth || element.clientWidth),
+        height: Math.max(1, contentHeight || element.clientHeight),
       });
     };
     measure();
@@ -2672,6 +2679,7 @@ export default function App() {
     setSelectedFixtureGroupFilter("front");
     setSelectedFixtureId(1);
     setSelectedMappingFixtureIds([1]);
+    if (conformanceFixture) setSelectedStageObjectId(1);
     setLiveDmxPreviews([]);
     setLiveFixtures(fixtures);
     setSnapshot((current) => ({
@@ -2679,6 +2687,17 @@ export default function App() {
       fixtures,
       dmx_preview: [],
       dmx_previews: [],
+      stage_objects: conformanceFixture
+        ? [{
+            ...viewportFixtureData.stageObject,
+            kind: "Stage",
+            x: 0,
+            z: 0,
+            width: 2,
+            depth: 2,
+            rotation_deg: 90,
+          }]
+        : current.stage_objects,
       stage_map: conformanceFixture
         ? {
             ...current.stage_map,
@@ -2764,6 +2783,7 @@ export default function App() {
     __syndocalReadEditLiveFixtureSnapshot?: () => EngineSnapshot;
     __syndocalReadEditLiveFixtureHistory?: () => ProjectHistoryStatus;
     __syndocalReadControlStageEditFixtureSnapshot?: () => EngineSnapshot;
+    __syndocalSelectMappingViewportStageObject?: () => void;
     __syndocalSetMappingLiveDmx?: (channelValues: Record<number, number>) => void;
     __syndocalCloneCueSnapshot?: () => void;
     __syndocalCloneFixtureSnapshot?: () => number;
@@ -2798,6 +2818,9 @@ export default function App() {
   }
   if (viewportFixture === "control-stage-edit" || viewportFixture === "mapping-viewport-conformance") {
     sceneBlockFixtureWindow.__syndocalReadControlStageEditFixtureSnapshot = () => snapshot();
+  }
+  if (viewportFixture === "mapping-viewport-conformance") {
+    sceneBlockFixtureWindow.__syndocalSelectMappingViewportStageObject = () => setSelectedStageObjectId(1);
   }
   if (viewportFixture === "scene-matrix") {
     sceneBlockFixtureWindow.__syndocalCloneCueSnapshot = () => {
@@ -2879,6 +2902,7 @@ export default function App() {
     delete sceneBlockFixtureWindow.__syndocalReadEditLiveFixtureSnapshot;
     delete sceneBlockFixtureWindow.__syndocalReadEditLiveFixtureHistory;
     delete sceneBlockFixtureWindow.__syndocalReadControlStageEditFixtureSnapshot;
+    delete sceneBlockFixtureWindow.__syndocalSelectMappingViewportStageObject;
     delete sceneBlockFixtureWindow.__syndocalSetMappingLiveDmx;
     delete sceneBlockFixtureWindow.__syndocalCloneCueSnapshot;
     delete sceneBlockFixtureWindow.__syndocalCloneFixtureSnapshot;

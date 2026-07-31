@@ -104,6 +104,7 @@ export default defineConfig({
             normalizedId.includes("/src/fixtureLiveColor") ||
             normalizedId.includes("/src/mappingRuntime") ||
             normalizedId.includes("/src/stageLabelLayout") ||
+            normalizedId.includes("/src/stageOverlayLayout") ||
             normalizedId.includes("/src/components/SetupMappingWorkspace") ||
             normalizedId.includes("/src/components/StageGlyphs") ||
             normalizedId.includes("/src/components/StagePreview2D") ||

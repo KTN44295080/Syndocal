@@ -1,10 +1,15 @@
-import { Show } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import type { MappingStageTool } from "../mappingViewPresets";
 import type { StageLabelViewport } from "../stageLabelLayout";
+import { stageWorldPerCssPixel } from "../stageOverlayLayout";
 import { MappingBeamsLayer, type MappingBeamFixture } from "./MappingBeamsLayer";
 import { MappingFixturesLayer, type MappingFixture2D, type MappingPlacePreview2D } from "./MappingFixturesLayer";
 import { MappingGeometryLayer, type MappingGeometryNode2D } from "./MappingGeometryLayer";
-import { MappingStageObjectsLayer, type MappingStageObject2D } from "./MappingStageObjectsLayer";
+import {
+  MappingStageObjectHandlesLayer,
+  MappingStageObjectsLayer,
+  type MappingStageObject2D,
+} from "./MappingStageObjectsLayer";
 import { MappingVideoSurfacesLayer, type MappingVideoSurface2D } from "./MappingVideoSurfacesLayer";
 
 interface MappingStageLayersPanelProps {
@@ -44,6 +49,9 @@ interface MappingStageLayersPanelProps {
 }
 
 export function MappingStageLayersPanel(props: MappingStageLayersPanelProps) {
+  const screenWorldPerCssPixel = createMemo(() =>
+    stageWorldPerCssPixel(props.labelViewport, props.labelViewportPixelSize));
+
   return (
     <>
       <Show when={props.showStageObjects}>
@@ -52,8 +60,6 @@ export function MappingStageLayersPanel(props: MappingStageLayersPanelProps) {
           readOnly={props.readOnly}
           isDragging={props.isDraggingStageObject}
           onBeginDrag={props.onBeginStageObjectDrag}
-          onBeginRotate={props.onBeginStageObjectRotate}
-          onBeginResize={props.onBeginStageObjectResize}
         />
       </Show>
       <Show when={props.showProjectors}>
@@ -79,7 +85,7 @@ export function MappingStageLayersPanel(props: MappingStageLayersPanelProps) {
         selectedTypeKey={props.selectedTypeKey}
         showLabels={props.showLabels}
         labelViewport={props.labelViewport}
-        labelViewportPixelSize={props.labelViewportPixelSize}
+        worldPerCssPixel={screenWorldPerCssPixel()}
         labelZoom={props.labelZoom}
         showLevels={props.showLevels}
         placePreview={props.placePreview}
@@ -90,6 +96,15 @@ export function MappingStageLayersPanel(props: MappingStageLayersPanelProps) {
         onBeginYawDrag={props.onBeginFixtureYawDrag}
         onFixturePointerDown={props.onFixturePointerDown}
       />
+      <Show when={props.showStageObjects}>
+        <MappingStageObjectHandlesLayer
+          objects={props.stageObjects}
+          readOnly={props.readOnly}
+          worldPerCssPixel={screenWorldPerCssPixel()}
+          onBeginRotate={props.onBeginStageObjectRotate}
+          onBeginResize={props.onBeginStageObjectResize}
+        />
+      </Show>
     </>
   );
 }

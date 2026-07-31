@@ -5,13 +5,13 @@ import type { VisualizerFixtureBeam } from "../mappingRuntime";
 import { planStageFixtureLabels } from "../stageLabelLayout";
 import { stageViewBoxSize } from "../stageGeometry";
 import { stageObjectClass } from "../stageObjects";
+import { stageWorldPerCssPixel } from "../stageOverlayLayout";
 import type { StageObjectKind } from "../types";
 import {
   StageFixtureGlyph,
   StageFixtureLabel,
   StageObjectGlyph,
   StageProjectionSurfaceGlyph,
-  stageFixtureLabelWorldPerCssPixel,
 } from "./StageGlyphs";
 
 export interface StagePreviewFixture {
@@ -205,7 +205,7 @@ export function StagePreview2D(props: StagePreview2DProps) {
     });
   });
   const labelWorldPerCssPixel = createMemo(() =>
-    stageFixtureLabelWorldPerCssPixel(viewBox(), viewportPixelSize()));
+    stageWorldPerCssPixel(viewBox(), viewportPixelSize()));
 
   return (
     <svg ref={stageElement} class={`visualizerStage ${props.className}`} viewBox={viewBoxAttribute()}>

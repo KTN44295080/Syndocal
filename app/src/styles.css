@@ -8766,6 +8766,7 @@ progress {
 .stageYawLine {
   stroke: #ffdd74;
   stroke-width: 0.8;
+  vector-effect: non-scaling-stroke;
   pointer-events: none;
 }
 
@@ -8778,6 +8779,7 @@ progress {
   fill: #10161d;
   stroke: #ffdd74;
   stroke-width: 1.2;
+  vector-effect: non-scaling-stroke;
   cursor: grab;
   touch-action: none;
 }
@@ -8977,6 +8979,7 @@ progress {
 .stageObjectHandleLine {
   stroke: #ffffff;
   stroke-width: 0.48;
+  vector-effect: non-scaling-stroke;
   opacity: 0.9;
   pointer-events: none;
 }
@@ -8986,6 +8989,7 @@ progress {
   fill: #fff4d6;
   stroke: #10161d;
   stroke-width: 0.7;
+  vector-effect: non-scaling-stroke;
   pointer-events: all;
 }
 
@@ -9042,6 +9046,7 @@ progress {
   stroke: #ffffff;
   stroke-dasharray: 1 1;
   stroke-width: 0.5;
+  vector-effect: non-scaling-stroke;
   pointer-events: none;
 }
 
@@ -9051,6 +9056,7 @@ progress {
   fill: #11100e;
   stroke: #ffffff;
   stroke-width: 0.75;
+  vector-effect: non-scaling-stroke;
   pointer-events: all;
 }
 

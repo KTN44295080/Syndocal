@@ -4032,6 +4032,16 @@ function readControlStageEditStateInPage() {
     )].map((element) => Number(element.getAttribute("data-stage-fixture-id"))),
     dragThresholdPx: Number(node?.getAttribute("data-stage-fixture-drag-threshold") ?? -1),
     yawHandleCount: yawHandle ? 1 : 0,
+    yawHandleScreenSizePx: (() => {
+      const rect = yawHandle?.getBoundingClientRect();
+      return rect ? Math.min(rect.width, rect.height) : 0;
+    })(),
+    yawHandleTargetScreenSizePx: Number(
+      yawHandle?.getAttribute("data-stage-overlay-handle-screen-size") ?? -1,
+    ),
+    yawHandleMinimumHitSizePx: Number(
+      yawHandle?.getAttribute("data-stage-overlay-handle-min-hit-size") ?? -1,
+    ),
     liveColorFixtureCount: document.querySelectorAll(
       '.controlStageContext [data-stage-fixture-id][data-live-color-applied="true"]',
     ).length,
@@ -4152,6 +4162,8 @@ function readMappingViewportConformanceStateInPage() {
   const fixture = root?.querySelector('[data-stage-fixture-id="9"]');
   const hitTarget = fixture?.querySelector(".stageFixtureHitTarget") ?? null;
   const shape = fixture?.querySelector("[data-stage-fixture-shape]") ?? null;
+  const selectedStageObject = root?.querySelector(".stageObject.selected") ?? null;
+  const selectedStageObjectShape = selectedStageObject?.querySelector("rect") ?? null;
   const slider = document.querySelector('[data-mapping-viewport-action="zoom-slider"]');
   const readout = document.querySelector("[data-mapping-zoom-readout]");
   const minor = stage?.querySelector('[data-mapping-grid-pattern="minor"]') ?? null;
@@ -4164,6 +4176,7 @@ function readMappingViewportConformanceStateInPage() {
   const stageRect = stage?.getBoundingClientRect();
   const hitRect = hitTarget?.getBoundingClientRect();
   const shapeRect = shape?.getBoundingClientRect();
+  const selectedStageObjectShapeRect = selectedStageObjectShape?.getBoundingClientRect();
   const fixtureMatrix = fixture instanceof SVGGraphicsElement ? fixture.getScreenCTM() : null;
   const labelMatrix = label instanceof SVGGraphicsElement ? label.getScreenCTM() : null;
   const labelRect = label?.getBoundingClientRect();
@@ -4184,6 +4197,23 @@ function readMappingViewportConformanceStateInPage() {
   const fixturePoint = hitRect
     ? { x: hitRect.left + hitRect.width / 2, y: hitRect.top + hitRect.height / 2 }
     : null;
+  const detachedHandles = Object.fromEntries(
+    [...(stage?.querySelectorAll("[data-stage-overlay-handle]") ?? [])].map((handle) => {
+      const rect = handle.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      return [handle.getAttribute("data-stage-overlay-handle") ?? "", {
+        targetScreenSizePx: numberAttribute(handle, "data-stage-overlay-handle-screen-size"),
+        minimumHitSizePx: numberAttribute(handle, "data-stage-overlay-handle-min-hit-size"),
+        screenWidthPx: rect.width,
+        screenHeightPx: rect.height,
+        screenMinPx: Math.min(rect.width, rect.height),
+        screenMaxPx: Math.max(rect.width, rect.height),
+        topHitOwnsHandle:
+          document.elementFromPoint(centerX, centerY)?.closest("[data-stage-overlay-handle]") === handle,
+      }];
+    }),
+  );
   return {
     zoom: {
       min: slider instanceof HTMLInputElement ? Number(slider.min) : null,
@@ -4226,6 +4256,12 @@ function readMappingViewportConformanceStateInPage() {
           )
         : 0,
     },
+    selectedStageObjectShape: {
+      present: Boolean(selectedStageObjectShape),
+      screenWidth: selectedStageObjectShapeRect?.width ?? 0,
+      screenHeight: selectedStageObjectShapeRect?.height ?? 0,
+    },
+    detachedHandles,
     grid: {
       minor: {
         svgWidth: numberAttribute(minor, "width"),
@@ -4360,7 +4396,10 @@ async function runMappingViewportConformanceViewport(client, viewport) {
     `(() => {
       const slider = document.querySelector('[data-mapping-viewport-action="zoom-slider"]');
       const fixture = document.querySelector('.setupStageContext [data-stage-fixture-id="9"]');
-      return slider instanceof HTMLInputElement && Number(slider.max) > 4 && Boolean(fixture);
+      return slider instanceof HTMLInputElement
+        && Number(slider.max) > 4
+        && Boolean(fixture)
+        && document.querySelectorAll(".setupStageContext [data-stage-overlay-handle]").length === 5;
     })()`,
     "mapping viewport adaptive maximum",
   );
@@ -4387,6 +4426,10 @@ async function runMappingViewportConformanceViewport(client, viewport) {
   const maxZoom = await readMappingViewportConformanceState(client);
   const maxTracking = await exerciseMappingViewportFixtureTracking(client);
 
+  await client.evaluate(`(async () => {
+    window.__syndocalSelectMappingViewportStageObject?.();
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  })()`);
   await setMappingViewportConformanceZoom(client, 1);
   await sleep(60);
   const zoomOne = await readMappingViewportConformanceState(client);
@@ -4395,6 +4438,32 @@ async function runMappingViewportConformanceViewport(client, viewport) {
 
   const close = (left, right, tolerance = 0.001) =>
     Number.isFinite(left) && Number.isFinite(right) && Math.abs(left - right) <= tolerance;
+  const expectedDetachedHandleNames = [
+    "fixture-yaw",
+    "stage-object-rotate",
+    "stage-object-resize-width",
+    "stage-object-resize-depth",
+    "stage-object-resize-both",
+  ];
+  const detachedHandlesAreComplete = (state) =>
+    expectedDetachedHandleNames.every((name) => Boolean(state.detachedHandles[name]))
+    && Object.keys(state.detachedHandles).length === expectedDetachedHandleNames.length;
+  const detachedHandlesStayWithinScreenSize = (state) =>
+    detachedHandlesAreComplete(state)
+    && expectedDetachedHandleNames.every((name) => {
+      const handle = state.detachedHandles[name];
+      return handle.targetScreenSizePx === 22
+        && handle.screenMinPx >= 18
+        && handle.screenMaxPx <= 26;
+    });
+  const detachedHandleHitTargetsMeetFloor = (state) =>
+    detachedHandlesAreComplete(state)
+    && expectedDetachedHandleNames.every((name) => {
+      const handle = state.detachedHandles[name];
+      return handle.minimumHitSizePx === 16
+        && handle.screenMinPx >= handle.minimumHitSizePx
+        && handle.topHitOwnsHandle;
+    });
   const checks = {
     adaptiveMaximumExceedsLegacyFourX:
       initial.zoom.min === 1
@@ -4437,6 +4506,22 @@ async function runMappingViewportConformanceViewport(client, viewport) {
       && zoomOne.label.screenHeight > 0
       && zoomOne.label.screenFontSizePx >= 9
       && zoomOne.label.screenFontSizePx <= 13,
+    detachedHandleSetCoversFixtureAndStageObjectGrabHandles:
+      detachedHandlesAreComplete(zoomOne)
+      && detachedHandlesAreComplete(maxZoom),
+    detachedHandleScreenSizeIsEighteenToTwentySixPxAtZoomOne:
+      zoomOne.zoom.value === 1
+      && detachedHandlesStayWithinScreenSize(zoomOne),
+    detachedHandleScreenSizeIsEighteenToTwentySixPxAtMaxZoom:
+      maxZoom.zoom.value === initial.zoom.max
+      && detachedHandlesStayWithinScreenSize(maxZoom),
+    detachedHandleHitTargetsStayAtLeastSixteenPxAtMaxZoom:
+      detachedHandleHitTargetsMeetFloor(maxZoom),
+    geometryTracedSelectionOutlinesRemainZoomScaled:
+      zoomOne.selectedStageObjectShape.present
+      && maxZoom.selectedStageObjectShape.present
+      && maxZoom.selectedStageObjectShape.screenWidth > zoomOne.selectedStageObjectShape.screenWidth * 2
+      && maxZoom.fixtureShape.screenMin > zoomOne.fixtureShape.screenMin * 2,
     fixtureTracksTrustedScreenDragAtMaxZoom:
       maxTracking.pointerDistancePx >= 8
       && maxTracking.trackingErrorPx <= 2
@@ -5092,11 +5177,16 @@ async function runControlStageFixtureEditViewport(client, viewport) {
   );
   const afterUndo = await readControlStageEditState(client);
 
-  if (!afterUndo.yawPoint) throw new Error("Control stage yaw handle point was unavailable");
+  await setMappingViewportConformanceZoom(client, "max");
+  const afterUndoMaxZoom = await readControlStageEditState(client);
+  await setMappingViewportConformanceZoom(client, 1);
+  const afterUndoZoomOne = await readControlStageEditState(client);
+
+  if (!afterUndoZoomOne.yawPoint) throw new Error("Control stage yaw handle point was unavailable");
   await dispatchCdpMouseDrag(
     client,
-    { x: afterUndo.yawPoint.x, y: afterUndo.yawPoint.y },
-    { x: afterUndo.yawPoint.targetX, y: afterUndo.yawPoint.targetY },
+    { x: afterUndoZoomOne.yawPoint.x, y: afterUndoZoomOne.yawPoint.y },
+    { x: afterUndoZoomOne.yawPoint.targetX, y: afterUndoZoomOne.yawPoint.targetY },
   );
   await waitForClientCondition(
     client,
@@ -5270,10 +5360,21 @@ async function runControlStageFixtureEditViewport(client, viewport) {
       samePosition(afterUndo.fixture.position, initial.fixture.position)
       && afterUndo.mockCommands.includes("undo_project_transaction")],
     ["controlStageSelectedFixtureShowsYawHandleAndRotates", () =>
-      afterUndo.yawHandleCount === 1
-      && afterUndo.yawPoint.topHitOwnsHandle
+      afterUndoZoomOne.yawHandleCount === 1
+      && afterUndoZoomOne.yawPoint.topHitOwnsHandle
       && afterYaw.fixture.rotation.yaw !== afterUndo.fixture.rotation.yaw
       && afterYaw.transformCalls.length === 2],
+    ["controlStageYawHandleScreenSizeIsEighteenToTwentySixPxAtZoomOneAndMax", () =>
+      afterUndoZoomOne.yawHandleTargetScreenSizePx === 22
+      && afterUndoZoomOne.yawHandleScreenSizePx >= 18
+      && afterUndoZoomOne.yawHandleScreenSizePx <= 26
+      && afterUndoMaxZoom.yawHandleTargetScreenSizePx === 22
+      && afterUndoMaxZoom.yawHandleScreenSizePx >= 18
+      && afterUndoMaxZoom.yawHandleScreenSizePx <= 26],
+    ["controlStageYawHandleHitTargetStaysAtLeastSixteenPxAtMaxZoom", () =>
+      afterUndoMaxZoom.yawHandleMinimumHitSizePx === 16
+      && afterUndoMaxZoom.yawHandleScreenSizePx >= afterUndoMaxZoom.yawHandleMinimumHitSizePx
+      && afterUndoMaxZoom.yawPoint.topHitOwnsHandle],
     ["controlStageKeepsOtherStageAuthoringSetupOnly", () =>
       initial.stageObjectEditHandleCount === 0
       && initial.placePreviewCount === 0
@@ -5334,6 +5435,8 @@ async function runControlStageFixtureEditViewport(client, viewport) {
     afterClick,
     afterMove,
     afterUndo,
+    afterUndoZoomOne,
+    afterUndoMaxZoom,
     afterYaw,
     beforePan,
     afterPan,
@@ -22467,6 +22570,8 @@ async function main() {
               `${JSON.stringify(result.afterMove.fixture?.position)}->` +
               `${JSON.stringify(result.afterUndo.fixture?.position)} ` +
             `yaw=${result.afterUndo.fixture?.rotation?.yaw}->${result.afterYaw.fixture?.rotation?.yaw} ` +
+            `yawHandle=${Math.round(result.afterUndoZoomOne.yawHandleScreenSizePx * 100) / 100}/` +
+              `${Math.round(result.afterUndoMaxZoom.yawHandleScreenSizePx * 100) / 100}px ` +
             `snap=${result.snapConfigured.active}/${result.snapConfigured.summary} ` +
             `live=${result.initial.liveColorFixtureCount}/${result.initial.multiSegmentFixtureCount} ` +
             `trigger=${JSON.stringify(result.matrixBefore.activeIds)}->${JSON.stringify(result.matrixAfter.activeIds)} ` +
@@ -23262,6 +23367,11 @@ async function main() {
             `${Math.round(result.maxTracking.screenDistancePx * 100) / 100}px ` +
           `label=${Math.round(result.zoomOne.label.screenFontSizePx * 100) / 100}px/` +
             `${Math.round(result.maxZoom.label.screenFontSizePx * 100) / 100}px ` +
+          `handles=${JSON.stringify(Object.fromEntries(Object.keys(result.zoomOne.detachedHandles).map((name) => [
+            name,
+            `${Math.round(result.zoomOne.detachedHandles[name].screenMinPx * 100) / 100}/` +
+              `${Math.round(result.maxZoom.detachedHandles[name].screenMinPx * 100) / 100}px`,
+          ])))} ` +
           `cursor=${result.initial.cursor.lineCount}/${result.initial.cursor.circleCount} ` +
           `readout=${JSON.stringify(result.initial.cursorReadout.text)} ` +
           `failed=${JSON.stringify(result.failedChecks)}`,

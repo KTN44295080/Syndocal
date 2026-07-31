@@ -200,11 +200,6 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
     }
     return mappingFixtureYawFromPoint(drag.centerWorld, drag.currentWorld) ?? fixture.rotation.yaw;
   };
-  const mappingFixtureYawHandle = (point: { x: number; z: number }, yaw: number) => {
-    const angle = ((yaw - 90) * Math.PI) / 180;
-    const distance = 7;
-    return { x: point.x + Math.cos(angle) * distance, z: point.z + Math.sin(angle) * distance };
-  };
   const mappingVideoOutputMapping = (output: VideoOutputSummary): VideoOutputMapping => {
     const drag = options.mappingDrag();
     return !drag || !isMappingVideoOutputDrag(drag) || drag.outputId !== output.id
@@ -348,7 +343,6 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
       const intensity = clamp01(dimmer / 65_535);
       const panDegrees = pan === undefined ? 0 : ((pan - 32_768) / 65_535) * 540;
       const yaw = mappingFixtureYaw(fixture);
-      const yawHandle = mappingFixtureYawHandle(point, yaw);
       const visualKind = fixtureVisualKind(fixture);
       const size = mappingFixtureStageSize(
         visualKind,
@@ -368,8 +362,6 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
         width: size.width,
         height: size.height,
         yaw,
-        yawHandleX: yawHandle.x,
-        yawHandleZ: yawHandle.z,
         beamYaw: yaw + panDegrees,
         beamPoints: beamPoints(point.x, point.z, yaw + panDegrees, intensity),
         intensity,
