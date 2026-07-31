@@ -19782,6 +19782,40 @@ h3 {
   text-transform: uppercase;
 }
 
+.profileImportDisclosure {
+  min-width: 0;
+  border: 1px solid #39342f;
+  border-radius: 2px;
+  background: #181715;
+}
+
+.profileImportDisclosure > summary {
+  min-height: 28px;
+  padding: 6px 8px;
+  color: #d8d0c9;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.profileImportDisclosure[open] > summary {
+  border-bottom: 1px solid #39342f;
+  background: #292521;
+}
+
+.profileImportDisclosure:not([open]) > .profileImportRows {
+  display: none;
+}
+
+.profileImportRows {
+  display: grid;
+  min-width: 0;
+}
+
+.profileImportDisclosure .profileSourceBlock:last-child {
+  border-bottom: 0;
+}
+
 .fixtureCatalogPanel {
   display: grid;
   align-content: start;
@@ -26847,10 +26881,25 @@ h3 {
   overflow: hidden;
 }
 
+.layoutSharedWorkspace.layoutSetup.setupMode-patch > .setupPanel > .profileLoadPanel {
+  flex: 0 0 auto;
+  max-height: min(300px, 52%);
+  overflow: auto;
+}
+
+.layoutSharedWorkspace.layoutSetup.setupMode-patch > .setupPanel > .profile {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
 .layoutSharedWorkspace.layoutSetup > .setupPatchTopPanel > .setupPatchAddressDesk {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 4px;
   min-width: 0;
   min-height: 0;
-  overflow: hidden auto;
+  overflow: hidden;
 }
 
 .layoutSharedWorkspace.layoutSetup > .setupPatchTopPanel > .setupPatchAddressDesk > .dmxPatchMap {
@@ -26859,13 +26908,224 @@ h3 {
   min-height: 0;
 }
 
-.layoutSharedWorkspace.layoutSetup > .setupPatchTopPanel > .fixtureSetupEditor {
+.patchFixtureFormPanel {
+  min-width: 0;
+}
+
+.patchFixtureMinimalForm {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(66px, 0.5fr)) auto auto auto;
+  align-items: end;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid #393530;
+  border-radius: 2px;
+  background: #181715;
+  padding: 4px;
+}
+
+.patchFixtureMinimalForm > label {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  color: #9b928a;
+  font-size: 10px;
+}
+
+.patchFixtureMinimalForm > label > input,
+.patchFixtureMinimalForm > button,
+.patchFixtureOptionsDisclosure > summary {
+  min-height: 25px;
+  font-size: 11px;
+}
+
+.patchFixtureMinimalForm > label > input {
+  width: 100%;
+  min-width: 0;
+  padding: 2px 5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.patchFixtureSubmit {
+  min-width: 62px;
+}
+
+.patchFixtureNextFree {
+  min-width: 96px;
+  white-space: nowrap;
+}
+
+.patchFixtureOptionsDisclosure {
+  position: relative;
+  min-width: 0;
+}
+
+.patchFixtureOptionsDisclosure > summary {
+  display: flex;
+  align-items: center;
+  min-width: 98px;
+  border: 1px solid #48413b;
+  border-radius: 2px;
+  background: #211e1b;
+  padding: 3px 7px;
+  color: #b9b0a7;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.patchFixtureOptionsDisclosure[open] > summary {
+  border-color: #8c8178;
+  background: #3b3530;
+  color: #fff;
+}
+
+.patchFixtureOptionsDisclosure:not([open]) > .patchFixtureOptions {
+  display: none;
+}
+
+.patchFixtureOptions {
+  position: absolute;
+  z-index: 8;
+  top: calc(100% + 4px);
+  right: 0;
+  display: grid;
+  gap: 6px;
+  width: min(430px, calc(100vw - 30px));
+  max-height: min(430px, calc(100vh - 190px));
+  overflow: auto;
+  border: 1px solid #514a43;
+  border-radius: 2px;
+  background: #181715;
+  padding: 8px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.34);
+}
+
+.patchFixtureOptions .footprint {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.patchFixtureConflict {
+  margin: 3px 0 0;
+  color: #ffc0c0;
+  font-size: 11px;
+}
+
+.layoutSharedWorkspace.layoutSetup > .setupPatchTopPanel > .fixtureSetupContextPane {
   display: grid;
   grid-column: 2;
   grid-row: 1;
   min-width: 0;
   min-height: 0;
+  border: 1px solid #393530;
+  border-radius: 2px;
+  background: #181715;
+  padding: 4px;
   overflow: auto;
+}
+
+.fixtureSetupContextPane > .fixtureSetupEditor {
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 4px;
+}
+
+.fixtureSetupEmptyState {
+  align-self: start;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  padding: 7px 5px;
+  color: #9b928a;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layoutSharedWorkspace.layoutSetup.setupMode-patch .dmxPatchMap > .panelHeader {
+  position: relative;
+  flex-wrap: nowrap;
+}
+
+.dmxGridUsage {
+  min-width: 0;
+  overflow: hidden;
+  color: #b9b0a7;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dmxUniverseOverviewDisclosure {
+  position: relative;
+  min-width: 0;
+}
+
+.dmxUniverseOverviewDisclosure > summary {
+  display: flex;
+  align-items: center;
+  min-height: 25px;
+  border: 1px solid #48413b;
+  border-radius: 2px;
+  background: #211e1b;
+  padding: 3px 7px;
+  color: #b9b0a7;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dmxUniverseOverviewDisclosure[open] > summary {
+  border-color: #8c8178;
+  background: #3b3530;
+  color: #fff;
+}
+
+.dmxUniverseOverviewDisclosure:not([open]) > .dmxUniverseOverviewContent {
+  display: none;
+}
+
+.dmxUniverseOverviewContent {
+  position: absolute;
+  z-index: 8;
+  top: calc(100% + 4px);
+  right: 0;
+  display: grid;
+  gap: 8px;
+  width: min(520px, calc(100vw - 30px));
+  max-height: min(360px, calc(100vh - 190px));
+  overflow: auto;
+  border: 1px solid #514a43;
+  border-radius: 2px;
+  background: #181715;
+  padding: 8px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.34);
+}
+
+.dmxUniverseOverviewMeta {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  color: #9b928a;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.dmxUniverseOverviewMeta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dmxUniverseOverviewContent .dmxUniverseLegend {
+  flex-wrap: nowrap;
+  overflow: auto hidden;
+}
+
+.dmxUniverseOverviewContent .dmxUniverseLegend button {
+  flex: 0 0 auto;
 }
 
 .layoutSharedWorkspace.layoutSetup.setupMode-patch .mappingPersistentWorkspaceBand .mappingGroupStrip,

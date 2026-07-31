@@ -2148,6 +2148,7 @@ export default function App() {
   };
   if (
     viewportFixture === "timeline"
+    || viewportFixture === "patch"
     || viewportFixture === "timeline-layered"
     || viewportFixture === "scene-block-large"
     || viewportFixture === "scene-block-hour"
@@ -2169,6 +2170,7 @@ export default function App() {
     const controlStageEditFixture = viewportFixture === "control-stage-edit";
     const timelineFixture =
       viewportFixture === "timeline"
+      || viewportFixture === "patch"
       || timelineLayeredFixture
       || sceneBlockLargeFixture
       || sceneBlockHourFixture
@@ -2808,7 +2810,8 @@ export default function App() {
     };
   }
   if (
-    viewportFixture === "edit-live"
+    viewportFixture === "patch"
+    || viewportFixture === "edit-live"
     || viewportFixture === "live-edit-types"
     || viewportFixture === "workspace-operator"
   ) {
@@ -16655,6 +16658,7 @@ export default function App() {
           <Show when={setupSubTab() === "library" || setupSubTab() === "patch"}>
           <ProfileLoadPanel
             title={setupSubTab() === "library" ? "Fixture Library" : "Patch Source"}
+            foldSources={setupSubTab() === "patch"}
             gdtfPath={gdtfPath()}
             gdtfShareUrl={gdtfShareUrl()}
             onGdtfPath={setGdtfPath}
@@ -16723,9 +16727,20 @@ export default function App() {
                   functionDetail={channelFunctionDetail}
                   onSelectedMode={setSelectedMode}
                 />
-                <Show when={setupSubTab() === "patch"}>
+              </div>
+            )}
+          </Show>
+        </aside>
+        </Show>
+
+        <Show when={workspaceTab() === "setup" && setupSubTab() === "patch"}>
+        <SetupMappingWorkspace
+          className={setupPanelClass("panel fixtures setupPanel", ["patch"])}
+          panelRef={registerSetupPanel(["patch"])}
+          patchForm={
+            <Show when={profile()}>
+              {(loaded) => (
                 <PatchFixtureFormPanel
-                  label={label()}
                   universe={universe()}
                   address={address()}
                   count={patchCount()}
@@ -16741,7 +16756,6 @@ export default function App() {
                   pitch={patchPitch()}
                   yaw={patchYaw()}
                   roll={patchRoll()}
-                  groupText={groupText()}
                   footprint={selectedFootprint()}
                   normalizedCount={patchCountValue()}
                   normalizedAddressStride={patchAddressStrideValue()}
@@ -16752,7 +16766,6 @@ export default function App() {
                   invalid={patchAddressInvalid()}
                   nextFreeAddress={nextFreePatchAddress()}
                   warnings={loaded().warnings}
-                  onLabel={setLabel}
                   onUniverse={setUniverse}
                   onAddress={setAddress}
                   onCount={setPatchCount}
@@ -16768,21 +16781,12 @@ export default function App() {
                   onPitch={setPatchPitch}
                   onYaw={setPatchYaw}
                   onRoll={setPatchRoll}
-                  onGroupText={setGroupText}
                   onPatch={patchFixture}
                   onNextFreeAddress={selectNextFreePatchAddress}
                 />
-                </Show>
-              </div>
-            )}
-          </Show>
-        </aside>
-        </Show>
-
-        <Show when={workspaceTab() === "setup" && setupSubTab() === "patch"}>
-        <SetupMappingWorkspace
-          className={setupPanelClass("panel fixtures setupPanel", ["patch"])}
-          panelRef={registerSetupPanel(["patch"])}
+              )}
+            </Show>
+          }
           patchMap={{
             activeUniverse: activePatchGridUniverse(),
             universeOptions: patchGridUniverseOptions(),

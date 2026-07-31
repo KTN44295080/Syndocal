@@ -524,7 +524,7 @@ await collectTsx(sourceRoot);
 
 const localeInvariantText = new Set([
   "Syndocal", "DMX", "MIDI", "OSC", "RDM", "ISF", "NDI", "Spout", "Syphon", "HAP", "FFmpeg",
-  "GO", "SET", "FLASH", "EDIT", "EDIT:", "LIVE", "HTP", "LTP", "RGB", "BPM", "PULSE", "A", "B", "R", "G", "X", "Y", "Z", "Pan", "Tilt",
+  "GO", "SET", "FLASH", "EDIT", "EDIT:", "LIVE", "HTP", "LTP", "RGB", "BPM", "PULSE", "PATCH", "A", "B", "R", "G", "X", "Y", "Z", "Pan", "Tilt",
   "Dimmer", "Color", "Position", "Beam", "Speed", "Size", "Phase",
   "Sine", "Cosine", "Triangle", "Saw", "Square", "Random", "Perlin",
   "STEPS", "COLOR FX", "CHASER FX", "MOVE FX", "VALUE FX", "CURVE FX", "MAPPINGS", "COLOUR MAPPINGS",

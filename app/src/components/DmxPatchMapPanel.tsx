@@ -190,6 +190,9 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
           <output class="dmxPatchAddressReadout" aria-label="Current DMX address">
             U{props.activeUniverse} A{inspectedAddress()}
           </output>
+          <output class="dmxGridUsage" data-dmx-grid-usage>
+            {props.activeMap.used}/512 used / {props.activeMap.largestFree}ch max free
+          </output>
           <div class="panelHeaderActions">
             <button onClick={useNextFreeAddress} disabled={props.nextFreeAddress === null}>
               Next Free
@@ -224,6 +227,63 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
                 List
               </button>
             </div>
+            <details class="dmxUniverseOverviewDisclosure" data-dmx-universe-disclosure>
+              <summary>Universe Overview</summary>
+              <div class="dmxUniverseOverviewContent">
+                <div class="dmxUniverseOverviewMeta">
+                  <span>{props.universeMaps.length} universe(s)</span>
+                  <span>{props.fixtureCount} fixture(s)</span>
+                  <span>{props.plannedAddressSummary}</span>
+                </div>
+                <For each={props.universeMaps}>
+                  {(map) => (
+                    <div class="dmxUniverseMap">
+                      <div class="dmxUniverseHeader">
+                        <strong>U{map.universe}</strong>
+                        <span>{map.used}/512 used</span>
+                        <span>{map.largestFree}ch max free</span>
+                      </div>
+                      <div class="dmxUniverseTrack">
+                        <For each={map.segments}>
+                          {(segment) => (
+                            <button
+                              class={segment.fixture.id === props.selectedFixtureId ? "dmxPatchSegment selected" : "dmxPatchSegment"}
+                              style={{
+                                left: `${segment.left}%`,
+                                width: `${Math.max(segment.width, 0.7)}%`,
+                              }}
+                              title={`${segment.fixture.label} A${segment.start}-${segment.end}`}
+                              aria-label={`Select ${segment.fixture.label}, Universe ${map.universe}, addresses ${segment.start} to ${segment.end}`}
+                              onClick={() => {
+                                props.onUniverse(map.universe);
+                                props.onSelectFixture(segment.fixture);
+                              }}
+                            />
+                          )}
+                        </For>
+                      </div>
+                      <div class="dmxUniverseLegend">
+                        <For each={map.segments}>
+                          {(segment) => (
+                            <button
+                              onClick={() => {
+                                props.onUniverse(map.universe);
+                                props.onSelectFixture(segment.fixture);
+                              }}
+                            >
+                              <span data-no-localize>A{segment.start}-{segment.end} {segment.fixture.label}</span>
+                            </button>
+                          )}
+                        </For>
+                        <Show when={map.segments.length === 0}>
+                          <span>Empty</span>
+                        </Show>
+                      </div>
+                    </div>
+                  )}
+                </For>
+              </div>
+            </details>
           </div>
         </div>
         <Show
@@ -350,68 +410,6 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
             </For>
           </div>
         </Show>
-        <div class="dmxGridSummary">
-          <span>{props.activeMap.used}/512 used</span>
-          <span>{props.activeMap.largestFree}ch max free</span>
-          <span>{props.plannedAddressSummary}</span>
-          <span>{props.fixtureCount} fixture(s)</span>
-        </div>
-      </div>
-      <div class="dmxPatchMap compact">
-        <div class="panelHeader">
-          <h3>Universe Overview</h3>
-          <span>{props.universeMaps.length} universe(s)</span>
-        </div>
-        <For each={props.universeMaps}>
-          {(map) => (
-            <div class="dmxUniverseMap">
-              <div class="dmxUniverseHeader">
-                <strong>U{map.universe}</strong>
-                <span>{map.used}/512 used</span>
-                <span>{map.largestFree}ch max free</span>
-              </div>
-              <div class="dmxUniverseTrack">
-                <For each={map.segments}>
-                  {(segment) => (
-                    <button
-                      class={segment.fixture.id === props.selectedFixtureId ? "dmxPatchSegment selected" : "dmxPatchSegment"}
-                      style={{
-                        left: `${segment.left}%`,
-                        width: `${Math.max(segment.width, 0.7)}%`,
-                      }}
-                      title={`${segment.fixture.label} A${segment.start}-${segment.end}`}
-                      aria-label={`Select ${segment.fixture.label}, Universe ${map.universe}, addresses ${segment.start} to ${segment.end}`}
-                      onClick={() => {
-                        props.onUniverse(map.universe);
-                        props.onSelectFixture(segment.fixture);
-                      }}
-                    />
-                  )}
-                </For>
-              </div>
-              <div class="dmxUniverseLegend">
-                <For each={map.segments.slice(0, 6)}>
-                  {(segment) => (
-                    <button
-                      onClick={() => {
-                        props.onUniverse(map.universe);
-                        props.onSelectFixture(segment.fixture);
-                      }}
-                    >
-                      <span data-no-localize>A{segment.start}-{segment.end} {segment.fixture.label}</span>
-                    </button>
-                  )}
-                </For>
-                <Show when={map.segments.length === 0}>
-                  <span>Empty</span>
-                </Show>
-                <Show when={map.segments.length > 6}>
-                  <span>+{map.segments.length - 6}</span>
-                </Show>
-              </div>
-            </div>
-          )}
-        </For>
       </div>
     </>
   );
