@@ -27,6 +27,7 @@ assert.equal(localization.uiLocaleFromUnknown("ja"), "ja");
 assert.equal(localization.uiLocaleFromUnknown("en"), "en");
 assert.equal(localization.uiLocaleFromUnknown("future"), "en");
 assert.equal(localization.translateUiText("Save", "ja"), "保存");
+assert.equal(localization.translateUiText("Load", "ja"), "開く");
 assert.equal(localization.translateUiText("  Save  ", "ja"), "  保存  ");
 assert.equal(localization.translateUiText("3 steps", "ja"), "3 手順");
 assert.equal(localization.translateUiText("Install v1.2.0", "ja"), "v1.2.0をインストール");

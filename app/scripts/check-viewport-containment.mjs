@@ -2304,6 +2304,27 @@ async function measureTimelinePaneExpansionState(client) {
     const controlContextHeaderRect = measuredRect('[data-control-context-header]');
     const controlModeSegmentRect = measuredRect('[data-control-context-header] > [data-control-mode-segment]');
     const controlContextFadersRect = measuredRect('.controlContextPane > .faders');
+    const requiredTopbarDragRegionSelectors = [
+      ':scope',
+      ':scope > .topbarLeft',
+      ':scope > .topbarProject',
+      ':scope > .topbarProject > strong',
+      ':scope > .topbarProject > span',
+      ':scope > .status',
+      ':scope > .status > .topbarMasterCluster',
+      ':scope > .status > .bpmReadout',
+      ':scope > .status > .bpmReadout > small',
+      ':scope > .status > .bpmReadout > strong',
+      ':scope > .status > .pill',
+      ':scope > .status > .tickMetric',
+      ':scope > .status > .outputMetric',
+      ':scope > .status > .outputMetric > small',
+      ':scope > .status > .outputMetric > strong',
+    ];
+    const missingTopbarDragRegionSelectors = requiredTopbarDragRegionSelectors.filter((selector) => {
+      const element = selector === ':scope' ? topbar : topbar?.querySelector(selector);
+      return !element?.hasAttribute('data-tauri-drag-region');
+    });
     const rectContained = (inner, outer) => Boolean(
       inner && outer &&
       inner.x >= outer.x - 1 &&
@@ -2366,8 +2387,10 @@ async function measureTimelinePaneExpansionState(client) {
         topbarDragRegionSurfaceCount:
           (topbar?.hasAttribute('data-tauri-drag-region') ? 1 : 0) +
           (topbar?.querySelectorAll('[data-tauri-drag-region]').length ?? 0),
+        requiredTopbarDragRegionSurfaceCount: requiredTopbarDragRegionSelectors.length,
+        missingTopbarDragRegionSelectors,
         interactiveDragRegionCount: topbar?.querySelectorAll(
-          'button[data-tauri-drag-region], input[data-tauri-drag-region], select[data-tauri-drag-region], [role="menu"][data-tauri-drag-region]'
+          'button[data-tauri-drag-region], input[data-tauri-drag-region], select[data-tauri-drag-region], textarea[data-tauri-drag-region], label[data-tauri-drag-region], [role="menu"][data-tauri-drag-region], [role="menuitem"][data-tauri-drag-region], [role="dialog"][data-tauri-drag-region]'
         ).length ?? 0,
         windowControlsRect,
         windowControlCount: windowControlButtons.length,
@@ -2563,8 +2586,12 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
     ['t25TopbarMastersBpmAndTapIntegrated', () => topbarMastersAndBpmAreIntegrated],
     ['t25ETopbarOwnsDragRegionOnlyOnBackground', () => Boolean(
       normalDensity.topbarDragRegion &&
-      normalDensity.topbarDragRegionSurfaceCount >= 4 &&
+      normalDensity.topbarDragRegionSurfaceCount >= normalDensity.requiredTopbarDragRegionSurfaceCount &&
       normalDensity.interactiveDragRegionCount === 0
+    )],
+    ['t25ETopbarEmptySurfaceMapIsComplete', () => Boolean(
+      normalDensity.requiredTopbarDragRegionSurfaceCount === 15 &&
+      normalDensity.missingTopbarDragRegionSelectors?.length === 0
     )],
     ['t25EWindowControlsExistInRequiredOrder', () => Boolean(
       normalDensity.windowControlCount === 3 &&
@@ -6417,9 +6444,12 @@ async function measure(client, label) {
       },
       visibleAppStatusLineCount: visibleCount('.appStatusLine[role="status"]'),
       appStatusTone: document.querySelector('.appStatusLine')?.getAttribute('data-status-tone') ?? '',
+      topbarProjectActionCount: visibleCount('.topbar .projectAction'),
       visibleProjectMenuCount: visibleCount('.appProjectMenu'),
       visibleProjectMenuItemCount: visibleCount('.appProjectMenu button[role="menuitem"]'),
       visibleProjectMenuShortcutCount: document.querySelectorAll('.appProjectMenu button[aria-keyshortcuts]').length,
+      visibleProjectMenuSaveActionCount: visibleCount('.appProjectMenu [data-project-menu-action="save"]'),
+      visibleProjectMenuLoadActionCount: visibleCount('.appProjectMenu [data-project-menu-action="load"]'),
       visibleRecentProjectMenuItemCount: visibleCount('.appProjectMenu .recentProjectMenuItem'),
       visibleRecoveryProjectMenuItemCount: visibleCount('.appProjectMenu .recoveryProjectMenuItem'),
       visibleUpdateMenuLabelCount: [...document.querySelectorAll('.appProjectMenu .appProjectMenuLabel span')]
@@ -6435,6 +6465,8 @@ async function measure(client, label) {
         .filter((node) => (node.textContent || '').trim() === 'UI言語').length,
       visibleJapaneseSaveButtonCount: [...document.querySelectorAll('.appProjectMenu button[role="menuitem"] span')]
         .filter((node) => (node.textContent || '').trim() === '保存').length,
+      visibleJapaneseLoadButtonCount: [...document.querySelectorAll('.appProjectMenu button[role="menuitem"] span')]
+        .filter((node) => (node.textContent || '').trim() === '開く').length,
       visibleJapaneseLiveAudioStoppedCount: [...document.querySelectorAll('.liveAudioHealthAnnouncement')]
         .filter((node) => (node.textContent || '').trim() === 'ライブ音声入力は停止中です。').length,
       visibleJapaneseLiveAudioMeterLabelCount: [...document.querySelectorAll('.liveAudioMeters [role="meter"]')]
@@ -7858,8 +7890,11 @@ function hasExpectedProjectMenu(result) {
   }
   return (
     result.visibleProjectMenuCount === 1 &&
+    result.topbarProjectActionCount === 0 &&
     result.visibleProjectMenuItemCount >= 6 &&
     result.visibleProjectMenuShortcutCount >= 4 &&
+    result.visibleProjectMenuSaveActionCount === 1 &&
+    result.visibleProjectMenuLoadActionCount === 1 &&
     result.visibleRecentProjectMenuItemCount >= 5 &&
     result.visibleRecoveryProjectMenuItemCount >= 1 &&
     result.visibleUpdateMenuLabelCount === 1 &&
@@ -7893,6 +7928,7 @@ function hasExpectedLocalization(result) {
     result.visibleProjectMenuCount === 1 &&
     result.visibleJapaneseLanguageLabelCount === 1 &&
     result.visibleJapaneseSaveButtonCount === 1 &&
+    result.visibleJapaneseLoadButtonCount === 1 &&
     result.preservedUserFixtureLabelCount === 3 &&
     result.translatedUserFixtureCollisionCount === 0
   );
@@ -9518,6 +9554,27 @@ function readTopbarPulseStateInPage() {
   const pulseRect = rectOf(pulse);
   const rmsFill = pulse?.querySelector(".topbarPulseTrack > i");
   const peakFill = pulse?.querySelector(".topbarPulseTrack > b");
+  const requiredDragRegionSelectors = [
+    ":scope",
+    ":scope > .topbarLeft",
+    ":scope > .topbarProject",
+    ":scope > .topbarProject > strong",
+    ":scope > .topbarProject > span",
+    ":scope > .status",
+    ":scope > .status > .topbarMasterCluster",
+    ":scope > .status > .bpmReadout",
+    ":scope > .status > .bpmReadout > small",
+    ":scope > .status > .bpmReadout > strong",
+    ":scope > .status > .pill",
+    ":scope > .status > .tickMetric",
+    ":scope > .status > .outputMetric",
+    ":scope > .status > .outputMetric > small",
+    ":scope > .status > .outputMetric > strong",
+  ];
+  const missingDragRegionSelectors = requiredDragRegionSelectors.filter((selector) => {
+    const element = selector === ":scope" ? topbar : topbar?.querySelector(selector);
+    return !element?.hasAttribute("data-tauri-drag-region");
+  });
   const controlGroups = {
     go: [...(topbar?.querySelectorAll(".goButton") ?? [])],
     masters: [...(topbar?.querySelectorAll("[data-topbar-master]") ?? [])].filter(visible),
@@ -9568,6 +9625,11 @@ function readTopbarPulseStateInPage() {
     controlCounts: Object.fromEntries(
       Object.entries(controlGroups).map(([key, elements]) => [key, elements.length]),
     ),
+    requiredDragRegionSurfaceCount: requiredDragRegionSelectors.length,
+    missingDragRegionSelectors,
+    interactiveDragRegionCount: topbar?.querySelectorAll(
+      'button[data-tauri-drag-region], input[data-tauri-drag-region], select[data-tauri-drag-region], textarea[data-tauri-drag-region], label[data-tauri-drag-region], [role="menu"][data-tauri-drag-region], [role="menuitem"][data-tauri-drag-region], [role="dialog"][data-tauri-drag-region]'
+    ).length ?? 0,
     controlsContained,
     controlsOverlap,
     controlCenterSpread: Math.round(controlCenterSpread * 100) / 100,
@@ -9598,6 +9660,32 @@ async function runTopbarPulseViewport(client, viewport) {
   const stoppedLevelCalls = await client.evaluate(
     "(window.__syndocalLiveAudioMock?.calls ?? []).filter((call) => call.command === 'live_audio_input_levels').length",
   );
+  const projectMenuOpened = await client.evaluate(`(() => {
+    const button = document.querySelector('.appMenuButton');
+    if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+    button.click();
+    return true;
+  })()`);
+  await sleep(80);
+  const projectMenu = await client.evaluate(`(() => {
+    const menu = document.querySelector('.appProjectMenu[role="menu"]');
+    const save = menu?.querySelector('[data-project-menu-action="save"]');
+    const load = menu?.querySelector('[data-project-menu-action="load"]');
+    return {
+      visible: Boolean(menu && menu.getBoundingClientRect().width > 0 && menu.getBoundingClientRect().height > 0),
+      saveCount: menu?.querySelectorAll('[data-project-menu-action="save"]').length ?? 0,
+      loadCount: menu?.querySelectorAll('[data-project-menu-action="load"]').length ?? 0,
+      saveText: (save?.textContent ?? '').trim(),
+      loadText: (load?.textContent ?? '').trim(),
+      saveShortcut: save?.getAttribute('aria-keyshortcuts') ?? '',
+      loadShortcut: load?.getAttribute('aria-keyshortcuts') ?? '',
+      interactiveDragRegionCount: menu?.querySelectorAll(
+        'button[data-tauri-drag-region], input[data-tauri-drag-region], select[data-tauri-drag-region], textarea[data-tauri-drag-region], [role="menu"][data-tauri-drag-region], [role="menuitem"][data-tauri-drag-region]'
+      ).length ?? 0,
+    };
+  })()`);
+  await client.evaluate("document.querySelector('.appMenuButton')?.click()");
+  await sleep(40);
   const pulseClicked = await client.evaluate(`(() => {
     const pulse = document.querySelector('[data-topbar-pulse]');
     if (!(pulse instanceof HTMLButtonElement)) return false;
@@ -9723,6 +9811,21 @@ async function runTopbarPulseViewport(client, viewport) {
       stopped.bpmRect &&
       stopped.masterClusterRect.right <= stopped.goRect.x + 0.5 &&
       stopped.goRect.right <= stopped.bpmRect.x + 0.5,
+    projectSaveLoadRemovedFromTopbarAndPreservedInMenu:
+      stopped.controlCounts.project === 0 &&
+      projectMenuOpened &&
+      projectMenu.visible &&
+      projectMenu.saveCount === 1 &&
+      projectMenu.loadCount === 1 &&
+      projectMenu.saveText === "Save" &&
+      projectMenu.loadText === "Load" &&
+      projectMenu.saveShortcut.includes("Control+S") &&
+      projectMenu.loadShortcut.includes("Control+O"),
+    emptyTopbarSurfacesAreDragRegionsOnly:
+      stopped.requiredDragRegionSurfaceCount === 15 &&
+      stopped.missingDragRegionSelectors.length === 0 &&
+      stopped.interactiveDragRegionCount === 0 &&
+      projectMenu.interactiveDragRegionCount === 0,
     allTopbarControlsCoexistAt1280:
       stopped.controlCounts.go === 1 &&
       stopped.controlCounts.masters === 2 &&
@@ -9730,7 +9833,7 @@ async function runTopbarPulseViewport(client, viewport) {
       stopped.controlCounts.tap === 1 &&
       stopped.controlCounts.live === 1 &&
       stopped.controlCounts.dmx === 1 &&
-      stopped.controlCounts.project === 2 &&
+      stopped.controlCounts.project === 0 &&
       stopped.controlCounts.window === 3 &&
       stopped.statusOverflowX <= 1 &&
       !stopped.controlsOverlap,
@@ -9791,6 +9894,7 @@ async function runTopbarPulseViewport(client, viewport) {
     activeLevelCalls,
     staleElapsedMs,
     stopped,
+    projectMenu,
     route,
     active,
     stale,
@@ -18007,7 +18111,9 @@ async function runSceneBlockLargeViewport(client, viewport) {
     const dirtySaveEnabled = row500Save instanceof HTMLButtonElement && !row500Save.disabled;
     const topbarDirtyVisible = document.querySelector('.topbarProject')?.classList.contains('dirty') ?? false;
     const projectLabelDirtyVisible = (document.querySelector('.topbarProject span')?.textContent || '').trim().endsWith('*');
-    const globalSave = document.querySelector('.projectAction[title^="Save project"]');
+    document.querySelector('.appMenuButton')?.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
+    const globalSave = document.querySelector('.appProjectMenu [data-project-menu-action="save"]');
     globalSave?.click();
     await Promise.resolve();
     const globalSaveBlocked = document.querySelector('.appStatusLine')
@@ -22178,6 +22284,10 @@ async function main() {
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
             `size=${result.stopped.topbarRect?.height ?? 0}/${result.stopped.pulseRect?.width ?? 0}x${result.stopped.pulseRect?.height ?? 0} ` +
             `controls=${JSON.stringify(result.stopped.controlCounts)} overflow=${result.stopped.statusOverflowX} ` +
+            `menu=${result.projectMenu.saveCount}/${result.projectMenu.loadCount}:` +
+              `${JSON.stringify(result.projectMenu.saveText)}/${JSON.stringify(result.projectMenu.loadText)} ` +
+            `drag=${result.stopped.requiredDragRegionSurfaceCount - result.stopped.missingDragRegionSelectors.length}` +
+              `/${result.stopped.requiredDragRegionSurfaceCount}/${result.stopped.interactiveDragRegionCount} ` +
             `goOrder=${result.stopped.masterClusterRect?.right ?? "?"}<${result.stopped.goRect?.x ?? "?"}-` +
               `${result.stopped.goRect?.right ?? "?"}<${result.stopped.bpmRect?.x ?? "?"} ` +
             `goTitle=${JSON.stringify(result.stopped.goTitle)} ` +
@@ -23891,7 +24001,7 @@ async function main() {
         ? ` sceneBlocks=${result.timelineSceneBlockCount}/${result.timelinePointEventCount}/${result.sceneBlockRowCount} workspace=${result.sceneBlockWorkspaceWidth}x${result.sceneBlockWorkspaceHeight}/${result.timelinePanelWidth} controls=${result.fullyVisibleSceneBlockComposerControlCount}/${result.visibleSceneBlockComposerControlCount} actions=${result.fullyVisibleSceneBlockRowActionCount}/${result.visibleSceneBlockRowActionCount} reachable=${result.sceneBlockLastControlReachable ? 1 : 0} overflow=${result.sceneBlockWorkspaceHorizontalOverflowPx}/${result.sceneBlockWorkspaceVerticalOverflowPx}/${result.sceneBlockListHorizontalOverflowPx}/${result.sceneBlockComposerHorizontalOverflowPx}`
         : "";
       const projectMenuSuffix = result.label.startsWith("project-menu-")
-        ? ` projectMenu=${result.visibleProjectMenuCount}/${result.visibleProjectMenuItemCount}/${result.visibleProjectMenuShortcutCount}/${result.visibleRecentProjectMenuItemCount}/${result.visibleRecoveryProjectMenuItemCount}/${result.visibleUpdateMenuLabelCount}/${result.visibleUpdateCheckButtonCount}/${result.visibleUserTemplateMenuLabelCount}/${result.visibleUserTemplateActionCount}`
+        ? ` projectMenu=${result.visibleProjectMenuCount}/${result.visibleProjectMenuItemCount}/${result.visibleProjectMenuShortcutCount}/${result.visibleProjectMenuSaveActionCount}/${result.visibleProjectMenuLoadActionCount}/${result.visibleRecentProjectMenuItemCount}/${result.visibleRecoveryProjectMenuItemCount}/${result.visibleUpdateMenuLabelCount}/${result.visibleUpdateCheckButtonCount}/${result.visibleUserTemplateMenuLabelCount}/${result.visibleUserTemplateActionCount} topbarProject=${result.topbarProjectActionCount}`
         : "";
       const keyboardSuffix = result.label.startsWith("control-edit-keyboard-")
         ? ` keyboard=${result.keyboardNavigationPassed ? 'pass' : 'fail'}`
@@ -24030,6 +24140,7 @@ async function main() {
             projectMenu: result.visibleProjectMenuCount,
             japaneseLanguage: result.visibleJapaneseLanguageLabelCount,
             japaneseSave: result.visibleJapaneseSaveButtonCount,
+            japaneseLoad: result.visibleJapaneseLoadButtonCount,
             preservedFixtures: result.preservedUserFixtureLabelCount,
             translatedFixtures: result.translatedUserFixtureCollisionCount,
           })),

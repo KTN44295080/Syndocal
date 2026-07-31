@@ -154,12 +154,25 @@ assert.ok(
 );
 assert.ok(
   workspaceChrome.includes('<header class="topbar" data-tauri-drag-region>') &&
+    workspaceChrome.includes('<div class="topbarLeft" data-tauri-drag-region ref={projectMenuRoot}>') &&
+    workspaceChrome.includes('<div class="status" data-tauri-drag-region>') &&
     workspaceChrome.includes("<strong data-tauri-drag-region>Syndocal</strong>") &&
     workspaceChrome.includes("<span data-tauri-drag-region>{props.projectLabel}</span>") &&
     workspaceChrome.includes('data-window-control="minimize"') &&
     workspaceChrome.includes('data-window-control="maximize"') &&
     workspaceChrome.includes('data-window-control="close"'),
-  "the T25-A topbar must own the drag region and all three browser-visible window controls",
+  "the T25-E topbar must expose each top-level empty background as a drag region and keep all three window controls",
+);
+assert.doesNotMatch(
+  workspaceChrome,
+  /<(?:button|input|select|textarea)\b[^>]*data-tauri-drag-region/,
+  "interactive topbar controls must not become native drag regions",
+);
+assert.ok(
+  workspaceChrome.includes('data-project-menu-action="save"') &&
+    workspaceChrome.includes('data-project-menu-action="load"') &&
+    !workspaceChrome.includes('class="projectAction"'),
+  "Save and Load must be absent from the topbar while remaining available in the project menu",
 );
 assert.ok(
   workspaceChrome.includes('aria-label="最小化"') &&

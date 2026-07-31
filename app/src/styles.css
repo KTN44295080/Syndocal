@@ -1150,22 +1150,9 @@ h3 {
   line-height: 1;
 }
 
-.projectAction {
-  border-color: #4b433c;
-  background: #1d1916;
-  color: #dbd1c8;
-  text-transform: uppercase;
-}
-
-.projectAction:hover {
-  border-color: #6c625a;
-  background: #302a25;
-}
-
 @media (max-width: 1520px) {
   .jitterMetric,
-  .bytesMetric,
-  .projectAction.secondary {
+  .bytesMetric {
     display: none;
   }
 }
@@ -19645,13 +19632,6 @@ h3 {
   font-variant-numeric: tabular-nums;
 }
 
-.projectAction {
-  border-color: #4d4741;
-  background: #292521;
-  color: #d9d1ca;
-  text-transform: uppercase;
-}
-
 .setupModeTabs,
 .controlModeTabs {
   min-height: 33px;
@@ -31262,7 +31242,6 @@ h3 {
 .status .bpmReadout,
 .status .pill,
 .status .metric,
-.status .projectAction,
 .status .topbarPulseMeter,
 .status .goButton {
   flex: 0 0 auto;

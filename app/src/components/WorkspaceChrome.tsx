@@ -210,7 +210,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
   return (
     <div class="workspaceChrome">
       <header class="topbar" data-tauri-drag-region>
-        <div class="topbarLeft" ref={projectMenuRoot}>
+        <div class="topbarLeft" data-tauri-drag-region ref={projectMenuRoot}>
           <button
             class={projectMenuOpen() ? "appMenuButton active" : "appMenuButton"}
             title="Project menu"
@@ -227,7 +227,12 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               <button role="menuitem" aria-keyshortcuts="Control+N Meta+N" onClick={() => runProjectMenuAction(props.onNewProject)}>
                 <span>New</span>
               </button>
-              <button role="menuitem" aria-keyshortcuts="Control+S Meta+S" onClick={() => runProjectMenuAction(props.onSaveProject)}>
+              <button
+                role="menuitem"
+                data-project-menu-action="save"
+                aria-keyshortcuts="Control+S Meta+S"
+                onClick={() => runProjectMenuAction(props.onSaveProject)}
+              >
                 <span>Save</span>
               </button>
               <button
@@ -237,7 +242,12 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               >
                 <span>Save As</span>
               </button>
-              <button role="menuitem" aria-keyshortcuts="Control+O Meta+O" onClick={() => runProjectMenuAction(props.onLoadProject)}>
+              <button
+                role="menuitem"
+                data-project-menu-action="load"
+                aria-keyshortcuts="Control+O Meta+O"
+                onClick={() => runProjectMenuAction(props.onLoadProject)}
+              >
                 <span>Load</span>
               </button>
               <button
@@ -480,8 +490,8 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
           {props.operations}
         </div>
 
-        <div class="status">
-          <div class="topbarMasterCluster" data-topbar-masters>
+        <div class="status" data-tauri-drag-region>
+          <div class="topbarMasterCluster" data-topbar-masters data-tauri-drag-region>
             <label
               class="topbarMasterControl"
               title={`${Math.round(props.lightingMaster * 100)}%`}
@@ -524,9 +534,9 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
           >
             GO
           </button>
-          <span class="bpmReadout">
-            <small>BPM</small>
-            <strong>{props.bpm.toFixed(0)}</strong>
+          <span class="bpmReadout" data-tauri-drag-region>
+            <small data-tauri-drag-region>BPM</small>
+            <strong data-tauri-drag-region>{props.bpm.toFixed(0)}</strong>
           </span>
           <button
             class="topbarTapButton"
@@ -547,28 +557,27 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
             peak={props.liveAudioInputPeak}
             onOpenSettings={props.onOpenLiveAudioInputSettings}
           />
-          <span class={props.blackout || props.videoBlackout ? "pill danger" : "pill ok"}>{liveLabel()}</span>
+          <span
+            class={props.blackout || props.videoBlackout ? "pill danger" : "pill ok"}
+            data-tauri-drag-region
+          >
+            {liveLabel()}
+          </span>
           <span
             class="metric tickMetric"
             title={`Engine ${props.tickMs} ms / jitter ${props.jitterUs} us / ${props.packetBytes} B`}
+            data-tauri-drag-region
           >
             {props.tickMs} ms
           </span>
-          <span class="metric outputMetric" title="Healthy DMX outputs / configured DMX outputs">
-            <small>DMX</small>
-            <strong>{props.dmxSuccessCount}/{props.dmxOutputCount}</strong>
-          </span>
-          <button class="projectAction" title="Save project (Ctrl/Cmd+S)" onClick={props.onSaveProject}>
-            Save
-          </button>
-          <button
-            class="projectAction"
-            title="Load project (Ctrl/Cmd+O)"
-            disabled={props.operatorLockMode !== null}
-            onClick={props.onLoadProject}
+          <span
+            class="metric outputMetric"
+            title="Healthy DMX outputs / configured DMX outputs"
+            data-tauri-drag-region
           >
-            Load
-          </button>
+            <small data-tauri-drag-region>DMX</small>
+            <strong data-tauri-drag-region>{props.dmxSuccessCount}/{props.dmxOutputCount}</strong>
+          </span>
         </div>
         <WindowControls />
       </header>
