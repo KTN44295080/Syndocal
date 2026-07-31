@@ -3561,6 +3561,7 @@ struct CueBody {
 struct RuntimeFade {
     cue_id: CueId,
     timeline_event_id: Option<TimelineEventId>,
+    apply_mib_on_complete: bool,
     started_at: Instant,
     duration: Duration,
     video_duration: Duration,
@@ -3818,6 +3819,8 @@ enum PendingCommandRollback {
         cue_list_effect_activation_cues: HashMap<CueListId, CueId>,
         active_group_cue_ids: HashMap<String, CueId>,
         cue_release_values: HashMap<CueId, HashMap<(FixtureId, String), u16>>,
+        values: HashMap<(FixtureId, String), u16>,
+        cue_value_origins: HashMap<(FixtureId, String), CueListId>,
         timeline_events: Vec<RuntimeTimelineEvent>,
         active_cue_id: Option<CueId>,
         active_fade: Option<RuntimeFade>,
@@ -4569,12 +4572,18 @@ impl EngineRuntime {
             }
         }
         self.cue_release_values.clear();
-        for cue_id in self
+        let mut active_release_cue_ids = self
             .active_group_cue_ids
             .values()
             .copied()
-            .collect::<Vec<_>>()
-        {
+            .collect::<HashSet<_>>();
+        active_release_cue_ids.extend(
+            self.cue_lists
+                .iter()
+                .filter_map(|cue_list| cue_list.active_cue_id),
+        );
+        active_release_cue_ids.extend(self.active_cue_id);
+        for cue_id in active_release_cue_ids {
             let Some(cue) = self.cues.iter().find(|cue| cue.id == cue_id).cloned() else {
                 continue;
             };
@@ -7089,6 +7098,8 @@ impl EngineRuntime {
                     cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
                     active_group_cue_ids: self.active_group_cue_ids.clone(),
                     cue_release_values: self.cue_release_values.clone(),
+                    values: self.values.clone(),
+                    cue_value_origins: self.cue_value_origins.clone(),
                     timeline_events: self.timeline_events.clone(),
                     active_cue_id: self.active_cue_id,
                     active_fade: self.active_fade.clone(),
@@ -7176,6 +7187,8 @@ impl EngineRuntime {
                     cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
                     active_group_cue_ids: self.active_group_cue_ids.clone(),
                     cue_release_values: self.cue_release_values.clone(),
+                    values: self.values.clone(),
+                    cue_value_origins: self.cue_value_origins.clone(),
                     timeline_events: self.timeline_events.clone(),
                     active_cue_id: self.active_cue_id,
                     active_fade: self.active_fade.clone(),
@@ -7228,6 +7241,8 @@ impl EngineRuntime {
                     cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
                     active_group_cue_ids: self.active_group_cue_ids.clone(),
                     cue_release_values: self.cue_release_values.clone(),
+                    values: self.values.clone(),
+                    cue_value_origins: self.cue_value_origins.clone(),
                     timeline_events: self.timeline_events.clone(),
                     active_cue_id: self.active_cue_id,
                     active_fade: self.active_fade.clone(),
@@ -7270,6 +7285,8 @@ impl EngineRuntime {
                     cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
                     active_group_cue_ids: self.active_group_cue_ids.clone(),
                     cue_release_values: self.cue_release_values.clone(),
+                    values: self.values.clone(),
+                    cue_value_origins: self.cue_value_origins.clone(),
                     timeline_events: self.timeline_events.clone(),
                     active_cue_id: self.active_cue_id,
                     active_fade: self.active_fade.clone(),
@@ -7324,6 +7341,8 @@ impl EngineRuntime {
                     cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
                     active_group_cue_ids: self.active_group_cue_ids.clone(),
                     cue_release_values: self.cue_release_values.clone(),
+                    values: self.values.clone(),
+                    cue_value_origins: self.cue_value_origins.clone(),
                     timeline_events: self.timeline_events.clone(),
                     active_cue_id: self.active_cue_id,
                     active_fade: self.active_fade.clone(),
@@ -7382,6 +7401,8 @@ impl EngineRuntime {
                     cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
                     active_group_cue_ids: self.active_group_cue_ids.clone(),
                     cue_release_values: self.cue_release_values.clone(),
+                    values: self.values.clone(),
+                    cue_value_origins: self.cue_value_origins.clone(),
                     timeline_events: self.timeline_events.clone(),
                     active_cue_id: self.active_cue_id,
                     active_fade: self.active_fade.clone(),
@@ -7424,6 +7445,8 @@ impl EngineRuntime {
                     cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
                     active_group_cue_ids: self.active_group_cue_ids.clone(),
                     cue_release_values: self.cue_release_values.clone(),
+                    values: self.values.clone(),
+                    cue_value_origins: self.cue_value_origins.clone(),
                     timeline_events: self.timeline_events.clone(),
                     active_cue_id: self.active_cue_id,
                     active_fade: self.active_fade.clone(),
@@ -7468,6 +7491,8 @@ impl EngineRuntime {
                     cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
                     active_group_cue_ids: self.active_group_cue_ids.clone(),
                     cue_release_values: self.cue_release_values.clone(),
+                    values: self.values.clone(),
+                    cue_value_origins: self.cue_value_origins.clone(),
                     timeline_events: self.timeline_events.clone(),
                     active_cue_id: self.active_cue_id,
                     active_fade: self.active_fade.clone(),
@@ -8047,7 +8072,9 @@ impl EngineRuntime {
                 }
             }
             EngineCommand::ReleaseCue(cue_id) => {
-                self.last_error = self.release_cue_state(cue_id).err();
+                self.last_error = self
+                    .release_cue_with_value_restore(cue_id, Instant::now())
+                    .err();
             }
             EngineCommand::SetCueFadePaused(paused) => {
                 self.set_active_fade_paused(paused, Instant::now());
@@ -8067,6 +8094,8 @@ impl EngineRuntime {
                     cue_list_effect_activation_cues: self.cue_list_effect_activation_cues.clone(),
                     active_group_cue_ids: self.active_group_cue_ids.clone(),
                     cue_release_values: self.cue_release_values.clone(),
+                    values: self.values.clone(),
+                    cue_value_origins: self.cue_value_origins.clone(),
                     timeline_events: self.timeline_events.clone(),
                     active_cue_id: self.active_cue_id,
                     active_fade: self.active_fade.clone(),
@@ -10155,6 +10184,8 @@ impl EngineRuntime {
                 cue_list_effect_activation_cues,
                 active_group_cue_ids,
                 cue_release_values,
+                values,
+                cue_value_origins,
                 timeline_events,
                 active_cue_id,
                 active_fade,
@@ -10170,6 +10201,8 @@ impl EngineRuntime {
                 self.cue_list_effect_activation_cues = cue_list_effect_activation_cues;
                 self.active_group_cue_ids = active_group_cue_ids;
                 self.cue_release_values = cue_release_values;
+                self.values = values;
+                self.cue_value_origins = cue_value_origins;
                 self.timeline_events = timeline_events;
                 self.active_cue_id = active_cue_id;
                 self.active_fade = active_fade;
@@ -13362,6 +13395,7 @@ impl EngineRuntime {
         self.active_fade = Some(RuntimeFade {
             cue_id: cue.id,
             timeline_event_id: Some(event.id),
+            apply_mib_on_complete: true,
             started_at: now,
             duration,
             video_duration: Duration::ZERO,
@@ -14249,6 +14283,8 @@ impl EngineRuntime {
         if !self.cues.iter().any(|cue| cue.id == cue_id) {
             return Err(format!("Cue {cue_id} was not found"));
         }
+        self.apply_active_fade(Instant::now());
+        let release_plan = self.cue_value_release_plan(cue_id);
         let removed_timeline_event_ids = self
             .timeline_events
             .iter()
@@ -14311,6 +14347,19 @@ impl EngineRuntime {
             }
         }
         self.pending_cues.retain(|pending| pending.cue_id != cue_id);
+        self.apply_cue_value_release_plan_immediately(release_plan);
+        Ok(())
+    }
+
+    fn release_cue_with_value_restore(
+        &mut self,
+        cue_id: CueId,
+        now: Instant,
+    ) -> Result<(), String> {
+        self.apply_active_fade(now);
+        let release_plan = self.cue_value_release_plan(cue_id);
+        self.release_cue_state(cue_id)?;
+        self.apply_cue_value_release_plan(cue_id, release_plan, now);
         Ok(())
     }
 
@@ -14353,9 +14402,15 @@ impl EngineRuntime {
         let Some(cue) = self.cues.iter().find(|cue| cue.id == cue_id) else {
             return CueValueReleasePlan::default();
         };
-        let Some(target_values) = self.cue_release_values.get(&cue_id).cloned() else {
+        let Some(mut target_values) = self.cue_release_values.get(&cue_id).cloned() else {
             return CueValueReleasePlan::default();
         };
+        target_values.retain(|key, _| {
+            !self
+                .cue_release_values
+                .iter()
+                .any(|(active_cue_id, values)| *active_cue_id != cue_id && values.contains_key(key))
+        });
         let timing = (Duration::ZERO, Duration::from_millis(cue.fade_ms));
         let attribute_timings = target_values
             .keys()
@@ -14364,6 +14419,62 @@ impl EngineRuntime {
         CueValueReleasePlan {
             target_values,
             attribute_timings,
+        }
+    }
+
+    fn apply_cue_value_release_plan(
+        &mut self,
+        cue_id: CueId,
+        release_plan: CueValueReleasePlan,
+        now: Instant,
+    ) {
+        if release_plan.target_values.is_empty() {
+            return;
+        }
+        let start_values = release_plan
+            .target_values
+            .keys()
+            .map(|key| (key.clone(), self.values.get(key).copied().unwrap_or(0)))
+            .collect::<HashMap<_, _>>();
+        let duration = release_plan
+            .attribute_timings
+            .values()
+            .map(|(delay, fade)| delay.saturating_add(*fade))
+            .max()
+            .unwrap_or(Duration::ZERO);
+        for key in release_plan.target_values.keys() {
+            self.cue_value_origins.remove(key);
+        }
+        if duration.is_zero() {
+            self.values.extend(release_plan.target_values);
+            return;
+        }
+        self.active_fade = Some(RuntimeFade {
+            cue_id,
+            timeline_event_id: None,
+            apply_mib_on_complete: false,
+            started_at: now,
+            duration,
+            video_duration: Duration::ZERO,
+            paused_at: None,
+            paused_duration: Duration::ZERO,
+            start_values,
+            target_values: release_plan.target_values,
+            attribute_timings: release_plan.attribute_timings,
+            video_start_states: HashMap::new(),
+            video_target_states: HashMap::new(),
+            video_layer_timings: HashMap::new(),
+            video_output_start_opacities: HashMap::new(),
+            video_output_target_opacities: HashMap::new(),
+            video_output_targets: HashMap::new(),
+            video_output_timings: HashMap::new(),
+        });
+    }
+
+    fn apply_cue_value_release_plan_immediately(&mut self, release_plan: CueValueReleasePlan) {
+        for (key, target) in release_plan.target_values {
+            self.cue_value_origins.remove(&key);
+            self.values.insert(key, target);
         }
     }
 
@@ -15849,8 +15960,6 @@ impl EngineRuntime {
             .group_id
             .as_ref()
             .and_then(|group_id| self.active_group_cue_ids.get(group_id).copied());
-        let same_group_retrigger = active_group_cue_id == Some(cue_id);
-
         let release_plan = if cue.recall_mode == RecallMode::ReplaceGroup {
             active_group_cue_id
                 .filter(|active_cue_id| *active_cue_id != cue_id)
@@ -15981,19 +16090,8 @@ impl EngineRuntime {
         target_values.extend(self.cue_palette_target_values(&cue.palette_targets));
         target_values.extend(cue_target_values(&cue.targets));
         let cue_target_keys = target_values.keys().cloned().collect::<HashSet<_>>();
-        let cue_release_values = cue_target_keys
-            .iter()
-            .map(|key| {
-                let value = release_plan
-                    .target_values
-                    .get(key)
-                    .copied()
-                    .or_else(|| self.values.get(key).copied())
-                    .unwrap_or_else(|| self.fixture_attribute_default(key).unwrap_or(0));
-                (key.clone(), value)
-            })
-            .collect();
-        if cue.group_id.is_some() && !same_group_retrigger {
+        if !self.cue_release_values.contains_key(&cue_id) {
+            let cue_release_values = self.cue_default_release_values(&cue);
             self.cue_release_values.insert(cue_id, cue_release_values);
         }
         for (key, value) in &release_plan.target_values {
@@ -16130,6 +16228,7 @@ impl EngineRuntime {
             self.active_fade = Some(RuntimeFade {
                 cue_id,
                 timeline_event_id: None,
+                apply_mib_on_complete: true,
                 started_at: now,
                 duration,
                 video_duration,
@@ -16815,13 +16914,16 @@ impl EngineRuntime {
         }
         if elapsed >= fade.duration {
             let cue_id = fade.cue_id;
+            let apply_mib_on_complete = fade.apply_mib_on_complete;
             if fade.timeline_event_id.is_some() {
                 for key in fade.target_values.keys() {
                     self.cue_value_origins.remove(key);
                 }
             }
             self.active_fade = None;
-            self.apply_mib_for_next_cue(cue_id);
+            if apply_mib_on_complete {
+                self.apply_mib_for_next_cue(cue_id);
+            }
         }
     }
 
@@ -29647,6 +29749,115 @@ mod tests {
             timeline.active_fade.as_ref().map(|fade| fade.duration),
             manual.active_fade.as_ref().map(|fade| fade.duration)
         );
+    }
+
+    #[test]
+    fn explicit_release_fades_static_cue_values_back_to_fixture_defaults() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        create_group_recall_cue(
+            &mut runtime,
+            1,
+            "Front",
+            RecallMode::Coexist,
+            1_000,
+            "Dimmer",
+            u16::MAX,
+            Vec::new(),
+        );
+        let started_at = Instant::now();
+        runtime.start_cue(1, started_at, PendingCueTriggerSource::Manual);
+        runtime.apply_active_fade(started_at + Duration::from_millis(1_000));
+        let before_release = runtime.render_dmx_frame_for_universe(0, started_at)[0];
+
+        runtime.apply_command(EngineCommand::ReleaseCue(1));
+        assert_eq!(runtime.last_error, None);
+        assert_eq!(runtime.active_cue_id, None);
+        assert!(!runtime.active_group_cue_ids.contains_key("Front"));
+        assert!(!runtime.cue_release_values.contains_key(&1));
+        let release_started_at = runtime
+            .active_fade
+            .as_ref()
+            .expect("explicit release must create the authored fade")
+            .started_at;
+
+        runtime.apply_active_fade(release_started_at + Duration::from_millis(500));
+        let during_release = runtime
+            .render_dmx_frame_for_universe(0, release_started_at + Duration::from_millis(500))[0];
+        runtime.apply_active_fade(release_started_at + Duration::from_millis(1_000));
+        let after_release = runtime
+            .render_dmx_frame_for_universe(0, release_started_at + Duration::from_millis(1_000))[0];
+
+        eprintln!(
+            "explicit release DMX bytes: before={before_release}, during={during_release}, after={after_release}"
+        );
+        assert_eq!(before_release, 255);
+        assert_eq!(during_release, 128);
+        assert_eq!(after_release, 0);
+        assert!(runtime.active_fade.is_none());
+    }
+
+    #[test]
+    fn explicit_release_does_not_stomp_attribute_held_by_another_group() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        create_group_recall_cue(
+            &mut runtime,
+            1,
+            "Front",
+            RecallMode::Coexist,
+            0,
+            "Dimmer",
+            20_000,
+            Vec::new(),
+        );
+        create_group_recall_cue(
+            &mut runtime,
+            2,
+            "Back",
+            RecallMode::Coexist,
+            0,
+            "Dimmer",
+            50_000,
+            Vec::new(),
+        );
+        let now = Instant::now();
+        runtime.start_cue(1, now, PendingCueTriggerSource::Manual);
+        runtime.start_cue(2, now, PendingCueTriggerSource::Manual);
+        let before_release = runtime.render_dmx_frame_for_universe(0, now)[0];
+
+        runtime.apply_command(EngineCommand::ReleaseCue(1));
+        let after_release = runtime.render_dmx_frame_for_universe(0, now)[0];
+
+        assert_eq!(runtime.last_error, None);
+        assert_eq!(before_release, 195);
+        assert_eq!(after_release, before_release);
+        assert!(!runtime.active_group_cue_ids.contains_key("Front"));
+        assert_eq!(runtime.active_group_cue_ids.get("Back"), Some(&2));
+        assert!(runtime.cue_release_values.contains_key(&2));
+        assert!(runtime.active_fade.is_none());
+    }
+
+    #[test]
+    fn removing_active_cue_restores_values_immediately_without_a_fade() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        create_group_recall_cue(
+            &mut runtime,
+            1,
+            "Front",
+            RecallMode::Coexist,
+            1_000,
+            "Dimmer",
+            u16::MAX,
+            Vec::new(),
+        );
+        let started_at = Instant::now();
+        runtime.start_cue(1, started_at, PendingCueTriggerSource::Manual);
+        runtime.apply_active_fade(started_at + Duration::from_millis(1_000));
+        assert_eq!(runtime.render_dmx_frame_for_universe(0, started_at)[0], 255);
+
+        runtime.remove_cue_state(1).unwrap();
+
+        assert_eq!(runtime.render_dmx_frame_for_universe(0, started_at)[0], 0);
+        assert!(runtime.active_fade.is_none());
     }
 
     fn test_lfo_request(
@@ -53508,11 +53719,16 @@ mod tests {
         ));
         assert_eq!(runtime.render_dmx_frame_for_universe(0, recalled_at)[0], 0);
 
+        assert!(
+            runtime.cue_value_release_plan(2).target_values.is_empty(),
+            "effect-only Cue must not claim static values for release"
+        );
         runtime.apply_command(EngineCommand::ReleaseCue(2));
         assert!(runtime.active_effect_activation_indices.is_empty());
         assert_eq!(
             runtime.render_dmx_frame_for_universe(0, recalled_at)[0],
-            (20_000_u16 >> 8) as u8
+            (20_000_u16 >> 8) as u8,
+            "effect-only release must reveal the untouched authored base value"
         );
         assert_eq!(runtime.cue_lists[0].active_cue_id, None);
         runtime.rebuild_effect_activations(recalled_at + Duration::from_millis(1));
