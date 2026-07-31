@@ -308,6 +308,11 @@ function mappingPickStateFromMeasurement(result) {
     visibleMappingSelectionFlagsCount: result.visibleMappingSelectionFlagsCount,
     visibleMappingSelectionFlagButtonCount: result.visibleMappingSelectionFlagButtonCount,
     visibleMappingNudgeButtonCount: result.visibleMappingNudgeButtonCount,
+    visibleMappingFixtureFlagRowCount: result.visibleMappingFixtureFlagRowCount,
+    visibleMappingFixtureCoordinateEditorCount: result.visibleMappingFixtureCoordinateEditorCount,
+    visibleMappingFixtureLimitsEditorCount: result.visibleMappingFixtureLimitsEditorCount,
+    visibleUpperPatchLimitsEditorCount: result.visibleUpperPatchLimitsEditorCount,
+    visibleUpperPatchCoordinateEditorCount: result.visibleUpperPatchCoordinateEditorCount,
     fixedPaneRects: {
       groups: result.persistentBandRects?.groups ?? null,
       stage: result.persistentBandRects?.stage ?? null,
@@ -322,8 +327,13 @@ function hasVisibleMappingPickState(state) {
     state.mappingOpenSceneFxButtonCount === 1 &&
     state.visibleMappingOpenSceneFxButtonCount === 1 &&
     state.visibleMappingSelectionFlagsCount === 1 &&
-    state.visibleMappingSelectionFlagButtonCount >= 3 &&
-    state.visibleMappingNudgeButtonCount === 4
+    state.visibleMappingSelectionFlagButtonCount === 3 &&
+    state.visibleMappingNudgeButtonCount === 4 &&
+    state.visibleMappingFixtureFlagRowCount === 1 &&
+    state.visibleMappingFixtureCoordinateEditorCount === 1 &&
+    state.visibleMappingFixtureLimitsEditorCount === 1 &&
+    state.visibleUpperPatchLimitsEditorCount === 0 &&
+    state.visibleUpperPatchCoordinateEditorCount === 0
   );
 }
 
@@ -334,7 +344,12 @@ function hasHiddenMappingPickState(state) {
     state.visibleMappingOpenSceneFxButtonCount === 0 &&
     state.visibleMappingSelectionFlagsCount === 0 &&
     state.visibleMappingSelectionFlagButtonCount === 0 &&
-    state.visibleMappingNudgeButtonCount === 0
+    state.visibleMappingNudgeButtonCount === 0 &&
+    state.visibleMappingFixtureFlagRowCount === 0 &&
+    state.visibleMappingFixtureCoordinateEditorCount === 0 &&
+    state.visibleMappingFixtureLimitsEditorCount === 0 &&
+    state.visibleUpperPatchLimitsEditorCount === 0 &&
+    state.visibleUpperPatchCoordinateEditorCount === 0
   );
 }
 
@@ -6730,6 +6745,33 @@ async function measure(client, label) {
       visibleMappingNudgeButtonCount: visibleCount(
         '.setupContextPane [data-mapping-selection-flags] .mappingNudgeGrid button'
       ),
+      visibleMappingFixtureFlagRowCount: visibleCount(
+        '.setupContextPane [data-mapping-fixture-flag-row]'
+      ),
+      visibleMappingFixtureCoordinateEditorCount: visibleCount(
+        '.setupContextPane [data-fixture-coordinate-editor]'
+      ),
+      visibleMappingFixtureLimitsEditorCount: visibleCount(
+        '.setupContextPane [data-fixture-limits-editor]'
+      ),
+      visibleUpperPatchLimitsEditorCount: visibleCount(
+        '.fixtureSetupContextPane [data-fixture-limits-editor]'
+      ),
+      visibleUpperPatchCoordinateEditorCount: visibleCount(
+        '.fixtureSetupContextPane [data-fixture-coordinate-editor]'
+      ),
+      visibleGdtfGeometryDisclosureCount: visibleCount(
+        '.setupContextPane [data-gdtf-geometry-disclosure]'
+      ),
+      visibleOpenGdtfGeometryDisclosureCount: visibleCount(
+        '.setupContextPane [data-gdtf-geometry-disclosure][open]'
+      ),
+      visibleFixtureCoordinateAdvancedDisclosureCount: visibleCount(
+        '.setupContextPane [data-fixture-coordinate-advanced]'
+      ),
+      visibleOpenFixtureCoordinateAdvancedDisclosureCount: visibleCount(
+        '.setupContextPane [data-fixture-coordinate-advanced][open]'
+      ),
       visibleMappingLowerBandInteractiveControlCount: visibleElements(
         '.layoutSetup .mappingPersistentWorkspaceBand button, ' +
         '.layoutSetup .mappingPersistentWorkspaceBand input, ' +
@@ -11395,6 +11437,14 @@ async function readPatchZoningState(client) {
       return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
     };
     const visibleMatches = (selector) => [...document.querySelectorAll(selector)].filter(visible);
+    const visibleInteractiveControlCountWithin = (selector) => {
+      const root = document.querySelector(selector);
+      if (!(root instanceof HTMLElement)) return 0;
+      return [...root.querySelectorAll('button, input, select, summary')]
+        .filter(visible)
+        .filter((element) => !element.matches('.dmxAddressCell'))
+        .length;
+    };
     const importDisclosure = document.querySelector('[data-profile-import-disclosure]');
     const placementDisclosure = document.querySelector('[data-patch-placement-disclosure]');
     const universeDisclosure = document.querySelector('[data-dmx-universe-disclosure]');
@@ -11438,6 +11488,43 @@ async function readPatchZoningState(client) {
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'use profile for patch').length,
       duplicateFixtureCount: visibleMatches('.fixtureSetupEditor button')
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'duplicate fixture').length,
+      lowerSingleFixtureDuplicateCount: visibleMatches(
+        '[data-workspace-pane="lower-right"] .mappingControlShortcuts button'
+      ).filter((button) => (button.textContent || '').trim().toLowerCase() === 'duplicate').length,
+      patchIdentityEditorCount: visibleMatches('.fixtureSetupContextPane [data-fixture-patch-identity-editor]').length,
+      upperLimitsEditorCount: visibleMatches('.fixtureSetupContextPane [data-fixture-limits-editor]').length,
+      upperCoordinateEditorCount: visibleMatches('.fixtureSetupContextPane [data-fixture-coordinate-editor]').length,
+      lowerLimitsEditorCount: visibleMatches('[data-workspace-pane="lower-right"] [data-fixture-limits-editor]').length,
+      lowerFixtureFlagRowCount: visibleMatches('[data-workspace-pane="lower-right"] [data-mapping-fixture-flag-row]').length,
+      lowerFixtureFlagButtonCount: visibleMatches(
+        '[data-workspace-pane="lower-right"] [data-mapping-fixture-flag-row] button'
+      ).length,
+      lowerCoordinateEditorCount: visibleMatches(
+        '[data-workspace-pane="lower-right"] [data-fixture-coordinate-editor]'
+      ).length,
+      coordinateAdvancedDisclosureCount: visibleMatches(
+        '[data-workspace-pane="lower-right"] [data-fixture-coordinate-advanced]'
+      ).length,
+      coordinateAdvancedOpenCount: visibleMatches(
+        '[data-workspace-pane="lower-right"] [data-fixture-coordinate-advanced][open]'
+      ).length,
+      coordinateAdvancedControlCount: visibleMatches(
+        '[data-workspace-pane="lower-right"] [data-fixture-coordinate-advanced] input, ' +
+        '[data-workspace-pane="lower-right"] [data-fixture-coordinate-advanced] button'
+      ).length,
+      gdtfGeometryDisclosureCount: visibleMatches(
+        '[data-workspace-pane="lower-right"] [data-gdtf-geometry-disclosure]'
+      ).length,
+      gdtfGeometryDisclosureOpenCount: visibleMatches(
+        '[data-workspace-pane="lower-right"] [data-gdtf-geometry-disclosure][open]'
+      ).length,
+      visibleGdtfGeometryRowCount: visibleMatches(
+        '[data-workspace-pane="lower-right"] [data-gdtf-geometry-disclosure] .mappingGeometryRow'
+      ).length,
+      selectedProfileFamily: document.querySelector('[data-fixture-profile-family]')
+        ?.getAttribute('data-fixture-profile-family') || '',
+      upperRightVisibleControlCount: visibleInteractiveControlCountWithin('.fixtureSetupContextPane'),
+      lowerRightVisibleControlCount: visibleInteractiveControlCountWithin('[data-workspace-pane="lower-right"]'),
       alwaysVisibleControlCount: visibleMatches(
         '.layoutSetup.setupMode-patch button, ' +
         '.layoutSetup.setupMode-patch input, ' +
@@ -11482,6 +11569,11 @@ async function checkPatchZoning(client) {
   await sleep(50);
   const selected = await readPatchZoningState(client);
 
+  await clickVisibleSelector(client, '[data-workspace-pane="lower-right"] [data-fixture-coordinate-advanced] > summary');
+  await sleep(50);
+  const coordinateAdvancedOpen = await readPatchZoningState(client);
+  await clickVisibleSelector(client, '[data-workspace-pane="lower-right"] [data-fixture-coordinate-advanced] > summary');
+
   const checks = {
     disclosuresDefaultCollapsed:
       initial.importDisclosureCount === 1 &&
@@ -11525,7 +11617,26 @@ async function checkPatchZoning(client) {
       selected.fixtureEditorCount === 1 &&
       selected.fixtureEmptyStateCount === 0 &&
       selected.useProfileForPatchCount === 1 &&
-      selected.duplicateFixtureCount === 1,
+      selected.duplicateFixtureCount === 1 &&
+      selected.lowerSingleFixtureDuplicateCount === 0 &&
+      selected.patchIdentityEditorCount === 1 &&
+      selected.upperLimitsEditorCount === 0 &&
+      selected.upperCoordinateEditorCount === 0,
+    selectedFixtureFunctionsUnique:
+      selected.lowerLimitsEditorCount === 1 &&
+      selected.lowerFixtureFlagRowCount === 1 &&
+      selected.lowerFixtureFlagButtonCount === 3 &&
+      selected.lowerCoordinateEditorCount === 1,
+    selectedFixtureDisclosuresDefaultCollapsed:
+      selected.coordinateAdvancedDisclosureCount === 1 &&
+      selected.coordinateAdvancedOpenCount === 0 &&
+      selected.coordinateAdvancedControlCount === 0 &&
+      selected.gdtfGeometryDisclosureCount === 1 &&
+      selected.gdtfGeometryDisclosureOpenCount === 0 &&
+      selected.visibleGdtfGeometryRowCount === 0,
+    advancedCoordinateControlsRemainReachable:
+      coordinateAdvancedOpen.coordinateAdvancedOpenCount === 1 &&
+      coordinateAdvancedOpen.coordinateAdvancedControlCount === 5,
   };
   const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
   return {
@@ -11538,6 +11649,82 @@ async function checkPatchZoning(client) {
     universeOpen,
     noSelection,
     selected,
+    coordinateAdvancedOpen,
+  };
+}
+
+async function checkPatchFixtureFamilySweep(client) {
+  await client.send("Page.navigate", { url: fixtureUrl("mapping-live-color") });
+  await waitForApp(client);
+  await clickByText(client, "Setup");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
+  await sleep(120);
+
+  const families = [];
+  for (let fixtureId = 1; fixtureId <= 9; fixtureId += 1) {
+    const selected = await client.evaluate(`(() => {
+      if (typeof window.__syndocalSetControlFixtureSelection !== 'function') return false;
+      window.__syndocalSetControlFixtureSelection([${fixtureId}], ${fixtureId}, 'front');
+      return true;
+    })()`);
+    await sleep(40);
+    const state = await readPatchZoningState(client);
+    const checks = {
+      selected,
+      familyIdentified: state.selectedProfileFamily.length > 0,
+      patchIdentityOnly:
+        state.patchIdentityEditorCount === 1 &&
+        state.duplicateFixtureCount === 1 &&
+        state.lowerSingleFixtureDuplicateCount === 0 &&
+        state.upperLimitsEditorCount === 0 &&
+        state.upperCoordinateEditorCount === 0,
+      fixtureFunctionsUnique:
+        state.lowerLimitsEditorCount === 1 &&
+        state.lowerFixtureFlagRowCount === 1 &&
+        state.lowerFixtureFlagButtonCount === 3 &&
+        state.lowerCoordinateEditorCount === 1,
+      disclosuresDefaultCollapsed:
+        state.coordinateAdvancedDisclosureCount === 1 &&
+        state.coordinateAdvancedOpenCount === 0 &&
+        state.gdtfGeometryDisclosureCount === 1 &&
+        state.gdtfGeometryDisclosureOpenCount === 0 &&
+        state.visibleGdtfGeometryRowCount === 0,
+    };
+    families.push({
+      fixtureId,
+      profileFamily: state.selectedProfileFamily,
+      checks,
+      passed: Object.values(checks).every(Boolean),
+    });
+  }
+
+  await client.evaluate(`window.__syndocalSetControlFixtureSelection?.([5], 5, 'front')`);
+  await sleep(40);
+  await clickVisibleSelector(
+    client,
+    '[data-workspace-pane="lower-right"] [data-gdtf-geometry-disclosure] > summary',
+  );
+  await sleep(40);
+  const gdtfGeometryOpen = await readPatchZoningState(client);
+  const uniqueProfileFamilies = [...new Set(families.map((entry) => entry.profileFamily))];
+  const checks = {
+    allFixtureIdsCovered: families.length === 9 && families.every((entry, index) => entry.fixtureId === index + 1),
+    everyFamilyPassed: families.every((entry) => entry.passed),
+    everyProfilePathCovered: uniqueProfileFamilies.length === 9,
+    gdtfGeometryRemainsReachable:
+      gdtfGeometryOpen.gdtfGeometryDisclosureCount === 1 &&
+      gdtfGeometryOpen.gdtfGeometryDisclosureOpenCount === 1 &&
+      gdtfGeometryOpen.visibleGdtfGeometryRowCount === 3,
+  };
+  const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  return {
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    families,
+    uniqueProfileFamilies,
+    gdtfGeometryOpen,
   };
 }
 
@@ -11565,12 +11752,14 @@ async function runPatchViewport(client, viewport) {
   const containment = await measure(client, `setup-patch-${viewport.width}x${viewport.height}`);
   const zoning = await checkPatchZoning(client);
   const highAddressAction = await checkPatchHighAddressAction(client);
+  const fixtureFamilySweep = await checkPatchFixtureFamilySweep(client);
   const checks = {
     contained: isContained(containment),
     setupSurface: hasExpectedSetupSurface(containment),
     continuousGrid: hasExpectedContinuousPatchGrid(containment),
     zoning: zoning.passed === true,
     highAddressAction: highAddressAction.passed === true,
+    fixtureFamilySweep: fixtureFamilySweep.passed === true,
   };
   const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
   return {
@@ -11581,6 +11770,7 @@ async function runPatchViewport(client, viewport) {
     containment,
     zoning,
     highAddressAction,
+    fixtureFamilySweep,
   };
 }
 
@@ -22769,6 +22959,15 @@ async function main() {
               `${result.stageBand.stageBandPickStates.clearControl.action} ` +
             `pick=${result.stageBand.stageBandPickStates.picked.visibleMappingSelectionFlagsCount}->` +
               `${result.stageBand.stageBandPickStates.cleared.visibleMappingSelectionFlagsCount} ` +
+            `unique=${[
+              result.stageBand.stageBandPickStates.picked.visibleMappingFixtureFlagRowCount,
+              result.stageBand.stageBandPickStates.picked.visibleMappingFixtureCoordinateEditorCount,
+              result.stageBand.stageBandPickStates.picked.visibleMappingFixtureLimitsEditorCount,
+            ].join("/")}->${[
+              result.stageBand.stageBandPickStates.cleared.visibleMappingFixtureFlagRowCount,
+              result.stageBand.stageBandPickStates.cleared.visibleMappingFixtureCoordinateEditorCount,
+              result.stageBand.stageBandPickStates.cleared.visibleMappingFixtureLimitsEditorCount,
+            ].join("/")} ` +
             `neutral=${result.stageBand.stageBandPickStates.traversalRestored.setupPatchActive}/` +
               `${result.stageBand.stageBandPickStates.traversalRestored.ioAreaReachable}/` +
               `${result.stageBand.stageBandPickStates.traversalRestored.legacyMappingExpansionMarkerCount}/` +
@@ -22983,6 +23182,10 @@ async function main() {
             `keys=${metrics?.arrowRightAddress ?? "?"}/${metrics?.arrowDownAddress ?? "?"}/${metrics?.controlEndAddress ?? "?"} ` +
             `keyVisible=${metrics?.controlEndFullyVisible ? 1 : 0} ` +
             `alwaysVisibleControls=${result.containment.visibleSetupPatchInteractiveControlCount ?? "?"}/${result.zoning.noSelection.alwaysVisibleControlCount ?? "?"} ` +
+            `paneControls=${result.zoning.selected.upperRightVisibleControlCount ?? "?"}/${result.zoning.selected.lowerRightVisibleControlCount ?? "?"} ` +
+            `families=${result.fixtureFamilySweep.uniqueProfileFamilies.length}/${result.fixtureFamilySweep.families.length} ` +
+            `unique=${result.zoning.selected.lowerFixtureFlagRowCount}/${result.zoning.selected.lowerCoordinateEditorCount} ` +
+            `gdtf=${result.fixtureFamilySweep.gdtfGeometryOpen.gdtfGeometryDisclosureOpenCount}/${result.fixtureFamilySweep.gdtfGeometryOpen.visibleGdtfGeometryRowCount} ` +
             `high=${result.highAddressAction.addressValue ?? "?"}:${result.highAddressAction.plannedHighAddresses?.join(",") ?? "?"} ` +
             `zoningFailed=${JSON.stringify(result.zoning.failedChecks)} failed=${JSON.stringify(result.failedChecks)}`,
         );
@@ -23064,6 +23267,15 @@ async function main() {
               result.setupStageBand.stageBandPickStates.cleared.visibleMappingSelectionFlagsCount,
               result.setupStageBand.stageBandPickStates.cleared.visibleMappingSelectionFlagButtonCount,
               result.setupStageBand.stageBandPickStates.cleared.visibleMappingNudgeButtonCount,
+            ].join("/")} ` +
+            `unique=${[
+              result.setupStageBand.stageBandPickStates.picked.visibleMappingFixtureFlagRowCount,
+              result.setupStageBand.stageBandPickStates.picked.visibleMappingFixtureCoordinateEditorCount,
+              result.setupStageBand.stageBandPickStates.picked.visibleMappingFixtureLimitsEditorCount,
+            ].join("/")}->${[
+              result.setupStageBand.stageBandPickStates.cleared.visibleMappingFixtureFlagRowCount,
+              result.setupStageBand.stageBandPickStates.cleared.visibleMappingFixtureCoordinateEditorCount,
+              result.setupStageBand.stageBandPickStates.cleared.visibleMappingFixtureLimitsEditorCount,
             ].join("/")} ` +
             `fixedPanes=${mappingFixedPaneRectsUnchanged(
               result.setupStageBand.stageBandPickStates.picked,

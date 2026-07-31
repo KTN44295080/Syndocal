@@ -7,6 +7,7 @@ import type {
   VideoOutputSummary,
 } from "../types";
 import { MappingFixtureTypeStrip } from "./MappingFilterStrips";
+import { FixtureLimitsPanel } from "./FixtureLimitsPanel";
 import { MappingFixtureInspectorPanel, type MappingFixtureGeometryRow } from "./MappingFixtureInspectorPanel";
 import { MappingFixtureListPanel, MappingFixtureSelectionToolsPanel } from "./MappingFixtureSelectionPanel";
 import { MappingProjectorSelectionPanel } from "./MappingProjectorSelectionPanel";
@@ -47,6 +48,7 @@ export interface MappingSelectionPanelProps {
   selectedFixture: PatchedFixtureSummary | null;
   selectedGeometryRows: MappingFixtureGeometryRow[];
   unresolvedGeometryReferences: string[];
+  fixtureLimitsEditor: ComponentProps<typeof FixtureLimitsPanel> | null;
   filteredFixtures: PatchedFixtureSummary[];
   selectedFixtureIds: Set<number>;
   outputs: VideoOutputSummary[];
@@ -78,15 +80,13 @@ export interface MappingSelectionPanelProps {
   onDistributeSelection: (axis: MappingAxis) => MaybePromise;
   onMirrorSelection: (axis: MappingAxis) => MaybePromise;
   onRotateSelection: (degrees: number) => MaybePromise;
+  onLayoutFixtures: (mode: MappingFixtureLayoutMode) => MaybePromise;
   onControlActive: () => void;
   onOpenSceneFx: () => void;
   onSetFixtureTransform: (
     fixture: PatchedFixtureSummary,
     updates: Partial<Pick<PatchedFixtureSummary, "position" | "rotation">>,
   ) => MaybePromise;
-  onSetFixtureHighlight: (fixtureId: number, enabled: boolean) => MaybePromise;
-  onSetFixtureSolo: (fixtureId: number, enabled: boolean) => MaybePromise;
-  onSetFixturePark: (fixtureId: number, enabled: boolean) => MaybePromise;
   onControlFixture: () => void;
   onPatchFixture: () => void;
   onSelectFixture: (fixture: PatchedFixtureSummary, event: MappingSelectionEvent) => void;
@@ -202,6 +202,9 @@ export function MappingSetupContextPanel(props: MappingSelectionPanelProps) {
         onPickInside={props.onPickInsideStageObject}
         onLayoutOnObject={props.onLayoutOnStageObject}
       />
+      <Show when={props.fixtureLimitsEditor}>
+        {(fixtureLimitsEditor) => <FixtureLimitsPanel {...fixtureLimitsEditor()} />}
+      </Show>
       <MappingSelectionActionsPanel
         flagState={props.flagState}
         selectedCount={props.selectedFixtureCount}
@@ -225,13 +228,11 @@ export function MappingSetupContextPanel(props: MappingSelectionPanelProps) {
         fixture={props.selectedFixture}
         geometryRows={props.selectedGeometryRows}
         unresolvedGeometryReferences={props.unresolvedGeometryReferences}
+        filteredFixtureCount={props.filteredFixtureCount}
         onSetTransform={props.onSetFixtureTransform}
-        onSetHighlight={props.onSetFixtureHighlight}
-        onSetSolo={props.onSetFixtureSolo}
-        onSetPark={props.onSetFixturePark}
+        onLayoutFixtures={props.onLayoutFixtures}
         onControl={props.onControlFixture}
         onPatch={props.onPatchFixture}
-        onDuplicate={props.onDuplicateSelected}
         onRemove={props.onRemoveSelected}
       />
       <MappingProjectorSelectionPanel

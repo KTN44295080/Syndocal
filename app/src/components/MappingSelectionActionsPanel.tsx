@@ -43,7 +43,7 @@ export function MappingSelectionActionsPanel(props: MappingSelectionActionsPanel
             <strong>Selection Flags</strong>
             <span>{props.flagState.count} fixture(s) picked</span>
           </div>
-          <div class="mappingFlagActions">
+          <div class="mappingFlagActions" data-mapping-fixture-flag-row>
             <button
               class={props.flagState.allHighlighted ? "active" : ""}
               onClick={() => void props.onSetFlag("highlight", !props.flagState.allHighlighted)}

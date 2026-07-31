@@ -7997,6 +7997,46 @@ progress {
   min-height: 26px;
 }
 
+.mappingFixtureCoordinateEditor {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  border: 1px solid #332d28;
+  border-radius: 4px;
+  background: #1d1915;
+  padding: 7px;
+}
+
+.mappingFixtureCoordinateEditor > strong {
+  color: #f1e8df;
+  font-size: 12px;
+}
+
+.mappingCoordinateAdvanced > summary,
+.mappingGeometrySummary > summary {
+  min-width: 0;
+  cursor: pointer;
+}
+
+.mappingCoordinateAdvanced > summary {
+  color: #b8aea5;
+  font-size: 11px;
+}
+
+.mappingCoordinateAdvanced[open] > summary {
+  margin-bottom: 7px;
+  color: #ffffff;
+}
+
+.mappingCoordinateAdvanced[open] > .mappingTransformGrid {
+  margin-bottom: 7px;
+}
+
+.mappingCoordinateAdvanced:not([open]) > .mappingTransformGrid,
+.mappingCoordinateAdvanced:not([open]) > .presetRow {
+  display: none;
+}
+
 .mappingGeometrySummary {
   display: grid;
   gap: 7px;
@@ -8004,6 +8044,32 @@ progress {
   border-radius: 4px;
   background: #1d1915;
   padding: 7px;
+}
+
+.mappingGeometrySummary > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+}
+
+.mappingGeometrySummary[open] > summary {
+  padding-bottom: 7px;
+  border-bottom: 1px solid #332d28;
+}
+
+.mappingGeometryDisclosureBody {
+  display: grid;
+  gap: 7px;
+}
+
+.mappingGeometrySummary:not([open]) > .mappingGeometryDisclosureBody {
+  display: none;
+}
+
+.mappingSetupContextContent > .fixtureLimitsEditor {
+  border-width: 0 0 1px;
+  border-radius: 0;
 }
 
 .mappingGeometryList {

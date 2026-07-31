@@ -2867,6 +2867,7 @@ export default function App() {
     viewportFixture === "patch"
     || viewportFixture === "edit-live"
     || viewportFixture === "live-edit-types"
+    || viewportFixture === "mapping-live-color"
     || viewportFixture === "workspace-operator"
   ) {
     sceneBlockFixtureWindow.__syndocalSetControlFixtureSelection = (
@@ -16866,12 +16867,6 @@ export default function App() {
             universeDraft: selectedFixtureUniverseDraft(),
             addressDraft: selectedFixtureAddressDraft(),
             groupText: selectedFixtureGroupText(),
-            limitsDraft: selectedFixtureLimitsDraft(),
-            normalizedLimits: normalizedSelectedFixtureLimitsDraft(),
-            limitWindowStyle: selectedFixtureLimitWindowStyle(),
-            movementLimitDragging: Boolean(movementLimitDrag()),
-            filteredFixtureCount: filteredFixtures().length,
-            formatDmxPercent,
             onUseProfileForPatch: useFixtureProfileForPatch,
             onDuplicateFixture: duplicateFixture,
             onLabelDraft: setSelectedFixtureLabelDraft,
@@ -16880,15 +16875,6 @@ export default function App() {
             onApplyPatch: setFixturePatch,
             onGroupText: setSelectedFixtureGroupText,
             onApplyGroups: setFixtureGroups,
-            onUpdateNumericLimit: (field, value) => updateSelectedFixtureLimit(field, value),
-            onUpdateToggleLimit: (field, value) => updateSelectedFixtureLimit(field, value),
-            onResetLimits: () => setSelectedFixtureLimitsDraft(defaultFixtureLimits),
-            onApplyLimits: setFixtureLimits,
-            onMovementLimitPointerDown: startMovementLimitDrag,
-            onMovementLimitPointerMove: dragMovementLimit,
-            onMovementLimitPointerEnd: endMovementLimitDrag,
-            onSetTransform: setFixtureTransform,
-            onLayoutFixtures: layoutFixturePositions,
           } : null}
         />
         </Show>
@@ -17545,6 +17531,21 @@ export default function App() {
             selectedFixture: selectedMappingFixture(),
             selectedGeometryRows: selectedMappingGeometryRows(),
             unresolvedGeometryReferences: selectedMappingUnresolvedGeometryReferences(),
+            fixtureLimitsEditor: selectedMappingFixture() ? {
+              fixture: selectedMappingFixture()!,
+              limitsDraft: selectedFixtureLimitsDraft(),
+              normalizedLimits: normalizedSelectedFixtureLimitsDraft(),
+              limitWindowStyle: selectedFixtureLimitWindowStyle(),
+              movementLimitDragging: Boolean(movementLimitDrag()),
+              formatDmxPercent,
+              onUpdateNumericLimit: (field, value) => updateSelectedFixtureLimit(field, value),
+              onUpdateToggleLimit: (field, value) => updateSelectedFixtureLimit(field, value),
+              onResetLimits: () => setSelectedFixtureLimitsDraft(defaultFixtureLimits),
+              onApplyLimits: setFixtureLimits,
+              onMovementLimitPointerDown: startMovementLimitDrag,
+              onMovementLimitPointerMove: dragMovementLimit,
+              onMovementLimitPointerEnd: endMovementLimitDrag,
+            } : null,
             filteredFixtures: mappingFilteredFixtures(),
             selectedFixtureIds: selectedMappingFixtureIdSet(),
             outputs: snapshot().video.outputs,
@@ -17576,12 +17577,10 @@ export default function App() {
             onDistributeSelection: distributeSelectedMappingFixtures,
             onMirrorSelection: mirrorSelectedMappingFixtures,
             onRotateSelection: rotateSelectedMappingFixtures,
+            onLayoutFixtures: layoutFixturePositions,
             onControlActive: () => setWorkspaceTab("control"),
             onOpenSceneFx: openSceneFxFromMapping,
             onSetFixtureTransform: setFixtureTransform,
-            onSetFixtureHighlight: setFixtureHighlight,
-            onSetFixtureSolo: setFixtureSolo,
-            onSetFixturePark: setFixturePark,
             onControlFixture: () => setWorkspaceTab("control"),
             onPatchFixture: () => selectSetupMode("patch"),
             onSelectFixture: selectMappingFixture,
