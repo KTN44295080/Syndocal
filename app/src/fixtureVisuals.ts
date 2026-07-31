@@ -1,6 +1,7 @@
 // Fixture visual-kind classification and mapping-stage label/size helpers extracted from App.tsx.
 // Pure functions over PatchedFixtureSummary; no SolidJS/state deps.
 import type { PatchedFixtureSummary } from "./types";
+import { stagePadding, stageViewBoxSize, type StageWorldBounds } from "./stageGeometry";
 
 export type MappingFixtureVisualKind = "point" | "moving" | "bar" | "panel" | "laser" | "par";
 
@@ -25,20 +26,28 @@ export const fixtureVisualKind = (fixture: PatchedFixtureSummary): MappingFixtur
   return "point";
 };
 
-// The stage minor grid is five SVG units. A fixture owns one complete grid cell,
-// and multi-cell fixtures extend by one adjacent cell per independently rendered
-// segment. visualKind remains part of the signature for call-site readability;
-// facing marks and CSS still provide the type distinction.
+// A standard fixture is five stage-world units, capped at one existing five-SVG-
+// unit minor-grid cell on compact stages. Broad imported stages scale the glyph
+// down with their world bounds so fixture spacing and glyph size stay comparable.
+// Multi-cell fixtures extend by one adjacent cell per rendered segment.
 export const mappingFixtureGridUnit = 5;
 export const mappingFixtureCellGap = 0.6;
 export const mappingFixtureCellInkSize = mappingFixtureGridUnit - mappingFixtureCellGap;
 
+export const mappingFixtureWorldToSvgScale = (bounds: StageWorldBounds) => {
+  const drawableSize = stageViewBoxSize - stagePadding * 2;
+  const scaleX = drawableSize / Math.max(Number.EPSILON, bounds.maxX - bounds.minX);
+  const scaleZ = drawableSize / Math.max(Number.EPSILON, bounds.maxZ - bounds.minZ);
+  return Math.min(1, scaleX, scaleZ);
+};
+
 export const mappingFixtureStageSize = (
   _visualKind: MappingFixtureVisualKind,
   segmentCount = 1,
+  worldToSvgScale = 1,
 ) => ({
-  width: mappingFixtureGridUnit * Math.max(1, Math.floor(segmentCount)),
-  height: mappingFixtureGridUnit,
+  width: mappingFixtureGridUnit * worldToSvgScale * Math.max(1, Math.floor(segmentCount)),
+  height: mappingFixtureGridUnit * worldToSvgScale,
 });
 
 export const fixtureTypeKey = (fixture: PatchedFixtureSummary) =>

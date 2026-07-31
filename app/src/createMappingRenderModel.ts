@@ -9,8 +9,8 @@ import { readFixtureAttribute } from "./fixtureControlRuntime";
 import {
   fixtureTypeKey,
   fixtureVisualKind,
-  mappingFixtureGridUnit,
   mappingFixtureStageSize,
+  mappingFixtureWorldToSvgScale,
 } from "./fixtureVisuals";
 import {
   mappingGeometryClass,
@@ -330,6 +330,7 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
       return [];
     }
     const bounds = options.stageWorldBounds();
+    const fixtureWorldToSvgScale = mappingFixtureWorldToSvgScale(bounds);
     const currentValues = options.faderValues();
     const groupFilter = options.selectedFixtureGroupFilter();
     return fixtures.map((fixture) => {
@@ -352,6 +353,7 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
       const size = mappingFixtureStageSize(
         visualKind,
         Math.max(1, fixtureSegmentSkeleton(fixture).length),
+        fixtureWorldToSvgScale,
       );
       return {
         id: fixture.id,
@@ -416,7 +418,8 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
         : undefined;
       const beams = live && liveSegments
         ? liveSegments.map((segment, index) => {
-            const localX = (index - (liveSegments.length - 1) / 2) * mappingFixtureGridUnit;
+            const cellPitch = base.width / liveSegments.length;
+            const localX = (index - (liveSegments.length - 1) / 2) * cellPitch;
             const offset = rotateStageOffsetYaw({ x: localX, z: 0 }, base.yaw);
             const x = base.x + offset.x;
             const z = base.z + offset.z;

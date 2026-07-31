@@ -16,8 +16,8 @@ use protocol::{
     DmxUniversePreview, EffectBlendMode, EffectClockSync, EffectParamsSnapshot, EngineSnapshot,
     FixtureProfileSummary, GeometrySummary, LfoEffectRequest, LfoShape, MoveCoordinateMode,
     MoveDirection, MoveEffectRequest, MoveInterpolation, MovePathPoint, PatchedFixtureSummary,
-    ProjectFile, Rotation3, TimelineAudioClipSummary, TimelineCueEventSummary, TimelineLayerKind,
-    TimelineLayerSummary, TimelineTrackKind, Vec3,
+    ProjectFile, Rotation3, StageMapConfig, TimelineAudioClipSummary, TimelineCueEventSummary,
+    TimelineLayerKind, TimelineLayerSummary, TimelineTrackKind, Vec3,
 };
 use roxmltree::{Document, Node};
 use serde::Serialize;
@@ -29,6 +29,10 @@ const DVC_FIXTURE_RECORD_BYTES: usize = 27;
 const DVC_BEAM_FEATURE_SLOTS: usize = 13;
 const DVC_BEAM_MISMATCH_WARNING_LIMIT: usize = 16;
 const DVC_REPORT_DETAIL_LIMIT: usize = 256;
+// Keep this paired with app/src/fixtureVisuals.ts::mappingFixtureGridUnit,
+// the nominal par/point cell used by mappingFixtureStageSize.
+const SYNDOCAL_STANDARD_FIXTURE_GLYPH_WORLD_SIZE: f32 = 5.0;
+const DVC_DEFAULT_FIXTURE_SIZE: f32 = 30.0;
 
 // Feature slots identified empirically across the five local Daslight projects
 // (525 payloads, 61 distinct row patterns): slots 0..2 mirror the unique
@@ -244,11 +248,13 @@ fn import_bytes(bytes: &[u8], path_label: &str) -> Result<DvcImportOutcome, Stri
         ));
     }
 
-    let (profiles, mut fixtures, fixture_refs) = parse_patch(patch_root, root, &mut report)?;
-    fit_fixture_positions(&mut fixtures);
+    let (profiles, mut fixtures, fixture_refs, fixture_sizes) =
+        parse_patch(patch_root, root, &mut report)?;
+    let stage_map = scale_fixture_layout(&mut fixtures, &fixture_sizes);
 
     let mut snapshot = EngineSnapshot::default();
     snapshot.fixtures = fixtures;
+    snapshot.stage_map = stage_map;
     snapshot.group_colors = BTreeMap::new();
     let (mut cues, scene_indices, bank_count) = parse_scenes(
         root,
@@ -353,6 +359,7 @@ fn parse_patch(
         Vec<ParsedProfile>,
         Vec<PatchedFixtureSummary>,
         HashMap<String, FixtureImportRef>,
+        Vec<f32>,
     ),
     String,
 > {
@@ -360,6 +367,7 @@ fn parse_patch(
     let mut profiles = Vec::new();
     let mut fixtures = Vec::new();
     let mut fixture_refs = HashMap::new();
+    let mut fixture_sizes = Vec::new();
     let mut profile_paths = HashSet::new();
 
     for (container_index, container) in element_children(patch_root)
@@ -394,6 +402,11 @@ fn parse_patch(
                 fixture_node.attribute("NAME"),
                 &format!("Fixture {fixture_id}"),
             );
+            if let Some(size) = parse_f32_attribute(fixture_node, "SIZE")
+                .filter(|size| size.is_finite() && *size > f32::EPSILON)
+            {
+                fixture_sizes.push(size);
+            }
             let attribute_values = profile
                 .summary
                 .dmx_modes
@@ -497,7 +510,7 @@ fn parse_patch(
             fixtures.len()
         ));
     }
-    Ok((profiles, fixtures, fixture_refs))
+    Ok((profiles, fixtures, fixture_refs, fixture_sizes))
 }
 
 fn parse_profile(
@@ -3147,9 +3160,30 @@ fn configure_disabled_dmx_routes(snapshot: &mut EngineSnapshot) {
     snapshot.dmx_preview = vec![0; 512];
 }
 
-fn fit_fixture_positions(fixtures: &mut [PatchedFixtureSummary]) {
+fn median_daslight_fixture_size(fixture_sizes: &[f32]) -> f32 {
+    let mut sizes = fixture_sizes
+        .iter()
+        .copied()
+        .filter(|size| size.is_finite() && *size > f32::EPSILON)
+        .collect::<Vec<_>>();
+    if sizes.is_empty() {
+        return DVC_DEFAULT_FIXTURE_SIZE;
+    }
+    sizes.sort_by(f32::total_cmp);
+    let midpoint = sizes.len() / 2;
+    if sizes.len() % 2 == 0 {
+        (sizes[midpoint - 1] + sizes[midpoint]) * 0.5
+    } else {
+        sizes[midpoint]
+    }
+}
+
+fn scale_fixture_layout(
+    fixtures: &mut [PatchedFixtureSummary],
+    fixture_sizes: &[f32],
+) -> StageMapConfig {
     if fixtures.is_empty() {
-        return;
+        return StageMapConfig::default();
     }
     let min_x = fixtures
         .iter()
@@ -3167,21 +3201,28 @@ fn fit_fixture_positions(fixtures: &mut [PatchedFixtureSummary]) {
         .iter()
         .map(|fixture| fixture.position.z)
         .fold(f32::NEG_INFINITY, f32::max);
-    let width = (max_x - min_x).max(0.0);
-    let depth = (max_z - min_z).max(0.0);
-    let scale_x = (width > f32::EPSILON).then_some(20.0 / width);
-    let scale_z = (depth > f32::EPSILON).then_some(20.0 / depth);
-    let scale = match (scale_x, scale_z) {
-        (Some(x), Some(z)) => x.min(z),
-        (Some(x), None) => x,
-        (None, Some(z)) => z,
-        (None, None) => 1.0,
-    };
+    let scale =
+        SYNDOCAL_STANDARD_FIXTURE_GLYPH_WORLD_SIZE / median_daslight_fixture_size(fixture_sizes);
     let center_x = (min_x + max_x) * 0.5;
     let center_z = (min_z + max_z) * 0.5;
+    let mut layout_half_extent = 0.0_f32;
     for fixture in fixtures {
         fixture.position.x = (fixture.position.x - center_x) * scale;
         fixture.position.z = (fixture.position.z - center_z) * scale;
+        layout_half_extent = layout_half_extent
+            .max(fixture.position.x.abs())
+            .max(fixture.position.z.abs());
+    }
+    // A square locked reference preserves the uniform X/Z transform and adds
+    // one standard glyph of breathing room beyond the outer fixture centers.
+    let stage_half_extent = (layout_half_extent + SYNDOCAL_STANDARD_FIXTURE_GLYPH_WORLD_SIZE)
+        .max(SYNDOCAL_STANDARD_FIXTURE_GLYPH_WORLD_SIZE);
+    StageMapConfig {
+        locked: true,
+        min_x: -stage_half_extent,
+        max_x: stage_half_extent,
+        min_z: -stage_half_extent,
+        max_z: stage_half_extent,
     }
 }
 
@@ -3579,6 +3620,14 @@ mod tests {
         )
     }
 
+    fn synthetic_layout_dvc() -> String {
+        let patch = r#"<PATCH NBFIXTURE="3"><FIXTURES><SSLLIBRARY SSLFIXUID="profile-layout" SSLNAME="Test/Layout.ssl2"><SSLPROPERTIES SSLBEAMOPENING="20"/><SSLMODES SSLNBMODE="1"><SSLMODE SSLMODEINDEX="0" SSLNBCHANNEL="1"><SSLCHANNEL SSLCHANNELTYPE="7" SSLCHANNELNAME="Dimmer" SSLCHANNELMSB="0" SSLCHANNELLSB="0"><SSLPRESETS><SSLPRESET SSLPRESETNAME="Dimmer" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL></SSLMODE></SSLMODES></SSLLIBRARY><FIXTURE DASUID="layout-1" NAME="Layout 1" ADDRESS="1" UNIVERS="1" SIZE="20" POSX="100" POSY="20" ANGLE="15"/><FIXTURE DASUID="layout-2" NAME="Layout 2" ADDRESS="2" UNIVERS="1" SIZE="30" POSX="220" POSY="-40" ANGLE="75"/><FIXTURE DASUID="layout-3" NAME="Layout 3" ADDRESS="3" UNIVERS="1" SIZE="40" POSX="400" POSY="80" ANGLE="195"/></FIXTURES></PATCH>"#;
+        format!(
+            r#"<DLMFILE TYPE="Daslight" VERSION="5" DASBUILD="test-layout" VERSIONFILE="2"><PATCHS DATA="{}"/><FIXTUREGROUPS/><SCENES/><SHORTCUTS/><TOUCH/><DEVICES/></DLMFILE>"#,
+            qcompress(patch.as_bytes())
+        )
+    }
+
     fn synthetic_fx_dvc() -> String {
         let patch = r#"<PATCH NBFIXTURE="3"><FIXTURES><SSLLIBRARY SSLFIXUID="profile-1" SSLNAME="Test/Dimmer.ssl2"><SSLPROPERTIES SSLBEAMOPENING="20"/><SSLMODES SSLNBMODE="1"><SSLMODE SSLMODEINDEX="0" SSLNBCHANNEL="1"><SSLCHANNEL SSLCHANNELTYPE="7" SSLCHANNELNAME="Dimmer" SSLCHANNELMSB="0" SSLCHANNELLSB="0"><SSLPRESETS><SSLPRESET SSLPRESETNAME="Dimmer" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL></SSLMODE></SSLMODES></SSLLIBRARY><FIXTURE DASUID="fixture-1" NAME="Dimmer 1" ADDRESS="1" UNIVERS="1" POSX="0" POSY="0" ANGLE="0"/><FIXTURE DASUID="fixture-2" NAME="Dimmer 2" ADDRESS="2" UNIVERS="1" POSX="1" POSY="0" ANGLE="0"/><FIXTURE DASUID="fixture-3" NAME="Dimmer 3" ADDRESS="3" UNIVERS="1" POSX="2" POSY="0" ANGLE="0"/></FIXTURES></PATCH>"#;
         format!(
@@ -3784,6 +3833,37 @@ mod tests {
         assert_eq!(outcome.report.summary.beam_records, 1);
         assert_eq!(outcome.report.summary.beam_feature_checks, 1);
         assert_eq!(outcome.report.summary.beam_feature_mismatches, 0);
+
+        let layout =
+            import_bytes(synthetic_layout_dvc().as_bytes(), "synthetic-layout.dvc").unwrap();
+        let positions = layout
+            .project
+            .snapshot
+            .fixtures
+            .iter()
+            .map(|fixture| (fixture.position.x, fixture.position.z))
+            .collect::<Vec<_>>();
+        assert_eq!(positions, vec![(-25.0, 0.0), (-5.0, -10.0), (25.0, 10.0)]);
+        assert_eq!(
+            layout
+                .project
+                .snapshot
+                .fixtures
+                .iter()
+                .map(|fixture| fixture.rotation.yaw)
+                .collect::<Vec<_>>(),
+            vec![15.0, 75.0, 195.0]
+        );
+        assert_eq!(
+            layout.project.snapshot.stage_map,
+            StageMapConfig {
+                locked: true,
+                min_x: -30.0,
+                max_x: 30.0,
+                min_z: -30.0,
+                max_z: 30.0,
+            }
+        );
     }
 
     #[test]
@@ -4659,6 +4739,44 @@ mod tests {
         assert_eq!(outcome.report.summary.beam_feature_mismatches, 0);
         assert_eq!(outcome.report.summary.effects_converted, 7);
         assert_eq!(outcome.report.summary.effects_skipped, 0);
+        let min_x = outcome
+            .project
+            .snapshot
+            .fixtures
+            .iter()
+            .map(|fixture| fixture.position.x)
+            .fold(f32::INFINITY, f32::min);
+        let max_x = outcome
+            .project
+            .snapshot
+            .fixtures
+            .iter()
+            .map(|fixture| fixture.position.x)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let min_z = outcome
+            .project
+            .snapshot
+            .fixtures
+            .iter()
+            .map(|fixture| fixture.position.z)
+            .fold(f32::INFINITY, f32::min);
+        let max_z = outcome
+            .project
+            .snapshot
+            .fixtures
+            .iter()
+            .map(|fixture| fixture.position.z)
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!((min_x - -172.666_67).abs() < 0.001);
+        assert!((max_x - 172.666_67).abs() < 0.001);
+        assert!((min_z - -95.833_336).abs() < 0.001);
+        assert!((max_z - 95.833_336).abs() < 0.001);
+        let stage_map = outcome.project.snapshot.stage_map;
+        assert!(stage_map.locked);
+        assert!((stage_map.min_x - -177.666_67).abs() < 0.001);
+        assert!((stage_map.max_x - 177.666_67).abs() < 0.001);
+        assert!((stage_map.min_z - -177.666_67).abs() < 0.001);
+        assert!((stage_map.max_z - 177.666_67).abs() < 0.001);
         let chaser_count = outcome
             .project
             .snapshot

@@ -36,11 +36,12 @@ export function StageFixtureGlyph(props: StageFixtureGlyphProps) {
     const count = segments()?.length ?? 1;
     return props.width / count;
   };
+  const segmentGap = () => Math.min(mappingFixtureCellGap, segmentPitch() * 0.12);
   const segmentX = (index: number) => {
-    return -props.width / 2 + mappingFixtureCellGap / 2 + index * segmentPitch();
+    return -props.width / 2 + segmentGap() / 2 + index * segmentPitch();
   };
-  const segmentWidth = () => Math.max(0.4, segmentPitch() - mappingFixtureCellGap);
-  const segmentHeight = () => Math.max(0.4, props.height - mappingFixtureCellGap);
+  const segmentWidth = () => Math.max(0.1, segmentPitch() - segmentGap());
+  const segmentHeight = () => Math.max(0.1, props.height - segmentGap());
   const fixtureCornerRadius = () => Math.min(0.8, props.height * 0.2);
 
   return (

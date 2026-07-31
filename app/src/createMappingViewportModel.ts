@@ -1,5 +1,9 @@
 import { createMemo, type Accessor, type Setter } from "solid-js";
-import { fixtureVisualKind, mappingFixtureStageSize } from "./fixtureVisuals";
+import {
+  fixtureVisualKind,
+  mappingFixtureStageSize,
+  mappingFixtureWorldToSvgScale,
+} from "./fixtureVisuals";
 import type { MappingMarqueeState, MappingSnapLine } from "./mappingRuntime";
 import type { MappingStageTool } from "./mappingViewPresets";
 import { clampRange } from "./numericHelpers";
@@ -53,7 +57,11 @@ export const createMappingViewportModel = (options: MappingViewportModelOptions)
       return null;
     }
     const visualKind = fixtureVisualKind(fixture);
-    const size = mappingFixtureStageSize(visualKind);
+    const size = mappingFixtureStageSize(
+      visualKind,
+      1,
+      mappingFixtureWorldToSvgScale(options.stageWorldBounds()),
+    );
     return {
       label: fixture.label,
       dmxLabel: `U${fixture.universe} A${fixture.address}`,
