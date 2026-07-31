@@ -6,7 +6,13 @@ import { planStageFixtureLabels } from "../stageLabelLayout";
 import { stageViewBoxSize } from "../stageGeometry";
 import { stageObjectClass } from "../stageObjects";
 import type { StageObjectKind } from "../types";
-import { StageFixtureGlyph, StageFixtureLabel, StageObjectGlyph, StageProjectionSurfaceGlyph } from "./StageGlyphs";
+import {
+  StageFixtureGlyph,
+  StageFixtureLabel,
+  StageObjectGlyph,
+  StageProjectionSurfaceGlyph,
+  stageFixtureLabelWorldPerCssPixel,
+} from "./StageGlyphs";
 
 export interface StagePreviewFixture {
   id: number;
@@ -83,21 +89,33 @@ type StagePreview2DProps = {
 
 export function StagePreview2D(props: StagePreview2DProps) {
   let stageElement: SVGSVGElement | undefined;
-  const [measuredAspectRatio, setMeasuredAspectRatio] = createSignal<number | null>(null);
+  const [viewportPixelSize, setViewportPixelSize] =
+    createSignal<{ width: number; height: number } | null>(null);
   const [hoveredFixtureId, setHoveredFixtureId] = createSignal<number | null>(null);
 
   onMount(() => {
-    if (!stageElement || typeof ResizeObserver === "undefined") return;
+    if (!stageElement) return;
+    const measure = () => {
+      const rect = stageElement?.getBoundingClientRect();
+      if (rect && rect.width > 0 && rect.height > 0) {
+        setViewportPixelSize({ width: rect.width, height: rect.height });
+      }
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(([entry]) => {
       const { width, height } = entry.contentRect;
-      if (width > 0 && height > 0) setMeasuredAspectRatio(width / height);
+      if (width > 0 && height > 0) setViewportPixelSize({ width, height });
     });
     observer.observe(stageElement);
     onCleanup(() => observer.disconnect());
   });
 
   const viewBox = createMemo(() => {
-    const aspect = measuredAspectRatio() ?? props.viewAspectRatio;
+    const measuredSize = viewportPixelSize();
+    const aspect = measuredSize
+      ? measuredSize.width / measuredSize.height
+      : props.viewAspectRatio;
     if (!aspect || aspect <= 0) {
       return { x: 0, z: 0, width: stageViewBoxSize, height: stageViewBoxSize };
     }
@@ -186,6 +204,8 @@ export function StagePreview2D(props: StagePreview2DProps) {
       hoveredFixtureId: hoveredFixtureId(),
     });
   });
+  const labelWorldPerCssPixel = createMemo(() =>
+    stageFixtureLabelWorldPerCssPixel(viewBox(), viewportPixelSize()));
 
   return (
     <svg ref={stageElement} class={`visualizerStage ${props.className}`} viewBox={viewBoxAttribute()}>
@@ -319,7 +339,12 @@ export function StagePreview2D(props: StagePreview2DProps) {
         }}
       </For>
       <For each={labelLayout().labels}>
-        {(layout) => <StageFixtureLabel layout={layout} />}
+        {(layout) => (
+          <StageFixtureLabel
+            layout={layout}
+            worldPerCssPixel={labelWorldPerCssPixel()}
+          />
+        )}
       </For>
     </svg>
   );

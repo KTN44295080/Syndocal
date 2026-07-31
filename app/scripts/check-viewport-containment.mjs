@@ -4163,10 +4163,17 @@ function readMappingViewportConformanceStateInPage() {
   const minor = stage?.querySelector('[data-mapping-grid-pattern="minor"]') ?? null;
   const major = stage?.querySelector('[data-mapping-grid-pattern="major"]') ?? null;
   const cursor = stage?.querySelector(".stageCursorGuide") ?? null;
+  const cursorReadout = root?.querySelector(".mappingCursorReadout") ?? null;
+  const label = stage?.querySelector('[data-stage-fixture-label-id="9"]')
+    ?? stage?.querySelector(".stageLabel")
+    ?? null;
   const stageRect = stage?.getBoundingClientRect();
   const hitRect = hitTarget?.getBoundingClientRect();
   const shapeRect = shape?.getBoundingClientRect();
   const fixtureMatrix = fixture instanceof SVGGraphicsElement ? fixture.getScreenCTM() : null;
+  const labelMatrix = label instanceof SVGGraphicsElement ? label.getScreenCTM() : null;
+  const labelRect = label?.getBoundingClientRect();
+  const labelFontWorldPx = label ? Number.parseFloat(getComputedStyle(label).fontSize) : Number.NaN;
   const numberAttribute = (element, name) => Number(element?.getAttribute(name) ?? Number.NaN);
   const viewBoxValues = (stage?.getAttribute("viewBox") ?? "")
     .trim()
@@ -4244,6 +4251,20 @@ function readMappingViewportConformanceStateInPage() {
       lineCount: cursor?.querySelectorAll("line").length ?? 0,
       circleCount: cursor?.querySelectorAll("circle").length ?? 0,
       title: (cursor?.querySelector("title")?.textContent ?? "").trim(),
+    },
+    cursorReadout: {
+      active: cursorReadout?.classList.contains("active") === true,
+      text: (cursorReadout?.textContent ?? "").trim(),
+    },
+    label: {
+      fixtureId: Number(label?.getAttribute("data-stage-fixture-label-id") ?? -1),
+      targetScreenFontSizePx: numberAttribute(label, "data-stage-label-screen-font-size"),
+      worldFontSizePx: labelFontWorldPx,
+      screenFontSizePx: labelMatrix
+        ? labelFontWorldPx * Math.hypot(labelMatrix.a, labelMatrix.b)
+        : 0,
+      screenWidth: labelRect?.width ?? 0,
+      screenHeight: labelRect?.height ?? 0,
     },
   };
 }
@@ -4401,11 +4422,27 @@ async function runMappingViewportConformanceViewport(client, viewport) {
       close(initial.grid.major.worldSize, initial.grid.minor.worldSize * 5)
       && close(initial.grid.major.svgWidth, initial.grid.minor.svgWidth * 5)
       && close(initial.grid.major.svgHeight, initial.grid.minor.svgHeight * 5),
-    cursorKeepsCrosshairAndRemovesCircle:
-      initial.cursor.groupCount === 1
-      && initial.cursor.lineCount === 2
+    cursorGuideLinesAreAbsent:
+      initial.cursor.groupCount === 0
+      && initial.cursor.lineCount === 0
       && initial.cursor.circleCount === 0
-      && initial.cursor.title.length > 0,
+      && initial.cursor.title.length === 0,
+    toolbarCursorCoordinateReadoutRemainsVisible:
+      initial.cursorReadout.active
+      && /^X -?\d+\.\d{2} \/ Z -?\d+\.\d{2} \/ [A-Z]+$/.test(initial.cursorReadout.text),
+    labelScreenFontSizeIsNineToThirteenPxAtMaxZoom:
+      maxZoom.label.fixtureId > 0
+      && maxZoom.label.screenWidth > 0
+      && maxZoom.label.screenHeight > 0
+      && maxZoom.label.screenFontSizePx >= 9
+      && maxZoom.label.screenFontSizePx <= 13,
+    labelScreenFontSizeIsNineToThirteenPxAtZoomOne:
+      zoomOne.zoom.value === 1
+      && zoomOne.label.fixtureId > 0
+      && zoomOne.label.screenWidth > 0
+      && zoomOne.label.screenHeight > 0
+      && zoomOne.label.screenFontSizePx >= 9
+      && zoomOne.label.screenFontSizePx <= 13,
     fixtureTracksTrustedScreenDragAtMaxZoom:
       maxTracking.pointerDistancePx >= 8
       && maxTracking.trackingErrorPx <= 2
@@ -23227,7 +23264,10 @@ async function main() {
             `${Math.round(result.zoomOneTracking.screenDistancePx * 100) / 100}px ` +
           `dragMax=${Math.round(result.maxTracking.pointerDistancePx * 100) / 100}->` +
             `${Math.round(result.maxTracking.screenDistancePx * 100) / 100}px ` +
+          `label=${Math.round(result.zoomOne.label.screenFontSizePx * 100) / 100}px/` +
+            `${Math.round(result.maxZoom.label.screenFontSizePx * 100) / 100}px ` +
           `cursor=${result.initial.cursor.lineCount}/${result.initial.cursor.circleCount} ` +
+          `readout=${JSON.stringify(result.initial.cursorReadout.text)} ` +
           `failed=${JSON.stringify(result.failedChecks)}`,
         );
         if (viewportIndex < viewports.length - 1) {

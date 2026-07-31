@@ -37,8 +37,6 @@ type MappingEditableStageShellProps = {
   viewBox: string;
   stageWorldBounds: StageWorldBounds;
   stageOrigin: StagePoint;
-  cursorPoint: StagePoint | null;
-  cursorLabel: string;
   snapEnabled: boolean;
   snapLines: MappingSnapLine[];
   marqueeBox: MappingMarqueeBox | null;
@@ -119,15 +117,6 @@ export function MappingEditableStageShell(props: MappingEditableStageShellProps)
       <rect class="stageGrid" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
       <line class="stageAxis2d" x1={props.stageOrigin.x} y1="0" x2={props.stageOrigin.x} y2={stageViewBoxSize} />
       <line class="stageAxis2d" x1="0" y1={props.stageOrigin.z} x2={stageViewBoxSize} y2={props.stageOrigin.z} />
-      <Show when={props.cursorPoint}>
-        {(cursor) => (
-          <g class="stageCursorGuide">
-            <title>{props.cursorLabel}</title>
-            <line x1={cursor().x} y1="0" x2={cursor().x} y2={stageViewBoxSize} />
-            <line x1="0" y1={cursor().z} x2={stageViewBoxSize} y2={cursor().z} />
-          </g>
-        )}
-      </Show>
       <Show when={props.snapEnabled}>
         <g>
           <For each={props.snapLines}>

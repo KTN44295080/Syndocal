@@ -3,7 +3,8 @@ export const stageFixtureLabelDeclutterThreshold = 25;
 export const stageFixtureLabelRestoreZoom = 1.5;
 
 export const stageFixtureLabelFootprintGap = 1.25;
-// The SVG label font is 4px; 1.05em per code unit conservatively bounds wide glyphs.
+// Keep T24's conservative 4-unit planning envelope even though the renderer
+// counter-scales the visible label text to a fixed screen-space size.
 const stageFixtureLabelCharacterWidth = 4.2;
 const stageFixtureLabelStrokeAllowance = 1.2;
 const stageFixtureLabelHeight = 6;

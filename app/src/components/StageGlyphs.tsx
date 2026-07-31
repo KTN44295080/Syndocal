@@ -135,16 +135,41 @@ export function StageFixtureGlyph(props: StageFixtureGlyphProps) {
 
 type StageFixtureLabelProps = {
   layout: StageFixtureLabelLayout;
+  worldPerCssPixel: number;
   class?: string;
+};
+
+export const stageFixtureLabelScreenFontSizePx = 11;
+
+export const stageFixtureLabelWorldPerCssPixel = (
+  viewBox: { width: number; height: number },
+  viewportPixelSize: { width: number; height: number } | null,
+) => {
+  if (
+    viewportPixelSize
+    && Number.isFinite(viewportPixelSize.width)
+    && Number.isFinite(viewportPixelSize.height)
+    && viewportPixelSize.width > 0
+    && viewportPixelSize.height > 0
+  ) {
+    return Math.max(
+      viewBox.width / viewportPixelSize.width,
+      viewBox.height / viewportPixelSize.height,
+    );
+  }
+  return Math.max(viewBox.width, viewBox.height) / 100;
 };
 
 export function StageFixtureLabel(props: StageFixtureLabelProps) {
   return (
     <text
       data-no-localize
+      data-stage-fixture-label-id={props.layout.fixtureId}
+      data-stage-label-screen-font-size={stageFixtureLabelScreenFontSizePx}
       class={props.class ?? "stageLabel"}
       x={props.layout.x}
       y={props.layout.z}
+      style={{ "font-size": `${stageFixtureLabelScreenFontSizePx * props.worldPerCssPixel}px` }}
       ref={(element) => element.setAttribute("title", props.layout.fullLabel)}
     >
       {props.layout.displayLabel}

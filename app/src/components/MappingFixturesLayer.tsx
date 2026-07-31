@@ -3,7 +3,11 @@ import type { FixtureLiveColorSegment } from "../fixtureLiveColor";
 import type { MappingFixtureVisualKind } from "../fixtureVisuals";
 import { MAPPING_FIXTURE_DRAG_THRESHOLD_PX } from "../createMappingInteractionController";
 import { planStageFixtureLabels, type StageLabelViewport } from "../stageLabelLayout";
-import { StageFixtureGlyph, StageFixtureLabel } from "./StageGlyphs";
+import {
+  StageFixtureGlyph,
+  StageFixtureLabel,
+  stageFixtureLabelWorldPerCssPixel,
+} from "./StageGlyphs";
 
 export interface MappingFixture2D {
   id: number;
@@ -47,6 +51,7 @@ type MappingFixturesLayerProps = {
   selectedTypeKey: string | null;
   showLabels: boolean;
   labelViewport: StageLabelViewport;
+  labelViewportPixelSize: { width: number; height: number };
   labelZoom: number;
   showLevels: boolean;
   placePreview: MappingPlacePreview2D | null;
@@ -69,6 +74,8 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
       hoveredFixtureId: hoveredFixtureId(),
     }),
   );
+  const labelWorldPerCssPixel = createMemo(() =>
+    stageFixtureLabelWorldPerCssPixel(props.labelViewport, props.labelViewportPixelSize));
 
   return (
     <>
@@ -145,7 +152,12 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
         }}
       </For>
       <For each={labelLayout().labels}>
-        {(layout) => <StageFixtureLabel layout={layout} />}
+        {(layout) => (
+          <StageFixtureLabel
+            layout={layout}
+            worldPerCssPixel={labelWorldPerCssPixel()}
+          />
+        )}
       </For>
       <Show when={!props.readOnly && props.placePreview}>
         {(preview) => (

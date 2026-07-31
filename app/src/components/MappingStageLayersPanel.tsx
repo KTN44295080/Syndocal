@@ -16,6 +16,7 @@ interface MappingStageLayersPanelProps {
   showGeometry: boolean;
   showLabels: boolean;
   labelViewport: StageLabelViewport;
+  labelViewportPixelSize: { width: number; height: number };
   labelZoom: number;
   showLevels: boolean;
   stageTool: MappingStageTool;
@@ -78,6 +79,7 @@ export function MappingStageLayersPanel(props: MappingStageLayersPanelProps) {
         selectedTypeKey={props.selectedTypeKey}
         showLabels={props.showLabels}
         labelViewport={props.labelViewport}
+        labelViewportPixelSize={props.labelViewportPixelSize}
         labelZoom={props.labelZoom}
         showLevels={props.showLevels}
         placePreview={props.placePreview}
