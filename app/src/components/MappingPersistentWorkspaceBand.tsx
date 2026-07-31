@@ -174,6 +174,7 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
                     canFitVisible={props.viewportControls.canFitVisible}
                     canFitSelection={props.viewportControls.canFitSelection}
                     zoomValue={props.viewportControls.zoomValue}
+                    zoomMax={props.viewportControls.zoomMax}
                     canZoomOut={props.viewportControls.canZoomOut}
                     canZoomIn={props.viewportControls.canZoomIn}
                     showLabels={props.viewportControls.showLabels}

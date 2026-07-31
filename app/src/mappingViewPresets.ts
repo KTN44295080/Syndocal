@@ -94,7 +94,7 @@ export const mappingViewPresetFromUnknown = (candidate: unknown): MappingViewPre
   return {
     id: idSource || `view-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
     label,
-    viewportZoom: clampRange(finiteOr(Number(source.viewportZoom), 1), 1, 4),
+    viewportZoom: Math.max(1, finiteOr(Number(source.viewportZoom), 1)),
     viewportCenterX: clampRange(finiteOr(Number(source.viewportCenterX), stageViewBoxSize / 2), 0, stageViewBoxSize),
     viewportCenterZ: clampRange(finiteOr(Number(source.viewportCenterZ), stageViewBoxSize / 2), 0, stageViewBoxSize),
     snapEnabled: Boolean(source.snapEnabled),

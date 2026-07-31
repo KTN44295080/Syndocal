@@ -12,6 +12,7 @@ type MappingViewportControlsProps = {
   canFitSelection: boolean;
   zoomLabel: string;
   zoomValue: number;
+  zoomMax: number;
   canZoomOut: boolean;
   canZoomIn: boolean;
   canResetZoom: boolean;
@@ -46,6 +47,7 @@ type ControlStageToolbarProps = Pick<
   | "canFitVisible"
   | "canFitSelection"
   | "zoomValue"
+  | "zoomMax"
   | "canZoomOut"
   | "canZoomIn"
   | "showLabels"
@@ -190,7 +192,7 @@ export function ControlStageToolbar(props: ControlStageToolbarProps) {
         <input
           type="range"
           min="1"
-          max="4"
+          max={props.zoomMax}
           step="0.05"
           value={props.zoomValue}
           aria-label="Zoom level"
@@ -305,7 +307,7 @@ export function MappingViewportControls(props: MappingViewportControlsProps) {
           data-mapping-viewport-action="zoom-slider"
           type="range"
           min="1"
-          max="4"
+          max={props.zoomMax}
           step="0.05"
           value={props.zoomValue}
           aria-label="Zoom level"

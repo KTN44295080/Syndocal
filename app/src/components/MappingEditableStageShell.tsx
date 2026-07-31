@@ -1,6 +1,11 @@
 import { For, Show, type JSX } from "solid-js";
+import {
+  mappingFixtureGridStageSize,
+  mappingFixtureGridUnit,
+  mappingFixtureWorldToSvgScale,
+} from "../fixtureVisuals";
 import type { MappingStageTool } from "../mappingViewPresets";
-import { stageViewBoxSize } from "../stageGeometry";
+import { stageViewBoxSize, type StageWorldBounds } from "../stageGeometry";
 
 type MaybePromise = void | Promise<void>;
 
@@ -30,6 +35,7 @@ type MappingEditableStageShellProps = {
   dragging: boolean;
   stageTool: MappingStageTool;
   viewBox: string;
+  stageWorldBounds: StageWorldBounds;
   stageOrigin: StagePoint;
   cursorPoint: StagePoint | null;
   cursorLabel: string;
@@ -46,6 +52,9 @@ type MappingEditableStageShellProps = {
 };
 
 export function MappingEditableStageShell(props: MappingEditableStageShellProps) {
+  const minorGridSize = () => mappingFixtureGridStageSize(props.stageWorldBounds);
+  const majorGridSize = () => minorGridSize() * 5;
+  const gridWorldToSvgScale = () => mappingFixtureWorldToSvgScale(props.stageWorldBounds);
   const className = () => [
     "visualizerStage",
     "editableStage",
@@ -76,12 +85,34 @@ export function MappingEditableStageShell(props: MappingEditableStageShellProps)
       onWheel={(event) => props.onWheel(event)}
     >
       <defs>
-        <pattern id="stage-grid-minor" width="5" height="5" patternUnits="userSpaceOnUse">
-          <path class="stageGridMinor" d="M 5 0 L 0 0 0 5" />
+        <pattern
+          id="stage-grid-minor"
+          data-mapping-grid-pattern="minor"
+          data-grid-world-size={mappingFixtureGridUnit}
+          data-world-to-svg-scale={gridWorldToSvgScale()}
+          width={minorGridSize()}
+          height={minorGridSize()}
+          patternUnits="userSpaceOnUse"
+        >
+          <path
+            class="stageGridMinor"
+            d={`M ${minorGridSize()} 0 L 0 0 0 ${minorGridSize()}`}
+          />
         </pattern>
-        <pattern id="stage-grid" width="20" height="20" patternUnits="userSpaceOnUse">
-          <rect width="20" height="20" fill="url(#stage-grid-minor)" />
-          <path class="stageGridMajor" d="M 20 0 L 0 0 0 20" />
+        <pattern
+          id="stage-grid"
+          data-mapping-grid-pattern="major"
+          data-grid-world-size={mappingFixtureGridUnit * 5}
+          data-world-to-svg-scale={gridWorldToSvgScale()}
+          width={majorGridSize()}
+          height={majorGridSize()}
+          patternUnits="userSpaceOnUse"
+        >
+          <rect width={majorGridSize()} height={majorGridSize()} fill="url(#stage-grid-minor)" />
+          <path
+            class="stageGridMajor"
+            d={`M ${majorGridSize()} 0 L 0 0 0 ${majorGridSize()}`}
+          />
         </pattern>
       </defs>
       <rect class="stageFloor" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
@@ -91,11 +122,9 @@ export function MappingEditableStageShell(props: MappingEditableStageShellProps)
       <Show when={props.cursorPoint}>
         {(cursor) => (
           <g class="stageCursorGuide">
+            <title>{props.cursorLabel}</title>
             <line x1={cursor().x} y1="0" x2={cursor().x} y2={stageViewBoxSize} />
             <line x1="0" y1={cursor().z} x2={stageViewBoxSize} y2={cursor().z} />
-            <circle cx={cursor().x} cy={cursor().z} r="1.6">
-              <title>{props.cursorLabel}</title>
-            </circle>
           </g>
         )}
       </Show>

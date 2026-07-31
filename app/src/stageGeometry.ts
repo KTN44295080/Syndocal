@@ -33,6 +33,14 @@ export const svgPointToStageWorld = (x: number, z: number, bounds: StageWorldBou
   };
 };
 
+export const svgDeltaToStageWorld = (x: number, z: number, bounds: StageWorldBounds) => {
+  const drawableSize = stageViewBoxSize - stagePadding * 2;
+  return {
+    x: (x / drawableSize) * (bounds.maxX - bounds.minX),
+    z: (z / drawableSize) * (bounds.maxZ - bounds.minZ),
+  };
+};
+
 // Triangle points (in SVG view-box units) for a fixture's emitted beam, given its
 // stage position, yaw, and 0..1 intensity.
 export const beamPoints = (x: number, z: number, yawDegrees: number, intensity: number) => {

@@ -8,7 +8,12 @@ import type {
   VisualizerFixture,
 } from "./mappingRuntime";
 import { clampRange } from "./numericHelpers";
-import { stageViewBoxSize, svgPointToStageWorld, type StageWorldBounds } from "./stageGeometry";
+import {
+  stageViewBoxSize,
+  svgDeltaToStageWorld,
+  svgPointToStageWorld,
+  type StageWorldBounds,
+} from "./stageGeometry";
 import type {
   EngineSnapshot,
   PatchFixtureRequest,
@@ -106,6 +111,21 @@ export function createMappingInteractionController(options: MappingInteractionCo
   const stageWorldPointFromPointer = (event: PointerEvent, svg?: SVGSVGElement) => {
     const point = stageSvgPointFromPointer(event, svg);
     return svgPointToStageWorld(point.x, point.z, options.stageWorldBounds());
+  };
+
+  const fixtureDragWorldPointFromPointer = (
+    drag: Extract<MappingDragState, { kind: "fixture" | "fixtureYaw" }>,
+    event: PointerEvent,
+    svg: SVGSVGElement,
+  ) => {
+    const startSvg = stageSvgPointFromClient(drag.startClient.x, drag.startClient.y, svg);
+    const currentSvg = stageSvgPointFromClient(event.clientX, event.clientY, svg);
+    const bounds = options.stageWorldBounds();
+    const delta = svgDeltaToStageWorld(currentSvg.x - startSvg.x, currentSvg.z - startSvg.z, bounds);
+    return {
+      x: clampRange(drag.startWorld.x + delta.x, bounds.minX, bounds.maxX),
+      z: clampRange(drag.startWorld.z + delta.z, bounds.minZ, bounds.maxZ),
+    };
   };
 
   const handleMappingStageWheel = (event: WheelEvent & { currentTarget: SVGSVGElement }) => {
@@ -430,9 +450,12 @@ export function createMappingInteractionController(options: MappingInteractionCo
 
     const drag = options.mappingDrag();
     if (drag && drag.pointerId === event.pointerId) {
+      const currentWorld = drag.kind === "fixture" || drag.kind === "fixtureYaw"
+        ? fixtureDragWorldPointFromPointer(drag, event, event.currentTarget)
+        : cursorWorld;
       options.setMappingDrag({
         ...drag,
-        currentWorld: cursorWorld,
+        currentWorld,
         ...(
           drag.kind === "fixture" || drag.kind === "fixtureYaw"
             ? { currentClient: { x: event.clientX, y: event.clientY } }

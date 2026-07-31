@@ -41,6 +41,9 @@ export const mappingFixtureWorldToSvgScale = (bounds: StageWorldBounds) => {
   return Math.min(1, scaleX, scaleZ);
 };
 
+export const mappingFixtureGridStageSize = (bounds: StageWorldBounds) =>
+  mappingFixtureGridUnit * mappingFixtureWorldToSvgScale(bounds);
+
 export const mappingFixtureStageSize = (
   _visualKind: MappingFixtureVisualKind,
   segmentCount = 1,

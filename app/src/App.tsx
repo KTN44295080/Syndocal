@@ -1670,6 +1670,26 @@ export default function App() {
   const [selectedMappingViewPresetId, setSelectedMappingViewPresetId] = createSignal("overview");
   const [mappingViewPresets, setMappingViewPresets] = createSignal<MappingViewPreset[]>(loadMappingViewPresets());
   let mappingStageSvgElement: SVGSVGElement | undefined;
+  let mappingStageResizeObserver: ResizeObserver | undefined;
+  const [mappingStageViewportPixelSize, setMappingStageViewportPixelSize] =
+    createSignal({ width: 640, height: 390 });
+  const bindMappingStageSvgElement = (element: SVGSVGElement) => {
+    mappingStageSvgElement = element;
+    mappingStageResizeObserver?.disconnect();
+    const measure = () => {
+      const rect = element.getBoundingClientRect();
+      setMappingStageViewportPixelSize({
+        width: Math.max(1, element.clientWidth || rect.width),
+        height: Math.max(1, element.clientHeight || rect.height),
+      });
+    };
+    measure();
+    if (typeof ResizeObserver !== "undefined") {
+      mappingStageResizeObserver = new ResizeObserver(measure);
+      mappingStageResizeObserver.observe(element);
+    }
+  };
+  onCleanup(() => mappingStageResizeObserver?.disconnect());
   const [videoCompositionLabel, setVideoCompositionLabel] = createSignal("Composition 1");
   const [videoCompositionLayerIds, setVideoCompositionLayerIds] = createSignal<number[]>([]);
   const [videoAutomationLayerId, setVideoAutomationLayerId] = createSignal<number | null>(null);
@@ -2643,8 +2663,9 @@ export default function App() {
         auto_vj: defaultAutoVjSnapshot(),
       },
     }));
-  } else if (viewportFixture === "mapping-live-color") {
+  } else if (viewportFixture === "mapping-live-color" || viewportFixture === "mapping-viewport-conformance") {
     const fixtures = structuredClone(viewportFixtureData.mappingLiveColorFixtures);
+    const conformanceFixture = viewportFixture === "mapping-viewport-conformance";
     setWorkspaceTab("setup");
     setSetupSubTab("mapping");
     setControlMode("edit");
@@ -2658,6 +2679,16 @@ export default function App() {
       fixtures,
       dmx_preview: [],
       dmx_previews: [],
+      stage_map: conformanceFixture
+        ? {
+            ...current.stage_map,
+            locked: true,
+            min_x: -177.67,
+            max_x: 177.67,
+            min_z: -177.67,
+            max_z: 177.67,
+          }
+        : current.stage_map,
     }));
   } else if (viewportFixture === "mapping-live-snapshot") {
     const fixtures = structuredClone(viewportFixtureData.mappingLiveSnapshotFixtures);
@@ -2765,7 +2796,7 @@ export default function App() {
     sceneBlockFixtureWindow.__syndocalReadEditLiveFixtureSnapshot = () => snapshot();
     sceneBlockFixtureWindow.__syndocalReadEditLiveFixtureHistory = () => projectHistoryStatus();
   }
-  if (viewportFixture === "control-stage-edit") {
+  if (viewportFixture === "control-stage-edit" || viewportFixture === "mapping-viewport-conformance") {
     sceneBlockFixtureWindow.__syndocalReadControlStageEditFixtureSnapshot = () => snapshot();
   }
   if (viewportFixture === "scene-matrix") {
@@ -6383,6 +6414,7 @@ export default function App() {
   });
   const {
     normalizedMappingViewportZoom,
+    mappingViewportMaxZoom,
     mappingViewportBox,
     mappingStageViewBox,
     mappingStageCursorSvgPoint,
@@ -6409,6 +6441,7 @@ export default function App() {
     setViewportCenterZ: setMappingViewportCenterZ,
     stageCursorWorld: mappingStageCursorWorld,
     stageWorldBounds,
+    viewportPixelSize: mappingStageViewportPixelSize,
     selectedFixture,
     stageTool: mappingStageTool,
     snapEnabled: mappingSnapEnabled,
@@ -17366,8 +17399,9 @@ export default function App() {
             canFitSelection: canFitMappingViewportToSelection(),
             zoomLabel: mappingViewportZoomLabel(),
             zoomValue: normalizedMappingViewportZoom(),
+            zoomMax: mappingViewportMaxZoom(),
             canZoomOut: normalizedMappingViewportZoom() > 1.001,
-            canZoomIn: normalizedMappingViewportZoom() < 3.999,
+            canZoomIn: normalizedMappingViewportZoom() < mappingViewportMaxZoom() - 0.001,
             canResetZoom: normalizedMappingViewportZoom() > 1.001,
             snapEnabled: mappingSnapEnabled(),
             snapSize: normalizedMappingSnapSize(),
@@ -17400,10 +17434,11 @@ export default function App() {
             onShowLevels: setMappingShowLevels,
           }}
           editableStage={{
-            svgRef: (element) => { mappingStageSvgElement = element; },
+            svgRef: bindMappingStageSvgElement,
             dragging: Boolean(mappingDrag() || mappingViewportPanDrag()),
             stageTool: mappingStageTool(),
             viewBox: mappingStageViewBox(),
+            stageWorldBounds: stageWorldBounds(),
             stageOrigin: stageOrigin2d(),
             cursorPoint: mappingStageCursorSvgPoint(),
             cursorLabel: mappingStageCursorLabel(),

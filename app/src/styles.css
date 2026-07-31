@@ -7710,7 +7710,7 @@ progress {
   stroke-width: 0.32;
 }
 
-/* Daslight-grade grid hierarchy: faint 1m minor lines, brighter 4m major lines. */
+/* Daslight-grade grid hierarchy: faint G-world minor lines, brighter 5G major lines. */
 .mappingVisualizer .visualizerStage .stageGridMinor {
   stroke: #2a2521;
   stroke-width: 0.26;
@@ -8763,12 +8763,6 @@ progress {
   stroke: rgba(255, 221, 116, 0.34);
   stroke-width: 0.28;
   stroke-dasharray: 1.5 1.5;
-}
-
-.stageCursorGuide circle {
-  fill: none;
-  stroke: rgba(255, 221, 116, 0.88);
-  stroke-width: 0.55;
 }
 
 .stageBeam {

@@ -1,6 +1,7 @@
 import { createMemo, type Accessor, type Setter } from "solid-js";
 import {
   fixtureVisualKind,
+  mappingFixtureGridStageSize,
   mappingFixtureStageSize,
   mappingFixtureWorldToSvgScale,
 } from "./fixtureVisuals";
@@ -19,6 +20,7 @@ interface MappingViewportModelOptions {
   setViewportCenterZ: Setter<number>;
   stageCursorWorld: Accessor<{ x: number; z: number } | null>;
   stageWorldBounds: Accessor<StageWorldBounds>;
+  viewportPixelSize: Accessor<{ width: number; height: number }>;
   selectedFixture: Accessor<PatchedFixtureSummary | undefined>;
   stageTool: Accessor<MappingStageTool>;
   snapEnabled: Accessor<boolean>;
@@ -27,8 +29,30 @@ interface MappingViewportModelOptions {
   onStatus: (message: string) => void;
 }
 
+export const mappingViewportTargetGlyphCellPx = 96;
+export const mappingViewportMinimumMaxZoom = 4;
+export const mappingViewportZoomStep = 0.05;
+
+export const mappingViewportMaxZoomForBounds = (
+  bounds: StageWorldBounds,
+  viewportPixelSize: { width: number; height: number },
+) => {
+  const viewportSpanPx = Math.max(1, Math.min(viewportPixelSize.width, viewportPixelSize.height));
+  const glyphCellStageSize = Math.max(Number.EPSILON, mappingFixtureGridStageSize(bounds));
+  const requiredZoom =
+    (mappingViewportTargetGlyphCellPx * stageViewBoxSize) /
+    (glyphCellStageSize * viewportSpanPx);
+  return Number((
+    Math.ceil(Math.max(mappingViewportMinimumMaxZoom, requiredZoom) / mappingViewportZoomStep)
+    * mappingViewportZoomStep
+  ).toFixed(2));
+};
+
 export const createMappingViewportModel = (options: MappingViewportModelOptions) => {
-  const normalizedMappingViewportZoom = createMemo(() => clampRange(options.viewportZoom(), 1, 4));
+  const mappingViewportMaxZoom = createMemo(() =>
+    mappingViewportMaxZoomForBounds(options.stageWorldBounds(), options.viewportPixelSize()));
+  const normalizedMappingViewportZoom = createMemo(() =>
+    clampRange(options.viewportZoom(), 1, mappingViewportMaxZoom()));
   const mappingViewportSize = createMemo(() => stageViewBoxSize / normalizedMappingViewportZoom());
   const mappingViewportBox = createMemo(() => {
     const size = mappingViewportSize();
@@ -82,7 +106,7 @@ export const createMappingViewportModel = (options: MappingViewportModelOptions)
     centerX = options.viewportCenterX(),
     centerZ = options.viewportCenterZ(),
   ) => {
-    const nextZoom = clampRange(zoom, 1, 4);
+    const nextZoom = clampRange(zoom, 1, mappingViewportMaxZoom());
     const nextSize = stageViewBoxSize / nextZoom;
     options.setViewportZoom(nextZoom);
     options.setViewportCenterX(clampRange(centerX, nextSize / 2, stageViewBoxSize - nextSize / 2));
@@ -98,7 +122,7 @@ export const createMappingViewportModel = (options: MappingViewportModelOptions)
     const nextZoom = clampRange(
       Number((direction > 0 ? currentZoom * 1.18 : currentZoom / 1.18).toFixed(3)),
       1,
-      4,
+      mappingViewportMaxZoom(),
     );
     const nextSize = stageViewBoxSize / nextZoom;
     const anchorX = clampRange((point.x - currentBox.x) / currentBox.size, 0, 1);
@@ -175,6 +199,7 @@ export const createMappingViewportModel = (options: MappingViewportModelOptions)
 
   return {
     normalizedMappingViewportZoom,
+    mappingViewportMaxZoom,
     mappingViewportBox,
     mappingStageViewBox,
     mappingStageCursorSvgPoint,

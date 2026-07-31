@@ -2,6 +2,7 @@ import { Show } from "solid-js";
 import type { FixtureLiveColorSegment } from "../fixtureLiveColor";
 import {
   mappingFixtureCellGap,
+  mappingFixtureGridUnit,
   type MappingFixtureVisualKind,
 } from "../fixtureVisuals";
 import type { StageFixtureLabelLayout } from "../stageLabelLayout";
@@ -64,6 +65,7 @@ export function StageFixtureGlyph(props: StageFixtureGlyphProps) {
         fallback={
           <rect
             data-stage-fixture-shape
+            data-stage-fixture-grid-world-size={mappingFixtureGridUnit}
             class={shapeClass()}
             x={-props.width / 2}
             y={-props.height / 2}
@@ -80,6 +82,7 @@ export function StageFixtureGlyph(props: StageFixtureGlyphProps) {
             <rect
               data-stage-fixture-shape
               data-stage-fixture-outline
+              data-stage-fixture-grid-world-size={mappingFixtureGridUnit}
               class={`${shapeClass()} stageFixtureSegmentOutline`}
               x={-props.width / 2}
               y={-props.height / 2}

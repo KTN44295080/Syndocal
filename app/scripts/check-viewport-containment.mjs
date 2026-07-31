@@ -49,6 +49,7 @@ const contextMenuOnlyMode = process.argv.includes("--context-menu-only");
 const mappingLiveColorOnlyMode = process.argv.includes("--mapping-live-color-only");
 const mappingLiveSegmentsOnlyMode = process.argv.includes("--mapping-live-segments-only");
 const mappingLiveSnapshotOnlyMode = process.argv.includes("--mapping-live-snapshot-only");
+const mappingViewportConformanceOnlyMode = process.argv.includes("--mapping-viewport-conformance-only");
 const barBeamsOnlyMode = process.argv.includes("--bar-beams-only");
 const controlModeSurfaceOnlyMode = process.argv.includes("--control-mode-surface-only");
 const liveDeskHeaderOnlyMode = process.argv.includes("--live-desk-header-only");
@@ -59,6 +60,8 @@ const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
     ? "large-show"
     : patchOnlyMode
       ? "patch"
+      : mappingViewportConformanceOnlyMode
+        ? "mapping-viewport-conformance"
       : mappingLiveSnapshotOnlyMode
         ? "mapping-live-snapshot"
     : mappingLiveColorOnlyMode || mappingLiveSegmentsOnlyMode || barBeamsOnlyMode
@@ -4120,6 +4123,292 @@ async function dispatchCdpMouseDrag(client, start, end, intermediate = null) {
     buttons: 0,
     clickCount: 1,
   });
+}
+
+function readMappingViewportConformanceStateInPage() {
+  const root = document.querySelector(".setupStageContext");
+  const stage = root?.querySelector(".editableStage");
+  const fixture = root?.querySelector('[data-stage-fixture-id="9"]');
+  const hitTarget = fixture?.querySelector(".stageFixtureHitTarget") ?? null;
+  const shape = fixture?.querySelector("[data-stage-fixture-shape]") ?? null;
+  const slider = document.querySelector('[data-mapping-viewport-action="zoom-slider"]');
+  const readout = document.querySelector("[data-mapping-zoom-readout]");
+  const minor = stage?.querySelector('[data-mapping-grid-pattern="minor"]') ?? null;
+  const major = stage?.querySelector('[data-mapping-grid-pattern="major"]') ?? null;
+  const cursor = stage?.querySelector(".stageCursorGuide") ?? null;
+  const stageRect = stage?.getBoundingClientRect();
+  const hitRect = hitTarget?.getBoundingClientRect();
+  const shapeRect = shape?.getBoundingClientRect();
+  const fixtureMatrix = fixture instanceof SVGGraphicsElement ? fixture.getScreenCTM() : null;
+  const numberAttribute = (element, name) => Number(element?.getAttribute(name) ?? Number.NaN);
+  const viewBoxValues = (stage?.getAttribute("viewBox") ?? "")
+    .trim()
+    .split(/\s+/)
+    .map(Number);
+  const viewBox = viewBoxValues.length === 4 && viewBoxValues.every(Number.isFinite)
+    ? {
+        x: viewBoxValues[0],
+        z: viewBoxValues[1],
+        width: viewBoxValues[2],
+        height: viewBoxValues[3],
+      }
+    : null;
+  const fixturePoint = hitRect
+    ? { x: hitRect.left + hitRect.width / 2, y: hitRect.top + hitRect.height / 2 }
+    : null;
+  return {
+    zoom: {
+      min: slider instanceof HTMLInputElement ? Number(slider.min) : null,
+      max: slider instanceof HTMLInputElement ? Number(slider.max) : null,
+      value: slider instanceof HTMLInputElement ? Number(slider.value) : null,
+      readout: (readout?.textContent ?? "").trim(),
+    },
+    viewBox,
+    stageRect: stageRect
+      ? {
+          left: stageRect.left,
+          top: stageRect.top,
+          right: stageRect.right,
+          bottom: stageRect.bottom,
+          width: stageRect.width,
+          height: stageRect.height,
+        }
+      : null,
+    fixturePoint: fixturePoint
+      ? {
+          ...fixturePoint,
+          topHitFixtureId: Number(
+            document.elementFromPoint(fixturePoint.x, fixturePoint.y)
+              ?.closest("[data-stage-fixture-id]")
+              ?.getAttribute("data-stage-fixture-id") ?? -1,
+          ),
+        }
+      : null,
+    fixtureShape: {
+      svgWidth: numberAttribute(shape, "width"),
+      svgHeight: numberAttribute(shape, "height"),
+      gridWorldSize: numberAttribute(shape, "data-stage-fixture-grid-world-size"),
+      screenWidth: shapeRect?.width ?? 0,
+      screenHeight: shapeRect?.height ?? 0,
+      screenMin: shapeRect ? Math.min(shapeRect.width, shapeRect.height) : 0,
+      gridUnitScreenPx: fixtureMatrix
+        ? Math.min(
+            Math.hypot(fixtureMatrix.a, fixtureMatrix.b) * numberAttribute(minor, "width"),
+            Math.hypot(fixtureMatrix.c, fixtureMatrix.d) * numberAttribute(minor, "height"),
+          )
+        : 0,
+    },
+    grid: {
+      minor: {
+        svgWidth: numberAttribute(minor, "width"),
+        svgHeight: numberAttribute(minor, "height"),
+        worldSize: numberAttribute(minor, "data-grid-world-size"),
+        worldToSvgScale: numberAttribute(minor, "data-world-to-svg-scale"),
+      },
+      major: {
+        svgWidth: numberAttribute(major, "width"),
+        svgHeight: numberAttribute(major, "height"),
+        worldSize: numberAttribute(major, "data-grid-world-size"),
+        worldToSvgScale: numberAttribute(major, "data-world-to-svg-scale"),
+      },
+    },
+    cursor: {
+      groupCount: cursor ? 1 : 0,
+      lineCount: cursor?.querySelectorAll("line").length ?? 0,
+      circleCount: cursor?.querySelectorAll("circle").length ?? 0,
+      title: (cursor?.querySelector("title")?.textContent ?? "").trim(),
+    },
+  };
+}
+
+async function readMappingViewportConformanceState(client) {
+  return await client.evaluate(`(${readMappingViewportConformanceStateInPage.toString()})()`);
+}
+
+async function setMappingViewportConformanceZoom(client, level) {
+  await client.evaluate(`(async () => {
+    const slider = document.querySelector('[data-mapping-viewport-action="zoom-slider"]');
+    if (!(slider instanceof HTMLInputElement)) return;
+    slider.value = ${level === "max" ? "slider.max" : JSON.stringify(String(level))};
+    slider.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  })()`);
+}
+
+async function exerciseMappingViewportFixtureTracking(client, requestedDistancePx = 60) {
+  const before = await readMappingViewportConformanceState(client);
+  if (!before.fixturePoint || !before.stageRect) {
+    throw new Error("Mapping viewport fixture tracking geometry is unavailable");
+  }
+  if (before.fixturePoint.topHitFixtureId !== 9) {
+    throw new Error(`Mapping viewport trusted drag target is obscured: ${JSON.stringify(before.fixturePoint)}`);
+  }
+  const availableRight = before.stageRect.right - 8 - before.fixturePoint.x;
+  const availableLeft = before.fixturePoint.x - before.stageRect.left - 8;
+  const distanceX = availableRight >= requestedDistancePx
+    ? requestedDistancePx
+    : availableLeft >= requestedDistancePx
+      ? -requestedDistancePx
+      : Math.sign(availableRight - availableLeft) * Math.max(8, Math.min(availableRight, availableLeft));
+  const start = { x: before.fixturePoint.x, y: before.fixturePoint.y };
+  const end = { x: start.x + distanceX, y: start.y };
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: start.x,
+    y: start.y,
+    button: "left",
+    buttons: 1,
+    clickCount: 1,
+  });
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: start.x + distanceX / 2,
+    y: start.y,
+    button: "left",
+    buttons: 1,
+  });
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: end.x,
+    y: end.y,
+    button: "left",
+    buttons: 1,
+  });
+  await sleep(60);
+  const during = await readMappingViewportConformanceState(client);
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: end.x,
+    y: end.y,
+    button: "left",
+    buttons: 0,
+    clickCount: 1,
+  });
+  await sleep(120);
+  const after = await readMappingViewportConformanceState(client);
+  const screenDelta = during.fixturePoint
+    ? {
+        x: during.fixturePoint.x - before.fixturePoint.x,
+        y: during.fixturePoint.y - before.fixturePoint.y,
+      }
+    : { x: Number.NaN, y: Number.NaN };
+  return {
+    pointerDelta: { x: distanceX, y: 0 },
+    pointerDistancePx: Math.abs(distanceX),
+    screenDelta,
+    screenDistancePx: Math.hypot(screenDelta.x, screenDelta.y),
+    trackingErrorPx: Math.abs(Math.hypot(screenDelta.x, screenDelta.y) - Math.abs(distanceX)),
+    before,
+    during,
+    after,
+  };
+}
+
+async function runMappingViewportConformanceViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: fixtureUrl("mapping-viewport-conformance") });
+  await waitForApp(client);
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const slider = document.querySelector('[data-mapping-viewport-action="zoom-slider"]');
+      const fixture = document.querySelector('.setupStageContext [data-stage-fixture-id="9"]');
+      return slider instanceof HTMLInputElement && Number(slider.max) > 4 && Boolean(fixture);
+    })()`,
+    "mapping viewport adaptive maximum",
+  );
+  await client.evaluate(`(${installControlStageEditMockInPage.toString()})()`);
+
+  const stagePoint = await client.evaluate(`(() => {
+    const stage = document.querySelector(".setupStageContext .editableStage");
+    const rect = stage?.getBoundingClientRect();
+    return rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null;
+  })()`);
+  if (!stagePoint) throw new Error("Mapping viewport cursor probe geometry is unavailable");
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: stagePoint.x,
+    y: stagePoint.y,
+    button: "none",
+    buttons: 0,
+  });
+  await sleep(40);
+  const initial = await readMappingViewportConformanceState(client);
+
+  await setMappingViewportConformanceZoom(client, "max");
+  await sleep(60);
+  const maxZoom = await readMappingViewportConformanceState(client);
+  const maxTracking = await exerciseMappingViewportFixtureTracking(client);
+
+  await setMappingViewportConformanceZoom(client, 1);
+  await sleep(60);
+  const zoomOne = await readMappingViewportConformanceState(client);
+  const zoomOneTracking = await exerciseMappingViewportFixtureTracking(client);
+  const final = await readMappingViewportConformanceState(client);
+
+  const close = (left, right, tolerance = 0.001) =>
+    Number.isFinite(left) && Number.isFinite(right) && Math.abs(left - right) <= tolerance;
+  const checks = {
+    adaptiveMaximumExceedsLegacyFourX:
+      initial.zoom.min === 1
+      && initial.zoom.max > 4
+      && maxZoom.zoom.value === initial.zoom.max
+      && maxZoom.zoom.readout === `${Math.round(initial.zoom.max * 100)}%`,
+    maxZoomMakesGlyphCellAtLeastNinetySixCssPixels:
+      maxZoom.fixtureShape.gridUnitScreenPx >= 96,
+    minorGridPatternEqualsDerivedGlyphWorldCell:
+      close(initial.grid.minor.worldSize, initial.fixtureShape.gridWorldSize)
+      && close(
+        initial.grid.minor.svgWidth,
+        initial.grid.minor.worldSize * initial.grid.minor.worldToSvgScale,
+      )
+      && close(initial.grid.minor.svgHeight, initial.grid.minor.svgWidth)
+      && close(initial.grid.minor.svgWidth, initial.fixtureShape.svgWidth)
+      && close(initial.grid.minor.svgHeight, initial.fixtureShape.svgHeight),
+    majorGridPatternIsFiveDerivedMinorCells:
+      close(initial.grid.major.worldSize, initial.grid.minor.worldSize * 5)
+      && close(initial.grid.major.svgWidth, initial.grid.minor.svgWidth * 5)
+      && close(initial.grid.major.svgHeight, initial.grid.minor.svgHeight * 5),
+    cursorKeepsCrosshairAndRemovesCircle:
+      initial.cursor.groupCount === 1
+      && initial.cursor.lineCount === 2
+      && initial.cursor.circleCount === 0
+      && initial.cursor.title.length > 0,
+    fixtureTracksTrustedScreenDragAtMaxZoom:
+      maxTracking.pointerDistancePx >= 8
+      && maxTracking.trackingErrorPx <= 2
+      && Math.abs(maxTracking.screenDelta.y) <= 2,
+    fixtureTracksTrustedScreenDragAtZoomOne:
+      zoomOne.zoom.value === 1
+      && zoomOneTracking.pointerDistancePx >= 8
+      && zoomOneTracking.trackingErrorPx <= 2
+      && Math.abs(zoomOneTracking.screenDelta.y) <= 2,
+    zoomSliderAndReadoutRemainUsableAfterDynamicRange:
+      final.zoom.value === 1
+      && final.zoom.max === initial.zoom.max
+      && final.zoom.readout === "100%",
+  };
+  const failedChecks = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  return {
+    label: `mapping-viewport-conformance-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    viewport,
+    initial,
+    maxZoom,
+    maxTracking,
+    zoomOne,
+    zoomOneTracking,
+    final,
+  };
 }
 
 function readStageMiddlePanStateInPage(scopeSelector) {
@@ -18291,8 +18580,21 @@ async function readMappingLiveColorSurface(client, rootSelector) {
         } : null,
       };
     };
+    const inspectGridPattern = (kind) => {
+      const pattern = root?.querySelector('[data-mapping-grid-pattern="' + kind + '"]') ?? null;
+      return {
+        svgWidth: Number(pattern?.getAttribute('width') ?? Number.NaN),
+        svgHeight: Number(pattern?.getAttribute('height') ?? Number.NaN),
+        worldSize: Number(pattern?.getAttribute('data-grid-world-size') ?? Number.NaN),
+        worldToSvgScale: Number(pattern?.getAttribute('data-world-to-svg-scale') ?? Number.NaN),
+      };
+    };
     return {
       bridgeAvailable: typeof window.__syndocalSetMappingLiveDmx === 'function',
+      grid: {
+        minor: inspectGridPattern("minor"),
+        major: inspectGridPattern("major"),
+      },
       shapeFills: [...(root?.querySelectorAll('[data-stage-fixture-shape]') ?? [])]
         .map((shape) => shape.getAttribute('fill')),
       segmentFills: [...(root?.querySelectorAll('[data-stage-fixture-segment]') ?? [])]
@@ -18367,7 +18669,7 @@ async function runMappingLiveColorViewport(client, viewport) {
   await client.evaluate(`(async () => {
     const slider = document.querySelector('[data-mapping-viewport-action="zoom-slider"]');
     if (slider instanceof HTMLInputElement) {
-      slider.value = '4';
+      slider.value = slider.max;
       slider.dispatchEvent(new Event('input', { bubbles: true }));
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     }
@@ -18613,7 +18915,7 @@ async function runLargeShowViewport(client, viewport) {
     const beforeBeamCount = stage?.querySelectorAll('[data-stage-beam-fixture-id]').length ?? 0;
     const slider = document.querySelector('[data-mapping-viewport-action="zoom-slider"]');
     if (slider instanceof HTMLInputElement) {
-      slider.value = '4';
+      slider.value = slider.max;
       slider.dispatchEvent(new Event('input', { bubbles: true }));
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     }
@@ -18628,6 +18930,7 @@ async function runLargeShowViewport(client, viewport) {
       afterBeamCount,
       afterSkipped: totalStageFixtures - afterApplied,
       zoomValue: slider instanceof HTMLInputElement ? Number(slider.value) : null,
+      zoomMax: slider instanceof HTMLInputElement ? Number(slider.max) : null,
     };
   })()`);
   const containment = await measure(client, `large-show-${viewport.width}x${viewport.height}`);
@@ -22797,6 +23100,36 @@ async function main() {
       }
       return;
     }
+    if (mappingViewportConformanceOnlyMode) {
+      const conformanceResults = [];
+      for (const [viewportIndex, viewport] of viewports.entries()) {
+        const result = await runMappingViewportConformanceViewport(client, viewport);
+        conformanceResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+          `max=${result.maxZoom.zoom.value}x/${result.maxZoom.zoom.readout} ` +
+          `cell=${Math.round(result.maxZoom.fixtureShape.gridUnitScreenPx * 100) / 100}px ` +
+          `grid=${result.initial.grid.minor.worldSize}world:` +
+            `${Math.round(result.initial.grid.minor.svgWidth * 10000) / 10000}svg/` +
+            `${result.initial.grid.major.worldSize}world:` +
+            `${Math.round(result.initial.grid.major.svgWidth * 10000) / 10000}svg ` +
+          `drag1=${Math.round(result.zoomOneTracking.pointerDistancePx * 100) / 100}->` +
+            `${Math.round(result.zoomOneTracking.screenDistancePx * 100) / 100}px ` +
+          `dragMax=${Math.round(result.maxTracking.pointerDistancePx * 100) / 100}->` +
+            `${Math.round(result.maxTracking.screenDistancePx * 100) / 100}px ` +
+          `cursor=${result.initial.cursor.lineCount}/${result.initial.cursor.circleCount} ` +
+          `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+        if (viewportIndex < viewports.length - 1) {
+          await recycleBrowser();
+        }
+      }
+      const failures = conformanceResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Mapping viewport conformance failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (barBeamsOnlyMode) {
       const result = await runBarBeamsViewport(client, viewports[0]);
       const renderModelSource = readFileSync(join(appRoot, "src", "createMappingRenderModel.ts"), "utf8");
@@ -23094,6 +23427,14 @@ async function main() {
               && result.setup.single.shapeRx > 0
               && result.control.single.shapeWidth === 5
               && result.stagePreviewInitial.single.shapeWidth === 5,
+            minorGridPatternMatchesDerivedGlyphCell:
+              Math.abs(result.setup.grid.minor.svgWidth - result.setup.single.shapeWidth) <= 0.001
+              && Math.abs(result.setup.grid.minor.svgHeight - result.setup.single.shapeHeight) <= 0.001
+              && Math.abs(
+                result.setup.grid.minor.svgWidth
+                - result.setup.grid.minor.worldSize * result.setup.grid.minor.worldToSvgScale
+              ) <= 0.001
+              && Math.abs(result.setup.grid.major.svgWidth - result.setup.grid.minor.svgWidth * 5) <= 0.001,
             megaBarOwnsEightContinuousFiveUnitCells:
               result.setup.mega.outlineWidth === 40
               && result.setup.mega.outlineHeight === 5
@@ -23202,7 +23543,8 @@ async function main() {
         result.stats.beforeBeamCount === result.stats.beforeApplied &&
         result.stats.afterBeamCount === result.stats.afterApplied &&
         result.stats.afterSkipped === 2_000 - result.stats.afterApplied &&
-        result.stats.zoomValue === 4 &&
+        result.stats.zoomValue === result.stats.zoomMax &&
+        result.stats.zoomMax >= 4 &&
         isContained(result.containment)
       );
       console.log(`${passed ? "pass" : "fail"} large-show virtualization ${JSON.stringify(result.stats)}`);
