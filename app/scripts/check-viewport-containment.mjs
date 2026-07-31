@@ -17573,6 +17573,7 @@ async function readMappingLiveColorSurface(client, rootSelector) {
       const hitTarget = node?.querySelector('.stageFixtureHitTarget') ?? null;
       const outline = node?.querySelector('[data-stage-fixture-outline]') ?? null;
       const segmentElements = [...(node?.querySelectorAll('[data-stage-fixture-segment]') ?? [])];
+      const beamElements = [...(root?.querySelectorAll('[data-stage-beam-fixture-id="' + id + '"]') ?? [])];
       const numberAttribute = (element, name) => Number(element?.getAttribute(name) ?? Number.NaN);
       const screenRect = (element) => {
         const rect = element?.getBoundingClientRect();
@@ -17594,6 +17595,9 @@ async function readMappingLiveColorSurface(client, rootSelector) {
         segmentWidths: segmentElements.map((segment) => numberAttribute(segment, 'width')),
         segmentHeights: segmentElements.map((segment) => numberAttribute(segment, 'height')),
         segmentScreenRects: segmentElements.map(screenRect),
+        beamCount: beamElements.length,
+        beamFills: beamElements.map((beam) => beam.getAttribute('fill')),
+        beamOpacities: beamElements.map((beam) => numberAttribute(beam, 'opacity')),
         hitTargetCount: node?.querySelectorAll('.stageFixtureHitTarget').length ?? 0,
         hitTargetScreenRect: screenRect(hitTarget),
         hitTargetSvgWidth: numberAttribute(hitTarget, 'width'),
@@ -17631,6 +17635,7 @@ async function readMappingLiveColorSurface(client, rootSelector) {
       attributeFallback: inspect(6),
       unlit: inspect(7),
       quad: inspect(8),
+      dimmerless: inspect(9),
     };
   })()`);
 }
@@ -17671,14 +17676,14 @@ async function runMappingLiveColorViewport(client, viewport) {
   await waitForApp(client);
   await waitForClientCondition(
     client,
-    "document.querySelectorAll('.setupStageContext [data-stage-fixture-id]').length === 8",
+    "document.querySelectorAll('.setupStageContext [data-stage-fixture-id]').length === 9",
     "mapping live-color fixture stage",
   );
   const initial = await readMappingLiveColorSurface(client, ".setupStageContext");
   await clickVisibleByText(client, ".workspaceTabs button", "Touch");
   await waitForClientCondition(
     client,
-    "document.querySelectorAll('.touchStagePanel [data-stage-fixture-id]').length === 8",
+    "document.querySelectorAll('.touchStagePanel [data-stage-fixture-id]').length === 9",
     "StagePreview2D live fixture surface",
   );
   const stagePreviewInitial = await readMappingLiveColorSurface(client, ".touchStagePanel");
@@ -17686,7 +17691,7 @@ async function runMappingLiveColorViewport(client, viewport) {
   await waitForApp(client);
   await waitForClientCondition(
     client,
-    "document.querySelectorAll('.setupStageContext [data-stage-fixture-id]').length === 8",
+    "document.querySelectorAll('.setupStageContext [data-stage-fixture-id]').length === 9",
     "mapping live-color fixture stage reload",
   );
   await client.evaluate(`(async () => {
@@ -17714,6 +17719,21 @@ async function runMappingLiveColorViewport(client, viewport) {
   await clickVisibleByText(client, ".workspaceTabs button", "Control");
   await sleep(120);
   const attributeControl = await readMappingLiveColorSurface(client, ".controlStageContext");
+  await client.evaluate(`window.__syndocalSetMappingLiveDmx?.({})`);
+  await waitForClientCondition(
+    client,
+    `document.querySelector('.controlStageContext [data-stage-fixture-id="6"] [data-stage-fixture-segment="1"]')?.getAttribute('fill') === 'rgb(31, 38, 46)'`,
+    "mapping all-zero preview overrides attribute fallback",
+  );
+  const zeroPreviewControl = await readMappingLiveColorSurface(client, ".controlStageContext");
+  await clickVisibleByText(client, ".workspaceTabs button", "Touch");
+  await waitForClientCondition(
+    client,
+    `document.querySelector('.touchStagePanel [data-stage-fixture-id="6"]')?.getAttribute('data-live-color-source') === 'preview'`,
+    "StagePreview2D all-zero preview source",
+  );
+  const zeroPreviewStage = await readMappingLiveColorSurface(client, ".touchStagePanel");
+  await clickVisibleByText(client, ".workspaceTabs button", "Control");
   await client.evaluate(`window.__syndocalSetMappingLiveDmx?.(${JSON.stringify({
     1: 128,
     2: 255,
@@ -17744,6 +17764,7 @@ async function runMappingLiveColorViewport(client, viewport) {
     129: 255,
     130: 255,
     131: 128,
+    140: 128,
   })})`);
   await waitForClientCondition(
     client,
@@ -17751,6 +17772,13 @@ async function runMappingLiveColorViewport(client, viewport) {
     "mapping live-color DMX injection",
   );
   const control = await readMappingLiveColorSurface(client, ".controlStageContext");
+  await clickVisibleByText(client, ".workspaceTabs button", "Touch");
+  await waitForClientCondition(
+    client,
+    `document.querySelector('.touchStagePanel [data-stage-fixture-id="9"] [data-stage-fixture-shape]')?.getAttribute('fill') === 'rgb(128, 128, 128)'`,
+    "StagePreview2D dimmerless live fixture",
+  );
+  const stagePreviewLit = await readMappingLiveColorSurface(client, ".touchStagePanel");
   await clickVisibleByText(client, ".workspaceTabs button", "Setup");
   await waitForClientCondition(
     client,
@@ -17769,7 +17797,10 @@ async function runMappingLiveColorViewport(client, viewport) {
     viewport,
     initial,
     stagePreviewInitial,
+    stagePreviewLit,
     attributeControl,
+    zeroPreviewControl,
+    zeroPreviewStage,
     structureOnly,
     setup,
     control,
@@ -17790,7 +17821,7 @@ async function runBarBeamsViewport(client, viewport) {
   await clickVisibleByText(client, "[data-control-mode-segment] button", "Live Edit");
   await waitForClientCondition(
     client,
-    "document.querySelectorAll('.controlStageContext [data-stage-fixture-id]').length === 8",
+    "document.querySelectorAll('.controlStageContext [data-stage-fixture-id]').length === 9",
     "bar beam control-stage fixtures",
   );
   await client.evaluate(`window.__syndocalSetMappingLiveDmx?.(${JSON.stringify({
@@ -19914,6 +19945,11 @@ async function runAttributeCategoriesViewport(client, viewport) {
       innerRect.bottom <= outerRect.bottom + 1
     );
     const panel = document.querySelector('.attributeDeskSurface > .channelFunctionPanel');
+    const dimmerPresetColumn = document.querySelector('.attributeDeskSurface > .dimmerControlPanel');
+    const dimmerQuickRow = dimmerPresetColumn?.querySelector('.dimmerQuickRow');
+    const dimmerQuickButtons = dimmerQuickRow
+      ? [...dimmerQuickRow.querySelectorAll(':scope > button')]
+      : [];
     const summary = panel?.querySelector(':scope > summary');
     const readouts = summary?.querySelector('.channelFunctionSummaryReadouts');
     const firstReadout = readouts?.querySelector('.channelFunctionSummaryChip');
@@ -19930,6 +19966,12 @@ async function runAttributeCategoriesViewport(client, viewport) {
     const app = document.querySelector('.app');
     return {
       panelCount: panel ? 1 : 0,
+      dimmerPresetColumnRect: rect(dimmerPresetColumn),
+      dimmerQuickRowRect: rect(dimmerQuickRow),
+      dimmerQuickButtonRects: dimmerQuickButtons.map(rect),
+      dimmerQuickButtonLabels: dimmerQuickButtons.map((button) =>
+        (button.textContent || '').replace(/\s+/g, ' ').trim()
+      ),
       open: panel instanceof HTMLDetailsElement && panel.open,
       label: (summary?.querySelector('.channelFunctionSummaryIdentity > strong')?.textContent || '').trim(),
       firstReadoutText: (firstReadout?.textContent || '').replace(/\\s+/g, ' ').trim(),
@@ -20005,6 +20047,16 @@ async function runAttributeCategoriesViewport(client, viewport) {
 
   const checks = {
     narrowedToGenericFixture: narrowed,
+    dimmerPresetColumnUsesDeskDensity:
+      dimmerClosed.dimmerPresetColumnRect?.width === 168 &&
+      JSON.stringify(dimmerClosed.dimmerQuickButtonLabels) === JSON.stringify(["Out", "Half", "Full", "Bump"]) &&
+      dimmerClosed.dimmerQuickButtonRects.length === 4 &&
+      dimmerClosed.dimmerQuickButtonRects.every((buttonRect) =>
+        buttonRect &&
+        buttonRect.width >= 37 &&
+        buttonRect.width <= 38 &&
+        buttonRect.height === 26
+      ),
     dimmerFunctionPanelPresent:
       dimmerClosed.panelCount === 1 &&
       dimmerClosed.label.includes("GDTF") &&
@@ -21350,6 +21402,8 @@ async function main() {
         results.push(result);
         console.log(
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `dimmerPreset=${result.dimmerClosed.dimmerPresetColumnRect?.width ?? 0}px ` +
+            `quickButtons=${result.dimmerClosed.dimmerQuickButtonRects.map((rect) => `${rect?.width ?? 0}x${rect?.height ?? 0}`).join("+")} ` +
             `dimmerRow=${JSON.stringify(result.dimmerClosed.firstReadoutRect)} ` +
             `panel=${JSON.stringify(result.dimmerClosed.panelRect)} ` +
             `contained=${result.dimmerClosed.firstReadoutContainedInPanel}/` +
@@ -22078,7 +22132,10 @@ async function main() {
         realSnapshotDeltaMergeUsed:
           appSource.includes("mergeEngineSnapshotSyncResponse(latestEngineSnapshot, response)")
           && appSource.includes("return applyEngineSnapshotSyncResponse(response, syncUiState)")
-          && liveStateSource.includes("response.full ?? ({ ...current, ...(response.delta ?? {}) }"),
+          && liveStateSource.includes("if (response.full) return response.full;")
+          && liveStateSource.includes("} = response.delta ?? {};")
+          && liveStateSource.includes("...current,")
+          && liveStateSource.includes("...delta,"),
         snapshotDeltaOmitsFixtureReplacement:
           appSource.includes('viewportFixture === "mapping-live-snapshot"')
           && appSource.includes("active_cue_id: viewportFixtureData.mappingLiveSnapshotAmberCue.id"),
@@ -22136,6 +22193,7 @@ async function main() {
       const appSource = readFileSync(join(appRoot, "src", "App.tsx"), "utf8");
       const liveColorSource = readFileSync(join(appRoot, "src", "fixtureLiveColor.ts"), "utf8");
       const stagePreviewSource = readFileSync(join(appRoot, "src", "components", "StagePreview2D.tsx"), "utf8");
+      const mappingBeamSource = readFileSync(join(appRoot, "src", "components", "MappingBeamsLayer.tsx"), "utf8");
       const dark = "rgb(31, 38, 46)";
       const expectedSegments = [
         "rgb(128, 0, 0)",
@@ -22163,7 +22221,14 @@ async function main() {
               && liveColorSource.includes("previewControlValueReader")
               && liveColorSource.includes("attributeControlValueReader")
               && liveColorSource.includes("const segmentLiveColor")
-              && liveColorSource.includes("segmentLiveColor(group, readControlValue)"),
+              && liveColorSource.includes("segmentLiveColor(group, readControlValue, brightness)"),
+            previewPresenceSelectsSource:
+              liveColorSource.includes("previewsByUniverse.has(fixture.universe)")
+              && appSource.includes("const previews = next.dmx_previews ?? [];"),
+            dimmerlessBrightnessProxyDocumented:
+              liveColorSource.includes("Daslight parity for dimmerless fixtures")
+              && liveColorSource.includes("previewDimmerlessBrightness")
+              && liveColorSource.includes("attributeDimmerlessBrightness"),
             liveAttributeDeltaRoute: appSource.includes("setLiveFixtures(snapshotLiveFixtures(next))")
               && appSource.includes("liveFixtures,")
               && appSource.includes("setLiveDmxPreviews(engineDmxPreviews(next))"),
@@ -22183,6 +22248,17 @@ async function main() {
               JSON.stringify(result.attributeControl.attributeFallback.segmentColors)
                 === JSON.stringify(result.initial.attributeFallback.segmentColors)
               && result.attributeControl.attributeFallback.liveColorSource === "attribute",
+            previewPresentAllZeroOverridesStaleAttributes:
+              [result.zeroPreviewControl.attributeFallback, result.zeroPreviewStage.attributeFallback]
+                .every((fixture) =>
+                  fixture.liveColorApplied === "true"
+                  && fixture.liveColorSource === "preview"
+                  && fixture.segmentColors.length === 3
+                  && fixture.segmentColors.every((color) => color === dark)
+                  && fixture.beamCount === 0),
+            previewPresentAllZeroConsumerParity:
+              JSON.stringify(result.zeroPreviewControl.attributeFallback.segmentColors)
+                === JSON.stringify(result.zeroPreviewStage.attributeFallback.segmentColors),
             initialMegaDark: result.initial.mega.segmentColors.length === 8
               && result.initial.mega.segmentColors.every((color) => color === dark),
             initialSingleDark: result.initial.single.shapeFill === dark,
@@ -22198,6 +22274,25 @@ async function main() {
               && result.stagePreviewInitial.unlit.liveColorApplied === "true"
               && result.stagePreviewInitial.unlit.liveColorSource === "attribute"
               && result.stagePreviewInitial.unlit.shapeFill !== "rgb(255, 255, 255)",
+            dimmerlessAllZeroIsDarkAcrossEverySurface:
+              [result.initial.dimmerless, result.attributeControl.dimmerless, result.stagePreviewInitial.dimmerless]
+                .every((fixture) =>
+                  fixture.shapeFill === dark
+                  && fixture.liveColorApplied === "true"
+                  && fixture.liveColorSource === "attribute"
+                  && fixture.beamCount === 0),
+            dimmerlessNonzeroIsLitAcrossEverySurface:
+              [result.setup.dimmerless, result.control.dimmerless, result.stagePreviewLit.dimmerless]
+                .every((fixture) =>
+                  fixture.shapeFill === "rgb(128, 128, 128)"
+                  && fixture.liveColorApplied === "true"
+                  && fixture.liveColorSource === "preview"
+                  && fixture.beamCount === 1
+                  && fixture.beamFills[0] === "rgb(128, 128, 128)"
+                  && fixture.beamOpacities[0] > 0),
+            unlitBeamConsumersGuarded:
+              mappingBeamSource.includes("fixture.intensity > 0")
+              && stagePreviewSource.includes("fixture.intensity > 0"),
             setupRgbFromDmx: result.setup.single.shapeFill === "rgb(64, 128, 255)",
             previewInjectionUsesPreview: result.setup.single.liveColorSource === "preview"
               && result.setup.mega.liveColorSource === "preview",
@@ -22212,7 +22307,8 @@ async function main() {
             controlMatchesSetup: JSON.stringify(result.control.mega.segmentColors) === JSON.stringify(result.setup.mega.segmentColors)
               && result.control.single.shapeFill === result.setup.single.shapeFill
               && result.control.dimmerOnly.shapeFill === result.setup.dimmerOnly.shapeFill
-              && result.control.wheel.shapeFill === result.setup.wheel.shapeFill,
+              && result.control.wheel.shapeFill === result.setup.wheel.shapeFill
+              && result.control.dimmerless.shapeFill === result.setup.dimmerless.shapeFill,
             secondInjectionUpdatesBrightness: result.updated.mega.segmentColors[0] === "rgb(64, 0, 0)",
             selectionContractPreserved: result.setup.mega.className.includes("picked")
               && result.control.mega.className.includes("picked"),
@@ -22326,6 +22422,8 @@ async function main() {
         `previewEmpty=${result.initial.attributeFallback.liveColorSource}:` +
           `${result.initial.attributeFallback.segmentCount}:` +
           `${JSON.stringify(result.initial.attributeFallback.segmentColors)} ` +
+        `previewZero=${result.zeroPreviewControl.attributeFallback.liveColorSource}:` +
+          `${JSON.stringify(result.zeroPreviewControl.attributeFallback.segmentColors)} ` +
         `stagePreview=${result.stagePreviewInitial.single.shapeFill}:` +
           `${result.stagePreviewInitial.mega.segmentCount} ` +
         `glyph=${result.setup.single.shapeWidth}x${result.setup.single.shapeHeight}:` +
@@ -22337,6 +22435,7 @@ async function main() {
           result.control.single.hitTargetMinCssPx,
         )}px ` +
         `unlit=${result.setup.unlit.liveColorSource}:${result.setup.unlit.shapeFill} ` +
+        `dimmerless=${result.setup.dimmerless.liveColorSource}:${result.setup.dimmerless.shapeFill}:beam${result.setup.dimmerless.beamCount} ` +
         `single=${result.setup.single.shapeTag}:${result.setup.single.shapeFill} ` +
         `dimmer=${result.setup.dimmerOnly.shapeFill} wheel=${result.setup.wheel.shapeFill} ` +
         `updated=${result.updated.mega.segmentColors[0]} checks=${JSON.stringify(checks)}`,

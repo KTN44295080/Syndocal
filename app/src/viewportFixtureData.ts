@@ -627,10 +627,41 @@ const mappingLiveColorFixtures: PatchedFixtureSummary[] = [
     mappingLiveQuadBarControls,
     -15,
   ),
+  {
+    ...mappingLiveFixture(
+      9,
+      "Dimmerless Laser",
+      "f3200a laser",
+      "2CH",
+      140,
+      -5,
+      4,
+      [
+        {
+          attribute: "LaserPattern",
+          channel_name: "Laser Pattern",
+          offsets: [1],
+          resolution: "EightBit",
+          default_value: 0,
+          functions: [],
+        },
+        {
+          attribute: "LaserMotor",
+          channel_name: "Laser Motor",
+          offsets: [2],
+          resolution: "EightBit",
+          default_value: 0,
+          functions: [],
+        },
+      ],
+      10,
+    ),
+    attribute_values: [],
+  },
 ];
 
 const mappingLiveSnapshotFixtures: PatchedFixtureSummary[] =
-  mappingLiveColorFixtures.map((fixture) => ({
+  mappingLiveColorFixtures.filter((fixture) => fixture.id !== 9).map((fixture) => ({
     ...fixture,
     attribute_values: fixture.controls.map((control) => ({
       attribute: control.attribute,

@@ -1786,7 +1786,7 @@ export default function App() {
   const initialEngineSnapshot = createInitialEngineSnapshot();
   const [snapshot, setSnapshot] = createSignal<EngineSnapshot>(initialEngineSnapshot);
   const engineDmxPreviews = (next: EngineSnapshot) => {
-    const previews = (next.dmx_previews ?? []).filter((preview) => preview.values.length > 0);
+    const previews = next.dmx_previews ?? [];
     const legacyPreview = next.dmx_preview ?? [];
     return previews.length > 0
       ? previews

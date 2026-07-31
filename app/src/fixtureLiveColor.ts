@@ -49,8 +49,16 @@ interface SegmentControlGroup {
 
 type ControlValueReader = (control: AttributeControl) => number;
 
+interface FixtureBrightness {
+  hasDimmer: boolean;
+  dimmerlessProxy: number;
+}
+
 const clampByte = (value: number) =>
   Math.max(0, Math.min(255, Number.isFinite(value) ? Math.round(value) : 0));
+
+const clampControlValue = (value: number) =>
+  Math.max(0, Math.min(65_535, Number.isFinite(value) ? value : 0));
 
 const normalizeControlName = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "");
 
@@ -170,6 +178,33 @@ const attributeControlValueReader = (
   return (control) => valuesByAttribute.get(control.attribute.toLowerCase()) ?? control.default_value;
 };
 
+const previewDimmerlessBrightness = (
+  fixture: PatchedFixtureSummary,
+  universeValues: number[],
+) => {
+  const footprint = Math.max(
+    0,
+    ...fixture.controls.flatMap((control) =>
+      control.offsets.filter((offset) => Number.isInteger(offset) && offset > 0)),
+  );
+  let brightestByte = 0;
+  for (let offset = 1; offset <= footprint; offset += 1) {
+    brightestByte = Math.max(
+      brightestByte,
+      clampByte(universeValues[fixture.address + offset - 2] ?? 0),
+    );
+  }
+  return brightestByte / 255;
+};
+
+const attributeDimmerlessBrightness = (
+  attributeValues: AttributeValueSummary[],
+) =>
+  attributeValues.reduce(
+    (brightest, entry) => Math.max(brightest, clampControlValue(entry.value) / 65_535),
+    0,
+  );
+
 const parseHexColor = (color: string) => {
   const match = color.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
   return match
@@ -180,6 +215,7 @@ const parseHexColor = (color: string) => {
 const segmentLiveColor = (
   group: SegmentControlGroup,
   readControlValue: ControlValueReader,
+  brightness: FixtureBrightness,
 ): FixtureLiveColorSegment & Pick<FixtureLiveColor, "source"> => {
   const globalDimmers = group.controls.filter((descriptor) =>
     descriptor.dimmer && descriptor.segmentIndex === null && descriptor.geometry === null);
@@ -189,7 +225,9 @@ const segmentLiveColor = (
     dimmers.length > 0
       ? Math.max(...dimmers.map(({ control }) => readControlValue(control) / 65_535))
       : 1;
-  const dimmer = dimmerLevel(globalDimmers) * dimmerLevel(localDimmers);
+  const dimmer = brightness.hasDimmer
+    ? dimmerLevel(globalDimmers) * dimmerLevel(localDimmers)
+    : brightness.dimmerlessProxy;
   const channelLevel = (role: ColorRole) =>
     Math.min(
       1,
@@ -235,6 +273,19 @@ const segmentLiveColor = (
     }
   }
 
+  if (!brightness.hasDimmer) {
+    const colorPeak = Math.max(red, green, blue);
+    if (colorPeak > 0) {
+      red /= colorPeak;
+      green /= colorPeak;
+      blue /= colorPeak;
+    } else if (dimmer > 0) {
+      red = 1;
+      green = 1;
+      blue = 1;
+    }
+  }
+
   const output = [
     clampByte(red * dimmer * 255),
     clampByte(green * dimmer * 255),
@@ -254,14 +305,26 @@ export const fixtureLiveColor = (
   previewsByUniverse: ReadonlyMap<number, number[]>,
   attributeValues: AttributeValueSummary[] = fixture.attribute_values,
 ): FixtureLiveColor => {
-  const universeValues = previewsByUniverse.get(fixture.universe);
-  const hasPreview = Boolean(universeValues && universeValues.length > 0);
+  const hasPreview = previewsByUniverse.has(fixture.universe);
+  const universeValues = previewsByUniverse.get(fixture.universe) ?? [];
   const valueSource = hasPreview ? "preview" : "attribute";
   const readControlValue = valueSource === "preview"
-    ? previewControlValueReader(fixture, universeValues!)
+    ? previewControlValueReader(fixture, universeValues)
     : attributeControlValueReader(attributeValues);
+  const hasDimmer = fixture.controls.some(controlIsDimmer);
+  // Daslight parity for dimmerless fixtures: use the normalized maximum current
+  // DMX byte in the fixture footprint, or attribute value on fallback, as a
+  // surrogate dimmer so an all-zero fixture is unlit instead of assumed full.
+  const brightness: FixtureBrightness = {
+    hasDimmer,
+    dimmerlessProxy: hasDimmer
+      ? 1
+      : valueSource === "preview"
+        ? previewDimmerlessBrightness(fixture, universeValues)
+        : attributeDimmerlessBrightness(attributeValues),
+  };
   const segments = fixtureSegmentControlGroups(fixture)
-    .map((group) => segmentLiveColor(group, readControlValue));
+    .map((group) => segmentLiveColor(group, readControlValue, brightness));
   const brightest = segments.reduce(
     (current, segment) => segment.intensity > current.intensity ? segment : current,
     segments[0],

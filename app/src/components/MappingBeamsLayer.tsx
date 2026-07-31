@@ -15,7 +15,7 @@ type MappingBeamsLayerProps = {
 
 export function MappingBeamsLayer(props: MappingBeamsLayerProps) {
   return (
-    <For each={props.fixtures}>
+    <For each={props.fixtures.filter((fixture) => fixture.intensity > 0)}>
       {(fixture) => {
         const beams = () => fixture.beams ?? [{
           cellIndex: 1,

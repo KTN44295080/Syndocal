@@ -54,6 +54,7 @@
     "check:stage-middle-pan": "node scripts/check-viewport-containment.mjs --stage-middle-pan-only",
     "check:context-menu": "node scripts/check-viewport-containment.mjs --context-menu-only",
     "check:control-stage-fixture-edit": "node scripts/check-viewport-containment.mjs --control-stage-fixture-edit-only",
+    "check:fixture-live-color": "node scripts/check-fixture-live-color.mjs",
     "check:mapping-live-color": "node scripts/check-viewport-containment.mjs --mapping-live-color-only",
     "check:mapping-live-segments": "node scripts/check-viewport-containment.mjs --mapping-live-segments-only",
     "check:mapping-live-snapshot": "node scripts/check-viewport-containment.mjs --mapping-live-snapshot-only",

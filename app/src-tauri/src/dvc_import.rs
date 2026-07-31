@@ -585,7 +585,10 @@ fn parse_profile(
         };
         let attribute = unique_attribute(attribute_base, &mut attribute_counts);
         let functions = parse_channel_functions(channel, &attribute, &resolution);
-        let default_value = channel_default_value(channel, &resolution);
+        // Daslight LIVE has a blackout baseline when no scene is active. The
+        // profile's SSLPRESETDMXDEFAULT is an editor reference value, so it is
+        // intentionally not used as the imported control's idle default.
+        let default_value = 0;
         controls.push(AttributeControl {
             attribute: attribute.clone(),
             channel_name,
@@ -685,23 +688,6 @@ fn parse_channel_functions(
             })
         })
         .collect()
-}
-
-fn channel_default_value(channel: Node<'_, '_>, resolution: &AttributeResolution) -> u16 {
-    let preferred = channel
-        .descendants()
-        .filter(|node| node.has_tag_name("SSLPRESET"))
-        .find(|node| node.attribute("SSLPRESETDEFAULTPRESET") == Some("1"))
-        .or_else(|| {
-            channel
-                .descendants()
-                .find(|node| node.has_tag_name("SSLPRESET"))
-        });
-    preferred
-        .and_then(|preset| preset.attribute("SSLPRESETDMXDEFAULT"))
-        .and_then(|value| value.parse::<u16>().ok())
-        .map(|value| scale_dmx_value(value, resolution))
-        .unwrap_or(0)
 }
 
 fn scale_dmx_value(value: u16, resolution: &AttributeResolution) -> u16 {
@@ -3760,11 +3746,19 @@ mod tests {
 
     #[test]
     fn dvc_synthetic_project_imports_patch_group_cues_and_super_scene() {
-        let source = synthetic_dvc();
+        let source = synthetic_dvc().replacen(
+            r#"SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1""#,
+            r#"SSLPRESETDMXDEFAULT="255" SSLPRESETDEFAULTPRESET="1""#,
+            1,
+        );
         let outcome = import_bytes(source.as_bytes(), "synthetic.dvc").unwrap();
         crate::validate_project_file(&outcome.project).unwrap();
         assert_eq!(outcome.project.snapshot.fixtures.len(), 1);
         assert_eq!(outcome.project.custom_profiles.len(), 1);
+        assert_eq!(
+            outcome.project.custom_profiles[0].dmx_modes[0].controls[0].default_value,
+            0
+        );
         assert_eq!(outcome.project.snapshot.fixtures[0].universe, 0);
         assert_eq!(outcome.project.snapshot.fixtures[0].address, 1);
         assert_eq!(outcome.project.snapshot.group_colors["Bank 1"], "#112233");
@@ -3997,8 +3991,16 @@ mod tests {
 
     #[test]
     fn dvc3b_six_spatial_generators_convert_with_palette_and_beam_order() {
-        let xml = synthetic_dvc3b();
+        let xml = synthetic_dvc3b().replacen(
+            r#"SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1""#,
+            r#"SSLPRESETDMXDEFAULT="255" SSLPRESETDEFAULTPRESET="1""#,
+            1,
+        );
         let outcome = import_bytes(xml.as_bytes(), "synthetic-dvc3b.dvc").unwrap();
+        assert_eq!(
+            outcome.project.custom_profiles[0].dmx_modes[0].controls[0].default_value,
+            0
+        );
         assert_eq!(outcome.report.summary.effects_converted, 6);
         assert_eq!(outcome.report.summary.effects_skipped, 0);
         assert!(outcome

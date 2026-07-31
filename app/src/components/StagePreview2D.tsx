@@ -252,7 +252,8 @@ export function StagePreview2D(props: StagePreview2DProps) {
         )}
       </For>
       <Show when={props.showBeams !== false}>
-        <For each={props.fixtures.filter((fixture) => fixture.liveColorApplied !== false)}>
+        <For each={props.fixtures.filter((fixture) =>
+          fixture.liveColorApplied !== false && fixture.intensity > 0)}>
           {(fixture) => (
             <For each={fixture.beams ?? [{
               cellIndex: 1,
