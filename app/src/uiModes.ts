@@ -10,7 +10,6 @@ export type EditDeskSurface = "faders" | "attributes";
 export const setupAreas: { id: SetupArea; label: string; description: string; defaultTab: SetupSubTab }[] = [
   { id: "lighting", label: "Lighting", description: "Fixture library, profiles, and DMX patch", defaultTab: "patch" },
   { id: "video", label: "Video", description: "Compositions, displays, and projector calibration", defaultTab: "video" },
-  { id: "mapping", label: "Stage", description: "Full-screen view of the Setup 2D stage band for lighting fixture layout", defaultTab: "mapping" },
   { id: "io", label: "I/O", description: "DMX, MIDI, OSC, and remote connections", defaultTab: "dmx" },
 ];
 
@@ -19,7 +18,6 @@ export const setupSubTabs: { id: SetupSubTab; area: SetupArea; label: string; de
   { id: "profiles", area: "lighting", label: "Profiles", description: "Fixture profile authoring" },
   { id: "patch", area: "lighting", label: "Patch", description: "DMX addressing and fixture assignment" },
   { id: "video", area: "video", label: "Outputs", description: "Compositions, output routing, resolution, and projection calibration" },
-  { id: "mapping", area: "mapping", label: "Stage", description: "Full-screen view of the Setup 2D stage band for lighting fixture layout" },
   { id: "dmx", area: "io", label: "DMX", description: "Art-Net, sACN, and serial DMX routing" },
   { id: "midi", area: "io", label: "MIDI", description: "MIDI clock, control mapping, and feedback" },
   { id: "osc", area: "io", label: "OSC", description: "OSC listener and address mapping" },

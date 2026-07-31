@@ -43,14 +43,16 @@ export function MappingStageConfigPanel(props: MappingStageConfigPanelProps) {
           {props.stageWorldBounds.maxZ.toFixed(1)}
         </span>
       </div>
-      <div class="mappingStageBoundsActions">
+      <div class="mappingStageBoundsActions" data-stage-settings-group="bounds-fit">
         <button
+          data-stage-bounds-action="fit-current"
           class={props.stageMap.locked ? "active" : ""}
           onClick={() => void props.onLockToCurrentBounds()}
         >
           Fit Current
         </button>
         <button
+          data-stage-bounds-action="auto-fit"
           class={!props.stageMap.locked ? "active" : ""}
           onClick={() => void props.onSetStageMapConfig({ locked: false }, "Unlocked 2D stage map auto-fit.")}
         >
@@ -61,6 +63,7 @@ export function MappingStageConfigPanel(props: MappingStageConfigPanelProps) {
         <label>
           Min X
           <input
+            data-stage-bounds-input="min-x"
             type="number"
             step="0.1"
             value={props.stageMap.min_x}
@@ -72,6 +75,7 @@ export function MappingStageConfigPanel(props: MappingStageConfigPanelProps) {
         <label>
           Max X
           <input
+            data-stage-bounds-input="max-x"
             type="number"
             step="0.1"
             value={props.stageMap.max_x}
@@ -83,6 +87,7 @@ export function MappingStageConfigPanel(props: MappingStageConfigPanelProps) {
         <label>
           Min Z
           <input
+            data-stage-bounds-input="min-z"
             type="number"
             step="0.1"
             value={props.stageMap.min_z}
@@ -94,6 +99,7 @@ export function MappingStageConfigPanel(props: MappingStageConfigPanelProps) {
         <label>
           Max Z
           <input
+            data-stage-bounds-input="max-z"
             type="number"
             step="0.1"
             value={props.stageMap.max_z}
@@ -129,23 +135,25 @@ export function MappingStageConfigPanel(props: MappingStageConfigPanelProps) {
             </For>
           </select>
         </label>
-        <div class="mappingStagePresetActions">
-          <button onClick={() => void props.onSaveStageMapPreset()}>
+        <div class="mappingStagePresetActions" data-stage-settings-group="stage-map-presets">
+          <button data-stage-map-preset-action="save" onClick={() => void props.onSaveStageMapPreset()}>
             Save
           </button>
-          <button onClick={() => void props.onExportStageMapPreset()}>
+          <button data-stage-map-preset-action="export" onClick={() => void props.onExportStageMapPreset()}>
             Export
           </button>
-          <button onClick={() => void props.onImportStageMapPreset()}>
+          <button data-stage-map-preset-action="import" onClick={() => void props.onImportStageMapPreset()}>
             Import
           </button>
           <button
+            data-stage-map-preset-action="apply"
             disabled={!props.selectedStageMapPresetLabel}
             onClick={() => void props.onApplyStageMapPreset(props.selectedStageMapPresetLabel)}
           >
             Apply
           </button>
           <button
+            data-stage-map-preset-action="delete"
             disabled={!props.selectedStageMapPresetLabel}
             onClick={() => void props.onRemoveStageMapPreset(props.selectedStageMapPresetLabel)}
           >
@@ -179,26 +187,28 @@ export function MappingStageConfigPanel(props: MappingStageConfigPanelProps) {
             </For>
           </select>
         </label>
-        <div class="mappingStagePresetActions viewPresetActions">
-          <button onClick={props.onSaveMappingViewPreset}>
+        <div class="mappingStagePresetActions viewPresetActions" data-stage-settings-group="view-presets">
+          <button data-view-preset-action="save" onClick={props.onSaveMappingViewPreset}>
             Save View
           </button>
           <button
+            data-view-preset-action="apply"
             disabled={!props.selectedMappingViewPresetId}
             onClick={() => props.onApplyMappingViewPreset(props.selectedMappingViewPresetId)}
           >
             Apply View
           </button>
           <button
+            data-view-preset-action="delete"
             disabled={!props.selectedMappingViewPresetId}
             onClick={() => props.onRemoveMappingViewPreset(props.selectedMappingViewPresetId)}
           >
             Delete View
           </button>
-          <button onClick={props.onExportMappingStageSvg}>
+          <button data-stage-export-action="svg" onClick={props.onExportMappingStageSvg}>
             Export SVG
           </button>
-          <button onClick={() => void props.onExportVisualizerRenderPayload()}>
+          <button data-stage-export-action="json" onClick={() => void props.onExportVisualizerRenderPayload()}>
             Export JSON
           </button>
         </div>

@@ -22,7 +22,6 @@ type WithoutChildren<T> = Omit<T, "children">;
 
 type MappingPersistentWorkspaceBandProps = {
   workspace: "setup" | "control";
-  mappingWorkspaceExpanded: boolean;
   controlMode: ControlMode;
   controlHeaderTitle: JSX.Element;
   controlHeaderTools?: JSX.Element;
@@ -127,8 +126,7 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
 
   return (
     <section
-      class={`mappingPersistentWorkspaceBand${props.mappingWorkspaceExpanded ? " mappingWorkspaceExpanded" : ""}${timelinePaneExpanded() ? " timelinePaneExpanded" : ""}${props.poppedPanes.includes("stage") ? " stagePanePopped" : ""}${props.poppedPanes.includes("timeline") ? " timelinePanePopped" : ""}`}
-      data-mapping-workspace-expanded={props.mappingWorkspaceExpanded ? "true" : "false"}
+      class={`mappingPersistentWorkspaceBand${timelinePaneExpanded() ? " timelinePaneExpanded" : ""}${props.poppedPanes.includes("stage") ? " stagePanePopped" : ""}${props.poppedPanes.includes("timeline") ? " timelinePanePopped" : ""}`}
       data-timeline-pane-expanded={timelinePaneExpanded() ? "true" : "false"}
       data-control-stage-chrome={props.workspace === "control" ? "true" : undefined}
       data-workspace-pane="lower"
@@ -331,15 +329,17 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
               </>
             }
           >
-            <Show
-              when={props.mappingWorkspaceExpanded}
-              fallback={<MappingSetupContextPanel {...props.selection} />}
-            >
-              <div class="mappingExpandedStageConfig" data-mapping-expanded-stage-config>
-                <MappingStageConfigPanel {...props.stageConfig} />
+            <div class="mappingSetupContextStack">
+              <details class="stageSettingsDisclosure" data-stage-settings-disclosure>
+                <summary data-stage-settings-disclosure-toggle>Stage Settings</summary>
+                <div class="stageSettingsDisclosureBody" data-stage-settings-panel>
+                  <MappingStageConfigPanel {...props.stageConfig} />
+                </div>
+              </details>
+              <div class="mappingSetupContextMain">
+                <MappingSetupContextPanel {...props.selection} />
               </div>
-              <MappingSetupContextPanel {...props.selection} />
-            </Show>
+            </div>
           </Show>
         </aside>
       </div>

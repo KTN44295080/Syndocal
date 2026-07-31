@@ -42,7 +42,6 @@ const allowedSetupSubTabs: SetupSubTab[] = [
   "profiles",
   "patch",
   "video",
-  "mapping",
   "dmx",
   "midi",
   "osc",

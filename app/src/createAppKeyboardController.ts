@@ -118,7 +118,7 @@ export function createAppKeyboardController(options: AppKeyboardControllerOption
       }
     }
 
-    if (options.workspaceTab() === "setup" && options.setupSubTab() === "mapping") {
+    if (options.workspaceTab() === "setup") {
       if (event.key === "?" || (event.code === "Slash" && event.shiftKey)) {
         event.preventDefault();
         options.setMappingHotkeyHelpOpen((open) => !open);

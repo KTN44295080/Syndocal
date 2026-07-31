@@ -17234,10 +17234,9 @@ export default function App() {
           onSelectionsDrawerOpen={setSelectionsDrawerOpen}
           onOpenMapping={() => {
             setWorkspaceTab("setup");
-            selectSetupMode("mapping");
+            selectSetupMode("patch");
           }}
           workspace={workspaceTab() === "control" ? "control" : "setup"}
-          mappingWorkspaceExpanded={workspaceTab() === "setup" && setupSubTab() === "mapping"}
           controlMode={controlMode()}
           controlHeaderTitle={faderDeskTitle()}
           controlHeaderTools={

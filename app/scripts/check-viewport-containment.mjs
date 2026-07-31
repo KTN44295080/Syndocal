@@ -26,8 +26,8 @@ const setupDmxOnlyMode = process.argv.includes("--setup-dmx-only");
 const timelineSlimOnlyMode = process.argv.includes("--timeline-slim-only");
 const patchOnlyMode = process.argv.includes("--patch-only");
 const persistentBandOnlyMode = process.argv.includes("--persistent-band-only");
-const mappingExpansionOnlyMode = process.argv.includes("--mapping-expansion-only");
-const setupMappingSequenceOnlyMode = process.argv.includes("--setup-mapping-sequence-only");
+const stageSettingsOnlyMode = process.argv.includes("--stage-settings-only");
+const setupStageBandSequenceOnlyMode = process.argv.includes("--setup-stage-band-sequence-only");
 const timelineExpansionOnlyMode = process.argv.includes("--timeline-expansion-only");
 const paneWindowOnlyMode = process.argv.includes("--pane-window-only");
 const workspaceSplitOnlyMode = process.argv.includes("--workspace-split-only");
@@ -169,7 +169,6 @@ const setupTabs = [
   { area: "Lighting", tab: "Profiles", id: "profiles" },
   { area: "Lighting", tab: "Patch", id: "patch" },
   { area: "Video", tab: "Outputs", id: "video" },
-  { area: "Stage", tab: "Stage", id: "mapping" },
   { area: "I/O", tab: "DMX", id: "dmx" },
   { area: "I/O", tab: "MIDI", id: "midi" },
   { area: "I/O", tab: "OSC", id: "osc" },
@@ -2066,8 +2065,8 @@ async function checkKeyboardNavigation(client) {
 
   await pressKey(client, "F1");
   await sleep(60);
-  await clickByText(client, "Stage");
-  await clickByText(client, "Stage");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
   await sleep(80);
   const setupEditableGuard = await client.evaluate(`(async () => {
     const visible = (element) => {
@@ -2176,7 +2175,7 @@ async function measurePersistentBand(client, label) {
       visibleControlStagePanelCount: visibleElements('.controlStagePanel').length,
       visibleControlStageCount: visibleElements('.controlStage').length,
       controlStageToolItemsShareOneRow: (() => {
-        if (controlStageToolItems.length !== 10) return false;
+        if (controlStageToolItems.length !== 14) return false;
         const tops = controlStageToolItems.map((item) => item.getBoundingClientRect().top);
         return Math.max(...tops) - Math.min(...tops) <= 1;
       })(),
@@ -3139,7 +3138,7 @@ async function runLiveDeskHeaderViewport(client, viewport) {
   };
 }
 
-async function measureMappingExpansionState(client) {
+async function measureStageSettingsState(client) {
   return await client.evaluate(`(async () => {
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
     const isVisible = (element) => {
@@ -3148,9 +3147,8 @@ async function measureMappingExpansionState(client) {
       const style = getComputedStyle(element);
       return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
     };
-    const measuredRect = (selector, visibleOnly = true) => {
-      const elements = [...document.querySelectorAll(selector)];
-      const element = visibleOnly ? elements.find(isVisible) : elements[0];
+    const measuredRect = (selector) => {
+      const element = [...document.querySelectorAll(selector)].find(isVisible);
       if (!element) return null;
       const rect = element.getBoundingClientRect();
       const precision = (value) => Math.round(value * 100) / 100;
@@ -3167,25 +3165,56 @@ async function measureMappingExpansionState(client) {
     const body = document.body;
     const app = document.querySelector('.app');
     const layout = document.querySelector('[data-workspace-split-root="true"]');
-    const band = document.querySelector('.mappingPersistentWorkspaceBand');
-    const stageHost = document.querySelector('.mappingPersistentStage');
-    const mappingGrid = document.querySelector('.mappingPersistentWorkspaceGrid');
-    const drawer = document.querySelector('[data-workspace-selection-drawer]');
-    const config = document.querySelector('[data-mapping-expanded-stage-config]');
-    const visibleConfigControls = config
-      ? [...config.querySelectorAll('button, input, select')].filter(isVisible).length
-      : 0;
-    const stageContain = stageHost ? getComputedStyle(stageHost).contain : '';
+    const disclosure = document.querySelector('[data-stage-settings-disclosure]');
+    const panel = document.querySelector('[data-stage-settings-panel]');
+    const context = document.querySelector('[data-workspace-pane="lower-right"]');
+    let lastConfigControlReachable = false;
+    if (disclosure instanceof HTMLDetailsElement && disclosure.open && panel instanceof HTMLElement) {
+      const previousScrollTop = panel.scrollTop;
+      const lastControl = panel.querySelector('[data-stage-export-action="json"]');
+      lastControl?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+      const panelRect = panel.getBoundingClientRect();
+      const controlRect = lastControl?.getBoundingClientRect();
+      lastConfigControlReachable = Boolean(
+        controlRect &&
+        controlRect.top >= panelRect.top - 1 &&
+        controlRect.bottom <= panelRect.bottom + 1 &&
+        controlRect.bottom <= innerHeight + 1
+      );
+      panel.scrollTop = previousScrollTop;
+    }
+    const setupAreaLabels = [...document.querySelectorAll('.setupAreaTabs button')]
+      .map((button) => (button.textContent || '').replace(/\\s+/g, ' ').trim());
+    const setupModeLabels = [...document.querySelectorAll('.setupModeTabs button')]
+      .map((button) => (button.textContent || '').replace(/\\s+/g, ' ').trim());
+    let storedSetupSubTab = '';
+    try {
+      storedSetupSubTab = JSON.parse(window.localStorage.getItem('syndocal.workspaceLayout.v1') || '{}').setup_sub_tab || '';
+    } catch {}
     return {
-      mappingWorkspaceExpanded:
-        band?.getAttribute('data-mapping-workspace-expanded') === 'true' &&
-        band?.classList.contains('mappingWorkspaceExpanded'),
-      layoutRect: measuredRect('[data-workspace-split-root="true"]'),
-      bandRect: measuredRect('.mappingPersistentWorkspaceBand'),
-      stageHostRect: measuredRect('.mappingPersistentStage'),
-      stageCanvasRect: measuredRect('[data-persistent-band-part="stage"]'),
-      configRect: measuredRect('[data-mapping-expanded-stage-config]'),
-      contextContentRect: measuredRect('.mappingSetupContextContent'),
+      setupAreaLabels,
+      setupModeLabels,
+      stageAreaTabCount: setupAreaLabels.filter((label) => label === 'Stage').length,
+      stageSubTabCount: setupModeLabels.filter((label) => label === 'Stage').length,
+      setupModePatchActive: Boolean(document.querySelector('.layoutSetup.setupMode-patch')),
+      setupModeDmxActive: Boolean(document.querySelector('.layoutSetup.setupMode-dmx')),
+      setupModeMappingActive: Boolean(document.querySelector('.layoutSetup.setupMode-mapping')),
+      legacyExpansionMarkerCount: document.querySelectorAll(
+        '.mappingWorkspaceExpanded, [data-mapping-workspace-expanded], [data-mapping-expanded-stage-config]'
+      ).length,
+      disclosureCount: document.querySelectorAll('[data-stage-settings-disclosure]').length,
+      disclosureOpen: disclosure instanceof HTMLDetailsElement && disclosure.open,
+      disclosureSummaryText: (disclosure?.querySelector('summary')?.textContent || '').replace(/\\s+/g, ' ').trim(),
+      panelVisible: isVisible(panel),
+      panelInsideLowerRight: Boolean(panel && context && context.contains(panel)),
+      boundsInputCount: panel?.querySelectorAll('[data-stage-bounds-input]').length ?? 0,
+      boundsFitButtonCount: panel?.querySelectorAll('[data-stage-bounds-action]').length ?? 0,
+      stageMapPresetActionCount: panel?.querySelectorAll('[data-stage-map-preset-action]').length ?? 0,
+      viewPresetActionCount: panel?.querySelectorAll('[data-view-preset-action]').length ?? 0,
+      exportActionCount: panel?.querySelectorAll('[data-stage-export-action]').length ?? 0,
+      configControlCount: panel?.querySelectorAll('button, input, select').length ?? 0,
+      lastConfigControlReachable,
       persistentBandRects: {
         groups: measuredRect('[data-persistent-band-part="groups"]'),
         stage: measuredRect('[data-workspace-pane="lower-left"]'),
@@ -3194,14 +3223,10 @@ async function measureMappingExpansionState(client) {
       },
       horizontalSplitterRect: measuredRect('[data-workspace-splitter="upper-lower"]'),
       verticalSplitterRect: measuredRect('[data-workspace-splitter="lower-left-right"]'),
-      mappingTopPanelRect: measuredRect('.mappingSetupTopPanel'),
-      selectionDrawerOpen: drawer instanceof HTMLDetailsElement && drawer.open,
-      visibleControlSelectionListCount: [...document.querySelectorAll('[data-control-stage-selection-list]')]
-        .filter(isVisible).length,
-      visibleConfigControls,
-      stageContain,
-      mappingGridRows: mappingGrid ? getComputedStyle(mappingGrid).gridTemplateRows : '',
-      workspaceStorageRaw: window.localStorage.getItem('syndocal.workspaceLayout.v1') ?? '',
+      selectionDrawerOpen:
+        document.querySelector('[data-workspace-selection-drawer]') instanceof HTMLDetailsElement &&
+        document.querySelector('[data-workspace-selection-drawer]').open,
+      storedSetupSubTab,
       documentAndAppScrollZero:
         window.scrollX === 0 && window.scrollY === 0 &&
         documentElement.scrollWidth === documentElement.clientWidth &&
@@ -3230,151 +3255,87 @@ async function ensureMappingSelectionDrawerOpen(client) {
   return opened;
 }
 
-function clippedRectArea(rect, clip) {
-  if (!rect || !clip) return 0;
-  const left = Math.max(rect.x, clip.x);
-  const top = Math.max(rect.y, clip.y);
-  const right = Math.min(rect.right, clip.right);
-  const bottom = Math.min(rect.bottom, clip.bottom);
-  return Math.max(0, right - left) * Math.max(0, bottom - top);
-}
-
-async function runMappingExpansionCheck(client, viewport) {
+async function runStageSettingsCheck(client, viewport) {
   await clickByText(client, "Setup");
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
   await sleep(120);
   const drawerOpened = await ensureMappingSelectionDrawerOpen(client);
-  const before = await measureMappingExpansionState(client);
+  const collapsed = await measureStageSettingsState(client);
+  await clickVisibleSelector(client, '[data-stage-settings-disclosure-toggle]');
+  await sleep(120);
+  const opened = await measureStageSettingsState(client);
 
-  await clickByText(client, "Stage");
-  await clickByText(client, "Stage");
+  await pressKey(client, "Digit4", "4", 1);
   await sleep(160);
-  const expanded = await measureMappingExpansionState(client);
+  const oldStageShortcut = await measureStageSettingsState(client);
+
+  await clickByText(client, "Video");
+  await clickByText(client, "Outputs");
+  await sleep(160);
+  const video = await measureStageSettingsState(client);
+
+  await clickByText(client, "I/O");
+  await clickByText(client, "DMX");
+  await sleep(160);
+  const dmx = await measureStageSettingsState(client);
 
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
   await sleep(160);
-  const restoredSubtab = await measureMappingExpansionState(client);
+  const restored = await measureStageSettingsState(client);
 
-  await clickByText(client, "Stage");
-  await clickByText(client, "Stage");
-  await sleep(160);
-  const expandedAgain = await measureMappingExpansionState(client);
   await clickByText(client, "Control");
   await clickByText(client, "Live Edit");
+  await clickVisibleSelector(client, '[data-control-stage-mapping-link]');
   await sleep(160);
-  const restoredWorkspace = await measureMappingExpansionState(client);
+  const mappingLinkReturn = await measureStageSettingsState(client);
 
   const partNames = ["groups", "stage", "selections", "context"];
   const allPartsPresent = (state) => partNames.every((part) => Boolean(state.persistentBandRects[part]));
-  const allPartsRestored = (state) => partNames.every((part) =>
+  const allPartsStable = (state) => partNames.every((part) =>
     persistentBandRectsWithinTolerance(
-      before.persistentBandRects[part],
+      collapsed.persistentBandRects[part],
       state.persistentBandRects[part],
       0.5,
     )
   );
-  const stableHostPartNames = ["groups", "stage", "context"];
-  const stableHostsRestored = (state) => stableHostPartNames.every((part) =>
-    persistentBandRectsWithinTolerance(
-      before.persistentBandRects[part],
-      state.persistentBandRects[part],
-      0.5,
-    )
-  );
-  const oldUpperRect = before.layoutRect && before.bandRect ? {
-    x: before.layoutRect.x,
-    y: before.layoutRect.y,
-    width: before.layoutRect.width,
-    height: Math.max(0, before.bandRect.y - before.layoutRect.y),
-    right: before.layoutRect.right,
-    bottom: before.bandRect.y,
-  } : null;
-  const oldUpperArea = oldUpperRect ? oldUpperRect.width * oldUpperRect.height : 0;
-  const oldUpperCoveredArea = oldUpperRect
-    ? [
-        expanded.persistentBandRects.groups,
-        expanded.stageHostRect,
-        expanded.configRect,
-      ].reduce((area, rect) => area + clippedRectArea(rect, oldUpperRect), 0)
-    : 0;
-  const oldUpperUnfilledRatio = oldUpperArea > 0
-    ? Math.max(0, 1 - Math.min(1, oldUpperCoveredArea / oldUpperArea))
-    : 1;
-  const normalStageHeight = before.stageHostRect?.height ?? 0;
-  const expandedStageHeight = expanded.stageHostRect?.height ?? 0;
-  const stageHeightRatio = normalStageHeight > 0 ? expandedStageHeight / normalStageHeight : 0;
-  const bandFillsLayout = (state) => Boolean(
-    state.bandRect &&
-    state.layoutRect &&
-    persistentBandRectsWithinTolerance(state.bandRect, state.layoutRect, 0.5)
-  );
-  const settingsStackFillsRightColumn = (state) => Boolean(
-    state.configRect &&
-    state.contextContentRect &&
-    state.persistentBandRects.context &&
-    Math.abs(state.configRect.x - state.persistentBandRects.context.x) <= 0.5 &&
-    Math.abs(state.configRect.width - state.persistentBandRects.context.width) <= 0.5 &&
-    Math.abs(state.configRect.y - state.persistentBandRects.context.y) <= 0.5 &&
-    Math.abs(state.configRect.bottom - state.contextContentRect.y) <= 1 &&
-    Math.abs(state.contextContentRect.bottom - state.persistentBandRects.context.bottom) <= 0.5
-  );
-  const fixedContainedStageHost = (state) => Boolean(
-    state.stageHostRect?.height > 0 &&
-    state.stageContain.includes("size") &&
-    state.stageContain.includes("layout") &&
-    state.mappingGridRows &&
-    !state.mappingGridRows.includes("auto")
-  );
-  const mappingExpansionConditions = [
-    ["selectionDrawerOpenedForFourRegionContract", () => Boolean(drawerOpened && before.selectionDrawerOpen)],
-    ["normalFourRegionRectsPresent", () => allPartsPresent(before)],
-    ["mappingExpandedStateApplied", () => Boolean(expanded.mappingWorkspaceExpanded)],
-    ["mappingExpandedStageAtLeastDoubleNormal", () => stageHeightRatio >= 2],
-    ["primaryMappingStageHostAtLeast900Px", () =>
-      viewport.width !== 1920 || viewport.height !== 1080 || expandedStageHeight >= 900],
-    ["mappingExpandedBandFillsWorkspace", () => bandFillsLayout(expanded)],
-    ["mappingExpandedOldUpperAreaAtLeast98PercentFilled", () => oldUpperUnfilledRatio <= 0.02],
-    ["mappingExpandedSettingsStackFillsRightColumn", () => settingsStackFillsRightColumn(expanded)],
-    ["mappingExpandedConfigControlsVisible", () => expanded.visibleConfigControls >= 20],
-    ["mappingExpandedRemovesLegacyTopPanelAndSplitter", () =>
-      expanded.mappingTopPanelRect === null && expanded.horizontalSplitterRect === null],
-    ["mappingExpandedKeepsLowerSplitterAndAllFourRegions", () =>
-      Boolean(expanded.verticalSplitterRect) && allPartsPresent(expanded)],
-    ["mappingExpandedStageHostFixedAndContained", () => fixedContainedStageHost(expanded)],
-    ["mappingExpandedDocumentAndAppScrollZero", () => Boolean(expanded.documentAndAppScrollZero)],
-    ["mappingReentryKeepsSameExpandedGeometry", () =>
-      Boolean(
-        expandedAgain.mappingWorkspaceExpanded &&
-        persistentBandRectsWithinTolerance(expanded.stageHostRect, expandedAgain.stageHostRect, 0.5) &&
-        persistentBandRectsWithinTolerance(expanded.configRect, expandedAgain.configRect, 0.5)
-      )],
-    ["mappingSubtabExitClearsExpandedState", () =>
-      Boolean(
-        !restoredSubtab.mappingWorkspaceExpanded &&
-        restoredSubtab.configRect === null &&
-        restoredSubtab.horizontalSplitterRect
-      )],
-    ["mappingSubtabExitRestoresFourRectsWithinHalfPixel", () => allPartsRestored(restoredSubtab)],
-    ["mappingWorkspaceExitClearsExpandedState", () =>
-      Boolean(
-        !restoredWorkspace.mappingWorkspaceExpanded &&
-        restoredWorkspace.configRect === null &&
-        restoredWorkspace.horizontalSplitterRect
-      )],
-    ["mappingWorkspaceExitRestoresStableHostsAndUsesControlSelectionList", () =>
-      stableHostsRestored(restoredWorkspace) &&
-      restoredWorkspace.visibleControlSelectionListCount === 1 &&
-      Boolean(restoredWorkspace.persistentBandRects.selections)],
-    ["mappingExitKeepsDocumentAndAppScrollZero", () =>
-      Boolean(
-        restoredSubtab.documentAndAppScrollZero &&
-        expandedAgain.documentAndAppScrollZero &&
-        restoredWorkspace.documentAndAppScrollZero
-      )],
+  const setupStates = [collapsed, opened, oldStageShortcut, video, dmx, restored, mappingLinkReturn];
+  const stageSettingsConditions = [
+    ["stageSetupAreaTabAbsent", () => collapsed.stageAreaTabCount === 0],
+    ["stageSetupSubTabAbsent", () => collapsed.stageSubTabCount === 0],
+    ["legacyMappingExpansionMarkersAbsent", () =>
+      setupStates.every((state) => state.legacyExpansionMarkerCount === 0 && !state.setupModeMappingActive)],
+    ["stageSettingsDisclosureExistsCollapsedByDefault", () =>
+      collapsed.disclosureCount === 1 && !collapsed.disclosureOpen && !collapsed.panelVisible],
+    ["stageSettingsDisclosureLivesInLowerRightContext", () =>
+      collapsed.panelInsideLowerRight && collapsed.disclosureSummaryText === "Stage Settings"],
+    ["stageSettingsDisclosureOpens", () => opened.disclosureOpen && opened.panelVisible],
+    ["stageSettingsBoundsInputsCountIsFour", () => opened.boundsInputCount === 4],
+    ["stageSettingsBoundsFitButtonsCountIsTwo", () => opened.boundsFitButtonCount === 2],
+    ["stageSettingsStageMapPresetActionsCountIsFive", () => opened.stageMapPresetActionCount === 5],
+    ["stageSettingsViewPresetActionsCountIsThree", () => opened.viewPresetActionCount === 3],
+    ["stageSettingsSvgJsonExportActionsCountIsTwo", () => opened.exportActionCount === 2],
+    ["stageSettingsTotalInteractiveControlsCountIsTwenty", () => opened.configControlCount === 20],
+    ["stageSettingsLastExportControlReachableByInternalScroll", () => opened.lastConfigControlReachable],
+    ["selectionDrawerOpenedForFourRegionContract", () => Boolean(drawerOpened && collapsed.selectionDrawerOpen)],
+    ["setupFourRegionRectsPresentAcrossSubtabs", () =>
+      [collapsed, opened, oldStageShortcut, video, dmx, restored].every(allPartsPresent)],
+    ["setupFourRegionRectsStableAcrossSubtabsWithinHalfPixel", () =>
+      [opened, oldStageShortcut, video, dmx, restored].every(allPartsStable)],
+    ["setupKeepsBothFixedSplittersAcrossSubtabs", () =>
+      [collapsed, opened, oldStageShortcut, video, dmx, restored, mappingLinkReturn]
+        .every((state) => Boolean(state.horizontalSplitterRect && state.verticalSplitterRect))],
+    ["removedStageShortcutCannotReachExpandedState", () =>
+      oldStageShortcut.legacyExpansionMarkerCount === 0 && allPartsPresent(oldStageShortcut)],
+    ["controlStageLinkReturnsToFixedSetupPatchBand", () =>
+      mappingLinkReturn.setupModePatchActive &&
+      mappingLinkReturn.legacyExpansionMarkerCount === 0 &&
+      allPartsPresent(mappingLinkReturn)],
+    ["stageSettingsTraversalKeepsDocumentAndAppScrollZero", () =>
+      setupStates.every((state) => state.documentAndAppScrollZero)],
   ];
-  const checks = Object.fromEntries(mappingExpansionConditions.map(([name, check]) => {
+  const checks = Object.fromEntries(stageSettingsConditions.map(([name, check]) => {
     try {
       return [name, check()];
     } catch {
@@ -3383,25 +3344,21 @@ async function runMappingExpansionCheck(client, viewport) {
   }));
   const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
   return {
-    label: `mapping-expansion-${viewport.width}x${viewport.height}`,
+    label: `stage-settings-${viewport.width}x${viewport.height}`,
     passed: failedChecks.length === 0,
     checks,
     failedChecks,
-    metrics: {
-      normalStageHeight,
-      expandedStageHeight,
-      stageHeightRatio,
-      oldUpperUnfilledRatio,
-    },
-    before,
-    expanded,
-    expandedAgain,
-    restoredSubtab,
-    restoredWorkspace,
+    collapsed,
+    opened,
+    oldStageShortcut,
+    video,
+    dmx,
+    restored,
+    mappingLinkReturn,
   };
 }
 
-async function runMappingExpansionViewport(client, viewport) {
+async function runStageSettingsViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
     height: viewport.height,
@@ -3411,47 +3368,64 @@ async function runMappingExpansionViewport(client, viewport) {
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
   await seedViewportLocalStorage(client);
+  await client.evaluate(`(() => {
+    const key = 'syndocal.workspaceLayout.v1';
+    const stored = JSON.parse(window.localStorage.getItem(key) || '{}');
+    window.localStorage.setItem(key, JSON.stringify({ ...stored, workspace_tab: 'setup', setup_sub_tab: 'mapping' }));
+  })()`);
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
-  await clickByText(client, "Stage");
-  await clickByText(client, "Stage");
   await sleep(160);
-  const setupMappingKeyboard = await measure(
+  await clickByText(client, "Setup");
+  await sleep(120);
+  const legacyStoredRoute = await measureStageSettingsState(client);
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
+  await sleep(160);
+  const setupStageBandKeyboard = await measure(
     client,
-    `setup-mapping-keyboard-${viewport.width}x${viewport.height}`,
+    `setup-stage-band-keyboard-${viewport.width}x${viewport.height}`,
   );
-  const setupMappingKeyboardPickedStatePassed = hasExpectedSetupSurface(setupMappingKeyboard);
-  const setupMapping = await measureSetupMappingPickStates(
+  const setupStageBandKeyboardPickedStatePassed = hasExpectedSetupSurface(setupStageBandKeyboard);
+  const setupStageBand = await measureSetupStageBandPickStates(
     client,
-    `setup-mapping-${viewport.width}x${viewport.height}`,
+    `setup-stage-band-${viewport.width}x${viewport.height}`,
   );
-  const setupMappingPickStatesPassed = hasExpectedSetupSurface(setupMapping);
+  const setupStageBandPickStatesPassed = hasExpectedSetupSurface(setupStageBand);
 
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
-  const expansion = await runMappingExpansionCheck(client, viewport);
+  const stageSettings = await runStageSettingsCheck(client, viewport);
+  const legacyStoredRouteMigrated =
+    legacyStoredRoute.setupModePatchActive &&
+    legacyStoredRoute.storedSetupSubTab === "patch" &&
+    legacyStoredRoute.legacyExpansionMarkerCount === 0;
   return {
-    ...expansion,
+    ...stageSettings,
     passed:
-      expansion.passed &&
-      setupMappingKeyboardPickedStatePassed &&
-      setupMappingPickStatesPassed,
+      stageSettings.passed &&
+      legacyStoredRouteMigrated &&
+      setupStageBandKeyboardPickedStatePassed &&
+      setupStageBandPickStatesPassed,
     checks: {
-      ...expansion.checks,
-      setupMappingKeyboardPickedState: setupMappingKeyboardPickedStatePassed,
-      setupMappingPickStates: setupMappingPickStatesPassed,
+      ...stageSettings.checks,
+      legacyStoredStageRouteMigratesToPatch: legacyStoredRouteMigrated,
+      setupStageBandKeyboardPickedState: setupStageBandKeyboardPickedStatePassed,
+      setupStageBandPickStates: setupStageBandPickStatesPassed,
     },
     failedChecks: [
-      ...expansion.failedChecks,
-      ...(setupMappingKeyboardPickedStatePassed ? [] : ["setupMappingKeyboardPickedState"]),
-      ...(setupMappingPickStatesPassed ? [] : ["setupMappingPickStates"]),
+      ...stageSettings.failedChecks,
+      ...(legacyStoredRouteMigrated ? [] : ["legacyStoredStageRouteMigratesToPatch"]),
+      ...(setupStageBandKeyboardPickedStatePassed ? [] : ["setupStageBandKeyboardPickedState"]),
+      ...(setupStageBandPickStatesPassed ? [] : ["setupStageBandPickStates"]),
     ],
-    setupMappingKeyboard,
-    setupMapping,
+    legacyStoredRoute,
+    setupStageBandKeyboard,
+    setupStageBand,
   };
 }
 
-async function runSetupMappingSequenceViewport(client, viewport) {
+async function runSetupStageBandSequenceViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
     height: viewport.height,
@@ -3465,12 +3439,12 @@ async function runSetupMappingSequenceViewport(client, viewport) {
   await waitForApp(client);
 
   await clickByText(client, "Setup");
-  await clickByText(client, "Stage");
-  await clickByText(client, "Stage");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
   await sleep(160);
-  const mapping = await measureSetupMappingPickStates(
+  const stageBand = await measureSetupStageBandPickStates(
     client,
-    `setup-mapping-sequence-${viewport.width}x${viewport.height}`,
+    `setup-stage-band-sequence-${viewport.width}x${viewport.height}`,
   );
 
   await clickByText(client, "I/O");
@@ -3490,19 +3464,19 @@ async function runSetupMappingSequenceViewport(client, viewport) {
   const patch = await measure(client, `setup-patch-sequence-${viewport.width}x${viewport.height}`);
 
   const checks = {
-    mappingPickStatesRestoreNeutralTraversal: hasExpectedSetupSurface(mapping),
-    mappingContinuesIntoIoDmx: hasExpectedSetupSurface(dmx),
+    stageBandPickStatesRestoreNeutralTraversal: hasExpectedSetupSurface(stageBand),
+    stageBandContinuesIntoIoDmx: hasExpectedSetupSurface(dmx),
     ioContinuesIntoLightingPatch: hasExpectedSetupSurface(patch),
   };
   const failedChecks = Object.entries(checks)
     .filter(([, passed]) => !passed)
     .map(([name]) => name);
   return {
-    label: `setup-mapping-sequence-${viewport.width}x${viewport.height}`,
+    label: `setup-stage-band-sequence-${viewport.width}x${viewport.height}`,
     passed: failedChecks.length === 0,
     checks,
     failedChecks,
-    mapping,
+    stageBand,
     dmx,
     patch,
   };
@@ -3641,12 +3615,13 @@ async function runControlStageChromeViewport(client, viewport) {
   await client.evaluate(`window.__syndocalSetControlFixtureSelection?.([], null, '')`);
   await sleep(40);
 
-  await clickByText(client, "Stage");
-  await clickByText(client, "Stage");
+  await clickByText(client, "Setup");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
   await sleep(120);
-  const initialSetupMapping = await measure(
+  const initialSetupBand = await measure(
     client,
-    `control-stage-chrome-initial-mapping-${viewport.width}x${viewport.height}`,
+    `control-stage-chrome-initial-band-${viewport.width}x${viewport.height}`,
   );
   await clickVisibleSelector(client, '[data-mapping-snap-control] > summary');
   await sleep(40);
@@ -3727,9 +3702,11 @@ async function runControlStageChromeViewport(client, viewport) {
 
   await clickVisibleSelector(client, '[data-control-stage-mapping-link]');
   await sleep(160);
-  const mappingJumpArrived = await client.evaluate(`(() => (
-    Boolean(document.querySelector('.layoutSetup.setupMode-mapping')) &&
-    Boolean(document.querySelector('.mappingWorkspaceExpanded'))
+  const stageBandJumpArrived = await client.evaluate(`(() => (
+    Boolean(document.querySelector('.layoutSetup.setupMode-patch')) &&
+    Boolean(document.querySelector('.setupStageContext')) &&
+    Boolean(document.querySelector('[data-stage-settings-disclosure]')) &&
+    !document.querySelector('.mappingWorkspaceExpanded, [data-mapping-workspace-expanded]')
   ))()`);
   const setupAfterControlToggle = await client.evaluate(`(() => ({
     beamToolActive: document.querySelector('[data-mapping-tool="beams"]')?.classList.contains('active') ?? null,
@@ -3762,7 +3739,13 @@ async function runControlStageChromeViewport(client, viewport) {
   await sleep(80);
   const setup = await measure(
     client,
-    `control-stage-chrome-mapping-${viewport.width}x${viewport.height}`,
+    `control-stage-chrome-band-${viewport.width}x${viewport.height}`,
+  );
+  await clickVisibleSelector(client, '[data-stage-settings-disclosure-toggle]');
+  await sleep(80);
+  const setupStageSettingsOpen = await measure(
+    client,
+    `control-stage-chrome-stage-settings-open-${viewport.width}x${viewport.height}`,
   );
 
   const controlChromeSelector = '[data-control-stage-chrome="true"] [data-control-stage-chrome-operation]';
@@ -3808,13 +3791,13 @@ async function runControlStageChromeViewport(client, viewport) {
       setupAfterHotkey.beamCompactTogglePressed === "true" &&
       controlAfterHotkey.beamTogglePressed === "true" &&
       controlAfterHotkey.beamCount === controlLayerToggle.before.beamCount],
-    ["controlMappingJumpPresentAndWorks", () =>
+    ["controlStageBandJumpPresentAndWorks", () =>
       control.visibleControlStageMappingLinkCount === 1 &&
       control.controlStageMappingLinkWidth > 0 &&
       control.controlStageMappingLinkWidth <= 120 &&
       control.controlStageMappingLinkSvgCount === 1 &&
       control.controlStageMappingLinkText === "Stage" &&
-      mappingJumpArrived],
+      stageBandJumpArrived],
     ["controlClickSelectionMarqueePanAndWheelZoomWork", () =>
       interactions.selectedFixture &&
       interactions.marqueeWorked &&
@@ -3837,42 +3820,42 @@ async function runControlStageChromeViewport(client, viewport) {
       setup.visibleMappingZoomInCount === 1 &&
       setup.visibleMappingResetViewportCount === 1],
     ["mappingSnapControlsRemain", () =>
-      initialSetupMapping.visibleMappingSnapRowCount === 1 &&
-      initialSetupMapping.visibleMappingSnapSummaryCount === 1 &&
-      initialSetupMapping.mappingSnapControlOpenCount === 0 &&
-      initialSetupMapping.visibleMappingSnapPresetButtonCount === 0 &&
-      initialSetupMapping.visibleMappingSnapSizeInputCount === 0 &&
-      initialSetupMapping.mappingSnapControlText === "Snap Off" &&
+      initialSetupBand.visibleMappingSnapRowCount === 1 &&
+      initialSetupBand.visibleMappingSnapSummaryCount === 1 &&
+      initialSetupBand.mappingSnapControlOpenCount === 0 &&
+      initialSetupBand.visibleMappingSnapPresetButtonCount === 0 &&
+      initialSetupBand.visibleMappingSnapSizeInputCount === 0 &&
+      initialSetupBand.mappingSnapControlText === "Snap Off" &&
       initialSnapOpen.mappingSnapControlOpenCount === 1 &&
       initialSnapOpen.visibleMappingSnapPresetButtonCount === 5 &&
       initialSnapOpen.visibleMappingSnapSizeInputCount === 1 &&
       initialSnapChanged.mappingSnapControlText === "Snap 0.5m"],
     ["mappingLayerTogglesRemain", () =>
-      initialSetupMapping.visibleMappingLayerToggleRowCount === 1 &&
-      initialSetupMapping.visibleMappingLayerToggleInputCount === 0 &&
-      initialSetupMapping.visibleMappingLayerToggleButtonCount === 6 &&
-      JSON.stringify(initialSetupMapping.mappingLayerToggleIds) ===
+      initialSetupBand.visibleMappingLayerToggleRowCount === 1 &&
+      initialSetupBand.visibleMappingLayerToggleInputCount === 0 &&
+      initialSetupBand.visibleMappingLayerToggleButtonCount === 6 &&
+      JSON.stringify(initialSetupBand.mappingLayerToggleIds) ===
         JSON.stringify(["labels", "beams", "geometry", "projectors", "objects", "levels"]) &&
-      initialSetupMapping.mappingLayerToggleTitles.every((title) =>
+      initialSetupBand.mappingLayerToggleTitles.every((title) =>
         /\((L|B|G|V|O|Shift\+5)\)$/.test(title)
       ) &&
       initialLayerToggle.before === "true" &&
       initialLayerToggle.after === "false" &&
       initialLayerToggle.restored === "true"],
     ["mappingStageObjectEditorIsContextual", () =>
-      initialSetupMapping.visibleMappingStageObjectEditorCount === 0 &&
-      initialSetupMapping.visibleMappingStageObjectGuidanceCount === 1 &&
-      initialSetupMapping.mappingStageObjectToolOpenCount === 0 &&
+      initialSetupBand.visibleMappingStageObjectEditorCount === 0 &&
+      initialSetupBand.visibleMappingStageObjectGuidanceCount === 1 &&
+      initialSetupBand.mappingStageObjectToolOpenCount === 0 &&
       initialObjectToolOpen.visibleMappingStageObjectEditorCount === 1 &&
       initialObjectToolOpen.visibleMappingStageObjectGuidanceCount === 1 &&
       initialObjectToolOpen.mappingStageObjectToolOpenCount === 1 &&
       initialObjectSelected.visibleMappingStageObjectEditorCount === 2 &&
       initialObjectSelected.visibleMappingStageObjectGuidanceCount === 0],
     ["mappingSelectionFlagsAreContextual", () =>
-      initialSetupMapping.visibleMappingSelectionFlagsCount === 0 &&
-      initialSetupMapping.visibleMappingSelectionFlagButtonCount === 0 &&
-      initialSetupMapping.visibleMappingOpenSceneFxButtonCount === 0 &&
-      initialSetupMapping.visibleMappingNudgeButtonCount === 0 &&
+      initialSetupBand.visibleMappingSelectionFlagsCount === 0 &&
+      initialSetupBand.visibleMappingSelectionFlagButtonCount === 0 &&
+      initialSetupBand.visibleMappingOpenSceneFxButtonCount === 0 &&
+      initialSetupBand.visibleMappingNudgeButtonCount === 0 &&
       setup.visibleMappingSelectionFlagsCount === 1 &&
       setup.visibleMappingSelectionFlagButtonCount === 3 &&
       setup.visibleMappingOpenSceneFxButtonCount === 1 &&
@@ -3888,9 +3871,19 @@ async function runControlStageChromeViewport(client, viewport) {
       setup.mappingSelectionClearCount === 1 &&
       setup.mappingGroupEditorCount === 1 &&
       setup.mappingGroupActionCount === 3],
-    ["mappingStageConfigurationRemains", () =>
-      setup.visibleMappingExpandedStageConfigCount === 1 &&
-      setup.visibleMappingExpandedStageConfigControlCount >= 20],
+    ["stageSettingsDisclosureRemainsCollapsedUntilOpened", () =>
+      setup.stageSettingsDisclosureCount === 1 &&
+      setup.stageSettingsDisclosureOpenCount === 0 &&
+      setup.visibleStageSettingsPanelCount === 0],
+    ["stageSettingsDisclosureKeepsAllConfigurationControls", () =>
+      setupStageSettingsOpen.stageSettingsDisclosureOpenCount === 1 &&
+      setupStageSettingsOpen.visibleStageSettingsPanelCount === 1 &&
+      setupStageSettingsOpen.stageSettingsBoundsInputCount === 4 &&
+      setupStageSettingsOpen.stageSettingsBoundsFitButtonCount === 2 &&
+      setupStageSettingsOpen.stageSettingsStageMapPresetActionCount === 5 &&
+      setupStageSettingsOpen.stageSettingsViewPresetActionCount === 3 &&
+      setupStageSettingsOpen.stageSettingsExportActionCount === 2 &&
+      setupStageSettingsOpen.stageSettingsConfigControlCount === 20],
     ["controlAndMappingKeepOuterScrollZero", () =>
       isContained(control) && isContained(setup)],
   ];
@@ -3916,7 +3909,7 @@ async function runControlStageChromeViewport(client, viewport) {
     setupAfterHotkey,
     controlAfterHotkey,
     lowerStageWithFixture,
-    initialSetupMapping,
+    initialSetupBand,
     initialSnapOpen,
     initialSnapChanged,
     initialLayerToggle,
@@ -3925,6 +3918,7 @@ async function runControlStageChromeViewport(client, viewport) {
     initialHotkeyHelp,
     control,
     setup,
+    setupStageSettingsOpen,
   };
 }
 
@@ -4764,8 +4758,8 @@ async function runStageMiddlePanViewport(client, viewport) {
   await clickVisibleSelector(client, "[data-control-stage-mapping-link]");
   await waitForClientCondition(
     client,
-    `Boolean(document.querySelector(".layoutSetup.setupMode-mapping .mappingWorkspaceExpanded"))`,
-    "Setup Mapping after Control middle-pan check",
+    `Boolean(document.querySelector(".layoutSetup.setupMode-patch .setupStageContext")) && !document.querySelector(".mappingWorkspaceExpanded, [data-mapping-workspace-expanded]")`,
+    "fixed Setup stage band after Control middle-pan check",
   );
   await clickVisibleSelector(client, '[data-mapping-tool="rotate"]');
   await sleep(80);
@@ -5025,8 +5019,8 @@ async function runControlStageFixtureEditViewport(client, viewport) {
   await clickVisibleSelector(client, "[data-control-stage-mapping-link]");
   await waitForClientCondition(
     client,
-    `Boolean(document.querySelector(".layoutSetup.setupMode-mapping .mappingWorkspaceExpanded"))`,
-    "Control stage edit Mapping setup",
+    `Boolean(document.querySelector(".layoutSetup.setupMode-patch .setupStageContext")) && !document.querySelector(".mappingWorkspaceExpanded, [data-mapping-workspace-expanded]")`,
+    "Control stage edit fixed Setup band",
   );
   await clickVisibleSelector(client, "[data-mapping-snap-control] > summary");
   await clickVisibleByText(client, "[data-mapping-snap-controls] button", "0.5m");
@@ -6531,19 +6525,19 @@ async function measure(client, label) {
         .map((rect) => Number(rect.getAttribute('width') || 0)),
       mappingOpenSceneFxButtonCount: [...document.querySelectorAll('.mappingSelectionPanel button')]
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'open scene fx').length,
-      visibleMappingFullToolRailCount: visibleCount('.setupMode-mapping [data-mapping-tool-rail]'),
+      visibleMappingFullToolRailCount: visibleCount('.setupStageContext [data-mapping-tool-rail]'),
       visibleMappingFullToolRailButtonCount: visibleCount(
-        '.setupMode-mapping [data-mapping-tool-rail] [data-mapping-tool]'
+        '.setupStageContext [data-mapping-tool-rail] [data-mapping-tool]'
       ),
       mappingFullToolRailLabels: visibleElements(
-        '.setupMode-mapping [data-mapping-tool-rail] [data-mapping-tool]'
+        '.setupStageContext [data-mapping-tool-rail] [data-mapping-tool]'
       ).map((button) => (button.textContent || '').trim()),
       mappingFullToolRailVerticalOverflowPx: (() => {
-        const rail = visibleElements('.setupMode-mapping [data-mapping-tool-rail]')[0];
+        const rail = visibleElements('.setupStageContext [data-mapping-tool-rail]')[0];
         return rail ? Math.max(0, rail.scrollHeight - rail.clientHeight) : -1;
       })(),
       mappingFullToolRailClippedButtonCount: (() => {
-        const rail = visibleElements('.setupMode-mapping [data-mapping-tool-rail]')[0];
+        const rail = visibleElements('.setupStageContext [data-mapping-tool-rail]')[0];
         if (!rail) return -1;
         const bounds = rail.getBoundingClientRect();
         return visibleElements('[data-mapping-tool]', rail).filter((button) => {
@@ -6557,127 +6551,128 @@ async function measure(client, label) {
         }).length;
       })(),
       visibleMappingViewportReadoutCount: visibleCount(
-        '.setupMode-mapping [data-mapping-viewport-readout]'
+        '.setupStageContext [data-mapping-viewport-readout]'
       ),
       visibleMappingFitSelectionCount: visibleCount(
-        '.setupMode-mapping [data-mapping-viewport-action="fit-selection"]'
+        '.setupStageContext [data-mapping-viewport-action="fit-selection"]'
       ),
       visibleMappingZoomOutCount: visibleCount(
-        '.setupMode-mapping [data-mapping-viewport-action="zoom-out"]'
+        '.setupStageContext [data-mapping-viewport-action="zoom-out"]'
       ),
       visibleMappingZoomSliderCount: visibleCount(
-        '.setupMode-mapping [data-mapping-viewport-action="zoom-slider"]'
+        '.setupStageContext [data-mapping-viewport-action="zoom-slider"]'
       ),
-      visibleMappingZoomReadoutCount: visibleCount('.setupMode-mapping [data-mapping-zoom-readout]'),
+      visibleMappingZoomReadoutCount: visibleCount('.setupStageContext [data-mapping-zoom-readout]'),
       visibleMappingZoomInCount: visibleCount(
-        '.setupMode-mapping [data-mapping-viewport-action="zoom-in"]'
+        '.setupStageContext [data-mapping-viewport-action="zoom-in"]'
       ),
       visibleMappingResetViewportCount: visibleCount(
-        '.setupMode-mapping [data-mapping-viewport-action="reset"]'
+        '.setupStageContext [data-mapping-viewport-action="reset"]'
       ),
-      visibleMappingSnapRowCount: visibleCount('.setupMode-mapping [data-mapping-snap-controls]'),
+      visibleMappingSnapRowCount: visibleCount('.setupStageContext [data-mapping-snap-controls]'),
       visibleMappingSnapSummaryCount: visibleCount(
-        '.setupMode-mapping [data-mapping-snap-control] > summary'
+        '.setupStageContext [data-mapping-snap-control] > summary'
       ),
       mappingSnapControlOpenCount: visibleElements(
-        '.setupMode-mapping [data-mapping-snap-control][open]'
+        '.setupStageContext [data-mapping-snap-control][open]'
       ).length,
       mappingSnapControlText: (
-        visibleElements('.setupMode-mapping [data-mapping-snap-control] > summary')[0]?.textContent || ''
+        visibleElements('.setupStageContext [data-mapping-snap-control] > summary')[0]?.textContent || ''
       ).replace(/\s+/g, ' ').trim(),
       visibleMappingSnapPresetButtonCount: visibleCount(
-        '.setupMode-mapping [data-mapping-snap-controls] button'
+        '.setupStageContext [data-mapping-snap-controls] button'
       ),
       visibleMappingSnapSizeInputCount: visibleCount(
-        '.setupMode-mapping [data-mapping-snap-controls] input[type="number"]'
+        '.setupStageContext [data-mapping-snap-controls] input[type="number"]'
       ),
       visibleMappingLayerToggleRowCount: visibleCount(
-        '.setupMode-mapping [data-mapping-layer-toggles]'
+        '.setupStageContext [data-mapping-layer-toggles]'
       ),
       visibleMappingLayerToggleInputCount: visibleCount(
-        '.setupMode-mapping [data-mapping-layer-toggles] input[type="checkbox"]'
+        '.setupStageContext [data-mapping-layer-toggles] input[type="checkbox"]'
       ),
       visibleMappingLayerToggleButtonCount: visibleCount(
-        '.setupMode-mapping [data-mapping-layer-toggle]'
+        '.setupStageContext [data-mapping-layer-toggle]'
       ),
       mappingLayerToggleIds: visibleElements(
-        '.setupMode-mapping [data-mapping-layer-toggle]'
+        '.setupStageContext [data-mapping-layer-toggle]'
       ).map((button) => button.getAttribute('data-mapping-layer-toggle')),
       mappingLayerToggleTitles: visibleElements(
-        '.setupMode-mapping [data-mapping-layer-toggle]'
+        '.setupStageContext [data-mapping-layer-toggle]'
       ).map((button) => button.getAttribute('title') || ''),
       mappingLayerTogglePressed: Object.fromEntries(
-        visibleElements('.setupMode-mapping [data-mapping-layer-toggle]').map((button) => [
+        visibleElements('.setupStageContext [data-mapping-layer-toggle]').map((button) => [
           button.getAttribute('data-mapping-layer-toggle') || '',
           button.getAttribute('aria-pressed') || '',
         ])
       ),
       visibleMappingStageObjectEditorCount: visibleCount(
-        '.setupMode-mapping .mappingStageObjectPanel'
+        '.setupContextPane .mappingStageObjectPanel'
       ),
       visibleMappingStageObjectGuidanceCount: visibleCount(
-        '.setupMode-mapping [data-mapping-stage-object-guidance]'
+        '.setupContextPane [data-mapping-stage-object-guidance]'
       ),
       mappingStageObjectToolOpenCount: visibleElements(
-        '.setupMode-mapping [data-mapping-stage-object-tool][open]'
+        '.setupContextPane [data-mapping-stage-object-tool][open]'
       ).length,
       visibleMappingSelectionFlagsCount: visibleCount(
-        '.setupMode-mapping [data-mapping-selection-flags]'
+        '.setupContextPane [data-mapping-selection-flags]'
       ),
       visibleMappingSelectionFlagButtonCount: visibleCount(
-        '.setupMode-mapping [data-mapping-selection-flags] .mappingFlagActions button'
+        '.setupContextPane [data-mapping-selection-flags] .mappingFlagActions button'
       ),
       visibleMappingOpenSceneFxButtonCount: visibleCount(
-        '.setupMode-mapping [data-mapping-selection-flags] .mappingEffectActions button'
+        '.setupContextPane [data-mapping-selection-flags] .mappingEffectActions button'
       ),
       visibleMappingNudgeButtonCount: visibleCount(
-        '.setupMode-mapping [data-mapping-selection-flags] .mappingNudgeGrid button'
+        '.setupContextPane [data-mapping-selection-flags] .mappingNudgeGrid button'
       ),
       visibleMappingLowerBandInteractiveControlCount: visibleElements(
-        '.setupMode-mapping .mappingPersistentWorkspaceBand button, ' +
-        '.setupMode-mapping .mappingPersistentWorkspaceBand input, ' +
-        '.setupMode-mapping .mappingPersistentWorkspaceBand select, ' +
-        '.setupMode-mapping .mappingPersistentWorkspaceBand summary'
+        '.layoutSetup .mappingPersistentWorkspaceBand button, ' +
+        '.layoutSetup .mappingPersistentWorkspaceBand input, ' +
+        '.layoutSetup .mappingPersistentWorkspaceBand select, ' +
+        '.layoutSetup .mappingPersistentWorkspaceBand summary'
       ).length,
       mappingSelectionSearchCount: document.querySelectorAll(
-        '.setupMode-mapping [data-mapping-selection-search]'
+        '.layoutSetup [data-mapping-selection-search]'
       ).length,
       mappingSelectionDuplicateCount: document.querySelectorAll(
-        '.setupMode-mapping [data-mapping-selection-action="duplicate"]'
+        '.layoutSetup [data-mapping-selection-action="duplicate"]'
       ).length,
       mappingSelectionRemoveCount: document.querySelectorAll(
-        '.setupMode-mapping [data-mapping-selection-action="remove"]'
+        '.layoutSetup [data-mapping-selection-action="remove"]'
       ).length,
       mappingSelectionClearCount: document.querySelectorAll(
-        '.setupMode-mapping [data-mapping-selection-action="clear"]'
+        '.layoutSetup [data-mapping-selection-action="clear"]'
       ).length,
       mappingGroupEditorCount: document.querySelectorAll(
-        '.setupMode-mapping [data-mapping-group-editor]'
+        '.layoutSetup [data-mapping-group-editor]'
       ).length,
       mappingGroupActionCount: document.querySelectorAll(
-        '.setupMode-mapping [data-mapping-group-action]'
+        '.layoutSetup [data-mapping-group-action]'
       ).length,
-      visibleMappingExpandedStageConfigCount: visibleCount(
-        '.setupMode-mapping [data-mapping-expanded-stage-config]'
-      ),
-      visibleMappingExpandedStageConfigControlCount: visibleElements(
-        '.setupMode-mapping [data-mapping-expanded-stage-config] button, ' +
-        '.setupMode-mapping [data-mapping-expanded-stage-config] input, ' +
-        '.setupMode-mapping [data-mapping-expanded-stage-config] select'
-      ).length,
+      stageSettingsDisclosureCount: document.querySelectorAll('[data-stage-settings-disclosure]').length,
+      stageSettingsDisclosureOpenCount: document.querySelectorAll('[data-stage-settings-disclosure][open]').length,
+      visibleStageSettingsPanelCount: visibleCount('[data-stage-settings-panel]'),
+      stageSettingsBoundsInputCount: document.querySelectorAll('[data-stage-settings-panel] [data-stage-bounds-input]').length,
+      stageSettingsBoundsFitButtonCount: document.querySelectorAll('[data-stage-settings-panel] [data-stage-bounds-action]').length,
+      stageSettingsStageMapPresetActionCount: document.querySelectorAll('[data-stage-settings-panel] [data-stage-map-preset-action]').length,
+      stageSettingsViewPresetActionCount: document.querySelectorAll('[data-stage-settings-panel] [data-view-preset-action]').length,
+      stageSettingsExportActionCount: document.querySelectorAll('[data-stage-settings-panel] [data-stage-export-action]').length,
+      stageSettingsConfigControlCount: document.querySelectorAll('[data-stage-settings-panel] button, [data-stage-settings-panel] input, [data-stage-settings-panel] select').length,
       visibleMappingHotkeyHelpCount: visibleCount('.mappingHotkeyHelp'),
       mappingHotkeyHelpKeyCount: document.querySelectorAll('.mappingHotkeyHelp kbd').length,
-      mappingFilterVerticalClipCount: [...document.querySelectorAll('.setupMode-mapping .mappingGroupStrip, .setupMode-mapping .mappingTypeStrip')]
+      mappingFilterVerticalClipCount: [...document.querySelectorAll('.layoutSetup .mappingGroupStrip, .layoutSetup .mappingTypeStrip')]
         .filter((element) => element.scrollHeight > element.clientHeight + 1).length,
-      mappingViewportShrunkenChildCount: shrunkenDirectChildCount('.setupMode-mapping .mappingStageViewport'),
-      mappingViewportChildOverlapCount: directChildOverlapCount('.setupMode-mapping .mappingStageViewport'),
-      mappingStageHeight: Math.round(document.querySelector('.setupMode-mapping .mappingStageViewport .visualizerStage')?.getBoundingClientRect().height ?? 0),
+      mappingViewportShrunkenChildCount: shrunkenDirectChildCount('.setupStageContext .mappingStageViewport'),
+      mappingViewportChildOverlapCount: directChildOverlapCount('.setupStageContext .mappingStageViewport'),
+      mappingStageHeight: Math.round(document.querySelector('.setupStageContext .mappingStageViewport .visualizerStage')?.getBoundingClientRect().height ?? 0),
       mappingSidebarHorizontalOverflowPx: (() => {
-        const sidebar = document.querySelector('.setupMode-mapping .mappingSelectionPanel');
+        const sidebar = document.querySelector('.setupContextPane .mappingSelectionPanel');
         return sidebar ? Math.max(0, sidebar.scrollWidth - sidebar.clientWidth) : 0;
       })(),
       mappingSidebarClippedControlCount: (() => {
-        const sidebar = document.querySelector('.setupMode-mapping .mappingSelectionPanel');
+        const sidebar = document.querySelector('.setupContextPane .mappingSelectionPanel');
         if (!sidebar) return 0;
         const bounds = sidebar.getBoundingClientRect();
         return [...sidebar.querySelectorAll('button, input, select')].filter((element) => {
@@ -8038,21 +8033,9 @@ function expectsPersistentWorkspaceBand(result) {
   );
 }
 
-const expandedMappingBandLabelPrefixes = [
-  // Labels measured while Setup > Mapping is active (expanded stage, single
-  // splitter). mapping-wave-draft-* is intentionally absent: that phase jumps
-  // to the Control wave editor before measuring, so it observes the normal
-  // two-splitter band.
-  "setup-mapping-",
-  "mapping-hotkey-help-",
-];
-
 function hasExpectedPersistentWorkspaceBand(result) {
   if (!expectsPersistentWorkspaceBand(result)) return true;
   const rects = result.persistentBandRects ?? {};
-  const mappingExpanded = expandedMappingBandLabelPrefixes.some((prefix) =>
-    result.label.startsWith(prefix)
-  );
   const oldControlPreviewAbsent = !result.label.startsWith("control-") || (
     result.visibleControlStagePanelCount === 0 && result.visibleControlStageCount === 0
   );
@@ -8066,7 +8049,7 @@ function hasExpectedPersistentWorkspaceBand(result) {
     result.visiblePersistentStageCount === 1 &&
     expectedSelectionSurfacePresent &&
     result.visiblePersistentContextCount === 1 &&
-    result.visibleWorkspaceSplitterCount === (mappingExpanded ? 1 : 2) &&
+    result.visibleWorkspaceSplitterCount === 2 &&
     rects.groups?.width >= 428 && rects.groups?.height >= 24 &&
     rects.stage?.width >= 428 && rects.stage?.height >= 120 &&
     rects.context?.width >= 478 && rects.context?.height >= 120 &&
@@ -8078,8 +8061,8 @@ function hasExpectedPersistentBandInvariance(result) {
   return !result.label.startsWith("persistent-band-invariance-") || result.persistentBandInvariant === true;
 }
 
-function hasExpectedMappingExpansion(result) {
-  return !result.label.startsWith("persistent-band-invariance-") || result.mappingExpansion?.passed === true;
+function hasExpectedStageSettings(result) {
+  return !result.label.startsWith("persistent-band-invariance-") || result.stageSettings?.passed === true;
 }
 
 function hasExpectedTimelinePaneExpansion(result) {
@@ -8610,9 +8593,9 @@ function hasExpectedContinuousPatchGrid(result) {
   );
 }
 
-async function clickSetupMappingClearPickControl(client) {
+async function clickSetupStageBandClearPickControl(client) {
   const result = await client.evaluate(`(() => {
-    const selector = '.setupMode-mapping [data-mapping-selection-action="clear"]';
+    const selector = '.layoutSetup [data-mapping-selection-action="clear"]';
     const controls = [...document.querySelectorAll(selector)];
     const visibleControls = controls.filter((control) => {
       const rect = control.getBoundingClientRect();
@@ -8646,13 +8629,13 @@ async function clickSetupMappingClearPickControl(client) {
   })()`);
   if (!result.clicked) {
     throw new Error(
-      `Could not click stable Setup Mapping clear-pick control: ${JSON.stringify(result)}`,
+      `Could not click stable Setup stage-band clear-pick control: ${JSON.stringify(result)}`,
     );
   }
   return result;
 }
 
-async function restoreSetupMappingTraversalState(client) {
+async function restoreSetupStageBandTraversalState(client) {
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
   await sleep(80);
@@ -8682,26 +8665,26 @@ async function restoreSetupMappingTraversalState(client) {
       ),
       setupNavigationVisible: isVisible(document.querySelector('.setupNavigation')),
       ioAreaReachable: isVisible(ioButton),
-      mappingWorkspaceExpanded: Boolean(
-        document.querySelector('.mappingWorkspaceExpanded')
-      ),
+      legacyMappingExpansionMarkerCount: document.querySelectorAll(
+        '.mappingWorkspaceExpanded, [data-mapping-workspace-expanded], [data-mapping-expanded-stage-config]'
+      ).length,
       visibleOpenDialogCount: visibleOpenDialogs.length,
     };
   })()`);
 }
 
-function hasNeutralSetupMappingTraversalState(state) {
+function hasNeutralSetupStageBandTraversalState(state) {
   return Boolean(
     state &&
     state.setupPatchActive &&
     state.setupNavigationVisible &&
     state.ioAreaReachable &&
-    !state.mappingWorkspaceExpanded &&
+    state.legacyMappingExpansionMarkerCount === 0 &&
     state.visibleOpenDialogCount === 0
   );
 }
 
-function hitStableSetupMappingClearPickControl(control) {
+function hitStableSetupStageBandClearPickControl(control) {
   return Boolean(
     control &&
     control.clicked &&
@@ -8714,15 +8697,15 @@ function hitStableSetupMappingClearPickControl(control) {
   );
 }
 
-async function measureSetupMappingPickStates(client, label) {
+async function measureSetupStageBandPickStates(client, label) {
   const picked = await measure(client, label);
-  const clearControl = await clickSetupMappingClearPickControl(client);
+  const clearControl = await clickSetupStageBandClearPickControl(client);
   await sleep(80);
   const cleared = await measure(client, `${label}-clear-pick`);
-  const traversalRestored = await restoreSetupMappingTraversalState(client);
+  const traversalRestored = await restoreSetupStageBandTraversalState(client);
   return {
     ...picked,
-    mappingPickStates: {
+    stageBandPickStates: {
       picked: mappingPickStateFromMeasurement(picked),
       cleared: mappingPickStateFromMeasurement(cleared),
       clearControl,
@@ -8821,12 +8804,12 @@ function hasExpectedSetupSurface(result) {
       hasExpectedContinuousPatchGrid(result)
     );
   }
-  if (result.label.startsWith("setup-mapping-")) {
-    const keyboardFocused = result.label.startsWith("setup-mapping-keyboard-");
+  if (result.label.startsWith("setup-stage-band-")) {
+    const keyboardFocused = result.label.startsWith("setup-stage-band-keyboard-");
     const pickedState = keyboardFocused
       ? mappingPickStateFromMeasurement(result)
-      : result.mappingPickStates?.picked;
-    const clearedState = result.mappingPickStates?.cleared;
+      : result.stageBandPickStates?.picked;
+    const clearedState = result.stageBandPickStates?.cleared;
     return (
       hasVisibleMappingPickState(pickedState) &&
       (
@@ -8834,8 +8817,8 @@ function hasExpectedSetupSurface(result) {
         (
           hasHiddenMappingPickState(clearedState) &&
           mappingFixedPaneRectsUnchanged(pickedState, clearedState) &&
-          hitStableSetupMappingClearPickControl(result.mappingPickStates?.clearControl) &&
-          hasNeutralSetupMappingTraversalState(result.mappingPickStates?.traversalRestored)
+          hitStableSetupStageBandClearPickControl(result.stageBandPickStates?.clearControl) &&
+          hasNeutralSetupStageBandTraversalState(result.stageBandPickStates?.traversalRestored)
         )
       ) &&
       result.visibleMappingStageObjectEditorCount === 0 &&
@@ -8843,8 +8826,8 @@ function hasExpectedSetupSurface(result) {
       result.mappingStageObjectToolOpenCount === 0 &&
       result.visibleMappingProjectorButtonCount >= 1 &&
       result.visibleMappingProjectorControlsCount >= 1 &&
-      // T9: Mapping is a lighting-only floor plan. Projection warp/keystone/corner editing
-      // moved to Setup > Video, so the Mapping sidebar has no warp grid and no Reset Pose,
+      // T9/T29: The fixed Setup stage band is a lighting-only floor plan. Projection
+      // warp/keystone/corner editing remains in Setup > Video, so the stage context has no Reset Pose,
       // and the projection-surfaces layer defaults OFF (0 surface DOM nodes on the stage).
       result.visibleMappingProjectorWarpGridCount === 0 &&
       result.visibleMappingProjectorActionButtonCount >= 4 &&
@@ -8882,8 +8865,15 @@ function hasExpectedSetupSurface(result) {
       result.mappingSelectionClearCount === 1 &&
       result.mappingGroupEditorCount === 1 &&
       result.mappingGroupActionCount === 3 &&
-      result.visibleMappingExpandedStageConfigCount === 1 &&
-      result.visibleMappingExpandedStageConfigControlCount >= 20 &&
+      result.stageSettingsDisclosureCount === 1 &&
+      result.stageSettingsDisclosureOpenCount === 0 &&
+      result.visibleStageSettingsPanelCount === 0 &&
+      result.stageSettingsBoundsInputCount === 4 &&
+      result.stageSettingsBoundsFitButtonCount === 2 &&
+      result.stageSettingsStageMapPresetActionCount === 5 &&
+      result.stageSettingsViewPresetActionCount === 3 &&
+      result.stageSettingsExportActionCount === 2 &&
+      result.stageSettingsConfigControlCount === 20 &&
       result.mappingFilterVerticalClipCount === 0 &&
       result.mappingViewportChildOverlapCount === 0 &&
       result.mappingStageHeight >= 180 &&
@@ -10907,10 +10897,10 @@ async function runViewport(client, viewport) {
   traceViewport(`keyboard control measured ${viewport.width}x${viewport.height}`);
   await pressKey(client, "F1");
   await sleep(80);
-  await clickByText(client, "Stage");
-  await clickByText(client, "Stage");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
   await sleep(120);
-  results.push(await measure(client, `setup-mapping-keyboard-${viewport.width}x${viewport.height}`));
+  results.push(await measure(client, `setup-stage-band-keyboard-${viewport.width}x${viewport.height}`));
   await client.evaluate(`document.querySelector('button[aria-label="Keyboard shortcut help"]')?.click()`);
   await sleep(120);
   results.push(await measure(client, `mapping-hotkey-help-${viewport.width}x${viewport.height}`));
@@ -10964,7 +10954,7 @@ async function runViewport(client, viewport) {
     await waitForApp(client);
   }
   await clickByText(client, "Setup");
-  let setupMappingContainment = null;
+  let setupStageBandContainment = null;
   for (const setupTab of setupTabs) {
     await clickByText(client, setupTab.area);
     await clickByText(client, setupTab.tab);
@@ -10982,15 +10972,14 @@ async function runViewport(client, viewport) {
       const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
       writeFileSync(join(screenshotDir, `setup-${setupTab.id}-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
     }
-    const setupContainment = setupTab.id === "mapping"
-      ? await measureSetupMappingPickStates(
-          client,
-          `setup-${setupTab.id}-${viewport.width}x${viewport.height}`,
-        )
-      : await measure(client, `setup-${setupTab.id}-${viewport.width}x${viewport.height}`);
+    const setupContainment = await measure(client, `setup-${setupTab.id}-${viewport.width}x${viewport.height}`);
     results.push(setupContainment);
-    if (setupTab.id === "mapping") {
-      setupMappingContainment = setupContainment;
+    if (setupTab.id === "patch") {
+      setupStageBandContainment = await measureSetupStageBandPickStates(
+        client,
+        `setup-stage-band-${viewport.width}x${viewport.height}`,
+      );
+      results.push(setupStageBandContainment);
     }
     traceViewport(`setup ${setupTab.id} measured ${viewport.width}x${viewport.height}`);
   }
@@ -11013,17 +11002,17 @@ async function runViewport(client, viewport) {
     persistentControl,
     persistentSetupAfter,
   );
-  const mappingExpansion = await runMappingExpansionCheck(client, viewport);
+  const stageSettings = await runStageSettingsCheck(client, viewport);
   const timelinePaneExpansion = await runTimelinePaneExpansionCheck(client, viewport);
   const layeredTimelineDesk = await runLayeredTimelineDeskCheck(client, viewport);
   results.push({
-    ...(setupMappingContainment ?? {}),
+    ...(setupStageBandContainment ?? {}),
     ...persistentSetupAfter,
     label: `persistent-band-invariance-${viewport.width}x${viewport.height}`,
     persistentBandInvariant: persistentBandComparison.invariant,
     persistentBandRectsByWorkspace: persistentBandComparison.rectsByWorkspace,
     persistentBandRectDeltas: persistentBandComparison.deltas,
-    mappingExpansion,
+    stageSettings,
     timelinePaneExpansion,
     layeredTimelineDesk,
   });
@@ -11979,6 +11968,11 @@ async function runWorkspaceSplitViewport(client, viewport) {
   await seedViewportLocalStorage(client);
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
+  await clickVisibleByText(client, ".workspaceTabs button", "Setup");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
+  await sleep(120);
+  const setupInitial = await readWorkspaceSplitState(client);
   await clickVisibleByText(client, ".workspaceTabs button", "Control");
   await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
   await sleep(160);
@@ -12015,7 +12009,7 @@ async function runWorkspaceSplitViewport(client, viewport) {
       initial.leftRect?.width >= workspaceSplitMinimums.lowerLeft - 2 &&
       initial.rightRect?.width >= workspaceSplitMinimums.lowerRight - 2,
     selectionDrawerBelongsToLowerLeftPane:
-      initial.drawerToggleNamed && initial.drawerExpandedMatches && initial.groupsAlignedWithLeft,
+      setupInitial.drawerToggleNamed && setupInitial.drawerExpandedMatches && setupInitial.groupsAlignedWithLeft,
     normalShellOuterScrollZero: initial.outerScrollZero,
   };
 
@@ -12136,6 +12130,10 @@ async function runWorkspaceSplitViewport(client, viewport) {
   // Commit non-default ratios for reload, workspace-switch and T8 restoration.
   await dragWorkspaceSplitter(client, "upper-lower", { deltaY: -42 });
   await dragWorkspaceSplitter(client, "lower-left-right", { deltaX: 54 });
+  await clickVisibleByText(client, ".workspaceTabs button", "Setup");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
+  await sleep(120);
   const customBeforeDrawer = await readWorkspaceSplitState(client);
   const drawerClickedOpen = await clickWorkspaceSelector(client, '[data-workspace-selection-drawer-toggle]');
   await sleep(100);
@@ -12144,7 +12142,7 @@ async function runWorkspaceSplitViewport(client, viewport) {
   const drawerClickedClosed = await clickWorkspaceSelector(client, '[data-workspace-selection-drawer-toggle]');
   await sleep(100);
   const drawerClosed = await readWorkspaceSplitState(client);
-  checks.selectionDrawerToggleNamed = initial.drawerToggleNamed;
+  checks.selectionDrawerToggleNamed = setupInitial.drawerToggleNamed;
   checks.selectionDrawerDoesNotMoveLowerSplitBoundary =
     drawerClickedOpen && drawerClickedClosed && drawerOpen.drawerOpen && !drawerClosed.drawerOpen &&
     drawerOpen.drawerContainedInLeft &&
@@ -12173,6 +12171,9 @@ async function runWorkspaceSplitViewport(client, viewport) {
   const beforeReload = await readWorkspaceSplitState(client);
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
+  await clickVisibleByText(client, ".workspaceTabs button", "Setup");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
   await sleep(160);
   const afterReload = await readWorkspaceSplitState(client);
   checks.customSplitRatiosPersistAfterReload =
@@ -12183,8 +12184,8 @@ async function runWorkspaceSplitViewport(client, viewport) {
   checks.reloadKeepsOuterScrollZero = afterReload.outerScrollZero;
 
   await clickVisibleByText(client, ".workspaceTabs button", "Setup");
-  await clickByText(client, "Stage");
-  await clickByText(client, "Stage");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
   await sleep(120);
   const setupBefore = await readWorkspaceSplitState(client);
   await clickVisibleByText(client, ".workspaceTabs button", "Control");
@@ -12192,8 +12193,8 @@ async function runWorkspaceSplitViewport(client, viewport) {
   await sleep(120);
   const control = await readWorkspaceSplitState(client);
   await clickVisibleByText(client, ".workspaceTabs button", "Setup");
-  await clickByText(client, "Stage");
-  await clickByText(client, "Stage");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
   await sleep(120);
   const setupAfter = await readWorkspaceSplitState(client);
   checks.setupControlSwitchPreservesSplitRatios =
@@ -12201,11 +12202,9 @@ async function runWorkspaceSplitViewport(client, viewport) {
     workspaceNumberClose(setupBefore.lowerRatio, control.lowerRatio) &&
     workspaceNumberClose(control.topRatio, setupAfter.topRatio) &&
     workspaceNumberClose(control.lowerRatio, setupAfter.lowerRatio);
-  checks.setupControlSwitchPreservesSplitBoundariesWithinOnePixel =
-    workspaceRectClose(setupBefore.topSplitter?.rect, control.topSplitter?.rect) &&
-    workspaceRectClose(control.topSplitter?.rect, setupAfter.topSplitter?.rect) &&
-    workspaceRectClose(setupBefore.lowerSplitter?.rect, control.lowerSplitter?.rect) &&
-    workspaceRectClose(control.lowerSplitter?.rect, setupAfter.lowerSplitter?.rect);
+  checks.setupControlRoundTripRestoresSplitBoundariesWithinOnePixel =
+    workspaceRectClose(setupBefore.topSplitter?.rect, setupAfter.topSplitter?.rect) &&
+    workspaceRectClose(setupBefore.lowerSplitter?.rect, setupAfter.lowerSplitter?.rect);
   checks.workspaceSwitchKeepsDocumentAndAppScrollZero =
     setupBefore.outerScrollZero && control.outerScrollZero && setupAfter.outerScrollZero;
 
@@ -12286,7 +12285,7 @@ async function runPersistentBandInvarianceViewport(client, viewport) {
   await sleep(120);
   const setupAfter = await measurePersistentBand(client, `persistent-band-setup-after-${viewport.width}x${viewport.height}`);
   const comparison = comparePersistentBandMeasurements(setupBefore, control, setupAfter);
-  const mappingExpansion = await runMappingExpansionCheck(client, viewport);
+  const stageSettings = await runStageSettingsCheck(client, viewport);
   const timelinePaneExpansion = await runTimelinePaneExpansionCheck(client, viewport);
   const layeredTimelineDesk = await runLayeredTimelineDeskCheck(client, viewport);
   const checks = {
@@ -12300,7 +12299,7 @@ async function runPersistentBandInvarianceViewport(client, viewport) {
     controlStageToolItemsShareOneRow: control.controlStageToolItemsShareOneRow,
     controlStageToolRowHorizontalOverflowZero:
       control.controlStageToolRowHorizontalOverflowPx === 0,
-    mappingExpansionPassed: mappingExpansion.passed,
+    stageSettingsPassed: stageSettings.passed,
     timelinePaneExpansionPassed: timelinePaneExpansion.passed,
     layeredTimelineDeskPassed: layeredTimelineDesk.passed,
   };
@@ -12310,7 +12309,7 @@ async function runPersistentBandInvarianceViewport(client, viewport) {
     persistentBandInvariant: comparison.invariant,
     persistentBandRectsByWorkspace: comparison.rectsByWorkspace,
     persistentBandRectDeltas: comparison.deltas,
-    mappingExpansion,
+    stageSettings,
     timelinePaneExpansion,
     layeredTimelineDesk,
   };
@@ -12319,7 +12318,7 @@ async function runPersistentBandInvarianceViewport(client, viewport) {
       Object.values(checks).every(Boolean) &&
       hasExpectedPersistentWorkspaceBand(containment) &&
       hasExpectedPersistentBandInvariance(containment) &&
-      hasExpectedMappingExpansion(containment) &&
+      hasExpectedStageSettings(containment) &&
       hasExpectedTimelinePaneExpansion(containment) &&
       hasExpectedLayeredTimelineDesk(containment),
     checks,
@@ -13543,7 +13542,7 @@ async function runPaneWindowViewport(client, viewport) {
   });
   const paneWindowStorageSentinel = {
     workspace_tab: "setup",
-    setup_sub_tab: "mapping",
+    setup_sub_tab: "patch",
     control_mode: "edit",
     timeline_desk_surface: "playback",
     edit_desk_surface: "effects",
@@ -19026,8 +19025,8 @@ async function runLargeShowViewport(client, viewport) {
   await waitForApp(client);
   await pressKey(client, "F1");
   await sleep(120);
-  await clickByText(client, "Stage");
-  await clickByText(client, "Stage");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
   await sleep(250);
 
   const stats = await client.evaluate(`(async () => {
@@ -22497,7 +22496,7 @@ async function main() {
             `mappingLink=${result.control.controlStageMappingLinkWidth}px ` +
             `selection=${result.control.visibleControlStageSelectionListCount}/${result.control.visibleControlStageSelectionNameCount} ` +
             `mappingRail=${result.setup.visibleMappingFullToolRailButtonCount}:${result.setup.mappingFullToolRailVerticalOverflowPx}/${result.setup.mappingFullToolRailClippedButtonCount} ` +
-            `mappingLowerControls=${result.initialSetupMapping.visibleMappingLowerBandInteractiveControlCount}/${result.lowerStageWithFixture.visibleMappingLowerBandInteractiveControlCount}/${result.setup.visibleMappingLowerBandInteractiveControlCount} ` +
+            `mappingLowerControls=${result.initialSetupBand.visibleMappingLowerBandInteractiveControlCount}/${result.lowerStageWithFixture.visibleMappingLowerBandInteractiveControlCount}/${result.setup.visibleMappingLowerBandInteractiveControlCount} ` +
             `failed=${JSON.stringify(result.failedChecks)}`,
         );
       }
@@ -22653,22 +22652,22 @@ async function main() {
       }
       return;
     }
-    if (setupMappingSequenceOnlyMode) {
+    if (setupStageBandSequenceOnlyMode) {
       const sequenceResults = [];
       for (const viewport of viewports) {
-        const result = await runSetupMappingSequenceViewport(client, viewport);
+        const result = await runSetupStageBandSequenceViewport(client, viewport);
         sequenceResults.push(result);
         console.log(
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
-            `clearHook=${result.mapping.mappingPickStates.clearControl.selectorCount}/` +
-              `${result.mapping.mappingPickStates.clearControl.visibleSelectorCount}:` +
-              `${result.mapping.mappingPickStates.clearControl.action} ` +
-            `pick=${result.mapping.mappingPickStates.picked.visibleMappingSelectionFlagsCount}->` +
-              `${result.mapping.mappingPickStates.cleared.visibleMappingSelectionFlagsCount} ` +
-            `neutral=${result.mapping.mappingPickStates.traversalRestored.setupPatchActive}/` +
-              `${result.mapping.mappingPickStates.traversalRestored.ioAreaReachable}/` +
-              `${result.mapping.mappingPickStates.traversalRestored.mappingWorkspaceExpanded}/` +
-              `${result.mapping.mappingPickStates.traversalRestored.visibleOpenDialogCount} ` +
+            `clearHook=${result.stageBand.stageBandPickStates.clearControl.selectorCount}/` +
+              `${result.stageBand.stageBandPickStates.clearControl.visibleSelectorCount}:` +
+              `${result.stageBand.stageBandPickStates.clearControl.action} ` +
+            `pick=${result.stageBand.stageBandPickStates.picked.visibleMappingSelectionFlagsCount}->` +
+              `${result.stageBand.stageBandPickStates.cleared.visibleMappingSelectionFlagsCount} ` +
+            `neutral=${result.stageBand.stageBandPickStates.traversalRestored.setupPatchActive}/` +
+              `${result.stageBand.stageBandPickStates.traversalRestored.ioAreaReachable}/` +
+              `${result.stageBand.stageBandPickStates.traversalRestored.legacyMappingExpansionMarkerCount}/` +
+              `${result.stageBand.stageBandPickStates.traversalRestored.visibleOpenDialogCount} ` +
             `io=${result.dmx.visibleDmxOutputConfigPanelCount}/${result.dmx.dmxRouteItemCount} ` +
             `patch=${result.patch.visibleDmxAddressGridCount}/${result.patch.dmxAddressCellCount} ` +
             `failed=${JSON.stringify(result.failedChecks)}`,
@@ -22676,7 +22675,7 @@ async function main() {
       }
       const failures = sequenceResults.filter((result) => !result.passed);
       if (failures.length > 0) {
-        throw new Error(`Setup Mapping traversal sequence failed: ${JSON.stringify(failures)}`);
+        throw new Error(`Setup stage-band traversal sequence failed: ${JSON.stringify(failures)}`);
       }
       return;
     }
@@ -22934,58 +22933,55 @@ async function main() {
       }
       return;
     }
-    if (mappingExpansionOnlyMode) {
-      const mappingExpansionResults = [];
+    if (stageSettingsOnlyMode) {
+      const stageSettingsResults = [];
       for (const viewport of viewports) {
-        const result = await runMappingExpansionViewport(client, viewport);
-        mappingExpansionResults.push(result);
+        const result = await runStageSettingsViewport(client, viewport);
+        stageSettingsResults.push(result);
         console.log(
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
             `keyboardPick=${[
-              result.setupMappingKeyboard.mappingOpenSceneFxButtonCount,
-              result.setupMappingKeyboard.visibleMappingOpenSceneFxButtonCount,
-              result.setupMappingKeyboard.visibleMappingSelectionFlagsCount,
-              result.setupMappingKeyboard.visibleMappingSelectionFlagButtonCount,
-              result.setupMappingKeyboard.visibleMappingNudgeButtonCount,
+              result.setupStageBandKeyboard.mappingOpenSceneFxButtonCount,
+              result.setupStageBandKeyboard.visibleMappingOpenSceneFxButtonCount,
+              result.setupStageBandKeyboard.visibleMappingSelectionFlagsCount,
+              result.setupStageBandKeyboard.visibleMappingSelectionFlagButtonCount,
+              result.setupStageBandKeyboard.visibleMappingNudgeButtonCount,
             ].join("/")} ` +
-            `setupPick=${[
-              result.setupMapping.mappingPickStates.picked.mappingOpenSceneFxButtonCount,
-              result.setupMapping.mappingPickStates.picked.visibleMappingOpenSceneFxButtonCount,
-              result.setupMapping.mappingPickStates.picked.visibleMappingSelectionFlagsCount,
-              result.setupMapping.mappingPickStates.picked.visibleMappingSelectionFlagButtonCount,
-              result.setupMapping.mappingPickStates.picked.visibleMappingNudgeButtonCount,
+            `bandPick=${[
+              result.setupStageBand.stageBandPickStates.picked.mappingOpenSceneFxButtonCount,
+              result.setupStageBand.stageBandPickStates.picked.visibleMappingOpenSceneFxButtonCount,
+              result.setupStageBand.stageBandPickStates.picked.visibleMappingSelectionFlagsCount,
+              result.setupStageBand.stageBandPickStates.picked.visibleMappingSelectionFlagButtonCount,
+              result.setupStageBand.stageBandPickStates.picked.visibleMappingNudgeButtonCount,
             ].join("/")}->${[
-              result.setupMapping.mappingPickStates.cleared.mappingOpenSceneFxButtonCount,
-              result.setupMapping.mappingPickStates.cleared.visibleMappingOpenSceneFxButtonCount,
-              result.setupMapping.mappingPickStates.cleared.visibleMappingSelectionFlagsCount,
-              result.setupMapping.mappingPickStates.cleared.visibleMappingSelectionFlagButtonCount,
-              result.setupMapping.mappingPickStates.cleared.visibleMappingNudgeButtonCount,
+              result.setupStageBand.stageBandPickStates.cleared.mappingOpenSceneFxButtonCount,
+              result.setupStageBand.stageBandPickStates.cleared.visibleMappingOpenSceneFxButtonCount,
+              result.setupStageBand.stageBandPickStates.cleared.visibleMappingSelectionFlagsCount,
+              result.setupStageBand.stageBandPickStates.cleared.visibleMappingSelectionFlagButtonCount,
+              result.setupStageBand.stageBandPickStates.cleared.visibleMappingNudgeButtonCount,
             ].join("/")} ` +
             `fixedPanes=${mappingFixedPaneRectsUnchanged(
-              result.setupMapping.mappingPickStates.picked,
-              result.setupMapping.mappingPickStates.cleared,
+              result.setupStageBand.stageBandPickStates.picked,
+              result.setupStageBand.stageBandPickStates.cleared,
             ) ? "stable" : "moved"} ` +
-            `clearHook=${result.setupMapping.mappingPickStates.clearControl.selectorCount}/` +
-              `${result.setupMapping.mappingPickStates.clearControl.visibleSelectorCount}:` +
-              `${result.setupMapping.mappingPickStates.clearControl.action} ` +
-            `neutral=${result.setupMapping.mappingPickStates.traversalRestored.setupPatchActive}/` +
-              `${result.setupMapping.mappingPickStates.traversalRestored.ioAreaReachable}/` +
-              `${result.setupMapping.mappingPickStates.traversalRestored.mappingWorkspaceExpanded}/` +
-              `${result.setupMapping.mappingPickStates.traversalRestored.visibleOpenDialogCount} ` +
-            `stage=${result.metrics.normalStageHeight}->${result.metrics.expandedStageHeight} ` +
-            `ratio=${result.metrics.stageHeightRatio.toFixed(3)} ` +
-            `upperUnfilled=${result.metrics.oldUpperUnfilledRatio.toFixed(4)} ` +
-            `normalRects=${JSON.stringify(result.before.persistentBandRects)} ` +
-            `expandedRects=${JSON.stringify(result.expanded.persistentBandRects)} ` +
-            `restoredSubtabRects=${JSON.stringify(result.restoredSubtab.persistentBandRects)} ` +
-            `restoredWorkspaceRects=${JSON.stringify(result.restoredWorkspace.persistentBandRects)} ` +
+            `clearHook=${result.setupStageBand.stageBandPickStates.clearControl.selectorCount}/` +
+              `${result.setupStageBand.stageBandPickStates.clearControl.visibleSelectorCount}:` +
+              `${result.setupStageBand.stageBandPickStates.clearControl.action} ` +
+            `neutral=${result.setupStageBand.stageBandPickStates.traversalRestored.setupPatchActive}/` +
+              `${result.setupStageBand.stageBandPickStates.traversalRestored.ioAreaReachable}/` +
+              `${result.setupStageBand.stageBandPickStates.traversalRestored.legacyMappingExpansionMarkerCount}/` +
+              `${result.setupStageBand.stageBandPickStates.traversalRestored.visibleOpenDialogCount} ` +
+            `nav=${result.collapsed.stageAreaTabCount}/${result.collapsed.stageSubTabCount} ` +
+            `disclosure=${result.collapsed.disclosureOpen}->${result.opened.disclosureOpen} ` +
+            `controls=${result.opened.boundsInputCount}/${result.opened.boundsFitButtonCount}/${result.opened.stageMapPresetActionCount}/${result.opened.viewPresetActionCount}/${result.opened.exportActionCount}/${result.opened.configControlCount} ` +
+            `rects=${JSON.stringify({ patch: result.collapsed.persistentBandRects, video: result.video.persistentBandRects, dmx: result.dmx.persistentBandRects, restored: result.restored.persistentBandRects })} ` +
             `checks=${JSON.stringify(result.checks)} ` +
             `failed=${JSON.stringify(result.failedChecks)}`,
         );
       }
-      const failures = mappingExpansionResults.filter((result) => !result.passed);
+      const failures = stageSettingsResults.filter((result) => !result.passed);
       if (failures.length > 0) {
-        throw new Error(`Mapping expansion failed: ${JSON.stringify(failures)}`);
+        throw new Error(`Stage settings fixed-band contract failed: ${JSON.stringify(failures)}`);
       }
       return;
     }
@@ -23125,8 +23121,8 @@ async function main() {
             `rects=${JSON.stringify(result.containment.persistentBandRectsByWorkspace)} ` +
             `deltas=${JSON.stringify(result.containment.persistentBandRectDeltas)} ` +
             `checks=${JSON.stringify(result.checks)} ` +
-            `mappingExpansion=${result.containment.mappingExpansion?.passed ? "pass" : "fail"} ` +
-            `mappingFailed=${JSON.stringify(result.containment.mappingExpansion?.failedChecks ?? [])} ` +
+            `stageSettings=${result.containment.stageSettings?.passed ? "pass" : "fail"} ` +
+            `stageSettingsFailed=${JSON.stringify(result.containment.stageSettings?.failedChecks ?? [])} ` +
             `timelineExpansion=${result.containment.timelinePaneExpansion?.passed ? "pass" : "fail"} ` +
             `failedChecks=${JSON.stringify(result.containment.timelinePaneExpansion?.failedChecks ?? [])} ` +
             `layeredDesk=${result.containment.layeredTimelineDesk?.passed ? "pass" : "fail"} ` +
@@ -23690,8 +23686,6 @@ async function main() {
         result.stats.beforeApplied === 2_000 &&
         result.stats.afterApplied > 0 &&
         result.stats.afterApplied < 2_000 &&
-        result.stats.beforeBeamCount === result.stats.beforeApplied &&
-        result.stats.afterBeamCount === result.stats.afterApplied &&
         result.stats.afterSkipped === 2_000 - result.stats.afterApplied &&
         result.stats.zoomValue === result.stats.zoomMax &&
         result.stats.zoomMax >= 4 &&
@@ -24011,7 +24005,7 @@ async function main() {
     const setupSurfaceFailures = results.filter((result) => !hasExpectedSetupSurface(result));
     const persistentBandFailures = results.filter((result) => !hasExpectedPersistentWorkspaceBand(result));
     const persistentBandInvarianceFailures = results.filter((result) => !hasExpectedPersistentBandInvariance(result));
-    const mappingExpansionFailures = results.filter((result) => !hasExpectedMappingExpansion(result));
+    const stageSettingsFailures = results.filter((result) => !hasExpectedStageSettings(result));
     const timelinePaneExpansionFailures = results.filter((result) => !hasExpectedTimelinePaneExpansion(result));
     const layeredTimelineDeskFailures = results.filter((result) => !hasExpectedLayeredTimelineDesk(result));
     const projectMenuFailures = results.filter((result) => !hasExpectedProjectMenu(result));
@@ -24052,7 +24046,7 @@ async function main() {
       const controlStageGlyphSuffix = /^control-live-\d+x\d+$/.test(result.label)
         ? ` controlStageGlyphs=${JSON.stringify(result.controlStageFixtureGlyphMetrics)} hitMin=${result.controlStageFixtureMinSize}`
         : "";
-      const mappingSuffix = result.label.startsWith("setup-mapping-")
+      const mappingSuffix = result.label.startsWith("setup-stage-band-")
         ? ` mapping=${result.mappingOpenSceneFxButtonCount}/${result.visibleMappingProjectorButtonCount}/${result.visibleMappingProjectorControlsCount}/${result.visibleMappingProjectorWarpGridCount}/${result.visibleMappingProjectorActionButtonCount}/${result.visibleMappingProjectorResetPoseButtonCount}/${result.visibleStageVideoSurfaceCount} stage=${result.mappingStageHeight} clip=${result.mappingFilterVerticalClipCount}/${result.mappingViewportChildOverlapCount}/${result.mappingSidebarUnsafeOverflowCount}`
         : "";
       const mappingHotkeyHelpSuffix = result.label.startsWith("mapping-hotkey-help-")
@@ -24083,7 +24077,7 @@ async function main() {
         ? ` mixer=${result.visibleVideoOutputItemCount}/${result.visibleVideoOutputSelectedItemCount}/${result.visibleVideoMixerOutputDeckCount}/${result.visibleVideoMixerOutputFaderCount}/${result.visibleVideoMixerOutputSelectButtonCount}/${result.visibleVideoLayerItemCount}/${result.visibleBuiltinVideoFxSelectCount}/${result.visibleVideoMixerLayerDeckCount}/${result.visibleVideoMixerLayerFaderCount}/${result.visibleVideoMixerLayerButtonCount} clip=${result.videoClipGridClientHeight}/${result.fullyVisibleVideoClipPadCount} contract=${result.controlModeFailedChecks?.join(",") || "ok"}`
         : "";
       const persistentBandSuffix = result.label.startsWith("persistent-band-invariance-")
-        ? ` persistentBand=${result.persistentBandInvariant ? "stable" : "moved"} rects=${JSON.stringify(result.persistentBandRectsByWorkspace)} deltas=${JSON.stringify(result.persistentBandRectDeltas)} mappingExpansion=${result.mappingExpansion?.passed ? "pass" : "fail"} mappingExpansionFailed=${JSON.stringify(result.mappingExpansion?.failedChecks ?? [])} timelineExpansion=${result.timelinePaneExpansion?.passed ? "pass" : "fail"} timelineExpansionFailed=${JSON.stringify(result.timelinePaneExpansion?.failedChecks ?? [])} layeredDesk=${result.layeredTimelineDesk?.passed ? "pass" : "fail"} layeredDeskFailed=${JSON.stringify(result.layeredTimelineDesk?.failedChecks ?? [])}`
+        ? ` persistentBand=${result.persistentBandInvariant ? "stable" : "moved"} rects=${JSON.stringify(result.persistentBandRectsByWorkspace)} deltas=${JSON.stringify(result.persistentBandRectDeltas)} stageSettings=${result.stageSettings?.passed ? "pass" : "fail"} stageSettingsFailed=${JSON.stringify(result.stageSettings?.failedChecks ?? [])} timelineExpansion=${result.timelinePaneExpansion?.passed ? "pass" : "fail"} timelineExpansionFailed=${JSON.stringify(result.timelinePaneExpansion?.failedChecks ?? [])} layeredDesk=${result.layeredTimelineDesk?.passed ? "pass" : "fail"} layeredDeskFailed=${JSON.stringify(result.layeredTimelineDesk?.failedChecks ?? [])}`
         : "";
       console.log(
         `${status} [${viewportRole({ width: result.innerWidth, height: result.innerHeight })}] ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${keyboardSuffix}${timelineSuffix}${sceneBlockSuffix}${touchSuffix}${controlStageGlyphSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${editVisualSuffix}${positionVisualSuffix}${colorEffectSuffix}${chaserEffectSuffix}${moveEffectSuffix}${mixerSuffix}${persistentBandSuffix}`,
@@ -24143,7 +24137,7 @@ async function main() {
       setupSurfaceFailures.length > 0 ||
       persistentBandFailures.length > 0 ||
       persistentBandInvarianceFailures.length > 0 ||
-      mappingExpansionFailures.length > 0 ||
+      stageSettingsFailures.length > 0 ||
       timelinePaneExpansionFailures.length > 0 ||
       layeredTimelineDeskFailures.length > 0 ||
       projectMenuFailures.length > 0 ||
@@ -24162,9 +24156,9 @@ async function main() {
           setupSurface: setupSurfaceFailures.map((result) => result.label),
           persistentBand: persistentBandFailures.map((result) => result.label),
           persistentBandInvariance: persistentBandInvarianceFailures.map((result) => result.label),
-          mappingExpansion: mappingExpansionFailures.map((result) => ({
-            label: result.mappingExpansion?.label ?? result.label,
-            failedChecks: result.mappingExpansion?.failedChecks ?? [],
+          stageSettings: stageSettingsFailures.map((result) => ({
+            label: result.stageSettings?.label ?? result.label,
+            failedChecks: result.stageSettings?.failedChecks ?? [],
           })),
           timelinePaneExpansion: timelinePaneExpansionFailures.map((result) => ({
             label: result.timelinePaneExpansion?.label ?? result.label,
@@ -24258,7 +24252,7 @@ async function main() {
             setupSurface: setupSurfaceFailures,
             persistentBand: persistentBandFailures,
             persistentBandInvariance: persistentBandInvarianceFailures,
-            mappingExpansion: mappingExpansionFailures.map((result) => result.mappingExpansion),
+            stageSettings: stageSettingsFailures.map((result) => result.stageSettings),
             timelinePaneExpansion: timelinePaneExpansionFailures.map((result) => result.timelinePaneExpansion),
             layeredTimelineDesk: layeredTimelineDeskFailures.map((result) => result.layeredTimelineDesk),
             projectMenu: projectMenuFailures,
@@ -24283,7 +24277,7 @@ async function main() {
         ),
       );
       throw new Error(
-        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${liveEditTypeFailures.length} Live Edit fixture-type check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${mappingExpansionFailures.length} mapping expansion check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${killZoneFailures.length} kill zone check(s), ${statusLineFailures.length} status line check(s) failed.`,
+        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${liveEditTypeFailures.length} Live Edit fixture-type check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${stageSettingsFailures.length} stage settings check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${killZoneFailures.length} kill zone check(s), ${statusLineFailures.length} status line check(s) failed.`,
       );
     }
   } finally {

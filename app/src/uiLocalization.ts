@@ -2057,6 +2057,7 @@ const japaneseText: Record<string, string> = {
   speed: "Speed",
   "Spout input": "Spout入力",
   "Stage Bounds": "ステージ範囲",
+  "Stage Settings": "ステージ設定",
   "Full-screen view of the Setup 2D stage band for lighting fixture layout":
     "照明灯体配置用セットアップ2Dステージ帯の全画面表示",
   "Stage edits": "ステージ編集",
