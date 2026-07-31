@@ -37,68 +37,63 @@ export function MappingSelectionActionsPanel(props: MappingSelectionActionsPanel
 
   return (
     <>
-      <div class="mappingTransformInspector">
-        <div class="mappingTransformTitle">
-          <strong>Selection Flags</strong>
-          <span>
-            {hasSelection()
-              ? `${props.flagState.count} fixture(s) picked`
-              : "Pick fixtures on the map or list."}
-          </span>
-        </div>
-        <div class="mappingFlagActions">
-          <button
-            class={props.flagState.allHighlighted ? "active" : ""}
-            onClick={() => void props.onSetFlag("highlight", !props.flagState.allHighlighted)}
-            disabled={!hasSelection()}
-            title="Toggle highlight for the picked fixtures (Q)"
-          >
-            {props.flagState.allHighlighted ? "Clear High" : "Highlight"}
-          </button>
-          <button
-            class={props.flagState.allSoloed ? "active" : ""}
-            onClick={() => void props.onSetFlag("solo", !props.flagState.allSoloed)}
-            disabled={!hasSelection()}
-            title="Toggle solo for the picked fixtures (W)"
-          >
-            {props.flagState.allSoloed ? "Clear Solo" : "Solo"}
-          </button>
-          <button
-            class={props.flagState.allParked ? "active" : ""}
-            onClick={() => void props.onSetFlag("park", !props.flagState.allParked)}
-            disabled={!hasSelection()}
-            title="Toggle park for the picked fixtures (E)"
-          >
-            {props.flagState.allParked ? "Clear Park" : "Park"}
-          </button>
-        </div>
-        <div class="mappingEffectActions">
-          <button
-            class="primary"
-            onClick={() => props.onOpenSceneFx()}
-            title="Open the selected scene's FX surface"
-          >
-            Open Scene FX
-          </button>
-        </div>
-        <div class="mappingNudgePanel">
-          <span>Nudge {props.snapSize}m</span>
-          <div class="mappingNudgeGrid">
-            <button onClick={() => void props.onNudge(0, -props.snapSize)} disabled={!hasSelection()}>
-              Up
+      <Show when={hasSelection()}>
+        <div class="mappingTransformInspector" data-mapping-selection-flags>
+          <div class="mappingTransformTitle">
+            <strong>Selection Flags</strong>
+            <span>{props.flagState.count} fixture(s) picked</span>
+          </div>
+          <div class="mappingFlagActions">
+            <button
+              class={props.flagState.allHighlighted ? "active" : ""}
+              onClick={() => void props.onSetFlag("highlight", !props.flagState.allHighlighted)}
+              title="Toggle highlight for the picked fixtures (Q)"
+            >
+              {props.flagState.allHighlighted ? "Clear High" : "Highlight"}
             </button>
-            <button onClick={() => void props.onNudge(-props.snapSize, 0)} disabled={!hasSelection()}>
-              Left
+            <button
+              class={props.flagState.allSoloed ? "active" : ""}
+              onClick={() => void props.onSetFlag("solo", !props.flagState.allSoloed)}
+              title="Toggle solo for the picked fixtures (W)"
+            >
+              {props.flagState.allSoloed ? "Clear Solo" : "Solo"}
             </button>
-            <button onClick={() => void props.onNudge(props.snapSize, 0)} disabled={!hasSelection()}>
-              Right
-            </button>
-            <button onClick={() => void props.onNudge(0, props.snapSize)} disabled={!hasSelection()}>
-              Down
+            <button
+              class={props.flagState.allParked ? "active" : ""}
+              onClick={() => void props.onSetFlag("park", !props.flagState.allParked)}
+              title="Toggle park for the picked fixtures (E)"
+            >
+              {props.flagState.allParked ? "Clear Park" : "Park"}
             </button>
           </div>
+          <div class="mappingEffectActions">
+            <button
+              class="primary"
+              onClick={() => props.onOpenSceneFx()}
+              title="Open the selected scene's FX surface"
+            >
+              Open Scene FX
+            </button>
+          </div>
+          <div class="mappingNudgePanel">
+            <span>Nudge {props.snapSize}m</span>
+            <div class="mappingNudgeGrid">
+              <button onClick={() => void props.onNudge(0, -props.snapSize)}>
+                Up
+              </button>
+              <button onClick={() => void props.onNudge(-props.snapSize, 0)}>
+                Left
+              </button>
+              <button onClick={() => void props.onNudge(props.snapSize, 0)}>
+                Right
+              </button>
+              <button onClick={() => void props.onNudge(0, props.snapSize)}>
+                Down
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
+      </Show>
       <Show when={props.selectedCount > 1}>
         <div class="mappingTransformInspector">
           <div class="mappingTransformTitle">

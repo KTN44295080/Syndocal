@@ -1300,6 +1300,7 @@ const japaneseText: Record<string, string> = {
   Bits: "ビット",
   "Black Level": "ブラックレベル",
   "fixture(s)": "灯体",
+  "fixture(s) picked": "灯体選択",
   "attribute(s)": "属性",
   "node(s)": "ノード",
   "control(s)": "コントロール",
@@ -2022,6 +2023,8 @@ const japaneseText: Record<string, string> = {
   "Select a fixture on the map or patch list.": "マップまたはパッチリストで灯体を選択してください。",
   "Select a fixture in the patch grid or list to edit its setup.":
     "パッチグリッドまたはリストで灯体を選択してセットアップを編集してください。",
+  "Select a stage object on the map, or open object tools to create one.":
+    "マップでステージオブジェクトを選択するか、オブジェクトツールを開いて作成してください。",
   "Select fixture or projection surface": "灯体または投影面を選択",
   "Select fixture or projection surface (S)": "灯体または投影面を選択（S）",
   "Select or patch a fixture.": "灯体を選択またはパッチしてください。",

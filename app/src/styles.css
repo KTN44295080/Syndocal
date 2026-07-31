@@ -7300,48 +7300,89 @@ progress {
 }
 
 .mappingStageSnapControls {
-  display: flex;
-  align-items: center;
-  gap: 5px;
+  position: relative;
   min-width: 0;
-  overflow-x: auto;
+  width: min(148px, 100%);
 }
 
-.mappingStageSnapControls button {
-  flex: 0 0 auto;
+.mappingStageSnapControls > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
   min-height: 26px;
-  border-color: #403a35;
+  border: 1px solid #403a35;
   border-radius: 4px;
   background: #1a1713;
   color: #cfc7be;
   padding: 0 8px;
   font-size: 12px;
+  cursor: pointer;
+  list-style-position: inside;
+  white-space: nowrap;
 }
 
-.mappingStageSnapControls button.active {
+.mappingStageSnapControls > summary strong {
+  color: #ffffff;
+  font-variant-numeric: tabular-nums;
+}
+
+.mappingStageSnapControls[open] > summary {
+  border-color: #8c8178;
+  background: #403933;
+  color: #ffffff;
+  box-shadow: inset 0 -2px 0 var(--ray-accent);
+}
+
+.mappingSnapMenu {
+  position: absolute;
+  z-index: 8;
+  top: calc(100% + 3px);
+  left: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(64px, 1fr));
+  gap: 4px;
+  width: 242px;
+  border: 1px solid #514a43;
+  border-radius: 4px;
+  background: #181715;
+  padding: 5px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.34);
+}
+
+.mappingStageSnapControls:not([open]) > .mappingSnapMenu {
+  display: none;
+}
+
+.mappingSnapMenu button {
+  min-height: 26px;
+  border-color: #403a35;
+  border-radius: 4px;
+  background: #1a1713;
+  color: #cfc7be;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+.mappingSnapMenu button.active {
   border-color: #77b866;
   background: #193021;
   color: #9ef08d;
 }
 
-.mappingStageSnapControls label {
-  display: inline-grid;
-  grid-template-columns: auto 70px;
+.mappingSnapMenu label {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 6px;
-  flex: 0 0 auto;
   min-height: 26px;
-  border: 1px solid #403a35;
-  border-radius: 4px;
-  background: #171410;
   color: #9f948b;
-  padding: 0 6px;
   font-size: 11px;
-  text-transform: uppercase;
 }
 
-.mappingStageSnapControls input {
-  width: 70px;
+.mappingSnapMenu input {
+  width: 100%;
   min-height: 22px;
   padding: 0 5px;
   font-size: 12px;
@@ -7355,24 +7396,24 @@ progress {
   overflow-x: auto;
 }
 
-.mappingLayerToggles label {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+.mappingLayerToggles button {
   flex: 0 0 auto;
-  min-height: 28px;
+  width: 25px;
+  min-height: 25px;
   border: 1px solid #403a35;
-  border-radius: 4px;
+  border-radius: 2px;
   background: #1a1713;
   color: #cfc7be;
-  padding: 0 8px;
-  font-size: 12px;
+  padding: 0;
+  font-size: 11px;
+  font-weight: 700;
 }
 
-.mappingLayerToggles input {
-  width: 13px;
-  height: 13px;
-  min-height: 13px;
+.mappingLayerToggles button.active {
+  border-color: #8c8178;
+  background: #403933;
+  color: #ffffff;
+  box-shadow: inset 0 -2px 0 var(--ray-accent);
 }
 
 .mappingStageBoundsPanel {
@@ -8393,6 +8434,40 @@ progress {
   border-radius: 4px;
   background: #101720;
   padding: 8px;
+}
+
+.mappingStageObjectTool {
+  min-width: 0;
+  border-bottom: 1px solid #3b3732;
+}
+
+.mappingStageObjectTool > summary {
+  min-height: 29px;
+  overflow: hidden;
+  border: 1px solid #45403a;
+  border-radius: 2px;
+  background: #24211e;
+  padding: 6px 8px;
+  color: #a9a098;
+  font-size: 11px;
+  cursor: pointer;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mappingStageObjectTool[open] > summary {
+  border-color: #8c8178;
+  background: #403933;
+  color: #ffffff;
+  box-shadow: inset 0 -2px 0 var(--ray-accent);
+}
+
+.mappingStageObjectTool:not([open]) > .mappingStageObjectPanel {
+  display: none;
+}
+
+.mappingStageObjectTool > .mappingStageObjectPanel {
+  margin-top: 4px;
 }
 
 .mappingStageObjectPanel.selectedObject {
@@ -21269,14 +21344,17 @@ h3 {
 
 .mappingViewportControls button,
 .mappingViewControls button,
-.mappingStageSnapControls button,
-.mappingLayerToggles label {
+.mappingStageSnapControls > summary,
+.mappingSnapMenu button,
+.mappingLayerToggles button {
   border-color: #45403a;
   border-radius: 2px;
   background: #24211e;
 }
 
-.mappingStageSnapControls button.active,
+.mappingStageSnapControls[open] > summary,
+.mappingSnapMenu button.active,
+.mappingLayerToggles button.active,
 .mappingLabelMode button.active,
 .mappingViewControls button.active {
   border-color: #8c8178;
@@ -26024,7 +26102,7 @@ h3 {
   gap: 2px 4px;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .mappingViewportToolbar > * {
@@ -26067,7 +26145,6 @@ h3 {
   grid-column: 1;
   grid-row: 3;
   gap: 3px;
-  overflow: auto hidden;
 }
 
 .mappingViewportToolbar > .mappingLayerToggles {
@@ -26078,8 +26155,8 @@ h3 {
 }
 
 .mappingViewportToolbar .mappingViewControls button,
-.mappingViewportToolbar .mappingStageSnapControls button,
-.mappingViewportToolbar .mappingLayerToggles label,
+.mappingViewportToolbar .mappingStageSnapControls > summary,
+.mappingViewportToolbar .mappingLayerToggles button,
 .mappingViewportToolbar .mappingLabelMode,
 .mappingViewportToolbar .mappingLabelMode button {
   min-height: 24px;
@@ -26098,14 +26175,14 @@ h3 {
   min-height: 22px;
 }
 
-.mappingViewportToolbar .mappingStageSnapControls label {
+.mappingViewportToolbar .mappingSnapMenu label {
   grid-template-columns: auto 48px;
   min-height: 24px;
   padding-inline: 4px;
   font-size: 9px;
 }
 
-.mappingViewportToolbar .mappingStageSnapControls input {
+.mappingViewportToolbar .mappingSnapMenu input {
   width: 48px;
   min-height: 20px;
   font-size: 10px;

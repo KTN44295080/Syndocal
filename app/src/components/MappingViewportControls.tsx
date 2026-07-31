@@ -81,6 +81,14 @@ type ControlStageIconButtonProps = {
   onClick: () => void;
 };
 
+type MappingLayerToggleButtonProps = {
+  layer: "labels" | "beams" | "geometry" | "projectors" | "objects" | "levels";
+  label: string;
+  title: string;
+  pressed: boolean;
+  onClick: () => void;
+};
+
 function ControlStageIconButton(props: ControlStageIconButtonProps) {
   return (
     <button
@@ -99,6 +107,22 @@ function ControlStageIconButton(props: ControlStageIconButtonProps) {
       <svg viewBox="0 0 16 16" aria-hidden="true">
         <path d={props.path} />
       </svg>
+    </button>
+  );
+}
+
+function MappingLayerToggleButton(props: MappingLayerToggleButtonProps) {
+  return (
+    <button
+      type="button"
+      class={props.pressed ? "active" : ""}
+      data-mapping-layer-toggle={props.layer}
+      title={props.title}
+      aria-label={props.title}
+      aria-pressed={props.pressed}
+      onClick={props.onClick}
+    >
+      {props.label}
     </button>
   );
 }
@@ -306,81 +330,90 @@ export function MappingViewportControls(props: MappingViewportControlsProps) {
           Reset
         </button>
       </div>
-      <div class="mappingStageSnapControls" data-mapping-snap-controls>
-        <button class={!props.snapEnabled ? "active" : ""} onClick={props.onSnapOff}>
-          Snap Off
-        </button>
-        <For each={mappingSnapPresets}>
-          {(preset) => (
-            <button
-              class={props.snapEnabled && Math.abs(props.snapSize - preset) < 0.001 ? "active" : ""}
-              onClick={() => props.onSnapPreset(preset)}
-            >
-              {preset}m
-            </button>
-          )}
-        </For>
-        <label>
-          Grid
-          <input
-            type="number"
-            min="0.05"
-            max="20"
-            step="0.05"
-            value={props.snapSize}
-            onChange={(event) => props.onSnapSizeChange(Number(event.currentTarget.value))}
-          />
-        </label>
-      </div>
+      <details class="mappingStageSnapControls" data-mapping-snap-controls data-mapping-snap-control>
+        <summary>
+          <span>{props.snapEnabled ? "Snap" : "Snap Off"}</span>
+          {" "}
+          <strong data-no-localize>{props.snapEnabled ? `${props.snapSize}m` : ""}</strong>
+        </summary>
+        <div class="mappingSnapMenu">
+          <button
+            type="button"
+            data-mapping-snap-option="off"
+            class={!props.snapEnabled ? "active" : ""}
+            onClick={props.onSnapOff}
+          >
+            Snap Off
+          </button>
+          <For each={mappingSnapPresets}>
+            {(preset) => (
+              <button
+                type="button"
+                data-mapping-snap-option={String(preset)}
+                class={props.snapEnabled && Math.abs(props.snapSize - preset) < 0.001 ? "active" : ""}
+                onClick={() => props.onSnapPreset(preset)}
+              >
+                {preset}m
+              </button>
+            )}
+          </For>
+          <label>
+            Grid
+            <input
+              data-mapping-snap-size
+              type="number"
+              min="0.05"
+              max="20"
+              step="0.05"
+              value={props.snapSize}
+              onChange={(event) => props.onSnapSizeChange(Number(event.currentTarget.value))}
+            />
+          </label>
+        </div>
+      </details>
       <div class="mappingLayerToggles" data-mapping-layer-toggles>
-        <label>
-          <input
-            type="checkbox"
-            checked={props.showLabels}
-            onChange={(event) => props.onShowLabels(event.currentTarget.checked)}
-          />
-          Labels
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={props.showBeams}
-            onChange={(event) => props.onShowBeams(event.currentTarget.checked)}
-          />
-          Beams
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={props.showGeometry}
-            onChange={(event) => props.onShowGeometry(event.currentTarget.checked)}
-          />
-          Geometry
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={props.showProjectors}
-            onChange={(event) => props.onShowProjectors(event.currentTarget.checked)}
-          />
-          Surfaces
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={props.showStageObjects}
-            onChange={(event) => props.onShowStageObjects(event.currentTarget.checked)}
-          />
-          Objects
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={props.showLevels}
-            onChange={(event) => props.onShowLevels(event.currentTarget.checked)}
-          />
-          Levels
-        </label>
+        <MappingLayerToggleButton
+          layer="labels"
+          label="L"
+          title="Toggle labels (L)"
+          pressed={props.showLabels}
+          onClick={() => props.onShowLabels(!props.showLabels)}
+        />
+        <MappingLayerToggleButton
+          layer="beams"
+          label="B"
+          title="Toggle beams (B)"
+          pressed={props.showBeams}
+          onClick={() => props.onShowBeams(!props.showBeams)}
+        />
+        <MappingLayerToggleButton
+          layer="geometry"
+          label="G"
+          title="Toggle GDTF geometry nodes (G)"
+          pressed={props.showGeometry}
+          onClick={() => props.onShowGeometry(!props.showGeometry)}
+        />
+        <MappingLayerToggleButton
+          layer="projectors"
+          label="V"
+          title="Toggle projection surfaces (V)"
+          pressed={props.showProjectors}
+          onClick={() => props.onShowProjectors(!props.showProjectors)}
+        />
+        <MappingLayerToggleButton
+          layer="objects"
+          label="O"
+          title="Toggle stage reference objects (O)"
+          pressed={props.showStageObjects}
+          onClick={() => props.onShowStageObjects(!props.showStageObjects)}
+        />
+        <MappingLayerToggleButton
+          layer="levels"
+          label="%"
+          title="Toggle fixture level readouts (Shift+5)"
+          pressed={props.showLevels}
+          onClick={() => props.onShowLevels(!props.showLevels)}
+        />
       </div>
     </>
   );

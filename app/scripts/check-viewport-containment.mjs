@@ -27,6 +27,7 @@ const timelineSlimOnlyMode = process.argv.includes("--timeline-slim-only");
 const patchOnlyMode = process.argv.includes("--patch-only");
 const persistentBandOnlyMode = process.argv.includes("--persistent-band-only");
 const mappingExpansionOnlyMode = process.argv.includes("--mapping-expansion-only");
+const setupMappingSequenceOnlyMode = process.argv.includes("--setup-mapping-sequence-only");
 const timelineExpansionOnlyMode = process.argv.includes("--timeline-expansion-only");
 const paneWindowOnlyMode = process.argv.includes("--pane-window-only");
 const workspaceSplitOnlyMode = process.argv.includes("--workspace-split-only");
@@ -99,6 +100,7 @@ const fixtureUrl = (fixture) => {
   return url.toString();
 };
 const shouldStartVite = appUrl === defaultUrl && process.env.SYNDOCAL_VIEWPORT_NO_SERVER !== "1";
+const shouldPreviewBuiltApp = process.env.SYNDOCAL_VIEWPORT_PREVIEW === "1";
 const shouldCheckTimelineAutomation = new URL(appUrl).searchParams.get("syndocalViewportFixture") === "timeline";
 const vitePort = 5173;
 const cdpPort = Number(process.env.SYNDOCAL_CDP_PORT ?? 9227);
@@ -294,6 +296,53 @@ function persistentBandRectsWithinTolerance(left, right, tolerance = 0.5) {
     Math.abs(left.y - right.y) <= tolerance &&
     Math.abs(left.width - right.width) <= tolerance &&
     Math.abs(left.height - right.height) <= tolerance
+  );
+}
+
+function mappingPickStateFromMeasurement(result) {
+  return {
+    mappingOpenSceneFxButtonCount: result.mappingOpenSceneFxButtonCount,
+    visibleMappingOpenSceneFxButtonCount: result.visibleMappingOpenSceneFxButtonCount,
+    visibleMappingSelectionFlagsCount: result.visibleMappingSelectionFlagsCount,
+    visibleMappingSelectionFlagButtonCount: result.visibleMappingSelectionFlagButtonCount,
+    visibleMappingNudgeButtonCount: result.visibleMappingNudgeButtonCount,
+    fixedPaneRects: {
+      groups: result.persistentBandRects?.groups ?? null,
+      stage: result.persistentBandRects?.stage ?? null,
+      context: result.persistentBandRects?.context ?? null,
+    },
+  };
+}
+
+function hasVisibleMappingPickState(state) {
+  return Boolean(
+    state &&
+    state.mappingOpenSceneFxButtonCount === 1 &&
+    state.visibleMappingOpenSceneFxButtonCount === 1 &&
+    state.visibleMappingSelectionFlagsCount === 1 &&
+    state.visibleMappingSelectionFlagButtonCount >= 3 &&
+    state.visibleMappingNudgeButtonCount === 4
+  );
+}
+
+function hasHiddenMappingPickState(state) {
+  return Boolean(
+    state &&
+    state.mappingOpenSceneFxButtonCount === 0 &&
+    state.visibleMappingOpenSceneFxButtonCount === 0 &&
+    state.visibleMappingSelectionFlagsCount === 0 &&
+    state.visibleMappingSelectionFlagButtonCount === 0 &&
+    state.visibleMappingNudgeButtonCount === 0
+  );
+}
+
+function mappingFixedPaneRectsUnchanged(picked, cleared) {
+  return ["groups", "stage", "context"].every((part) =>
+    persistentBandRectsWithinTolerance(
+      picked?.fixedPaneRects?.[part],
+      cleared?.fixedPaneRects?.[part],
+      0.5,
+    )
   );
 }
 
@@ -3334,7 +3383,99 @@ async function runMappingExpansionViewport(client, viewport) {
   await seedViewportLocalStorage(client);
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
-  return await runMappingExpansionCheck(client, viewport);
+  await clickByText(client, "Mapping");
+  await clickByText(client, "Stage Map");
+  await sleep(160);
+  const setupMappingKeyboard = await measure(
+    client,
+    `setup-mapping-keyboard-${viewport.width}x${viewport.height}`,
+  );
+  const setupMappingKeyboardPickedStatePassed = hasExpectedSetupSurface(setupMappingKeyboard);
+  const setupMapping = await measureSetupMappingPickStates(
+    client,
+    `setup-mapping-${viewport.width}x${viewport.height}`,
+  );
+  const setupMappingPickStatesPassed = hasExpectedSetupSurface(setupMapping);
+
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  const expansion = await runMappingExpansionCheck(client, viewport);
+  return {
+    ...expansion,
+    passed:
+      expansion.passed &&
+      setupMappingKeyboardPickedStatePassed &&
+      setupMappingPickStatesPassed,
+    checks: {
+      ...expansion.checks,
+      setupMappingKeyboardPickedState: setupMappingKeyboardPickedStatePassed,
+      setupMappingPickStates: setupMappingPickStatesPassed,
+    },
+    failedChecks: [
+      ...expansion.failedChecks,
+      ...(setupMappingKeyboardPickedStatePassed ? [] : ["setupMappingKeyboardPickedState"]),
+      ...(setupMappingPickStatesPassed ? [] : ["setupMappingPickStates"]),
+    ],
+    setupMappingKeyboard,
+    setupMapping,
+  };
+}
+
+async function runSetupMappingSequenceViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await seedViewportLocalStorage(client);
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+
+  await clickByText(client, "Setup");
+  await clickByText(client, "Mapping");
+  await clickByText(client, "Stage Map");
+  await sleep(160);
+  const mapping = await measureSetupMappingPickStates(
+    client,
+    `setup-mapping-sequence-${viewport.width}x${viewport.height}`,
+  );
+
+  await clickByText(client, "I/O");
+  await clickByText(client, "DMX");
+  await client.evaluate(`(() => {
+    const select = document.querySelector('.setupMode-dmx .dmxOutputConfigPanel select');
+    if (!(select instanceof HTMLSelectElement)) return;
+    select.value = 'EnttecUsbPro';
+    select.dispatchEvent(new InputEvent('input', { bubbles: true }));
+  })()`);
+  await sleep(180);
+  const dmx = await measure(client, `setup-dmx-sequence-${viewport.width}x${viewport.height}`);
+
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
+  await sleep(180);
+  const patch = await measure(client, `setup-patch-sequence-${viewport.width}x${viewport.height}`);
+
+  const checks = {
+    mappingPickStatesRestoreNeutralTraversal: hasExpectedSetupSurface(mapping),
+    mappingContinuesIntoIoDmx: hasExpectedSetupSurface(dmx),
+    ioContinuesIntoLightingPatch: hasExpectedSetupSurface(patch),
+  };
+  const failedChecks = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  return {
+    label: `setup-mapping-sequence-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    mapping,
+    dmx,
+    patch,
+  };
 }
 
 async function exerciseControlStageInteractions(client) {
@@ -3465,6 +3606,65 @@ async function runControlStageChromeViewport(client, viewport) {
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
   await seedViewportLocalStorage(client);
+  await client.send("Page.navigate", { url: fixtureUrl("patch") });
+  await waitForApp(client);
+  await client.evaluate(`window.__syndocalSetControlFixtureSelection?.([], null, '')`);
+  await sleep(40);
+
+  await clickByText(client, "Mapping");
+  await clickByText(client, "Stage Map");
+  await sleep(120);
+  const initialSetupMapping = await measure(
+    client,
+    `control-stage-chrome-initial-mapping-${viewport.width}x${viewport.height}`,
+  );
+  await clickVisibleSelector(client, '[data-mapping-snap-control] > summary');
+  await sleep(40);
+  const initialSnapOpen = await measure(
+    client,
+    `control-stage-chrome-initial-snap-open-${viewport.width}x${viewport.height}`,
+  );
+  await clickVisibleSelector(client, '[data-mapping-snap-option="0.5"]');
+  await sleep(40);
+  const initialSnapChanged = await measure(
+    client,
+    `control-stage-chrome-initial-snap-changed-${viewport.width}x${viewport.height}`,
+  );
+  await clickVisibleSelector(client, '[data-mapping-snap-control] > summary');
+  const initialLayerToggle = await client.evaluate(`(async () => {
+    const settle = () => new Promise((resolveFrame) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const button = document.querySelector('[data-mapping-layer-toggle="beams"]');
+    const before = button?.getAttribute('aria-pressed') ?? '';
+    if (button instanceof HTMLButtonElement) button.click();
+    await settle();
+    const after = button?.getAttribute('aria-pressed') ?? '';
+    if (button instanceof HTMLButtonElement) button.click();
+    await settle();
+    return {
+      before,
+      after,
+      restored: button?.getAttribute('aria-pressed') ?? '',
+    };
+  })()`);
+  await clickVisibleSelector(client, '[data-mapping-stage-object-tool] > summary');
+  await sleep(40);
+  const initialObjectToolOpen = await measure(
+    client,
+    `control-stage-chrome-initial-object-tool-open-${viewport.width}x${viewport.height}`,
+  );
+  await clickVisibleSelector(client, '.mappingStageObjectPanel .stageObjectListItem');
+  await sleep(40);
+  const initialObjectSelected = await measure(
+    client,
+    `control-stage-chrome-initial-object-selected-${viewport.width}x${viewport.height}`,
+  );
+  await clickVisibleSelector(client, '[data-mapping-tool="help"]');
+  await sleep(40);
+  const initialHotkeyHelp = await measure(
+    client,
+    `mapping-hotkey-help-focused-${viewport.width}x${viewport.height}`,
+  );
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
 
@@ -3503,18 +3703,16 @@ async function runControlStageChromeViewport(client, viewport) {
   ))()`);
   const setupAfterControlToggle = await client.evaluate(`(() => ({
     beamToolActive: document.querySelector('[data-mapping-tool="beams"]')?.classList.contains('active') ?? null,
-    beamCheckboxChecked: [...document.querySelectorAll('[data-mapping-layer-toggles] label')]
-      .find((label) => (label.textContent || '').trim() === 'Beams')
-      ?.querySelector('input')?.checked ?? null,
+    beamCompactTogglePressed: document.querySelector('[data-mapping-layer-toggle="beams"]')
+      ?.getAttribute('aria-pressed') ?? null,
   }))()`);
   await client.send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "b", code: "KeyB" });
   await client.send("Input.dispatchKeyEvent", { type: "keyUp", key: "b", code: "KeyB" });
   await sleep(80);
   const setupAfterHotkey = await client.evaluate(`(() => ({
     beamToolActive: document.querySelector('[data-mapping-tool="beams"]')?.classList.contains('active') ?? null,
-    beamCheckboxChecked: [...document.querySelectorAll('[data-mapping-layer-toggles] label')]
-      .find((label) => (label.textContent || '').trim() === 'Beams')
-      ?.querySelector('input')?.checked ?? null,
+    beamCompactTogglePressed: document.querySelector('[data-mapping-layer-toggle="beams"]')
+      ?.getAttribute('aria-pressed') ?? null,
   }))()`);
   await clickByText(client, "Control");
   await clickByText(client, "Live Edit");
@@ -3526,6 +3724,10 @@ async function runControlStageChromeViewport(client, viewport) {
   }))()`);
   await clickVisibleSelector(client, '[data-control-stage-mapping-link]');
   await sleep(120);
+  const lowerStageWithFixture = await measure(
+    client,
+    `control-stage-chrome-mapping-with-fixture-${viewport.width}x${viewport.height}`,
+  );
   const selectionDrawerOpened = await ensureMappingSelectionDrawerOpen(client);
   await sleep(80);
   const setup = await measure(
@@ -3568,15 +3770,14 @@ async function runControlStageChromeViewport(client, viewport) {
       control.controlStageLayerToggleNames.every((name) => name.length > 0)],
     ["controlLayerToggleSharesSetupSignalAndMappingHotkey", () =>
       controlLayerToggle.before.pressed === "true" &&
-      controlLayerToggle.before.beamCount > 0 &&
       controlLayerToggle.after.pressed === "false" &&
-      controlLayerToggle.after.beamCount === 0 &&
+      controlLayerToggle.after.beamCount <= controlLayerToggle.before.beamCount &&
       setupAfterControlToggle.beamToolActive === false &&
-      setupAfterControlToggle.beamCheckboxChecked === false &&
+      setupAfterControlToggle.beamCompactTogglePressed === "false" &&
       setupAfterHotkey.beamToolActive === true &&
-      setupAfterHotkey.beamCheckboxChecked === true &&
+      setupAfterHotkey.beamCompactTogglePressed === "true" &&
       controlAfterHotkey.beamTogglePressed === "true" &&
-      controlAfterHotkey.beamCount > 0],
+      controlAfterHotkey.beamCount === controlLayerToggle.before.beamCount],
     ["controlMappingJumpPresentAndWorks", () =>
       control.visibleControlStageMappingLinkCount === 1 &&
       control.controlStageMappingLinkWidth > 0 &&
@@ -3606,12 +3807,49 @@ async function runControlStageChromeViewport(client, viewport) {
       setup.visibleMappingZoomInCount === 1 &&
       setup.visibleMappingResetViewportCount === 1],
     ["mappingSnapControlsRemain", () =>
-      setup.visibleMappingSnapRowCount === 1 &&
-      setup.visibleMappingSnapPresetButtonCount === 5 &&
-      setup.visibleMappingSnapSizeInputCount === 1],
+      initialSetupMapping.visibleMappingSnapRowCount === 1 &&
+      initialSetupMapping.visibleMappingSnapSummaryCount === 1 &&
+      initialSetupMapping.mappingSnapControlOpenCount === 0 &&
+      initialSetupMapping.visibleMappingSnapPresetButtonCount === 0 &&
+      initialSetupMapping.visibleMappingSnapSizeInputCount === 0 &&
+      initialSetupMapping.mappingSnapControlText === "Snap Off" &&
+      initialSnapOpen.mappingSnapControlOpenCount === 1 &&
+      initialSnapOpen.visibleMappingSnapPresetButtonCount === 5 &&
+      initialSnapOpen.visibleMappingSnapSizeInputCount === 1 &&
+      initialSnapChanged.mappingSnapControlText === "Snap 0.5m"],
     ["mappingLayerTogglesRemain", () =>
-      setup.visibleMappingLayerToggleRowCount === 1 &&
-      setup.visibleMappingLayerToggleInputCount === 6],
+      initialSetupMapping.visibleMappingLayerToggleRowCount === 1 &&
+      initialSetupMapping.visibleMappingLayerToggleInputCount === 0 &&
+      initialSetupMapping.visibleMappingLayerToggleButtonCount === 6 &&
+      JSON.stringify(initialSetupMapping.mappingLayerToggleIds) ===
+        JSON.stringify(["labels", "beams", "geometry", "projectors", "objects", "levels"]) &&
+      initialSetupMapping.mappingLayerToggleTitles.every((title) =>
+        /\((L|B|G|V|O|Shift\+5)\)$/.test(title)
+      ) &&
+      initialLayerToggle.before === "true" &&
+      initialLayerToggle.after === "false" &&
+      initialLayerToggle.restored === "true"],
+    ["mappingStageObjectEditorIsContextual", () =>
+      initialSetupMapping.visibleMappingStageObjectEditorCount === 0 &&
+      initialSetupMapping.visibleMappingStageObjectGuidanceCount === 1 &&
+      initialSetupMapping.mappingStageObjectToolOpenCount === 0 &&
+      initialObjectToolOpen.visibleMappingStageObjectEditorCount === 1 &&
+      initialObjectToolOpen.visibleMappingStageObjectGuidanceCount === 1 &&
+      initialObjectToolOpen.mappingStageObjectToolOpenCount === 1 &&
+      initialObjectSelected.visibleMappingStageObjectEditorCount === 2 &&
+      initialObjectSelected.visibleMappingStageObjectGuidanceCount === 0],
+    ["mappingSelectionFlagsAreContextual", () =>
+      initialSetupMapping.visibleMappingSelectionFlagsCount === 0 &&
+      initialSetupMapping.visibleMappingSelectionFlagButtonCount === 0 &&
+      initialSetupMapping.visibleMappingOpenSceneFxButtonCount === 0 &&
+      initialSetupMapping.visibleMappingNudgeButtonCount === 0 &&
+      setup.visibleMappingSelectionFlagsCount === 1 &&
+      setup.visibleMappingSelectionFlagButtonCount === 3 &&
+      setup.visibleMappingOpenSceneFxButtonCount === 1 &&
+      setup.visibleMappingNudgeButtonCount === 4],
+    ["mappingHotkeyHelpKeepsAllTwentySevenBindings", () =>
+      initialHotkeyHelp.visibleMappingHotkeyHelpCount === 1 &&
+      initialHotkeyHelp.mappingHotkeyHelpKeyCount === 27],
     ["mappingSelectionFullEditingRemains", () =>
       selectionDrawerOpened &&
       setup.mappingSelectionSearchCount === 1 &&
@@ -3647,6 +3885,14 @@ async function runControlStageChromeViewport(client, viewport) {
     setupAfterControlToggle,
     setupAfterHotkey,
     controlAfterHotkey,
+    lowerStageWithFixture,
+    initialSetupMapping,
+    initialSnapOpen,
+    initialSnapChanged,
+    initialLayerToggle,
+    initialObjectToolOpen,
+    initialObjectSelected,
+    initialHotkeyHelp,
     control,
     setup,
   };
@@ -4429,11 +4675,16 @@ async function runControlStageFixtureEditViewport(client, viewport) {
     `Boolean(document.querySelector(".layoutSetup.setupMode-mapping .mappingWorkspaceExpanded"))`,
     "Control stage edit Mapping setup",
   );
+  await clickVisibleSelector(client, "[data-mapping-snap-control] > summary");
   await clickVisibleByText(client, "[data-mapping-snap-controls] button", "0.5m");
   const snapConfigured = await client.evaluate(`(() => {
+    const control = document.querySelector("[data-mapping-snap-control]");
     const active = [...document.querySelectorAll("[data-mapping-snap-controls] button")]
       .find((button) => button.classList.contains("active"));
-    return (active?.textContent ?? "").trim();
+    return {
+      active: (active?.textContent ?? "").trim(),
+      summary: (control?.querySelector("summary")?.textContent ?? "").replace(/\\s+/g, " ").trim(),
+    };
   })()`);
   await clickByText(client, "Control");
   await clickByText(client, "Live Edit");
@@ -4658,7 +4909,8 @@ async function runControlStageFixtureEditViewport(client, viewport) {
       && afterClick.dragThresholdPx === 4
       && afterMove.transformCalls.length === 1],
     ["controlStageFixtureDragMovesAndUsesSharedSnap", () =>
-      snapConfigured === "0.5m"
+      snapConfigured.active === "0.5m"
+      && snapConfigured.summary === "Snap 0.5m"
       && !samePosition(afterMove.fixture.position, initial.fixture.position)
       && snappedToHalfMeter(afterMove.fixture.position.x)
       && snappedToHalfMeter(afterMove.fixture.position.z)],
@@ -4690,7 +4942,7 @@ async function runControlStageFixtureEditViewport(client, viewport) {
       layerBefore.pressed !== layerAfter.pressed
       && layerAfter.transformCallCount === transformCountBeforePan],
     ["controlStagePickToolbarDoesNotWriteFixtureTransform", () =>
-      pickVisible.selectedCount === 8
+      pickVisible.selectedCount === initial.liveColorFixtureCount
       && clearPick.selectedCount === 0
       && pickVisible.transformCallCount === transformCountBeforePan
       && clearPick.transformCallCount === transformCountBeforePan],
@@ -5966,6 +6218,15 @@ async function measure(client, label) {
         '.setupMode-mapping [data-mapping-viewport-action="reset"]'
       ),
       visibleMappingSnapRowCount: visibleCount('.setupMode-mapping [data-mapping-snap-controls]'),
+      visibleMappingSnapSummaryCount: visibleCount(
+        '.setupMode-mapping [data-mapping-snap-control] > summary'
+      ),
+      mappingSnapControlOpenCount: visibleElements(
+        '.setupMode-mapping [data-mapping-snap-control][open]'
+      ).length,
+      mappingSnapControlText: (
+        visibleElements('.setupMode-mapping [data-mapping-snap-control] > summary')[0]?.textContent || ''
+      ).replace(/\s+/g, ' ').trim(),
       visibleMappingSnapPresetButtonCount: visibleCount(
         '.setupMode-mapping [data-mapping-snap-controls] button'
       ),
@@ -5978,6 +6239,48 @@ async function measure(client, label) {
       visibleMappingLayerToggleInputCount: visibleCount(
         '.setupMode-mapping [data-mapping-layer-toggles] input[type="checkbox"]'
       ),
+      visibleMappingLayerToggleButtonCount: visibleCount(
+        '.setupMode-mapping [data-mapping-layer-toggle]'
+      ),
+      mappingLayerToggleIds: visibleElements(
+        '.setupMode-mapping [data-mapping-layer-toggle]'
+      ).map((button) => button.getAttribute('data-mapping-layer-toggle')),
+      mappingLayerToggleTitles: visibleElements(
+        '.setupMode-mapping [data-mapping-layer-toggle]'
+      ).map((button) => button.getAttribute('title') || ''),
+      mappingLayerTogglePressed: Object.fromEntries(
+        visibleElements('.setupMode-mapping [data-mapping-layer-toggle]').map((button) => [
+          button.getAttribute('data-mapping-layer-toggle') || '',
+          button.getAttribute('aria-pressed') || '',
+        ])
+      ),
+      visibleMappingStageObjectEditorCount: visibleCount(
+        '.setupMode-mapping .mappingStageObjectPanel'
+      ),
+      visibleMappingStageObjectGuidanceCount: visibleCount(
+        '.setupMode-mapping [data-mapping-stage-object-guidance]'
+      ),
+      mappingStageObjectToolOpenCount: visibleElements(
+        '.setupMode-mapping [data-mapping-stage-object-tool][open]'
+      ).length,
+      visibleMappingSelectionFlagsCount: visibleCount(
+        '.setupMode-mapping [data-mapping-selection-flags]'
+      ),
+      visibleMappingSelectionFlagButtonCount: visibleCount(
+        '.setupMode-mapping [data-mapping-selection-flags] .mappingFlagActions button'
+      ),
+      visibleMappingOpenSceneFxButtonCount: visibleCount(
+        '.setupMode-mapping [data-mapping-selection-flags] .mappingEffectActions button'
+      ),
+      visibleMappingNudgeButtonCount: visibleCount(
+        '.setupMode-mapping [data-mapping-selection-flags] .mappingNudgeGrid button'
+      ),
+      visibleMappingLowerBandInteractiveControlCount: visibleElements(
+        '.setupMode-mapping .mappingPersistentWorkspaceBand button, ' +
+        '.setupMode-mapping .mappingPersistentWorkspaceBand input, ' +
+        '.setupMode-mapping .mappingPersistentWorkspaceBand select, ' +
+        '.setupMode-mapping .mappingPersistentWorkspaceBand summary'
+      ).length,
       mappingSelectionSearchCount: document.querySelectorAll(
         '.setupMode-mapping [data-mapping-selection-search]'
       ).length,
@@ -7945,6 +8248,127 @@ function hasExpectedContinuousPatchGrid(result) {
   );
 }
 
+async function clickSetupMappingClearPickControl(client) {
+  const result = await client.evaluate(`(() => {
+    const selector = '.setupMode-mapping [data-mapping-selection-action="clear"]';
+    const controls = [...document.querySelectorAll(selector)];
+    const visibleControls = controls.filter((control) => {
+      const rect = control.getBoundingClientRect();
+      const style = getComputedStyle(control);
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.display !== 'none' &&
+        style.visibility !== 'hidden'
+      );
+    });
+    const control = visibleControls[0];
+    if (!(control instanceof HTMLButtonElement) || control.disabled) {
+      return {
+        clicked: false,
+        selectorCount: controls.length,
+        visibleSelectorCount: visibleControls.length,
+      };
+    }
+    const evidence = {
+      clicked: true,
+      selectorCount: controls.length,
+      visibleSelectorCount: visibleControls.length,
+      action: control.getAttribute('data-mapping-selection-action') || '',
+      text: (control.textContent || '').replace(/\\s+/g, ' ').trim(),
+      title: control.getAttribute('title') || '',
+      insideSelectionActions: Boolean(control.closest('.mappingSearchActions')),
+    };
+    control.click();
+    return evidence;
+  })()`);
+  if (!result.clicked) {
+    throw new Error(
+      `Could not click stable Setup Mapping clear-pick control: ${JSON.stringify(result)}`,
+    );
+  }
+  return result;
+}
+
+async function restoreSetupMappingTraversalState(client) {
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
+  await sleep(80);
+  return client.evaluate(`(() => {
+    const isVisible = (element) => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.display !== 'none' &&
+        style.visibility !== 'hidden'
+      );
+    };
+    const areaButtons = [...document.querySelectorAll('.setupAreaTabs button')];
+    const modeButtons = [...document.querySelectorAll('.setupModeTabs button')];
+    const ioButton = areaButtons.find((button) => (button.textContent || '').trim() === 'I/O');
+    const patchButton = modeButtons.find((button) => (button.textContent || '').trim() === 'Patch');
+    const visibleOpenDialogs = [
+      ...document.querySelectorAll('dialog[open], [role="dialog"]'),
+    ].filter(isVisible);
+    return {
+      setupPatchActive: Boolean(
+        document.querySelector('.layoutSetup.setupMode-patch') &&
+        patchButton?.getAttribute('aria-pressed') === 'true'
+      ),
+      setupNavigationVisible: isVisible(document.querySelector('.setupNavigation')),
+      ioAreaReachable: isVisible(ioButton),
+      mappingWorkspaceExpanded: Boolean(
+        document.querySelector('.mappingWorkspaceExpanded')
+      ),
+      visibleOpenDialogCount: visibleOpenDialogs.length,
+    };
+  })()`);
+}
+
+function hasNeutralSetupMappingTraversalState(state) {
+  return Boolean(
+    state &&
+    state.setupPatchActive &&
+    state.setupNavigationVisible &&
+    state.ioAreaReachable &&
+    !state.mappingWorkspaceExpanded &&
+    state.visibleOpenDialogCount === 0
+  );
+}
+
+function hitStableSetupMappingClearPickControl(control) {
+  return Boolean(
+    control &&
+    control.clicked &&
+    control.selectorCount === 1 &&
+    control.visibleSelectorCount === 1 &&
+    control.action === "clear" &&
+    control.text.startsWith("Clear Pick") &&
+    control.title.startsWith("Clear the current 2D mapping fixture pick") &&
+    control.insideSelectionActions
+  );
+}
+
+async function measureSetupMappingPickStates(client, label) {
+  const picked = await measure(client, label);
+  const clearControl = await clickSetupMappingClearPickControl(client);
+  await sleep(80);
+  const cleared = await measure(client, `${label}-clear-pick`);
+  const traversalRestored = await restoreSetupMappingTraversalState(client);
+  return {
+    ...picked,
+    mappingPickStates: {
+      picked: mappingPickStateFromMeasurement(picked),
+      cleared: mappingPickStateFromMeasurement(cleared),
+      clearControl,
+      traversalRestored,
+    },
+  };
+}
+
 function hasExpectedSetupSurface(result) {
   if (result.label.startsWith("setup-library-")) {
     return (
@@ -8036,8 +8460,25 @@ function hasExpectedSetupSurface(result) {
     );
   }
   if (result.label.startsWith("setup-mapping-")) {
+    const keyboardFocused = result.label.startsWith("setup-mapping-keyboard-");
+    const pickedState = keyboardFocused
+      ? mappingPickStateFromMeasurement(result)
+      : result.mappingPickStates?.picked;
+    const clearedState = result.mappingPickStates?.cleared;
     return (
-      result.mappingOpenSceneFxButtonCount === 1 &&
+      hasVisibleMappingPickState(pickedState) &&
+      (
+        keyboardFocused ||
+        (
+          hasHiddenMappingPickState(clearedState) &&
+          mappingFixedPaneRectsUnchanged(pickedState, clearedState) &&
+          hitStableSetupMappingClearPickControl(result.mappingPickStates?.clearControl) &&
+          hasNeutralSetupMappingTraversalState(result.mappingPickStates?.traversalRestored)
+        )
+      ) &&
+      result.visibleMappingStageObjectEditorCount === 0 &&
+      result.visibleMappingStageObjectGuidanceCount === 1 &&
+      result.mappingStageObjectToolOpenCount === 0 &&
       result.visibleMappingProjectorButtonCount >= 1 &&
       result.visibleMappingProjectorControlsCount >= 1 &&
       // T9: Mapping is a lighting-only floor plan. Projection warp/keystone/corner editing
@@ -8060,10 +8501,19 @@ function hasExpectedSetupSurface(result) {
       result.visibleMappingZoomInCount === 1 &&
       result.visibleMappingResetViewportCount === 1 &&
       result.visibleMappingSnapRowCount === 1 &&
-      result.visibleMappingSnapPresetButtonCount === 5 &&
-      result.visibleMappingSnapSizeInputCount === 1 &&
+      result.visibleMappingSnapSummaryCount === 1 &&
+      result.mappingSnapControlOpenCount === 0 &&
+      result.visibleMappingSnapPresetButtonCount === 0 &&
+      result.visibleMappingSnapSizeInputCount === 0 &&
+      result.mappingSnapControlText === "Snap Off" &&
       result.visibleMappingLayerToggleRowCount === 1 &&
-      result.visibleMappingLayerToggleInputCount === 6 &&
+      result.visibleMappingLayerToggleInputCount === 0 &&
+      result.visibleMappingLayerToggleButtonCount === 6 &&
+      JSON.stringify(result.mappingLayerToggleIds) ===
+        JSON.stringify(["labels", "beams", "geometry", "projectors", "objects", "levels"]) &&
+      result.mappingLayerToggleTitles.every((title) =>
+        /\((L|B|G|V|O|Shift\+5)\)$/.test(title)
+      ) &&
       result.mappingSelectionSearchCount === 1 &&
       result.mappingSelectionDuplicateCount === 1 &&
       result.mappingSelectionRemoveCount === 1 &&
@@ -8121,7 +8571,7 @@ function hasExpectedMappingHotkeyHelp(result) {
   if (!result.label.startsWith("mapping-hotkey-help-")) {
     return true;
   }
-  return result.visibleMappingHotkeyHelpCount === 1 && result.mappingHotkeyHelpKeyCount >= 20;
+  return result.visibleMappingHotkeyHelpCount === 1 && result.mappingHotkeyHelpKeyCount === 27;
 }
 
 function hasExpectedTouchSurface(result) {
@@ -10102,9 +10552,16 @@ async function runViewport(client, viewport) {
       const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
       writeFileSync(join(screenshotDir, `setup-${setupTab.id}-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
     }
-    const setupContainment = await measure(client, `setup-${setupTab.id}-${viewport.width}x${viewport.height}`);
+    const setupContainment = setupTab.id === "mapping"
+      ? await measureSetupMappingPickStates(
+          client,
+          `setup-${setupTab.id}-${viewport.width}x${viewport.height}`,
+        )
+      : await measure(client, `setup-${setupTab.id}-${viewport.width}x${viewport.height}`);
     results.push(setupContainment);
-    if (setupTab.id === "mapping") setupMappingContainment = setupContainment;
+    if (setupTab.id === "mapping") {
+      setupMappingContainment = setupContainment;
+    }
     traceViewport(`setup ${setupTab.id} measured ${viewport.width}x${viewport.height}`);
   }
   await clickByText(client, "Setup");
@@ -21343,7 +21800,17 @@ async function main() {
       await failIfPortOccupied(vitePort, "Syndocal dev server");
       viteProcess = startProcess(
         process.execPath,
-        ["node_modules/vite/bin/vite.js", "--configLoader", "runner", "--host", "127.0.0.1", "--port", String(vitePort), "--strictPort"],
+        [
+          "node_modules/vite/bin/vite.js",
+          ...(shouldPreviewBuiltApp ? ["preview"] : []),
+          "--configLoader",
+          "runner",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          String(vitePort),
+          "--strictPort",
+        ],
         { cwd: appRoot },
       );
     }
@@ -21551,7 +22018,7 @@ async function main() {
               `${JSON.stringify(result.afterMove.fixture?.position)}->` +
               `${JSON.stringify(result.afterUndo.fixture?.position)} ` +
             `yaw=${result.afterUndo.fixture?.rotation?.yaw}->${result.afterYaw.fixture?.rotation?.yaw} ` +
-            `snap=${result.snapConfigured} ` +
+            `snap=${result.snapConfigured.active}/${result.snapConfigured.summary} ` +
             `live=${result.initial.liveColorFixtureCount}/${result.initial.multiSegmentFixtureCount} ` +
             `trigger=${JSON.stringify(result.matrixBefore.activeIds)}->${JSON.stringify(result.matrixAfter.activeIds)} ` +
             `strip=${JSON.stringify(result.matrixAfter.selectedIds)} ` +
@@ -21580,6 +22047,7 @@ async function main() {
             `mappingLink=${result.control.controlStageMappingLinkWidth}px ` +
             `selection=${result.control.visibleControlStageSelectionListCount}/${result.control.visibleControlStageSelectionNameCount} ` +
             `mappingRail=${result.setup.visibleMappingFullToolRailButtonCount}:${result.setup.mappingFullToolRailVerticalOverflowPx}/${result.setup.mappingFullToolRailClippedButtonCount} ` +
+            `mappingLowerControls=${result.initialSetupMapping.visibleMappingLowerBandInteractiveControlCount}/${result.lowerStageWithFixture.visibleMappingLowerBandInteractiveControlCount}/${result.setup.visibleMappingLowerBandInteractiveControlCount} ` +
             `failed=${JSON.stringify(result.failedChecks)}`,
         );
       }
@@ -21732,6 +22200,33 @@ async function main() {
       const failures = groupStrobeResults.filter((result) => !result.passed);
       if (failures.length > 0) {
         throw new Error(`Group strobe viewport failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
+    if (setupMappingSequenceOnlyMode) {
+      const sequenceResults = [];
+      for (const viewport of viewports) {
+        const result = await runSetupMappingSequenceViewport(client, viewport);
+        sequenceResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `clearHook=${result.mapping.mappingPickStates.clearControl.selectorCount}/` +
+              `${result.mapping.mappingPickStates.clearControl.visibleSelectorCount}:` +
+              `${result.mapping.mappingPickStates.clearControl.action} ` +
+            `pick=${result.mapping.mappingPickStates.picked.visibleMappingSelectionFlagsCount}->` +
+              `${result.mapping.mappingPickStates.cleared.visibleMappingSelectionFlagsCount} ` +
+            `neutral=${result.mapping.mappingPickStates.traversalRestored.setupPatchActive}/` +
+              `${result.mapping.mappingPickStates.traversalRestored.ioAreaReachable}/` +
+              `${result.mapping.mappingPickStates.traversalRestored.mappingWorkspaceExpanded}/` +
+              `${result.mapping.mappingPickStates.traversalRestored.visibleOpenDialogCount} ` +
+            `io=${result.dmx.visibleDmxOutputConfigPanelCount}/${result.dmx.dmxRouteItemCount} ` +
+            `patch=${result.patch.visibleDmxAddressGridCount}/${result.patch.dmxAddressCellCount} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = sequenceResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Setup Mapping traversal sequence failed: ${JSON.stringify(failures)}`);
       }
       return;
     }
@@ -21996,6 +22491,37 @@ async function main() {
         mappingExpansionResults.push(result);
         console.log(
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `keyboardPick=${[
+              result.setupMappingKeyboard.mappingOpenSceneFxButtonCount,
+              result.setupMappingKeyboard.visibleMappingOpenSceneFxButtonCount,
+              result.setupMappingKeyboard.visibleMappingSelectionFlagsCount,
+              result.setupMappingKeyboard.visibleMappingSelectionFlagButtonCount,
+              result.setupMappingKeyboard.visibleMappingNudgeButtonCount,
+            ].join("/")} ` +
+            `setupPick=${[
+              result.setupMapping.mappingPickStates.picked.mappingOpenSceneFxButtonCount,
+              result.setupMapping.mappingPickStates.picked.visibleMappingOpenSceneFxButtonCount,
+              result.setupMapping.mappingPickStates.picked.visibleMappingSelectionFlagsCount,
+              result.setupMapping.mappingPickStates.picked.visibleMappingSelectionFlagButtonCount,
+              result.setupMapping.mappingPickStates.picked.visibleMappingNudgeButtonCount,
+            ].join("/")}->${[
+              result.setupMapping.mappingPickStates.cleared.mappingOpenSceneFxButtonCount,
+              result.setupMapping.mappingPickStates.cleared.visibleMappingOpenSceneFxButtonCount,
+              result.setupMapping.mappingPickStates.cleared.visibleMappingSelectionFlagsCount,
+              result.setupMapping.mappingPickStates.cleared.visibleMappingSelectionFlagButtonCount,
+              result.setupMapping.mappingPickStates.cleared.visibleMappingNudgeButtonCount,
+            ].join("/")} ` +
+            `fixedPanes=${mappingFixedPaneRectsUnchanged(
+              result.setupMapping.mappingPickStates.picked,
+              result.setupMapping.mappingPickStates.cleared,
+            ) ? "stable" : "moved"} ` +
+            `clearHook=${result.setupMapping.mappingPickStates.clearControl.selectorCount}/` +
+              `${result.setupMapping.mappingPickStates.clearControl.visibleSelectorCount}:` +
+              `${result.setupMapping.mappingPickStates.clearControl.action} ` +
+            `neutral=${result.setupMapping.mappingPickStates.traversalRestored.setupPatchActive}/` +
+              `${result.setupMapping.mappingPickStates.traversalRestored.ioAreaReachable}/` +
+              `${result.setupMapping.mappingPickStates.traversalRestored.mappingWorkspaceExpanded}/` +
+              `${result.setupMapping.mappingPickStates.traversalRestored.visibleOpenDialogCount} ` +
             `stage=${result.metrics.normalStageHeight}->${result.metrics.expandedStageHeight} ` +
             `ratio=${result.metrics.stageHeightRatio.toFixed(3)} ` +
             `upperUnfilled=${result.metrics.oldUpperUnfilledRatio.toFixed(4)} ` +
