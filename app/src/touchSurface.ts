@@ -21,10 +21,6 @@ export const touchControlPalette: ReadonlyArray<{ kind: TouchControlKind; label:
 
 const defaultBindingForKind = (kind: TouchControlKind): TouchControlBinding | null => {
   switch (kind) {
-    case "Button":
-      return { kind: "cue_next" };
-    case "Fader":
-      return { kind: "lighting_master" };
     case "Dial":
     case "IncrementalWheel":
       return { kind: "selected_fixture_attribute", attribute: "Dimmer" };
@@ -86,31 +82,20 @@ export const defaultTouchSurface = (
           binding: { kind: "cue_previous" },
         },
         {
-          ...createTouchControl(4, "Button", 4, 0),
-          w: 3,
-          label: "GO",
-          binding: { kind: "cue_next" },
-        },
-        {
-          ...createTouchControl(5, "Button", 7, 0),
+          ...createTouchControl(5, "Button", 4, 0),
           label: "PAUSE",
           binding: { kind: "cue_fade_pause" },
         },
         {
           ...createTouchControl(6, "Fader", 9, 0),
+          w: 3,
           h: 2,
-          label: "LIGHT",
-          binding: { kind: "lighting_master" },
+          label: "FRONT",
+          binding: { kind: "group_submaster", group_id: "front" },
         },
         {
-          ...createTouchControl(7, "Fader", 10, 0),
-          h: 2,
-          label: "VIDEO",
-          binding: { kind: "video_master" },
-        },
-        {
-          ...createTouchControl(8, "Button", 11, 0),
-          w: 1,
+          ...createTouchControl(8, "Button", 6, 0),
+          w: 3,
           label: "ALL BO",
           binding: { kind: "all_blackout" },
         },
@@ -172,7 +157,28 @@ export const defaultTouchSurface = (
 export const effectiveTouchSurface = (
   surface: TouchSurfaceSummary | undefined,
   cues: ReadonlyArray<{ id: number; label: string }> = [],
-): TouchSurfaceSummary => surface && surface.pages.length > 0 ? surface : defaultTouchSurface(cues);
+): TouchSurfaceSummary => withoutTopbarDuplicateTouchControls(
+  surface && surface.pages.length > 0 ? surface : defaultTouchSurface(cues),
+);
+
+const topbarDuplicateBindingKinds = new Set<TouchControlBinding["kind"]>([
+  "cue_next",
+  "lighting_master",
+  "video_master",
+]);
+
+const duplicatesTopbar = (control: TouchControlSummary) =>
+  Boolean(control.binding && topbarDuplicateBindingKinds.has(control.binding.kind))
+  || (control.kind === "Button" && control.label.trim().toUpperCase() === "GO");
+
+export const withoutTopbarDuplicateTouchControls = (
+  surface: TouchSurfaceSummary,
+): TouchSurfaceSummary => ({
+  pages: surface.pages.map((page) => ({
+    ...page,
+    controls: page.controls.filter((control) => !duplicatesTopbar(control)),
+  })),
+});
 
 export const nextTouchPageId = (surface: TouchSurfaceSummary) =>
   Math.max(0, ...surface.pages.map((page) => page.id)) + 1;

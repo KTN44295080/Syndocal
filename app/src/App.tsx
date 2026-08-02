@@ -70,7 +70,6 @@ import { TouchDimmerControlPanel } from "./components/TouchDimmerControlPanel";
 import { TouchFixturePanel } from "./components/TouchFixturePanel";
 import { TouchGenericAttributeGrid } from "./components/TouchGenericAttributeGrid";
 import { TouchPanTiltPad } from "./components/TouchPanTiltPad";
-import { TouchSafetyDeck } from "./components/TouchSafetyDeck";
 import { TouchVideoPanel } from "./components/TouchVideoPanel";
 import type {
   TimelineOverviewAutomationRange,
@@ -16451,17 +16450,6 @@ export default function App() {
         </section>
         </Show>
         <Show when={workspaceTab() === "touch"}>
-        <TouchSafetyDeck
-          snapshot={snapshot()}
-          onTriggerPreviousCue={triggerPreviousCue}
-          onTriggerNextCue={triggerNextCue}
-          onSetCueFadePaused={setCueFadePaused}
-          onSetLightingMaster={setLightingMaster}
-          onSetVideoMasterOpacity={setVideoMasterOpacity}
-          onSetBlackout={setBlackout}
-          onSetVideoBlackout={setVideoBlackout}
-          onSetAllBlackout={setAllBlackout}
-        />
         <EditableTouchSurface
           snapshot={snapshot()}
           surface={snapshot().touch_surface}

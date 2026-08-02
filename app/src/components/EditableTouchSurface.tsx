@@ -55,12 +55,9 @@ interface TouchDragState {
 
 const bindingOptions: ReadonlyArray<{ value: string; label: string }> = [
   { value: "", label: "Unassigned" },
-  { value: "cue_next", label: "Next cue" },
   { value: "cue_previous", label: "Previous cue" },
   { value: "cue_fade_pause", label: "Cue fade pause" },
   { value: "cue", label: "Cue" },
-  { value: "lighting_master", label: "Lighting Master" },
-  { value: "video_master", label: "Video Master" },
   { value: "blackout", label: "DMX Blackout" },
   { value: "video_blackout", label: "Video Blackout" },
   { value: "all_blackout", label: "All Blackout" },
@@ -353,6 +350,39 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
     return cue && authoredCueLiveModifier(cue).flash ? cue : null;
   };
 
+  const buttonLabel = (control: TouchControlSummary) => {
+    switch (control.binding?.kind) {
+      case "cue_fade_pause":
+        return props.snapshot.active_fade?.paused ? "Resume" : control.label;
+      case "blackout":
+        return props.snapshot.blackout ? "Clear DMX BO" : control.label;
+      case "video_blackout":
+        return props.snapshot.video.blackout ? "Clear Video BO" : control.label;
+      case "all_blackout":
+        return props.snapshot.blackout && props.snapshot.video.blackout ? "All Clear" : control.label;
+      default:
+        return control.label;
+    }
+  };
+
+  const blackoutBinding = (control: TouchControlSummary) =>
+    control.binding?.kind === "blackout"
+    || control.binding?.kind === "video_blackout"
+    || control.binding?.kind === "all_blackout";
+
+  const buttonPressed = (control: TouchControlSummary): boolean | undefined => {
+    switch (control.binding?.kind) {
+      case "cue_fade_pause":
+        return props.snapshot.active_fade?.paused ?? false;
+      case "blackout":
+      case "video_blackout":
+      case "all_blackout":
+        return controlValue(control) >= 1;
+      default:
+        return undefined;
+    }
+  };
+
   const renderLiveControl = (control: TouchControlSummary) => {
     const disabled = mode() !== "live" || !control.binding;
     switch (control.kind) {
@@ -368,9 +398,14 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
         };
         return (
           <button
-            class={control.binding?.kind === "cue_next" ? "primary touchPlacedButton" : "touchPlacedButton"}
-            classList={{ flash: Boolean(flashCue()) }}
+            class="touchPlacedButton"
+            classList={{
+              flash: Boolean(flashCue()),
+              safety: blackoutBinding(control),
+              engaged: blackoutBinding(control) && controlValue(control) >= 1,
+            }}
             disabled={disabled}
+            aria-pressed={buttonPressed(control)}
             data-touch-live-activated={liveActivations()[control.id] ? "true" : "false"}
             data-touch-cue-pad={boundCue(control)?.id}
             data-touch-flash-cue={flashCue()?.id}
@@ -407,7 +442,7 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
               triggerControl(control);
             }}
           >
-            {control.label}
+            {buttonLabel(control)}
           </button>
         );
       }
@@ -584,6 +619,7 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
                 style={controlGridStyle(displayed())}
                  data-touch-control={control.id}
                  data-touch-kind={control.kind}
+                 data-touch-binding={control.binding?.kind ?? "unassigned"}
                  data-no-localize
               >
                 {renderLiveControl(control)}

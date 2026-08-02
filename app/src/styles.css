@@ -1702,39 +1702,6 @@ h3 {
   color: #edf3fb;
 }
 
-.touchGoDeck {
-  display: grid;
-  grid-template-columns: minmax(84px, 0.8fr) minmax(150px, 1.4fr) minmax(84px, 0.8fr);
-  gap: 10px;
-}
-
-.touchGoDeck button {
-  min-height: 72px;
-  font-size: 18px;
-  font-weight: 800;
-}
-
-.touchGoDeck .primary {
-  min-height: 92px;
-  font-size: 32px;
-  letter-spacing: 0;
-}
-
-.layoutTouch .touchGoDeck {
-  grid-template-columns: minmax(74px, 0.8fr) minmax(120px, 1.35fr) minmax(74px, 0.8fr);
-  gap: 8px;
-}
-
-.layoutTouch .touchGoDeck button {
-  min-height: 58px;
-  font-size: 15px;
-}
-
-.layoutTouch .touchGoDeck .primary {
-  min-height: 72px;
-  font-size: 25px;
-}
-
 .touchCueStatus {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -2794,110 +2761,6 @@ h3 {
   .bpmReadout strong {
     font-size: 16px;
   }
-}
-
-/* Touch keeps show-critical transport, masters and blackouts in a fixed safety deck. */
-.layoutTouch {
-  grid-template-columns: minmax(330px, 0.95fr) minmax(360px, 1.1fr) minmax(300px, 0.86fr);
-  grid-template-rows: 92px minmax(0, 1fr) minmax(165px, 0.42fr);
-  gap: 3px;
-  font-size: 13px;
-}
-
-.layoutTouch .touchSafetyDeck {
-  grid-column: 1 / -1;
-  grid-row: 1;
-  display: grid;
-  grid-template-columns: minmax(240px, 0.72fr) minmax(390px, 1.15fr) minmax(340px, 1fr);
-  align-items: stretch;
-  gap: 5px;
-  min-width: 0;
-  min-height: 0;
-  border-color: #4a5157;
-  border-radius: 0;
-  background: #171a1d;
-  padding: 5px;
-  overflow: hidden;
-}
-
-.layoutTouch .touchSafetyDeck .touchGoDeck {
-  display: grid;
-  grid-template-columns: minmax(64px, 0.75fr) minmax(100px, 1.2fr) minmax(72px, 0.8fr);
-  gap: 4px;
-  min-width: 0;
-}
-
-.layoutTouch .touchSafetyDeck .touchGoDeck button {
-  min-height: 52px;
-  border-radius: 2px;
-  font-size: 14px;
-}
-
-.layoutTouch .touchSafetyDeck .touchGoDeck .primary {
-  min-height: 68px;
-  background: #6a3517;
-  font-size: 27px;
-}
-
-.layoutTouch .touchSafetyDeck .touchMasterGrid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px;
-  min-width: 0;
-}
-
-.layoutTouch .touchSafetyDeck .touchMasterGrid label {
-  grid-template-columns: 58px minmax(90px, 1fr) 44px;
-  gap: 5px;
-  min-width: 0;
-  border: 1px solid #343a3f;
-  border-radius: 2px;
-  background: #111416;
-  padding: 5px 7px;
-  color: #b4bbc0;
-  font-size: 12px;
-}
-
-.layoutTouch .touchSafetyDeck .touchMasterGrid strong {
-  color: #fff;
-  font-size: 13px;
-}
-
-.layoutTouch .touchSafetyDeck .touchGuardRow {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 4px;
-  min-width: 0;
-}
-
-.layoutTouch .touchSafetyDeck .touchGuardRow button {
-  min-width: 0;
-  min-height: 56px;
-  border-radius: 2px;
-  padding: 0 5px;
-  font-size: 12px;
-}
-
-.layoutTouch .touchCuePanel {
-  grid-column: 1;
-  grid-row: 2;
-}
-
-.layoutTouch .touchStagePanel {
-  grid-column: 2;
-  grid-row: 2;
-}
-
-.layoutTouch .touchFixturePanel {
-  grid-column: 3;
-  grid-row: 2 / span 2;
-}
-
-.layoutTouch .touchRemotePanel {
-  display: none;
-}
-
-.layoutTouch .touchVideoPanel {
-  grid-column: 1 / span 2;
-  grid-row: 3;
 }
 
 .app .layoutTouch button,
@@ -4016,12 +3879,6 @@ progress {
 
 .layoutTouch .touchPanel {
   border-radius: 0;
-}
-
-@media (max-height: 760px) {
-  .layoutTouch {
-    grid-template-rows: 88px minmax(0, 1fr) minmax(150px, 0.38fr);
-  }
 }
 
 /* VJ Desk: three continuous production panes with a persistent program monitor. */
@@ -21172,12 +21029,6 @@ h3 {
   overflow: auto;
 }
 
-.app .touchGoDeck button.primary {
-  border-color: var(--ray-accent-strong);
-  background: #b85b1b;
-  color: #fff;
-}
-
 .layout {
   gap: 4px;
 }
@@ -28133,7 +27984,7 @@ h3 {
 /* ---- UI redesign T5: Control consistency. Blackouts move into a KILL visual
    family (dark red + hatch, never the GO accent orange), Active/Next cue get
    identity chips, and the two fade-progress styles unify to one neutral
-   square style. Touch inherits the same kill classes via TouchSafetyDeck. */
+   square style. Touch keeps equivalent safety state on its blackout tiles. */
 
 .killButton {
   border: 1px solid #6b2424;
@@ -28419,16 +28270,16 @@ h3 {
   min-height: 18px;
 }
 
-/* T11: one composed Touch surface switches in place between EDIT and LIVE. */
+/* One composed Touch surface switches in place between EDIT and LIVE. */
 .layoutTouch {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: clamp(92px, 12dvh, 138px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .layoutTouch .touchSurfacePanel {
   position: relative;
   grid-column: 1;
-  grid-row: 2;
+  grid-row: 1;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   min-width: 0;
@@ -28670,6 +28521,18 @@ h3 {
   font-size: 22px;
 }
 
+.app .layoutTouch .touchPlacedButton.safety {
+  border-color: #70403a;
+  background: #34201d;
+  color: #f5d6d1;
+}
+
+.app .layoutTouch .touchPlacedButton.safety.engaged {
+  border-color: #b04b40;
+  background: #6d2c27;
+  color: #fff;
+}
+
 .touchPlacedFader,
 .touchPlacedDial,
 .touchPlacedColor {
@@ -28856,10 +28719,6 @@ h3 {
 }
 
 @media (max-height: 760px) {
-  .layoutTouch {
-    grid-template-rows: 88px minmax(0, 1fr);
-  }
-
   .touchSurfaceToolbar,
   .touchControlPalette {
     min-height: 48px;

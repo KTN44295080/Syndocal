@@ -8020,6 +8020,39 @@ async function measure(client, label) {
         document.querySelector('.touchSurfaceGrid')?.getAttribute('data-touch-page') === 'Default Desk',
       touchActivePageLabel: document.querySelector('.touchSurfaceGrid')?.getAttribute('data-touch-page') ?? '',
       visibleTouchPlacedControlCount: visibleCount('[data-touch-control]'),
+      touchBandReplacementBindings: [...new Set([...document.querySelectorAll('[data-touch-control]')]
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+        })
+        .map((element) => element.getAttribute('data-touch-binding'))
+        .filter((binding) => ['cue_previous', 'cue_fade_pause', 'blackout', 'video_blackout', 'all_blackout'].includes(binding)))].sort(),
+      touchTopbarDuplicateControls: [...document.querySelectorAll('[data-touch-control]')]
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+        })
+        .filter((element) => {
+          const binding = element.getAttribute('data-touch-binding');
+          const buttonLabel = (element.querySelector('.touchPlacedButton')?.textContent || '').trim().toUpperCase();
+          return ['cue_next', 'lighting_master', 'video_master'].includes(binding) || buttonLabel === 'GO';
+        })
+        .map((element) => element.getAttribute('data-touch-binding') + ':' +
+          (element.querySelector('.touchPlacedButton')?.textContent || '').trim()),
+      touchSurfaceWorkspaceFill: (() => {
+        const layout = document.querySelector('.layoutTouch');
+        const surface = document.querySelector('[data-touch-surface]');
+        if (!layout || !surface) return null;
+        const layoutRect = layout.getBoundingClientRect();
+        const surfaceRect = surface.getBoundingClientRect();
+        return {
+          topGap: Math.round((surfaceRect.top - layoutRect.top) * 100) / 100,
+          bottomGap: Math.round((layoutRect.bottom - surfaceRect.bottom) * 100) / 100,
+          heightRatio: Math.round((surfaceRect.height / layoutRect.height) * 10_000) / 10_000,
+        };
+      })(),
       touchPlacedKinds: [...new Set([...document.querySelectorAll('[data-touch-control]')]
         .filter((element) => {
           const rect = element.getBoundingClientRect();
@@ -9234,6 +9267,19 @@ function hasExpectedTouchSurface(result) {
     result.touchTileMetrics?.normalizedTileWidthRatio <= 1.02 &&
     result.touchTileMetrics?.normalizedTileHeightRatio <= 1.02
   );
+  const bandReplacementBindingsPassed = [
+    "all_blackout",
+    "blackout",
+    "cue_fade_pause",
+    "cue_previous",
+    "video_blackout",
+  ].every((binding) => result.touchBandReplacementBindings.includes(binding));
+  const surfaceReclaimsBandHeight =
+    result.touchSurfaceWorkspaceFill?.topGap >= -1 &&
+    result.touchSurfaceWorkspaceFill?.topGap <= 1 &&
+    result.touchSurfaceWorkspaceFill?.bottomGap >= -1 &&
+    result.touchSurfaceWorkspaceFill?.bottomGap <= 1 &&
+    result.touchSurfaceWorkspaceFill?.heightRatio >= 0.99;
   return (
     result.visibleTouchSurfaceCount === 1 &&
     result.visibleTouchModeToggleCount === 2 &&
@@ -9254,10 +9300,13 @@ function hasExpectedTouchSurface(result) {
       "Label",
       "XyGrid",
     ]) &&
-    result.visibleTouchSafetyDeckCount === 1 &&
-    result.visibleTouchGoDeckCount > 0 &&
-    result.visibleTouchMasterGridCount > 0 &&
-    result.visibleTouchSafetyGuardButtonCount === 4 &&
+    result.visibleTouchSafetyDeckCount === 0 &&
+    result.visibleTouchGoDeckCount === 0 &&
+    result.visibleTouchMasterGridCount === 0 &&
+    result.visibleTouchSafetyGuardButtonCount === 0 &&
+    bandReplacementBindingsPassed &&
+    result.touchTopbarDuplicateControls.length === 0 &&
+    surfaceReclaimsBandHeight &&
     result.touchComposedCheckPassed &&
     result.touchDocumentAndAppScrollZero &&
     result.touchPlacedUndersizedCount === 0 &&
@@ -9272,11 +9321,10 @@ async function checkEditableTouchSurface(client, expectedPage, expectedDefaultPr
     const expectedPage = ${JSON.stringify(expectedPage)};
     const expectedDefaultPreset = ${JSON.stringify(expectedDefaultPreset)};
     const surface = document.querySelector('[data-touch-surface]');
-    const safetyDeck = document.querySelector('.touchSafetyDeck');
     const modeButtons = [...document.querySelectorAll('.touchSurfaceModeToggle button')];
     const editButton = modeButtons[0];
     const liveButton = modeButtons[1];
-    if (!surface || !safetyDeck || !editButton || !liveButton) {
+    if (!surface || !editButton || !liveButton) {
       window.__syndocalTouchSurfaceCheck = { passed: false, found: false };
       return false;
     }
@@ -9286,6 +9334,17 @@ async function checkEditableTouchSurface(client, expectedPage, expectedDefaultPr
     const initialControls = [...surface.querySelectorAll('[data-touch-control]')];
     const initialControlCount = initialControls.length;
     const initialKinds = [...new Set(initialControls.map((control) => control.getAttribute('data-touch-kind')))].filter(Boolean).sort();
+    const initialBindings = [...new Set(initialControls.map((control) => control.getAttribute('data-touch-binding')))].filter(Boolean).sort();
+    const bandReplacementBindings = ['all_blackout', 'blackout', 'cue_fade_pause', 'cue_previous', 'video_blackout'];
+    const bandReplacementBindingsPresent = bandReplacementBindings.every((binding) => initialBindings.includes(binding));
+    const topbarDuplicateControls = initialControls.filter((control) => {
+      const binding = control.getAttribute('data-touch-binding');
+      const buttonLabel = (control.querySelector('.touchPlacedButton')?.textContent || '').trim().toUpperCase();
+      return ['cue_next', 'lighting_master', 'video_master'].includes(binding) || buttonLabel === 'GO';
+    }).map((control) => ({
+      binding: control.getAttribute('data-touch-binding'),
+      label: (control.querySelector('.touchPlacedButton')?.textContent || '').trim(),
+    }));
     const operatedKinds = [];
 
     const button = surface.querySelector('[data-touch-kind="Button"] .touchPlacedButton:not(:disabled)');
@@ -9346,20 +9405,27 @@ async function checkEditableTouchSurface(client, expectedPage, expectedDefaultPr
     const pageManagementPresent = document.querySelectorAll('.touchPageTabs button[aria-pressed]').length >= 1 &&
       document.querySelectorAll('.touchPageAdd').length === 1 &&
       document.querySelectorAll('.touchPageRemove').length === 1;
-    const safetyDeckInEdit = document.querySelector('.touchSafetyDeck') === safetyDeck;
+    const bandAbsentInEdit = document.querySelector('.touchSafetyDeck') === null;
 
     liveButton.click();
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
     const liveModeSameSurface = document.querySelector('[data-touch-surface]') === surface &&
       surface.getAttribute('data-touch-mode') === 'live' &&
       surface.querySelectorAll('[data-touch-control]').length === initialControlCount;
-    const safetyDeckInLive = document.querySelector('.touchSafetyDeck') === safetyDeck;
+    const bandAbsentInLive = document.querySelector('.touchSafetyDeck') === null;
     const activePage = surface.querySelector('.touchSurfaceGrid')?.getAttribute('data-touch-page') ?? '';
     const defaultPresetMatches = surface.getAttribute('data-touch-default-preset') === String(expectedDefaultPreset);
     const palettePassed = JSON.stringify(paletteLabels) === JSON.stringify(expectedPalette);
     const allKindsPresent = JSON.stringify(initialKinds) === JSON.stringify([
       'Button', 'ColorWheel', 'Dial', 'Fader', 'Image', 'IncrementalWheel', 'Label', 'XyGrid'
     ]);
+    const layout = document.querySelector('.layoutTouch');
+    const layoutRect = layout?.getBoundingClientRect();
+    const surfaceRect = surface.getBoundingClientRect();
+    const surfaceReclaimsBandHeight = Boolean(layoutRect) &&
+      Math.abs(surfaceRect.top - layoutRect.top) <= 1 &&
+      Math.abs(layoutRect.bottom - surfaceRect.bottom) <= 1 &&
+      surfaceRect.height / layoutRect.height >= 0.99;
 
     window.__syndocalTouchSurfaceCheck = {
       passed:
@@ -9372,8 +9438,11 @@ async function checkEditableTouchSurface(client, expectedPage, expectedDefaultPr
         liveModeSameSurface &&
         editHandlesPresent &&
         pageManagementPresent &&
-        safetyDeckInEdit &&
-        safetyDeckInLive,
+        bandReplacementBindingsPresent &&
+        topbarDuplicateControls.length === 0 &&
+        bandAbsentInEdit &&
+        bandAbsentInLive &&
+        surfaceReclaimsBandHeight,
       found: true,
       activePage,
       expectedPage,
@@ -9381,7 +9450,10 @@ async function checkEditableTouchSurface(client, expectedPage, expectedDefaultPr
       paletteLabels,
       palettePassed,
       initialKinds,
+      initialBindings,
       allKindsPresent,
+      bandReplacementBindingsPresent,
+      topbarDuplicateControls,
       operatedKinds,
       liveActivationKinds,
       liveOperationsPassed,
@@ -9389,8 +9461,9 @@ async function checkEditableTouchSurface(client, expectedPage, expectedDefaultPr
       liveModeSameSurface,
       editHandlesPresent,
       pageManagementPresent,
-      safetyDeckInEdit,
-      safetyDeckInLive,
+      bandAbsentInEdit,
+      bandAbsentInLive,
+      surfaceReclaimsBandHeight,
     };
     return window.__syndocalTouchSurfaceCheck.passed;
   })()`);
@@ -20527,7 +20600,7 @@ async function runWorkspaceOperatorViewport(client, viewport) {
     setup: ".setupPanel",
     live: ".liveControlPanel",
     mixer: ".videoControlPanelMixer, .groupLiveMixerStrip",
-    touch: ".touchSafetyDeck",
+    touch: "[data-touch-surface]",
   };
   const paneWindows = [];
   for (const [pane, selector] of Object.entries(paneSelectors)) {
@@ -23450,6 +23523,8 @@ async function main() {
                 `${result.touchTileMetrics?.normalizedTileHeightRatio ?? "?"} ` +
               `minimum=${result.touchTileMetrics?.minimumTileWidth ?? "?"}x` +
                 `${result.touchTileMetrics?.minimumTileHeight ?? "?"} ` +
+              `band=${result.visibleTouchSafetyDeckCount} replacements=${result.touchBandReplacementBindings.join("+")} ` +
+              `duplicates=${result.touchTopbarDuplicateControls.length} fill=${result.touchSurfaceWorkspaceFill?.heightRatio ?? "?"} ` +
               `targets=${result.touchPlacedUndersizedCount}/${result.touchUndersizedTargetCount} ` +
               `scroll=${result.touchDocumentAndAppScrollZero ? 0 : 1}`,
           );
@@ -24697,7 +24772,7 @@ async function main() {
         ? ` keyboard=${result.keyboardNavigationPassed ? 'pass' : 'fail'}`
         : "";
       const touchSuffix = result.label.startsWith("touch-")
-        ? ` touch=${result.visibleTouchSurfaceCount}/${result.visibleTouchModeToggleCount}/${result.visibleTouchPageTabCount}/${result.visibleTouchPlacedControlCount} page=${JSON.stringify(result.touchActivePageLabel)} kinds=${JSON.stringify(result.touchPlacedKinds)} palette=${JSON.stringify(result.touchComposedCheckResult?.paletteLabels ?? [])} live=${result.touchComposedCheckResult?.liveOperationsPassed ? "pass" : "fail"} safety=${result.visibleTouchSafetyDeckCount}/${result.visibleTouchSafetyGuardButtonCount} coverage=${result.touchTileMetrics?.tileUnionCoverageRatio ?? "?"} tracks=${result.touchTileMetrics?.columnTrackRatio ?? "?"}/${result.touchTileMetrics?.rowTrackRatio ?? "?"} normalized=${result.touchTileMetrics?.normalizedTileWidthRatio ?? "?"}/${result.touchTileMetrics?.normalizedTileHeightRatio ?? "?"} targets=${result.touchPlacedUndersizedCount}/${result.touchUndersizedTargetCount} scroll=${result.touchDocumentAndAppScrollZero ? 0 : 1}`
+        ? ` touch=${result.visibleTouchSurfaceCount}/${result.visibleTouchModeToggleCount}/${result.visibleTouchPageTabCount}/${result.visibleTouchPlacedControlCount} page=${JSON.stringify(result.touchActivePageLabel)} kinds=${JSON.stringify(result.touchPlacedKinds)} palette=${JSON.stringify(result.touchComposedCheckResult?.paletteLabels ?? [])} live=${result.touchComposedCheckResult?.liveOperationsPassed ? "pass" : "fail"} band=${result.visibleTouchSafetyDeckCount} replacements=${result.touchBandReplacementBindings.join("+")} duplicates=${result.touchTopbarDuplicateControls.length} fill=${result.touchSurfaceWorkspaceFill?.heightRatio ?? "?"} coverage=${result.touchTileMetrics?.tileUnionCoverageRatio ?? "?"} tracks=${result.touchTileMetrics?.columnTrackRatio ?? "?"}/${result.touchTileMetrics?.rowTrackRatio ?? "?"} normalized=${result.touchTileMetrics?.normalizedTileWidthRatio ?? "?"}/${result.touchTileMetrics?.normalizedTileHeightRatio ?? "?"} targets=${result.touchPlacedUndersizedCount}/${result.touchUndersizedTargetCount} scroll=${result.touchDocumentAndAppScrollZero ? 0 : 1}`
         : "";
       const controlStageGlyphSuffix = /^control-live-\d+x\d+$/.test(result.label)
         ? ` controlStageGlyphs=${JSON.stringify(result.controlStageFixtureGlyphMetrics)} hitMin=${result.controlStageFixtureMinSize}`
