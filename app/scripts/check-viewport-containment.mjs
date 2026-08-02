@@ -25,9 +25,13 @@ const cueRecallOnlyMode = process.argv.includes("--cue-recall-only");
 const setupDmxOnlyMode = process.argv.includes("--setup-dmx-only");
 const timelineSlimOnlyMode = process.argv.includes("--timeline-slim-only");
 const patchOnlyMode = process.argv.includes("--patch-only");
+const patchEmptyStateOnlyMode = process.argv.includes("--patch-empty-state-only");
+const touchOnlyMode = process.argv.includes("--touch-only");
 const persistentBandOnlyMode = process.argv.includes("--persistent-band-only");
 const stageSettingsOnlyMode = process.argv.includes("--stage-settings-only");
-const setupStageBandSequenceOnlyMode = process.argv.includes("--setup-stage-band-sequence-only");
+const setupStageBandSequenceOnlyMode =
+  process.argv.includes("--setup-stage-band-sequence-only") ||
+  process.argv.includes("--setup-mapping-sequence-only");
 const timelineExpansionOnlyMode = process.argv.includes("--timeline-expansion-only");
 const paneWindowOnlyMode = process.argv.includes("--pane-window-only");
 const workspaceSplitOnlyMode = process.argv.includes("--workspace-split-only");
@@ -60,6 +64,8 @@ const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
     ? "large-show"
     : patchOnlyMode
       ? "patch"
+      : patchEmptyStateOnlyMode
+        ? "none"
       : mappingViewportConformanceOnlyMode
         ? "mapping-viewport-conformance"
       : mappingLiveSnapshotOnlyMode
@@ -6294,6 +6300,94 @@ async function measure(client, label) {
     const moveEffectPathDeskRect = moveEffectPathDesk?.getBoundingClientRect() ?? null;
     const moveEffectInspectorRect = moveEffectInspector?.getBoundingClientRect() ?? null;
     const moveEffectPathCanvasRect = moveEffectPathCanvas?.getBoundingClientRect() ?? null;
+    const touchGrid = document.querySelector('.touchSurfaceGrid');
+    const touchTiles = touchGrid ? visibleElements('[data-touch-control]', touchGrid) : [];
+    let touchTileMetrics = null;
+    if (touchGrid instanceof HTMLElement && touchTiles.length > 0) {
+      const precision = (value) => Math.round(value * 10_000) / 10_000;
+      const gridRect = touchGrid.getBoundingClientRect();
+      const gridStyle = getComputedStyle(touchGrid);
+      const tileRects = touchTiles.map((tile) => tile.getBoundingClientRect());
+      const extent = {
+        left: Math.min(...tileRects.map((rect) => rect.left)),
+        top: Math.min(...tileRects.map((rect) => rect.top)),
+        right: Math.max(...tileRects.map((rect) => rect.right)),
+        bottom: Math.max(...tileRects.map((rect) => rect.bottom)),
+      };
+      const clippedExtentWidth = Math.max(0, Math.min(extent.right, gridRect.right) - Math.max(extent.left, gridRect.left));
+      const clippedExtentHeight = Math.max(0, Math.min(extent.bottom, gridRect.bottom) - Math.max(extent.top, gridRect.top));
+      const gridArea = gridRect.width * gridRect.height;
+      const contentBounds = {
+        left: gridRect.left + (Number.parseFloat(gridStyle.borderLeftWidth) || 0) + (Number.parseFloat(gridStyle.paddingLeft) || 0),
+        top: gridRect.top + (Number.parseFloat(gridStyle.borderTopWidth) || 0) + (Number.parseFloat(gridStyle.paddingTop) || 0),
+        right: gridRect.right - (Number.parseFloat(gridStyle.borderRightWidth) || 0) - (Number.parseFloat(gridStyle.paddingRight) || 0),
+        bottom: gridRect.bottom - (Number.parseFloat(gridStyle.borderBottomWidth) || 0) - (Number.parseFloat(gridStyle.paddingBottom) || 0),
+      };
+      const clippedTiles = tileRects.map((rect) => ({
+        left: Math.max(rect.left, contentBounds.left),
+        top: Math.max(rect.top, contentBounds.top),
+        right: Math.min(rect.right, contentBounds.right),
+        bottom: Math.min(rect.bottom, contentBounds.bottom),
+      })).filter((rect) => rect.right > rect.left && rect.bottom > rect.top);
+      const xEdges = [...new Set(clippedTiles.flatMap((rect) => [rect.left, rect.right]))].sort((left, right) => left - right);
+      let tileUnionArea = 0;
+      for (let index = 0; index < xEdges.length - 1; index += 1) {
+        const left = xEdges[index];
+        const right = xEdges[index + 1];
+        const midpoint = (left + right) / 2;
+        const intervals = clippedTiles
+          .filter((rect) => rect.left <= midpoint && rect.right >= midpoint)
+          .map((rect) => [rect.top, rect.bottom])
+          .sort((first, second) => first[0] - second[0]);
+        let coveredHeight = 0;
+        let activeStart = null;
+        let activeEnd = null;
+        for (const [top, bottom] of intervals) {
+          if (activeStart === null || top > activeEnd) {
+            if (activeStart !== null) coveredHeight += activeEnd - activeStart;
+            activeStart = top;
+            activeEnd = bottom;
+          } else {
+            activeEnd = Math.max(activeEnd, bottom);
+          }
+        }
+        if (activeStart !== null) coveredHeight += activeEnd - activeStart;
+        tileUnionArea += (right - left) * coveredHeight;
+      }
+      const contentArea = Math.max(0, contentBounds.right - contentBounds.left) *
+        Math.max(0, contentBounds.bottom - contentBounds.top);
+      const parsedTracks = (value) => value.split(' ').map(Number.parseFloat).filter(Number.isFinite);
+      const columnTracks = parsedTracks(gridStyle.gridTemplateColumns);
+      const rowTracks = parsedTracks(gridStyle.gridTemplateRows);
+      const ratio = (values) => values.length > 0 ? Math.max(...values) / Math.min(...values) : Number.POSITIVE_INFINITY;
+      const spanFromStyle = (value) => Number(value.split('span ')[1]?.trim() ?? 1);
+      const columnGap = Number.parseFloat(gridStyle.columnGap) || 0;
+      const rowGap = Number.parseFloat(gridStyle.rowGap) || 0;
+      const normalizedTileWidths = touchTiles.map((tile, index) => {
+        const span = spanFromStyle(tile.style.gridColumn);
+        return (tileRects[index].width - Math.max(0, span - 1) * columnGap) / span;
+      });
+      const normalizedTileHeights = touchTiles.map((tile, index) => {
+        const span = spanFromStyle(tile.style.gridRow);
+        return (tileRects[index].height - Math.max(0, span - 1) * rowGap) / span;
+      });
+      touchTileMetrics = {
+        gridWidth: precision(gridRect.width),
+        gridHeight: precision(gridRect.height),
+        tileBoundingBoxCoverageRatio: gridArea > 0
+          ? precision(clippedExtentWidth * clippedExtentHeight / gridArea)
+          : 0,
+        tileUnionCoverageRatio: contentArea > 0 ? precision(tileUnionArea / contentArea) : 0,
+        columnTrackCount: columnTracks.length,
+        rowTrackCount: rowTracks.length,
+        columnTrackRatio: precision(ratio(columnTracks)),
+        rowTrackRatio: precision(ratio(rowTracks)),
+        normalizedTileWidthRatio: precision(ratio(normalizedTileWidths)),
+        normalizedTileHeightRatio: precision(ratio(normalizedTileHeights)),
+        minimumTileWidth: precision(Math.min(...tileRects.map((rect) => rect.width))),
+        minimumTileHeight: precision(Math.min(...tileRects.map((rect) => rect.height))),
+      };
+    }
     const patchGrid = document.querySelector('.dmxAddressGrid');
     const patchCells = patchGrid ? [...patchGrid.querySelectorAll('.dmxAddressCell')] : [];
     let patchGridMetrics = null;
@@ -6305,6 +6399,7 @@ async function measure(client, label) {
       const cellRects = patchCells.map((cell) => cell.getBoundingClientRect());
       const roundedUnique = (values) => new Set(values.map((value) => Math.round(value * 10) / 10)).size;
       const gridStyle = getComputedStyle(patchGrid);
+      const gridRect = patchGrid.getBoundingClientRect();
       const directGridRows = [...patchGrid.children].filter((child) => child.getAttribute('role') === 'row');
       const gridCells = [...patchGrid.querySelectorAll('[role="gridcell"]')];
       const lastCell = patchGrid.querySelector('[data-dmx-address="512"]');
@@ -6417,6 +6512,19 @@ async function measure(client, label) {
         maxCellWidth: cellRects.length > 0 ? Math.max(...cellRects.map((rect) => rect.width)) : 0,
         minCellHeight: cellRects.length > 0 ? Math.min(...cellRects.map((rect) => rect.height)) : 0,
         maxCellHeight: cellRects.length > 0 ? Math.max(...cellRects.map((rect) => rect.height)) : 0,
+        gridWidth: gridRect.width,
+        contentWidth: directGridRows[0]?.getBoundingClientRect().width ?? 0,
+        paneWidth: setupPatchAddressDesk?.getBoundingClientRect().width ?? 0,
+        widthCoverageRatio: setupPatchAddressDesk
+          ? gridRect.width / setupPatchAddressDesk.getBoundingClientRect().width
+          : 0,
+        contentWidthCoverageRatio: setupPatchAddressDesk
+          ? (directGridRows[0]?.getBoundingClientRect().width ?? 0) /
+            setupPatchAddressDesk.getBoundingClientRect().width
+          : 0,
+        frameContentWidthGapRatio: gridRect.width > 0
+          ? Math.max(0, gridRect.width - (directGridRows[0]?.getBoundingClientRect().width ?? 0)) / gridRect.width
+          : 0,
         clientWidth: patchGrid.clientWidth,
         clientHeight: patchGrid.clientHeight,
         scrollWidth: patchGrid.scrollWidth,
@@ -7934,6 +8042,7 @@ async function measure(client, label) {
           const rect = element.getBoundingClientRect();
           return rect.width < 47.5 || rect.height < 47.5;
         }).length,
+      touchTileMetrics,
       visibleTouchCuePanelCount: visibleCount('.touchCuePanel'),
       visibleTouchSafetyDeckCount: visibleCount('.touchSafetyDeck'),
       visibleTouchSafetyGuardButtonCount: visibleCount('.touchSafetyDeck .touchGuardRow button'),
@@ -8694,9 +8803,13 @@ function hasExpectedControlModeSurface(result) {
 function hasExpectedContinuousPatchGrid(result) {
   const metrics = result.patchGridMetrics;
   if (!metrics) return false;
+  const largeResponsiveViewport = result.innerWidth >= 2048 && result.innerHeight >= 1129;
   const hasBoundedInternalScroll =
     (metrics.scrollHeight > metrics.clientHeight + 1 && ["auto", "scroll"].includes(metrics.overflowY)) ||
     (metrics.scrollWidth > metrics.clientWidth + 1 && ["auto", "scroll"].includes(metrics.overflowX));
+  const contentFitsWithoutScroll =
+    metrics.scrollHeight <= metrics.clientHeight + 1 &&
+    metrics.scrollWidth <= metrics.clientWidth + 1;
   const avoidsUnneededHorizontalScroll =
     result.innerWidth < 1600 || metrics.scrollWidth <= metrics.clientWidth + 1;
   return (
@@ -8708,10 +8821,15 @@ function hasExpectedContinuousPatchGrid(result) {
     metrics.rowCount === 16 &&
     metrics.columnCount === 32 &&
     metrics.minCellWidth >= 16 &&
-    metrics.maxCellWidth <= 24 &&
+    metrics.maxCellWidth <= 44 &&
     metrics.minCellHeight >= 16 &&
-    metrics.maxCellHeight <= 24 &&
-    hasBoundedInternalScroll &&
+    metrics.maxCellHeight <= 44 &&
+    (!largeResponsiveViewport || (
+      metrics.widthCoverageRatio >= 0.85 &&
+      metrics.contentWidthCoverageRatio >= 0.92 &&
+      metrics.frameContentWidthGapRatio <= 0.04
+    )) &&
+    (contentFitsWithoutScroll || hasBoundedInternalScroll) &&
     avoidsUnneededHorizontalScroll &&
     metrics.endReachable &&
     metrics.outerScrollUnchangedAtEnd &&
@@ -8736,6 +8854,35 @@ function hasExpectedContinuousPatchGrid(result) {
     metrics.readoutNamed &&
     metrics.unnamedOverviewSegmentCount === 0
   );
+}
+
+function largePatchGridScalingChecks(results) {
+  const compact = results.find((result) => result.innerWidth === 1366 && result.innerHeight === 768);
+  const large = results.filter((result) => result.innerWidth >= 2048 && result.innerHeight >= 1129);
+  const checks = {
+    extendedGridOccupiesPaneWidth:
+      large.length === 0 || large.every((result) =>
+        result.patchGridMetrics?.widthCoverageRatio >= 0.85 &&
+        result.patchGridMetrics?.contentWidthCoverageRatio >= 0.92 &&
+        result.patchGridMetrics?.frameContentWidthGapRatio <= 0.04
+      ),
+    extendedCellStrictlyLargerThan1366:
+      large.length === 0 || !compact || large.every((result) =>
+        (result.patchGridMetrics?.minCellWidth ?? 0) > (compact.patchGridMetrics?.minCellWidth ?? Number.POSITIVE_INFINITY)
+      ),
+  };
+  return {
+    passed: Object.values(checks).every(Boolean),
+    checks,
+    compactCellSize: compact?.patchGridMetrics?.minCellWidth ?? null,
+    large: large.map((result) => ({
+      label: result.label,
+      cellSize: result.patchGridMetrics?.minCellWidth ?? null,
+      widthCoverageRatio: result.patchGridMetrics?.widthCoverageRatio ?? null,
+      contentWidthCoverageRatio: result.patchGridMetrics?.contentWidthCoverageRatio ?? null,
+      frameContentWidthGapRatio: result.patchGridMetrics?.frameContentWidthGapRatio ?? null,
+    })),
+  };
 }
 
 async function clickSetupStageBandClearPickControl(client) {
@@ -9076,6 +9223,17 @@ function hasExpectedTouchSurface(result) {
     return true;
   }
   const expectedPage = result.label.startsWith("touch-composed-") ? "Viewport Touch" : "Default Desk";
+  const expectsLargeResponsiveDesk =
+    expectedPage === "Default Desk" && result.innerWidth >= 2048 && result.innerHeight >= 1129;
+  const largeResponsiveDeskPassed = !expectsLargeResponsiveDesk || (
+    result.touchTileMetrics?.tileUnionCoverageRatio >= 0.95 &&
+    result.touchTileMetrics?.columnTrackCount === 12 &&
+    result.touchTileMetrics?.rowTrackCount === 8 &&
+    result.touchTileMetrics?.columnTrackRatio <= 1.02 &&
+    result.touchTileMetrics?.rowTrackRatio <= 1.02 &&
+    result.touchTileMetrics?.normalizedTileWidthRatio <= 1.02 &&
+    result.touchTileMetrics?.normalizedTileHeightRatio <= 1.02
+  );
   return (
     result.visibleTouchSurfaceCount === 1 &&
     result.visibleTouchModeToggleCount === 2 &&
@@ -9104,7 +9262,8 @@ function hasExpectedTouchSurface(result) {
     result.touchDocumentAndAppScrollZero &&
     result.touchPlacedUndersizedCount === 0 &&
     result.visibleTouchRemotePanelCount === 0 &&
-    result.touchUndersizedTargetCount === 0
+    result.touchUndersizedTargetCount === 0 &&
+    largeResponsiveDeskPassed
   );
 }
 
@@ -11428,6 +11587,26 @@ async function checkPatchHighAddressAction(client) {
   })()`);
 }
 
+async function runTouchViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await clickByText(client, "Touch");
+  await sleep(180);
+  await checkEditableTouchSurface(client, "Default Desk", true);
+  if (shouldCaptureViewport(viewport)) {
+    mkdirSync(screenshotDir, { recursive: true });
+    const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+    writeFileSync(join(screenshotDir, `touch-focused-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
+  }
+  return measure(client, `touch-${viewport.width}x${viewport.height}`);
+}
+
 async function readPatchZoningState(client) {
   return await client.evaluate(`(() => {
     const visible = (element) => {
@@ -11773,6 +11952,91 @@ async function runPatchViewport(client, viewport) {
     fixtureFamilySweep,
   };
 }
+
+async function runPatchEmptyStateViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: fixtureUrl("none") });
+  await waitForApp(client);
+  await seedViewportLocalStorage(client);
+  await client.send("Page.navigate", { url: fixtureUrl("none") });
+  await waitForApp(client);
+  await clickByText(client, "Setup");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
+  await sleep(180);
+
+  const metrics = await client.evaluate(`(() => {
+    const desk = document.querySelector('.setupPatchAddressDesk');
+    const patchMap = desk?.querySelector(':scope > .dmxPatchMap');
+    const addressGrid = patchMap?.querySelector('.dmxAddressGrid');
+    const firstCell = addressGrid?.querySelector('.dmxAddressGridCell');
+    const patchFormCount = desk?.querySelectorAll(':scope > .patchFixtureFormPanel').length ?? 0;
+    if (!(desk instanceof HTMLElement) || !(patchMap instanceof HTMLElement) || !(addressGrid instanceof HTMLElement)) {
+      return {
+        deskPresent: desk instanceof HTMLElement,
+        patchMapPresent: patchMap instanceof HTMLElement,
+        addressGridPresent: addressGrid instanceof HTMLElement,
+        patchFormCount,
+      };
+    }
+    const precision = (value) => Math.round(value * 1_000) / 1_000;
+    const deskRect = desk.getBoundingClientRect();
+    const patchMapRect = patchMap.getBoundingClientRect();
+    const firstCellRect = firstCell?.getBoundingClientRect();
+    const deskStyle = getComputedStyle(desk);
+    const patchMapStyle = getComputedStyle(patchMap);
+    const addressGridStyle = getComputedStyle(addressGrid);
+    return {
+      deskPresent: true,
+      patchMapPresent: true,
+      addressGridPresent: true,
+      patchFormCount,
+      deskHeight: precision(deskRect.height),
+      patchMapHeight: precision(patchMapRect.height),
+      paneDeskHeightRatio: deskRect.height > 0 ? precision(patchMapRect.height / deskRect.height) : 0,
+      trailingDeskSpacePx: precision(Math.max(0, deskRect.bottom - patchMapRect.bottom)),
+      leadingDeskSpacePx: precision(Math.max(0, patchMapRect.top - deskRect.top)),
+      deskGridTemplateRows: deskStyle.gridTemplateRows,
+      patchMapGridRowStart: patchMapStyle.gridRowStart,
+      cellSizePx: precision(Number.parseFloat(addressGridStyle.getPropertyValue('--dmx-cell-size')) || 0),
+      firstCellWidth: precision(firstCellRect?.width ?? 0),
+      firstCellHeight: precision(firstCellRect?.height ?? 0),
+    };
+  })()`);
+  const checks = {
+    patchFormAbsent: metrics.patchFormCount === 0,
+    patchMapOccupiesFrameDrivenRow:
+      metrics.deskPresent === true &&
+      metrics.patchMapPresent === true &&
+      metrics.addressGridPresent === true &&
+      metrics.patchMapGridRowStart === "2",
+    patchMapCoversAtLeastNinetyPercentOfDesk: metrics.paneDeskHeightRatio >= 0.9,
+    cellSizeAtLeastTwentyFourAt2048: viewport.width !== 2048 || metrics.cellSizePx >= 24,
+    noEmptyTrailingDeskRow: metrics.trailingDeskSpacePx <= 1,
+  };
+  const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  return {
+    passed: failedChecks.length === 0,
+    label: `patch-empty-state-${viewport.width}x${viewport.height}`,
+    checks,
+    failedChecks,
+    metrics,
+  };
+}
+
+const patchEmptyStateLogLine = (result) =>
+  `${result.passed ? "pass" : "fail"} ${result.label} ` +
+  `form=${result.metrics.patchFormCount ?? "?"} ` +
+  `pane=${result.metrics.patchMapHeight ?? "?"} desk=${result.metrics.deskHeight ?? "?"} ` +
+  `ratio=${result.metrics.paneDeskHeightRatio ?? "?"} cell=${result.metrics.cellSizePx ?? "?"} ` +
+  `trailing=${result.metrics.trailingDeskSpacePx ?? "?"} leading=${result.metrics.leadingDeskSpacePx ?? "?"} ` +
+  `rows=${JSON.stringify(result.metrics.deskGridTemplateRows ?? "?")} ` +
+  `gridRow=${result.metrics.patchMapGridRowStart ?? "?"} failed=${JSON.stringify(result.failedChecks)}`;
 
 const workspaceSplitDefaults = {
   top: 0.58,
@@ -23166,8 +23430,53 @@ async function main() {
       }
       return;
     }
+    if (touchOnlyMode) {
+      const touchResults = [];
+      for (const viewport of viewports) {
+        const viewportResults = [
+          await runTouchViewport(client, viewport),
+          await runComposedTouchViewport(client, viewport),
+        ];
+        for (const result of viewportResults) {
+          touchResults.push(result);
+          console.log(
+            `${isContained(result) && hasExpectedTouchSurface(result) ? "pass" : "fail"} ${result.label} ` +
+              `surface=${result.visibleTouchSurfaceCount}/${result.visibleTouchPlacedControlCount} ` +
+              `page=${JSON.stringify(result.touchActivePageLabel)} ` +
+              `coverage=${result.touchTileMetrics?.tileUnionCoverageRatio ?? "?"} ` +
+              `tracks=${result.touchTileMetrics?.columnTrackRatio ?? "?"}/` +
+                `${result.touchTileMetrics?.rowTrackRatio ?? "?"} ` +
+              `normalized=${result.touchTileMetrics?.normalizedTileWidthRatio ?? "?"}/` +
+                `${result.touchTileMetrics?.normalizedTileHeightRatio ?? "?"} ` +
+              `minimum=${result.touchTileMetrics?.minimumTileWidth ?? "?"}x` +
+                `${result.touchTileMetrics?.minimumTileHeight ?? "?"} ` +
+              `targets=${result.touchPlacedUndersizedCount}/${result.touchUndersizedTargetCount} ` +
+              `scroll=${result.touchDocumentAndAppScrollZero ? 0 : 1}`,
+          );
+        }
+      }
+      const failures = touchResults.filter((result) => !isContained(result) || !hasExpectedTouchSurface(result));
+      if (failures.length > 0) {
+        throw new Error(`Touch viewport failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
+    if (patchEmptyStateOnlyMode) {
+      const patchEmptyStateResults = [];
+      for (const viewport of viewports) {
+        const result = await runPatchEmptyStateViewport(client, viewport);
+        patchEmptyStateResults.push(result);
+        console.log(patchEmptyStateLogLine(result));
+      }
+      const failures = patchEmptyStateResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Empty-state PATCH viewport failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (patchOnlyMode) {
       const patchResults = [];
+      const patchEmptyStateResults = [];
       for (const viewport of viewports) {
         const result = await runPatchViewport(client, viewport);
         patchResults.push(result);
@@ -23177,6 +23486,8 @@ async function main() {
             `cells=${metrics?.addressCount ?? 0} range=${metrics?.firstAddress ?? "?"}..${metrics?.lastAddress ?? "?"} ` +
             `pages=${metrics?.pageSelectorCount ?? "?"} geometry=${metrics?.columnCount ?? "?"}x${metrics?.rowCount ?? "?"} ` +
             `cell=${metrics?.minCellWidth ?? "?"}x${metrics?.minCellHeight ?? "?"} ` +
+            `coverage=${metrics?.widthCoverageRatio ?? "?"}/${metrics?.contentWidthCoverageRatio ?? "?"} ` +
+            `frameGap=${metrics?.frameContentWidthGapRatio ?? "?"} ` +
             `scroll=${metrics?.clientWidth ?? "?"}x${metrics?.clientHeight ?? "?"}->${metrics?.scrollWidth ?? "?"}x${metrics?.scrollHeight ?? "?"} ` +
             `end=${metrics?.endReachable ? 1 : 0} outer=${metrics?.outerScrollUnchangedAtEnd ? 0 : 1} ` +
             `keys=${metrics?.arrowRightAddress ?? "?"}/${metrics?.arrowDownAddress ?? "?"}/${metrics?.controlEndAddress ?? "?"} ` +
@@ -23189,10 +23500,25 @@ async function main() {
             `high=${result.highAddressAction.addressValue ?? "?"}:${result.highAddressAction.plannedHighAddresses?.join(",") ?? "?"} ` +
             `zoningFailed=${JSON.stringify(result.zoning.failedChecks)} failed=${JSON.stringify(result.failedChecks)}`,
         );
+        const emptyStateResult = await runPatchEmptyStateViewport(client, viewport);
+        patchEmptyStateResults.push(emptyStateResult);
+        console.log(patchEmptyStateLogLine(emptyStateResult));
       }
+      const responsiveScaling = largePatchGridScalingChecks(
+        patchResults.map((result) => result.containment),
+      );
+      console.log(
+        `${responsiveScaling.passed ? "pass" : "fail"} patch-responsive-scaling ` +
+          `cell1366=${responsiveScaling.compactCellSize ?? "?"} ` +
+          `large=${JSON.stringify(responsiveScaling.large)} ` +
+          `checks=${JSON.stringify(responsiveScaling.checks)}`,
+      );
       const failures = patchResults.filter((result) => !result.passed);
-      if (failures.length > 0) {
-        throw new Error(`Continuous PATCH viewport failed: ${JSON.stringify(failures)}`);
+      const emptyStateFailures = patchEmptyStateResults.filter((result) => !result.passed);
+      if (failures.length > 0 || emptyStateFailures.length > 0 || !responsiveScaling.passed) {
+        throw new Error(
+          `Continuous PATCH viewport failed: ${JSON.stringify({ failures, emptyStateFailures, responsiveScaling })}`,
+        );
       }
       return;
     }
@@ -24279,9 +24605,13 @@ async function main() {
     }
 
     const results = [];
+    const patchEmptyStateResults = [];
     for (const viewport of viewports) {
       results.push(...(await runViewport(client, viewport)));
       results.push(await runComposedTouchViewport(client, viewport));
+      const patchEmptyStateResult = await runPatchEmptyStateViewport(client, viewport);
+      patchEmptyStateResults.push(patchEmptyStateResult);
+      console.log(patchEmptyStateLogLine(patchEmptyStateResult));
     }
     const cueRecallResults = [];
     const cueRecallLargeResults = [];
@@ -24324,6 +24654,7 @@ async function main() {
     const vjBankFailures = vjBankResults.filter((result) => !result.passed);
     const paneWindowFailures = paneWindowResults.filter((result) => !result.passed);
     const liveEditTypeFailures = liveEditTypeResults.filter((result) => !result.passed);
+    const patchEmptyStateFailures = patchEmptyStateResults.filter((result) => !result.passed);
     const setupSurfaceFailures = results.filter((result) => !hasExpectedSetupSurface(result));
     const persistentBandFailures = results.filter((result) => !hasExpectedPersistentWorkspaceBand(result));
     const persistentBandInvarianceFailures = results.filter((result) => !hasExpectedPersistentBandInvariance(result));
@@ -24336,6 +24667,9 @@ async function main() {
     const mappingHotkeyHelpFailures = results.filter((result) => !hasExpectedMappingHotkeyHelp(result));
     const controlModeFailures = results.filter((result) => !hasExpectedControlModeSurface(result));
     const touchSurfaceFailures = results.filter((result) => !hasExpectedTouchSurface(result));
+    const patchResponsiveScaling = largePatchGridScalingChecks(
+      results.filter((result) => /^setup-patch-\d+x\d+$/.test(result.label)),
+    );
     const timelineAutomationFailures = shouldCheckTimelineAutomation
       ? results.filter((result) => result.label.startsWith("control-live-") && !hasTimelineAutomationVisuals(result))
       : [];
@@ -24363,7 +24697,7 @@ async function main() {
         ? ` keyboard=${result.keyboardNavigationPassed ? 'pass' : 'fail'}`
         : "";
       const touchSuffix = result.label.startsWith("touch-")
-        ? ` touch=${result.visibleTouchSurfaceCount}/${result.visibleTouchModeToggleCount}/${result.visibleTouchPageTabCount}/${result.visibleTouchPlacedControlCount} page=${JSON.stringify(result.touchActivePageLabel)} kinds=${JSON.stringify(result.touchPlacedKinds)} palette=${JSON.stringify(result.touchComposedCheckResult?.paletteLabels ?? [])} live=${result.touchComposedCheckResult?.liveOperationsPassed ? "pass" : "fail"} safety=${result.visibleTouchSafetyDeckCount}/${result.visibleTouchSafetyGuardButtonCount} targets=${result.touchPlacedUndersizedCount}/${result.touchUndersizedTargetCount} scroll=${result.touchDocumentAndAppScrollZero ? 0 : 1}`
+        ? ` touch=${result.visibleTouchSurfaceCount}/${result.visibleTouchModeToggleCount}/${result.visibleTouchPageTabCount}/${result.visibleTouchPlacedControlCount} page=${JSON.stringify(result.touchActivePageLabel)} kinds=${JSON.stringify(result.touchPlacedKinds)} palette=${JSON.stringify(result.touchComposedCheckResult?.paletteLabels ?? [])} live=${result.touchComposedCheckResult?.liveOperationsPassed ? "pass" : "fail"} safety=${result.visibleTouchSafetyDeckCount}/${result.visibleTouchSafetyGuardButtonCount} coverage=${result.touchTileMetrics?.tileUnionCoverageRatio ?? "?"} tracks=${result.touchTileMetrics?.columnTrackRatio ?? "?"}/${result.touchTileMetrics?.rowTrackRatio ?? "?"} normalized=${result.touchTileMetrics?.normalizedTileWidthRatio ?? "?"}/${result.touchTileMetrics?.normalizedTileHeightRatio ?? "?"} targets=${result.touchPlacedUndersizedCount}/${result.touchUndersizedTargetCount} scroll=${result.touchDocumentAndAppScrollZero ? 0 : 1}`
         : "";
       const controlStageGlyphSuffix = /^control-live-\d+x\d+$/.test(result.label)
         ? ` controlStageGlyphs=${JSON.stringify(result.controlStageFixtureGlyphMetrics)} hitMin=${result.controlStageFixtureMinSize}`
@@ -24445,6 +24779,12 @@ async function main() {
         `${result.passed ? "pass" : "fail"} ${result.label} columns=${result.multiple.columnCount} fixtures=${result.multiple.fixtureCounts.join("+")} controls=${result.multiple.primaryControlKinds.join("+")} bank=${result.faderBank.bankFaderCount}/${result.faderBank.bankVerticalInputCount} visibleCh=${result.faderBank.fullyVisibleBankFaderCount}/${result.singleFaderBank.fullyVisibleBankFaderCount} rail=${Math.round(result.faderBank.categoryRailWidth * 10) / 10}px:left-vertical deck=${result.faderBank.faderChannelBankClientWidth}/${result.faderBank.faderChannelBankScrollWidth}+${result.faderBank.faderChannelBankHorizontalOverflow}px:${result.faderBank.widthDerivedVisibleChannelFloor}ch-floor chrome=${Math.round(result.faderBank.faderThumbMinimumWidth * 10) / 10}x${Math.round(result.faderBank.faderThumbMinimumHeight * 10) / 10}/${result.faderBank.faderTrackInsetCount} pure=${result.faderBank.faderCategoryActionCount}+${result.singleFaderBank.faderCategoryActionCount}/${result.faderBank.faderGdtfFunctionPanelCount}+${result.singleFaderBank.faderGdtfFunctionPanelCount} width=${Math.round(result.faderBank.faderChannelBankWidthRatio * 1000) / 1000}/${Math.round(result.singleFaderBank.faderChannelBankWidthRatio * 1000) / 1000} keyboard=${result.keyboardProbe.valueChanged}/${result.keyboardProbe.focusVisible}/${result.keyboardProbe.ariaPreserved} dmx=${result.dmxFunctionReadout.panelCount} single=${result.single.legacyFaderGridCount}/${result.single.legacyDimmerPanelCount} failed=${JSON.stringify(result.failedChecks)}`,
       );
     }
+    console.log(
+      `${patchResponsiveScaling.passed ? "pass" : "fail"} patch-responsive-scaling ` +
+        `cell1366=${patchResponsiveScaling.compactCellSize ?? "?"} ` +
+        `large=${JSON.stringify(patchResponsiveScaling.large)} ` +
+        `checks=${JSON.stringify(patchResponsiveScaling.checks)}`,
+    );
     if (
       failures.length > 0 ||
       cueRecallFailures.length > 0 ||
@@ -24455,6 +24795,7 @@ async function main() {
       vjBankFailures.length > 0 ||
       paneWindowFailures.length > 0 ||
       liveEditTypeFailures.length > 0 ||
+      patchEmptyStateFailures.length > 0 ||
       keyboardNavigationFailures.length > 0 ||
       setupSurfaceFailures.length > 0 ||
       persistentBandFailures.length > 0 ||
@@ -24470,7 +24811,8 @@ async function main() {
       timelineAutomationFailures.length > 0 ||
       sceneBlockFailures.length > 0 ||
       killZoneFailures.length > 0 ||
-      statusLineFailures.length > 0
+      statusLineFailures.length > 0 ||
+      !patchResponsiveScaling.passed
     ) {
       if (workspaceShellOnlyMode) {
         console.error(JSON.stringify({
@@ -24570,6 +24912,7 @@ async function main() {
             vjBank: vjBankFailures,
             paneWindow: paneWindowFailures,
             liveEditTypes: liveEditTypeFailures,
+            patchEmptyState: patchEmptyStateFailures,
             keyboardNavigation: keyboardNavigationFailures,
             setupSurface: setupSurfaceFailures,
             persistentBand: persistentBandFailures,
@@ -24582,6 +24925,7 @@ async function main() {
             mappingHotkeyHelp: mappingHotkeyHelpFailures,
             controlMode: controlModeFailures,
             touchSurface: touchSurfaceFailures,
+            patchResponsiveScaling,
             timelineAutomation: timelineAutomationFailures,
             sceneBlocks: sceneBlockFailures,
             killZone: killZoneFailures.map((result) => ({
@@ -24599,7 +24943,7 @@ async function main() {
         ),
       );
       throw new Error(
-        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${liveEditTypeFailures.length} Live Edit fixture-type check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${stageSettingsFailures.length} stage settings check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${killZoneFailures.length} kill zone check(s), ${statusLineFailures.length} status line check(s) failed.`,
+        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${liveEditTypeFailures.length} Live Edit fixture-type check(s), ${patchEmptyStateFailures.length} PATCH empty-state check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${stageSettingsFailures.length} stage settings check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${killZoneFailures.length} kill zone check(s), ${statusLineFailures.length} status line check(s) failed.`,
       );
     }
   } finally {

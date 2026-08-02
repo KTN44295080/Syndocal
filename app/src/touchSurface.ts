@@ -70,14 +70,16 @@ export const createTouchControl = (
 
 export const defaultTouchSurface = (
   cues: ReadonlyArray<{ id: number; label: string }> = [],
-): TouchSurfaceSummary => ({
-  pages: [
-    {
+): TouchSurfaceSummary => {
+  const visibleCues = cues.slice(0, 4);
+  return {
+    pages: [
+      {
       id: 1,
       label: "Default Desk",
       controls: [
         { ...createTouchControl(1, "Label", 0, 0), label: "SHOW CONTROL" },
-        { ...createTouchControl(2, "Image", 0, 1), label: "Touch Stage" },
+        { ...createTouchControl(2, "Image", 0, 1), h: 1, label: "Touch Stage" },
         {
           ...createTouchControl(3, "Button", 2, 0),
           label: "BACK",
@@ -96,11 +98,13 @@ export const defaultTouchSurface = (
         },
         {
           ...createTouchControl(6, "Fader", 9, 0),
+          h: 2,
           label: "LIGHT",
           binding: { kind: "lighting_master" },
         },
         {
           ...createTouchControl(7, "Fader", 10, 0),
+          h: 2,
           label: "VIDEO",
           binding: { kind: "video_master" },
         },
@@ -111,49 +115,59 @@ export const defaultTouchSurface = (
           binding: { kind: "all_blackout" },
         },
         {
-          ...createTouchControl(9, "Dial", 0, 3),
+          ...createTouchControl(9, "Dial", 0, 2),
+          h: 4,
           label: "DIMMER",
           binding: { kind: "selected_fixture_attribute", attribute: "Dimmer" },
         },
         {
           ...createTouchControl(10, "IncrementalWheel", 2, 2),
-          h: 3,
+          h: 4,
           label: "FINE",
           binding: { kind: "selected_fixture_attribute", attribute: "Dimmer" },
         },
         {
           ...createTouchControl(11, "ColorWheel", 4, 2),
+          w: 2,
+          h: 4,
           label: "COLOR",
           binding: { kind: "selected_fixture_color" },
         },
         {
-          ...createTouchControl(12, "XyGrid", 7, 2),
-          w: 2,
+          ...createTouchControl(12, "XyGrid", 6, 2),
+          h: 6,
           label: "POSITION",
           binding: { kind: "selected_fixture_pan_tilt", pan_attribute: "Pan", tilt_attribute: "Tilt" },
         },
         {
-          ...createTouchControl(13, "Button", 9, 4),
-          w: 1,
+          ...createTouchControl(13, "Button", 9, 2),
+          w: 3,
+          h: 3,
           label: "DMX BO",
           binding: { kind: "blackout" },
         },
         {
-          ...createTouchControl(14, "Button", 10, 4),
-          w: 1,
+          ...createTouchControl(14, "Button", 9, 5),
+          w: 3,
+          h: 3,
           label: "VIDEO BO",
           binding: { kind: "video_blackout" },
         },
-        ...cues.slice(0, 4).map((cue, index) => ({
-          ...createTouchControl(15 + index, "Button", index * 3, 6),
-          w: 3,
-          label: cue.label,
-          binding: { kind: "cue" as const, cue_id: cue.id },
-        })),
+        ...visibleCues.map((cue, index) => {
+          const start = Math.floor(index * 6 / visibleCues.length);
+          const end = Math.floor((index + 1) * 6 / visibleCues.length);
+          return {
+            ...createTouchControl(15 + index, "Button", start, 6),
+            w: end - start,
+            label: cue.label,
+            binding: { kind: "cue" as const, cue_id: cue.id },
+          };
+        }),
       ],
-    },
-  ],
-});
+      },
+    ],
+  };
+};
 
 export const effectiveTouchSurface = (
   surface: TouchSurfaceSummary | undefined,

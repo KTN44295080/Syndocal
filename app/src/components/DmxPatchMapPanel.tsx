@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import type { PatchedFixtureSummary } from "../types";
 
 export type DmxPatchViewMode = "grid" | "list";
@@ -39,6 +39,10 @@ interface DmxPatchGridFragment {
 
 const dmxGridColumnCount = 32;
 const dmxGridRowCount = 16;
+const dmxGridMinimumCellSize = 16;
+const dmxGridMaximumCellSize = 44;
+
+const cssPixelValue = (value: string): number => Number.parseFloat(value) || 0;
 
 const segmentGridFragments = (segments: DmxPatchSegment[]): DmxPatchGridFragment[] =>
   segments.flatMap((segment) => {
@@ -91,7 +95,72 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
     new Map(gridFragments().map((fragment) => [`${fragment.row}:${fragment.column}`, fragment] as const)),
   );
   let addressGrid: HTMLDivElement | undefined;
+  let addressGridResizeObserver: ResizeObserver | undefined;
+  let addressGridResizeFrame = 0;
   let lastRevealedSelectionKey = "";
+
+  const updateAddressGridCellSize = () => {
+    const grid = addressGrid;
+    const pane = grid?.parentElement;
+    const header = pane?.querySelector<HTMLElement>(":scope > .panelHeader");
+    if (!grid || !pane || !header || !grid.isConnected) return;
+
+    const paneStyle = getComputedStyle(pane);
+    const gridStyle = getComputedStyle(grid);
+    const paneInnerWidth = pane.clientWidth
+      - cssPixelValue(paneStyle.paddingLeft)
+      - cssPixelValue(paneStyle.paddingRight);
+    const paneInnerHeight = pane.clientHeight
+      - cssPixelValue(paneStyle.paddingTop)
+      - cssPixelValue(paneStyle.paddingBottom);
+    const gridGap = cssPixelValue(gridStyle.getPropertyValue("--dmx-grid-gap"));
+    const rowHeaderWidth = cssPixelValue(gridStyle.getPropertyValue("--dmx-row-label-width"));
+    const paneContentWidth = Math.max(0, paneInnerWidth - dmxGridColumnCount * gridGap);
+    const widthLimitedCellSize = Math.floor(
+      (paneContentWidth - rowHeaderWidth) / dmxGridColumnCount,
+    );
+
+    const availableGridHeight = paneInnerHeight
+      - header.getBoundingClientRect().height
+      - cssPixelValue(paneStyle.rowGap);
+    const gridBlockChrome = cssPixelValue(gridStyle.borderTopWidth)
+      + cssPixelValue(gridStyle.borderBottomWidth)
+      + cssPixelValue(gridStyle.paddingTop)
+      + cssPixelValue(gridStyle.paddingBottom)
+      + (dmxGridRowCount - 1) * gridGap;
+    const heightLimitedCellSize = Math.floor(
+      (availableGridHeight - gridBlockChrome) / dmxGridRowCount,
+    );
+    const paneLimitedCellSize = heightLimitedCellSize >= dmxGridMinimumCellSize
+      ? Math.min(widthLimitedCellSize, heightLimitedCellSize)
+      : widthLimitedCellSize;
+    const cellSize = Math.min(
+      dmxGridMaximumCellSize,
+      Math.max(dmxGridMinimumCellSize, paneLimitedCellSize),
+    );
+    grid.style.setProperty("--dmx-cell-size", `${cellSize}px`);
+  };
+
+  const scheduleAddressGridCellSize = () => {
+    cancelAnimationFrame(addressGridResizeFrame);
+    addressGridResizeFrame = requestAnimationFrame(updateAddressGridCellSize);
+  };
+
+  const attachAddressGrid = (element: HTMLDivElement) => {
+    addressGrid = element;
+    addressGridResizeObserver?.disconnect();
+    addressGridResizeObserver = new ResizeObserver(scheduleAddressGridCellSize);
+    const pane = element.parentElement;
+    if (pane) addressGridResizeObserver.observe(pane);
+    const header = pane?.querySelector<HTMLElement>(":scope > .panelHeader");
+    if (header) addressGridResizeObserver.observe(header);
+    scheduleAddressGridCellSize();
+  };
+
+  onCleanup(() => {
+    addressGridResizeObserver?.disconnect();
+    cancelAnimationFrame(addressGridResizeFrame);
+  });
 
   const scrollAddressIntoView = (channel: number): boolean => {
     const grid = addressGrid;
@@ -312,7 +381,7 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
         >
           <div
             class="dmxAddressGrid"
-            ref={(element) => { addressGrid = element; }}
+            ref={attachAddressGrid}
             role="grid"
             aria-label={`Universe ${props.activeUniverse} DMX addresses 1 to 512`}
             aria-rowcount={dmxGridRowCount}
@@ -384,8 +453,12 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
                                   rowFragment.segment.fixture.id === props.selectedFixtureId ? "selected" : ""
                                 } ${rowFragment.span <= 2 ? "tiny" : rowFragment.span <= 5 ? "narrow" : ""}`}
                                 style={{
-                                  left: `${51 + (rowFragment.column - 1) * 19}px`,
-                                  width: `${rowFragment.span * 18 + Math.max(0, rowFragment.span - 1)}px`,
+                                  left: `calc(var(--dmx-row-label-width) + var(--dmx-grid-gap) + ${
+                                    rowFragment.column - 1
+                                  } * (var(--dmx-cell-size) + var(--dmx-grid-gap)))`,
+                                  width: `calc(${rowFragment.span} * var(--dmx-cell-size) + ${
+                                    Math.max(0, rowFragment.span - 1)
+                                  } * var(--dmx-grid-gap))`,
                                 }}
                                 title={`${rowFragment.segment.fixture.label} / A${rowFragment.segment.start} / ${
                                   rowFragment.segment.end - rowFragment.segment.start + 1

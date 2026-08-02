@@ -6540,11 +6540,14 @@ progress {
 }
 
 .dmxAddressGrid {
+  --dmx-cell-size: 18px;
+  --dmx-grid-gap: 1px;
+  --dmx-row-label-width: 50px;
   display: grid;
-  grid-template-rows: repeat(16, 18px);
+  grid-template-rows: repeat(16, var(--dmx-cell-size));
   align-content: start;
   justify-content: start;
-  gap: 1px;
+  gap: var(--dmx-grid-gap);
   min-width: 0;
   max-height: 360px;
   overflow: auto;
@@ -6556,40 +6559,46 @@ progress {
     linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
     linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
     #181411;
-  background-size: 19px 19px;
+  background-size:
+    calc(var(--dmx-cell-size) + var(--dmx-grid-gap))
+    calc(var(--dmx-cell-size) + var(--dmx-grid-gap));
   padding: 4px;
 }
 
 .dmxAddressRow {
   position: relative;
   display: grid;
-  grid-template-columns: 50px repeat(32, 18px);
-  gap: 1px;
-  width: 658px;
-  height: 18px;
-  min-width: 658px;
-  min-height: 18px;
+  grid-template-columns: var(--dmx-row-label-width) repeat(32, var(--dmx-cell-size));
+  gap: var(--dmx-grid-gap);
+  width: calc(
+    var(--dmx-row-label-width) + 32 * var(--dmx-cell-size) + 32 * var(--dmx-grid-gap)
+  );
+  height: var(--dmx-cell-size);
+  min-width: calc(
+    var(--dmx-row-label-width) + 32 * var(--dmx-cell-size) + 32 * var(--dmx-grid-gap)
+  );
+  min-height: var(--dmx-cell-size);
 }
 
 .dmxAddressGridCell {
-  width: 18px;
-  height: 18px;
+  width: var(--dmx-cell-size);
+  height: var(--dmx-cell-size);
   min-width: 0;
   min-height: 0;
 }
 
 .dmxAddressCell {
-  width: 18px;
-  height: 18px;
+  width: 100%;
+  height: 100%;
   min-width: 0;
-  min-height: 18px;
+  min-height: 0;
   overflow: hidden;
   border-color: #302c27;
   border-radius: 2px;
   background: #221e1a;
   color: #736b64;
   padding: 0;
-  font-size: 11px;
+  font-size: clamp(11px, calc(var(--dmx-cell-size) * 0.52), 13px);
   line-height: 1;
 }
 
@@ -6598,9 +6607,9 @@ progress {
   overflow: hidden;
   color: #a79d94;
   padding-inline: 3px;
-  font-size: 11px;
+  font-size: clamp(11px, calc(var(--dmx-cell-size) * 0.5), 12px);
   font-variant-numeric: tabular-nums;
-  line-height: 18px;
+  line-height: var(--dmx-cell-size);
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -21060,19 +21069,31 @@ h3 {
 }
 
 .layoutSetup.setupMode-patch .dmxAddressGrid {
-  width: min(100%, 690px);
-  max-width: 690px;
+  --dmx-cell-size: 16px;
+  --dmx-row-label-width: 60px;
+  width: min(
+    100%,
+    calc(
+      var(--dmx-row-label-width) + 32 * var(--dmx-cell-size) + 32 * var(--dmx-grid-gap) + 20px
+    )
+  );
+  max-width: 100%;
+  height: min(
+    100%,
+    calc(16 * var(--dmx-cell-size) + 15 * var(--dmx-grid-gap) + 10px)
+  );
   box-sizing: border-box;
-  gap: 1px;
-  max-height: 236px;
+  gap: var(--dmx-grid-gap);
+  max-height: none;
   padding: 4px 14px 4px 4px;
+  scrollbar-gutter: auto;
+  align-self: start;
   justify-self: start;
 }
 
 .layoutSetup.setupMode-patch .dmxAddressCell {
-  width: 18px;
+  width: 100%;
   min-height: 0;
-  font-size: 11px;
 }
 
 .dmxPatchFixtureBlock {
@@ -21115,7 +21136,7 @@ h3 {
 }
 
 .dmxPatchFixtureBlock strong {
-  font-size: 11px;
+  font-size: clamp(11px, calc(var(--dmx-cell-size) * 0.45), 14px);
 }
 
 .dmxPatchFixtureBlock small {
@@ -21144,7 +21165,7 @@ h3 {
 }
 
 .dmxPatchFixtureBlock.tiny strong::first-letter {
-  font-size: 11px;
+  font-size: clamp(11px, calc(var(--dmx-cell-size) * 0.45), 14px);
 }
 
 .layoutSetup .setupIoPanel {
@@ -25435,8 +25456,13 @@ h3 {
   }
 
   .layoutSetup.setupMode-patch .dmxAddressGrid {
-    width: min(100%, 690px);
-    max-width: 690px;
+    width: min(
+      100%,
+      calc(
+        var(--dmx-row-label-width) + 32 * var(--dmx-cell-size) + 32 * var(--dmx-grid-gap) + 20px
+      )
+    );
+    max-width: 100%;
   }
 
   .layoutControl.controlModeMixer .videoControlPanelMixer {
@@ -27114,8 +27140,17 @@ h3 {
 
 .layoutSharedWorkspace.layoutSetup > .setupPatchTopPanel > .setupPatchAddressDesk > .dmxPatchMap {
   display: grid;
+  grid-row: 2;
+  grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
+}
+
+@media (min-width: 1600px) and (min-height: 900px) {
+  .layoutSharedWorkspace.layoutSetup > .setupPatchTopPanel {
+    grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+  }
 }
 
 .patchFixtureFormPanel {
@@ -28387,22 +28422,42 @@ h3 {
 /* T11: one composed Touch surface switches in place between EDIT and LIVE. */
 .layoutTouch {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: 92px minmax(0, 1fr);
+  grid-template-rows: clamp(92px, 12dvh, 138px) minmax(0, 1fr);
 }
 
 .layoutTouch .touchSurfacePanel {
   position: relative;
   grid-column: 1;
   grid-row: 2;
-  display: flex;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   min-width: 0;
   min-height: 0;
-  flex-direction: column;
   gap: 4px;
   border-radius: 0;
   background: #171a1d;
   padding: 4px;
   overflow: hidden;
+}
+
+.layoutTouch .touchSurfacePanel[data-touch-mode="edit"] {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.layoutTouch .touchSurfacePanel[data-touch-mode="edit"] .touchControlPalette {
+  grid-row: 2;
+}
+
+.layoutTouch .touchSurfacePanel[data-touch-mode="edit"] .touchSurfaceGrid {
+  grid-row: 3;
+}
+
+.layoutTouch .touchSurfacePanel[data-touch-mode="live"] .touchSurfaceGrid {
+  grid-row: 2;
+}
+
+.layoutTouch .touchSurfacePanel[data-touch-mode="live"] > .cueLiveModifierStrip.touch {
+  grid-row: 3;
 }
 
 .layoutTouch > .touchCuePanel,
@@ -28418,7 +28473,7 @@ h3 {
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 5px;
-  min-height: 48px;
+  min-height: clamp(48px, 6.25dvh, 72px);
   border: 1px solid #343a3f;
   background: #111416;
   padding: 2px;
@@ -28499,11 +28554,17 @@ h3 {
 
 .touchSurfaceGrid {
   display: grid;
+  width: 100%;
+  height: 100%;
   min-width: 0;
   min-height: 384px;
-  flex: 1 1 auto;
   grid-template-columns: repeat(12, minmax(0, 1fr));
   grid-template-rows: repeat(8, minmax(48px, 1fr));
+  grid-auto-flow: row;
+  align-content: stretch;
+  align-items: stretch;
+  justify-content: stretch;
+  justify-items: stretch;
   gap: 3px;
   border: 1px solid #3d4246;
   background: #0f1214;
@@ -28515,8 +28576,10 @@ h3 {
 .touchPlacedControl {
   position: relative;
   display: grid;
+  width: 100%;
+  height: 100%;
   min-width: 0;
-  min-height: 48px;
+  min-height: 0;
   place-items: stretch;
   border: 1px solid #3b4044;
   background: #1a1e21;
@@ -28534,6 +28597,31 @@ h3 {
 .touchPlacedControl > strong {
   min-width: 0;
   min-height: 48px;
+}
+
+.layoutTouch .touchSurfacePanel > .cueLiveModifierStrip.touch {
+  grid-template-columns: repeat(3, minmax(150px, 1fr)) minmax(260px, 1.35fr) auto;
+  align-items: center;
+  gap: 4px;
+  min-height: clamp(56px, 7.3dvh, 84px);
+  padding: 4px;
+}
+
+.layoutTouch .touchSurfacePanel > .cueLiveModifierStrip.touch .cueLiveModifierRow {
+  grid-template-columns: 48px minmax(48px, 1fr) 48px;
+  gap: 4px;
+}
+
+.layoutTouch .touchSurfacePanel > .cueLiveModifierStrip.touch .cueLiveModifierModeRow {
+  grid-template-columns: 48px minmax(96px, 1fr) minmax(76px, 0.72fr);
+}
+
+.layoutTouch .touchSurfacePanel > .cueLiveModifierStrip.touch .cueLiveModifierModeRow > span {
+  grid-row: 1;
+}
+
+.layoutTouch .touchSurfacePanel > .cueLiveModifierStrip.touch .cueLiveModifierModeRow > select {
+  grid-column: auto;
 }
 
 .touchPlacedLabel {
