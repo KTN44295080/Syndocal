@@ -692,11 +692,18 @@ export interface OperatorPolicy {
   credential: OperatorCredentialVerifier;
 }
 
+export interface FixtureGroupSummary {
+  id: string;
+  label: string;
+  color?: string | null;
+}
+
 export interface ProjectFile {
   version: number;
   app: string;
   operator_policy?: OperatorPolicy | null;
   custom_profiles?: FixtureProfileSummary[];
+  fixture_groups?: FixtureGroupSummary[];
   snapshot: EngineSnapshot;
 }
 

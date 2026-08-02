@@ -39,12 +39,12 @@ use protocol::{
     CueFixtureTarget, CueId, CueNodeGraphTarget, CurveEffectRequest, CustomFixtureProfileFile,
     CustomFixtureProfileRequest, DmxInputConfig, DmxInputProtocol, DmxInputStatus, DmxModeSummary,
     DmxOutputConfig, DmxOutputProtocol, EffectId, EffectKind, EffectParamsSnapshot, EffectPreset,
-    EffectSummary, EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, FixtureId,
-    FixtureLimits, FixturePreset, FixtureProfileSummary, GeometrySummary, LearnedMidiControl,
-    LearnedOscControl, LfoEffectRequest, MappingEffectRequest, MidiControlAction,
-    MidiControlMapping, MidiInputSummary, MidiOutputSummary, MoveEffectRequest, NodeGraphId,
-    NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp, OperatorPolicy,
-    OscControlAction, OscControlMapping, OscInputConfig, PatchFixtureRequest,
+    EffectSummary, EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, FixtureGroupSummary,
+    FixtureId, FixtureLimits, FixturePreset, FixtureProfileSummary, GeometrySummary,
+    LearnedMidiControl, LearnedOscControl, LfoEffectRequest, MappingEffectRequest,
+    MidiControlAction, MidiControlMapping, MidiInputSummary, MidiOutputSummary, MoveEffectRequest,
+    NodeGraphId, NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp,
+    OperatorPolicy, OscControlAction, OscControlMapping, OscInputConfig, PatchFixtureRequest,
     PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RecallMode, RemoteControlConfig,
     RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile,
     StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary, TimelineAudioClipId,
@@ -181,6 +181,8 @@ struct AppState {
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     spout_inputs: spout_transport::SpoutInputRegistry,
     custom_profiles: Mutex<HashMap<String, FixtureProfileSummary>>,
+    fixture_groups: Mutex<Vec<FixtureGroupSummary>>,
+    fixture_group_delete_undo: Mutex<Option<DeletedFixtureGroup>>,
     visualizer_model_assets: Mutex<HashMap<String, VisualizerModelAssetCacheEntry>>,
     midi_clock: Mutex<Option<MidiClockInput>>,
     midi_control: Mutex<Option<MidiControlInput>>,
@@ -196,6 +198,13 @@ struct AppState {
     standby_sync: Mutex<StandbySyncRuntime>,
     native_video_output_metrics:
         Mutex<HashMap<VideoOutputId, Arc<Mutex<NativeVideoOutputMetrics>>>>,
+}
+
+#[derive(Debug, Clone)]
+struct DeletedFixtureGroup {
+    group: FixtureGroupSummary,
+    group_index: usize,
+    fixture_membership_indexes: Vec<(FixtureId, usize)>,
 }
 
 const VJ_PREVIEW_MIN_SPEED: f32 = -4.0;
@@ -3984,6 +3993,7 @@ fn patch_fixture(
     mut request: PatchFixtureRequest,
 ) -> Result<FixtureId, String> {
     request.group_ids = normalize_group_ids(request.group_ids)?;
+    validate_fixture_group_memberships(&state, &request.group_ids)?;
     validate_patch_request(&request)?;
     let profile = load_patch_profile(&state, &request.profile_path)?;
     validate_patch_footprint(&request, &profile)?;
@@ -4006,6 +4016,9 @@ fn patch_fixtures(
     requests: Vec<PatchFixtureRequest>,
 ) -> Result<Vec<FixtureId>, String> {
     let prepared = prepare_fixture_patches(&state, requests)?;
+    for patch in &prepared {
+        validate_fixture_group_memberships(&state, &patch.request.group_ids)?;
+    }
     let fixture_ids = prepared
         .iter()
         .map(|_| state.engine.allocate_fixture_id())
@@ -4113,6 +4126,7 @@ fn set_fixture_groups(
     group_ids: Vec<String>,
 ) -> Result<(), String> {
     let group_ids = normalize_group_ids(group_ids)?;
+    validate_fixture_group_memberships(&state, &group_ids)?;
     state
         .engine
         .send(EngineCommand::SetFixtureGroups {
@@ -4120,6 +4134,312 @@ fn set_fixture_groups(
             group_ids,
         })
         .map_err(|error| error.to_string())
+}
+
+fn normalize_fixture_group_label(label: String) -> Result<String, String> {
+    let label = label.trim();
+    if label.is_empty() {
+        return Err("Group label is required".to_string());
+    }
+    if label.chars().count() > 80 {
+        return Err("Group label must be 80 characters or fewer".to_string());
+    }
+    Ok(label.to_string())
+}
+
+fn normalize_fixture_group_color(color: Option<String>) -> Result<Option<String>, String> {
+    color
+        .map(|color| {
+            validate_video_cue_point_color(&color)?;
+            let hex = color.trim().trim_start_matches('#').to_ascii_lowercase();
+            Ok(format!("#{hex}"))
+        })
+        .transpose()
+}
+
+fn validate_fixture_group_memberships(
+    state: &State<'_, AppState>,
+    group_ids: &[String],
+) -> Result<(), String> {
+    let groups = state
+        .fixture_groups
+        .lock()
+        .map_err(|_| "Fixture group state lock was poisoned".to_string())?;
+    for group_id in group_ids {
+        if !groups.iter().any(|group| group.id == *group_id) {
+            return Err(format!("Fixture group '{group_id}' was not found"));
+        }
+    }
+    Ok(())
+}
+
+fn allocate_fixture_group_id(groups: &[FixtureGroupSummary]) -> String {
+    for index in 1u64.. {
+        let candidate = format!("fixture-group-{index}");
+        if !groups
+            .iter()
+            .any(|group| group.id.eq_ignore_ascii_case(&candidate))
+        {
+            return candidate;
+        }
+    }
+    unreachable!("u64 fixture group id space is exhausted")
+}
+
+#[tauri::command]
+fn get_fixture_groups(state: State<'_, AppState>) -> Result<Vec<FixtureGroupSummary>, String> {
+    state
+        .fixture_groups
+        .lock()
+        .map_err(|_| "Fixture group state lock was poisoned".to_string())
+        .map(|groups| groups.clone())
+}
+
+#[tauri::command]
+fn create_fixture_group(
+    state: State<'_, AppState>,
+    label: String,
+    color: Option<String>,
+    fixture_ids: Vec<FixtureId>,
+) -> Result<FixtureGroupSummary, String> {
+    let label = normalize_fixture_group_label(label)?;
+    let color = normalize_fixture_group_color(color)?;
+    let snapshot = state.engine.snapshot();
+    let fixture_ids = fixture_ids.into_iter().collect::<HashSet<_>>();
+    if let Some(fixture_id) = fixture_ids.iter().find(|fixture_id| {
+        !snapshot
+            .fixtures
+            .iter()
+            .any(|fixture| fixture.id == **fixture_id)
+    }) {
+        return Err(format!("Fixture {fixture_id} was not found"));
+    }
+    let group = {
+        let groups = state
+            .fixture_groups
+            .lock()
+            .map_err(|_| "Fixture group state lock was poisoned".to_string())?;
+        if groups
+            .iter()
+            .any(|group| group.label.eq_ignore_ascii_case(&label))
+        {
+            return Err(format!("A fixture group named '{label}' already exists"));
+        }
+        FixtureGroupSummary {
+            id: allocate_fixture_group_id(&groups),
+            label,
+            color,
+        }
+    };
+    for fixture in snapshot
+        .fixtures
+        .iter()
+        .filter(|fixture| fixture_ids.contains(&fixture.id))
+    {
+        let mut group_ids = fixture.group_ids.clone();
+        if !group_ids.contains(&group.id) {
+            group_ids.push(group.id.clone());
+            state
+                .engine
+                .send(EngineCommand::SetFixtureGroups {
+                    fixture_id: fixture.id,
+                    group_ids,
+                })
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    state
+        .engine
+        .set_group_color_published(group.id.clone(), group.color.clone())?;
+    state
+        .fixture_groups
+        .lock()
+        .map_err(|_| "Fixture group state lock was poisoned".to_string())?
+        .push(group.clone());
+    *state
+        .fixture_group_delete_undo
+        .lock()
+        .map_err(|_| "Fixture group delete Undo lock was poisoned".to_string())? = None;
+    Ok(group)
+}
+
+#[tauri::command]
+fn rename_fixture_group(
+    state: State<'_, AppState>,
+    group_id: String,
+    label: String,
+) -> Result<FixtureGroupSummary, String> {
+    let label = normalize_fixture_group_label(label)?;
+    let mut groups = state
+        .fixture_groups
+        .lock()
+        .map_err(|_| "Fixture group state lock was poisoned".to_string())?;
+    if groups
+        .iter()
+        .any(|group| group.id != group_id && group.label.eq_ignore_ascii_case(&label))
+    {
+        return Err(format!("A fixture group named '{label}' already exists"));
+    }
+    let group = groups
+        .iter_mut()
+        .find(|group| group.id == group_id)
+        .ok_or_else(|| format!("Fixture group '{group_id}' was not found"))?;
+    group.label = label;
+    Ok(group.clone())
+}
+
+#[tauri::command]
+fn recolor_fixture_group(
+    state: State<'_, AppState>,
+    group_id: String,
+    color: Option<String>,
+) -> Result<FixtureGroupSummary, String> {
+    let color = normalize_fixture_group_color(color)?;
+    if !state
+        .fixture_groups
+        .lock()
+        .map_err(|_| "Fixture group state lock was poisoned".to_string())?
+        .iter()
+        .any(|group| group.id == group_id)
+    {
+        return Err(format!("Fixture group '{group_id}' was not found"));
+    }
+    state
+        .engine
+        .set_group_color_published(group_id.clone(), color.clone())?;
+    let mut groups = state
+        .fixture_groups
+        .lock()
+        .map_err(|_| "Fixture group state lock was poisoned".to_string())?;
+    let group = groups
+        .iter_mut()
+        .find(|group| group.id == group_id)
+        .ok_or_else(|| format!("Fixture group '{group_id}' was not found"))?;
+    group.color = color;
+    Ok(group.clone())
+}
+
+#[tauri::command]
+fn delete_fixture_group(
+    state: State<'_, AppState>,
+    group_id: String,
+) -> Result<FixtureGroupSummary, String> {
+    let (group_index, group) = {
+        let groups = state
+            .fixture_groups
+            .lock()
+            .map_err(|_| "Fixture group state lock was poisoned".to_string())?;
+        groups
+            .iter()
+            .enumerate()
+            .find(|(_, group)| group.id == group_id)
+            .map(|(index, group)| (index, group.clone()))
+            .ok_or_else(|| format!("Fixture group '{group_id}' was not found"))?
+    };
+    let snapshot = state.engine.snapshot();
+    let mut fixture_membership_indexes = Vec::new();
+    for fixture in &snapshot.fixtures {
+        let Some(index) = fixture
+            .group_ids
+            .iter()
+            .position(|fixture_group_id| fixture_group_id == &group_id)
+        else {
+            continue;
+        };
+        fixture_membership_indexes.push((fixture.id, index));
+        let mut group_ids = fixture.group_ids.clone();
+        group_ids.remove(index);
+        state
+            .engine
+            .send(EngineCommand::SetFixtureGroups {
+                fixture_id: fixture.id,
+                group_ids,
+            })
+            .map_err(|error| error.to_string())?;
+    }
+    state
+        .engine
+        .set_group_color_published(group_id.clone(), None)?;
+    state
+        .fixture_groups
+        .lock()
+        .map_err(|_| "Fixture group state lock was poisoned".to_string())?
+        .remove(group_index);
+    *state
+        .fixture_group_delete_undo
+        .lock()
+        .map_err(|_| "Fixture group delete Undo lock was poisoned".to_string())? =
+        Some(DeletedFixtureGroup {
+            group: group.clone(),
+            group_index,
+            fixture_membership_indexes,
+        });
+    Ok(group)
+}
+
+#[tauri::command]
+fn undo_delete_fixture_group(
+    state: State<'_, AppState>,
+) -> Result<Option<FixtureGroupSummary>, String> {
+    let deleted = state
+        .fixture_group_delete_undo
+        .lock()
+        .map_err(|_| "Fixture group delete Undo lock was poisoned".to_string())?
+        .clone();
+    let Some(deleted) = deleted else {
+        return Ok(None);
+    };
+    if state
+        .fixture_groups
+        .lock()
+        .map_err(|_| "Fixture group state lock was poisoned".to_string())?
+        .iter()
+        .any(|group| group.id == deleted.group.id)
+    {
+        return Err(format!(
+            "Fixture group '{}' already exists",
+            deleted.group.id
+        ));
+    }
+    let snapshot = state.engine.snapshot();
+    for (fixture_id, membership_index) in &deleted.fixture_membership_indexes {
+        let Some(fixture) = snapshot
+            .fixtures
+            .iter()
+            .find(|fixture| fixture.id == *fixture_id)
+        else {
+            continue;
+        };
+        if fixture.group_ids.contains(&deleted.group.id) {
+            continue;
+        }
+        let mut group_ids = fixture.group_ids.clone();
+        group_ids.insert(
+            (*membership_index).min(group_ids.len()),
+            deleted.group.id.clone(),
+        );
+        state
+            .engine
+            .send(EngineCommand::SetFixtureGroups {
+                fixture_id: *fixture_id,
+                group_ids,
+            })
+            .map_err(|error| error.to_string())?;
+    }
+    state
+        .engine
+        .set_group_color_published(deleted.group.id.clone(), deleted.group.color.clone())?;
+    let mut groups = state
+        .fixture_groups
+        .lock()
+        .map_err(|_| "Fixture group state lock was poisoned".to_string())?;
+    let index = deleted.group_index.min(groups.len());
+    groups.insert(index, deleted.group.clone());
+    *state
+        .fixture_group_delete_undo
+        .lock()
+        .map_err(|_| "Fixture group delete Undo lock was poisoned".to_string())? = None;
+    Ok(Some(deleted.group))
 }
 
 #[tauri::command]
@@ -7230,7 +7550,19 @@ fn set_group_color(
     if let Some(color) = &color {
         validate_video_cue_point_color(color)?;
     }
-    state.engine.set_group_color_published(group_id, color)
+    state
+        .engine
+        .set_group_color_published(group_id.clone(), color.clone())?;
+    if let Some(group) = state
+        .fixture_groups
+        .lock()
+        .map_err(|_| "Fixture group state lock was poisoned".to_string())?
+        .iter_mut()
+        .find(|group| group.id == group_id)
+    {
+        group.color = normalize_fixture_group_color(color)?;
+    }
+    Ok(())
 }
 
 fn validate_cue_authored_beats(authored_beats: Option<f32>) -> Result<(), String> {
@@ -13369,6 +13701,15 @@ fn new_project(state: State<'_, AppState>) -> Result<(), String> {
             .map_err(|_| "Operator policy state lock was poisoned".to_string())?;
         *operator_policy = None;
     }
+    state
+        .fixture_groups
+        .lock()
+        .map_err(|_| "Fixture group state lock was poisoned".to_string())?
+        .clear();
+    *state
+        .fixture_group_delete_undo
+        .lock()
+        .map_err(|_| "Fixture group delete Undo lock was poisoned".to_string())? = None;
     load_project_snapshot_with_runtime_reset(&state, EngineSnapshot::default())?;
     reset_vj_preview_after_project_change(&state);
     Ok(())
@@ -13590,6 +13931,15 @@ fn project_file_for_save(state: &State<'_, AppState>) -> Result<ProjectFile, Str
         .cloned()
         .collect::<Vec<_>>();
     custom_profiles.sort_by(|left, right| left.source_path.cmp(&right.source_path));
+    let snapshot = project_snapshot_for_save(state.engine.persistence_snapshot()?);
+    let mut fixture_groups = state
+        .fixture_groups
+        .lock()
+        .map_err(|_| "Fixture group state lock was poisoned".to_string())?
+        .clone();
+    for group in &mut fixture_groups {
+        group.color = snapshot.group_colors.get(&group.id).cloned();
+    }
     Ok(ProjectFile {
         version: 1,
         app: APP_NAME.to_string(),
@@ -13599,7 +13949,8 @@ fn project_file_for_save(state: &State<'_, AppState>) -> Result<ProjectFile, Str
             .map_err(|_| "Operator policy state lock was poisoned".to_string())?
             .clone(),
         custom_profiles,
-        snapshot: project_snapshot_for_save(state.engine.persistence_snapshot()?),
+        fixture_groups,
+        snapshot,
     })
 }
 
@@ -15359,6 +15710,7 @@ fn load_project_from_file(
 ) -> Result<ProjectLoadResult, String> {
     use_authored_video_snapshot(&mut project.snapshot);
     normalize_project_timeline_layers(&mut project.snapshot);
+    reconcile_project_fixture_groups(&mut project)?;
     validate_project_file(&project)?;
     let warnings = project_validation_warnings(&project);
     let profiles = project.custom_profiles.clone();
@@ -15373,7 +15725,16 @@ fn load_project_from_file(
         }
     }
     let operator_policy = project.operator_policy.clone();
+    let fixture_groups = project.fixture_groups.clone();
     load_project_snapshot_with_runtime_reset(state, project.snapshot)?;
+    *state
+        .fixture_groups
+        .lock()
+        .map_err(|_| "Fixture group state lock was poisoned".to_string())? = fixture_groups;
+    *state
+        .fixture_group_delete_undo
+        .lock()
+        .map_err(|_| "Fixture group delete Undo lock was poisoned".to_string())? = None;
     {
         let mut current_policy = state
             .operator_policy
@@ -15392,6 +15753,118 @@ fn load_project_from_file(
         profiles,
         warnings,
     })
+}
+
+fn reconcile_project_fixture_groups(project: &mut ProjectFile) -> Result<(), String> {
+    if project.fixture_groups.is_empty() {
+        let mut seen = HashSet::new();
+        for group_id in project
+            .snapshot
+            .fixtures
+            .iter()
+            .flat_map(|fixture| fixture.group_ids.iter())
+        {
+            if !seen.insert(group_id.clone()) {
+                continue;
+            }
+            project.fixture_groups.push(FixtureGroupSummary {
+                id: group_id.clone(),
+                label: group_id.clone(),
+                color: project.snapshot.group_colors.get(group_id).cloned(),
+            });
+        }
+    }
+    for group in &mut project.fixture_groups {
+        group.id = normalize_group_id(&group.id)?;
+        group.label = normalize_fixture_group_label(group.label.clone())?;
+        group.color = normalize_fixture_group_color(
+            group
+                .color
+                .clone()
+                .or_else(|| project.snapshot.group_colors.get(&group.id).cloned()),
+        )?;
+        if let Some(color) = group.color.clone() {
+            project
+                .snapshot
+                .group_colors
+                .insert(group.id.clone(), color);
+        } else {
+            project.snapshot.group_colors.remove(&group.id);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn delete_fixture_group_from_project_data(
+    project: &mut ProjectFile,
+    group_id: &str,
+) -> Result<DeletedFixtureGroup, String> {
+    let group_index = project
+        .fixture_groups
+        .iter()
+        .position(|group| group.id == group_id)
+        .ok_or_else(|| format!("Fixture group '{group_id}' was not found"))?;
+    let group = project.fixture_groups.remove(group_index);
+    let mut fixture_membership_indexes = Vec::new();
+    for fixture in &mut project.snapshot.fixtures {
+        if let Some(index) = fixture
+            .group_ids
+            .iter()
+            .position(|fixture_group_id| fixture_group_id == group_id)
+        {
+            fixture_membership_indexes.push((fixture.id, index));
+            fixture.group_ids.remove(index);
+        }
+    }
+    project.snapshot.group_colors.remove(group_id);
+    Ok(DeletedFixtureGroup {
+        group,
+        group_index,
+        fixture_membership_indexes,
+    })
+}
+
+#[cfg(test)]
+fn undo_delete_fixture_group_in_project_data(
+    project: &mut ProjectFile,
+    deleted: DeletedFixtureGroup,
+) -> Result<(), String> {
+    if project
+        .fixture_groups
+        .iter()
+        .any(|group| group.id == deleted.group.id)
+    {
+        return Err(format!(
+            "Fixture group '{}' already exists",
+            deleted.group.id
+        ));
+    }
+    let group_index = deleted.group_index.min(project.fixture_groups.len());
+    for (fixture_id, membership_index) in &deleted.fixture_membership_indexes {
+        let Some(fixture) = project
+            .snapshot
+            .fixtures
+            .iter_mut()
+            .find(|fixture| fixture.id == *fixture_id)
+        else {
+            continue;
+        };
+        if !fixture.group_ids.contains(&deleted.group.id) {
+            fixture.group_ids.insert(
+                (*membership_index).min(fixture.group_ids.len()),
+                deleted.group.id.clone(),
+            );
+        }
+    }
+    if let Some(color) = deleted.group.color.clone() {
+        project
+            .snapshot
+            .group_colors
+            .insert(deleted.group.id.clone(), color);
+    }
+    project.fixture_groups.insert(group_index, deleted.group);
+    Ok(())
 }
 
 fn load_project_snapshot_with_runtime_reset(
@@ -15864,6 +16337,7 @@ fn validate_project_file(project: &ProjectFile) -> Result<(), String> {
         validate_operator_policy(policy)?;
     }
     validate_project_custom_profiles(&project.custom_profiles)?;
+    validate_project_fixture_groups(project)?;
     validate_touch_surface(&project.snapshot.touch_surface, &project.snapshot)?;
     validate_unique_ids(
         "fixture",
@@ -16094,6 +16568,54 @@ fn validate_project_file(project: &ProjectFile) -> Result<(), String> {
     validate_project_lighting_references(&project.snapshot)?;
     validate_project_video_graph(&project.snapshot)?;
     validate_project_node_graphs(&project.snapshot)?;
+    Ok(())
+}
+
+fn validate_project_fixture_groups(project: &ProjectFile) -> Result<(), String> {
+    let mut ids = HashSet::new();
+    let mut labels = HashSet::new();
+    for group in &project.fixture_groups {
+        let normalized_id = normalize_group_id(&group.id)?;
+        if normalized_id != group.id {
+            return Err(format!(
+                "Project fixture group '{}' has a non-normalized ID",
+                group.id
+            ));
+        }
+        if !ids.insert(group.id.clone()) {
+            return Err(format!(
+                "Project has duplicate fixture group ID '{}'",
+                group.id
+            ));
+        }
+        let label = normalize_fixture_group_label(group.label.clone())?;
+        if label != group.label {
+            return Err(format!(
+                "Project fixture group '{}' has a non-normalized label",
+                group.id
+            ));
+        }
+        if !labels.insert(group.label.clone()) {
+            return Err(format!(
+                "Project has duplicate fixture group label '{}'",
+                group.label
+            ));
+        }
+        normalize_fixture_group_color(group.color.clone())?;
+    }
+    if project.fixture_groups.is_empty() {
+        return Ok(());
+    }
+    for fixture in &project.snapshot.fixtures {
+        for group_id in &fixture.group_ids {
+            if !ids.contains(group_id) {
+                return Err(format!(
+                    "Project fixture {} '{}' references missing fixture group '{group_id}'",
+                    fixture.id, fixture.label
+                ));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -26232,6 +26754,7 @@ mod tests {
             app: APP_NAME.to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot::default(),
         }
     }
@@ -29987,6 +30510,7 @@ f 1 2 3
             app: APP_NAME.to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot {
                 blackout: true,
                 timeline: protocol::TimelineSnapshot {
@@ -30035,6 +30559,144 @@ f 1 2 3
                 .and_then(|audio| audio.estimated_bpm),
             Some(120.0)
         );
+    }
+
+    #[test]
+    fn project_fixture_group_list_round_trips_through_sdc_json() {
+        let mut project = empty_project_file();
+        let mut fixture = project_fixture(1, "Front fixture", 0, 1);
+        fixture.group_ids = vec!["fixture-group-1".to_string()];
+        project.snapshot.fixtures = vec![fixture];
+        project.fixture_groups = vec![FixtureGroupSummary {
+            id: "fixture-group-1".to_string(),
+            label: "Front wash".to_string(),
+            color: Some("#22aa88".to_string()),
+        }];
+        project
+            .snapshot
+            .group_colors
+            .insert("fixture-group-1".to_string(), "#22aa88".to_string());
+
+        let json = project_json_for_write(&project).unwrap();
+        let mut roundtrip: ProjectFile = serde_json::from_str(&json).unwrap();
+        reconcile_project_fixture_groups(&mut roundtrip).unwrap();
+
+        assert_eq!(roundtrip.fixture_groups, project.fixture_groups);
+        assert_eq!(
+            roundtrip.snapshot.fixtures[0].group_ids,
+            vec!["fixture-group-1"]
+        );
+        assert_eq!(
+            roundtrip.snapshot.group_colors["fixture-group-1"],
+            "#22aa88"
+        );
+    }
+
+    #[test]
+    fn project_legacy_fixture_groups_are_derived_when_field_is_absent() {
+        let mut legacy = empty_project_file();
+        let mut front = project_fixture(1, "Front fixture", 0, 1);
+        front.group_ids = vec!["Front".to_string(), "Wash".to_string()];
+        let mut back = project_fixture(2, "Back fixture", 0, 16);
+        back.group_ids = vec!["Wash".to_string(), "front".to_string()];
+        legacy.snapshot.fixtures = vec![front, back];
+        legacy
+            .snapshot
+            .group_colors
+            .insert("Front".to_string(), "#112233".to_string());
+        let mut value = serde_json::to_value(legacy).unwrap();
+        value.as_object_mut().unwrap().remove("fixture_groups");
+
+        let mut loaded: ProjectFile = serde_json::from_value(value).unwrap();
+        assert!(loaded.fixture_groups.is_empty());
+        reconcile_project_fixture_groups(&mut loaded).unwrap();
+
+        assert_eq!(
+            loaded
+                .fixture_groups
+                .iter()
+                .map(|group| (
+                    group.id.as_str(),
+                    group.label.as_str(),
+                    group.color.as_deref()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Front", "Front", Some("#112233")),
+                ("Wash", "Wash", None),
+                ("front", "front", None),
+            ]
+        );
+        validate_project_file(&loaded).unwrap();
+    }
+
+    #[test]
+    fn project_fixture_group_rename_preserves_membership_across_save_load() {
+        let mut project = empty_project_file();
+        let mut fixture = project_fixture(1, "Rename fixture", 0, 1);
+        fixture.group_ids = vec!["fixture-group-1".to_string()];
+        project.snapshot.fixtures = vec![fixture];
+        project.fixture_groups = vec![FixtureGroupSummary {
+            id: "fixture-group-1".to_string(),
+            label: "Old label".to_string(),
+            color: None,
+        }];
+
+        project.fixture_groups[0].label = "Renamed label".to_string();
+        let json = project_json_for_write(&project).unwrap();
+        let mut loaded: ProjectFile = serde_json::from_str(&json).unwrap();
+        reconcile_project_fixture_groups(&mut loaded).unwrap();
+
+        assert_eq!(loaded.fixture_groups[0].label, "Renamed label");
+        assert_eq!(loaded.fixture_groups[0].id, "fixture-group-1");
+        assert_eq!(
+            loaded.snapshot.fixtures[0].group_ids,
+            vec!["fixture-group-1"]
+        );
+    }
+
+    #[test]
+    fn group_delete_and_undo_restore_entity_membership_color_and_order() {
+        let mut project = empty_project_file();
+        let mut first = project_fixture(1, "First fixture", 0, 1);
+        first.group_ids = vec!["other".to_string(), "fixture-group-1".to_string()];
+        let mut second = project_fixture(2, "Second fixture", 0, 16);
+        second.group_ids = vec!["fixture-group-1".to_string()];
+        project.snapshot.fixtures = vec![first, second];
+        project.fixture_groups = vec![
+            FixtureGroupSummary {
+                id: "other".to_string(),
+                label: "Other".to_string(),
+                color: None,
+            },
+            FixtureGroupSummary {
+                id: "fixture-group-1".to_string(),
+                label: "Front wash".to_string(),
+                color: Some("#22aa88".to_string()),
+            },
+        ];
+        project
+            .snapshot
+            .group_colors
+            .insert("fixture-group-1".to_string(), "#22aa88".to_string());
+        let before = project.clone();
+
+        let deleted =
+            delete_fixture_group_from_project_data(&mut project, "fixture-group-1").unwrap();
+        assert_eq!(deleted.group.label, "Front wash");
+        assert!(project
+            .snapshot
+            .fixtures
+            .iter()
+            .all(|fixture| !fixture.group_ids.contains(&"fixture-group-1".to_string())));
+        assert!(!project
+            .snapshot
+            .group_colors
+            .contains_key("fixture-group-1"));
+
+        undo_delete_fixture_group_in_project_data(&mut project, deleted).unwrap();
+        assert_eq!(project, before);
+        validate_project_file(&project).unwrap();
     }
 
     #[test]
@@ -30144,6 +30806,7 @@ f 1 2 3
             app: APP_NAME.to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot::default(),
         })
         .unwrap();
@@ -30469,6 +31132,7 @@ f 1 2 3
             app: APP_NAME.to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: project_snapshot_for_save(snapshot(before_rendered, before_graph)),
         };
         let after = ProjectFile {
@@ -30622,6 +31286,7 @@ f 1 2 3
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot::default(),
         };
 
@@ -30651,6 +31316,7 @@ f 1 2 3
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot::default(),
         };
         project.snapshot.cues = vec![
@@ -30690,6 +31356,7 @@ f 1 2 3
             app: APP_NAME.to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![project_fixture(1, "Effect Target", 0, 1)],
                 cues: vec![protocol::CueSummary {
@@ -30946,6 +31613,7 @@ f 1 2 3
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot {
                 video: protocol::VideoSnapshot {
                     layers: vec![project_video_layer(10)],
@@ -31167,6 +31835,7 @@ f 1 2 3
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: vec![project_custom_profile()],
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![fixture],
                 ..EngineSnapshot::default()
@@ -31200,6 +31869,7 @@ f 1 2 3
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![fixture],
                 ..EngineSnapshot::default()
@@ -31216,6 +31886,7 @@ f 1 2 3
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![project_fixture(1, "Custom Bar 1", 0, 1)],
                 ..EngineSnapshot::default()
@@ -31436,6 +32107,7 @@ f 1 2 3
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![project_fixture(1, "Fixture 1", 0, 1)],
                 node_graphs: vec![project_node_graph(3, 1)],
@@ -31611,6 +32283,7 @@ f 1 2 3
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![fixture],
                 ..EngineSnapshot::default()
@@ -31635,6 +32308,7 @@ f 1 2 3
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![fixture],
                 ..EngineSnapshot::default()
@@ -31656,6 +32330,7 @@ f 1 2 3
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: vec![profile],
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot::default(),
         };
 
@@ -31847,6 +32522,7 @@ f 1 2 3
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot::default(),
         };
         project.snapshot.fixtures = vec![
@@ -31887,6 +32563,7 @@ f 1 2 3
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![project_fixture(1, "Fixture 1", 0, 1)],
                 ..EngineSnapshot::default()
@@ -31937,6 +32614,7 @@ f 1 2 3
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![fixture],
                 ..EngineSnapshot::default()
@@ -31955,6 +32633,7 @@ f 1 2 3
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![project_fixture(1, "Fixture 1", 0, 1)],
                 ..EngineSnapshot::default()
@@ -32074,6 +32753,7 @@ f 1 2 3
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![project_fixture(1, "Fixture 1", 0, 1)],
                 ..EngineSnapshot::default()
@@ -32135,6 +32815,7 @@ f 1 2 3
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![project_fixture(1, "Legacy fixture", 0, 1)],
                 effects: vec![project_lfo_effect(4, vec![1])],
@@ -32236,6 +32917,7 @@ f 1 2 3
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![rgb, wheel, unsupported.clone()],
                 effects: vec![project_color_effect(9, vec!["front".to_string()])],
@@ -32292,6 +32974,7 @@ f 1 2 3
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![dimmer_only, pan_and_dimmer],
                 effects: vec![effect.clone()],
@@ -33504,6 +34187,7 @@ f 1 2 3
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![project_fixture(1, "Fixture 1", 0, 1)],
                 ..EngineSnapshot::default()
@@ -33632,6 +34316,7 @@ f 1 2 3
             app: "Syndocal".to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot::default(),
         };
         project.snapshot.dmx_outputs = vec![
@@ -35232,6 +35917,7 @@ f 1 2 3
             app: APP_NAME.to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![incompatible_fixture],
                 effects: vec![chaser_effect_summary_for_test(17, dormant_request)],
@@ -35269,6 +35955,7 @@ f 1 2 3
             app: APP_NAME.to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![upper_fixture, lower_fixture],
                 effects: vec![chaser_effect_summary_for_test(18, case_request)],
@@ -35329,6 +36016,7 @@ f 1 2 3
             app: APP_NAME.to_string(),
             operator_policy: None,
             custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
             snapshot: EngineSnapshot {
                 fixtures: vec![mover],
                 effects: vec![effect],
@@ -40623,6 +41311,8 @@ fn main() {
             #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
             spout_inputs: Arc::clone(&spout_inputs),
             custom_profiles: Mutex::new(HashMap::new()),
+            fixture_groups: Mutex::new(Vec::new()),
+            fixture_group_delete_undo: Mutex::new(None),
             visualizer_model_assets: Mutex::new(HashMap::new()),
             midi_clock: Mutex::new(None),
             midi_control: Mutex::new(None),
@@ -40691,6 +41381,12 @@ fn main() {
             set_fixture_limits,
             set_group_fixture_limits,
             set_fixture_groups,
+            get_fixture_groups,
+            create_fixture_group,
+            rename_fixture_group,
+            recolor_fixture_group,
+            delete_fixture_group,
+            undo_delete_fixture_group,
             set_attribute,
             set_group_attribute,
             set_programmer_mode,

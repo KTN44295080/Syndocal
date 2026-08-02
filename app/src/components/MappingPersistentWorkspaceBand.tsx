@@ -141,6 +141,10 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
           selectedGroupId={props.filters.selectedGroupId}
           groupRows={props.filters.groupRows}
           onSelectGroup={props.filters.onSelectGroup}
+          onCreateGroup={props.filters.onCreateGroup}
+          onRenameGroup={props.filters.onRenameGroup}
+          onDeleteGroup={props.filters.onDeleteGroup}
+          onRecolorGroup={props.filters.onRecolorGroup}
           controlChrome={props.workspace === "control"}
         />
         <Show when={props.poppedPanes.includes("timeline")}>

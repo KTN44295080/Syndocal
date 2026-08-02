@@ -326,6 +326,7 @@ fn import_bytes(bytes: &[u8], path_label: &str) -> Result<DvcImportOutcome, Stri
             .iter()
             .map(|profile| profile.summary.clone())
             .collect(),
+        fixture_groups: Vec::new(),
         snapshot,
     };
     Ok(DvcImportOutcome { project, report })

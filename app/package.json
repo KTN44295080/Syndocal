@@ -72,6 +72,7 @@
     "check:virtualization": "node scripts/check-virtualization.mjs",
     "check:large-show-ui": "node scripts/check-viewport-containment.mjs --large-show",
     "check:patch-viewport": "node scripts/check-viewport-containment.mjs --patch-only",
+    "check:fixture-groups": "node scripts/check-viewport-containment.mjs --fixture-groups-only",
     "check:workspace-split": "node scripts/check-viewport-containment.mjs --workspace-split-only",
     "check:viewport": "node scripts/check-viewport-containment.mjs",
     "check:vj-first-run-viewport": "node scripts/check-viewport-containment.mjs --vj-empty",

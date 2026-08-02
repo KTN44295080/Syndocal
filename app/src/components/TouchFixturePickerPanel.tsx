@@ -4,6 +4,7 @@ import { groupIdentityCss } from "../identityColor";
 
 export interface TouchFixtureGroupRow {
   groupId: string;
+  label: string;
   count: number;
 }
 
@@ -36,7 +37,7 @@ export function TouchFixturePickerPanel(props: TouchFixturePickerPanelProps) {
               style={{ "--identity": groupIdentityCss(group.groupId, props.groupColors, "fill") }}
               onClick={() => props.onSelectGroup(group.groupId)}
             >
-              <span data-no-localize>{group.groupId}</span>
+              <span data-no-localize>{group.label}</span>
               <span>{group.count}</span>
             </button>
           )}

@@ -1,5 +1,5 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
-import type { PatchedFixtureSummary } from "../types";
+import type { FixtureGroupSummary, PatchedFixtureSummary } from "../types";
 import { virtualListRange } from "../virtualList";
 
 type MaybePromise = void | Promise<unknown>;
@@ -12,6 +12,7 @@ type MappingFixtureSelectionToolsPanelProps = {
   search: string;
   groupText: string;
   groupTokenCount: number;
+  availableGroups: FixtureGroupSummary[];
   onSearch: (value: string) => void;
   onGroupText: (value: string) => void;
   onPickVisible: () => MaybePromise;
@@ -100,11 +101,16 @@ export function MappingFixtureSelectionToolsPanel(props: MappingFixtureSelection
           Selected Groups
           <input
             data-mapping-group-editor
+            list="mapping-fixture-group-options"
             type="text"
             value={props.groupText}
             onInput={(event) => props.onGroupText(event.currentTarget.value)}
             placeholder="front, movers, floor"
+            title={props.availableGroups.map((group) => `${group.label}: ${group.id}`).join("\n")}
           />
+          <datalist id="mapping-fixture-group-options">
+            {props.availableGroups.map((group) => <option value={group.id} data-no-localize>{group.label}</option>)}
+          </datalist>
         </label>
         <div class="mappingSelectionQuickActions">
           <button

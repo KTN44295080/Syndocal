@@ -25,6 +25,7 @@ const cueRecallOnlyMode = process.argv.includes("--cue-recall-only");
 const setupDmxOnlyMode = process.argv.includes("--setup-dmx-only");
 const timelineSlimOnlyMode = process.argv.includes("--timeline-slim-only");
 const patchOnlyMode = process.argv.includes("--patch-only");
+const fixtureGroupsOnlyMode = process.argv.includes("--fixture-groups-only");
 const patchEmptyStateOnlyMode = process.argv.includes("--patch-empty-state-only");
 const touchOnlyMode = process.argv.includes("--touch-only");
 const persistentBandOnlyMode = process.argv.includes("--persistent-band-only");
@@ -62,7 +63,7 @@ const viewportTraceEnabled = process.env.SYNDOCAL_VIEWPORT_TRACE === "1";
 const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
   largeShowMode
     ? "large-show"
-    : patchOnlyMode
+    : patchOnlyMode || fixtureGroupsOnlyMode
       ? "patch"
       : patchEmptyStateOnlyMode
         ? "none"
@@ -11980,6 +11981,209 @@ async function checkPatchFixtureFamilySweep(client) {
   };
 }
 
+async function runFixtureGroupsViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: fixtureUrl("patch") });
+  await waitForApp(client);
+  await seedViewportLocalStorage(client);
+  await client.send("Page.navigate", { url: fixtureUrl("patch") });
+  await waitForApp(client);
+  await clickByText(client, "Setup");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
+  await sleep(160);
+
+  const readState = () => client.evaluate(`(() => {
+    const visible = (element) => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const rect = (selector) => {
+      const element = [...document.querySelectorAll(selector)].find(visible);
+      if (!element) return null;
+      const value = element.getBoundingClientRect();
+      const round = (number) => Math.round(number * 100) / 100;
+      return {
+        x: round(value.x), y: round(value.y), width: round(value.width), height: round(value.height),
+        right: round(value.right), bottom: round(value.bottom),
+      };
+    };
+    const groupTabs = [...document.querySelectorAll('[data-group-tab]')].filter(visible).map((tab) => ({
+      id: tab.getAttribute('data-group-tab'),
+      text: (tab.querySelector(':scope > span')?.textContent || '').trim(),
+      count: Number(tab.querySelector('small')?.textContent || 0),
+    }));
+    const menu = [...document.querySelectorAll('[data-group-context-menu]')].find(visible);
+    const deleteDialog = document.querySelector('[data-group-delete-dialog]');
+    const registrationDialog = document.querySelector('[data-patch-group-registration-dialog]');
+    const app = document.querySelector('.app');
+    return {
+      groupTabs,
+      plusButtonCount: [...document.querySelectorAll('[data-group-create]')].filter(visible).length,
+      inlineRenameCount: [...document.querySelectorAll('[data-group-inline-rename]')].filter(visible).length,
+      inlineRenameValue: document.querySelector('[data-group-inline-rename]')?.value || '',
+      inlineCreateCount: [...document.querySelectorAll('[data-group-inline-create]')].filter(visible).length,
+      menu: menu ? {
+        id: menu.getAttribute('data-group-context-menu'),
+        items: [...menu.querySelectorAll('button, label > span')].map((item) => (item.textContent || '').trim()),
+        colorInputCount: menu.querySelectorAll('input[type="color"]').length,
+      } : null,
+      deleteDialogOpen: deleteDialog instanceof HTMLDialogElement && deleteDialog.open,
+      statusUndoCount: [...document.querySelectorAll('.appStatusAction')].filter(visible).length,
+      statusUndoText: (document.querySelector('.appStatusAction')?.textContent || '').trim(),
+      registration: registrationDialog instanceof HTMLDialogElement && registrationDialog.open ? {
+        inputValue: registrationDialog.querySelector('[data-patch-group-registration-name]')?.value || '',
+        skipCount: registrationDialog.querySelectorAll('[data-patch-group-registration-skip]').length,
+        registerCount: registrationDialog.querySelectorAll('[data-patch-group-registration-register]').length,
+        rect: rect('[data-patch-group-registration-dialog]'),
+      } : null,
+      frames: {
+        upper: rect('[data-workspace-pane="upper"]'),
+        lower: rect('[data-workspace-pane="lower"]'),
+        groups: rect('[data-persistent-band-part="groups"]'),
+        lowerLeft: rect('[data-workspace-pane="lower-left"]'),
+        lowerRight: rect('[data-workspace-pane="lower-right"]'),
+      },
+      documentAndAppScrollZero:
+        scrollX === 0 && scrollY === 0 &&
+        document.documentElement.scrollWidth === document.documentElement.clientWidth &&
+        document.documentElement.scrollHeight === document.documentElement.clientHeight &&
+        (!app || (app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight)),
+    };
+  })()`);
+
+  const initial = await readState();
+  const sourceGroup = initial.groupTabs[0];
+  await client.evaluate(`(() => {
+    const tab = [...document.querySelectorAll('[data-group-tab]')]
+      .find((candidate) => candidate.getAttribute('data-group-tab') === ${JSON.stringify(sourceGroup?.id ?? "")}) ||
+      document.querySelector('[data-group-tab]');
+    tab?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, clientX: 80, clientY: 40 }));
+  })()`);
+  await sleep(50);
+  const doubleClicked = await readState();
+  await client.evaluate(`(() => {
+    const input = document.querySelector('[data-group-inline-rename]');
+    if (!(input instanceof HTMLInputElement)) return;
+    input.value = 'Renamed Front';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: 'Renamed Front' }));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
+  })()`);
+  await sleep(60);
+  const renamed = await readState();
+  await client.evaluate(`(() => {
+    const tab = [...document.querySelectorAll('[data-group-tab]')]
+      .find((candidate) => candidate.getAttribute('data-group-tab') === ${JSON.stringify(sourceGroup?.id ?? "")}) ||
+      document.querySelector('[data-group-tab]');
+    tab?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 140, clientY: 80 }));
+  })()`);
+  await sleep(40);
+  const contextMenu = await readState();
+  await client.evaluate(`(() => {
+    const menu = document.querySelector('[data-group-context-menu]');
+    [...(menu?.querySelectorAll('button') || [])].find((button) => button.textContent?.trim() === 'Delete')?.click();
+  })()`);
+  await sleep(40);
+  const deleteConfirmation = await readState();
+  await client.evaluate(`(() => {
+    const dialog = document.querySelector('[data-group-delete-dialog]');
+    [...(dialog?.querySelectorAll('button') || [])].find((button) => button.textContent?.trim() === 'Delete')?.click();
+  })()`);
+  await sleep(70);
+  const deleted = await readState();
+  await client.evaluate(`document.querySelector('.appStatusAction')?.click()`);
+  await sleep(70);
+  const undone = await readState();
+  await client.evaluate(`document.querySelector('[data-group-create]')?.click()`);
+  await sleep(30);
+  const createStarted = await readState();
+  await client.evaluate(`(() => {
+    const input = document.querySelector('[data-group-inline-create]');
+    if (!(input instanceof HTMLInputElement)) return;
+    input.value = 'Empty Group';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: 'Empty Group' }));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
+  })()`);
+  await sleep(60);
+  const emptyCreated = await readState();
+  await client.evaluate(`(() => {
+    const setNumber = (selector, value) => {
+      const input = document.querySelector(selector);
+      if (!(input instanceof HTMLInputElement)) return;
+      input.value = String(value);
+      input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: String(value) }));
+    };
+    setNumber('[data-patch-field="address"] input', 100);
+    setNumber('[data-patch-field="count"] input', 2);
+  })()`);
+  await sleep(40);
+  const beforePatchFrames = emptyCreated.frames;
+  await client.evaluate(`document.querySelector('.patchFixtureSubmit')?.click()`);
+  await sleep(100);
+  const registration = await readState();
+  await client.evaluate(`document.querySelector('[data-patch-group-registration-register]')?.click()`);
+  await sleep(80);
+  const registered = await readState();
+
+  const renamedGroup = renamed.groupTabs.find((group) => group.id === sourceGroup?.id);
+  const restoredGroup = undone.groupTabs.find((group) => group.id === sourceGroup?.id);
+  const checks = {
+    groupStripHasCreateButton: initial.plusButtonCount === 1,
+    doubleClickEntersInlineRename:
+      doubleClicked.inlineRenameCount === 1 && doubleClicked.inlineRenameValue === sourceGroup?.text,
+    renamePreservesGroupIdentityAndMembership:
+      renamedGroup?.id === sourceGroup?.id && renamedGroup?.text === 'Renamed Front' && renamedGroup?.count === sourceGroup?.count,
+    rightClickOpensCustomRenameDeleteColorMenu:
+      contextMenu.menu?.id === sourceGroup?.id &&
+      ['Rename', 'Color', 'Delete'].every((item) => contextMenu.menu.items.includes(item)) &&
+      contextMenu.menu.colorInputCount === 1,
+    deleteRequiresConfirmation: deleteConfirmation.deleteDialogOpen === true,
+    deleteOffersStatusLineUndo: deleted.statusUndoCount === 1 && deleted.statusUndoText === 'Undo group delete',
+    undoRestoresRenamedEntityAndMembership:
+      restoredGroup?.text === 'Renamed Front' && restoredGroup?.count === sourceGroup?.count,
+    plusCreatesEmptyFirstClassGroup:
+      createStarted.inlineCreateCount === 1 &&
+      emptyCreated.groupTabs.some((group) => group.text === 'Empty Group' && group.count === 0),
+    patchSurfacesFixedFrameRegistrationDialog:
+      registration.registration?.inputValue === 'Viewport Par' &&
+      registration.registration.skipCount === 1 &&
+      registration.registration.registerCount === 1,
+    registrationDialogLeavesFixedFramesExact:
+      JSON.stringify(registration.frames) === JSON.stringify(beforePatchFrames),
+    registrationAddsMembershipByEntity:
+      registered.registration === null &&
+      registered.groupTabs.some((group) => group.text === 'Viewport Par' && group.count === 2),
+    documentAndAppScrollRemainZero:
+      [initial, doubleClicked, contextMenu, deleteConfirmation, deleted, undone, createStarted, emptyCreated, registration, registered]
+        .every((state) => state.documentAndAppScrollZero),
+  };
+  const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  return {
+    label: `fixture-groups-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    initial,
+    doubleClicked,
+    renamed,
+    contextMenu,
+    deleteConfirmation,
+    deleted,
+    undone,
+    createStarted,
+    emptyCreated,
+    registration,
+    registered,
+  };
+}
+
 async function runPatchViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -23549,6 +23753,32 @@ async function main() {
       }
       return;
     }
+    if (fixtureGroupsOnlyMode) {
+      const results = [];
+      for (const viewport of viewports) {
+        const result = await runFixtureGroupsViewport(client, viewport);
+        results.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `plus=${result.initial.plusButtonCount} ` +
+            `dblclick=${result.doubleClicked.inlineRenameCount}:${JSON.stringify(result.doubleClicked.inlineRenameValue)} ` +
+            `rename=${JSON.stringify(result.renamed.groupTabs)} ` +
+            `menu=${JSON.stringify(result.contextMenu.menu?.items ?? [])} ` +
+            `delete=${result.deleteConfirmation.deleteDialogOpen}->${result.deleted.statusUndoCount}->` +
+              `${result.undone.groupTabs.length} ` +
+            `empty=${result.emptyCreated.groupTabs.find((group) => group.text === "Empty Group")?.count ?? "missing"} ` +
+            `register=${result.registration.registration?.inputValue ?? "missing"}->` +
+              `${result.registered.groupTabs.find((group) => group.text === "Viewport Par")?.count ?? "missing"} ` +
+            `frames=${JSON.stringify(result.registration.frames)} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = results.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Fixture group operations failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
     if (patchOnlyMode) {
       const patchResults = [];
       const patchEmptyStateResults = [];
@@ -24681,12 +24911,29 @@ async function main() {
 
     const results = [];
     const patchEmptyStateResults = [];
+    const fixtureGroupsResults = [];
     for (const viewport of viewports) {
       results.push(...(await runViewport(client, viewport)));
       results.push(await runComposedTouchViewport(client, viewport));
       const patchEmptyStateResult = await runPatchEmptyStateViewport(client, viewport);
       patchEmptyStateResults.push(patchEmptyStateResult);
       console.log(patchEmptyStateLogLine(patchEmptyStateResult));
+      const fixtureGroupsResult = await runFixtureGroupsViewport(client, viewport);
+      fixtureGroupsResults.push(fixtureGroupsResult);
+      console.log(
+        `${fixtureGroupsResult.passed ? "pass" : "fail"} ${fixtureGroupsResult.label} ` +
+          `plus=${fixtureGroupsResult.initial.plusButtonCount} ` +
+          `dblclick=${fixtureGroupsResult.doubleClicked.inlineRenameCount}:${JSON.stringify(fixtureGroupsResult.doubleClicked.inlineRenameValue)} ` +
+          `rename=${JSON.stringify(fixtureGroupsResult.renamed.groupTabs)} ` +
+          `menu=${JSON.stringify(fixtureGroupsResult.contextMenu.menu?.items ?? [])} ` +
+          `delete=${fixtureGroupsResult.deleteConfirmation.deleteDialogOpen}->${fixtureGroupsResult.deleted.statusUndoCount}->` +
+            `${fixtureGroupsResult.undone.groupTabs.length} ` +
+          `empty=${fixtureGroupsResult.emptyCreated.groupTabs.find((group) => group.text === "Empty Group")?.count ?? "missing"} ` +
+          `register=${fixtureGroupsResult.registration.registration?.inputValue ?? "missing"}->` +
+            `${fixtureGroupsResult.registered.groupTabs.find((group) => group.text === "Viewport Par")?.count ?? "missing"} ` +
+          `frames=${JSON.stringify(fixtureGroupsResult.registration.frames)} ` +
+          `failed=${JSON.stringify(fixtureGroupsResult.failedChecks)}`,
+      );
     }
     const cueRecallResults = [];
     const cueRecallLargeResults = [];
@@ -24730,6 +24977,7 @@ async function main() {
     const paneWindowFailures = paneWindowResults.filter((result) => !result.passed);
     const liveEditTypeFailures = liveEditTypeResults.filter((result) => !result.passed);
     const patchEmptyStateFailures = patchEmptyStateResults.filter((result) => !result.passed);
+    const fixtureGroupsFailures = fixtureGroupsResults.filter((result) => !result.passed);
     const setupSurfaceFailures = results.filter((result) => !hasExpectedSetupSurface(result));
     const persistentBandFailures = results.filter((result) => !hasExpectedPersistentWorkspaceBand(result));
     const persistentBandInvarianceFailures = results.filter((result) => !hasExpectedPersistentBandInvariance(result));
@@ -24871,6 +25119,7 @@ async function main() {
       paneWindowFailures.length > 0 ||
       liveEditTypeFailures.length > 0 ||
       patchEmptyStateFailures.length > 0 ||
+      fixtureGroupsFailures.length > 0 ||
       keyboardNavigationFailures.length > 0 ||
       setupSurfaceFailures.length > 0 ||
       persistentBandFailures.length > 0 ||
@@ -24988,6 +25237,7 @@ async function main() {
             paneWindow: paneWindowFailures,
             liveEditTypes: liveEditTypeFailures,
             patchEmptyState: patchEmptyStateFailures,
+            fixtureGroups: fixtureGroupsFailures,
             keyboardNavigation: keyboardNavigationFailures,
             setupSurface: setupSurfaceFailures,
             persistentBand: persistentBandFailures,
@@ -25018,7 +25268,7 @@ async function main() {
         ),
       );
       throw new Error(
-        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${liveEditTypeFailures.length} Live Edit fixture-type check(s), ${patchEmptyStateFailures.length} PATCH empty-state check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${stageSettingsFailures.length} stage settings check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${killZoneFailures.length} kill zone check(s), ${statusLineFailures.length} status line check(s) failed.`,
+        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${liveEditTypeFailures.length} Live Edit fixture-type check(s), ${patchEmptyStateFailures.length} PATCH empty-state check(s), ${fixtureGroupsFailures.length} fixture group operation check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${stageSettingsFailures.length} stage settings check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${killZoneFailures.length} kill zone check(s), ${statusLineFailures.length} status line check(s) failed.`,
       );
     }
   } finally {

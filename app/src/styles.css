@@ -6816,6 +6816,7 @@ progress {
   background: #171411;
   color: #d0c7bd;
   padding: 0 11px;
+  box-shadow: inset 3px 0 0 var(--fixture-group-color, transparent);
 }
 
 .mappingGroupStrip button.active {
@@ -6826,6 +6827,150 @@ progress {
 
 .mappingGroupStrip small {
   color: #9f948b;
+}
+
+.mappingGroupStrip .mappingGroupCreateButton {
+  min-width: 30px;
+  justify-content: center;
+  border-color: #62584d;
+  color: #f3f0eb;
+  padding-inline: 8px;
+  font-size: 17px;
+  line-height: 1;
+  box-shadow: none;
+}
+
+.mappingGroupInlineRename {
+  flex: 0 0 132px;
+  width: 132px;
+  min-height: 30px;
+  border: 1px solid #d79b4b;
+  border-radius: 4px;
+  background: #0f0d0b;
+  color: #fff;
+  padding: 0 8px;
+  font: inherit;
+}
+
+.mappingGroupContextMenu {
+  position: fixed;
+  z-index: 40;
+  display: grid;
+  width: 176px;
+  overflow: hidden;
+  border: 1px solid #62584d;
+  border-radius: 5px;
+  background: #171411;
+  padding: 4px;
+  box-shadow: 0 8px 18px rgb(0 0 0 / 42%);
+}
+
+.mappingGroupContextMenu button,
+.mappingGroupContextMenu label {
+  display: flex;
+  min-width: 0;
+  min-height: 30px;
+  align-items: center;
+  justify-content: space-between;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: #e4ddd5;
+  padding: 5px 8px;
+  box-shadow: none;
+  font-size: 12px;
+}
+
+.mappingGroupContextMenu button:hover,
+.mappingGroupContextMenu label:hover {
+  background: #2b2621;
+}
+
+.mappingGroupContextMenu button.danger {
+  color: #ffaaa2;
+}
+
+.mappingGroupContextMenu input[type="color"] {
+  width: 34px;
+  height: 24px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.mappingGroupDeleteDialog,
+.patchGroupRegistrationDialog {
+  width: min(390px, calc(100vw - 32px));
+  border: 1px solid #5a5148;
+  border-radius: 6px;
+  background: #1b1917;
+  color: #edf3fb;
+  padding: 0;
+  box-shadow: 0 12px 28px rgb(0 0 0 / 45%);
+}
+
+.mappingGroupDeleteDialog::backdrop,
+.patchGroupRegistrationDialog::backdrop {
+  background: rgb(0 0 0 / 68%);
+}
+
+.mappingGroupDeleteDialog form,
+.patchGroupRegistrationFrame {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.mappingGroupDeleteDialog h3,
+.mappingGroupDeleteDialog p,
+.patchGroupRegistrationDialog h3 {
+  margin: 0;
+}
+
+.mappingGroupDeleteDialog p {
+  color: #b9c2ce;
+  font-size: 12px;
+}
+
+.patchGroupRegistrationFrame header,
+.patchGroupRegistrationFrame .dialogActions,
+.mappingGroupDeleteDialog .dialogActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.patchGroupRegistrationFrame header {
+  border-bottom: 1px solid #3b3530;
+  color: #a99f95;
+  padding-bottom: 7px;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.patchGroupRegistrationFrame h3 {
+  font-size: 15px;
+  text-wrap: balance;
+}
+
+.patchGroupRegistrationFrame label {
+  display: grid;
+  gap: 5px;
+  color: #c9c1b8;
+  font-size: 11px;
+}
+
+.patchGroupRegistrationFrame input {
+  min-height: 34px;
+  border-color: #514940;
+  background: #100e0c;
+  color: #fff;
+}
+
+.patchGroupRegistrationFrame .dialogActions,
+.mappingGroupDeleteDialog .dialogActions {
+  justify-content: flex-end;
 }
 
 .mappingTypeStrip {
@@ -19251,6 +19396,18 @@ input[type="color"] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.appStatusAction {
+  flex: 0 0 auto;
+  min-height: 18px;
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: #e9b86f;
+  padding: 0 4px;
+  font-size: 11px;
+  text-decoration: underline;
 }
 
 .appStatusLine.success .appStatusIndicator { background: #4fc483; }

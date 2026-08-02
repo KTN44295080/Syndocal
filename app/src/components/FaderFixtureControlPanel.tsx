@@ -10,6 +10,7 @@ interface FixtureFlagState {
 
 interface FaderFixtureControlPanelProps {
   selectedGroupId: string | null;
+  selectedGroupLabel: string | null;
   selectedGroupFixtureCount: number;
   patchedFixtureCount: number;
   selectedGroupSubmasterLevel: number;
@@ -46,7 +47,7 @@ export function FaderFixtureControlPanel(props: FaderFixtureControlPanelProps) {
         {(groupId) => (
           <div class="groupControlBanner">
             <div>
-              <strong>{groupId()}</strong>
+              <strong data-no-localize>{props.selectedGroupLabel ?? groupId()}</strong>
               <span>{props.selectedGroupFixtureCount} fixture(s)</span>
             </div>
             <label class="groupSubmasterControl">

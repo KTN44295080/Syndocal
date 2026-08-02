@@ -1,5 +1,6 @@
 import { For, Show, type ComponentProps } from "solid-js";
 import type {
+  FixtureGroupSummary,
   PatchedFixtureSummary,
   StageObjectKind,
   StageObjectSummary,
@@ -33,6 +34,7 @@ export interface MappingSelectionPanelProps {
   fixtureSearch: string;
   groupText: string;
   groupTokenCount: number;
+  availableGroups: FixtureGroupSummary[];
   stageObjects: StageObjectSummary[];
   stageObjectFixtureCounts: Record<number, number>;
   selectedStageObject: StageObjectSummary | null;
@@ -118,6 +120,7 @@ export function MappingSelectionsColumn(props: MappingSelectionsColumnProps) {
         search={props.fixtureSearch}
         groupText={props.groupText}
         groupTokenCount={props.groupTokenCount}
+        availableGroups={props.availableGroups}
         onSearch={props.onSearch}
         onGroupText={props.onGroupText}
         onPickVisible={props.onPickVisible}

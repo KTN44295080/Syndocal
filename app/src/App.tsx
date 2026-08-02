@@ -225,6 +225,7 @@ import type {
   ExternalVideoTransportSyncResponse,
   ExternalVideoTransportSyncReport,
   FixtureLimits,
+  FixtureGroupSummary,
   FixturePresetGroupLoadResult,
   FixtureProfileSummary,
   GeometrySummary,
@@ -665,6 +666,11 @@ const projectMutationCommands = new Set([
   "set_fixture_limits",
   "set_group_fixture_limits",
   "set_fixture_groups",
+  "create_fixture_group",
+  "rename_fixture_group",
+  "recolor_fixture_group",
+  "delete_fixture_group",
+  "undo_delete_fixture_group",
   "set_attribute",
   "set_group_attribute",
   "commit_programmer",
@@ -1313,6 +1319,18 @@ export default function App() {
   const [patchYaw, setPatchYaw] = createSignal(0);
   const [patchRoll, setPatchRoll] = createSignal(0);
   const [groupText, setGroupText] = createSignal("");
+  const [fixtureGroups, setFixtureGroupList] = createSignal<FixtureGroupSummary[]>([]);
+  const [fixtureGroupDeleteUndoAvailable, setFixtureGroupDeleteUndoAvailable] = createSignal(false);
+  const [viewportFixtureGroupDeleteUndo, setViewportFixtureGroupDeleteUndo] = createSignal<{
+    group: FixtureGroupSummary;
+    groupIndex: number;
+    memberships: Array<{ fixtureId: number; index: number }>;
+  } | null>(null);
+  const [pendingPatchGroupRegistration, setPendingPatchGroupRegistration] = createSignal<{
+    fixtureIds: number[];
+    defaultName: string;
+  } | null>(null);
+  const [patchGroupRegistrationName, setPatchGroupRegistrationName] = createSignal("");
   const [selectedFixtureGroupFilter, setSelectedFixtureGroupFilter] = createSignal<string | null>(null);
   const [selectedFixtureLabelDraft, setSelectedFixtureLabelDraft] = createSignal("");
   const [selectedFixtureUniverseDraft, setSelectedFixtureUniverseDraft] = createSignal(0);
@@ -2955,6 +2973,17 @@ export default function App() {
     setAppStatus(appStatusFromMessage(text, key));
     return text;
   };
+  const refreshFixtureGroups = async () => {
+    if (!isTauriRuntime()) return fixtureGroups();
+    try {
+      const groups = await tauriInvoke<FixtureGroupSummary[]>("get_fixture_groups");
+      setFixtureGroupList(groups);
+      return groups;
+    } catch (error) {
+      setMessage(`Fixture groups unavailable: ${String(error)}`);
+      return fixtureGroups();
+    }
+  };
   const currentWorkspaceLayout = (): WorkspaceLayout => ({
     workspace_tab: workspaceTab(),
     setup_sub_tab: setupSubTab(),
@@ -3245,6 +3274,25 @@ export default function App() {
       height: `${Math.max(1.5, tiltHeight)}%`,
     };
   });
+  const fixtureGroupEntities = createMemo<FixtureGroupSummary[]>(() => {
+    const entities = fixtureGroups().map((group) => ({
+      ...group,
+      color: snapshot().group_colors?.[group.id] ?? group.color ?? null,
+    }));
+    const seen = new Set(entities.map((group) => group.id));
+    for (const fixture of snapshot().fixtures) {
+      for (const groupId of fixture.group_ids) {
+        if (seen.has(groupId)) continue;
+        seen.add(groupId);
+        entities.push({
+          id: groupId,
+          label: groupId,
+          color: snapshot().group_colors?.[groupId] ?? null,
+        });
+      }
+    }
+    return entities;
+  });
   const fixtureGroupRows = createMemo(() => {
     const counts = new Map<string, number>();
     for (const fixture of snapshot().fixtures) {
@@ -3252,10 +3300,185 @@ export default function App() {
         counts.set(groupId, (counts.get(groupId) ?? 0) + 1);
       }
     }
-    return [...counts.entries()]
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([groupId, count]) => ({ groupId, count }));
+    return fixtureGroupEntities().map((group) => ({
+      groupId: group.id,
+      label: group.label,
+      color: group.color,
+      count: counts.get(group.id) ?? 0,
+    }));
   });
+  const selectedFixtureGroupLabel = createMemo(() => {
+    const groupId = selectedFixtureGroupFilter();
+    return groupId ? fixtureGroupEntities().find((group) => group.id === groupId)?.label ?? groupId : null;
+  });
+  const createFixtureGroup = async (label: string, fixtureIds: number[] = []) => {
+    const normalizedLabel = label.trim();
+    if (!normalizedLabel) return null;
+    if (fixtureGroupEntities().some((group) => group.label.toLowerCase() === normalizedLabel.toLowerCase())) {
+      setMessage(`A fixture group named ${normalizedLabel} already exists.`);
+      return null;
+    }
+    try {
+      let group: FixtureGroupSummary;
+      if (viewportFixture) {
+        const existingIds = new Set(fixtureGroupEntities().map((candidate) => candidate.id));
+        let index = 1;
+        while (existingIds.has(`fixture-group-${index}`)) index += 1;
+        group = { id: `fixture-group-${index}`, label: normalizedLabel, color: null };
+        setFixtureGroupList((current) => [...current, group]);
+        const fixtureIdSet = new Set(fixtureIds);
+        setSnapshot((current) => ({
+          ...current,
+          fixtures: current.fixtures.map((fixture) =>
+            fixtureIdSet.has(fixture.id) && !fixture.group_ids.includes(group.id)
+              ? { ...fixture, group_ids: [...fixture.group_ids, group.id] }
+              : fixture,
+          ),
+        }));
+      } else {
+        group = await invoke<FixtureGroupSummary>("create_fixture_group", {
+          label: normalizedLabel,
+          color: null,
+          fixtureIds,
+        });
+        await refreshFixtureGroups();
+        await refreshSnapshot();
+      }
+      setFixtureGroupDeleteUndoAvailable(false);
+      setViewportFixtureGroupDeleteUndo(null);
+      setProjectDirty(true);
+      setMessage(`Created fixture group ${group.label}.`);
+      return group;
+    } catch (error) {
+      setMessage(`Fixture group creation failed: ${String(error)}`);
+      return null;
+    }
+  };
+  const renameFixtureGroup = async (groupId: string, label: string) => {
+    const previous = fixtureGroupEntities().find((group) => group.id === groupId);
+    try {
+      if (viewportFixture) {
+        setFixtureGroupList((current) => current.some((group) => group.id === groupId)
+          ? current.map((group) => group.id === groupId ? { ...group, label: label.trim() } : group)
+          : previous ? [...current, { ...previous, label: label.trim() }] : current);
+      } else {
+        await invoke("rename_fixture_group", { groupId, label });
+        await refreshFixtureGroups();
+      }
+      setProjectDirty(true);
+      setMessage(`Renamed fixture group ${previous?.label ?? groupId} to ${label.trim()}.`);
+    } catch (error) {
+      setMessage(`Fixture group rename failed: ${String(error)}`);
+    }
+  };
+  const recolorFixtureGroup = async (groupId: string, color: string) => {
+    try {
+      if (viewportFixture) {
+        const previous = fixtureGroupEntities().find((group) => group.id === groupId);
+        setFixtureGroupList((current) => current.some((group) => group.id === groupId)
+          ? current.map((group) => group.id === groupId ? { ...group, color } : group)
+          : previous ? [...current, { ...previous, color }] : current);
+        setSnapshot((current) => ({
+          ...current,
+          group_colors: { ...(current.group_colors ?? {}), [groupId]: color },
+        }));
+      } else {
+        await invoke("recolor_fixture_group", { groupId, color });
+        await Promise.all([refreshFixtureGroups(), refreshSnapshot()]);
+      }
+      setProjectDirty(true);
+      setMessage(`Fixture group color updated (${color}).`);
+    } catch (error) {
+      setMessage(`Fixture group color update failed: ${String(error)}`);
+    }
+  };
+  const deleteFixtureGroup = async (groupId: string) => {
+    const group = fixtureGroupEntities().find((candidate) => candidate.id === groupId);
+    if (!group) return;
+    try {
+      if (viewportFixture) {
+        const groupIndex = fixtureGroups().findIndex((candidate) => candidate.id === groupId);
+        const memberships = snapshot().fixtures.flatMap((fixture) => {
+          const index = fixture.group_ids.indexOf(groupId);
+          return index >= 0 ? [{ fixtureId: fixture.id, index }] : [];
+        });
+        setViewportFixtureGroupDeleteUndo({ group, groupIndex: Math.max(0, groupIndex), memberships });
+        setFixtureGroupList((current) => current.filter((candidate) => candidate.id !== groupId));
+        setSnapshot((current) => {
+          const colors = { ...(current.group_colors ?? {}) };
+          delete colors[groupId];
+          return {
+            ...current,
+            group_colors: colors,
+            fixtures: current.fixtures.map((fixture) => ({
+              ...fixture,
+              group_ids: fixture.group_ids.filter((candidate) => candidate !== groupId),
+            })),
+          };
+        });
+      } else {
+        await invoke("delete_fixture_group", { groupId });
+        await Promise.all([refreshFixtureGroups(), refreshSnapshot()]);
+      }
+      if (selectedFixtureGroupFilter() === groupId) setSelectedFixtureGroupFilter(null);
+      setFixtureGroupDeleteUndoAvailable(true);
+      setProjectDirty(true);
+      setMessage(`Deleted fixture group ${group.label}. Undo is available.`);
+    } catch (error) {
+      setMessage(`Fixture group delete failed: ${String(error)}`);
+    }
+  };
+  const undoDeleteFixtureGroup = async () => {
+    try {
+      let restored: FixtureGroupSummary | null = null;
+      if (viewportFixture) {
+        const deleted = viewportFixtureGroupDeleteUndo();
+        if (!deleted) return;
+        restored = deleted.group;
+        setFixtureGroupList((current) => {
+          const next = [...current];
+          next.splice(Math.min(deleted.groupIndex, next.length), 0, deleted.group);
+          return next;
+        });
+        const membershipByFixture = new Map(deleted.memberships.map((entry) => [entry.fixtureId, entry.index]));
+        setSnapshot((current) => ({
+          ...current,
+          group_colors: deleted.group.color
+            ? { ...(current.group_colors ?? {}), [deleted.group.id]: deleted.group.color }
+            : current.group_colors,
+          fixtures: current.fixtures.map((fixture) => {
+            const index = membershipByFixture.get(fixture.id);
+            if (index === undefined || fixture.group_ids.includes(deleted.group.id)) return fixture;
+            const groupIds = [...fixture.group_ids];
+            groupIds.splice(Math.min(index, groupIds.length), 0, deleted.group.id);
+            return { ...fixture, group_ids: groupIds };
+          }),
+        }));
+        setViewportFixtureGroupDeleteUndo(null);
+      } else {
+        restored = await invoke<FixtureGroupSummary | null>("undo_delete_fixture_group");
+        await Promise.all([refreshFixtureGroups(), refreshSnapshot()]);
+      }
+      setFixtureGroupDeleteUndoAvailable(false);
+      if (restored) {
+        setProjectDirty(true);
+        setMessage(`Restored fixture group ${restored.label}.`);
+      }
+    } catch (error) {
+      setMessage(`Fixture group Undo failed: ${String(error)}`);
+    }
+  };
+  const registerPatchedFixturesAsGroup = async () => {
+    const pending = pendingPatchGroupRegistration();
+    if (!pending) return;
+    const group = await createFixtureGroup(patchGroupRegistrationName(), pending.fixtureIds);
+    if (!group) return;
+    setPendingPatchGroupRegistration(null);
+  };
+  const skipPatchedFixtureGroupRegistration = () => {
+    setPendingPatchGroupRegistration(null);
+    setMessage("Skipped fixture group registration.");
+  };
   const sceneMatrixGroupIds = createMemo(() => {
     // Cue group IDs are scene banks; fixture group IDs describe patch selections.
     const groupIds: string[] = [];
@@ -8261,7 +8484,7 @@ export default function App() {
       syncTimelineVideoAutomationDrafts(next.timeline.video_automations);
     }
     const groupId = selectedFixtureGroupFilter();
-    if (groupId && !next.fixtures.some((fixture) => fixture.group_ids.includes(groupId))) {
+    if (groupId && !fixtureGroupEntities().some((group) => group.id === groupId)) {
       setSelectedFixtureGroupFilter(null);
     }
     const selectedId = selectedFixtureId();
@@ -8302,6 +8525,9 @@ export default function App() {
           setSnapshotRevision(null);
           if (batch.some((waiter) => waiter.resetEditorDrafts)) {
             await refreshOperatorPolicy(true);
+            await refreshFixtureGroups();
+            setFixtureGroupDeleteUndoAvailable(false);
+            setViewportFixtureGroupDeleteUndo(null);
           }
           applyEngineSnapshot(
             next,
@@ -8413,6 +8639,7 @@ export default function App() {
       setMessage(tauriBackendUnavailableMessage);
       return;
     }
+    void refreshFixtureGroups();
     void refreshSnapshot();
     void refreshEngineTelemetryReport();
     void refreshMidiInputs();
@@ -8962,7 +9189,7 @@ export default function App() {
     const addressStride = patchAddressStrideValue();
     const footprint = selectedFootprint();
     const groupIds = parseGroupIds(groupText());
-    const baseLabel = label().trim() || "Fixture";
+    const baseLabel = label().trim() || imported.name.trim() || "Fixture";
     const requests: PatchFixtureRequest[] = Array.from({ length: count }, (_, index) => {
       const position = patchFixturePosition(index, count);
       return {
@@ -8982,7 +9209,35 @@ export default function App() {
     });
 
     try {
-      const fixtureIds = await invoke<number[]>("patch_fixtures", { requests });
+      const fixtureIds = viewportFixture === "patch"
+        ? requests.map((request, index) => Math.max(0, ...snapshot().fixtures.map((fixture) => fixture.id)) + index + 1)
+        : await invoke<number[]>("patch_fixtures", { requests });
+      if (viewportFixture === "patch") {
+        setSnapshot((current) => ({
+          ...current,
+          fixtures: [
+            ...current.fixtures,
+            ...requests.map((request, index) => ({
+              ...viewportPatchedFixture(
+                fixtureIds[index],
+                request.label,
+                request.address,
+                request.position.x,
+                request.position.z,
+              ),
+              universe: request.universe,
+              group_ids: [...request.group_ids],
+              position: { ...request.position },
+              rotation: { ...request.rotation },
+              manufacturer: imported.manufacturer,
+              profile_name: imported.name,
+              profile_source_path: imported.source_path,
+              mode_name: selectedMode() || imported.dmx_modes[0]?.name || "Default",
+              controls: selectedModeSummary()?.controls ?? imported.dmx_modes[0]?.controls ?? [],
+            })),
+          ],
+        }));
+      }
       const fixtureId = fixtureIds[fixtureIds.length - 1];
       const request = requests[requests.length - 1];
       if (fixtureId === undefined || request === undefined) {
@@ -9001,7 +9256,7 @@ export default function App() {
         }
       }
       setFaderValues((current) => ({ ...current, ...initialValues }));
-      const next = await refreshSnapshot();
+      const next = viewportFixture === "patch" ? snapshot() : await refreshSnapshot();
       const preferredNextAddress = request.address + addressStride;
       const nextAddress = next
         ? findNextFreePatchAddress(next.fixtures, request.universe, footprint, count, addressStride, preferredNextAddress)
@@ -9027,6 +9282,8 @@ export default function App() {
           ? `Patched ${request.label} at ${patchedRangeText}.${nextText}`
           : `Patched ${fixtureIds.length} fixtures at ${patchedRangeText}.${nextText}`,
       );
+      setPatchGroupRegistrationName(baseLabel || imported.name);
+      setPendingPatchGroupRegistration({ fixtureIds, defaultName: baseLabel || imported.name });
     } catch (error) {
       setMessage(String(error));
     }
@@ -16047,6 +16304,65 @@ export default function App() {
       <Show when={dvcImportReport()}>
         {(report) => <DvcImportReportPanel report={report()} onClose={() => setDvcImportReport(null)} />}
       </Show>
+      <Show when={pendingPatchGroupRegistration()}>
+        {(pending) => (
+          <dialog
+            ref={(dialog) => queueMicrotask(() => {
+              if (!dialog.open) dialog.showModal();
+              dialog.querySelector<HTMLInputElement>("input")?.focus();
+            })}
+            class="patchGroupRegistrationDialog"
+            data-patch-group-registration-dialog
+            data-fixed-frame-modal="patch-group-registration"
+            aria-labelledby="patch-group-registration-title"
+            onCancel={(event) => {
+              event.preventDefault();
+              skipPatchedFixtureGroupRegistration();
+            }}
+          >
+            <div class="patchGroupRegistrationFrame">
+              <header>
+                <span>Patch complete</span>
+                <strong>{pending().fixtureIds.length} fixtures</strong>
+              </header>
+              <h3 id="patch-group-registration-title">Register new fixtures as a group?</h3>
+              <label>
+                Group name
+                <input
+                  data-patch-group-registration-name
+                  value={patchGroupRegistrationName()}
+                  placeholder={pending().defaultName}
+                  onInput={(event) => setPatchGroupRegistrationName(event.currentTarget.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void registerPatchedFixturesAsGroup();
+                    }
+                  }}
+                />
+              </label>
+              <div class="dialogActions">
+                <button
+                  type="button"
+                  data-patch-group-registration-skip
+                  onClick={skipPatchedFixtureGroupRegistration}
+                >
+                  Skip
+                </button>
+                <button
+                  type="button"
+                  class="primary"
+                  data-patch-group-registration-register
+                  disabled={!patchGroupRegistrationName().trim()}
+                  onClick={() => void registerPatchedFixturesAsGroup()}
+                >
+                  Register group
+                </button>
+              </div>
+            </div>
+          </dialog>
+        )}
+      </Show>
       <Show when={projectDropState()}>
         <div class={`projectDropOverlay ${projectDropState() === "invalid" ? "invalid" : ""}`}>
           <strong>{projectDropState() === "project" ? "Open Syndocal Project" : "Unsupported File"}</strong>
@@ -16605,7 +16921,7 @@ export default function App() {
                   class={selectedFixtureGroupFilter() === group.groupId ? "active" : ""}
                   onClick={() => selectFixtureGroupFilter(group.groupId)}
                 >
-                  <span data-no-localize>{group.groupId}</span>
+                  <span data-no-localize>{group.label}</span>
                 </button>
               )}
             </For>
@@ -16855,6 +17171,7 @@ export default function App() {
             universeDraft: selectedFixtureUniverseDraft(),
             addressDraft: selectedFixtureAddressDraft(),
             groupText: selectedFixtureGroupText(),
+            availableGroups: fixtureGroupEntities(),
             onUseProfileForPatch: useFixtureProfileForPatch,
             onDuplicateFixture: duplicateFixture,
             onLabelDraft: setSelectedFixtureLabelDraft,
@@ -17363,6 +17680,10 @@ export default function App() {
             selectedTypeKey: selectedFixtureTypeFilter(),
             fixtureTypeRows: fixtureTypeRows(),
             onSelectGroup: selectFixtureGroupFilter,
+            onCreateGroup: async (label) => { await createFixtureGroup(label); },
+            onRenameGroup: renameFixtureGroup,
+            onDeleteGroup: deleteFixtureGroup,
+            onRecolorGroup: recolorFixtureGroup,
             onSelectType: setSelectedFixtureTypeFilter,
           }}
           toolRail={{
@@ -17504,6 +17825,7 @@ export default function App() {
             fixtureSearch: mappingFixtureSearch(),
             groupText: mappingSelectionGroupText(),
             groupTokenCount: parseGroupIds(mappingSelectionGroupText()).length,
+            availableGroups: fixtureGroupEntities(),
             stageObjects: snapshot().stage_objects,
             stageObjectFixtureCounts: stageObjectFixtureCounts(),
             selectedStageObject: selectedStageObject(),
@@ -17607,6 +17929,7 @@ export default function App() {
           </Show>
           <FaderFixtureControlPanel
             selectedGroupId={selectedFixtureGroupFilter()}
+            selectedGroupLabel={selectedFixtureGroupLabel()}
             selectedGroupFixtureCount={filteredFixtures().length}
             patchedFixtureCount={snapshot().fixtures.length}
             selectedGroupSubmasterLevel={selectedGroupSubmaster()?.level ?? 1}
@@ -18352,7 +18675,11 @@ export default function App() {
         )}
       </Show>
 
-      <AppStatusLine status={appStatus()} />
+      <AppStatusLine
+        status={appStatus()}
+        actionLabel={fixtureGroupDeleteUndoAvailable() ? "Undo group delete" : null}
+        onAction={fixtureGroupDeleteUndoAvailable() ? () => void undoDeleteFixtureGroup() : undefined}
+      />
     </main>
   );
 }

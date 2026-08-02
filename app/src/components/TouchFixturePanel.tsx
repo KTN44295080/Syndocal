@@ -36,11 +36,13 @@ interface TouchFixturePanelProps {
 }
 
 export function TouchFixturePanel(props: TouchFixturePanelProps) {
+  const selectedGroupLabel = () => props.groups.find((group) => group.groupId === props.selectedGroupId)?.label;
+
   return (
     <section class="panel touchPanel touchFixturePanel">
       <div class="panelHeader">
         <h2>Touch Fixtures</h2>
-        <span>{props.selectedGroupId ? `Group ${props.selectedGroupId}` : props.selectedFixture?.label ?? "No selection"}</span>
+        <span>{props.selectedGroupId ? `Group ${selectedGroupLabel() ?? props.selectedGroupId}` : props.selectedFixture?.label ?? "No selection"}</span>
       </div>
       <TouchFixturePickerPanel
         groups={props.groups}

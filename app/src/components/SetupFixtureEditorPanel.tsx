@@ -1,4 +1,4 @@
-import type { PatchedFixtureSummary } from "../types";
+import type { FixtureGroupSummary, PatchedFixtureSummary } from "../types";
 
 interface SetupFixtureEditorPanelProps {
   fixture: PatchedFixtureSummary;
@@ -6,6 +6,7 @@ interface SetupFixtureEditorPanelProps {
   universeDraft: number;
   addressDraft: number;
   groupText: string;
+  availableGroups: FixtureGroupSummary[];
   onUseProfileForPatch: (fixture: PatchedFixtureSummary) => void | Promise<void>;
   onDuplicateFixture: (fixture: PatchedFixtureSummary) => void | Promise<void>;
   onLabelDraft: (value: string) => void;
@@ -58,10 +59,15 @@ export function SetupFixtureEditorPanel(props: SetupFixtureEditorPanelProps) {
       <label>
         Groups
         <input
+          list="setup-fixture-group-options"
           value={props.groupText}
           onInput={(event) => props.onGroupText(event.currentTarget.value)}
           placeholder="front, movers"
+          title={props.availableGroups.map((group) => `${group.label}: ${group.id}`).join("\n")}
         />
+        <datalist id="setup-fixture-group-options">
+          {props.availableGroups.map((group) => <option value={group.id} data-no-localize>{group.label}</option>)}
+        </datalist>
       </label>
       <button onClick={() => void props.onApplyGroups(props.fixture)}>Apply Groups</button>
     </div>

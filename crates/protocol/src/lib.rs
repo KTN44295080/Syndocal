@@ -369,6 +369,13 @@ pub struct OperatorPolicy {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FixtureGroupSummary {
+    pub id: String,
+    pub label: String,
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProjectFile {
     pub version: u32,
     pub app: String,
@@ -376,6 +383,11 @@ pub struct ProjectFile {
     pub operator_policy: Option<OperatorPolicy>,
     #[serde(default)]
     pub custom_profiles: Vec<FixtureProfileSummary>,
+    /// First-class fixture-selection groups. Membership remains on fixtures as
+    /// immutable group IDs, so changing a label never rewrites membership.
+    /// Legacy `.sdc` v1 files omitted this field, so absence loads as empty.
+    #[serde(default)]
+    pub fixture_groups: Vec<FixtureGroupSummary>,
     pub snapshot: EngineSnapshot,
 }
 
