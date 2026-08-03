@@ -21,6 +21,7 @@ export function DmxTestFramePanel(props: DmxTestFramePanelProps) {
         <label>
           Channel
           <input
+            data-io-control="dmx-test-channel"
             type="number"
             min="1"
             max="512"

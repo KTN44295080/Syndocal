@@ -162,6 +162,13 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     await applyDmxOutputRoutes(routes.length > 0 ? routes : [{ ...defaultOutput, enabled: false }]);
   };
 
+  const setDmxRouteEnabled = async (index: number, enabled: boolean) => {
+    const routes = [output(), ...dmxOutputRoutes().slice(1)].map((route, candidate) =>
+      candidate === index ? { ...route, enabled } : route
+    );
+    await applyDmxOutputRoutes(routes);
+  };
+
   const setOutputProtocol = (protocol: DmxOutputConfig["protocol"]) => {
     const current = output();
     const port = protocol === "Sacn" && current.port === 6454
@@ -217,6 +224,7 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     applyCurrentDmxRoutes,
     addCurrentDmxRoute,
     removeDmxRoute,
+    setDmxRouteEnabled,
     setOutputProtocol,
     refreshSerialPorts,
   };

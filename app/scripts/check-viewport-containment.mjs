@@ -24,6 +24,7 @@ const sceneSettingsOnlyMode = process.argv.includes("--scene-settings-only");
 const sceneFxBlockOnlyMode = process.argv.includes("--scene-fx-block-only");
 const cueRecallOnlyMode = process.argv.includes("--cue-recall-only");
 const setupDmxOnlyMode = process.argv.includes("--setup-dmx-only");
+const setupIoOnlyMode = process.argv.includes("--setup-io-only");
 const timelineSlimOnlyMode = process.argv.includes("--timeline-slim-only");
 const patchOnlyMode = process.argv.includes("--patch-only");
 const fixtureGroupsOnlyMode = process.argv.includes("--fixture-groups-only");
@@ -65,6 +66,8 @@ const viewportTraceEnabled = process.env.SYNDOCAL_VIEWPORT_TRACE === "1";
 const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
   largeShowMode
     ? "large-show"
+    : setupDmxOnlyMode || setupIoOnlyMode
+      ? "setup-io"
     : patchOnlyMode || fixtureGroupsOnlyMode
       ? "patch"
       : patchEmptyStateOnlyMode
@@ -3451,6 +3454,366 @@ async function runStageSettingsViewport(client, viewport) {
   };
 }
 
+async function installSetupIoInvokeMock(client) {
+  return await evaluatePageFunction(client, () => {
+    const clone = (value) => value === undefined ? undefined : structuredClone(value);
+    const standbyStatus = {
+      running: false,
+      role: null,
+      directory: null,
+      session_id: null,
+      generation: null,
+      written_at_unix_ms: null,
+      heartbeat_age_ms: null,
+      heartbeat_stale: true,
+      takeover_ready: false,
+      split_brain: false,
+      active_primary_sessions: [],
+      project_bytes: 0,
+      last_applied_generation: null,
+      last_error: null,
+    };
+    const remoteStatus = {
+      running: true,
+      active_connections: 0,
+      rejected_connections: 0,
+      clients: [],
+    };
+    const mock = { calls: [], transactionId: 0 };
+    window.__syndocalSetupIoMock = mock;
+    window.__TAURI_INTERNALS__ = {
+      invoke: async (command, args) => {
+        mock.calls.push({ command, args: clone(args) });
+        if (command === "begin_project_transaction") return ++mock.transactionId;
+        if (command === "commit_project_transaction") {
+          return {
+            can_undo: true,
+            can_redo: false,
+            undo_depth: mock.transactionId,
+            redo_depth: 0,
+            undo_label: "Setup I/O viewport mutation",
+            redo_label: null,
+          };
+        }
+        if (command === "cancel_project_transaction") return undefined;
+        if (command === "get_snapshot") throw new Error("Setup I/O viewport snapshot refresh intentionally omitted");
+        if (command === "remote_access_urls") return ["http://127.0.0.1:9100/?pin=123456"];
+        if (command === "remote_control_status") return remoteStatus;
+        if (command === "standby_sync_status") return standbyStatus;
+        return undefined;
+      },
+    };
+    return true;
+  });
+}
+
+async function readSetupIoMockCalls(client) {
+  return await evaluatePageFunction(client, () => structuredClone(window.__syndocalSetupIoMock?.calls ?? []));
+}
+
+async function exerciseSetupIoDisclosure(client, name, controlSelector) {
+  return await evaluatePageFunction(client, async (disclosureName, selector) => {
+    const disclosure = document.querySelector(`[data-io-disclosure="${disclosureName}"]`);
+    const summary = disclosure?.querySelector(':scope > summary');
+    const control = disclosure?.querySelector(selector);
+    const visible = (element) => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const hiddenBefore = Boolean(control) && !visible(control);
+    const disclosureControls = disclosure
+      ? [...disclosure.querySelectorAll('button, input, select, textarea')].filter((candidate) => !candidate.closest('dialog'))
+      : [];
+    const hiddenControlCountBefore = disclosureControls.filter((candidate) => !visible(candidate)).length;
+    if (summary instanceof HTMLElement) summary.click();
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    control?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const panel = document.querySelector('.setupIoPanel');
+    const panelRect = panel?.getBoundingClientRect() ?? null;
+    const controlRect = control?.getBoundingClientRect() ?? null;
+    const visibleAfter = visible(control);
+    const interactableAfter = visibleAfter && !control.disabled && getComputedStyle(control).pointerEvents !== 'none';
+    const reachableAfter = Boolean(
+      panelRect && controlRect &&
+      controlRect.left >= Math.max(0, panelRect.left) - 1 &&
+      controlRect.right <= Math.min(innerWidth, panelRect.right) + 1 &&
+      controlRect.top >= Math.max(0, panelRect.top) - 1 &&
+      controlRect.bottom <= Math.min(innerHeight, panelRect.bottom) + 1
+    );
+    let reachableControlCount = 0;
+    for (const candidate of disclosureControls) {
+      candidate.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const candidateRect = candidate.getBoundingClientRect();
+      const currentPanelRect = panel?.getBoundingClientRect() ?? null;
+      if (
+        visible(candidate) && currentPanelRect &&
+        candidateRect.left >= Math.max(0, currentPanelRect.left) - 1 &&
+        candidateRect.right <= Math.min(innerWidth, currentPanelRect.right) + 1 &&
+        candidateRect.top >= Math.max(0, currentPanelRect.top) - 1 &&
+        candidateRect.bottom <= Math.min(innerHeight, currentPanelRect.bottom) + 1
+      ) {
+        reachableControlCount += 1;
+      }
+    }
+    const opened = disclosure?.open === true;
+    if (summary instanceof HTMLElement) summary.click();
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    return {
+      name: disclosureName,
+      disclosureFound: Boolean(disclosure),
+      summaryFound: summary instanceof HTMLElement,
+      controlFound: Boolean(control),
+      hiddenBefore,
+      controlCount: disclosureControls.length,
+      hiddenControlCountBefore,
+      opened,
+      visibleAfter,
+      interactableAfter,
+      reachableAfter,
+      reachableControlCount,
+      allControlsReachable: disclosureControls.length > 0 && reachableControlCount === disclosureControls.length,
+      closedAfter: disclosure?.open === false,
+    };
+  }, name, controlSelector);
+}
+
+function setupIoDisclosurePassed(result) {
+  return Boolean(
+    result.disclosureFound &&
+    result.summaryFound &&
+    result.controlFound &&
+    result.hiddenBefore &&
+    result.hiddenControlCountBefore === result.controlCount &&
+    result.opened &&
+    result.visibleAfter &&
+    result.interactableAfter &&
+    result.reachableAfter &&
+    result.allControlsReachable &&
+    result.closedAfter
+  );
+}
+
+async function exerciseDmxRoutePagination(client) {
+  return await evaluatePageFunction(client, async () => {
+    const routeList = document.querySelector('[data-io-route-list]');
+    const totalRouteCount = Number(routeList?.getAttribute('data-io-route-total') ?? 0);
+    const pageCount = Number(routeList?.getAttribute('data-io-route-page-count') ?? 0);
+    const visitedRouteIndexes = new Set();
+    let allVisitedRowsComplete = true;
+
+    const readCurrentPage = () => {
+      const rows = routeList ? [...routeList.querySelectorAll('[data-io-route-row]')] : [];
+      for (const row of rows) {
+        const routeIndex = Number(row.getAttribute('data-route-index'));
+        if (Number.isInteger(routeIndex)) visitedRouteIndexes.add(routeIndex);
+        allVisitedRowsComplete = allVisitedRowsComplete && Boolean(
+          row.querySelector('.ioStatusDot') &&
+          row.querySelector('strong') &&
+          row.querySelector('[data-io-route-target]') &&
+          row.querySelector('[data-io-route-universe]') &&
+          row.querySelector('[data-io-control="dmx-route-enabled"]') &&
+          row.querySelector('[data-io-control="dmx-remove-route"]')
+        );
+      }
+    };
+    const settle = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+    readCurrentPage();
+    let forwardClicks = 0;
+    while (forwardClicks < pageCount + 1) {
+      const next = routeList?.querySelector('button[aria-label="Next route page"]');
+      if (!(next instanceof HTMLButtonElement) || next.disabled) break;
+      next.click();
+      forwardClicks += 1;
+      await settle();
+      readCurrentPage();
+    }
+    const nextAtEnd = routeList?.querySelector('button[aria-label="Next route page"]');
+    const reachedLastPage = pageCount === 1 || (nextAtEnd instanceof HTMLButtonElement && nextAtEnd.disabled);
+
+    let backwardClicks = 0;
+    while (backwardClicks < pageCount + 1) {
+      const previous = routeList?.querySelector('button[aria-label="Previous route page"]');
+      if (!(previous instanceof HTMLButtonElement) || previous.disabled) break;
+      previous.click();
+      backwardClicks += 1;
+      await settle();
+    }
+    const firstPageRestored = routeList?.querySelector('[data-io-route-row]')?.getAttribute('data-route-index') === '0';
+    const visitedIndexes = [...visitedRouteIndexes].sort((left, right) => left - right);
+
+    return {
+      routeListFound: Boolean(routeList),
+      totalRouteCount,
+      pageCount,
+      visitedRouteCount: visitedIndexes.length,
+      firstVisitedRouteIndex: visitedIndexes[0] ?? -1,
+      lastVisitedRouteIndex: visitedIndexes.at(-1) ?? -1,
+      forwardClicks,
+      backwardClicks,
+      reachedLastPage,
+      firstPageRestored,
+      allVisitedRowsComplete,
+    };
+  });
+}
+
+async function runSetupIoViewport(client, viewport, dmxOnly = false) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await clickByText(client, "Setup");
+  await installSetupIoInvokeMock(client);
+  await clickByText(client, "I/O");
+
+  const measurements = {};
+  const disclosures = {};
+  const flows = {};
+
+  await clickByText(client, "DMX");
+  await sleep(100);
+  measurements.dmx = await measure(client, `setup-dmx-${viewport.width}x${viewport.height}`);
+  const routePagination = await exerciseDmxRoutePagination(client);
+  await selectVisibleOption(client, '[data-io-control="dmx-protocol"]', 'EnttecUsbPro');
+  await selectVisibleOption(client, '[data-io-control="dmx-serial-port"]', 'COM9');
+  await sleep(80);
+  const serialState = await measure(client, `setup-dmx-serial-${viewport.width}x${viewport.height}`);
+  await clickVisibleSelector(client, '[data-io-control="dmx-apply-output"]');
+  await sleep(140);
+  await clickVisibleSelector(client, '[data-io-control="dmx-add-artnet"]');
+  await sleep(140);
+  await clickVisibleSelector(client, '[data-io-control="dmx-add-sacn"]');
+  await sleep(180);
+  const dmxCalls = await readSetupIoMockCalls(client);
+  const serialApply = dmxCalls.find((call) =>
+    call.command === 'set_output_config' &&
+    call.args?.config?.protocol === 'EnttecUsbPro' &&
+    call.args?.config?.serial_port === 'COM9'
+  );
+  const routeCalls = dmxCalls.filter((call) => call.command === 'set_dmx_outputs');
+  flows.dmx = {
+    routeTotalCountPreserved:
+      measurements.dmx.ioRouteTotalCount === 128 &&
+      routePagination.totalRouteCount === 128,
+    allRoutePagesReachable:
+      routePagination.pageCount === Math.ceil(routePagination.totalRouteCount / 6) &&
+      routePagination.visitedRouteCount === routePagination.totalRouteCount &&
+      routePagination.firstVisitedRouteIndex === 0 &&
+      routePagination.lastVisitedRouteIndex === routePagination.totalRouteCount - 1 &&
+      routePagination.reachedLastPage,
+    allRouteRowsComplete: routePagination.allVisitedRowsComplete,
+    routePaginationRestored:
+      routePagination.firstPageRestored &&
+      routePagination.forwardClicks === routePagination.backwardClicks,
+    serialReachableWithoutDisclosure: serialState.ioSerialRouteApplyReachable,
+    serialApplyCommand: Boolean(serialApply),
+    artNetRouteCreated: routeCalls.some((call) => call.args?.configs?.some((route) => route.protocol === 'ArtNet')),
+    sacnRouteCreated: routeCalls.some((call) => call.args?.configs?.some((route) => route.protocol === 'Sacn')),
+  };
+  disclosures.dmx = [
+    await exerciseSetupIoDisclosure(client, 'dmx-output-options', '[data-io-control="dmx-recommended-protocol"]'),
+    await exerciseSetupIoDisclosure(client, 'dmx-input', '[data-io-control="dmx-input-protocol"]'),
+    await exerciseSetupIoDisclosure(client, 'dmx-rdm', '[data-io-control="rdm-transport"]'),
+    await exerciseSetupIoDisclosure(client, 'dmx-diagnostics', '[data-io-control="dmx-test-channel"]'),
+  ];
+
+  if (!dmxOnly) {
+    await clickByText(client, "MIDI");
+    await sleep(100);
+    measurements.midi = await measure(client, `setup-midi-${viewport.width}x${viewport.height}`);
+    disclosures.midi = [
+      await exerciseSetupIoDisclosure(client, 'midi-feedback', '[data-io-control="midi-feedback-output"]'),
+      await exerciseSetupIoDisclosure(client, 'midi-mapping', '[data-io-control="midi-map-message"]'),
+    ];
+    await clickVisibleSelector(client, '[data-io-control="midi-clock-connect"]');
+    await sleep(100);
+    await clickVisibleSelector(client, '[data-io-control="midi-control-connect"]');
+    await sleep(120);
+    const midiCalls = await readSetupIoMockCalls(client);
+    flows.midi = {
+      clockConnected: midiCalls.some((call) => call.command === 'connect_midi_clock' && call.args?.inputIndex === 7),
+      controlConnected: midiCalls.some((call) =>
+        call.command === 'connect_midi_control' &&
+        call.args?.inputIndex === 7 &&
+        call.args?.mappings?.length === 1
+      ),
+    };
+
+    await clickByText(client, "OSC");
+    await sleep(100);
+    measurements.osc = await measure(client, `setup-osc-${viewport.width}x${viewport.height}`);
+    disclosures.osc = [
+      await exerciseSetupIoDisclosure(client, 'osc-mapping', '[data-io-control="osc-map-address"]'),
+    ];
+    await clickVisibleSelector(client, '[data-io-control="osc-start"]');
+    await sleep(120);
+    const oscCalls = await readSetupIoMockCalls(client);
+    flows.osc = {
+      listening: oscCalls.some((call) =>
+        call.command === 'start_osc_input' &&
+        call.args?.config?.bind_ip === '0.0.0.0' &&
+        call.args?.config?.port === 9000 &&
+        call.args?.mappings?.length === 1
+      ),
+    };
+
+    await clickByText(client, "Remote");
+    await sleep(140);
+    measurements.remote = await measure(client, `setup-remote-${viewport.width}x${viewport.height}`);
+    const remoteSecurity = await exerciseSetupIoDisclosure(client, 'remote-security', '[data-io-control="remote-max-clients"]');
+    const remoteStandby = await exerciseSetupIoDisclosure(client, 'remote-standby', '[data-io-control="remote-standby-role"]');
+    await clickVisibleSelector(client, '[data-io-control="remote-start"]');
+    await sleep(180);
+    const remoteEndpoints = await exerciseSetupIoDisclosure(client, 'remote-endpoints', '[data-io-control="remote-copy-url"]');
+    disclosures.remote = [remoteSecurity, remoteEndpoints, remoteStandby];
+    const remoteCalls = await readSetupIoMockCalls(client);
+    flows.remote = {
+      started: remoteCalls.some((call) =>
+        call.command === 'start_remote_control' &&
+        call.args?.config?.bind_ip === '127.0.0.1' &&
+        call.args?.config?.port === 9100 &&
+        call.args?.config?.pairing_pin?.length === 6
+      ),
+    };
+  }
+
+  const expectedTabs = dmxOnly ? ['dmx'] : ['dmx', 'midi', 'osc', 'remote'];
+  const checks = {
+    defaultControlsAtMost30: expectedTabs.every((tab) => measurements[tab]?.ioVisibleControlCount <= 30),
+    defaultDisclosuresClosed: expectedTabs.every((tab) => measurements[tab]?.ioOpenDisclosureCount === 0),
+    defaultSurfacesMatchTabs: expectedTabs.every((tab) => measurements[tab]?.ioDefaultSurfaceTab === tab),
+    tabContracts: expectedTabs.every((tab) => hasExpectedSetupSurface(measurements[tab])),
+    disclosuresOpenAndExposeControls: expectedTabs.every((tab) => disclosures[tab]?.every(setupIoDisclosurePassed)),
+    dmxRoutePagination: flows.dmx.routeTotalCountPreserved && flows.dmx.allRoutePagesReachable && flows.dmx.allRouteRowsComplete && flows.dmx.routePaginationRestored,
+    serialApplyFlow: flows.dmx.serialReachableWithoutDisclosure && flows.dmx.serialApplyCommand,
+    dmxRouteCreationFlows: flows.dmx.artNetRouteCreated && flows.dmx.sacnRouteCreated,
+    midiConnectFlows: dmxOnly || Object.values(flows.midi).every(Boolean),
+    oscListenFlow: dmxOnly || Object.values(flows.osc).every(Boolean),
+    remoteStartFlow: dmxOnly || Object.values(flows.remote).every(Boolean),
+    fixedFrameContained: expectedTabs.every((tab) => isContained(measurements[tab])),
+  };
+  const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  return {
+    label: `setup-io-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    measurements,
+    disclosures,
+    flows,
+    routePagination,
+  };
+}
+
 async function runSetupStageBandSequenceViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -6106,6 +6469,9 @@ async function measure(client, label) {
         const style = window.getComputedStyle(element);
         return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
       });
+    const visibleInteractiveElements = (root) => root
+      ? visibleElements('button, input, select, textarea, summary, [role="button"], [tabindex]:not([tabindex="-1"])', root)
+      : [];
     const measuredRect = (selector) => {
       const element = document.querySelector(selector);
       if (!element) return null;
@@ -6268,6 +6634,11 @@ async function measure(client, label) {
     const customProfileAttributePaneRect = customProfileAttributePane?.getBoundingClientRect() ?? null;
     const customProfilePreviewDesk = document.querySelector('.setupMode-profiles .customProfilePreviewDesk');
     const customProfilePreviewDeskRect = customProfilePreviewDesk?.getBoundingClientRect() ?? null;
+    const setupIoPanel = document.querySelector('.setupIoPanel');
+    const ioDefaultSurface = setupIoPanel?.querySelector('[data-io-default-surface]') ?? null;
+    const ioDisclosures = setupIoPanel ? [...setupIoPanel.querySelectorAll('[data-io-disclosure]')] : [];
+    const ioRouteList = setupIoPanel?.querySelector('[data-io-route-list]') ?? null;
+    const ioRouteRows = setupIoPanel ? [...setupIoPanel.querySelectorAll('[data-io-route-row]')] : [];
     const dmxOutputConfigPanel = document.querySelector('.setupMode-dmx .dmxOutputConfigPanel');
     const dmxOutputConfigPanelRect = dmxOutputConfigPanel?.getBoundingClientRect() ?? null;
     const outputDiagnosticsDesk = document.querySelector('.setupMode-dmx .outputDiagnosticsDesk');
@@ -7134,6 +7505,27 @@ async function measure(client, label) {
       customProfilePreviewDeskWidth: customProfilePreviewDeskRect ? Math.round(customProfilePreviewDeskRect.width) : 0,
       visibleCustomProfileActionCount: visibleCount('.setupMode-profiles .customProfileActions button'),
       visibleCustomProfileDmxMapCount: visibleCount('.setupMode-profiles .customProfileDmxMap'),
+      ioDefaultSurfaceTab: ioDefaultSurface?.getAttribute('data-io-default-surface') ?? '',
+      ioVisibleControlCount: visibleInteractiveElements(setupIoPanel).length,
+      ioDefaultSurfaceVisibleControlCount: visibleInteractiveElements(ioDefaultSurface).length,
+      ioDisclosureCount: ioDisclosures.length,
+      ioOpenDisclosureCount: ioDisclosures.filter((disclosure) => disclosure.open).length,
+      ioRouteTotalCount: Number(ioRouteList?.getAttribute('data-io-route-total') ?? 0),
+      ioRoutePageCount: Number(ioRouteList?.getAttribute('data-io-route-page-count') ?? 0),
+      ioRouteRowCount: ioRouteRows.length,
+      ioCompleteRouteRowCount: ioRouteRows.filter((row) =>
+        row.querySelector('.ioStatusDot') &&
+        row.querySelector('strong') &&
+        row.querySelector('[data-io-route-target]') &&
+        row.querySelector('[data-io-route-universe]') &&
+        row.querySelector('[data-io-control="dmx-route-enabled"]')
+      ).length,
+      ioSerialRouteApplyReachable: Boolean(
+        setupIoPanel?.querySelector('[data-io-control="dmx-protocol"]') &&
+        visibleInteractiveElements(setupIoPanel).includes(setupIoPanel?.querySelector('[data-io-control="dmx-serial-port"]')) &&
+        visibleInteractiveElements(setupIoPanel).includes(setupIoPanel?.querySelector('[data-io-control="dmx-apply-output"]')) &&
+        ioDisclosures.every((disclosure) => !disclosure.open)
+      ),
       visibleDmxOutputConfigPanelCount: visibleCount('.setupMode-dmx .dmxOutputConfigPanel'),
       visibleArtRdmPanelCount: visibleCount('.setupMode-dmx .artRdmPanel'),
       visibleOutputDiagnosticsDeskCount: visibleCount('.setupMode-dmx .outputDiagnosticsDesk'),
@@ -9158,33 +9550,49 @@ function hasExpectedSetupSurface(result) {
   }
   if (result.label.startsWith("setup-dmx-")) {
     return (
-      result.visibleDmxOutputConfigPanelCount >= 1 &&
-      result.visibleArtRdmPanelCount >= 1 &&
-      result.visibleOutputDiagnosticsDeskCount >= 1 &&
-      result.visibleLightingRuntimeDeskCount >= 1 &&
-      result.dmxRouteItemCount === 128 &&
-      result.visibleSerialPortIdentityCount === 1 &&
-      result.visibleSerialProtocolRecommendationCount === 1 &&
-      result.dmxOutputConfigPanelWidth >= 250 &&
-      result.outputDiagnosticsDeskWidth >= 420 &&
-      result.lightingRuntimeDeskWidth >= 260 &&
-      result.dmxEndpointShrunkenChildCount === 0 &&
-      result.dmxEndpointChildOverlapCount === 0
+      result.ioDefaultSurfaceTab === "dmx" &&
+      result.ioVisibleControlCount <= 30 &&
+      result.ioDisclosureCount === 4 &&
+      result.ioOpenDisclosureCount === 0 &&
+      result.ioRouteTotalCount === 128 &&
+      result.ioRoutePageCount === Math.ceil(result.ioRouteTotalCount / 6) &&
+      result.ioRouteRowCount === 6 &&
+      result.ioCompleteRouteRowCount === result.ioRouteRowCount &&
+      result.visibleDmxOutputConfigPanelCount === 1 &&
+      result.visibleArtRdmPanelCount === 0 &&
+      result.visibleOutputDiagnosticsDeskCount === 0 &&
+      result.visibleLightingRuntimeDeskCount === 0
     );
   }
   if (result.label.startsWith("setup-midi-")) {
-    return result.midiMappingEditorDeskWidth >= 430 && result.midiMappingListDeskWidth >= 430;
+    return (
+      result.ioDefaultSurfaceTab === "midi" &&
+      result.ioVisibleControlCount <= 30 &&
+      result.ioDisclosureCount === 2 &&
+      result.ioOpenDisclosureCount === 0 &&
+      result.midiMappingEditorDeskWidth === 0 &&
+      result.midiMappingListDeskWidth === 0
+    );
   }
   if (result.label.startsWith("setup-osc-")) {
-    return result.oscMappingEditorDeskWidth >= 430 && result.oscMappingListDeskWidth >= 430;
+    return (
+      result.ioDefaultSurfaceTab === "osc" &&
+      result.ioVisibleControlCount <= 30 &&
+      result.ioDisclosureCount === 1 &&
+      result.ioOpenDisclosureCount === 0 &&
+      result.oscMappingEditorDeskWidth === 0 &&
+      result.oscMappingListDeskWidth === 0
+    );
   }
   if (result.label.startsWith("setup-remote-")) {
     return (
-      result.remoteServerDeskWidth >= 360 &&
-      result.remoteEndpointDeskWidth >= 500 &&
-      result.visibleStandbySyncDeskCount === 1 &&
-      result.visibleStandbyRoleOptionCount === 2 &&
-      result.visibleStandbyActionButtonCount === 3
+      result.ioDefaultSurfaceTab === "remote" &&
+      result.ioVisibleControlCount <= 30 &&
+      result.ioDisclosureCount === 3 &&
+      result.ioOpenDisclosureCount === 0 &&
+      result.remoteServerDeskWidth > 0 &&
+      result.remoteEndpointDeskWidth === 0 &&
+      result.visibleStandbySyncDeskCount === 0
     );
   }
   if (result.label.startsWith("setup-patch-")) {
@@ -21871,6 +22279,12 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
   await clickByText(client, "Setup");
   await clickByText(client, "I/O");
   await clickByText(client, "DMX");
+  const dmxDiagnosticsDisclosureFound = await client.evaluate(`(() => {
+    const disclosure = document.querySelector('[data-io-disclosure="dmx-diagnostics"]');
+    if (!(disclosure instanceof HTMLDetailsElement)) return false;
+    if (!disclosure.open) disclosure.querySelector(':scope > summary')?.click();
+    return true;
+  })()`);
   await sleep(80);
   const dmxFunctionReadout = await client.evaluate(`(() => {
     const visible = (element) => {
@@ -21879,11 +22293,14 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
       const style = getComputedStyle(element);
       return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
     };
-    const rawMonitor = document.querySelector('.setupIoPanel > .rawMonitor');
+    const disclosure = document.querySelector('[data-io-disclosure="dmx-diagnostics"]');
+    const rawMonitor = disclosure?.querySelector('.rawMonitor') ?? null;
     const panels = rawMonitor
       ? [...rawMonitor.querySelectorAll('.dmxGdtfFunctionReadout > .channelFunctionPanel')].filter(visible)
       : [];
     return {
+      disclosureFound: disclosure instanceof HTMLDetailsElement,
+      disclosureOpen: disclosure instanceof HTMLDetailsElement && disclosure.open,
       rawMonitorVisible: visible(rawMonitor),
       panelCount: panels.length,
       labels: panels.map((panel) =>
@@ -22149,6 +22566,9 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
     ["faderFocusVisibilityPreserved", () => keyboardProbe.focusVisible],
     ["faderAriaPreserved", () => keyboardProbe.ariaPreserved],
     ["gdtfFunctionReadoutLivesOnSetupDmx", () =>
+      dmxDiagnosticsDisclosureFound &&
+      dmxFunctionReadout.disclosureFound &&
+      dmxFunctionReadout.disclosureOpen &&
       dmxFunctionReadout.rawMonitorVisible &&
       dmxFunctionReadout.panelCount === 1 &&
       dmxFunctionReadout.labels.every((label) => label === "GDTF Functions")
@@ -24223,7 +24643,8 @@ async function main() {
               `${result.stageBand.stageBandPickStates.traversalRestored.ioAreaReachable}/` +
               `${result.stageBand.stageBandPickStates.traversalRestored.legacyMappingExpansionMarkerCount}/` +
               `${result.stageBand.stageBandPickStates.traversalRestored.visibleOpenDialogCount} ` +
-            `io=${result.dmx.visibleDmxOutputConfigPanelCount}/${result.dmx.dmxRouteItemCount} ` +
+            `io=${result.dmx.ioVisibleControlCount}/${result.dmx.ioRouteRowCount}/${result.dmx.ioDisclosureCount} ` +
+            `routes=${result.dmx.ioRouteTotalCount} ` +
             `patch=${result.patch.visibleDmxAddressGridCount}/${result.patch.dmxAddressCellCount} ` +
             `failed=${JSON.stringify(result.failedChecks)}`,
         );
@@ -24234,68 +24655,35 @@ async function main() {
       }
       return;
     }
-    if (setupDmxOnlyMode) {
-      const setupDmxResults = [];
+    if (setupDmxOnlyMode || setupIoOnlyMode) {
+      const setupIoResults = [];
       for (const viewport of viewports) {
-        await client.send("Emulation.setDeviceMetricsOverride", {
-          width: viewport.width,
-          height: viewport.height,
-          deviceScaleFactor: 1,
-          mobile: false,
-        });
-        await client.send("Page.navigate", { url: appUrl });
-        await waitForApp(client);
-        await clickByText(client, "Setup");
-        await clickByText(client, "I/O");
-        await clickByText(client, "DMX");
-        await client.evaluate(`(() => {
-          const select = document.querySelector('.setupMode-dmx .dmxOutputConfigPanel select');
-          if (!(select instanceof HTMLSelectElement)) return;
-          select.value = 'EnttecUsbPro';
-          select.dispatchEvent(new InputEvent('input', { bubbles: true }));
-        })()`);
-        await sleep(180);
-        const result = await measure(client, `setup-dmx-${viewport.width}x${viewport.height}`);
-        const checks = {
-          dmxOutputConfigPanelVisible: result.visibleDmxOutputConfigPanelCount >= 1,
-          artRdmPanelVisible: result.visibleArtRdmPanelCount >= 1,
-          outputDiagnosticsDeskVisible: result.visibleOutputDiagnosticsDeskCount >= 1,
-          lightingRuntimeDeskVisible: result.visibleLightingRuntimeDeskCount >= 1,
-          dmxRouteItemCountIs128: result.dmxRouteItemCount === 128,
-          serialPortIdentityVisible: result.visibleSerialPortIdentityCount === 1,
-          serialProtocolRecommendationVisible:
-            result.visibleSerialProtocolRecommendationCount === 1,
-          dmxOutputConfigPanelWidthAtLeast250: result.dmxOutputConfigPanelWidth >= 250,
-          outputDiagnosticsDeskWidthAtLeast420: result.outputDiagnosticsDeskWidth >= 420,
-          lightingRuntimeDeskWidthAtLeast260: result.lightingRuntimeDeskWidth >= 260,
-          dmxEndpointHasNoShrunkenChildren: result.dmxEndpointShrunkenChildCount === 0,
-          dmxEndpointChildrenDoNotOverlap: result.dmxEndpointChildOverlapCount === 0,
-        };
-        const failedChecks = Object.entries(checks)
-          .filter(([, passed]) => !passed)
-          .map(([name]) => name);
-        const passed = hasExpectedSetupSurface(result) && failedChecks.length === 0;
-        setupDmxResults.push({ result, checks, failedChecks, passed });
+        const result = await runSetupIoViewport(client, viewport, setupDmxOnlyMode && !setupIoOnlyMode);
+        setupIoResults.push(result);
+        const counts = result.measurements;
         console.log(
-          `${passed ? "pass" : "fail"} ${result.label} ` +
-            `panels=${result.visibleDmxOutputConfigPanelCount}/` +
-              `${result.visibleArtRdmPanelCount}/` +
-              `${result.visibleOutputDiagnosticsDeskCount}/` +
-              `${result.visibleLightingRuntimeDeskCount} ` +
-            `widths=${Math.round(result.dmxOutputConfigPanelWidth)}/` +
-              `${Math.round(result.outputDiagnosticsDeskWidth)}/` +
-              `${Math.round(result.lightingRuntimeDeskWidth)} ` +
-            `routes=${result.dmxRouteItemCount} serial=` +
-              `${result.visibleSerialPortIdentityCount}/` +
-              `${result.visibleSerialProtocolRecommendationCount} ` +
-            `endpoint=${result.dmxEndpointShrunkenChildCount}/` +
-              `${result.dmxEndpointChildOverlapCount} ` +
-            `failed=${JSON.stringify(failedChecks)}`,
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `controls=${counts.dmx.ioVisibleControlCount}/` +
+              `${counts.midi?.ioVisibleControlCount ?? "-"}/` +
+              `${counts.osc?.ioVisibleControlCount ?? "-"}/` +
+              `${counts.remote?.ioVisibleControlCount ?? "-"} ` +
+            `disclosures=${Object.values(result.disclosures).flat().filter(setupIoDisclosurePassed).length}/` +
+              `${Object.values(result.disclosures).flat().length} ` +
+            `serial=${Number(result.flows.dmx.serialReachableWithoutDisclosure)}/` +
+              `${Number(result.flows.dmx.serialApplyCommand)} ` +
+            `routes=${Number(result.flows.dmx.artNetRouteCreated)}/` +
+              `${Number(result.flows.dmx.sacnRouteCreated)} ` +
+            `routePages=${result.routePagination.visitedRouteCount}/` +
+              `${result.routePagination.totalRouteCount}:${result.routePagination.pageCount} ` +
+            `midi=${result.flows.midi ? `${Number(result.flows.midi.clockConnected)}/${Number(result.flows.midi.controlConnected)}` : "-"} ` +
+            `osc=${result.flows.osc ? Number(result.flows.osc.listening) : "-"} ` +
+            `remote=${result.flows.remote ? Number(result.flows.remote.started) : "-"} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
         );
       }
-      const failures = setupDmxResults.filter((entry) => !entry.passed);
+      const failures = setupIoResults.filter((entry) => !entry.passed);
       if (failures.length > 0) {
-        throw new Error(`Setup DMX viewport failed: ${JSON.stringify(failures)}`);
+        throw new Error(`Setup I/O viewport failed: ${JSON.stringify(failures)}`);
       }
       return;
     }

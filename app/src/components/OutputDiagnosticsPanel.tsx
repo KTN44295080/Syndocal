@@ -1,5 +1,4 @@
-import type { DmxOutputConfig, EngineSnapshot, EngineTelemetryBudgetReport, Phase1SmokeReport } from "../types";
-import { DmxRoutesPanel } from "./DmxRoutesPanel";
+import type { EngineSnapshot, EngineTelemetryBudgetReport, Phase1SmokeReport } from "../types";
 import { DmxTestFramePanel } from "./DmxTestFramePanel";
 import { EngineTelemetryPanel } from "./EngineTelemetryPanel";
 import { Phase1SmokeReportPanel } from "./Phase1SmokeReportPanel";
@@ -11,19 +10,14 @@ interface OutputDiagnosticsPanelProps {
   testChannel: number;
   testWidth: number;
   testValue: number;
-  routes: DmxOutputConfig[];
   telemetry: EngineSnapshot["telemetry"];
   telemetryBudget?: EngineTelemetryBudgetReport | null;
   phase1SmokeReport: Phase1SmokeReport | null;
-  routeLabel: (route: DmxOutputConfig) => string;
   onTestChannel: (value: number) => void;
   onTestWidth: (value: number) => void;
   onTestValue: (value: number) => void;
   onSendTest: () => MaybePromise;
   onSendRoutes: () => MaybePromise;
-  onAddCurrentRoute: () => MaybePromise;
-  onApplyRoutes: () => MaybePromise;
-  onRemoveRoute: (index: number) => MaybePromise;
   onResetTelemetry: () => MaybePromise;
   onSaveTelemetryReport: () => MaybePromise;
 }
@@ -41,13 +35,6 @@ export function OutputDiagnosticsPanel(props: OutputDiagnosticsPanelProps) {
         onValueChange={props.onTestValue}
         onSendTest={props.onSendTest}
         onSendRoutes={props.onSendRoutes}
-      />
-      <DmxRoutesPanel
-        routes={props.routes}
-        routeLabel={props.routeLabel}
-        onAddCurrent={props.onAddCurrentRoute}
-        onApplyRoutes={props.onApplyRoutes}
-        onRemoveRoute={props.onRemoveRoute}
       />
       <Phase1SmokeReportPanel report={props.phase1SmokeReport} />
       <EngineTelemetryPanel

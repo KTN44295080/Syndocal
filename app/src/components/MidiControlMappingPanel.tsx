@@ -12,12 +12,16 @@ import type {
   MidiControlAction,
   MidiControlMapping,
   MidiControlMessage,
+  MidiInputSummary,
   MidiOutputSummary,
   VideoParam,
 } from "../types";
 
 interface MidiControlMappingPanelProps {
   snapshot: EngineSnapshot;
+  midiInputs: MidiInputSummary[];
+  selectedMidiInput: number | null;
+  clockConnected: boolean;
   midiOutputs: MidiOutputSummary[];
   selectedMidiOutput: number | null;
   feedbackConnected: boolean;
@@ -45,6 +49,10 @@ interface MidiControlMappingPanelProps {
   mapLow: number;
   mapHigh: number;
   mappingTargetLabel: (mapping: MidiControlMapping) => string;
+  onRefreshMidi: () => void | Promise<void>;
+  onSelectedMidiInput: (index: number) => void;
+  onConnectClock: () => void | Promise<void>;
+  onDisconnectClock: () => void | Promise<void>;
   onSelectedMidiOutput: (index: number) => void;
   onConnectFeedback: () => void | Promise<void>;
   onDisconnectFeedback: () => void | Promise<void>;
@@ -79,42 +87,87 @@ interface MidiControlMappingPanelProps {
 
 export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
   return (
-    <div class="midiClock">
-      <div class="mappingEditorDesk">
-      <h3>MIDI Feedback</h3>
-      <select value={props.selectedMidiOutput ?? ""} onInput={(event) => props.onSelectedMidiOutput(Number(event.currentTarget.value))}>
-        <For each={props.midiOutputs}>{(output) => <option data-no-localize value={output.index}>{output.name}</option>}</For>
-      </select>
-      <div class="buttonRow">
-        <button
-          class="primary"
-          onClick={() => void props.onConnectFeedback()}
-          disabled={props.midiOutputs.length === 0 || props.feedbackConnected}
-        >
-          Connect Feedback
-        </button>
-        <button onClick={() => void props.onDisconnectFeedback()} disabled={!props.feedbackConnected}>
-          Disconnect Feedback
-        </button>
-        <button onClick={() => void props.onSendFeedback()} disabled={!props.feedbackConnected || props.mappings.length === 0}>
-          Send Feedback
-        </button>
-      </div>
-      <label class="checkbox">
-        <input
-          type="checkbox"
-          checked={props.feedbackEnabled}
-          disabled={!props.feedbackConnected}
-          onChange={(event) => props.onFeedbackEnabled(event.currentTarget.checked)}
-        />
-        Auto feedback
-      </label>
+    <div class="midiClock ioOperatorSurface">
+      <section class="ioConnectionDesk" data-io-default-surface="midi">
+        <header class="ioDeskHeader">
+          <div>
+            <h2>MIDI Connections</h2>
+            <span>Clock, MTC, and mapped control</span>
+          </div>
+          <div class="ioConnectionStates">
+            <span class={`ioConnectionState ${props.clockConnected ? "ok" : "idle"}`}><i aria-hidden="true" />Clock {props.clockConnected ? "Connected" : "Stopped"}</span>
+            <span class={`ioConnectionState ${props.controlConnected ? "ok" : "idle"}`}><i aria-hidden="true" />Control {props.controlConnected ? "Connected" : "Stopped"}</span>
+          </div>
+        </header>
+        <div class="ioConnectionControls">
+          <label>
+            MIDI input
+            <select
+              data-io-control="midi-input"
+              value={props.selectedMidiInput ?? ""}
+              onInput={(event) => props.onSelectedMidiInput(Number(event.currentTarget.value))}
+            >
+              <option value="">Select input</option>
+              <For each={props.midiInputs}>{(input) => <option data-no-localize value={input.index}>{input.name}</option>}</For>
+            </select>
+          </label>
+          <button data-io-control="midi-refresh" onClick={() => void props.onRefreshMidi()}>Scan MIDI</button>
+          <Show when={props.clockConnected} fallback={
+            <button data-io-control="midi-clock-connect" class="primary" disabled={props.midiInputs.length === 0} onClick={() => void props.onConnectClock()}>Connect MIDI Clock / MTC</button>
+          }>
+            <button data-io-control="midi-clock-disconnect" onClick={() => void props.onDisconnectClock()}>Disconnect MIDI Clock / MTC</button>
+          </Show>
+          <Show when={props.controlConnected} fallback={
+            <button
+              data-io-control="midi-control-connect"
+              class="primary"
+              onClick={() => void props.onConnectControl()}
+              disabled={props.midiInputs.length === 0 || props.mappings.length === 0}
+            >Connect MIDI Control</button>
+          }>
+            <button data-io-control="midi-control-disconnect" onClick={() => void props.onDisconnectControl()}>Disconnect Control</button>
+          </Show>
+        </div>
+      </section>
 
+      <div class="ioDisclosureStack">
+        <details class="ioDisclosure" data-io-disclosure="midi-feedback">
+          <summary>MIDI feedback</summary>
+          <div class="ioDisclosureBody mappingEditorDesk" data-io-disclosure-body>
+            <h3>MIDI Feedback</h3>
+            <select data-io-control="midi-feedback-output" value={props.selectedMidiOutput ?? ""} onInput={(event) => props.onSelectedMidiOutput(Number(event.currentTarget.value))}>
+              <For each={props.midiOutputs}>{(output) => <option data-no-localize value={output.index}>{output.name}</option>}</For>
+            </select>
+            <div class="buttonRow">
+              <button
+                class="primary"
+                onClick={() => void props.onConnectFeedback()}
+                disabled={props.midiOutputs.length === 0 || props.feedbackConnected}
+              >Connect Feedback</button>
+              <button onClick={() => void props.onDisconnectFeedback()} disabled={!props.feedbackConnected}>Disconnect Feedback</button>
+              <button onClick={() => void props.onSendFeedback()} disabled={!props.feedbackConnected || props.mappings.length === 0}>Send Feedback</button>
+            </div>
+            <label class="checkbox">
+              <input
+                type="checkbox"
+                checked={props.feedbackEnabled}
+                disabled={!props.feedbackConnected}
+                onChange={(event) => props.onFeedbackEnabled(event.currentTarget.checked)}
+              />
+              Auto feedback
+            </label>
+          </div>
+        </details>
+
+        <details class="ioDisclosure" data-io-disclosure="midi-mapping">
+          <summary>Control mapping and learn</summary>
+          <div class="ioDisclosureBody ioMappingWorkbench" data-io-disclosure-body>
+          <div class="mappingEditorDesk">
       <h3>MIDI Control</h3>
       <div class="split">
         <label>
           Message
-          <select value={props.mapMessage} onInput={(event) => props.onMapMessage(event.currentTarget.value as MidiControlMessage)}>
+          <select data-io-control="midi-map-message" value={props.mapMessage} onInput={(event) => props.onMapMessage(event.currentTarget.value as MidiControlMessage)}>
             <option value="ControlChange">CC</option>
             <option value="NoteOn">Note On</option>
             <option value="NoteOff">Note Off</option>
@@ -340,16 +393,6 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
           Learn
         </button>
         <button onClick={props.onAddMapping}>Add Mapping</button>
-        <button
-          class="primary"
-          onClick={() => void props.onConnectControl()}
-          disabled={props.midiInputsCount === 0 || props.mappings.length === 0 || props.controlConnected}
-        >
-          Connect MIDI Control
-        </button>
-        <button onClick={() => void props.onDisconnectControl()} disabled={!props.controlConnected}>
-          Disconnect Control
-        </button>
       </div>
       <div class="buttonRow">
         <button onClick={() => void props.onLoadMappings()}>Load Mapping</button>
@@ -375,6 +418,9 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
         </For>
       </div>
       </section>
+          </div>
+        </details>
+      </div>
     </div>
   );
 }

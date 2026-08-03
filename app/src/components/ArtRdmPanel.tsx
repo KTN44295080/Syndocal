@@ -185,7 +185,7 @@ export function ArtRdmPanel(props: ArtRdmPanelProps) {
       </header>
       <p class="hint">Enter the gateway IP and discovered fixture UID. Replace the development controller UID with your assigned UID for production hardware.</p>
       <div class="artRdmGrid">
-        <label>Transport<select value={transport()} onInput={(event) => setTransport(event.currentTarget.value as "ArtNet" | "UsbPro")}><option value="ArtNet">Art-Net gateway</option><option value="UsbPro">ENTTEC USB Pro</option></select></label>
+        <label>Transport<select data-io-control="rdm-transport" value={transport()} onInput={(event) => setTransport(event.currentTarget.value as "ArtNet" | "UsbPro")}><option value="ArtNet">Art-Net gateway</option><option value="UsbPro">ENTTEC USB Pro</option></select></label>
         <Show when={transport() === "ArtNet"} fallback={
           <div class="videoAudioDeviceField rdmSerialPortField">
             <label>Serial port<select value={serialPort()} onInput={(event) => setSerialPort(event.currentTarget.value)}><option value="">Select port</option>{props.serialPorts.map((port) => <option value={port.name}>{port.name} · {port.port_type}</option>)}</select></label>

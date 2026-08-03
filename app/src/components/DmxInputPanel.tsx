@@ -23,6 +23,7 @@ export function DmxInputPanel(props: DmxInputPanelProps) {
         <label>
           Protocol
           <select
+            data-io-control="dmx-input-protocol"
             value={props.config.protocol}
             disabled={props.status.running}
             onInput={(event) => {

@@ -3226,10 +3226,10 @@ export default function App() {
     applyOutput,
     sendDmxTestFrame,
     sendDmxRoutesTestFrame,
-    dmxRouteLabel,
     applyCurrentDmxRoutes,
     addCurrentDmxRoute,
     removeDmxRoute,
+    setDmxRouteEnabled,
     setOutputProtocol,
     refreshSerialPorts,
   } = createOutputDiagnosticsController({
@@ -3244,6 +3244,7 @@ export default function App() {
     || viewportFixture === "cue-recall"
     || viewportFixture === "cue-recall-large"
     || viewportFixture === "cue-node-graph"
+    || viewportFixture === "setup-io"
   ) {
     setSerialPorts([
       {
@@ -3257,12 +3258,40 @@ export default function App() {
         recommended_protocol: "EnttecUsbPro",
       },
     ]);
+  }
+  if (
+    viewportFixture === "timeline"
+    || viewportFixture === "cue-recall"
+    || viewportFixture === "cue-recall-large"
+    || viewportFixture === "cue-node-graph"
+    || viewportFixture === "setup-io"
+  ) {
     setDmxOutputRoutes(
       Array.from({ length: 128 }, (_, universe) => ({
         ...defaultOutput,
         universe,
       })),
     );
+  }
+  if (viewportFixture === "setup-io") {
+    setMidiInputs([{ index: 7, name: "Viewport MIDI Input" }]);
+    setMidiOutputs([{ index: 9, name: "Viewport MIDI Output" }]);
+    setSelectedMidiInput(7);
+    setSelectedMidiOutput(9);
+    setMidiMappings([{
+      channel: null,
+      message: "ControlChange",
+      number: 7,
+      action: "LightingMaster",
+      low: 0,
+      high: 1,
+    }]);
+    setOscMappings([{
+      address: "/syndocal/master",
+      action: "LightingMaster",
+      low: 0,
+      high: 1,
+    }]);
   }
   const refreshDmxInputStatus = async () => {
     if (!isTauriRuntime()) return;
@@ -18799,16 +18828,26 @@ export default function App() {
           tabIndex={-1}
         >
           <Show when={setupSubTab() === "dmx"}>
-          <div class="dmxEndpointDesk">
+          <div class="ioOperatorSurface dmxOperatorSurface">
           <DmxOutputConfigPanel
             output={output()}
+            routes={dmxOutputRoutes()}
+            routeStatuses={snapshot().telemetry.last_dmx_route_results}
             serialPorts={serialPorts()}
             isSerialProtocol={isSerialDmxProtocol}
             onOutputChange={(nextOutput) => setOutput(nextOutput)}
             onProtocolChange={setOutputProtocol}
             onRefreshSerialPorts={refreshSerialPorts}
             onApply={applyOutput}
+            onAddCurrentRoute={addCurrentDmxRoute}
+            onApplyRoutes={applyCurrentDmxRoutes}
+            onRouteEnabled={setDmxRouteEnabled}
+            onRemoveRoute={removeDmxRoute}
           />
+          <div class="ioDisclosureStack">
+          <details class="ioDisclosure" data-io-disclosure="dmx-input">
+          <summary>DMX input and merge</summary>
+          <div class="ioDisclosureBody" data-io-disclosure-body>
           <DmxInputPanel
             config={dmxInputConfig()}
             status={dmxInputStatus()}
@@ -18816,6 +18855,11 @@ export default function App() {
             onStart={startDmxInput}
             onStop={stopDmxInput}
           />
+          </div>
+          </details>
+          <details class="ioDisclosure" data-io-disclosure="dmx-rdm">
+          <summary>RDM console</summary>
+          <div class="ioDisclosureBody" data-io-disclosure-body>
           <ArtRdmPanel
             gatewayIp={output().target_ip}
             portAddress={output().universe}
@@ -18828,6 +18872,10 @@ export default function App() {
             onStartFullDiscovery={startArtRdmFullDiscovery}
           />
           </div>
+          </details>
+          <details class="ioDisclosure" data-io-disclosure="dmx-diagnostics">
+          <summary>Test, monitor, telemetry, and runtime</summary>
+          <div class="ioDisclosureBody dmxDiagnosticsDisclosure" data-io-disclosure-body>
           <DmxRawMonitor
             previews={dmxPreviewOptions()}
             activeUniverse={activeDmxPreviewUniverse()}
@@ -18858,19 +18906,14 @@ export default function App() {
             testChannel={dmxTestChannel()}
             testWidth={dmxTestWidth()}
             testValue={dmxTestValue()}
-            routes={dmxOutputRoutes()}
             telemetry={snapshot().telemetry}
             telemetryBudget={engineTelemetryReport()?.budget ?? null}
             phase1SmokeReport={phase1SmokeReport()}
-            routeLabel={dmxRouteLabel}
             onTestChannel={setDmxTestChannel}
             onTestWidth={setDmxTestWidth}
             onTestValue={setDmxTestValue}
             onSendTest={sendDmxTestFrame}
             onSendRoutes={sendDmxRoutesTestFrame}
-            onAddCurrentRoute={addCurrentDmxRoute}
-            onApplyRoutes={applyCurrentDmxRoutes}
-            onRemoveRoute={removeDmxRoute}
             onResetTelemetry={resetEngineTelemetry}
             onSaveTelemetryReport={saveEngineTelemetryReport}
           />
@@ -18897,10 +18940,17 @@ export default function App() {
             onSelectedMidiInput={setSelectedMidiInput}
             onConnectMidiClock={connectMidiClock}
           />
+          </div>
+          </details>
+          </div>
+          </div>
           </Show>
           <Show when={setupSubTab() === "midi"}>
           <MidiControlMappingPanel
             snapshot={snapshot()}
+            midiInputs={midiInputs()}
+            selectedMidiInput={selectedMidiInput()}
+            clockConnected={midiConnected()}
             midiOutputs={midiOutputs()}
             selectedMidiOutput={selectedMidiOutput()}
             feedbackConnected={midiFeedbackConnected()}
@@ -18928,6 +18978,13 @@ export default function App() {
             mapLow={midiMapLow()}
             mapHigh={midiMapHigh()}
             mappingTargetLabel={controlMappingTargetLabel}
+            onRefreshMidi={() => {
+              void refreshMidiInputs();
+              void refreshMidiOutputs();
+            }}
+            onSelectedMidiInput={setSelectedMidiInput}
+            onConnectClock={connectMidiClock}
+            onDisconnectClock={disconnectMidiClock}
             onSelectedMidiOutput={setSelectedMidiOutput}
             onConnectFeedback={connectMidiFeedback}
             onDisconnectFeedback={disconnectMidiFeedback}

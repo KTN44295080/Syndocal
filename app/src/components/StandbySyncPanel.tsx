@@ -195,6 +195,7 @@ export function StandbySyncPanel(props: StandbySyncPanelProps) {
         <label>
           Role
           <select
+            data-io-control="remote-standby-role"
             value={role()}
             disabled={status().running || busy()}
             onChange={(event) => setRole(event.currentTarget.value as StandbySyncRole)}

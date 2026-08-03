@@ -62,30 +62,42 @@ interface OscControlMappingPanelProps {
 
 export function OscControlMappingPanel(props: OscControlMappingPanelProps) {
   return (
-    <div class="oscInput">
-      <div class="mappingEditorDesk">
-      <h3>OSC Input</h3>
-      <div class="split">
-        <label>
-          Bind IP
-          <input value={props.bindIp} onInput={(event) => props.onBindIp(event.currentTarget.value)} />
-        </label>
-        <label>
-          Port
-          <input type="number" min="1" value={props.port} onInput={(event) => props.onPort(Number(event.currentTarget.value))} />
-        </label>
-      </div>
-      <div class="buttonRow">
-        <button class="primary" onClick={() => void props.onStart()} disabled={props.running}>
-          Start OSC
-        </button>
-        <button onClick={() => void props.onStop()} disabled={!props.running}>
-          Stop OSC
-        </button>
-      </div>
+    <div class="oscInput ioOperatorSurface">
+      <section class="ioConnectionDesk" data-io-default-surface="osc">
+        <header class="ioDeskHeader">
+          <div>
+            <h2>OSC Connection</h2>
+            <span>UDP listener</span>
+          </div>
+          <span class={`ioConnectionState ${props.running ? "ok" : "idle"}`}><i aria-hidden="true" />{props.running ? "Listening" : "Stopped"}</span>
+        </header>
+        <div class="ioConnectionControls">
+          <label>
+            Bind IP
+            <input data-io-control="osc-bind-ip" value={props.bindIp} disabled={props.running} onInput={(event) => props.onBindIp(event.currentTarget.value)} />
+          </label>
+          <label>
+            Port
+            <input data-io-control="osc-port" type="number" min="1" value={props.port} disabled={props.running} onInput={(event) => props.onPort(Number(event.currentTarget.value))} />
+          </label>
+          <Show when={props.running} fallback={
+            <button data-io-control="osc-start" class="primary" onClick={() => void props.onStart()}>Start OSC</button>
+          }>
+            <button data-io-control="osc-stop" onClick={() => void props.onStop()}>Stop OSC</button>
+          </Show>
+        </div>
+      </section>
+
+      <div class="ioDisclosureStack">
+        <details class="ioDisclosure" data-io-disclosure="osc-mapping">
+          <summary>Control mapping and learn</summary>
+          <div class="ioDisclosureBody ioMappingWorkbench" data-io-disclosure-body>
+          <div class="mappingEditorDesk">
+      <h3>OSC mapping</h3>
       <label>
         Address
         <input
+          data-io-control="osc-map-address"
           value={props.mapAddress}
           placeholder="/touchosc/page/*/fader/1"
           onInput={(event) => props.onMapAddress(event.currentTarget.value)}
@@ -326,6 +338,9 @@ export function OscControlMappingPanel(props: OscControlMappingPanelProps) {
         </For>
       </div>
       </section>
+          </div>
+        </details>
+      </div>
     </div>
   );
 }
