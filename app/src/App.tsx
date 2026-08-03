@@ -2205,6 +2205,7 @@ export default function App() {
     || viewportFixture === "fx-visual"
     || viewportFixture === "live-edit-types"
     || viewportFixture === "edit-live"
+    || viewportFixture === "blind"
     || viewportFixture === "color-wheel"
     || viewportFixture === "control-stage-edit"
   ) {
@@ -2225,10 +2226,12 @@ export default function App() {
     const cueFixture = cueRecallFixture || cueRecallLargeFixture || fxVisualFixture;
     const cueNodeGraphFixture = viewportFixture === "cue-node-graph";
     const editLiveFixture = viewportFixture === "edit-live";
+    const blindFixture = viewportFixture === "blind";
     const sceneMatrixFixture =
       viewportFixture === "scene-matrix"
       || viewportFixture === "workspace-operator"
       || editLiveFixture
+      || blindFixture
       || controlStageEditFixture;
     const touchComposedFixture = viewportFixture === "touch-composed";
     const liveEditTypeFixture = viewportFixture === "live-edit-types" || editLiveFixture;
@@ -2302,6 +2305,13 @@ export default function App() {
       setControlMode("edit");
       setEditDeskSurface("attributes");
       setControlCategory(colorWheelFixture ? "color" : "dimmer");
+    }
+    if (blindFixture) {
+      setControlMode("edit");
+      setEditDeskSurface("attributes");
+      setControlCategory("color");
+      setControlFaderWriteMode("edit");
+      setSelectedSceneCueId(activeCueId);
     }
     const verifiedRgbParPatchFixture = viewportFixture === "patch"
       && new URLSearchParams(window.location.search).get("syndocalViewportProfile") === "verified-rgb-par";
@@ -2454,6 +2464,52 @@ export default function App() {
         ],
       },
     }));
+    if (blindFixture) {
+      const liveRedValues = Array.from({ length: 512 }, () => 0);
+      for (const address of [1, 9, 17]) {
+        liveRedValues[address - 1] = 255;
+        liveRedValues[address + 4] = 255;
+      }
+      const liveRedPreviews = [{ universe: 0, values: liveRedValues }];
+      let blindSnapshot: EngineSnapshot | null = null;
+      setSnapshot((current) => {
+        const next: EngineSnapshot = {
+          ...current,
+          fixtures: current.fixtures.map((fixture) => ({
+            ...fixture,
+            attribute_values: fixture.attribute_values.map((entry) => ({
+              ...entry,
+              value: entry.attribute === "Dimmer" || entry.attribute === "ColorRed"
+                ? 65_535
+                : entry.attribute === "ColorGreen" || entry.attribute === "ColorBlue"
+                  ? 0
+                  : entry.value,
+            })),
+          })),
+          cues: current.cues.map((cue) => cue.id === activeCueId
+            ? {
+                ...cue,
+                targets: [{
+                  fixture_id: 1,
+                  values: [
+                    { attribute: "Dimmer", value: 65_535 },
+                    { attribute: "ColorRed", value: 65_535 },
+                    { attribute: "ColorGreen", value: 0 },
+                    { attribute: "ColorBlue", value: 0 },
+                  ],
+                }],
+              }
+            : cue),
+          programmer: { enabled: false, blind: false, values: [], dmx_previews: [] },
+          dmx_preview: liveRedValues,
+          dmx_previews: liveRedPreviews,
+        };
+        blindSnapshot = next;
+        return next;
+      });
+      setLiveDmxPreviews(liveRedPreviews);
+      if (blindSnapshot) setLiveFixtures(snapshotLiveFixtures(blindSnapshot));
+    }
   } else if (viewportFixture === "audio-reactive") {
     const layer = structuredClone(viewportFixtureData.videoLayer);
     layer.id = 1;
@@ -2836,7 +2892,7 @@ export default function App() {
   if (viewportFixture === "operator-vj") {
     sceneBlockFixtureWindow.__syndocalReadOperatorVjFixtureSnapshot = () => snapshot();
   }
-  if (viewportFixture === "edit-live") {
+  if (viewportFixture === "edit-live" || viewportFixture === "blind") {
     sceneBlockFixtureWindow.__syndocalReadEditLiveFixtureSnapshot = () => snapshot();
     sceneBlockFixtureWindow.__syndocalReadEditLiveFixtureHistory = () => projectHistoryStatus();
   }
@@ -2890,6 +2946,7 @@ export default function App() {
   if (
     viewportFixture === "patch"
     || viewportFixture === "edit-live"
+    || viewportFixture === "blind"
     || viewportFixture === "live-edit-types"
     || viewportFixture === "mapping-live-color"
     || viewportFixture === "workspace-operator"
@@ -4954,6 +5011,10 @@ export default function App() {
     return snapshot().effects.find((effect) => effect.id === effectId) ?? null;
   });
   const dmxPreviewOptions = createMemo(() => liveDmxPreviews());
+  const mappingDmxPreviewOptions = createMemo(() =>
+    snapshot().programmer.blind
+      ? snapshot().programmer.dmx_previews
+      : liveDmxPreviews());
   const activeDmxPreview = createMemo(() => {
     const previews = dmxPreviewOptions();
     return previews.find((preview) => preview.universe === rawDmxUniverse()) ?? previews[0];
@@ -6856,7 +6917,7 @@ export default function App() {
     mappingFilteredFixtures,
     liveFixtures,
     mappingViewportBox,
-    dmxPreviews: dmxPreviewOptions,
+    dmxPreviews: mappingDmxPreviewOptions,
     stageWorldBounds,
     selectedMappingFixtureIdSet,
     selectedFixtureGroupFilter,
@@ -9426,7 +9487,7 @@ export default function App() {
   ) => {
     const cue = snapshot().cues.find((candidate) => candidate.id === cueId);
     if (!cue || captureTargets.length === 0) return;
-    if (viewportFixture === "edit-live") {
+    if (viewportFixture === "edit-live" || viewportFixture === "blind") {
       updateViewportControlEditLook(cue, captureTargets);
       setMessage(`Updated cue ${cue.id} look from the current Store Scope.`);
       return;
@@ -9498,6 +9559,7 @@ export default function App() {
     const targets = pendingControlEditTargets.get(cueId) ?? new Map<string, ControlEditCaptureTarget>();
     targets.set(controlEditTargetKey(captureTarget), captureTarget);
     pendingControlEditTargets.set(cueId, targets);
+    if (snapshot().programmer.blind) return;
     if (controlEditWriteTimer !== null) window.clearTimeout(controlEditWriteTimer);
     controlEditWriteTimer = window.setTimeout(() => {
       void flushControlEditLookUpdates();
@@ -9513,7 +9575,8 @@ export default function App() {
       workspaceTab() === "control"
       && controlMode() === "edit"
       && editDeskSurface() === "attributes"
-      && controlFaderWriteMode() === "edit";
+      && controlFaderWriteMode() === "edit"
+      && !snapshot().programmer.blind;
     if (!armed) return;
     const flush = () => {
       if (pendingControlEditTargets.size > 0) void flushControlEditLookUpdates();
@@ -9531,9 +9594,62 @@ export default function App() {
     if (controlEditWriteTimer !== null) window.clearTimeout(controlEditWriteTimer);
   });
 
+  const applyViewportBlindAttributes = (
+    updates: { fixtureId: number; attribute: string; value: number }[],
+  ) => {
+    setSnapshot((current) => {
+      const stagedByKey = new Map(
+        current.programmer.values.map((entry) => [`${entry.fixture_id}:${entry.attribute}`, entry]),
+      );
+      const previewSource = current.programmer.dmx_previews.length > 0
+        ? current.programmer.dmx_previews
+        : engineDmxPreviews(current);
+      const previewByUniverse = new Map(previewSource.map((preview) => [
+        preview.universe,
+        { universe: preview.universe, values: [...preview.values] },
+      ]));
+      for (const update of updates) {
+        stagedByKey.set(`${update.fixtureId}:${update.attribute}`, {
+          fixture_id: update.fixtureId,
+          attribute: update.attribute,
+          value: update.value,
+        });
+        const fixture = current.fixtures.find((candidate) => candidate.id === update.fixtureId);
+        const control = fixture?.controls.find((candidate) => candidate.attribute === update.attribute);
+        if (!fixture || !control) continue;
+        const preview = previewByUniverse.get(fixture.universe) ?? {
+          universe: fixture.universe,
+          values: Array.from({ length: 512 }, () => 0),
+        };
+        previewByUniverse.set(fixture.universe, preview);
+        const bytes = control.resolution === "SixteenBit"
+          ? [(update.value >> 8) & 0xff, update.value & 0xff]
+          : [Math.round(update.value / 257)];
+        for (const [index, offset] of control.offsets.entries()) {
+          const channelIndex = fixture.address + offset - 2;
+          if (channelIndex >= 0 && channelIndex < 512) {
+            preview.values[channelIndex] = bytes[index] ?? bytes[0];
+          }
+        }
+      }
+      const values = [...stagedByKey.values()].sort((left, right) =>
+        left.fixture_id - right.fixture_id || left.attribute.localeCompare(right.attribute));
+      const dmxPreviews = [...previewByUniverse.values()].sort((left, right) => left.universe - right.universe);
+      return {
+        ...current,
+        programmer: { enabled: true, blind: true, values, dmx_previews: dmxPreviews },
+      };
+    });
+  };
+
   const setAttribute = async (fixtureId: number, attribute: string, value: number) => {
     const editCueId = controlEditCueIdForWrite();
     setFaderValues((current) => ({ ...current, [`${fixtureId}:${attribute}`]: value }));
+    if (viewportFixture === "blind") {
+      applyViewportBlindAttributes([{ fixtureId, attribute, value }]);
+      queueControlEditLookUpdate(editCueId, { kind: "selectedFixture", fixtureId });
+      return;
+    }
     if (viewportFixture === "edit-live" || viewportFixture === "color-wheel") {
       queueControlEditLookUpdate(editCueId, { kind: "selectedFixture", fixtureId });
       return;
@@ -9563,6 +9679,11 @@ export default function App() {
       }
       return next;
     });
+    if (viewportFixture === "blind") {
+      applyViewportBlindAttributes(fixtureIds.map((fixtureId) => ({ fixtureId, attribute, value })));
+      queueControlEditLookUpdate(editCueId, { kind: "selectedGroup", groupId });
+      return;
+    }
     if (viewportFixture === "edit-live" || viewportFixture === "color-wheel") {
       queueControlEditLookUpdate(editCueId, { kind: "selectedGroup", groupId });
       return;
@@ -9763,7 +9884,27 @@ export default function App() {
     }
   };
 
+  const cancelPendingBlindSceneUpdate = () => {
+    if (controlEditWriteTimer !== null) {
+      window.clearTimeout(controlEditWriteTimer);
+      controlEditWriteTimer = null;
+    }
+    pendingControlEditTargets.clear();
+  };
+
   const setProgrammerMode = async (enabled: boolean, blind: boolean) => {
+    if (viewportFixture === "blind") {
+      setSnapshot((current) => ({
+        ...current,
+        programmer: {
+          ...current.programmer,
+          enabled,
+          blind: enabled && blind,
+        },
+      }));
+      setMessage(!enabled ? "Direct live editing enabled." : blind ? "Programmer Blind enabled." : "Programmer Live Preview enabled.");
+      return;
+    }
     try {
       await invoke("set_programmer_mode", { enabled, blind });
       if (!enabled) setFaderValues({});
@@ -9775,6 +9916,16 @@ export default function App() {
   };
 
   const clearProgrammer = async () => {
+    cancelPendingBlindSceneUpdate();
+    if (viewportFixture === "blind") {
+      setSnapshot((current) => ({
+        ...current,
+        programmer: { enabled: false, blind: false, values: [], dmx_previews: [] },
+      }));
+      setFaderValues({});
+      setMessage("Discarded Blind edits. Live DMX output was not changed.");
+      return;
+    }
     try {
       await invoke("clear_programmer");
       setFaderValues({});
@@ -9787,12 +9938,68 @@ export default function App() {
 
   const commitProgrammer = async () => {
     try {
+      await flushControlEditLookUpdates();
+      if (viewportFixture === "blind") {
+        let committedSnapshot: EngineSnapshot | null = null;
+        setSnapshot((current) => {
+          const stagedByFixture = new Map<number, Map<string, number>>();
+          for (const staged of current.programmer.values) {
+            const values = stagedByFixture.get(staged.fixture_id) ?? new Map<string, number>();
+            values.set(staged.attribute, staged.value);
+            stagedByFixture.set(staged.fixture_id, values);
+          }
+          const previews = current.programmer.dmx_previews.length > 0
+            ? current.programmer.dmx_previews.map((preview) => ({ ...preview, values: [...preview.values] }))
+            : current.dmx_previews.map((preview) => ({ ...preview, values: [...preview.values] }));
+          const next: EngineSnapshot = {
+            ...current,
+            fixtures: current.fixtures.map((fixture) => {
+              const staged = stagedByFixture.get(fixture.id);
+              return staged
+                ? {
+                    ...fixture,
+                    attribute_values: fixture.attribute_values.map((entry) => ({
+                      ...entry,
+                      value: staged.get(entry.attribute) ?? entry.value,
+                    })),
+                  }
+                : fixture;
+            }),
+            active_cue_id: null,
+            active_fade: null,
+            programmer: { enabled: false, blind: false, values: [], dmx_previews: [] },
+            dmx_preview: previews[0]?.values ?? current.dmx_preview,
+            dmx_previews: previews,
+          };
+          committedSnapshot = next;
+          return next;
+        });
+        if (committedSnapshot) {
+          setLiveDmxPreviews(engineDmxPreviews(committedSnapshot));
+          setLiveFixtures(snapshotLiveFixtures(committedSnapshot));
+        }
+        setFaderValues({});
+        setMessage("Committed Blind edits to the scene and live DMX output.");
+        return;
+      }
       await invoke("commit_programmer");
       setMessage("Committed Programmer values to the live base state. Undo is available.");
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
     }
+  };
+
+  const toggleBlindEditing = async (enabled: boolean) => {
+    if (enabled) {
+      if (controlFaderWriteMode() !== "edit" || !selectedSceneCue()) {
+        setMessage("Select a scene and use EDIT before enabling Blind editing.");
+        return;
+      }
+      await setProgrammerMode(true, true);
+      return;
+    }
+    await commitProgrammer();
   };
 
   const setFixtureTransform = async (
@@ -10582,6 +10789,17 @@ export default function App() {
       return next;
     });
 
+    if (viewportFixture === "blind") {
+      applyViewportBlindAttributes(fixtureIds.flatMap((fixtureId) =>
+        updates.map((update) => ({ fixtureId, attribute: update.attribute, value: update.value }))));
+      queueControlEditLookUpdate(
+        editCueId,
+        groupId
+          ? { kind: "selectedGroup", groupId }
+          : { kind: "selectedFixture", fixtureId: fixture.id },
+      );
+      return;
+    }
     if (viewportFixture === "edit-live") {
       queueControlEditLookUpdate(
         editCueId,
@@ -10594,13 +10812,13 @@ export default function App() {
     try {
       for (const update of updates) {
         if (groupId) {
-          await invoke("set_group_attribute", {
+          await invoke(snapshot().programmer.enabled ? "set_programmer_group_attribute" : "set_group_attribute", {
             groupId,
             attribute: update.attribute,
             value: update.value,
           });
         } else {
-          await invoke("set_attribute", {
+          await invoke(snapshot().programmer.enabled ? "set_programmer_attribute" : "set_attribute", {
             fixtureId: fixture.id,
             attribute: update.attribute,
             value: update.value,
@@ -17641,7 +17859,12 @@ export default function App() {
                         )
                       : null
                   }
+                  blindActive={snapshot().programmer.blind}
+                  blindStagedCount={snapshot().programmer.values.length}
                   onWriteMode={changeControlFaderWriteMode}
+                  onBlindToggle={toggleBlindEditing}
+                  onBlindCommit={commitProgrammer}
+                  onBlindDiscard={clearProgrammer}
                 />
               </Show>
             </>
@@ -17772,6 +17995,7 @@ export default function App() {
             onWheel: handleMappingStageWheel,
           }}
           stageLayers={{
+            blindActive: snapshot().programmer.blind,
             showStageObjects: mappingShowStageObjects(),
             showProjectors: mappingShowProjectors(),
             showBeams: mappingShowBeams(),

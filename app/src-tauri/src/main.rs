@@ -15415,6 +15415,7 @@ fn project_snapshot_for_save(mut snapshot: EngineSnapshot) -> EngineSnapshot {
     snapshot.video.auto_vj.status = protocol::AutoVjStatus::default();
     snapshot.dmx_preview.clear();
     snapshot.dmx_previews.clear();
+    clear_runtime_programmer_state(&mut snapshot);
     snapshot.telemetry = EngineTelemetry::default();
     // T17: latched scene live overrides are runtime-only; the engine's
     // persistence snapshot already strips them, and the `.sdc` writer keeps
@@ -15426,6 +15427,10 @@ fn project_snapshot_for_save(mut snapshot: EngineSnapshot) -> EngineSnapshot {
         submaster.strobe_fixture_count = 0;
     }
     snapshot
+}
+
+fn clear_runtime_programmer_state(snapshot: &mut EngineSnapshot) {
+    snapshot.programmer = protocol::ProgrammerSnapshot::default();
 }
 
 #[tauri::command]
@@ -15710,6 +15715,7 @@ fn load_project_from_file(
 ) -> Result<ProjectLoadResult, String> {
     use_authored_video_snapshot(&mut project.snapshot);
     normalize_project_timeline_layers(&mut project.snapshot);
+    clear_runtime_programmer_state(&mut project.snapshot);
     reconcile_project_fixture_groups(&mut project)?;
     validate_project_file(&project)?;
     let warnings = project_validation_warnings(&project);
@@ -30932,6 +30938,77 @@ f 1 2 3
         let saved_json = serde_json::to_string(&saved).unwrap();
         assert!(!saved_json.contains("strobe_hz"));
         assert!(!saved_json.contains("strobe_fixture_count"));
+    }
+
+    #[test]
+    fn blind_programmer_preview_updates_scene_capture_without_mutating_live_dmx() {
+        let project: ProjectFile = serde_json::from_str(PHASE1_SAMPLE_PROJECT_JSON).unwrap();
+        let mut snapshot = project.snapshot;
+        let fixture = snapshot.fixtures.first().unwrap();
+        let fixture_id = fixture.id;
+        let attribute = fixture.attribute_values.first().unwrap().attribute.clone();
+        let staged_value = fixture
+            .attribute_values
+            .first()
+            .unwrap()
+            .value
+            .saturating_add(1);
+        snapshot.dmx_previews = vec![protocol::DmxUniversePreview {
+            universe: 0,
+            values: vec![17; 512],
+        }];
+        snapshot.programmer = protocol::ProgrammerSnapshot {
+            enabled: true,
+            blind: true,
+            values: vec![protocol::ProgrammerValueSummary {
+                fixture_id,
+                attribute: attribute.clone(),
+                value: staged_value,
+            }],
+            dmx_previews: vec![protocol::DmxUniversePreview {
+                universe: 0,
+                values: vec![233; 512],
+            }],
+        };
+        let live_dmx_before = snapshot.dmx_previews.clone();
+
+        apply_programmer_preview_to_snapshot(&mut snapshot);
+
+        assert_eq!(snapshot.dmx_previews, live_dmx_before);
+        assert_eq!(
+            snapshot.fixtures[0]
+                .attribute_values
+                .iter()
+                .find(|value| value.attribute == attribute)
+                .map(|value| value.value),
+            Some(staged_value)
+        );
+    }
+
+    #[test]
+    fn blind_programmer_state_is_removed_from_project_save_and_load_boundaries() {
+        let project: ProjectFile = serde_json::from_str(PHASE1_SAMPLE_PROJECT_JSON).unwrap();
+        let mut snapshot = project.snapshot;
+        let fixture = snapshot.fixtures.first().unwrap();
+        snapshot.programmer = protocol::ProgrammerSnapshot {
+            enabled: true,
+            blind: true,
+            values: vec![protocol::ProgrammerValueSummary {
+                fixture_id: fixture.id,
+                attribute: fixture.attribute_values.first().unwrap().attribute.clone(),
+                value: 45_000,
+            }],
+            dmx_previews: vec![protocol::DmxUniversePreview {
+                universe: 0,
+                values: vec![175; 512],
+            }],
+        };
+
+        let saved = project_snapshot_for_save(snapshot.clone());
+        assert_eq!(saved.programmer, protocol::ProgrammerSnapshot::default());
+
+        clear_runtime_programmer_state(&mut snapshot);
+        assert_eq!(snapshot.programmer, protocol::ProgrammerSnapshot::default());
     }
 
     #[test]

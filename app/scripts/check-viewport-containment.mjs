@@ -45,6 +45,7 @@ const workspaceOperatorOnlyMode = process.argv.includes("--workspace-operator-on
 const liveEditTypesOnlyMode = process.argv.includes("--live-edit-types-only");
 const attributeCategoriesOnlyMode = process.argv.includes("--attribute-categories-only");
 const editLiveOnlyMode = process.argv.includes("--edit-live-only");
+const blindOnlyMode = process.argv.includes("--blind-only");
 const colorWheelOnlyMode = process.argv.includes("--color-wheel-only");
 const controlEditPositionOnlyMode = process.argv.includes("--control-edit-position-only");
 const controlStageChromeOnlyMode = process.argv.includes("--control-stage-chrome-only");
@@ -75,6 +76,8 @@ const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
       ? "mapping-live-color"
     : colorWheelOnlyMode
       ? "color-wheel"
+    : blindOnlyMode
+      ? "blind"
     : editLiveOnlyMode
       ? "edit-live"
     : controlStageFixtureEditOnlyMode || stageMiddlePanOnlyMode || contextMenuOnlyMode
@@ -22750,6 +22753,173 @@ async function runColorWheelViewport(client, viewport) {
   };
 }
 
+async function runBlindViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  const blindUrl = new URL(fixtureUrl("blind"));
+  blindUrl.searchParams.set("viewportRun", `${viewport.width}x${viewport.height}`);
+  await client.send("Page.navigate", { url: blindUrl.toString() });
+  await waitForApp(client);
+  await sleep(120);
+
+  const readState = () => evaluatePageFunction(client, () => {
+    const rendered = (element) => {
+      if (!(element instanceof Element)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+    };
+    const rect = (selector) => {
+      const bounds = document.querySelector(selector)?.getBoundingClientRect();
+      return bounds
+        ? Object.fromEntries(["left", "top", "width", "height"].map((key) => [key, Math.round(bounds[key] * 100) / 100]))
+        : null;
+    };
+    const snapshot = window.__syndocalReadEditLiveFixtureSnapshot?.();
+    const cue = snapshot?.cues?.find((candidate) => candidate.id === 301);
+    const fixture = document.querySelector('.controlStageContext [data-stage-fixture-id="1"]');
+    const shape = fixture?.querySelector('.stageFixtureShape:not(.stageFixtureSegmentOutline)');
+    const watermark = document.querySelector('[data-mapping-blind-watermark]');
+    const watermarkRect = watermark?.querySelector('rect');
+    const watermarkText = watermark?.querySelector('text');
+    const watermarkStyle = watermarkRect ? getComputedStyle(watermarkRect) : null;
+    const toggle = document.querySelector('[data-control-blind-toggle]');
+    const writeModes = document.querySelector('.controlFaderWriteMode');
+    const toggleRect = toggle?.getBoundingClientRect();
+    const writeModeRect = writeModes?.getBoundingClientRect();
+    const app = document.querySelector('.app');
+    return {
+      blind: snapshot?.programmer?.blind === true,
+      stagedCount: snapshot?.programmer?.values?.length ?? 0,
+      liveDmxSignature: JSON.stringify(snapshot?.dmx_previews ?? []),
+      programmerDmxSignature: JSON.stringify(snapshot?.programmer?.dmx_previews ?? []),
+      cueTargetSignature: JSON.stringify(cue?.targets ?? []),
+      cueGreen: cue?.targets
+        ?.find((target) => target.fixture_id === 1)
+        ?.values?.find((value) => value.attribute === 'ColorGreen')?.value ?? null,
+      cueRed: cue?.targets
+        ?.find((target) => target.fixture_id === 1)
+        ?.values?.find((value) => value.attribute === 'ColorRed')?.value ?? null,
+      stageColor: shape ? getComputedStyle(shape).fill : '',
+      liveColorSource: fixture?.getAttribute('data-live-color-source') ?? '',
+      toggleCount: document.querySelectorAll('[data-control-blind-toggle]').length,
+      toggleVisible: rendered(toggle),
+      togglePressed: toggle?.getAttribute('aria-pressed') ?? '',
+      toggleDisabled: toggle instanceof HTMLButtonElement ? toggle.disabled : null,
+      toggleLabel: (toggle?.textContent ?? '').replace(/\s+/g, ' ').trim(),
+      toggleBesideWriteModes: Boolean(
+        toggleRect && writeModeRect &&
+        Math.abs(toggleRect.top - writeModeRect.top) <= 1 &&
+        toggleRect.left >= writeModeRect.right - 1
+      ),
+      commitVisible: rendered(document.querySelector('[data-control-blind-commit]')),
+      discardVisible: rendered(document.querySelector('[data-control-blind-discard]')),
+      watermarkVisible: rendered(watermark),
+      watermarkText: (watermarkText?.textContent ?? '').trim(),
+      watermarkStroke: watermarkStyle?.stroke ?? '',
+      paneRects: {
+        upper: rect('[data-workspace-pane="upper"]'),
+        lowerLeft: rect('[data-workspace-pane="lower-left"]'),
+        lowerRight: rect('[data-workspace-pane="lower-right"]'),
+      },
+      documentAndAppScrollZero:
+        window.scrollX === 0 && window.scrollY === 0 &&
+        document.documentElement.scrollWidth <= innerWidth + 1 &&
+        document.documentElement.scrollHeight <= innerHeight + 1 &&
+        document.body.scrollWidth <= document.body.clientWidth + 1 &&
+        document.body.scrollHeight <= document.body.clientHeight + 1 &&
+        (!app || (app.scrollWidth <= app.clientWidth + 1 && app.scrollHeight <= app.clientHeight + 1)),
+    };
+  });
+  const clickGreenSwatch = async () => {
+    const clicked = await evaluatePageFunction(client, () => {
+      const button = [...document.querySelectorAll('.colorSwatchGrid button')].find((candidate) =>
+        (candidate.getAttribute('aria-label') ?? '').startsWith('Set color #00ff00'));
+      if (!(button instanceof HTMLButtonElement)) return false;
+      button.click();
+      return true;
+    });
+    await sleep(140);
+    return clicked;
+  };
+  const samePaneRects = (left, right) => JSON.stringify(left.paneRects) === JSON.stringify(right.paneRects);
+
+  const initial = await readState();
+  await clickVisibleSelector(client, '[data-control-blind-toggle]');
+  const blindEnabled = true;
+  await sleep(80);
+  const greenEdit = await clickGreenSwatch();
+  const staged = await readState();
+
+  await clickVisibleSelector(client, '[data-control-blind-discard]');
+  const discardOpened = true;
+  await sleep(40);
+  await clickVisibleSelector(client, '[data-control-blind-discard-confirm]');
+  const discardConfirmed = true;
+  await sleep(100);
+  const discarded = await readState();
+
+  await clickVisibleSelector(client, '[data-control-blind-toggle]');
+  const blindReenabled = true;
+  await sleep(60);
+  const greenEditForCommit = await clickGreenSwatch();
+  const stagedForCommit = await readState();
+  await clickVisibleSelector(client, '[data-control-blind-toggle]');
+  const toggleOff = true;
+  await sleep(420);
+  const committed = await readState();
+
+  const conditions = [
+    ["blindTogglePresentBesideEditLive", () =>
+      initial.toggleCount === 1 && initial.toggleVisible && initial.toggleBesideWriteModes && initial.toggleLabel.includes("Blind")],
+    ["blindStartsOffWithLiveRedStage", () =>
+      !initial.blind && initial.togglePressed === "false" && initial.stageColor === "rgb(255, 0, 0)"],
+    ["blindCanEnableAndEditGreen", () =>
+      blindEnabled && greenEdit && staged.blind && staged.togglePressed === "true" && staged.stagedCount >= 3 &&
+      staged.stageColor === "rgb(0, 255, 0)" && staged.liveColorSource === "preview"],
+    ["blindEditKeepsLiveDmxByteIdentical", () => staged.liveDmxSignature === initial.liveDmxSignature],
+    ["blindEditDoesNotCommitSceneEarly", () => staged.cueTargetSignature === initial.cueTargetSignature],
+    ["blindWatermarkIsOrangeAndVisibleOnlyWhileActive", () =>
+      staged.watermarkVisible && staged.watermarkText === "BLIND" && /255, 138, 36/.test(staged.watermarkStroke) &&
+      !initial.watermarkVisible && !discarded.watermarkVisible && !committed.watermarkVisible],
+    ["explicitCommitAndDiscardPathsAreVisible", () => staged.commitVisible && staged.discardVisible],
+    ["discardRestoresStageAndLeavesLiveDmxUntouched", () =>
+      discardOpened && discardConfirmed && !discarded.blind && discarded.stageColor === initial.stageColor &&
+      discarded.liveDmxSignature === initial.liveDmxSignature && discarded.cueTargetSignature === initial.cueTargetSignature],
+    ["toggleOffCommitsSceneAndLiveExactlyOnce", () =>
+      blindReenabled && greenEditForCommit && toggleOff && stagedForCommit.blind && !committed.blind &&
+      committed.stageColor === "rgb(0, 255, 0)" && committed.liveDmxSignature !== initial.liveDmxSignature &&
+      committed.cueGreen === 65_535 && committed.cueRed === 0],
+    ["fixedPaneRectsStayEqual", () =>
+      [staged, discarded, stagedForCommit, committed].every((state) => samePaneRects(initial, state))],
+    ["blindFlowKeepsDocumentAndAppScrollZero", () =>
+      [initial, staged, discarded, stagedForCommit, committed].every((state) => state.documentAndAppScrollZero)],
+  ];
+  const checks = Object.fromEntries(conditions.map(([name, check]) => {
+    try {
+      return [name, Boolean(check())];
+    } catch {
+      return [name, false];
+    }
+  }));
+  const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  return {
+    label: `blind-${viewport.width}x${viewport.height}`,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    initial,
+    staged,
+    discarded,
+    stagedForCommit,
+    committed,
+  };
+}
+
 async function runEditLiveViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -23345,6 +23515,30 @@ async function main() {
       const failures = colorWheelResults.filter((result) => !result.passed);
       if (failures.length > 0) {
         throw new Error(`Color wheel HSV approximation failed: ${JSON.stringify(failures)}`);
+      }
+      return;
+    }
+    if (blindOnlyMode) {
+      const blindResults = [];
+      for (const [viewportIndex, viewport] of viewports.entries()) {
+        const result = await runBlindViewport(client, viewport);
+        blindResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `dmxFrozen=${result.initial.liveDmxSignature === result.staged.liveDmxSignature} ` +
+            `stage=${result.initial.stageColor}->${result.staged.stageColor}->${result.committed.stageColor} ` +
+            `watermark=${result.staged.watermarkVisible}->${result.committed.watermarkVisible} ` +
+            `discard=${result.discarded.stageColor}:${result.discarded.liveDmxSignature === result.initial.liveDmxSignature} ` +
+            `frames=${JSON.stringify(result.initial.paneRects)} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+        if (viewportIndex < viewports.length - 1) {
+          await recycleBrowser();
+        }
+      }
+      const failures = blindResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Control BLIND editing failed: ${JSON.stringify(failures)}`);
       }
       return;
     }
@@ -25065,6 +25259,7 @@ async function main() {
     const results = [];
     const patchEmptyStateResults = [];
     const fixtureGroupsResults = [];
+    const blindResults = [];
     for (const viewport of viewports) {
       results.push(...(await runViewport(client, viewport)));
       results.push(await runComposedTouchViewport(client, viewport));
@@ -25092,6 +25287,18 @@ async function main() {
               `${fixtureGroupsResult.verifiedRgbQuickPaths.touch.swatchCount} ` +
           `frames=${JSON.stringify(fixtureGroupsResult.registration.frames)} ` +
           `failed=${JSON.stringify(fixtureGroupsResult.failedChecks)}`,
+      );
+      const blindResult = await runBlindViewport(client, viewport);
+      blindResults.push(blindResult);
+      console.log(
+        `${blindResult.passed ? "pass" : "fail"} ${blindResult.label} ` +
+          `dmxFrozen=${blindResult.initial.liveDmxSignature === blindResult.staged.liveDmxSignature} ` +
+          `stage=${blindResult.initial.stageColor}->${blindResult.staged.stageColor}->${blindResult.committed.stageColor} ` +
+          `watermark=${blindResult.staged.watermarkVisible}->${blindResult.committed.watermarkVisible} ` +
+          `discard=${blindResult.discarded.stageColor}:` +
+            `${blindResult.discarded.liveDmxSignature === blindResult.initial.liveDmxSignature} ` +
+          `frames=${JSON.stringify(blindResult.initial.paneRects)} ` +
+          `failed=${JSON.stringify(blindResult.failedChecks)}`,
       );
     }
     const cueRecallResults = [];
@@ -25137,6 +25344,7 @@ async function main() {
     const liveEditTypeFailures = liveEditTypeResults.filter((result) => !result.passed);
     const patchEmptyStateFailures = patchEmptyStateResults.filter((result) => !result.passed);
     const fixtureGroupsFailures = fixtureGroupsResults.filter((result) => !result.passed);
+    const blindFailures = blindResults.filter((result) => !result.passed);
     const setupSurfaceFailures = results.filter((result) => !hasExpectedSetupSurface(result));
     const persistentBandFailures = results.filter((result) => !hasExpectedPersistentWorkspaceBand(result));
     const persistentBandInvarianceFailures = results.filter((result) => !hasExpectedPersistentBandInvariance(result));
@@ -25279,6 +25487,7 @@ async function main() {
       liveEditTypeFailures.length > 0 ||
       patchEmptyStateFailures.length > 0 ||
       fixtureGroupsFailures.length > 0 ||
+      blindFailures.length > 0 ||
       keyboardNavigationFailures.length > 0 ||
       setupSurfaceFailures.length > 0 ||
       persistentBandFailures.length > 0 ||
@@ -25300,6 +25509,7 @@ async function main() {
       if (workspaceShellOnlyMode) {
         console.error(JSON.stringify({
           viewport: failures.map((result) => result.label),
+          blind: blindFailures.map((result) => result.label),
           setupSurface: setupSurfaceFailures.map((result) => result.label),
           persistentBand: persistentBandFailures.map((result) => result.label),
           persistentBandInvariance: persistentBandInvarianceFailures.map((result) => result.label),
@@ -25397,6 +25607,7 @@ async function main() {
             liveEditTypes: liveEditTypeFailures,
             patchEmptyState: patchEmptyStateFailures,
             fixtureGroups: fixtureGroupsFailures,
+            blind: blindFailures,
             keyboardNavigation: keyboardNavigationFailures,
             setupSurface: setupSurfaceFailures,
             persistentBand: persistentBandFailures,
@@ -25427,7 +25638,7 @@ async function main() {
         ),
       );
       throw new Error(
-        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${liveEditTypeFailures.length} Live Edit fixture-type check(s), ${patchEmptyStateFailures.length} PATCH empty-state check(s), ${fixtureGroupsFailures.length} fixture group operation check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${stageSettingsFailures.length} stage settings check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${killZoneFailures.length} kill zone check(s), ${statusLineFailures.length} status line check(s) failed.`,
+        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${liveEditTypeFailures.length} Live Edit fixture-type check(s), ${patchEmptyStateFailures.length} PATCH empty-state check(s), ${fixtureGroupsFailures.length} fixture group operation check(s), ${blindFailures.length} BLIND editing check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${stageSettingsFailures.length} stage settings check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${killZoneFailures.length} kill zone check(s), ${statusLineFailures.length} status line check(s) failed.`,
       );
     }
   } finally {

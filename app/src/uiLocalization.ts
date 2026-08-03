@@ -373,6 +373,7 @@ const japaneseText: Record<string, string> = {
   "Scene Block pages": "シーンブロックのページ",
   Last: "最後",
   LIVE: "LIVE",
+  BLIND: "BLIND",
   FLASH: "FLASH",
   FX: "FX",
   SS: "SS",
@@ -1345,6 +1346,22 @@ const japaneseText: Record<string, string> = {
   "effect(s) /": "エフェクト /",
   yaw: "ヨー",
   Blind: "ブラインド",
+  "Blind edit controls": "ブラインド編集コントロール",
+  "Commit and exit Blind editing": "ブラインド編集を確定して終了",
+  "Enable Blind editing": "ブラインド編集を有効化",
+  "Commit Blind edit": "ブラインド編集を確定",
+  "Discard Blind edit": "ブラインド編集を破棄",
+  "Discard Blind changes?": "ブラインドの変更を破棄しますか？",
+  "This discards all Blind edits without changing live DMX output.":
+    "Live DMX出力を変更せず、ブラインド編集をすべて破棄します。",
+  "Keep Editing": "編集を続ける",
+  "Discard Changes": "変更を破棄",
+  "Discarded Blind edits. Live DMX output was not changed.":
+    "ブラインド編集を破棄しました。Live DMX出力は変更されていません。",
+  "Committed Blind edits to the scene and live DMX output.":
+    "ブラインド編集をシーンとLive DMX出力へ確定しました。",
+  "Select a scene and use EDIT before enabling Blind editing.":
+    "シーンを選択し、EDITにしてからブラインド編集を有効にしてください。",
   Bottom: "下",
   "Blend Gamma": "ブレンドガンマ",
   Bright: "明",

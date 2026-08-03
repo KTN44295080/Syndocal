@@ -15,6 +15,7 @@ import { MappingVideoSurfacesLayer, type MappingVideoSurface2D } from "./Mapping
 interface MappingStageLayersPanelProps {
   readOnly?: boolean;
   fixtureTransformsEditable?: boolean;
+  blindActive?: boolean;
   showStageObjects: boolean;
   showProjectors: boolean;
   showBeams: boolean;
@@ -51,6 +52,19 @@ interface MappingStageLayersPanelProps {
 export function MappingStageLayersPanel(props: MappingStageLayersPanelProps) {
   const screenWorldPerCssPixel = createMemo(() =>
     stageWorldPerCssPixel(props.labelViewport, props.labelViewportPixelSize));
+  const blindWatermark = createMemo(() => {
+    const unit = screenWorldPerCssPixel();
+    const fontSize = unit * 28;
+    return {
+      x: props.labelViewport.x + props.labelViewport.width / 2,
+      y: props.labelViewport.z + props.labelViewport.height / 2,
+      fontSize,
+      width: fontSize * 3.7,
+      height: fontSize * 1.55,
+      radius: unit * 5,
+      strokeWidth: unit * 1.5,
+    };
+  });
 
   return (
     <>
@@ -104,6 +118,31 @@ export function MappingStageLayersPanel(props: MappingStageLayersPanelProps) {
           onBeginRotate={props.onBeginStageObjectRotate}
           onBeginResize={props.onBeginStageObjectResize}
         />
+      </Show>
+      <Show when={props.blindActive}>
+        <g
+          class="mappingBlindWatermark"
+          data-mapping-blind-watermark
+          aria-hidden="true"
+          pointer-events="none"
+        >
+          <rect
+            x={blindWatermark().x - blindWatermark().width / 2}
+            y={blindWatermark().y - blindWatermark().height / 2}
+            width={blindWatermark().width}
+            height={blindWatermark().height}
+            rx={blindWatermark().radius}
+            stroke-width={blindWatermark().strokeWidth}
+          />
+          <text
+            x={blindWatermark().x}
+            y={blindWatermark().y}
+            font-size={String(blindWatermark().fontSize)}
+            data-no-localize
+          >
+            BLIND
+          </text>
+        </g>
       </Show>
     </>
   );

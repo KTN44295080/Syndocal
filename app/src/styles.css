@@ -29282,6 +29282,12 @@ h3 {
   flex-basis: 420px;
 }
 
+.controlFaderWriteHeader.blindActive {
+  flex-basis: 540px;
+  max-width: 540px;
+  border-color: #a85b16;
+}
+
 .controlFaderWriteMode {
   display: grid;
   grid-template-columns: repeat(2, minmax(44px, 1fr));
@@ -29336,6 +29342,67 @@ h3 {
   background: #183126;
   box-shadow: inset 0 -3px 0 var(--ray-edit);
   color: #b9ebcc;
+}
+
+.controlBlindControls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  align-self: center;
+  height: 24px;
+  min-height: 24px;
+  max-height: 24px;
+  border-right: 1px solid #393530;
+}
+
+.controlFaderWriteHeader .controlBlindControls > button {
+  display: inline-flex;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  max-height: 24px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-right: 1px solid #393530;
+  border-radius: 0;
+  background: #1d2124;
+  padding: 0 5px;
+  color: #aaa39d;
+  font-size: 10px;
+}
+
+.controlFaderWriteHeader .controlBlindControls > button:last-child {
+  border-right: 0;
+}
+
+.controlFaderWriteHeader .controlBlindControls > .controlBlindToggle {
+  min-width: 70px;
+  gap: 4px;
+}
+
+.controlBlindControls svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+}
+
+.controlBlindControls .controlBlindToggle.active {
+  background: #3a2414;
+  box-shadow: inset 0 -3px 0 #f28a2e;
+  color: #ffad5c;
+}
+
+.controlBlindControls .controlBlindCommit:not(:disabled) {
+  color: #b9ebcc;
+}
+
+.controlBlindControls .controlBlindDiscard:not(:disabled) {
+  color: #f0a08e;
 }
 
 .controlFaderEditState {
@@ -29411,6 +29478,26 @@ h3 {
   .controlFaderWriteHeader.edit {
     flex-basis: 210px;
   }
+
+  .controlFaderWriteHeader.blindActive {
+    flex-basis: 330px;
+  }
+}
+
+.mappingBlindWatermark rect {
+  fill: rgba(52, 29, 10, 0.88);
+  stroke: #ff8a24;
+}
+
+.mappingBlindWatermark text {
+  fill: #ff9a3d;
+  font-family: "Segoe UI", sans-serif;
+  font-weight: 900;
+  paint-order: stroke;
+  stroke: #4b2305;
+  stroke-width: 0.08em;
+  text-anchor: middle;
+  dominant-baseline: middle;
 }
 
 .attributeCategoryRail button > span {

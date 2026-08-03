@@ -51,6 +51,7 @@ export const normalizeProjectSnapshotForStorage = (snapshot: EngineSnapshot): En
   } = snapshot;
   const authoredSnapshot: EngineSnapshot = {
     ...snapshotWithoutTransport,
+    programmer: { enabled: false, blind: false, values: [], dmx_previews: [] },
     video: authoredVideo ?? snapshot.video,
     node_graphs: (snapshot.node_graphs ?? []).map(({ audio_runtime: _audioRuntime, ...graph }) => graph),
     submasters: (snapshot.submasters ?? []).map(

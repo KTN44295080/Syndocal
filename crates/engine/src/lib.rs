@@ -5307,6 +5307,9 @@ impl EngineRuntime {
                 Err(error) => self.last_error = Some(error),
             },
             EngineCommand::SetProgrammerMode { enabled, blind } => {
+                if self.programmer_enabled && self.programmer_blind && (!enabled || !blind) {
+                    self.commit_programmer_values();
+                }
                 self.programmer_enabled = enabled;
                 self.programmer_blind = enabled && blind;
                 self.last_error = None;
@@ -5339,15 +5342,14 @@ impl EngineRuntime {
             },
             EngineCommand::ClearProgrammer => {
                 self.programmer_values.clear();
+                self.programmer_enabled = false;
+                self.programmer_blind = false;
                 self.last_error = None;
             }
             EngineCommand::CommitProgrammer => {
-                self.active_cue_id = None;
-                self.active_fade = None;
-                for (key, value) in self.programmer_values.drain() {
-                    self.cue_value_origins.remove(&key);
-                    self.values.insert(key, value);
-                }
+                self.commit_programmer_values();
+                self.programmer_enabled = false;
+                self.programmer_blind = false;
                 self.last_error = None;
             }
             EngineCommand::SetGroupHighlight { group_id, enabled } => {
@@ -10286,6 +10288,18 @@ impl EngineRuntime {
                 self.timeline_position_ms = timeline_position_ms;
                 self.last_error = last_error;
             }
+        }
+    }
+
+    fn commit_programmer_values(&mut self) {
+        if self.programmer_values.is_empty() {
+            return;
+        }
+        self.active_cue_id = None;
+        self.active_fade = None;
+        for (key, value) in self.programmer_values.drain() {
+            self.cue_value_origins.remove(&key);
+            self.values.insert(key, value);
         }
     }
 
@@ -36046,7 +36060,102 @@ mod tests {
     }
 
     #[test]
-    fn programmer_blind_previews_without_output_then_commits_live() {
+    fn programmer_blind_active_scene_keeps_dmx_frozen_then_explicit_commit_applies_once() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: sample_patch_request("Fixture 1", 1),
+                profile: sample_profile(),
+            })
+            .unwrap();
+        let cue_id = engine.allocate_cue_id();
+        engine
+            .send(EngineCommand::CreateCue {
+                authored_beats: None,
+                cue_id,
+                label: "Red live scene".to_string(),
+                fade_ms: 0,
+                targets: vec![CueFixtureTarget {
+                    fixture_id,
+                    values: vec![AttributeValueSummary {
+                        attribute: "Dimmer".to_string(),
+                        value: 1_000,
+                    }],
+                }],
+                video_targets: Vec::new(),
+                video_output_targets: Vec::new(),
+                node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
+            })
+            .unwrap();
+        engine.send(EngineCommand::TriggerCue(cue_id)).unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot.active_cue_id == Some(cue_id) && snapshot.dmx_preview[0] <= 5 {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+        assert_eq!(snapshot.active_cue_id, Some(cue_id));
+        let live_before_blind = snapshot.dmx_previews.clone();
+
+        engine
+            .send(EngineCommand::SetProgrammerMode {
+                enabled: true,
+                blind: true,
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetProgrammerAttribute {
+                fixture_id,
+                attribute: "Dimmer".to_string(),
+                value: 50_000,
+            })
+            .unwrap();
+
+        for _ in 0..20 {
+            if snapshot.programmer.values.len() == 1 && !snapshot.fixtures.is_empty() {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+        assert!(snapshot.programmer.enabled);
+        assert!(snapshot.programmer.blind);
+        assert_eq!(snapshot.fixtures[0].attribute_values[0].value, 1_000);
+        assert_eq!(snapshot.programmer.values[0].value, 50_000);
+        assert!(snapshot.programmer.dmx_previews[0].values[0] >= 194);
+        assert_eq!(snapshot.active_cue_id, Some(cue_id));
+        assert_eq!(snapshot.dmx_previews, live_before_blind);
+
+        engine.send(EngineCommand::CommitProgrammer).unwrap();
+        for _ in 0..20 {
+            snapshot = engine.snapshot();
+            if snapshot.programmer.values.is_empty() && snapshot.dmx_preview[0] >= 194 {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+        }
+        assert!(snapshot.programmer.values.is_empty());
+        assert!(!snapshot.programmer.enabled);
+        assert!(!snapshot.programmer.blind);
+        assert_eq!(snapshot.active_cue_id, None);
+        assert_eq!(snapshot.fixtures[0].attribute_values[0].value, 50_000);
+        assert!(snapshot.dmx_preview[0] >= 194);
+        let committed_dmx = snapshot.dmx_previews.clone();
+        std::thread::sleep(DMX_TICK_INTERVAL * 2);
+        assert_eq!(engine.snapshot().dmx_previews, committed_dmx);
+    }
+
+    #[test]
+    fn programmer_blind_discard_keeps_live_dmx_byte_identical() {
         let engine = EngineHandle::start(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
@@ -36066,6 +36175,9 @@ mod tests {
                 value: 1_000,
             })
             .unwrap();
+        std::thread::sleep(DMX_TICK_INTERVAL * 2);
+        let live_before_blind = engine.snapshot().dmx_previews;
+
         engine
             .send(EngineCommand::SetProgrammerMode {
                 enabled: true,
@@ -36079,47 +36191,63 @@ mod tests {
                 value: 50_000,
             })
             .unwrap();
+        std::thread::sleep(DMX_TICK_INTERVAL * 2);
+        assert_eq!(engine.snapshot().dmx_previews, live_before_blind);
 
-        let mut snapshot = engine.snapshot();
-        for _ in 0..20 {
-            if snapshot.programmer.values.len() == 1 && !snapshot.fixtures.is_empty() {
-                break;
-            }
-            std::thread::sleep(DMX_TICK_INTERVAL);
-            snapshot = engine.snapshot();
-        }
-        assert!(snapshot.programmer.enabled);
-        assert!(snapshot.programmer.blind);
-        assert_eq!(snapshot.fixtures[0].attribute_values[0].value, 1_000);
-        assert_eq!(snapshot.programmer.values[0].value, 50_000);
-        assert!(snapshot.programmer.dmx_previews[0].values[0] >= 194);
-        assert!(snapshot.dmx_preview[0] <= 5);
+        engine.send(EngineCommand::ClearProgrammer).unwrap();
+        std::thread::sleep(DMX_TICK_INTERVAL * 2);
+        let discarded = engine.snapshot();
+        assert_eq!(discarded.dmx_previews, live_before_blind);
+        assert!(discarded.programmer.values.is_empty());
+        assert!(!discarded.programmer.enabled);
+        assert!(!discarded.programmer.blind);
+        assert_eq!(discarded.fixtures[0].attribute_values[0].value, 1_000);
+    }
 
+    #[test]
+    fn programmer_blind_toggle_off_commits_staged_values() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: sample_patch_request("Fixture 1", 1),
+                profile: sample_profile(),
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetProgrammerMode {
+                enabled: true,
+                blind: true,
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetProgrammerAttribute {
+                fixture_id,
+                attribute: "Dimmer".to_string(),
+                value: 50_000,
+            })
+            .unwrap();
         engine
             .send(EngineCommand::SetProgrammerMode {
                 enabled: true,
                 blind: false,
             })
             .unwrap();
-        for _ in 0..20 {
-            snapshot = engine.snapshot();
-            if snapshot.dmx_preview[0] >= 194 {
-                break;
-            }
-            std::thread::sleep(DMX_TICK_INTERVAL);
-        }
-        assert!(!snapshot.programmer.blind);
-        assert!(snapshot.dmx_preview[0] >= 194);
 
-        engine.send(EngineCommand::CommitProgrammer).unwrap();
+        let mut snapshot = engine.snapshot();
         for _ in 0..20 {
-            snapshot = engine.snapshot();
-            if snapshot.programmer.values.is_empty() {
+            if snapshot.programmer.values.is_empty() && snapshot.dmx_preview[0] >= 194 {
                 break;
             }
             std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
         }
         assert!(snapshot.programmer.values.is_empty());
+        assert!(!snapshot.programmer.blind);
         assert_eq!(snapshot.fixtures[0].attribute_values[0].value, 50_000);
         assert!(snapshot.dmx_preview[0] >= 194);
     }

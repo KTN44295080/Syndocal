@@ -109,6 +109,7 @@ assert.equal(localization.translateUiText("SS", "ja"), "SS");
 assert.equal(localization.translateUiText("EDIT", "ja"), "EDIT");
 assert.equal(localization.translateUiText("EDIT:", "ja"), "EDIT:");
 assert.equal(localization.translateUiText("LIVE", "ja"), "LIVE");
+assert.equal(localization.translateUiText("BLIND", "ja"), "BLIND");
 assert.equal(localization.translateUiText("Fader write mode", "ja"), "フェーダー書込モード");
 assert.equal(localization.translateUiText("No scene selected", "ja"), "シーン未選択");
 assert.equal(localization.translateUiText("Scene settings", "ja"), "シーン設定");
@@ -525,7 +526,7 @@ await collectTsx(sourceRoot);
 
 const localeInvariantText = new Set([
   "Syndocal", "DMX", "MIDI", "OSC", "RDM", "ISF", "NDI", "Spout", "Syphon", "HAP", "FFmpeg",
-  "GO", "SET", "FLASH", "EDIT", "EDIT:", "LIVE", "HTP", "LTP", "RGB", "BPM", "PULSE", "PATCH", "A", "B", "R", "G", "X", "Y", "Z", "Pan", "Tilt",
+  "GO", "SET", "FLASH", "EDIT", "EDIT:", "LIVE", "BLIND", "HTP", "LTP", "RGB", "BPM", "PULSE", "PATCH", "A", "B", "R", "G", "X", "Y", "Z", "Pan", "Tilt",
   "Dimmer", "Color", "Position", "Beam", "Speed", "Size", "Phase",
   "Sine", "Cosine", "Triangle", "Saw", "Square", "Random", "Perlin",
   "STEPS", "COLOR FX", "CHASER FX", "MOVE FX", "VALUE FX", "CURVE FX", "MAPPINGS", "COLOUR MAPPINGS",
