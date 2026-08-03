@@ -40,7 +40,7 @@ export function ProgrammerPanel(props: ProgrammerPanelProps) {
         <button class="primary" disabled={props.programmer.values.length === 0} onClick={() => void props.onCommit()}>Commit</button>
         <button disabled={props.programmer.values.length === 0} onClick={() => clearDialog.showModal()}>Clear</button>
       </div>
-      <p class="hint">Stage edits routes faders to the Programmer. Live Preview reaches DMX; Blind changes only the editor preview. Commit writes staged values to the live base state.</p>
+      <p class="hint">Stage edits routes faders to the Programmer. Live Preview reaches DMX; Blind changes only the editor preview. Commit updates the edited scene; live output changes only when that scene is active.</p>
       <dialog ref={clearDialog} class="programmerClearDialog" aria-labelledby="programmer-clear-title">
         <form method="dialog">
           <h2 id="programmer-clear-title">Clear Programmer?</h2>

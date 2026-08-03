@@ -22850,6 +22850,7 @@ async function runBlindViewport(client, viewport) {
     };
     const snapshot = window.__syndocalReadEditLiveFixtureSnapshot?.();
     const cue = snapshot?.cues?.find((candidate) => candidate.id === 301);
+    const nonActiveCue = snapshot?.cues?.find((candidate) => candidate.id === 302);
     const fixture = document.querySelector('.controlStageContext [data-stage-fixture-id="1"]');
     const shape = fixture?.querySelector('.stageFixtureShape:not(.stageFixtureSegmentOutline)');
     const watermark = document.querySelector('[data-mapping-blind-watermark]');
@@ -22867,12 +22868,31 @@ async function runBlindViewport(client, viewport) {
       liveDmxSignature: JSON.stringify(snapshot?.dmx_previews ?? []),
       programmerDmxSignature: JSON.stringify(snapshot?.programmer?.dmx_previews ?? []),
       cueTargetSignature: JSON.stringify(cue?.targets ?? []),
+      nonActiveCueTargetSignature: JSON.stringify(nonActiveCue?.targets ?? []),
       cueGreen: cue?.targets
         ?.find((target) => target.fixture_id === 1)
         ?.values?.find((value) => value.attribute === 'ColorGreen')?.value ?? null,
       cueRed: cue?.targets
         ?.find((target) => target.fixture_id === 1)
         ?.values?.find((value) => value.attribute === 'ColorRed')?.value ?? null,
+      nonActiveCueGreen: nonActiveCue?.targets
+        ?.find((target) => target.fixture_id === 1)
+        ?.values?.find((value) => value.attribute === 'ColorGreen')?.value ?? null,
+      nonActiveCueRed: nonActiveCue?.targets
+        ?.find((target) => target.fixture_id === 1)
+        ?.values?.find((value) => value.attribute === 'ColorRed')?.value ?? null,
+      activeCueId: snapshot?.active_cue_id ?? null,
+      cueListActiveCueIds: JSON.stringify(snapshot?.cue_lists?.map((cueList) => cueList.active_cue_id) ?? []),
+      activeMatrixCueIds: JSON.stringify(
+        [...document.querySelectorAll('[data-scene-matrix-active="true"]')]
+          .map((element) => Number(element.getAttribute('data-scene-matrix-cue-id')))
+          .filter(Number.isFinite)
+          .sort((left, right) => left - right)
+      ),
+      selectedCueId: Number(
+        document.querySelector('[data-scene-matrix-selected="true"]')
+          ?.getAttribute('data-scene-matrix-cue-id') ?? NaN
+      ),
       stageColor: shape ? getComputedStyle(shape).fill : '',
       liveColorSource: fixture?.getAttribute('data-live-color-source') ?? '',
       toggleCount: document.querySelectorAll('[data-control-blind-toggle]').length,
@@ -22918,6 +22938,9 @@ async function runBlindViewport(client, viewport) {
   const samePaneRects = (left, right) => JSON.stringify(left.paneRects) === JSON.stringify(right.paneRects);
 
   const initial = await readState();
+  await clickVisibleSelector(client, '[data-scene-matrix-edit-strip="302"]');
+  await sleep(80);
+  const nonActiveSelected = await readState();
   await clickVisibleSelector(client, '[data-control-blind-toggle]');
   const blindEnabled = true;
   await sleep(80);
@@ -22935,38 +22958,81 @@ async function runBlindViewport(client, viewport) {
   await clickVisibleSelector(client, '[data-control-blind-toggle]');
   const blindReenabled = true;
   await sleep(60);
-  const greenEditForCommit = await clickGreenSwatch();
-  const stagedForCommit = await readState();
+  const greenEditForNonActiveCommit = await clickGreenSwatch();
+  const stagedForNonActiveCommit = await readState();
   await clickVisibleSelector(client, '[data-control-blind-toggle]');
-  const toggleOff = true;
+  const nonActiveToggleOff = true;
+  await sleep(420);
+  const nonActiveCommitted = await readState();
+
+  await clickVisibleSelector(client, '[data-scene-matrix-edit-strip="301"]');
+  await sleep(80);
+  const activeSelected = await readState();
+  await clickVisibleSelector(client, '[data-control-blind-toggle]');
+  const activeBlindEnabled = true;
+  await sleep(60);
+  const greenEditForActiveCommit = await clickGreenSwatch();
+  const stagedForActiveCommit = await readState();
+  await clickVisibleSelector(client, '[data-control-blind-toggle]');
+  const activeToggleOff = true;
   await sleep(420);
   const committed = await readState();
+  await sleep(120);
+  const committedSettled = await readState();
 
   const conditions = [
     ["blindTogglePresentBesideEditLive", () =>
       initial.toggleCount === 1 && initial.toggleVisible && initial.toggleBesideWriteModes && initial.toggleLabel.includes("Blind")],
     ["blindStartsOffWithLiveRedStage", () =>
-      !initial.blind && initial.togglePressed === "false" && initial.stageColor === "rgb(255, 0, 0)"],
+      !initial.blind && initial.togglePressed === "false" && initial.stageColor === "rgb(255, 0, 0)" &&
+      initial.activeCueId === 301 && initial.selectedCueId === 301],
+    ["blindStripSelectsNonActiveSceneWithoutTriggering", () =>
+      nonActiveSelected.selectedCueId === 302 && nonActiveSelected.activeCueId === 301 &&
+      nonActiveSelected.liveDmxSignature === initial.liveDmxSignature &&
+      nonActiveSelected.cueListActiveCueIds === initial.cueListActiveCueIds &&
+      nonActiveSelected.activeMatrixCueIds === initial.activeMatrixCueIds],
     ["blindCanEnableAndEditGreen", () =>
       blindEnabled && greenEdit && staged.blind && staged.togglePressed === "true" && staged.stagedCount >= 3 &&
       staged.stageColor === "rgb(0, 255, 0)" && staged.liveColorSource === "preview"],
     ["blindEditKeepsLiveDmxByteIdentical", () => staged.liveDmxSignature === initial.liveDmxSignature],
-    ["blindEditDoesNotCommitSceneEarly", () => staged.cueTargetSignature === initial.cueTargetSignature],
+    ["blindEditDoesNotCommitSceneEarly", () =>
+      staged.nonActiveCueTargetSignature === initial.nonActiveCueTargetSignature],
     ["blindWatermarkIsOrangeAndVisibleOnlyWhileActive", () =>
       staged.watermarkVisible && staged.watermarkText === "BLIND" && /255, 138, 36/.test(staged.watermarkStroke) &&
-      !initial.watermarkVisible && !discarded.watermarkVisible && !committed.watermarkVisible],
+      stagedForNonActiveCommit.watermarkVisible && stagedForActiveCommit.watermarkVisible &&
+      !initial.watermarkVisible && !discarded.watermarkVisible &&
+      !nonActiveCommitted.watermarkVisible && !committed.watermarkVisible],
     ["explicitCommitAndDiscardPathsAreVisible", () => staged.commitVisible && staged.discardVisible],
     ["discardRestoresStageAndLeavesLiveDmxUntouched", () =>
       discardOpened && discardConfirmed && !discarded.blind && discarded.stageColor === initial.stageColor &&
-      discarded.liveDmxSignature === initial.liveDmxSignature && discarded.cueTargetSignature === initial.cueTargetSignature],
+      discarded.liveDmxSignature === initial.liveDmxSignature &&
+      discarded.nonActiveCueTargetSignature === initial.nonActiveCueTargetSignature],
+    ["blindNonActiveCommitKeepsLiveOutputByteIdentical", () =>
+      blindReenabled && greenEditForNonActiveCommit && nonActiveToggleOff &&
+      stagedForNonActiveCommit.blind && !nonActiveCommitted.blind &&
+      nonActiveCommitted.stageColor === initial.stageColor &&
+      nonActiveCommitted.liveDmxSignature === initial.liveDmxSignature &&
+      nonActiveCommitted.cueTargetSignature === initial.cueTargetSignature &&
+      nonActiveCommitted.nonActiveCueGreen === 65_535 && nonActiveCommitted.nonActiveCueRed === 0],
+    ["blindCommitPreservesActiveCueForNonActiveAndActiveEdits", () =>
+      [nonActiveSelected, staged, discarded, stagedForNonActiveCommit, nonActiveCommitted,
+        activeSelected, stagedForActiveCommit, committed, committedSettled]
+        .every((state) => state.activeCueId === 301 &&
+          state.cueListActiveCueIds === initial.cueListActiveCueIds &&
+          state.activeMatrixCueIds === initial.activeMatrixCueIds)],
     ["toggleOffCommitsSceneAndLiveExactlyOnce", () =>
-      blindReenabled && greenEditForCommit && toggleOff && stagedForCommit.blind && !committed.blind &&
+      activeBlindEnabled && greenEditForActiveCommit && activeToggleOff && stagedForActiveCommit.blind && !committed.blind &&
       committed.stageColor === "rgb(0, 255, 0)" && committed.liveDmxSignature !== initial.liveDmxSignature &&
-      committed.cueGreen === 65_535 && committed.cueRed === 0],
+      committed.cueGreen === 65_535 && committed.cueRed === 0 &&
+      committedSettled.liveDmxSignature === committed.liveDmxSignature],
     ["fixedPaneRectsStayEqual", () =>
-      [staged, discarded, stagedForCommit, committed].every((state) => samePaneRects(initial, state))],
+      [nonActiveSelected, staged, discarded, stagedForNonActiveCommit, nonActiveCommitted,
+        activeSelected, stagedForActiveCommit, committed, committedSettled]
+        .every((state) => samePaneRects(initial, state))],
     ["blindFlowKeepsDocumentAndAppScrollZero", () =>
-      [initial, staged, discarded, stagedForCommit, committed].every((state) => state.documentAndAppScrollZero)],
+      [initial, nonActiveSelected, staged, discarded, stagedForNonActiveCommit, nonActiveCommitted,
+        activeSelected, stagedForActiveCommit, committed, committedSettled]
+        .every((state) => state.documentAndAppScrollZero)],
   ];
   const checks = Object.fromEntries(conditions.map(([name, check]) => {
     try {
@@ -22982,10 +23048,15 @@ async function runBlindViewport(client, viewport) {
     checks,
     failedChecks,
     initial,
+    nonActiveSelected,
     staged,
     discarded,
-    stagedForCommit,
+    stagedForNonActiveCommit,
+    nonActiveCommitted,
+    activeSelected,
+    stagedForActiveCommit,
     committed,
+    committedSettled,
   };
 }
 
@@ -23595,6 +23666,9 @@ async function main() {
         console.log(
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
             `dmxFrozen=${result.initial.liveDmxSignature === result.staged.liveDmxSignature} ` +
+            `nonActiveCommitDmx=${result.checks.blindNonActiveCommitKeepsLiveOutputByteIdentical} ` +
+            `activeCuePreserved=${result.checks.blindCommitPreservesActiveCueForNonActiveAndActiveEdits} ` +
+            `activeApplyOnce=${result.checks.toggleOffCommitsSceneAndLiveExactlyOnce} ` +
             `stage=${result.initial.stageColor}->${result.staged.stageColor}->${result.committed.stageColor} ` +
             `watermark=${result.staged.watermarkVisible}->${result.committed.watermarkVisible} ` +
             `discard=${result.discarded.stageColor}:${result.discarded.liveDmxSignature === result.initial.liveDmxSignature} ` +
@@ -25366,6 +25440,9 @@ async function main() {
       console.log(
         `${blindResult.passed ? "pass" : "fail"} ${blindResult.label} ` +
           `dmxFrozen=${blindResult.initial.liveDmxSignature === blindResult.staged.liveDmxSignature} ` +
+          `nonActiveCommitDmx=${blindResult.checks.blindNonActiveCommitKeepsLiveOutputByteIdentical} ` +
+          `activeCuePreserved=${blindResult.checks.blindCommitPreservesActiveCueForNonActiveAndActiveEdits} ` +
+          `activeApplyOnce=${blindResult.checks.toggleOffCommitsSceneAndLiveExactlyOnce} ` +
           `stage=${blindResult.initial.stageColor}->${blindResult.staged.stageColor}->${blindResult.committed.stageColor} ` +
           `watermark=${blindResult.staged.watermarkVisible}->${blindResult.committed.watermarkVisible} ` +
           `discard=${blindResult.discarded.stageColor}:` +

@@ -4484,10 +4484,15 @@ fn set_programmer_mode(
     state: State<'_, AppState>,
     enabled: bool,
     blind: bool,
+    edited_scene_cue_id: Option<CueId>,
 ) -> Result<(), String> {
     state
         .engine
-        .send(EngineCommand::SetProgrammerMode { enabled, blind })
+        .send(EngineCommand::SetProgrammerMode {
+            enabled,
+            blind,
+            edited_scene_cue_id,
+        })
         .map_err(|error| error.to_string())
 }
 
@@ -4537,10 +4542,15 @@ fn clear_programmer(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn commit_programmer(state: State<'_, AppState>) -> Result<(), String> {
+fn commit_programmer(
+    state: State<'_, AppState>,
+    edited_scene_cue_id: Option<CueId>,
+) -> Result<(), String> {
     state
         .engine
-        .send(EngineCommand::CommitProgrammer)
+        .send(EngineCommand::CommitProgrammer {
+            edited_scene_cue_id,
+        })
         .map_err(|error| error.to_string())
 }
 

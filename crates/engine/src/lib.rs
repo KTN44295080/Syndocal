@@ -224,6 +224,7 @@ pub enum EngineCommand {
     SetProgrammerMode {
         enabled: bool,
         blind: bool,
+        edited_scene_cue_id: Option<CueId>,
     },
     SetProgrammerAttribute {
         fixture_id: FixtureId,
@@ -236,7 +237,9 @@ pub enum EngineCommand {
         value: u16,
     },
     ClearProgrammer,
-    CommitProgrammer,
+    CommitProgrammer {
+        edited_scene_cue_id: Option<CueId>,
+    },
     SetGroupHighlight {
         group_id: String,
         enabled: bool,
@@ -1086,7 +1089,7 @@ impl EngineCommand {
                 | EngineCommand::SetProgrammerAttribute { .. }
                 | EngineCommand::SetProgrammerGroupAttribute { .. }
                 | EngineCommand::ClearProgrammer
-                | EngineCommand::CommitProgrammer
+                | EngineCommand::CommitProgrammer { .. }
                 | EngineCommand::SetGroupHighlight { .. }
                 | EngineCommand::SetGroupSolo { .. }
                 | EngineCommand::SetGroupStrobe { .. }
@@ -5306,9 +5309,13 @@ impl EngineRuntime {
                 }
                 Err(error) => self.last_error = Some(error),
             },
-            EngineCommand::SetProgrammerMode { enabled, blind } => {
+            EngineCommand::SetProgrammerMode {
+                enabled,
+                blind,
+                edited_scene_cue_id,
+            } => {
                 if self.programmer_enabled && self.programmer_blind && (!enabled || !blind) {
-                    self.commit_programmer_values();
+                    self.commit_programmer_values(edited_scene_cue_id);
                 }
                 self.programmer_enabled = enabled;
                 self.programmer_blind = enabled && blind;
@@ -5346,8 +5353,10 @@ impl EngineRuntime {
                 self.programmer_blind = false;
                 self.last_error = None;
             }
-            EngineCommand::CommitProgrammer => {
-                self.commit_programmer_values();
+            EngineCommand::CommitProgrammer {
+                edited_scene_cue_id,
+            } => {
+                self.commit_programmer_values(edited_scene_cue_id);
                 self.programmer_enabled = false;
                 self.programmer_blind = false;
                 self.last_error = None;
@@ -10291,14 +10300,66 @@ impl EngineRuntime {
         }
     }
 
-    fn commit_programmer_values(&mut self) {
+    fn commit_programmer_values(&mut self, edited_scene_cue_id: Option<CueId>) {
         if self.programmer_values.is_empty() {
             return;
         }
-        self.active_cue_id = None;
-        self.active_fade = None;
-        for (key, value) in self.programmer_values.drain() {
-            self.cue_value_origins.remove(&key);
+
+        let edited_scene_is_active = edited_scene_cue_id.is_some_and(|cue_id| {
+            self.active_cue_id == Some(cue_id)
+                || self
+                    .cue_lists
+                    .iter()
+                    .any(|cue_list| cue_list.active_cue_id == Some(cue_id))
+                || self
+                    .active_group_cue_ids
+                    .values()
+                    .any(|active_cue_id| *active_cue_id == cue_id)
+        });
+        if edited_scene_cue_id.is_some() && !edited_scene_is_active {
+            self.programmer_values.clear();
+            return;
+        }
+
+        let cue_list_id = edited_scene_cue_id.and_then(|cue_id| {
+            self.cues
+                .iter()
+                .find(|cue| cue.id == cue_id)
+                .map(|cue| cue.cue_list_id)
+        });
+        let staged_values = std::mem::take(&mut self.programmer_values);
+
+        if edited_scene_cue_id.is_none() {
+            self.active_cue_id = None;
+            self.active_fade = None;
+        } else if self
+            .active_fade
+            .as_ref()
+            .is_some_and(|fade| edited_scene_cue_id.is_some_and(|cue_id| fade.cue_id == cue_id))
+        {
+            self.active_fade = None;
+        }
+
+        if let Some(cue_id) = edited_scene_cue_id {
+            let release_defaults = staged_values
+                .keys()
+                .filter_map(|key| {
+                    self.fixture_attribute_default(key)
+                        .map(|value| (key.clone(), value))
+                })
+                .collect::<Vec<_>>();
+            let release_values = self.cue_release_values.entry(cue_id).or_default();
+            for (key, value) in release_defaults {
+                release_values.entry(key).or_insert(value);
+            }
+        }
+
+        for (key, value) in staged_values {
+            if let Some(cue_list_id) = cue_list_id {
+                self.cue_value_origins.insert(key.clone(), cue_list_id);
+            } else {
+                self.cue_value_origins.remove(&key);
+            }
             self.values.insert(key, value);
         }
     }
@@ -35417,6 +35478,7 @@ mod tests {
             .send(EngineCommand::SetProgrammerMode {
                 enabled: true,
                 blind: false,
+                edited_scene_cue_id: None,
             })
             .unwrap();
         engine
@@ -36060,6 +36122,150 @@ mod tests {
     }
 
     #[test]
+    fn programmer_blind_non_active_scene_commit_preserves_live_output_and_active_cue() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: sample_patch_request("Fixture 1", 1),
+                profile: sample_profile(),
+            })
+            .unwrap();
+        let active_cue_id = engine.allocate_cue_id();
+        let edited_cue_id = engine.allocate_cue_id();
+        engine
+            .send(EngineCommand::CreateCue {
+                authored_beats: None,
+                cue_id: active_cue_id,
+                label: "Active white scene".to_string(),
+                fade_ms: 0,
+                targets: vec![CueFixtureTarget {
+                    fixture_id,
+                    values: vec![AttributeValueSummary {
+                        attribute: "Dimmer".to_string(),
+                        value: 1_000,
+                    }],
+                }],
+                video_targets: Vec::new(),
+                video_output_targets: Vec::new(),
+                node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::CreateCue {
+                authored_beats: None,
+                cue_id: edited_cue_id,
+                label: "Edited scene".to_string(),
+                fade_ms: 0,
+                targets: vec![CueFixtureTarget {
+                    fixture_id,
+                    values: vec![AttributeValueSummary {
+                        attribute: "Dimmer".to_string(),
+                        value: 10_000,
+                    }],
+                }],
+                video_targets: Vec::new(),
+                video_output_targets: Vec::new(),
+                node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::TriggerCue(active_cue_id))
+            .unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            if snapshot.active_cue_id == Some(active_cue_id) && snapshot.dmx_preview[0] <= 5 {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+            snapshot = engine.snapshot();
+        }
+        assert_eq!(snapshot.active_cue_id, Some(active_cue_id));
+        assert_eq!(snapshot.cue_lists[0].active_cue_id, Some(active_cue_id));
+        let live_before_blind = snapshot.dmx_previews.clone();
+
+        engine
+            .send(EngineCommand::SetProgrammerMode {
+                enabled: true,
+                blind: true,
+                edited_scene_cue_id: None,
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetProgrammerAttribute {
+                fixture_id,
+                attribute: "Dimmer".to_string(),
+                value: 50_000,
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::UpdateCue {
+                cue_id: edited_cue_id,
+                label: "Edited scene".to_string(),
+                fade_ms: 0,
+                targets: vec![CueFixtureTarget {
+                    fixture_id,
+                    values: vec![AttributeValueSummary {
+                        attribute: "Dimmer".to_string(),
+                        value: 50_000,
+                    }],
+                }],
+                video_targets: Vec::new(),
+                video_output_targets: Vec::new(),
+                node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::CommitProgrammer {
+                edited_scene_cue_id: Some(edited_cue_id),
+            })
+            .unwrap();
+
+        for _ in 0..20 {
+            snapshot = engine.snapshot();
+            let edited_value = snapshot
+                .cues
+                .iter()
+                .find(|cue| cue.id == edited_cue_id)
+                .map(|cue| cue.targets[0].values[0].value);
+            if snapshot.programmer.values.is_empty() && edited_value == Some(50_000) {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+        }
+        assert!(snapshot.programmer.values.is_empty());
+        assert!(!snapshot.programmer.enabled);
+        assert!(!snapshot.programmer.blind);
+        assert_eq!(snapshot.active_cue_id, Some(active_cue_id));
+        assert_eq!(snapshot.cue_lists[0].active_cue_id, Some(active_cue_id));
+        assert_eq!(snapshot.dmx_previews, live_before_blind);
+        assert_eq!(
+            snapshot
+                .cues
+                .iter()
+                .find(|cue| cue.id == edited_cue_id)
+                .unwrap()
+                .targets[0]
+                .values[0]
+                .value,
+            50_000
+        );
+        std::thread::sleep(DMX_TICK_INTERVAL * 2);
+        let settled = engine.snapshot();
+        assert_eq!(settled.active_cue_id, Some(active_cue_id));
+        assert_eq!(settled.cue_lists[0].active_cue_id, Some(active_cue_id));
+        assert_eq!(settled.dmx_previews, live_before_blind);
+    }
+
+    #[test]
     fn programmer_blind_active_scene_keeps_dmx_frozen_then_explicit_commit_applies_once() {
         let engine = EngineHandle::start(DmxOutputConfig {
             enabled: false,
@@ -36110,6 +36316,7 @@ mod tests {
             .send(EngineCommand::SetProgrammerMode {
                 enabled: true,
                 blind: true,
+                edited_scene_cue_id: None,
             })
             .unwrap();
         engine
@@ -36117,6 +36324,24 @@ mod tests {
                 fixture_id,
                 attribute: "Dimmer".to_string(),
                 value: 50_000,
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::UpdateCue {
+                cue_id,
+                label: "Red live scene".to_string(),
+                fade_ms: 0,
+                targets: vec![CueFixtureTarget {
+                    fixture_id,
+                    values: vec![AttributeValueSummary {
+                        attribute: "Dimmer".to_string(),
+                        value: 50_000,
+                    }],
+                }],
+                video_targets: Vec::new(),
+                video_output_targets: Vec::new(),
+                node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
             })
             .unwrap();
 
@@ -36135,7 +36360,11 @@ mod tests {
         assert_eq!(snapshot.active_cue_id, Some(cue_id));
         assert_eq!(snapshot.dmx_previews, live_before_blind);
 
-        engine.send(EngineCommand::CommitProgrammer).unwrap();
+        engine
+            .send(EngineCommand::CommitProgrammer {
+                edited_scene_cue_id: Some(cue_id),
+            })
+            .unwrap();
         for _ in 0..20 {
             snapshot = engine.snapshot();
             if snapshot.programmer.values.is_empty() && snapshot.dmx_preview[0] >= 194 {
@@ -36146,12 +36375,29 @@ mod tests {
         assert!(snapshot.programmer.values.is_empty());
         assert!(!snapshot.programmer.enabled);
         assert!(!snapshot.programmer.blind);
-        assert_eq!(snapshot.active_cue_id, None);
+        assert_eq!(snapshot.active_cue_id, Some(cue_id));
+        assert_eq!(snapshot.cue_lists[0].active_cue_id, Some(cue_id));
         assert_eq!(snapshot.fixtures[0].attribute_values[0].value, 50_000);
+        assert_eq!(snapshot.cues[0].targets[0].values[0].value, 50_000);
         assert!(snapshot.dmx_preview[0] >= 194);
         let committed_dmx = snapshot.dmx_previews.clone();
         std::thread::sleep(DMX_TICK_INTERVAL * 2);
-        assert_eq!(engine.snapshot().dmx_previews, committed_dmx);
+        let settled = engine.snapshot();
+        assert_eq!(settled.active_cue_id, Some(cue_id));
+        assert_eq!(settled.cue_lists[0].active_cue_id, Some(cue_id));
+        assert_eq!(settled.dmx_previews, committed_dmx);
+
+        engine.send(EngineCommand::ReleaseCue(cue_id)).unwrap();
+        for _ in 0..20 {
+            snapshot = engine.snapshot();
+            if snapshot.active_cue_id.is_none() && snapshot.dmx_preview[0] <= 5 {
+                break;
+            }
+            std::thread::sleep(DMX_TICK_INTERVAL);
+        }
+        assert_eq!(snapshot.active_cue_id, None);
+        assert_eq!(snapshot.cue_lists[0].active_cue_id, None);
+        assert!(snapshot.dmx_preview[0] <= 5);
     }
 
     #[test]
@@ -36182,6 +36428,7 @@ mod tests {
             .send(EngineCommand::SetProgrammerMode {
                 enabled: true,
                 blind: true,
+                edited_scene_cue_id: None,
             })
             .unwrap();
         engine
@@ -36222,6 +36469,7 @@ mod tests {
             .send(EngineCommand::SetProgrammerMode {
                 enabled: true,
                 blind: true,
+                edited_scene_cue_id: None,
             })
             .unwrap();
         engine
@@ -36235,6 +36483,7 @@ mod tests {
             .send(EngineCommand::SetProgrammerMode {
                 enabled: true,
                 blind: false,
+                edited_scene_cue_id: None,
             })
             .unwrap();
 

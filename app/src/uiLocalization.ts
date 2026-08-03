@@ -1360,6 +1360,16 @@ const japaneseText: Record<string, string> = {
     "ブラインド編集を破棄しました。Live DMX出力は変更されていません。",
   "Committed Blind edits to the scene and live DMX output.":
     "ブラインド編集をシーンとLive DMX出力へ確定しました。",
+  "Blind commit requires the edited scene to remain selected.":
+    "ブラインド編集の確定には、編集中のシーンを選択したままにする必要があります。",
+  "Committed Blind edits to the active scene and live DMX output.":
+    "ブラインド編集を実行中のシーンとLive DMX出力へ確定しました。",
+  "Committed Blind edits to the scene. Live DMX output was not changed.":
+    "ブラインド編集をシーンへ確定しました。Live DMX出力は変更されていません。",
+  "Committed Blind edits to the active scene and live DMX output. Undo is available.":
+    "ブラインド編集を実行中のシーンとLive DMX出力へ確定しました。元に戻す操作が利用できます。",
+  "Committed Blind edits to the scene. Live DMX output was not changed. Undo is available.":
+    "ブラインド編集をシーンへ確定しました。Live DMX出力は変更されていません。元に戻す操作が利用できます。",
   "Select a scene and use EDIT before enabling Blind editing.":
     "シーンを選択し、EDITにしてからブラインド編集を有効にしてください。",
   Bottom: "下",
@@ -2091,8 +2101,8 @@ const japaneseText: Record<string, string> = {
   "Full-screen view of the Setup 2D stage band for lighting fixture layout":
     "照明灯体配置用セットアップ2Dステージ帯の全画面表示",
   "Stage edits": "ステージ編集",
-  "Stage edits routes faders to the Programmer. Live Preview reaches DMX; Blind changes only the editor preview. Commit writes staged values to the live base state.":
-    "ステージ編集ではフェーダーをプログラマーへ送ります。ライブプレビューはDMXへ反映し、ブラインドは編集プレビューだけを変更します。確定すると仮値をライブ基準値へ書き込みます。",
+  "Stage edits routes faders to the Programmer. Live Preview reaches DMX; Blind changes only the editor preview. Commit updates the edited scene; live output changes only when that scene is active.":
+    "ステージ編集ではフェーダーをプログラマーへ送ります。ライブプレビューはDMXへ反映し、ブラインドは編集プレビューだけを変更します。確定すると編集中のシーンを更新し、そのシーンが実行中の場合だけLive出力を変更します。",
   "Stage Objects": "ステージオブジェクト",
   "Stage Wave": "ステージウェーブ",
   "staged ·": "仮値 ·",

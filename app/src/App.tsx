@@ -9906,9 +9906,28 @@ export default function App() {
       return;
     }
     try {
-      await invoke("set_programmer_mode", { enabled, blind });
+      const committingBlind = snapshot().programmer.blind && (!enabled || !blind);
+      const editedSceneCueId = committingBlind ? selectedSceneCue()?.id ?? null : null;
+      if (committingBlind && editedSceneCueId === null) {
+        setMessage("Blind commit requires the edited scene to remain selected.");
+        return;
+      }
+      const editedSceneWasActive = editedSceneCueId !== null && (
+        snapshot().active_cue_id === editedSceneCueId
+        || Object.values(snapshot().active_group_cue_ids ?? {}).includes(editedSceneCueId)
+        || snapshot().cue_lists.some((cueList) => cueList.active_cue_id === editedSceneCueId)
+      );
+      await invoke("set_programmer_mode", { enabled, blind, editedSceneCueId });
       if (!enabled) setFaderValues({});
-      setMessage(!enabled ? "Direct live editing enabled." : blind ? "Programmer Blind enabled." : "Programmer Live Preview enabled.");
+      setMessage(committingBlind
+        ? editedSceneWasActive
+          ? "Committed Blind edits to the active scene and live DMX output."
+          : "Committed Blind edits to the scene. Live DMX output was not changed."
+        : !enabled
+          ? "Direct live editing enabled."
+          : blind
+            ? "Programmer Blind enabled."
+            : "Programmer Live Preview enabled.");
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
@@ -9938,9 +9957,21 @@ export default function App() {
 
   const commitProgrammer = async () => {
     try {
+      const committingBlind = snapshot().programmer.blind;
+      const editedSceneCueId = selectedSceneCue()?.id ?? null;
+      if (committingBlind && editedSceneCueId === null) {
+        setMessage("Blind commit requires the edited scene to remain selected.");
+        return;
+      }
+      const editedSceneWasActive = committingBlind && editedSceneCueId !== null && (
+        snapshot().active_cue_id === editedSceneCueId
+        || Object.values(snapshot().active_group_cue_ids ?? {}).includes(editedSceneCueId)
+        || snapshot().cue_lists.some((cueList) => cueList.active_cue_id === editedSceneCueId)
+      );
       await flushControlEditLookUpdates();
       if (viewportFixture === "blind") {
         let committedSnapshot: EngineSnapshot | null = null;
+        let appliedToLive = false;
         setSnapshot((current) => {
           const stagedByFixture = new Map<number, Map<string, number>>();
           for (const staged of current.programmer.values) {
@@ -9948,25 +9979,35 @@ export default function App() {
             values.set(staged.attribute, staged.value);
             stagedByFixture.set(staged.fixture_id, values);
           }
-          const previews = current.programmer.dmx_previews.length > 0
-            ? current.programmer.dmx_previews.map((preview) => ({ ...preview, values: [...preview.values] }))
-            : current.dmx_previews.map((preview) => ({ ...preview, values: [...preview.values] }));
+          appliedToLive = editedSceneCueId !== null && (
+            current.active_cue_id === editedSceneCueId
+            || Object.values(current.active_group_cue_ids ?? {}).includes(editedSceneCueId)
+            || current.cue_lists.some((cueList) => cueList.active_cue_id === editedSceneCueId)
+          );
+          const previews = appliedToLive
+            ? current.programmer.dmx_previews.length > 0
+              ? current.programmer.dmx_previews.map((preview) => ({ ...preview, values: [...preview.values] }))
+              : current.dmx_previews.map((preview) => ({ ...preview, values: [...preview.values] }))
+            : current.dmx_previews;
           const next: EngineSnapshot = {
             ...current,
-            fixtures: current.fixtures.map((fixture) => {
-              const staged = stagedByFixture.get(fixture.id);
-              return staged
-                ? {
-                    ...fixture,
-                    attribute_values: fixture.attribute_values.map((entry) => ({
-                      ...entry,
-                      value: staged.get(entry.attribute) ?? entry.value,
-                    })),
-                  }
-                : fixture;
-            }),
-            active_cue_id: null,
-            active_fade: null,
+            fixtures: appliedToLive
+              ? current.fixtures.map((fixture) => {
+                  const staged = stagedByFixture.get(fixture.id);
+                  return staged
+                    ? {
+                        ...fixture,
+                        attribute_values: fixture.attribute_values.map((entry) => ({
+                          ...entry,
+                          value: staged.get(entry.attribute) ?? entry.value,
+                        })),
+                      }
+                    : fixture;
+                })
+              : current.fixtures,
+            active_fade: appliedToLive && current.active_fade?.cue_id === editedSceneCueId
+              ? null
+              : current.active_fade,
             programmer: { enabled: false, blind: false, values: [], dmx_previews: [] },
             dmx_preview: previews[0]?.values ?? current.dmx_preview,
             dmx_previews: previews,
@@ -9974,16 +10015,24 @@ export default function App() {
           committedSnapshot = next;
           return next;
         });
-        if (committedSnapshot) {
+        if (committedSnapshot && appliedToLive) {
           setLiveDmxPreviews(engineDmxPreviews(committedSnapshot));
           setLiveFixtures(snapshotLiveFixtures(committedSnapshot));
         }
         setFaderValues({});
-        setMessage("Committed Blind edits to the scene and live DMX output.");
+        setMessage(appliedToLive
+          ? "Committed Blind edits to the active scene and live DMX output."
+          : "Committed Blind edits to the scene. Live DMX output was not changed.");
         return;
       }
-      await invoke("commit_programmer");
-      setMessage("Committed Programmer values to the live base state. Undo is available.");
+      await invoke("commit_programmer", {
+        editedSceneCueId: committingBlind ? editedSceneCueId : null,
+      });
+      setMessage(!committingBlind
+        ? "Committed Programmer values to the live base state. Undo is available."
+        : editedSceneWasActive
+          ? "Committed Blind edits to the active scene and live DMX output. Undo is available."
+          : "Committed Blind edits to the scene. Live DMX output was not changed. Undo is available.");
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
