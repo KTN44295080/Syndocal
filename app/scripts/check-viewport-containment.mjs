@@ -12134,11 +12134,23 @@ async function checkVerifiedRgbParColorQuickPaths(client, viewport) {
       return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
     };
     const app = document.querySelector('.app');
+    const paletteSwatches = [...document.querySelectorAll('.colorControlPanel .colorSwatchPanel .colorSwatch')]
+      .filter(visible);
+    const paletteSwatchRects = paletteSwatches.map((swatch) => {
+      const rect = swatch.getBoundingClientRect();
+      return {
+        width: Math.round(rect.width * 100) / 100,
+        height: Math.round(rect.height * 100) / 100,
+      };
+    });
     return {
       selectedFixtureId: ${JSON.stringify(selectedFixtureId)},
       colorPanelCount: [...document.querySelectorAll('.colorControlPanel')].filter(visible).length,
       huePlaneCount: [...document.querySelectorAll('.colorControlPanel .colorPlane[aria-label="Hue and brightness pad"]')].filter(visible).length,
-      paletteSwatchCount: [...document.querySelectorAll('.colorControlPanel .colorSwatchPanel .colorSwatch')].filter(visible).length,
+      paletteSwatchCount: paletteSwatches.length,
+      paletteSwatchRects,
+      paletteSwatchMaxWidth: Math.max(0, ...paletteSwatchRects.map((rect) => rect.width)),
+      paletteSwatchMaxHeight: Math.max(0, ...paletteSwatchRects.map((rect) => rect.height)),
       attributeText: (document.querySelector('.colorControlPanel .visualControlHeader > span')?.textContent || '').trim(),
       documentAndAppScrollZero:
         scrollX === 0 && scrollY === 0 &&
@@ -12183,6 +12195,9 @@ async function checkVerifiedRgbParColorQuickPaths(client, viewport) {
     controlColorPanelRendered: control.colorPanelCount === 1,
     huePickerRendered: control.huePlaneCount === 1,
     oneClickPaletteRendered: control.paletteSwatchCount >= 8,
+    controlPaletteSwatchesStayCompact:
+      control.paletteSwatchCount >= 8 &&
+      control.paletteSwatchRects.every((rect) => rect.width > 0 && rect.height > 0 && rect.width <= 22 && rect.height <= 22),
     touchColorPaletteRendered: touch.paletteCount === 1 && touch.swatchCount === 8,
     documentAndAppScrollRemainZero: control.documentAndAppScrollZero && touch.documentAndAppScrollZero,
   };
@@ -22429,6 +22444,8 @@ async function readControlFaderWriteVisibility(client) {
         buttonSpans.every((entry) =>
           entry.spanColor === entry.expectedColor && entry.buttonColor === entry.expectedColor
         ),
+      buttonsInEditLiveOrder:
+        buttonSpans.length === 2 && buttonSpans.map((entry) => entry.option).join(',') === 'edit,live',
       buttonSpans,
     };
   })()`);
@@ -22900,6 +22917,9 @@ async function runBlindViewport(client, viewport) {
       togglePressed: toggle?.getAttribute('aria-pressed') ?? '',
       toggleDisabled: toggle instanceof HTMLButtonElement ? toggle.disabled : null,
       toggleLabel: (toggle?.textContent ?? '').replace(/\s+/g, ' ').trim(),
+      toggleAriaLabel: toggle?.getAttribute('aria-label') ?? '',
+      toggleTitle: toggle?.getAttribute('title') ?? '',
+      toggleIconCount: toggle?.querySelectorAll('svg[aria-hidden="true"]').length ?? 0,
       toggleBesideWriteModes: Boolean(
         toggleRect && writeModeRect &&
         Math.abs(toggleRect.top - writeModeRect.top) <= 1 &&
@@ -22982,7 +23002,9 @@ async function runBlindViewport(client, viewport) {
 
   const conditions = [
     ["blindTogglePresentBesideEditLive", () =>
-      initial.toggleCount === 1 && initial.toggleVisible && initial.toggleBesideWriteModes && initial.toggleLabel.includes("Blind")],
+      initial.toggleCount === 1 && initial.toggleVisible && initial.toggleBesideWriteModes &&
+      initial.toggleLabel === "" && initial.toggleAriaLabel.includes("Blind") &&
+      initial.toggleTitle === initial.toggleAriaLabel && initial.toggleIconCount === 1],
     ["blindStartsOffWithLiveRedStage", () =>
       !initial.blind && initial.togglePressed === "false" && initial.stageColor === "rgb(255, 0, 0)" &&
       initial.activeCueId === 301 && initial.selectedCueId === 301],
@@ -23336,6 +23358,13 @@ async function runEditLiveViewport(client, viewport) {
         operatorTargetVisibility,
       ].every((state) => state.buttonsFixed24)
     ],
+    ["writeModeButtonsStayEditLiveOrderAcrossGeometries", () =>
+      [
+        selectedTargetVisibility,
+        emptyTargetVisibility,
+        operatorTargetVisibility,
+      ].every((state) => state.buttonsInEditLiveOrder)
+    ],
     ["writeModeTextUsesDefinedColorsAcrossGeometries", () =>
       [
         selectedTargetVisibility,
@@ -23671,6 +23700,7 @@ async function main() {
             `activeApplyOnce=${result.checks.toggleOffCommitsSceneAndLiveExactlyOnce} ` +
             `stage=${result.initial.stageColor}->${result.staged.stageColor}->${result.committed.stageColor} ` +
             `watermark=${result.staged.watermarkVisible}->${result.committed.watermarkVisible} ` +
+            `toggle=${JSON.stringify(result.initial.toggleLabel)}/${JSON.stringify(result.initial.toggleAriaLabel)} ` +
             `discard=${result.discarded.stageColor}:${result.discarded.liveDmxSignature === result.initial.liveDmxSignature} ` +
             `frames=${JSON.stringify(result.initial.paneRects)} ` +
             `failed=${JSON.stringify(result.failedChecks)}`,
@@ -23710,6 +23740,7 @@ async function main() {
             `deskTabs=${JSON.stringify(result.initial.editDeskTabWidths)} ` +
             `reclaimed=26px threshold=${result.editStripSubThresholdGesture?.movementPx ?? "?"}<${result.editStripSubThresholdGesture?.thresholdPx ?? "?"} ` +
             `readout=${JSON.stringify(result.selectedTargetVisibility.compactReadoutText)} ` +
+            `order=${result.selectedTargetVisibility.buttonSpans.map((entry) => entry.option).join("/")} ` +
             `text=${textVisibility(result.selectedTargetVisibility)}/` +
               `${textVisibility(result.emptyTargetVisibility)}/` +
               `${textVisibility(result.operatorTargetVisibility)} ` +
@@ -24257,6 +24288,8 @@ async function main() {
               `panel=${result.verifiedRgbQuickPaths.control.colorPanelCount}:` +
                 `${result.verifiedRgbQuickPaths.control.huePlaneCount}:` +
                 `${result.verifiedRgbQuickPaths.control.paletteSwatchCount} ` +
+              `chips=${result.verifiedRgbQuickPaths.control.paletteSwatchMaxWidth}x` +
+                `${result.verifiedRgbQuickPaths.control.paletteSwatchMaxHeight} ` +
               `touch=${result.verifiedRgbQuickPaths.touch.paletteCount}:` +
                 `${result.verifiedRgbQuickPaths.touch.swatchCount} ` +
             `frames=${JSON.stringify(result.registration.frames)} ` +
@@ -25430,6 +25463,8 @@ async function main() {
             `panel=${fixtureGroupsResult.verifiedRgbQuickPaths.control.colorPanelCount}:` +
               `${fixtureGroupsResult.verifiedRgbQuickPaths.control.huePlaneCount}:` +
               `${fixtureGroupsResult.verifiedRgbQuickPaths.control.paletteSwatchCount} ` +
+            `chips=${fixtureGroupsResult.verifiedRgbQuickPaths.control.paletteSwatchMaxWidth}x` +
+              `${fixtureGroupsResult.verifiedRgbQuickPaths.control.paletteSwatchMaxHeight} ` +
             `touch=${fixtureGroupsResult.verifiedRgbQuickPaths.touch.paletteCount}:` +
               `${fixtureGroupsResult.verifiedRgbQuickPaths.touch.swatchCount} ` +
           `frames=${JSON.stringify(fixtureGroupsResult.registration.frames)} ` +

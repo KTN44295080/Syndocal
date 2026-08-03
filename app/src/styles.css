@@ -29378,8 +29378,9 @@ h3 {
 }
 
 .controlFaderWriteHeader .controlBlindControls > .controlBlindToggle {
-  min-width: 70px;
-  gap: 4px;
+  width: 28px;
+  min-width: 28px;
+  padding-inline: 0;
 }
 
 .controlBlindControls svg {
@@ -29625,17 +29626,20 @@ h3 {
 .attributeDeskSurface .colorSwatchGrid {
   display: flex;
   flex-wrap: nowrap;
-  gap: 3px;
+  gap: 2px;
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
 }
 
-.attributeDeskSurface .colorSwatchGrid button,
-.attributeDeskSurface .swatchHeader button {
-  flex: 0 0 40px;
-  min-width: 40px;
-  min-height: 40px;
+.attributeDeskSurface .colorControlPanel .colorSwatchGrid > .colorSwatch {
+  flex: 0 0 20px;
+  width: 20px;
+  min-width: 20px;
+  max-width: 20px;
+  height: 20px;
+  min-height: 20px;
+  max-height: 20px;
 }
 
 .attributeDeskSurface > .positionControlPanel {

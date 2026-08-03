@@ -17,6 +17,7 @@ interface ControlFaderWriteHeaderProps {
 
 export function ControlFaderWriteHeader(props: ControlFaderWriteHeaderProps) {
   let blindDiscardDialog!: HTMLDialogElement;
+  const blindToggleLabel = () => props.blindActive ? "Commit and exit Blind editing" : "Enable Blind editing";
 
   return (
     <div
@@ -36,6 +37,16 @@ export function ControlFaderWriteHeader(props: ControlFaderWriteHeaderProps) {
       >
         <button
           type="button"
+          classList={{ active: props.writeMode === "edit" }}
+          aria-label="Use EDIT scene-write mode"
+          aria-pressed={props.writeMode === "edit"}
+          data-control-fader-write-mode-option="edit"
+          onClick={() => props.onWriteMode("edit")}
+        >
+          <span data-no-localize>EDIT</span>
+        </button>
+        <button
+          type="button"
           classList={{ active: props.writeMode === "live" }}
           aria-label="Use LIVE fader mode"
           aria-pressed={props.writeMode === "live"}
@@ -45,16 +56,6 @@ export function ControlFaderWriteHeader(props: ControlFaderWriteHeaderProps) {
         >
           <span data-no-localize>LIVE</span>
         </button>
-        <button
-          type="button"
-          classList={{ active: props.writeMode === "edit" }}
-          aria-label="Use EDIT scene-write mode"
-          aria-pressed={props.writeMode === "edit"}
-          data-control-fader-write-mode-option="edit"
-          onClick={() => props.onWriteMode("edit")}
-        >
-          <span data-no-localize>EDIT</span>
-        </button>
       </div>
       <div class="controlBlindControls" role="group" aria-label="Blind edit controls">
         <button
@@ -62,7 +63,8 @@ export function ControlFaderWriteHeader(props: ControlFaderWriteHeaderProps) {
           class="controlBlindToggle"
           classList={{ active: props.blindActive }}
           data-control-blind-toggle
-          aria-label={props.blindActive ? "Commit and exit Blind editing" : "Enable Blind editing"}
+          title={blindToggleLabel()}
+          aria-label={blindToggleLabel()}
           aria-pressed={props.blindActive}
           disabled={!props.blindActive && (props.writeMode !== "edit" || !props.editingSceneLabel)}
           onClick={() => void props.onBlindToggle(!props.blindActive)}
@@ -71,7 +73,6 @@ export function ControlFaderWriteHeader(props: ControlFaderWriteHeaderProps) {
             <path d="M1.5 9s2.8-4.5 7.5-4.5S16.5 9 16.5 9 13.7 13.5 9 13.5 1.5 9 1.5 9Z" />
             <circle cx="9" cy="9" r="2.25" />
           </svg>
-          <span>Blind</span>
         </button>
         <Show when={props.blindActive}>
           <button
