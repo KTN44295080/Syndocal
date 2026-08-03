@@ -19,6 +19,14 @@ pub const ENTTEC_OPEN_DMX_START_CODE: u8 = 0x00;
 pub const ENTTEC_OPEN_DMX_PAYLOAD_LEN: usize = 513;
 pub const ENTTEC_OPEN_DMX_BREAK_US: u64 = 176;
 pub const ENTTEC_OPEN_DMX_MAB_US: u64 = 16;
+// 1 start + 8 data + 2 stop bits per byte at 250 kbaud.
+pub const ENTTEC_OPEN_DMX_BYTE_WIRE_US: u64 = 44;
+pub const ENTTEC_OPEN_DMX_FRAME_WIRE_US: u64 = ENTTEC_OPEN_DMX_BREAK_US
+    + ENTTEC_OPEN_DMX_MAB_US
+    + ENTTEC_OPEN_DMX_PAYLOAD_LEN as u64 * ENTTEC_OPEN_DMX_BYTE_WIRE_US;
+// FTDI VCP write/flush returns before the chip's internal TX buffer has drained
+// onto the wire; asserting the next break early slices the in-flight frame.
+pub const ENTTEC_OPEN_DMX_FRAME_GUARD_US: u64 = 8_000;
 pub const ENTTEC_PRO_START_DELIMITER: u8 = 0x7e;
 pub const ENTTEC_PRO_END_DELIMITER: u8 = 0xe7;
 pub const ENTTEC_PRO_SEND_DMX_LABEL: u8 = 0x06;
@@ -266,14 +274,28 @@ fn run_enttec_open_dmx_worker(
             thread::sleep(Duration::from_millis(1));
             continue;
         };
+        let frame_started = Instant::now();
         if let Err(error) = write_enttec_open_dmx_frame(&mut *port, frame) {
             if let Ok(mut slot) = worker_error.lock() {
                 *slot = Some(error.to_string());
             }
             worker_failed.store(true, Ordering::Release);
             running.store(false, Ordering::Release);
+        } else {
+            // Pace to the wire rate: without this the loop re-sends far faster
+            // than 250 kbaud can transmit, and each frame's break lands inside
+            // the previous frame still draining from the FTDI buffer.
+            let wait = open_dmx_frame_pacing_wait(frame_started.elapsed());
+            if !wait.is_zero() {
+                precise_wait(wait);
+            }
         }
     }
+}
+
+pub fn open_dmx_frame_pacing_wait(elapsed: Duration) -> Duration {
+    Duration::from_micros(ENTTEC_OPEN_DMX_FRAME_WIRE_US + ENTTEC_OPEN_DMX_FRAME_GUARD_US)
+        .saturating_sub(elapsed)
 }
 
 fn precise_wait(duration: Duration) {
@@ -395,6 +417,33 @@ mod tests {
 
         assert_eq!(payload[0], ENTTEC_OPEN_DMX_START_CODE);
         assert_eq!(&payload[1..], frame);
+    }
+
+    #[test]
+    fn open_dmx_frame_wire_time_matches_250kbaud_8n2_full_frame() {
+        // 176us break + 16us MAB + 513 bytes x 44us (1 start + 8 data + 2 stop).
+        assert_eq!(ENTTEC_OPEN_DMX_FRAME_WIRE_US, 176 + 16 + 513 * 44);
+        assert_eq!(ENTTEC_OPEN_DMX_FRAME_WIRE_US, 22_764);
+    }
+
+    #[test]
+    fn open_dmx_pacing_waits_the_full_frame_budget_from_a_fast_write() {
+        let wait = open_dmx_frame_pacing_wait(Duration::ZERO);
+        assert_eq!(
+            wait,
+            Duration::from_micros(ENTTEC_OPEN_DMX_FRAME_WIRE_US + ENTTEC_OPEN_DMX_FRAME_GUARD_US)
+        );
+    }
+
+    #[test]
+    fn open_dmx_pacing_does_not_wait_when_the_write_already_took_the_budget() {
+        let budget =
+            Duration::from_micros(ENTTEC_OPEN_DMX_FRAME_WIRE_US + ENTTEC_OPEN_DMX_FRAME_GUARD_US);
+        assert_eq!(open_dmx_frame_pacing_wait(budget), Duration::ZERO);
+        assert_eq!(
+            open_dmx_frame_pacing_wait(budget + Duration::from_millis(5)),
+            Duration::ZERO
+        );
     }
 
     #[test]
