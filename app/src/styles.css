@@ -21942,8 +21942,7 @@ h3 {
 .layoutControl.controlModeEdit .dimmerControlPanel > .controlLimitPanel,
 .layoutControl.controlModeEdit .colorControlPanel > .colorQuickLookRow,
 .layoutControl.controlModeEdit .colorControlPanel > .colorSaturationStrip,
-.layoutControl.controlModeEdit .colorControlPanel > .hsvDirectGrid,
-.layoutControl.controlModeEdit .colorControlPanel > .colorSwatchPanel {
+.layoutControl.controlModeEdit .colorControlPanel > .hsvDirectGrid {
   display: none;
 }
 
@@ -28752,7 +28751,7 @@ h3 {
 }
 
 .touchPlacedColor {
-  grid-template-rows: auto minmax(48px, 1fr);
+  grid-template-rows: auto minmax(48px, 1fr) auto;
 }
 
 .touchPlacedColor input[type="color"] {
@@ -28761,6 +28760,19 @@ h3 {
   min-width: 48px;
   min-height: 48px;
   padding: 3px;
+}
+
+.touchPlacedColorPalette {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.touchPlacedColorPalette .colorSwatch {
+  min-width: 0;
+  min-height: 32px;
+  padding: 0;
 }
 
 .app .layoutTouch .touchPlacedXy {

@@ -28,6 +28,7 @@ interface EditableTouchSurfaceProps {
   snapshot: EngineSnapshot;
   surface?: TouchSurfaceSummary;
   selectedFixtureId?: number | null;
+  colorPalette?: readonly string[];
   onSurfaceChange: (surface: TouchSurfaceSummary) => void | Promise<void>;
   onTrigger: (binding: TouchControlBinding) => void | Promise<void>;
   onValue: (binding: TouchControlBinding, value: number) => void | Promise<void>;
@@ -503,7 +504,7 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
         );
       case "ColorWheel":
         return (
-          <label class="touchPlacedColor">
+          <div class="touchPlacedColor">
             <span>{control.label}</span>
             <input
               aria-label={control.label}
@@ -513,7 +514,23 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
               data-touch-live-activated={liveActivations()[control.id] ? "true" : "false"}
               onInput={(event) => setControlColor(control, event.currentTarget.value)}
             />
-          </label>
+            <Show when={props.colorPalette?.length}>
+              <div class="touchPlacedColorPalette" aria-label={`${control.label} palette`}>
+                <For each={props.colorPalette}>
+                  {(color) => (
+                    <button
+                      type="button"
+                      class="colorSwatch"
+                      style={{ "background-color": color }}
+                      aria-label={`Set ${control.label} to ${color}`}
+                      disabled={disabled}
+                      onClick={() => setControlColor(control, color)}
+                    />
+                  )}
+                </For>
+              </div>
+            </Show>
+          </div>
         );
       case "XyGrid": {
         const point = () => localXy()[control.id] ?? { x: 0.5, y: 0.5 };

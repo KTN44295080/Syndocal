@@ -2303,16 +2303,23 @@ export default function App() {
       setEditDeskSurface("attributes");
       setControlCategory(colorWheelFixture ? "color" : "dimmer");
     }
-    setSelectedFixtureGroupFilter(colorWheelFixture ? "moving" : liveEditTypeFixture ? "" : "front");
-    setProfile(viewportFixtureData.profile);
-    setGdtfPath(viewportFixtureData.profile.source_path);
-    setSelectedMode(viewportFixtureData.profile.dmx_modes[0]?.name ?? "");
-    setLabel("Viewport Par");
+    const verifiedRgbParPatchFixture = viewportFixture === "patch"
+      && new URLSearchParams(window.location.search).get("syndocalViewportProfile") === "verified-rgb-par";
+    const initialViewportProfile = verifiedRgbParPatchFixture
+      ? viewportFixtureData.verifiedRgbParProfile
+      : viewportFixtureData.profile;
+    setSelectedFixtureGroupFilter(
+      verifiedRgbParPatchFixture ? "" : colorWheelFixture ? "moving" : liveEditTypeFixture ? "" : "front",
+    );
+    setProfile(initialViewportProfile);
+    setGdtfPath(initialViewportProfile.source_path);
+    setSelectedMode(initialViewportProfile.dmx_modes[0]?.name ?? "");
+    setLabel(verifiedRgbParPatchFixture ? initialViewportProfile.name : "Viewport Par");
     setUniverse(0);
-    setAddress(25);
-    setPatchCount(2);
+    setAddress(verifiedRgbParPatchFixture ? 32 : 25);
+    setPatchCount(verifiedRgbParPatchFixture ? 1 : 2);
     setPatchAddressStride(0);
-    setGroupText("front");
+    setGroupText(verifiedRgbParPatchFixture ? "" : "front");
     setSelectedFixtureId(1);
     setSelectedMappingFixtureIds(
       liveEditTypeFixture || colorWheelFixture
@@ -2325,7 +2332,7 @@ export default function App() {
     );
     setSelectedFixtureUniverseDraft(0);
     setSelectedFixtureAddressDraft(1);
-    setSelectedFixtureGroupText("front");
+    setSelectedFixtureGroupText(verifiedRgbParPatchFixture ? "" : "front");
     setSelectedFixtureLimitsDraft(defaultFixtureLimits);
     const controlStageEditFixtures = controlStageEditFixture
       ? structuredClone(viewportFixtureData.mappingLiveColorFixtures)
@@ -6615,9 +6622,9 @@ export default function App() {
     const previewFixtures = fixtures.map((fixture) => {
       const point = stageWorldToSvgPoint(fixture.position.x, fixture.position.z, bounds);
       const dimmer = readFixtureAttribute(fixture, currentValues, ["Dimmer", "Intensity"]) ?? 0;
-      const red = readFixtureAttribute(fixture, currentValues, ["ColorRed", "Red"]);
-      const green = readFixtureAttribute(fixture, currentValues, ["ColorGreen", "Green"]);
-      const blue = readFixtureAttribute(fixture, currentValues, ["ColorBlue", "Blue"]);
+      const red = readFixtureAttribute(fixture, currentValues, colorCandidates.red);
+      const green = readFixtureAttribute(fixture, currentValues, colorCandidates.green);
+      const blue = readFixtureAttribute(fixture, currentValues, colorCandidates.blue);
       const color =
         red !== undefined || green !== undefined || blue !== undefined
           ? `#${valueToHexByte(clampDmxValue(red ?? 0))}${valueToHexByte(clampDmxValue(green ?? 0))}${valueToHexByte(clampDmxValue(blue ?? 0))}`
@@ -10653,13 +10660,9 @@ export default function App() {
   };
 
   const touchRgbAttributes = (fixture: PatchedFixtureSummary) => {
-    const normalized = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
-    const find = (candidates: string[]) => fixture.controls.find((control) =>
-      candidates.includes(normalized(control.attribute)),
-    )?.attribute;
-    const red = find(["colorred", "coloraddr", "red"]);
-    const green = find(["colorgreen", "coloraddg", "green"]);
-    const blue = find(["colorblue", "coloraddb", "blue"]);
+    const red = findControlAttribute(fixture, colorCandidates.red);
+    const green = findControlAttribute(fixture, colorCandidates.green);
+    const blue = findControlAttribute(fixture, colorCandidates.blue);
     return red && green && blue ? { red, green, blue } : null;
   };
 
@@ -16770,6 +16773,7 @@ export default function App() {
           snapshot={snapshot()}
           surface={snapshot().touch_surface}
           selectedFixtureId={selectedFixtureId()}
+          colorPalette={selectedColorControls() ? defaultColorPalette.slice(0, 8) : []}
           onSurfaceChange={setTouchSurfaceLayout}
           onTrigger={triggerTouchBinding}
           onValue={setTouchBindingValue}

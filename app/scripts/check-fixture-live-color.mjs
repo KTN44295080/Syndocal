@@ -66,7 +66,40 @@ try {
     fixtureLiveColor,
     liveFixtureDarkColor,
   } = await server.ssrLoadModule("/src/fixtureLiveColor.ts");
+  const {
+    colorCandidates,
+    findControlAttributeInControls,
+  } = await server.ssrLoadModule("/src/fixtureControlRuntime.ts");
   assert.equal(liveFixtureDarkColor, dark);
+
+  const gdtfAdditiveControls = [
+    control("ColorAdd_R", 1),
+    control("ColorAdd_G", 2),
+    control("ColorAdd_B", 3),
+    control("ColorAdd_WW", 4),
+    control("ColorAdd_CW", 5),
+    control("ColorAdd_A", 6),
+    control("ColorAdd_UV", 7),
+    control("Generic: UV", 8),
+  ];
+  const additiveResolution = {
+    red: findControlAttributeInControls(gdtfAdditiveControls, colorCandidates.red),
+    green: findControlAttributeInControls(gdtfAdditiveControls, colorCandidates.green),
+    blue: findControlAttributeInControls(gdtfAdditiveControls, colorCandidates.blue),
+    white: findControlAttributeInControls(gdtfAdditiveControls, colorCandidates.white),
+    amber: findControlAttributeInControls(gdtfAdditiveControls, colorCandidates.amber),
+    uv: findControlAttributeInControls(gdtfAdditiveControls, colorCandidates.uv),
+  };
+  assert.deepEqual(additiveResolution, {
+    red: "ColorAdd_R",
+    green: "ColorAdd_G",
+    blue: "ColorAdd_B",
+    white: "ColorAdd_WW",
+    amber: "ColorAdd_A",
+    uv: "ColorAdd_UV",
+  });
+  assert.ok(colorCandidates.white.includes("ColorAdd_CW"));
+  assert.ok(colorCandidates.uv.includes("Generic: UV"));
 
   const explicitZeroPreview = Array.from({ length: 512 }, () => 0);
   const previewZero = fixtureLiveColor(
@@ -115,7 +148,9 @@ try {
       `previewZero=${previewZero.valueSource}:${previewZero.intensity}x${previewZero.segmentCount} ` +
       `previewNonzero=${previewNonzero.valueSource}:${JSON.stringify(previewNonzero.segments.map((segment) => segment.color))} ` +
       `previewAbsent=${previewAbsent.valueSource}:${JSON.stringify(previewAbsent.segments.map((segment) => segment.color))} ` +
-      `compactZero=${compactZero.valueSource}:${compactZero.intensity}x${compactZero.segmentCount}`,
+      `compactZero=${compactZero.valueSource}:${compactZero.intensity}x${compactZero.segmentCount} ` +
+      `gdtfAdditive=${additiveResolution.red}/${additiveResolution.green}/${additiveResolution.blue} ` +
+      `extras=${additiveResolution.white}/${additiveResolution.amber}/${additiveResolution.uv}`,
   );
 } finally {
   await server.close();

@@ -1,4 +1,5 @@
 import { channelFunctionWheelColor } from "./channelFunctionHelpers";
+import { colorCandidates } from "./fixtureControlRuntime";
 import type {
   AttributeControl,
   AttributeValueSummary,
@@ -62,6 +63,12 @@ const clampControlValue = (value: number) =>
 
 const normalizeControlName = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "");
 
+const exactColorRoleByName = new Map<string, ColorRole>(
+  (Object.entries(colorCandidates) as [ColorRole, readonly string[]][]).flatMap(([role, names]) =>
+    names.map((name) => [normalizeControlName(name), role] as const),
+  ),
+);
+
 const trailingSegmentIndex = (value: string) => {
   const match = normalizeControlName(value).match(/(\d+)$/);
   return match ? Number(match[1]) : null;
@@ -71,6 +78,8 @@ const controlColorRole = (control: AttributeControl): ColorRole | null => {
   const candidates = [control.attribute, control.channel_name];
   for (const candidate of candidates) {
     const normalized = normalizeControlName(candidate).replace(/\d+$/, "");
+    const exactRole = exactColorRoleByName.get(normalized);
+    if (exactRole) return exactRole;
     if (/^(?:coloradd|colorrgb|color)?(?:r|red)$/.test(normalized)) return "red";
     if (/^(?:coloradd|colorrgb|color)?(?:g|green)$/.test(normalized)) return "green";
     if (/^(?:coloradd|colorrgb|color)?(?:b|blue)$/.test(normalized)) return "blue";

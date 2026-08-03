@@ -64,20 +64,29 @@ export interface MovementLimitDragState {
 }
 
 export const colorCandidates = {
-  red: ["ColorRed", "Red"],
-  green: ["ColorGreen", "Green"],
-  blue: ["ColorBlue", "Blue"],
-  white: ["ColorWhite", "White", "WarmWhite", "ColdWhite", "CoolWhite"],
-  amber: ["ColorAmber", "Amber"],
-  uv: ["ColorUv", "ColorUV", "Uv", "UV", "Ultraviolet"],
-};
+  red: ["ColorRed", "Red", "ColorAdd_R"],
+  green: ["ColorGreen", "Green", "ColorAdd_G"],
+  blue: ["ColorBlue", "Blue", "ColorAdd_B"],
+  white: [
+    "ColorWhite",
+    "White",
+    "WarmWhite",
+    "ColdWhite",
+    "CoolWhite",
+    "ColorAdd_W",
+    "ColorAdd_WW",
+    "ColorAdd_CW",
+  ],
+  amber: ["ColorAmber", "Amber", "ColorAdd_A"],
+  uv: ["ColorUv", "ColorUV", "Uv", "UV", "Ultraviolet", "ColorAdd_UV", "Generic: UV"],
+} as const;
 
-export const findControlAttribute = (fixture: PatchedFixtureSummary, names: string[]) => {
+export const findControlAttribute = (fixture: PatchedFixtureSummary, names: readonly string[]) => {
   const normalizedNames = names.map((name) => name.toLowerCase());
   return fixture.controls.find((control) => normalizedNames.includes(control.attribute.toLowerCase()))?.attribute;
 };
 
-export const findControlAttributeInControls = (controls: AttributeControl[], names: string[]) => {
+export const findControlAttributeInControls = (controls: AttributeControl[], names: readonly string[]) => {
   const normalizedNames = names.map((name) => name.toLowerCase());
   return controls.find((control) => normalizedNames.includes(control.attribute.toLowerCase()))?.attribute;
 };
@@ -96,7 +105,7 @@ export const bulkPatchLabel = (baseLabel: string, index: number, count: number) 
 export const readFixtureAttribute = (
   fixture: PatchedFixtureSummary,
   currentValues: Record<string, number>,
-  names: string[],
+  names: readonly string[],
 ) => {
   const attributeValues = new Map(
     fixture.attribute_values.map((value) => [value.attribute.toLowerCase(), value.value]),

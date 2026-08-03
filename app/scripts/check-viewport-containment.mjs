@@ -11981,6 +11981,150 @@ async function checkPatchFixtureFamilySweep(client) {
   };
 }
 
+async function checkVerifiedRgbParColorQuickPaths(client, viewport) {
+  const url = new URL(fixtureUrl("patch"));
+  url.searchParams.set("syndocalViewportProfile", "verified-rgb-par");
+  await client.send("Page.navigate", { url: url.toString() });
+  await waitForApp(client);
+  await clickByText(client, "Setup");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
+  if (viewportTraceEnabled) {
+    const patchState = await client.evaluate(`(() => ({
+      url: location.href,
+      setupButtons: [...document.querySelectorAll('.setupModeTabs button')].map((button) => ({
+        text: (button.textContent || '').trim(),
+        pressed: button.getAttribute('aria-pressed'),
+      })),
+      profileSummary: (document.querySelector('.loadedProfileSummaryPanel')?.textContent || '').trim(),
+      patchFormCount: document.querySelectorAll('.patchFixtureFormPanel').length,
+      status: (document.querySelector('.appStatusLine')?.textContent || '').trim(),
+    }))()`);
+    traceViewport(`verified RGB patch state ${JSON.stringify(patchState)}`);
+  }
+  await waitForClientCondition(
+    client,
+    "document.querySelector('.patchFixtureSubmit:not(:disabled)')",
+    "verified RGB PAR patch action",
+  );
+  await client.evaluate(`document.querySelector('.patchFixtureSubmit')?.click()`);
+  await waitForClientCondition(
+    client,
+    "document.querySelector('[data-patch-group-registration-dialog][open]')",
+    "verified RGB PAR patch completion",
+  );
+  await client.evaluate(`document.querySelector('[data-patch-group-registration-skip]')?.click()`);
+  await sleep(80);
+
+  const selectedFixtureId = await client.evaluate(`(() => {
+    const fixtureIds = [...document.querySelectorAll('.setupStageContext [data-stage-fixture-id]')]
+      .map((fixture) => Number(fixture.getAttribute('data-stage-fixture-id')))
+      .filter(Number.isFinite);
+    return fixtureIds.length > 0 ? Math.max(...fixtureIds) : 0;
+  })()`);
+  const selectedThroughStage = await client.evaluate(`(() => {
+    const hitTarget = document.querySelector(
+      '.setupStageContext [data-stage-fixture-id="${selectedFixtureId}"] .stageFixtureHitTarget',
+    );
+    if (!hitTarget) return false;
+    const rect = hitTarget.getBoundingClientRect();
+    const init = {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      buttons: 1,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
+      pointerId: 1,
+      pointerType: 'mouse',
+      isPrimary: true,
+    };
+    hitTarget.dispatchEvent(new PointerEvent('pointerdown', init));
+    hitTarget.dispatchEvent(new PointerEvent('pointerup', { ...init, buttons: 0 }));
+    return true;
+  })()`);
+  await waitForClientCondition(
+    client,
+    `${selectedThroughStage} && document.querySelector('.setupStageContext [data-stage-fixture-id="${selectedFixtureId}"].selected')`,
+    "verified RGB PAR stage selection",
+  );
+  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await clickVisibleByText(client, ".controlModeTabs button", "Live Edit");
+  await clickVisibleByText(client, ".attributeCategoryRail button", "Color");
+  await waitForClientCondition(client, "document.querySelector('.colorControlPanel')", "verified RGB color panel");
+  await sleep(80);
+
+  const control = await client.evaluate(`(() => {
+    const visible = (element) => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const app = document.querySelector('.app');
+    return {
+      selectedFixtureId: ${JSON.stringify(selectedFixtureId)},
+      colorPanelCount: [...document.querySelectorAll('.colorControlPanel')].filter(visible).length,
+      huePlaneCount: [...document.querySelectorAll('.colorControlPanel .colorPlane[aria-label="Hue and brightness pad"]')].filter(visible).length,
+      paletteSwatchCount: [...document.querySelectorAll('.colorControlPanel .colorSwatchPanel .colorSwatch')].filter(visible).length,
+      attributeText: (document.querySelector('.colorControlPanel .visualControlHeader > span')?.textContent || '').trim(),
+      documentAndAppScrollZero:
+        scrollX === 0 && scrollY === 0 &&
+        document.documentElement.scrollWidth === document.documentElement.clientWidth &&
+        document.documentElement.scrollHeight === document.documentElement.clientHeight &&
+        (!app || (app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight)),
+    };
+  })()`);
+
+  await clickVisibleByText(client, ".workspaceTabs button", "Touch");
+  await waitForClientCondition(
+    client,
+    "document.querySelector('.touchPlacedColorPalette .colorSwatch')",
+    "verified RGB Touch swatches",
+  );
+  await sleep(80);
+  const touch = await client.evaluate(`(() => {
+    const visible = (element) => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const app = document.querySelector('.app');
+    return {
+      paletteCount: [...document.querySelectorAll('.touchPlacedColorPalette')].filter(visible).length,
+      swatchCount: [...document.querySelectorAll('.touchPlacedColorPalette .colorSwatch')].filter(visible).length,
+      documentAndAppScrollZero:
+        scrollX === 0 && scrollY === 0 &&
+        document.documentElement.scrollWidth === document.documentElement.clientWidth &&
+        document.documentElement.scrollHeight === document.documentElement.clientHeight &&
+        (!app || (app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight)),
+    };
+  })()`);
+
+  const checks = {
+    patchedFixtureSelected: selectedFixtureId > 3,
+    gdtfAdditiveAttributesBound:
+      control.attributeText.includes("ColorAdd_R") &&
+      control.attributeText.includes("ColorAdd_G") &&
+      control.attributeText.includes("ColorAdd_B"),
+    controlColorPanelRendered: control.colorPanelCount === 1,
+    huePickerRendered: control.huePlaneCount === 1,
+    oneClickPaletteRendered: control.paletteSwatchCount >= 8,
+    touchColorPaletteRendered: touch.paletteCount === 1 && touch.swatchCount === 8,
+    documentAndAppScrollRemainZero: control.documentAndAppScrollZero && touch.documentAndAppScrollZero,
+  };
+  const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  return {
+    viewport,
+    passed: failedChecks.length === 0,
+    checks,
+    failedChecks,
+    control,
+    touch,
+  };
+}
+
 async function runFixtureGroupsViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -12131,6 +12275,7 @@ async function runFixtureGroupsViewport(client, viewport) {
   await client.evaluate(`document.querySelector('[data-patch-group-registration-register]')?.click()`);
   await sleep(80);
   const registered = await readState();
+  const verifiedRgbQuickPaths = await checkVerifiedRgbParColorQuickPaths(client, viewport);
 
   const renamedGroup = renamed.groupTabs.find((group) => group.id === sourceGroup?.id);
   const restoredGroup = undone.groupTabs.find((group) => group.id === sourceGroup?.id);
@@ -12160,6 +12305,7 @@ async function runFixtureGroupsViewport(client, viewport) {
     registrationAddsMembershipByEntity:
       registered.registration === null &&
       registered.groupTabs.some((group) => group.text === 'Viewport Par' && group.count === 2),
+    verifiedRgbColorQuickPaths: verifiedRgbQuickPaths.passed,
     documentAndAppScrollRemainZero:
       [initial, doubleClicked, contextMenu, deleteConfirmation, deleted, undone, createStarted, emptyCreated, registration, registered]
         .every((state) => state.documentAndAppScrollZero),
@@ -12181,6 +12327,7 @@ async function runFixtureGroupsViewport(client, viewport) {
     emptyCreated,
     registration,
     registered,
+    verifiedRgbQuickPaths,
   };
 }
 
@@ -23769,6 +23916,12 @@ async function main() {
             `empty=${result.emptyCreated.groupTabs.find((group) => group.text === "Empty Group")?.count ?? "missing"} ` +
             `register=${result.registration.registration?.inputValue ?? "missing"}->` +
               `${result.registered.groupTabs.find((group) => group.text === "Viewport Par")?.count ?? "missing"} ` +
+            `rgb=${result.verifiedRgbQuickPaths.control.attributeText || "missing"} ` +
+              `panel=${result.verifiedRgbQuickPaths.control.colorPanelCount}:` +
+                `${result.verifiedRgbQuickPaths.control.huePlaneCount}:` +
+                `${result.verifiedRgbQuickPaths.control.paletteSwatchCount} ` +
+              `touch=${result.verifiedRgbQuickPaths.touch.paletteCount}:` +
+                `${result.verifiedRgbQuickPaths.touch.swatchCount} ` +
             `frames=${JSON.stringify(result.registration.frames)} ` +
             `failed=${JSON.stringify(result.failedChecks)}`,
         );
@@ -24931,6 +25084,12 @@ async function main() {
           `empty=${fixtureGroupsResult.emptyCreated.groupTabs.find((group) => group.text === "Empty Group")?.count ?? "missing"} ` +
           `register=${fixtureGroupsResult.registration.registration?.inputValue ?? "missing"}->` +
             `${fixtureGroupsResult.registered.groupTabs.find((group) => group.text === "Viewport Par")?.count ?? "missing"} ` +
+          `rgb=${fixtureGroupsResult.verifiedRgbQuickPaths.control.attributeText || "missing"} ` +
+            `panel=${fixtureGroupsResult.verifiedRgbQuickPaths.control.colorPanelCount}:` +
+              `${fixtureGroupsResult.verifiedRgbQuickPaths.control.huePlaneCount}:` +
+              `${fixtureGroupsResult.verifiedRgbQuickPaths.control.paletteSwatchCount} ` +
+            `touch=${fixtureGroupsResult.verifiedRgbQuickPaths.touch.paletteCount}:` +
+              `${fixtureGroupsResult.verifiedRgbQuickPaths.touch.swatchCount} ` +
           `frames=${JSON.stringify(fixtureGroupsResult.registration.frames)} ` +
           `failed=${JSON.stringify(fixtureGroupsResult.failedChecks)}`,
       );

@@ -5,7 +5,7 @@ import {
   fixtureLiveColor,
   fixtureLiveSegmentSkeleton,
 } from "./fixtureLiveColor";
-import { readFixtureAttribute } from "./fixtureControlRuntime";
+import { colorCandidates, readFixtureAttribute } from "./fixtureControlRuntime";
 import {
   fixtureTypeKey,
   fixtureVisualKind,
@@ -333,9 +333,9 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
       const point = stageWorldToSvgPoint(position.x, position.z, bounds);
       const dimmer = readFixtureAttribute(fixture, currentValues, ["Dimmer", "Intensity"]) ?? 0;
       const pan = readFixtureAttribute(fixture, currentValues, ["Pan"]);
-      const red = readFixtureAttribute(fixture, currentValues, ["ColorRed", "Red"]);
-      const green = readFixtureAttribute(fixture, currentValues, ["ColorGreen", "Green"]);
-      const blue = readFixtureAttribute(fixture, currentValues, ["ColorBlue", "Blue"]);
+      const red = readFixtureAttribute(fixture, currentValues, colorCandidates.red);
+      const green = readFixtureAttribute(fixture, currentValues, colorCandidates.green);
+      const blue = readFixtureAttribute(fixture, currentValues, colorCandidates.blue);
       const color =
         red !== undefined || green !== undefined || blue !== undefined
           ? `rgb(${red ? red >> 8 : 0}, ${green ? green >> 8 : 0}, ${blue ? blue >> 8 : 0})`

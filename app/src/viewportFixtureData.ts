@@ -769,6 +769,53 @@ const profile: FixtureProfileSummary = {
   warnings: [],
 };
 
+const verifiedRgbParProfile: FixtureProfileSummary = {
+  source_path: "memory://verified/common-rig/rgb-par-4ch/v1",
+  manufacturer: "Syndocal Verified",
+  name: "Generic RGB PAR 4ch",
+  short_name: null,
+  fixture_type_id: "syndocal-verified-rgb-par-4ch-v1",
+  dmx_modes: [{
+    name: "Standard",
+    controls: [
+      {
+        attribute: "Dimmer",
+        channel_name: "Dimmer",
+        offsets: [1],
+        resolution: "EightBit",
+        default_value: 0,
+        functions: [],
+      },
+      {
+        attribute: "ColorAdd_R",
+        channel_name: "Red",
+        offsets: [2],
+        resolution: "EightBit",
+        default_value: 0,
+        functions: [],
+      },
+      {
+        attribute: "ColorAdd_G",
+        channel_name: "Green",
+        offsets: [3],
+        resolution: "EightBit",
+        default_value: 0,
+        functions: [],
+      },
+      {
+        attribute: "ColorAdd_B",
+        channel_name: "Blue",
+        offsets: [4],
+        resolution: "EightBit",
+        default_value: 0,
+        functions: [],
+      },
+    ],
+  }],
+  geometries: [],
+  warnings: [],
+};
+
 export const viewportPatchedFixture = (
   id: number,
   label: string,
@@ -1989,6 +2036,7 @@ const vjBankOutputs: VideoOutputSummary[] = [
 
 export const viewportFixtureData = {
   profile,
+  verifiedRgbParProfile,
   projectorMapping,
   videoLayer,
   composition,
