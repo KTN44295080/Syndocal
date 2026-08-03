@@ -145,6 +145,13 @@ import {
   operatorPolicyFromUnknown,
   verifyOperatorPassword,
 } from "./operatorPolicy";
+import {
+  defaultSceneFxParams,
+  previewSceneFxFixtures,
+  quickSceneFxFamilies,
+  sceneMoveFxAvailable,
+  type QuickSceneFxFamily,
+} from "./sceneFxDefaults";
 import { type ColorWheelFunctionEntry, type GoboSlotPattern, type GoboWheelFunctionEntry } from "./components/WheelSlotPanel";
 import { nearestColorWheelEntry } from "./colorWheelApproximation";
 import {
@@ -693,6 +700,7 @@ const projectMutationCommands = new Set([
   "remove_playback_executor",
   "update_cue_from_current",
   "set_cue_effect_targets",
+  "add_cue_owned_effect",
   "set_cue_metadata",
   "set_cue_child_timeline",
   "set_cue_steps",
@@ -1840,6 +1848,28 @@ export default function App() {
   };
   const [liveDmxPreviews, setLiveDmxPreviews] = createSignal(engineDmxPreviews(initialEngineSnapshot));
   const [liveFixtures, setLiveFixtures] = createSignal(snapshotLiveFixtures(initialEngineSnapshot));
+  const [sceneFxStagePreview, setSceneFxStagePreview] = createSignal<{
+    cueId: number;
+    effectId: number;
+    params: EffectParamsSnapshot;
+    startedAt: number;
+  } | null>(null);
+  const [sceneFxPreviewTick, setSceneFxPreviewTick] = createSignal(0);
+  createEffect(() => {
+    if (!sceneFxStagePreview()) return;
+    setSceneFxPreviewTick(performance.now());
+    const timer = window.setInterval(() => setSceneFxPreviewTick(performance.now()), 100);
+    onCleanup(() => window.clearInterval(timer));
+  });
+  const stagePreviewFixtures = createMemo(() => {
+    const preview = sceneFxStagePreview();
+    if (!preview) return liveFixtures();
+    return previewSceneFxFixtures(
+      liveFixtures(),
+      preview.params,
+      Math.max(0, sceneFxPreviewTick() - preview.startedAt),
+    );
+  });
   let latestEngineSnapshot = initialEngineSnapshot;
   const [snapshotRevision, setSnapshotRevision] = createSignal<number | null>(null);
   let loadSceneEffectDraft = (_cueId: number, _effectId: number) => {};
@@ -1852,13 +1882,15 @@ export default function App() {
       : cue.effect_targets[0]?.effect_id ?? null;
     setSelectedSceneCueId(cueId);
     setSelectedSceneEffectId(effectId);
-    setSceneSettingsSurface("contents");
+    setSceneSettingsSurface(controlMode() === "edit" ? "fx" : "contents");
+    setSceneFxStagePreview(null);
     if (effectId !== null) loadSceneEffectDraft(cueId, effectId);
   };
   const closeSceneSettings = () => {
     setSelectedSceneCueId(null);
     setSelectedSceneEffectId(null);
     setSceneSettingsSurface("contents");
+    setSceneFxStagePreview(null);
   };
   const openCueEditor = () => {
     setTimelineDeskSurface("show");
@@ -5012,7 +5044,9 @@ export default function App() {
   });
   const dmxPreviewOptions = createMemo(() => liveDmxPreviews());
   const mappingDmxPreviewOptions = createMemo(() =>
-    snapshot().programmer.blind
+    sceneFxStagePreview()
+      ? []
+      : snapshot().programmer.blind
       ? snapshot().programmer.dmx_previews
       : liveDmxPreviews());
   const activeDmxPreview = createMemo(() => {
@@ -6915,7 +6949,7 @@ export default function App() {
     mappingDrag,
     mappingShowGeometry,
     mappingFilteredFixtures,
-    liveFixtures,
+    liveFixtures: stagePreviewFixtures,
     mappingViewportBox,
     dmxPreviews: mappingDmxPreviewOptions,
     stageWorldBounds,
@@ -9643,6 +9677,7 @@ export default function App() {
   };
 
   const setAttribute = async (fixtureId: number, attribute: string, value: number) => {
+    setSceneFxStagePreview(null);
     const editCueId = controlEditCueIdForWrite();
     setFaderValues((current) => ({ ...current, [`${fixtureId}:${attribute}`]: value }));
     if (viewportFixture === "blind") {
@@ -9667,6 +9702,7 @@ export default function App() {
   };
 
   const setGroupAttribute = async (groupId: string, attribute: string, value: number) => {
+    setSceneFxStagePreview(null);
     const editCueId = controlEditCueIdForWrite();
     const fixtureIds = snapshot()
       .fixtures
@@ -10807,6 +10843,7 @@ export default function App() {
   };
 
   const setFixtureColor = async (hexColor: string) => {
+    setSceneFxStagePreview(null);
     const editCueId = controlEditCueIdForWrite();
     const fixture = selectedControlReferenceFixture();
     const controls = selectedColorControls();
@@ -15728,8 +15765,12 @@ export default function App() {
 
   const selectSceneEffect = (effectId: number) => {
     const cue = selectedSceneCue();
-    if (!cue || !cue.effect_targets.some((target) => target.effect_id === effectId)) return;
+    const target = cue?.effect_targets.find((candidate) => candidate.effect_id === effectId);
+    if (!cue || !target) return;
     setSelectedSceneEffectId(effectId);
+    setSceneFxStagePreview(target.enabled && target.params
+      ? { cueId: cue.id, effectId, params: target.params, startedAt: performance.now() }
+      : null);
     loadSceneEffectDraft(cue.id, effectId);
   };
 
@@ -15784,6 +15825,20 @@ export default function App() {
     setEffectAttribute(attribute);
   };
 
+  const sceneMoveFxEnabled = createMemo(() => {
+    const cue = selectedSceneCue();
+    return cue ? sceneMoveFxAvailable(cue, snapshot().fixtures) : false;
+  });
+
+  const previewAndRunSceneEffect = async (
+    cueId: number,
+    effectId: number,
+    params: EffectParamsSnapshot,
+  ) => {
+    setSceneFxStagePreview({ cueId, effectId, params, startedAt: performance.now() });
+    if (!snapshot().programmer.blind) await triggerCue(cueId);
+  };
+
   const createSceneEffect = async (family: EffectChooserFamily) => {
     const cue = selectedSceneCue();
     if (!cue) return;
@@ -15800,19 +15855,39 @@ export default function App() {
       setTimelineContextDrawer("none");
       return;
     }
-    prepareSceneEffectTarget(cue);
-    await selectEffectFamily(family);
-    const draft = buildEffectRequestFromForm();
-    if (!draft) return;
-    const params = effectParamsSnapshotFromDraft(draft);
+    const quickFamily = quickSceneFxFamilies.includes(family as QuickSceneFxFamily)
+      ? family as QuickSceneFxFamily
+      : null;
+    let params: EffectParamsSnapshot;
+    let effectLabel: string;
+    if (quickFamily) {
+      const defaultParams = defaultSceneFxParams(quickFamily, cue, snapshot().fixtures);
+      if (!defaultParams) {
+        setMessage(quickFamily === "MOVE FX"
+          ? "MOVE FX requires a scene fixture with paired Pan/Tilt controls."
+          : "This scene has no compatible fixture target for the selected FX block.");
+        return;
+      }
+      params = defaultParams;
+      setEffectChooserFamily(quickFamily);
+      effectLabel = Object.values(defaultParams)[0].label;
+    } else {
+      prepareSceneEffectTarget(cue);
+      await selectEffectFamily(family);
+      const draft = buildEffectRequestFromForm();
+      if (!draft) return;
+      params = effectParamsSnapshotFromDraft(draft);
+      effectLabel = draft.effectType;
+    }
     if (viewportFixture) {
-      const effectId = Math.max(900, ...snapshot().effects.map((effect) => effect.id)) + 1;
+      const cueEffectIds = snapshot().cues.flatMap((candidate) =>
+        candidate.effect_targets.map((target) => target.effect_id));
+      const effectId = Math.max(900, ...snapshot().effects.map((effect) => effect.id), ...cueEffectIds) + 1;
       const effectTarget: CueEffectTarget = { effect_id: effectId, enabled: true, params };
       const effect = cueOwnedEffectSummary(effectTarget, null);
       if (!effect) return;
       setSnapshot((current) => ({
         ...current,
-        effects: [...current.effects, effect],
         cues: current.cues.map((candidate) =>
           candidate.id === cue.id
             ? { ...candidate, effect_targets: [...candidate.effect_targets, effectTarget] }
@@ -15821,20 +15896,66 @@ export default function App() {
       }));
       setSelectedSceneEffectId(effectId);
       useEffectAsDraft(effect);
-      setMessage(`Created cue-owned ${draft.effectType} FX for scene ${cue.id}.`);
+      await previewAndRunSceneEffect(cue.id, effectId, params);
+      setMessage(quickFamily === "COLOR FX"
+        ? "Prepared a multi-color draft for whole-fixture colour output."
+        : `Created cue-owned ${effectLabel} FX for scene ${cue.id} in one gesture.`);
       return;
     }
-    const effectId = await addEffect();
-    if (effectId === null) return;
-    const currentCue = snapshot().cues.find((candidate) => candidate.id === cue.id) ?? cue;
-    const saved = await persistSceneEffectTargets(cue.id, [
-      ...currentCue.effect_targets,
-      { effect_id: effectId, enabled: true, params },
-    ]);
+    try {
+      const effectId = await invoke<number>("add_cue_owned_effect", { cueId: cue.id, params });
+      await refreshSnapshot();
+      setSelectedSceneEffectId(effectId);
+      const effect = cueOwnedEffectSummary(
+        { effect_id: effectId, enabled: true, params },
+        null,
+      );
+      if (effect) useEffectAsDraft(effect);
+      await previewAndRunSceneEffect(cue.id, effectId, params);
+      setMessage(quickFamily === "COLOR FX"
+        ? "Prepared a multi-color draft for whole-fixture colour output."
+        : `Created cue-owned ${effectLabel} FX for scene ${cue.id} in one gesture.`);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const setSceneEffectEnabled = async (effectId: number, enabled: boolean) => {
+    const cue = selectedSceneCue();
+    const target = cue?.effect_targets.find((candidate) => candidate.effect_id === effectId);
+    if (!cue || !target) return;
+    const saved = await persistSceneEffectTargets(
+      cue.id,
+      cue.effect_targets.map((candidate) =>
+        candidate.effect_id === effectId ? { ...candidate, enabled } : candidate),
+    );
     if (!saved) return;
-    setSelectedSceneEffectId(effectId);
-    loadSceneEffectDraft(cue.id, effectId);
-    setMessage(`Created cue-owned ${draft.effectType} FX for scene ${cue.id}.`);
+    setSceneFxStagePreview(enabled && target.params
+      ? { cueId: cue.id, effectId, params: target.params, startedAt: performance.now() }
+      : null);
+    if (!snapshot().programmer.blind) await triggerCue(cue.id);
+    setMessage(`${enabled ? "Enabled" : "Bypassed"} cue-owned FX ${effectId}.`);
+  };
+
+  const removeSceneEffect = async (effectId: number) => {
+    const cue = selectedSceneCue();
+    if (!cue || !cue.effect_targets.some((target) => target.effect_id === effectId)) return;
+    const nextTargets = cue.effect_targets.filter((target) => target.effect_id !== effectId);
+    const saved = await persistSceneEffectTargets(cue.id, nextTargets);
+    if (!saved) return;
+    const nextTarget = nextTargets[0] ?? null;
+    setSelectedSceneEffectId(nextTarget?.effect_id ?? null);
+    setSceneFxStagePreview(nextTarget?.enabled && nextTarget.params
+      ? {
+          cueId: cue.id,
+          effectId: nextTarget.effect_id,
+          params: nextTarget.params,
+          startedAt: performance.now(),
+        }
+      : null);
+    if (nextTarget) loadSceneEffectDraft(cue.id, nextTarget.effect_id);
+    if (!snapshot().programmer.blind) await triggerCue(cue.id);
+    setMessage(`Removed cue-owned FX ${effectId} from scene ${cue.id}.`);
   };
 
   const saveSceneEffectDraft = async () => {
@@ -15854,6 +15975,7 @@ export default function App() {
       snapshot().effects.find((candidate) => candidate.id === effectId) ?? null,
     );
     if (effect) useEffectAsDraft(effect);
+    await previewAndRunSceneEffect(cue.id, effectId, params);
     setMessage(`Saved cue-owned ${draft.effectType} FX for scene ${cue.id}.`);
   };
 
@@ -16310,7 +16432,10 @@ export default function App() {
   const selectControlMode = (mode: ControlMode) => {
     if (paneWindow === "timeline" && mode !== "live") return;
     setControlMode(mode);
-    if (mode === "edit") setEditDeskSurface("attributes");
+    if (mode === "edit") {
+      setEditDeskSurface("attributes");
+      if (selectedSceneCue()) setSceneSettingsSurface("fx");
+    }
     if (mode === "live") {
       setTimelineDeskSurface("show");
       setTimelineContextDrawer((current) => current === "cue" ? "cue" : "none");
@@ -16760,6 +16885,7 @@ export default function App() {
                   selectedEffectId={selectedSceneEffectId()}
                   activeFamily={effectChooserFamily()}
                   activeSurface={sceneSettingsSurface()}
+                  moveFxEnabled={sceneMoveFxEnabled()}
                   running={selectedSceneIsRunning()}
                   liveStates={snapshot().cue_live_modifiers}
                   editor={sceneEffectEditor()}
@@ -16774,6 +16900,8 @@ export default function App() {
                   onEditSource={() => openTimelineSourceCue(cue().id)}
                   onSelectEffect={selectSceneEffect}
                   onSelectFamily={createSceneEffect}
+                  onSetEffectEnabled={setSceneEffectEnabled}
+                  onRemoveEffect={removeSceneEffect}
                 />
               )}
             </Show>

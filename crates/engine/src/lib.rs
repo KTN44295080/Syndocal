@@ -2628,6 +2628,12 @@ impl EngineHandle {
                 .effects
                 .iter()
                 .map(|effect| effect.id)
+                .chain(
+                    snapshot
+                        .cues
+                        .iter()
+                        .flat_map(|cue| cue.effect_targets.iter().map(|target| target.effect_id)),
+                )
                 .max()
                 .unwrap_or(0)
                 .saturating_add(1),

@@ -197,6 +197,15 @@ const japaneseText: Record<string, string> = {
   "No follow": "フォローなし",
   "Save scene properties": "シーンプロパティを保存",
   "Add FX": "FXを追加",
+  "Default Rainbow": "デフォルトRainbow",
+  "Dimmer chaser": "Dimmerチェイサー",
+  "Dimmer pulse": "Dimmerパルス",
+  "Pan/Tilt circle": "Pan/Tiltサークル",
+  "Requires a Pan/Tilt fixture": "Pan/Tilt灯体が必要です",
+  "MOVE FX requires a scene fixture with paired Pan/Tilt controls.":
+    "MOVE FXにはPan/Tiltが対になったシーン灯体が必要です。",
+  "This scene has no compatible fixture target for the selected FX block.":
+    "このシーンには選択したFXブロックと互換性のある灯体ターゲットがありません。",
   "Select a family to create a cue-owned FX.": "ファミリーを選んでCue所有FXを作成します。",
   "Select an FX family above to add the first cue-owned FX.":
     "上のFXファミリーを選んで最初のCue所有FXを追加してください。",
@@ -2350,8 +2359,20 @@ const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
     (kind, cueId) => `シーン ${cueId} にCue所有 ${kind} FXを作成しました。`,
   ],
   [
+    /^Created cue-owned (.+) FX for scene (\d+) in one gesture\.$/,
+    (kind, cueId) => `シーン ${cueId} にCue所有 ${kind} FXを1操作で作成しました。`,
+  ],
+  [
     /^Saved cue-owned (.+) FX for scene (\d+)\.$/,
     (kind, cueId) => `シーン ${cueId} のCue所有 ${kind} FXを保存しました。`,
+  ],
+  [
+    /^(Enabled|Bypassed) cue-owned FX (\d+)\.$/,
+    (action, effectId) => `Cue所有FX ${effectId}を${action === "Enabled" ? "有効化" : "バイパス"}しました。`,
+  ],
+  [
+    /^Removed cue-owned FX (\d+) from scene (\d+)\.$/,
+    (effectId, cueId) => `シーン ${cueId} からCue所有FX ${effectId}を削除しました。`,
   ],
   [/^Opened Scene FX for (.+)\.$/, (label) => `${label} のシーンFXを開きました。`],
   [

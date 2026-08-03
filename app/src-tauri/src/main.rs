@@ -7426,6 +7426,41 @@ fn set_cue_effect_targets(
         .set_cue_effect_targets_published(cue_id, effect_targets)
 }
 
+fn add_cue_owned_effect_to_engine(
+    engine: &EngineHandle,
+    cue_id: CueId,
+    params: EffectParamsSnapshot,
+) -> Result<EffectId, String> {
+    validate_effect_params_snapshot(&params)?;
+    let snapshot = engine.persistence_snapshot()?;
+    let cue = snapshot
+        .cues
+        .iter()
+        .find(|cue| cue.id == cue_id)
+        .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
+    let effect_id = engine.allocate_effect_id();
+    let mut effect_targets = cue.effect_targets.clone();
+    effect_targets.push(CueEffectTarget {
+        effect_id,
+        enabled: true,
+        params: Some(params),
+        transition_ms: None,
+    });
+    validate_cue_effect_targets(&snapshot, &effect_targets)?;
+    validate_cue_effect_target_replacement(cue, &effect_targets)?;
+    engine.set_cue_effect_targets_published(cue_id, effect_targets)?;
+    Ok(effect_id)
+}
+
+#[tauri::command]
+fn add_cue_owned_effect(
+    state: State<'_, AppState>,
+    cue_id: CueId,
+    params: EffectParamsSnapshot,
+) -> Result<EffectId, String> {
+    add_cue_owned_effect_to_engine(&state.engine, cue_id, params)
+}
+
 fn apply_programmer_preview_to_snapshot(snapshot: &mut EngineSnapshot) {
     for staged in &snapshot.programmer.values {
         if let Some(fixture) = snapshot
@@ -31561,6 +31596,105 @@ f 1 2 3
     }
 
     #[test]
+    fn scene_owned_fx_command_matches_imported_shape_roundtrips_and_removes() {
+        let cue_id = 17;
+        let params = EffectParamsSnapshot::Lfo(sample_lfo_request());
+        let snapshot = EngineSnapshot {
+            fixtures: vec![project_fixture(1, "Scene fixture", 0, 1)],
+            cues: vec![protocol::CueSummary {
+                id: cue_id,
+                label: "Editable scene".to_string(),
+                targets: vec![CueFixtureTarget {
+                    fixture_id: 1,
+                    values: vec![protocol::AttributeValueSummary {
+                        attribute: "Dimmer".to_string(),
+                        value: 32_768,
+                    }],
+                }],
+                ..protocol::CueSummary::default()
+            }],
+            ..EngineSnapshot::default()
+        };
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine.load_project_snapshot(snapshot).unwrap();
+
+        let effect_id = add_cue_owned_effect_to_engine(&engine, cue_id, params.clone()).unwrap();
+        let added = engine.snapshot();
+        let imported_shape = CueEffectTarget {
+            effect_id,
+            enabled: true,
+            params: Some(params),
+            transition_ms: None,
+        };
+        assert!(added.effects.is_empty());
+        assert_eq!(added.cues[0].effect_targets, vec![imported_shape.clone()]);
+
+        let project = ProjectFile {
+            version: PROJECT_FILE_VERSION,
+            app: APP_NAME.to_string(),
+            operator_policy: None,
+            custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
+            snapshot: added,
+        };
+        validate_project_file(&project).unwrap();
+        let json = project_json_for_write(&project).unwrap();
+        let roundtrip: ProjectFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            roundtrip.snapshot.cues[0].effect_targets,
+            vec![imported_shape]
+        );
+        assert!(roundtrip.snapshot.effects.is_empty());
+
+        engine
+            .set_cue_effect_targets_published(cue_id, Vec::new())
+            .unwrap();
+        assert!(engine.snapshot().cues[0].effect_targets.is_empty());
+    }
+
+    #[test]
+    fn scene_owned_fx_allocator_advances_past_imported_cue_ids() {
+        let mut request = sample_lfo_request();
+        request.label = "Imported curve".to_string();
+        let snapshot = EngineSnapshot {
+            fixtures: vec![project_fixture(1, "Imported fixture", 0, 1)],
+            cues: vec![protocol::CueSummary {
+                id: 7,
+                label: "Imported FX scene".to_string(),
+                targets: vec![CueFixtureTarget {
+                    fixture_id: 1,
+                    values: vec![protocol::AttributeValueSummary {
+                        attribute: "Dimmer".to_string(),
+                        value: 0,
+                    }],
+                }],
+                effect_targets: vec![CueEffectTarget {
+                    effect_id: 41,
+                    enabled: true,
+                    params: Some(EffectParamsSnapshot::Lfo(request.clone())),
+                    transition_ms: None,
+                }],
+                ..protocol::CueSummary::default()
+            }],
+            ..EngineSnapshot::default()
+        };
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine.load_project_snapshot(snapshot).unwrap();
+
+        let added_id =
+            add_cue_owned_effect_to_engine(&engine, 7, EffectParamsSnapshot::Lfo(request)).unwrap();
+
+        assert_eq!(added_id, 42);
+        assert_eq!(engine.snapshot().cues[0].effect_targets.len(), 2);
+    }
+
+    #[test]
     fn cue_effect_targets_survive_project_save_history_and_legacy_default() {
         let project = project_with_effect_only_cue();
         validate_project_file(&project).unwrap();
@@ -41565,6 +41699,7 @@ fn main() {
             trigger_cue_list_previous,
             update_cue_from_current,
             set_cue_effect_targets,
+            add_cue_owned_effect,
             set_cue_metadata,
             set_cue_child_timeline,
             set_cue_steps,

@@ -42,7 +42,16 @@ const chooserFamilyCode = (family: EffectChooserFamily) => {
 interface EffectFamilyChooserProps {
   activeFamily: EffectChooserFamily;
   onSelectFamily: (family: EffectChooserFamily) => void | Promise<void>;
+  descriptions?: Partial<Record<EffectChooserFamily, string>>;
+  disabledFamilies?: Partial<Record<EffectChooserFamily, boolean>>;
 }
+
+const quickSceneFamilies = new Set<EffectChooserFamily>([
+  "COLOR FX",
+  "CHASER FX",
+  "VALUE FX",
+  "MOVE FX",
+]);
 
 export function EffectFamilyChooser(props: EffectFamilyChooserProps) {
   return (
@@ -56,10 +65,15 @@ export function EffectFamilyChooser(props: EffectFamilyChooserProps) {
             data-effect-family={family}
             data-effect-family-id={family.toLowerCase().replace(/\s+/g, "-")}
             data-family-order={index() + 1}
+            data-scene-fx-quick-block={quickSceneFamilies.has(family) ? family : undefined}
+            disabled={props.disabledFamilies?.[family] ?? false}
             onClick={() => void props.onSelectFamily(family)}
           >
             <span class="effectFamilyGlyph" aria-hidden="true">{chooserFamilyCode(family)}</span>
             <strong>{family}</strong>
+            {props.descriptions?.[family]
+              ? <small>{props.descriptions[family]}</small>
+              : null}
           </button>
         )}
       </For>

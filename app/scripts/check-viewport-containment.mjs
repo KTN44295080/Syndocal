@@ -21,6 +21,7 @@ const sceneBlockOverlapOnlyMode = process.argv.includes("--scene-block-overlap-o
 const sceneMatrixOnlyMode = process.argv.includes("--scene-matrix-only");
 const sceneMatrixStripDragOnlyMode = process.argv.includes("--scene-matrix-strip-drag-only");
 const sceneSettingsOnlyMode = process.argv.includes("--scene-settings-only");
+const sceneFxBlockOnlyMode = process.argv.includes("--scene-fx-block-only");
 const cueRecallOnlyMode = process.argv.includes("--cue-recall-only");
 const setupDmxOnlyMode = process.argv.includes("--setup-dmx-only");
 const timelineSlimOnlyMode = process.argv.includes("--timeline-slim-only");
@@ -88,7 +89,7 @@ const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
       ? "cue-recall"
     : workspaceOperatorOnlyMode
       ? "workspace-operator"
-    : sceneSettingsOnlyMode || sceneMatrixStripDragOnlyMode || sceneLiveModifierOnlyMode || groupStrobeOnlyMode || fixtureCatalogOnlyMode
+    : sceneSettingsOnlyMode || sceneFxBlockOnlyMode || sceneMatrixStripDragOnlyMode || sceneLiveModifierOnlyMode || groupStrobeOnlyMode || fixtureCatalogOnlyMode
       ? "scene-matrix"
       : fxVisualOnlyMode
         ? "fx-visual"
@@ -7658,6 +7659,17 @@ async function measure(client, label) {
         const formRect = form.getBoundingClientRect();
         return editorRect.left >= formRect.left - 1 && editorRect.right <= formRect.right + 1;
       })(),
+      colorEffectEditorBounds: (() => {
+        const editor = document.querySelector('.colorEffectEditor');
+        const form = editor?.closest('[data-scene-settings-effect-editor]');
+        if (!editor || !form) return null;
+        const editorRect = editor.getBoundingClientRect();
+        const formRect = form.getBoundingClientRect();
+        return {
+          editor: [editorRect.left, editorRect.right, editorRect.width],
+          form: [formRect.left, formRect.right, formRect.width],
+        };
+      })(),
       visibleChaserEditorCount: visibleCount('.chaserEffectEditor'),
       visibleChaserStepCount: visibleCount('.chaserStepRow'),
       visibleChaserFeatureCount: visibleCount('.chaserFeatureRow'),
@@ -7693,6 +7705,17 @@ async function measure(client, label) {
         const editorRect = editor.getBoundingClientRect();
         const formRect = form.getBoundingClientRect();
         return editorRect.left >= formRect.left - 1 && editorRect.right <= formRect.right + 1;
+      })(),
+      chaserEditorBounds: (() => {
+        const editor = document.querySelector('.chaserEffectEditor');
+        const form = editor?.closest('[data-scene-settings-effect-editor]');
+        if (!editor || !form) return null;
+        const editorRect = editor.getBoundingClientRect();
+        const formRect = form.getBoundingClientRect();
+        return {
+          editor: [editorRect.left, editorRect.right, editorRect.width],
+          form: [formRect.left, formRect.right, formRect.width],
+        };
       })(),
       visibleMoveEffectEditorCount: visibleCount('.moveEffectEditorPanel'),
       visibleMoveEffectPathDeskCount: visibleCount('.moveEffectPathDesk'),
@@ -15751,6 +15774,12 @@ async function readSceneSettingsState(client) {
       chooserButtonCount: chooserButtons.length,
       chooserFamilies: chooserButtons.map((button) =>
         button.getAttribute("data-effect-family") ?? ""),
+      quickBlockFamilies: chooserButtons
+        .filter((button) => button.hasAttribute("data-scene-fx-quick-block"))
+        .map((button) => button.getAttribute("data-scene-fx-quick-block") ?? ""),
+      disabledQuickBlockFamilies: chooserButtons
+        .filter((button) => button.hasAttribute("data-scene-fx-quick-block") && button.disabled)
+        .map((button) => button.getAttribute("data-scene-fx-quick-block") ?? ""),
       chooserMinimumHitSize: chooserButtons.length > 0
         ? Math.min(...chooserButtons.map((button) => {
           const box = button.getBoundingClientRect();
@@ -15792,7 +15821,20 @@ async function readSceneSettingsState(client) {
       selectedOwnedFxIds: [...document.querySelectorAll(
         '.sceneOwnedFxList button[aria-pressed="true"]',
       )].filter(isVisible).map((button) =>
-        button.getAttribute("data-scene-owned-effect") ?? ""),
+        button.closest("[data-scene-owned-effect]")
+          ?.getAttribute("data-scene-owned-effect") ?? ""),
+      enabledOwnedFxCount: [...document.querySelectorAll(
+        '[data-scene-owned-effect][data-scene-owned-effect-enabled="true"]',
+      )].filter(isVisible).length,
+      ownedFxToggleCount: [...document.querySelectorAll(
+        '[data-scene-owned-effect] .sceneOwnedFxToggle input[type="checkbox"]',
+      )].filter(isVisible).length,
+      ownedFxRemoveCount: [...document.querySelectorAll(
+        '[data-scene-owned-effect] .sceneOwnedFxRemove',
+      )].filter(isVisible).length,
+      selectedSceneMatrixKind: document.querySelector(
+        `[data-scene-matrix-cue-id="${pane?.getAttribute("data-selected-scene-id") ?? ""}"] [data-scene-matrix-kind]`,
+      )?.getAttribute("data-scene-matrix-kind") ?? "",
       editorType: document.querySelector("[data-scene-settings-effect-editor]")
         ?.getAttribute("data-scene-settings-effect-editor") ?? "",
       curveEditorVisible: isVisible(document.querySelector(
@@ -16164,6 +16206,53 @@ async function runSceneSettingsViewport(client, viewport) {
     return input instanceof HTMLInputElement ? input.value : "";
   });
 
+  // T31: reset the deterministic fixture so the EDIT-scene path begins at
+  // zero owned FX. Selecting the scene and entering EDIT establishes context;
+  // the measured operation is the single synthetic click on COLOR FX.
+  await client.send("Page.navigate", { url: fixtureUrl("scene-matrix") });
+  await waitForApp(client);
+  await clickVisibleByText(client, ".workspaceTabs button", "Control");
+  await clickVisibleByText(client, ".controlModeTabs button", "Timeline");
+  await clickVisibleByText(client, ".timelineDeskTabs button", "Show");
+  await sleep(80);
+  const oneClickStripGesture = await clickSceneSettingsStrip(
+    client,
+    '[data-scene-matrix-edit-strip="302"]',
+  );
+  await sleep(80);
+  const oneClickBeforeEdit = await readSceneSettingsState(client);
+  const editModeClicked = await clickSceneSettingsTarget(
+    client,
+    '[data-control-mode-option="edit"]',
+  );
+  await waitForClientCondition(
+    client,
+    'document.querySelector("[data-scene-settings]")?.getAttribute("data-scene-settings-surface") === "fx"',
+    `T31 EDIT scene FX context ${viewport.width}x${viewport.height}`,
+  );
+  const oneClickEditContext = await readSceneSettingsState(client);
+  const oneClickAddGesture = await evaluatePageFunction(client, () => {
+    const button = document.querySelector('[data-scene-fx-quick-block="COLOR FX"]');
+    if (!(button instanceof HTMLButtonElement) || button.disabled) {
+      return { gestureCount: 0, dispatched: false };
+    }
+    button.click();
+    return { gestureCount: 1, dispatched: true };
+  });
+  await waitForClientCondition(
+    client,
+    `(() => {
+      const pane = document.querySelector('[data-scene-settings]');
+      const cellKind = document.querySelector('[data-scene-matrix-cue-id="302"] [data-scene-matrix-kind]');
+      return pane?.getAttribute('data-scene-settings-kind') === 'FX'
+        && pane.querySelectorAll('[data-scene-owned-effect]').length === 1
+        && cellKind?.getAttribute('data-scene-matrix-kind') === 'FX';
+    })()`,
+    `T31 one-click COLOR FX add ${viewport.width}x${viewport.height}`,
+  );
+  await sleep(120);
+  const oneClickAdded = await readSceneSettingsState(client);
+
   const expectedFamilies = [
     "STEPS",
     "COLOR FX",
@@ -16175,6 +16264,7 @@ async function runSceneSettingsViewport(client, viewport) {
     "COLOUR MAPPINGS",
     "SUPER SCENE",
   ];
+  const expectedQuickFamilies = ["COLOR FX", "CHASER FX", "MOVE FX", "VALUE FX"];
   const conditions = [
     ["unselectedKeepsTraditionalStatusRail", () =>
       initial.settingsCount === 0
@@ -16365,7 +16455,28 @@ async function runSceneSettingsViewport(client, viewport) {
       && createdFx.editorType === "Curve"
       && createdFx.curveEditorVisible
       && createdFx.saveFxButtonVisible
-      && !createdFx.activeCardIds.includes("302")],
+      && createdFx.activeCardIds.includes("302")],
+    ["editSceneContextShowsDaslightStyleQuickFxBlocks", () =>
+      oneClickStripGesture.dispatched
+      && editModeClicked
+      && oneClickBeforeEdit.kind === "STATIC"
+      && oneClickBeforeEdit.ownedFxCount === 0
+      && oneClickEditContext.activeSurface === "fx"
+      && oneClickEditContext.chooserButtonCount === 9
+      && JSON.stringify(oneClickEditContext.quickBlockFamilies)
+        === JSON.stringify(expectedQuickFamilies)
+      && oneClickEditContext.disabledQuickBlockFamilies.length === 0],
+    ["oneSyntheticGestureAddsDefaultRainbowAndTypesSceneFx", () =>
+      oneClickAddGesture.dispatched
+      && oneClickAddGesture.gestureCount === 1
+      && oneClickAdded.kind === "FX"
+      && oneClickAdded.selectedSceneMatrixKind === "FX"
+      && oneClickAdded.ownedFxCount === 1
+      && oneClickAdded.enabledOwnedFxCount === 1
+      && oneClickAdded.selectedOwnedFxIds.length === 1
+      && oneClickAdded.editorType === "Color"
+      && oneClickAdded.ownedFxToggleCount === 1
+      && oneClickAdded.ownedFxRemoveCount === 1],
     ["surfaceSelectionSurvivesFxCreationAndReturnsToContents", () =>
       returnContentsSurfaceClicked
       && createdFxContents.kind === "FX"
@@ -16424,6 +16535,15 @@ async function runSceneSettingsViewport(client, viewport) {
       && fxSurface.documentAndAppScrollZero
       && createdFx.documentAndAppScrollZero
       && createdFxContents.documentAndAppScrollZero],
+    ["oneClickFxKeepsFixedViewportAndInternalPaneGeometry", () =>
+      oneClickBeforeEdit.documentAndAppScrollZero
+      && oneClickEditContext.documentAndAppScrollZero
+      && oneClickAdded.documentAndAppScrollZero
+      && oneClickAdded.settingsHorizontalOverflowPx <= 1
+      && oneClickAdded.minimumVisibleFontPx >= 11
+      && oneClickAdded.chooserMinimumHitSize >= 40
+      && oneClickAdded.ownedFxToggleCount === 1
+      && oneClickAdded.ownedFxRemoveCount === 1],
   ];
   const checks = Object.fromEntries(conditions.map(([name, check]) => {
     try {
@@ -16465,8 +16585,42 @@ async function runSceneSettingsViewport(client, viewport) {
     cueEditSaveClicked,
     cueEditSaveRoundTrip,
     cueEditAfterSave,
+    oneClickStripGesture,
+    oneClickBeforeEdit,
+    oneClickEditContext,
+    oneClickAddGesture,
+    oneClickAdded,
   };
 }
+
+const sceneSettingsLogLine = (result) =>
+  `${result.passed ? "pass" : "fail"} ${result.label} ` +
+    `body=${result.triggeredOnly.activeCardIds.join("+") || "none"}:${result.triggeredOnly.selectedSceneId || "unselected"} ` +
+    `strip=${result.selectedStatic.selectedSceneId}/${result.selectedStatic.kind}@${result.selectedStatic.selectedStripVisualWidth}px ` +
+    `precision=${result.selectedStatic.scenePropertyValues.authoredBeats}->${result.saveRoundTrip.metadataArgs?.authoredBeats ?? "none"} ` +
+    `drawerPrecision=${result.cueEditAuthoredBeats.initialValue}->${result.cueEditSaveRoundTrip.metadataArgs?.authoredBeats ?? "none"} ` +
+    `topHit=${result.selectStripGesture.centerHitTag}.${result.selectStripGesture.centerHitClass || "none"} ` +
+    `click=${result.selectStripGesture.movementPx}px<${result.selectStripGesture.thresholdPx}px ` +
+    `release=${result.releasedStatic.activeCardIds.join("+") || "none"}:${result.releasedStatic.selectedSceneId} ` +
+    `edit=${result.editSelected.selectedSceneId}/${result.editSelected.activeCardIds.join("+") || "none"} ` +
+    `surfaces=${result.selectedStatic.surfaceControlCount}:` +
+      `${result.selectedStatic.activeSurface}>${result.advancedSurface.activeSurface}>` +
+      `${result.fxSurface.activeSurface}>${result.createdFxContents.activeSurface} ` +
+    `chooser=${result.fxSurface.chooserButtonCount}@${Math.round(result.fxSurface.chooserMinimumHitSize)}px ` +
+    `created=${result.createdFx.editorType}/${result.createdFx.ownedFxCount} ` +
+    `quick=${result.oneClickAddGesture.gestureCount}:${result.oneClickAdded.editorType}/` +
+      `${result.oneClickAdded.ownedFxCount}/${result.oneClickAdded.enabledOwnedFxCount} ` +
+    `source=${result.editSourceRoute.drawerVisible}/${result.editSourceRoute.storeFormVisible} ` +
+    `hit=${result.createdFx.minimumInteractiveDescriptor?.tag ?? "none"}/` +
+      `${result.createdFx.minimumInteractiveDescriptor?.type ?? "none"}@` +
+      `${Math.round(result.createdFx.minimumInteractiveDescriptor?.width ?? 0)}x` +
+      `${Math.round(result.createdFx.minimumInteractiveDescriptor?.height ?? 0)}px#` +
+      `${result.createdFx.minimumInteractiveDescriptor?.className ?? ""}:` +
+      `${result.createdFx.minimumInteractiveDescriptor?.ariaLabel ?? ""} ` +
+    `rail=${Math.round(result.createdFx.statusRect?.width ?? 0)}px ` +
+    `paneHeight=${Math.round(result.createdFx.paneHeight)}px ` +
+    `scroll=${result.createdFx.documentAndAppScrollZero ? "zero" : "overflow"} ` +
+    `failed=${JSON.stringify(result.failedChecks)}`;
 
 // T15: the Timeline slim pass deliberately reuses the T14 Scene Matrix
 // interaction fixture. That keeps the 4px click/drag boundary on the exact
@@ -20744,7 +20898,7 @@ async function runFxVisualViewport(client, viewport) {
         type: (button.querySelector("small")?.textContent || "").trim(),
       })),
       selectedOwnedCount: buttons.filter((button) =>
-        button.getAttribute("aria-pressed") === "true").length,
+        button.querySelector('.sceneOwnedFxSelect[aria-pressed="true"]')).length,
       surfaceControlCount: surfaceControls.length,
       activeSurfaceControlCount: surfaceControls.filter((button) =>
         button.getAttribute("aria-pressed") === "true").length,
@@ -20764,7 +20918,7 @@ async function runFxVisualViewport(client, viewport) {
   for (const effect of initial.ownedEffects) {
     await clickSceneSettingsTarget(
       client,
-      `[data-scene-owned-effect="${effect.id}"]`,
+      `[data-scene-owned-effect="${effect.id}"] .sceneOwnedFxSelect`,
     );
     await sleep(72);
     editors.push(await evaluatePageFunction(client, (expectedType) => {
@@ -20803,7 +20957,7 @@ async function runFxVisualViewport(client, viewport) {
   if (moveEffect) {
     await clickSceneSettingsTarget(
       client,
-      `[data-scene-owned-effect="${moveEffect.id}"]`,
+      `[data-scene-owned-effect="${moveEffect.id}"] .sceneOwnedFxSelect`,
     );
     await waitForClientCondition(
       client,
@@ -22886,6 +23040,7 @@ async function runBlindViewport(client, viewport) {
       programmerDmxSignature: JSON.stringify(snapshot?.programmer?.dmx_previews ?? []),
       cueTargetSignature: JSON.stringify(cue?.targets ?? []),
       nonActiveCueTargetSignature: JSON.stringify(nonActiveCue?.targets ?? []),
+      nonActiveCueEffectCount: nonActiveCue?.effect_targets?.length ?? 0,
       cueGreen: cue?.targets
         ?.find((target) => target.fixture_id === 1)
         ?.values?.find((value) => value.attribute === 'ColorGreen')?.value ?? null,
@@ -22910,6 +23065,10 @@ async function runBlindViewport(client, viewport) {
         document.querySelector('[data-scene-matrix-selected="true"]')
           ?.getAttribute('data-scene-matrix-cue-id') ?? NaN
       ),
+      selectedSceneKind: document.querySelector('[data-scene-settings]')
+        ?.getAttribute('data-scene-settings-kind') ?? '',
+      selectedSceneSurface: document.querySelector('[data-scene-settings]')
+        ?.getAttribute('data-scene-settings-surface') ?? '',
       stageColor: shape ? getComputedStyle(shape).fill : '',
       liveColorSource: fixture?.getAttribute('data-live-color-source') ?? '',
       toggleCount: document.querySelectorAll('[data-control-blind-toggle]').length,
@@ -22964,6 +23123,25 @@ async function runBlindViewport(client, viewport) {
   await clickVisibleSelector(client, '[data-control-blind-toggle]');
   const blindEnabled = true;
   await sleep(80);
+  const blindFxBefore = await readState();
+  const blindFxAddGesture = await evaluatePageFunction(client, () => {
+    const button = document.querySelector('[data-scene-fx-quick-block="COLOR FX"]');
+    if (!(button instanceof HTMLButtonElement) || button.disabled) {
+      return { gestureCount: 0, dispatched: false };
+    }
+    button.click();
+    return { gestureCount: 1, dispatched: true };
+  });
+  await waitForClientCondition(
+    client,
+    `(() => window.__syndocalReadEditLiveFixtureSnapshot?.()
+      ?.cues?.find((cue) => cue.id === 302)?.effect_targets?.length === 1)()`,
+    `T31 Blind scene FX add ${viewport.width}x${viewport.height}`,
+  );
+  await sleep(120);
+  const blindFxPreviewFirst = await readState();
+  await sleep(220);
+  const blindFxPreviewSecond = await readState();
   const greenEdit = await clickGreenSwatch();
   const staged = await readState();
 
@@ -23017,6 +23195,19 @@ async function runBlindViewport(client, viewport) {
       blindEnabled && greenEdit && staged.blind && staged.togglePressed === "true" && staged.stagedCount >= 3 &&
       staged.stageColor === "rgb(0, 255, 0)" && staged.liveColorSource === "preview"],
     ["blindEditKeepsLiveDmxByteIdentical", () => staged.liveDmxSignature === initial.liveDmxSignature],
+    ["blindOneClickFxPreviewsStageWithoutChangingLiveDmx", () =>
+      blindFxBefore.blind
+      && blindFxBefore.selectedSceneSurface === "fx"
+      && blindFxBefore.nonActiveCueEffectCount === 0
+      && blindFxAddGesture.dispatched
+      && blindFxAddGesture.gestureCount === 1
+      && blindFxPreviewFirst.nonActiveCueEffectCount === 1
+      && blindFxPreviewFirst.selectedSceneKind === "FX"
+      && blindFxPreviewFirst.stageColor !== blindFxPreviewSecond.stageColor
+      && blindFxPreviewFirst.liveDmxSignature === initial.liveDmxSignature
+      && blindFxPreviewSecond.liveDmxSignature === initial.liveDmxSignature
+      && blindFxPreviewFirst.activeCueId === initial.activeCueId
+      && blindFxPreviewSecond.activeMatrixCueIds === initial.activeMatrixCueIds],
     ["blindEditDoesNotCommitSceneEarly", () =>
       staged.nonActiveCueTargetSignature === initial.nonActiveCueTargetSignature],
     ["blindWatermarkIsOrangeAndVisibleOnlyWhileActive", () =>
@@ -23071,6 +23262,10 @@ async function runBlindViewport(client, viewport) {
     failedChecks,
     initial,
     nonActiveSelected,
+    blindFxBefore,
+    blindFxAddGesture,
+    blindFxPreviewFirst,
+    blindFxPreviewSecond,
     staged,
     discarded,
     stagedForNonActiveCommit,
@@ -24104,38 +24299,12 @@ async function main() {
       }
       return;
     }
-    if (sceneSettingsOnlyMode) {
+    if (sceneSettingsOnlyMode || sceneFxBlockOnlyMode) {
       const sceneSettingsResults = [];
       for (const viewport of viewports) {
         const result = await runSceneSettingsViewport(client, viewport);
         sceneSettingsResults.push(result);
-        console.log(
-          `${result.passed ? "pass" : "fail"} ${result.label} ` +
-            `body=${result.triggeredOnly.activeCardIds.join("+") || "none"}:${result.triggeredOnly.selectedSceneId || "unselected"} ` +
-            `strip=${result.selectedStatic.selectedSceneId}/${result.selectedStatic.kind}@${result.selectedStatic.selectedStripVisualWidth}px ` +
-            `precision=${result.selectedStatic.scenePropertyValues.authoredBeats}->${result.saveRoundTrip.metadataArgs?.authoredBeats ?? "none"} ` +
-            `drawerPrecision=${result.cueEditAuthoredBeats.initialValue}->${result.cueEditSaveRoundTrip.metadataArgs?.authoredBeats ?? "none"} ` +
-            `topHit=${result.selectStripGesture.centerHitTag}.${result.selectStripGesture.centerHitClass || "none"} ` +
-            `click=${result.selectStripGesture.movementPx}px<${result.selectStripGesture.thresholdPx}px ` +
-            `release=${result.releasedStatic.activeCardIds.join("+") || "none"}:${result.releasedStatic.selectedSceneId} ` +
-            `edit=${result.editSelected.selectedSceneId}/${result.editSelected.activeCardIds.join("+") || "none"} ` +
-            `surfaces=${result.selectedStatic.surfaceControlCount}:` +
-              `${result.selectedStatic.activeSurface}>${result.advancedSurface.activeSurface}>` +
-              `${result.fxSurface.activeSurface}>${result.createdFxContents.activeSurface} ` +
-            `chooser=${result.fxSurface.chooserButtonCount}@${Math.round(result.fxSurface.chooserMinimumHitSize)}px ` +
-            `created=${result.createdFx.editorType}/${result.createdFx.ownedFxCount} ` +
-            `source=${result.editSourceRoute.drawerVisible}/${result.editSourceRoute.storeFormVisible} ` +
-            `hit=${result.createdFx.minimumInteractiveDescriptor?.tag ?? "none"}/` +
-              `${result.createdFx.minimumInteractiveDescriptor?.type ?? "none"}@` +
-              `${Math.round(result.createdFx.minimumInteractiveDescriptor?.width ?? 0)}x` +
-              `${Math.round(result.createdFx.minimumInteractiveDescriptor?.height ?? 0)}px#` +
-              `${result.createdFx.minimumInteractiveDescriptor?.className ?? ""}:` +
-              `${result.createdFx.minimumInteractiveDescriptor?.ariaLabel ?? ""} ` +
-            `rail=${Math.round(result.createdFx.statusRect?.width ?? 0)}px ` +
-            `paneHeight=${Math.round(result.createdFx.paneHeight)}px ` +
-            `scroll=${result.createdFx.documentAndAppScrollZero ? "zero" : "overflow"} ` +
-            `failed=${JSON.stringify(result.failedChecks)}`,
-        );
+        console.log(sceneSettingsLogLine(result));
       }
       const failures = sceneSettingsResults.filter((result) => !result.passed);
       if (failures.length > 0) {
@@ -24540,6 +24709,33 @@ async function main() {
                 result.liveDeskSceneReadoutInsideStatus,
               ],
               editTabs: result.visibleEditDeskTabCount,
+              sceneFx: result.label.startsWith("control-live-scene-settings-fx-color-editor-")
+                ? {
+                    editorType: result.activeSceneSettingsEditorType,
+                    stops: result.visibleColorEffectStopCount,
+                    algorithm: result.colorEffectAlgorithmValue,
+                    interpolation: result.colorEffectInterpolationValue,
+                    summaryCurrent: result.colorEffectDraftSummaryIsCurrent,
+                    statusCurrent: result.colorEffectStatusIsCurrent,
+                    overflow: result.colorEffectHorizontalOverflowPx,
+                    contained: result.colorEffectEditorContained,
+                    bounds: result.colorEffectEditorBounds,
+                  }
+                : result.label.startsWith("control-live-scene-settings-fx-chaser-editor-")
+                  ? {
+                      editorType: result.activeSceneSettingsEditorType,
+                      steps: result.visibleChaserStepCount,
+                      features: result.visibleChaserFeatureCount,
+                      direction: result.chaserDirectionValue,
+                      activeSteps: result.chaserActiveStepCount,
+                      size: result.chaserSizePercent,
+                      phase: result.chaserPhasePercent,
+                      fading: result.chaserFadingEnabled,
+                      overflow: result.chaserHorizontalOverflowPx,
+                      contained: result.chaserEditorContained,
+                      bounds: result.chaserEditorBounds,
+                    }
+                  : null,
             })))}`,
         );
       }
@@ -25440,6 +25636,7 @@ async function main() {
     const patchEmptyStateResults = [];
     const fixtureGroupsResults = [];
     const blindResults = [];
+    const sceneSettingsResults = [];
     for (const viewport of viewports) {
       results.push(...(await runViewport(client, viewport)));
       results.push(await runComposedTouchViewport(client, viewport));
@@ -25497,6 +25694,9 @@ async function main() {
     if (!workspaceShellOnlyMode) {
       for (const viewport of viewports) {
         await recycleBrowser();
+        const sceneSettingsResult = await runSceneSettingsViewport(client, viewport);
+        sceneSettingsResults.push(sceneSettingsResult);
+        console.log(sceneSettingsLogLine(sceneSettingsResult));
         liveEditTypeResults.push(await runLiveEditFixtureTypesViewport(client, viewport));
         cueRecallResults.push(await runCueRecallViewport(client, viewport));
         cueRecallLargeResults.push(await runCueRecallLargeViewport(client, viewport));
@@ -25530,6 +25730,7 @@ async function main() {
     const patchEmptyStateFailures = patchEmptyStateResults.filter((result) => !result.passed);
     const fixtureGroupsFailures = fixtureGroupsResults.filter((result) => !result.passed);
     const blindFailures = blindResults.filter((result) => !result.passed);
+    const sceneSettingsFailures = sceneSettingsResults.filter((result) => !result.passed);
     const setupSurfaceFailures = results.filter((result) => !hasExpectedSetupSurface(result));
     const persistentBandFailures = results.filter((result) => !hasExpectedPersistentWorkspaceBand(result));
     const persistentBandInvarianceFailures = results.filter((result) => !hasExpectedPersistentBandInvariance(result));
@@ -25673,6 +25874,7 @@ async function main() {
       patchEmptyStateFailures.length > 0 ||
       fixtureGroupsFailures.length > 0 ||
       blindFailures.length > 0 ||
+      sceneSettingsFailures.length > 0 ||
       keyboardNavigationFailures.length > 0 ||
       setupSurfaceFailures.length > 0 ||
       persistentBandFailures.length > 0 ||
@@ -25695,6 +25897,7 @@ async function main() {
         console.error(JSON.stringify({
           viewport: failures.map((result) => result.label),
           blind: blindFailures.map((result) => result.label),
+          sceneSettings: sceneSettingsFailures.map((result) => result.label),
           setupSurface: setupSurfaceFailures.map((result) => result.label),
           persistentBand: persistentBandFailures.map((result) => result.label),
           persistentBandInvariance: persistentBandInvarianceFailures.map((result) => result.label),
@@ -25793,6 +25996,7 @@ async function main() {
             patchEmptyState: patchEmptyStateFailures,
             fixtureGroups: fixtureGroupsFailures,
             blind: blindFailures,
+            sceneSettings: sceneSettingsFailures,
             keyboardNavigation: keyboardNavigationFailures,
             setupSurface: setupSurfaceFailures,
             persistentBand: persistentBandFailures,
@@ -25823,7 +26027,7 @@ async function main() {
         ),
       );
       throw new Error(
-        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${liveEditTypeFailures.length} Live Edit fixture-type check(s), ${patchEmptyStateFailures.length} PATCH empty-state check(s), ${fixtureGroupsFailures.length} fixture group operation check(s), ${blindFailures.length} BLIND editing check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${stageSettingsFailures.length} stage settings check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${killZoneFailures.length} kill zone check(s), ${statusLineFailures.length} status line check(s) failed.`,
+        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${liveEditTypeFailures.length} Live Edit fixture-type check(s), ${patchEmptyStateFailures.length} PATCH empty-state check(s), ${fixtureGroupsFailures.length} fixture group operation check(s), ${blindFailures.length} BLIND editing check(s), ${sceneSettingsFailures.length} Scene Settings check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${stageSettingsFailures.length} stage settings check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${killZoneFailures.length} kill zone check(s), ${statusLineFailures.length} status line check(s) failed.`,
       );
     }
   } finally {

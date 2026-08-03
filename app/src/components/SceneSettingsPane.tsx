@@ -50,6 +50,7 @@ interface SceneSettingsPaneProps {
   selectedEffectId: number | null;
   activeFamily: EffectChooserFamily;
   activeSurface: SceneSettingsSurface;
+  moveFxEnabled: boolean;
   running: boolean;
   liveStates?: CueLiveModifierState[];
   editor: SceneEffectEditorModel;
@@ -74,6 +75,8 @@ interface SceneSettingsPaneProps {
   onEditSource: () => void;
   onSelectEffect: (effectId: number) => void;
   onSelectFamily: (family: EffectChooserFamily) => void | Promise<void>;
+  onSetEffectEnabled: (effectId: number, enabled: boolean) => void | Promise<void>;
+  onRemoveEffect: (effectId: number) => void | Promise<void>;
 }
 
 const optionalNumber = (value: string) => {
@@ -301,6 +304,13 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
               <EffectFamilyChooser
                 activeFamily={props.activeFamily}
                 onSelectFamily={props.onSelectFamily}
+                descriptions={{
+                  "COLOR FX": "Default Rainbow",
+                  "CHASER FX": "Dimmer chaser",
+                  "VALUE FX": "Dimmer pulse",
+                  "MOVE FX": props.moveFxEnabled ? "Pan/Tilt circle" : "Requires a Pan/Tilt fixture",
+                }}
+                disabledFamilies={{ "MOVE FX": !props.moveFxEnabled }}
               />
             </section>
 
@@ -320,17 +330,43 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
                 <nav class="sceneOwnedFxList" aria-label="Cue-owned FX list">
                   <For each={props.effects}>
                     {(effect, index) => (
-                      <button
-                        type="button"
-                        class={effect.id === props.selectedEffectId ? "active" : ""}
-                        aria-pressed={effect.id === props.selectedEffectId}
+                      <div
+                        class={`sceneOwnedFxRow ${effect.id === props.selectedEffectId ? "active" : ""}`}
                         data-scene-owned-effect={effect.id}
-                        onClick={() => props.onSelectEffect(effect.id)}
+                        data-scene-owned-effect-enabled={effect.enabled ? "true" : "false"}
                       >
-                        <span>{index() + 1}</span>
-                        <strong data-no-localize title={effect.label}>{effect.label}</strong>
-                        <small>{effect.effect_type}</small>
-                      </button>
+                        <button
+                          type="button"
+                          class="sceneOwnedFxSelect"
+                          aria-pressed={effect.id === props.selectedEffectId}
+                          onClick={() => props.onSelectEffect(effect.id)}
+                        >
+                          <span>{index() + 1}</span>
+                          <strong data-no-localize title={effect.label}>{effect.label}</strong>
+                          <small>{effect.effect_type}</small>
+                        </button>
+                        <label class="sceneOwnedFxToggle">
+                          <input
+                            type="checkbox"
+                            checked={effect.enabled}
+                            aria-label={`${effect.enabled ? "Bypass" : "Enable"} FX ${index() + 1}`}
+                            onChange={(event) => void props.onSetEffectEnabled(
+                              effect.id,
+                              event.currentTarget.checked,
+                            )}
+                          />
+                          <span>{effect.enabled ? "Enabled" : "Disabled"}</span>
+                        </label>
+                        <button
+                          type="button"
+                          class="sceneOwnedFxRemove"
+                          aria-label={`Remove FX ${index() + 1}`}
+                          title={`Remove FX ${index() + 1}`}
+                          onClick={() => void props.onRemoveEffect(effect.id)}
+                        >
+                          <span aria-hidden="true" data-no-localize>×</span>
+                        </button>
+                      </div>
                     )}
                   </For>
                 </nav>
