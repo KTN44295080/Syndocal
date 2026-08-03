@@ -3734,16 +3734,14 @@ async function runControlStageChromeViewport(client, viewport) {
     !document.querySelector('.mappingWorkspaceExpanded, [data-mapping-workspace-expanded]')
   ))()`);
   const setupAfterControlToggle = await client.evaluate(`(() => ({
-    beamToolActive: document.querySelector('[data-mapping-tool="beams"]')?.classList.contains('active') ?? null,
-    beamCompactTogglePressed: document.querySelector('[data-mapping-layer-toggle="beams"]')
+    beamTopStripTogglePressed: document.querySelector('.setupStageContext [data-mapping-layer-toggle="beams"]')
       ?.getAttribute('aria-pressed') ?? null,
   }))()`);
   await client.send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "b", code: "KeyB" });
   await client.send("Input.dispatchKeyEvent", { type: "keyUp", key: "b", code: "KeyB" });
   await sleep(80);
   const setupAfterHotkey = await client.evaluate(`(() => ({
-    beamToolActive: document.querySelector('[data-mapping-tool="beams"]')?.classList.contains('active') ?? null,
-    beamCompactTogglePressed: document.querySelector('[data-mapping-layer-toggle="beams"]')
+    beamTopStripTogglePressed: document.querySelector('.setupStageContext [data-mapping-layer-toggle="beams"]')
       ?.getAttribute('aria-pressed') ?? null,
   }))()`);
   await clickByText(client, "Control");
@@ -3806,14 +3804,12 @@ async function runControlStageChromeViewport(client, viewport) {
       JSON.stringify(control.controlStageLayerToggleIds) ===
         JSON.stringify(["beams", "labels", "projectors", "objects"]) &&
       control.controlStageLayerToggleNames.every((name) => name.length > 0)],
-    ["controlLayerToggleSharesSetupSignalAndMappingHotkey", () =>
+    ["controlLayerToggleSharesSetupTopStripSignalAndMappingHotkey", () =>
       controlLayerToggle.before.pressed === "true" &&
       controlLayerToggle.after.pressed === "false" &&
       controlLayerToggle.after.beamCount <= controlLayerToggle.before.beamCount &&
-      setupAfterControlToggle.beamToolActive === false &&
-      setupAfterControlToggle.beamCompactTogglePressed === "false" &&
-      setupAfterHotkey.beamToolActive === true &&
-      setupAfterHotkey.beamCompactTogglePressed === "true" &&
+      setupAfterControlToggle.beamTopStripTogglePressed === "false" &&
+      setupAfterHotkey.beamTopStripTogglePressed === "true" &&
       controlAfterHotkey.beamTogglePressed === "true" &&
       controlAfterHotkey.beamCount === controlLayerToggle.before.beamCount],
     ["controlStageBandJumpPresentAndWorks", () =>
@@ -3829,11 +3825,16 @@ async function runControlStageChromeViewport(client, viewport) {
       interactions.panModeActivated &&
       interactions.selectModeRestored &&
       interactions.wheelZoom.changed],
-    ["mappingFullToolRailHasAllElevenItems", () =>
+    ["mappingToolRailHasStageToolsAndHelpOnlyWhileTopStripOwnsLayerToggles", () =>
       setup.visibleMappingFullToolRailCount === 1 &&
-      setup.visibleMappingFullToolRailButtonCount === 11 &&
-      JSON.stringify(setup.mappingFullToolRailLabels) === JSON.stringify(["S", "P", "R", "H", "L", "B", "G", "V", "O", "%", "?"])],
-    ["mappingFullToolRailAlwaysVisibleWithoutScroll", () =>
+      setup.visibleMappingFullToolRailButtonCount === 5 &&
+      JSON.stringify(setup.mappingFullToolRailIds) === JSON.stringify(["select", "place", "rotate", "pan", "help"]) &&
+      JSON.stringify(setup.mappingFullToolRailLabels) === JSON.stringify(["S", "P", "R", "H", "?"]) &&
+      setup.visibleMappingLayerToggleButtonCount === 6 &&
+      JSON.stringify(setup.mappingLayerToggleIds) ===
+        JSON.stringify(["labels", "beams", "geometry", "projectors", "objects", "levels"])],
+    ["mappingToolRailIsSingleColumnAlwaysVisibleWithoutScroll", () =>
+      setup.mappingFullToolRailSingleColumn &&
       setup.mappingFullToolRailVerticalOverflowPx === 0 &&
       setup.mappingFullToolRailClippedButtonCount === 0],
     ["mappingReadoutFitAndZoomControlsRemain", () =>
@@ -4193,6 +4194,8 @@ function readMappingViewportConformanceStateInPage() {
   const readout = document.querySelector("[data-mapping-zoom-readout]");
   const minor = stage?.querySelector('[data-mapping-grid-pattern="minor"]') ?? null;
   const major = stage?.querySelector('[data-mapping-grid-pattern="major"]') ?? null;
+  const originAxisX = stage?.querySelector('[data-mapping-origin-axis="x"]') ?? null;
+  const originAxisZ = stage?.querySelector('[data-mapping-origin-axis="z"]') ?? null;
   const cursor = stage?.querySelector(".stageCursorGuide") ?? null;
   const cursorReadout = root?.querySelector(".mappingCursorReadout") ?? null;
   const label = stage?.querySelector('[data-stage-fixture-label-id="9"]')
@@ -4207,6 +4210,10 @@ function readMappingViewportConformanceStateInPage() {
   const labelRect = label?.getBoundingClientRect();
   const labelFontWorldPx = label ? Number.parseFloat(getComputedStyle(label).fontSize) : Number.NaN;
   const numberAttribute = (element, name) => Number(element?.getAttribute(name) ?? Number.NaN);
+  const numberAttributeOr = (element, name, fallback) => {
+    const value = element?.getAttribute(name);
+    return value === null || value === undefined ? fallback : Number(value);
+  };
   const viewBoxValues = (stage?.getAttribute("viewBox") ?? "")
     .trim()
     .split(/\s+/)
@@ -4239,6 +4246,42 @@ function readMappingViewportConformanceStateInPage() {
       }];
     }),
   );
+  const inspectOriginGridAlignment = (pattern) => {
+    const stageMatrix = stage instanceof SVGGraphicsElement ? stage.getScreenCTM() : null;
+    const width = numberAttribute(pattern, "width");
+    const height = numberAttribute(pattern, "height");
+    const patternX = numberAttributeOr(pattern, "x", 0);
+    const patternZ = numberAttributeOr(pattern, "y", 0);
+    const axisXSvg = numberAttribute(originAxisX, "x1");
+    const axisZSvg = numberAttribute(originAxisZ, "y1");
+    const nearestGridXSvg = patternX + Math.round((axisXSvg - patternX) / width) * width;
+    const nearestGridZSvg = patternZ + Math.round((axisZSvg - patternZ) / height) * height;
+    const screenPoint = (x, z) => {
+      if (!stageMatrix || !Number.isFinite(x) || !Number.isFinite(z)) return null;
+      const point = new DOMPoint(x, z).matrixTransform(stageMatrix);
+      return { x: point.x, y: point.y };
+    };
+    const axisXScreen = screenPoint(axisXSvg, axisZSvg);
+    const gridXScreen = screenPoint(nearestGridXSvg, axisZSvg);
+    const axisZScreen = screenPoint(axisXSvg, axisZSvg);
+    const gridZScreen = screenPoint(axisXSvg, nearestGridZSvg);
+    const xOffsetPx = axisXScreen && gridXScreen
+      ? Math.hypot(axisXScreen.x - gridXScreen.x, axisXScreen.y - gridXScreen.y)
+      : Number.NaN;
+    const zOffsetPx = axisZScreen && gridZScreen
+      ? Math.hypot(axisZScreen.x - gridZScreen.x, axisZScreen.y - gridZScreen.y)
+      : Number.NaN;
+    return {
+      patternOriginSvg: { x: patternX, z: patternZ },
+      axisSvg: { x: axisXSvg, z: axisZSvg },
+      nearestGridSvg: { x: nearestGridXSvg, z: nearestGridZSvg },
+      axisScreen: { x: axisXScreen?.x ?? Number.NaN, z: axisZScreen?.y ?? Number.NaN },
+      nearestGridScreen: { x: gridXScreen?.x ?? Number.NaN, z: gridZScreen?.y ?? Number.NaN },
+      xOffsetPx,
+      zOffsetPx,
+      maxOffsetPx: Math.max(xOffsetPx, zOffsetPx),
+    };
+  };
   return {
     zoom: {
       min: slider instanceof HTMLInputElement ? Number(slider.min) : null,
@@ -4293,12 +4336,14 @@ function readMappingViewportConformanceStateInPage() {
         svgHeight: numberAttribute(minor, "height"),
         worldSize: numberAttribute(minor, "data-grid-world-size"),
         worldToSvgScale: numberAttribute(minor, "data-world-to-svg-scale"),
+        originAlignment: inspectOriginGridAlignment(minor),
       },
       major: {
         svgWidth: numberAttribute(major, "width"),
         svgHeight: numberAttribute(major, "height"),
         worldSize: numberAttribute(major, "data-grid-world-size"),
         worldToSvgScale: numberAttribute(major, "data-world-to-svg-scale"),
+        originAlignment: inspectOriginGridAlignment(major),
       },
     },
     cursor: {
@@ -4510,6 +4555,14 @@ async function runMappingViewportConformanceViewport(client, viewport) {
       close(initial.grid.major.worldSize, initial.grid.minor.worldSize * 5)
       && close(initial.grid.major.svgWidth, initial.grid.minor.svgWidth * 5)
       && close(initial.grid.major.svgHeight, initial.grid.minor.svgHeight * 5),
+    originAxesCoincideWithMinorAndMajorGridAtDefaultZoom:
+      initial.zoom.value === 1
+      && initial.grid.minor.originAlignment.maxOffsetPx <= 1
+      && initial.grid.major.originAlignment.maxOffsetPx <= 1,
+    originAxesCoincideWithMinorAndMajorGridAtMaximumZoom:
+      maxZoom.zoom.value === initial.zoom.max
+      && maxZoom.grid.minor.originAlignment.maxOffsetPx <= 1
+      && maxZoom.grid.major.originAlignment.maxOffsetPx <= 1,
     cursorGuideLinesAreAbsent:
       initial.cursor.groupCount === 0
       && initial.cursor.lineCount === 0
@@ -6762,6 +6815,20 @@ async function measure(client, label) {
       mappingFullToolRailLabels: visibleElements(
         '.setupStageContext [data-mapping-tool-rail] [data-mapping-tool]'
       ).map((button) => (button.textContent || '').trim()),
+      mappingFullToolRailIds: visibleElements(
+        '.setupStageContext [data-mapping-tool-rail] [data-mapping-tool]'
+      ).map((button) => button.getAttribute('data-mapping-tool') || ''),
+      mappingFullToolRailButtonLeftCoordinates: visibleElements(
+        '.setupStageContext [data-mapping-tool-rail] [data-mapping-tool]'
+      ).map((button) => Math.round(button.getBoundingClientRect().left * 100) / 100),
+      mappingFullToolRailSingleColumn: (() => {
+        const buttons = visibleElements(
+          '.setupStageContext [data-mapping-tool-rail] [data-mapping-tool]'
+        );
+        if (buttons.length === 0) return false;
+        const lefts = buttons.map((button) => button.getBoundingClientRect().left);
+        return Math.max(...lefts) - Math.min(...lefts) <= 1;
+      })(),
       mappingFullToolRailVerticalOverflowPx: (() => {
         const rail = visibleElements('.setupStageContext [data-mapping-tool-rail]')[0];
         return rail ? Math.max(0, rail.scrollHeight - rail.clientHeight) : -1;
@@ -9163,8 +9230,10 @@ function hasExpectedSetupSurface(result) {
       result.visibleMappingProjectorResetPoseButtonCount === 0 &&
       result.visibleStageVideoSurfaceCount === 0 &&
       result.visibleMappingFullToolRailCount === 1 &&
-      result.visibleMappingFullToolRailButtonCount === 11 &&
-      JSON.stringify(result.mappingFullToolRailLabels) === JSON.stringify(["S", "P", "R", "H", "L", "B", "G", "V", "O", "%", "?"]) &&
+      result.visibleMappingFullToolRailButtonCount === 5 &&
+      JSON.stringify(result.mappingFullToolRailIds) === JSON.stringify(["select", "place", "rotate", "pan", "help"]) &&
+      JSON.stringify(result.mappingFullToolRailLabels) === JSON.stringify(["S", "P", "R", "H", "?"]) &&
+      result.mappingFullToolRailSingleColumn &&
       result.mappingFullToolRailVerticalOverflowPx === 0 &&
       result.mappingFullToolRailClippedButtonCount === 0 &&
       result.visibleMappingViewportReadoutCount === 1 &&
@@ -24551,6 +24620,10 @@ async function main() {
             `${Math.round(result.initial.grid.minor.svgWidth * 10000) / 10000}svg/` +
             `${result.initial.grid.major.worldSize}world:` +
             `${Math.round(result.initial.grid.major.svgWidth * 10000) / 10000}svg ` +
+          `axis=${result.initial.grid.minor.originAlignment.maxOffsetPx.toFixed(2)}/` +
+            `${result.initial.grid.major.originAlignment.maxOffsetPx.toFixed(2)}px->` +
+            `${result.maxZoom.grid.minor.originAlignment.maxOffsetPx.toFixed(2)}/` +
+            `${result.maxZoom.grid.major.originAlignment.maxOffsetPx.toFixed(2)}px ` +
           `drag1=${Math.round(result.zoomOneTracking.pointerDistancePx * 100) / 100}->` +
             `${Math.round(result.zoomOneTracking.screenDistancePx * 100) / 100}px ` +
           `dragMax=${Math.round(result.maxTracking.pointerDistancePx * 100) / 100}->` +

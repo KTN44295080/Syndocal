@@ -88,6 +88,8 @@ export function MappingEditableStageShell(props: MappingEditableStageShellProps)
           data-mapping-grid-pattern="minor"
           data-grid-world-size={mappingFixtureGridUnit}
           data-world-to-svg-scale={gridWorldToSvgScale()}
+          x={props.stageOrigin.x}
+          y={props.stageOrigin.z}
           width={minorGridSize()}
           height={minorGridSize()}
           patternUnits="userSpaceOnUse"
@@ -102,6 +104,8 @@ export function MappingEditableStageShell(props: MappingEditableStageShellProps)
           data-mapping-grid-pattern="major"
           data-grid-world-size={mappingFixtureGridUnit * 5}
           data-world-to-svg-scale={gridWorldToSvgScale()}
+          x={props.stageOrigin.x}
+          y={props.stageOrigin.z}
           width={majorGridSize()}
           height={majorGridSize()}
           patternUnits="userSpaceOnUse"
@@ -115,8 +119,22 @@ export function MappingEditableStageShell(props: MappingEditableStageShellProps)
       </defs>
       <rect class="stageFloor" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
       <rect class="stageGrid" x="0" y="0" width={stageViewBoxSize} height={stageViewBoxSize} />
-      <line class="stageAxis2d" x1={props.stageOrigin.x} y1="0" x2={props.stageOrigin.x} y2={stageViewBoxSize} />
-      <line class="stageAxis2d" x1="0" y1={props.stageOrigin.z} x2={stageViewBoxSize} y2={props.stageOrigin.z} />
+      <line
+        class="stageAxis2d"
+        data-mapping-origin-axis="x"
+        x1={props.stageOrigin.x}
+        y1="0"
+        x2={props.stageOrigin.x}
+        y2={stageViewBoxSize}
+      />
+      <line
+        class="stageAxis2d"
+        data-mapping-origin-axis="z"
+        x1="0"
+        y1={props.stageOrigin.z}
+        x2={stageViewBoxSize}
+        y2={props.stageOrigin.z}
+      />
       <Show when={props.snapEnabled}>
         <g>
           <For each={props.snapLines}>

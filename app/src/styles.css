@@ -7036,6 +7036,7 @@ progress {
 
 .mappingToolRail {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   align-content: start;
   gap: 5px;
   border-right: 1px solid #3b3530;
@@ -26472,13 +26473,13 @@ h3 {
 }
 
 .layoutSharedWorkspace.layoutSetup .mappingPersistentStage {
-  grid-template-columns: 62px minmax(0, 1fr);
+  grid-template-columns: 34px minmax(0, 1fr);
 }
 
 .layoutSharedWorkspace.layoutSetup .mappingPersistentStage > .mappingToolRail {
-  grid-template-columns: repeat(2, 27px);
+  grid-template-columns: 27px;
   overflow: hidden;
-  padding-inline: 3px;
+  padding-inline: 2px;
 }
 
 .layoutSharedWorkspace.layoutSetup .mappingPersistentStage > .mappingToolRail .mappingToolDivider {
@@ -26490,7 +26491,7 @@ h3 {
 }
 
 .layoutSharedWorkspace.layoutSetup .mappingPersistentStage > .mappingHotkeyHelp {
-  left: 66px;
+  left: 38px;
 }
 
 .mappingSelectionsColumn {

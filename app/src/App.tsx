@@ -17915,20 +17915,8 @@ export default function App() {
           }}
           toolRail={{
             stageTool: mappingStageTool(),
-            showLabels: mappingShowLabels(),
-            showBeams: mappingShowBeams(),
-            showGeometry: mappingShowGeometry(),
-            showProjectors: mappingShowProjectors(),
-            showStageObjects: mappingShowStageObjects(),
-            showLevels: mappingShowLevels(),
             helpOpen: mappingHotkeyHelpOpen(),
             onStageTool: setMappingStageTool,
-            onToggleLabels: () => setMappingShowLabels((value) => !value),
-            onToggleBeams: () => setMappingShowBeams((value) => !value),
-            onToggleGeometry: () => setMappingShowGeometry((value) => !value),
-            onToggleProjectors: () => setMappingShowProjectors((value) => !value),
-            onToggleStageObjects: () => setMappingShowStageObjects((value) => !value),
-            onToggleLevels: () => setMappingShowLevels((value) => !value),
             onToggleHelp: () => setMappingHotkeyHelpOpen((open) => !open),
           }}
           viewportControls={{
