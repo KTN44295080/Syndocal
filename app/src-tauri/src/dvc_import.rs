@@ -4520,6 +4520,217 @@ mod tests {
     }
 
     #[test]
+    fn dvc_synthetic_direct_super_scene_trigger_changes_rendered_dmx_across_blocks() {
+        let outcome = import_bytes(synthetic_dvc().as_bytes(), "synthetic-direct-super.dvc")
+            .expect("synthetic Daslight Super Scene must import");
+        let mut snapshot_to_load = outcome.project.snapshot;
+        let parent_index = snapshot_to_load
+            .cues
+            .iter()
+            .position(|cue| cue.child_timeline.is_some())
+            .expect("synthetic import must contain a Super Scene cue");
+        let parent_cue_id = snapshot_to_load.cues[parent_index].id;
+        let parent_group_id = snapshot_to_load.cues[parent_index]
+            .group_id
+            .clone()
+            .expect("synthetic Super Scene must retain its imported bank");
+        let first_cue_id = snapshot_to_load.cues[parent_index]
+            .child_timeline
+            .as_ref()
+            .and_then(|child| child.events.first())
+            .map(|event| event.cue_id)
+            .expect("synthetic Super Scene must contain a child Scene Block");
+        let mut second_cue = snapshot_to_load
+            .cues
+            .iter()
+            .find(|cue| cue.id == first_cue_id)
+            .cloned()
+            .expect("synthetic child Scene Block cue must exist");
+        second_cue.id = snapshot_to_load
+            .cues
+            .iter()
+            .map(|cue| cue.id)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+        second_cue.label = "Synthetic child low".to_string();
+        second_cue.targets[0].values[0].value = 16_384;
+        let second_cue_id = second_cue.id;
+        snapshot_to_load.cues.push(second_cue);
+
+        let child = snapshot_to_load.cues[parent_index]
+            .child_timeline
+            .as_mut()
+            .unwrap();
+        let mut first_event = child.events[0].clone();
+        first_event.time_ms = 100;
+        first_event.time_beats = None;
+        first_event.duration_ms = 250;
+        first_event.duration_beats = None;
+        first_event.conform_to_tempo = false;
+        first_event.loop_fill = false;
+        first_event.loop_count = 1;
+        first_event.source_offset_ms = 0;
+        let mut second_event = first_event.clone();
+        second_event.id = second_event.id.saturating_add(1);
+        second_event.cue_id = second_cue_id;
+        second_event.time_ms = 400;
+        child.events = vec![first_event, second_event];
+        child.duration_ms = 650;
+        child.audio = None;
+        child.audio_clips.clear();
+
+        snapshot_to_load.output.enabled = false;
+        for output in &mut snapshot_to_load.dmx_outputs {
+            output.enabled = false;
+        }
+        let engine = engine::EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine.load_project_snapshot(snapshot_to_load).unwrap();
+        engine
+            .send(engine::EngineCommand::TriggerCue(parent_cue_id))
+            .unwrap();
+
+        let mut first_value = None;
+        for _ in 0..50 {
+            let value = engine.snapshot().dmx_preview[0];
+            if value == u8::MAX {
+                first_value = Some(value);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let first_value = first_value.expect("the first direct child block must render full DMX");
+
+        let mut second_value = None;
+        for _ in 0..60 {
+            let value = engine.snapshot().dmx_preview[0];
+            if value == 64 {
+                second_value = Some(value);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let second_value = second_value.expect("the later direct child block must replace DMX");
+        assert_ne!(first_value, second_value);
+        let rendered = engine.snapshot();
+        assert_eq!(rendered.active_cue_id, Some(parent_cue_id));
+        assert_eq!(
+            rendered.active_group_cue_ids.get(&parent_group_id),
+            Some(&parent_cue_id)
+        );
+    }
+
+    #[test]
+    fn dvc_local_golden_super_scene_direct_trigger_plays_child_timeline() {
+        // Supervisor acceptance for direct Super Scene playback (#48): the real
+        // show's Super Scene cue, triggered directly (matrix/GO path, not via a
+        // main-timeline event), must execute its child timeline blocks.
+        let path = Path::new(r"C:\Users\kouty\Documents\Daslight 5\Projects\Shinkan2026.dvc");
+        if !path.is_file() {
+            eprintln!(
+                "Skipping local Daslight golden: {} is unavailable",
+                path.display()
+            );
+            return;
+        }
+        let outcome = import_path(path).unwrap();
+        let parent = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .find(|cue| {
+                cue.child_timeline
+                    .as_ref()
+                    .is_some_and(|child| !child.events.is_empty())
+            })
+            .expect("golden project should contain a Super Scene cue with child blocks");
+        let parent_cue_id = parent.id;
+        let block_count = parent.child_timeline.as_ref().unwrap().events.len();
+        assert!(
+            block_count >= 2,
+            "golden Super Scene should hold multiple child blocks (found {block_count})"
+        );
+
+        let mut snapshot_to_load = outcome.project.snapshot.clone();
+        snapshot_to_load.output.enabled = false;
+        for output in &mut snapshot_to_load.dmx_outputs {
+            output.enabled = false;
+        }
+        let engine = engine::EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine.load_project_snapshot(snapshot_to_load).unwrap();
+        engine
+            .send(engine::EngineCommand::TriggerCue(parent_cue_id))
+            .unwrap();
+
+        // The first real blocks land a few seconds in; sample up to 12s and
+        // require at least two distinct non-zero preview states (blocks
+        // actually replacing each other), which the pre-#48 engine never
+        // produced (30s of all-zero).
+        let mut activated = false;
+        for _ in 0..40 {
+            if engine.snapshot().active_cue_id == Some(parent_cue_id) {
+                activated = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(
+            activated,
+            "triggering the Super Scene should make it active"
+        );
+
+        let mut distinct_nonzero: Vec<Vec<u8>> = Vec::new();
+        for _ in 0..120 {
+            let snapshot = engine.snapshot();
+            assert_eq!(
+                snapshot.active_cue_id,
+                Some(parent_cue_id),
+                "the Super Scene must stay active while its child timeline plays"
+            );
+            let preview = snapshot.dmx_preview;
+            if preview.iter().any(|value| *value != 0) && !distinct_nonzero.contains(&preview) {
+                distinct_nonzero.push(preview);
+                if distinct_nonzero.len() >= 2 {
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(
+            distinct_nonzero.len() >= 2,
+            "direct Super Scene trigger should render at least two distinct non-zero \
+             DMX states from its child blocks (saw {})",
+            distinct_nonzero.len()
+        );
+
+        engine
+            .send(engine::EngineCommand::ReleaseCue(parent_cue_id))
+            .unwrap();
+        let mut released = false;
+        for _ in 0..40 {
+            let snapshot = engine.snapshot();
+            if snapshot.active_cue_id.is_none()
+                && snapshot.dmx_preview.iter().all(|value| *value == 0)
+            {
+                released = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(
+            released,
+            "releasing the Super Scene should stop child playback and restore zero output"
+        );
+    }
+
+    #[test]
     fn dvc_local_golden_project_triggers_cue_and_renders_dmx() {
         let path = Path::new(r"C:\Users\kouty\Documents\Daslight 5\Projects\Shinkan2026.dvc");
         if !path.is_file() {

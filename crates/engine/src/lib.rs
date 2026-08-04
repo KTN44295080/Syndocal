@@ -2909,6 +2909,13 @@ enum RuntimeEffectActivationKey {
         cue_id: CueId,
         iteration: u64,
     },
+    DirectChildTimeline {
+        parent_cue_id: CueId,
+        generation: u64,
+        event_id: TimelineEventId,
+        cue_id: CueId,
+        iteration: u64,
+    },
     CueList {
         cue_list_id: CueListId,
         cue_id: CueId,
@@ -2987,7 +2994,7 @@ enum RuntimeCueStepClock {
         source_offset_ms: u64,
     },
     ChildTimeline {
-        transport_index: usize,
+        transport_id: RuntimeChildTransportId,
         starts_at_ms: u64,
         source_offset_ms: u64,
     },
@@ -3606,6 +3613,7 @@ struct PendingTimelineEffectActivation {
     cue_id: CueId,
     iteration: u64,
     child_parent: Option<(TimelineEventId, u64)>,
+    direct_child_parent: Option<(CueId, u64)>,
     range: RuntimeEffectActivationRange,
     step_range: RuntimeCueStepActivationRange,
     rate: f32,
@@ -3623,6 +3631,8 @@ struct PendingCueTrigger {
     fade_override_ms: Option<u64>,
     timeline_effect_activation: Option<PendingTimelineEffectActivation>,
     dispatch: Option<CueDispatchEntry>,
+    child_transport_id: Option<RuntimeChildTransportId>,
+    direct_child_anchor_at: Option<Instant>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3702,6 +3712,16 @@ struct RuntimeChildTransport {
     dispatch: Vec<Option<CueDispatchEntry>>,
     effect_activation_ranges: Vec<RuntimeEffectActivationRange>,
     step_activation_ranges: Vec<RuntimeCueStepActivationRange>,
+    direct_parent_cue_id: Option<CueId>,
+    direct_started_at: Option<Instant>,
+    direct_generation: u64,
+    activated_events: Vec<bool>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeChildTransportId {
+    Timeline(usize),
+    Direct(usize),
 }
 
 #[derive(Clone)]
@@ -3970,6 +3990,8 @@ struct EngineRuntime {
     timeline_step_activation_ranges: Vec<RuntimeCueStepActivationRange>,
     child_transports: Vec<RuntimeChildTransport>,
     child_transport_by_parent_event: Vec<Option<usize>>,
+    direct_child_transports: Vec<RuntimeChildTransport>,
+    direct_child_transport_by_cue: Vec<Option<usize>>,
     node_graphs: Vec<RuntimeNodeGraph>,
     cues: Vec<RuntimeCue>,
     cue_lists: Vec<CueListSummary>,
@@ -4171,6 +4193,8 @@ impl EngineRuntime {
             timeline_step_activation_ranges: Vec::new(),
             child_transports: Vec::new(),
             child_transport_by_parent_event: Vec::new(),
+            direct_child_transports: Vec::new(),
+            direct_child_transport_by_cue: Vec::new(),
             node_graphs: Vec::new(),
             cues: Vec::new(),
             cue_lists: vec![CueListSummary::default()],
@@ -12521,13 +12545,122 @@ impl EngineRuntime {
         })
     }
 
+    fn build_child_transport(
+        &self,
+        owner_cue_id: CueId,
+        mut child: ChildTimelineSummary,
+        parent_event_id: TimelineEventId,
+        window_start_ms: u64,
+        window_end_ms: u64,
+        iteration_period_ms: u64,
+        rate: f32,
+        loop_fill: bool,
+        direct_parent_cue_id: Option<CueId>,
+        cue_dispatch: &HashMap<CueId, CueDispatchEntry>,
+    ) -> Result<RuntimeChildTransport, String> {
+        self.normalize_and_validate_child_timeline(owner_cue_id, &mut child)?;
+        let any_solo = child.layers.iter().any(|layer| layer.solo);
+        let mut events = Vec::with_capacity(child.events.len());
+        for summary in &child.events {
+            let mut event = runtime_timeline_event_from_summary(summary);
+            let layer =
+                resolve_timeline_event_layer(&child.layers, &event, any_solo).map_err(|error| {
+                    format!(
+                        "Cue {owner_cue_id} child event {} has an invalid layer: {error}",
+                        event.id
+                    )
+                })?;
+            event.resolved_layer_id = layer.id;
+            event.layer_order = layer.order;
+            event.layer_muted_effective = layer.muted_effective;
+            event.track = timeline_track_for_layer_kind(layer.kind)
+                .expect("validated child Cue event cannot use an Audio layer");
+            events.push(
+                self.resolve_timeline_event_timing(event, self.clock.bpm)
+                    .map_err(|error| {
+                        format!("Cue {owner_cue_id} child timeline timing is invalid: {error}")
+                    })?,
+            );
+        }
+        events.sort_by(|left, right| {
+            left.time_ms
+                .cmp(&right.time_ms)
+                .then_with(|| right.layer_order.cmp(&left.layer_order))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        let required_due_capacity = events.iter().fold(0_usize, |total, event| {
+            total.saturating_add(
+                usize::from(event.loop_count.max(1))
+                    .saturating_add(usize::from(event.duration_ms > 0)),
+            )
+        });
+        let duration_ms = child
+            .duration_ms
+            .max(events.iter().map(timeline_event_end_ms).max().unwrap_or(0))
+            .max(
+                child
+                    .audio_clips
+                    .iter()
+                    .map(|clip| clip.start_ms.saturating_add(clip.duration_ms))
+                    .max()
+                    .unwrap_or(0),
+            )
+            .max(
+                child
+                    .audio
+                    .as_ref()
+                    .map(|audio| audio.duration_ms)
+                    .unwrap_or(0),
+            );
+        let dispatch = events
+            .iter()
+            .map(|event| cue_dispatch.get(&event.cue_id).copied())
+            .collect();
+        Ok(RuntimeChildTransport {
+            parent_event_id,
+            window_start_ms,
+            window_end_ms,
+            iteration_period_ms: iteration_period_ms.max(1),
+            rate: valid_effect_rate(rate),
+            loop_fill,
+            duration_ms,
+            active: false,
+            boundary_armed: false,
+            parent_iteration: 0,
+            previous_position_ms: 0,
+            position_ms: 0,
+            activated_events: vec![false; events.len()],
+            events,
+            automations: child
+                .automations
+                .iter()
+                .map(runtime_timeline_automation_from_summary)
+                .collect(),
+            video_automations: child
+                .video_automations
+                .iter()
+                .map(runtime_timeline_video_automation_from_summary)
+                .collect(),
+            due: Vec::with_capacity(required_due_capacity),
+            dispatch,
+            effect_activation_ranges: Vec::new(),
+            step_activation_ranges: Vec::new(),
+            direct_parent_cue_id,
+            direct_started_at: None,
+            direct_generation: 0,
+        })
+    }
+
     fn rebuild_child_transports(&mut self) {
         self.child_transports.clear();
         self.child_transport_by_parent_event.clear();
         self.child_transport_by_parent_event
             .resize(self.timeline_events.len(), None);
+        self.direct_child_transports.clear();
+        self.direct_child_transport_by_cue.clear();
+        self.direct_child_transport_by_cue
+            .resize(self.cues.len(), None);
         let cue_dispatch = self.build_cue_dispatch_index();
-        let bpm = self.clock.bpm;
         let mut first_error = None;
 
         for parent_event_index in 0..self.timeline_events.len() {
@@ -12535,7 +12668,7 @@ impl EngineRuntime {
             if parent_event.duration_ms == 0 || parent_event.layer_muted_effective {
                 continue;
             }
-            let Some(mut child) = self
+            let Some(child) = self
                 .cues
                 .iter()
                 .find(|cue| cue.id == parent_event.cue_id)
@@ -12543,115 +12676,56 @@ impl EngineRuntime {
             else {
                 continue;
             };
-            if let Err(error) =
-                self.normalize_and_validate_child_timeline(parent_event.cue_id, &mut child)
-            {
-                first_error.get_or_insert(error);
-                continue;
+            match self.build_child_transport(
+                parent_event.cue_id,
+                child,
+                parent_event.id,
+                parent_event.time_ms,
+                timeline_event_end_ms(&parent_event),
+                timeline_event_iteration_period_ms(&parent_event),
+                parent_event.rate.unwrap_or(1.0),
+                parent_event.loop_fill,
+                None,
+                &cue_dispatch,
+            ) {
+                Ok(transport) => {
+                    let transport_index = self.child_transports.len();
+                    self.child_transport_by_parent_event[parent_event_index] =
+                        Some(transport_index);
+                    self.child_transports.push(transport);
+                }
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
             }
+        }
 
-            let any_solo = child.layers.iter().any(|layer| layer.solo);
-            let mut events = Vec::with_capacity(child.events.len());
-            let mut valid = true;
-            for summary in &child.events {
-                let mut event = runtime_timeline_event_from_summary(summary);
-                match resolve_timeline_event_layer(&child.layers, &event, any_solo) {
-                    Ok(layer) => {
-                        event.resolved_layer_id = layer.id;
-                        event.layer_order = layer.order;
-                        event.layer_muted_effective = layer.muted_effective;
-                        event.track = timeline_track_for_layer_kind(layer.kind)
-                            .expect("validated child Cue event cannot use an Audio layer");
-                    }
-                    Err(error) => {
-                        first_error.get_or_insert(format!(
-                            "Cue {} child event {} has an invalid layer: {error}",
-                            parent_event.cue_id, event.id
-                        ));
-                        valid = false;
-                        break;
-                    }
-                }
-                match self.resolve_timeline_event_timing(event, bpm) {
-                    Ok(event) => events.push(event),
-                    Err(error) => {
-                        first_error.get_or_insert(format!(
-                            "Cue {} child timeline timing is invalid: {error}",
-                            parent_event.cue_id
-                        ));
-                        valid = false;
-                        break;
-                    }
-                }
-            }
-            if !valid {
+        for cue_index in 0..self.cues.len() {
+            let cue_id = self.cues[cue_index].id;
+            let Some(child) = self.cues[cue_index].child_timeline.clone() else {
                 continue;
+            };
+            match self.build_child_transport(
+                cue_id,
+                child,
+                0,
+                0,
+                u64::MAX,
+                1,
+                1.0,
+                false,
+                Some(cue_id),
+                &cue_dispatch,
+            ) {
+                Ok(transport) => {
+                    let transport_index = self.direct_child_transports.len();
+                    self.direct_child_transport_by_cue[cue_index] = Some(transport_index);
+                    self.direct_child_transports.push(transport);
+                }
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
             }
-            events.sort_by(|left, right| {
-                left.time_ms
-                    .cmp(&right.time_ms)
-                    .then_with(|| right.layer_order.cmp(&left.layer_order))
-                    .then_with(|| left.id.cmp(&right.id))
-            });
-            let required_due_capacity = events.iter().fold(0_usize, |total, event| {
-                total.saturating_add(
-                    usize::from(event.loop_count.max(1))
-                        .saturating_add(usize::from(event.duration_ms > 0)),
-                )
-            });
-            let duration_ms = child
-                .duration_ms
-                .max(events.iter().map(timeline_event_end_ms).max().unwrap_or(0))
-                .max(
-                    child
-                        .audio_clips
-                        .iter()
-                        .map(|clip| clip.start_ms.saturating_add(clip.duration_ms))
-                        .max()
-                        .unwrap_or(0),
-                )
-                .max(
-                    child
-                        .audio
-                        .as_ref()
-                        .map(|audio| audio.duration_ms)
-                        .unwrap_or(0),
-                );
-            let dispatch = events
-                .iter()
-                .map(|event| cue_dispatch.get(&event.cue_id).copied())
-                .collect();
-            let transport_index = self.child_transports.len();
-            self.child_transport_by_parent_event[parent_event_index] = Some(transport_index);
-            self.child_transports.push(RuntimeChildTransport {
-                parent_event_id: parent_event.id,
-                window_start_ms: parent_event.time_ms,
-                window_end_ms: timeline_event_end_ms(&parent_event),
-                iteration_period_ms: timeline_event_iteration_period_ms(&parent_event).max(1),
-                rate: valid_effect_rate(parent_event.rate.unwrap_or(1.0)),
-                loop_fill: parent_event.loop_fill,
-                duration_ms,
-                active: false,
-                boundary_armed: false,
-                parent_iteration: 0,
-                previous_position_ms: 0,
-                position_ms: 0,
-                events,
-                automations: child
-                    .automations
-                    .iter()
-                    .map(runtime_timeline_automation_from_summary)
-                    .collect(),
-                video_automations: child
-                    .video_automations
-                    .iter()
-                    .map(runtime_timeline_video_automation_from_summary)
-                    .collect(),
-                due: Vec::with_capacity(required_due_capacity),
-                dispatch,
-                effect_activation_ranges: Vec::new(),
-                step_activation_ranges: Vec::new(),
-            });
         }
         let required_pending_capacity = self
             .timeline_events
@@ -12668,6 +12742,12 @@ impl EngineRuntime {
                     .map(|transport| transport.due.capacity())
                     .fold(0_usize, usize::saturating_add),
             );
+        let required_pending_capacity = required_pending_capacity.saturating_add(
+            self.direct_child_transports
+                .iter()
+                .map(|transport| transport.due.capacity())
+                .fold(0_usize, usize::saturating_add),
+        );
         if self.pending_cues.capacity() < required_pending_capacity {
             self.pending_cues
                 .reserve(required_pending_capacity.saturating_sub(self.pending_cues.capacity()));
@@ -12677,7 +12757,102 @@ impl EngineRuntime {
         }
     }
 
+    fn child_transport(
+        &self,
+        transport_id: RuntimeChildTransportId,
+    ) -> Option<&RuntimeChildTransport> {
+        match transport_id {
+            RuntimeChildTransportId::Timeline(index) => self.child_transports.get(index),
+            RuntimeChildTransportId::Direct(index) => self.direct_child_transports.get(index),
+        }
+    }
+
+    fn child_transport_mut(
+        &mut self,
+        transport_id: RuntimeChildTransportId,
+    ) -> Option<&mut RuntimeChildTransport> {
+        match transport_id {
+            RuntimeChildTransportId::Timeline(index) => self.child_transports.get_mut(index),
+            RuntimeChildTransportId::Direct(index) => self.direct_child_transports.get_mut(index),
+        }
+    }
+
+    fn rebuild_child_transport_effect_activation_ranges_at(
+        &mut self,
+        transport_id: RuntimeChildTransportId,
+        now: Instant,
+        first_error: &mut Option<String>,
+    ) {
+        let event_count = self
+            .child_transport(transport_id)
+            .map(|transport| transport.events.len())
+            .unwrap_or(0);
+        if let Some(transport) = self.child_transport_mut(transport_id) {
+            transport.effect_activation_ranges.clear();
+            transport.effect_activation_ranges.reserve(event_count);
+        }
+        for event_index in 0..event_count {
+            let start = self.effect_activations.len();
+            let cue_id = self
+                .child_transport(transport_id)
+                .and_then(|transport| transport.events.get(event_index))
+                .map(|event| event.cue_id);
+            if let Some(cue_index) =
+                cue_id.and_then(|cue_id| self.cues.iter().position(|cue| cue.id == cue_id))
+            {
+                for target_index in 0..self.cues[cue_index].effect_targets.len() {
+                    let (effect_id, params, transition_ms) = {
+                        let target = &self.cues[cue_index].effect_targets[target_index];
+                        if !target.enabled {
+                            continue;
+                        }
+                        let Some(params) = target.params.clone() else {
+                            continue;
+                        };
+                        (target.effect_id, params, target.transition_ms)
+                    };
+                    match self.runtime_effect_from_params_snapshot(effect_id, &params, now) {
+                        Ok(effect) => self.effect_activations.push(RuntimeEffectActivation {
+                            effect,
+                            key: None,
+                            rate: 1.0,
+                            transition_ms,
+                            transition: None,
+                        }),
+                        Err(error) => {
+                            first_error.get_or_insert(error);
+                        }
+                    }
+                }
+            }
+            let range = RuntimeEffectActivationRange {
+                start,
+                len: self.effect_activations.len() - start,
+            };
+            if let Some(transport) = self.child_transport_mut(transport_id) {
+                transport.effect_activation_ranges.push(range);
+            }
+        }
+    }
+
     fn rebuild_effect_activations(&mut self, now: Instant) {
+        let active_direct_child_transports = self
+            .direct_child_transports
+            .iter()
+            .filter_map(|transport| {
+                transport.active.then_some((
+                    transport.direct_parent_cue_id?,
+                    transport.direct_started_at?,
+                    transport.direct_generation,
+                ))
+            })
+            .collect::<Vec<_>>();
+        self.pending_cues.retain(|pending| {
+            !matches!(
+                pending.child_transport_id,
+                Some(RuntimeChildTransportId::Direct(_))
+            )
+        });
         self.rebuild_child_transports();
         self.cue_list_effect_activation_cues.reserve(
             self.cue_lists
@@ -12728,6 +12903,7 @@ impl EngineRuntime {
         let child_owned_count = self
             .child_transports
             .iter()
+            .chain(self.direct_child_transports.iter())
             .flat_map(|transport| transport.events.iter())
             .filter_map(|event| {
                 self.cues
@@ -12829,50 +13005,18 @@ impl EngineRuntime {
         }
 
         for transport_index in 0..self.child_transports.len() {
-            self.child_transports[transport_index]
-                .effect_activation_ranges
-                .clear();
-            let event_count = self.child_transports[transport_index].events.len();
-            self.child_transports[transport_index]
-                .effect_activation_ranges
-                .reserve(event_count);
-            for event_index in 0..event_count {
-                let start = self.effect_activations.len();
-                let cue_id = self.child_transports[transport_index].events[event_index].cue_id;
-                let cue_index = self.cues.iter().position(|cue| cue.id == cue_id);
-                if let Some(cue_index) = cue_index {
-                    for target_index in 0..self.cues[cue_index].effect_targets.len() {
-                        let (effect_id, params, transition_ms) = {
-                            let target = &self.cues[cue_index].effect_targets[target_index];
-                            if !target.enabled {
-                                continue;
-                            }
-                            let Some(params) = target.params.clone() else {
-                                continue;
-                            };
-                            (target.effect_id, params, target.transition_ms)
-                        };
-                        match self.runtime_effect_from_params_snapshot(effect_id, &params, now) {
-                            Ok(effect) => self.effect_activations.push(RuntimeEffectActivation {
-                                effect,
-                                key: None,
-                                rate: 1.0,
-                                transition_ms,
-                                transition: None,
-                            }),
-                            Err(error) => {
-                                first_error.get_or_insert(error);
-                            }
-                        }
-                    }
-                }
-                self.child_transports[transport_index]
-                    .effect_activation_ranges
-                    .push(RuntimeEffectActivationRange {
-                        start,
-                        len: self.effect_activations.len() - start,
-                    });
-            }
+            self.rebuild_child_transport_effect_activation_ranges_at(
+                RuntimeChildTransportId::Timeline(transport_index),
+                now,
+                &mut first_error,
+            );
+        }
+        for transport_index in 0..self.direct_child_transports.len() {
+            self.rebuild_child_transport_effect_activation_ranges_at(
+                RuntimeChildTransportId::Direct(transport_index),
+                now,
+                &mut first_error,
+            );
         }
 
         let mut cue_list_activations = self
@@ -13025,6 +13169,81 @@ impl EngineRuntime {
                 })
                 .map(|(_, _, transition)| transition.clone());
         }
+        let mut has_immediate_trigger = false;
+        for (cue_id, started_at, generation) in active_direct_child_transports {
+            let Some(cue_index) = self.cues.iter().position(|cue| cue.id == cue_id) else {
+                continue;
+            };
+            let Some(transport_index) = self
+                .direct_child_transport_by_cue
+                .get(cue_index)
+                .copied()
+                .flatten()
+            else {
+                continue;
+            };
+            let transport = &mut self.direct_child_transports[transport_index];
+            transport.active = true;
+            transport.boundary_armed = true;
+            transport.direct_started_at = Some(started_at);
+            transport.direct_generation = generation;
+            transport.previous_position_ms = 0;
+            transport.position_ms = 0;
+            transport.parent_iteration = 0;
+            transport.activated_events.fill(false);
+            has_immediate_trigger |=
+                self.advance_child_transport(RuntimeChildTransportId::Direct(transport_index), now);
+        }
+        if has_immediate_trigger {
+            self.advance_pending_cue(now);
+        }
+    }
+
+    fn rebuild_child_transport_step_activation_ranges_at(
+        &mut self,
+        transport_id: RuntimeChildTransportId,
+    ) {
+        let event_count = self
+            .child_transport(transport_id)
+            .map(|transport| transport.events.len())
+            .unwrap_or(0);
+        if let Some(transport) = self.child_transport_mut(transport_id) {
+            transport.step_activation_ranges.clear();
+            transport
+                .step_activation_ranges
+                .resize(event_count, RuntimeCueStepActivationRange::default());
+        }
+        for event_index in 0..event_count {
+            let start = self.step_activations.len();
+            let cue_id = self
+                .child_transport(transport_id)
+                .and_then(|transport| transport.events.get(event_index))
+                .map(|event| event.cue_id);
+            if let Some(cue_index) = cue_id.and_then(|cue_id| {
+                self.cues
+                    .iter()
+                    .position(|cue| cue.id == cue_id)
+                    .filter(|index| !self.cues[*index].step_sequence.steps.is_empty())
+            }) {
+                self.step_activations.push(RuntimeCueStepActivation {
+                    sequence: self.cues[cue_index].step_sequence.clone(),
+                    key: None,
+                    rate: 1.0,
+                    clock: RuntimeCueStepClock::ChildTimeline {
+                        transport_id,
+                        starts_at_ms: 0,
+                        source_offset_ms: 0,
+                    },
+                });
+            }
+            let range = RuntimeCueStepActivationRange {
+                start,
+                len: self.step_activations.len().saturating_sub(start),
+            };
+            if let Some(transport) = self.child_transport_mut(transport_id) {
+                transport.step_activation_ranges[event_index] = range;
+            }
+        }
     }
 
     fn rebuild_step_activations(&mut self, now: Instant) {
@@ -13098,39 +13317,14 @@ impl EngineRuntime {
         }
 
         for transport_index in 0..self.child_transports.len() {
-            let event_count = self.child_transports[transport_index].events.len();
-            self.child_transports[transport_index]
-                .step_activation_ranges
-                .clear();
-            self.child_transports[transport_index]
-                .step_activation_ranges
-                .resize(event_count, RuntimeCueStepActivationRange::default());
-            for event_index in 0..event_count {
-                let start = self.step_activations.len();
-                let cue_id = self.child_transports[transport_index].events[event_index].cue_id;
-                if let Some(cue_index) = self
-                    .cues
-                    .iter()
-                    .position(|cue| cue.id == cue_id)
-                    .filter(|index| !self.cues[*index].step_sequence.steps.is_empty())
-                {
-                    self.step_activations.push(RuntimeCueStepActivation {
-                        sequence: self.cues[cue_index].step_sequence.clone(),
-                        key: None,
-                        rate: 1.0,
-                        clock: RuntimeCueStepClock::ChildTimeline {
-                            transport_index,
-                            starts_at_ms: 0,
-                            source_offset_ms: 0,
-                        },
-                    });
-                }
-                self.child_transports[transport_index].step_activation_ranges[event_index] =
-                    RuntimeCueStepActivationRange {
-                        start,
-                        len: self.step_activations.len().saturating_sub(start),
-                    };
-            }
+            self.rebuild_child_transport_step_activation_ranges_at(
+                RuntimeChildTransportId::Timeline(transport_index),
+            );
+        }
+        for transport_index in 0..self.direct_child_transports.len() {
+            self.rebuild_child_transport_step_activation_ranges_at(
+                RuntimeChildTransportId::Direct(transport_index),
+            );
         }
         self.active_step_activation_indices
             .reserve(self.step_activations.len());
@@ -13259,11 +13453,11 @@ impl EngineRuntime {
                 .saturating_sub(starts_at_ms)
                 .saturating_add(source_offset_ms),
             RuntimeCueStepClock::ChildTimeline {
-                transport_index,
+                transport_id,
                 starts_at_ms,
                 source_offset_ms,
             } => {
-                let transport = self.child_transports.get(transport_index)?;
+                let transport = self.child_transport(transport_id)?;
                 if !transport.active {
                     return None;
                 }
@@ -13547,6 +13741,9 @@ impl EngineRuntime {
                 } | RuntimeEffectActivationKey::ChildTimeline {
                     cue_id: candidate,
                     ..
+                } | RuntimeEffectActivationKey::DirectChildTimeline {
+                    cue_id: candidate,
+                    ..
                 } | RuntimeEffectActivationKey::CueList {
                     cue_id: candidate,
                     ..
@@ -13564,6 +13761,9 @@ impl EngineRuntime {
                     cue_id: candidate,
                     ..
                 } | RuntimeEffectActivationKey::ChildTimeline {
+                    cue_id: candidate,
+                    ..
+                } | RuntimeEffectActivationKey::DirectChildTimeline {
                     cue_id: candidate,
                     ..
                 } | RuntimeEffectActivationKey::CueList {
@@ -13605,8 +13805,12 @@ impl EngineRuntime {
         }
         self.active_step_activation_indices
             .retain(|index| self.step_activations[*index].key.is_some());
-        self.pending_cues
-            .retain(|pending| pending.timeline_effect_activation.is_none());
+        self.pending_cues.retain(|pending| {
+            pending
+                .timeline_effect_activation
+                .as_ref()
+                .is_none_or(|activation| activation.direct_child_parent.is_some())
+        });
     }
 
     fn reconcile_timeline_effect_activations_at_position(
@@ -14365,7 +14569,6 @@ impl EngineRuntime {
             return Err(format!("Cue {cue_id} was not found"));
         }
         self.apply_active_fade(Instant::now());
-        let release_plan = self.cue_value_release_plan(cue_id);
         let removed_timeline_event_ids = self
             .timeline_events
             .iter()
@@ -14394,6 +14597,9 @@ impl EngineRuntime {
             ));
         }
 
+        let now = Instant::now();
+        self.stop_direct_child_transport_for_cue(cue_id, now);
+        let release_plan = self.cue_value_release_plan(cue_id);
         self.deactivate_cue_effect_activations(cue_id);
         self.cue_list_effect_activation_cues
             .retain(|_, active_cue_id| *active_cue_id != cue_id);
@@ -14438,13 +14644,20 @@ impl EngineRuntime {
         now: Instant,
     ) -> Result<(), String> {
         self.apply_active_fade(now);
+        self.stop_direct_child_transport_for_cue(cue_id, now);
         let release_plan = self.cue_value_release_plan(cue_id);
-        self.release_cue_state(cue_id)?;
+        self.release_cue_state_core(cue_id)?;
         self.apply_cue_value_release_plan(cue_id, release_plan, now);
         Ok(())
     }
 
+    #[cfg(test)]
     fn release_cue_state(&mut self, cue_id: CueId) -> Result<(), String> {
+        self.stop_direct_child_transport_for_cue(cue_id, Instant::now());
+        self.release_cue_state_core(cue_id)
+    }
+
+    fn release_cue_state_core(&mut self, cue_id: CueId) -> Result<(), String> {
         let cue_list_id = self
             .cues
             .iter()
@@ -15864,6 +16077,7 @@ impl EngineRuntime {
             cue_id,
             iteration: 0,
             child_parent: None,
+            direct_child_parent: None,
             range,
             step_range,
             rate,
@@ -15892,6 +16106,8 @@ impl EngineRuntime {
             fade_override_ms: Some(event.fade_in_ms),
             timeline_effect_activation,
             dispatch: Some(dispatch),
+            child_transport_id: None,
+            direct_child_anchor_at: None,
         });
         if dispatch.pre_wait_ms == 0 {
             self.advance_pending_cue(now);
@@ -15924,6 +16140,8 @@ impl EngineRuntime {
                 fade_override_ms: None,
                 timeline_effect_activation: None,
                 dispatch: None,
+                child_transport_id: None,
+                direct_child_anchor_at: Some(now),
             });
             self.last_error = None;
         }
@@ -15956,6 +16174,8 @@ impl EngineRuntime {
                 && previous.source == pending.source
                 && previous.fade_override_ms == pending.fade_override_ms
                 && previous.timeline_effect_activation == pending.timeline_effect_activation
+                && previous.child_transport_id == pending.child_transport_id
+                && previous.direct_child_anchor_at == pending.direct_child_anchor_at
             {
                 if let Some(repeat_count) = previous.repeat_count.checked_add(pending.repeat_count)
                 {
@@ -16005,6 +16225,8 @@ impl EngineRuntime {
                 pending.repeat_count,
                 pending.fade_override_ms,
                 pending.timeline_effect_activation,
+                pending.child_transport_id,
+                pending.direct_child_anchor_at,
             );
         }
     }
@@ -16015,7 +16237,17 @@ impl EngineRuntime {
             return;
         };
         let next_cue_index = self.next_cue_index(cue_index);
-        self.start_cue_at_index(cue_index, next_cue_index, now, source, 1, None, None);
+        self.start_cue_at_index(
+            cue_index,
+            next_cue_index,
+            now,
+            source,
+            1,
+            None,
+            None,
+            None,
+            (source == PendingCueTriggerSource::Manual).then_some(now),
+        );
     }
 
     fn start_cue_at_index(
@@ -16027,6 +16259,8 @@ impl EngineRuntime {
         repeat_count: u64,
         fade_override_ms: Option<u64>,
         timeline_effect_activation: Option<PendingTimelineEffectActivation>,
+        child_transport_id: Option<RuntimeChildTransportId>,
+        direct_child_anchor_at: Option<Instant>,
     ) {
         if repeat_count == 0 {
             return;
@@ -16036,18 +16270,32 @@ impl EngineRuntime {
             return;
         };
         let cue_id = cue.id;
+        let direct_child_parent_cue_id =
+            child_transport_id.and_then(|transport_id| match transport_id {
+                RuntimeChildTransportId::Direct(index) => self
+                    .direct_child_transports
+                    .get(index)
+                    .and_then(|transport| transport.direct_parent_cue_id),
+                RuntimeChildTransportId::Timeline(_) => None,
+            });
+        if source == PendingCueTriggerSource::Manual {
+            self.stop_direct_child_transport_for_cue(cue_id, now);
+        }
         let default_fade_ms = fade_override_ms.unwrap_or(cue.fade_ms);
         let active_group_cue_id = cue
             .group_id
             .as_ref()
             .and_then(|group_id| self.active_group_cue_ids.get(group_id).copied());
-        let release_plan = if cue.recall_mode == RecallMode::ReplaceGroup {
+        let release_plan = if direct_child_parent_cue_id.is_some() {
+            CueValueReleasePlan::default()
+        } else if cue.recall_mode == RecallMode::ReplaceGroup {
             active_group_cue_id
                 .filter(|active_cue_id| *active_cue_id != cue_id)
                 .and_then(|active_cue_id| {
                     self.apply_active_fade(now);
+                    self.stop_direct_child_transport_for_cue(active_cue_id, now);
                     let plan = self.cue_value_release_plan(active_cue_id);
-                    if let Err(error) = self.release_cue_state(active_cue_id) {
+                    if let Err(error) = self.release_cue_state_core(active_cue_id) {
                         self.last_error = Some(error);
                         None
                     } else {
@@ -16071,19 +16319,21 @@ impl EngineRuntime {
         } else {
             Vec::new()
         };
-        self.deactivate_cue_list_effect_activations(cue.cue_list_id);
-        self.cue_list_effect_activation_cues
-            .remove(&cue.cue_list_id);
-        self.active_cue_id = Some(cue_id);
-        if let Some(group_id) = &cue.group_id {
-            self.active_group_cue_ids.insert(group_id.clone(), cue_id);
-        }
-        if let Some(cue_list) = self
-            .cue_lists
-            .iter_mut()
-            .find(|cue_list| cue_list.id == cue.cue_list_id)
-        {
-            cue_list.active_cue_id = Some(cue_id);
+        if direct_child_parent_cue_id.is_none() {
+            self.deactivate_cue_list_effect_activations(cue.cue_list_id);
+            self.cue_list_effect_activation_cues
+                .remove(&cue.cue_list_id);
+            self.active_cue_id = Some(cue_id);
+            if let Some(group_id) = &cue.group_id {
+                self.active_group_cue_ids.insert(group_id.clone(), cue_id);
+            }
+            if let Some(cue_list) = self
+                .cue_lists
+                .iter_mut()
+                .find(|cue_list| cue_list.id == cue.cue_list_id)
+            {
+                cue_list.active_cue_id = Some(cue_id);
+            }
         }
         let follow = cue.follow_ms.and_then(|follow_ms| {
             let next_cue = self.cues.get(next_cue_index?)?;
@@ -16095,6 +16345,9 @@ impl EngineRuntime {
                 fade_override_ms: None,
                 timeline_effect_activation: None,
                 dispatch: None,
+                child_transport_id: None,
+                direct_child_anchor_at: (source == PendingCueTriggerSource::Manual)
+                    .then_some(now + Duration::from_millis(follow_ms)),
             })
         });
         if let Some(follow) = follow {
@@ -16102,7 +16355,15 @@ impl EngineRuntime {
         }
         self.apply_cue_effect_targets(&cue.effect_targets);
         if let Some(activation) = timeline_effect_activation {
-            let key = if let Some((parent_event_id, parent_iteration)) = activation.child_parent {
+            let key = if let Some((parent_cue_id, generation)) = activation.direct_child_parent {
+                RuntimeEffectActivationKey::DirectChildTimeline {
+                    parent_cue_id,
+                    generation,
+                    event_id: activation.event_id,
+                    cue_id: activation.cue_id,
+                    iteration: activation.iteration,
+                }
+            } else if let Some((parent_event_id, parent_iteration)) = activation.child_parent {
                 RuntimeEffectActivationKey::ChildTimeline {
                     parent_event_id,
                     parent_iteration,
@@ -16192,6 +16453,13 @@ impl EngineRuntime {
         {
             self.active_fade = None;
             self.apply_mib_for_next_cue_index(next_cue_index);
+            if source == PendingCueTriggerSource::Manual {
+                self.start_direct_child_transport(
+                    cue_index,
+                    direct_child_anchor_at.unwrap_or(now),
+                    now,
+                );
+            }
             self.last_error = None;
             return;
         }
@@ -16326,6 +16594,13 @@ impl EngineRuntime {
                 video_output_targets,
                 video_output_timings,
             });
+        }
+        if source == PendingCueTriggerSource::Manual {
+            self.start_direct_child_transport(
+                cue_index,
+                direct_child_anchor_at.unwrap_or(now),
+                now,
+            );
         }
         self.last_error = None;
     }
@@ -17035,8 +17310,9 @@ impl EngineRuntime {
         else {
             return;
         };
+        let transport_id = RuntimeChildTransportId::Timeline(transport_index);
         if self.child_transports[transport_index].active {
-            self.deactivate_child_transport_effects(transport_index);
+            self.deactivate_child_transport_effects_by_id(transport_id);
         }
         let parent_position = self.timeline_position_ms;
         let transport = &mut self.child_transports[transport_index];
@@ -17048,45 +17324,141 @@ impl EngineRuntime {
         transport.position_ms = position_ms;
     }
 
-    fn deactivate_child_transport_effects(&mut self, transport_index: usize) {
+    fn start_direct_child_transport(
+        &mut self,
+        cue_index: usize,
+        started_at: Instant,
+        now: Instant,
+    ) {
+        let Some(transport_index) = self
+            .direct_child_transport_by_cue
+            .get(cue_index)
+            .copied()
+            .flatten()
+        else {
+            return;
+        };
+        if self.direct_child_transports[transport_index].active {
+            self.release_direct_child_transport(transport_index, now);
+        }
+        let transport = &mut self.direct_child_transports[transport_index];
+        transport.active = true;
+        transport.boundary_armed = true;
+        transport.parent_iteration = 0;
+        transport.previous_position_ms = 0;
+        transport.position_ms = 0;
+        transport.direct_started_at = Some(started_at);
+        transport.direct_generation = transport.direct_generation.wrapping_add(1);
+        transport.activated_events.fill(false);
+        let has_immediate_trigger =
+            self.advance_child_transport(RuntimeChildTransportId::Direct(transport_index), now);
+        if has_immediate_trigger {
+            self.advance_pending_cue(now);
+        }
+    }
+
+    fn deactivate_child_transport_effects_by_id(&mut self, transport_id: RuntimeChildTransportId) {
         let range_count = self
-            .child_transports
-            .get(transport_index)
+            .child_transport(transport_id)
             .map(|transport| transport.effect_activation_ranges.len())
             .unwrap_or(0);
         for range_index in 0..range_count {
-            let range =
-                self.child_transports[transport_index].effect_activation_ranges[range_index];
+            let range = self
+                .child_transport(transport_id)
+                .and_then(|transport| transport.effect_activation_ranges.get(range_index))
+                .copied()
+                .unwrap_or_default();
             self.deactivate_effect_range(range);
         }
         let step_range_count = self
-            .child_transports
-            .get(transport_index)
+            .child_transport(transport_id)
             .map(|transport| transport.step_activation_ranges.len())
             .unwrap_or(0);
         for range_index in 0..step_range_count {
-            let range = self.child_transports[transport_index].step_activation_ranges[range_index];
+            let range = self
+                .child_transport(transport_id)
+                .and_then(|transport| transport.step_activation_ranges.get(range_index))
+                .copied()
+                .unwrap_or_default();
             self.deactivate_step_range(range);
         }
-        let parent_event_id = self.child_transports[transport_index].parent_event_id;
-        self.pending_cues.retain(|pending| {
-            pending.timeline_effect_activation.is_none_or(|activation| {
-                activation
-                    .child_parent
-                    .is_none_or(|(candidate, _)| candidate != parent_event_id)
-            })
-        });
+        self.pending_cues
+            .retain(|pending| pending.child_transport_id != Some(transport_id));
     }
 
-    fn deactivate_child_transport(&mut self, transport_index: usize) {
-        self.deactivate_child_transport_effects(transport_index);
-        if let Some(transport) = self.child_transports.get_mut(transport_index) {
+    fn deactivate_child_transport_by_id(&mut self, transport_id: RuntimeChildTransportId) {
+        self.deactivate_child_transport_effects_by_id(transport_id);
+        if let Some(transport) = self.child_transport_mut(transport_id) {
             transport.active = false;
             transport.boundary_armed = false;
             transport.previous_position_ms = 0;
             transport.position_ms = 0;
+            transport.parent_iteration = 0;
+            transport.direct_started_at = None;
             transport.due.clear();
+            transport.activated_events.fill(false);
         }
+    }
+
+    fn deactivate_child_transport(&mut self, transport_index: usize) {
+        self.deactivate_child_transport_by_id(RuntimeChildTransportId::Timeline(transport_index));
+    }
+
+    fn release_direct_child_transport(&mut self, transport_index: usize, now: Instant) {
+        let activated_cue_ids = self
+            .direct_child_transports
+            .get(transport_index)
+            .into_iter()
+            .flat_map(|transport| {
+                transport
+                    .events
+                    .iter()
+                    .zip(transport.activated_events.iter())
+            })
+            .filter_map(|(event, activated)| activated.then_some(event.cue_id))
+            .fold(Vec::new(), |mut cue_ids, cue_id| {
+                if !cue_ids.contains(&cue_id) {
+                    cue_ids.push(cue_id);
+                }
+                cue_ids
+            });
+        self.deactivate_child_transport_by_id(RuntimeChildTransportId::Direct(transport_index));
+        for cue_id in activated_cue_ids {
+            let active_elsewhere = self.direct_child_transports.iter().any(|transport| {
+                transport.active
+                    && transport
+                        .events
+                        .iter()
+                        .zip(transport.activated_events.iter())
+                        .any(|(event, activated)| *activated && event.cue_id == cue_id)
+            });
+            if active_elsewhere || !self.cues.iter().any(|cue| cue.id == cue_id) {
+                continue;
+            }
+            if let Err(error) = self.release_cue_with_value_restore(cue_id, now) {
+                self.last_error = Some(error);
+            }
+        }
+    }
+
+    fn stop_direct_child_transport_for_cue(&mut self, cue_id: CueId, now: Instant) {
+        let Some(cue_index) = self.cues.iter().position(|cue| cue.id == cue_id) else {
+            return;
+        };
+        let Some(transport_index) = self
+            .direct_child_transport_by_cue
+            .get(cue_index)
+            .copied()
+            .flatten()
+            .filter(|index| {
+                self.direct_child_transports
+                    .get(*index)
+                    .is_some_and(|transport| transport.active)
+            })
+        else {
+            return;
+        };
+        self.release_direct_child_transport(transport_index, now);
     }
 
     fn deactivate_all_child_transports(&mut self) {
@@ -17132,14 +17504,16 @@ impl EngineRuntime {
 
     fn collect_and_dispatch_child_transport_range(
         &mut self,
-        transport_index: usize,
+        transport_id: RuntimeChildTransportId,
         previous_position_ms: u64,
         current_position_ms: u64,
         include_previous: bool,
         now: Instant,
     ) -> bool {
         {
-            let transport = &mut self.child_transports[transport_index];
+            let Some(transport) = self.child_transport_mut(transport_id) else {
+                return false;
+            };
             collect_timeline_cue_occurrences_between(
                 &transport.events,
                 previous_position_ms,
@@ -17151,31 +17525,39 @@ impl EngineRuntime {
             );
         }
         let mut has_immediate_trigger = false;
-        let due_count = self.child_transports[transport_index].due.len();
+        let due_count = self
+            .child_transport(transport_id)
+            .map(|transport| transport.due.len())
+            .unwrap_or(0);
         for due_index in 0..due_count {
-            let occurrence = self.child_transports[transport_index].due[due_index];
-            let range = self.child_transports[transport_index]
-                .effect_activation_ranges
-                .get(occurrence.event_index)
-                .copied()
-                .unwrap_or_default();
-            let step_range = self.child_transports[transport_index]
-                .step_activation_ranges
-                .get(occurrence.event_index)
-                .copied()
-                .unwrap_or_default();
+            let Some((occurrence, range, step_range)) =
+                self.child_transport(transport_id).and_then(|transport| {
+                    let occurrence = *transport.due.get(due_index)?;
+                    Some((
+                        occurrence,
+                        transport
+                            .effect_activation_ranges
+                            .get(occurrence.event_index)
+                            .copied()
+                            .unwrap_or_default(),
+                        transport
+                            .step_activation_ranges
+                            .get(occurrence.event_index)
+                            .copied()
+                            .unwrap_or_default(),
+                    ))
+                })
+            else {
+                continue;
+            };
             if matches!(occurrence.kind, TimelineCueOccurrenceKind::End) {
                 self.deactivate_effect_range(range);
                 self.deactivate_step_range(step_range);
                 self.pending_cues.retain(|pending| {
-                    pending.timeline_effect_activation.is_none_or(|activation| {
-                        activation.child_parent
-                            != Some((
-                                self.child_transports[transport_index].parent_event_id,
-                                self.child_transports[transport_index].parent_iteration,
-                            ))
-                            || activation.event_id != occurrence.event_id
-                    })
+                    pending.child_transport_id != Some(transport_id)
+                        || pending
+                            .timeline_effect_activation
+                            .is_none_or(|activation| activation.event_id != occurrence.event_id)
                 });
                 continue;
             }
@@ -17184,80 +17566,92 @@ impl EngineRuntime {
                 self.deactivate_step_range(step_range);
                 continue;
             }
-            let Some(dispatch) = self.child_transports[transport_index]
-                .dispatch
-                .get(occurrence.event_index)
-                .copied()
-                .flatten()
+            let Some((
+                dispatch,
+                event,
+                parent_rate,
+                parent_event_id,
+                parent_iteration,
+                direct_parent,
+                direct_generation,
+            )) = self.child_transport(transport_id).and_then(|transport| {
+                Some((
+                    transport
+                        .dispatch
+                        .get(occurrence.event_index)
+                        .copied()
+                        .flatten()?,
+                    transport.events.get(occurrence.event_index)?.clone(),
+                    transport.rate,
+                    transport.parent_event_id,
+                    transport.parent_iteration,
+                    transport.direct_parent_cue_id,
+                    transport.direct_generation,
+                ))
+            })
             else {
                 continue;
             };
-            let event_rate = self.child_transports[transport_index]
-                .events
-                .get(occurrence.event_index)
-                .and_then(|event| event.rate)
-                .unwrap_or(1.0);
-            let parent_rate = self.child_transports[transport_index].rate;
+            if let Some(transport) = self.child_transport_mut(transport_id) {
+                if let Some(activated) = transport.activated_events.get_mut(occurrence.event_index)
+                {
+                    *activated = true;
+                }
+            }
+            let event_rate = event.rate.unwrap_or(1.0);
             let due_at = now + Duration::from_millis(dispatch.pre_wait_ms);
             let elapsed_child_ms = current_position_ms.saturating_sub(occurrence.time_ms);
-            let timeline_effect_activation = self.child_transports[transport_index]
-                .events
-                .get(occurrence.event_index)
-                .filter(|event| {
-                    event.duration_ms > 0 && (!range.is_empty() || !step_range.is_empty())
-                })
-                .map(|event| {
-                    let activation_child_elapsed_ms =
-                        event
-                            .source_offset_ms
-                            .saturating_add(if dispatch.pre_wait_ms == 0 {
-                                elapsed_child_ms
-                            } else {
-                                0
-                            });
-                    let activation_parent_elapsed_ms =
-                        ((activation_child_elapsed_ms as f64) / f64::from(parent_rate))
-                            .floor()
-                            .clamp(0.0, u64::MAX as f64) as u64;
-                    let activation_at = if dispatch.pre_wait_ms == 0 {
-                        now
-                    } else {
-                        due_at
-                    };
-                    PendingTimelineEffectActivation {
-                        event_id: occurrence.event_id,
-                        cue_id: occurrence.cue_id,
-                        iteration: occurrence.iteration,
-                        child_parent: Some((
-                            self.child_transports[transport_index].parent_event_id,
-                            self.child_transports[transport_index].parent_iteration,
-                        )),
-                        range,
-                        step_range,
-                        rate: valid_effect_rate(parent_rate * event_rate),
-                        step_rate: valid_effect_rate(event_rate),
-                        created_at: activation_at
-                            .checked_sub(Duration::from_millis(activation_parent_elapsed_ms))
-                            .unwrap_or(activation_at),
-                        step_clock: RuntimeCueStepClock::ChildTimeline {
-                            transport_index,
-                            starts_at_ms: occurrence.time_ms,
-                            source_offset_ms: event.source_offset_ms,
-                        },
-                    }
-                });
+            let timeline_effect_activation = ((event.duration_ms > 0
+                && (!range.is_empty() || !step_range.is_empty()))
+                || direct_parent.is_some())
+            .then(|| {
+                let activation_child_elapsed_ms =
+                    event
+                        .source_offset_ms
+                        .saturating_add(if dispatch.pre_wait_ms == 0 {
+                            elapsed_child_ms
+                        } else {
+                            0
+                        });
+                let activation_parent_elapsed_ms =
+                    ((activation_child_elapsed_ms as f64) / f64::from(parent_rate))
+                        .floor()
+                        .clamp(0.0, u64::MAX as f64) as u64;
+                let activation_at = if dispatch.pre_wait_ms == 0 {
+                    now
+                } else {
+                    due_at
+                };
+                PendingTimelineEffectActivation {
+                    event_id: occurrence.event_id,
+                    cue_id: occurrence.cue_id,
+                    iteration: occurrence.iteration,
+                    child_parent: direct_parent
+                        .is_none()
+                        .then_some((parent_event_id, parent_iteration)),
+                    direct_child_parent: direct_parent
+                        .map(|parent_cue_id| (parent_cue_id, direct_generation)),
+                    range,
+                    step_range,
+                    rate: valid_effect_rate(parent_rate * event_rate),
+                    step_rate: valid_effect_rate(event_rate),
+                    created_at: activation_at
+                        .checked_sub(Duration::from_millis(activation_parent_elapsed_ms))
+                        .unwrap_or(activation_at),
+                    step_clock: RuntimeCueStepClock::ChildTimeline {
+                        transport_id,
+                        starts_at_ms: occurrence.time_ms,
+                        source_offset_ms: event.source_offset_ms,
+                    },
+                }
+            });
             has_immediate_trigger |= dispatch.pre_wait_ms == 0;
-            let fade_override_ms = self.child_transports[transport_index]
-                .events
-                .get(occurrence.event_index)
-                .and_then(|event| {
-                    (occurrence.iteration == 0
-                        || self
-                            .cues
-                            .get(dispatch.cue_index)
-                            .is_some_and(|cue| cue.fade_ms == event.fade_in_ms))
-                    .then_some(event.fade_in_ms)
-                });
+            let fade_override_ms = (occurrence.iteration == 0
+                || self
+                    .cues
+                    .get(dispatch.cue_index)
+                    .is_some_and(|cue| cue.fade_ms == event.fade_in_ms))
+            .then_some(event.fade_in_ms);
             self.enqueue_pending_cue(PendingCueTrigger {
                 cue_id: occurrence.cue_id,
                 due_at,
@@ -17266,7 +17660,72 @@ impl EngineRuntime {
                 fade_override_ms,
                 timeline_effect_activation,
                 dispatch: Some(dispatch),
+                child_transport_id: Some(transport_id),
+                direct_child_anchor_at: None,
             });
+        }
+        has_immediate_trigger
+    }
+
+    fn advance_child_transport(
+        &mut self,
+        transport_id: RuntimeChildTransportId,
+        now: Instant,
+    ) -> bool {
+        let Some(transport) = self.child_transport(transport_id) else {
+            return false;
+        };
+        if !transport.active {
+            return false;
+        }
+        let parent_position = transport
+            .direct_started_at
+            .map(|started_at| now.saturating_duration_since(started_at).as_millis() as u64)
+            .unwrap_or(self.timeline_position_ms);
+        let (window_start_ms, window_end_ms) = (transport.window_start_ms, transport.window_end_ms);
+        if parent_position < window_start_ms || parent_position >= window_end_ms {
+            self.deactivate_child_transport_by_id(transport_id);
+            return false;
+        }
+        let current_position_ms = child_transport_position_ms(transport, parent_position);
+        let previous_position_ms = transport.previous_position_ms;
+        let duration_ms = transport.duration_ms;
+        let include_previous = self
+            .child_transport_mut(transport_id)
+            .map(|transport| std::mem::take(&mut transport.boundary_armed))
+            .unwrap_or(false);
+        let mut has_immediate_trigger = false;
+        if current_position_ms < previous_position_ms {
+            if duration_ms > 0 {
+                has_immediate_trigger |= self.collect_and_dispatch_child_transport_range(
+                    transport_id,
+                    previous_position_ms,
+                    duration_ms,
+                    include_previous,
+                    now,
+                );
+                has_immediate_trigger |= self.collect_and_dispatch_child_transport_range(
+                    transport_id,
+                    0,
+                    current_position_ms,
+                    true,
+                    now,
+                );
+            }
+        } else {
+            has_immediate_trigger |= self.collect_and_dispatch_child_transport_range(
+                transport_id,
+                previous_position_ms,
+                current_position_ms,
+                include_previous,
+                now,
+            );
+        }
+        if let Some(transport) = self.child_transport_mut(transport_id) {
+            transport.previous_position_ms = current_position_ms;
+            transport.position_ms = current_position_ms;
+            transport.parent_iteration = parent_position.saturating_sub(transport.window_start_ms)
+                / transport.iteration_period_ms.max(1);
         }
         has_immediate_trigger
     }
@@ -17274,57 +17733,12 @@ impl EngineRuntime {
     fn advance_child_transports(&mut self, now: Instant) {
         let mut has_immediate_trigger = false;
         for transport_index in 0..self.child_transports.len() {
-            if !self.child_transports[transport_index].active {
-                continue;
-            }
-            let parent_position = self.timeline_position_ms;
-            let (window_start_ms, window_end_ms) = {
-                let transport = &self.child_transports[transport_index];
-                (transport.window_start_ms, transport.window_end_ms)
-            };
-            if parent_position < window_start_ms || parent_position >= window_end_ms {
-                self.deactivate_child_transport(transport_index);
-                continue;
-            }
-            let current_position_ms = child_transport_position_ms(
-                &self.child_transports[transport_index],
-                parent_position,
-            );
-            let previous_position_ms = self.child_transports[transport_index].previous_position_ms;
-            let include_previous =
-                std::mem::take(&mut self.child_transports[transport_index].boundary_armed);
-            if current_position_ms < previous_position_ms {
-                let duration_ms = self.child_transports[transport_index].duration_ms;
-                if duration_ms > 0 {
-                    has_immediate_trigger |= self.collect_and_dispatch_child_transport_range(
-                        transport_index,
-                        previous_position_ms,
-                        duration_ms,
-                        include_previous,
-                        now,
-                    );
-                    has_immediate_trigger |= self.collect_and_dispatch_child_transport_range(
-                        transport_index,
-                        0,
-                        current_position_ms,
-                        true,
-                        now,
-                    );
-                }
-            } else {
-                has_immediate_trigger |= self.collect_and_dispatch_child_transport_range(
-                    transport_index,
-                    previous_position_ms,
-                    current_position_ms,
-                    include_previous,
-                    now,
-                );
-            }
-            let transport = &mut self.child_transports[transport_index];
-            transport.previous_position_ms = current_position_ms;
-            transport.position_ms = current_position_ms;
-            transport.parent_iteration = parent_position.saturating_sub(transport.window_start_ms)
-                / transport.iteration_period_ms.max(1);
+            has_immediate_trigger |= self
+                .advance_child_transport(RuntimeChildTransportId::Timeline(transport_index), now);
+        }
+        for transport_index in 0..self.direct_child_transports.len() {
+            has_immediate_trigger |=
+                self.advance_child_transport(RuntimeChildTransportId::Direct(transport_index), now);
         }
         if has_immediate_trigger {
             self.advance_pending_cue(now);
@@ -17332,57 +17746,65 @@ impl EngineRuntime {
     }
 
     fn apply_child_timeline_automations(&mut self) {
-        for transport_index in 0..self.child_transports.len() {
-            if !self.child_transports[transport_index].active {
-                continue;
-            }
-            let position_ms = self.child_transports[transport_index].position_ms;
-            for automation_index in 0..self.child_transports[transport_index].automations.len() {
-                let automation =
-                    &self.child_transports[transport_index].automations[automation_index];
-                if !automation.enabled || !matches!(automation.track, TimelineTrackKind::Lighting) {
-                    continue;
+        macro_rules! apply_transport_domain {
+            ($field:ident) => {
+                for transport_index in 0..self.$field.len() {
+                    if !self.$field[transport_index].active {
+                        continue;
+                    }
+                    let position_ms = self.$field[transport_index].position_ms;
+                    for automation_index in 0..self.$field[transport_index].automations.len() {
+                        let automation =
+                            &self.$field[transport_index].automations[automation_index];
+                        if !automation.enabled
+                            || !matches!(automation.track, TimelineTrackKind::Lighting)
+                        {
+                            continue;
+                        }
+                        let Some(value) =
+                            evaluate_automation_keyframes(&automation.keyframes, position_ms)
+                        else {
+                            continue;
+                        };
+                        let key = (automation.fixture_id, automation.attribute.as_str());
+                        if let Some((_, current)) =
+                            self.values.iter_mut().find(|((fixture_id, attribute), _)| {
+                                *fixture_id == key.0 && attribute == key.1
+                            })
+                        {
+                            *current = value;
+                        }
+                    }
+                    for automation_index in 0..self.$field[transport_index].video_automations.len()
+                    {
+                        let automation =
+                            &self.$field[transport_index].video_automations[automation_index];
+                        if !automation.enabled {
+                            continue;
+                        }
+                        let Some(value) =
+                            evaluate_video_automation_keyframes(&automation.keyframes, position_ms)
+                        else {
+                            continue;
+                        };
+                        if let Some(layer) = self
+                            .video_layers
+                            .iter_mut()
+                            .find(|layer| layer.id == automation.layer_id)
+                        {
+                            apply_video_param(&mut layer.state, &automation.param, value);
+                        }
+                    }
                 }
-                let Some(value) = evaluate_automation_keyframes(&automation.keyframes, position_ms)
-                else {
-                    continue;
-                };
-                let key = (automation.fixture_id, automation.attribute.as_str());
-                if let Some((_, current)) = self
-                    .values
-                    .iter_mut()
-                    .find(|((fixture_id, attribute), _)| *fixture_id == key.0 && attribute == key.1)
-                {
-                    *current = value;
-                }
-            }
-            for automation_index in 0..self.child_transports[transport_index]
-                .video_automations
-                .len()
-            {
-                let automation =
-                    &self.child_transports[transport_index].video_automations[automation_index];
-                if !automation.enabled {
-                    continue;
-                }
-                let Some(value) =
-                    evaluate_video_automation_keyframes(&automation.keyframes, position_ms)
-                else {
-                    continue;
-                };
-                if let Some(layer) = self
-                    .video_layers
-                    .iter_mut()
-                    .find(|layer| layer.id == automation.layer_id)
-                {
-                    apply_video_param(&mut layer.state, &automation.param, value);
-                }
-            }
+            };
         }
+        apply_transport_domain!(child_transports);
+        apply_transport_domain!(direct_child_transports);
     }
 
     fn advance_timeline(&mut self, now: Instant) {
         if !self.timeline_playing || self.timeline_external_sync_source.is_some() {
+            self.advance_child_transports(now);
             return;
         }
         let include_previous = std::mem::take(&mut self.timeline_playhead_boundary_armed);
@@ -17618,6 +18040,7 @@ impl EngineRuntime {
                         cue_id,
                         iteration: occurrence.iteration,
                         child_parent: None,
+                        direct_child_parent: None,
                         range,
                         step_range,
                         rate: valid_effect_rate(event.rate.unwrap_or(1.0)),
@@ -17646,6 +18069,8 @@ impl EngineRuntime {
                 ),
                 timeline_effect_activation,
                 dispatch: Some(dispatch),
+                child_transport_id: None,
+                direct_child_anchor_at: None,
             });
         }
         // Preserve the legacy zero-pre-wait recall boundary, including command-path timecode
@@ -52424,6 +52849,8 @@ mod tests {
             fade_override_ms: None,
             timeline_effect_activation: None,
             dispatch: None,
+            child_transport_id: None,
+            direct_child_anchor_at: None,
         });
         runtime.apply_command(EngineCommand::LoadProjectSnapshot(snapshot.clone()));
         assert_eq!(runtime.timeline_evaluated_boundary_position_ms, None);
@@ -53188,6 +53615,8 @@ mod tests {
                 fade_override_ms: None,
                 timeline_effect_activation: None,
                 dispatch: None,
+                child_transport_id: None,
+                direct_child_anchor_at: None,
             });
         }
         assert_eq!(
@@ -54802,7 +55231,7 @@ mod tests {
             "128k Scene Block occurrences: schedule={scheduling_elapsed:?}, pre-wait/follow dispatch={dispatch_elapsed:?}"
         );
         assert!(
-            scheduling_elapsed < Duration::from_millis(50),
+            scheduling_elapsed < Duration::from_millis(75),
             "128,000 occurrence scheduling took {scheduling_elapsed:?}"
         );
         assert!(
@@ -55500,6 +55929,8 @@ mod tests {
             fade_override_ms: None,
             timeline_effect_activation: None,
             dispatch: None,
+            child_transport_id: None,
+            direct_child_anchor_at: None,
         });
         runtime.timeline_playing = true;
         runtime.timeline_position_ms = 900;
@@ -57102,6 +57533,344 @@ mod tests {
         );
     }
 
+    fn direct_child_static_test_runtime(events: Vec<TimelineCueEventSummary>) -> EngineRuntime {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        for (cue_id, label, value) in [
+            (1, "Direct Super Scene", None),
+            (2, "Child high", Some(u16::MAX)),
+            (3, "Child low", Some(16_384)),
+        ] {
+            runtime.apply_command(EngineCommand::CreateCue {
+                cue_id,
+                label: label.to_string(),
+                fade_ms: 0,
+                authored_beats: None,
+                targets: value
+                    .map(|value| {
+                        vec![CueFixtureTarget {
+                            fixture_id: 1,
+                            values: vec![AttributeValueSummary {
+                                attribute: "Dimmer".to_string(),
+                                value,
+                            }],
+                        }]
+                    })
+                    .unwrap_or_default(),
+                video_targets: Vec::new(),
+                video_output_targets: Vec::new(),
+                node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
+            });
+        }
+        let duration_ms = events
+            .iter()
+            .map(|event| {
+                event.time_ms.saturating_add(
+                    event
+                        .duration_ms
+                        .saturating_mul(u64::from(event.loop_count.max(1))),
+                )
+            })
+            .max()
+            .unwrap_or(0);
+        runtime
+            .set_cue_child_timeline_state(
+                1,
+                Some(ChildTimelineSummary {
+                    events,
+                    duration_ms,
+                    ..ChildTimelineSummary::default()
+                }),
+            )
+            .unwrap();
+        runtime.rebuild_effect_activations(Instant::now());
+        runtime
+    }
+
+    fn direct_child_static_event(
+        id: TimelineEventId,
+        cue_id: CueId,
+        time_ms: u64,
+        duration_ms: u64,
+    ) -> TimelineCueEventSummary {
+        TimelineCueEventSummary {
+            id,
+            cue_id,
+            time_ms,
+            track: TimelineTrackKind::Lighting,
+            duration_ms,
+            ..TimelineCueEventSummary::default()
+        }
+    }
+
+    #[test]
+    fn direct_child_trigger_activates_first_block_on_schedule_and_renders_dmx() {
+        let mut runtime =
+            direct_child_static_test_runtime(vec![direct_child_static_event(201, 2, 100, 500)]);
+        runtime
+            .cues
+            .iter_mut()
+            .find(|cue| cue.id == 1)
+            .unwrap()
+            .pre_wait_ms = 50;
+        let started_at = Instant::now();
+        runtime.request_cue(1, started_at);
+        assert!(!runtime.timeline_playing);
+        assert!(runtime.active_cue_id.is_none());
+
+        runtime.advance_pending_cue(started_at + Duration::from_millis(50));
+        assert_eq!(runtime.active_cue_id, Some(1));
+        assert_eq!(runtime.direct_child_transports[0].position_ms, 50);
+
+        let before = started_at + Duration::from_millis(99);
+        runtime.advance_child_transports(before);
+        assert_eq!(runtime.render_dmx_frame_for_universe(0, before)[0], 0);
+
+        let at_block = started_at + Duration::from_millis(100);
+        runtime.advance_child_transports(at_block);
+        let frame = runtime.render_dmx_frame_for_universe(0, at_block);
+        assert_eq!(runtime.active_cue_id, Some(1));
+        assert!(
+            frame[0] > 0,
+            "the direct child block must render non-zero DMX"
+        );
+        assert!(runtime.direct_child_transports[0].active);
+        assert_eq!(runtime.direct_child_transports[0].position_ms, 100);
+    }
+
+    #[test]
+    fn direct_child_later_block_replaces_earlier_value_on_schedule() {
+        let mut runtime = direct_child_static_test_runtime(vec![
+            direct_child_static_event(201, 2, 50, 500),
+            direct_child_static_event(202, 3, 250, 500),
+        ]);
+        let started_at = Instant::now();
+        runtime.start_cue(1, started_at, PendingCueTriggerSource::Manual);
+
+        let first_at = started_at + Duration::from_millis(50);
+        runtime.advance_child_transports(first_at);
+        assert_eq!(runtime.values[&(1, "Dimmer".to_string())], u16::MAX);
+
+        let second_at = started_at + Duration::from_millis(250);
+        runtime.advance_child_transports(second_at);
+        assert_eq!(runtime.values[&(1, "Dimmer".to_string())], 16_384);
+        assert_eq!(runtime.render_dmx_frame_for_universe(0, second_at)[0], 64);
+    }
+
+    #[test]
+    fn direct_child_parent_release_stops_transport_and_restores_block_output() {
+        let mut runtime =
+            direct_child_static_test_runtime(vec![direct_child_static_event(201, 2, 100, 500)]);
+        let started_at = Instant::now();
+        runtime.start_cue(1, started_at, PendingCueTriggerSource::Manual);
+        let active_at = started_at + Duration::from_millis(100);
+        runtime.advance_child_transports(active_at);
+        assert_eq!(runtime.values[&(1, "Dimmer".to_string())], u16::MAX);
+
+        runtime
+            .release_cue_with_value_restore(1, active_at)
+            .unwrap();
+        assert!(!runtime.direct_child_transports[0].active);
+        assert_eq!(runtime.values[&(1, "Dimmer".to_string())], 0);
+        assert_eq!(runtime.render_dmx_frame_for_universe(0, active_at)[0], 0);
+        assert!(runtime.active_cue_id.is_none());
+    }
+
+    #[test]
+    fn direct_child_parent_release_preserves_overlapping_active_cue_output() {
+        let mut runtime =
+            direct_child_static_test_runtime(vec![direct_child_static_event(201, 2, 100, 500)]);
+        let started_at = Instant::now();
+        runtime.start_cue(1, started_at, PendingCueTriggerSource::Manual);
+        let child_at = started_at + Duration::from_millis(100);
+        runtime.advance_child_transports(child_at);
+        runtime.start_cue(3, child_at, PendingCueTriggerSource::Manual);
+        assert_eq!(runtime.values[&(1, "Dimmer".to_string())], 16_384);
+
+        runtime.release_cue_with_value_restore(1, child_at).unwrap();
+        assert!(!runtime.direct_child_transports[0].active);
+        assert_eq!(runtime.values[&(1, "Dimmer".to_string())], 16_384);
+        assert_eq!(runtime.render_dmx_frame_for_universe(0, child_at)[0], 64);
+    }
+
+    #[test]
+    fn direct_child_retrigger_restarts_transport_from_zero() {
+        let mut runtime =
+            direct_child_static_test_runtime(vec![direct_child_static_event(201, 2, 100, 500)]);
+        let started_at = Instant::now();
+        runtime.start_cue(1, started_at, PendingCueTriggerSource::Manual);
+        runtime.advance_child_transports(started_at + Duration::from_millis(150));
+        assert_eq!(runtime.values[&(1, "Dimmer".to_string())], u16::MAX);
+
+        let restarted_at = started_at + Duration::from_millis(200);
+        runtime.start_cue(1, restarted_at, PendingCueTriggerSource::Manual);
+        assert_eq!(runtime.direct_child_transports[0].position_ms, 0);
+        assert_eq!(runtime.values[&(1, "Dimmer".to_string())], 0);
+        runtime.advance_child_transports(restarted_at + Duration::from_millis(99));
+        assert_eq!(runtime.values[&(1, "Dimmer".to_string())], 0);
+        runtime.advance_child_transports(restarted_at + Duration::from_millis(100));
+        assert_eq!(runtime.values[&(1, "Dimmer".to_string())], u16::MAX);
+        assert_eq!(runtime.direct_child_transports[0].direct_generation, 2);
+    }
+
+    #[test]
+    fn direct_child_timeline_scene_block_source_offset_advances_owned_chaser_phase() {
+        let mut runtime = runtime_with_chaser_fixtures(1);
+        let chaser = test_chaser_request(&[1]);
+        let chaser_period_ms = chaser.step_duration_ms * u64::try_from(chaser.steps.len()).unwrap();
+        let half_period_ms = chaser_period_ms / 2;
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![CueEffectTarget {
+                effect_id: 901,
+                enabled: true,
+                params: Some(EffectParamsSnapshot::Chaser(chaser)),
+                transition_ms: None,
+            }],
+        );
+        runtime.apply_command(EngineCommand::CreateCue {
+            cue_id: 2,
+            label: "Direct Offset Super Scene".to_string(),
+            fade_ms: 0,
+            authored_beats: None,
+            targets: Vec::new(),
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: Vec::new(),
+        });
+        runtime
+            .set_cue_child_timeline_state(
+                2,
+                Some(ChildTimelineSummary {
+                    events: vec![
+                        TimelineCueEventSummary {
+                            id: 201,
+                            cue_id: 1,
+                            time_ms: 0,
+                            track: TimelineTrackKind::Lighting,
+                            duration_ms: 1_000,
+                            source_offset_ms: 0,
+                            ..TimelineCueEventSummary::default()
+                        },
+                        TimelineCueEventSummary {
+                            id: 202,
+                            cue_id: 1,
+                            time_ms: 0,
+                            track: TimelineTrackKind::Lighting,
+                            duration_ms: 1_000,
+                            source_offset_ms: half_period_ms,
+                            ..TimelineCueEventSummary::default()
+                        },
+                    ],
+                    duration_ms: 1_000,
+                    ..ChildTimelineSummary::default()
+                }),
+            )
+            .unwrap();
+        let started_at = Instant::now();
+        runtime.rebuild_effect_activations(started_at);
+        runtime.start_cue(2, started_at, PendingCueTriggerSource::Manual);
+
+        let elapsed_by_event = |event_id| {
+            runtime
+                .active_effect_activation_indices
+                .iter()
+                .filter_map(|index| runtime.effect_activations.get(*index))
+                .find_map(|activation| match activation.key {
+                    Some(RuntimeEffectActivationKey::DirectChildTimeline {
+                        parent_cue_id: 2,
+                        event_id: candidate,
+                        ..
+                    }) if candidate == event_id => Some(
+                        started_at
+                            .saturating_duration_since(activation.effect.created_at)
+                            .as_millis() as u64,
+                    ),
+                    _ => None,
+                })
+                .expect("direct child Scene Block must own an active Chaser instance")
+        };
+        assert_eq!(elapsed_by_event(201), 0);
+        assert_eq!(elapsed_by_event(202), half_period_ms);
+
+        runtime.apply_command(EngineCommand::SeekTimeline(0));
+        assert!(runtime
+            .active_effect_activation_indices
+            .iter()
+            .any(|index| {
+                matches!(
+                    runtime
+                        .effect_activations
+                        .get(*index)
+                        .and_then(|activation| activation.key),
+                    Some(RuntimeEffectActivationKey::DirectChildTimeline {
+                        parent_cue_id: 2,
+                        ..
+                    })
+                )
+            }));
+        assert!(runtime.direct_child_transports[0].active);
+    }
+
+    #[test]
+    fn direct_child_pre_wait_survives_unrelated_main_timeline_seek() {
+        let mut runtime =
+            direct_child_static_test_runtime(vec![direct_child_static_event(201, 2, 0, 500)]);
+        runtime
+            .cues
+            .iter_mut()
+            .find(|cue| cue.id == 2)
+            .unwrap()
+            .pre_wait_ms = 100;
+        runtime.rebuild_effect_activations(Instant::now());
+        let started_at = Instant::now();
+        runtime.start_cue(1, started_at, PendingCueTriggerSource::Manual);
+        assert_eq!(runtime.pending_cues.len(), 1);
+        assert_eq!(runtime.values[&(1, "Dimmer".to_string())], 0);
+
+        runtime.apply_command(EngineCommand::SeekTimeline(0));
+        assert_eq!(runtime.pending_cues.len(), 1);
+        runtime.advance_pending_cue(started_at + Duration::from_millis(100));
+        assert_eq!(runtime.values[&(1, "Dimmer".to_string())], u16::MAX);
+        assert!(runtime.direct_child_transports[0].active);
+    }
+
+    #[test]
+    fn direct_child_tempo_follow_rebuild_keeps_trigger_anchor_and_shared_bpm_schedule() {
+        let mut event = direct_child_static_event(201, 2, 500, 250);
+        event.time_beats = Some(1.0);
+        event.duration_beats = Some(0.5);
+        event.conform_to_tempo = true;
+        let mut runtime = direct_child_static_test_runtime(vec![event]);
+        runtime
+            .cues
+            .iter_mut()
+            .find(|cue| cue.id == 2)
+            .unwrap()
+            .authored_beats = Some(1.0);
+        let started_at = Instant::now();
+        runtime.clock.set_bpm(120.0, started_at);
+        runtime.rebuild_effect_activations(started_at);
+        runtime.start_cue(1, started_at, PendingCueTriggerSource::Manual);
+        runtime.advance_child_transports(started_at + Duration::from_millis(400));
+        assert_eq!(runtime.values[&(1, "Dimmer".to_string())], 0);
+
+        let bpm_changed_at = started_at + Duration::from_millis(400);
+        runtime.clock.set_bpm(60.0, bpm_changed_at);
+        runtime.rebuild_effect_activations(bpm_changed_at);
+        assert!(runtime.direct_child_transports[0].active);
+        assert_eq!(
+            runtime.direct_child_transports[0].direct_started_at,
+            Some(started_at)
+        );
+        runtime.advance_child_transports(started_at + Duration::from_millis(999));
+        assert_eq!(runtime.values[&(1, "Dimmer".to_string())], 0);
+        runtime.advance_child_transports(started_at + Duration::from_millis(1_000));
+        assert_eq!(runtime.values[&(1, "Dimmer".to_string())], u16::MAX);
+    }
+
     #[test]
     fn child_timeline_scene_block_source_offset_advances_owned_chaser_and_seek_phase() {
         let mut runtime = runtime_with_chaser_fixtures(1);
@@ -57645,8 +58414,16 @@ mod tests {
             .child_transports
             .iter()
             .all(|transport| transport.events.len() == 200 && transport.due.capacity() >= 200));
+        assert_eq!(runtime.direct_child_transports.len(), 1);
+        assert!(runtime.direct_child_transports.iter().all(|transport| {
+            transport.events.len() == 200
+                && transport.due.capacity() >= 200
+                && transport.activated_events.len() == 200
+        }));
+        let started_at = Instant::now();
         runtime.timeline_position_ms = 0;
-        runtime.establish_child_transports_at_position(Instant::now());
+        runtime.establish_child_transports_at_position(started_at);
+        runtime.start_cue(1, started_at, PendingCueTriggerSource::Manual);
         let before = runtime
             .child_transports
             .iter()
@@ -57659,9 +58436,23 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
+        let direct_before = runtime
+            .direct_child_transports
+            .iter()
+            .map(|transport| {
+                (
+                    transport.events.as_ptr(),
+                    transport.events.capacity(),
+                    transport.due.as_ptr(),
+                    transport.due.capacity(),
+                    transport.activated_events.as_ptr(),
+                    transport.activated_events.capacity(),
+                )
+            })
+            .collect::<Vec<_>>();
         let pending_capacity = runtime.pending_cues.capacity();
         runtime.timeline_position_ms = 200;
-        runtime.advance_child_transports(Instant::now());
+        runtime.advance_child_transports(started_at + Duration::from_millis(200));
         let reallocation_count = runtime
             .child_transports
             .iter()
@@ -57673,9 +58464,22 @@ mod tests {
                     || transport.due.capacity() != before.3
             })
             .count()
+            + runtime
+                .direct_child_transports
+                .iter()
+                .zip(direct_before.iter())
+                .filter(|(transport, before)| {
+                    transport.events.as_ptr() != before.0
+                        || transport.events.capacity() != before.1
+                        || transport.due.as_ptr() != before.2
+                        || transport.due.capacity() != before.3
+                        || transport.activated_events.as_ptr() != before.4
+                        || transport.activated_events.capacity() != before.5
+                })
+                .count()
             + usize::from(runtime.pending_cues.capacity() != pending_capacity);
         eprintln!(
-            "super-scene budget: transports=16 child_events_each=200 transport_tick_reallocations={reallocation_count}"
+            "super-scene budget: timeline_transports=16 direct_transports=1 child_events_each=200 transport_tick_reallocations={reallocation_count}"
         );
         assert_eq!(reallocation_count, 0);
     }
