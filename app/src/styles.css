@@ -11,18 +11,39 @@
   text-rendering: optimizeLegibility;
 }
 
-/* Setup I/O: connection-first operator surfaces with local disclosure scrolling. */
-.layoutSetup.setupMode-dmx > .setupIoPanel,
-.layoutSetup.setupMode-midi > .setupIoPanel,
-.layoutSetup.setupMode-osc > .setupIoPanel,
-.layoutSetup.setupMode-remote > .setupIoPanel {
+/* Setup I/O: one connection-first surface with local zone scrolling. */
+.layoutSetup.setupMode-io > .setupIoPanel {
   display: block;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
 
-.layoutSetup .setupIoPanel > .ioOperatorSurface {
+.layoutSetup .setupIoPanel > .ioUnifiedSurface {
+  display: grid;
+  grid-template-rows: minmax(0, 1.65fr) minmax(86px, 0.75fr);
+  gap: 5px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ioUnifiedZone,
+.ioCompactZoneGrid {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ioCompactZoneGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.layoutSetup .ioUnifiedZone > .ioOperatorSurface {
   display: grid;
   align-content: start;
   gap: 6px;
@@ -34,15 +55,20 @@
   padding-right: 2px;
 }
 
-.layoutSetup.setupMode-midi .midiClock,
-.layoutSetup.setupMode-osc .oscInput,
-.layoutSetup.setupMode-remote .remoteControl {
+.layoutSetup.setupMode-io .midiClock,
+.layoutSetup.setupMode-io .oscInput,
+.layoutSetup.setupMode-io .remoteControl {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: none;
   height: 100%;
   border: 0;
   padding: 0 2px 0 0;
   overflow: hidden auto;
+}
+
+.layoutSetup.setupMode-io .ioCompactZone .ioConnectionControls,
+.layoutSetup.setupMode-io .ioCompactZone .remoteConnectionControls {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .ioConnectionDesk {
@@ -20197,10 +20223,7 @@ h3 {
 .layoutSetup.setupMode-library,
 .layoutSetup.setupMode-profiles,
 .layoutSetup.setupMode-video,
-.layoutSetup.setupMode-dmx,
-.layoutSetup.setupMode-midi,
-.layoutSetup.setupMode-osc,
-.layoutSetup.setupMode-remote {
+.layoutSetup.setupMode-io {
   grid-template-columns: minmax(0, 1fr);
 }
 
@@ -20215,10 +20238,7 @@ h3 {
 .layoutSetup.setupMode-library > .setup,
 .layoutSetup.setupMode-profiles > .setup,
 .layoutSetup.setupMode-video > .videoSetupPanel,
-.layoutSetup.setupMode-dmx > .setupIoPanel,
-.layoutSetup.setupMode-midi > .setupIoPanel,
-.layoutSetup.setupMode-osc > .setupIoPanel,
-.layoutSetup.setupMode-remote > .setupIoPanel {
+.layoutSetup.setupMode-io > .setupIoPanel {
   grid-column: 1;
   width: 100%;
   max-width: none;
@@ -20810,7 +20830,7 @@ h3 {
   max-height: none;
 }
 
-.layoutSetup.setupMode-dmx > .setupIoPanel {
+.layoutSetup.setupMode-io > .setupIoPanel {
   display: grid;
   grid-template-columns:
     minmax(250px, 0.8fr)
@@ -20823,7 +20843,7 @@ h3 {
   overflow: hidden;
 }
 
-.layoutSetup.setupMode-dmx > .setupIoPanel > .rawMonitor {
+.layoutSetup.setupMode-io > .setupIoPanel > .rawMonitor {
   grid-template-rows: auto minmax(0, 1fr) auto;
   height: 100%;
   overflow: hidden;
@@ -20832,7 +20852,7 @@ h3 {
   padding: 0 5px 0 0;
 }
 
-.layoutSetup.setupMode-dmx > .setupIoPanel > .rawMonitor > .rawGrid {
+.layoutSetup.setupMode-io > .setupIoPanel > .rawMonitor > .rawGrid {
   max-height: none;
   overflow: auto;
 }
@@ -20923,15 +20943,15 @@ h3 {
   white-space: nowrap;
 }
 
-.layoutSetup.setupMode-dmx .dmxEndpointDesk,
-.layoutSetup.setupMode-dmx .outputDiagnosticsDesk {
+.layoutSetup.setupMode-io .dmxEndpointDesk,
+.layoutSetup.setupMode-io .outputDiagnosticsDesk {
   border-right: 1px solid #39342f;
   padding-right: 5px;
 }
 
-.layoutSetup.setupMode-dmx .dmxOutputConfigPanel,
-.layoutSetup.setupMode-dmx .outputDiagnosticsDesk,
-.layoutSetup.setupMode-dmx .lightingRuntimeDesk {
+.layoutSetup.setupMode-io .dmxOutputConfigPanel,
+.layoutSetup.setupMode-io .outputDiagnosticsDesk,
+.layoutSetup.setupMode-io .lightingRuntimeDesk {
   overflow: auto;
 }
 
@@ -20955,26 +20975,25 @@ h3 {
   white-space: nowrap;
 }
 
-.layoutSetup.setupMode-dmx .dmxTestFramePanel,
-.layoutSetup.setupMode-dmx .dmxRoutesPanel,
-.layoutSetup.setupMode-dmx .phase1SmokeReport,
-.layoutSetup.setupMode-dmx .telemetry {
+.layoutSetup.setupMode-io .dmxTestFramePanel,
+.layoutSetup.setupMode-io .dmxRoutesPanel,
+.layoutSetup.setupMode-io .phase1SmokeReport,
+.layoutSetup.setupMode-io .telemetry {
   margin: 0;
 }
 
-.layoutSetup.setupMode-dmx .blackout {
+.layoutSetup.setupMode-io .blackout {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.layoutSetup.setupMode-midi > .setupIoPanel,
-.layoutSetup.setupMode-osc > .setupIoPanel {
+.layoutSetup.setupMode-io > .setupIoPanel {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
 
-.layoutSetup.setupMode-midi .midiClock,
-.layoutSetup.setupMode-osc .oscInput {
+.layoutSetup.setupMode-io .midiClock,
+.layoutSetup.setupMode-io .oscInput {
   display: grid;
   grid-template-columns: minmax(430px, 0.9fr) minmax(430px, 1.1fr);
   gap: 5px;
@@ -21019,13 +21038,13 @@ h3 {
   padding: 6px 7px;
 }
 
-.layoutSetup.setupMode-remote > .setupIoPanel {
+.layoutSetup.setupMode-io > .setupIoPanel {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
 
-.layoutSetup.setupMode-remote .remoteControl {
+.layoutSetup.setupMode-io .remoteControl {
   display: grid;
   grid-template-columns: minmax(360px, 0.75fr) minmax(500px, 1.25fr);
   grid-template-rows: minmax(0, 0.75fr) minmax(0, 1.25fr);
@@ -26239,10 +26258,7 @@ h3 {
 .layoutSharedWorkspace.layoutSetup.setupMode-library,
 .layoutSharedWorkspace.layoutSetup.setupMode-profiles,
 .layoutSharedWorkspace.layoutSetup.setupMode-video,
-.layoutSharedWorkspace.layoutSetup.setupMode-dmx,
-.layoutSharedWorkspace.layoutSetup.setupMode-midi,
-.layoutSharedWorkspace.layoutSetup.setupMode-osc,
-.layoutSharedWorkspace.layoutSetup.setupMode-remote,
+.layoutSharedWorkspace.layoutSetup.setupMode-io,
 .layoutSharedWorkspace.layoutSetup.setupMode-mapping,
 .layoutSharedWorkspace.layoutControl.controlModeEdit,
 .layoutSharedWorkspace.layoutControl.controlModeLive,
@@ -33751,21 +33767,39 @@ a[href]:focus-visible,
   height: var(--ui-icon-size);
 }
 
-/* Keep the Setup I/O connection-first structure authoritative over legacy desks. */
-.layoutSetup.setupMode-dmx > .setupIoPanel,
-.layoutSetup.setupMode-midi > .setupIoPanel,
-.layoutSetup.setupMode-osc > .setupIoPanel,
-.layoutSetup.setupMode-remote > .setupIoPanel {
+/* Keep the unified Setup I/O connection-first structure authoritative over legacy desks. */
+.layoutSetup.setupMode-io > .setupIoPanel {
   display: block;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
 
-.layoutSetup .setupIoPanel > .ioOperatorSurface,
-.layoutSetup.setupMode-midi .midiClock,
-.layoutSetup.setupMode-osc .oscInput,
-.layoutSetup.setupMode-remote .remoteControl {
+.layoutSetup .setupIoPanel > .ioUnifiedSurface {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1.65fr) minmax(86px, 0.75fr);
+  gap: 5px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layoutSetup .ioCompactZoneGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layoutSetup .ioUnifiedZone > .ioOperatorSurface,
+.layoutSetup.setupMode-io .midiClock,
+.layoutSetup.setupMode-io .oscInput,
+.layoutSetup.setupMode-io .remoteControl {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: none;
@@ -33778,4 +33812,9 @@ a[href]:focus-visible,
   border: 0;
   padding: 0 2px 0 0;
   overflow: hidden auto;
+}
+
+.layoutSetup.setupMode-io .ioCompactZone .ioConnectionControls,
+.layoutSetup.setupMode-io .ioCompactZone .remoteConnectionControls {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }

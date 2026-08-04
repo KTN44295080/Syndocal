@@ -18835,13 +18835,14 @@ export default function App() {
         </MappingPersistentWorkspaceBand>
         </Show>
 
-        <Show when={workspaceTab() === "setup" && ["dmx", "midi", "osc", "remote"].includes(setupSubTab())}>
+        <Show when={workspaceTab() === "setup" && setupSubTab() === "io"}>
         <aside
-          class={setupPanelClass("panel output setupIoPanel setupPanel controlPanel", ["dmx", "midi", "osc", "remote"])}
-          ref={registerSetupPanel(["dmx", "midi", "osc", "remote"])}
+          class={setupPanelClass("panel output setupIoPanel setupPanel controlPanel", ["io"])}
+          ref={registerSetupPanel(["io"])}
           tabIndex={-1}
         >
-          <Show when={setupSubTab() === "dmx"}>
+          <div class="ioUnifiedSurface" data-io-unified-surface>
+          <section class="ioUnifiedZone ioUnifiedDmxZone" data-io-zone="dmx">
           <div class="ioOperatorSurface dmxOperatorSurface">
           <DmxOutputConfigPanel
             output={output()}
@@ -18958,8 +18959,9 @@ export default function App() {
           </details>
           </div>
           </div>
-          </Show>
-          <Show when={setupSubTab() === "midi"}>
+          </section>
+          <div class="ioCompactZoneGrid">
+          <section class="ioUnifiedZone ioCompactZone" data-io-zone="midi">
           <MidiControlMappingPanel
             snapshot={snapshot()}
             midiInputs={midiInputs()}
@@ -19030,8 +19032,8 @@ export default function App() {
             onSaveMappings={saveMidiMappings}
             onRemoveMapping={removeMidiMapping}
           />
-          </Show>
-          <Show when={setupSubTab() === "osc"}>
+          </section>
+          <section class="ioUnifiedZone ioCompactZone" data-io-zone="osc">
           <OscControlMappingPanel
             snapshot={snapshot()}
             bindIp={oscBindIp()}
@@ -19082,8 +19084,8 @@ export default function App() {
             onSaveMappings={saveOscMappings}
             onRemoveMapping={removeOscMapping}
           />
-          </Show>
-          <Show when={setupSubTab() === "remote"}>
+          </section>
+          <section class="ioUnifiedZone ioCompactZone" data-io-zone="remote">
           <RemoteControlPanel
             backendAvailable={isTauriRuntime()}
             invokeCommand={invoke}
@@ -19114,7 +19116,9 @@ export default function App() {
             onStop={stopRemoteControl}
             onDisconnectClient={disconnectRemoteClient}
           />
-          </Show>
+          </section>
+          </div>
+          </div>
         </aside>
         </Show>
       </section>

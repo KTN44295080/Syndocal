@@ -598,21 +598,23 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               )}
             </For>
           </nav>
-          <nav class="setupModeTabs" aria-label={`${activeSetupArea()} setup mode`}>
-            <For each={setupSubTabsForArea(activeSetupArea())}>
-              {(tab) => (
-                <button
-                  class={props.setupSubTab === tab.id ? "active" : ""}
-                  title={tab.description}
-                  aria-keyshortcuts={`Alt+${setupSubTabs.findIndex((candidate) => candidate.id === tab.id) + 1}`}
-                  onClick={() => props.onSetupSubTab(tab.id)}
-                  aria-pressed={props.setupSubTab === tab.id}
-                >
-                  {tab.label}
-                </button>
-              )}
-            </For>
-          </nav>
+          <Show when={activeSetupArea() !== "io"}>
+            <nav class="setupModeTabs" aria-label={`${activeSetupArea()} setup mode`}>
+              <For each={setupSubTabsForArea(activeSetupArea())}>
+                {(tab) => (
+                  <button
+                    class={props.setupSubTab === tab.id ? "active" : ""}
+                    title={tab.description}
+                    aria-keyshortcuts={`Alt+${setupSubTabs.findIndex((candidate) => candidate.id === tab.id) + 1}`}
+                    onClick={() => props.onSetupSubTab(tab.id)}
+                    aria-pressed={props.setupSubTab === tab.id}
+                  >
+                    {tab.label}
+                  </button>
+                )}
+              </For>
+            </nav>
+          </Show>
         </div>
       </Show>
     </div>

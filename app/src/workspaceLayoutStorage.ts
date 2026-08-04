@@ -42,10 +42,7 @@ const allowedSetupSubTabs: SetupSubTab[] = [
   "profiles",
   "patch",
   "video",
-  "dmx",
-  "midi",
-  "osc",
-  "remote",
+  "io",
 ];
 const allowedControlModes: ControlMode[] = ["edit", "live", "mixer"];
 const allowedTimelineDeskSurfaces: TimelineDeskSurface[] = ["show", "automation", "playback"];
@@ -73,6 +70,11 @@ const ratioValue = (candidate: unknown, fallback: number): number =>
     ? Math.min(0.85, Math.max(0.15, candidate))
     : fallback;
 
+const normalizedSetupSubTab = (candidate: unknown): unknown =>
+  typeof candidate === "string" && ["dmx", "midi", "osc", "remote"].includes(candidate)
+    ? "io"
+    : candidate;
+
 export const workspaceLayoutFromUnknown = (candidate: unknown): WorkspaceLayout => {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
     return { ...defaultWorkspaceLayout };
@@ -81,7 +83,11 @@ export const workspaceLayoutFromUnknown = (candidate: unknown): WorkspaceLayout 
   const legacyCueSurface = value.timeline_desk_surface === "cues";
   return {
     workspace_tab: enumValue(value.workspace_tab, allowedWorkspaceTabs, defaultWorkspaceLayout.workspace_tab),
-    setup_sub_tab: enumValue(value.setup_sub_tab, allowedSetupSubTabs, defaultWorkspaceLayout.setup_sub_tab),
+    setup_sub_tab: enumValue(
+      normalizedSetupSubTab(value.setup_sub_tab),
+      allowedSetupSubTabs,
+      defaultWorkspaceLayout.setup_sub_tab,
+    ),
     control_mode: enumValue(value.control_mode, allowedControlModes, defaultWorkspaceLayout.control_mode),
     timeline_desk_surface: enumValue(
       legacyCueSurface ? "show" : value.timeline_desk_surface,

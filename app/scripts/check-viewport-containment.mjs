@@ -183,10 +183,7 @@ const setupTabs = [
   { area: "Lighting", tab: "Profiles", id: "profiles" },
   { area: "Lighting", tab: "Patch", id: "patch" },
   { area: "Video", tab: "Outputs", id: "video" },
-  { area: "I/O", tab: "DMX", id: "dmx" },
-  { area: "I/O", tab: "MIDI", id: "midi" },
-  { area: "I/O", tab: "OSC", id: "osc" },
-  { area: "I/O", tab: "Remote", id: "remote" },
+  { area: "I/O", tab: null, id: "io" },
 ];
 const controlTabs = [
   { id: "edit", label: "Live Edit" },
@@ -3276,7 +3273,7 @@ async function measureStageSettingsState(client) {
       stageAreaTabCount: setupAreaLabels.filter((label) => label === 'Stage').length,
       stageSubTabCount: setupModeLabels.filter((label) => label === 'Stage').length,
       setupModePatchActive: Boolean(document.querySelector('.layoutSetup.setupMode-patch')),
-      setupModeDmxActive: Boolean(document.querySelector('.layoutSetup.setupMode-dmx')),
+      setupModeIoActive: Boolean(document.querySelector('.layoutSetup.setupMode-io')),
       setupModeMappingActive: Boolean(document.querySelector('.layoutSetup.setupMode-mapping')),
       legacyExpansionMarkerCount: document.querySelectorAll(
         '.mappingWorkspaceExpanded, [data-mapping-workspace-expanded], [data-mapping-expanded-stage-config]'
@@ -3354,9 +3351,8 @@ async function runStageSettingsCheck(client, viewport) {
   const video = await measureStageSettingsState(client);
 
   await clickByText(client, "I/O");
-  await clickByText(client, "DMX");
   await sleep(160);
-  const dmx = await measureStageSettingsState(client);
+  const io = await measureStageSettingsState(client);
 
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
@@ -3378,7 +3374,7 @@ async function runStageSettingsCheck(client, viewport) {
       0.5,
     )
   );
-  const setupStates = [collapsed, opened, oldStageShortcut, video, dmx, restored, mappingLinkReturn];
+  const setupStates = [collapsed, opened, oldStageShortcut, video, io, restored, mappingLinkReturn];
   const stageSettingsConditions = [
     ["stageSetupAreaTabAbsent", () => collapsed.stageAreaTabCount === 0],
     ["stageSetupSubTabAbsent", () => collapsed.stageSubTabCount === 0],
@@ -3398,11 +3394,11 @@ async function runStageSettingsCheck(client, viewport) {
     ["stageSettingsLastExportControlReachableByInternalScroll", () => opened.lastConfigControlReachable],
     ["selectionDrawerOpenedForFourRegionContract", () => Boolean(drawerOpened && collapsed.selectionDrawerOpen)],
     ["setupFourRegionRectsPresentAcrossSubtabs", () =>
-      [collapsed, opened, oldStageShortcut, video, dmx, restored].every(allPartsPresent)],
+      [collapsed, opened, oldStageShortcut, video, io, restored].every(allPartsPresent)],
     ["setupFourRegionRectsStableAcrossSubtabsWithinHalfPixel", () =>
-      [opened, oldStageShortcut, video, dmx, restored].every(allPartsStable)],
+      [opened, oldStageShortcut, video, io, restored].every(allPartsStable)],
     ["setupKeepsBothFixedSplittersAcrossSubtabs", () =>
-      [collapsed, opened, oldStageShortcut, video, dmx, restored, mappingLinkReturn]
+      [collapsed, opened, oldStageShortcut, video, io, restored, mappingLinkReturn]
         .every((state) => Boolean(state.horizontalSplitterRect && state.verticalSplitterRect))],
     ["removedStageShortcutCannotReachExpandedState", () =>
       oldStageShortcut.legacyExpansionMarkerCount === 0 && allPartsPresent(oldStageShortcut)],
@@ -3430,7 +3426,7 @@ async function runStageSettingsCheck(client, viewport) {
     opened,
     oldStageShortcut,
     video,
-    dmx,
+    io,
     restored,
     mappingLinkReturn,
   };
@@ -3711,6 +3707,61 @@ async function exerciseDmxRoutePagination(client) {
   });
 }
 
+async function exerciseLegacySetupIoStoredTabs(client) {
+  const states = [];
+  for (const legacyTab of ['dmx', 'midi', 'osc', 'remote']) {
+    await evaluatePageFunction(client, (setupSubTab) => {
+      const key = 'syndocal.workspaceLayout.v1';
+      let stored = {};
+      try {
+        stored = JSON.parse(window.localStorage.getItem(key) || '{}');
+      } catch {}
+      window.localStorage.setItem(key, JSON.stringify({
+        ...stored,
+        workspace_tab: 'setup',
+        setup_sub_tab: setupSubTab,
+      }));
+    }, legacyTab);
+    await client.send("Page.navigate", { url: appUrl });
+    await waitForApp(client);
+    await sleep(80);
+    states.push(await evaluatePageFunction(client, (setupSubTab) => {
+      let storedSetupSubTab = '';
+      try {
+        storedSetupSubTab = JSON.parse(
+          window.localStorage.getItem('syndocal.workspaceLayout.v1') || '{}',
+        ).setup_sub_tab || '';
+      } catch {}
+      const visible = (element) => {
+        if (!element) return false;
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      };
+      return {
+        legacyTab: setupSubTab,
+        setupModeIoActive: Boolean(document.querySelector('.layoutSetup.setupMode-io')),
+        storedSetupSubTab,
+        ioSubTabButtonCount: [...document.querySelectorAll('.setupModeTabs button')].filter(visible).length,
+        visibleZoneNames: [...document.querySelectorAll('[data-io-zone]')]
+          .filter(visible)
+          .map((zone) => zone.getAttribute('data-io-zone'))
+          .filter(Boolean)
+          .sort(),
+      };
+    }, legacyTab));
+  }
+  return {
+    states,
+    passed: states.every((state) =>
+      state.setupModeIoActive &&
+      state.storedSetupSubTab === 'io' &&
+      state.ioSubTabButtonCount === 0 &&
+      JSON.stringify(state.visibleZoneNames) === JSON.stringify(['dmx', 'midi', 'osc', 'remote'])
+    ),
+  };
+}
+
 async function runSetupIoViewport(client, viewport, dmxOnly = false) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -3728,14 +3779,13 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
   const disclosures = {};
   const flows = {};
 
-  await clickByText(client, "DMX");
   await sleep(100);
-  measurements.dmx = await measure(client, `setup-dmx-${viewport.width}x${viewport.height}`);
+  measurements.io = await measure(client, `setup-io-${viewport.width}x${viewport.height}`);
   const routePagination = await exerciseDmxRoutePagination(client);
   await selectVisibleOption(client, '[data-io-control="dmx-protocol"]', 'EnttecUsbPro');
   await selectVisibleOption(client, '[data-io-control="dmx-serial-port"]', 'COM9');
   await sleep(80);
-  const serialState = await measure(client, `setup-dmx-serial-${viewport.width}x${viewport.height}`);
+  const serialState = await measure(client, `setup-io-serial-${viewport.width}x${viewport.height}`);
   await clickVisibleSelector(client, '[data-io-control="dmx-apply-output"]');
   await sleep(140);
   await clickVisibleSelector(client, '[data-io-control="dmx-add-artnet"]');
@@ -3751,7 +3801,7 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
   const routeCalls = dmxCalls.filter((call) => call.command === 'set_dmx_outputs');
   flows.dmx = {
     routeTotalCountPreserved:
-      measurements.dmx.ioRouteTotalCount === 128 &&
+      measurements.io.ioRouteTotalCount === 128 &&
       routePagination.totalRouteCount === 128,
     allRoutePagesReachable:
       routePagination.pageCount === Math.ceil(routePagination.totalRouteCount / 6) &&
@@ -3776,9 +3826,6 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
   ];
 
   if (!dmxOnly) {
-    await clickByText(client, "MIDI");
-    await sleep(100);
-    measurements.midi = await measure(client, `setup-midi-${viewport.width}x${viewport.height}`);
     disclosures.midi = [
       await exerciseSetupIoDisclosure(client, 'midi-feedback', '[data-io-control="midi-feedback-output"]'),
       await exerciseSetupIoDisclosure(client, 'midi-mapping', '[data-io-control="midi-map-message"]'),
@@ -3797,9 +3844,6 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
       ),
     };
 
-    await clickByText(client, "OSC");
-    await sleep(100);
-    measurements.osc = await measure(client, `setup-osc-${viewport.width}x${viewport.height}`);
     disclosures.osc = [
       await exerciseSetupIoDisclosure(client, 'osc-mapping', '[data-io-control="osc-map-address"]'),
     ];
@@ -3815,9 +3859,6 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
       ),
     };
 
-    await clickByText(client, "Remote");
-    await sleep(140);
-    measurements.remote = await measure(client, `setup-remote-${viewport.width}x${viewport.height}`);
     const remoteSecurity = await exerciseSetupIoDisclosure(client, 'remote-security', '[data-io-control="remote-max-clients"]');
     const remoteStandby = await exerciseSetupIoDisclosure(client, 'remote-standby', '[data-io-control="remote-standby-role"]');
     await clickVisibleSelector(client, '[data-io-control="remote-start"]');
@@ -3835,20 +3876,34 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     };
   }
 
-  const expectedTabs = dmxOnly ? ['dmx'] : ['dmx', 'midi', 'osc', 'remote'];
+  const expectedControlCounts = { dmx: 28, midi: 6, osc: 4, remote: 9 };
+  const expectedDisclosureCounts = { dmx: 4, midi: 2, osc: 1, remote: 3 };
+  const legacyStoredTabs = await exerciseLegacySetupIoStoredTabs(client);
   const checks = {
-    defaultControlsAtMost30: expectedTabs.every((tab) => measurements[tab]?.ioVisibleControlCount <= 30),
-    defaultDisclosuresClosed: expectedTabs.every((tab) => measurements[tab]?.ioOpenDisclosureCount === 0),
-    defaultSurfacesMatchTabs: expectedTabs.every((tab) => measurements[tab]?.ioDefaultSurfaceTab === tab),
-    tabContracts: expectedTabs.every((tab) => hasExpectedSetupSurface(measurements[tab])),
-    disclosuresOpenAndExposeControls: expectedTabs.every((tab) => disclosures[tab]?.every(setupIoDisclosurePassed)),
+    ioSubTabBarRemoved:
+      measurements.io.ioSubTabBarCount === 0 && measurements.io.ioSubTabButtonCount === 0,
+    allFourZonesVisible:
+      measurements.io.ioVisibleZoneCount === 4 &&
+      JSON.stringify(measurements.io.ioVisibleZoneNames) === JSON.stringify(['dmx', 'midi', 'osc', 'remote']) &&
+      measurements.io.ioAllZoneRectsPositive,
+    perZoneLeanControlsPreserved:
+      JSON.stringify(measurements.io.ioZoneVisibleControlCounts) === JSON.stringify(expectedControlCounts) &&
+      measurements.io.ioVisibleControlCount === Object.values(expectedControlCounts).reduce((sum, count) => sum + count, 0),
+    disclosureCountsPreserved:
+      JSON.stringify(measurements.io.ioZoneDisclosureCounts) === JSON.stringify(expectedDisclosureCounts) &&
+      JSON.stringify(measurements.io.ioZoneOpenDisclosureCounts) === JSON.stringify({ dmx: 0, midi: 0, osc: 0, remote: 0 }) &&
+      measurements.io.ioDisclosureCount === Object.values(expectedDisclosureCounts).reduce((sum, count) => sum + count, 0),
+    documentAndAppScrollZero: measurements.io.ioDocumentAndAppScrollZero,
+    unifiedSurfaceContract: hasExpectedSetupSurface(measurements.io),
+    disclosuresOpenAndExposeControls: Object.values(disclosures).flat().every(setupIoDisclosurePassed),
     dmxRoutePagination: flows.dmx.routeTotalCountPreserved && flows.dmx.allRoutePagesReachable && flows.dmx.allRouteRowsComplete && flows.dmx.routePaginationRestored,
     serialApplyFlow: flows.dmx.serialReachableWithoutDisclosure && flows.dmx.serialApplyCommand,
     dmxRouteCreationFlows: flows.dmx.artNetRouteCreated && flows.dmx.sacnRouteCreated,
     midiConnectFlows: dmxOnly || Object.values(flows.midi).every(Boolean),
     oscListenFlow: dmxOnly || Object.values(flows.osc).every(Boolean),
     remoteStartFlow: dmxOnly || Object.values(flows.remote).every(Boolean),
-    fixedFrameContained: expectedTabs.every((tab) => isContained(measurements[tab])),
+    legacyStoredIoTabsNormalize: legacyStoredTabs.passed,
+    fixedFrameContained: isContained(measurements.io),
   };
   const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
   return {
@@ -3860,6 +3915,7 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     disclosures,
     flows,
     routePagination,
+    legacyStoredTabs,
   };
 }
 
@@ -3886,15 +3942,8 @@ async function runSetupStageBandSequenceViewport(client, viewport) {
   );
 
   await clickByText(client, "I/O");
-  await clickByText(client, "DMX");
-  await client.evaluate(`(() => {
-    const select = document.querySelector('.setupMode-dmx .dmxOutputConfigPanel select');
-    if (!(select instanceof HTMLSelectElement)) return;
-    select.value = 'EnttecUsbPro';
-    select.dispatchEvent(new InputEvent('input', { bubbles: true }));
-  })()`);
   await sleep(180);
-  const dmx = await measure(client, `setup-dmx-sequence-${viewport.width}x${viewport.height}`);
+  const io = await measure(client, `setup-io-sequence-${viewport.width}x${viewport.height}`);
 
   await clickByText(client, "Lighting");
   await clickByText(client, "Patch");
@@ -3903,7 +3952,7 @@ async function runSetupStageBandSequenceViewport(client, viewport) {
 
   const checks = {
     stageBandPickStatesRestoreNeutralTraversal: hasExpectedSetupSurface(stageBand),
-    stageBandContinuesIntoIoDmx: hasExpectedSetupSurface(dmx),
+    stageBandContinuesIntoUnifiedIo: hasExpectedSetupSurface(io),
     ioContinuesIntoLightingPatch: hasExpectedSetupSurface(patch),
   };
   const failedChecks = Object.entries(checks)
@@ -3915,7 +3964,7 @@ async function runSetupStageBandSequenceViewport(client, viewport) {
     checks,
     failedChecks,
     stageBand,
-    dmx,
+    io,
     patch,
   };
 }
@@ -6815,27 +6864,41 @@ async function measure(client, label) {
     const customProfilePreviewDesk = document.querySelector('.setupMode-profiles .customProfilePreviewDesk');
     const customProfilePreviewDeskRect = customProfilePreviewDesk?.getBoundingClientRect() ?? null;
     const setupIoPanel = document.querySelector('.setupIoPanel');
-    const ioDefaultSurface = setupIoPanel?.querySelector('[data-io-default-surface]') ?? null;
+    const ioUnifiedSurface = setupIoPanel?.querySelector('[data-io-unified-surface]') ?? null;
+    const ioZones = setupIoPanel ? [...setupIoPanel.querySelectorAll('[data-io-zone]')] : [];
+    const visibleIoZones = setupIoPanel ? visibleElements('[data-io-zone]', setupIoPanel) : [];
     const ioDisclosures = setupIoPanel ? [...setupIoPanel.querySelectorAll('[data-io-disclosure]')] : [];
+    const ioZoneVisibleControlCounts = Object.fromEntries(ioZones.map((zone) => [
+      zone.getAttribute('data-io-zone') ?? '',
+      visibleInteractiveElements(zone).length,
+    ]));
+    const ioZoneDisclosureCounts = Object.fromEntries(ioZones.map((zone) => [
+      zone.getAttribute('data-io-zone') ?? '',
+      zone.querySelectorAll('[data-io-disclosure]').length,
+    ]));
+    const ioZoneOpenDisclosureCounts = Object.fromEntries(ioZones.map((zone) => [
+      zone.getAttribute('data-io-zone') ?? '',
+      [...zone.querySelectorAll('[data-io-disclosure]')].filter((disclosure) => disclosure.open).length,
+    ]));
     const ioRouteList = setupIoPanel?.querySelector('[data-io-route-list]') ?? null;
     const ioRouteRows = setupIoPanel ? [...setupIoPanel.querySelectorAll('[data-io-route-row]')] : [];
-    const dmxOutputConfigPanel = document.querySelector('.setupMode-dmx .dmxOutputConfigPanel');
+    const dmxOutputConfigPanel = document.querySelector('.setupMode-io .dmxOutputConfigPanel');
     const dmxOutputConfigPanelRect = dmxOutputConfigPanel?.getBoundingClientRect() ?? null;
-    const outputDiagnosticsDesk = document.querySelector('.setupMode-dmx .outputDiagnosticsDesk');
+    const outputDiagnosticsDesk = document.querySelector('.setupMode-io .outputDiagnosticsDesk');
     const outputDiagnosticsDeskRect = outputDiagnosticsDesk?.getBoundingClientRect() ?? null;
-    const lightingRuntimeDesk = document.querySelector('.setupMode-dmx .lightingRuntimeDesk');
+    const lightingRuntimeDesk = document.querySelector('.setupMode-io .lightingRuntimeDesk');
     const lightingRuntimeDeskRect = lightingRuntimeDesk?.getBoundingClientRect() ?? null;
-    const midiMappingEditorDesk = document.querySelector('.setupMode-midi .mappingEditorDesk');
+    const midiMappingEditorDesk = document.querySelector('.setupMode-io [data-io-zone="midi"] .mappingEditorDesk');
     const midiMappingEditorDeskRect = midiMappingEditorDesk?.getBoundingClientRect() ?? null;
-    const midiMappingListDesk = document.querySelector('.setupMode-midi .mappingListDesk');
+    const midiMappingListDesk = document.querySelector('.setupMode-io [data-io-zone="midi"] .mappingListDesk');
     const midiMappingListDeskRect = midiMappingListDesk?.getBoundingClientRect() ?? null;
-    const oscMappingEditorDesk = document.querySelector('.setupMode-osc .mappingEditorDesk');
+    const oscMappingEditorDesk = document.querySelector('.setupMode-io [data-io-zone="osc"] .mappingEditorDesk');
     const oscMappingEditorDeskRect = oscMappingEditorDesk?.getBoundingClientRect() ?? null;
-    const oscMappingListDesk = document.querySelector('.setupMode-osc .mappingListDesk');
+    const oscMappingListDesk = document.querySelector('.setupMode-io [data-io-zone="osc"] .mappingListDesk');
     const oscMappingListDeskRect = oscMappingListDesk?.getBoundingClientRect() ?? null;
-    const remoteServerDesk = document.querySelector('.setupMode-remote .remoteServerDesk');
+    const remoteServerDesk = document.querySelector('.setupMode-io [data-io-zone="remote"] .remoteServerDesk');
     const remoteServerDeskRect = remoteServerDesk?.getBoundingClientRect() ?? null;
-    const remoteEndpointDesk = document.querySelector('.setupMode-remote .remoteEndpointDesk');
+    const remoteEndpointDesk = document.querySelector('.setupMode-io [data-io-zone="remote"] .remoteEndpointDesk');
     const remoteEndpointDeskRect = remoteEndpointDesk?.getBoundingClientRect() ?? null;
     const cuePanel = document.querySelector('.cuePanel');
     const cueEditToggle = document.querySelector('.cuePanelEditToggle');
@@ -7749,11 +7812,34 @@ async function measure(client, label) {
       customProfilePreviewDeskWidth: customProfilePreviewDeskRect ? Math.round(customProfilePreviewDeskRect.width) : 0,
       visibleCustomProfileActionCount: visibleCount('.setupMode-profiles .customProfileActions button'),
       visibleCustomProfileDmxMapCount: visibleCount('.setupMode-profiles .customProfileDmxMap'),
-      ioDefaultSurfaceTab: ioDefaultSurface?.getAttribute('data-io-default-surface') ?? '',
+      ioUnifiedSurfaceCount: visibleCount('[data-io-unified-surface]'),
+      ioSubTabBarCount: visibleCount('.setupNavigation > .setupModeTabs'),
+      ioSubTabButtonCount: visibleCount('.setupNavigation > .setupModeTabs button'),
+      ioVisibleZoneCount: visibleIoZones.length,
+      ioVisibleZoneNames: visibleIoZones
+        .map((zone) => zone.getAttribute('data-io-zone') ?? '')
+        .filter(Boolean)
+        .sort(),
+      ioZoneVisibleControlCounts,
+      ioZoneDisclosureCounts,
+      ioZoneOpenDisclosureCounts,
+      ioAllZoneRectsPositive: visibleIoZones.every((zone) => {
+        const rect = zone.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      }),
       ioVisibleControlCount: visibleInteractiveElements(setupIoPanel).length,
-      ioDefaultSurfaceVisibleControlCount: visibleInteractiveElements(ioDefaultSurface).length,
       ioDisclosureCount: ioDisclosures.length,
       ioOpenDisclosureCount: ioDisclosures.filter((disclosure) => disclosure.open).length,
+      ioDocumentAndAppScrollZero:
+        window.scrollX === 0 && window.scrollY === 0 &&
+        documentElement.scrollWidth === documentElement.clientWidth &&
+        documentElement.scrollHeight === documentElement.clientHeight &&
+        body.scrollWidth === documentElement.clientWidth &&
+        body.scrollHeight === documentElement.clientHeight &&
+        (!app || (
+          app.scrollLeft === 0 && app.scrollTop === 0 &&
+          app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight
+        )),
       ioRouteTotalCount: Number(ioRouteList?.getAttribute('data-io-route-total') ?? 0),
       ioRoutePageCount: Number(ioRouteList?.getAttribute('data-io-route-page-count') ?? 0),
       ioRouteRowCount: ioRouteRows.length,
@@ -7770,27 +7856,27 @@ async function measure(client, label) {
         visibleInteractiveElements(setupIoPanel).includes(setupIoPanel?.querySelector('[data-io-control="dmx-apply-output"]')) &&
         ioDisclosures.every((disclosure) => !disclosure.open)
       ),
-      visibleDmxOutputConfigPanelCount: visibleCount('.setupMode-dmx .dmxOutputConfigPanel'),
-      visibleArtRdmPanelCount: visibleCount('.setupMode-dmx .artRdmPanel'),
-      visibleOutputDiagnosticsDeskCount: visibleCount('.setupMode-dmx .outputDiagnosticsDesk'),
-      visibleLightingRuntimeDeskCount: visibleCount('.setupMode-dmx .lightingRuntimeDesk'),
-      dmxRouteItemCount: document.querySelectorAll('.setupMode-dmx .dmxRoutes .timelineItem').length,
-      visibleSerialPortIdentityCount: visibleCount('.setupMode-dmx .serialPortIdentity'),
-      visibleSerialProtocolRecommendationCount: visibleCount('.setupMode-dmx .serialPortIdentity button'),
+      visibleDmxOutputConfigPanelCount: visibleCount('.setupMode-io .dmxOutputConfigPanel'),
+      visibleArtRdmPanelCount: visibleCount('.setupMode-io .artRdmPanel'),
+      visibleOutputDiagnosticsDeskCount: visibleCount('.setupMode-io .outputDiagnosticsDesk'),
+      visibleLightingRuntimeDeskCount: visibleCount('.setupMode-io .lightingRuntimeDesk'),
+      dmxRouteItemCount: document.querySelectorAll('.setupMode-io .dmxRoutes .timelineItem').length,
+      visibleSerialPortIdentityCount: visibleCount('.setupMode-io .serialPortIdentity'),
+      visibleSerialProtocolRecommendationCount: visibleCount('.setupMode-io .serialPortIdentity button'),
       dmxOutputConfigPanelWidth: dmxOutputConfigPanelRect ? Math.round(dmxOutputConfigPanelRect.width) : 0,
       outputDiagnosticsDeskWidth: outputDiagnosticsDeskRect ? Math.round(outputDiagnosticsDeskRect.width) : 0,
       lightingRuntimeDeskWidth: lightingRuntimeDeskRect ? Math.round(lightingRuntimeDeskRect.width) : 0,
-      dmxEndpointShrunkenChildCount: shrunkenDirectChildCount('.setupMode-dmx .dmxEndpointDesk'),
-      dmxEndpointChildOverlapCount: directChildOverlapCount('.setupMode-dmx .dmxEndpointDesk'),
+      dmxEndpointShrunkenChildCount: shrunkenDirectChildCount('.setupMode-io .dmxEndpointDesk'),
+      dmxEndpointChildOverlapCount: directChildOverlapCount('.setupMode-io .dmxEndpointDesk'),
       midiMappingEditorDeskWidth: midiMappingEditorDeskRect ? Math.round(midiMappingEditorDeskRect.width) : 0,
       midiMappingListDeskWidth: midiMappingListDeskRect ? Math.round(midiMappingListDeskRect.width) : 0,
       oscMappingEditorDeskWidth: oscMappingEditorDeskRect ? Math.round(oscMappingEditorDeskRect.width) : 0,
       oscMappingListDeskWidth: oscMappingListDeskRect ? Math.round(oscMappingListDeskRect.width) : 0,
       remoteServerDeskWidth: remoteServerDeskRect ? Math.round(remoteServerDeskRect.width) : 0,
       remoteEndpointDeskWidth: remoteEndpointDeskRect ? Math.round(remoteEndpointDeskRect.width) : 0,
-      visibleStandbySyncDeskCount: visibleCount('.setupMode-remote .standbySyncDesk'),
-      visibleStandbyRoleOptionCount: document.querySelectorAll('.setupMode-remote .standbySyncDesk select option').length,
-      visibleStandbyActionButtonCount: visibleCount('.setupMode-remote .standbySyncDesk > .buttonRow button'),
+      visibleStandbySyncDeskCount: visibleCount('.setupMode-io [data-io-zone="remote"] .standbySyncDesk'),
+      visibleStandbyRoleOptionCount: document.querySelectorAll('.setupMode-io [data-io-zone="remote"] .standbySyncDesk select option').length,
+      visibleStandbyActionButtonCount: visibleCount('.setupMode-io [data-io-zone="remote"] .standbySyncDesk > .buttonRow button'),
       visibleDmxGridSummaryCount: visibleCount('[data-dmx-grid-usage]'),
       visibleFixtureSetupEditorCount: visibleCount('.fixtureSetupEditor'),
       visibleFixtureSetupEmptyStateCount: visibleCount('[data-fixture-setup-empty]'),
@@ -9792,11 +9878,19 @@ function hasExpectedSetupSurface(result) {
       result.visibleCustomProfileDmxMapCount >= 1
     );
   }
-  if (result.label.startsWith("setup-dmx-")) {
+  if (result.label.startsWith("setup-io-")) {
     return (
-      result.ioDefaultSurfaceTab === "dmx" &&
-      result.ioVisibleControlCount <= 30 &&
-      result.ioDisclosureCount === 4 &&
+      result.ioUnifiedSurfaceCount === 1 &&
+      result.ioSubTabBarCount === 0 &&
+      result.ioSubTabButtonCount === 0 &&
+      result.ioVisibleZoneCount === 4 &&
+      JSON.stringify(result.ioVisibleZoneNames) === JSON.stringify(["dmx", "midi", "osc", "remote"]) &&
+      result.ioAllZoneRectsPositive &&
+      JSON.stringify(result.ioZoneVisibleControlCounts) === JSON.stringify({ dmx: 28, midi: 6, osc: 4, remote: 9 }) &&
+      result.ioVisibleControlCount === 47 &&
+      JSON.stringify(result.ioZoneDisclosureCounts) === JSON.stringify({ dmx: 4, midi: 2, osc: 1, remote: 3 }) &&
+      JSON.stringify(result.ioZoneOpenDisclosureCounts) === JSON.stringify({ dmx: 0, midi: 0, osc: 0, remote: 0 }) &&
+      result.ioDisclosureCount === 10 &&
       result.ioOpenDisclosureCount === 0 &&
       result.ioRouteTotalCount === 128 &&
       result.ioRoutePageCount === Math.ceil(result.ioRouteTotalCount / 6) &&
@@ -9805,38 +9899,15 @@ function hasExpectedSetupSurface(result) {
       result.visibleDmxOutputConfigPanelCount === 1 &&
       result.visibleArtRdmPanelCount === 0 &&
       result.visibleOutputDiagnosticsDeskCount === 0 &&
-      result.visibleLightingRuntimeDeskCount === 0
-    );
-  }
-  if (result.label.startsWith("setup-midi-")) {
-    return (
-      result.ioDefaultSurfaceTab === "midi" &&
-      result.ioVisibleControlCount <= 30 &&
-      result.ioDisclosureCount === 2 &&
-      result.ioOpenDisclosureCount === 0 &&
+      result.visibleLightingRuntimeDeskCount === 0 &&
       result.midiMappingEditorDeskWidth === 0 &&
-      result.midiMappingListDeskWidth === 0
-    );
-  }
-  if (result.label.startsWith("setup-osc-")) {
-    return (
-      result.ioDefaultSurfaceTab === "osc" &&
-      result.ioVisibleControlCount <= 30 &&
-      result.ioDisclosureCount === 1 &&
-      result.ioOpenDisclosureCount === 0 &&
+      result.midiMappingListDeskWidth === 0 &&
       result.oscMappingEditorDeskWidth === 0 &&
-      result.oscMappingListDeskWidth === 0
-    );
-  }
-  if (result.label.startsWith("setup-remote-")) {
-    return (
-      result.ioDefaultSurfaceTab === "remote" &&
-      result.ioVisibleControlCount <= 30 &&
-      result.ioDisclosureCount === 3 &&
-      result.ioOpenDisclosureCount === 0 &&
+      result.oscMappingListDeskWidth === 0 &&
       result.remoteServerDeskWidth > 0 &&
       result.remoteEndpointDeskWidth === 0 &&
-      result.visibleStandbySyncDeskCount === 0
+      result.visibleStandbySyncDeskCount === 0 &&
+      result.ioDocumentAndAppScrollZero
     );
   }
   if (result.label.startsWith("setup-patch-")) {
@@ -12076,14 +12147,8 @@ async function runViewport(client, viewport) {
   let setupStageBandContainment = null;
   for (const setupTab of setupTabs) {
     await clickByText(client, setupTab.area);
-    await clickByText(client, setupTab.tab);
-    if (setupTab.id === "dmx") {
-      await client.evaluate(`(() => {
-        const select = document.querySelector('.setupMode-dmx .dmxOutputConfigPanel select');
-        if (!(select instanceof HTMLSelectElement)) return;
-        select.value = 'EnttecUsbPro';
-        select.dispatchEvent(new InputEvent('input', { bubbles: true }));
-      })()`);
+    if (setupTab.tab) {
+      await clickByText(client, setupTab.tab);
     }
     await sleep(180);
     if (shouldCaptureViewport(viewport)) {
@@ -22516,7 +22581,6 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
   await sleep(80);
   await clickByText(client, "Setup");
   await clickByText(client, "I/O");
-  await clickByText(client, "DMX");
   const dmxDiagnosticsDisclosureFound = await client.evaluate(`(() => {
     const disclosure = document.querySelector('[data-io-disclosure="dmx-diagnostics"]');
     if (!(disclosure instanceof HTMLDetailsElement)) return false;
@@ -24885,8 +24949,8 @@ async function main() {
               `${result.stageBand.stageBandPickStates.traversalRestored.ioAreaReachable}/` +
               `${result.stageBand.stageBandPickStates.traversalRestored.legacyMappingExpansionMarkerCount}/` +
               `${result.stageBand.stageBandPickStates.traversalRestored.visibleOpenDialogCount} ` +
-            `io=${result.dmx.ioVisibleControlCount}/${result.dmx.ioRouteRowCount}/${result.dmx.ioDisclosureCount} ` +
-            `routes=${result.dmx.ioRouteTotalCount} ` +
+            `io=${result.io.ioVisibleControlCount}/${result.io.ioRouteRowCount}/${result.io.ioDisclosureCount} ` +
+            `routes=${result.io.ioRouteTotalCount} ` +
             `patch=${result.patch.visibleDmxAddressGridCount}/${result.patch.dmxAddressCellCount} ` +
             `failed=${JSON.stringify(result.failedChecks)}`,
         );
@@ -24902,15 +24966,15 @@ async function main() {
       for (const viewport of viewports) {
         const result = await runSetupIoViewport(client, viewport, setupDmxOnlyMode && !setupIoOnlyMode);
         setupIoResults.push(result);
-        const counts = result.measurements;
+        const counts = result.measurements.io.ioZoneVisibleControlCounts;
         console.log(
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
-            `controls=${counts.dmx.ioVisibleControlCount}/` +
-              `${counts.midi?.ioVisibleControlCount ?? "-"}/` +
-              `${counts.osc?.ioVisibleControlCount ?? "-"}/` +
-              `${counts.remote?.ioVisibleControlCount ?? "-"} ` +
+            `zones=${result.measurements.io.ioVisibleZoneCount}/4 tabs=${result.measurements.io.ioSubTabButtonCount} ` +
+            `controls=${counts.dmx}/${counts.midi}/${counts.osc}/${counts.remote} ` +
             `disclosures=${Object.values(result.disclosures).flat().filter(setupIoDisclosurePassed).length}/` +
               `${Object.values(result.disclosures).flat().length} ` +
+            `scroll=${Number(result.measurements.io.ioDocumentAndAppScrollZero)} ` +
+            `legacy=${result.legacyStoredTabs.states.filter((state) => state.storedSetupSubTab === 'io').length}/4 ` +
             `serial=${Number(result.flows.dmx.serialReachableWithoutDisclosure)}/` +
               `${Number(result.flows.dmx.serialApplyCommand)} ` +
             `routes=${Number(result.flows.dmx.artNetRouteCreated)}/` +
@@ -25244,7 +25308,7 @@ async function main() {
             `nav=${result.collapsed.stageAreaTabCount}/${result.collapsed.stageSubTabCount} ` +
             `disclosure=${result.collapsed.disclosureOpen}->${result.opened.disclosureOpen} ` +
             `controls=${result.opened.boundsInputCount}/${result.opened.boundsFitButtonCount}/${result.opened.stageMapPresetActionCount}/${result.opened.viewPresetActionCount}/${result.opened.exportActionCount}/${result.opened.configControlCount} ` +
-            `rects=${JSON.stringify({ patch: result.collapsed.persistentBandRects, video: result.video.persistentBandRects, dmx: result.dmx.persistentBandRects, restored: result.restored.persistentBandRects })} ` +
+            `rects=${JSON.stringify({ patch: result.collapsed.persistentBandRects, video: result.video.persistentBandRects, io: result.io.persistentBandRects, restored: result.restored.persistentBandRects })} ` +
             `checks=${JSON.stringify(result.checks)} ` +
             `failed=${JSON.stringify(result.failedChecks)}`,
         );
@@ -26420,6 +26484,9 @@ async function main() {
       const outputSetupSuffix = result.label.startsWith("setup-video-")
         ? ` outputSetup=${result.visibleSetupVideoPanelCount}/${result.visibleSetupVideoOutputDeckCount}/${result.visibleSetupVideoOutputActiveDeckCount}/${result.visibleSetupVideoOutputDetailPaneCount}/${result.visibleVideoOutputMappingPanelCount}/${result.visibleVideoOutputBlendControlsCount}/${result.visibleProjectorMapEditorCount}/${result.visibleProjectorMapHandleCount}/${result.visibleProjectorKeystoneHandleCount}/${result.visibleProjectorScaleHandleCount}/${result.visibleProjectorRotateHandleCount}/${result.visibleProjectorAspectModeButtonCount}/${result.visibleProjectorAspectPresetButtonCount}/${result.visibleProjectorResetPoseButtonCount}/${result.videoSetupSidebarWidth}w/${result.videoSetupOutputDeskWidth}w panes=${result.videoSetupRoutingPaneWidth}/${result.videoSetupMapPaneWidth}/${result.videoSetupInspectorPaneWidth} mapH=${result.videoSetupMapPaneHeight} overflow=${result.videoSetupMapPaneOverflowPx} reachable=${result.videoSetupMappingLastControlReachable ? 1 : 0}/${result.videoSetupPreviewContained ? 1 : 0}/${result.videoSetupActionDockLastActionReachable ? 1 : 0} dock=${result.visibleVideoSetupActionDockCount}/${result.videoSetupActionDockHeight} actions=${result.videoSetupCriticalActionInViewportCount} videoSetupProjectorSurfaceContained=${result.videoSetupProjectorSurfaceContained} videoSetupActionDockLastActionReachable=${result.videoSetupActionDockLastActionReachable} videoSetupActionDockInViewport=${result.videoSetupActionDockInViewport}`
         : "";
+      const ioSetupSuffix = result.label.startsWith("setup-io-")
+        ? ` io=${result.ioVisibleZoneCount}/4 tabs=${result.ioSubTabButtonCount} controls=${result.ioZoneVisibleControlCounts?.dmx ?? "?"}/${result.ioZoneVisibleControlCounts?.midi ?? "?"}/${result.ioZoneVisibleControlCounts?.osc ?? "?"}/${result.ioZoneVisibleControlCounts?.remote ?? "?"} disclosures=${result.ioDisclosureCount} scroll=${result.ioDocumentAndAppScrollZero ? 0 : 1}`
+        : "";
       const editVisualSuffix = result.label.startsWith("control-edit-position-") || result.label.startsWith("control-edit-color-")
         ? ` editVisual=${result.visiblePanTiltPadCount}/${result.visiblePositionReadoutCount}/${result.visibleColorPlaneCount}/${result.visibleColorReadoutCount}/${result.visibleGroupControlBannerCount}/${result.visibleControlFaderWriteHeaderCount}/${result.visibleGroupControlFaderWriteHeaderCount}`
         : "";
@@ -26442,7 +26509,7 @@ async function main() {
         ? ` persistentBand=${result.persistentBandInvariant ? "stable" : "moved"} rects=${JSON.stringify(result.persistentBandRectsByWorkspace)} deltas=${JSON.stringify(result.persistentBandRectDeltas)} stageSettings=${result.stageSettings?.passed ? "pass" : "fail"} stageSettingsFailed=${JSON.stringify(result.stageSettings?.failedChecks ?? [])} timelineExpansion=${result.timelinePaneExpansion?.passed ? "pass" : "fail"} timelineExpansionFailed=${JSON.stringify(result.timelinePaneExpansion?.failedChecks ?? [])} layeredDesk=${result.layeredTimelineDesk?.passed ? "pass" : "fail"} layeredDeskFailed=${JSON.stringify(result.layeredTimelineDesk?.failedChecks ?? [])}`
         : "";
       console.log(
-        `${status} [${viewportRole({ width: result.innerWidth, height: result.innerHeight })}] ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${keyboardSuffix}${timelineSuffix}${sceneBlockSuffix}${touchSuffix}${controlStageGlyphSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${editVisualSuffix}${positionVisualSuffix}${colorEffectSuffix}${chaserEffectSuffix}${moveEffectSuffix}${mixerSuffix}${persistentBandSuffix}`,
+        `${status} [${viewportRole({ width: result.innerWidth, height: result.innerHeight })}] ${result.label} document=${result.documentScrollWidth}x${result.documentScrollHeight} app=${result.appScrollWidth}x${result.appScrollHeight} moved=${result.movedX},${result.movedY}${keyboardSuffix}${timelineSuffix}${sceneBlockSuffix}${touchSuffix}${controlStageGlyphSuffix}${projectMenuSuffix}${mappingSuffix}${mappingHotkeyHelpSuffix}${patchSuffix}${outputSetupSuffix}${ioSetupSuffix}${editVisualSuffix}${positionVisualSuffix}${colorEffectSuffix}${chaserEffectSuffix}${moveEffectSuffix}${mixerSuffix}${persistentBandSuffix}`,
       );
     }
     for (const result of cueRecallResults) {
