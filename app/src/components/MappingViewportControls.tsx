@@ -279,28 +279,41 @@ export function MappingViewportControls(props: MappingViewportControlsProps) {
       <div class="mappingViewControls" data-mapping-view-controls aria-label="2D mapping viewport">
         <span>View</span>
         <button
+          type="button"
+          class="mappingViewportCompactButton mappingViewportIconButton"
           data-mapping-viewport-action="fit-visible"
           onClick={props.onFitVisible}
           disabled={!props.canFitVisible}
           title="Fit visible stage items (F)"
+          aria-label="Fit visible stage items (F)"
         >
-          Fit All
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10" />
+          </svg>
         </button>
         <button
+          type="button"
+          class="mappingViewportCompactButton mappingViewportIconButton"
           data-mapping-viewport-action="fit-selection"
           onClick={props.onFitSelection}
           disabled={!props.canFitSelection}
           title="Fit selected items (Shift+F)"
+          aria-label="Fit selected items (Shift+F)"
         >
-          Fit Sel
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10M8 6.3a1.7 1.7 0 1 0 0 3.4 1.7 1.7 0 0 0 0-3.4Z" />
+          </svg>
         </button>
         <button
+          type="button"
+          class="mappingViewportCompactButton"
           data-mapping-viewport-action="zoom-out"
           onClick={props.onZoomOut}
           disabled={!props.canZoomOut}
           title="Zoom out (-)"
+          aria-label="Zoom out (-)"
         >
-          Zoom -
+          -
         </button>
         <input
           class="mappingZoomSlider"
@@ -316,20 +329,26 @@ export function MappingViewportControls(props: MappingViewportControlsProps) {
         />
         <strong data-mapping-zoom-readout>{props.zoomLabel}</strong>
         <button
+          type="button"
+          class="mappingViewportCompactButton"
           data-mapping-viewport-action="zoom-in"
           onClick={props.onZoomIn}
           disabled={!props.canZoomIn}
           title="Zoom in (+)"
+          aria-label="Zoom in (+)"
         >
-          Zoom +
+          +
         </button>
         <button
+          type="button"
+          class="mappingViewportCompactButton"
           data-mapping-viewport-action="reset"
           onClick={props.onResetZoom}
           disabled={!props.canResetZoom}
           title="Reset viewport (0)"
+          aria-label="Reset viewport (0)"
         >
-          Reset
+          0
         </button>
       </div>
       <details class="mappingStageSnapControls" data-mapping-snap-controls data-mapping-snap-control>

@@ -9244,8 +9244,9 @@ progress {
 
 .stageAxis2d {
   stroke: #486279;
-  stroke-dasharray: 2 2;
-  stroke-width: 0.55;
+  stroke-dasharray: 4 4;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
   pointer-events: none;
 }
 
@@ -9774,17 +9775,21 @@ progress {
   stroke-width: 1.5;
 }
 
-/* T9: compact Daslight-style mapping glyphs. Thin outline + subtle hover + thin white
-   selection, scoped to the editable Mapping stage so Control/Touch stages are untouched.
-   Live-DMX color fill is preserved; only the outline/marks change. */
+/* #46: compact editable-stage glyphs with screen-fixed neutral outlines. Live-DMX
+   color fill and hit geometry stay unchanged; only the visible outline weight changes. */
 .editableStage .stageFixture {
   stroke: #d8e4f1;
-  stroke-width: 0.4;
+  stroke-width: 0.55;
+  filter: none;
+}
+
+.editableStage .stageFixtureShape {
+  vector-effect: non-scaling-stroke;
 }
 
 .editableStage .stageFixture:hover {
-  stroke: #ffffff;
-  stroke-width: 0.68;
+  stroke: #e7e1da;
+  stroke-width: 0.8;
 }
 
 .editableStage .stageFixture.groupMatch {
@@ -9799,21 +9804,21 @@ progress {
   filter: none;
 }
 
-.editableStage .stageFixture.picked,
-.editableStage .stageFixture.selected {
-  stroke: #ffffff;
-  stroke-width: 0.95;
-  filter: none;
-}
-
 .editableStage .stageFixture.highlighted {
   stroke: #77ff6b;
-  stroke-width: 0.85;
+  stroke-width: 0.9;
   filter: none;
 }
 
 .editableStage .stageFixture.soloed {
-  stroke-width: 1.05;
+  stroke-width: 1;
+  filter: none;
+}
+
+.editableStage .stageFixture.picked,
+.editableStage .stageFixture.selected {
+  stroke: #ffffff;
+  stroke-width: 1.1;
   filter: none;
 }
 
@@ -22553,7 +22558,7 @@ h3 {
 
 .controlStage .stageAxis2d {
   stroke: #625b54;
-  stroke-width: 0.35;
+  stroke-width: 0.8;
   opacity: 0.48;
 }
 
@@ -26531,7 +26536,7 @@ h3 {
 .mappingPersistentStage > .mappingStageViewport {
   display: grid;
   grid-column: 2;
-  grid-template-rows: 84px minmax(0, 1fr);
+  grid-template-rows: 56px minmax(0, 1fr);
   gap: 3px;
   min-width: 0;
   min-height: 0;
@@ -26541,8 +26546,8 @@ h3 {
 
 .mappingViewportToolbar {
   display: grid;
-  grid-template-columns: minmax(205px, 0.78fr) minmax(190px, 1fr);
-  grid-template-rows: repeat(3, 26px);
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-rows: repeat(2, 26px);
   gap: 2px 4px;
   min-width: 0;
   min-height: 0;
@@ -26568,7 +26573,7 @@ h3 {
 }
 
 .mappingViewportToolbar > .mappingCursorReadout {
-  grid-column: 2;
+  grid-column: 2 / -1;
   grid-row: 1;
   min-height: 26px;
   overflow: hidden;
@@ -26579,23 +26584,47 @@ h3 {
 }
 
 .mappingViewportToolbar > .mappingViewControls {
-  grid-column: 1 / -1;
+  grid-column: 1;
   grid-row: 2;
   gap: 3px;
   overflow: auto hidden;
 }
 
 .mappingViewportToolbar > .mappingStageSnapControls {
-  grid-column: 1;
-  grid-row: 3;
+  grid-column: 2;
+  grid-row: 2;
   gap: 3px;
+  width: auto;
+  min-width: 74px;
 }
 
 .mappingViewportToolbar > .mappingLayerToggles {
-  grid-column: 2;
-  grid-row: 3;
+  grid-column: 3;
+  grid-row: 2;
   gap: 3px;
   overflow: auto hidden;
+}
+
+.mappingViewportToolbar .mappingViewControls > .mappingViewportCompactButton {
+  flex: 0 0 24px;
+  width: 24px;
+  min-width: 24px;
+  padding: 0;
+}
+
+.mappingViewportToolbar .mappingViewportIconButton {
+  display: inline-grid;
+  place-items: center;
+}
+
+.mappingViewportToolbar .mappingViewportIconButton svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.35;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .mappingViewportToolbar .mappingViewControls button,
@@ -27759,14 +27788,14 @@ h3 {
 }
 
 .layoutSharedWorkspace.layoutSetup.setupMode-patch .mappingPersistentWorkspaceBand .mappingStageViewport {
-  grid-template-rows: 84px minmax(0, 1fr);
+  grid-template-rows: 56px minmax(0, 1fr);
   gap: 3px;
   padding: 3px;
 }
 
 @media (max-width: 1450px) {
   .mappingViewportToolbar {
-    grid-template-columns: minmax(190px, 0.8fr) minmax(175px, 1fr);
+    grid-template-columns: minmax(0, 1fr) auto auto;
   }
 
   .layoutSharedWorkspace.layoutSetup > .mappingSetupTopPanel > .mappingStageBoundsPanel {

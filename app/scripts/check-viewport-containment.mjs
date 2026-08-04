@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -706,6 +706,55 @@ async function waitForHttp(url, description) {
     await sleep(250);
   }
   throw new Error(`${description} did not become ready: ${lastError?.message ?? "unknown error"}`);
+}
+
+// 2026-08-04: current Chrome new-headless RELAUNCHES itself at startup - the
+// spawned chrome.exe (our child.pid) exits immediately and a re-parented
+// browser process ends up owning the CDP port. taskkill /T on child.pid then
+// reports "not found" and kills nothing, so the real browser survives every
+// recycle and the harness silently reattaches to the stale instance. Kill the
+// processes that actually LISTEN on the CDP port instead.
+function killCdpPortListeners() {
+  if (process.platform !== "win32") return;
+  try {
+    const netstat = execSync("netstat -ano -p TCP", { encoding: "utf8" });
+    const owners = new Set();
+    const listenerPattern = new RegExp(
+      `^\\s*TCP\\s+\\S+:${cdpPort}\\s+\\S+\\s+LISTENING\\s+(\\d+)\\s*$`,
+    );
+    for (const line of netstat.split(/\r?\n/)) {
+      const match = line.match(listenerPattern);
+      if (match) owners.add(match[1]);
+    }
+    for (const owner of owners) {
+      try {
+        execSync(`taskkill /PID ${owner} /T /F`, { stdio: "ignore" });
+      } catch {
+        // The listener may already be exiting; the port-free wait below decides.
+      }
+    }
+  } catch {
+    // netstat unavailable - fall back to the port-free wait alone.
+  }
+}
+
+// After killing, wait for the port to actually refuse connections before
+// relaunching, or the new client reattaches to a stale instance and the
+// replacement Chrome leaks.
+async function waitForCdpPortFree() {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      await fetch(`http://127.0.0.1:${cdpPort}/json/version`, {
+        signal: AbortSignal.timeout(500),
+      });
+    } catch {
+      return;
+    }
+    await sleep(250);
+  }
+  throw new Error(
+    `Chrome DevTools Protocol port ${cdpPort} is still answering 10s after the old browser was killed - refusing to relaunch against a stale instance.`,
+  );
 }
 
 class CdpClient {
@@ -3989,6 +4038,42 @@ async function exerciseControlStageInteractions(client) {
   };
 }
 
+function hasExpectedCompactMappingViewportControls(result) {
+  const compact = result.mappingCompactViewportControlContract;
+  return (
+    result.visibleMappingViewportReadoutCount === 1
+    && result.visibleMappingFitVisibleCount === 1
+    && result.visibleMappingFitSelectionCount === 1
+    && result.visibleMappingZoomOutCount === 1
+    && result.visibleMappingZoomSliderCount === 1
+    && result.visibleMappingZoomReadoutCount === 1
+    && result.visibleMappingZoomInCount === 1
+    && result.visibleMappingResetViewportCount === 1
+    && compact?.toolbarGridRowCount === 2
+    && compact.toolbarHeight > 0
+    && compact.toolbarHeight <= 56.01
+    && compact.controlsShareOneVisualRow
+    && compact.fitVisibleText === ""
+    && compact.fitVisibleSvgCount === 1
+    && compact.fitVisibleTitle === "Fit visible stage items (F)"
+    && compact.fitVisibleAriaLabel === compact.fitVisibleTitle
+    && compact.fitSelectionText === ""
+    && compact.fitSelectionSvgCount === 1
+    && compact.fitSelectionTitle === "Fit selected items (Shift+F)"
+    && compact.fitSelectionAriaLabel === compact.fitSelectionTitle
+    && compact.zoomOutText === "-"
+    && compact.zoomOutTitle === "Zoom out (-)"
+    && compact.zoomOutAriaLabel === compact.zoomOutTitle
+    && compact.zoomInText === "+"
+    && compact.zoomInTitle === "Zoom in (+)"
+    && compact.zoomInAriaLabel === compact.zoomInTitle
+    && compact.resetText === "0"
+    && compact.resetTitle === "Reset viewport (0)"
+    && compact.resetAriaLabel === compact.resetTitle
+    && compact.compactButtonMaxWidth <= 28
+  );
+}
+
 async function runControlStageChromeViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -4201,14 +4286,8 @@ async function runControlStageChromeViewport(client, viewport) {
       setup.mappingFullToolRailSingleColumn &&
       setup.mappingFullToolRailVerticalOverflowPx === 0 &&
       setup.mappingFullToolRailClippedButtonCount === 0],
-    ["mappingReadoutFitAndZoomControlsRemain", () =>
-      setup.visibleMappingViewportReadoutCount === 1 &&
-      setup.visibleMappingFitSelectionCount === 1 &&
-      setup.visibleMappingZoomOutCount === 1 &&
-      setup.visibleMappingZoomSliderCount === 1 &&
-      setup.visibleMappingZoomReadoutCount === 1 &&
-      setup.visibleMappingZoomInCount === 1 &&
-      setup.visibleMappingResetViewportCount === 1],
+    ["mappingReadoutAndCompactViewportControlsShareTwoRows", () =>
+      hasExpectedCompactMappingViewportControls(initialSetupBand)],
     ["mappingSnapControlsRemain", () =>
       initialSetupBand.visibleMappingSnapRowCount === 1 &&
       initialSetupBand.visibleMappingSnapSummaryCount === 1 &&
@@ -4573,6 +4652,7 @@ function readMappingViewportConformanceStateInPage() {
   const labelMatrix = label instanceof SVGGraphicsElement ? label.getScreenCTM() : null;
   const labelRect = label?.getBoundingClientRect();
   const labelFontWorldPx = label ? Number.parseFloat(getComputedStyle(label).fontSize) : Number.NaN;
+  const shapeStyle = shape ? getComputedStyle(shape) : null;
   const numberAttribute = (element, name) => Number(element?.getAttribute(name) ?? Number.NaN);
   const numberAttributeOr = (element, name, fallback) => {
     const value = element?.getAttribute(name);
@@ -4646,6 +4726,45 @@ function readMappingViewportConformanceStateInPage() {
       maxOffsetPx: Math.max(xOffsetPx, zOffsetPx),
     };
   };
+  const inspectScreenFixedStroke = (element) => {
+    const style = element ? getComputedStyle(element) : null;
+    return {
+      strokeWidthPx: Number.parseFloat(style?.strokeWidth ?? Number.NaN),
+      dashPatternPx: (style?.strokeDasharray ?? "")
+        .split(/[ ,]+/)
+        .map(Number.parseFloat)
+        .filter(Number.isFinite),
+      vectorEffect: style?.vectorEffect ?? "",
+    };
+  };
+  const findStyleRule = (selector) => {
+    let found = null;
+    const visit = (rules) => {
+      for (const rule of rules) {
+        const selectors = typeof rule.selectorText === "string"
+          ? rule.selectorText.split(",").map((candidate) => candidate.trim())
+          : [];
+        if (selectors.includes(selector)) found = rule.style;
+        if (rule.cssRules) visit(rule.cssRules);
+      }
+    };
+    for (const sheet of document.styleSheets) {
+      try {
+        visit(sheet.cssRules);
+      } catch {
+        // Only same-origin application styles are relevant to this contract.
+      }
+    }
+    return found;
+  };
+  const inspectFixtureRule = (selector) => {
+    const style = findStyleRule(selector);
+    return {
+      strokeWidthPx: Number.parseFloat(style?.strokeWidth ?? Number.NaN),
+      stroke: style?.stroke ?? "",
+      filter: style?.filter ?? "",
+    };
+  };
   return {
     zoom: {
       min: slider instanceof HTMLInputElement ? Number(slider.min) : null,
@@ -4681,6 +4800,9 @@ function readMappingViewportConformanceStateInPage() {
       screenWidth: shapeRect?.width ?? 0,
       screenHeight: shapeRect?.height ?? 0,
       screenMin: shapeRect ? Math.min(shapeRect.width, shapeRect.height) : 0,
+      strokeWidthPx: Number.parseFloat(shapeStyle?.strokeWidth ?? Number.NaN),
+      vectorEffect: shapeStyle?.vectorEffect ?? "",
+      filter: shapeStyle?.filter ?? "",
       gridUnitScreenPx: fixtureMatrix
         ? Math.min(
             Math.hypot(fixtureMatrix.a, fixtureMatrix.b) * numberAttribute(minor, "width"),
@@ -4709,6 +4831,15 @@ function readMappingViewportConformanceStateInPage() {
         worldToSvgScale: numberAttribute(major, "data-world-to-svg-scale"),
         originAlignment: inspectOriginGridAlignment(major),
       },
+    },
+    originAxes: {
+      x: inspectScreenFixedStroke(originAxisX),
+      z: inspectScreenFixedStroke(originAxisZ),
+    },
+    fixtureVisualRules: {
+      base: inspectFixtureRule(".editableStage .stageFixture"),
+      hover: inspectFixtureRule(".editableStage .stageFixture:hover"),
+      selected: inspectFixtureRule(".editableStage .stageFixture.selected"),
     },
     cursor: {
       groupCount: cursor ? 1 : 0,
@@ -4927,6 +5058,29 @@ async function runMappingViewportConformanceViewport(client, viewport) {
       maxZoom.zoom.value === initial.zoom.max
       && maxZoom.grid.minor.originAlignment.maxOffsetPx <= 1
       && maxZoom.grid.major.originAlignment.maxOffsetPx <= 1,
+    originAxisDashStaysOnePxAndFourFourAtEveryZoom:
+      [zoomOne, maxZoom].every((state) =>
+        [state.originAxes.x, state.originAxes.z].every((axis) =>
+          axis.vectorEffect === "non-scaling-stroke"
+          && close(axis.strokeWidthPx, 1)
+          && axis.dashPatternPx.length === 2
+          && close(axis.dashPatternPx[0], 4)
+          && close(axis.dashPatternPx[1], 4)
+        )
+      ),
+    fixtureSelectionAndHoverUseRestrainedScreenFixedWeights:
+      zoomOne.fixtureShape.vectorEffect === "non-scaling-stroke"
+      && maxZoom.fixtureShape.vectorEffect === "non-scaling-stroke"
+      && close(zoomOne.fixtureShape.strokeWidthPx, maxZoom.fixtureShape.strokeWidthPx)
+      && zoomOne.fixtureShape.strokeWidthPx <= 1.1
+      && zoomOne.fixtureShape.filter === "none"
+      && initial.fixtureVisualRules.base.filter === "none"
+      && close(initial.fixtureVisualRules.base.strokeWidthPx, 0.55)
+      && close(initial.fixtureVisualRules.hover.strokeWidthPx, 0.8)
+      && close(initial.fixtureVisualRules.selected.strokeWidthPx, 1.1)
+      && initial.fixtureVisualRules.base.strokeWidthPx < initial.fixtureVisualRules.hover.strokeWidthPx
+      && initial.fixtureVisualRules.hover.strokeWidthPx < initial.fixtureVisualRules.selected.strokeWidthPx
+      && initial.fixtureVisualRules.selected.filter === "none",
     cursorGuideLinesAreAbsent:
       initial.cursor.groupCount === 0
       && initial.cursor.lineCount === 0
@@ -6457,6 +6611,32 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
 async function measure(client, label) {
   return await client.evaluate(`(async () => {
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    // Layout settle: ResizeObserver-driven panes (cue matrix, patch grid) can
+    // deliver their re-layout a few frames after a viewport resize. Wait until
+    // the key scroll metrics are stable across two consecutive frame pairs
+    // (bounded at ~20 frames) so measurements never capture a stale mid-resize
+    // layout (seen post-reboot 2026-08-04: cue host kept the previous
+    // viewport's width, e.g. 86px overflow at 1280 = leftover 1366 layout).
+    {
+      const sampleLayout = () => {
+        const cueHostProbe = document.querySelector('.layoutControl.controlModeLive .faders');
+        return [
+          document.documentElement.scrollWidth,
+          document.documentElement.scrollHeight,
+          document.body.scrollWidth,
+          cueHostProbe ? cueHostProbe.scrollWidth : -1,
+          cueHostProbe ? cueHostProbe.clientWidth : -1,
+        ].join(',');
+      };
+      let previousSample = sampleLayout();
+      let stableCount = 0;
+      for (let settleFrame = 0; settleFrame < 10 && stableCount < 2; settleFrame += 1) {
+        await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+        const nextSample = sampleLayout();
+        stableCount = nextSample === previousSample ? stableCount + 1 : 0;
+        previousSample = nextSample;
+      }
+    }
     const visibleCount = (selector) => [...document.querySelectorAll(selector)]
       .filter((element) => {
         const rect = element.getBoundingClientRect();
@@ -7222,6 +7402,9 @@ async function measure(client, label) {
       visibleMappingViewportReadoutCount: visibleCount(
         '.setupStageContext [data-mapping-viewport-readout]'
       ),
+      visibleMappingFitVisibleCount: visibleCount(
+        '.setupStageContext [data-mapping-viewport-action="fit-visible"]'
+      ),
       visibleMappingFitSelectionCount: visibleCount(
         '.setupStageContext [data-mapping-viewport-action="fit-selection"]'
       ),
@@ -7238,6 +7421,67 @@ async function measure(client, label) {
       visibleMappingResetViewportCount: visibleCount(
         '.setupStageContext [data-mapping-viewport-action="reset"]'
       ),
+      mappingCompactViewportControlContract: (() => {
+        const row = visibleElements('.setupStageContext [data-mapping-view-controls]')[0];
+        const toolbar = row?.closest('.mappingViewportToolbar') ?? null;
+        const snap = visibleElements('.setupStageContext [data-mapping-snap-controls]')[0];
+        const layers = visibleElements('.setupStageContext [data-mapping-layer-toggles]')[0];
+        const fitVisible = visibleElements(
+          '.setupStageContext [data-mapping-viewport-action="fit-visible"]'
+        )[0];
+        const fitSelection = visibleElements(
+          '.setupStageContext [data-mapping-viewport-action="fit-selection"]'
+        )[0];
+        const zoomOut = visibleElements(
+          '.setupStageContext [data-mapping-viewport-action="zoom-out"]'
+        )[0];
+        const zoomIn = visibleElements(
+          '.setupStageContext [data-mapping-viewport-action="zoom-in"]'
+        )[0];
+        const reset = visibleElements(
+          '.setupStageContext [data-mapping-viewport-action="reset"]'
+        )[0];
+        const gridItems = [row, snap, layers].filter(Boolean);
+        const centerYs = gridItems.map((element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.top + rect.height / 2;
+        });
+        const buttonWidth = (button) => button?.getBoundingClientRect().width ?? 0;
+        const text = (element) => (element?.textContent ?? '').trim();
+        const gridRows = toolbar
+          ? getComputedStyle(toolbar).gridTemplateRows.trim().split(/\\s+/).filter(Boolean)
+          : [];
+        return {
+          toolbarGridRowCount: gridRows.length,
+          toolbarHeight: toolbar?.getBoundingClientRect().height ?? 0,
+          controlsShareOneVisualRow:
+            centerYs.length === 3 && Math.max(...centerYs) - Math.min(...centerYs) <= 1,
+          fitVisibleText: text(fitVisible),
+          fitVisibleSvgCount: fitVisible?.querySelectorAll('svg').length ?? 0,
+          fitVisibleTitle: fitVisible?.getAttribute('title') ?? '',
+          fitVisibleAriaLabel: fitVisible?.getAttribute('aria-label') ?? '',
+          fitSelectionText: text(fitSelection),
+          fitSelectionSvgCount: fitSelection?.querySelectorAll('svg').length ?? 0,
+          fitSelectionTitle: fitSelection?.getAttribute('title') ?? '',
+          fitSelectionAriaLabel: fitSelection?.getAttribute('aria-label') ?? '',
+          zoomOutText: text(zoomOut),
+          zoomOutTitle: zoomOut?.getAttribute('title') ?? '',
+          zoomOutAriaLabel: zoomOut?.getAttribute('aria-label') ?? '',
+          zoomInText: text(zoomIn),
+          zoomInTitle: zoomIn?.getAttribute('title') ?? '',
+          zoomInAriaLabel: zoomIn?.getAttribute('aria-label') ?? '',
+          resetText: text(reset),
+          resetTitle: reset?.getAttribute('title') ?? '',
+          resetAriaLabel: reset?.getAttribute('aria-label') ?? '',
+          compactButtonMaxWidth: Math.max(
+            buttonWidth(fitVisible),
+            buttonWidth(fitSelection),
+            buttonWidth(zoomOut),
+            buttonWidth(zoomIn),
+            buttonWidth(reset),
+          ),
+        };
+      })(),
       visibleMappingSnapRowCount: visibleCount('.setupStageContext [data-mapping-snap-controls]'),
       visibleMappingSnapSummaryCount: visibleCount(
         '.setupStageContext [data-mapping-snap-control] > summary'
@@ -9667,13 +9911,7 @@ function hasExpectedSetupSurface(result) {
       result.mappingFullToolRailSingleColumn &&
       result.mappingFullToolRailVerticalOverflowPx === 0 &&
       result.mappingFullToolRailClippedButtonCount === 0 &&
-      result.visibleMappingViewportReadoutCount === 1 &&
-      result.visibleMappingFitSelectionCount === 1 &&
-      result.visibleMappingZoomOutCount === 1 &&
-      result.visibleMappingZoomSliderCount === 1 &&
-      result.visibleMappingZoomReadoutCount === 1 &&
-      result.visibleMappingZoomInCount === 1 &&
-      result.visibleMappingResetViewportCount === 1 &&
+      hasExpectedCompactMappingViewportControls(result) &&
       result.visibleMappingSnapRowCount === 1 &&
       result.visibleMappingSnapSummaryCount === 1 &&
       result.mappingSnapControlOpenCount === 0 &&
@@ -24229,6 +24467,10 @@ async function main() {
         // Ignore close races on a possibly-wedged client.
       }
       await stopProcess(browserProcess);
+      // See killCdpPortListeners: child.pid is Chrome's short-lived launcher,
+      // so stopProcess alone never reaches the browser that owns the port.
+      killCdpPortListeners();
+      await waitForCdpPortFree();
       // A force-killed Chrome leaves singleton locks in its profile; reusing
       // the directory makes the next instance recover state unpredictably.
       // Each recycled browser gets a fresh profile instead.
@@ -26421,6 +26663,9 @@ async function main() {
   } finally {
     client?.close();
     await stopProcess(browserProcess);
+    // The launcher pid never reaches the reparented browser; kill the actual
+    // CDP port owner so runs stop leaking Chromes that poison the next run.
+    killCdpPortListeners();
     await stopProcess(viteProcess);
     for (const dir of [profileDir, ...extraProfileDirs]) {
       try {
