@@ -26,6 +26,7 @@ export interface MappingStageObject2D {
 type MappingStageObjectsLayerProps = {
   objects: MappingStageObject2D[];
   readOnly?: boolean;
+  worldPerCssPixel: number;
   isDragging: (objectId: number) => boolean;
   onBeginDrag: (event: PointerEvent, objectId: number) => void;
 };
@@ -57,6 +58,7 @@ export function MappingStageObjectsLayer(props: MappingStageObjectsLayerProps) {
                 depth={object.depth}
                 color={object.color}
                 label={object.label}
+                worldPerCssPixel={props.worldPerCssPixel}
               />
             </g>
           );

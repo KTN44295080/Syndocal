@@ -21,6 +21,7 @@ type StageFixtureGlyphProps = {
   hitTargetRadius?: number;
   showFacingMark?: boolean;
   segments?: FixtureLiveColorSegment[];
+  liveSegmentScreenScale?: number;
   title?: string;
 };
 
@@ -44,6 +45,7 @@ export function StageFixtureGlyph(props: StageFixtureGlyphProps) {
   };
   const segmentWidth = () => Math.max(0.1, segmentPitch() - segmentGap());
   const segmentHeight = () => Math.max(0.1, props.height - segmentGap());
+  const liveSegmentScreenScale = () => props.liveSegmentScreenScale ?? 1;
   const fixtureCornerRadius = () => Math.min(0.8, props.height * 0.2);
 
   return (
@@ -79,7 +81,10 @@ export function StageFixtureGlyph(props: StageFixtureGlyphProps) {
         }
       >
         {(liveSegments) => (
-          <>
+          <g
+            data-stage-live-segment-screen-scale={liveSegmentScreenScale()}
+            transform={`scale(${liveSegmentScreenScale()})`}
+          >
             <rect
               data-stage-fixture-shape
               data-stage-fixture-outline
@@ -107,7 +112,7 @@ export function StageFixtureGlyph(props: StageFixtureGlyphProps) {
                 stroke="none"
               />
             ))}
-          </>
+          </g>
         )}
       </Show>
       <Show when={stageFixtureHasFacingTick(props.visualKind)}>
@@ -144,20 +149,54 @@ export const stageFixtureLabelScreenFontSizePx = 11;
 
 export const stageFixtureLabelWorldPerCssPixel = stageWorldPerCssPixel;
 
-export function StageFixtureLabel(props: StageFixtureLabelProps) {
+type StageScreenFixedLabelProps = {
+  x: number;
+  y: number;
+  label: string;
+  fullLabel?: string;
+  worldPerCssPixel?: number;
+  kind: "fixture" | "projection-surface" | "stage-object";
+  fixtureId?: number;
+  class?: string;
+};
+
+function StageScreenFixedLabel(props: StageScreenFixedLabelProps) {
+  const screenFixed = () => props.worldPerCssPixel !== undefined;
+  const className = () => [
+    props.class,
+    screenFixed() ? "stageScreenFixedLabel" : "",
+  ].filter(Boolean).join(" ");
   return (
     <text
       data-no-localize
-      data-stage-fixture-label-id={props.layout.fixtureId}
-      data-stage-label-screen-font-size={stageFixtureLabelScreenFontSizePx}
-      class={props.class ?? "stageLabel"}
+      data-stage-screen-fixed-label={screenFixed() ? props.kind : undefined}
+      data-stage-fixture-label-id={props.fixtureId}
+      data-stage-label-screen-font-size={screenFixed() ? stageFixtureLabelScreenFontSizePx : undefined}
+      class={className() || undefined}
+      x={props.x}
+      y={props.y}
+      style={screenFixed()
+        ? { "font-size": `${stageFixtureLabelScreenFontSizePx * props.worldPerCssPixel!}px` }
+        : undefined}
+      ref={(element) => element.setAttribute("title", props.fullLabel ?? props.label)}
+    >
+      {props.label}
+    </text>
+  );
+}
+
+export function StageFixtureLabel(props: StageFixtureLabelProps) {
+  return (
+    <StageScreenFixedLabel
       x={props.layout.x}
       y={props.layout.z}
-      style={{ "font-size": `${stageFixtureLabelScreenFontSizePx * props.worldPerCssPixel}px` }}
-      ref={(element) => element.setAttribute("title", props.layout.fullLabel)}
-    >
-      {props.layout.displayLabel}
-    </text>
+      label={props.layout.displayLabel}
+      fullLabel={props.layout.fullLabel}
+      worldPerCssPixel={props.worldPerCssPixel}
+      kind="fixture"
+      fixtureId={props.layout.fixtureId}
+      class={props.class ?? "stageLabel"}
+    />
   );
 }
 
@@ -165,6 +204,7 @@ type StageProjectionSurfaceGlyphProps = {
   width: number;
   label: string;
   showLabel?: boolean;
+  worldPerCssPixel?: number;
 };
 
 export const stageProjectionSurfaceHalfWidth = (width: number) => Math.max(1.2, width / 2);
@@ -185,9 +225,13 @@ export function StageProjectionSurfaceGlyph(props: StageProjectionSurfaceGlyphPr
       <line class="stageVideoSurfaceFacing" x1="0" y1="0" x2="0" y2={-facingLength()} />
       <circle class="stageVideoSurfaceFacingMark" cx="0" cy={-facingLength()} r="0.6" />
       <Show when={props.showLabel !== false}>
-        <text data-no-localize x={-halfWidth() + 0.6} y={2.6}>
-          {props.label}
-        </text>
+        <StageScreenFixedLabel
+          x={-halfWidth() + 0.6}
+          y={2.6}
+          label={props.label}
+          worldPerCssPixel={props.worldPerCssPixel}
+          kind="projection-surface"
+        />
       </Show>
       <title data-no-localize>{props.label}</title>
     </>
@@ -201,6 +245,7 @@ type StageObjectGlyphProps = {
   color: string;
   label: string;
   showLabel?: boolean;
+  worldPerCssPixel?: number;
 };
 
 export const stageObjectRenderDepth = (kind: StageObjectKind, depth: number) =>
@@ -225,9 +270,13 @@ export function StageObjectGlyph(props: StageObjectGlyphProps) {
         <line x1="0" y1={-renderDepth() / 2} x2="0" y2={renderDepth() / 2} />
       </Show>
       <Show when={props.showLabel !== false}>
-        <text data-no-localize x={-props.width / 2 + 1} y={-renderDepth() / 2 - 1}>
-          {props.label}
-        </text>
+        <StageScreenFixedLabel
+          x={-props.width / 2 + 1}
+          y={-renderDepth() / 2 - 1}
+          label={props.label}
+          worldPerCssPixel={props.worldPerCssPixel}
+          kind="stage-object"
+        />
       </Show>
     </>
   );

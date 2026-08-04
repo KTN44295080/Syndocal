@@ -18,6 +18,7 @@ type MappingVideoSurfacesLayerProps = {
   surfaces: MappingVideoSurface2D[];
   selectedVideoOutputId: number | null;
   stageTool: MappingStageTool;
+  worldPerCssPixel: number;
   onSelectOutput: (outputId: number) => void;
 };
 
@@ -44,7 +45,11 @@ export function MappingVideoSurfacesLayer(props: MappingVideoSurfacesLayerProps)
               props.onSelectOutput(surface.id);
             }}
           >
-            <StageProjectionSurfaceGlyph width={surface.width} label={surface.label} />
+            <StageProjectionSurfaceGlyph
+              width={surface.width}
+              label={surface.label}
+              worldPerCssPixel={props.worldPerCssPixel}
+            />
           </g>
         )}
       </For>

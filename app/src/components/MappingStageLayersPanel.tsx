@@ -72,6 +72,7 @@ export function MappingStageLayersPanel(props: MappingStageLayersPanelProps) {
         <MappingStageObjectsLayer
           objects={props.stageObjects}
           readOnly={props.readOnly}
+          worldPerCssPixel={screenWorldPerCssPixel()}
           isDragging={props.isDraggingStageObject}
           onBeginDrag={props.onBeginStageObjectDrag}
         />
@@ -81,6 +82,7 @@ export function MappingStageLayersPanel(props: MappingStageLayersPanelProps) {
           surfaces={props.videoSurfaces}
           selectedVideoOutputId={props.selectedVideoOutputId}
           stageTool={props.stageTool}
+          worldPerCssPixel={screenWorldPerCssPixel()}
           onSelectOutput={props.onSelectVideoOutput}
         />
       </Show>

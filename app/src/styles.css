@@ -9963,6 +9963,10 @@ progress {
   pointer-events: none;
 }
 
+.stageScreenFixedLabel {
+  vector-effect: non-scaling-stroke;
+}
+
 .stageLevelLabel {
   fill: #ffdd74;
   font-size: 3.4px;

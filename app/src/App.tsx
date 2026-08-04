@@ -2817,6 +2817,10 @@ export default function App() {
       fixtures,
       dmx_preview: [],
       dmx_previews: [],
+      video: {
+        ...current.video,
+        outputs: [viewportFixtureData.videoOutput],
+      },
       stage_objects: conformanceFixture
         ? [{
             ...viewportFixtureData.stageObject,
@@ -2827,7 +2831,7 @@ export default function App() {
             depth: 2,
             rotation_deg: 90,
           }]
-        : current.stage_objects,
+        : [viewportFixtureData.stageObject],
       stage_map: conformanceFixture
         ? {
             ...current.stage_map,

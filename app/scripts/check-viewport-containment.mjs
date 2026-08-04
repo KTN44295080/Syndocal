@@ -20754,6 +20754,7 @@ async function readMappingLiveColorSurface(client, rootSelector) {
   return client.evaluate(`(() => {
     const root = document.querySelector(${JSON.stringify(rootSelector)});
     const fixture = (id) => root?.querySelector('[data-stage-fixture-id="' + id + '"]') ?? null;
+    const numberAttribute = (element, name) => Number(element?.getAttribute(name) ?? Number.NaN);
     const inspect = (id) => {
       const node = fixture(id);
       const shape = node?.querySelector('[data-stage-fixture-shape]') ?? null;
@@ -20761,12 +20762,20 @@ async function readMappingLiveColorSurface(client, rootSelector) {
       const outline = node?.querySelector('[data-stage-fixture-outline]') ?? null;
       const segmentElements = [...(node?.querySelectorAll('[data-stage-fixture-segment]') ?? [])];
       const beamElements = [...(root?.querySelectorAll('[data-stage-beam-fixture-id="' + id + '"]') ?? [])];
-      const numberAttribute = (element, name) => Number(element?.getAttribute(name) ?? Number.NaN);
       const screenRect = (element) => {
         const rect = element?.getBoundingClientRect();
         return rect ? {
           width: Math.round(rect.width * 100) / 100,
           height: Math.round(rect.height * 100) / 100,
+        } : null;
+      };
+      const screenSize = (element) => {
+        const matrix = element instanceof SVGGraphicsElement ? element.getScreenCTM() : null;
+        const width = numberAttribute(element, 'width');
+        const height = numberAttribute(element, 'height');
+        return matrix ? {
+          width: Math.round(width * Math.hypot(matrix.a, matrix.b) * 100) / 100,
+          height: Math.round(height * Math.hypot(matrix.c, matrix.d) * 100) / 100,
         } : null;
       };
       const matrix = node instanceof SVGGraphicsElement ? node.getScreenCTM() : null;
@@ -20782,6 +20791,7 @@ async function readMappingLiveColorSurface(client, rootSelector) {
         segmentWidths: segmentElements.map((segment) => numberAttribute(segment, 'width')),
         segmentHeights: segmentElements.map((segment) => numberAttribute(segment, 'height')),
         segmentScreenRects: segmentElements.map(screenRect),
+        segmentScreenSizes: segmentElements.map(screenSize),
         beamCount: beamElements.length,
         beamFills: beamElements.map((beam) => beam.getAttribute('fill')),
         beamOpacities: beamElements.map((beam) => numberAttribute(beam, 'opacity')),
@@ -20817,8 +20827,27 @@ async function readMappingLiveColorSurface(client, rootSelector) {
         worldToSvgScale: Number(pattern?.getAttribute('data-world-to-svg-scale') ?? Number.NaN),
       };
     };
+    const inspectScreenFixedLabel = (kind) => {
+      const label = root?.querySelector('[data-stage-screen-fixed-label="' + kind + '"]') ?? null;
+      const matrix = label instanceof SVGGraphicsElement ? label.getScreenCTM() : null;
+      const worldFontSizePx = label ? Number.parseFloat(getComputedStyle(label).fontSize) : Number.NaN;
+      return {
+        text: (label?.textContent ?? '').trim(),
+        targetScreenFontSizePx: numberAttribute(label, 'data-stage-label-screen-font-size'),
+        screenFontSizePx: matrix
+          ? Math.round(worldFontSizePx * Math.hypot(matrix.a, matrix.b) * 100) / 100
+          : 0,
+      };
+    };
+    const slider = document.querySelector('[data-mapping-viewport-action="zoom-slider"]');
     return {
       bridgeAvailable: typeof window.__syndocalSetMappingLiveDmx === 'function',
+      zoom: slider instanceof HTMLInputElement ? Number(slider.value) : 0,
+      screenFixedLabels: {
+        fixture: inspectScreenFixedLabel('fixture'),
+        projectionSurface: inspectScreenFixedLabel('projection-surface'),
+        stageObject: inspectScreenFixedLabel('stage-object'),
+      },
       grid: {
         minor: inspectGridPattern("minor"),
         major: inspectGridPattern("major"),
@@ -20879,7 +20908,30 @@ async function runMappingLiveColorViewport(client, viewport) {
     "document.querySelectorAll('.setupStageContext [data-stage-fixture-id]').length === 9",
     "mapping live-color fixture stage",
   );
+  await client.evaluate(`(async () => {
+    const toggle = [...document.querySelectorAll('[data-mapping-layer-toggle="projectors"]')]
+      .find((candidate) => candidate.getClientRects().length > 0);
+    if (toggle?.getAttribute('aria-pressed') !== 'true') toggle?.click();
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  })()`);
   const initial = await readMappingLiveColorSurface(client, ".setupStageContext");
+  await client.evaluate(`(async () => {
+    const slider = document.querySelector('[data-mapping-viewport-action="zoom-slider"]');
+    if (slider instanceof HTMLInputElement) {
+      slider.value = '3.8';
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    }
+  })()`);
+  const auditZoom = await readMappingLiveColorSurface(client, ".setupStageContext");
+  await client.evaluate(`(async () => {
+    const slider = document.querySelector('[data-mapping-viewport-action="zoom-slider"]');
+    if (slider instanceof HTMLInputElement) {
+      slider.value = '1';
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    }
+  })()`);
   await clickVisibleByText(client, ".workspaceTabs button", "Touch");
   await waitForClientCondition(
     client,
@@ -20895,6 +20947,9 @@ async function runMappingLiveColorViewport(client, viewport) {
     "mapping live-color fixture stage reload",
   );
   await client.evaluate(`(async () => {
+    const toggle = [...document.querySelectorAll('[data-mapping-layer-toggle="projectors"]')]
+      .find((candidate) => candidate.getClientRects().length > 0);
+    if (toggle?.getAttribute('aria-pressed') !== 'true') toggle?.click();
     const slider = document.querySelector('[data-mapping-viewport-action="zoom-slider"]');
     if (slider instanceof HTMLInputElement) {
       slider.value = slider.max;
@@ -20996,6 +21051,7 @@ async function runMappingLiveColorViewport(client, viewport) {
   return {
     viewport,
     initial,
+    auditZoom,
     stagePreviewInitial,
     stagePreviewLit,
     attributeControl,
@@ -25950,8 +26006,54 @@ async function main() {
         "rgb(128, 128, 128)",
         dark,
       ];
+      const closePx = (left, right, tolerance = 0.05) =>
+        Number.isFinite(left) && Number.isFinite(right) && Math.abs(left - right) <= tolerance;
+      const screenFixedAuditChecks = {
+        mappingLabelsUseSharedElevenPxScreenFixedFamilyAtZoom:
+          [result.initial, result.auditZoom, result.structureOnly].every((state) =>
+            [
+              state.screenFixedLabels.fixture,
+              state.screenFixedLabels.projectionSurface,
+              state.screenFixedLabels.stageObject,
+            ].every((label) =>
+              label.targetScreenFontSizePx === 11
+              && closePx(label.screenFontSizePx, 11)
+            )
+          )
+          && result.initial.screenFixedLabels.projectionSurface.text === "Viewport Video Output"
+          && result.initial.screenFixedLabels.stageObject.text === "Viewport Screen",
+        multiSegmentGlyphAndStripHeightStayFixedAtZoom:
+          result.initial.zoom === 1
+          && result.auditZoom.zoom === 3.8
+          && result.structureOnly.zoom > 1
+          && result.initial.mega.segmentScreenSizes.length === 8
+          && result.auditZoom.mega.segmentScreenSizes.length === 8
+          && result.structureOnly.mega.segmentScreenSizes.length === 8
+          && result.initial.mega.segmentScreenSizes.every((size, index) => {
+            const audited = result.auditZoom.mega.segmentScreenSizes[index];
+            const zoomed = result.structureOnly.mega.segmentScreenSizes[index];
+            return size
+              && audited
+              && zoomed
+              && closePx(size.width, audited.width)
+              && closePx(size.height, audited.height)
+              && closePx(size.width, zoomed.width)
+              && closePx(size.height, zoomed.height);
+          }),
+        multiSegmentHitTargetRemainsStageScaled:
+          result.initial.mega.hitTargetCount === 1
+          && result.auditZoom.mega.hitTargetCount === 1
+          && result.structureOnly.mega.hitTargetCount === 1
+          && result.initial.mega.hitTargetMinCssPx > 0
+          && closePx(
+            result.auditZoom.mega.hitTargetMinCssPx / result.initial.mega.hitTargetMinCssPx,
+            result.auditZoom.zoom,
+            0.1,
+          ),
+      };
       const checks = mappingLiveColorOnlyMode
         ? {
+            ...screenFixedAuditChecks,
             bridgeAvailable: result.initial.bridgeAvailable,
             existingReadOnlyDeltaRoute: appSource.includes('invoke<EngineSnapshotSyncResponse>("get_snapshot_delta"')
               && appSource.includes("<DmxRawMonitor")
@@ -26059,6 +26161,7 @@ async function main() {
               && result.control.mega.className.includes("picked"),
           }
         : {
+            ...screenFixedAuditChecks,
             megaSegmentCount: result.setup.mega.segmentCount === 8
               && result.setup.mega.segmentColors.length === 8,
             previewEmptySegmentCount: result.initial.attributeFallback.segmentCount === 3
@@ -26183,6 +26286,15 @@ async function main() {
           `${result.setup.single.gridUnitCssPx?.x ?? 0}x${result.setup.single.gridUnitCssPx?.y ?? 0}px ` +
         `megaFootprint=${result.setup.mega.outlineWidth}x${result.setup.mega.outlineHeight}:` +
           `${result.setup.mega.outlineScreenRect?.width ?? 0}x${result.setup.mega.outlineScreenRect?.height ?? 0}px ` +
+        `screenFixed=${result.initial.zoom}x/${result.auditZoom.zoom}x:` +
+          `${result.initial.screenFixedLabels.projectionSurface.screenFontSizePx}/` +
+          `${result.auditZoom.screenFixedLabels.projectionSurface.screenFontSizePx}px-surface:` +
+          `${result.initial.screenFixedLabels.stageObject.screenFontSizePx}/` +
+          `${result.auditZoom.screenFixedLabels.stageObject.screenFontSizePx}px-object:` +
+          `${result.initial.mega.segmentScreenSizes[0]?.width ?? 0}x` +
+          `${result.initial.mega.segmentScreenSizes[0]?.height ?? 0}/` +
+          `${result.auditZoom.mega.segmentScreenSizes[0]?.width ?? 0}x` +
+          `${result.auditZoom.mega.segmentScreenSizes[0]?.height ?? 0}px-segment ` +
         `hitMin=${Math.min(
           result.setup.single.hitTargetMinCssPx,
           result.control.single.hitTargetMinCssPx,

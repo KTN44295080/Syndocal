@@ -116,6 +116,7 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
                   height={fixture.height}
                   color={fixture.color}
                   segments={fixture.liveSegments}
+                  liveSegmentScreenScale={1 / Math.max(1, props.labelZoom)}
                   hitTargetRadius={6}
                   title={`${fixture.label} / ${fixture.dmxLabel} / ${fixture.groupLabel}`}
                 />
