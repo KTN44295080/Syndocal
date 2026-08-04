@@ -1,9 +1,15 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
-import { createMemo, createSignal, For, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import {
+  fixtureCatalogFavoriteKey,
+  fixtureCatalogIdentityMatches,
   fixtureCatalogSearchTextMatches,
   previewVerifiedProfiles,
   type GdtfFixtureCacheEntry,
+  type GdtfShareDownloadRequest,
+  type GdtfShareFixtureSummary,
+  type GdtfShareSearchRequest,
+  type GdtfShareSearchResponse,
   type VerifiedFixtureProfileSummary,
 } from "../fixtureCatalog";
 import type { FixtureProfileSummary, PatchedFixtureSummary } from "../types";
@@ -25,6 +31,8 @@ export interface PatchProfileDragItem {
 
 interface PatchProfileBrowserPanelProps extends ProfileImportSourcesProps {
   backendAvailable: boolean;
+  shareUser: string;
+  sharePassword: string;
   selectedProfile: FixtureProfileSummary | null;
   selectedMode: string;
   recentProfiles: PatchRecentProfileEntry[];
@@ -33,6 +41,9 @@ interface PatchProfileBrowserPanelProps extends ProfileImportSourcesProps {
   onLoadCached: (path: string, modeName: string | null) => boolean | Promise<boolean>;
   onLoadRecent: (entry: PatchRecentProfileEntry) => boolean | Promise<boolean>;
   onLoadProject: (fixture: PatchedFixtureSummary) => boolean | Promise<boolean>;
+  onShareUser: (value: string) => void;
+  onSharePassword: (value: string) => void;
+  onOpenLibrary: () => void;
   onProfileDragStart: (item: PatchProfileDragItem) => void;
   onProfileDragEnd: () => void;
   onMessage: (message: string) => void;
@@ -46,6 +57,24 @@ interface RecentProjectProfileRow {
   modeName: string;
   footprint: number;
 }
+
+type PatchShareState = "idle" | "signed-out" | "searching" | "results" | "empty" | "offline";
+
+interface PatchShareManufacturerGroup {
+  manufacturer: string;
+  fixtures: GdtfShareFixtureSummary[];
+}
+
+const emptyShareSearchResponse = (): GdtfShareSearchResponse => ({
+  fixtures: [],
+  facets: { manufacturers: [], modes: [], versions: [] },
+  filter_support: {
+    release_status: null,
+    tested_in_visualizer: null,
+    tested_in_real_life: null,
+  },
+  total_matches: 0,
+});
 
 const normalized = (value: string) => value.trim().toLocaleLowerCase();
 
@@ -69,6 +98,12 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
   const [cacheEntries, setCacheEntries] = createSignal<GdtfFixtureCacheEntry[]>([]);
   const [verifiedProfiles, setVerifiedProfiles] = createSignal<VerifiedFixtureProfileSummary[]>(previewVerifiedProfiles);
   const [busy, setBusy] = createSignal(false);
+  const [shareResponse, setShareResponse] = createSignal(emptyShareSearchResponse());
+  const [shareState, setShareState] = createSignal<PatchShareState>(
+    props.backendAvailable ? "signed-out" : "offline",
+  );
+  const [downloadingShareKey, setDownloadingShareKey] = createSignal<string | null>(null);
+  let shareSearchGeneration = 0;
 
   const refreshLocalProfiles = async () => {
     if (!props.backendAvailable) return;
@@ -88,6 +123,113 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
   };
 
   onMount(() => void refreshLocalProfiles());
+
+  const shareCredentialsReady = () => Boolean(props.shareUser.trim() && props.sharePassword);
+
+  const shareGroups = createMemo<PatchShareManufacturerGroup[]>(() => {
+    const grouped = new Map<string, GdtfShareFixtureSummary[]>();
+    for (const fixture of shareResponse().fixtures) {
+      const entries = grouped.get(fixture.manufacturer) ?? [];
+      entries.push(fixture);
+      grouped.set(fixture.manufacturer, entries);
+    }
+    return [...grouped.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([manufacturer, fixtures]) => ({
+        manufacturer,
+        fixtures: [...fixtures].sort((left, right) =>
+          left.fixture.localeCompare(right.fixture) || left.revision.localeCompare(right.revision)),
+      }));
+  });
+
+  const cachedShareEntry = (fixture: GdtfShareFixtureSummary) => cacheEntries().find((candidate) =>
+    candidate.health !== "invalid" && fixtureCatalogIdentityMatches(fixture, candidate));
+
+  const searchShare = async (searchQuery: string, generation: number) => {
+    const request: GdtfShareSearchRequest = {
+      user: props.shareUser,
+      password: props.sharePassword,
+      manufacturer: null,
+      fixture: null,
+      query: searchQuery,
+      mode: null,
+      min_footprint: null,
+      max_footprint: null,
+      release_only: false,
+      tested_in_visualizer: false,
+      tested_in_real_life: false,
+      limit: 80,
+    };
+    try {
+      const response = await tauriInvoke<GdtfShareSearchResponse>("search_gdtf_share", { request });
+      if (generation !== shareSearchGeneration) return;
+      setShareResponse(response);
+      setShareState(response.fixtures.length > 0 ? "results" : "empty");
+      props.onMessage(`GDTF Share: showing ${response.fixtures.length} of ${response.total_matches} matching revisions.`);
+    } catch (error) {
+      if (generation !== shareSearchGeneration) return;
+      setShareResponse(emptyShareSearchResponse());
+      setShareState("offline");
+      props.onMessage(String(error));
+    }
+  };
+
+  createEffect(() => {
+    const backendAvailable = props.backendAvailable;
+    const credentialsReady = shareCredentialsReady();
+    const searchQuery = query().trim();
+    const generation = ++shareSearchGeneration;
+    setShareResponse(emptyShareSearchResponse());
+    if (!backendAvailable) {
+      setShareState("offline");
+      return;
+    }
+    if (!credentialsReady) {
+      setShareState("signed-out");
+      return;
+    }
+    if (searchQuery.length < 2) {
+      setShareState("idle");
+      return;
+    }
+    setShareState("searching");
+    const timer = window.setTimeout(() => void searchShare(searchQuery, generation), 450);
+    onCleanup(() => window.clearTimeout(timer));
+  });
+
+  const downloadAndUseShareProfile = async (fixture: GdtfShareFixtureSummary) => {
+    const alreadyCached = cachedShareEntry(fixture);
+    const preferredMode = alreadyCached?.modes[0]?.name || fixture.modes[0]?.name || null;
+    if (alreadyCached) return props.onLoadCached(alreadyCached.path, preferredMode);
+    if (!props.backendAvailable || !shareCredentialsReady()) return false;
+
+    const key = fixtureCatalogFavoriteKey(fixture);
+    const request: GdtfShareDownloadRequest = {
+      user: props.shareUser,
+      password: props.sharePassword,
+      rid: fixture.rid,
+      uuid: fixture.uuid,
+      manufacturer: fixture.manufacturer,
+      fixture: fixture.fixture,
+      revision: fixture.revision,
+    };
+    setDownloadingShareKey(key);
+    try {
+      const entry = await tauriInvoke<GdtfFixtureCacheEntry>("cache_gdtf_from_share", { request });
+      setCacheEntries((current) => [
+        entry,
+        ...current.filter((candidate) => candidate.key !== entry.key && candidate.path !== entry.path),
+      ]);
+      const loaded = await props.onLoadCached(entry.path, entry.modes[0]?.name || preferredMode);
+      if (loaded) await refreshLocalProfiles();
+      return loaded;
+    } catch (error) {
+      props.onMessage(String(error));
+      return false;
+    } finally {
+      setDownloadingShareKey(null);
+    }
+  };
 
   const visibleVerified = createMemo(() => verifiedProfiles().filter((entry) => textMatches([
     entry.manufacturer,
@@ -166,6 +308,23 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
     }));
     dataTransfer.setData("text/plain", `${item.label} / ${item.modeName}`);
     props.onProfileDragStart(item);
+  };
+
+  const beginShareProfileDrag = (event: DragEvent, fixture: GdtfShareFixtureSummary) => {
+    const cached = cachedShareEntry(fixture);
+    if (!cached) {
+      event.preventDefault();
+      return;
+    }
+    const mode = cached.modes[0] ?? fixture.modes[0] ?? { name: "", dmx_footprint: null };
+    beginProfileDrag(event, {
+      source: "cache",
+      key: profileModeKey(cached.path, mode.name),
+      label: `${fixture.manufacturer} ${fixture.fixture}`,
+      modeName: mode.name,
+      footprint: mode.dmx_footprint ?? 0,
+      activate: () => props.onLoadCached(cached.path, mode.name || null),
+    });
   };
 
   return (
@@ -302,6 +461,113 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
               )}
             </For>
           </div>
+        </section>
+
+        <section class="patchProfileBrowserSection patchShareSection" data-patch-profile-section="share">
+          <header>
+            <strong>GDTF Share</strong>
+            <span>{shareState() === "results" ? `${shareResponse().fixtures.length}/${shareResponse().total_matches}` : "—"}</span>
+          </header>
+
+          <Show when={shareState() === "signed-out"}>
+            <div class="patchShareGuidance" data-patch-share-state="signed-out">
+              <span>Sign in to GDTF Share here, or open Library.</span>
+              <div class="patchShareCredentialControls">
+                <input
+                  value={props.shareUser}
+                  autocomplete="off"
+                  aria-label="Share User"
+                  placeholder="Share User"
+                  onInput={(event) => props.onShareUser(event.currentTarget.value)}
+                />
+                <input
+                  type="password"
+                  value={props.sharePassword}
+                  autocomplete="off"
+                  aria-label="Share Password"
+                  placeholder="Share Password"
+                  onInput={(event) => props.onSharePassword(event.currentTarget.value)}
+                />
+                <button type="button" data-patch-share-open-library onClick={props.onOpenLibrary}>Open Library</button>
+              </div>
+              <small>Credentials stay in session memory only.</small>
+            </div>
+          </Show>
+
+          <Show when={shareState() === "idle"}>
+            <p class="empty patchProfileRowEmpty" data-patch-share-state="idle">
+              Type 2 or more characters to search GDTF Share.
+            </p>
+          </Show>
+
+          <Show when={shareState() === "searching"}>
+            <p class="empty patchProfileRowEmpty" data-patch-share-state="searching" aria-live="polite">
+              Searching GDTF Share…
+            </p>
+          </Show>
+
+          <Show when={shareState() === "empty"}>
+            <p class="empty patchProfileRowEmpty" data-patch-share-state="empty">
+              No GDTF Share profiles match.
+            </p>
+          </Show>
+
+          <Show when={shareState() === "offline"}>
+            <p class="empty patchProfileRowEmpty patchShareUnavailable" data-patch-share-state="offline">
+              GDTF Share is offline or unavailable.
+            </p>
+          </Show>
+
+          <Show when={shareState() === "results"}>
+            <div class="patchShareManufacturerGroups" data-patch-share-state="results">
+              <For each={shareGroups()}>
+                {(group) => (
+                  <section class="patchShareManufacturerGroup" data-share-manufacturer={group.manufacturer}>
+                    <header><strong data-no-localize>{group.manufacturer}</strong><span>{group.fixtures.length}</span></header>
+                    <div class="patchProfileRows">
+                      <For each={group.fixtures}>
+                        {(entry) => {
+                          const key = fixtureCatalogFavoriteKey(entry);
+                          const cached = () => cachedShareEntry(entry);
+                          const mode = () => cached()?.modes[0] ?? entry.modes[0] ?? { name: "", dmx_footprint: null };
+                          const downloading = () => downloadingShareKey() === key;
+                          return (
+                            <button
+                              type="button"
+                              class="patchProfileRow patchShareProfileRow"
+                              data-patch-profile-row
+                              data-profile-source="share"
+                              data-profile-cached={cached() ? "true" : "false"}
+                              data-profile-footprint={mode().dmx_footprint ?? 0}
+                              data-share-profile-key={key}
+                              draggable={Boolean(cached())}
+                              aria-pressed={Boolean(cached()) && selected(
+                                cached()!.path,
+                                entry.manufacturer,
+                                entry.fixture,
+                                mode().name,
+                              )}
+                              disabled={downloading()}
+                              onClick={() => void downloadAndUseShareProfile(entry)}
+                              onDragStart={(event) => beginShareProfileDrag(event, entry)}
+                              onDragEnd={props.onProfileDragEnd}
+                            >
+                              <strong data-no-localize>{entry.manufacturer} · {entry.fixture}</strong>
+                              <span>
+                                <Show when={downloading()} fallback={<b data-no-localize>{entry.revision}</b>}>
+                                  <i>Downloading…</i>
+                                </Show>
+                              </span>
+                            </button>
+                          );
+                        }}
+                      </For>
+                    </div>
+                  </section>
+                )}
+              </For>
+            </div>
+          </Show>
         </section>
 
         <ProfileImportSources {...props} folded />

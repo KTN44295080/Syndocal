@@ -24,9 +24,13 @@ import type { FixtureProfileSummary } from "../types";
 
 interface FixtureCatalogPanelProps {
   backendAvailable: boolean;
+  shareUser: string;
+  sharePassword: string;
   selectedFixtureId: number | null;
   selectedProfile: FixtureProfileSummary | null;
   selectedMode: string;
+  onShareUser: (value: string) => void;
+  onSharePassword: (value: string) => void;
   onProfileLoaded: (profile: FixtureProfileSummary, message: string, openPatch: boolean) => void;
   onRepair: (fixtureId: number, profilePath: string, modeName: string | null) => Promise<void>;
   onMessage: (message: string) => void;
@@ -48,8 +52,6 @@ const modeSummary = (modes: { name: string; dmx_footprint: number | null }[]) =>
   : modes.slice(0, 3).map((mode) => `${mode.name}${mode.dmx_footprint ? ` ${mode.dmx_footprint}ch` : ""}`).join(" · ");
 
 export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
-  const [user, setUser] = createSignal("");
-  const [password, setPassword] = createSignal("");
   const [manufacturer, setManufacturer] = createSignal("");
   const [fixtureQuery, setFixtureQuery] = createSignal("");
   const [globalQuery, setGlobalQuery] = createSignal("");
@@ -119,8 +121,8 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
     }
     const bounds = fixtureFootprintBandBounds(footprintBand());
     const request: GdtfShareSearchRequest = {
-      user: user(),
-      password: password(),
+      user: props.shareUser,
+      password: props.sharePassword,
       manufacturer: manufacturer().trim() || null,
       fixture: fixtureQuery().trim() || null,
       query: globalQuery().trim() || null,
@@ -168,8 +170,8 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
       return;
     }
     const request: GdtfShareDownloadRequest = {
-      user: user(),
-      password: password(),
+      user: props.shareUser,
+      password: props.sharePassword,
       rid: fixture.rid,
       uuid: fixture.uuid,
       manufacturer: fixture.manufacturer,
@@ -238,11 +240,11 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
       <div class="fixtureCatalogCredentials">
         <label>
           Share User
-          <input value={user()} autocomplete="off" onInput={(event) => setUser(event.currentTarget.value)} />
+          <input value={props.shareUser} autocomplete="off" onInput={(event) => props.onShareUser(event.currentTarget.value)} />
         </label>
         <label>
           Share Password
-          <input type="password" value={password()} autocomplete="off" onInput={(event) => setPassword(event.currentTarget.value)} />
+          <input type="password" value={props.sharePassword} autocomplete="off" onInput={(event) => props.onSharePassword(event.currentTarget.value)} />
         </label>
         <small>Credentials stay in memory for this session and are never written to the project or cache metadata.</small>
       </div>

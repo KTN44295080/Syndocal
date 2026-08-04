@@ -7703,6 +7703,8 @@ async function measure(client, label) {
         '[data-patch-profile-row][data-profile-source="session"], ' +
         '[data-patch-profile-row][data-profile-source="project"]'
       ),
+      visiblePatchShareProfileRowCount: visibleCount('[data-patch-profile-row][data-profile-source="share"]'),
+      visiblePatchShareOfflineRowCount: visibleCount('[data-patch-share-state="offline"]'),
       visiblePatchSelectedProfileRowCount: visibleElements('[data-patch-profile-row]')
         .filter((row) => row.getAttribute('aria-pressed') === 'true').length,
       patchProfileDraggableRowCount: visibleElements('[data-patch-profile-row][draggable="true"]').length,
@@ -9949,10 +9951,12 @@ function hasExpectedSetupSurface(result) {
       result.visiblePatchTopFormCount === 0 &&
       result.visiblePatchProfileBrowserCount === 1 &&
       result.visiblePatchProfileSearchCount === 1 &&
-      JSON.stringify(result.patchProfileSectionNames) === JSON.stringify(["verified", "cache", "recent"]) &&
+      JSON.stringify(result.patchProfileSectionNames) === JSON.stringify(["verified", "cache", "recent", "share"]) &&
       result.visiblePatchVerifiedProfileRowCount === 4 &&
       result.visiblePatchCachedProfileRowCount === 0 &&
       result.visiblePatchRecentProfileRowCount >= 1 &&
+      result.visiblePatchShareProfileRowCount === 0 &&
+      result.visiblePatchShareOfflineRowCount === 1 &&
       result.visiblePatchSelectedProfileRowCount === 1 &&
       result.patchProfileDraggableRowCount >= 5 &&
       result.patchProfileRowHeights.length >= 5 &&
@@ -13420,6 +13424,414 @@ async function runPatchDndViewport(client, viewport) {
   };
 }
 
+function installPatchGdtfShareMockInPage() {
+  const delay = (ms) => new Promise((resolveDelay) => window.setTimeout(resolveDelay, ms));
+  const clone = (value) => JSON.parse(JSON.stringify(value));
+  const verifiedProfiles = [
+    { id: "dimmer-1ch", manufacturer: "Syndocal Verified", name: "Generic Dimmer 1ch", mode_name: "Standard", footprint: 1, description: "Single-channel intensity fixture." },
+    { id: "rgb-par-4ch", manufacturer: "Syndocal Verified", name: "Generic RGB PAR 4ch", mode_name: "Standard", footprint: 4, description: "Dimmer plus RGB channels." },
+    { id: "rgbw-par-5ch", manufacturer: "Syndocal Verified", name: "Generic RGBW PAR 5ch", mode_name: "Standard", footprint: 5, description: "Dimmer plus RGBW channels." },
+    { id: "moving-head-rgbw-10ch", manufacturer: "Syndocal Verified", name: "Generic Moving Head RGBW 10ch", mode_name: "Standard", footprint: 10, description: "Pan, tilt, dimmer and RGBW channels." },
+  ];
+  const fixtures = [
+    {
+      rid: 7101,
+      uuid: "viewport-etc-source-four-led",
+      manufacturer: "ETC",
+      fixture: "Source Four LED Series 3",
+      revision: "1.2",
+      uploader: "Viewport",
+      rating: "5",
+      version: "1.2",
+      creator: "ETC",
+      filesize: 2048,
+      release_status: "Release",
+      tested_in_visualizer: true,
+      tested_in_real_life: true,
+      modes: [
+        { name: "Standard", dmx_footprint: 8 },
+        { name: "Direct", dmx_footprint: 16 },
+      ],
+    },
+    {
+      rid: 7102,
+      uuid: "viewport-etc-colorsource-spot",
+      manufacturer: "ETC",
+      fixture: "ColorSource Spot V",
+      revision: "2.0",
+      uploader: "Viewport",
+      rating: "4",
+      version: "1.2",
+      creator: "ETC",
+      filesize: 3072,
+      release_status: "Release",
+      tested_in_visualizer: true,
+      tested_in_real_life: null,
+      modes: [{ name: "Standard", dmx_footprint: 8 }],
+    },
+    {
+      rid: 7201,
+      uuid: "viewport-robe-megapointe",
+      manufacturer: "Robe",
+      fixture: "MegaPointe",
+      revision: "1.5",
+      uploader: "Viewport",
+      rating: "5",
+      version: "1.2",
+      creator: "Robe",
+      filesize: 4096,
+      release_status: "Release",
+      tested_in_visualizer: true,
+      tested_in_real_life: true,
+      modes: [{ name: "Mode 1", dmx_footprint: 39 }],
+    },
+  ];
+  const state = {
+    offline: false,
+    searchCalls: [],
+    downloadCalls: [],
+    importCalls: [],
+    cache: [],
+  };
+  const profileFor = (entry, path) => ({
+    source_path: path,
+    manufacturer: entry.manufacturer,
+    name: entry.fixture,
+    short_name: entry.fixture,
+    fixture_type_id: entry.uuid,
+    dmx_modes: [{
+      name: entry.modes[0]?.name || "Standard",
+      controls: Array.from({ length: entry.modes[0]?.dmx_footprint || 8 }, (_, index) => ({
+        attribute: index === 0 ? "Dimmer" : `Attribute${index + 1}`,
+        channel_name: index === 0 ? "Dimmer" : `Channel ${index + 1}`,
+        offsets: [index + 1],
+        resolution: "EightBit",
+        default_value: 0,
+        functions: [],
+      })),
+    }],
+    geometries: [],
+    warnings: [],
+  });
+  const invoke = async (command, args = {}) => {
+    if (command === "list_gdtf_fixture_cache") return clone(state.cache);
+    if (command === "list_verified_fixture_profiles") return clone(verifiedProfiles);
+    if (command === "get_fixture_profile_health") return [];
+    if (command === "search_gdtf_share") {
+      state.searchCalls.push({ at: performance.now(), request: clone(args.request || {}) });
+      await delay(35);
+      if (state.offline) throw new Error("GDTF Share offline from viewport mock");
+      return clone({
+        fixtures,
+        facets: {
+          manufacturers: ["ETC", "Robe"],
+          modes: ["Standard", "Direct", "Mode 1"],
+          versions: ["1.2"],
+        },
+        filter_support: {
+          release_status: true,
+          tested_in_visualizer: true,
+          tested_in_real_life: true,
+        },
+        total_matches: fixtures.length,
+      });
+    }
+    if (command === "cache_gdtf_from_share") {
+      const request = clone(args.request || {});
+      state.downloadCalls.push({ at: performance.now(), request });
+      await delay(140);
+      const fixture = fixtures.find((candidate) => candidate.rid === request.rid) || fixtures[0];
+      const entry = {
+        key: `share-rid-${fixture.rid}`,
+        rid: fixture.rid,
+        uuid: fixture.uuid,
+        manufacturer: fixture.manufacturer,
+        fixture: fixture.fixture,
+        revision: fixture.revision,
+        path: `C:/viewport-gdtf-cache/${fixture.manufacturer}-${fixture.fixture}.gdtf`,
+        filesize: fixture.filesize,
+        health: "healthy",
+        detail: "Viewport mock cache ready",
+        warnings: [],
+        modes: clone(fixture.modes),
+      };
+      state.cache = [entry, ...state.cache.filter((candidate) => candidate.key !== entry.key)];
+      return clone(entry);
+    }
+    if (command === "import_gdtf") {
+      const path = String(args.path || "");
+      state.importCalls.push({ at: performance.now(), path });
+      const entry = state.cache.find((candidate) => candidate.path === path) || state.cache[0];
+      if (!entry) throw new Error("Viewport mock import path was not cached");
+      return clone(profileFor(entry, path));
+    }
+    throw new Error("Unexpected PATCH GDTF Share viewport invoke: " + command);
+  };
+  Object.defineProperty(window, "__TAURI_INTERNALS__", {
+    configurable: true,
+    writable: true,
+    value: { invoke },
+  });
+  window.__syndocalPatchGdtfShareMock = state;
+}
+
+async function runPatchGdtfShareViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  const url = fixtureUrl("patch");
+  await client.send("Page.navigate", { url });
+  await waitForApp(client);
+  await seedViewportLocalStorage(client);
+  await client.send("Page.navigate", { url });
+  await waitForApp(client);
+  await clickByText(client, "Setup");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
+  await sleep(100);
+  await client.evaluate("(" + installPatchGdtfShareMockInPage.toString() + ")()");
+
+  const readState = async (scope) => await client.evaluate(`(() => {
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const rows = (selector) => [...document.querySelectorAll(selector)].filter(visible);
+    const shareRows = rows('[data-patch-profile-row][data-profile-source="share"]');
+    const cacheRows = rows('[data-patch-profile-row][data-profile-source="cache"]');
+    const recentRows = rows(
+      '[data-patch-profile-row][data-profile-source="session"], ' +
+      '[data-patch-profile-row][data-profile-source="project"]'
+    );
+    const app = document.querySelector('.app');
+    const mock = window.__syndocalPatchGdtfShareMock;
+    const credentialValuesPersisted = Object.keys(localStorage).some((key) => {
+      const value = localStorage.getItem(key) || '';
+      return value.includes('viewport-share-user') || value.includes('viewport-share-password');
+    });
+    return {
+      scope: ${JSON.stringify(scope)},
+      shareState: document.querySelector('[data-patch-share-state]')?.getAttribute('data-patch-share-state') || '',
+      sectionNames: [...document.querySelectorAll('[data-patch-profile-section]')]
+        .filter(visible)
+        .map((section) => section.getAttribute('data-patch-profile-section')),
+      signedOutGuidanceText: (document.querySelector('[data-patch-share-state="signed-out"]')?.textContent || '')
+        .replace(/\\s+/g, ' ')
+        .trim(),
+      inlineCredentialInputCount: document.querySelectorAll('[data-patch-share-state="signed-out"] input').length,
+      inlinePasswordInputCount: document.querySelectorAll(
+        '[data-patch-share-state="signed-out"] input[type="password"][autocomplete="off"]'
+      ).length,
+      openLibraryButtonCount: document.querySelectorAll('[data-patch-share-open-library]').length,
+      manufacturerGroups: [...document.querySelectorAll('[data-share-manufacturer]')].map((group) => ({
+        manufacturer: group.getAttribute('data-share-manufacturer'),
+        rowCount: group.querySelectorAll('[data-patch-profile-row][data-profile-source="share"]').length,
+      })),
+      shareRows: shareRows.map((row) => ({
+        key: row.getAttribute('data-share-profile-key'),
+        text: (row.textContent || '').replace(/\\s+/g, ' ').trim(),
+        cached: row.getAttribute('data-profile-cached'),
+        draggable: row.getAttribute('draggable'),
+        pressed: row.getAttribute('aria-pressed'),
+        disabled: row.disabled === true,
+        height: Math.round(row.getBoundingClientRect().height),
+      })),
+      cacheRows: cacheRows.map((row) => ({
+        text: (row.textContent || '').replace(/\\s+/g, ' ').trim(),
+        pressed: row.getAttribute('aria-pressed'),
+        draggable: row.getAttribute('draggable'),
+      })),
+      recentRows: recentRows.map((row) => ({
+        text: (row.textContent || '').replace(/\\s+/g, ' ').trim(),
+        pressed: row.getAttribute('aria-pressed'),
+      })),
+      verifiedRowCount: rows('[data-patch-profile-row][data-profile-source="verified"]').length,
+      patchButtonDisabled: document.querySelector('[data-patch-minimal-form] button.primary')?.disabled !== false,
+      statusText: (document.querySelector('.appStatusLine')?.textContent || '').replace(/\\s+/g, ' ').trim(),
+      credentialValuesPersisted,
+      mock: mock ? JSON.parse(JSON.stringify(mock)) : null,
+      documentAndAppScrollZero:
+        scrollX === 0 && scrollY === 0 &&
+        document.documentElement.scrollWidth === document.documentElement.clientWidth &&
+        document.documentElement.scrollHeight === document.documentElement.clientHeight &&
+        (!app || (app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight)),
+    };
+  })()`);
+
+  await client.evaluate(`(() => {
+    const input = document.querySelector('[data-patch-profile-search]');
+    if (!(input instanceof HTMLInputElement)) return;
+    input.value = 'ro';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: 'ro' }));
+  })()`);
+  await sleep(50);
+  const signedOut = await readState("signed-out");
+
+  await client.evaluate(`(() => {
+    const inputs = document.querySelectorAll('[data-patch-share-state="signed-out"] input');
+    const values = ['viewport-share-user', 'viewport-share-password'];
+    inputs.forEach((input, index) => {
+      input.value = values[index];
+      input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: values[index] }));
+    });
+  })()`);
+  await clickVisibleByText(client, ".setupModeTabs button", "Library");
+  await waitForClientCondition(
+    client,
+    "Boolean(document.querySelector('.setupMode-library .fixtureCatalogPanel'))",
+    "shared GDTF Share credentials in Library",
+  );
+  const sharedCredentials = await client.evaluate(`(() => {
+    const inputs = [...document.querySelectorAll('.fixtureCatalogCredentials input')];
+    return {
+      values: inputs.map((input) => input.value),
+      passwordAutocomplete: document.querySelector('.fixtureCatalogCredentials input[type="password"]')?.getAttribute('autocomplete') || '',
+      passwordInputCount: document.querySelectorAll('.fixtureCatalogCredentials input[type="password"]').length,
+    };
+  })()`);
+
+  await clickVisibleByText(client, ".setupModeTabs button", "Patch");
+  await waitForClientCondition(client, "Boolean(document.querySelector('[data-patch-profile-browser]'))", "PATCH profile browser");
+  await client.evaluate(`(() => {
+    const mock = window.__syndocalPatchGdtfShareMock;
+    mock.searchCalls = [];
+    const address = document.querySelector('[data-patch-field="address"] input');
+    if (address instanceof HTMLInputElement) {
+      address.value = '65';
+      address.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: '65' }));
+    }
+    const input = document.querySelector('[data-patch-profile-search]');
+    if (!(input instanceof HTMLInputElement)) return;
+    mock.typedAt = performance.now();
+    input.value = 'source';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: 'source' }));
+  })()`);
+  await sleep(300);
+  const beforeDebounce = await readState("before-debounce");
+  await waitForClientCondition(
+    client,
+    "document.querySelector('[data-patch-share-state=\"results\"]')?.querySelectorAll('[data-profile-source=\"share\"]').length === 3",
+    "mocked grouped GDTF Share search results",
+  );
+  const results = await readState("results");
+  const debounceDelayMs = results.mock?.searchCalls?.[0]
+    ? Math.round(results.mock.searchCalls[0].at - (results.mock.typedAt ?? 0))
+    : -1;
+
+  await client.evaluate(`document.querySelector('[data-share-profile-key="share:rid:7101"]')?.click()`);
+  await sleep(35);
+  const downloading = await readState("downloading");
+  await sleep(420);
+  const downloaded = await readState("downloaded");
+  const downloadedShareDnd = await client.evaluate(`(() => {
+    const row = document.querySelector('[data-share-profile-key="share:rid:7101"]');
+    if (!(row instanceof HTMLButtonElement)) return null;
+    const transfer = new DataTransfer();
+    row.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+    const raw = transfer.getData('application/x-syndocal-fixture-profile');
+    row.dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+    try { return JSON.parse(raw); } catch { return null; }
+  })()`);
+
+  await client.evaluate(`(() => {
+    const mock = window.__syndocalPatchGdtfShareMock;
+    mock.offline = true;
+    const input = document.querySelector('[data-patch-profile-search]');
+    if (!(input instanceof HTMLInputElement)) return;
+    input.value = 'source four';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: 'source four' }));
+  })()`);
+  await waitForClientCondition(
+    client,
+    "Boolean(document.querySelector('[data-patch-share-state=\"offline\"]'))",
+    "GDTF Share offline row",
+  );
+  const offline = await readState("offline");
+
+  const checks = {
+    shareSectionOrder:
+      JSON.stringify(signedOut.sectionNames) === JSON.stringify(["verified", "cache", "recent", "share"]),
+    signedOutGuidance:
+      signedOut.shareState === "signed-out" &&
+      signedOut.inlineCredentialInputCount === 2 &&
+      signedOut.inlinePasswordInputCount === 1 &&
+      signedOut.openLibraryButtonCount === 1 &&
+      signedOut.signedOutGuidanceText.includes("Sign in to GDTF Share"),
+    credentialsSharedWithLibrary:
+      JSON.stringify(sharedCredentials.values) === JSON.stringify(["viewport-share-user", "viewport-share-password"]) &&
+      sharedCredentials.passwordInputCount === 1 &&
+      sharedCredentials.passwordAutocomplete === "off" &&
+      downloaded.credentialValuesPersisted === false,
+    searchDebouncedAtLeastFourHundredMs:
+      beforeDebounce.shareState === "searching" &&
+      beforeDebounce.mock?.searchCalls?.length === 0 &&
+      results.mock?.searchCalls?.length === 1 &&
+      debounceDelayMs >= 400,
+    resultsGroupedByManufacturer:
+      results.shareState === "results" &&
+      JSON.stringify(results.manufacturerGroups) === JSON.stringify([
+        { manufacturer: "ETC", rowCount: 2 },
+        { manufacturer: "Robe", rowCount: 1 },
+      ]) &&
+      results.shareRows.length === 3 &&
+      results.shareRows.every((row) => row.height >= 24 && row.height <= 28) &&
+      results.shareRows.every((row) => /ETC|Robe/.test(row.text) && /1\.2|2\.0|1\.5/.test(row.text)),
+    inlineDownloadBusy:
+      downloading.shareRows.some((row) =>
+        row.key === "share:rid:7101" && row.disabled && row.text.includes("Downloading")),
+    downloadCachesAndArms:
+      downloaded.mock?.downloadCalls?.length === 1 &&
+      downloaded.mock?.importCalls?.length === 1 &&
+      downloaded.mock.downloadCalls[0].at <= downloaded.mock.importCalls[0].at &&
+      downloaded.cacheRows.some((row) => row.text.includes("ETC Source Four LED Series 3") && row.pressed === "true") &&
+      downloaded.recentRows.some((row) => row.text.includes("ETC Source Four LED Series 3") && row.pressed === "true") &&
+      downloaded.patchButtonDisabled === false,
+    downloadedShareRowHasDndParity:
+      downloaded.shareRows.some((row) =>
+        row.key === "share:rid:7101" && row.cached === "true" && row.draggable === "true" && row.pressed === "true") &&
+      downloadedShareDnd?.source === "cache" &&
+      downloadedShareDnd?.modeName === "Standard" &&
+      downloadedShareDnd?.footprint === 8,
+    offlineKeepsLocalSectionsWorking:
+      offline.shareState === "offline" &&
+      offline.cacheRows.length >= 1 &&
+      offline.recentRows.length >= 1 &&
+      offline.statusText.includes("GDTF Share offline from viewport mock") &&
+      offline.documentAndAppScrollZero,
+  };
+  const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  return {
+    passed: failedChecks.length === 0,
+    label: `setup-patch-gdtf-share-${viewport.width}x${viewport.height}`,
+    viewport,
+    checks,
+    failedChecks,
+    debounceDelayMs,
+    signedOut,
+    sharedCredentials,
+    beforeDebounce,
+    results,
+    downloading,
+    downloaded,
+    downloadedShareDnd,
+    offline,
+  };
+}
+
+const patchGdtfShareLogLine = (result) =>
+  `${result.passed ? "pass" : "fail"} ${result.label} ` +
+  `signedOut=${result.signedOut.inlineCredentialInputCount ?? "?"} ` +
+  `groups=${result.results.manufacturerGroups?.map((group) => `${group.manufacturer}:${group.rowCount}`).join("+") || "?"} ` +
+  `debounce=${result.debounceDelayMs}ms ` +
+  `download=${result.downloaded.mock?.downloadCalls?.length ?? "?"}->${result.downloaded.cacheRows?.length ?? "?"}->${result.downloaded.recentRows?.length ?? "?"} ` +
+  `dnd=${result.downloadedShareDnd?.source ?? "?"}:${result.downloadedShareDnd?.footprint ?? "?"} ` +
+  `offline=${result.offline.shareState ?? "?"} failed=${JSON.stringify(result.failedChecks)}`;
+
 async function runPatchEmptyStateViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -13529,6 +13941,10 @@ async function runPatchEmptyStateViewport(client, viewport) {
         '[data-patch-profile-row][data-profile-source="session"], ' +
         '[data-patch-profile-row][data-profile-source="project"]'
       ).length,
+      shareProfileRowCount: document.querySelectorAll(
+        '[data-patch-profile-row][data-profile-source="share"]'
+      ).length,
+      shareOfflineRowCount: document.querySelectorAll('[data-patch-share-state="offline"]').length,
       profileRowHeights: profileRows.map((row) => precision(row.getBoundingClientRect().height)),
       profileBrowserOverflowY: profileBrowserScrollStyle?.overflowY ?? '',
       profileBrowserLastControlReachable,
@@ -13560,10 +13976,12 @@ async function runPatchEmptyStateViewport(client, viewport) {
     embeddedProfileBrowser:
       metrics.profileBrowserPresent === true &&
       metrics.profileSearchCount === 1 &&
-      JSON.stringify(metrics.profileBrowserSectionNames) === JSON.stringify(['verified', 'cache', 'recent']) &&
+      JSON.stringify(metrics.profileBrowserSectionNames) === JSON.stringify(['verified', 'cache', 'recent', 'share']) &&
       metrics.verifiedProfileRowCount === 4 &&
       metrics.cachedProfileRowCount === 0 &&
-      metrics.recentProfileRowCount === 0,
+      metrics.recentProfileRowCount === 0 &&
+      metrics.shareProfileRowCount === 0 &&
+      metrics.shareOfflineRowCount === 1,
     compactProfileRows:
       metrics.profileRowHeights?.length === 4 &&
       metrics.profileRowHeights.every((height) => height >= 24 && height <= 28),
@@ -13599,7 +14017,7 @@ const patchEmptyStateLogLine = (result) =>
   `form=${result.metrics.patchFormCount ?? "?"} ` +
   `pane=${result.metrics.patchMapHeight ?? "?"} desk=${result.metrics.deskHeight ?? "?"} ` +
   `ratio=${result.metrics.paneDeskHeightRatio ?? "?"} cell=${result.metrics.cellSizePx ?? "?"} ` +
-  `browser=${result.metrics.verifiedProfileRowCount ?? "?"}/${result.metrics.cachedProfileRowCount ?? "?"}/${result.metrics.recentProfileRowCount ?? "?"} ` +
+  `browser=${result.metrics.verifiedProfileRowCount ?? "?"}/${result.metrics.cachedProfileRowCount ?? "?"}/${result.metrics.recentProfileRowCount ?? "?"}/${result.metrics.shareProfileRowCount ?? "?"} ` +
   `guidance=${result.metrics.profileGuidanceCount ?? "?"}/${result.metrics.fixtureGuidanceCount ?? "?"} ` +
   `scroll=${result.metrics.documentAndAppScrollZero ? 0 : 1} ` +
   `trailing=${result.metrics.trailingDeskSpacePx ?? "?"} leading=${result.metrics.leadingDeskSpacePx ?? "?"} ` +
@@ -25547,6 +25965,7 @@ async function main() {
     if (patchOnlyMode) {
       const patchResults = [];
       const patchDndResults = [];
+      const patchGdtfShareResults = [];
       const patchEmptyStateResults = [];
       for (const viewport of viewports) {
         const result = await runPatchViewport(client, viewport);
@@ -25584,6 +26003,9 @@ async function main() {
             `rejected=${dndResult.metrics.afterPatchBlockCount ?? "?"}->${dndResult.metrics.afterRejectedBlockCount ?? "?"} ` +
             `status=${dndResult.metrics.validStatusCount ?? "?"}/${dndResult.metrics.conflictStatusCount ?? "?"}/${dndResult.metrics.rejectedStatusCount ?? "?"}`,
         );
+        const gdtfShareResult = await runPatchGdtfShareViewport(client, viewport);
+        patchGdtfShareResults.push(gdtfShareResult);
+        console.log(patchGdtfShareLogLine(gdtfShareResult));
         const emptyStateResult = await runPatchEmptyStateViewport(client, viewport);
         patchEmptyStateResults.push(emptyStateResult);
         console.log(patchEmptyStateLogLine(emptyStateResult));
@@ -25599,10 +26021,17 @@ async function main() {
       );
       const failures = patchResults.filter((result) => !result.passed);
       const dndFailures = patchDndResults.filter((result) => !result.passed);
+      const gdtfShareFailures = patchGdtfShareResults.filter((result) => !result.passed);
       const emptyStateFailures = patchEmptyStateResults.filter((result) => !result.passed);
-      if (failures.length > 0 || dndFailures.length > 0 || emptyStateFailures.length > 0 || !responsiveScaling.passed) {
+      if (
+        failures.length > 0 ||
+        dndFailures.length > 0 ||
+        gdtfShareFailures.length > 0 ||
+        emptyStateFailures.length > 0 ||
+        !responsiveScaling.passed
+      ) {
         throw new Error(
-          `Continuous PATCH viewport failed: ${JSON.stringify({ failures, dndFailures, emptyStateFailures, responsiveScaling })}`,
+          `Continuous PATCH viewport failed: ${JSON.stringify({ failures, dndFailures, gdtfShareFailures, emptyStateFailures, responsiveScaling })}`,
         );
       }
       return;
@@ -26778,6 +27207,7 @@ async function main() {
 
     const results = [];
     const patchDndResults = [];
+    const patchGdtfShareResults = [];
     const patchEmptyStateResults = [];
     const fixtureGroupsResults = [];
     const blindResults = [];
@@ -26794,6 +27224,9 @@ async function main() {
           `conflict=${patchDndResult.metrics.conflictPreviewCount ?? "?"} ` +
           `rejected=${patchDndResult.metrics.afterPatchBlockCount ?? "?"}->${patchDndResult.metrics.afterRejectedBlockCount ?? "?"}`,
       );
+      const patchGdtfShareResult = await runPatchGdtfShareViewport(client, viewport);
+      patchGdtfShareResults.push(patchGdtfShareResult);
+      console.log(patchGdtfShareLogLine(patchGdtfShareResult));
       const patchEmptyStateResult = await runPatchEmptyStateViewport(client, viewport);
       patchEmptyStateResults.push(patchEmptyStateResult);
       console.log(patchEmptyStateLogLine(patchEmptyStateResult));
@@ -26882,6 +27315,7 @@ async function main() {
     const paneWindowFailures = paneWindowResults.filter((result) => !result.passed);
     const liveEditTypeFailures = liveEditTypeResults.filter((result) => !result.passed);
     const patchDndFailures = patchDndResults.filter((result) => !result.passed);
+    const patchGdtfShareFailures = patchGdtfShareResults.filter((result) => !result.passed);
     const patchEmptyStateFailures = patchEmptyStateResults.filter((result) => !result.passed);
     const fixtureGroupsFailures = fixtureGroupsResults.filter((result) => !result.passed);
     const blindFailures = blindResults.filter((result) => !result.passed);
@@ -27030,6 +27464,7 @@ async function main() {
       paneWindowFailures.length > 0 ||
       liveEditTypeFailures.length > 0 ||
       patchDndFailures.length > 0 ||
+      patchGdtfShareFailures.length > 0 ||
       patchEmptyStateFailures.length > 0 ||
       fixtureGroupsFailures.length > 0 ||
       blindFailures.length > 0 ||
@@ -27153,6 +27588,7 @@ async function main() {
             paneWindow: paneWindowFailures,
             liveEditTypes: liveEditTypeFailures,
             patchDnd: patchDndFailures,
+            patchGdtfShare: patchGdtfShareFailures,
             patchEmptyState: patchEmptyStateFailures,
             fixtureGroups: fixtureGroupsFailures,
             blind: blindFailures,
@@ -27187,7 +27623,7 @@ async function main() {
         ),
       );
       throw new Error(
-        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${liveEditTypeFailures.length} Live Edit fixture-type check(s), ${patchDndFailures.length} PATCH DnD check(s), ${patchEmptyStateFailures.length} PATCH empty-state check(s), ${fixtureGroupsFailures.length} fixture group operation check(s), ${blindFailures.length} BLIND editing check(s), ${sceneSettingsFailures.length} Scene Settings check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${stageSettingsFailures.length} stage settings check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${killZoneFailures.length} kill zone check(s), ${statusLineFailures.length} status line check(s) failed.`,
+        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${liveEditTypeFailures.length} Live Edit fixture-type check(s), ${patchDndFailures.length} PATCH DnD check(s), ${patchGdtfShareFailures.length} PATCH GDTF Share check(s), ${patchEmptyStateFailures.length} PATCH empty-state check(s), ${fixtureGroupsFailures.length} fixture group operation check(s), ${blindFailures.length} BLIND editing check(s), ${sceneSettingsFailures.length} Scene Settings check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${stageSettingsFailures.length} stage settings check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${killZoneFailures.length} kill zone check(s), ${statusLineFailures.length} status line check(s) failed.`,
       );
     }
   } finally {

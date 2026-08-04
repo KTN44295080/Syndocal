@@ -1307,6 +1307,8 @@ export default function App() {
   const [revealedSourceCueRevision, setRevealedSourceCueRevision] = createSignal(0);
   const [profile, setProfile] = createSignal<FixtureProfileSummary | null>(null);
   const [selectedMode, setSelectedMode] = createSignal("");
+  const [gdtfShareUser, setGdtfShareUser] = createSignal("");
+  const [gdtfSharePassword, setGdtfSharePassword] = createSignal("");
   const [recentPatchProfiles, setRecentPatchProfiles] = createSignal<PatchRecentProfileEntry[]>([]);
   createEffect(() => {
     const loaded = profile();
@@ -17627,10 +17629,14 @@ export default function App() {
             onDownloadGdtf={downloadGdtfFromUrl}
           />
           <FixtureCatalogPanel
-            backendAvailable={isTauriRuntime() && !viewportFixture}
+            backendAvailable={isTauriRuntime()}
+            shareUser={gdtfShareUser()}
+            sharePassword={gdtfSharePassword()}
             selectedFixtureId={selectedFixtureId()}
             selectedProfile={profile()}
             selectedMode={selectedMode()}
+            onShareUser={setGdtfShareUser}
+            onSharePassword={setGdtfSharePassword}
             onProfileLoaded={useCatalogProfile}
             onRepair={repairCatalogFixtureProfile}
             onMessage={setMessage}
@@ -17638,7 +17644,9 @@ export default function App() {
           </Show>
           <Show when={setupSubTab() === "patch"}>
             <PatchProfileBrowserPanel
-              backendAvailable={isTauriRuntime() && !viewportFixture}
+              backendAvailable={isTauriRuntime()}
+              shareUser={gdtfShareUser()}
+              sharePassword={gdtfSharePassword()}
               selectedProfile={profile()}
               selectedMode={selectedMode()}
               recentProfiles={recentPatchProfiles()}
@@ -17654,6 +17662,9 @@ export default function App() {
               onLoadCached={usePatchCachedProfile}
               onLoadRecent={usePatchRecentProfile}
               onLoadProject={usePatchProjectProfile}
+              onShareUser={setGdtfShareUser}
+              onSharePassword={setGdtfSharePassword}
+              onOpenLibrary={() => selectSetupMode("library")}
               onProfileDragStart={beginPatchProfileDrag}
               onProfileDragEnd={clearPatchProfileDrag}
               onMessage={setMessage}
