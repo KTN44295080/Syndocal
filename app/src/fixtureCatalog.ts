@@ -71,6 +71,13 @@ export interface VerifiedFixtureProfileSummary {
   description: string;
 }
 
+export const previewVerifiedProfiles: VerifiedFixtureProfileSummary[] = [
+  { id: "dimmer-1ch", manufacturer: "Syndocal Verified", name: "Generic Dimmer 1ch", mode_name: "Standard", footprint: 1, description: "Single-channel intensity fixture for dimmer packs and practicals." },
+  { id: "rgb-par-4ch", manufacturer: "Syndocal Verified", name: "Generic RGB PAR 4ch", mode_name: "Standard", footprint: 4, description: "Dimmer plus additive red, green and blue channels." },
+  { id: "rgbw-par-5ch", manufacturer: "Syndocal Verified", name: "Generic RGBW PAR 5ch", mode_name: "Standard", footprint: 5, description: "Dimmer plus additive red, green, blue and white channels." },
+  { id: "moving-head-rgbw-10ch", manufacturer: "Syndocal Verified", name: "Generic Moving Head RGBW 10ch", mode_name: "Standard", footprint: 10, description: "16-bit pan/tilt, dimmer, calibrated 1-25 Hz strobe and RGBW channels." },
+];
+
 export interface GdtfShareSearchRequest {
   user: string;
   password: string;

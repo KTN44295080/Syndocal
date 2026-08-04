@@ -7691,6 +7691,32 @@ async function measure(client, label) {
           return unsafeX || unsafeY;
         }).length,
       visiblePatchActionRowCount: visibleCount('[data-patch-minimal-form]'),
+      visiblePatchProfileBrowserCount: visibleCount('[data-patch-profile-browser]'),
+      visiblePatchProfileSearchCount: visibleCount('[data-patch-profile-search]'),
+      patchProfileSectionNames: visibleElements('[data-patch-profile-section]')
+        .map((section) => section.getAttribute('data-patch-profile-section')),
+      visiblePatchVerifiedProfileRowCount: visibleCount('[data-patch-profile-row][data-profile-source="verified"]'),
+      visiblePatchCachedProfileRowCount: visibleCount('[data-patch-profile-row][data-profile-source="cache"]'),
+      visiblePatchRecentProfileRowCount: visibleCount(
+        '[data-patch-profile-row][data-profile-source="session"], ' +
+        '[data-patch-profile-row][data-profile-source="project"]'
+      ),
+      visiblePatchSelectedProfileRowCount: visibleElements('[data-patch-profile-row]')
+        .filter((row) => row.getAttribute('aria-pressed') === 'true').length,
+      patchProfileRowHeights: visibleElements('[data-patch-profile-row]')
+        .map((row) => Math.round(row.getBoundingClientRect().height)),
+      patchProfileBrowserOverflowY: getComputedStyle(
+        document.querySelector('[data-patch-profile-browser-scroll]') ?? document.documentElement
+      ).overflowY,
+      patchProfileBrowserLastControlReachable: lastVisibleControlReachableWhenScrolled(
+        '[data-patch-profile-browser-scroll]',
+        'button, summary',
+      ),
+      visiblePatchLoadedProfileSummaryCount: visibleCount('.setupMode-patch .loadedProfileSummaryPanel'),
+      visiblePatchProfileEmptyGuidanceCount: visibleCount('[data-patch-profile-empty]'),
+      patchProfileEmptyGuidanceText: (document.querySelector('[data-patch-profile-empty]')?.textContent || '')
+        .replace(/\s+/g, ' ')
+        .trim(),
       visiblePatchAutoButtonCount: visibleElements('.fieldWithAction button')
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'auto').length,
       visiblePatchPrimaryButtonCount: visibleElements('[data-patch-minimal-form] button.primary')
@@ -9913,6 +9939,19 @@ function hasExpectedSetupSurface(result) {
   if (result.label.startsWith("setup-patch-")) {
     return (
       result.visiblePatchActionRowCount === 1 &&
+      result.visiblePatchProfileBrowserCount === 1 &&
+      result.visiblePatchProfileSearchCount === 1 &&
+      JSON.stringify(result.patchProfileSectionNames) === JSON.stringify(["verified", "cache", "recent"]) &&
+      result.visiblePatchVerifiedProfileRowCount === 4 &&
+      result.visiblePatchCachedProfileRowCount === 0 &&
+      result.visiblePatchRecentProfileRowCount >= 1 &&
+      result.visiblePatchSelectedProfileRowCount === 1 &&
+      result.patchProfileRowHeights.length >= 5 &&
+      result.patchProfileRowHeights.every((height) => height >= 24 && height <= 28) &&
+      ["auto", "scroll"].includes(result.patchProfileBrowserOverflowY) &&
+      result.patchProfileBrowserLastControlReachable &&
+      result.visiblePatchLoadedProfileSummaryCount === 0 &&
+      result.visiblePatchProfileEmptyGuidanceCount === 0 &&
       result.visiblePatchAutoButtonCount === 0 &&
       result.visiblePatchPrimaryButtonCount === 1 &&
       result.visiblePatchNextFreeButtonCount === 1 &&
@@ -12515,6 +12554,18 @@ async function readPatchZoningState(client) {
       importControlCount: visibleMatches(
         '[data-profile-import-disclosure] input, [data-profile-import-disclosure] button'
       ).length,
+      profileBrowserCount: visibleMatches('[data-patch-profile-browser]').length,
+      profileSearchCount: visibleMatches('[data-patch-profile-search]').length,
+      verifiedProfileRowCount: visibleMatches(
+        '[data-patch-profile-row][data-profile-source="verified"]'
+      ).length,
+      recentProfileRowCount: visibleMatches(
+        '[data-patch-profile-row][data-profile-source="session"], ' +
+        '[data-patch-profile-row][data-profile-source="project"]'
+      ).length,
+      selectedProfileRowCount: visibleMatches('[data-patch-profile-row]')
+        .filter((row) => row.getAttribute('aria-pressed') === 'true').length,
+      activeSetupMode: (document.querySelector('.setupModeTabs button.active')?.textContent || '').trim(),
       minimalFieldNames: visibleMatches('[data-patch-minimal-form] [data-patch-field]')
         .map((field) => field.getAttribute('data-patch-field')),
       minimalInputCount: visibleMatches('[data-patch-minimal-form] > label > input').length,
@@ -12597,6 +12648,15 @@ async function readPatchZoningState(client) {
 async function checkPatchZoning(client) {
   const initial = await readPatchZoningState(client);
 
+  const patchBrowserSelectionClicked = await client.evaluate(`(() => {
+    const row = document.querySelector('[data-patch-profile-row][data-profile-source="session"]');
+    if (!(row instanceof HTMLButtonElement) || row.disabled) return false;
+    row.click();
+    return true;
+  })()`);
+  await sleep(50);
+  const patchBrowserSelected = await readPatchZoningState(client);
+
   await clickVisibleSelector(client, '[data-profile-import-disclosure] > summary');
   await sleep(50);
   const importOpen = await readPatchZoningState(client);
@@ -12634,6 +12694,17 @@ async function checkPatchZoning(client) {
   await clickVisibleSelector(client, '[data-workspace-pane="lower-right"] [data-fixture-coordinate-advanced] > summary');
 
   const checks = {
+    embeddedProfileBrowser:
+      initial.profileBrowserCount === 1 &&
+      initial.profileSearchCount === 1 &&
+      initial.verifiedProfileRowCount === 4 &&
+      initial.recentProfileRowCount >= 1 &&
+      initial.selectedProfileRowCount === 1,
+    patchBrowserSelectionStaysInPatch:
+      patchBrowserSelectionClicked &&
+      patchBrowserSelected.activeSetupMode === 'Patch' &&
+      patchBrowserSelected.minimalPrimaryCount === 1 &&
+      patchBrowserSelected.selectedProfileRowCount === 1,
     disclosuresDefaultCollapsed:
       initial.importDisclosureCount === 1 &&
       !initial.importOpen &&
@@ -12703,6 +12774,7 @@ async function checkPatchZoning(client) {
     checks,
     failedChecks,
     initial,
+    patchBrowserSelected,
     importOpen,
     placementOpen,
     universeOpen,
@@ -13221,12 +13293,19 @@ async function runPatchEmptyStateViewport(client, viewport) {
     const addressGrid = patchMap?.querySelector('.dmxAddressGrid');
     const firstCell = addressGrid?.querySelector('.dmxAddressGridCell');
     const patchFormCount = desk?.querySelectorAll(':scope > .patchFixtureFormPanel').length ?? 0;
+    const profileBrowser = document.querySelector('[data-patch-profile-browser]');
+    const profileBrowserScroll = document.querySelector('[data-patch-profile-browser-scroll]');
+    const profileRows = [...document.querySelectorAll('[data-patch-profile-row]')];
+    const profileGuidance = desk?.querySelector(':scope > [data-patch-profile-empty]');
+    const fixtureGuidance = document.querySelector('[data-fixture-setup-empty]');
+    const profileBrowserSections = [...document.querySelectorAll('[data-patch-profile-section]')];
     if (!(desk instanceof HTMLElement) || !(patchMap instanceof HTMLElement) || !(addressGrid instanceof HTMLElement)) {
       return {
         deskPresent: desk instanceof HTMLElement,
         patchMapPresent: patchMap instanceof HTMLElement,
         addressGridPresent: addressGrid instanceof HTMLElement,
         patchFormCount,
+        profileBrowserPresent: profileBrowser instanceof HTMLElement,
       };
     }
     const precision = (value) => Math.round(value * 1_000) / 1_000;
@@ -13236,6 +13315,29 @@ async function runPatchEmptyStateViewport(client, viewport) {
     const deskStyle = getComputedStyle(desk);
     const patchMapStyle = getComputedStyle(patchMap);
     const addressGridStyle = getComputedStyle(addressGrid);
+    const profileBrowserScrollStyle = profileBrowserScroll instanceof HTMLElement
+      ? getComputedStyle(profileBrowserScroll)
+      : null;
+    let profileBrowserLastControlReachable = false;
+    if (profileBrowserScroll instanceof HTMLElement) {
+      const lastControl = [...profileBrowserScroll.querySelectorAll('button, summary')]
+        .filter((control) => {
+          const rect = control.getBoundingClientRect();
+          const style = getComputedStyle(control);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+        })
+        .at(-1);
+      const initialScrollTop = profileBrowserScroll.scrollTop;
+      profileBrowserScroll.scrollTop = profileBrowserScroll.scrollHeight;
+      if (lastControl instanceof HTMLElement) {
+        const scrollerRect = profileBrowserScroll.getBoundingClientRect();
+        const controlRect = lastControl.getBoundingClientRect();
+        profileBrowserLastControlReachable =
+          controlRect.top >= scrollerRect.top - 1 && controlRect.bottom <= scrollerRect.bottom + 1;
+      }
+      profileBrowserScroll.scrollTop = initialScrollTop;
+    }
+    const app = document.querySelector('.app');
     return {
       deskPresent: true,
       patchMapPresent: true,
@@ -13251,10 +13353,57 @@ async function runPatchEmptyStateViewport(client, viewport) {
       cellSizePx: precision(Number.parseFloat(addressGridStyle.getPropertyValue('--dmx-cell-size')) || 0),
       firstCellWidth: precision(firstCellRect?.width ?? 0),
       firstCellHeight: precision(firstCellRect?.height ?? 0),
+      profileBrowserPresent: profileBrowser instanceof HTMLElement,
+      profileSearchCount: document.querySelectorAll('[data-patch-profile-search]').length,
+      profileBrowserSectionNames: profileBrowserSections
+        .map((section) => section.getAttribute('data-patch-profile-section')),
+      verifiedProfileRowCount: document.querySelectorAll(
+        '[data-patch-profile-row][data-profile-source="verified"]'
+      ).length,
+      cachedProfileRowCount: document.querySelectorAll(
+        '[data-patch-profile-row][data-profile-source="cache"]'
+      ).length,
+      recentProfileRowCount: document.querySelectorAll(
+        '[data-patch-profile-row][data-profile-source="session"], ' +
+        '[data-patch-profile-row][data-profile-source="project"]'
+      ).length,
+      profileRowHeights: profileRows.map((row) => precision(row.getBoundingClientRect().height)),
+      profileBrowserOverflowY: profileBrowserScrollStyle?.overflowY ?? '',
+      profileBrowserLastControlReachable,
+      profileGuidanceCount: profileGuidance instanceof HTMLElement ? 1 : 0,
+      profileGuidanceText: (profileGuidance?.textContent || '').replace(/\\s+/g, ' ').trim(),
+      fixtureGuidanceCount: fixtureGuidance instanceof HTMLElement ? 1 : 0,
+      documentAndAppScrollZero:
+        window.scrollX === 0 && window.scrollY === 0 &&
+        document.documentElement.scrollWidth === document.documentElement.clientWidth &&
+        document.documentElement.scrollHeight === document.documentElement.clientHeight &&
+        document.body.scrollWidth === document.documentElement.clientWidth &&
+        document.body.scrollHeight === document.documentElement.clientHeight &&
+        (!(app instanceof HTMLElement) || (
+          app.scrollLeft === 0 && app.scrollTop === 0 &&
+          app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight
+        )),
     };
   })()`);
   const checks = {
     patchFormAbsent: metrics.patchFormCount === 0,
+    embeddedProfileBrowser:
+      metrics.profileBrowserPresent === true &&
+      metrics.profileSearchCount === 1 &&
+      JSON.stringify(metrics.profileBrowserSectionNames) === JSON.stringify(['verified', 'cache', 'recent']) &&
+      metrics.verifiedProfileRowCount === 4 &&
+      metrics.cachedProfileRowCount === 0 &&
+      metrics.recentProfileRowCount === 0,
+    compactProfileRows:
+      metrics.profileRowHeights?.length === 4 &&
+      metrics.profileRowHeights.every((height) => height >= 24 && height <= 28),
+    profileBrowserUsesInternalScroll:
+      ['auto', 'scroll'].includes(metrics.profileBrowserOverflowY) &&
+      metrics.profileBrowserLastControlReachable === true,
+    unarmedGuidancePointsLeft:
+      metrics.profileGuidanceCount === 1 &&
+      metrics.profileGuidanceText === 'Choose a fixture profile in Patch Source on the left to arm patching.' &&
+      metrics.fixtureGuidanceCount === 1,
     patchMapOccupiesFrameDrivenRow:
       metrics.deskPresent === true &&
       metrics.patchMapPresent === true &&
@@ -13263,6 +13412,7 @@ async function runPatchEmptyStateViewport(client, viewport) {
     patchMapCoversAtLeastNinetyPercentOfDesk: metrics.paneDeskHeightRatio >= 0.9,
     cellSizeAtLeastTwentyFourAt2048: viewport.width !== 2048 || metrics.cellSizePx >= 24,
     noEmptyTrailingDeskRow: metrics.trailingDeskSpacePx <= 1,
+    documentAndAppScrollRemainZero: metrics.documentAndAppScrollZero === true,
   };
   const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
   return {
@@ -13279,6 +13429,9 @@ const patchEmptyStateLogLine = (result) =>
   `form=${result.metrics.patchFormCount ?? "?"} ` +
   `pane=${result.metrics.patchMapHeight ?? "?"} desk=${result.metrics.deskHeight ?? "?"} ` +
   `ratio=${result.metrics.paneDeskHeightRatio ?? "?"} cell=${result.metrics.cellSizePx ?? "?"} ` +
+  `browser=${result.metrics.verifiedProfileRowCount ?? "?"}/${result.metrics.cachedProfileRowCount ?? "?"}/${result.metrics.recentProfileRowCount ?? "?"} ` +
+  `guidance=${result.metrics.profileGuidanceCount ?? "?"}/${result.metrics.fixtureGuidanceCount ?? "?"} ` +
+  `scroll=${result.metrics.documentAndAppScrollZero ? 0 : 1} ` +
   `trailing=${result.metrics.trailingDeskSpacePx ?? "?"} leading=${result.metrics.leadingDeskSpacePx ?? "?"} ` +
   `rows=${JSON.stringify(result.metrics.deskGridTemplateRows ?? "?")} ` +
   `gridRow=${result.metrics.patchMapGridRowStart ?? "?"} failed=${JSON.stringify(result.failedChecks)}`;
@@ -25183,6 +25336,9 @@ async function main() {
             `end=${metrics?.endReachable ? 1 : 0} outer=${metrics?.outerScrollUnchangedAtEnd ? 0 : 1} ` +
             `keys=${metrics?.arrowRightAddress ?? "?"}/${metrics?.arrowDownAddress ?? "?"}/${metrics?.controlEndAddress ?? "?"} ` +
             `keyVisible=${metrics?.controlEndFullyVisible ? 1 : 0} ` +
+            `browser=${result.containment.visiblePatchVerifiedProfileRowCount ?? "?"}/` +
+              `${result.containment.visiblePatchCachedProfileRowCount ?? "?"}/` +
+              `${result.containment.visiblePatchRecentProfileRowCount ?? "?"} ` +
             `alwaysVisibleControls=${result.containment.visibleSetupPatchInteractiveControlCount ?? "?"}/${result.zoning.noSelection.alwaysVisibleControlCount ?? "?"} ` +
             `paneControls=${result.zoning.selected.upperRightVisibleControlCount ?? "?"}/${result.zoning.selected.lowerRightVisibleControlCount ?? "?"} ` +
             `families=${result.fixtureFamilySweep.uniqueProfileFamilies.length}/${result.fixtureFamilySweep.families.length} ` +

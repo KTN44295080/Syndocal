@@ -1,8 +1,6 @@
 import { Show } from "solid-js";
 
-interface ProfileLoadPanelProps {
-  title: string;
-  foldSources?: boolean;
+export interface ProfileImportSourcesProps {
   gdtfPath: string;
   gdtfShareUrl: string;
   onGdtfPath: (value: string) => void;
@@ -12,7 +10,12 @@ interface ProfileLoadPanelProps {
   onDownloadGdtf: () => void | Promise<void>;
 }
 
-export function ProfileLoadPanel(props: ProfileLoadPanelProps) {
+interface ProfileLoadPanelProps extends ProfileImportSourcesProps {
+  title: string;
+  foldSources?: boolean;
+}
+
+export function ProfileImportSources(props: ProfileImportSourcesProps & { folded?: boolean }) {
   const sourceRows = () => (
     <div class="profileImportRows">
       <div class="profileSourceBlock" data-profile-import-local>
@@ -46,20 +49,27 @@ export function ProfileLoadPanel(props: ProfileLoadPanelProps) {
   );
 
   return (
+    <Show
+      when={props.folded}
+      fallback={sourceRows()}
+    >
+      <details class="profileImportDisclosure" data-profile-import-disclosure>
+        <summary>GDTF import</summary>
+        {sourceRows()}
+      </details>
+    </Show>
+  );
+}
+
+export function ProfileLoadPanel(props: ProfileLoadPanelProps) {
+
+  return (
     <section class="profileLoadPanel">
       <header class="profileLoadHeader">
         <h2>{props.title}</h2>
         <span>GDTF</span>
       </header>
-      <Show
-        when={props.foldSources}
-        fallback={sourceRows()}
-      >
-        <details class="profileImportDisclosure" data-profile-import-disclosure>
-          <summary>GDTF import</summary>
-          {sourceRows()}
-        </details>
-      </Show>
+      <ProfileImportSources {...props} folded={props.foldSources} />
     </section>
   );
 }

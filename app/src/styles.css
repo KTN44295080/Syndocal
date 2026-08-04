@@ -27539,6 +27539,171 @@ h3 {
   overflow: auto;
 }
 
+.layoutSharedWorkspace.layoutSetup.setupMode-patch > .setupPanel {
+  overflow: hidden;
+}
+
+.patchProfileBrowserPanel {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 5px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.patchProfileBrowserHeader {
+  align-items: center;
+}
+
+.patchProfileBrowserHeader h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.patchProfileBrowserHeader button {
+  min-height: 24px;
+  padding: 2px 7px;
+  font-size: 10px;
+}
+
+.patchProfileSearch {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.patchProfileSearch > span,
+.patchProfileBrowserSection > header strong {
+  color: #9f968e;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.patchProfileSearch input {
+  width: 100%;
+  min-width: 0;
+  min-height: 27px;
+  padding: 2px 6px;
+  font-size: 11px;
+}
+
+.patchProfileBrowserScroll {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+  scrollbar-gutter: stable;
+}
+
+.patchProfileBrowserSection {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.patchProfileBrowserSection > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 18px;
+  border-bottom: 1px solid #35312d;
+  padding: 1px 3px;
+}
+
+.patchProfileBrowserSection > header span {
+  color: #817970;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.patchProfileRows {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.patchProfileRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 27px;
+  min-height: 27px;
+  overflow: hidden;
+  border-color: #35312d;
+  border-radius: 1px;
+  background: #1b1917;
+  padding: 0 5px;
+  text-align: left;
+}
+
+.patchProfileRow:hover:not(:disabled) {
+  border-color: #645b52;
+  background: #292521;
+}
+
+.patchProfileRow[aria-pressed="true"] {
+  border-color: #9a793c;
+  background: #30291f;
+  box-shadow: inset 2px 0 0 #d2a33d;
+}
+
+.patchProfileRow > strong,
+.patchProfileRow > span,
+.patchProfileRow > span > b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.patchProfileRow > strong {
+  color: #e7e0d9;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.patchProfileRow > span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #8f8780;
+  font-size: 9px;
+}
+
+.patchProfileRow > span > i {
+  color: #c2a86d;
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.patchProfileRow > span > b {
+  font-weight: 500;
+}
+
+.patchProfileRowEmpty {
+  min-height: 26px;
+  margin: 0;
+  padding: 6px 5px;
+  font-size: 10px;
+}
+
+.patchProfileBrowserScroll > .profileImportDisclosure {
+  margin-top: 1px;
+}
+
 .layoutSharedWorkspace.layoutSetup.setupMode-patch > .setupPanel > .profile {
   flex: 1 1 auto;
   min-height: 0;
@@ -27571,6 +27736,25 @@ h3 {
 
 .patchFixtureFormPanel {
   min-width: 0;
+}
+
+.patchProfileEmptyState {
+  display: flex;
+  grid-row: 1;
+  align-items: center;
+  height: 24px;
+  min-width: 0;
+  min-height: 24px;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid #393530;
+  border-radius: 2px;
+  background: #181715;
+  padding: 2px 6px;
+  color: #b9b0a7;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .patchFixtureMinimalForm {

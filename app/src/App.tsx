@@ -44,6 +44,10 @@ import { OscControlMappingPanel } from "./components/OscControlMappingPanel";
 import { OutputDiagnosticsPanel } from "./components/OutputDiagnosticsPanel";
 import { type OpticsControlEntry } from "./components/OpticsControlPanel";
 import { PatchFixtureFormPanel, type FixtureLayoutMode } from "./components/PatchFixtureFormPanel";
+import {
+  PatchProfileBrowserPanel,
+  type PatchRecentProfileEntry,
+} from "./components/PatchProfileBrowserPanel";
 import { type PositionFavorite } from "./components/PositionControlPanel";
 import { ProfileLoadPanel } from "./components/ProfileLoadPanel";
 import { ProgrammerPanel } from "./components/ProgrammerPanel";
@@ -1302,6 +1306,20 @@ export default function App() {
   const [revealedSourceCueRevision, setRevealedSourceCueRevision] = createSignal(0);
   const [profile, setProfile] = createSignal<FixtureProfileSummary | null>(null);
   const [selectedMode, setSelectedMode] = createSignal("");
+  const [recentPatchProfiles, setRecentPatchProfiles] = createSignal<PatchRecentProfileEntry[]>([]);
+  createEffect(() => {
+    const loaded = profile();
+    const modeName = selectedMode();
+    if (!loaded || !modeName) return;
+    const key = `${loaded.source_path.trim().toLocaleLowerCase()}::${modeName.trim().toLocaleLowerCase()}`;
+    setRecentPatchProfiles((current) => {
+      const existingIndex = current.findIndex((entry) =>
+        `${entry.profile.source_path.trim().toLocaleLowerCase()}::${entry.modeName.trim().toLocaleLowerCase()}` === key);
+      const entry = { profile: loaded, modeName };
+      if (existingIndex === 0 && current[0].profile === loaded) return current;
+      return [entry, ...current.filter((_, index) => index !== existingIndex)].slice(0, 12);
+    });
+  });
   const [customManufacturer, setCustomManufacturer] = createSignal("Syndocal");
   const [customProfileName, setCustomProfileName] = createSignal("Custom Fixture");
   const [customModeName, setCustomModeName] = createSignal("Default");
@@ -8955,16 +8973,38 @@ export default function App() {
     }
   };
 
-  const loadGdtfProfile = async (path: string, loadedMessage = "Loaded") => {
-    const imported = await invoke<FixtureProfileSummary>("import_gdtf", { path });
+  const selectLoadedProfile = (
+    imported: FixtureProfileSummary,
+    loadedMessage: string,
+    preferredMode: string | null = null,
+    openPatch = false,
+  ) => {
+    const modeName = preferredMode && imported.dmx_modes.some((mode) => mode.name === preferredMode)
+      ? preferredMode
+      : imported.dmx_modes[0]?.name ?? "";
     setProfile(imported);
-    setSelectedMode(imported.dmx_modes[0]?.name ?? "");
+    setGdtfPath(imported.source_path);
+    setSelectedMode(modeName);
     setMessage(profileLoadMessage(loadedMessage, imported));
+    if (openPatch) {
+      selectSetupMode("patch");
+      focusPatchFixtureForm();
+    }
+  };
+
+  const loadGdtfProfile = async (
+    path: string,
+    loadedMessage = "Loaded",
+    preferredMode: string | null = null,
+    openPatch = false,
+  ) => {
+    const imported = await invoke<FixtureProfileSummary>("import_gdtf", { path });
+    selectLoadedProfile(imported, loadedMessage, preferredMode, openPatch);
   };
 
   const importGdtf = async () => {
     try {
-      await loadGdtfProfile(gdtfPath());
+      await loadGdtfProfile(gdtfPath(), "Loaded", null, setupSubTab() === "library");
     } catch (error) {
       setMessage(String(error));
     }
@@ -9000,7 +9040,7 @@ export default function App() {
         return;
       }
       setGdtfPath(path);
-      await loadGdtfProfile(path, "Downloaded and loaded");
+      await loadGdtfProfile(path, "Downloaded and loaded", null, setupSubTab() === "library");
     } catch (error) {
       setMessage(String(error));
     }
@@ -11640,14 +11680,36 @@ export default function App() {
     }
   };
 
-  const useCatalogProfile = (imported: FixtureProfileSummary, loadedMessage: string, openPatch: boolean) => {
-    setProfile(imported);
-    setGdtfPath(imported.source_path);
-    setSelectedMode(imported.dmx_modes[0]?.name ?? "");
-    setMessage(profileLoadMessage(loadedMessage, imported));
-    if (openPatch) {
-      selectSetupMode("patch");
-      focusPatchFixtureForm();
+  const useCatalogProfile = (imported: FixtureProfileSummary, loadedMessage: string, openPatch: boolean) =>
+    selectLoadedProfile(imported, loadedMessage, null, openPatch);
+
+  const usePatchVerifiedProfile = async (profileId: string, modeName: string) => {
+    try {
+      const imported = await invoke<FixtureProfileSummary>("load_verified_fixture_profile", { profileId });
+      selectLoadedProfile(imported, `Loaded verified ${imported.name}`, modeName, false);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const usePatchCachedProfile = async (path: string, modeName: string | null) => {
+    try {
+      await loadGdtfProfile(path, "Loaded cached profile", modeName, false);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const usePatchRecentProfile = (entry: PatchRecentProfileEntry) => {
+    selectLoadedProfile(entry.profile, "Loaded", entry.modeName, false);
+  };
+
+  const usePatchProjectProfile = async (fixture: PatchedFixtureSummary) => {
+    try {
+      const imported = await invoke<FixtureProfileSummary>("use_fixture_profile", { fixtureId: fixture.id });
+      selectLoadedProfile(imported, "Loaded", fixture.mode_name, false);
+    } catch (error) {
+      setMessage(String(error));
     }
   };
 
@@ -17458,10 +17520,9 @@ export default function App() {
           ref={registerSetupPanel(["library", "profiles", "patch"])}
           tabIndex={-1}
         >
-          <Show when={setupSubTab() === "library" || setupSubTab() === "patch"}>
+          <Show when={setupSubTab() === "library"}>
           <ProfileLoadPanel
-            title={setupSubTab() === "library" ? "Fixture Library" : "Patch Source"}
-            foldSources={setupSubTab() === "patch"}
+            title="Fixture Library"
             gdtfPath={gdtfPath()}
             gdtfShareUrl={gdtfShareUrl()}
             onGdtfPath={setGdtfPath}
@@ -17470,17 +17531,36 @@ export default function App() {
             onLoadGdtf={importGdtf}
             onDownloadGdtf={downloadGdtfFromUrl}
           />
-          <Show when={setupSubTab() === "library"}>
-            <FixtureCatalogPanel
+          <FixtureCatalogPanel
+            backendAvailable={isTauriRuntime() && !viewportFixture}
+            selectedFixtureId={selectedFixtureId()}
+            selectedProfile={profile()}
+            selectedMode={selectedMode()}
+            onProfileLoaded={useCatalogProfile}
+            onRepair={repairCatalogFixtureProfile}
+            onMessage={setMessage}
+          />
+          </Show>
+          <Show when={setupSubTab() === "patch"}>
+            <PatchProfileBrowserPanel
               backendAvailable={isTauriRuntime() && !viewportFixture}
-              selectedFixtureId={selectedFixtureId()}
               selectedProfile={profile()}
               selectedMode={selectedMode()}
-              onProfileLoaded={useCatalogProfile}
-              onRepair={repairCatalogFixtureProfile}
+              recentProfiles={recentPatchProfiles()}
+              projectFixtures={snapshot().fixtures}
+              gdtfPath={gdtfPath()}
+              gdtfShareUrl={gdtfShareUrl()}
+              onGdtfPath={setGdtfPath}
+              onGdtfShareUrl={setGdtfShareUrl}
+              onBrowse={selectGdtfFile}
+              onLoadGdtf={importGdtf}
+              onDownloadGdtf={downloadGdtfFromUrl}
+              onLoadVerified={usePatchVerifiedProfile}
+              onLoadCached={usePatchCachedProfile}
+              onLoadRecent={usePatchRecentProfile}
+              onLoadProject={usePatchProjectProfile}
               onMessage={setMessage}
             />
-          </Show>
           </Show>
           <Show when={setupSubTab() === "profiles"}>
           <CustomProfileEditorPanel
@@ -17512,7 +17592,7 @@ export default function App() {
           />
           </Show>
 
-          <Show when={setupSubTab() !== "profiles" && profile()}>
+          <Show when={setupSubTab() === "library" && profile()}>
             {(loaded) => (
               <div class="profile">
                 <LoadedProfileSummaryPanel
@@ -17540,6 +17620,7 @@ export default function App() {
         <SetupMappingWorkspace
           className={setupPanelClass("panel fixtures setupPanel", ["patch"])}
           panelRef={registerSetupPanel(["patch"])}
+          patchArmed={Boolean(profile())}
           patchForm={
             <Show when={profile()}>
               {(loaded) => (

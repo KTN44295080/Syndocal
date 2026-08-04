@@ -7,6 +7,7 @@ import {
   fixtureCatalogSearchTextMatches,
   fixtureFootprintBandBounds,
   loadFixtureCatalogFavorites,
+  previewVerifiedProfiles,
   saveFixtureCatalogFavorites,
   toggledFixtureCatalogFavorites,
   verifiedFixtureFavoriteKey,
@@ -30,13 +31,6 @@ interface FixtureCatalogPanelProps {
   onRepair: (fixtureId: number, profilePath: string, modeName: string | null) => Promise<void>;
   onMessage: (message: string) => void;
 }
-
-const previewVerifiedProfiles: VerifiedFixtureProfileSummary[] = [
-  { id: "dimmer-1ch", manufacturer: "Syndocal Verified", name: "Generic Dimmer 1ch", mode_name: "Standard", footprint: 1, description: "Single-channel intensity fixture for dimmer packs and practicals." },
-  { id: "rgb-par-4ch", manufacturer: "Syndocal Verified", name: "Generic RGB PAR 4ch", mode_name: "Standard", footprint: 4, description: "Dimmer plus additive red, green and blue channels." },
-  { id: "rgbw-par-5ch", manufacturer: "Syndocal Verified", name: "Generic RGBW PAR 5ch", mode_name: "Standard", footprint: 5, description: "Dimmer plus additive red, green, blue and white channels." },
-  { id: "moving-head-rgbw-10ch", manufacturer: "Syndocal Verified", name: "Generic Moving Head RGBW 10ch", mode_name: "Standard", footprint: 10, description: "16-bit pan/tilt, dimmer, calibrated 1-25 Hz strobe and RGBW channels." },
-];
 
 const emptySearchResponse = (): GdtfShareSearchResponse => ({
   fixtures: [],
@@ -150,7 +144,7 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
     }
   };
 
-  const loadCachedProfile = async (entry: GdtfFixtureCacheEntry, openPatch = false) => {
+  const loadCachedProfile = async (entry: GdtfFixtureCacheEntry, openPatch = true) => {
     if (entry.health === "invalid") {
       props.onMessage(`Cannot load invalid cached profile: ${entry.detail}`);
       return;
@@ -170,7 +164,7 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
     const cachedEntry = cacheEntries().find((candidate) =>
       candidate.health !== "invalid" && fixtureCatalogIdentityMatches(fixture, candidate));
     if (cachedEntry) {
-      await loadCachedProfile(cachedEntry);
+      await loadCachedProfile(cachedEntry, true);
       return;
     }
     const request: GdtfShareDownloadRequest = {
@@ -186,7 +180,7 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
     try {
       const entry = await tauriInvoke<GdtfFixtureCacheEntry>("cache_gdtf_from_share", { request });
       await refreshLocalCatalog();
-      await loadCachedProfile(entry);
+      await loadCachedProfile(entry, true);
     } catch (error) {
       props.onMessage(String(error));
     } finally {
