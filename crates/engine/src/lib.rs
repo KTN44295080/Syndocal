@@ -31220,6 +31220,215 @@ mod tests {
         assert!(snapshot.telemetry.total_dmx_send_success_count >= 1);
     }
 
+    /// Physical serial rig demo/acceptance: drives the operator's 121ch rig
+    /// (ch1 master dimmer + 40x RGB cells) with a moving rainbow built from
+    /// three phase-shifted PositionWave effects, through the real Enttec Open
+    /// DMX worker (break/MAB pacing included). Run manually with:
+    ///   SYNDOCAL_PHYSICAL_SERIAL=COM3 cargo test -p engine --locked \
+    ///     physical_serial_rainbow_demo -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn physical_serial_rainbow_demo_drives_master_dimmer_and_rgb_cells() {
+        let Some(serial_port) = std::env::var("SYNDOCAL_PHYSICAL_SERIAL")
+            .ok()
+            .filter(|port| !port.is_empty())
+        else {
+            eprintln!("Skipping physical serial demo: SYNDOCAL_PHYSICAL_SERIAL is unset");
+            return;
+        };
+        let master_byte: u8 = std::env::var("SYNDOCAL_PHYSICAL_MASTER")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(20);
+        let seconds: u64 = std::env::var("SYNDOCAL_PHYSICAL_SECONDS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(60);
+
+        let master_profile = FixtureProfileSummary {
+            source_path: "memory://physical-demo-master.gdtf".to_string(),
+            manufacturer: "Syndocal".to_string(),
+            name: "Demo Master Dimmer".to_string(),
+            short_name: None,
+            fixture_type_id: None,
+            dmx_modes: vec![DmxModeSummary {
+                name: "Standard".to_string(),
+                controls: vec![AttributeControl {
+                    attribute: "Dimmer".to_string(),
+                    channel_name: "Dimmer".to_string(),
+                    geometry: None,
+                    offsets: vec![1],
+                    resolution: AttributeResolution::EightBit,
+                    default_value: 0,
+                    functions: Vec::new(),
+                }],
+            }],
+            geometries: sample_geometries(),
+            warnings: Vec::new(),
+        };
+        let rgb_profile = FixtureProfileSummary {
+            source_path: "memory://physical-demo-rgb.gdtf".to_string(),
+            manufacturer: "Syndocal".to_string(),
+            name: "Demo RGB Cell".to_string(),
+            short_name: None,
+            fixture_type_id: None,
+            dmx_modes: vec![DmxModeSummary {
+                name: "Standard".to_string(),
+                controls: ["ColorRed", "ColorGreen", "ColorBlue"]
+                    .iter()
+                    .enumerate()
+                    .map(|(index, attribute)| AttributeControl {
+                        attribute: (*attribute).to_string(),
+                        channel_name: (*attribute).to_string(),
+                        geometry: None,
+                        offsets: vec![index as u16 + 1],
+                        resolution: AttributeResolution::EightBit,
+                        default_value: 0,
+                        functions: Vec::new(),
+                    })
+                    .collect(),
+            }],
+            geometries: sample_geometries(),
+            warnings: Vec::new(),
+        };
+
+        let output = DmxOutputConfig {
+            enabled: true,
+            protocol: DmxOutputProtocol::EnttecOpenDmx,
+            target_ip: String::new(),
+            port: 0,
+            universe: 0,
+            serial_port,
+            serial_baud_rate: 250_000,
+        };
+        let engine = EngineHandle::start(output);
+
+        let master_id = engine.allocate_fixture_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id: master_id,
+                request: PatchFixtureRequest {
+                    profile_path: master_profile.source_path.clone(),
+                    mode_name: Some("Standard".to_string()),
+                    label: "Master".to_string(),
+                    universe: 0,
+                    address: 1,
+                    group_ids: Vec::new(),
+                    position: Vec3::default(),
+                    rotation: Default::default(),
+                },
+                profile: master_profile,
+            })
+            .unwrap();
+
+        let mut cell_ids = Vec::new();
+        for cell in 0..40u16 {
+            let fixture_id = engine.allocate_fixture_id();
+            engine
+                .send(EngineCommand::PatchFixture {
+                    fixture_id,
+                    request: PatchFixtureRequest {
+                        profile_path: rgb_profile.source_path.clone(),
+                        mode_name: Some("Standard".to_string()),
+                        label: format!("Cell {}", cell + 1),
+                        universe: 0,
+                        address: 2 + cell * 3,
+                        group_ids: Vec::new(),
+                        position: Vec3 {
+                            x: cell as f32 * 0.5,
+                            y: 0.0,
+                            z: 0.0,
+                        },
+                        rotation: Default::default(),
+                    },
+                    profile: rgb_profile.clone(),
+                })
+                .unwrap();
+            cell_ids.push(fixture_id);
+        }
+
+        engine
+            .send(EngineCommand::SetAttribute {
+                fixture_id: master_id,
+                attribute: "Dimmer".to_string(),
+                value: u16::from(master_byte) << 8,
+            })
+            .unwrap();
+
+        for (attribute, phase) in [
+            ("ColorRed", 0.0_f32),
+            ("ColorGreen", 1.0 / 3.0),
+            ("ColorBlue", 2.0 / 3.0),
+        ] {
+            let effect_id = engine.allocate_effect_id();
+            engine
+                .send(EngineCommand::AddPositionWaveEffect {
+                    effect_id,
+                    request: PositionWaveEffectRequest {
+                        label: format!("Rainbow {attribute}"),
+                        fixture_ids: cell_ids.clone(),
+                        target_group_ids: Vec::new(),
+                        attribute: attribute.to_string(),
+                        video_targets: Vec::new(),
+                        shape: LfoShape::Sine,
+                        origin: Vec3::default(),
+                        direction: Vec3 {
+                            x: 1.0,
+                            y: 0.0,
+                            z: 0.0,
+                        },
+                        speed: 0.6,
+                        wavelength: 10.0,
+                        clock_sync: None,
+                        low: 0,
+                        high: u16::MAX,
+                        phase,
+                        blend_mode: EffectBlendMode::Override,
+                    },
+                })
+                .unwrap();
+        }
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(seconds);
+        let mut last_report = std::time::Instant::now();
+        while std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(500));
+            let snapshot = engine.snapshot();
+            assert_eq!(
+                snapshot.telemetry.last_dmx_send_failure_count, 0,
+                "serial route must not report send failures during the demo"
+            );
+            if last_report.elapsed() >= Duration::from_secs(10) {
+                last_report = std::time::Instant::now();
+                let preview = &snapshot.dmx_preview;
+                eprintln!(
+                    "demo running: master={} cell1 rgb=({},{},{}) sends={}",
+                    preview[0],
+                    preview[1],
+                    preview[2],
+                    preview[3],
+                    snapshot.telemetry.total_dmx_send_success_count
+                );
+            }
+        }
+
+        let snapshot = engine.snapshot();
+        assert_eq!(snapshot.dmx_preview[0], master_byte);
+        assert!(
+            snapshot.telemetry.total_dmx_send_success_count > 0,
+            "the serial route should have delivered frames"
+        );
+        assert!(
+            snapshot
+                .dmx_preview
+                .iter()
+                .skip(1)
+                .take(120)
+                .any(|value| *value != 0),
+            "the RGB cells should carry non-zero rainbow data"
+        );
+    }
+
     #[test]
     fn engine_sends_rendered_fixture_state_to_multiple_artnet_routes() {
         let receiver_a = UdpSocket::bind("127.0.0.1:0").unwrap();
