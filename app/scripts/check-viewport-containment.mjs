@@ -12569,6 +12569,16 @@ async function readPatchZoningState(client) {
       ).length,
       profileBrowserCount: visibleMatches('[data-patch-profile-browser]').length,
       profileSearchCount: visibleMatches('[data-patch-profile-search]').length,
+      cacheProfileTreeCount: document.querySelectorAll(
+        '[data-patch-profile-section="cache"] [data-patch-profile-tree="cache"][role="tree"]'
+      ).length,
+      flatProfileSectionTreeCount: document.querySelectorAll(
+        '[data-patch-profile-section="verified"] [role="tree"], ' +
+        '[data-patch-profile-section="recent"] [role="tree"]'
+      ).length,
+      cacheManufacturerExpandedValues: [...document.querySelectorAll(
+        '[data-patch-profile-tree="cache"] [data-profile-tree-item="manufacturer"]'
+      )].map((row) => row.getAttribute('aria-expanded')),
       verifiedProfileRowCount: visibleMatches(
         '[data-patch-profile-row][data-profile-source="verified"]'
       ).length,
@@ -12723,6 +12733,10 @@ async function checkPatchZoning(client) {
       initial.recentProfileRowCount >= 1 &&
       initial.selectedProfileRowCount === 1 &&
       initial.draggableProfileRowCount >= 5,
+    hierarchicalCacheTreeAndFlatShortLists:
+      initial.cacheProfileTreeCount === 1 &&
+      initial.flatProfileSectionTreeCount === 0 &&
+      initial.cacheManufacturerExpandedValues.every((value) => value === "false"),
     leftColumnOwnsPatchExecution:
       initial.leftPatchFormCount === 1 &&
       initial.topPatchFormCount === 0 &&
@@ -13491,7 +13505,20 @@ function installPatchGdtfShareMockInPage() {
     searchCalls: [],
     downloadCalls: [],
     importCalls: [],
-    cache: [],
+    cache: [{
+      key: "share-rid-7102",
+      rid: fixtures[1].rid,
+      uuid: fixtures[1].uuid,
+      manufacturer: fixtures[1].manufacturer,
+      fixture: fixtures[1].fixture,
+      revision: fixtures[1].revision,
+      path: "C:/viewport-gdtf-cache/ETC-ColorSource Spot V.gdtf",
+      filesize: fixtures[1].filesize,
+      health: "healthy",
+      detail: "Viewport mock cache ready",
+      warnings: [],
+      modes: clone(fixtures[1].modes),
+    }],
   };
   const profileFor = (entry, path) => ({
     source_path: path,
@@ -13499,9 +13526,9 @@ function installPatchGdtfShareMockInPage() {
     name: entry.fixture,
     short_name: entry.fixture,
     fixture_type_id: entry.uuid,
-    dmx_modes: [{
-      name: entry.modes[0]?.name || "Standard",
-      controls: Array.from({ length: entry.modes[0]?.dmx_footprint || 8 }, (_, index) => ({
+    dmx_modes: (entry.modes.length > 0 ? entry.modes : [{ name: "Standard", dmx_footprint: 8 }]).map((mode) => ({
+      name: mode.name || "Standard",
+      controls: Array.from({ length: mode.dmx_footprint || 8 }, (_, index) => ({
         attribute: index === 0 ? "Dimmer" : `Attribute${index + 1}`,
         channel_name: index === 0 ? "Dimmer" : `Channel ${index + 1}`,
         offsets: [index + 1],
@@ -13509,7 +13536,7 @@ function installPatchGdtfShareMockInPage() {
         default_value: 0,
         functions: [],
       })),
-    }],
+    })),
     geometries: [],
     warnings: [],
   });
@@ -13602,6 +13629,8 @@ async function runPatchGdtfShareViewport(client, viewport) {
       return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
     };
     const rows = (selector) => [...document.querySelectorAll(selector)].filter(visible);
+    const shareTree = document.querySelector('[data-patch-profile-tree="share"]');
+    const cacheTree = document.querySelector('[data-patch-profile-tree="cache"]');
     const shareRows = rows('[data-patch-profile-row][data-profile-source="share"]');
     const cacheRows = rows('[data-patch-profile-row][data-profile-source="cache"]');
     const recentRows = rows(
@@ -13643,22 +13672,60 @@ async function runPatchGdtfShareViewport(client, viewport) {
         '[data-patch-share-state="signed-out"] input[type="password"][autocomplete="off"]'
       ).length,
       openLibraryButtonCount: document.querySelectorAll('[data-patch-share-open-library]').length,
-      manufacturerGroups: [...document.querySelectorAll('[data-share-manufacturer]')].map((group) => ({
-        manufacturer: group.getAttribute('data-share-manufacturer'),
+      manufacturerGroups: [...(shareTree?.querySelectorAll('[data-profile-tree-manufacturer]') ?? [])].map((group) => ({
+        manufacturer: group.getAttribute('data-profile-tree-manufacturer'),
+        expanded: group.querySelector(':scope > [data-profile-tree-item="manufacturer"]')?.getAttribute('aria-expanded'),
+        fixtureCount: group.querySelectorAll(
+          '[data-profile-tree-item="fixture"], [data-profile-tree-item="fixture-mode"]'
+        ).length,
         rowCount: group.querySelectorAll('[data-patch-profile-row][data-profile-source="share"]').length,
+      })),
+      shareTreeRole: shareTree?.getAttribute('role') || '',
+      cacheTreeRole: cacheTree?.getAttribute('role') || '',
+      shareTreeGroupRoleCount: shareTree?.querySelectorAll('[role="group"]').length ?? 0,
+      cacheTreeGroupRoleCount: cacheTree?.querySelectorAll('[role="group"]').length ?? 0,
+      flatSectionTreeCount: document.querySelectorAll(
+        '[data-patch-profile-section="verified"] [role="tree"], ' +
+        '[data-patch-profile-section="recent"] [role="tree"]'
+      ).length,
+      shareTreeItems: rows('[data-patch-profile-tree="share"] [role="treeitem"]').map((row) => ({
+        item: row.getAttribute('data-profile-tree-item'),
+        level: row.getAttribute('aria-level'),
+        expanded: row.getAttribute('aria-expanded'),
+        single: row.getAttribute('data-profile-single-mode'),
+        text: (row.textContent || '').replace(/\\s+/g, ' ').trim(),
+        height: Math.round(row.getBoundingClientRect().height),
+      })),
+      cacheTreeItems: rows('[data-patch-profile-tree="cache"] [role="treeitem"]').map((row) => ({
+        item: row.getAttribute('data-profile-tree-item'),
+        level: row.getAttribute('aria-level'),
+        expanded: row.getAttribute('aria-expanded'),
+        single: row.getAttribute('data-profile-single-mode'),
+        text: (row.textContent || '').replace(/\\s+/g, ' ').trim(),
+        height: Math.round(row.getBoundingClientRect().height),
       })),
       shareRows: shareRows.map((row) => ({
         key: row.getAttribute('data-share-profile-key'),
+        item: row.getAttribute('data-profile-tree-item'),
+        level: row.getAttribute('aria-level'),
+        single: row.getAttribute('data-profile-single-mode'),
+        mode: row.getAttribute('data-profile-mode-name'),
         text: (row.textContent || '').replace(/\\s+/g, ' ').trim(),
         cached: row.getAttribute('data-profile-cached'),
         draggable: row.getAttribute('draggable'),
         pressed: row.getAttribute('aria-pressed'),
+        selected: row.getAttribute('aria-selected'),
         disabled: row.disabled === true,
         height: Math.round(row.getBoundingClientRect().height),
       })),
       cacheRows: cacheRows.map((row) => ({
+        item: row.getAttribute('data-profile-tree-item'),
+        level: row.getAttribute('aria-level'),
+        single: row.getAttribute('data-profile-single-mode'),
+        mode: row.getAttribute('data-profile-mode-name'),
         text: (row.textContent || '').replace(/\\s+/g, ' ').trim(),
         pressed: row.getAttribute('aria-pressed'),
+        selected: row.getAttribute('aria-selected'),
         draggable: row.getAttribute('draggable'),
       })),
       recentRows: recentRows.map((row) => ({
@@ -13712,6 +13779,12 @@ async function runPatchGdtfShareViewport(client, viewport) {
 
   await clickVisibleByText(client, ".setupModeTabs button", "Patch");
   await waitForClientCondition(client, "Boolean(document.querySelector('[data-patch-profile-browser]'))", "PATCH profile browser");
+  await waitForClientCondition(
+    client,
+    "Boolean(document.querySelector('[data-patch-profile-tree=\"cache\"] [data-profile-tree-item=\"manufacturer\"]'))",
+    "cached GDTF tree after Patch remount",
+  );
+  const defaultCollapsed = await readState("default-collapsed");
   await client.evaluate(`(() => {
     const mock = window.__syndocalPatchGdtfShareMock;
     mock.searchCalls = [];
@@ -13723,14 +13796,14 @@ async function runPatchGdtfShareViewport(client, viewport) {
     const input = document.querySelector('[data-patch-profile-search]');
     if (!(input instanceof HTMLInputElement)) return;
     mock.typedAt = performance.now();
-    input.value = 'source';
-    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: 'source' }));
+    input.value = 'source four';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: 'source four' }));
   })()`);
   await sleep(300);
   const beforeDebounce = await readState("before-debounce");
   await waitForClientCondition(
     client,
-    "document.querySelector('[data-patch-share-state=\"results\"]')?.querySelectorAll('[data-profile-source=\"share\"]').length === 3",
+    "document.querySelector('[data-patch-share-state=\"results\"]')?.querySelectorAll('[data-profile-source=\"share\"]').length === 2",
     "mocked grouped GDTF Share search results",
   );
   const results = await readState("results");
@@ -13738,13 +13811,13 @@ async function runPatchGdtfShareViewport(client, viewport) {
     ? Math.round(results.mock.searchCalls[0].at - (results.mock.typedAt ?? 0))
     : -1;
 
-  await client.evaluate(`document.querySelector('[data-share-profile-key="share:rid:7101"]')?.click()`);
+  await client.evaluate(`document.querySelector('[data-share-profile-key="share:rid:7101::standard"]')?.click()`);
   await sleep(35);
   const downloading = await readState("downloading");
   await sleep(420);
   const downloaded = await readState("downloaded");
   const downloadedShareDnd = await client.evaluate(`(() => {
-    const row = document.querySelector('[data-share-profile-key="share:rid:7101"]');
+    const row = document.querySelector('[data-share-profile-key="share:rid:7101::standard"]');
     if (!(row instanceof HTMLButtonElement)) return null;
     const transfer = new DataTransfer();
     row.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: transfer }));
@@ -13752,6 +13825,68 @@ async function runPatchGdtfShareViewport(client, viewport) {
     row.dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, dataTransfer: transfer }));
     try { return JSON.parse(raw); } catch { return null; }
   })()`);
+
+  const searchTree = async (value, scope) => {
+    await client.evaluate(`(() => {
+      const input = document.querySelector('[data-patch-profile-search]');
+      if (!(input instanceof HTMLInputElement)) return;
+      input.value = ${JSON.stringify(value)};
+      input.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        inputType: 'insertText',
+        data: ${JSON.stringify(value)},
+      }));
+    })()`);
+    await waitForClientCondition(
+      client,
+      `window.__syndocalPatchGdtfShareMock?.searchCalls?.at(-1)?.request?.query === ${JSON.stringify(value)} && ` +
+        `Boolean(document.querySelector('[data-patch-share-state="results"]'))`,
+      `${scope} GDTF tree search`,
+    );
+    return await readState(scope);
+  };
+
+  const manufacturerSearch = await searchTree("ETC", "manufacturer-search");
+  const modeSearch = await searchTree("Direct", "mode-search");
+  const fixtureSearch = await searchTree("ColorSource Spot V", "fixture-search");
+
+  await client.evaluate(`document.querySelector(
+    '[data-patch-profile-tree="cache"] [data-profile-single-mode="true"]'
+  )?.click()`);
+  await sleep(80);
+  const singleModeArmed = await readState("single-mode-armed");
+
+  await client.evaluate(`(() => {
+    const input = document.querySelector('[data-patch-profile-search]');
+    if (!(input instanceof HTMLInputElement)) return;
+    input.value = '';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
+  })()`);
+  await waitForClientCondition(
+    client,
+    "document.querySelector('[data-patch-profile-tree=\"cache\"] [data-profile-tree-item=\"manufacturer\"]')?.getAttribute('aria-expanded') === 'false'",
+    "cleared GDTF tree search collapsed manufacturers",
+  );
+  const clearedSearch = await readState("cleared-search");
+
+  const sendCacheTreeKey = async (selector, key, label) => {
+    await client.evaluate(`(() => {
+      const row = document.querySelector(${JSON.stringify(selector)});
+      if (!(row instanceof HTMLButtonElement)) return;
+      row.focus();
+      row.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true, cancelable: true }));
+    })()`);
+    await sleep(40);
+    return await readState(label);
+  };
+  const manufacturerSelector = '[data-patch-profile-tree="cache"] [data-profile-tree-item="manufacturer"]';
+  const fixtureSelector = '[data-patch-profile-tree="cache"] [data-profile-tree-item="fixture"]';
+  const manufacturerEnterExpanded = await sendCacheTreeKey(manufacturerSelector, "Enter", "manufacturer-enter");
+  const fixtureArrowRightExpanded = await sendCacheTreeKey(fixtureSelector, "ArrowRight", "fixture-arrow-right");
+  const fixtureArrowLeftCollapsed = await sendCacheTreeKey(fixtureSelector, "ArrowLeft", "fixture-arrow-left");
+  const manufacturerArrowLeftCollapsed = await sendCacheTreeKey(manufacturerSelector, "ArrowLeft", "manufacturer-arrow-left");
+  const manufacturerArrowRightExpanded = await sendCacheTreeKey(manufacturerSelector, "ArrowRight", "manufacturer-arrow-right");
+  await sendCacheTreeKey(manufacturerSelector, "ArrowLeft", "manufacturer-final-collapse");
 
   await client.evaluate(`(() => {
     const mock = window.__syndocalPatchGdtfShareMock;
@@ -13813,6 +13948,15 @@ async function runPatchGdtfShareViewport(client, viewport) {
   const checks = {
     shareSectionOrder:
       JSON.stringify(signedOut.sectionNames) === JSON.stringify(["verified", "cache", "recent", "share"]),
+    defaultCacheTreeCollapsedAndShortSectionsFlat:
+      defaultCollapsed.cacheTreeRole === "tree" &&
+      defaultCollapsed.shareTreeRole === "" &&
+      defaultCollapsed.flatSectionTreeCount === 0 &&
+      defaultCollapsed.cacheTreeItems.length === 1 &&
+      defaultCollapsed.cacheTreeItems[0].item === "manufacturer" &&
+      defaultCollapsed.cacheTreeItems[0].level === "1" &&
+      defaultCollapsed.cacheTreeItems[0].expanded === "false" &&
+      defaultCollapsed.cacheRows.length === 0,
     signedOutGuidance:
       signedOut.shareState === "signed-out" &&
       signedOut.inlineCredentialInputCount === 2 &&
@@ -13829,28 +13973,90 @@ async function runPatchGdtfShareViewport(client, viewport) {
       beforeDebounce.mock?.searchCalls?.length === 0 &&
       results.mock?.searchCalls?.length === 1 &&
       debounceDelayMs >= 400,
-    resultsGroupedByManufacturer:
+    resultsUseExpandedManufacturerFixtureModeTree:
       results.shareState === "results" &&
       JSON.stringify(results.manufacturerGroups) === JSON.stringify([
-        { manufacturer: "ETC", rowCount: 2 },
-        { manufacturer: "Robe", rowCount: 1 },
+        { manufacturer: "ETC", expanded: "true", fixtureCount: 1, rowCount: 2 },
       ]) &&
-      results.shareRows.length === 3 &&
-      results.shareRows.every((row) => row.height >= 24 && row.height <= 28) &&
-      results.shareRows.every((row) => /ETC|Robe/.test(row.text) && /1\.2|2\.0|1\.5/.test(row.text)),
-    inlineDownloadBusy:
+      results.shareTreeRole === "tree" &&
+      results.shareTreeGroupRoleCount === 2 &&
+      JSON.stringify(results.shareTreeItems.map((item) => [item.item, item.level])) === JSON.stringify([
+        ["manufacturer", "1"],
+        ["fixture", "2"],
+        ["mode", "3"],
+        ["mode", "3"],
+      ]) &&
+      results.shareTreeItems.every((item) => item.height >= 24 && item.height <= 28) &&
+      results.shareTreeItems.some((item) =>
+        item.item === "fixture" && item.text.includes("Source Four LED Series 3") &&
+        item.text.includes("2 Modes") && item.text.includes("Rev. 1.2")) &&
+      JSON.stringify(results.shareRows.map((row) => row.mode)) === JSON.stringify(["Standard", "Direct"]) &&
+      results.shareRows.some((row) => row.mode === "Standard" && row.text.includes("8ch")) &&
+      results.shareRows.some((row) => row.mode === "Direct" && row.text.includes("16ch")),
+    searchMatchesManufacturerFixtureAndModeAndAutoExpands:
+      JSON.stringify(manufacturerSearch.manufacturerGroups) === JSON.stringify([
+        { manufacturer: "ETC", expanded: "true", fixtureCount: 2, rowCount: 3 },
+      ]) &&
+      manufacturerSearch.shareRows.length === 3 &&
+      fixtureSearch.manufacturerGroups.length === 1 &&
+      fixtureSearch.manufacturerGroups[0].manufacturer === "ETC" &&
+      fixtureSearch.shareRows.length === 1 &&
+      fixtureSearch.shareRows[0].item === "fixture-mode" &&
+      fixtureSearch.shareRows[0].single === "true" &&
+      fixtureSearch.shareRows[0].mode === "Standard" &&
+      modeSearch.manufacturerGroups.length === 1 &&
+      modeSearch.manufacturerGroups[0].manufacturer === "ETC" &&
+      modeSearch.shareRows.length === 1 &&
+      modeSearch.shareRows[0].item === "mode" &&
+      modeSearch.shareRows[0].level === "3" &&
+      modeSearch.shareRows[0].mode === "Direct" &&
+      modeSearch.shareTreeItems.some((item) => item.item === "fixture" && item.expanded === "true"),
+    clearingSearchRecollapsesToManufacturerLevel:
+      clearedSearch.cacheTreeItems.length === 1 &&
+      clearedSearch.cacheTreeItems[0].item === "manufacturer" &&
+      clearedSearch.cacheTreeItems[0].expanded === "false" &&
+      clearedSearch.cacheRows.length === 0,
+    groupRowsSupportEnterArrowRightAndArrowLeft:
+      manufacturerEnterExpanded.cacheTreeItems.some((item) =>
+        item.item === "manufacturer" && item.expanded === "true") &&
+      fixtureArrowRightExpanded.cacheTreeItems.some((item) =>
+        item.item === "fixture" && item.expanded === "true") &&
+      fixtureArrowRightExpanded.cacheRows.filter((row) => row.item === "mode").length === 2 &&
+      fixtureArrowLeftCollapsed.cacheTreeItems.some((item) =>
+        item.item === "fixture" && item.expanded === "false") &&
+      fixtureArrowLeftCollapsed.cacheRows.filter((row) => row.item === "mode").length === 0 &&
+      manufacturerArrowLeftCollapsed.cacheTreeItems.length === 1 &&
+      manufacturerArrowLeftCollapsed.cacheTreeItems[0].expanded === "false" &&
+      manufacturerArrowRightExpanded.cacheTreeItems[0].expanded === "true",
+    singleModeFixtureRowDirectlyArmsAndStaysDraggable:
+      singleModeArmed.mock?.importCalls?.length === 2 &&
+      singleModeArmed.cacheRows.length === 1 &&
+      singleModeArmed.cacheRows[0].item === "fixture-mode" &&
+      singleModeArmed.cacheRows[0].single === "true" &&
+      singleModeArmed.cacheRows[0].mode === "Standard" &&
+      singleModeArmed.cacheRows[0].selected === "true" &&
+      singleModeArmed.cacheRows[0].draggable === "true" &&
+      singleModeArmed.patchButtonDisabled === false,
+    inlineDownloadBusyStaysOnTriggeredModeRow:
       downloading.shareRows.some((row) =>
-        row.key === "share:rid:7101" && row.disabled && row.text.includes("Downloading")),
+        row.key === "share:rid:7101::standard" && row.disabled && row.text.includes("Downloading")) &&
+      downloading.shareRows.filter((row) => row.disabled).length === 1 &&
+      downloading.shareRows.some((row) =>
+        row.key === "share:rid:7101::direct" && !row.disabled && !row.text.includes("Downloading")),
     downloadCachesAndArms:
       downloaded.mock?.downloadCalls?.length === 1 &&
       downloaded.mock?.importCalls?.length === 1 &&
       downloaded.mock.downloadCalls[0].at <= downloaded.mock.importCalls[0].at &&
-      downloaded.cacheRows.some((row) => row.text.includes("ETC Source Four LED Series 3") && row.pressed === "true") &&
+      downloaded.cacheTreeItems.some((item) =>
+        item.item === "fixture" && item.text.includes("Source Four LED Series 3")) &&
+      downloaded.cacheRows.some((row) =>
+        row.mode === "Standard" && row.pressed === "true" && row.selected === "true") &&
       downloaded.recentRows.some((row) => row.text.includes("ETC Source Four LED Series 3") && row.pressed === "true") &&
       downloaded.patchButtonDisabled === false,
     downloadedShareRowHasDndParity:
       downloaded.shareRows.some((row) =>
-        row.key === "share:rid:7101" && row.cached === "true" && row.draggable === "true" && row.pressed === "true") &&
+        row.key === "share:rid:7101::standard" && row.cached === "true" &&
+        row.draggable === "true" && row.pressed === "true" && row.selected === "true") &&
       downloadedShareDnd?.source === "cache" &&
       downloadedShareDnd?.modeName === "Standard" &&
       downloadedShareDnd?.footprint === 8,
@@ -13890,6 +14096,7 @@ async function runPatchGdtfShareViewport(client, viewport) {
     checks,
     failedChecks,
     debounceDelayMs,
+    defaultCollapsed,
     signedOut,
     sharedCredentials,
     beforeDebounce,
@@ -13897,6 +14104,16 @@ async function runPatchGdtfShareViewport(client, viewport) {
     downloading,
     downloaded,
     downloadedShareDnd,
+    manufacturerSearch,
+    fixtureSearch,
+    modeSearch,
+    singleModeArmed,
+    clearedSearch,
+    manufacturerEnterExpanded,
+    fixtureArrowRightExpanded,
+    fixtureArrowLeftCollapsed,
+    manufacturerArrowLeftCollapsed,
+    manufacturerArrowRightExpanded,
     authFailure,
     genericError,
     genericRetried,
@@ -13907,7 +14124,8 @@ async function runPatchGdtfShareViewport(client, viewport) {
 const patchGdtfShareLogLine = (result) =>
   `${result.passed ? "pass" : "fail"} ${result.label} ` +
   `signedOut=${result.signedOut.inlineCredentialInputCount ?? "?"} ` +
-  `groups=${result.results.manufacturerGroups?.map((group) => `${group.manufacturer}:${group.rowCount}`).join("+") || "?"} ` +
+  `tree=${result.results.shareTreeItems?.map((item) => item.level).join("/") || "?"} ` +
+  `groups=${result.results.manufacturerGroups?.map((group) => `${group.manufacturer}:${group.fixtureCount}/${group.rowCount}`).join("+") || "?"} ` +
   `debounce=${result.debounceDelayMs}ms ` +
   `download=${result.downloaded.mock?.downloadCalls?.length ?? "?"}->${result.downloaded.cacheRows?.length ?? "?"}->${result.downloaded.recentRows?.length ?? "?"} ` +
   `dnd=${result.downloadedShareDnd?.source ?? "?"}:${result.downloadedShareDnd?.footprint ?? "?"} ` +
@@ -14011,6 +14229,19 @@ async function runPatchEmptyStateViewport(client, viewport) {
       firstCellHeight: precision(firstCellRect?.height ?? 0),
       profileBrowserPresent: profileBrowser instanceof HTMLElement,
       profileSearchCount: document.querySelectorAll('[data-patch-profile-search]').length,
+      cachedProfileTreeCount: document.querySelectorAll(
+        '[data-patch-profile-section="cache"] [data-patch-profile-tree="cache"][role="tree"]'
+      ).length,
+      cachedProfileTreeItemCount: document.querySelectorAll(
+        '[data-patch-profile-tree="cache"] [role="treeitem"]'
+      ).length,
+      shareProfileTreeCount: document.querySelectorAll(
+        '[data-patch-profile-section="share"] [data-patch-profile-tree="share"][role="tree"]'
+      ).length,
+      flatProfileSectionTreeCount: document.querySelectorAll(
+        '[data-patch-profile-section="verified"] [role="tree"], ' +
+        '[data-patch-profile-section="recent"] [role="tree"]'
+      ).length,
       profileBrowserSectionNames: profileBrowserSections
         .map((section) => section.getAttribute('data-patch-profile-section')),
       verifiedProfileRowCount: document.querySelectorAll(
@@ -14063,7 +14294,11 @@ async function runPatchEmptyStateViewport(client, viewport) {
       metrics.cachedProfileRowCount === 0 &&
       metrics.recentProfileRowCount === 0 &&
       metrics.shareProfileRowCount === 0 &&
-      metrics.shareOfflineRowCount === 1,
+      metrics.shareOfflineRowCount === 1 &&
+      metrics.cachedProfileTreeCount === 1 &&
+      metrics.cachedProfileTreeItemCount === 0 &&
+      metrics.shareProfileTreeCount === 0 &&
+      metrics.flatProfileSectionTreeCount === 0,
     compactProfileRows:
       metrics.profileRowHeights?.length === 4 &&
       metrics.profileRowHeights.every((height) => height >= 24 && height <= 28),

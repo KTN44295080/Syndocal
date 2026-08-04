@@ -3,7 +3,6 @@ import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show }
 import {
   fixtureCatalogFavoriteKey,
   fixtureCatalogIdentityMatches,
-  fixtureCatalogSearchTextMatches,
   previewVerifiedProfiles,
   type GdtfFixtureCacheEntry,
   type GdtfShareDownloadRequest,
@@ -13,6 +12,12 @@ import {
   type VerifiedFixtureProfileSummary,
 } from "../fixtureCatalog";
 import type { FixtureProfileSummary, PatchedFixtureSummary } from "../types";
+import {
+  filterGdtfProfileTreeFixtures,
+  GdtfProfileTree,
+  type GdtfProfileTreeFixture,
+  type GdtfProfileTreeMode,
+} from "./GdtfProfileTree";
 import { ProfileImportSources, type ProfileImportSourcesProps } from "./ProfileLoadPanel";
 
 export interface PatchRecentProfileEntry {
@@ -66,11 +71,6 @@ type PatchShareState =
     message: string;
     searchQuery: string;
   };
-
-interface PatchShareManufacturerGroup {
-  manufacturer: string;
-  fixtures: GdtfShareFixtureSummary[];
-}
 
 const emptyShareSearchResponse = (): GdtfShareSearchResponse => ({
   fixtures: [],
@@ -128,6 +128,23 @@ const fixtureFootprint = (fixture: PatchedFixtureSummary) =>
 
 const profileModeKey = (path: string, modeName: string) => `${normalized(path)}::${normalized(modeName)}`;
 
+const profileTreeFixture = (
+  entry: Pick<GdtfFixtureCacheEntry, "manufacturer" | "fixture" | "revision" | "modes">,
+  key: string,
+): GdtfProfileTreeFixture => ({
+  key,
+  manufacturer: entry.manufacturer,
+  fixture: entry.fixture,
+  revision: entry.revision,
+  modeCount: Math.max(1, entry.modes.length),
+  modes: (entry.modes.length > 0 ? entry.modes : [{ name: "", dmx_footprint: null }]).map((mode) => ({
+    key: profileModeKey(key, mode.name || "Default"),
+    name: mode.name || "Default",
+    modeName: mode.name || null,
+    footprint: mode.dmx_footprint ?? 0,
+  })),
+});
+
 const textMatches = (values: string[], query: string) => {
   const needle = normalized(query);
   return !needle || values.some((value) => normalized(value).includes(needle));
@@ -167,24 +184,21 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
 
   const shareCredentialsReady = () => Boolean(props.shareUser.trim() && props.sharePassword);
 
-  const shareGroups = createMemo<PatchShareManufacturerGroup[]>(() => {
-    const grouped = new Map<string, GdtfShareFixtureSummary[]>();
-    for (const fixture of shareResponse().fixtures) {
-      const entries = grouped.get(fixture.manufacturer) ?? [];
-      entries.push(fixture);
-      grouped.set(fixture.manufacturer, entries);
-    }
-    return [...grouped.entries()]
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([manufacturer, fixtures]) => ({
-        manufacturer,
-        fixtures: [...fixtures].sort((left, right) =>
-          left.fixture.localeCompare(right.fixture) || left.revision.localeCompare(right.revision)),
-      }));
-  });
-
   const cachedShareEntry = (fixture: GdtfShareFixtureSummary) => cacheEntries().find((candidate) =>
     candidate.health !== "invalid" && fixtureCatalogIdentityMatches(fixture, candidate));
+
+  const cacheTreeFixtures = createMemo(() => cacheEntries().map((entry) =>
+    profileTreeFixture(entry, entry.path)));
+  const visibleCacheFixtures = createMemo(() =>
+    filterGdtfProfileTreeFixtures(cacheTreeFixtures(), query()));
+  const shareTreeFixtures = createMemo(() => shareResponse().fixtures.map((entry) =>
+    profileTreeFixture(entry, fixtureCatalogFavoriteKey(entry))));
+  const visibleShareFixtures = createMemo(() =>
+    filterGdtfProfileTreeFixtures(shareTreeFixtures(), query()));
+  const cacheEntryForTreeFixture = (fixture: GdtfProfileTreeFixture) =>
+    cacheEntries().find((entry) => entry.path === fixture.key);
+  const shareEntryForTreeFixture = (fixture: GdtfProfileTreeFixture) =>
+    shareResponse().fixtures.find((entry) => fixtureCatalogFavoriteKey(entry) === fixture.key);
 
   const searchShare = async (searchQuery: string, generation: number) => {
     const request: GdtfShareSearchRequest = {
@@ -262,13 +276,17 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
     return state.kind === "error" ? state : null;
   };
 
-  const downloadAndUseShareProfile = async (fixture: GdtfShareFixtureSummary) => {
+  const downloadAndUseShareProfile = async (
+    fixture: GdtfShareFixtureSummary,
+    requestedModeName: string | null,
+  ) => {
     const alreadyCached = cachedShareEntry(fixture);
-    const preferredMode = alreadyCached?.modes[0]?.name || fixture.modes[0]?.name || null;
+    const preferredMode = alreadyCached?.modes.find((mode) => mode.name === requestedModeName)?.name ||
+      requestedModeName || alreadyCached?.modes[0]?.name || fixture.modes[0]?.name || null;
     if (alreadyCached) return props.onLoadCached(alreadyCached.path, preferredMode);
     if (!props.backendAvailable || !shareCredentialsReady()) return false;
 
-    const key = fixtureCatalogFavoriteKey(fixture);
+    const key = profileModeKey(fixtureCatalogFavoriteKey(fixture), preferredMode || "Default");
     const request: GdtfShareDownloadRequest = {
       user: props.shareUser,
       password: props.sharePassword,
@@ -285,7 +303,7 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
         entry,
         ...current.filter((candidate) => candidate.key !== entry.key && candidate.path !== entry.path),
       ]);
-      const loaded = await props.onLoadCached(entry.path, entry.modes[0]?.name || preferredMode);
+      const loaded = await props.onLoadCached(entry.path, preferredMode || entry.modes[0]?.name || null);
       if (loaded) await refreshLocalProfiles();
       return loaded;
     } catch (error) {
@@ -302,9 +320,6 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
     entry.mode_name,
     entry.description,
   ], query())));
-
-  const visibleCache = createMemo(() => cacheEntries().filter((entry) =>
-    fixtureCatalogSearchTextMatches(entry, query())));
 
   const projectRows = createMemo(() => {
     const rows: RecentProjectProfileRow[] = [];
@@ -375,13 +390,18 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
     props.onProfileDragStart(item);
   };
 
-  const beginShareProfileDrag = (event: DragEvent, fixture: GdtfShareFixtureSummary) => {
+  const beginShareProfileDrag = (
+    event: DragEvent,
+    fixture: GdtfShareFixtureSummary,
+    requestedMode: GdtfProfileTreeMode,
+  ) => {
     const cached = cachedShareEntry(fixture);
     if (!cached) {
       event.preventDefault();
       return;
     }
-    const mode = cached.modes[0] ?? fixture.modes[0] ?? { name: "", dmx_footprint: null };
+    const mode = cached.modes.find((candidate) => candidate.name === requestedMode.modeName) ??
+      cached.modes[0] ?? fixture.modes[0] ?? { name: "", dmx_footprint: null };
     beginProfileDrag(event, {
       source: "cache",
       key: profileModeKey(cached.path, mode.name),
@@ -451,40 +471,47 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
         </section>
 
         <section class="patchProfileBrowserSection" data-patch-profile-section="cache">
-          <header><strong>Cached / offline GDTF</strong><span>{visibleCache().length}</span></header>
-          <div class="patchProfileRows">
-            <For each={visibleCache()} fallback={<p class="empty patchProfileRowEmpty">No cached GDTF profiles.</p>}>
-              {(entry) => (
-                <For each={entry.modes.length > 0 ? entry.modes : [{ name: "", dmx_footprint: null }]}>
-                  {(mode) => (
-                    <button
-                      type="button"
-                      class="patchProfileRow"
-                      data-patch-profile-row
-                      data-profile-source="cache"
-                      data-profile-footprint={mode.dmx_footprint ?? 0}
-                      draggable="true"
-                      aria-pressed={selected(entry.path, entry.manufacturer, entry.fixture, mode.name)}
-                      disabled={entry.health === "invalid" || busy()}
-                      onClick={() => void props.onLoadCached(entry.path, mode.name || null)}
-                      onDragStart={(event) => beginProfileDrag(event, {
-                        source: "cache",
-                        key: profileModeKey(entry.path, mode.name),
-                        label: `${entry.manufacturer} ${entry.fixture}`,
-                        modeName: mode.name,
-                        footprint: mode.dmx_footprint ?? 0,
-                        activate: () => props.onLoadCached(entry.path, mode.name || null),
-                      })}
-                      onDragEnd={props.onProfileDragEnd}
-                    >
-                      <strong data-no-localize>{entry.manufacturer} {entry.fixture}</strong>
-                      <span data-no-localize>{mode.name || "Default"}{mode.dmx_footprint ? ` · ${mode.dmx_footprint}ch` : ""}</span>
-                    </button>
-                  )}
-                </For>
-              )}
-            </For>
-          </div>
+          <header><strong>Cached / offline GDTF</strong><span>{visibleCacheFixtures().length}</span></header>
+          <GdtfProfileTree
+            ariaLabel="Cached GDTF profile tree"
+            source="cache"
+            fixtures={visibleCacheFixtures()}
+            searchActive={Boolean(query().trim())}
+            disabled={(fixture) => cacheEntryForTreeFixture(fixture)?.health === "invalid" || busy()}
+            draggable={() => true}
+            selected={(fixture, mode) => {
+              const entry = cacheEntryForTreeFixture(fixture);
+              return Boolean(entry) && selected(
+                entry!.path,
+                entry!.manufacturer,
+                entry!.fixture,
+                mode.modeName ?? "",
+              );
+            }}
+            onActivate={(fixture, mode) => {
+              const entry = cacheEntryForTreeFixture(fixture);
+              if (entry) void props.onLoadCached(entry.path, mode.modeName);
+            }}
+            onDragStart={(event, fixture, mode) => {
+              const entry = cacheEntryForTreeFixture(fixture);
+              if (!entry) {
+                event.preventDefault();
+                return;
+              }
+              beginProfileDrag(event, {
+                source: "cache",
+                key: profileModeKey(entry.path, mode.modeName ?? ""),
+                label: `${entry.manufacturer} ${entry.fixture}`,
+                modeName: mode.modeName ?? "",
+                footprint: mode.footprint,
+                activate: () => props.onLoadCached(entry.path, mode.modeName),
+              });
+            }}
+            onDragEnd={props.onProfileDragEnd}
+          />
+          <Show when={visibleCacheFixtures().length === 0}>
+            <p class="empty patchProfileRowEmpty">No cached GDTF profiles.</p>
+          </Show>
         </section>
 
         <section class="patchProfileBrowserSection" data-patch-profile-section="recent">
@@ -641,52 +668,45 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
 
           <Show when={shareStateKind() === "results"}>
             <div class="patchShareManufacturerGroups" data-patch-share-state="results">
-              <For each={shareGroups()}>
-                {(group) => (
-                  <section class="patchShareManufacturerGroup" data-share-manufacturer={group.manufacturer}>
-                    <header><strong data-no-localize>{group.manufacturer}</strong><span>{group.fixtures.length}</span></header>
-                    <div class="patchProfileRows">
-                      <For each={group.fixtures}>
-                        {(entry) => {
-                          const key = fixtureCatalogFavoriteKey(entry);
-                          const cached = () => cachedShareEntry(entry);
-                          const mode = () => cached()?.modes[0] ?? entry.modes[0] ?? { name: "", dmx_footprint: null };
-                          const downloading = () => downloadingShareKey() === key;
-                          return (
-                            <button
-                              type="button"
-                              class="patchProfileRow patchShareProfileRow"
-                              data-patch-profile-row
-                              data-profile-source="share"
-                              data-profile-cached={cached() ? "true" : "false"}
-                              data-profile-footprint={mode().dmx_footprint ?? 0}
-                              data-share-profile-key={key}
-                              draggable={Boolean(cached())}
-                              aria-pressed={Boolean(cached()) && selected(
-                                cached()!.path,
-                                entry.manufacturer,
-                                entry.fixture,
-                                mode().name,
-                              )}
-                              disabled={downloading()}
-                              onClick={() => void downloadAndUseShareProfile(entry)}
-                              onDragStart={(event) => beginShareProfileDrag(event, entry)}
-                              onDragEnd={props.onProfileDragEnd}
-                            >
-                              <strong data-no-localize>{entry.manufacturer} · {entry.fixture}</strong>
-                              <span>
-                                <Show when={downloading()} fallback={<b data-no-localize>{entry.revision}</b>}>
-                                  <i>Downloading…</i>
-                                </Show>
-                              </span>
-                            </button>
-                          );
-                        }}
-                      </For>
-                    </div>
-                  </section>
-                )}
-              </For>
+              <GdtfProfileTree
+                ariaLabel="GDTF Share profile tree"
+                source="share"
+                fixtures={visibleShareFixtures()}
+                searchActive={Boolean(query().trim())}
+                disabled={(_fixture, mode) => downloadingShareKey() === mode.key}
+                draggable={(fixture) => {
+                  const entry = shareEntryForTreeFixture(fixture);
+                  return Boolean(entry && cachedShareEntry(entry));
+                }}
+                selected={(fixture, mode) => {
+                  const entry = shareEntryForTreeFixture(fixture);
+                  const cached = entry ? cachedShareEntry(entry) : undefined;
+                  return Boolean(cached) && selected(
+                    cached!.path,
+                    fixture.manufacturer,
+                    fixture.fixture,
+                    mode.modeName ?? "",
+                  );
+                }}
+                downloading={(_fixture, mode) => downloadingShareKey() === mode.key}
+                cached={(fixture) => {
+                  const entry = shareEntryForTreeFixture(fixture);
+                  return Boolean(entry && cachedShareEntry(entry));
+                }}
+                onActivate={(fixture, mode) => {
+                  const entry = shareEntryForTreeFixture(fixture);
+                  if (entry) void downloadAndUseShareProfile(entry, mode.modeName);
+                }}
+                onDragStart={(event, fixture, mode) => {
+                  const entry = shareEntryForTreeFixture(fixture);
+                  if (entry) beginShareProfileDrag(event, entry, mode);
+                  else event.preventDefault();
+                }}
+                onDragEnd={props.onProfileDragEnd}
+              />
+              <Show when={visibleShareFixtures().length === 0}>
+                <p class="empty patchProfileRowEmpty">No GDTF Share profiles match.</p>
+              </Show>
             </div>
           </Show>
         </section>
