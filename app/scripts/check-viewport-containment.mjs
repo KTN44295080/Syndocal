@@ -7691,6 +7691,8 @@ async function measure(client, label) {
           return unsafeX || unsafeY;
         }).length,
       visiblePatchActionRowCount: visibleCount('[data-patch-minimal-form]'),
+      visiblePatchLeftFormCount: visibleCount('.layoutSetup.setupMode-patch > .setupPanel [data-patch-left-form]'),
+      visiblePatchTopFormCount: visibleCount('.setupPatchAddressDesk [data-patch-minimal-form]'),
       visiblePatchProfileBrowserCount: visibleCount('[data-patch-profile-browser]'),
       visiblePatchProfileSearchCount: visibleCount('[data-patch-profile-search]'),
       patchProfileSectionNames: visibleElements('[data-patch-profile-section]')
@@ -7703,6 +7705,7 @@ async function measure(client, label) {
       ),
       visiblePatchSelectedProfileRowCount: visibleElements('[data-patch-profile-row]')
         .filter((row) => row.getAttribute('aria-pressed') === 'true').length,
+      patchProfileDraggableRowCount: visibleElements('[data-patch-profile-row][draggable="true"]').length,
       patchProfileRowHeights: visibleElements('[data-patch-profile-row]')
         .map((row) => Math.round(row.getBoundingClientRect().height)),
       patchProfileBrowserOverflowY: getComputedStyle(
@@ -7726,7 +7729,7 @@ async function measure(client, label) {
       visiblePatchFootprintCount: visibleCount('.footprint'),
       patchMinimalFieldNames: visibleElements('[data-patch-minimal-form] [data-patch-field]')
         .map((field) => field.getAttribute('data-patch-field')),
-      visiblePatchMinimalInputCount: visibleElements('[data-patch-minimal-form] > label > input').length,
+      visiblePatchMinimalInputCount: visibleElements('[data-patch-minimal-form] [data-patch-field] input').length,
       patchPlacementDisclosureCount: document.querySelectorAll('[data-patch-placement-disclosure]').length,
       patchPlacementDisclosureOpenCount: [...document.querySelectorAll('[data-patch-placement-disclosure]')]
         .filter((disclosure) => disclosure.open).length,
@@ -7908,6 +7911,9 @@ async function measure(client, label) {
       visibleFixtureSetupEmptyStateCount: visibleCount('[data-fixture-setup-empty]'),
       visibleUseProfileForPatchButtonCount: [...document.querySelectorAll('.fixtureSetupEditor button')]
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'use profile for patch').length,
+      visibleApplyFixturePatchButtonCount: [...document.querySelectorAll('.fixtureSetupEditor button')]
+        .filter((button) => (button.textContent || '').trim().toLowerCase() === 'apply patch').length,
+      visibleRightPatchExecutionFormCount: visibleCount('.fixtureSetupContextPane [data-patch-minimal-form]'),
       visibleDuplicateFixtureButtonCount: [...document.querySelectorAll('.fixtureSetupEditor button')]
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'duplicate fixture').length,
       controlModeTabCount: document.querySelectorAll('.controlModeTabs button').length,
@@ -9939,6 +9945,8 @@ function hasExpectedSetupSurface(result) {
   if (result.label.startsWith("setup-patch-")) {
     return (
       result.visiblePatchActionRowCount === 1 &&
+      result.visiblePatchLeftFormCount === 1 &&
+      result.visiblePatchTopFormCount === 0 &&
       result.visiblePatchProfileBrowserCount === 1 &&
       result.visiblePatchProfileSearchCount === 1 &&
       JSON.stringify(result.patchProfileSectionNames) === JSON.stringify(["verified", "cache", "recent"]) &&
@@ -9946,6 +9954,7 @@ function hasExpectedSetupSurface(result) {
       result.visiblePatchCachedProfileRowCount === 0 &&
       result.visiblePatchRecentProfileRowCount >= 1 &&
       result.visiblePatchSelectedProfileRowCount === 1 &&
+      result.patchProfileDraggableRowCount >= 5 &&
       result.patchProfileRowHeights.length >= 5 &&
       result.patchProfileRowHeights.every((height) => height >= 24 && height <= 28) &&
       ["auto", "scroll"].includes(result.patchProfileBrowserOverflowY) &&
@@ -9980,7 +9989,9 @@ function hasExpectedSetupSurface(result) {
       result.visibleDmxGridSummaryCount === 1 &&
       result.visibleFixtureSetupEditorCount === 1 &&
       result.visibleFixtureSetupEmptyStateCount === 0 &&
-      result.visibleUseProfileForPatchButtonCount === 1 &&
+      result.visibleUseProfileForPatchButtonCount === 0 &&
+      result.visibleApplyFixturePatchButtonCount === 1 &&
+      result.visibleRightPatchExecutionFormCount === 0 &&
       result.visibleDuplicateFixtureButtonCount === 1 &&
       hasExpectedContinuousPatchGrid(result)
     );
@@ -12454,9 +12465,7 @@ async function checkPatchHighAddressAction(client) {
     const grid = document.querySelector('.dmxAddressGrid');
     const cell497 = grid?.querySelector('[data-dmx-address="497"]');
     const cell25 = grid?.querySelector('[data-dmx-address="25"]');
-    const addressInput = [...document.querySelectorAll('label')]
-      .find((label) => (label.childNodes[0]?.textContent || '').trim() === 'Address')
-      ?.querySelector('input');
+    const addressInput = document.querySelector('[data-patch-field="address"] input');
     if (!(grid instanceof HTMLElement) || !(cell497 instanceof HTMLButtonElement) || !(addressInput instanceof HTMLInputElement)) {
       return { passed: false, reason: 'missing grid, A497, or Address input' };
     }
@@ -12565,10 +12574,16 @@ async function readPatchZoningState(client) {
       ).length,
       selectedProfileRowCount: visibleMatches('[data-patch-profile-row]')
         .filter((row) => row.getAttribute('aria-pressed') === 'true').length,
+      draggableProfileRowCount: visibleMatches('[data-patch-profile-row][draggable="true"]').length,
       activeSetupMode: (document.querySelector('.setupModeTabs button.active')?.textContent || '').trim(),
+      leftPatchFormCount: visibleMatches('.layoutSetup.setupMode-patch > .setupPanel [data-patch-left-form]').length,
+      topPatchFormCount: visibleMatches('.setupPatchAddressDesk [data-patch-minimal-form]').length,
+      placementDisclosureInsideLeftForm: Boolean(
+        document.querySelector('[data-patch-left-form] [data-patch-placement-disclosure]')
+      ),
       minimalFieldNames: visibleMatches('[data-patch-minimal-form] [data-patch-field]')
         .map((field) => field.getAttribute('data-patch-field')),
-      minimalInputCount: visibleMatches('[data-patch-minimal-form] > label > input').length,
+      minimalInputCount: visibleMatches('[data-patch-minimal-form] [data-patch-field] input').length,
       minimalPrimaryCount: visibleMatches('[data-patch-minimal-form] button.primary')
         .filter((button) => (button.textContent || '').trim().toUpperCase() === 'PATCH').length,
       minimalNextFreeCount: visibleMatches('[data-patch-minimal-form] button')
@@ -12596,6 +12611,9 @@ async function readPatchZoningState(client) {
       fixtureEmptyStateCount: visibleMatches('[data-fixture-setup-empty]').length,
       useProfileForPatchCount: visibleMatches('.fixtureSetupEditor button')
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'use profile for patch').length,
+      applyFixturePatchCount: visibleMatches('.fixtureSetupEditor button')
+        .filter((button) => (button.textContent || '').trim().toLowerCase() === 'apply patch').length,
+      rightPatchExecutionFormCount: visibleMatches('.fixtureSetupContextPane [data-patch-minimal-form]').length,
       duplicateFixtureCount: visibleMatches('.fixtureSetupEditor button')
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'duplicate fixture').length,
       lowerSingleFixtureDuplicateCount: visibleMatches(
@@ -12699,7 +12717,12 @@ async function checkPatchZoning(client) {
       initial.profileSearchCount === 1 &&
       initial.verifiedProfileRowCount === 4 &&
       initial.recentProfileRowCount >= 1 &&
-      initial.selectedProfileRowCount === 1,
+      initial.selectedProfileRowCount === 1 &&
+      initial.draggableProfileRowCount >= 5,
+    leftColumnOwnsPatchExecution:
+      initial.leftPatchFormCount === 1 &&
+      initial.topPatchFormCount === 0 &&
+      initial.placementDisclosureInsideLeftForm,
     patchBrowserSelectionStaysInPatch:
       patchBrowserSelectionClicked &&
       patchBrowserSelected.activeSetupMode === 'Patch' &&
@@ -12746,7 +12769,9 @@ async function checkPatchZoning(client) {
       selectedFromGrid &&
       selected.fixtureEditorCount === 1 &&
       selected.fixtureEmptyStateCount === 0 &&
-      selected.useProfileForPatchCount === 1 &&
+      selected.useProfileForPatchCount === 0 &&
+      selected.applyFixturePatchCount === 1 &&
+      selected.rightPatchExecutionFormCount === 0 &&
       selected.duplicateFixtureCount === 1 &&
       selected.lowerSingleFixtureDuplicateCount === 0 &&
       selected.patchIdentityEditorCount === 1 &&
@@ -12806,6 +12831,9 @@ async function checkPatchFixtureFamilySweep(client) {
       familyIdentified: state.selectedProfileFamily.length > 0,
       patchIdentityOnly:
         state.patchIdentityEditorCount === 1 &&
+        state.useProfileForPatchCount === 0 &&
+        state.applyFixturePatchCount === 1 &&
+        state.rightPatchExecutionFormCount === 0 &&
         state.duplicateFixtureCount === 1 &&
         state.lowerSingleFixtureDuplicateCount === 0 &&
         state.upperLimitsEditorCount === 0 &&
@@ -13270,6 +13298,128 @@ async function runPatchViewport(client, viewport) {
   };
 }
 
+async function runPatchDndViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: fixtureUrl("patch") });
+  await waitForApp(client);
+  await seedViewportLocalStorage(client);
+  await client.send("Page.navigate", { url: fixtureUrl("patch") });
+  await waitForApp(client);
+  await clickByText(client, "Setup");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
+  await sleep(120);
+
+  const metrics = await client.evaluate(`(async () => {
+    const settle = async () => {
+      await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    };
+    const countInput = document.querySelector('[data-patch-field="count"] input');
+    const row = document.querySelector('[data-patch-profile-row][data-profile-source="session"]');
+    const target = document.querySelector('[data-dmx-address="65"]');
+    if (!(countInput instanceof HTMLInputElement) || !(row instanceof HTMLButtonElement) || !(target instanceof HTMLButtonElement)) {
+      return {
+        passed: false,
+        reason: 'missing left count input, draggable session profile, or A65 target',
+      };
+    }
+    countInput.value = '1';
+    countInput.dispatchEvent(new Event('input', { bubbles: true }));
+    await settle();
+
+    const footprint = Number(row.getAttribute('data-profile-footprint'));
+    const initialBlockCount = document.querySelectorAll('.dmxPatchFixtureBlock').length;
+    const initialTargetOccupied = target.classList.contains('occupied');
+    const dispatchDrag = (source, destination, type, dataTransfer) => destination.dispatchEvent(new DragEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer,
+    }));
+
+    const firstTransfer = new DataTransfer();
+    dispatchDrag(row, row, 'dragstart', firstTransfer);
+    dispatchDrag(row, target, 'dragenter', firstTransfer);
+    dispatchDrag(row, target, 'dragover', firstTransfer);
+    await settle();
+    const previewAddresses = [...document.querySelectorAll('.dmxAddressCell.planned')]
+      .map((cell) => Number(cell.getAttribute('data-dmx-address')))
+      .filter((address) => address >= 65 && address < 65 + footprint)
+      .sort((left, right) => left - right);
+    const validStatusCount = document.querySelectorAll('[data-patch-dnd-status="valid"]').length;
+    dispatchDrag(row, target, 'drop', firstTransfer);
+    dispatchDrag(row, row, 'dragend', firstTransfer);
+    await settle();
+    const afterPatchBlockCount = document.querySelectorAll('.dmxPatchFixtureBlock').length;
+    const afterPatchTargetOccupied = document.querySelector('[data-dmx-address="65"]')?.classList.contains('occupied') === true;
+
+    const conflictRow = document.querySelector('[data-patch-profile-row][data-profile-source="session"]');
+    const conflictTarget = document.querySelector('[data-dmx-address="65"]');
+    if (!(conflictRow instanceof HTMLButtonElement) || !(conflictTarget instanceof HTMLButtonElement)) {
+      return {
+        passed: false,
+        reason: 'DnD patch removed the session profile row or A65 target',
+        initialBlockCount,
+        afterPatchBlockCount,
+      };
+    }
+    const conflictTransfer = new DataTransfer();
+    dispatchDrag(conflictRow, conflictRow, 'dragstart', conflictTransfer);
+    dispatchDrag(conflictRow, conflictTarget, 'dragenter', conflictTransfer);
+    dispatchDrag(conflictRow, conflictTarget, 'dragover', conflictTransfer);
+    await settle();
+    const conflictPreviewAddresses = [...document.querySelectorAll('.dmxAddressCell.plannedConflict')]
+      .map((cell) => Number(cell.getAttribute('data-dmx-address')))
+      .filter((address) => address >= 65 && address < 65 + footprint)
+      .sort((left, right) => left - right);
+    const conflictStatusCount = document.querySelectorAll('[data-patch-dnd-status="conflict"]').length;
+    dispatchDrag(conflictRow, conflictTarget, 'drop', conflictTransfer);
+    dispatchDrag(conflictRow, conflictRow, 'dragend', conflictTransfer);
+    await settle();
+    const afterRejectedBlockCount = document.querySelectorAll('.dmxPatchFixtureBlock').length;
+    const rejectedStatusCount = document.querySelectorAll('[data-patch-dnd-status="rejected"]').length;
+    const expectedPreview = Array.from({ length: footprint }, (_, index) => 65 + index);
+    const passed =
+      countInput.value === '1' &&
+      footprint > 0 &&
+      !initialTargetOccupied &&
+      JSON.stringify(previewAddresses) === JSON.stringify(expectedPreview) &&
+      validStatusCount === 1 &&
+      afterPatchTargetOccupied &&
+      afterPatchBlockCount === initialBlockCount + 1 &&
+      JSON.stringify(conflictPreviewAddresses) === JSON.stringify(expectedPreview) &&
+      conflictStatusCount === 1 &&
+      afterRejectedBlockCount === afterPatchBlockCount &&
+      rejectedStatusCount === 1;
+    return {
+      passed,
+      countValue: countInput.value,
+      footprint,
+      initialBlockCount,
+      initialTargetOccupied,
+      previewAddresses,
+      validStatusCount,
+      afterPatchBlockCount,
+      afterPatchTargetOccupied,
+      conflictPreviewAddresses,
+      conflictPreviewCount: conflictPreviewAddresses.length,
+      conflictStatusCount,
+      afterRejectedBlockCount,
+      rejectedStatusCount,
+    };
+  })()`);
+  return {
+    passed: metrics.passed === true,
+    label: `setup-patch-dnd-${viewport.width}x${viewport.height}`,
+    metrics,
+  };
+}
+
 async function runPatchEmptyStateViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -13292,11 +13442,13 @@ async function runPatchEmptyStateViewport(client, viewport) {
     const patchMap = desk?.querySelector(':scope > .dmxPatchMap');
     const addressGrid = patchMap?.querySelector('.dmxAddressGrid');
     const firstCell = addressGrid?.querySelector('.dmxAddressGridCell');
-    const patchFormCount = desk?.querySelectorAll(':scope > .patchFixtureFormPanel').length ?? 0;
+    const leftPatchForm = document.querySelector('[data-patch-left-form]');
+    const patchFormCount = document.querySelectorAll('[data-patch-left-form]').length;
+    const topPatchFormCount = desk?.querySelectorAll('[data-patch-minimal-form]').length ?? 0;
     const profileBrowser = document.querySelector('[data-patch-profile-browser]');
     const profileBrowserScroll = document.querySelector('[data-patch-profile-browser-scroll]');
     const profileRows = [...document.querySelectorAll('[data-patch-profile-row]')];
-    const profileGuidance = desk?.querySelector(':scope > [data-patch-profile-empty]');
+    const profileGuidance = leftPatchForm?.querySelector('[data-patch-profile-empty]');
     const fixtureGuidance = document.querySelector('[data-fixture-setup-empty]');
     const profileBrowserSections = [...document.querySelectorAll('[data-patch-profile-section]')];
     if (!(desk instanceof HTMLElement) || !(patchMap instanceof HTMLElement) || !(addressGrid instanceof HTMLElement)) {
@@ -13305,6 +13457,7 @@ async function runPatchEmptyStateViewport(client, viewport) {
         patchMapPresent: patchMap instanceof HTMLElement,
         addressGridPresent: addressGrid instanceof HTMLElement,
         patchFormCount,
+        topPatchFormCount,
         profileBrowserPresent: profileBrowser instanceof HTMLElement,
       };
     }
@@ -13343,6 +13496,15 @@ async function runPatchEmptyStateViewport(client, viewport) {
       patchMapPresent: true,
       addressGridPresent: true,
       patchFormCount,
+      topPatchFormCount,
+      patchMinimalFieldNames: [...document.querySelectorAll('[data-patch-minimal-form] [data-patch-field]')]
+        .map((field) => field.getAttribute('data-patch-field')),
+      patchMinimalInputCount: document.querySelectorAll('[data-patch-minimal-form] [data-patch-field] input').length,
+      patchPrimaryButtonCount: [...document.querySelectorAll('[data-patch-minimal-form] button.primary')]
+        .filter((button) => (button.textContent || '').trim().toUpperCase() === 'PATCH').length,
+      patchPrimaryButtonDisabled: document.querySelector('[data-patch-minimal-form] button.primary')?.disabled === true,
+      placementDisclosureCount: document.querySelectorAll('[data-patch-left-form] [data-patch-placement-disclosure]').length,
+      placementDisclosureOpenCount: document.querySelectorAll('[data-patch-left-form] [data-patch-placement-disclosure][open]').length,
       deskHeight: precision(deskRect.height),
       patchMapHeight: precision(patchMapRect.height),
       paneDeskHeightRatio: deskRect.height > 0 ? precision(patchMapRect.height / deskRect.height) : 0,
@@ -13386,7 +13548,15 @@ async function runPatchEmptyStateViewport(client, viewport) {
     };
   })()`);
   const checks = {
-    patchFormAbsent: metrics.patchFormCount === 0,
+    leftPatchFormPresentAndUnarmed:
+      metrics.patchFormCount === 1 &&
+      metrics.topPatchFormCount === 0 &&
+      JSON.stringify(metrics.patchMinimalFieldNames) === JSON.stringify(['universe', 'address', 'count']) &&
+      metrics.patchMinimalInputCount === 3 &&
+      metrics.patchPrimaryButtonCount === 1 &&
+      metrics.patchPrimaryButtonDisabled === true &&
+      metrics.placementDisclosureCount === 1 &&
+      metrics.placementDisclosureOpenCount === 0,
     embeddedProfileBrowser:
       metrics.profileBrowserPresent === true &&
       metrics.profileSearchCount === 1 &&
@@ -13400,15 +13570,15 @@ async function runPatchEmptyStateViewport(client, viewport) {
     profileBrowserUsesInternalScroll:
       ['auto', 'scroll'].includes(metrics.profileBrowserOverflowY) &&
       metrics.profileBrowserLastControlReachable === true,
-    unarmedGuidancePointsLeft:
+    unarmedGuidanceStaysWithLeftForm:
       metrics.profileGuidanceCount === 1 &&
-      metrics.profileGuidanceText === 'Choose a fixture profile in Patch Source on the left to arm patching.' &&
+      metrics.profileGuidanceText === 'Choose a fixture profile above to arm patching.' &&
       metrics.fixtureGuidanceCount === 1,
     patchMapOccupiesFrameDrivenRow:
       metrics.deskPresent === true &&
       metrics.patchMapPresent === true &&
       metrics.addressGridPresent === true &&
-      metrics.patchMapGridRowStart === "2",
+      metrics.patchMapGridRowStart === "1",
     patchMapCoversAtLeastNinetyPercentOfDesk: metrics.paneDeskHeightRatio >= 0.9,
     cellSizeAtLeastTwentyFourAt2048: viewport.width !== 2048 || metrics.cellSizePx >= 24,
     noEmptyTrailingDeskRow: metrics.trailingDeskSpacePx <= 1,
@@ -25376,6 +25546,7 @@ async function main() {
     }
     if (patchOnlyMode) {
       const patchResults = [];
+      const patchDndResults = [];
       const patchEmptyStateResults = [];
       for (const viewport of viewports) {
         const result = await runPatchViewport(client, viewport);
@@ -25403,6 +25574,16 @@ async function main() {
             `high=${result.highAddressAction.addressValue ?? "?"}:${result.highAddressAction.plannedHighAddresses?.join(",") ?? "?"} ` +
             `zoningFailed=${JSON.stringify(result.zoning.failedChecks)} failed=${JSON.stringify(result.failedChecks)}`,
         );
+        const dndResult = await runPatchDndViewport(client, viewport);
+        patchDndResults.push(dndResult);
+        console.log(
+          `${dndResult.passed ? "pass" : "fail"} ${dndResult.label} ` +
+            `preview=${dndResult.metrics.previewAddresses?.join(",") ?? "?"} ` +
+            `patched=${dndResult.metrics.initialBlockCount ?? "?"}->${dndResult.metrics.afterPatchBlockCount ?? "?"} ` +
+            `conflict=${dndResult.metrics.conflictPreviewCount ?? "?"} ` +
+            `rejected=${dndResult.metrics.afterPatchBlockCount ?? "?"}->${dndResult.metrics.afterRejectedBlockCount ?? "?"} ` +
+            `status=${dndResult.metrics.validStatusCount ?? "?"}/${dndResult.metrics.conflictStatusCount ?? "?"}/${dndResult.metrics.rejectedStatusCount ?? "?"}`,
+        );
         const emptyStateResult = await runPatchEmptyStateViewport(client, viewport);
         patchEmptyStateResults.push(emptyStateResult);
         console.log(patchEmptyStateLogLine(emptyStateResult));
@@ -25417,10 +25598,11 @@ async function main() {
           `checks=${JSON.stringify(responsiveScaling.checks)}`,
       );
       const failures = patchResults.filter((result) => !result.passed);
+      const dndFailures = patchDndResults.filter((result) => !result.passed);
       const emptyStateFailures = patchEmptyStateResults.filter((result) => !result.passed);
-      if (failures.length > 0 || emptyStateFailures.length > 0 || !responsiveScaling.passed) {
+      if (failures.length > 0 || dndFailures.length > 0 || emptyStateFailures.length > 0 || !responsiveScaling.passed) {
         throw new Error(
-          `Continuous PATCH viewport failed: ${JSON.stringify({ failures, emptyStateFailures, responsiveScaling })}`,
+          `Continuous PATCH viewport failed: ${JSON.stringify({ failures, dndFailures, emptyStateFailures, responsiveScaling })}`,
         );
       }
       return;
@@ -26595,6 +26777,7 @@ async function main() {
     }
 
     const results = [];
+    const patchDndResults = [];
     const patchEmptyStateResults = [];
     const fixtureGroupsResults = [];
     const blindResults = [];
@@ -26602,6 +26785,15 @@ async function main() {
     for (const viewport of viewports) {
       results.push(...(await runViewport(client, viewport)));
       results.push(await runComposedTouchViewport(client, viewport));
+      const patchDndResult = await runPatchDndViewport(client, viewport);
+      patchDndResults.push(patchDndResult);
+      console.log(
+        `${patchDndResult.passed ? "pass" : "fail"} ${patchDndResult.label} ` +
+          `preview=${patchDndResult.metrics.previewAddresses?.join(",") ?? "?"} ` +
+          `patched=${patchDndResult.metrics.initialBlockCount ?? "?"}->${patchDndResult.metrics.afterPatchBlockCount ?? "?"} ` +
+          `conflict=${patchDndResult.metrics.conflictPreviewCount ?? "?"} ` +
+          `rejected=${patchDndResult.metrics.afterPatchBlockCount ?? "?"}->${patchDndResult.metrics.afterRejectedBlockCount ?? "?"}`,
+      );
       const patchEmptyStateResult = await runPatchEmptyStateViewport(client, viewport);
       patchEmptyStateResults.push(patchEmptyStateResult);
       console.log(patchEmptyStateLogLine(patchEmptyStateResult));
@@ -26689,6 +26881,7 @@ async function main() {
     const vjBankFailures = vjBankResults.filter((result) => !result.passed);
     const paneWindowFailures = paneWindowResults.filter((result) => !result.passed);
     const liveEditTypeFailures = liveEditTypeResults.filter((result) => !result.passed);
+    const patchDndFailures = patchDndResults.filter((result) => !result.passed);
     const patchEmptyStateFailures = patchEmptyStateResults.filter((result) => !result.passed);
     const fixtureGroupsFailures = fixtureGroupsResults.filter((result) => !result.passed);
     const blindFailures = blindResults.filter((result) => !result.passed);
@@ -26747,7 +26940,7 @@ async function main() {
         ? ` mappingHelp=${result.visibleMappingHotkeyHelpCount}/${result.mappingHotkeyHelpKeyCount}`
         : "";
       const patchSuffix = result.label.startsWith("setup-patch-")
-        ? ` patch=${result.visiblePatchActionRowCount}/${result.visiblePatchAutoButtonCount}/${result.visiblePatchPrimaryButtonCount}/${result.visiblePatchNextFreeButtonCount}/${result.visiblePatchFootprintCount}/${result.visibleDmxAddressGridCount}/${result.dmxAddressCellCount}/${result.dmxAddressOccupiedCellCount}/${result.dmxAddressPlannedCellCount}/${result.visibleDmxFixtureBlockCount}/${result.compactMappingStageWidth}x${result.compactMappingStageHeight}/${result.visibleDmxGridSummaryCount}/${result.visibleFixtureSetupEditorCount}/${result.visibleUseProfileForPatchButtonCount}/${result.visibleDuplicateFixtureButtonCount} continuous=${result.patchGridMetrics?.addressCount ?? 0}:${result.patchGridMetrics?.firstAddress ?? "?"}..${result.patchGridMetrics?.lastAddress ?? "?"} pages=${result.patchGridMetrics?.pageSelectorCount ?? "?"} geometry=${result.patchGridMetrics?.columnCount ?? "?"}x${result.patchGridMetrics?.rowCount ?? "?"} cell=${result.patchGridMetrics?.minCellWidth ?? "?"}x${result.patchGridMetrics?.minCellHeight ?? "?"} scroll=${result.patchGridMetrics?.clientWidth ?? "?"}x${result.patchGridMetrics?.clientHeight ?? "?"}->${result.patchGridMetrics?.scrollWidth ?? "?"}x${result.patchGridMetrics?.scrollHeight ?? "?"} end=${result.patchGridMetrics?.endReachable ? 1 : 0} outer=${result.patchGridMetrics?.outerScrollUnchangedAtEnd ? 0 : 1} keys=${result.patchGridMetrics?.arrowRightAddress ?? "?"}/${result.patchGridMetrics?.arrowDownAddress ?? "?"}/${result.patchGridMetrics?.controlEndAddress ?? "?"}`
+        ? ` patch=${result.visiblePatchLeftFormCount}/${result.visiblePatchTopFormCount}/${result.visiblePatchPrimaryButtonCount}/${result.visiblePatchNextFreeButtonCount}/${result.visiblePatchFootprintCount}/${result.visibleDmxAddressGridCount}/${result.dmxAddressCellCount}/${result.dmxAddressOccupiedCellCount}/${result.dmxAddressPlannedCellCount}/${result.visibleDmxFixtureBlockCount}/${result.compactMappingStageWidth}x${result.compactMappingStageHeight}/${result.visibleDmxGridSummaryCount}/${result.visibleFixtureSetupEditorCount} right=${result.visibleUseProfileForPatchButtonCount}/${result.visibleApplyFixturePatchButtonCount}/${result.visibleRightPatchExecutionFormCount}/${result.visibleDuplicateFixtureButtonCount} continuous=${result.patchGridMetrics?.addressCount ?? 0}:${result.patchGridMetrics?.firstAddress ?? "?"}..${result.patchGridMetrics?.lastAddress ?? "?"} pages=${result.patchGridMetrics?.pageSelectorCount ?? "?"} geometry=${result.patchGridMetrics?.columnCount ?? "?"}x${result.patchGridMetrics?.rowCount ?? "?"} cell=${result.patchGridMetrics?.minCellWidth ?? "?"}x${result.patchGridMetrics?.minCellHeight ?? "?"} scroll=${result.patchGridMetrics?.clientWidth ?? "?"}x${result.patchGridMetrics?.clientHeight ?? "?"}->${result.patchGridMetrics?.scrollWidth ?? "?"}x${result.patchGridMetrics?.scrollHeight ?? "?"} end=${result.patchGridMetrics?.endReachable ? 1 : 0} outer=${result.patchGridMetrics?.outerScrollUnchangedAtEnd ? 0 : 1} keys=${result.patchGridMetrics?.arrowRightAddress ?? "?"}/${result.patchGridMetrics?.arrowDownAddress ?? "?"}/${result.patchGridMetrics?.controlEndAddress ?? "?"}`
         : "";
       const outputSetupSuffix = result.label.startsWith("setup-video-")
         ? ` outputSetup=${result.visibleSetupVideoPanelCount}/${result.visibleSetupVideoOutputDeckCount}/${result.visibleSetupVideoOutputActiveDeckCount}/${result.visibleSetupVideoOutputDetailPaneCount}/${result.visibleVideoOutputMappingPanelCount}/${result.visibleVideoOutputBlendControlsCount}/${result.visibleProjectorMapEditorCount}/${result.visibleProjectorMapHandleCount}/${result.visibleProjectorKeystoneHandleCount}/${result.visibleProjectorScaleHandleCount}/${result.visibleProjectorRotateHandleCount}/${result.visibleProjectorAspectModeButtonCount}/${result.visibleProjectorAspectPresetButtonCount}/${result.visibleProjectorResetPoseButtonCount}/${result.videoSetupSidebarWidth}w/${result.videoSetupOutputDeskWidth}w panes=${result.videoSetupRoutingPaneWidth}/${result.videoSetupMapPaneWidth}/${result.videoSetupInspectorPaneWidth} mapH=${result.videoSetupMapPaneHeight} overflow=${result.videoSetupMapPaneOverflowPx} reachable=${result.videoSetupMappingLastControlReachable ? 1 : 0}/${result.videoSetupPreviewContained ? 1 : 0}/${result.videoSetupActionDockLastActionReachable ? 1 : 0} dock=${result.visibleVideoSetupActionDockCount}/${result.videoSetupActionDockHeight} actions=${result.videoSetupCriticalActionInViewportCount} videoSetupProjectorSurfaceContained=${result.videoSetupProjectorSurfaceContained} videoSetupActionDockLastActionReachable=${result.videoSetupActionDockLastActionReachable} videoSetupActionDockInViewport=${result.videoSetupActionDockInViewport}`
@@ -26836,6 +27029,7 @@ async function main() {
       vjBankFailures.length > 0 ||
       paneWindowFailures.length > 0 ||
       liveEditTypeFailures.length > 0 ||
+      patchDndFailures.length > 0 ||
       patchEmptyStateFailures.length > 0 ||
       fixtureGroupsFailures.length > 0 ||
       blindFailures.length > 0 ||
@@ -26958,6 +27152,7 @@ async function main() {
             vjBank: vjBankFailures,
             paneWindow: paneWindowFailures,
             liveEditTypes: liveEditTypeFailures,
+            patchDnd: patchDndFailures,
             patchEmptyState: patchEmptyStateFailures,
             fixtureGroups: fixtureGroupsFailures,
             blind: blindFailures,
@@ -26992,7 +27187,7 @@ async function main() {
         ),
       );
       throw new Error(
-        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${liveEditTypeFailures.length} Live Edit fixture-type check(s), ${patchEmptyStateFailures.length} PATCH empty-state check(s), ${fixtureGroupsFailures.length} fixture group operation check(s), ${blindFailures.length} BLIND editing check(s), ${sceneSettingsFailures.length} Scene Settings check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${stageSettingsFailures.length} stage settings check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${killZoneFailures.length} kill zone check(s), ${statusLineFailures.length} status line check(s) failed.`,
+        `${failures.length} viewport containment check(s), ${cueRecallFailures.length} Cue Recall fixture check(s), ${cueRecallLargeFailures.length} large Cue Recall DOM-budget check(s), ${sceneBlockLargeFailures.length} large Scene Block DOM-budget/layout check(s), ${cueNodeGraphFailures.length} Cue Node Graph fixture check(s), ${sceneMatrixFailures.length} Scene Matrix fixture check(s), ${liveEditTypeFailures.length} Live Edit fixture-type check(s), ${patchDndFailures.length} PATCH DnD check(s), ${patchEmptyStateFailures.length} PATCH empty-state check(s), ${fixtureGroupsFailures.length} fixture group operation check(s), ${blindFailures.length} BLIND editing check(s), ${sceneSettingsFailures.length} Scene Settings check(s), ${keyboardNavigationFailures.length} keyboard navigation check(s), ${setupSurfaceFailures.length} setup surface check(s), ${persistentBandFailures.length} persistent band check(s), ${persistentBandInvarianceFailures.length} persistent band invariance check(s), ${stageSettingsFailures.length} stage settings check(s), ${timelinePaneExpansionFailures.length} timeline pane expansion check(s), ${layeredTimelineDeskFailures.length} layered timeline desk check(s), ${projectMenuFailures.length} project menu check(s), ${localizationFailures.length} localization check(s), ${mappingHotkeyHelpFailures.length} mapping hotkey help check(s), ${controlModeFailures.length} control mode surface check(s), ${touchSurfaceFailures.length} touch surface check(s), ${timelineAutomationFailures.length} timeline automation visual check(s), ${sceneBlockFailures.length} Scene Block context-pane check(s), ${killZoneFailures.length} kill zone check(s), ${statusLineFailures.length} status line check(s) failed.`,
       );
     }
   } finally {

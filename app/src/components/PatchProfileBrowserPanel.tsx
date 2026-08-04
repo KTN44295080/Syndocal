@@ -14,16 +14,27 @@ export interface PatchRecentProfileEntry {
   modeName: string;
 }
 
+export interface PatchProfileDragItem {
+  source: "verified" | "cache" | "session" | "project";
+  key: string;
+  label: string;
+  modeName: string;
+  footprint: number;
+  activate: () => boolean | Promise<boolean>;
+}
+
 interface PatchProfileBrowserPanelProps extends ProfileImportSourcesProps {
   backendAvailable: boolean;
   selectedProfile: FixtureProfileSummary | null;
   selectedMode: string;
   recentProfiles: PatchRecentProfileEntry[];
   projectFixtures: PatchedFixtureSummary[];
-  onLoadVerified: (profileId: string, modeName: string) => void | Promise<void>;
-  onLoadCached: (path: string, modeName: string | null) => void | Promise<void>;
-  onLoadRecent: (entry: PatchRecentProfileEntry) => void | Promise<void>;
-  onLoadProject: (fixture: PatchedFixtureSummary) => void | Promise<void>;
+  onLoadVerified: (profileId: string, modeName: string) => boolean | Promise<boolean>;
+  onLoadCached: (path: string, modeName: string | null) => boolean | Promise<boolean>;
+  onLoadRecent: (entry: PatchRecentProfileEntry) => boolean | Promise<boolean>;
+  onLoadProject: (fixture: PatchedFixtureSummary) => boolean | Promise<boolean>;
+  onProfileDragStart: (item: PatchProfileDragItem) => void;
+  onProfileDragEnd: () => void;
   onMessage: (message: string) => void;
 }
 
@@ -139,6 +150,24 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
     );
   };
 
+  const beginProfileDrag = (event: DragEvent, item: PatchProfileDragItem) => {
+    const dataTransfer = event.dataTransfer;
+    if (!dataTransfer) {
+      event.preventDefault();
+      return;
+    }
+    dataTransfer.effectAllowed = "copy";
+    dataTransfer.setData("application/x-syndocal-fixture-profile", JSON.stringify({
+      source: item.source,
+      key: item.key,
+      label: item.label,
+      modeName: item.modeName,
+      footprint: item.footprint,
+    }));
+    dataTransfer.setData("text/plain", `${item.label} / ${item.modeName}`);
+    props.onProfileDragStart(item);
+  };
+
   return (
     <section class="patchProfileBrowserPanel" data-patch-profile-browser>
       <header class="profileLoadHeader patchProfileBrowserHeader">
@@ -174,9 +203,20 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
                   class="patchProfileRow"
                   data-patch-profile-row
                   data-profile-source="verified"
+                  data-profile-footprint={entry.footprint}
+                  draggable="true"
                   aria-pressed={selected(entry.id, entry.manufacturer, entry.name, entry.mode_name)}
                   disabled={!props.backendAvailable || busy()}
                   onClick={() => void props.onLoadVerified(entry.id, entry.mode_name)}
+                  onDragStart={(event) => beginProfileDrag(event, {
+                    source: "verified",
+                    key: entry.id,
+                    label: `${entry.manufacturer} ${entry.name}`,
+                    modeName: entry.mode_name,
+                    footprint: entry.footprint,
+                    activate: () => props.onLoadVerified(entry.id, entry.mode_name),
+                  })}
+                  onDragEnd={props.onProfileDragEnd}
                 >
                   <strong data-no-localize>{entry.name}</strong>
                   <span data-no-localize>{entry.mode_name} · {entry.footprint}ch</span>
@@ -198,9 +238,20 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
                       class="patchProfileRow"
                       data-patch-profile-row
                       data-profile-source="cache"
+                      data-profile-footprint={mode.dmx_footprint ?? 0}
+                      draggable="true"
                       aria-pressed={selected(entry.path, entry.manufacturer, entry.fixture, mode.name)}
                       disabled={entry.health === "invalid" || busy()}
                       onClick={() => void props.onLoadCached(entry.path, mode.name || null)}
+                      onDragStart={(event) => beginProfileDrag(event, {
+                        source: "cache",
+                        key: profileModeKey(entry.path, mode.name),
+                        label: `${entry.manufacturer} ${entry.fixture}`,
+                        modeName: mode.name,
+                        footprint: mode.dmx_footprint ?? 0,
+                        activate: () => props.onLoadCached(entry.path, mode.name || null),
+                      })}
+                      onDragEnd={props.onProfileDragEnd}
                     >
                       <strong data-no-localize>{entry.manufacturer} {entry.fixture}</strong>
                       <span data-no-localize>{mode.name || "Default"}{mode.dmx_footprint ? ` · ${mode.dmx_footprint}ch` : ""}</span>
@@ -222,12 +273,25 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
                   class="patchProfileRow"
                   data-patch-profile-row
                   data-profile-source={entry.kind}
+                  data-profile-footprint={entry.footprint}
+                  draggable="true"
                   aria-pressed={entry.kind === "session"
                     ? selected(entry.entry.profile.source_path, entry.manufacturer, entry.name, entry.modeName)
                     : selected(entry.fixture.profile_source_path, entry.manufacturer, entry.name, entry.modeName)}
                   onClick={() => void (entry.kind === "session"
                     ? props.onLoadRecent(entry.entry)
                     : props.onLoadProject(entry.fixture))}
+                  onDragStart={(event) => beginProfileDrag(event, {
+                    source: entry.kind,
+                    key: entry.key,
+                    label: `${entry.manufacturer} ${entry.name}`,
+                    modeName: entry.modeName,
+                    footprint: entry.footprint,
+                    activate: () => entry.kind === "session"
+                      ? props.onLoadRecent(entry.entry)
+                      : props.onLoadProject(entry.fixture),
+                  })}
+                  onDragEnd={props.onProfileDragEnd}
                 >
                   <strong data-no-localize>{entry.manufacturer} {entry.name}</strong>
                   <span>

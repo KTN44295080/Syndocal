@@ -46,6 +46,7 @@ import { type OpticsControlEntry } from "./components/OpticsControlPanel";
 import { PatchFixtureFormPanel, type FixtureLayoutMode } from "./components/PatchFixtureFormPanel";
 import {
   PatchProfileBrowserPanel,
+  type PatchProfileDragItem,
   type PatchRecentProfileEntry,
 } from "./components/PatchProfileBrowserPanel";
 import { type PositionFavorite } from "./components/PositionControlPanel";
@@ -1398,6 +1399,9 @@ export default function App() {
   const [mappingViewportPanDrag, setMappingViewportPanDrag] = createSignal<MappingViewportPanDragState | null>(null);
   const [patchGridUniverse, setPatchGridUniverse] = createSignal(0);
   const [dmxPatchViewMode, setDmxPatchViewMode] = createSignal<DmxPatchViewMode>("grid");
+  const [patchProfileDragSource, setPatchProfileDragSource] = createSignal<PatchProfileDragItem | null>(null);
+  const [patchProfileDragAddress, setPatchProfileDragAddress] = createSignal<number | null>(null);
+  const [patchProfileDropRejected, setPatchProfileDropRejected] = createSignal(false);
   const [controlCategory, setControlCategory] = createSignal<ControlCategory>(initialWorkspaceLayout.control_category);
   const [panTiltNudgeAmount, setPanTiltNudgeAmount] = createSignal(2048);
   const [positionFavoriteLabel, setPositionFavoriteLabel] = createSignal("");
@@ -3853,27 +3857,23 @@ export default function App() {
     const manualStride = Math.floor(patchAddressStride() || 0);
     return manualStride > 0 ? manualStride : Math.max(selectedFootprint(), 1);
   });
-  const patchAddressRanges = createMemo(() =>
-    Array.from({ length: patchCountValue() }, (_, index) => {
-      const start = address() + index * patchAddressStrideValue();
+  const patchAddressRangesFor = (startAddress: number, footprint: number, count: number, stride: number) =>
+    Array.from({ length: count }, (_, index) => {
+      const start = startAddress + index * stride;
       return {
         index,
         start,
-        range: addressRange(start, selectedFootprint()),
+        range: addressRange(start, footprint),
       };
-    }),
-  );
-  const endAddress = createMemo(() => patchAddressRanges().at(-1)?.range?.[1] ?? address());
-  const patchAddressConflictText = createMemo(() => {
-    const ranges = patchAddressRanges();
+    });
+  const patchAddressConflictFor = (
+    ranges: ReturnType<typeof patchAddressRangesFor>,
+    targetUniverse: number,
+  ) => {
     for (const candidate of ranges) {
-      if (!candidate.range) {
-        continue;
-      }
+      if (!candidate.range) continue;
       const conflict = snapshot().fixtures.find((fixture) => {
-        if (fixture.universe !== universe()) {
-          return false;
-        }
+        if (fixture.universe !== targetUniverse) return false;
         const existingRange = addressRange(fixture.address, fixtureFootprint(fixture));
         return existingRange ? rangesOverlap(candidate.range!, existingRange) : false;
       });
@@ -3889,7 +3889,12 @@ export default function App() {
       }
     }
     return "";
-  });
+  };
+  const patchAddressRanges = createMemo(() =>
+    patchAddressRangesFor(address(), selectedFootprint(), patchCountValue(), patchAddressStrideValue()),
+  );
+  const endAddress = createMemo(() => patchAddressRanges().at(-1)?.range?.[1] ?? address());
+  const patchAddressConflictText = createMemo(() => patchAddressConflictFor(patchAddressRanges(), universe()));
   const patchAddressInvalid = createMemo(() => selectedFootprint() === 0 || endAddress() > 512 || Boolean(patchAddressConflictText()));
   const nextFreePatchAddress = createMemo(() => {
     const targetUniverse = universe();
@@ -4030,10 +4035,54 @@ export default function App() {
       : `Pending A${first[0]}-${last[1]} (${ranges.length} fixtures${stepText})`;
   });
 
+  const patchProfileDragFootprint = createMemo(() => Math.max(0, patchProfileDragSource()?.footprint ?? 0));
+  const patchProfileDragStride = createMemo(() => {
+    const manualStride = Math.floor(patchAddressStride() || 0);
+    return manualStride > 0 ? manualStride : Math.max(patchProfileDragFootprint(), 1);
+  });
+  const patchProfileDragRanges = createMemo(() => {
+    const dragAddress = patchProfileDragAddress();
+    return dragAddress === null
+      ? []
+      : patchAddressRangesFor(
+          dragAddress,
+          patchProfileDragFootprint(),
+          patchCountValue(),
+          patchProfileDragStride(),
+        );
+  });
+  const patchProfileDragEndAddress = createMemo(() =>
+    patchProfileDragRanges().at(-1)?.range?.[1] ?? patchProfileDragAddress() ?? 0,
+  );
+  const patchProfileDragConflictText = createMemo(() => {
+    if (patchProfileDragFootprint() === 0) return "Profile has no DMX footprint.";
+    if (patchProfileDragEndAddress() > 512) {
+      return `Fixture exceeds DMX universe at address ${patchProfileDragEndAddress()}.`;
+    }
+    return patchAddressConflictFor(patchProfileDragRanges(), activePatchGridUniverse());
+  });
+  const patchProfileDragInvalid = createMemo(() => Boolean(patchProfileDragConflictText()));
+  const patchProfileDndStatus = createMemo(() => {
+    if (patchProfileDropRejected()) return "rejected" as const;
+    if (!patchProfileDragSource() || patchProfileDragAddress() === null) return null;
+    return patchProfileDragInvalid() ? "conflict" as const : "valid" as const;
+  });
+  const activePatchPreviewRanges = createMemo(() => {
+    if (patchProfileDragSource() && patchProfileDragAddress() !== null) {
+      return patchProfileDragRanges().filter(
+        (candidate): candidate is { index: number; start: number; range: [number, number] } => Boolean(candidate.range),
+      );
+    }
+    return patchPlannedRanges();
+  });
+
   const dmxAddressCells = createMemo<DmxAddressCell[]>(() => {
     const map = activePatchGridMap();
     const selectedId = selectedFixtureId();
-    const plannedRanges = patchPlannedRanges();
+    const plannedRanges = activePatchPreviewRanges();
+    const dragPreviewInvalid = patchProfileDragSource() && patchProfileDragAddress() !== null
+      ? patchProfileDragInvalid()
+      : false;
     return Array.from({ length: 512 }, (_, index) => {
       const channel = index + 1;
       const segment = map.segments.find((candidate) => channel >= candidate.start && channel <= candidate.end) ?? null;
@@ -4045,7 +4094,7 @@ export default function App() {
         isSelected: Boolean(segment && segment.fixture.id === selectedId),
         plannedIndex: planned?.index ?? null,
         plannedStart: planned?.range[0] === channel,
-        plannedConflict: Boolean(planned && segment),
+        plannedConflict: Boolean(planned && (segment || dragPreviewInvalid)),
       };
     });
   });
@@ -9172,31 +9221,6 @@ export default function App() {
     }
   };
 
-  const useFixtureProfileForPatch = async (fixture: PatchedFixtureSummary) => {
-    try {
-      const imported = await invoke<FixtureProfileSummary>("use_fixture_profile", { fixtureId: fixture.id });
-      const footprint = Math.max(1, fixtureFootprint(fixture));
-      setProfile(imported);
-      setGdtfPath(imported.source_path);
-      setSelectedMode(fixture.mode_name);
-      setLabel(`${fixture.label} Copy`);
-      setUniverse(fixture.universe);
-      setAddress(Math.min(512, fixture.address + footprint));
-      setPatchCount(1);
-      setPatchAddressStride(footprint);
-      setGroupText(fixture.group_ids.join(", "));
-      setPatchX(fixture.position.x + 1);
-      setPatchY(fixture.position.y);
-      setPatchZ(fixture.position.z);
-      setPatchPitch(fixture.rotation.pitch);
-      setPatchYaw(fixture.rotation.yaw);
-      setPatchRoll(fixture.rotation.roll);
-      setMessage(`Using ${fixture.label}'s profile for patching`);
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
   const duplicateFixture = async (fixture: PatchedFixtureSummary) => {
     try {
       const footprint = Math.max(1, fixtureFootprint(fixture));
@@ -9355,20 +9379,20 @@ export default function App() {
     const imported = profile();
     if (!imported) {
       setMessage("Load a GDTF profile first.");
-      return;
+      return false;
     }
     if (selectedFootprint() === 0) {
       setMessage("Selected GDTF mode has no DMX channel offsets.");
-      return;
+      return false;
     }
     if (endAddress() > 512) {
       setMessage(`Fixture exceeds DMX universe: start ${address()}, footprint ${selectedFootprint()}ch, end ${endAddress()}`);
-      return;
+      return false;
     }
     const conflict = patchAddressConflictText();
     if (conflict) {
       setMessage(`DMX address conflict: ${patchAddressConflictText()}`);
-      return;
+      return false;
     }
     const count = patchCountValue();
     const addressStride = patchAddressStrideValue();
@@ -9427,7 +9451,7 @@ export default function App() {
       const request = requests[requests.length - 1];
       if (fixtureId === undefined || request === undefined) {
         setMessage("Patch did not return a fixture id.");
-        return;
+        return false;
       }
       setSelectedFixtureId(fixtureId);
       setSelectedFixtureLabelDraft(request.label);
@@ -9469,8 +9493,10 @@ export default function App() {
       );
       setPatchGroupRegistrationName(baseLabel || imported.name);
       setPendingPatchGroupRegistration({ fixtureIds, defaultName: baseLabel || imported.name });
+      return true;
     } catch (error) {
       setMessage(String(error));
+      return false;
     }
   };
 
@@ -10349,6 +10375,64 @@ export default function App() {
     } catch (error) {
       setMessage(String(error));
     }
+  };
+
+  const beginPatchProfileDrag = (item: PatchProfileDragItem) => {
+    setPatchProfileDragSource(item);
+    setPatchProfileDragAddress(null);
+    setPatchProfileDropRejected(false);
+    if (item.footprint > 0) return;
+    void Promise.resolve(item.activate()).then((activated) => {
+      if (!activated || patchProfileDragSource()?.key !== item.key) return;
+      const footprint = selectedFootprint();
+      if (footprint <= 0) return;
+      setPatchProfileDragSource({ ...item, footprint, activate: () => true });
+    });
+  };
+
+  const clearPatchProfileDrag = () => {
+    setPatchProfileDragSource(null);
+    setPatchProfileDragAddress(null);
+  };
+
+  const hoverPatchProfileAddress = (channel: number) => {
+    if (!patchProfileDragSource()) return;
+    setPatchProfileDragAddress(channel);
+  };
+
+  const leavePatchProfileGrid = () => {
+    if (!patchProfileDropRejected()) setPatchProfileDragAddress(null);
+  };
+
+  const dropPatchProfileAtAddress = async (channel: number) => {
+    const source = patchProfileDragSource();
+    if (!source) return;
+    setPatchProfileDragAddress(channel);
+    const targetUniverse = activePatchGridUniverse();
+    const conflict = patchProfileDragConflictText();
+    if (conflict) {
+      setPatchProfileDropRejected(true);
+      setMessage("Conflict: drop rejected");
+      return;
+    }
+
+    setUniverse(targetUniverse);
+    setAddress(channel);
+    setPatchGridUniverse(targetUniverse);
+    setDmxPatchViewMode("grid");
+    const activated = await source.activate();
+    if (!activated) {
+      setPatchProfileDropRejected(true);
+      setMessage("Conflict: drop rejected");
+      return;
+    }
+    const patched = await patchFixture();
+    if (!patched) {
+      setPatchProfileDropRejected(true);
+      return;
+    }
+    setPatchProfileDropRejected(false);
+    clearPatchProfileDrag();
   };
 
   const setFixturePatch = async (fixture: PatchedFixtureSummary) => {
@@ -11691,29 +11775,36 @@ export default function App() {
     try {
       const imported = await invoke<FixtureProfileSummary>("load_verified_fixture_profile", { profileId });
       selectLoadedProfile(imported, `Loaded verified ${imported.name}`, modeName, false);
+      return true;
     } catch (error) {
       setMessage(String(error));
+      return false;
     }
   };
 
   const usePatchCachedProfile = async (path: string, modeName: string | null) => {
     try {
       await loadGdtfProfile(path, "Loaded cached profile", modeName, false);
+      return true;
     } catch (error) {
       setMessage(String(error));
+      return false;
     }
   };
 
   const usePatchRecentProfile = (entry: PatchRecentProfileEntry) => {
     selectLoadedProfile(entry.profile, "Loaded", entry.modeName, false);
+    return true;
   };
 
   const usePatchProjectProfile = async (fixture: PatchedFixtureSummary) => {
     try {
       const imported = await invoke<FixtureProfileSummary>("use_fixture_profile", { fixtureId: fixture.id });
       selectLoadedProfile(imported, "Loaded", fixture.mode_name, false);
+      return true;
     } catch (error) {
       setMessage(String(error));
+      return false;
     }
   };
 
@@ -17563,7 +17654,54 @@ export default function App() {
               onLoadCached={usePatchCachedProfile}
               onLoadRecent={usePatchRecentProfile}
               onLoadProject={usePatchProjectProfile}
+              onProfileDragStart={beginPatchProfileDrag}
+              onProfileDragEnd={clearPatchProfileDrag}
               onMessage={setMessage}
+            />
+            <PatchFixtureFormPanel
+              armed={Boolean(profile())}
+              universe={universe()}
+              address={address()}
+              count={patchCount()}
+              addressStride={patchAddressStride()}
+              layoutMode={patchLayoutMode()}
+              gridColumns={patchGridColumns()}
+              circleRadius={patchCircleRadius()}
+              x={patchX()}
+              y={patchY()}
+              z={patchZ()}
+              xStep={patchXStep()}
+              zStep={patchZStep()}
+              pitch={patchPitch()}
+              yaw={patchYaw()}
+              roll={patchRoll()}
+              footprint={selectedFootprint()}
+              normalizedCount={patchCountValue()}
+              normalizedAddressStride={patchAddressStrideValue()}
+              normalizedGridColumns={patchGridColumnsValue()}
+              normalizedCircleRadius={patchCircleRadiusValue()}
+              endAddress={endAddress()}
+              conflictText={patchAddressConflictText()}
+              invalid={patchAddressInvalid()}
+              nextFreeAddress={nextFreePatchAddress()}
+              warnings={profile()?.warnings ?? []}
+              onUniverse={setUniverse}
+              onAddress={setAddress}
+              onCount={setPatchCount}
+              onAddressStride={setPatchAddressStride}
+              onLayoutMode={setPatchLayoutMode}
+              onGridColumns={setPatchGridColumns}
+              onCircleRadius={setPatchCircleRadius}
+              onX={setPatchX}
+              onY={setPatchY}
+              onZ={setPatchZ}
+              onXStep={setPatchXStep}
+              onZStep={setPatchZStep}
+              onPitch={setPatchPitch}
+              onYaw={setPatchYaw}
+              onRoll={setPatchRoll}
+              onPatch={patchFixture}
+              onNextFreeAddress={selectNextFreePatchAddress}
             />
           </Show>
           <Show when={setupSubTab() === "profiles"}>
@@ -17624,57 +17762,6 @@ export default function App() {
         <SetupMappingWorkspace
           className={setupPanelClass("panel fixtures setupPanel", ["patch"])}
           panelRef={registerSetupPanel(["patch"])}
-          patchArmed={Boolean(profile())}
-          patchForm={
-            <Show when={profile()}>
-              {(loaded) => (
-                <PatchFixtureFormPanel
-                  universe={universe()}
-                  address={address()}
-                  count={patchCount()}
-                  addressStride={patchAddressStride()}
-                  layoutMode={patchLayoutMode()}
-                  gridColumns={patchGridColumns()}
-                  circleRadius={patchCircleRadius()}
-                  x={patchX()}
-                  y={patchY()}
-                  z={patchZ()}
-                  xStep={patchXStep()}
-                  zStep={patchZStep()}
-                  pitch={patchPitch()}
-                  yaw={patchYaw()}
-                  roll={patchRoll()}
-                  footprint={selectedFootprint()}
-                  normalizedCount={patchCountValue()}
-                  normalizedAddressStride={patchAddressStrideValue()}
-                  normalizedGridColumns={patchGridColumnsValue()}
-                  normalizedCircleRadius={patchCircleRadiusValue()}
-                  endAddress={endAddress()}
-                  conflictText={patchAddressConflictText()}
-                  invalid={patchAddressInvalid()}
-                  nextFreeAddress={nextFreePatchAddress()}
-                  warnings={loaded().warnings}
-                  onUniverse={setUniverse}
-                  onAddress={setAddress}
-                  onCount={setPatchCount}
-                  onAddressStride={setPatchAddressStride}
-                  onLayoutMode={setPatchLayoutMode}
-                  onGridColumns={setPatchGridColumns}
-                  onCircleRadius={setPatchCircleRadius}
-                  onX={setPatchX}
-                  onY={setPatchY}
-                  onZ={setPatchZ}
-                  onXStep={setPatchXStep}
-                  onZStep={setPatchZStep}
-                  onPitch={setPatchPitch}
-                  onYaw={setPatchYaw}
-                  onRoll={setPatchRoll}
-                  onPatch={patchFixture}
-                  onNextFreeAddress={selectNextFreePatchAddress}
-                />
-              )}
-            </Show>
-          }
           patchMap={{
             activeUniverse: activePatchGridUniverse(),
             universeOptions: patchGridUniverseOptions(),
@@ -17686,11 +17773,16 @@ export default function App() {
             fixtureCount: snapshot().fixtures.length,
             selectedFixtureId: selectedFixtureId(),
             plannedAddressSummary: plannedAddressSummary(),
+            profileDragActive: Boolean(patchProfileDragSource()),
+            profileDndStatus: patchProfileDndStatus(),
             onNextFreeAddress: selectNextFreePatchAddress,
             onUniverse: setPatchGridUniverse,
             onViewMode: setDmxPatchViewMode,
             onSelectFixture: selectFixture,
             onAddressCell: handleDmxAddressCellClick,
+            onProfileDragHover: hoverPatchProfileAddress,
+            onProfileDragLeave: leavePatchProfileGrid,
+            onProfileDrop: dropPatchProfileAtAddress,
           }}
           fixtureEditor={selectedFixture() ? {
             fixture: selectedFixture()!,
@@ -17699,7 +17791,6 @@ export default function App() {
             addressDraft: selectedFixtureAddressDraft(),
             groupText: selectedFixtureGroupText(),
             availableGroups: fixtureGroupEntities(),
-            onUseProfileForPatch: useFixtureProfileForPatch,
             onDuplicateFixture: duplicateFixture,
             onLabelDraft: setSelectedFixtureLabelDraft,
             onUniverseDraft: setSelectedFixtureUniverseDraft,

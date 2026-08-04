@@ -2,6 +2,7 @@ import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "so
 import type { PatchedFixtureSummary } from "../types";
 
 export type DmxPatchViewMode = "grid" | "list";
+export type PatchProfileDndStatus = "valid" | "conflict" | "rejected" | null;
 
 export interface DmxPatchSegment {
   fixture: PatchedFixtureSummary;
@@ -75,11 +76,16 @@ interface DmxPatchMapPanelProps {
   fixtureCount: number;
   selectedFixtureId: number | null;
   plannedAddressSummary: string;
+  profileDragActive: boolean;
+  profileDndStatus: PatchProfileDndStatus;
   onNextFreeAddress: () => void;
   onUniverse: (universe: number) => void;
   onViewMode: (mode: DmxPatchViewMode) => void;
   onSelectFixture: (fixture: PatchedFixtureSummary) => void;
   onAddressCell: (cell: DmxAddressCell) => void;
+  onProfileDragHover: (channel: number) => void;
+  onProfileDragLeave: () => void;
+  onProfileDrop: (channel: number) => void | Promise<void>;
 }
 
 export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
@@ -251,6 +257,22 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
     if (nextFreeAddress !== null) revealAddress(nextFreeAddress);
   };
 
+  const handleProfileDragOver = (
+    event: DragEvent & { currentTarget: HTMLButtonElement },
+    channel: number,
+  ) => {
+    if (!props.profileDragActive) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    props.onProfileDragHover(channel);
+  };
+
+  const handleProfileDragLeave = (event: DragEvent & { currentTarget: HTMLDivElement }) => {
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
+    props.onProfileDragLeave();
+  };
+
   return (
     <>
       <div class="dmxPatchMap">
@@ -355,6 +377,17 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
             </details>
           </div>
         </div>
+        <Show when={props.profileDndStatus}>
+          {(status) => (
+            <output
+              class={`patchProfileDndStatus ${status()}`}
+              data-patch-dnd-status={status()}
+              role={status() === "conflict" || status() === "rejected" ? "alert" : "status"}
+            >
+              {status() === "valid" ? "Drop to patch" : "Conflict: drop rejected"}
+            </output>
+          )}
+        </Show>
         <Show
           when={props.viewMode === "grid"}
           fallback={
@@ -386,6 +419,7 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
             aria-label={`Universe ${props.activeUniverse} DMX addresses 1 to 512`}
             aria-rowcount={dmxGridRowCount}
             aria-colcount={dmxGridColumnCount}
+            onDragLeave={handleProfileDragLeave}
           >
             <For each={addressRows()}>
               {(cells, rowIndex) => (
@@ -429,6 +463,13 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
                               setInspectedAddress(cell.channel);
                             }}
                             onPointerEnter={() => setInspectedAddress(cell.channel)}
+                            onDragEnter={(event) => handleProfileDragOver(event, cell.channel)}
+                            onDragOver={(event) => handleProfileDragOver(event, cell.channel)}
+                            onDrop={(event) => {
+                              if (!props.profileDragActive) return;
+                              event.preventDefault();
+                              void props.onProfileDrop(cell.channel);
+                            }}
                             onKeyDown={(event) => handleAddressKeyDown(event, cell.channel)}
                             onClick={() => {
                               setActiveAddress(cell.channel);

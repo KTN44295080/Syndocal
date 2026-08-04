@@ -3,6 +3,7 @@ import { For, Show } from "solid-js";
 export type FixtureLayoutMode = "line" | "grid" | "circle";
 
 interface PatchFixtureFormPanelProps {
+  armed: boolean;
   universe: number;
   address: number;
   count: number;
@@ -43,7 +44,7 @@ interface PatchFixtureFormPanelProps {
   onPitch: (value: number) => void;
   onYaw: (value: number) => void;
   onRoll: (value: number) => void;
-  onPatch: () => void | Promise<void>;
+  onPatch: () => unknown;
   onNextFreeAddress: () => void;
 }
 
@@ -56,46 +57,52 @@ export function PatchFixtureFormPanel(props: PatchFixtureFormPanelProps) {
         : "Line";
 
   return (
-    <section class="patchFixtureFormPanel">
+    <section class="patchFixtureFormPanel" data-patch-left-form>
       <div class="patchFixtureMinimalForm" data-patch-minimal-form>
-        <label data-patch-field="universe">
-          Universe
+        <div class="patchFixtureField" data-patch-field="universe">
+          <label for="patch-fixture-universe">Universe</label>
           <input
+            id="patch-fixture-universe"
             type="number"
             min="0"
             value={props.universe}
             onInput={(event) => props.onUniverse(Number(event.currentTarget.value))}
           />
-        </label>
-        <label data-patch-field="address">
-          Address
+        </div>
+        <div class="patchFixtureField" data-patch-field="address">
+          <label for="patch-fixture-address">Address</label>
+          <span class="patchFixtureAddressControl">
+            <input
+              id="patch-fixture-address"
+              type="number"
+              min="1"
+              max="512"
+              value={props.address}
+              onInput={(event) => props.onAddress(Number(event.currentTarget.value))}
+            />
+            <button
+              type="button"
+              class="patchFixtureNextFree"
+              onClick={props.onNextFreeAddress}
+              disabled={props.nextFreeAddress === null}
+            >
+              Next Free
+            </button>
+          </span>
+        </div>
+        <div class="patchFixtureField" data-patch-field="count">
+          <label for="patch-fixture-count">Count</label>
           <input
-            type="number"
-            min="1"
-            max="512"
-            value={props.address}
-            onInput={(event) => props.onAddress(Number(event.currentTarget.value))}
-          />
-        </label>
-        <label data-patch-field="count">
-          Count
-          <input
+            id="patch-fixture-count"
             type="number"
             min="1"
             max="256"
             value={props.count}
             onInput={(event) => props.onCount(Number(event.currentTarget.value))}
           />
-        </label>
-        <button class="primary patchFixtureSubmit" onClick={props.onPatch} disabled={props.invalid}>
+        </div>
+        <button class="primary patchFixtureSubmit" onClick={props.onPatch} disabled={!props.armed || props.invalid}>
           PATCH
-        </button>
-        <button
-          class="patchFixtureNextFree"
-          onClick={props.onNextFreeAddress}
-          disabled={props.nextFreeAddress === null}
-        >
-          Next Free A{props.nextFreeAddress ?? "-"}
         </button>
         <details class="patchFixtureOptionsDisclosure" data-patch-placement-disclosure>
           <summary>Placement options</summary>
@@ -216,7 +223,12 @@ export function PatchFixtureFormPanel(props: PatchFixtureFormPanelProps) {
           </div>
         </details>
       </div>
-      <Show when={props.invalid}>
+      <Show when={!props.armed}>
+        <p class="patchProfileEmptyState" data-patch-profile-empty>
+          Choose a fixture profile above to arm patching.
+        </p>
+      </Show>
+      <Show when={props.armed && props.invalid}>
         <p class="patchFixtureConflict" role="alert">
           {props.conflictText || `End address ${props.endAddress}`}
         </p>

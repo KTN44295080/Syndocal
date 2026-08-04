@@ -7,7 +7,6 @@ interface SetupFixtureEditorPanelProps {
   addressDraft: number;
   groupText: string;
   availableGroups: FixtureGroupSummary[];
-  onUseProfileForPatch: (fixture: PatchedFixtureSummary) => void | Promise<void>;
   onDuplicateFixture: (fixture: PatchedFixtureSummary) => void | Promise<void>;
   onLabelDraft: (value: string) => void;
   onUniverseDraft: (value: number) => void;
@@ -24,9 +23,6 @@ export function SetupFixtureEditorPanel(props: SetupFixtureEditorPanelProps) {
         <h3>Fixture Setup</h3>
         <span data-no-localize>{props.fixture.label}</span>
       </div>
-      <button onClick={() => void props.onUseProfileForPatch(props.fixture)}>
-        Use Profile for Patch
-      </button>
       <button onClick={() => void props.onDuplicateFixture(props.fixture)}>
         Duplicate Fixture
       </button>

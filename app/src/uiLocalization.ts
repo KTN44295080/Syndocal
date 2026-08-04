@@ -1982,6 +1982,8 @@ const japaneseText: Record<string, string> = {
   "Place selected fixture": "選択灯体を配置",
   "Place selected fixture (P)": "選択灯体を配置（P）",
   "Placement options": "配置オプション",
+  "Drop to patch": "ドロップしてパッチ",
+  "Conflict: drop rejected": "競合：ドロップを拒否",
   PATCH: "PATCH",
   Play: "再生",
   "Playback executors": "プレイバックエグゼキューター",
@@ -2236,6 +2238,8 @@ const japaneseText: Record<string, string> = {
   "Use Profile for Patch": "プロファイルをパッチへ使用",
   "Choose a fixture profile in Patch Source on the left to arm patching.":
     "左のパッチ元で灯体プロファイルを選び、パッチ操作を有効にしてください。",
+  "Choose a fixture profile above to arm patching.":
+    "上の灯体プロファイルを選び、パッチ操作を有効にしてください。",
   "Use Source Length": "ソース長を使用",
   "Use the standard sACN multicast target for the selected universe": "選択ユニバースの標準sACNマルチキャスト宛先を使用",
   "Use Video Output Pos": "映像出力位置を使用",
