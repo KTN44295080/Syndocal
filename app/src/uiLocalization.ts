@@ -1649,6 +1649,8 @@ const japaneseText: Record<string, string> = {
   "Patch Source": "パッチ元",
   "Search profiles": "プロファイルを検索",
   "Fixture, manufacturer, or mode": "灯体、メーカー、モード",
+  "Fixture, manufacturer, mode, or channel count": "灯体、メーカー、モード、またはch数",
+  "Find by ch count": "ch数から探す",
   "Share User": "Shareユーザー",
   "Share Password": "Shareパスワード",
   "Sign in to GDTF Share here, or open Library.": "ここでGDTF Shareにサインインするか、ライブラリを開いてください。",
@@ -1697,6 +1699,26 @@ const japaneseText: Record<string, string> = {
   "Favorite cached profile": "キャッシュ済みプロファイルをお気に入り登録",
   "Use Profile": "プロファイルを使用",
   "Verified common-rig pack": "検証済み標準リグパック",
+  "Verified generic profile tree": "検証済み汎用プロファイルツリー",
+  Verified: "検証済み",
+  Profile: "プロファイル",
+  profiles: "プロファイル",
+  "PAR / Wash": "PAR／ウォッシュ",
+  "Moving heads": "ムービングヘッド",
+  "LED bars / Pixel": "LEDバー／ピクセル",
+  Dimmers: "ディマー",
+  "Additive color layouts for budget PAR cans and wash lights.":
+    "低価格PAR缶・ウォッシュライト向けの加法混色レイアウトです。",
+  "Common RGBW wash and spot channel layouts with position and optics controls.":
+    "位置・光学操作を備えた一般的なRGBWウォッシュ／スポットのチャンネルレイアウトです。",
+  "Segmented RGB and RGBW bars, including master-dimmer pixel families.":
+    "マスターディマー付きファミリーを含む、分割RGB／RGBWバーのレイアウトです。",
+  "Straight-through dimmer and relay-pack channel counts.":
+    "直結ディマー／リレーパック向けのチャンネル数です。",
+  "Compact shutter, rate, and intensity layouts for budget strobes.":
+    "低価格ストロボ向けのコンパクトなシャッター・レート・明度レイアウトです。",
+  "Safe generic controls for fog, UV, pinspot, bubble, and placeholder laser fixtures.":
+    "フォグ、UV、ピンスポット、バブル、レーザー安全プレースホルダー向けの汎用操作です。",
   "Structurally tested generic layouts. Confirm the fixture manual before sending DMX; these are not manufacturer-specific profiles.":
     "構造テスト済みの汎用レイアウトです。メーカー固有プロファイルではないため、DMX送信前に灯体マニュアルを確認してください。",
   "Favorite verified profile": "検証済みプロファイルをお気に入り登録",
@@ -2410,6 +2432,7 @@ const japaneseText: Record<string, string> = {
 };
 
 const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
+  [/^Common budget-fixture layout\. Channel order: (.+)\.$/, (order) => `一般的な低価格灯体レイアウトです。チャンネル順: ${order}。`],
   [/^(Lighting|Video) · (\d+) scenes$/, (track, count) => `${track === "Lighting" ? "照明" : "映像"}・${count}シーン`],
   [/^(\d+) fixture types$/, (count) => `灯体タイプ ${count}種類`],
   [/^(\d+) fixtures \/ (\d+) types$/, (fixtures, types) => `灯体 ${fixtures}台 / ${types}種類`],

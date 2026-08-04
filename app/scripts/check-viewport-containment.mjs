@@ -8,6 +8,10 @@ import { inflateSync } from "node:zlib";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
+const verifiedGenericProfileCount = 60;
+const verifiedGenericCategoryProfileCounts = [20, 12, 13, 5, 3, 7];
+const verifiedGenericCategoryCount = verifiedGenericCategoryProfileCounts.length;
+const verifiedGenericFirstProfileFavoriteKey = "verified:par-direct-rgb-3ch";
 const largeShowMode = process.argv.includes("--large-show");
 const vjEmptyMode = process.argv.includes("--vj-empty");
 const liveAudioOnlyMode = process.argv.includes("--live-audio-only");
@@ -7697,6 +7701,18 @@ async function measure(client, label) {
       visiblePatchProfileSearchCount: visibleCount('[data-patch-profile-search]'),
       patchProfileSectionNames: visibleElements('[data-patch-profile-section]')
         .map((section) => section.getAttribute('data-patch-profile-section')),
+      visiblePatchVerifiedProfileTreeCount: visibleCount(
+        '[data-patch-profile-section="verified"] [data-patch-profile-tree="verified"][role="tree"]'
+      ),
+      visiblePatchVerifiedCategoryCount: visibleCount(
+        '[data-patch-profile-tree="verified"] [data-profile-tree-item="manufacturer"]'
+      ),
+      patchVerifiedCategoryProfileCounts: [...document.querySelectorAll(
+        '[data-patch-profile-tree="verified"] [data-profile-tree-profile-count]'
+      )].map((row) => Number(row.getAttribute('data-profile-tree-profile-count'))),
+      patchVerifiedCategoryExpandedValues: [...document.querySelectorAll(
+        '[data-patch-profile-tree="verified"] [data-profile-tree-item="manufacturer"]'
+      )].map((row) => row.getAttribute('aria-expanded')),
       visiblePatchVerifiedProfileRowCount: visibleCount('[data-patch-profile-row][data-profile-source="verified"]'),
       visiblePatchCachedProfileRowCount: visibleCount('[data-patch-profile-row][data-profile-source="cache"]'),
       visiblePatchRecentProfileRowCount: visibleCount(
@@ -9898,7 +9914,7 @@ function hasExpectedSetupSurface(result) {
       result.profileLoadPanelWidth >= 180 &&
       result.fixtureCatalogPanelWidth >= 400 &&
       result.loadedProfileSummaryPanelWidth >= 235 &&
-      result.fixtureCatalogVerifiedCardCount === 4 &&
+      result.fixtureCatalogVerifiedCardCount === verifiedGenericProfileCount &&
       result.fixtureCatalogPasswordInputCount === 1 &&
       result.calibratedEmitterDetailCount >= 3
     );
@@ -9952,14 +9968,18 @@ function hasExpectedSetupSurface(result) {
       result.visiblePatchProfileBrowserCount === 1 &&
       result.visiblePatchProfileSearchCount === 1 &&
       JSON.stringify(result.patchProfileSectionNames) === JSON.stringify(["verified", "cache", "recent", "share"]) &&
-      result.visiblePatchVerifiedProfileRowCount === 4 &&
+      result.visiblePatchVerifiedProfileTreeCount === 1 &&
+      result.visiblePatchVerifiedCategoryCount === verifiedGenericCategoryCount &&
+      JSON.stringify(result.patchVerifiedCategoryProfileCounts) === JSON.stringify(verifiedGenericCategoryProfileCounts) &&
+      result.patchVerifiedCategoryExpandedValues.every((value) => value === "false") &&
+      result.visiblePatchVerifiedProfileRowCount === 0 &&
       result.visiblePatchCachedProfileRowCount === 0 &&
       result.visiblePatchRecentProfileRowCount >= 1 &&
       result.visiblePatchShareProfileRowCount === 0 &&
       result.visiblePatchShareOfflineRowCount === 1 &&
       result.visiblePatchSelectedProfileRowCount === 1 &&
-      result.patchProfileDraggableRowCount >= 5 &&
-      result.patchProfileRowHeights.length >= 5 &&
+      result.patchProfileDraggableRowCount >= 1 &&
+      result.patchProfileRowHeights.length >= 1 &&
       result.patchProfileRowHeights.every((height) => height >= 24 && height <= 28) &&
       ["auto", "scroll"].includes(result.patchProfileBrowserOverflowY) &&
       result.patchProfileBrowserLastControlReachable &&
@@ -12572,10 +12592,38 @@ async function readPatchZoningState(client) {
       cacheProfileTreeCount: document.querySelectorAll(
         '[data-patch-profile-section="cache"] [data-patch-profile-tree="cache"][role="tree"]'
       ).length,
+      verifiedProfileTreeCount: document.querySelectorAll(
+        '[data-patch-profile-section="verified"] [data-patch-profile-tree="verified"][role="tree"]'
+      ).length,
       flatProfileSectionTreeCount: document.querySelectorAll(
-        '[data-patch-profile-section="verified"] [role="tree"], ' +
         '[data-patch-profile-section="recent"] [role="tree"]'
       ).length,
+      verifiedCategoryProfileCounts: [...document.querySelectorAll(
+        '[data-patch-profile-tree="verified"] [data-profile-tree-profile-count]'
+      )].map((row) => Number(row.getAttribute('data-profile-tree-profile-count'))),
+      verifiedCategoryExpandedValues: [...document.querySelectorAll(
+        '[data-patch-profile-tree="verified"] [data-profile-tree-item="manufacturer"]'
+      )].map((row) => row.getAttribute('aria-expanded')),
+      verifiedFixtureExpandedValues: [...document.querySelectorAll(
+        '[data-patch-profile-tree="verified"] [data-profile-tree-item="fixture"]'
+      )].map((row) => row.getAttribute('aria-expanded')),
+      verifiedCategoryCount: document.querySelectorAll(
+        '[data-patch-profile-tree="verified"] [data-profile-tree-item="manufacturer"]'
+      ).length,
+      verifiedSectionCountText: (document.querySelector(
+        '[data-patch-profile-section="verified"] > header span'
+      )?.textContent || '').trim(),
+      verifiedProfileFootprints: visibleMatches(
+        '[data-patch-profile-row][data-profile-source="verified"]'
+      ).map((row) => Number(row.getAttribute('data-profile-footprint'))),
+      verifiedSingleModeProfileRowCount: visibleMatches(
+        '[data-patch-profile-row][data-profile-source="verified"][data-profile-single-mode="true"]'
+      ).length,
+      verifiedModeProfileRowCount: visibleMatches(
+        '[data-patch-profile-row][data-profile-source="verified"][data-profile-tree-item="mode"]'
+      ).length,
+      footprintFilterValue: document.querySelector('[data-patch-profile-search]')
+        ?.getAttribute('data-patch-footprint-filter') || '',
       cacheManufacturerExpandedValues: [...document.querySelectorAll(
         '[data-patch-profile-tree="cache"] [data-profile-tree-item="manufacturer"]'
       )].map((row) => row.getAttribute('aria-expanded')),
@@ -12680,6 +12728,26 @@ async function readPatchZoningState(client) {
 async function checkPatchZoning(client) {
   const initial = await readPatchZoningState(client);
 
+  const setProfileSearch = async (value) => {
+    await client.evaluate(`(() => {
+      const input = document.querySelector('[data-patch-profile-search]');
+      if (!(input instanceof HTMLInputElement)) return false;
+      input.value = ${JSON.stringify(value)};
+      input.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        inputType: ${JSON.stringify(value ? "insertText" : "deleteContentBackward")},
+        data: ${JSON.stringify(value)},
+      }));
+      return true;
+    })()`);
+    await sleep(50);
+  };
+
+  await setProfileSearch("25");
+  const footprintFiltered = await readPatchZoningState(client);
+  await setProfileSearch("");
+  const searchCleared = await readPatchZoningState(client);
+
   const patchBrowserSelectionClicked = await client.evaluate(`(() => {
     const row = document.querySelector('[data-patch-profile-row][data-profile-source="session"]');
     if (!(row instanceof HTMLButtonElement) || row.disabled) return false;
@@ -12729,14 +12797,37 @@ async function checkPatchZoning(client) {
     embeddedProfileBrowser:
       initial.profileBrowserCount === 1 &&
       initial.profileSearchCount === 1 &&
-      initial.verifiedProfileRowCount === 4 &&
+      initial.verifiedProfileTreeCount === 1 &&
+      initial.verifiedCategoryCount === verifiedGenericCategoryCount &&
+      JSON.stringify(initial.verifiedCategoryProfileCounts) === JSON.stringify(verifiedGenericCategoryProfileCounts) &&
+      initial.verifiedSectionCountText === String(verifiedGenericProfileCount) &&
+      initial.verifiedCategoryExpandedValues.every((value) => value === "false") &&
+      initial.verifiedProfileRowCount === 0 &&
       initial.recentProfileRowCount >= 1 &&
       initial.selectedProfileRowCount === 1 &&
-      initial.draggableProfileRowCount >= 5,
-    hierarchicalCacheTreeAndFlatShortLists:
+      initial.draggableProfileRowCount >= 1,
+    hierarchicalVerifiedAndCacheTrees:
+      initial.verifiedProfileTreeCount === 1 &&
       initial.cacheProfileTreeCount === 1 &&
       initial.flatProfileSectionTreeCount === 0 &&
       initial.cacheManufacturerExpandedValues.every((value) => value === "false"),
+    footprintFilterIsExactAndSearchAutoExpands:
+      footprintFiltered.footprintFilterValue === "25" &&
+      footprintFiltered.verifiedSectionCountText === "2" &&
+      JSON.stringify(footprintFiltered.verifiedCategoryProfileCounts) === JSON.stringify([2]) &&
+      footprintFiltered.verifiedCategoryExpandedValues.length === 1 &&
+      footprintFiltered.verifiedCategoryExpandedValues.every((value) => value === "true") &&
+      footprintFiltered.verifiedFixtureExpandedValues.every((value) => value === "true") &&
+      footprintFiltered.verifiedProfileRowCount === 2 &&
+      JSON.stringify(footprintFiltered.verifiedProfileFootprints) === JSON.stringify([25, 25]) &&
+      footprintFiltered.verifiedSingleModeProfileRowCount === 1 &&
+      footprintFiltered.verifiedModeProfileRowCount === 1,
+    clearedSearchRecollapsesVerifiedCategories:
+      searchCleared.footprintFilterValue === "" &&
+      searchCleared.verifiedSectionCountText === String(verifiedGenericProfileCount) &&
+      searchCleared.verifiedCategoryCount === verifiedGenericCategoryCount &&
+      searchCleared.verifiedCategoryExpandedValues.every((value) => value === "false") &&
+      searchCleared.verifiedProfileRowCount === 0,
     leftColumnOwnsPatchExecution:
       initial.leftPatchFormCount === 1 &&
       initial.topPatchFormCount === 0 &&
@@ -12817,6 +12908,8 @@ async function checkPatchZoning(client) {
     checks,
     failedChecks,
     initial,
+    footprintFiltered,
+    searchCleared,
     patchBrowserSelected,
     importOpen,
     placementOpen,
@@ -13441,12 +13534,6 @@ async function runPatchDndViewport(client, viewport) {
 function installPatchGdtfShareMockInPage() {
   const delay = (ms) => new Promise((resolveDelay) => window.setTimeout(resolveDelay, ms));
   const clone = (value) => JSON.parse(JSON.stringify(value));
-  const verifiedProfiles = [
-    { id: "dimmer-1ch", manufacturer: "Syndocal Verified", name: "Generic Dimmer 1ch", mode_name: "Standard", footprint: 1, description: "Single-channel intensity fixture." },
-    { id: "rgb-par-4ch", manufacturer: "Syndocal Verified", name: "Generic RGB PAR 4ch", mode_name: "Standard", footprint: 4, description: "Dimmer plus RGB channels." },
-    { id: "rgbw-par-5ch", manufacturer: "Syndocal Verified", name: "Generic RGBW PAR 5ch", mode_name: "Standard", footprint: 5, description: "Dimmer plus RGBW channels." },
-    { id: "moving-head-rgbw-10ch", manufacturer: "Syndocal Verified", name: "Generic Moving Head RGBW 10ch", mode_name: "Standard", footprint: 10, description: "Pan, tilt, dimmer and RGBW channels." },
-  ];
   const fixtures = [
     {
       rid: 7101,
@@ -13542,7 +13629,6 @@ function installPatchGdtfShareMockInPage() {
   });
   const invoke = async (command, args = {}) => {
     if (command === "list_gdtf_fixture_cache") return clone(state.cache);
-    if (command === "list_verified_fixture_profiles") return clone(verifiedProfiles);
     if (command === "get_fixture_profile_health") return [];
     if (command === "search_gdtf_share") {
       state.searchCalls.push({ at: performance.now(), request: clone(args.request || {}) });
@@ -13629,6 +13715,7 @@ async function runPatchGdtfShareViewport(client, viewport) {
       return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
     };
     const rows = (selector) => [...document.querySelectorAll(selector)].filter(visible);
+    const verifiedTree = document.querySelector('[data-patch-profile-tree="verified"]');
     const shareTree = document.querySelector('[data-patch-profile-tree="share"]');
     const cacheTree = document.querySelector('[data-patch-profile-tree="cache"]');
     const shareRows = rows('[data-patch-profile-row][data-profile-source="share"]');
@@ -13682,12 +13769,19 @@ async function runPatchGdtfShareViewport(client, viewport) {
       })),
       shareTreeRole: shareTree?.getAttribute('role') || '',
       cacheTreeRole: cacheTree?.getAttribute('role') || '',
+      verifiedTreeRole: verifiedTree?.getAttribute('role') || '',
+      verifiedCategoryProfileCounts: [...(verifiedTree?.querySelectorAll(
+        '[data-profile-tree-profile-count]'
+      ) ?? [])].map((row) => Number(row.getAttribute('data-profile-tree-profile-count'))),
       shareTreeGroupRoleCount: shareTree?.querySelectorAll('[role="group"]').length ?? 0,
       cacheTreeGroupRoleCount: cacheTree?.querySelectorAll('[role="group"]').length ?? 0,
       flatSectionTreeCount: document.querySelectorAll(
-        '[data-patch-profile-section="verified"] [role="tree"], ' +
         '[data-patch-profile-section="recent"] [role="tree"]'
       ).length,
+      verifiedTreeItems: rows('[data-patch-profile-tree="verified"] [role="treeitem"]').map((row) => ({
+        item: row.getAttribute('data-profile-tree-item'),
+        expanded: row.getAttribute('aria-expanded'),
+      })),
       shareTreeItems: rows('[data-patch-profile-tree="share"] [role="treeitem"]').map((row) => ({
         item: row.getAttribute('data-profile-tree-item'),
         level: row.getAttribute('aria-level'),
@@ -13948,7 +14042,14 @@ async function runPatchGdtfShareViewport(client, viewport) {
   const checks = {
     shareSectionOrder:
       JSON.stringify(signedOut.sectionNames) === JSON.stringify(["verified", "cache", "recent", "share"]),
-    defaultCacheTreeCollapsedAndShortSectionsFlat:
+    defaultVerifiedAndCacheTreesCollapsed:
+      defaultCollapsed.verifiedTreeRole === "tree" &&
+      defaultCollapsed.verifiedTreeItems.length === verifiedGenericCategoryCount &&
+      defaultCollapsed.verifiedTreeItems.every((item) =>
+        item.item === "manufacturer" && item.expanded === "false") &&
+      JSON.stringify(defaultCollapsed.verifiedCategoryProfileCounts) ===
+        JSON.stringify(verifiedGenericCategoryProfileCounts) &&
+      defaultCollapsed.verifiedRowCount === 0 &&
       defaultCollapsed.cacheTreeRole === "tree" &&
       defaultCollapsed.shareTreeRole === "" &&
       defaultCollapsed.flatSectionTreeCount === 0 &&
@@ -14229,6 +14330,21 @@ async function runPatchEmptyStateViewport(client, viewport) {
       firstCellHeight: precision(firstCellRect?.height ?? 0),
       profileBrowserPresent: profileBrowser instanceof HTMLElement,
       profileSearchCount: document.querySelectorAll('[data-patch-profile-search]').length,
+      verifiedProfileTreeCount: document.querySelectorAll(
+        '[data-patch-profile-section="verified"] [data-patch-profile-tree="verified"][role="tree"]'
+      ).length,
+      verifiedCategoryCount: document.querySelectorAll(
+        '[data-patch-profile-tree="verified"] [data-profile-tree-item="manufacturer"]'
+      ).length,
+      verifiedCategoryProfileCounts: [...document.querySelectorAll(
+        '[data-patch-profile-tree="verified"] [data-profile-tree-profile-count]'
+      )].map((row) => Number(row.getAttribute('data-profile-tree-profile-count'))),
+      verifiedCategoryExpandedValues: [...document.querySelectorAll(
+        '[data-patch-profile-tree="verified"] [data-profile-tree-item="manufacturer"]'
+      )].map((row) => row.getAttribute('aria-expanded')),
+      verifiedSectionCountText: (document.querySelector(
+        '[data-patch-profile-section="verified"] > header span'
+      )?.textContent || '').trim(),
       cachedProfileTreeCount: document.querySelectorAll(
         '[data-patch-profile-section="cache"] [data-patch-profile-tree="cache"][role="tree"]'
       ).length,
@@ -14239,7 +14355,6 @@ async function runPatchEmptyStateViewport(client, viewport) {
         '[data-patch-profile-section="share"] [data-patch-profile-tree="share"][role="tree"]'
       ).length,
       flatProfileSectionTreeCount: document.querySelectorAll(
-        '[data-patch-profile-section="verified"] [role="tree"], ' +
         '[data-patch-profile-section="recent"] [role="tree"]'
       ).length,
       profileBrowserSectionNames: profileBrowserSections
@@ -14276,6 +14391,69 @@ async function runPatchEmptyStateViewport(client, viewport) {
         )),
     };
   })()`);
+  await client.evaluate(`(() => {
+    const input = document.querySelector('[data-patch-profile-search]');
+    if (!(input instanceof HTMLInputElement)) return false;
+    input.value = '25';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: '25' }));
+    return true;
+  })()`);
+  await sleep(50);
+  const footprintFilterMetrics = await client.evaluate(`(() => {
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const rows = [...document.querySelectorAll(
+      '[data-patch-profile-row][data-profile-source="verified"]'
+    )].filter(visible);
+    return {
+      filterValue: document.querySelector('[data-patch-profile-search]')
+        ?.getAttribute('data-patch-footprint-filter') || '',
+      sectionCountText: (document.querySelector(
+        '[data-patch-profile-section="verified"] > header span'
+      )?.textContent || '').trim(),
+      categoryProfileCounts: [...document.querySelectorAll(
+        '[data-patch-profile-tree="verified"] [data-profile-tree-profile-count]'
+      )].map((row) => Number(row.getAttribute('data-profile-tree-profile-count'))),
+      categoryExpandedValues: [...document.querySelectorAll(
+        '[data-patch-profile-tree="verified"] [data-profile-tree-item="manufacturer"]'
+      )].map((row) => row.getAttribute('aria-expanded')),
+      fixtureExpandedValues: [...document.querySelectorAll(
+        '[data-patch-profile-tree="verified"] [data-profile-tree-item="fixture"]'
+      )].map((row) => row.getAttribute('aria-expanded')),
+      rowFootprints: rows.map((row) => Number(row.getAttribute('data-profile-footprint'))),
+      rowHeights: rows.map((row) => Math.round(row.getBoundingClientRect().height)),
+      singleModeRows: rows.filter((row) => row.getAttribute('data-profile-single-mode') === 'true').length,
+      modeRows: rows.filter((row) => row.getAttribute('data-profile-tree-item') === 'mode').length,
+    };
+  })()`);
+  await client.evaluate(`(() => {
+    const input = document.querySelector('[data-patch-profile-search]');
+    if (!(input instanceof HTMLInputElement)) return false;
+    input.value = '';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
+    return true;
+  })()`);
+  await sleep(50);
+  const clearedVerifiedTree = await client.evaluate(`(() => ({
+    filterValue: document.querySelector('[data-patch-profile-search]')
+      ?.getAttribute('data-patch-footprint-filter') || '',
+    sectionCountText: (document.querySelector(
+      '[data-patch-profile-section="verified"] > header span'
+    )?.textContent || '').trim(),
+    categoryCount: document.querySelectorAll(
+      '[data-patch-profile-tree="verified"] [data-profile-tree-item="manufacturer"]'
+    ).length,
+    categoryExpandedValues: [...document.querySelectorAll(
+      '[data-patch-profile-tree="verified"] [data-profile-tree-item="manufacturer"]'
+    )].map((row) => row.getAttribute('aria-expanded')),
+    profileRowCount: document.querySelectorAll(
+      '[data-patch-profile-row][data-profile-source="verified"]'
+    ).length,
+  }))()`);
   const checks = {
     leftPatchFormPresentAndUnarmed:
       metrics.patchFormCount === 1 &&
@@ -14290,7 +14468,12 @@ async function runPatchEmptyStateViewport(client, viewport) {
       metrics.profileBrowserPresent === true &&
       metrics.profileSearchCount === 1 &&
       JSON.stringify(metrics.profileBrowserSectionNames) === JSON.stringify(['verified', 'cache', 'recent', 'share']) &&
-      metrics.verifiedProfileRowCount === 4 &&
+      metrics.verifiedProfileTreeCount === 1 &&
+      metrics.verifiedCategoryCount === verifiedGenericCategoryCount &&
+      JSON.stringify(metrics.verifiedCategoryProfileCounts) === JSON.stringify(verifiedGenericCategoryProfileCounts) &&
+      metrics.verifiedCategoryExpandedValues.every((value) => value === 'false') &&
+      metrics.verifiedSectionCountText === String(verifiedGenericProfileCount) &&
+      metrics.verifiedProfileRowCount === 0 &&
       metrics.cachedProfileRowCount === 0 &&
       metrics.recentProfileRowCount === 0 &&
       metrics.shareProfileRowCount === 0 &&
@@ -14299,9 +14482,25 @@ async function runPatchEmptyStateViewport(client, viewport) {
       metrics.cachedProfileTreeItemCount === 0 &&
       metrics.shareProfileTreeCount === 0 &&
       metrics.flatProfileSectionTreeCount === 0,
+    footprintFilterIsExactAndAutoExpands:
+      footprintFilterMetrics.filterValue === '25' &&
+      footprintFilterMetrics.sectionCountText === '2' &&
+      JSON.stringify(footprintFilterMetrics.categoryProfileCounts) === JSON.stringify([2]) &&
+      footprintFilterMetrics.categoryExpandedValues.length === 1 &&
+      footprintFilterMetrics.categoryExpandedValues.every((value) => value === 'true') &&
+      footprintFilterMetrics.fixtureExpandedValues.every((value) => value === 'true') &&
+      JSON.stringify(footprintFilterMetrics.rowFootprints) === JSON.stringify([25, 25]) &&
+      footprintFilterMetrics.singleModeRows === 1 &&
+      footprintFilterMetrics.modeRows === 1,
     compactProfileRows:
-      metrics.profileRowHeights?.length === 4 &&
-      metrics.profileRowHeights.every((height) => height >= 24 && height <= 28),
+      footprintFilterMetrics.rowHeights?.length === 2 &&
+      footprintFilterMetrics.rowHeights.every((height) => height >= 24 && height <= 28),
+    clearedSearchRecollapsesVerifiedCategories:
+      clearedVerifiedTree.filterValue === '' &&
+      clearedVerifiedTree.sectionCountText === String(verifiedGenericProfileCount) &&
+      clearedVerifiedTree.categoryCount === verifiedGenericCategoryCount &&
+      clearedVerifiedTree.categoryExpandedValues.every((value) => value === 'false') &&
+      clearedVerifiedTree.profileRowCount === 0,
     profileBrowserUsesInternalScroll:
       ['auto', 'scroll'].includes(metrics.profileBrowserOverflowY) &&
       metrics.profileBrowserLastControlReachable === true,
@@ -14326,6 +14525,8 @@ async function runPatchEmptyStateViewport(client, viewport) {
     checks,
     failedChecks,
     metrics,
+    footprintFilterMetrics,
+    clearedVerifiedTree,
   };
 }
 
@@ -14334,7 +14535,10 @@ const patchEmptyStateLogLine = (result) =>
   `form=${result.metrics.patchFormCount ?? "?"} ` +
   `pane=${result.metrics.patchMapHeight ?? "?"} desk=${result.metrics.deskHeight ?? "?"} ` +
   `ratio=${result.metrics.paneDeskHeightRatio ?? "?"} cell=${result.metrics.cellSizePx ?? "?"} ` +
-  `browser=${result.metrics.verifiedProfileRowCount ?? "?"}/${result.metrics.cachedProfileRowCount ?? "?"}/${result.metrics.recentProfileRowCount ?? "?"}/${result.metrics.shareProfileRowCount ?? "?"} ` +
+  `browser=${result.metrics.verifiedSectionCountText ?? "?"}p:${result.metrics.verifiedCategoryCount ?? "?"}c:${result.metrics.verifiedProfileRowCount ?? "?"}v/` +
+    `${result.metrics.cachedProfileRowCount ?? "?"}/${result.metrics.recentProfileRowCount ?? "?"}/${result.metrics.shareProfileRowCount ?? "?"} ` +
+  `footprint=${result.footprintFilterMetrics?.filterValue ?? "?"}:` +
+    `${JSON.stringify(result.footprintFilterMetrics?.rowFootprints ?? [])} ` +
   `guidance=${result.metrics.profileGuidanceCount ?? "?"}/${result.metrics.fixtureGuidanceCount ?? "?"} ` +
   `scroll=${result.metrics.documentAndAppScrollZero ? 0 : 1} ` +
   `trailing=${result.metrics.trailingDeskSpacePx ?? "?"} leading=${result.metrics.leadingDeskSpacePx ?? "?"} ` +
@@ -15702,13 +15906,13 @@ async function runFixtureCatalogViewport(client, viewport) {
   const conditions = [
     ["catalogVisible", () => initial.panelCount === 1 && initial.panelContained],
     ["threePaneLibrary", () => initial.profileLoadCount === 1 && initial.profileSummaryCount === 1],
-    ["verifiedPack", () => initial.verifiedCardCount === 4],
+    ["verifiedPack", () => initial.verifiedCardCount === verifiedGenericProfileCount],
     ["catalogSections", () => initial.catalogSectionCount === 4],
     ["facetControls", () => initial.facetControlCount === 5],
     ["credentialSafetyField", () => initial.passwordInputCount === 1],
     ["favoritePersistsLocally", () => initial.favoritePressed === "false" &&
       favorited.favoritePressed === "true" &&
-      favorited.storedFavorites.includes("verified:dimmer-1ch")],
+      favorited.storedFavorites.includes(verifiedGenericFirstProfileFavoriteKey)],
     ["viewportContained", () => initial.documentAndAppScrollZero && favorited.documentAndAppScrollZero],
   ];
   const failedChecks = conditions.filter(([, check]) => !check()).map(([name]) => name);
@@ -26299,7 +26503,9 @@ async function main() {
             `end=${metrics?.endReachable ? 1 : 0} outer=${metrics?.outerScrollUnchangedAtEnd ? 0 : 1} ` +
             `keys=${metrics?.arrowRightAddress ?? "?"}/${metrics?.arrowDownAddress ?? "?"}/${metrics?.controlEndAddress ?? "?"} ` +
             `keyVisible=${metrics?.controlEndFullyVisible ? 1 : 0} ` +
-            `browser=${result.containment.visiblePatchVerifiedProfileRowCount ?? "?"}/` +
+            `browser=${verifiedGenericProfileCount}p:` +
+              `${result.containment.visiblePatchVerifiedCategoryCount ?? "?"}c:` +
+              `${result.containment.visiblePatchVerifiedProfileRowCount ?? "?"}v/` +
               `${result.containment.visiblePatchCachedProfileRowCount ?? "?"}/` +
               `${result.containment.visiblePatchRecentProfileRowCount ?? "?"} ` +
             `alwaysVisibleControls=${result.containment.visibleSetupPatchInteractiveControlCount ?? "?"}/${result.zoning.noSelection.alwaysVisibleControlCount ?? "?"} ` +

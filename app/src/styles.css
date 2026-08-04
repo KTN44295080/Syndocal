@@ -27587,6 +27587,20 @@ h3 {
   text-transform: uppercase;
 }
 
+.patchProfileSearch > span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.patchProfileSearch > span small {
+  color: #817970;
+  font-size: 8px;
+  font-weight: 600;
+  text-transform: none;
+}
+
 .patchProfileSearch input {
   width: 100%;
   min-width: 0;
@@ -27796,6 +27810,15 @@ h3 {
   font-style: normal;
   font-weight: 700;
   text-transform: uppercase;
+}
+
+.patchProfileRow > span > .patchVerifiedChip {
+  border: 1px solid #6f5c35;
+  border-radius: 1px;
+  background: #2d261b;
+  padding: 0 3px;
+  color: #d5b56d;
+  line-height: 14px;
 }
 
 .patchProfileRow > span > b {

@@ -5,6 +5,7 @@ export interface GdtfProfileTreeMode {
   name: string;
   modeName: string | null;
   footprint: number;
+  description?: string;
 }
 
 export interface GdtfProfileTreeFixture {
@@ -14,17 +15,20 @@ export interface GdtfProfileTreeFixture {
   revision: string;
   modeCount: number;
   modes: GdtfProfileTreeMode[];
+  manufacturerDescription?: string;
 }
 
 interface GdtfProfileTreeManufacturerGroup {
   key: string;
   manufacturer: string;
   fixtures: GdtfProfileTreeFixture[];
+  profileCount: number;
+  description?: string;
 }
 
 interface GdtfProfileTreeProps {
   ariaLabel: string;
-  source: "cache" | "share";
+  source: "verified" | "cache" | "share";
   fixtures: GdtfProfileTreeFixture[];
   searchActive: boolean;
   disabled: (fixture: GdtfProfileTreeFixture, mode: GdtfProfileTreeMode) => boolean;
@@ -77,13 +81,17 @@ export const filterGdtfProfileTreeFixtures = (
 ) => {
   const needle = normalized(query);
   if (!needle) return fixtures;
+  const footprint = /^\d{1,3}$/.test(needle) ? Number(needle) : null;
   return fixtures.flatMap((fixture) => {
     const manufacturerMatches = normalized(fixture.manufacturer).includes(needle);
     const fixtureMatches = [fixture.fixture, fixture.revision]
       .some((value) => normalized(value).includes(needle));
     const modes = manufacturerMatches || fixtureMatches
       ? fixture.modes
-      : fixture.modes.filter((mode) => normalized(mode.name).includes(needle));
+      : fixture.modes.filter((mode) =>
+        normalized(mode.name).includes(needle)
+        || normalized(mode.description ?? "").includes(needle)
+        || (footprint !== null && mode.footprint === footprint));
     return manufacturerMatches || fixtureMatches || modes.length > 0
       ? [{ ...fixture, modes }]
       : [];
@@ -112,17 +120,23 @@ export function GdtfProfileTree(props: GdtfProfileTreeProps) {
         key,
         manufacturer: fixture.manufacturer,
         fixtures: [],
+        profileCount: 0,
+        description: fixture.manufacturerDescription,
       };
       current.fixtures.push(fixture);
+      current.profileCount += fixture.modes.length;
       grouped.set(key, current);
     }
-    return [...grouped.values()]
-      .map((group) => ({
+    const ordered = [...grouped.values()].map((group) => ({
         ...group,
-        fixtures: [...group.fixtures].sort((left, right) =>
-          left.fixture.localeCompare(right.fixture) || left.revision.localeCompare(right.revision)),
-      }))
-      .sort((left, right) => left.manufacturer.localeCompare(right.manufacturer));
+        fixtures: props.source === "verified"
+          ? group.fixtures
+          : [...group.fixtures].sort((left, right) =>
+            left.fixture.localeCompare(right.fixture) || left.revision.localeCompare(right.revision)),
+      }));
+    return props.source === "verified"
+      ? ordered
+      : ordered.sort((left, right) => left.manufacturer.localeCompare(right.manufacturer));
   });
 
   const manufacturerExpanded = (key: string) =>
@@ -148,6 +162,7 @@ export function GdtfProfileTree(props: GdtfProfileTreeProps) {
             <div
               class="patchProfileTreeManufacturer"
               data-profile-tree-manufacturer={group.manufacturer}
+              data-profile-tree-category={props.source === "verified" ? group.manufacturer : undefined}
             >
               <button
                 type="button"
@@ -155,7 +170,9 @@ export function GdtfProfileTree(props: GdtfProfileTreeProps) {
                 role="treeitem"
                 aria-level="1"
                 aria-expanded={expanded()}
+                title={props.source === "verified" ? group.description : undefined}
                 data-profile-tree-item="manufacturer"
+                data-profile-tree-profile-count={props.source === "verified" ? group.profileCount : undefined}
                 onClick={() => setManufacturerExpanded(group.key, !expanded())}
                 onKeyDown={(event) => handleBranchKeyDown(
                   event,
@@ -164,10 +181,12 @@ export function GdtfProfileTree(props: GdtfProfileTreeProps) {
                 )}
               >
                 <span class="patchProfileTreeChevron" aria-hidden="true">{expanded() ? "▾" : "▸"}</span>
-                <strong data-no-localize>{group.manufacturer}</strong>
+                <strong data-no-localize={props.source === "verified" ? undefined : ""}>{group.manufacturer}</strong>
                 <span class="patchProfileTreeCount">
-                  <b data-no-localize>{group.fixtures.length}</b>{" "}
-                  {group.fixtures.length === 1 ? "Fixture" : "fixtures"}
+                  <b data-no-localize>{props.source === "verified" ? group.profileCount : group.fixtures.length}</b>{" "}
+                  {props.source === "verified"
+                    ? (group.profileCount === 1 ? "Profile" : "profiles")
+                    : (group.fixtures.length === 1 ? "Fixture" : "fixtures")}
                 </span>
               </button>
 
@@ -190,6 +209,7 @@ export function GdtfProfileTree(props: GdtfProfileTreeProps) {
                                 aria-level="2"
                                 aria-selected={props.selected(fixture, mode)}
                                 aria-pressed={props.selected(fixture, mode)}
+                                title={mode.description}
                                 data-patch-profile-row
                                 data-profile-source={props.source}
                                 data-profile-tree-item="fixture-mode"
@@ -210,6 +230,9 @@ export function GdtfProfileTree(props: GdtfProfileTreeProps) {
                                 <span>
                                   <Show when={props.downloading?.(fixture, mode)} fallback={(
                                     <>
+                                      <Show when={props.source === "verified"}>
+                                        <i class="patchVerifiedChip">Verified</i>
+                                      </Show>
                                       <b data-no-localize>{mode.name}{mode.footprint > 0 ? ` · ${mode.footprint}ch` : ""}</b>
                                       <Show when={fixture.revision}>
                                         <i><span>Rev.</span>{" "}<span data-no-localize>{fixture.revision}</span></i>
@@ -261,6 +284,7 @@ export function GdtfProfileTree(props: GdtfProfileTreeProps) {
                                       aria-level="3"
                                       aria-selected={props.selected(fixture, mode)}
                                       aria-pressed={props.selected(fixture, mode)}
+                                      title={mode.description}
                                       data-patch-profile-row
                                       data-profile-source={props.source}
                                       data-profile-tree-item="mode"
@@ -279,7 +303,12 @@ export function GdtfProfileTree(props: GdtfProfileTreeProps) {
                                       <strong data-no-localize>{mode.name}</strong>
                                       <span>
                                         <Show when={props.downloading?.(fixture, mode)} fallback={(
-                                          <b data-no-localize>{mode.footprint > 0 ? `${mode.footprint}ch` : "—"}</b>
+                                          <>
+                                            <Show when={props.source === "verified"}>
+                                              <i class="patchVerifiedChip">Verified</i>
+                                            </Show>
+                                            <b data-no-localize>{mode.footprint > 0 ? `${mode.footprint}ch` : "—"}</b>
+                                          </>
                                         )}>
                                           <i>Downloading…</i>
                                         </Show>

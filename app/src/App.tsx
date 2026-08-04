@@ -179,6 +179,7 @@ import {
   rangesOverlap,
   reserveDmxAddressRange,
 } from "./dmxAddressing";
+import { verifiedFixtureProfileRequest } from "./fixtureCatalog";
 import { confirmCueRemoval, confirmDestructiveAction } from "./destructiveActions";
 import { createLiveAudioInputStatusRequestGate } from "./liveAudioInputStatusSync";
 import type {
@@ -11775,7 +11776,9 @@ export default function App() {
 
   const usePatchVerifiedProfile = async (profileId: string, modeName: string) => {
     try {
-      const imported = await invoke<FixtureProfileSummary>("load_verified_fixture_profile", { profileId });
+      const request = verifiedFixtureProfileRequest(profileId);
+      if (!request) throw new Error(`Verified fixture profile '${profileId}' was not found`);
+      const imported = await tauriInvoke<FixtureProfileSummary>("create_custom_fixture_profile", { request });
       selectLoadedProfile(imported, `Loaded verified ${imported.name}`, modeName, false);
       return true;
     } catch (error) {

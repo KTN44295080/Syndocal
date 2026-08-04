@@ -145,6 +145,34 @@ const profileTreeFixture = (
   })),
 });
 
+const verifiedProfileTreeFixtures = (
+  profiles: VerifiedFixtureProfileSummary[],
+): GdtfProfileTreeFixture[] => {
+  const fixtures = new Map<string, GdtfProfileTreeFixture>();
+  for (const profile of profiles) {
+    const key = `${profile.category}::${normalized(profile.fixture_family)}`;
+    const fixture = fixtures.get(key) ?? {
+      key,
+      manufacturer: profile.category_name,
+      manufacturerDescription: profile.category_description,
+      fixture: profile.fixture_family,
+      revision: "",
+      modeCount: 0,
+      modes: [],
+    };
+    fixture.modes.push({
+      key: profile.id,
+      name: profile.mode_name,
+      modeName: profile.mode_name,
+      footprint: profile.footprint,
+      description: profile.description,
+    });
+    fixture.modeCount = fixture.modes.length;
+    fixtures.set(key, fixture);
+  }
+  return [...fixtures.values()];
+};
+
 const textMatches = (values: string[], query: string) => {
   const needle = normalized(query);
   return !needle || values.some((value) => normalized(value).includes(needle));
@@ -153,7 +181,6 @@ const textMatches = (values: string[], query: string) => {
 export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
   const [query, setQuery] = createSignal("");
   const [cacheEntries, setCacheEntries] = createSignal<GdtfFixtureCacheEntry[]>([]);
-  const [verifiedProfiles, setVerifiedProfiles] = createSignal<VerifiedFixtureProfileSummary[]>(previewVerifiedProfiles);
   const [busy, setBusy] = createSignal(false);
   const [shareResponse, setShareResponse] = createSignal(emptyShareSearchResponse());
   const [shareState, setShareState] = createSignal<PatchShareState>(
@@ -167,12 +194,8 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
     if (!props.backendAvailable) return;
     setBusy(true);
     try {
-      const [cache, verified] = await Promise.all([
-        tauriInvoke<GdtfFixtureCacheEntry[]>("list_gdtf_fixture_cache"),
-        tauriInvoke<VerifiedFixtureProfileSummary[]>("list_verified_fixture_profiles"),
-      ]);
+      const cache = await tauriInvoke<GdtfFixtureCacheEntry[]>("list_gdtf_fixture_cache");
       setCacheEntries(cache);
-      setVerifiedProfiles(verified);
     } catch (error) {
       props.onMessage(String(error));
     } finally {
@@ -187,6 +210,13 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
   const cachedShareEntry = (fixture: GdtfShareFixtureSummary) => cacheEntries().find((candidate) =>
     candidate.health !== "invalid" && fixtureCatalogIdentityMatches(fixture, candidate));
 
+  const verifiedTreeFixtures = verifiedProfileTreeFixtures(previewVerifiedProfiles);
+  const visibleVerifiedFixtures = createMemo(() =>
+    filterGdtfProfileTreeFixtures(verifiedTreeFixtures, query()));
+  const visibleVerifiedProfileCount = createMemo(() => visibleVerifiedFixtures()
+    .reduce((total, fixture) => total + fixture.modes.length, 0));
+  const verifiedEntryForMode = (mode: GdtfProfileTreeMode) =>
+    previewVerifiedProfiles.find((entry) => entry.id === mode.key);
   const cacheTreeFixtures = createMemo(() => cacheEntries().map((entry) =>
     profileTreeFixture(entry, entry.path)));
   const visibleCacheFixtures = createMemo(() =>
@@ -314,13 +344,6 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
     }
   };
 
-  const visibleVerified = createMemo(() => verifiedProfiles().filter((entry) => textMatches([
-    entry.manufacturer,
-    entry.name,
-    entry.mode_name,
-    entry.description,
-  ], query())));
-
   const projectRows = createMemo(() => {
     const rows: RecentProjectProfileRow[] = [];
     const seen = new Set<string>();
@@ -426,48 +449,60 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
       </header>
 
       <label class="patchProfileSearch">
-        <span>Search profiles</span>
+        <span>Search profiles <small>Find by ch count</small></span>
         <input
           type="search"
           value={query()}
-          placeholder="Fixture, manufacturer, or mode"
+          placeholder="Fixture, manufacturer, mode, or channel count"
           onInput={(event) => setQuery(event.currentTarget.value)}
           data-patch-profile-search
+          data-patch-footprint-filter={/^\d{1,3}$/.test(query().trim()) ? query().trim() : undefined}
         />
       </label>
 
       <div class="patchProfileBrowserScroll" data-patch-profile-browser-scroll>
         <section class="patchProfileBrowserSection" data-patch-profile-section="verified">
-          <header><strong>Verified common-rig pack</strong><span>{visibleVerified().length}</span></header>
-          <div class="patchProfileRows">
-            <For each={visibleVerified()} fallback={<p class="empty patchProfileRowEmpty">No matching profiles.</p>}>
-              {(entry) => (
-                <button
-                  type="button"
-                  class="patchProfileRow"
-                  data-patch-profile-row
-                  data-profile-source="verified"
-                  data-profile-footprint={entry.footprint}
-                  draggable="true"
-                  aria-pressed={selected(entry.id, entry.manufacturer, entry.name, entry.mode_name)}
-                  disabled={!props.backendAvailable || busy()}
-                  onClick={() => void props.onLoadVerified(entry.id, entry.mode_name)}
-                  onDragStart={(event) => beginProfileDrag(event, {
-                    source: "verified",
-                    key: entry.id,
-                    label: `${entry.manufacturer} ${entry.name}`,
-                    modeName: entry.mode_name,
-                    footprint: entry.footprint,
-                    activate: () => props.onLoadVerified(entry.id, entry.mode_name),
-                  })}
-                  onDragEnd={props.onProfileDragEnd}
-                >
-                  <strong data-no-localize>{entry.name}</strong>
-                  <span data-no-localize>{entry.mode_name} · {entry.footprint}ch</span>
-                </button>
-              )}
-            </For>
-          </div>
+          <header><strong>Verified common-rig pack</strong><span>{visibleVerifiedProfileCount()}</span></header>
+          <GdtfProfileTree
+            ariaLabel="Verified generic profile tree"
+            source="verified"
+            fixtures={visibleVerifiedFixtures()}
+            searchActive={Boolean(query().trim())}
+            disabled={() => !props.backendAvailable || busy()}
+            draggable={() => true}
+            selected={(_fixture, mode) => {
+              const entry = verifiedEntryForMode(mode);
+              return Boolean(entry) && selected(
+                entry!.id,
+                entry!.manufacturer,
+                entry!.name,
+                entry!.mode_name,
+              );
+            }}
+            onActivate={(_fixture, mode) => {
+              const entry = verifiedEntryForMode(mode);
+              if (entry) void props.onLoadVerified(entry.id, entry.mode_name);
+            }}
+            onDragStart={(event, _fixture, mode) => {
+              const entry = verifiedEntryForMode(mode);
+              if (!entry) {
+                event.preventDefault();
+                return;
+              }
+              beginProfileDrag(event, {
+                source: "verified",
+                key: entry.id,
+                label: `${entry.manufacturer} ${entry.name}`,
+                modeName: entry.mode_name,
+                footprint: entry.footprint,
+                activate: () => props.onLoadVerified(entry.id, entry.mode_name),
+              });
+            }}
+            onDragEnd={props.onProfileDragEnd}
+          />
+          <Show when={visibleVerifiedProfileCount() === 0}>
+            <p class="empty patchProfileRowEmpty">No matching profiles.</p>
+          </Show>
         </section>
 
         <section class="patchProfileBrowserSection" data-patch-profile-section="cache">

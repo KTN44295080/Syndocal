@@ -11,6 +11,7 @@ import {
   saveFixtureCatalogFavorites,
   toggledFixtureCatalogFavorites,
   verifiedFixtureFavoriteKey,
+  verifiedFixtureProfileRequest,
   type FixtureFootprintBand,
   type FixtureProfileHealthSummary,
   type GdtfFixtureCacheEntry,
@@ -65,7 +66,6 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
   const [searchResponse, setSearchResponse] = createSignal(emptySearchResponse());
   const [cacheEntries, setCacheEntries] = createSignal<GdtfFixtureCacheEntry[]>([]);
   const [projectHealth, setProjectHealth] = createSignal<FixtureProfileHealthSummary[]>([]);
-  const [verifiedProfiles, setVerifiedProfiles] = createSignal(previewVerifiedProfiles);
   const [busy, setBusy] = createSignal<"search" | "local" | "cache" | "load" | "repair" | null>(null);
 
   const favoriteSet = createMemo(() => new Set(favorites()));
@@ -74,7 +74,7 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
   const visibleCache = createMemo(() => cacheEntries().filter((entry) =>
     fixtureCatalogSearchTextMatches(entry, globalQuery())
       && (!favoritesOnly() || favoriteSet().has(fixtureCatalogFavoriteKey(entry)))));
-  const visibleVerified = createMemo(() => verifiedProfiles().filter((entry) =>
+  const visibleVerified = createMemo(() => previewVerifiedProfiles.filter((entry) =>
     (!globalQuery().trim()
       || `${entry.manufacturer} ${entry.name} ${entry.description}`.toLocaleLowerCase()
         .includes(globalQuery().trim().toLocaleLowerCase()))
@@ -96,15 +96,13 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
     if (!props.backendAvailable) return;
     setBusy("local");
     try {
-      const [cache, health, verified] = await Promise.all([
+      const [cache, health] = await Promise.all([
         tauriInvoke<GdtfFixtureCacheEntry[]>("list_gdtf_fixture_cache"),
         tauriInvoke<FixtureProfileHealthSummary[]>("get_fixture_profile_health"),
-        tauriInvoke<VerifiedFixtureProfileSummary[]>("list_verified_fixture_profiles"),
       ]);
       setCacheEntries(cache);
       setProjectHealth(health);
-      setVerifiedProfiles(verified);
-      props.onMessage(`Fixture catalog ready: ${cache.length} cached, ${health.length} patched, ${verified.length} verified profiles.`);
+      props.onMessage(`Fixture catalog ready: ${cache.length} cached, ${health.length} patched, ${previewVerifiedProfiles.length} verified profiles.`);
     } catch (error) {
       props.onMessage(String(error));
     } finally {
@@ -197,9 +195,9 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
     }
     setBusy("load");
     try {
-      const profile = await tauriInvoke<FixtureProfileSummary>("load_verified_fixture_profile", {
-        profileId: entry.id,
-      });
+      const request = verifiedFixtureProfileRequest(entry.id);
+      if (!request) throw new Error(`Verified fixture profile '${entry.id}' was not found`);
+      const profile = await tauriInvoke<FixtureProfileSummary>("create_custom_fixture_profile", { request });
       props.onProfileLoaded(profile, `Loaded verified ${entry.name}`, true);
     } catch (error) {
       props.onMessage(String(error));
