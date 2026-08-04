@@ -58,7 +58,14 @@ interface RecentProjectProfileRow {
   footprint: number;
 }
 
-type PatchShareState = "idle" | "signed-out" | "searching" | "results" | "empty" | "offline";
+type PatchShareState =
+  | { kind: "idle" | "signed-out" | "searching" | "results" | "empty" | "offline" }
+  | {
+    kind: "error";
+    category: "auth" | "generic";
+    message: string;
+    searchQuery: string;
+  };
 
 interface PatchShareManufacturerGroup {
   manufacturer: string;
@@ -77,6 +84,39 @@ const emptyShareSearchResponse = (): GdtfShareSearchResponse => ({
 });
 
 const normalized = (value: string) => value.trim().toLocaleLowerCase();
+
+const gdtfShareConnectivityErrorPatterns = [
+  "failed to start curl",
+  "curl failed",
+  "could not resolve",
+  "failed to connect",
+  "could not connect",
+  "timed out",
+  "timeout",
+  "connection refused",
+  "connection reset",
+  "network is unreachable",
+];
+
+const gdtfShareAuthErrorPatterns = [
+  "user or password",
+  "unauthorized",
+  "login",
+  "invalid credential",
+  "authentication failed",
+];
+
+const backendErrorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
+
+const isGdtfShareConnectivityError = (message: string) => {
+  const value = normalized(message);
+  return gdtfShareConnectivityErrorPatterns.some((pattern) => value.includes(pattern));
+};
+
+const isGdtfShareAuthError = (message: string) => {
+  const value = normalized(message);
+  return gdtfShareAuthErrorPatterns.some((pattern) => value.includes(pattern));
+};
 
 const profileModeFootprint = (profile: FixtureProfileSummary, modeName: string) => {
   const mode = profile.dmx_modes.find((candidate) => candidate.name === modeName) ?? profile.dmx_modes[0];
@@ -100,10 +140,11 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
   const [busy, setBusy] = createSignal(false);
   const [shareResponse, setShareResponse] = createSignal(emptyShareSearchResponse());
   const [shareState, setShareState] = createSignal<PatchShareState>(
-    props.backendAvailable ? "signed-out" : "offline",
+    { kind: props.backendAvailable ? "signed-out" : "offline" },
   );
   const [downloadingShareKey, setDownloadingShareKey] = createSignal<string | null>(null);
   let shareSearchGeneration = 0;
+  let pausedAuthErrorQuery: string | null = null;
 
   const refreshLocalProfiles = async () => {
     if (!props.backendAvailable) return;
@@ -163,15 +204,32 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
     try {
       const response = await tauriInvoke<GdtfShareSearchResponse>("search_gdtf_share", { request });
       if (generation !== shareSearchGeneration) return;
+      pausedAuthErrorQuery = null;
       setShareResponse(response);
-      setShareState(response.fixtures.length > 0 ? "results" : "empty");
+      setShareState({ kind: response.fixtures.length > 0 ? "results" : "empty" });
       props.onMessage(`GDTF Share: showing ${response.fixtures.length} of ${response.total_matches} matching revisions.`);
     } catch (error) {
       if (generation !== shareSearchGeneration) return;
+      const message = backendErrorMessage(error);
       setShareResponse(emptyShareSearchResponse());
-      setShareState("offline");
+      if (isGdtfShareConnectivityError(message)) {
+        setShareState({ kind: "offline" });
+      } else {
+        const category = isGdtfShareAuthError(message) ? "auth" : "generic";
+        if (category === "auth") pausedAuthErrorQuery = searchQuery;
+        setShareState({ kind: "error", category, message, searchQuery });
+      }
       props.onMessage(String(error));
     }
+  };
+
+  const retryShareSearch = (searchQuery: string) => {
+    if (!props.backendAvailable || !shareCredentialsReady() || searchQuery.length < 2) return;
+    pausedAuthErrorQuery = null;
+    const generation = ++shareSearchGeneration;
+    setShareResponse(emptyShareSearchResponse());
+    setShareState({ kind: "searching" });
+    void searchShare(searchQuery, generation);
   };
 
   createEffect(() => {
@@ -181,21 +239,28 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
     const generation = ++shareSearchGeneration;
     setShareResponse(emptyShareSearchResponse());
     if (!backendAvailable) {
-      setShareState("offline");
+      setShareState({ kind: "offline" });
       return;
     }
+    if (pausedAuthErrorQuery === searchQuery) return;
     if (!credentialsReady) {
-      setShareState("signed-out");
+      setShareState({ kind: "signed-out" });
       return;
     }
     if (searchQuery.length < 2) {
-      setShareState("idle");
+      setShareState({ kind: "idle" });
       return;
     }
-    setShareState("searching");
+    setShareState({ kind: "searching" });
     const timer = window.setTimeout(() => void searchShare(searchQuery, generation), 450);
     onCleanup(() => window.clearTimeout(timer));
   });
+
+  const shareStateKind = () => shareState().kind;
+  const shareError = () => {
+    const state = shareState();
+    return state.kind === "error" ? state : null;
+  };
 
   const downloadAndUseShareProfile = async (fixture: GdtfShareFixtureSummary) => {
     const alreadyCached = cachedShareEntry(fixture);
@@ -466,10 +531,10 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
         <section class="patchProfileBrowserSection patchShareSection" data-patch-profile-section="share">
           <header>
             <strong>GDTF Share</strong>
-            <span>{shareState() === "results" ? `${shareResponse().fixtures.length}/${shareResponse().total_matches}` : "—"}</span>
+            <span>{shareStateKind() === "results" ? `${shareResponse().fixtures.length}/${shareResponse().total_matches}` : "—"}</span>
           </header>
 
-          <Show when={shareState() === "signed-out"}>
+          <Show when={shareStateKind() === "signed-out"}>
             <div class="patchShareGuidance" data-patch-share-state="signed-out">
               <span>Sign in to GDTF Share here, or open Library.</span>
               <div class="patchShareCredentialControls">
@@ -494,31 +559,87 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
             </div>
           </Show>
 
-          <Show when={shareState() === "idle"}>
+          <Show when={shareStateKind() === "idle"}>
             <p class="empty patchProfileRowEmpty" data-patch-share-state="idle">
               Type 2 or more characters to search GDTF Share.
             </p>
           </Show>
 
-          <Show when={shareState() === "searching"}>
+          <Show when={shareStateKind() === "searching"}>
             <p class="empty patchProfileRowEmpty" data-patch-share-state="searching" aria-live="polite">
               Searching GDTF Share…
             </p>
           </Show>
 
-          <Show when={shareState() === "empty"}>
+          <Show when={shareStateKind() === "empty"}>
             <p class="empty patchProfileRowEmpty" data-patch-share-state="empty">
               No GDTF Share profiles match.
             </p>
           </Show>
 
-          <Show when={shareState() === "offline"}>
+          <Show when={shareStateKind() === "offline"}>
             <p class="empty patchProfileRowEmpty patchShareUnavailable" data-patch-share-state="offline">
               GDTF Share is offline or unavailable.
             </p>
           </Show>
 
-          <Show when={shareState() === "results"}>
+          <Show when={shareError()}>
+            {(error) => (
+              <div
+                class="patchShareErrorPanel"
+                data-patch-share-state="error"
+                data-patch-share-error-kind={error().category}
+              >
+                <div class="patchShareErrorRow" role="alert">
+                  <span class="patchShareErrorText">
+                    <Show when={error().category === "auth"} fallback={<span>GDTF Share error:</span>}>
+                      <span>Login failed:</span>
+                    </Show>{" "}
+                    <span data-no-localize>{error().message}</span>
+                  </span>
+                  <Show when={error().category === "generic"}>
+                    <button
+                      type="button"
+                      data-patch-share-retry
+                      aria-label="Retry GDTF Share search"
+                      onClick={() => retryShareSearch(error().searchQuery)}
+                    >
+                      Retry
+                    </button>
+                  </Show>
+                </div>
+                <Show when={error().category === "auth"}>
+                  <div class="patchShareCredentialControls">
+                    <input
+                      value={props.shareUser}
+                      autocomplete="off"
+                      aria-label="Share User"
+                      placeholder="Share User"
+                      onInput={(event) => props.onShareUser(event.currentTarget.value)}
+                    />
+                    <input
+                      type="password"
+                      value={props.sharePassword}
+                      autocomplete="off"
+                      aria-label="Share Password"
+                      placeholder="Share Password"
+                      onInput={(event) => props.onSharePassword(event.currentTarget.value)}
+                    />
+                    <button
+                      type="button"
+                      data-patch-share-retry
+                      disabled={!props.backendAvailable || !shareCredentialsReady()}
+                      onClick={() => retryShareSearch(error().searchQuery)}
+                    >
+                      Retry
+                    </button>
+                  </div>
+                </Show>
+              </div>
+            )}
+          </Show>
+
+          <Show when={shareStateKind() === "results"}>
             <div class="patchShareManufacturerGroups" data-patch-share-state="results">
               <For each={shareGroups()}>
                 {(group) => (

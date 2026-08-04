@@ -27753,6 +27753,39 @@ h3 {
   color: #817970;
 }
 
+.patchShareErrorPanel {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.patchShareErrorRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 26px;
+  border: 1px solid #683532;
+  border-radius: 1px;
+  background: #271817;
+  padding: 3px 5px;
+  color: #e3a19a;
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+.patchShareErrorText {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.patchShareErrorRow button {
+  flex: 0 0 auto;
+  min-height: 22px;
+  padding: 2px 7px;
+  font-size: 10px;
+}
+
 .patchShareManufacturerGroups,
 .patchShareManufacturerGroup {
   display: grid;

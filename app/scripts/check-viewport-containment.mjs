@@ -13487,7 +13487,7 @@ function installPatchGdtfShareMockInPage() {
     },
   ];
   const state = {
-    offline: false,
+    searchError: null,
     searchCalls: [],
     downloadCalls: [],
     importCalls: [],
@@ -13520,7 +13520,7 @@ function installPatchGdtfShareMockInPage() {
     if (command === "search_gdtf_share") {
       state.searchCalls.push({ at: performance.now(), request: clone(args.request || {}) });
       await delay(35);
-      if (state.offline) throw new Error("GDTF Share offline from viewport mock");
+      if (state.searchError) throw new Error(state.searchError);
       return clone({
         fixtures,
         facets: {
@@ -13617,6 +13617,21 @@ async function runPatchGdtfShareViewport(client, viewport) {
     return {
       scope: ${JSON.stringify(scope)},
       shareState: document.querySelector('[data-patch-share-state]')?.getAttribute('data-patch-share-state') || '',
+      shareStateText: (document.querySelector('[data-patch-share-state]')?.textContent || '')
+        .replace(/\\s+/g, ' ')
+        .trim(),
+      shareErrorKind: document.querySelector('[data-patch-share-state="error"]')
+        ?.getAttribute('data-patch-share-error-kind') || '',
+      inlineErrorText: (document.querySelector('[data-patch-share-state="error"]')?.textContent || '')
+        .replace(/\\s+/g, ' ')
+        .trim(),
+      errorCredentialInputCount: document.querySelectorAll('[data-patch-share-state="error"] input').length,
+      errorPasswordInputCount: document.querySelectorAll(
+        '[data-patch-share-state="error"] input[type="password"][autocomplete="off"]'
+      ).length,
+      errorRetryButtonCount: document.querySelectorAll(
+        '[data-patch-share-state="error"] [data-patch-share-retry]'
+      ).length,
       sectionNames: [...document.querySelectorAll('[data-patch-profile-section]')]
         .filter(visible)
         .map((section) => section.getAttribute('data-patch-profile-section')),
@@ -13740,7 +13755,49 @@ async function runPatchGdtfShareViewport(client, viewport) {
 
   await client.evaluate(`(() => {
     const mock = window.__syndocalPatchGdtfShareMock;
-    mock.offline = true;
+    mock.searchError = 'No valid user or password provided.';
+    const input = document.querySelector('[data-patch-profile-search]');
+    if (!(input instanceof HTMLInputElement)) return;
+    input.value = 'auth failure';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: 'auth failure' }));
+  })()`);
+  await waitForClientCondition(
+    client,
+    "document.querySelector('[data-patch-share-state=\"error\"]')?.getAttribute('data-patch-share-error-kind') === 'auth'",
+    "GDTF Share inline auth failure row",
+  );
+  const authFailure = await readState("auth-failure");
+
+  await client.evaluate(`(() => {
+    const mock = window.__syndocalPatchGdtfShareMock;
+    mock.searchError = 'Viewport generic catalog parse failure';
+    const input = document.querySelector('[data-patch-profile-search]');
+    if (!(input instanceof HTMLInputElement)) return;
+    input.value = 'generic failure';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: 'generic failure' }));
+  })()`);
+  await waitForClientCondition(
+    client,
+    "document.querySelector('[data-patch-share-state=\"error\"]')?.getAttribute('data-patch-share-error-kind') === 'generic'",
+    "GDTF Share inline generic error row",
+  );
+  const genericError = await readState("generic-error");
+
+  await client.evaluate(`(() => {
+    const mock = window.__syndocalPatchGdtfShareMock;
+    mock.searchError = null;
+    document.querySelector('[data-patch-share-state="error"] [data-patch-share-retry]')?.click();
+  })()`);
+  await waitForClientCondition(
+    client,
+    "Boolean(document.querySelector('[data-patch-share-state=\"results\"]'))",
+    "GDTF Share generic error retry results",
+  );
+  const genericRetried = await readState("generic-retried");
+
+  await client.evaluate(`(() => {
+    const mock = window.__syndocalPatchGdtfShareMock;
+    mock.searchError = 'curl failed: curl: (28) Operation timed out after 60001 milliseconds';
     const input = document.querySelector('[data-patch-profile-search]');
     if (!(input instanceof HTMLInputElement)) return;
     input.value = 'source four';
@@ -13797,11 +13854,32 @@ async function runPatchGdtfShareViewport(client, viewport) {
       downloadedShareDnd?.source === "cache" &&
       downloadedShareDnd?.modeName === "Standard" &&
       downloadedShareDnd?.footprint === 8,
+    authFailureShowsInlineLoginErrorAndCredentials:
+      authFailure.shareState === "error" &&
+      authFailure.shareErrorKind === "auth" &&
+      authFailure.inlineErrorText.includes("Login failed: No valid user or password provided.") &&
+      authFailure.errorCredentialInputCount === 2 &&
+      authFailure.errorPasswordInputCount === 1 &&
+      authFailure.errorRetryButtonCount === 1 &&
+      authFailure.statusText.includes("No valid user or password provided.") &&
+      authFailure.documentAndAppScrollZero,
+    genericErrorShowsInlineErrorAndRetriesSameSearch:
+      genericError.shareState === "error" &&
+      genericError.shareErrorKind === "generic" &&
+      genericError.inlineErrorText.includes("GDTF Share error: Viewport generic catalog parse failure") &&
+      genericError.errorCredentialInputCount === 0 &&
+      genericError.errorRetryButtonCount === 1 &&
+      genericError.statusText.includes("Viewport generic catalog parse failure") &&
+      genericError.documentAndAppScrollZero &&
+      genericRetried.shareState === "results" &&
+      JSON.stringify(genericRetried.mock?.searchCalls?.slice(-2).map((call) => call.request.query)) ===
+        JSON.stringify(["generic failure", "generic failure"]),
     offlineKeepsLocalSectionsWorking:
       offline.shareState === "offline" &&
+      offline.shareStateText.includes("GDTF Share is offline or unavailable.") &&
       offline.cacheRows.length >= 1 &&
       offline.recentRows.length >= 1 &&
-      offline.statusText.includes("GDTF Share offline from viewport mock") &&
+      offline.statusText.includes("curl failed: curl: (28) Operation timed out after 60001 milliseconds") &&
       offline.documentAndAppScrollZero,
   };
   const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
@@ -13819,6 +13897,9 @@ async function runPatchGdtfShareViewport(client, viewport) {
     downloading,
     downloaded,
     downloadedShareDnd,
+    authFailure,
+    genericError,
+    genericRetried,
     offline,
   };
 }
@@ -13830,6 +13911,7 @@ const patchGdtfShareLogLine = (result) =>
   `debounce=${result.debounceDelayMs}ms ` +
   `download=${result.downloaded.mock?.downloadCalls?.length ?? "?"}->${result.downloaded.cacheRows?.length ?? "?"}->${result.downloaded.recentRows?.length ?? "?"} ` +
   `dnd=${result.downloadedShareDnd?.source ?? "?"}:${result.downloadedShareDnd?.footprint ?? "?"} ` +
+  `auth=${result.authFailure.shareErrorKind ?? "?"} generic=${result.genericError.shareErrorKind ?? "?"} ` +
   `offline=${result.offline.shareState ?? "?"} failed=${JSON.stringify(result.failedChecks)}`;
 
 async function runPatchEmptyStateViewport(client, viewport) {
