@@ -26,7 +26,7 @@ interface FixtureCatalogPanelProps {
   selectedFixtureId: number | null;
   selectedProfile: FixtureProfileSummary | null;
   selectedMode: string;
-  onProfileLoaded: (profile: FixtureProfileSummary, message: string) => void;
+  onProfileLoaded: (profile: FixtureProfileSummary, message: string, openPatch: boolean) => void;
   onRepair: (fixtureId: number, profilePath: string, modeName: string | null) => Promise<void>;
   onMessage: (message: string) => void;
 }
@@ -150,7 +150,7 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
     }
   };
 
-  const loadCachedProfile = async (entry: GdtfFixtureCacheEntry) => {
+  const loadCachedProfile = async (entry: GdtfFixtureCacheEntry, openPatch = false) => {
     if (entry.health === "invalid") {
       props.onMessage(`Cannot load invalid cached profile: ${entry.detail}`);
       return;
@@ -158,7 +158,7 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
     setBusy("load");
     try {
       const profile = await tauriInvoke<FixtureProfileSummary>("import_gdtf", { path: entry.path });
-      props.onProfileLoaded(profile, `Loaded cached ${entry.manufacturer} ${entry.fixture}`);
+      props.onProfileLoaded(profile, `Loaded cached ${entry.manufacturer} ${entry.fixture}`, openPatch);
     } catch (error) {
       props.onMessage(String(error));
     } finally {
@@ -204,7 +204,7 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
       const profile = await tauriInvoke<FixtureProfileSummary>("load_verified_fixture_profile", {
         profileId: entry.id,
       });
-      props.onProfileLoaded(profile, `Loaded verified ${entry.name}`);
+      props.onProfileLoaded(profile, `Loaded verified ${entry.name}`, true);
     } catch (error) {
       props.onMessage(String(error));
     } finally {
@@ -344,7 +344,7 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
                     <span data-no-localize>{entry.revision}</span>
                     <small>{fixtureCatalogHealthLabel(entry.health)} · {entry.detail}</small>
                     <small data-no-localize>{modeSummary(entry.modes)}</small>
-                    <button onClick={() => void loadCachedProfile(entry)} disabled={entry.health === "invalid" || busy() !== null}>Use Profile</button>
+                    <button onClick={() => void loadCachedProfile(entry, true)} disabled={entry.health === "invalid" || busy() !== null}>Use Profile</button>
                   </article>
                 );
               }}

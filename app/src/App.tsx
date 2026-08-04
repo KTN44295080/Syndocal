@@ -7280,6 +7280,16 @@ export default function App() {
       panel.focus({ preventScroll: true });
     });
   };
+  const focusPatchFixtureForm = () => {
+    requestAnimationFrame(() => {
+      const firstControl = document.querySelector<HTMLInputElement>('[data-patch-field="universe"] input');
+      if (!firstControl) {
+        return;
+      }
+      firstControl.focus({ preventScroll: true });
+      firstControl.scrollIntoView({ block: "nearest", inline: "nearest" });
+    });
+  };
   const openLiveAudioInputSettings = () => {
     setWorkspaceTab("setup");
     selectSetupMode("video");
@@ -11630,11 +11640,15 @@ export default function App() {
     }
   };
 
-  const useCatalogProfile = (imported: FixtureProfileSummary, loadedMessage: string) => {
+  const useCatalogProfile = (imported: FixtureProfileSummary, loadedMessage: string, openPatch: boolean) => {
     setProfile(imported);
     setGdtfPath(imported.source_path);
     setSelectedMode(imported.dmx_modes[0]?.name ?? "");
     setMessage(profileLoadMessage(loadedMessage, imported));
+    if (openPatch) {
+      selectSetupMode("patch");
+      focusPatchFixtureForm();
+    }
   };
 
   const repairCatalogFixtureProfile = async (
