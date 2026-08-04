@@ -26,6 +26,15 @@ interface GdtfProfileTreeManufacturerGroup {
   description?: string;
 }
 
+export interface GdtfProfileTreeManufacturerBatchState {
+  manufacturer: string;
+  phase: "enumerating" | "downloading" | "stopping" | "complete" | "cancelled" | "error";
+  processed: number;
+  total: number;
+  cached: number;
+  failures: number;
+}
+
 interface GdtfProfileTreeProps {
   ariaLabel: string;
   source: "verified" | "cache" | "share";
@@ -36,6 +45,10 @@ interface GdtfProfileTreeProps {
   selected: (fixture: GdtfProfileTreeFixture, mode: GdtfProfileTreeMode) => boolean;
   downloading?: (fixture: GdtfProfileTreeFixture, mode: GdtfProfileTreeMode) => boolean;
   cached?: (fixture: GdtfProfileTreeFixture, mode: GdtfProfileTreeMode) => boolean;
+  manufacturerBatch?: (manufacturer: string) => GdtfProfileTreeManufacturerBatchState | null;
+  manufacturerBatchDisabled?: (manufacturer: string) => boolean;
+  onManufacturerBatch?: (manufacturer: string) => void;
+  onCancelManufacturerBatch?: (manufacturer: string) => void;
   onActivate: (fixture: GdtfProfileTreeFixture, mode: GdtfProfileTreeMode) => void;
   onDragStart: (
     event: DragEvent,
@@ -158,37 +171,92 @@ export function GdtfProfileTree(props: GdtfProfileTreeProps) {
       <For each={groups()}>
         {(group) => {
           const expanded = () => manufacturerExpanded(group.key);
+          const batch = () => props.manufacturerBatch?.(group.manufacturer) ?? null;
+          const batchActive = () => {
+            const phase = batch()?.phase;
+            return phase === "enumerating" || phase === "downloading" || phase === "stopping";
+          };
           return (
             <div
               class="patchProfileTreeManufacturer"
               data-profile-tree-manufacturer={group.manufacturer}
               data-profile-tree-category={props.source === "verified" ? group.manufacturer : undefined}
             >
-              <button
-                type="button"
-                class="patchProfileTreeBranchRow patchProfileTreeManufacturerRow"
-                role="treeitem"
-                aria-level="1"
-                aria-expanded={expanded()}
-                title={props.source === "verified" ? group.description : undefined}
-                data-profile-tree-item="manufacturer"
-                data-profile-tree-profile-count={props.source === "verified" ? group.profileCount : undefined}
-                onClick={() => setManufacturerExpanded(group.key, !expanded())}
-                onKeyDown={(event) => handleBranchKeyDown(
-                  event,
-                  expanded(),
-                  (next) => setManufacturerExpanded(group.key, next),
-                )}
+              <div
+                class={`patchProfileTreeManufacturerHeader${expanded() ? " is-expanded" : ""}`}
+                data-share-manufacturer-batch-visible={batch() ? "true" : undefined}
               >
-                <span class="patchProfileTreeChevron" aria-hidden="true">{expanded() ? "▾" : "▸"}</span>
-                <strong data-no-localize={props.source === "verified" ? undefined : ""}>{group.manufacturer}</strong>
-                <span class="patchProfileTreeCount">
-                  <b data-no-localize>{props.source === "verified" ? group.profileCount : group.fixtures.length}</b>{" "}
-                  {props.source === "verified"
-                    ? (group.profileCount === 1 ? "Profile" : "profiles")
-                    : (group.fixtures.length === 1 ? "Fixture" : "fixtures")}
-                </span>
-              </button>
+                <button
+                  type="button"
+                  class="patchProfileTreeBranchRow patchProfileTreeManufacturerRow"
+                  role="treeitem"
+                  aria-level="1"
+                  aria-expanded={expanded()}
+                  title={props.source === "verified" ? group.description : undefined}
+                  data-profile-tree-item="manufacturer"
+                  data-profile-tree-profile-count={props.source === "verified" ? group.profileCount : undefined}
+                  onClick={() => setManufacturerExpanded(group.key, !expanded())}
+                  onKeyDown={(event) => handleBranchKeyDown(
+                    event,
+                    expanded(),
+                    (next) => setManufacturerExpanded(group.key, next),
+                  )}
+                >
+                  <span class="patchProfileTreeChevron" aria-hidden="true">{expanded() ? "▾" : "▸"}</span>
+                  <strong data-no-localize={props.source === "verified" ? undefined : ""}>{group.manufacturer}</strong>
+                  <span class="patchProfileTreeCount">
+                    <b data-no-localize>{props.source === "verified" ? group.profileCount : group.fixtures.length}</b>{" "}
+                    {props.source === "verified"
+                      ? (group.profileCount === 1 ? "Profile" : "profiles")
+                      : (group.fixtures.length === 1 ? "Fixture" : "fixtures")}
+                  </span>
+                </button>
+
+                <Show when={props.source === "share" && props.onManufacturerBatch && props.onCancelManufacturerBatch}>
+                  <div
+                    class="patchShareManufacturerBatch"
+                    data-share-manufacturer-batch-state={batch()?.phase ?? "idle"}
+                    data-share-manufacturer-batch-manufacturer={group.manufacturer}
+                    aria-live="polite"
+                  >
+                    <Show when={batch()}>
+                      {(state) => (
+                        <span class="patchShareManufacturerBatchStatus" data-share-manufacturer-batch-status>
+                          <Show when={state().phase === "enumerating"}>Listing catalog…</Show>
+                          <Show when={state().phase === "downloading" || state().phase === "stopping"}>
+                            <b data-no-localize>{state().processed}/{state().total}</b><span aria-hidden="true">…</span>
+                            <Show when={state().failures > 0}>
+                              {" ("}<b data-no-localize>{state().failures}</b>{" "}<span>failed</span>{")"}
+                            </Show>
+                            <Show when={state().phase === "stopping"}>{" · "}<span>Stopping…</span></Show>
+                          </Show>
+                          <Show when={state().phase === "complete" || state().phase === "cancelled"}>
+                            <b data-no-localize>{state().cached}/{state().total}</b>{" "}<span>cached</span>
+                            <Show when={state().failures > 0}>
+                              {" ("}<b data-no-localize>{state().failures}</b>{" "}<span>failed</span>{")"}
+                            </Show>
+                            <Show when={state().phase === "cancelled"}>{" · "}<span>Canceled</span></Show>
+                          </Show>
+                          <Show when={state().phase === "error"}>Catalog failed</Show>
+                        </span>
+                      )}
+                    </Show>
+                    <button
+                      type="button"
+                      class="patchShareManufacturerBatchAction"
+                      title={batchActive() ? "Stop manufacturer cache" : "Cache all manufacturer revisions"}
+                      aria-label={batchActive() ? "Stop manufacturer cache" : "Cache all manufacturer revisions"}
+                      data-share-manufacturer-batch-action
+                      disabled={batch()?.phase === "stopping" || (!batchActive() && props.manufacturerBatchDisabled?.(group.manufacturer))}
+                      onClick={() => batchActive()
+                        ? props.onCancelManufacturerBatch?.(group.manufacturer)
+                        : props.onManufacturerBatch?.(group.manufacturer)}
+                    >
+                      <span aria-hidden="true" data-no-localize>{batchActive() ? "■" : "↓"}</span>
+                    </button>
+                  </div>
+                </Show>
+              </div>
 
               <Show when={expanded()}>
                 <div class="patchProfileTreeGroup" role="group">

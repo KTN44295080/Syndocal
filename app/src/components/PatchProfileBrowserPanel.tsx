@@ -1,6 +1,7 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import {
+  fixtureCatalogCacheMegabytes,
   fixtureCatalogFavoriteKey,
   fixtureCatalogIdentityMatches,
   previewVerifiedProfiles,
@@ -15,6 +16,7 @@ import type { FixtureProfileSummary, PatchedFixtureSummary } from "../types";
 import {
   filterGdtfProfileTreeFixtures,
   GdtfProfileTree,
+  type GdtfProfileTreeManufacturerBatchState,
   type GdtfProfileTreeFixture,
   type GdtfProfileTreeMode,
 } from "./GdtfProfileTree";
@@ -187,7 +189,10 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
     { kind: props.backendAvailable ? "signed-out" : "offline" },
   );
   const [downloadingShareKey, setDownloadingShareKey] = createSignal<string | null>(null);
+  const [manufacturerBatch, setManufacturerBatch] = createSignal<GdtfProfileTreeManufacturerBatchState | null>(null);
   let shareSearchGeneration = 0;
+  let manufacturerBatchGeneration = 0;
+  let activeManufacturerBatch: { generation: number; cancelled: boolean } | null = null;
   let pausedAuthErrorQuery: string | null = null;
 
   const refreshLocalProfiles = async () => {
@@ -204,11 +209,19 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
   };
 
   onMount(() => void refreshLocalProfiles());
+  onCleanup(() => {
+    if (activeManufacturerBatch) activeManufacturerBatch.cancelled = true;
+  });
 
   const shareCredentialsReady = () => Boolean(props.shareUser.trim() && props.sharePassword);
 
   const cachedShareEntry = (fixture: GdtfShareFixtureSummary) => cacheEntries().find((candidate) =>
     candidate.health !== "invalid" && fixtureCatalogIdentityMatches(fixture, candidate));
+  const cacheMegabytes = createMemo(() => fixtureCatalogCacheMegabytes(cacheEntries()));
+  const manufacturerBatchActive = () => {
+    const phase = manufacturerBatch()?.phase;
+    return phase === "enumerating" || phase === "downloading" || phase === "stopping";
+  };
 
   const verifiedTreeFixtures = verifiedProfileTreeFixtures(previewVerifiedProfiles);
   const visibleVerifiedFixtures = createMemo(() =>
@@ -306,6 +319,123 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
     return state.kind === "error" ? state : null;
   };
 
+  const upsertCacheEntry = (entry: GdtfFixtureCacheEntry) => setCacheEntries((current) => [
+    entry,
+    ...current.filter((candidate) => candidate.key !== entry.key && candidate.path !== entry.path),
+  ]);
+
+  const cancelManufacturerBatch = (manufacturer: string) => {
+    const current = manufacturerBatch();
+    const run = activeManufacturerBatch;
+    if (!run || !current || normalized(current.manufacturer) !== normalized(manufacturer)) return;
+    run.cancelled = true;
+    if (current.phase === "enumerating" || current.phase === "downloading") {
+      setManufacturerBatch({ ...current, phase: "stopping" });
+    }
+  };
+
+  const cacheManufacturerCatalog = async (manufacturer: string) => {
+    if (!props.backendAvailable || !shareCredentialsReady() || activeManufacturerBatch || downloadingShareKey()) return;
+    const run = { generation: ++manufacturerBatchGeneration, cancelled: false };
+    activeManufacturerBatch = run;
+    setManufacturerBatch({
+      manufacturer,
+      phase: "enumerating",
+      processed: 0,
+      total: 0,
+      cached: 0,
+      failures: 0,
+    });
+
+    try {
+      const request: GdtfShareSearchRequest = {
+        user: props.shareUser,
+        password: props.sharePassword,
+        manufacturer,
+        fixture: null,
+        query: null,
+        mode: null,
+        min_footprint: null,
+        max_footprint: null,
+        release_only: false,
+        tested_in_visualizer: false,
+        tested_in_real_life: false,
+        limit: 200,
+      };
+      const response = await tauriInvoke<GdtfShareSearchResponse>("search_gdtf_share", { request });
+      if (activeManufacturerBatch !== run) return;
+      if (response.fixtures.length < response.total_matches) {
+        throw new Error(`Manufacturer catalog returned only ${response.fixtures.length} of ${response.total_matches} revisions.`);
+      }
+      const catalog = [...new Map(response.fixtures
+        .filter((fixture) => normalized(fixture.manufacturer) === normalized(manufacturer))
+        .map((fixture) => [fixtureCatalogFavoriteKey(fixture), fixture])).values()];
+      let processed = 0;
+      let cached = 0;
+      let failures = 0;
+      const cachedKeys = new Set(cacheEntries()
+        .filter((entry) => entry.health !== "invalid")
+        .map((entry) => fixtureCatalogFavoriteKey(entry)));
+      setManufacturerBatch({ manufacturer, phase: run.cancelled ? "stopping" : "downloading", processed, total: catalog.length, cached, failures });
+
+      for (const fixture of catalog) {
+        if (run.cancelled) break;
+        const identity = fixtureCatalogFavoriteKey(fixture);
+        if (cachedKeys.has(identity)) {
+          processed += 1;
+          cached += 1;
+          setManufacturerBatch({ manufacturer, phase: "downloading", processed, total: catalog.length, cached, failures });
+          continue;
+        }
+        const downloadRequest: GdtfShareDownloadRequest = {
+          user: props.shareUser,
+          password: props.sharePassword,
+          rid: fixture.rid,
+          uuid: fixture.uuid,
+          manufacturer: fixture.manufacturer,
+          fixture: fixture.fixture,
+          revision: fixture.revision,
+        };
+        try {
+          const entry = await tauriInvoke<GdtfFixtureCacheEntry>("cache_gdtf_from_share", { request: downloadRequest });
+          upsertCacheEntry(entry);
+          cachedKeys.add(identity);
+          cached += 1;
+        } catch (error) {
+          failures += 1;
+          props.onMessage(`Failed to cache ${fixture.manufacturer} ${fixture.fixture} ${fixture.revision}: ${backendErrorMessage(error)}`);
+        }
+        processed += 1;
+        setManufacturerBatch({
+          manufacturer,
+          phase: run.cancelled ? "stopping" : "downloading",
+          processed,
+          total: catalog.length,
+          cached,
+          failures,
+        });
+      }
+
+      if (activeManufacturerBatch === run) {
+        setManufacturerBatch({
+          manufacturer,
+          phase: run.cancelled ? "cancelled" : "complete",
+          processed,
+          total: catalog.length,
+          cached,
+          failures,
+        });
+      }
+    } catch (error) {
+      if (activeManufacturerBatch === run) {
+        setManufacturerBatch({ manufacturer, phase: "error", processed: 0, total: 0, cached: 0, failures: 0 });
+        props.onMessage(`GDTF Share manufacturer catalog failed: ${backendErrorMessage(error)}`);
+      }
+    } finally {
+      if (activeManufacturerBatch === run) activeManufacturerBatch = null;
+    }
+  };
+
   const downloadAndUseShareProfile = async (
     fixture: GdtfShareFixtureSummary,
     requestedModeName: string | null,
@@ -314,7 +444,7 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
     const preferredMode = alreadyCached?.modes.find((mode) => mode.name === requestedModeName)?.name ||
       requestedModeName || alreadyCached?.modes[0]?.name || fixture.modes[0]?.name || null;
     if (alreadyCached) return props.onLoadCached(alreadyCached.path, preferredMode);
-    if (!props.backendAvailable || !shareCredentialsReady()) return false;
+    if (!props.backendAvailable || !shareCredentialsReady() || manufacturerBatchActive()) return false;
 
     const key = profileModeKey(fixtureCatalogFavoriteKey(fixture), preferredMode || "Default");
     const request: GdtfShareDownloadRequest = {
@@ -329,10 +459,7 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
     setDownloadingShareKey(key);
     try {
       const entry = await tauriInvoke<GdtfFixtureCacheEntry>("cache_gdtf_from_share", { request });
-      setCacheEntries((current) => [
-        entry,
-        ...current.filter((candidate) => candidate.key !== entry.key && candidate.path !== entry.path),
-      ]);
+      upsertCacheEntry(entry);
       const loaded = await props.onLoadCached(entry.path, preferredMode || entry.modes[0]?.name || null);
       if (loaded) await refreshLocalProfiles();
       return loaded;
@@ -454,6 +581,7 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
           type="search"
           value={query()}
           placeholder="Fixture, manufacturer, mode, or channel count"
+          disabled={manufacturerBatchActive()}
           onInput={(event) => setQuery(event.currentTarget.value)}
           data-patch-profile-search
           data-patch-footprint-filter={/^\d{1,3}$/.test(query().trim()) ? query().trim() : undefined}
@@ -506,7 +634,13 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
         </section>
 
         <section class="patchProfileBrowserSection" data-patch-profile-section="cache">
-          <header><strong>Cached / offline GDTF</strong><span>{visibleCacheFixtures().length}</span></header>
+          <header>
+            <strong>Cached / offline GDTF</strong>
+            <span class="patchProfileCacheSummary">
+              <b data-no-localize>{cacheEntries().length}</b>{" "}<span>profiles</span>{" · "}
+              <b data-no-localize>{cacheMegabytes()}</b>{" "}<span data-no-localize>MB</span>
+            </span>
+          </header>
           <GdtfProfileTree
             ariaLabel="Cached GDTF profile tree"
             source="cache"
@@ -708,7 +842,7 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
                 source="share"
                 fixtures={visibleShareFixtures()}
                 searchActive={Boolean(query().trim())}
-                disabled={(_fixture, mode) => downloadingShareKey() === mode.key}
+                disabled={(_fixture, mode) => manufacturerBatchActive() || downloadingShareKey() === mode.key}
                 draggable={(fixture) => {
                   const entry = shareEntryForTreeFixture(fixture);
                   return Boolean(entry && cachedShareEntry(entry));
@@ -728,6 +862,15 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
                   const entry = shareEntryForTreeFixture(fixture);
                   return Boolean(entry && cachedShareEntry(entry));
                 }}
+                manufacturerBatch={(manufacturer) => {
+                  const state = manufacturerBatch();
+                  return state && normalized(state.manufacturer) === normalized(manufacturer) ? state : null;
+                }}
+                manufacturerBatchDisabled={(manufacturer) =>
+                  !props.backendAvailable || !shareCredentialsReady() || Boolean(downloadingShareKey()) ||
+                  (manufacturerBatchActive() && normalized(manufacturerBatch()?.manufacturer ?? "") !== normalized(manufacturer))}
+                onManufacturerBatch={(manufacturer) => void cacheManufacturerCatalog(manufacturer)}
+                onCancelManufacturerBatch={cancelManufacturerBatch}
                 onActivate={(fixture, mode) => {
                   const entry = shareEntryForTreeFixture(fixture);
                   if (entry) void downloadAndUseShareProfile(entry, mode.modeName);

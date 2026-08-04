@@ -27664,6 +27664,77 @@ h3 {
   padding-left: 4px;
 }
 
+.patchProfileTreeManufacturerHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.patchShareManufacturerBatch {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  height: 27px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 100ms ease-out;
+}
+
+.patchProfileTreeManufacturerHeader:hover .patchShareManufacturerBatch,
+.patchProfileTreeManufacturerHeader:focus-within .patchShareManufacturerBatch,
+.patchProfileTreeManufacturerHeader.is-expanded .patchShareManufacturerBatch,
+.patchProfileTreeManufacturerHeader[data-share-manufacturer-batch-visible="true"] .patchShareManufacturerBatch {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.patchShareManufacturerBatchStatus {
+  max-width: 108px;
+  overflow: hidden;
+  color: #b9aa94;
+  font-size: 8px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.patchShareManufacturerBatchStatus > b {
+  color: #dfc078;
+  font-weight: 700;
+}
+
+.patchShareManufacturerBatchAction {
+  display: grid;
+  place-items: center;
+  width: 23px;
+  min-width: 23px;
+  height: 23px;
+  min-height: 23px;
+  border-color: #5b503e;
+  border-radius: 1px;
+  background: #252018;
+  padding: 0;
+  color: #d6b766;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.patchShareManufacturerBatchAction:hover:not(:disabled),
+.patchShareManufacturerBatchAction:focus-visible {
+  border-color: #a1844c;
+  background: #342b1d;
+  color: #f0cb70;
+}
+
+.patchShareManufacturerBatch[data-share-manufacturer-batch-state="stopping"] .patchShareManufacturerBatchAction,
+.patchShareManufacturerBatch[data-share-manufacturer-batch-state="cancelled"] .patchShareManufacturerBatchAction,
+.patchShareManufacturerBatch[data-share-manufacturer-batch-state="error"] .patchShareManufacturerBatchAction {
+  color: #d09578;
+}
+
 .patchProfileTreeModeGroup {
   margin-left: 8px;
 }
@@ -27698,6 +27769,22 @@ h3 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.patchProfileCacheSummary,
+.fixtureCatalogCacheSummary {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.patchProfileCacheSummary > b,
+.fixtureCatalogCacheSummary > b {
+  color: #a59b92;
+  font-size: inherit;
+  font-weight: 600;
 }
 
 .patchProfileTreeBranchRow > strong {

@@ -13534,6 +13534,34 @@ async function runPatchDndViewport(client, viewport) {
 function installPatchGdtfShareMockInPage() {
   const delay = (ms) => new Promise((resolveDelay) => window.setTimeout(resolveDelay, ms));
   const clone = (value) => JSON.parse(JSON.stringify(value));
+  const batchFixture = (rid, manufacturer, fixture, revision, filesize) => ({
+    rid,
+    uuid: `viewport-${manufacturer.toLocaleLowerCase()}-${rid}`,
+    manufacturer,
+    fixture,
+    revision,
+    uploader: "Viewport",
+    rating: "5",
+    version: "1.2",
+    creator: manufacturer,
+    filesize,
+    release_status: "Release",
+    tested_in_visualizer: true,
+    tested_in_real_life: true,
+    modes: [{ name: "Standard", dmx_footprint: 8 }],
+  });
+  const manufacturerCatalogs = {
+    BatchCo: [
+      batchFixture(7301, "BatchCo", "Batch One", "1.0", 5120),
+      batchFixture(7302, "BatchCo", "Batch Two", "1.1", 6144),
+      batchFixture(7303, "BatchCo", "Batch Three", "1.2", 7168),
+    ],
+    CancelCo: [
+      batchFixture(7401, "CancelCo", "Cancel One", "2.0", 8192),
+      batchFixture(7402, "CancelCo", "Cancel Two", "2.1", 9216),
+      batchFixture(7403, "CancelCo", "Cancel Three", "2.2", 10240),
+    ],
+  };
   const fixtures = [
     {
       rid: 7101,
@@ -13586,11 +13614,16 @@ function installPatchGdtfShareMockInPage() {
       tested_in_real_life: true,
       modes: [{ name: "Mode 1", dmx_footprint: 39 }],
     },
+    manufacturerCatalogs.BatchCo[0],
+    manufacturerCatalogs.CancelCo[0],
   ];
   const state = {
     searchError: null,
     searchCalls: [],
     downloadCalls: [],
+    downloadFailures: [],
+    activeDownloads: 0,
+    maxActiveDownloads: 0,
     importCalls: [],
     cache: [{
       key: "share-rid-7102",
@@ -13631,11 +13664,17 @@ function installPatchGdtfShareMockInPage() {
     if (command === "list_gdtf_fixture_cache") return clone(state.cache);
     if (command === "get_fixture_profile_health") return [];
     if (command === "search_gdtf_share") {
-      state.searchCalls.push({ at: performance.now(), request: clone(args.request || {}) });
+      const request = clone(args.request || {});
+      state.searchCalls.push({ at: performance.now(), request });
       await delay(35);
       if (state.searchError) throw new Error(state.searchError);
+      const responseFixtures = request.manufacturer
+        ? (manufacturerCatalogs[request.manufacturer] || fixtures.filter(
+          (candidate) => candidate.manufacturer.toLocaleLowerCase() === String(request.manufacturer).toLocaleLowerCase(),
+        ))
+        : fixtures;
       return clone({
-        fixtures,
+        fixtures: responseFixtures,
         facets: {
           manufacturers: ["ETC", "Robe"],
           modes: ["Standard", "Direct", "Mode 1"],
@@ -13646,30 +13685,44 @@ function installPatchGdtfShareMockInPage() {
           tested_in_visualizer: true,
           tested_in_real_life: true,
         },
-        total_matches: fixtures.length,
+        total_matches: responseFixtures.length,
       });
     }
     if (command === "cache_gdtf_from_share") {
       const request = clone(args.request || {});
-      state.downloadCalls.push({ at: performance.now(), request });
-      await delay(140);
-      const fixture = fixtures.find((candidate) => candidate.rid === request.rid) || fixtures[0];
-      const entry = {
-        key: `share-rid-${fixture.rid}`,
-        rid: fixture.rid,
-        uuid: fixture.uuid,
-        manufacturer: fixture.manufacturer,
-        fixture: fixture.fixture,
-        revision: fixture.revision,
-        path: `C:/viewport-gdtf-cache/${fixture.manufacturer}-${fixture.fixture}.gdtf`,
-        filesize: fixture.filesize,
-        health: "healthy",
-        detail: "Viewport mock cache ready",
-        warnings: [],
-        modes: clone(fixture.modes),
-      };
-      state.cache = [entry, ...state.cache.filter((candidate) => candidate.key !== entry.key)];
-      return clone(entry);
+      const call = { at: performance.now(), request, activeAtStart: state.activeDownloads };
+      state.downloadCalls.push(call);
+      state.activeDownloads += 1;
+      state.maxActiveDownloads = Math.max(state.maxActiveDownloads, state.activeDownloads);
+      try {
+        await delay(140);
+        if (state.downloadFailures.includes(request.rid)) throw new Error(`Viewport mocked download failure for ${request.rid}`);
+        const fixture = [...fixtures, ...Object.values(manufacturerCatalogs).flat()]
+          .find((candidate) => candidate.rid === request.rid) || fixtures[0];
+        const entry = {
+          key: `share-rid-${fixture.rid}`,
+          rid: fixture.rid,
+          uuid: fixture.uuid,
+          manufacturer: fixture.manufacturer,
+          fixture: fixture.fixture,
+          revision: fixture.revision,
+          path: `C:/viewport-gdtf-cache/${fixture.manufacturer}-${fixture.fixture}-${fixture.revision}.gdtf`,
+          filesize: fixture.filesize,
+          health: "healthy",
+          detail: "Viewport mock cache ready",
+          warnings: [],
+          modes: clone(fixture.modes),
+        };
+        state.cache = [entry, ...state.cache.filter((candidate) => candidate.key !== entry.key)];
+        call.failed = false;
+        return clone(entry);
+      } catch (error) {
+        call.failed = true;
+        throw error;
+      } finally {
+        state.activeDownloads -= 1;
+        call.finishedAt = performance.now();
+      }
     }
     if (command === "import_gdtf") {
       const path = String(args.path || "");
@@ -13761,11 +13814,21 @@ async function runPatchGdtfShareViewport(client, viewport) {
       openLibraryButtonCount: document.querySelectorAll('[data-patch-share-open-library]').length,
       manufacturerGroups: [...(shareTree?.querySelectorAll('[data-profile-tree-manufacturer]') ?? [])].map((group) => ({
         manufacturer: group.getAttribute('data-profile-tree-manufacturer'),
-        expanded: group.querySelector(':scope > [data-profile-tree-item="manufacturer"]')?.getAttribute('aria-expanded'),
+        expanded: group.querySelector('[data-profile-tree-item="manufacturer"]')?.getAttribute('aria-expanded'),
         fixtureCount: group.querySelectorAll(
           '[data-profile-tree-item="fixture"], [data-profile-tree-item="fixture-mode"]'
         ).length,
         rowCount: group.querySelectorAll('[data-patch-profile-row][data-profile-source="share"]').length,
+      })),
+      manufacturerBatches: [...(shareTree?.querySelectorAll('[data-share-manufacturer-batch-state]') ?? [])].map((batch) => ({
+        manufacturer: batch.getAttribute('data-share-manufacturer-batch-manufacturer'),
+        state: batch.getAttribute('data-share-manufacturer-batch-state'),
+        text: (batch.querySelector('[data-share-manufacturer-batch-status]')?.textContent || '')
+          .replace(/\\s+/g, ' ')
+          .trim(),
+        actionTitle: batch.querySelector('[data-share-manufacturer-batch-action]')?.getAttribute('title') || '',
+        actionAria: batch.querySelector('[data-share-manufacturer-batch-action]')?.getAttribute('aria-label') || '',
+        actionDisabled: batch.querySelector('[data-share-manufacturer-batch-action]')?.disabled === true,
       })),
       shareTreeRole: shareTree?.getAttribute('role') || '',
       cacheTreeRole: cacheTree?.getAttribute('role') || '',
@@ -13829,6 +13892,9 @@ async function runPatchGdtfShareViewport(client, viewport) {
       verifiedRowCount: rows('[data-patch-profile-row][data-profile-source="verified"]').length,
       patchButtonDisabled: document.querySelector('[data-patch-minimal-form] button.primary')?.disabled !== false,
       statusText: (document.querySelector('.appStatusLine')?.textContent || '').replace(/\\s+/g, ' ').trim(),
+      cacheSummaryText: (document.querySelector('.patchProfileCacheSummary')?.textContent || '')
+        .replace(/\\s+/g, ' ')
+        .trim(),
       credentialValuesPersisted,
       mock: mock ? JSON.parse(JSON.stringify(mock)) : null,
       documentAndAppScrollZero:
@@ -13982,6 +14048,65 @@ async function runPatchGdtfShareViewport(client, viewport) {
   const manufacturerArrowRightExpanded = await sendCacheTreeKey(manufacturerSelector, "ArrowRight", "manufacturer-arrow-right");
   await sendCacheTreeKey(manufacturerSelector, "ArrowLeft", "manufacturer-final-collapse");
 
+  const batchSearch = await searchTree("BatchCo", "batch-manufacturer-search");
+  await client.evaluate(`document.querySelector('[data-share-profile-key="share:rid:7301::standard"]')?.click()`);
+  await waitForClientCondition(
+    client,
+    "window.__syndocalPatchGdtfShareMock?.cache?.some((entry) => entry.rid === 7301) && " +
+      "document.querySelector('[data-share-profile-key=\"share:rid:7301::standard\"]')?.getAttribute('data-profile-cached') === 'true'",
+    "manufacturer batch pre-cached revision",
+  );
+  await client.evaluate(`(() => {
+    const mock = window.__syndocalPatchGdtfShareMock;
+    mock.downloadCalls = [];
+    mock.downloadFailures = [7302];
+    mock.maxActiveDownloads = 0;
+    document.querySelector(
+      '[data-share-manufacturer-batch-manufacturer="BatchCo"] [data-share-manufacturer-batch-action]'
+    )?.click();
+  })()`);
+  await waitForClientCondition(
+    client,
+    "window.__syndocalPatchGdtfShareMock?.activeDownloads === 1 && " +
+      "document.querySelector('[data-share-manufacturer-batch-manufacturer=\"BatchCo\"]')?.getAttribute('data-share-manufacturer-batch-state') === 'downloading'",
+    "manufacturer batch inline progress",
+  );
+  const batchProgress = await readState("batch-progress");
+  await waitForClientCondition(
+    client,
+    "document.querySelector('[data-share-manufacturer-batch-manufacturer=\"BatchCo\"]')?.getAttribute('data-share-manufacturer-batch-state') === 'complete'",
+    "manufacturer batch completion after skipped failure",
+  );
+  const batchCompleted = await readState("batch-completed");
+
+  const cancelSearch = await searchTree("CancelCo", "cancel-manufacturer-search");
+  await client.evaluate(`(() => {
+    const mock = window.__syndocalPatchGdtfShareMock;
+    mock.downloadCalls = [];
+    mock.downloadFailures = [];
+    mock.maxActiveDownloads = 0;
+    document.querySelector(
+      '[data-share-manufacturer-batch-manufacturer="CancelCo"] [data-share-manufacturer-batch-action]'
+    )?.click();
+  })()`);
+  await waitForClientCondition(
+    client,
+    "window.__syndocalPatchGdtfShareMock?.downloadCalls?.length === 2 && " +
+      "window.__syndocalPatchGdtfShareMock?.activeDownloads === 1",
+    "manufacturer batch second sequential download",
+  );
+  const cancelProgress = await readState("cancel-progress");
+  await client.evaluate(`document.querySelector(
+    '[data-share-manufacturer-batch-manufacturer="CancelCo"] [data-share-manufacturer-batch-action]'
+  )?.click()`);
+  const cancelStopping = await readState("cancel-stopping");
+  await waitForClientCondition(
+    client,
+    "document.querySelector('[data-share-manufacturer-batch-manufacturer=\"CancelCo\"]')?.getAttribute('data-share-manufacturer-batch-state') === 'cancelled'",
+    "cancelled manufacturer batch",
+  );
+  const batchCancelled = await readState("batch-cancelled");
+
   await client.evaluate(`(() => {
     const mock = window.__syndocalPatchGdtfShareMock;
     mock.searchError = 'No valid user or password provided.';
@@ -14039,6 +14164,16 @@ async function runPatchGdtfShareViewport(client, viewport) {
   );
   const offline = await readState("offline");
 
+  const batchCatalogRequest = batchCompleted.mock?.searchCalls?.find(
+    (call) => call.request?.manufacturer === "BatchCo",
+  )?.request;
+  const batchDownloadCalls = batchCompleted.mock?.downloadCalls ?? [];
+  const batchStatus = batchCompleted.manufacturerBatches.find((entry) => entry.manufacturer === "BatchCo");
+  const batchProgressStatus = batchProgress.manufacturerBatches.find((entry) => entry.manufacturer === "BatchCo");
+  const cancelProgressStatus = cancelProgress.manufacturerBatches.find((entry) => entry.manufacturer === "CancelCo");
+  const cancelStoppingStatus = cancelStopping.manufacturerBatches.find((entry) => entry.manufacturer === "CancelCo");
+  const cancelledStatus = batchCancelled.manufacturerBatches.find((entry) => entry.manufacturer === "CancelCo");
+  const cancelledDownloadCalls = batchCancelled.mock?.downloadCalls ?? [];
   const checks = {
     shareSectionOrder:
       JSON.stringify(signedOut.sectionNames) === JSON.stringify(["verified", "cache", "recent", "share"]),
@@ -14161,6 +14296,51 @@ async function runPatchGdtfShareViewport(client, viewport) {
       downloadedShareDnd?.source === "cache" &&
       downloadedShareDnd?.modeName === "Standard" &&
       downloadedShareDnd?.footprint === 8,
+    manufacturerBatchUsesFullCatalogAndCompactHeader:
+      batchSearch.manufacturerBatches.some((entry) =>
+        entry.manufacturer === "BatchCo" && entry.state === "idle" &&
+        entry.actionTitle === "Cache all manufacturer revisions" &&
+        entry.actionAria === "Cache all manufacturer revisions" && !entry.actionDisabled) &&
+      batchCatalogRequest?.manufacturer === "BatchCo" &&
+      batchCatalogRequest?.fixture === null &&
+      batchCatalogRequest?.query === null &&
+      batchCatalogRequest?.mode === null &&
+      batchCatalogRequest?.min_footprint === null &&
+      batchCatalogRequest?.max_footprint === null &&
+      batchCatalogRequest?.limit === 200,
+    manufacturerBatchIsSequentialSkipsCachedAndSurvivesFailure:
+      JSON.stringify(batchDownloadCalls.map((call) => call.request.rid)) === JSON.stringify([7302, 7303]) &&
+      JSON.stringify(batchDownloadCalls.map((call) => call.failed)) === JSON.stringify([true, false]) &&
+      batchCompleted.mock?.maxActiveDownloads === 1 &&
+      batchDownloadCalls.every((call, index) =>
+        call.activeAtStart === 0 && (index === 0 || call.at >= batchDownloadCalls[index - 1].finishedAt)) &&
+      batchCompleted.mock?.cache?.some((entry) => entry.rid === 7301) &&
+      !batchCompleted.mock?.cache?.some((entry) => entry.rid === 7302) &&
+      batchCompleted.mock?.cache?.some((entry) => entry.rid === 7303),
+    manufacturerBatchShowsInlineProgressAndFailureCount:
+      batchProgressStatus?.state === "downloading" &&
+      batchProgressStatus?.text.includes("1/3") &&
+      batchProgressStatus?.actionTitle === "Stop manufacturer cache" &&
+      batchProgressStatus?.actionAria === "Stop manufacturer cache" &&
+      batchStatus?.state === "complete" &&
+      batchStatus?.text.includes("2/3 cached") &&
+      batchStatus?.text.includes("1 failed"),
+    manufacturerBatchCancelStopsBeforeNextAndKeepsCache:
+      cancelProgressStatus?.state === "downloading" &&
+      cancelProgressStatus?.text.includes("1/3") &&
+      cancelStoppingStatus?.state === "stopping" &&
+      cancelStoppingStatus?.actionDisabled === true &&
+      cancelledStatus?.state === "cancelled" &&
+      cancelledStatus?.text.includes("2/3 cached") &&
+      cancelledStatus?.text.includes("Canceled") &&
+      JSON.stringify(cancelledDownloadCalls.map((call) => call.request.rid)) === JSON.stringify([7401, 7402]) &&
+      batchCancelled.mock?.maxActiveDownloads === 1 &&
+      batchCancelled.mock?.cache?.some((entry) => entry.rid === 7401) &&
+      batchCancelled.mock?.cache?.some((entry) => entry.rid === 7402) &&
+      !batchCancelled.mock?.cache?.some((entry) => entry.rid === 7403),
+    offlineCacheHeaderShowsCountAndMegabytes:
+      /^\d+ profiles · \d+\.\d MB$/.test(batchCompleted.cacheSummaryText) &&
+      /^\d+ profiles · \d+\.\d MB$/.test(batchCancelled.cacheSummaryText),
     authFailureShowsInlineLoginErrorAndCredentials:
       authFailure.shareState === "error" &&
       authFailure.shareErrorKind === "auth" &&
@@ -14215,6 +14395,13 @@ async function runPatchGdtfShareViewport(client, viewport) {
     fixtureArrowLeftCollapsed,
     manufacturerArrowLeftCollapsed,
     manufacturerArrowRightExpanded,
+    batchSearch,
+    batchProgress,
+    batchCompleted,
+    cancelSearch,
+    cancelProgress,
+    cancelStopping,
+    batchCancelled,
     authFailure,
     genericError,
     genericRetried,
@@ -14230,6 +14417,10 @@ const patchGdtfShareLogLine = (result) =>
   `debounce=${result.debounceDelayMs}ms ` +
   `download=${result.downloaded.mock?.downloadCalls?.length ?? "?"}->${result.downloaded.cacheRows?.length ?? "?"}->${result.downloaded.recentRows?.length ?? "?"} ` +
   `dnd=${result.downloadedShareDnd?.source ?? "?"}:${result.downloadedShareDnd?.footprint ?? "?"} ` +
+  `batch=${result.batchCompleted.manufacturerBatches?.find((entry) => entry.manufacturer === "BatchCo")?.text ?? "?"}:` +
+    `${result.batchCompleted.mock?.maxActiveDownloads ?? "?"}x ` +
+  `cancel=${result.batchCancelled.manufacturerBatches?.find((entry) => entry.manufacturer === "CancelCo")?.text ?? "?"}:` +
+    `${result.batchCancelled.mock?.downloadCalls?.length ?? "?"} ` +
   `auth=${result.authFailure.shareErrorKind ?? "?"} generic=${result.genericError.shareErrorKind ?? "?"} ` +
   `offline=${result.offline.shareState ?? "?"} failed=${JSON.stringify(result.failedChecks)}`;
 

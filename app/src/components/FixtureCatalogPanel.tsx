@@ -1,6 +1,7 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { createMemo, createSignal, For, onMount, Show } from "solid-js";
 import {
+  fixtureCatalogCacheMegabytes,
   fixtureCatalogFavoriteKey,
   fixtureCatalogHealthLabel,
   fixtureCatalogIdentityMatches,
@@ -85,6 +86,7 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
   const healthyCacheCount = createMemo(() => cacheEntries().filter(
     (entry) => entry.health === "healthy" || entry.health === "warnings",
   ).length);
+  const cacheMegabytes = createMemo(() => fixtureCatalogCacheMegabytes(cacheEntries()));
   const repairCount = createMemo(() => projectHealth().filter((entry) => entry.repairable).length);
 
   const toggleFavorite = (key: string) => {
@@ -326,7 +328,13 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
         </section>
 
         <section class="fixtureCatalogSection offline">
-          <header><strong>Offline cache</strong><span>{visibleCache().length}</span></header>
+          <header>
+            <strong>Offline cache</strong>
+            <span class="fixtureCatalogCacheSummary">
+              <b data-no-localize>{cacheEntries().length}</b>{" "}<span>profiles</span>{" · "}
+              <b data-no-localize>{cacheMegabytes()}</b>{" "}<span data-no-localize>MB</span>
+            </span>
+          </header>
           <div class="fixtureCatalogList">
             <For each={visibleCache()} fallback={<p class="empty">No cached GDTF profiles.</p>}>
               {(entry) => {

@@ -1660,6 +1660,13 @@ const japaneseText: Record<string, string> = {
   "Searching GDTF Share…": "GDTF Shareを検索中…",
   "No GDTF Share profiles match.": "一致するGDTF Shareプロファイルはありません。",
   "Downloading…": "ダウンロード中…",
+  "Cache all manufacturer revisions": "全部キャッシュ",
+  "Stop manufacturer cache": "メーカーキャッシュを停止",
+  "Listing catalog…": "カタログ取得中…",
+  "Stopping…": "停止中…",
+  "Catalog failed": "カタログ取得失敗",
+  Canceled: "キャンセル済み",
+  failed: "失敗",
   "Credentials stay in memory for this session and are never written to the project or cache metadata.":
     "認証情報はこのセッションのメモリ内だけに保持し、プロジェクトやキャッシュ情報には保存しません。",
   "fixture, revision, mode": "灯体、リビジョン、モード",
@@ -2432,6 +2439,12 @@ const japaneseText: Record<string, string> = {
 };
 
 const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
+  [
+    /^GDTF Share manufacturer catalog failed: Manufacturer catalog returned only (\d+) of (\d+) revisions\.$/,
+    (shown, total) => `GDTF Shareのメーカーカタログ取得に失敗しました: ${total}件中${shown}件しか取得できませんでした。`,
+  ],
+  [/^GDTF Share manufacturer catalog failed: (.+)$/, (detail) => `GDTF Shareのメーカーカタログ取得に失敗しました: ${detail}`],
+  [/^Failed to cache (.+): (.+)$/, (profile, detail) => `${profile}のキャッシュに失敗しました: ${detail}`],
   [/^Common budget-fixture layout\. Channel order: (.+)\.$/, (order) => `一般的な低価格灯体レイアウトです。チャンネル順: ${order}。`],
   [/^(Lighting|Video) · (\d+) scenes$/, (track, count) => `${track === "Lighting" ? "照明" : "映像"}・${count}シーン`],
   [/^(\d+) fixture types$/, (count) => `灯体タイプ ${count}種類`],

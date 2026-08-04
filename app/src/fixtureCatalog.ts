@@ -52,6 +52,9 @@ export interface GdtfFixtureCacheEntry {
   modes: GdtfShareModeSummary[];
 }
 
+export const fixtureCatalogCacheMegabytes = (entries: readonly Pick<GdtfFixtureCacheEntry, "filesize">[]) =>
+  (entries.reduce((total, entry) => total + Math.max(0, entry.filesize), 0) / (1024 * 1024)).toFixed(1);
+
 export interface FixtureProfileHealthSummary {
   fixture_id: number;
   label: string;
