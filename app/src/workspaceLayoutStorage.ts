@@ -38,8 +38,6 @@ export const workspaceLayoutStorageKey = "syndocal.workspaceLayout.v1";
 
 const allowedWorkspaceTabs: WorkspaceTab[] = ["setup", "control", "touch"];
 const allowedSetupSubTabs: SetupSubTab[] = [
-  "library",
-  "profiles",
   "patch",
   "video",
   "io",
@@ -70,10 +68,14 @@ const ratioValue = (candidate: unknown, fallback: number): number =>
     ? Math.min(0.85, Math.max(0.15, candidate))
     : fallback;
 
-const normalizedSetupSubTab = (candidate: unknown): unknown =>
-  typeof candidate === "string" && ["dmx", "midi", "osc", "remote"].includes(candidate)
-    ? "io"
-    : candidate;
+const normalizedSetupSubTab = (candidate: unknown): unknown => {
+  if (typeof candidate !== "string") return candidate;
+  // #51: the four I/O sub-tabs merged into one surface.
+  if (["dmx", "midi", "osc", "remote"].includes(candidate)) return "io";
+  // #63: Library and Profiles merged into the self-contained Patch surface.
+  if (["library", "profiles"].includes(candidate)) return "patch";
+  return candidate;
+};
 
 export const workspaceLayoutFromUnknown = (candidate: unknown): WorkspaceLayout => {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {

@@ -27573,6 +27573,58 @@ h3 {
   font-size: 10px;
 }
 
+.patchProfileBrowserHeaderActions {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* #63: former Profiles tab, now a workbench surface opened from Patch. */
+.customWorkbenchBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  border-bottom: 1px solid #393530;
+  padding-bottom: 4px;
+  color: #b9b0a7;
+  font-size: 11px;
+}
+
+.customWorkbenchBar > .customWorkbenchBack {
+  min-height: 24px;
+  padding: 2px 8px;
+  font-size: 10px;
+}
+
+/* #63: selected fixture with a broken profile source (former catalog repair). */
+.patchProfileRepairRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 26px;
+  border: 1px solid #6e3430;
+  border-radius: 2px;
+  background: #241715;
+  padding: 2px 6px;
+  color: #e2a49e;
+  font-size: 10px;
+}
+
+.patchProfileRepairRow > .patchProfileRepairText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.patchProfileRepairRow > button {
+  flex: 0 0 auto;
+  min-height: 22px;
+  padding: 1px 8px;
+  font-size: 10px;
+}
+
 .patchProfileSearch {
   display: grid;
   gap: 2px;

@@ -183,8 +183,7 @@ const viewportRole = ({ width, height }) => {
   return "compact-fallback";
 };
 const setupTabs = [
-  { area: "Lighting", tab: "Library", id: "library" },
-  { area: "Lighting", tab: "Profiles", id: "profiles" },
+  // #63: Library and Profiles merged into the self-contained Patch surface.
   { area: "Lighting", tab: "Patch", id: "patch" },
   { area: "Video", tab: "Outputs", id: "video" },
   { area: "I/O", tab: null, id: "io" },
@@ -9906,28 +9905,9 @@ async function measureSetupStageBandPickStates(client, label) {
 }
 
 function hasExpectedSetupSurface(result) {
-  if (result.label.startsWith("setup-library-")) {
-    return (
-      result.visibleProfileLoadPanelCount >= 1 &&
-      result.visibleFixtureCatalogPanelCount >= 1 &&
-      result.visibleLoadedProfileSummaryPanelCount >= 1 &&
-      result.profileLoadPanelWidth >= 180 &&
-      result.fixtureCatalogPanelWidth >= 400 &&
-      result.loadedProfileSummaryPanelWidth >= 235 &&
-      result.fixtureCatalogVerifiedCardCount === verifiedGenericProfileCount &&
-      result.fixtureCatalogPasswordInputCount === 1 &&
-      result.calibratedEmitterDetailCount >= 3
-    );
-  }
-  if (result.label.startsWith("setup-profiles-")) {
-    return (
-      result.visibleCustomProfileWorkbenchCount >= 1 &&
-      result.customProfileAttributePaneWidth >= 460 &&
-      result.customProfilePreviewDeskWidth >= 420 &&
-      result.visibleCustomProfileActionCount >= 3 &&
-      result.visibleCustomProfileDmxMapCount >= 1
-    );
-  }
+  // #63: setup-library-/setup-profiles- phases removed - both surfaces merged
+  // into the self-contained Patch surface (browser tree, workbench entry, and
+  // armed-profile summary asserted by the setup-patch family).
   if (result.label.startsWith("setup-io-")) {
     return (
       result.ioUnifiedSurfaceCount === 1 &&
@@ -12671,6 +12651,7 @@ async function readPatchZoningState(client) {
       ).length,
       fixtureEditorCount: visibleMatches('.fixtureSetupEditor').length,
       fixtureEmptyStateCount: visibleMatches('[data-fixture-setup-empty]').length,
+      armedProfileSummaryCount: visibleMatches('[data-patch-profile-summary]').length,
       useProfileForPatchCount: visibleMatches('.fixtureSetupEditor button')
         .filter((button) => (button.textContent || '').trim().toLowerCase() === 'use profile for patch').length,
       applyFixturePatchCount: visibleMatches('.fixtureSetupEditor button')
@@ -12870,10 +12851,13 @@ async function checkPatchZoning(client) {
       universeOpen.universeOpen &&
       universeOpen.universeTrackButtonCount > 0 &&
       universeOpen.universeLegendButtonCount > 0,
+    // #63: with no fixture selected the context pane shows the armed
+    // profile's summary (Library merge); the bare empty state only appears
+    // when nothing is armed. Exactly one of the two, never the editor.
     contextualEditorEmpty:
       selectionCleared &&
       noSelection.fixtureEditorCount === 0 &&
-      noSelection.fixtureEmptyStateCount === 1,
+      noSelection.fixtureEmptyStateCount + noSelection.armedProfileSummaryCount === 1,
     contextualEditorSelected:
       selectedFromGrid &&
       selected.fixtureEditorCount === 1 &&
@@ -13914,31 +13898,41 @@ async function runPatchGdtfShareViewport(client, viewport) {
   await sleep(50);
   const signedOut = await readState("signed-out");
 
-  await client.evaluate(`(() => {
+  // #63: the Library tab is gone; the shared credential contract is now
+  // "typing into the signed-out inputs feeds the app-level session signal and
+  // the section leaves the signed-out state". Capture the input metadata from
+  // the signed-out block itself before it unmounts.
+  const sharedCredentials = await client.evaluate(`(() => {
     const inputs = document.querySelectorAll('[data-patch-share-state="signed-out"] input');
-    const values = ['viewport-share-user', 'viewport-share-password'];
+    const meta = {
+      values: ['viewport-share-user', 'viewport-share-password'],
+      passwordAutocomplete: document.querySelector('[data-patch-share-state="signed-out"] input[type="password"]')?.getAttribute('autocomplete') || '',
+      passwordInputCount: document.querySelectorAll('[data-patch-share-state="signed-out"] input[type="password"]').length,
+    };
+    const values = meta.values;
     inputs.forEach((input, index) => {
       input.value = values[index];
       input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: values[index] }));
     });
+    return meta;
   })()`);
-  await clickVisibleByText(client, ".setupModeTabs button", "Library");
   await waitForClientCondition(
     client,
-    "Boolean(document.querySelector('.setupMode-library .fixtureCatalogPanel'))",
-    "shared GDTF Share credentials in Library",
+    "!document.querySelector('[data-patch-share-state=\"signed-out\"]')",
+    "share section left the signed-out state after credential entry",
   );
-  const sharedCredentials = await client.evaluate(`(() => {
-    const inputs = [...document.querySelectorAll('.fixtureCatalogCredentials input')];
-    return {
-      values: inputs.map((input) => input.value),
-      passwordAutocomplete: document.querySelector('.fixtureCatalogCredentials input[type="password"]')?.getAttribute('autocomplete') || '',
-      passwordInputCount: document.querySelectorAll('.fixtureCatalogCredentials input[type="password"]').length,
-    };
+  // The removed Library round-trip used to remount the browser, which both
+  // reset the search box and re-ran the local refresh AFTER the mock invoke
+  // layer was installed. Reproduce both explicitly: clear the query, then
+  // click Refresh so the cached list loads from the mock.
+  await client.evaluate(`(() => {
+    const input = document.querySelector('[data-patch-profile-search]');
+    if (!(input instanceof HTMLInputElement)) return;
+    input.value = '';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
   })()`);
-
-  await clickVisibleByText(client, ".setupModeTabs button", "Patch");
-  await waitForClientCondition(client, "Boolean(document.querySelector('[data-patch-profile-browser]'))", "PATCH profile browser");
+  await clickVisibleByText(client, ".patchProfileBrowserHeader button", "Refresh");
+  await sleep(80);
   await waitForClientCondition(
     client,
     "Boolean(document.querySelector('[data-patch-profile-tree=\"cache\"] [data-profile-tree-item=\"manufacturer\"]'))",
@@ -14193,11 +14187,13 @@ async function runPatchGdtfShareViewport(client, viewport) {
       defaultCollapsed.cacheTreeItems[0].level === "1" &&
       defaultCollapsed.cacheTreeItems[0].expanded === "false" &&
       defaultCollapsed.cacheRows.length === 0,
+    // #63: the Library tab (and its Open Library jump) no longer exists -
+    // signed-in happens entirely through the inline credentials.
     signedOutGuidance:
       signedOut.shareState === "signed-out" &&
       signedOut.inlineCredentialInputCount === 2 &&
       signedOut.inlinePasswordInputCount === 1 &&
-      signedOut.openLibraryButtonCount === 1 &&
+      signedOut.openLibraryButtonCount === 0 &&
       signedOut.signedOutGuidanceText.includes("Sign in to GDTF Share"),
     credentialsSharedWithLibrary:
       JSON.stringify(sharedCredentials.values) === JSON.stringify(["viewport-share-user", "viewport-share-password"]) &&

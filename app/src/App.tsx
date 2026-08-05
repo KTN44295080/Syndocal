@@ -179,7 +179,7 @@ import {
   rangesOverlap,
   reserveDmxAddressRange,
 } from "./dmxAddressing";
-import { verifiedFixtureProfileRequest } from "./fixtureCatalog";
+import { verifiedFixtureProfileRequest, type FixtureProfileHealthSummary } from "./fixtureCatalog";
 import { confirmCueRemoval, confirmDestructiveAction } from "./destructiveActions";
 import { createLiveAudioInputStatusRequestGate } from "./liveAudioInputStatusSync";
 import type {
@@ -1310,6 +1310,10 @@ export default function App() {
   const [selectedMode, setSelectedMode] = createSignal("");
   const [gdtfShareUser, setGdtfShareUser] = createSignal("");
   const [gdtfSharePassword, setGdtfSharePassword] = createSignal("");
+  // #63: the custom-profile workbench (former Profiles tab) opens from PATCH.
+  const [customWorkbenchOpen, setCustomWorkbenchOpen] = createSignal(false);
+  // #63: patched-fixture profile health (former catalog repair affordance).
+  const [patchProfileHealth, setPatchProfileHealth] = createSignal<FixtureProfileHealthSummary[]>([]);
   const [recentPatchProfiles, setRecentPatchProfiles] = createSignal<PatchRecentProfileEntry[]>([]);
   createEffect(() => {
     const loaded = profile();
@@ -9060,7 +9064,7 @@ export default function App() {
 
   const importGdtf = async () => {
     try {
-      await loadGdtfProfile(gdtfPath(), "Loaded", null, setupSubTab() === "library");
+      await loadGdtfProfile(gdtfPath(), "Loaded", null, false);
     } catch (error) {
       setMessage(String(error));
     }
@@ -9096,7 +9100,7 @@ export default function App() {
         return;
       }
       setGdtfPath(path);
-      await loadGdtfProfile(path, "Downloaded and loaded", null, setupSubTab() === "library");
+      await loadGdtfProfile(path, "Downloaded and loaded", null, false);
     } catch (error) {
       setMessage(String(error));
     }
@@ -11821,6 +11825,42 @@ export default function App() {
     await invoke("repair_fixture_profile", { fixtureId, profilePath, modeName });
     await refreshSnapshot();
     setMessage(`Repaired fixture ${fixtureId} profile source with an exact DMX layout match.`);
+  };
+
+  const refreshPatchProfileHealth = async () => {
+    if (!isTauriRuntime()) return;
+    try {
+      setPatchProfileHealth(await invoke<FixtureProfileHealthSummary[]>("get_fixture_profile_health"));
+    } catch {
+      setPatchProfileHealth([]);
+    }
+  };
+
+  createEffect(() => {
+    if (workspaceTab() === "setup" && setupSubTab() === "patch") {
+      void refreshPatchProfileHealth();
+    }
+  });
+
+  const repairablePatchFixture = createMemo(() => {
+    const fixtureId = selectedFixtureId();
+    if (fixtureId === null || !profile()) return null;
+    const health = patchProfileHealth().find(
+      (candidate) => candidate.fixture_id === fixtureId && candidate.repairable,
+    );
+    return health ?? null;
+  });
+
+  const repairSelectedPatchFixture = async () => {
+    const health = repairablePatchFixture();
+    const armed = profile();
+    if (!health || !armed) return;
+    try {
+      await repairCatalogFixtureProfile(health.fixture_id, armed.source_path, selectedMode() || null);
+      await refreshPatchProfileHealth();
+    } catch (error) {
+      setMessage(String(error));
+    }
   };
 
   const setGroupPark = async (groupId: string, enabled: boolean) => {
@@ -17614,38 +17654,13 @@ export default function App() {
           onOpenOutputWindow={openVideoOutputWindow}
         />
         </Show>
-        <Show when={workspaceTab() === "setup" && ["library", "profiles", "patch"].includes(setupSubTab())}>
+        <Show when={workspaceTab() === "setup" && setupSubTab() === "patch"}>
         <aside
-          class={setupPanelClass("panel setup setupPanel", ["library", "profiles", "patch"])}
-          ref={registerSetupPanel(["library", "profiles", "patch"])}
+          class={setupPanelClass("panel setup setupPanel", ["patch"])}
+          ref={registerSetupPanel(["patch"])}
           tabIndex={-1}
         >
-          <Show when={setupSubTab() === "library"}>
-          <ProfileLoadPanel
-            title="Fixture Library"
-            gdtfPath={gdtfPath()}
-            gdtfShareUrl={gdtfShareUrl()}
-            onGdtfPath={setGdtfPath}
-            onGdtfShareUrl={setGdtfShareUrl}
-            onBrowse={selectGdtfFile}
-            onLoadGdtf={importGdtf}
-            onDownloadGdtf={downloadGdtfFromUrl}
-          />
-          <FixtureCatalogPanel
-            backendAvailable={isTauriRuntime()}
-            shareUser={gdtfShareUser()}
-            sharePassword={gdtfSharePassword()}
-            selectedFixtureId={selectedFixtureId()}
-            selectedProfile={profile()}
-            selectedMode={selectedMode()}
-            onShareUser={setGdtfShareUser}
-            onSharePassword={setGdtfSharePassword}
-            onProfileLoaded={useCatalogProfile}
-            onRepair={repairCatalogFixtureProfile}
-            onMessage={setMessage}
-          />
-          </Show>
-          <Show when={setupSubTab() === "patch"}>
+          <Show when={!customWorkbenchOpen()}>
             <PatchProfileBrowserPanel
               backendAvailable={isTauriRuntime()}
               shareUser={gdtfShareUser()}
@@ -17667,7 +17682,9 @@ export default function App() {
               onLoadProject={usePatchProjectProfile}
               onShareUser={setGdtfShareUser}
               onSharePassword={setGdtfSharePassword}
-              onOpenLibrary={() => selectSetupMode("library")}
+              onOpenWorkbench={() => setCustomWorkbenchOpen(true)}
+              repairableFixtureLabel={repairablePatchFixture()?.label ?? null}
+              onRepairSelectedFixture={() => void repairSelectedPatchFixture()}
               onProfileDragStart={beginPatchProfileDrag}
               onProfileDragEnd={clearPatchProfileDrag}
               onMessage={setMessage}
@@ -17718,7 +17735,18 @@ export default function App() {
               onNextFreeAddress={selectNextFreePatchAddress}
             />
           </Show>
-          <Show when={setupSubTab() === "profiles"}>
+          <Show when={customWorkbenchOpen()}>
+          <div class="customWorkbenchBar" data-custom-workbench-bar>
+            <button
+              type="button"
+              class="customWorkbenchBack"
+              onClick={() => setCustomWorkbenchOpen(false)}
+              data-custom-workbench-back
+            >
+              Back to Patch
+            </button>
+            <span>Custom profile workbench</span>
+          </div>
           <CustomProfileEditorPanel
             manufacturer={customManufacturer()}
             profileName={customProfileName()}
@@ -17746,28 +17774,6 @@ export default function App() {
             onSave={saveCustomProfile}
             onLoad={loadCustomProfile}
           />
-          </Show>
-
-          <Show when={setupSubTab() === "library" && profile()}>
-            {(loaded) => (
-              <div class="profile">
-                <LoadedProfileSummaryPanel
-                  profile={loaded()}
-                  selectedMode={selectedMode()}
-                  selectedModeSummary={selectedModeSummary()}
-                  selectedFootprint={selectedFootprint()}
-                  dmxCells={selectedModeDmxCells()}
-                  functionEntries={selectedModeFunctionEntries()}
-                  visibleFunctionEntries={visibleSelectedModeFunctionEntries()}
-                  geometryRows={selectedModeGeometryRows()}
-                  unresolvedGeometryReferences={selectedModeUnresolvedGeometryReferences()}
-                  functionLabel={channelFunctionLabel}
-                  functionRangeLabel={channelFunctionRangeLabel}
-                  functionDetail={channelFunctionDetail}
-                  onSelectedMode={setSelectedMode}
-                />
-              </div>
-            )}
           </Show>
         </aside>
         </Show>
@@ -17798,6 +17804,21 @@ export default function App() {
             onProfileDragLeave: leavePatchProfileGrid,
             onProfileDrop: dropPatchProfileAtAddress,
           }}
+          profileSummary={profile() ? {
+            profile: profile()!,
+            selectedMode: selectedMode(),
+            selectedModeSummary: selectedModeSummary(),
+            selectedFootprint: selectedFootprint(),
+            dmxCells: selectedModeDmxCells(),
+            functionEntries: selectedModeFunctionEntries(),
+            visibleFunctionEntries: visibleSelectedModeFunctionEntries(),
+            geometryRows: selectedModeGeometryRows(),
+            unresolvedGeometryReferences: selectedModeUnresolvedGeometryReferences(),
+            functionLabel: channelFunctionLabel,
+            functionRangeLabel: channelFunctionRangeLabel,
+            functionDetail: channelFunctionDetail,
+            onSelectedMode: setSelectedMode,
+          } : null}
           fixtureEditor={selectedFixture() ? {
             fixture: selectedFixture()!,
             labelDraft: selectedFixtureLabelDraft(),

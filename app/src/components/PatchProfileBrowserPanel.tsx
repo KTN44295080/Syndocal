@@ -50,7 +50,12 @@ interface PatchProfileBrowserPanelProps extends ProfileImportSourcesProps {
   onLoadProject: (fixture: PatchedFixtureSummary) => boolean | Promise<boolean>;
   onShareUser: (value: string) => void;
   onSharePassword: (value: string) => void;
-  onOpenLibrary: () => void;
+  /* #63: the Library tab is gone - the workbench (former Profiles tab) opens
+     from here, and a selected fixture with a broken profile source repairs
+     against the armed profile (the former catalog repair affordance). */
+  onOpenWorkbench: () => void;
+  repairableFixtureLabel: string | null;
+  onRepairSelectedFixture: () => void;
   onProfileDragStart: (item: PatchProfileDragItem) => void;
   onProfileDragEnd: () => void;
   onMessage: (message: string) => void;
@@ -566,14 +571,44 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
     <section class="patchProfileBrowserPanel" data-patch-profile-browser>
       <header class="profileLoadHeader patchProfileBrowserHeader">
         <h2>Patch Source</h2>
-        <button
-          type="button"
-          onClick={() => void refreshLocalProfiles()}
-          disabled={!props.backendAvailable || busy()}
-        >
-          Refresh
-        </button>
+        <span class="patchProfileBrowserHeaderActions">
+          <button
+            type="button"
+            onClick={props.onOpenWorkbench}
+            disabled={busy()}
+            title="Create or edit a custom fixture profile."
+            data-patch-open-workbench
+          >
+            Custom profile
+          </button>
+          <button
+            type="button"
+            onClick={() => void refreshLocalProfiles()}
+            disabled={!props.backendAvailable || busy()}
+          >
+            Refresh
+          </button>
+        </span>
       </header>
+
+      <Show when={props.repairableFixtureLabel}>
+        {(label) => (
+          <div class="patchProfileRepairRow" data-patch-fixture-repair-row role="alert">
+            <span class="patchProfileRepairText">
+              <span>Broken profile source:</span>{" "}<b data-no-localize>{label()}</b>
+            </span>
+            <button
+              type="button"
+              onClick={props.onRepairSelectedFixture}
+              disabled={!props.backendAvailable || busy()}
+              title="Relink the selected fixture to the armed profile with an exact DMX layout match."
+              data-patch-fixture-repair
+            >
+              Repair
+            </button>
+          </div>
+        )}
+      </Show>
 
       <label class="patchProfileSearch">
         <span>Search profiles <small>Find by ch count</small></span>
@@ -749,7 +784,6 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
                   placeholder="Share Password"
                   onInput={(event) => props.onSharePassword(event.currentTarget.value)}
                 />
-                <button type="button" data-patch-share-open-library onClick={props.onOpenLibrary}>Open Library</button>
               </div>
               <small>Credentials stay in session memory only.</small>
             </div>

@@ -1,5 +1,6 @@
 import { Show, type ComponentProps } from "solid-js";
 import { DmxPatchMapPanel } from "./DmxPatchMapPanel";
+import { LoadedProfileSummaryPanel } from "./LoadedProfileSummaryPanel";
 import { SetupFixtureEditorPanel } from "./SetupFixtureEditorPanel";
 
 interface SetupMappingWorkspaceProps {
@@ -7,6 +8,10 @@ interface SetupMappingWorkspaceProps {
   panelRef: (element: HTMLElement) => void;
   patchMap: ComponentProps<typeof DmxPatchMapPanel>;
   fixtureEditor: ComponentProps<typeof SetupFixtureEditorPanel> | null;
+  /* #63: with the Library tab merged into Patch, the armed profile's summary
+     (mode DMX map, channel functions, geometry) shows in the context pane
+     whenever no fixture is selected. */
+  profileSummary: ComponentProps<typeof LoadedProfileSummaryPanel> | null;
 }
 
 export function SetupMappingWorkspace(props: SetupMappingWorkspaceProps) {
@@ -23,13 +28,24 @@ export function SetupMappingWorkspace(props: SetupMappingWorkspaceProps) {
         <Show
           when={props.fixtureEditor}
           fallback={
-            <p
-              class="empty fixtureSetupEmptyState"
-              data-fixture-setup-empty
-              title="Select a fixture in the patch grid or list to edit its setup."
+            <Show
+              when={props.profileSummary}
+              fallback={
+                <p
+                  class="empty fixtureSetupEmptyState"
+                  data-fixture-setup-empty
+                  title="Select a fixture in the patch grid or list to edit its setup."
+                >
+                  Select a fixture in the patch grid or list to edit its setup.
+                </p>
+              }
             >
-              Select a fixture in the patch grid or list to edit its setup.
-            </p>
+              {(profileSummary) => (
+                <div class="profile fixtureSetupProfileSummary" data-patch-profile-summary>
+                  <LoadedProfileSummaryPanel {...profileSummary()} />
+                </div>
+              )}
+            </Show>
           }
         >
           {(fixtureEditor) => <SetupFixtureEditorPanel {...fixtureEditor()} />}
