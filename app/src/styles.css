@@ -28033,14 +28033,13 @@ h3 {
   min-width: 0;
 }
 
+/* #62: the patch execution form is a fixed, never-scrolling footer of the
+   left pane - only the profile browser list above it scrolls. */
 .layoutSharedWorkspace.layoutSetup.setupMode-patch > .setupPanel > .patchFixtureFormPanel {
-  flex: 0 1 auto;
-  max-height: min(430px, 72%);
-  overflow: hidden auto;
-  overscroll-behavior: contain;
+  flex: 0 0 auto;
+  overflow: visible;
   border-top: 1px solid #393530;
   padding-top: 5px;
-  scrollbar-gutter: stable;
 }
 
 .patchProfileEmptyState {
@@ -28060,10 +28059,12 @@ h3 {
   white-space: nowrap;
 }
 
+/* #62: universe / address / count share one compact row; PATCH and the
+   placement disclosure span beneath. */
 .patchFixtureMinimalForm {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 4px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px 5px;
   min-width: 0;
   border: 1px solid #393530;
   border-radius: 2px;
@@ -28073,10 +28074,26 @@ h3 {
 
 .patchFixtureField {
   display: grid;
-  grid-template-columns: 62px minmax(0, 1fr);
-  align-items: center;
-  gap: 5px;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 1px;
   min-width: 0;
+}
+
+.patchFixtureField label {
+  overflow: hidden;
+  color: #b9b0a7;
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.patchFixtureSubmit,
+.patchFixtureMinimalForm > .patchFixtureOptionsDisclosure {
+  grid-column: 1 / -1;
 }
 
 .patchFixtureField > label {
@@ -28112,10 +28129,12 @@ h3 {
 }
 
 .patchFixtureAddressControl > .patchFixtureNextFree {
-  min-width: 72px;
+  min-width: 0;
   min-height: 25px;
-  padding-inline: 5px;
-  font-size: 10px;
+  overflow: hidden;
+  padding-inline: 4px;
+  font-size: 9px;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
