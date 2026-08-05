@@ -21,7 +21,8 @@
 
 .layoutSetup .setupIoPanel > .ioUnifiedSurface {
   display: grid;
-  grid-template-rows: minmax(0, 1.65fr) minmax(86px, 0.75fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
   gap: 5px;
   width: 100%;
   height: 100%;
@@ -30,17 +31,17 @@
   overflow: hidden;
 }
 
-.ioUnifiedZone,
-.ioCompactZoneGrid {
+.ioUnifiedZone {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
 
+/* The wrapper stays in the DOM for the zone contract but must not create a
+   box: display contents lets DMX/MIDI/OSC/Remote sit as four equal quadrants
+   of the parent 2x2 grid. */
 .ioCompactZoneGrid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 5px;
+  display: contents;
 }
 
 .layoutSetup .ioUnifiedZone > .ioOperatorSurface {
@@ -34299,8 +34300,8 @@ a[href]:focus-visible,
 
 .layoutSetup .setupIoPanel > .ioUnifiedSurface {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1.65fr) minmax(86px, 0.75fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
   gap: 5px;
   width: 100%;
   height: 100%;
@@ -34309,13 +34310,9 @@ a[href]:focus-visible,
   overflow: hidden;
 }
 
+/* No box of its own: the four zones flow directly into the 2x2 parent grid. */
 .layoutSetup .ioCompactZoneGrid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 5px;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
+  display: contents;
 }
 
 .layoutSetup .ioUnifiedZone > .ioOperatorSurface,
