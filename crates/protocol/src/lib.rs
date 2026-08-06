@@ -3347,6 +3347,18 @@ pub struct TouchSurfaceSummary {
     pub pages: Vec<TouchPageSummary>,
 }
 
+/// Runtime-only transport state for a Super Scene triggered directly from the
+/// Scene Matrix. This is published for operator feedback and is stripped from
+/// every persistence snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DirectChildTimelineTransportSummary {
+    pub cue_id: CueId,
+    pub position_ms: u64,
+    pub duration_ms: u64,
+    pub playing: bool,
+    pub generation: u64,
+}
+
 impl TouchSurfaceSummary {
     pub fn is_empty(&self) -> bool {
         self.pages.is_empty()
@@ -3392,6 +3404,8 @@ pub struct EngineSnapshot {
     #[serde(default = "default_level")]
     pub playback_master: f32,
     pub active_cue_id: Option<CueId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub direct_child_timeline_transports: Vec<DirectChildTimelineTransportSummary>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub active_group_cue_ids: BTreeMap<String, CueId>,
     /// T17 runtime-only latched scene live-modifier overrides. UI display
@@ -3448,6 +3462,7 @@ impl Default for EngineSnapshot {
             playback_executors: default_playback_executors(),
             playback_master: 1.0,
             active_cue_id: None,
+            direct_child_timeline_transports: Vec::new(),
             cue_live_modifiers: Vec::new(),
             active_group_cue_ids: BTreeMap::new(),
             group_colors: BTreeMap::new(),

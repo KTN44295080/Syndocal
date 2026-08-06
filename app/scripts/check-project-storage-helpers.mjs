@@ -227,6 +227,7 @@ const dirtySceneBlockDraft = {
   jump_to_event_id: 499,
   fade_in_ms: 0,
   fade_out_ms: 0,
+  source_offset_ms: 0,
 };
 const draftCheckpoint = recovery.createProjectRecoveryCheckpoint(
   project,
@@ -264,7 +265,7 @@ assert.deepEqual(
     control_mode: "live",
     timeline_desk_surface: "playback",
     timeline_context_drawer: "cue",
-    edit_desk_surface: "effects",
+    edit_desk_surface: "faders",
     control_category: "color",
     future_field: true,
   }),
@@ -274,7 +275,7 @@ assert.deepEqual(
     control_mode: "live",
     timeline_desk_surface: "playback",
     timeline_context_drawer: "cue",
-    edit_desk_surface: "effects",
+    edit_desk_surface: "faders",
     control_category: "color",
     top_split_ratio: workspaceLayout.defaultWorkspaceLayout.top_split_ratio,
     lower_split_ratio: workspaceLayout.defaultWorkspaceLayout.lower_split_ratio,
@@ -350,8 +351,8 @@ assert.deepEqual(
   }),
   {
     ...workspaceLayout.defaultWorkspaceLayout,
-    setup_sub_tab: "remote",
-    edit_desk_surface: "dmx",
+    setup_sub_tab: "io",
+    edit_desk_surface: "attributes",
     control_category: "beam",
   },
 );

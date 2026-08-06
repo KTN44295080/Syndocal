@@ -47,6 +47,7 @@ export const normalizeProjectSnapshotForStorage = (snapshot: EngineSnapshot): En
   const {
     authored_video: authoredVideo,
     cue_live_modifiers: _cueLiveModifiers,
+    direct_child_timeline_transports: _directChildTimelineTransports,
     ...snapshotWithoutTransport
   } = snapshot;
   const authoredSnapshot: EngineSnapshot = {
@@ -95,6 +96,7 @@ export const projectComparableSnapshot = (snapshot: EngineSnapshot) => {
   // T17: latched scene live overrides are runtime-only and must never make
   // the project look dirty or reach a save.
   comparable.cue_live_modifiers = [];
+  comparable.direct_child_timeline_transports = [];
   return comparable;
 };
 

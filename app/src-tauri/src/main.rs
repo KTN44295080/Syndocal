@@ -707,6 +707,11 @@ enum TimelineAudioSinkKey {
         parent_iteration: u64,
         clip_id: TimelineAudioClipId,
     },
+    DirectChild {
+        parent_cue_id: CueId,
+        generation: u64,
+        clip_id: TimelineAudioClipId,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -2468,15 +2473,19 @@ impl MediaAudioPlayback {
             })
             .collect::<Vec<_>>();
         active_clips.extend(timeline.child_clips.iter().map(|child| {
-            (
-                TimelineAudioSinkKey::Child {
+            let key = child
+                .direct_parent_cue_id
+                .map(|parent_cue_id| TimelineAudioSinkKey::DirectChild {
+                    parent_cue_id,
+                    generation: child.direct_generation,
+                    clip_id: child.clip.id,
+                })
+                .unwrap_or(TimelineAudioSinkKey::Child {
                     parent_event_id: child.parent_event_id,
                     parent_iteration: child.parent_iteration,
                     clip_id: child.clip.id,
-                },
-                &child.clip,
-                child.position_ms,
-            )
+                });
+            (key, &child.clip, child.position_ms)
         }));
         let active_ids = active_clips
             .iter()
@@ -3183,6 +3192,8 @@ struct EngineSnapshotDelta {
     playback_master: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     active_cue_id: Option<Option<CueId>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    direct_child_timeline_transports: Option<Vec<protocol::DirectChildTimelineTransportSummary>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     active_group_cue_ids: Option<BTreeMap<String, CueId>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -8449,6 +8460,33 @@ fn seek_timeline(state: State<'_, AppState>, position_ms: u64) -> Result<(), Str
     state
         .engine
         .send(EngineCommand::SeekTimeline(position_ms))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_direct_child_timeline_playing(
+    state: State<'_, AppState>,
+    cue_id: CueId,
+    playing: bool,
+) -> Result<(), String> {
+    state
+        .engine
+        .send(EngineCommand::SetDirectChildTimelinePlaying { cue_id, playing })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn seek_direct_child_timeline(
+    state: State<'_, AppState>,
+    cue_id: CueId,
+    position_ms: u64,
+) -> Result<(), String> {
+    state
+        .engine
+        .send(EngineCommand::SeekDirectChildTimeline {
+            cue_id,
+            position_ms,
+        })
         .map_err(|error| error.to_string())
 }
 
@@ -15456,6 +15494,7 @@ fn project_snapshot_for_save(mut snapshot: EngineSnapshot) -> EngineSnapshot {
         graph.audio_runtime.clear();
     }
     snapshot.active_fade = None;
+    snapshot.direct_child_timeline_transports.clear();
     snapshot.timeline.playing = false;
     snapshot.video.auto_vj.status = protocol::AutoVjStatus::default();
     snapshot.dmx_preview.clear();
@@ -16671,26 +16710,10 @@ fn validate_project_fixture_groups(project: &ProjectFile) -> Result<(), String> 
 }
 
 fn project_validation_warnings(project: &ProjectFile) -> Vec<String> {
-    let mut warnings = project
-        .snapshot
-        .cues
-        .iter()
-        .filter_map(|cue| {
-            let group_id = cue.group_id.as_deref()?;
-            let carried = project.snapshot.fixtures.iter().any(|fixture| {
-                fixture
-                    .group_ids
-                    .iter()
-                    .any(|fixture_group_id| group_matches(fixture_group_id, group_id))
-            });
-            (!carried).then(|| {
-                format!(
-                    "Cue {} '{}' references fixture group '{group_id}', but no fixture carries that group",
-                    cue.cue_number, cue.label
-                )
-            })
-        })
-        .collect::<Vec<_>>();
+    // Cue group IDs are Scene Matrix / ReplaceGroup playback identities, not
+    // fixture-selection references. Actual fixture-group targeting is
+    // validated at the effect, automation, and step boundaries instead.
+    let mut warnings = Vec::new();
     warnings.extend(
         project
             .snapshot
@@ -19997,6 +20020,7 @@ fn engine_snapshot_delta(before: &EngineSnapshot, after: &EngineSnapshot) -> Eng
         playback_master: (before.playback_master != after.playback_master)
             .then_some(after.playback_master),
         active_cue_id: (before.active_cue_id != after.active_cue_id).then_some(after.active_cue_id),
+        direct_child_timeline_transports: changed!(direct_child_timeline_transports),
         active_group_cue_ids: changed!(active_group_cue_ids),
         cue_live_modifiers: changed!(cue_live_modifiers),
         group_colors: changed!(group_colors),
@@ -30953,6 +30977,14 @@ f 1 2 3
             direction: protocol::CueLiveDirection::Reverse,
             segment: 2,
         }];
+        snapshot.direct_child_timeline_transports =
+            vec![protocol::DirectChildTimelineTransportSummary {
+                cue_id: 7,
+                position_ms: 8_000,
+                duration_ms: 12_000,
+                playing: true,
+                generation: 3,
+            }];
         snapshot.submasters = vec![protocol::SubmasterSummary {
             group_id: "front".to_string(),
             label: "Front".to_string(),
@@ -30964,6 +30996,7 @@ f 1 2 3
         let saved = project_snapshot_for_save(snapshot);
 
         assert!(saved.cue_live_modifiers.is_empty());
+        assert!(saved.direct_child_timeline_transports.is_empty());
         assert_eq!(saved.submasters[0].strobe_hz, 0.0);
         assert_eq!(saved.submasters[0].strobe_fixture_count, 0);
         assert_eq!(saved.active_cue_id, Some(7));
@@ -33649,16 +33682,14 @@ f 1 2 3
     }
 
     #[test]
-    fn project_scene_matrix_unknown_group_is_a_warning_not_an_error() {
+    fn project_scene_matrix_group_identity_does_not_require_matching_fixture_group() {
         let mut project: ProjectFile = serde_json::from_str(PHASE1_SAMPLE_PROJECT_JSON).unwrap();
         project.snapshot.cues[0].group_id = Some("Missing/Group".to_string());
 
         validate_project_file(&project).unwrap();
         let warnings = project_validation_warnings(&project);
 
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("Missing/Group"));
-        assert!(warnings[0].contains("no fixture carries that group"));
+        assert!(warnings.is_empty());
     }
 
     #[test]
@@ -38586,8 +38617,13 @@ mod media_audio_playback_tests {
                 parent_iteration: 1,
                 clip_id: 7,
             },
+            TimelineAudioSinkKey::DirectChild {
+                parent_cue_id: 12,
+                generation: 3,
+                clip_id: 7,
+            },
         ]);
-        assert_eq!(keys.len(), 4);
+        assert_eq!(keys.len(), 5);
     }
 
     #[test]
@@ -41740,6 +41776,8 @@ fn main() {
             reconform_timeline_to_bpm,
             set_timeline_playing,
             seek_timeline,
+            set_direct_child_timeline_playing,
+            seek_direct_child_timeline,
             seek_timeline_beat,
             sync_ltc_timecode,
             add_video_file_layer,

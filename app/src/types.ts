@@ -2396,6 +2396,14 @@ export interface TouchSurfaceSummary {
   pages: TouchPageSummary[];
 }
 
+export interface DirectChildTimelineTransportSummary {
+  cue_id: number;
+  position_ms: number;
+  duration_ms: number;
+  playing: boolean;
+  generation: number;
+}
+
 export interface EngineSnapshot {
   fixtures: PatchedFixtureSummary[];
   cues: CueSummary[];
@@ -2404,6 +2412,8 @@ export interface EngineSnapshot {
   playback_executors: PlaybackExecutorSummary[];
   playback_master: number;
   active_cue_id?: number | null;
+  /** Runtime-only transport state for directly triggered Super Scenes. */
+  direct_child_timeline_transports?: DirectChildTimelineTransportSummary[];
   active_group_cue_ids?: Record<string, number>;
   /** T17 runtime-only latched scene live overrides; never part of `.sdc` data. */
   cue_live_modifiers?: CueLiveModifierState[];

@@ -22953,6 +22953,12 @@ async function exerciseSceneSnapshotControlStability(client, cueId) {
   });
   await waitForClientCondition(
     client,
+    "document.querySelector('[data-scene-settings][data-selected-scene-id=\"301\"]')",
+    "static Scene settings pane",
+  );
+  await clickVisibleSelector(client, '[data-scene-settings-surface-control="contents"]');
+  await waitForClientCondition(
+    client,
     "document.querySelector('[data-scene-property=\"follow-ms\"]')",
     "static Scene settings Follow input",
   );

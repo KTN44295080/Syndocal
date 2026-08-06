@@ -496,7 +496,6 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
           title="Go to timeline start"
           aria-label="Go to timeline start"
           onClick={() => void props.onSeek(0)}
-          disabled={props.childTimelineLabel !== null}
         >
           <span class="timelineToolIcon" aria-hidden="true" data-no-localize>|◀</span>
         </button>
@@ -505,7 +504,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
           title="Pause timeline"
           aria-label="Pause timeline"
           onClick={() => void props.onPause()}
-          disabled={props.childTimelineLabel !== null || !props.playing}
+          disabled={!props.playing}
         >
           <span class="timelineToolIcon" aria-hidden="true" data-no-localize>Ⅱ</span>
         </button>
@@ -515,7 +514,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
           title="Play timeline"
           aria-label="Play timeline"
           onClick={() => void props.onPlay()}
-          disabled={props.childTimelineLabel !== null || props.durationMs === 0 || props.playing}
+          disabled={props.durationMs === 0 || props.playing}
         >
           <span class="timelineToolIcon" aria-hidden="true" data-no-localize>▶</span>
         </button>
@@ -527,7 +526,6 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         min="0"
         max={Math.max(props.durationMs, 1)}
         value={props.positionMs}
-        disabled={props.childTimelineLabel !== null}
         onInput={(event) => void props.onSeek(Number(event.currentTarget.value))}
       />
       <nav class="timelineViewportToolbar" aria-label="Timeline visible range controls">

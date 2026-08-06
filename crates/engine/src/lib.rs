@@ -33,27 +33,28 @@ use protocol::{
     ColorMappingWrapMode, CompositionId, CompositionSummary, CueEffectTarget, CueFixtureTarget,
     CueId, CueIfcbTiming, CueListId, CueListSummary, CueLiveDirection, CueLiveModifierSettings,
     CueLiveModifierState, CueNodeGraphTarget, CuePaletteTarget, CuePartSummary, CueStepSummary,
-    CueSummary, CurveEffectPoint, CurveEffectRequest, DmxMergeMode, DmxModeSummary,
-    DmxOutputConfig, DmxOutputProtocol, DmxOutputRouteTelemetry, DmxUniversePreview,
-    EffectBlendMode, EffectClockSync, EffectId, EffectKind, EffectParamsSnapshot, EffectSummary,
-    EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId, FixtureId,
-    FixtureLimits, FixtureProfileSummary, LfoEffectRequest, LfoShape, LiveAudioFrame,
-    LiveAudioReactiveFeatures, MappingEffectDirection, MappingEffectRequest, MoveCoordinateMode,
-    MoveDirection, MoveEffectRequest, MovePathPoint, NodeGraphAudioRuntimeStatus, NodeGraphId,
-    NodeGraphNodeKind, NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId,
-    PatchFixtureRequest, PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest,
-    ProgrammerSnapshot, ProgrammerValueSummary, RecallMode, ReferencePaletteSummary, Rotation3,
-    StageMapConfig, StageMapPresetSummary, StageObjectId, StageObjectSummary, SubmasterSummary,
-    TimelineAudioClipId, TimelineAudioClipSummary, TimelineAutomationSummary,
-    TimelineCueEventSummary, TimelineEventId, TimelineLayerKind, TimelineLayerSummary,
-    TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind, TimelineVideoAutomationSummary,
-    TouchSurfaceSummary, Transform2D, ValueEffectDirection, ValueEffectInterpolation,
-    ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
-    VideoBlendMode, VideoColorAdjust, VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust,
-    VideoIsfControlKind, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId,
-    VideoLayerState, VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind,
-    VideoOutputMapping, VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget,
-    VideoParam, VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
+    CueSummary, CurveEffectPoint, CurveEffectRequest, DirectChildTimelineTransportSummary,
+    DmxMergeMode, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, DmxOutputRouteTelemetry,
+    DmxUniversePreview, EffectBlendMode, EffectClockSync, EffectId, EffectKind,
+    EffectParamsSnapshot, EffectSummary, EngineSnapshot, EngineTelemetry,
+    ExclusiveVideoTakeRequest, ExecutorId, FixtureId, FixtureLimits, FixtureProfileSummary,
+    LfoEffectRequest, LfoShape, LiveAudioFrame, LiveAudioReactiveFeatures, MappingEffectDirection,
+    MappingEffectRequest, MoveCoordinateMode, MoveDirection, MoveEffectRequest, MovePathPoint,
+    NodeGraphAudioRuntimeStatus, NodeGraphId, NodeGraphNodeKind, NodeGraphNodeSummary,
+    NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest, PatchedFixtureSummary,
+    PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot, ProgrammerValueSummary,
+    RecallMode, ReferencePaletteSummary, Rotation3, StageMapConfig, StageMapPresetSummary,
+    StageObjectId, StageObjectSummary, SubmasterSummary, TimelineAudioClipId,
+    TimelineAudioClipSummary, TimelineAutomationSummary, TimelineCueEventSummary, TimelineEventId,
+    TimelineLayerKind, TimelineLayerSummary, TimelineSnapRequest, TimelineSnapshot,
+    TimelineTrackKind, TimelineVideoAutomationSummary, TouchSurfaceSummary, Transform2D,
+    ValueEffectDirection, ValueEffectInterpolation, ValueEffectMode, ValueEffectPoint,
+    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBlendMode, VideoColorAdjust,
+    VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust, VideoIsfControlKind,
+    VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
+    VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
+    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
+    VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
     LIVE_AUDIO_FEATURE_BAND_CAPACITY, MAX_CUE_AUTHORED_BEATS, MAX_TIMELINE_SCENE_BLOCK_LOOPS,
     MIN_CUE_AUTHORED_BEATS,
 };
@@ -871,6 +872,14 @@ pub enum EngineCommand {
     },
     SetTimelinePlaying(bool),
     SeekTimeline(u64),
+    SetDirectChildTimelinePlaying {
+        cue_id: CueId,
+        playing: bool,
+    },
+    SeekDirectChildTimeline {
+        cue_id: CueId,
+        position_ms: u64,
+    },
     SeekTimelineBeat {
         direction: i32,
     },
@@ -1180,12 +1189,14 @@ impl EngineCommand {
                 | EngineCommand::RemoveCue(_)
                 | EngineCommand::RemoveCuePublished { .. }
                 | EngineCommand::SetTimelinePlaying(_)
+                | EngineCommand::SetDirectChildTimelinePlaying { .. }
                 | EngineCommand::SetLiveAudioSpectrum(_)
                 | EngineCommand::PublishLiveAudioFrame { .. }
                 | EngineCommand::ClearLiveAudioInput { .. }
                 | EngineCommand::ClearLiveAudioInputPublished { .. }
                 | EngineCommand::ReportLiveAudioOnset { .. }
                 | EngineCommand::SeekTimeline(_)
+                | EngineCommand::SeekDirectChildTimeline { .. }
                 | EngineCommand::SeekTimelineBeat { .. }
                 | EngineCommand::SyncTimelineTimecode { .. }
         )
@@ -1237,6 +1248,8 @@ pub struct TimelineAudioRuntimeSnapshot {
 pub struct ChildTimelineAudioRuntimeClip {
     pub parent_event_id: TimelineEventId,
     pub parent_iteration: u64,
+    pub direct_parent_cue_id: Option<CueId>,
+    pub direct_generation: u64,
     pub position_ms: u64,
     pub clip: TimelineAudioClipSummary,
 }
@@ -2596,17 +2609,33 @@ impl EngineHandle {
     pub fn video_audio_runtime_snapshot(&self) -> VideoAudioRuntimeSnapshot {
         self.snapshot
             .read()
-            .map(|snapshot| VideoAudioRuntimeSnapshot {
-                layers: snapshot.video.layers.clone(),
-                auto_vj_status: snapshot.video.auto_vj.status.clone(),
-                timeline_audio: TimelineAudioRuntimeSnapshot {
-                    clips: snapshot.timeline.audio_clips.clone(),
-                    child_clips: child_timeline_audio_runtime_clips(&snapshot),
-                    playing: snapshot.timeline.playing,
-                    position_ms: snapshot.timeline.position_ms,
-                    muted: snapshot.timeline.audio_muted,
-                    transport_revision: snapshot.timeline.audio_transport_revision,
-                },
+            .map(|snapshot| {
+                let direct_playing = snapshot
+                    .direct_child_timeline_transports
+                    .iter()
+                    .find(|transport| transport.playing);
+                let transport_revision = snapshot.direct_child_timeline_transports.iter().fold(
+                    snapshot.timeline.audio_transport_revision,
+                    |revision, transport| revision.wrapping_add(transport.generation),
+                );
+                VideoAudioRuntimeSnapshot {
+                    layers: snapshot.video.layers.clone(),
+                    auto_vj_status: snapshot.video.auto_vj.status.clone(),
+                    timeline_audio: TimelineAudioRuntimeSnapshot {
+                        clips: snapshot.timeline.audio_clips.clone(),
+                        child_clips: child_timeline_audio_runtime_clips(&snapshot),
+                        playing: snapshot.timeline.playing || direct_playing.is_some(),
+                        position_ms: if snapshot.timeline.playing {
+                            snapshot.timeline.position_ms
+                        } else {
+                            direct_playing
+                                .map(|transport| transport.position_ms)
+                                .unwrap_or(0)
+                        },
+                        muted: snapshot.timeline.audio_muted,
+                        transport_revision,
+                    },
+                }
             })
             .unwrap_or_default()
     }
@@ -3714,6 +3743,7 @@ struct RuntimeChildTransport {
     step_activation_ranges: Vec<RuntimeCueStepActivationRange>,
     direct_parent_cue_id: Option<CueId>,
     direct_started_at: Option<Instant>,
+    direct_paused: bool,
     direct_generation: u64,
     activated_events: Vec<bool>,
 }
@@ -4359,6 +4389,13 @@ impl EngineRuntime {
         self.active_effect_activation_indices.clear();
         self.timeline_effect_activation_ranges.clear();
         self.cue_list_effect_activation_cues.clear();
+        // A project replacement is a hard runtime boundary. In particular,
+        // never let a directly-triggered child timeline from the previous
+        // project survive merely because the replacement reuses the same Cue
+        // id. The authored Cue/output state may be restored below, but child
+        // transport position, pause state, and generation are runtime-only.
+        self.direct_child_transports.clear();
+        self.direct_child_transport_by_cue.clear();
         // T17 reset rule: project load always returns every scene to its
         // authored live-modifier dial position.
         self.cue_live_modifier_overrides.clear();
@@ -9069,6 +9106,15 @@ impl EngineRuntime {
                 self.establish_child_transports_at_position(Instant::now());
                 self.apply_child_timeline_automations();
             }
+            EngineCommand::SetDirectChildTimelinePlaying { cue_id, playing } => {
+                self.set_direct_child_timeline_playing(cue_id, playing, Instant::now());
+            }
+            EngineCommand::SeekDirectChildTimeline {
+                cue_id,
+                position_ms,
+            } => {
+                self.seek_direct_child_timeline(cue_id, position_ms, Instant::now());
+            }
             EngineCommand::SeekTimelineBeat { direction } => {
                 self.deactivate_all_timeline_effect_activations();
                 self.deactivate_all_child_transports();
@@ -12647,6 +12693,7 @@ impl EngineRuntime {
             step_activation_ranges: Vec::new(),
             direct_parent_cue_id,
             direct_started_at: None,
+            direct_paused: false,
             direct_generation: 0,
         })
     }
@@ -12843,6 +12890,8 @@ impl EngineRuntime {
                 transport.active.then_some((
                     transport.direct_parent_cue_id?,
                     transport.direct_started_at?,
+                    transport.direct_paused,
+                    transport.position_ms,
                     transport.direct_generation,
                 ))
             })
@@ -13170,7 +13219,8 @@ impl EngineRuntime {
                 .map(|(_, _, transition)| transition.clone());
         }
         let mut has_immediate_trigger = false;
-        for (cue_id, started_at, generation) in active_direct_child_transports {
+        for (cue_id, started_at, paused, position_ms, generation) in active_direct_child_transports
+        {
             let Some(cue_index) = self.cues.iter().position(|cue| cue.id == cue_id) else {
                 continue;
             };
@@ -13186,13 +13236,21 @@ impl EngineRuntime {
             transport.active = true;
             transport.boundary_armed = true;
             transport.direct_started_at = Some(started_at);
+            transport.direct_paused = false;
             transport.direct_generation = generation;
             transport.previous_position_ms = 0;
             transport.position_ms = 0;
             transport.parent_iteration = 0;
             transport.activated_events.fill(false);
-            has_immediate_trigger |=
-                self.advance_child_transport(RuntimeChildTransportId::Direct(transport_index), now);
+            let replay_at = started_at
+                .checked_add(Duration::from_millis(position_ms))
+                .unwrap_or(now)
+                .min(now);
+            has_immediate_trigger |= self.advance_child_transport(
+                RuntimeChildTransportId::Direct(transport_index),
+                replay_at,
+            );
+            self.direct_child_transports[transport_index].direct_paused = paused;
         }
         if has_immediate_trigger {
             self.advance_pending_cue(now);
@@ -17348,6 +17406,7 @@ impl EngineRuntime {
         transport.previous_position_ms = 0;
         transport.position_ms = 0;
         transport.direct_started_at = Some(started_at);
+        transport.direct_paused = false;
         transport.direct_generation = transport.direct_generation.wrapping_add(1);
         transport.activated_events.fill(false);
         let has_immediate_trigger =
@@ -17395,6 +17454,7 @@ impl EngineRuntime {
             transport.position_ms = 0;
             transport.parent_iteration = 0;
             transport.direct_started_at = None;
+            transport.direct_paused = false;
             transport.due.clear();
             transport.activated_events.fill(false);
         }
@@ -17459,6 +17519,103 @@ impl EngineRuntime {
             return;
         };
         self.release_direct_child_transport(transport_index, now);
+    }
+
+    fn set_direct_child_timeline_playing(&mut self, cue_id: CueId, playing: bool, now: Instant) {
+        let Some(cue_index) = self.cues.iter().position(|cue| cue.id == cue_id) else {
+            self.last_error = Some(format!("Cue {cue_id} was not found"));
+            return;
+        };
+        let Some(transport_index) = self
+            .direct_child_transport_by_cue
+            .get(cue_index)
+            .copied()
+            .flatten()
+        else {
+            self.last_error = Some(format!("Cue {cue_id} has no child timeline"));
+            return;
+        };
+        let (active, paused, position_ms, duration_ms) = {
+            let transport = &self.direct_child_transports[transport_index];
+            (
+                transport.active,
+                transport.direct_paused,
+                transport.position_ms,
+                transport.duration_ms,
+            )
+        };
+
+        if playing {
+            if !active || position_ms >= duration_ms {
+                self.request_cue(cue_id, now);
+                return;
+            }
+            if paused {
+                let transport = &mut self.direct_child_transports[transport_index];
+                transport.direct_started_at = Some(
+                    now.checked_sub(Duration::from_millis(position_ms))
+                        .unwrap_or(now),
+                );
+                transport.direct_paused = false;
+                transport.boundary_armed = false;
+            }
+        } else if active && !paused {
+            self.advance_child_transport(RuntimeChildTransportId::Direct(transport_index), now);
+            self.direct_child_transports[transport_index].direct_paused = true;
+        }
+        self.last_error = None;
+    }
+
+    fn seek_direct_child_timeline(&mut self, cue_id: CueId, position_ms: u64, now: Instant) {
+        let Some(cue_index) = self.cues.iter().position(|cue| cue.id == cue_id) else {
+            self.last_error = Some(format!("Cue {cue_id} was not found"));
+            return;
+        };
+        let Some(transport_index) = self
+            .direct_child_transport_by_cue
+            .get(cue_index)
+            .copied()
+            .flatten()
+        else {
+            self.last_error = Some(format!("Cue {cue_id} has no child timeline"));
+            return;
+        };
+        let was_active = self.direct_child_transports[transport_index].active;
+        let was_playing = was_active
+            && !self.direct_child_transports[transport_index].direct_paused
+            && self.direct_child_transports[transport_index].position_ms
+                < self.direct_child_transports[transport_index].duration_ms;
+        if !was_active {
+            // Match root-timeline Seek: establish the authored state at the
+            // requested playhead without starting the clock.
+            self.start_cue(cue_id, now, PendingCueTriggerSource::Manual);
+        }
+        if self.direct_child_transports[transport_index].active {
+            self.release_direct_child_transport(transport_index, now);
+        }
+
+        let target_ms = position_ms.min(self.direct_child_transports[transport_index].duration_ms);
+        let transport = &mut self.direct_child_transports[transport_index];
+        transport.active = true;
+        transport.boundary_armed = true;
+        transport.parent_iteration = 0;
+        transport.previous_position_ms = 0;
+        transport.position_ms = 0;
+        transport.direct_started_at = Some(
+            now.checked_sub(Duration::from_millis(target_ms))
+                .unwrap_or(now),
+        );
+        transport.direct_paused = false;
+        transport.direct_generation = transport.direct_generation.wrapping_add(1);
+        transport.activated_events.fill(false);
+        let has_immediate_trigger =
+            self.advance_child_transport(RuntimeChildTransportId::Direct(transport_index), now);
+        if has_immediate_trigger {
+            self.advance_pending_cue(now);
+        }
+        self.direct_child_transports[transport_index].direct_paused = !was_playing;
+        self.apply_child_timeline_automations();
+        self.last_error = None;
     }
 
     fn deactivate_all_child_transports(&mut self) {
@@ -17675,7 +17832,7 @@ impl EngineRuntime {
         let Some(transport) = self.child_transport(transport_id) else {
             return false;
         };
-        if !transport.active {
+        if !transport.active || transport.direct_paused {
             return false;
         }
         let parent_position = transport
@@ -18763,6 +18920,22 @@ impl EngineRuntime {
             playback_executors: self.playback_executors.clone(),
             playback_master: self.playback_master,
             active_cue_id: self.active_cue_id,
+            direct_child_timeline_transports: self
+                .direct_child_transports
+                .iter()
+                .filter_map(|transport| {
+                    transport
+                        .active
+                        .then_some(DirectChildTimelineTransportSummary {
+                            cue_id: transport.direct_parent_cue_id?,
+                            position_ms: transport.position_ms,
+                            duration_ms: transport.duration_ms,
+                            playing: !transport.direct_paused
+                                && transport.position_ms < transport.duration_ms,
+                            generation: transport.direct_generation,
+                        })
+                })
+                .collect(),
             active_group_cue_ids: self
                 .active_group_cue_ids
                 .iter()
@@ -18863,6 +19036,7 @@ impl EngineRuntime {
 
     fn build_persistence_snapshot(&self) -> EngineSnapshot {
         let mut snapshot = self.build_snapshot(0);
+        snapshot.direct_child_timeline_transports.clear();
         // T17: latched live overrides are runtime-only and never reach `.sdc`.
         snapshot.cue_live_modifiers.clear();
         // T20: Live Mixer strobe is runtime-only. Keep the additive protocol
@@ -20646,13 +20820,15 @@ fn child_transport_position_ms(transport: &RuntimeChildTransport, parent_positio
 fn child_timeline_audio_runtime_clips(
     snapshot: &EngineSnapshot,
 ) -> Vec<ChildTimelineAudioRuntimeClip> {
-    if !snapshot.timeline.playing {
-        return Vec::new();
-    }
     let parent_position_ms = snapshot.timeline.position_ms;
     let mut active = Vec::new();
     let parent_any_solo = snapshot.timeline.layers.iter().any(|layer| layer.solo);
-    for event in &snapshot.timeline.events {
+    let root_events = if snapshot.timeline.playing {
+        snapshot.timeline.events.as_slice()
+    } else {
+        &[]
+    };
+    for event in root_events {
         if event.duration_ms == 0 {
             continue;
         }
@@ -20740,46 +20916,94 @@ fn child_timeline_audio_runtime_clips(
             event.duration_ms.max(1)
         };
         let parent_iteration = parent_delta_ms / iteration_period_ms;
-        if child.audio_clips.is_empty() {
-            if let Some(audio) = &child.audio {
-                let layer_id = child
-                    .layers
-                    .iter()
-                    .filter(|layer| matches!(layer.kind, TimelineLayerKind::Audio))
-                    .min_by_key(|layer| (layer.order, layer.id))
-                    .map(|layer| layer.id)
-                    .unwrap_or(0);
-                let clip = legacy_timeline_audio_clip(audio, layer_id, 0);
-                if child_position_ms >= clip.start_ms
-                    && child_position_ms < clip.start_ms.saturating_add(clip.duration_ms)
-                {
-                    active.push(ChildTimelineAudioRuntimeClip {
-                        parent_event_id: event.id,
-                        parent_iteration,
-                        position_ms: child_position_ms,
-                        clip,
-                    });
-                }
-            }
+        append_child_timeline_audio_runtime_clips(
+            &mut active,
+            child,
+            child_position_ms,
+            event.id,
+            parent_iteration,
+            None,
+            0,
+        );
+    }
+    for transport in snapshot
+        .direct_child_timeline_transports
+        .iter()
+        .filter(|transport| transport.playing)
+    {
+        let Some(cue) = snapshot.cues.iter().find(|cue| cue.id == transport.cue_id) else {
+            continue;
+        };
+        let Some(child) = cue.child_timeline.as_ref() else {
+            continue;
+        };
+        if child_timeline_recall_is_inert(snapshot, cue.id, child) {
             continue;
         }
-        for clip in &child.audio_clips {
-            if timeline_audio_clip_layer_is_muted(child, clip.layer_id) {
-                continue;
-            }
+        append_child_timeline_audio_runtime_clips(
+            &mut active,
+            child,
+            transport.position_ms,
+            0,
+            0,
+            Some(transport.cue_id),
+            transport.generation,
+        );
+    }
+    active
+}
+
+fn append_child_timeline_audio_runtime_clips(
+    active: &mut Vec<ChildTimelineAudioRuntimeClip>,
+    child: &ChildTimelineSummary,
+    child_position_ms: u64,
+    parent_event_id: TimelineEventId,
+    parent_iteration: u64,
+    direct_parent_cue_id: Option<CueId>,
+    direct_generation: u64,
+) {
+    if child.audio_clips.is_empty() {
+        if let Some(audio) = &child.audio {
+            let layer_id = child
+                .layers
+                .iter()
+                .filter(|layer| matches!(layer.kind, TimelineLayerKind::Audio))
+                .min_by_key(|layer| (layer.order, layer.id))
+                .map(|layer| layer.id)
+                .unwrap_or(0);
+            let clip = legacy_timeline_audio_clip(audio, layer_id, 0);
             if child_position_ms >= clip.start_ms
                 && child_position_ms < clip.start_ms.saturating_add(clip.duration_ms)
             {
                 active.push(ChildTimelineAudioRuntimeClip {
-                    parent_event_id: event.id,
+                    parent_event_id,
                     parent_iteration,
+                    direct_parent_cue_id,
+                    direct_generation,
                     position_ms: child_position_ms,
-                    clip: clip.clone(),
+                    clip,
                 });
             }
         }
+        return;
     }
-    active
+    for clip in &child.audio_clips {
+        if timeline_audio_clip_layer_is_muted(child, clip.layer_id) {
+            continue;
+        }
+        if child_position_ms >= clip.start_ms
+            && child_position_ms < clip.start_ms.saturating_add(clip.duration_ms)
+        {
+            active.push(ChildTimelineAudioRuntimeClip {
+                parent_event_id,
+                parent_iteration,
+                direct_parent_cue_id,
+                direct_generation,
+                position_ms: child_position_ms,
+                clip: clip.clone(),
+            });
+        }
+    }
 }
 
 fn timeline_summary_event_is_muted(
@@ -57923,6 +58147,57 @@ mod tests {
     }
 
     #[test]
+    fn direct_child_operator_transport_publishes_pauses_seeks_and_resumes() {
+        let mut runtime =
+            direct_child_static_test_runtime(vec![direct_child_static_event(201, 2, 100, 500)]);
+        let started_at = Instant::now();
+        runtime.start_cue(1, started_at, PendingCueTriggerSource::Manual);
+        runtime.advance_child_transports(started_at + Duration::from_millis(150));
+
+        let live = runtime.build_snapshot(0);
+        assert_eq!(live.direct_child_timeline_transports.len(), 1);
+        assert_eq!(live.direct_child_timeline_transports[0].cue_id, 1);
+        assert_eq!(live.direct_child_timeline_transports[0].position_ms, 150);
+        assert!(live.direct_child_timeline_transports[0].playing);
+
+        runtime.set_direct_child_timeline_playing(
+            1,
+            false,
+            started_at + Duration::from_millis(150),
+        );
+        runtime.advance_child_transports(started_at + Duration::from_millis(400));
+        assert_eq!(runtime.direct_child_transports[0].position_ms, 150);
+        assert!(!runtime.build_snapshot(0).direct_child_timeline_transports[0].playing);
+
+        runtime.set_direct_child_timeline_playing(1, true, started_at + Duration::from_millis(400));
+        runtime.advance_child_transports(started_at + Duration::from_millis(450));
+        assert_eq!(runtime.direct_child_transports[0].position_ms, 200);
+
+        runtime.seek_direct_child_timeline(1, 50, started_at + Duration::from_millis(500));
+        assert_eq!(runtime.direct_child_transports[0].position_ms, 50);
+        assert_eq!(runtime.values[&(1, "Dimmer".to_string())], 0);
+        assert!(runtime.build_snapshot(0).direct_child_timeline_transports[0].playing);
+
+        runtime.set_direct_child_timeline_playing(
+            1,
+            false,
+            started_at + Duration::from_millis(550),
+        );
+        runtime.seek_direct_child_timeline(1, 200, started_at + Duration::from_millis(600));
+        assert_eq!(runtime.direct_child_transports[0].position_ms, 200);
+        assert_eq!(runtime.values[&(1, "Dimmer".to_string())], u16::MAX);
+        assert!(!runtime.build_snapshot(0).direct_child_timeline_transports[0].playing);
+        assert!(runtime
+            .build_persistence_snapshot()
+            .direct_child_timeline_transports
+            .is_empty());
+
+        runtime.set_direct_child_timeline_playing(1, true, started_at + Duration::from_millis(700));
+        runtime.advance_child_transports(started_at + Duration::from_millis(750));
+        assert_eq!(runtime.direct_child_transports[0].position_ms, 250);
+    }
+
+    #[test]
     fn direct_child_timeline_scene_block_source_offset_advances_owned_chaser_phase() {
         let mut runtime = runtime_with_chaser_fixtures(1);
         let chaser = test_chaser_request(&[1]);
@@ -58378,6 +58653,59 @@ mod tests {
         snapshot.timeline.layers[0].muted = false;
         snapshot.cues[1].child_timeline = Some(ChildTimelineSummary::default());
         assert!(child_timeline_audio_runtime_clips(&snapshot).is_empty());
+    }
+
+    #[test]
+    fn directly_triggered_child_timeline_audio_uses_live_transport_position() {
+        let mut snapshot = super_scene_test_runtime(1.0).build_persistence_snapshot();
+        snapshot.timeline.playing = false;
+        let child = snapshot.cues[0].child_timeline.as_mut().unwrap();
+        child.layers = vec![timeline_test_layer(
+            50,
+            0,
+            false,
+            false,
+            false,
+            TimelineLayerKind::Audio,
+        )];
+        let mut clip = timeline_test_audio_clip(77, 50);
+        clip.start_ms = 750;
+        clip.duration_ms = 500;
+        child.audio_clips = vec![clip];
+        snapshot.direct_child_timeline_transports = vec![DirectChildTimelineTransportSummary {
+            cue_id: snapshot.cues[0].id,
+            position_ms: 1_000,
+            duration_ms: 2_000,
+            playing: true,
+            generation: 3,
+        }];
+
+        let mapped = child_timeline_audio_runtime_clips(&snapshot);
+        assert_eq!(mapped.len(), 1);
+        assert_eq!(mapped[0].direct_parent_cue_id, Some(snapshot.cues[0].id));
+        assert_eq!(mapped[0].direct_generation, 3);
+        assert_eq!(mapped[0].position_ms, 1_000);
+        assert_eq!(mapped[0].clip.id, 77);
+
+        snapshot.direct_child_timeline_transports[0].playing = false;
+        assert!(child_timeline_audio_runtime_clips(&snapshot).is_empty());
+    }
+
+    #[test]
+    fn project_load_does_not_carry_direct_child_transport_runtime() {
+        let mut runtime = super_scene_test_runtime(1.0);
+        let started_at = Instant::now();
+        runtime.start_cue(1, started_at, PendingCueTriggerSource::Manual);
+        runtime.advance_child_transports(started_at + Duration::from_millis(150));
+        assert!(runtime.direct_child_transports[0].active);
+
+        let persisted = runtime.build_persistence_snapshot();
+        assert!(persisted.direct_child_timeline_transports.is_empty());
+
+        runtime.apply_command(EngineCommand::LoadProjectSnapshot(persisted));
+        let loaded = runtime.build_snapshot(0);
+        assert!(loaded.direct_child_timeline_transports.is_empty());
+        assert_eq!(loaded.active_cue_id, Some(1));
     }
 
     #[test]

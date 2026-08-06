@@ -9,6 +9,7 @@ export const createInitialEngineSnapshot = (): EngineSnapshot => ({
   playback_executors: [{ id: 1, label: "Main", cue_list_id: 1, page: 1, slot: 1, level: 1 }],
   playback_master: 1,
   active_cue_id: null,
+  direct_child_timeline_transports: [],
   active_fade: null,
   programmer: { enabled: false, blind: false, values: [], dmx_previews: [] },
   timeline: {

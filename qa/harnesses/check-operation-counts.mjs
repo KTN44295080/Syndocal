@@ -146,8 +146,24 @@ async function opKey(key, code) {
 }
 
 async function navigateFixture(fixture) {
-  await send("Page.navigate", { url: `${appBase}/?syndocalViewportFixture=${fixture}` });
-  await sleep(5000);
+  const url = `${appBase}/?syndocalViewportFixture=${fixture}`;
+  const navigation = await send("Page.navigate", { url });
+  if (navigation.errorText) {
+    throw new Error(`Fixture navigation failed for ${url}: ${navigation.errorText}`);
+  }
+  const expectedOrigin = new URL(appBase).origin;
+  const deadline = Date.now() + 15_000;
+  let lastLocation = "";
+  while (Date.now() < deadline) {
+    lastLocation = await evalJs("location.href");
+    const ready = await evalJs("document.readyState");
+    if (lastLocation.startsWith(expectedOrigin) && ready !== "loading") {
+      await sleep(1000);
+      return;
+    }
+    await sleep(200);
+  }
+  throw new Error(`Fixture navigation did not reach ${expectedOrigin}; last location was ${lastLocation}`);
 }
 
 async function openFixture(fixture) {
@@ -213,11 +229,12 @@ try {
     await openFixture("timeline-layered");
     const before = Number(await evalJs("document.querySelectorAll('.timelineMarker.sceneBlock').length"));
     const grip = JSON.parse(await evalJs(`(() => {
-      const el = [...document.querySelectorAll('.sceneMatrixCard[data-timeline-cue-drag-source]')]
+      const card = [...document.querySelectorAll('.sceneMatrixCard[data-timeline-cue-drag-source]')]
         .find(e =>
           e.getBoundingClientRect().width > 0 &&
           e.getAttribute('data-scene-matrix-active') !== 'true' &&
           !e.querySelector('[data-scene-flash-cue]'));
+      const el = card?.querySelector('[data-scene-matrix-edit-strip]');
       if (!el) return 'null';
       const r = el.getBoundingClientRect();
       return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
@@ -449,56 +466,67 @@ try {
     );
   }
 
-  // ---- Tasks 13-14: effect-family and recipe selection. These assert the
-  // visible programming state, while Daslight same-task counts stay unmeasured.
+  // ---- Task 13: create a cue-owned Mapping FX from its family. The current
+  // Scene Settings workflow creates and selects the default family draft in
+  // the same click; the retired sample-recipe cards are not part of this UI.
   {
-    await navigateFixture("fx-visual");
+    await openFixture("fx-visual");
+    const fxSetup = JSON.parse(await evalJs(`(async () => {
+      const raf2 = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const clickVisible = (selector, predicate) => {
+        const el = [...document.querySelectorAll(selector)]
+          .find(candidate => predicate(candidate) && candidate.getBoundingClientRect().width > 0);
+        el?.click();
+        return Boolean(el);
+      };
+      const show = clickVisible('.timelineDeskTabs button', el => el.textContent.trim() === 'Show');
+      await raf2();
+      const scene = clickVisible('[data-scene-matrix-edit-strip="401"]', () => true);
+      await raf2();
+      const fx = clickVisible('[data-scene-settings-surface-control="fx"]', () => true);
+      await raf2(); await raf2();
+      return JSON.stringify({
+        show,
+        scene,
+        fx,
+        surface: document.querySelector('[data-scene-settings]')?.getAttribute('data-scene-settings-surface') || '',
+        families: document.querySelectorAll('[data-scene-fx-chooser] [data-effect-family]').length,
+      });
+    })()`));
+    if (!fxSetup.scene || !fxSetup.fx || fxSetup.surface !== "fx" || fxSetup.families !== 9) {
+      throw new Error(`FX operation-count starting state unavailable: ${JSON.stringify(fxSetup)}`);
+    }
+    const effectsBefore = Number(await evalJs("document.querySelectorAll('[data-scene-owned-effect]').length"));
     const mappings = JSON.parse(await evalJs(`(() => {
       const el = document.querySelector('[data-effect-family="MAPPINGS"]');
       if (!el) return 'null';
       const r = el.getBoundingClientRect();
       return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
     })()`));
+    if (!mappings) throw new Error("MAPPINGS family control unavailable after FX setup");
     await opClick(mappings.x, mappings.y); // op 1
     const mappingState = JSON.parse(await evalJs(`(() => {
       const active = document.querySelector('.effectFamilyChooser button.active[aria-pressed="true"]');
-      const cards = [...document.querySelectorAll('.sampleEffectPresetCard')]
-        .filter((card) => card.getBoundingClientRect().width > 0);
-      return JSON.stringify({ family: active?.getAttribute('data-effect-family') || '', cards: cards.length });
+      const effects = [...document.querySelectorAll('[data-scene-owned-effect]')];
+      const selected = effects.find((row) => row.querySelector('.sceneOwnedFxSelect[aria-pressed="true"]'));
+      const editor = document.querySelector('[data-scene-settings-effect-editor]');
+      return JSON.stringify({
+        family: active?.getAttribute('data-effect-family') || '',
+        effects: effects.length,
+        selectedType: selected?.querySelector('small')?.textContent?.trim() || '',
+        editorType: editor?.getAttribute('data-scene-settings-effect-editor') || '',
+      });
     })()`));
     record(
-      "select-effect-family",
+      "create-mapping-fx-from-family",
       1,
       1,
-      mappingState.family === "MAPPINGS" && mappingState.cards === 3,
+      mappingState.family === "MAPPINGS"
+        && mappingState.effects === effectsBefore + 1
+        && mappingState.selectedType === "Mapping"
+        && mappingState.editorType === "Mapping",
       "未計測",
-      `${mappingState.family}/${mappingState.cards} recipes`,
-    );
-
-    const recipe = JSON.parse(await evalJs(`(() => {
-      const cards = [...document.querySelectorAll('.sampleEffectPresetCard')]
-        .filter((card) => card.getBoundingClientRect().width > 0);
-      const el = cards[1];
-      if (!el) return 'null';
-      el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-      const r = el.getBoundingClientRect();
-      const x = r.x + r.width / 2;
-      const y = r.y + r.height / 2;
-      const hit = document.elementFromPoint(x, y);
-      return JSON.stringify({ x, y, hit: Boolean(hit && (hit === el || el.contains(hit))) });
-    })()`));
-    await opClick(recipe.x, recipe.y); // op 1
-    const selectedRecipe = await evalJs(`(() => {
-      const selected = document.querySelector('.sampleEffectPresetCard[aria-pressed="true"]');
-      return selected?.querySelector('strong')?.textContent?.trim() || '';
-    })()`);
-    record(
-      "select-effect-recipe",
-      1,
-      1,
-      recipe.hit === true && selectedRecipe === "Ball",
-      "未計測",
-      `hit=${recipe.hit} selected=${selectedRecipe}`,
+      `${mappingState.family}; effects ${effectsBefore} -> ${mappingState.effects}; selected=${mappingState.selectedType}; editor=${mappingState.editorType}`,
     );
   }
 

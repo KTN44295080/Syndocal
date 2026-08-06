@@ -3564,12 +3564,69 @@ fn non_empty_label(value: Option<&str>, fallback: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
+    use std::{collections::BTreeSet, io::Write};
 
     use base64::Engine as _;
     use flate2::{write::ZlibEncoder, Compress, Compression, FlushCompress};
 
     use super::*;
+
+    fn first_json_difference(
+        before: &serde_json::Value,
+        after: &serde_json::Value,
+        path: &str,
+    ) -> Option<String> {
+        match (before, after) {
+            (serde_json::Value::Number(left), serde_json::Value::Number(right))
+                if left.is_f64() || right.is_f64() =>
+            {
+                let left = left.as_f64().unwrap_or(f64::NAN);
+                let right = right.as_f64().unwrap_or(f64::NAN);
+                if left.is_finite() && right.is_finite() && (left - right).abs() <= 1.0e-9 {
+                    None
+                } else {
+                    Some(format!("{path}: {left:?} -> {right:?}"))
+                }
+            }
+            (serde_json::Value::Object(left), serde_json::Value::Object(right)) => {
+                let keys = left
+                    .keys()
+                    .chain(right.keys())
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>();
+                for key in keys {
+                    let next_path = format!("{path}.{key}");
+                    match (left.get(key), right.get(key)) {
+                        (Some(left), Some(right)) => {
+                            if let Some(difference) = first_json_difference(left, right, &next_path)
+                            {
+                                return Some(difference);
+                            }
+                        }
+                        (left, right) => {
+                            return Some(format!("{next_path}: {left:?} -> {right:?}"));
+                        }
+                    }
+                }
+                None
+            }
+            (serde_json::Value::Array(left), serde_json::Value::Array(right)) => {
+                if left.len() != right.len() {
+                    return Some(format!("{path}.length: {} -> {}", left.len(), right.len()));
+                }
+                for (index, (left, right)) in left.iter().zip(right).enumerate() {
+                    if let Some(difference) =
+                        first_json_difference(left, right, &format!("{path}[{index}]"))
+                    {
+                        return Some(difference);
+                    }
+                }
+                None
+            }
+            _ if before == after => None,
+            _ => Some(format!("{path}: {before:?} -> {after:?}")),
+        }
+    }
 
     fn qcompress(value: &[u8]) -> String {
         let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
@@ -5191,6 +5248,188 @@ mod tests {
         assert!(!center_div.closed);
         assert_eq!(center_div.direction, MoveDirection::Bounce);
         assert!((center_div.fixture_spread - 0.176).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn dvc_local_full_shinkan_super_scenes_are_referentially_complete_and_survive_sdc_reload() {
+        let path = Path::new(r"C:\Users\kouty\Desktop\Shinkan-Left\Shinkan2026.dvc");
+        if !path.is_file() {
+            eprintln!(
+                "Skipping local full Daslight golden: {} is unavailable",
+                path.display()
+            );
+            return;
+        }
+
+        let outcome = import_path(path).unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+        let cue_ids = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .map(|cue| cue.id)
+            .collect::<HashSet<_>>();
+        let super_scenes = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .filter_map(|cue| cue.child_timeline.as_ref().map(|child| (cue, child)))
+            .collect::<Vec<_>>();
+        assert_eq!(super_scenes.len(), 2);
+        assert_eq!(
+            super_scenes
+                .iter()
+                .map(|(cue, _)| cue.label.as_str())
+                .collect::<HashSet<_>>(),
+            HashSet::from(["Shin", "Unr"])
+        );
+
+        let mut event_ids = HashSet::new();
+        let mut event_count = 0_usize;
+        let mut audio_clip_count = 0_usize;
+        for (owner, child) in &super_scenes {
+            assert!(
+                !child.events.is_empty(),
+                "{} must contain Scene Blocks",
+                owner.label
+            );
+            assert!(
+                child.duration_ms > 0,
+                "{} must have a positive duration",
+                owner.label
+            );
+            let layer_kinds = child
+                .layers
+                .iter()
+                .map(|layer| (layer.id, layer.kind))
+                .collect::<HashMap<_, _>>();
+            for event in &child.events {
+                assert!(
+                    event_ids.insert(event.id),
+                    "Scene Block id {} is duplicated across imported Super Scenes",
+                    event.id
+                );
+                assert!(
+                    cue_ids.contains(&event.cue_id),
+                    "{} block {} references missing Cue {}",
+                    owner.label,
+                    event.id,
+                    event.cue_id
+                );
+                assert_ne!(
+                    event.cue_id, owner.id,
+                    "{} block {} recursively references its owner",
+                    owner.label, event.id
+                );
+                let referenced = outcome
+                    .project
+                    .snapshot
+                    .cues
+                    .iter()
+                    .find(|cue| cue.id == event.cue_id)
+                    .unwrap();
+                assert!(
+                    referenced.child_timeline.is_none(),
+                    "{} block {} creates unsupported nested Super Scene playback",
+                    owner.label,
+                    event.id
+                );
+                let layer_id = event.layer_id.unwrap_or_else(|| {
+                    panic!("{} block {} has no typed layer", owner.label, event.id)
+                });
+                let layer_kind = layer_kinds.get(&layer_id).unwrap_or_else(|| {
+                    panic!(
+                        "{} block {} references missing layer {}",
+                        owner.label, event.id, layer_id
+                    )
+                });
+                assert!(
+                    matches!(
+                        (event.track.clone(), layer_kind),
+                        (TimelineTrackKind::Lighting, TimelineLayerKind::Lighting)
+                            | (TimelineTrackKind::Video, TimelineLayerKind::Video)
+                    ),
+                    "{} block {} track/layer type mismatch",
+                    owner.label,
+                    event.id
+                );
+                assert!(
+                    event.time_ms.saturating_add(event.duration_ms) <= child.duration_ms,
+                    "{} block {} exceeds its child timeline duration",
+                    owner.label,
+                    event.id
+                );
+                if let Some(jump_id) = event.jump_to_event_id {
+                    assert!(
+                        child.events.iter().any(|candidate| candidate.id == jump_id),
+                        "{} block {} jumps outside its child timeline",
+                        owner.label,
+                        event.id
+                    );
+                }
+                event_count += 1;
+            }
+            for clip in &child.audio_clips {
+                assert_eq!(
+                    layer_kinds.get(&clip.layer_id),
+                    Some(&TimelineLayerKind::Audio),
+                    "{} audio clip {} must reference an Audio layer",
+                    owner.label,
+                    clip.id
+                );
+                assert!(
+                    clip.start_ms.saturating_add(clip.duration_ms) <= child.duration_ms,
+                    "{} audio clip {} exceeds its child timeline duration",
+                    owner.label,
+                    clip.id
+                );
+                audio_clip_count += 1;
+            }
+        }
+        assert_eq!(event_count, 229);
+        assert_eq!(
+            audio_clip_count + outcome.project.snapshot.timeline.audio_clips.len(),
+            2,
+            "all imported Show and Super Scene audio clips must remain represented"
+        );
+
+        // Exercise the same JSON write/read boundary used by `.sdc` Save and
+        // Open, then prove every imported authored field remains byte-semantic.
+        let json = crate::project_json_for_write(&outcome.project).unwrap();
+        let roundtrip: ProjectFile = serde_json::from_str(&json).unwrap();
+        crate::validate_project_file(&roundtrip).unwrap();
+        let authored_sections = [
+            (
+                "embedded profiles",
+                serde_json::to_value(&outcome.project.custom_profiles).unwrap(),
+                serde_json::to_value(&roundtrip.custom_profiles).unwrap(),
+            ),
+            (
+                "fixtures",
+                serde_json::to_value(&outcome.project.snapshot.fixtures).unwrap(),
+                serde_json::to_value(&roundtrip.snapshot.fixtures).unwrap(),
+            ),
+            (
+                "Scenes",
+                serde_json::to_value(&outcome.project.snapshot.cues).unwrap(),
+                serde_json::to_value(&roundtrip.snapshot.cues).unwrap(),
+            ),
+            (
+                "Timeline",
+                serde_json::to_value(&outcome.project.snapshot.timeline).unwrap(),
+                serde_json::to_value(&roundtrip.snapshot.timeline).unwrap(),
+            ),
+        ];
+        for (label, before, after) in authored_sections {
+            let difference = first_json_difference(&before, &after, label);
+            assert!(
+                difference.is_none(),
+                "imported {label} JSON must survive reload; first difference: {}",
+                difference.unwrap_or_else(|| "unknown".to_string())
+            );
+        }
     }
 
     #[test]

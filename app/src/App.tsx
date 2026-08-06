@@ -1933,6 +1933,12 @@ export default function App() {
       ? null
       : snapshot().cues.find((cue) => cue.id === cueId && cue.child_timeline) ?? null;
   });
+  const activeDirectChildTimelineTransport = createMemo(() => {
+    const cueId = timelineChildCueId();
+    return cueId === null
+      ? null
+      : snapshot().direct_child_timeline_transports?.find((transport) => transport.cue_id === cueId) ?? null;
+  });
   const normalizedChildTimeline = (child: ChildTimelineSummary): ChildTimelineSummary => ({
     layers: child.layers ?? [],
     events: child.events ?? [],
@@ -1946,6 +1952,7 @@ export default function App() {
     const child = timelineChildCue()?.child_timeline;
     if (!child) return snapshot().timeline;
     const normalized = normalizedChildTimeline(child);
+    const transport = activeDirectChildTimelineTransport();
     return {
       layers: normalized.layers,
       events: normalized.events ?? [],
@@ -1955,8 +1962,8 @@ export default function App() {
       audio_clips: normalized.audio_clips ?? [],
       audio_offset_ms: 0,
       audio_muted: false,
-      playing: false,
-      position_ms: 0,
+      playing: transport?.playing ?? false,
+      position_ms: Math.min(transport?.position_ms ?? 0, normalized.duration_ms ?? 0),
       duration_ms: normalized.duration_ms ?? 0,
     };
   });
@@ -5429,7 +5436,7 @@ export default function App() {
     if (reveal) revealTimelineSceneBlock(eventId);
   };
   const timelineExecutionLive = createMemo(() => {
-    if (timelineChildCue()) return false;
+    if (timelineChildCue()) return activeDirectChildTimelineTransport()?.playing ?? false;
     const current = snapshot();
     return timelineExecutionIsLive(
       current.timeline.playing,
@@ -7642,8 +7649,14 @@ export default function App() {
     args?: Record<string, unknown>,
   ): Promise<T> => {
     const childCueId = timelineChildCueId();
-    if (childCueId === null || command === "set_timeline_playing" || command === "seek_timeline") {
+    if (childCueId === null) {
       return invoke<T>(command, args);
+    }
+    if (command === "set_timeline_playing") {
+      return invoke<T>("set_direct_child_timeline_playing", { cueId: childCueId, ...args });
+    }
+    if (command === "seek_timeline") {
+      return invoke<T>("seek_direct_child_timeline", { cueId: childCueId, ...args });
     }
     const child = normalizedChildTimeline(timelineChildCue()?.child_timeline ?? {});
     if (command === "set_timeline_automation_enabled") {
