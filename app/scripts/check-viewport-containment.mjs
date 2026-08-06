@@ -8,8 +8,8 @@ import { inflateSync } from "node:zlib";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
-const verifiedGenericProfileCount = 60;
-const verifiedGenericCategoryProfileCounts = [20, 12, 13, 5, 3, 7];
+const verifiedGenericProfileCount = 100;
+const verifiedGenericCategoryProfileCounts = [40, 20, 12, 13, 5, 3, 7];
 const verifiedGenericCategoryCount = verifiedGenericCategoryProfileCounts.length;
 const verifiedGenericFirstProfileFavoriteKey = "verified:par-direct-rgb-3ch";
 const largeShowMode = process.argv.includes("--large-show");
@@ -14756,6 +14756,42 @@ async function runPatchEmptyStateViewport(client, viewport) {
   await client.evaluate(`(() => {
     const input = document.querySelector('[data-patch-profile-search]');
     if (!(input instanceof HTMLInputElement)) return false;
+    input.value = 'ADJ SABER SPOT RGBW';
+    input.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      inputType: 'insertText',
+      data: 'ADJ SABER SPOT RGBW',
+    }));
+    return true;
+  })()`);
+  await sleep(50);
+  const universityRigSearchMetrics = await client.evaluate(`(() => {
+    const rows = [...document.querySelectorAll(
+      '[data-patch-profile-row][data-profile-source="verified"]'
+    )];
+    return {
+      sectionCountText: (document.querySelector(
+        '[data-patch-profile-section="verified"] > header span'
+      )?.textContent || '').trim(),
+      categoryProfileCounts: [...document.querySelectorAll(
+        '[data-patch-profile-tree="verified"] [data-profile-tree-profile-count]'
+      )].map((row) => Number(row.getAttribute('data-profile-tree-profile-count'))),
+      categoryExpandedValues: [...document.querySelectorAll(
+        '[data-patch-profile-tree="verified"] [data-profile-tree-item="manufacturer"]'
+      )].map((row) => row.getAttribute('aria-expanded')),
+      fixtureExpandedValues: [...document.querySelectorAll(
+        '[data-patch-profile-tree="verified"] [data-profile-tree-item="fixture"]'
+      )].map((row) => row.getAttribute('aria-expanded')),
+      modeKeys: rows.map((row) => row.getAttribute('data-profile-mode-key')),
+      modeNames: rows.map((row) => row.getAttribute('data-profile-mode-name')),
+      footprints: rows.map((row) => Number(row.getAttribute('data-profile-footprint'))),
+      disabledValues: rows.map((row) => row instanceof HTMLButtonElement && row.disabled),
+      draggableValues: rows.map((row) => row.getAttribute('draggable')),
+    };
+  })()`);
+  await client.evaluate(`(() => {
+    const input = document.querySelector('[data-patch-profile-search]');
+    if (!(input instanceof HTMLInputElement)) return false;
     input.value = '';
     input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
     return true;
@@ -14839,6 +14875,18 @@ async function runPatchEmptyStateViewport(client, viewport) {
       qlcSupplementMetrics.disabledValues.every((disabled) => disabled) &&
       qlcSupplementMetrics.provenance.length === 1 &&
       qlcSupplementMetrics.provenance[0].includes('QLC+'),
+    universityRigExactNameSearchShowsEverySaberMode:
+      universityRigSearchMetrics.sectionCountText === '12' &&
+      JSON.stringify(universityRigSearchMetrics.categoryProfileCounts) === JSON.stringify([12]) &&
+      universityRigSearchMetrics.categoryExpandedValues.length === 1 &&
+      universityRigSearchMetrics.categoryExpandedValues.every((value) => value === 'true') &&
+      universityRigSearchMetrics.fixtureExpandedValues.length === 1 &&
+      universityRigSearchMetrics.fixtureExpandedValues.every((value) => value === 'true') &&
+      universityRigSearchMetrics.modeKeys.length === 12 &&
+      universityRigSearchMetrics.modeKeys.every((value) => value?.startsWith('university-saber-spot-rgbw-')) &&
+      JSON.stringify(universityRigSearchMetrics.footprints) === JSON.stringify([3, 4, 4, 5, 6, 6, 7, 8, 8, 9, 11, 12]) &&
+      universityRigSearchMetrics.disabledValues.every((value) => value === true) &&
+      universityRigSearchMetrics.draggableValues.every((value) => value === 'true'),
     compactProfileRows:
       footprintFilterMetrics.rowHeights?.length === 2 &&
       footprintFilterMetrics.rowHeights.every((height) => height >= 24 && height <= 28),
@@ -14874,6 +14922,7 @@ async function runPatchEmptyStateViewport(client, viewport) {
     metrics,
     footprintFilterMetrics,
     qlcSupplementMetrics,
+    universityRigSearchMetrics,
     clearedVerifiedTree,
   };
 }

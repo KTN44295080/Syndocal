@@ -78,10 +78,11 @@ export interface VerifiedFixtureProfileSummary {
   mode_name: string;
   footprint: number;
   description: string;
+  manual_url?: string;
   attributes: readonly VerifiedFixtureAttributeDefinition[];
 }
 
-export type VerifiedFixtureCategory = "par-wash" | "moving-heads" | "led-bars-pixel" | "dimmers" | "strobe" | "effects";
+export type VerifiedFixtureCategory = "university-rig" | "par-wash" | "moving-heads" | "led-bars-pixel" | "dimmers" | "strobe" | "effects";
 
 export interface VerifiedFixtureAttributeDefinition {
   attribute: string;
@@ -95,6 +96,11 @@ interface VerifiedFixtureCategoryDefinition {
 }
 
 const verifiedFixtureCategories: readonly VerifiedFixtureCategoryDefinition[] = [
+  {
+    id: "university-rig",
+    name: "University rig",
+    description: "Official-manual channel maps for the university's eight primary fixtures, with every documented DMX mode.",
+  },
   { id: "par-wash", name: "PAR / Wash", description: "Additive color layouts for budget PAR cans and wash lights." },
   { id: "moving-heads", name: "Moving heads", description: "Common RGBW wash and spot channel layouts with position and optics controls." },
   { id: "led-bars-pixel", name: "LED bars / Pixel", description: "Segmented RGB and RGBW bars, including master-dimmer pixel families." },
@@ -115,6 +121,11 @@ const rgbAttributes = (segments: number, order: readonly ("R" | "G" | "B")[] = [
 
 const rgbwAttributes = (segments: number) =>
   Array.from({ length: segments }, (_, segmentIndex) => ["R", "G", "B", "W"].map((component) =>
+    attribute(`ColorAdd_${component}${segmentIndex === 0 ? "" : segmentIndex + 1}`)))
+    .flat();
+
+const rgbaAttributes = (segments: number) =>
+  Array.from({ length: segments }, (_, segmentIndex) => ["R", "G", "B", "A"].map((component) =>
     attribute(`ColorAdd_${component}${segmentIndex === 0 ? "" : segmentIndex + 1}`)))
     .flat();
 
@@ -160,6 +171,40 @@ const verifiedProfile = (
   };
 };
 
+const universityRigProfile = (
+  id: string,
+  manufacturer: string,
+  fixtureFamily: string,
+  name: string,
+  modeName: string,
+  expectedFootprint: number,
+  manualUrl: string,
+  attributes: readonly VerifiedFixtureAttributeDefinition[],
+): VerifiedFixtureProfileSummary => {
+  const definition = categoryDefinition("university-rig");
+  const footprint = attributes.reduce(
+    (total, candidate) => total + (candidate.resolution === "SixteenBit" ? 2 : 1),
+    0,
+  );
+  if (footprint !== expectedFootprint) {
+    throw new Error(`University rig profile ${id} expected ${expectedFootprint}ch but defines ${footprint}ch`);
+  }
+  return {
+    id,
+    manufacturer,
+    category: "university-rig",
+    category_name: definition.name,
+    category_description: definition.description,
+    fixture_family: fixtureFamily,
+    name,
+    mode_name: modeName,
+    footprint,
+    description: `Official-manual channel map · ${footprint}ch. Every documented mode for this fixture is included in the university rig pack.`,
+    manual_url: manualUrl,
+    attributes,
+  };
+};
+
 const e = (name: string) => attribute(name);
 const s = (name: string) => attribute(name, "SixteenBit");
 const color = {
@@ -173,7 +218,110 @@ const color = {
 const d = e("Dimmer");
 const shutter = e("Shutter1");
 
-export const previewVerifiedProfiles: VerifiedFixtureProfileSummary[] = [
+const epar64Manual = "https://www.soundhouse.co.jp/download/se/epar64rgba_v1.00.pdf";
+const miniSpot30Manual = "https://www.soundhouse.co.jp/download/se/minispot30.pdf";
+const pinspotQuadManual = "https://assets.centryngroup.com/dl/files/PINSPOTLEDQUADDMX_USERMANUAL.pdf";
+const saberSpotManual = "https://www.adj.com/products/saber-spot-rgbw";
+const encoreFr50zManual = "https://assets.centryngroup.com/dl/files/ENC846__DL__008.pdf";
+const megaBarRgbaManual = "https://www.adj.com/cdn/shop/files/bb469faba6680c0a58a51eecc0be5e50f824b5cc_ADJ_Mega_Bar_RGBA___User_Manual_2023_04_11.pdf";
+const mega64ProfileEpManual = "https://www.adj.com/cdn/shop/files/0e7622ace1d8c0c4098428d602db0e71107cd429_Eliminator_Mega_64_Profile_EP___User_Manual.pdf";
+const mega64ProfilePlusManual = "https://assets.centryngroup.com/dl/files/MEG340__DL__001.pdf";
+
+const mega64ProfileModes = (
+  idPrefix: string,
+  manufacturer: string,
+  fixtureFamily: string,
+  name: string,
+  manualUrl: string,
+) => [
+  universityRigProfile(`${idPrefix}-4ch`, manufacturer, fixtureFamily, name, "4-channel", 4, manualUrl,
+    [color.r, color.g, color.b, color.uv]),
+  universityRigProfile(`${idPrefix}-5ch`, manufacturer, fixtureFamily, name, "5-channel", 5, manualUrl,
+    [color.r, color.g, color.b, color.uv, d]),
+  universityRigProfile(`${idPrefix}-6ch`, manufacturer, fixtureFamily, name, "6-channel", 6, manualUrl,
+    [color.r, color.g, color.b, color.uv, shutter, d]),
+  universityRigProfile(`${idPrefix}-9ch`, manufacturer, fixtureFamily, name, "9-channel", 9, manualUrl,
+    [color.r, color.g, color.b, color.uv, shutter, d, e("Control1"), e("Color1"), e("Control2")]),
+  universityRigProfile(`${idPrefix}-10ch`, manufacturer, fixtureFamily, name, "10-channel", 10, manualUrl,
+    [color.r, color.g, color.b, color.uv, shutter, d, e("Control1"), e("Color1"), e("Control2"), e("Control3")]),
+];
+
+export const universityRigProfiles: VerifiedFixtureProfileSummary[] = [
+  universityRigProfile("university-epar64-rgba-4ch", "Stage Evolution", "ePAR64 RGBA", "ePAR64 RGBA", "4-channel", 4, epar64Manual,
+    [color.r, color.g, color.b, color.a]),
+  universityRigProfile("university-epar64-rgba-8ch", "Stage Evolution", "ePAR64 RGBA", "ePAR64 RGBA", "8-channel", 8, epar64Manual,
+    [color.r, color.g, color.b, color.a, e("Color1"), e("Control1"), e("Control2"), d]),
+
+  universityRigProfile("university-mini-spot30-9ch", "Stage Evolution", "STAGE EVOLUTION MINI SPOT30", "MINI SPOT30", "9-channel", 9, miniSpot30Manual,
+    [e("Pan"), e("Tilt"), e("Color1"), e("Gobo1"), shutter, d, e("PanTiltSpeed"), e("Control1"), e("Control2")]),
+  universityRigProfile("university-mini-spot30-11ch", "Stage Evolution", "STAGE EVOLUTION MINI SPOT30", "MINI SPOT30", "11-channel · 16-bit P/T", 11, miniSpot30Manual,
+    [s("Pan"), s("Tilt"), e("Color1"), e("Gobo1"), shutter, d, e("PanTiltSpeed"), e("Control1"), e("Control2")]),
+
+  universityRigProfile("university-pinspot-led-quad-dmx-6ch", "ADJ", "Pinspot LED Quad DMX", "Pinspot LED Quad DMX", "6-channel", 6, pinspotQuadManual,
+    [color.r, color.g, color.b, color.w, d, shutter]),
+
+  universityRigProfile("university-saber-spot-rgbw-hsi-3ch", "ADJ", "ADJ SABER SPOT RGBW", "SABER SPOT RGBW", "HSI · 3-channel", 3, saberSpotManual,
+    [e("Control1"), e("Control2"), d]),
+  universityRigProfile("university-saber-spot-rgbw-rgbw-4ch", "ADJ", "ADJ SABER SPOT RGBW", "SABER SPOT RGBW", "RGBW · 4-channel", 4, saberSpotManual,
+    [color.r, color.g, color.b, color.w]),
+  universityRigProfile("university-saber-spot-rgbw-hsi-curve-4ch", "ADJ", "ADJ SABER SPOT RGBW", "SABER SPOT RGBW", "HSI + dimmer curve · 4-channel", 4, saberSpotManual,
+    [e("Control1"), e("Control2"), d, e("Dimmer2")]),
+  universityRigProfile("university-saber-spot-rgbw-rgbwd-5ch", "ADJ", "ADJ SABER SPOT RGBW", "SABER SPOT RGBW", "RGBWD · 5-channel", 5, saberSpotManual,
+    [color.r, color.g, color.b, color.w, d]),
+  universityRigProfile("university-saber-spot-rgbw-strobe-6ch", "ADJ", "ADJ SABER SPOT RGBW", "SABER SPOT RGBW", "RGBWD + strobe · 6-channel", 6, saberSpotManual,
+    [shutter, color.r, color.g, color.b, color.w, d]),
+  universityRigProfile("university-saber-spot-rgbw-dimmer-fine-6ch", "ADJ", "ADJ SABER SPOT RGBW", "SABER SPOT RGBW", "RGBWD fine · 6-channel", 6, saberSpotManual,
+    [color.r, color.g, color.b, color.w, s("Dimmer")]),
+  universityRigProfile("university-saber-spot-rgbw-dimmer-fine-strobe-7ch", "ADJ", "ADJ SABER SPOT RGBW", "SABER SPOT RGBW", "RGBWD fine + strobe · 7-channel", 7, saberSpotManual,
+    [color.r, color.g, color.b, color.w, shutter, s("Dimmer")]),
+  universityRigProfile("university-saber-spot-rgbw-extended-8ch", "ADJ", "ADJ SABER SPOT RGBW", "SABER SPOT RGBW", "Extended · 8-channel", 8, saberSpotManual,
+    [color.r, color.g, color.b, color.w, shutter, s("Dimmer"), e("Dimmer2")]),
+  universityRigProfile("university-saber-spot-rgbw-fine-8ch", "ADJ", "ADJ SABER SPOT RGBW", "SABER SPOT RGBW", "RGBW fine · 8-channel", 8, saberSpotManual,
+    [s("ColorAdd_R"), s("ColorAdd_G"), s("ColorAdd_B"), s("ColorAdd_W")]),
+  universityRigProfile("university-saber-spot-rgbw-hsi-programs-9ch", "ADJ", "ADJ SABER SPOT RGBW", "SABER SPOT RGBW", "HSI programs · 9-channel", 9, saberSpotManual,
+    [shutter, e("Control1"), e("Control2"), d, e("Color1"), e("Control3"), e("Control4"), e("Control5"), e("Dimmer2")]),
+  universityRigProfile("university-saber-spot-rgbw-programs-11ch", "ADJ", "ADJ SABER SPOT RGBW", "SABER SPOT RGBW", "RGBW programs · 11-channel", 11, saberSpotManual,
+    [shutter, color.r, color.g, color.b, color.w, d, e("Color1"), e("Control1"), e("Control2"), e("Control3"), e("Dimmer2")]),
+  universityRigProfile("university-saber-spot-rgbw-programs-fine-12ch", "ADJ", "ADJ SABER SPOT RGBW", "SABER SPOT RGBW", "RGBW programs fine · 12-channel", 12, saberSpotManual,
+    [color.r, color.g, color.b, color.w, e("Color1"), shutter, s("Dimmer"), e("Control1"), e("Control2"), e("Control3"), e("Dimmer2")]),
+
+  universityRigProfile("university-encore-fr50z-1ch", "ADJ", "ADJ Encore FR50Z", "Encore FR50Z", "1CH", 1, encoreFr50zManual, [d]),
+  universityRigProfile("university-encore-fr50z-2ch", "ADJ", "ADJ Encore FR50Z", "Encore FR50Z", "2CH", 2, encoreFr50zManual, [d, shutter]),
+  universityRigProfile("university-encore-fr50z-2-2ch", "ADJ", "ADJ Encore FR50Z", "Encore FR50Z", "2-2CH", 2, encoreFr50zManual, [s("Dimmer")]),
+  universityRigProfile("university-encore-fr50z-3ch", "ADJ", "ADJ Encore FR50Z", "Encore FR50Z", "3CH", 3, encoreFr50zManual, [d, shutter, e("Control1")]),
+  universityRigProfile("university-encore-fr50z-2-3ch", "ADJ", "ADJ Encore FR50Z", "Encore FR50Z", "2-3CH", 3, encoreFr50zManual, [s("Dimmer"), e("Control1")]),
+  universityRigProfile("university-encore-fr50z-4ch", "ADJ", "ADJ Encore FR50Z", "Encore FR50Z", "4CH", 4, encoreFr50zManual, [s("Dimmer"), shutter, e("Control1")]),
+
+  universityRigProfile("university-mega-bar-rgba-4ch", "ADJ", "ADJ MEGA BAR RGBA", "MEGA BAR RGBA", "4-channel · RGBA", 4, megaBarRgbaManual,
+    rgbaAttributes(1)),
+  universityRigProfile("university-mega-bar-rgba-6ch", "ADJ", "ADJ MEGA BAR RGBA", "MEGA BAR RGBA", "6-channel · RGBA + strobe/dimmer", 6, megaBarRgbaManual,
+    [...rgbaAttributes(1), shutter, d]),
+  universityRigProfile("university-mega-bar-rgba-7ch", "ADJ", "ADJ MEGA BAR RGBA", "MEGA BAR RGBA", "7-channel · color macro", 7, megaBarRgbaManual,
+    [...rgbaAttributes(1), e("Color1"), shutter, d]),
+  universityRigProfile("university-mega-bar-rgba-9ch", "ADJ", "ADJ MEGA BAR RGBA", "MEGA BAR RGBA", "9-channel · programs", 9, megaBarRgbaManual,
+    [...rgbaAttributes(1), e("Color1"), e("Control1"), e("Control2"), shutter, d]),
+  universityRigProfile("university-mega-bar-rgba-10ch", "ADJ", "ADJ MEGA BAR RGBA", "MEGA BAR RGBA", "10-channel · halves", 10, megaBarRgbaManual,
+    [...rgbaAttributes(2), shutter, d]),
+  universityRigProfile("university-mega-bar-rgba-18ch", "ADJ", "ADJ MEGA BAR RGBA", "MEGA BAR RGBA", "18-channel · fourths", 18, megaBarRgbaManual,
+    [...rgbaAttributes(4), shutter, d]),
+  universityRigProfile("university-mega-bar-rgba-34ch", "ADJ", "ADJ MEGA BAR RGBA", "MEGA BAR RGBA", "34-channel · eighths", 34, megaBarRgbaManual,
+    [...rgbaAttributes(8), shutter, d]),
+
+  ...mega64ProfileModes("university-mega-64-profile-ep", "Eliminator Lighting", "MEGA 64 Profile EP", "MEGA 64 Profile EP", mega64ProfileEpManual),
+  ...mega64ProfileModes("university-mega-64-profile-plus", "ADJ", "MEGA 64 Profile Plus", "MEGA 64 Profile Plus", mega64ProfilePlusManual),
+];
+
+export const universityRigFixtureCount = 8;
+export const universityRigModeCount = 40;
+
+if (universityRigProfiles.length !== universityRigModeCount) {
+  throw new Error(`University rig pack must contain ${universityRigModeCount} modes`);
+}
+if (new Set(universityRigProfiles.map((entry) => entry.fixture_family)).size !== universityRigFixtureCount) {
+  throw new Error(`University rig pack must contain ${universityRigFixtureCount} fixture families`);
+}
+
+const genericVerifiedProfiles: VerifiedFixtureProfileSummary[] = [
   // PAR / Wash — direct color, dimmer-first, dimmer-last, and strobe-extended conventions.
   verifiedProfile("par-wash", "par-direct-rgb-3ch", "Direct Color PAR / Wash", "Generic Direct RGB PAR 3ch", "RGB · 3ch", 3, "R → G → B", [color.r, color.g, color.b]),
   verifiedProfile("par-wash", "par-direct-rgbw-4ch", "Direct Color PAR / Wash", "Generic Direct RGBW PAR 4ch", "RGBW · 4ch", 4, "R → G → B → W", [color.r, color.g, color.b, color.w]),
@@ -247,8 +395,13 @@ export const previewVerifiedProfiles: VerifiedFixtureProfileSummary[] = [
   verifiedProfile("effects", "bubble-1ch", "Bubble Machine", "Generic Bubble Machine 1ch", "Output · 1ch", 1, "Bubble output", [e("Generic: Bubble Output")]),
 ];
 
-export const verifiedFixtureProfileCount = 60;
-export const verifiedFixtureCategoryCount = 6;
+export const previewVerifiedProfiles: VerifiedFixtureProfileSummary[] = [
+  ...universityRigProfiles,
+  ...genericVerifiedProfiles,
+];
+
+export const verifiedFixtureProfileCount = 100;
+export const verifiedFixtureCategoryCount = 7;
 
 if (previewVerifiedProfiles.length !== verifiedFixtureProfileCount) {
   throw new Error(`Verified fixture pack must contain ${verifiedFixtureProfileCount} profiles`);

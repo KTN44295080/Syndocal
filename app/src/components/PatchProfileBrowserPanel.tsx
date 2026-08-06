@@ -650,9 +650,9 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
 
       <div class="patchProfileBrowserScroll" data-patch-profile-browser-scroll>
         <section class="patchProfileBrowserSection" data-patch-profile-section="verified">
-          <header><strong>Verified common-rig pack</strong><span>{visibleVerifiedProfileCount()}</span></header>
+          <header><strong>Verified fixture packs</strong><span>{visibleVerifiedProfileCount()}</span></header>
           <GdtfProfileTree
-            ariaLabel="Verified generic profile tree"
+            ariaLabel="Verified fixture profile tree"
             source="verified"
             fixtures={visibleVerifiedFixtures()}
             searchActive={Boolean(query().trim())}

@@ -356,8 +356,8 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
       </div>
 
       <section class="fixtureCatalogSection verified">
-        <header><strong>Verified common-rig pack</strong><span>{visibleVerified().length}</span></header>
-        <p>Structurally tested generic layouts. Confirm the fixture manual before sending DMX; these are not manufacturer-specific profiles.</p>
+        <header><strong>Verified fixture packs</strong><span>{visibleVerified().length}</span></header>
+        <p>University fixture modes are manual-verified. Confirm the fixture manual before using the generic common-rig layouts.</p>
         <div class="fixtureVerifiedGrid">
           <For each={visibleVerified()}>
             {(entry) => {

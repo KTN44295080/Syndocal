@@ -1717,8 +1717,13 @@ const japaneseText: Record<string, string> = {
   Project: "プロジェクト",
   "Favorite cached profile": "キャッシュ済みプロファイルをお気に入り登録",
   "Use Profile": "プロファイルを使用",
-  "Verified common-rig pack": "検証済み標準リグパック",
-  "Verified generic profile tree": "検証済み汎用プロファイルツリー",
+  "Verified fixture packs": "検証済み灯体パック",
+  "Verified fixture profile tree": "検証済み灯体プロファイルツリー",
+  "University rig": "大学リグ",
+  "Official-manual channel maps for the university's eight primary fixtures, with every documented DMX mode.":
+    "大学で主に使う8灯体について、公式マニュアルに記載された全DMXモードのチャンネルマップです。",
+  "University fixture modes are manual-verified. Confirm the fixture manual before using the generic common-rig layouts.":
+    "大学灯体の各モードはマニュアル照合済みです。汎用標準リグのレイアウトを使う場合は灯体マニュアルも確認してください。",
   Verified: "検証済み",
   Profile: "プロファイル",
   profiles: "プロファイル",
