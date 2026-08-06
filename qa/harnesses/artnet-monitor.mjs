@@ -10,7 +10,7 @@ const ARTNET_ID = Buffer.from("Art-Net\0", "ascii");
 const ART_DMX_OPCODE = 0x5000;
 const DEFAULT_ARTNET_PORT = 6454;
 const DEFAULT_HTTP_PORT = 6455;
-const MAX_TRANSITIONS = 128;
+const DEFAULT_MAX_TRANSITIONS = 128;
 
 export function parseArtDmx(message) {
   if (!Buffer.isBuffer(message) || message.length < 18) return null;
@@ -52,6 +52,8 @@ function parseArgs(argv) {
     httpPort: DEFAULT_HTTP_PORT,
     durationSeconds: 0,
     evidencePath: "",
+    captureChanges: false,
+    maxTransitions: DEFAULT_MAX_TRANSITIONS,
     selfTest: false,
   };
 
@@ -66,6 +68,8 @@ function parseArgs(argv) {
     else if (argument === "--http-port") options.httpPort = Number(nextValue());
     else if (argument === "--duration-seconds") options.durationSeconds = Number(nextValue());
     else if (argument === "--evidence") options.evidencePath = nextValue();
+    else if (argument === "--capture-changes") options.captureChanges = true;
+    else if (argument === "--max-transitions") options.maxTransitions = Number(nextValue());
     else if (argument === "--self-test") options.selfTest = true;
     else throw new Error(`Unknown argument: ${argument}`);
   }
@@ -80,6 +84,9 @@ function parseArgs(argv) {
   }
   if (!Number.isFinite(options.durationSeconds) || options.durationSeconds < 0) {
     throw new Error("Duration must be zero or a positive number of seconds");
+  }
+  if (!Number.isInteger(options.maxTransitions) || options.maxTransitions < 0) {
+    throw new Error("Maximum transitions must be zero or a positive integer");
   }
   return options;
 }
@@ -116,6 +123,10 @@ function createState(options) {
     endedAt: null,
     listen: { address: "0.0.0.0", port: options.artnetPort },
     monitorUrl: `http://127.0.0.1:${options.httpPort}/`,
+    capture: {
+      transitionData: options.captureChanges ?? false,
+      maxTransitions: options.maxTransitions ?? DEFAULT_MAX_TRANSITIONS,
+    },
     totalDatagrams: 0,
     artDmxFrames: 0,
     rejectedDatagrams: 0,
@@ -128,6 +139,7 @@ function createState(options) {
     streams: {},
     universes: {},
     transitions: [],
+    lastFrames: {},
     lastFrame: null,
   };
 }
@@ -164,14 +176,16 @@ function recordFrame(state, packet, remote, nowMs) {
   const changed = priorUniverse?.lastDigest !== digest;
   if (changed) {
     state.changedFrames += 1;
-    if (state.transitions.length < MAX_TRANSITIONS) {
-      state.transitions.push({
+    if (state.transitions.length < state.capture.maxTransitions) {
+      const transition = {
         at: timestamp,
         universe: packet.universe,
         sequence: packet.sequence,
         digest,
         ...summary,
-      });
+      };
+      if (state.capture.transitionData) transition.data = Array.from(packet.data);
+      state.transitions.push(transition);
     }
   }
 
@@ -187,7 +201,7 @@ function recordFrame(state, packet, remote, nowMs) {
     lastFrameEpochMs: nowMs,
     ...summary,
   };
-  state.lastFrame = {
+  const lastFrame = {
     at: timestamp,
     source: sourceKey,
     universe: packet.universe,
@@ -196,6 +210,8 @@ function recordFrame(state, packet, remote, nowMs) {
     data: Array.from(packet.data),
     ...summary,
   };
+  state.lastFrames[universeKey] = lastFrame;
+  state.lastFrame = lastFrame;
 }
 
 function publicState(state) {
@@ -304,7 +320,12 @@ async function runSelfTest() {
   if (parseArtDmx(Buffer.from("not Art-Net")) !== null) {
     throw new Error("Non-Art-Net datagram was accepted");
   }
-  const state = createState({ artnetPort: 6454, httpPort: 6455 });
+  const state = createState({
+    artnetPort: 6454,
+    httpPort: 6455,
+    captureChanges: true,
+    maxTransitions: 1,
+  });
   const sourceA = { address: "127.0.0.1", port: 50001 };
   const sourceB = { address: "127.0.0.1", port: 50002 };
   recordFrame(state, parseArtDmx(buildArtDmxForSelfTest({ sequence: 10 })), sourceA, 1000);
@@ -313,7 +334,14 @@ async function runSelfTest() {
   if (state.sequenceDiscontinuities !== 0 || Object.keys(state.streams).length !== 2) {
     throw new Error("Per-source ArtDMX sequence tracking self-test failed");
   }
-  console.log("external Art-Net monitor self-test: 3 assertions passed");
+  if (
+    state.transitions.length !== 1 ||
+    state.transitions[0].data?.[0] !== 255 ||
+    state.lastFrames["0"]?.data?.[1] !== 127
+  ) {
+    throw new Error("Full transition capture self-test failed");
+  }
+  console.log("external Art-Net monitor self-test: 4 assertions passed");
 }
 
 async function main() {
@@ -324,7 +352,10 @@ async function main() {
   }
 
   const state = createState(options);
-  const socket = dgram.createSocket("udp4");
+  // Art-Net applications commonly bind UDP 6454 themselves so they can answer
+  // discovery traffic.  Allow the monitor to share the port with the sender;
+  // this is required for same-host Daslight/Syndocal capture on Windows.
+  const socket = dgram.createSocket({ type: "udp4", reuseAddr: true });
   const server = http.createServer((request, response) => {
     response.setHeader("Cache-Control", "no-store");
     if (request.url === "/state") {

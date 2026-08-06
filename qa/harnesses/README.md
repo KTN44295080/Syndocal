@@ -67,11 +67,25 @@ between-phase browser recycling (fresh profile each time) isolates it.
 - `artnet-monitor.mjs` is a separate-process ArtDMX receiver and 512-channel
   dashboard for the product's formal external-visualizer path. It parses UDP
   6454 fail-closed, tracks sequence continuity per sender/universe, records
-  payload transitions and writes machine-readable JSON evidence.
+  payload transitions and writes machine-readable JSON evidence. On Windows
+  it shares UDP 6454 with an Art-Net application, so same-host Daslight and
+  Syndocal capture can be attempted without changing the firewall. Add
+  `--capture-changes` when every retained transition needs its full DMX byte
+  array; `--max-transitions` bounds the resulting evidence size. Capture the
+  two products sequentially: on Windows, leaving Daslight bound to 6454 can
+  consume Syndocal's loopback unicast instead of duplicating it to the monitor.
+
+- `artnet-compare.mjs` compares the last captured frame for a selected universe
+  byte-for-byte. It reports exact one-based channel differences and returns 0
+  for equality, 1 for a valid difference, and 2 for malformed/missing evidence.
+  Transition digests are diagnostic because independently started dynamic FX
+  captures are not guaranteed to share a time origin.
 
   ```powershell
   node qa/harnesses/artnet-monitor.mjs --self-test
-  node qa/harnesses/artnet-monitor.mjs --duration-seconds 20 --evidence target/qa/artnet-acceptance.json
+  node qa/harnesses/artnet-monitor.mjs --duration-seconds 20 --capture-changes --max-transitions 1024 --evidence target/qa/artnet-acceptance.json
+  node qa/harnesses/artnet-compare.mjs --self-test
+  node qa/harnesses/artnet-compare.mjs --reference target/qa/daslight-scene.json --candidate target/qa/syndocal-scene.json --universe 0 --evidence target/qa/artnet-comparison.json
   ```
 
   Open `http://127.0.0.1:6455/` while it is running. Loopback proves the

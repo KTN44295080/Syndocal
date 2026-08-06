@@ -13,10 +13,14 @@ Scope: T23 software acceptance for the formal external-visualizer product bounda
 
 ```powershell
 node qa/harnesses/artnet-monitor.mjs --self-test
-node qa/harnesses/artnet-monitor.mjs --artnet-port 6454 --http-port 6455 --duration-seconds 20 --evidence target/qa/artnet-shinkan-acceptance.json
+node qa/harnesses/artnet-monitor.mjs --artnet-port 6454 --http-port 6455 --duration-seconds 20 --capture-changes --max-transitions 1024 --evidence target/qa/artnet-shinkan-acceptance.json
+node qa/harnesses/artnet-compare.mjs --self-test
+node qa/harnesses/artnet-compare.mjs --reference target/qa/daslight-scene.json --candidate target/qa/syndocal-scene.json --universe 0 --evidence target/qa/artnet-comparison.json
 ```
 
-Self-test result: 3 assertions passed, including the rule that a new UDP source port starts a new ArtDMX sequence stream instead of manufacturing packet loss.
+Monitor self-test result: 4 assertions passed, including the rule that a new UDP source port starts a new ArtDMX sequence stream instead of manufacturing packet loss and that bounded full transition capture retains channel bytes. Comparator self-test result: 3 assertions passed for exact equality, a one-channel delta and malformed evidence rejection.
+
+The monitor keeps `lastFrames` by universe as well as the most recent global frame. The comparator's equality verdict is the selected universe's final DMX frame, byte-for-byte. Transition digest counts and common prefixes are included as diagnostics; dynamic FX timing/phase needs a separately synchronized acceptance rule.
 
 ## Native real-show exercise
 
@@ -41,6 +45,31 @@ Final 20-second evidence (`target/qa/artnet-shinkan-acceptance.json`):
 | Sender stream | `127.0.0.1:57600/u0` |
 
 The measured rate is 44 frames/s over the 20-second window. This is an external-process receipt result, not a Syndocal status-label assertion.
+
+## Daslight-to-Syndocal A/B capture status (2026-08-07)
+
+The comparison path is executable, but a truthful Daslight reference frame is not available on this machine yet.
+
+- Daslight source: `C:\Users\kouty\Desktop\Shinkan-Left\Shinkan2026.dvc` (344,765 bytes, SHA-256 `ED202B33878E42124D8DEDA2088239C9E8A1B7C65EFDC56821B6317FF9BE3099`).
+- Daslight virtual device: `Codex Capture`, active, Art-Net 4, `192.168.1.255`, mask `255.255.255.0`, port 6454, Art-Net universe 0 mapped to software universe 1.
+- Directed capture while switching `Shin`/`Unr`: 30 seconds, ArtDMX 0, rejected non-ArtDMX 1.
+- Broadcast capture with `Use Broadcast` enabled while switching `Unr`/`Shin`: 20 seconds, ArtDMX 0, rejected non-ArtDMX 1.
+- Hardware Manager reported no connected device. Daslight listed a cached `DVC GOLD` serial `1021943`, but its connectivity remained disabled.
+
+Daslight's manual states that Art-Net output needs a connected compatible SUT device with a valid Art-Net licence. The virtual device and universe mapping can therefore be configured without a reference ArtDMX stream being licensed for output. Connect the licensed Daslight interface, repeat one capture per named scene, then pass those JSON files to `artnet-compare.mjs`; until that reference exists, do not label the import/output byte-identical to Daslight.
+
+Official source: [Daslight 5 v1.4 manual](https://eu-litterature.n-g.co/Release/daslight_5_manual_en.pdf).
+
+The same current release build produced independent Syndocal evidence after Daslight released UDP 6454:
+
+| Scene | Window | ArtDMX frames | Changed frames | Rejected | Sequence gaps | Max gap | U / bytes | Last non-zero | Last digest |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| `Shin` | 12 s | 529 | 1 | 0 | 0 | 24 ms | 0 / 512 | 283 | `e7817420` |
+| `Unr` | 10 s | 440 | 347 | 0 | 0 | 24 ms | 0 / 512 | 289 | `5f647702` |
+
+The comparator returned 0 for the real `Shin` evidence compared with itself. As a negative control, `Shin` versus `Unr` returned 1 and reported 26 exact channel differences; the first was channel 72, `26 -> 255`. This proves that the comparison gate detects payload differences instead of merely checking packet presence.
+
+Run the two product captures sequentially. Windows allowed Daslight and the monitor to share UDP 6454 for the Daslight attempt, but leaving Daslight bound while Syndocal sent to `127.0.0.1` caused the unicast to be consumed by the competing socket. Closing Daslight before the Syndocal capture removed that host-only ambiguity and immediately restored valid ArtDMX receipt.
 
 ## IP-path diagnosis
 
