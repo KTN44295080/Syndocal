@@ -405,7 +405,7 @@ const f3200aLaserMode34Attributes = [
   e("Generic: Projection Range Control"),
 ];
 
-const wristbandAttributes = (segments: number) =>
+const rf433RemoteControllerAttributes = (segments: number) =>
   Array.from({ length: segments }, (_, segmentIndex) => {
     const suffix = segmentIndex === 0 ? "" : segmentIndex + 1;
     return [
@@ -415,6 +415,8 @@ const wristbandAttributes = (segments: number) =>
       e(`ColorAdd_B${suffix}`),
     ];
   }).flat();
+
+const rf433RemoteControllerSource = "Daslight ScanLibrary channel map recovered from the supplied RF433 remote-controller profile";
 
 const soundWavesManualSource = "User-supplied 960 sound waves strongpoint hardware manual channel map";
 const daslightSource = (sourceFile: string) => `Daslight ScanLibrary channel map recovered from ${sourceFile}`;
@@ -508,33 +510,33 @@ export const personalRigProfiles: VerifiedFixtureProfileSummary[] = [
   ),
   personalRigProfile(
     "personal-wristband-4ch",
-    "wristband",
-    "wristband",
+    "RF433 Remote Controller",
+    "RF433 Remote Controller",
     "Mode 1 · 4-channel",
     4,
-    daslightSource("wristband.ssl2"),
+    rf433RemoteControllerSource,
     false,
-    wristbandAttributes(1),
+    rf433RemoteControllerAttributes(1),
   ),
   personalRigProfile(
     "personal-wristband-8ch",
-    "wristband",
-    "wristband",
+    "RF433 Remote Controller",
+    "RF433 Remote Controller",
     "Mode 2 · 8-channel",
     8,
-    daslightSource("wristband.ssl2"),
+    rf433RemoteControllerSource,
     false,
-    wristbandAttributes(2),
+    rf433RemoteControllerAttributes(2),
   ),
   personalRigProfile(
     "personal-wristband-12ch",
-    "wristband",
-    "wristband",
+    "RF433 Remote Controller",
+    "RF433 Remote Controller",
     "Mode 3 · 12-channel",
     12,
-    daslightSource("wristband.ssl2"),
+    rf433RemoteControllerSource,
     true,
-    wristbandAttributes(3),
+    rf433RemoteControllerAttributes(3),
   ),
 ];
 

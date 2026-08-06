@@ -82,10 +82,11 @@ assert.deepEqual(
     "960 sound waves strongpoint": 11,
     "Mini Moving Head Gobo Light": 2,
     "F3200A Laser": 2,
-    wristband: 3,
+    "RF433 Remote Controller": 3,
   },
 );
 assert.equal(new Set(catalog.personalRigProfiles.map((entry) => entry.id)).size, 18);
+assert.equal(catalog.personalRigProfiles.some((entry) => [entry.fixture_family, entry.name, entry.description].some((value) => value.toLowerCase().includes("wristband"))), false);
 assert.equal(catalog.personalRigProfiles.filter((entry) => entry.description.includes("deployed in DSF2026.dvc")).length, 4);
 assert.equal(catalog.personalRigProfiles.filter((entry) => entry.description.includes("hardware manual channel map")).length, 11);
 assert.deepEqual(
@@ -161,4 +162,4 @@ assert.doesNotMatch(
 assert.match(tauriSource, /fixture_profile_repair_layout_matches/, "repair must compare the exact DMX layout");
 assert.match(tauriSource, /\?rid=\{rid\}[\s\S]*?downloadFile\.php/, "Share downloads must use the public revision-ID GET contract");
 
-console.log("fixture catalog helpers: 61 assertions passed");
+console.log("fixture catalog helpers: 62 assertions passed");
