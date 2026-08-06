@@ -72,6 +72,53 @@ assert.deepEqual(catalog.verifiedFixtureProfileRequest("university-mega-bar-rgba
 ]);
 assert.equal(catalog.verifiedFixtureProfileRequest("university-saber-spot-rgbw-programs-fine-12ch")?.attributes.at(-1), "Dimmer2@12:8");
 
+assert.equal(catalog.personalRigFixtureCount, 4);
+assert.equal(catalog.personalRigModeCount, 7);
+assert.equal(catalog.personalRigProfiles.length, 7);
+assert.deepEqual(
+  Object.fromEntries([...new Set(catalog.personalRigProfiles.map((entry) => entry.fixture_family))]
+    .map((fixture) => [fixture, catalog.personalRigProfiles.filter((entry) => entry.fixture_family === fixture).length])),
+  {
+    "960 sound waves strongpoint": 1,
+    "Mini Moving Head Gobo Light": 1,
+    "F3200A Laser": 2,
+    wristband: 3,
+  },
+);
+assert.equal(new Set(catalog.personalRigProfiles.map((entry) => entry.id)).size, 7);
+assert.equal(catalog.personalRigProfiles.filter((entry) => entry.description.includes("deployed in DSF2026.dvc")).length, 4);
+assert.deepEqual(catalog.verifiedFixtureProfileRequest("personal-960-sound-waves-strongpoint-13ch")?.attributes, [
+  "Dimmer@1:8",
+  "ColorAdd_R@2:8", "ColorAdd_G@3:8", "ColorAdd_B@4:8",
+  "ColorAdd_R2@5:8", "ColorAdd_G2@6:8", "ColorAdd_B2@7:8",
+  "ColorAdd_R3@8:8", "ColorAdd_G3@9:8", "ColorAdd_B3@10:8",
+  "ColorAdd_R4@11:8", "ColorAdd_G4@12:8", "ColorAdd_B4@13:8",
+]);
+assert.deepEqual(catalog.verifiedFixtureProfileRequest("personal-mini-moving-head-gobo-light-10ch")?.attributes, [
+  "Pan@1:8", "Tilt@2:8", "Color1@3:8", "Gobo1@4:8", "Shutter1@5:8",
+  "Dimmer@6:8", "PanTiltSpeed@7:8", "Generic: Other@8:8", "Generic: Other 2@9:8", "Generic: Other 3@10:8",
+]);
+assert.deepEqual(catalog.verifiedFixtureProfileRequest("personal-f3200a-laser-6ch")?.attributes, [
+  "Generic: Light Off/On@1:8",
+  "Generic: Movement Sound/Auto Control@2:8",
+  "Generic: Effect Library Selection@3:8",
+  "Generic: Scene Selection@4:8",
+  "Generic: Color Selection@5:8",
+  "Generic: Movement Speed@6:8",
+]);
+assert.equal(catalog.verifiedFixtureProfileRequest("personal-f3200a-laser-34ch")?.attributes.length, 34);
+assert.deepEqual(catalog.verifiedFixtureProfileRequest("personal-f3200a-laser-34ch")?.attributes.slice(-3), [
+  "Generic: Gradual Drawing Control 2@32:8",
+  "Generic: Pattern Distortion Effect's Miscellaneous Function Control 2@33:8",
+  "Generic: Projection Range Control@34:8",
+]);
+assert.deepEqual(catalog.verifiedFixtureProfileRequest("personal-wristband-8ch")?.attributes, [
+  "Shutter1@1:8", "ColorAdd_R@2:8", "ColorAdd_G@3:8", "ColorAdd_B@4:8",
+  "Shutter2@5:8", "ColorAdd_R2@6:8", "ColorAdd_G2@7:8", "ColorAdd_B2@8:8",
+]);
+assert.equal(catalog.verifiedFixtureProfileCount, 107);
+assert.equal(catalog.verifiedFixtureCategoryCount, 8);
+
 assert.match(componentSource, /type="password"[\s\S]*?autocomplete="off"/, "credentials must remain an in-memory input");
 assert.doesNotMatch(componentSource, /localStorage[\s\S]*?(user|password)|(user|password)[\s\S]*?localStorage/i, "credentials must not be persisted by the component");
 assert.match(componentSource, /search_gdtf_share/, "online catalog must use the structured Share command");
@@ -91,4 +138,4 @@ assert.doesNotMatch(
 assert.match(tauriSource, /fixture_profile_repair_layout_matches/, "repair must compare the exact DMX layout");
 assert.match(tauriSource, /\?rid=\{rid\}[\s\S]*?downloadFile\.php/, "Share downloads must use the public revision-ID GET contract");
 
-console.log("fixture catalog helpers: 41 assertions passed");
+console.log("fixture catalog helpers: 55 assertions passed");

@@ -8,8 +8,8 @@ import { inflateSync } from "node:zlib";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
-const verifiedGenericProfileCount = 100;
-const verifiedGenericCategoryProfileCounts = [40, 20, 12, 13, 5, 3, 7];
+const verifiedGenericProfileCount = 107;
+const verifiedGenericCategoryProfileCounts = [40, 7, 20, 12, 13, 5, 3, 7];
 const verifiedGenericCategoryCount = verifiedGenericCategoryProfileCounts.length;
 const verifiedGenericFirstProfileFavoriteKey = "verified:par-direct-rgb-3ch";
 const largeShowMode = process.argv.includes("--large-show");

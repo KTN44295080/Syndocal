@@ -1722,8 +1722,11 @@ const japaneseText: Record<string, string> = {
   "University rig": "大学リグ",
   "Official-manual channel maps for the university's eight primary fixtures, with every documented DMX mode.":
     "大学で主に使う8灯体について、公式マニュアルに記載された全DMXモードのチャンネルマップです。",
-  "University fixture modes are manual-verified. Confirm the fixture manual before using the generic common-rig layouts.":
-    "大学灯体の各モードはマニュアル照合済みです。汎用標準リグのレイアウトを使う場合は灯体マニュアルも確認してください。",
+  "Personal rig": "私物リグ",
+  "Source-matched channel maps for the four user-owned fixtures supplied as Daslight ScanLibrary files, including every embedded mode.":
+    "Daslight ScanLibraryファイルとして提供された私物4灯体について、収録されている全モードを元データに照合したチャンネルマップです。",
+  "University fixture modes are manual-verified, and personal fixture modes are matched to the supplied Daslight files. Confirm the fixture manual before using generic common-rig layouts.":
+    "大学灯体はマニュアル照合済み、私物灯体は提供されたDaslightファイルと照合済みです。汎用標準リグのレイアウトを使う場合は灯体マニュアルも確認してください。",
   Verified: "検証済み",
   Profile: "プロファイル",
   profiles: "プロファイル",

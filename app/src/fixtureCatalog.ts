@@ -82,7 +82,7 @@ export interface VerifiedFixtureProfileSummary {
   attributes: readonly VerifiedFixtureAttributeDefinition[];
 }
 
-export type VerifiedFixtureCategory = "university-rig" | "par-wash" | "moving-heads" | "led-bars-pixel" | "dimmers" | "strobe" | "effects";
+export type VerifiedFixtureCategory = "university-rig" | "personal-rig" | "par-wash" | "moving-heads" | "led-bars-pixel" | "dimmers" | "strobe" | "effects";
 
 export interface VerifiedFixtureAttributeDefinition {
   attribute: string;
@@ -100,6 +100,11 @@ const verifiedFixtureCategories: readonly VerifiedFixtureCategoryDefinition[] = 
     id: "university-rig",
     name: "University rig",
     description: "Official-manual channel maps for the university's eight primary fixtures, with every documented DMX mode.",
+  },
+  {
+    id: "personal-rig",
+    name: "Personal rig",
+    description: "Source-matched channel maps for the four user-owned fixtures supplied as Daslight ScanLibrary files, including every embedded mode.",
   },
   { id: "par-wash", name: "PAR / Wash", description: "Additive color layouts for budget PAR cans and wash lights." },
   { id: "moving-heads", name: "Moving heads", description: "Common RGBW wash and spot channel layouts with position and optics controls." },
@@ -201,6 +206,39 @@ const universityRigProfile = (
     footprint,
     description: `Official-manual channel map · ${footprint}ch. Every documented mode for this fixture is included in the university rig pack.`,
     manual_url: manualUrl,
+    attributes,
+  };
+};
+
+const personalRigProfile = (
+  id: string,
+  fixtureFamily: string,
+  name: string,
+  modeName: string,
+  expectedFootprint: number,
+  sourceFile: string,
+  deployedInDsf2026: boolean,
+  attributes: readonly VerifiedFixtureAttributeDefinition[],
+): VerifiedFixtureProfileSummary => {
+  const definition = categoryDefinition("personal-rig");
+  const footprint = attributes.reduce(
+    (total, candidate) => total + (candidate.resolution === "SixteenBit" ? 2 : 1),
+    0,
+  );
+  if (footprint !== expectedFootprint) {
+    throw new Error(`Personal rig profile ${id} expected ${expectedFootprint}ch but defines ${footprint}ch`);
+  }
+  return {
+    id,
+    manufacturer: "User Library",
+    category: "personal-rig",
+    category_name: definition.name,
+    category_description: definition.description,
+    fixture_family: fixtureFamily,
+    name,
+    mode_name: modeName,
+    footprint,
+    description: `Daslight ScanLibrary channel map recovered from ${sourceFile} · ${footprint}ch.${deployedInDsf2026 ? " This mode is deployed in DSF2026.dvc." : ""}`,
     attributes,
   };
 };
@@ -321,6 +359,149 @@ if (new Set(universityRigProfiles.map((entry) => entry.fixture_family)).size !==
   throw new Error(`University rig pack must contain ${universityRigFixtureCount} fixture families`);
 }
 
+const f3200aLaserMode6Attributes = [
+  e("Generic: Light Off/On"),
+  e("Generic: Movement Sound/Auto Control"),
+  e("Generic: Effect Library Selection"),
+  e("Generic: Scene Selection"),
+  e("Generic: Color Selection"),
+  e("Generic: Movement Speed"),
+];
+
+const f3200aLaserMode34Attributes = [
+  e("Generic: Pattern 1 Off/On"),
+  e("Generic: Pattern Size 1"),
+  e("Generic: Effect Library Selection 1"),
+  e("Generic: Pattern Selection 1"),
+  e("Generic: Pattern Zoom 1"),
+  e("Generic: Pattern Rotation 1"),
+  e("Generic: Horizontal Movement 1"),
+  e("Generic: Vertical Movement 1"),
+  e("Generic: Horizontal Zoom 1"),
+  e("Generic: Vertical Zoom 1"),
+  e("Generic: Compulsive Section Color 1"),
+  e("Generic: Color Selection 1"),
+  e("Generic: Dots/Dots Disconnection Control 1"),
+  e("Generic: Miscellaneous Function 1"),
+  e("Generic: Gradual Drawing Control 1"),
+  e("Generic: Pattern Distortion Effect's Miscellaneous Function Control 1"),
+  e("Generic: Grating Gobo Selection"),
+  e("Generic: Pattern 2 Off/On"),
+  e("Generic: Pattern Size 2"),
+  e("Generic: Array Each Unit's Divergent Angle"),
+  e("Generic: Pattern Selection 2"),
+  e("Generic: Pattern Zoom 2"),
+  e("Generic: Pattern Rotation 2"),
+  e("Generic: Horizontal Movement 2"),
+  e("Generic: Vertical Movement 2"),
+  e("Generic: Horizontal Zoom 2"),
+  e("Generic: Vertical Zoom 2"),
+  e("Generic: Compulsive Section Color 2"),
+  e("Generic: Color Selection 2"),
+  e("Generic: Dots/Dots Disconnection Control 2"),
+  e("Generic: Miscellaneous Function 2"),
+  e("Generic: Gradual Drawing Control 2"),
+  e("Generic: Pattern Distortion Effect's Miscellaneous Function Control 2"),
+  e("Generic: Projection Range Control"),
+];
+
+const wristbandAttributes = (segments: number) =>
+  Array.from({ length: segments }, (_, segmentIndex) => {
+    const suffix = segmentIndex === 0 ? "" : segmentIndex + 1;
+    return [
+      e(`Shutter${segmentIndex + 1}`),
+      e(`ColorAdd_R${suffix}`),
+      e(`ColorAdd_G${suffix}`),
+      e(`ColorAdd_B${suffix}`),
+    ];
+  }).flat();
+
+export const personalRigProfiles: VerifiedFixtureProfileSummary[] = [
+  personalRigProfile(
+    "personal-960-sound-waves-strongpoint-13ch",
+    "960 sound waves strongpoint",
+    "960 sound waves strongpoint",
+    "Mode 1 · 13-channel",
+    13,
+    "960 sound waves strongpoint.ssl2",
+    true,
+    [d, ...rgbAttributes(4)],
+  ),
+  personalRigProfile(
+    "personal-mini-moving-head-gobo-light-10ch",
+    "Mini Moving Head Gobo Light",
+    "Mini Moving Head Gobo Light",
+    "Mode 1 · 10-channel",
+    10,
+    "Mini Moving Head Gobo Light.ssl2",
+    true,
+    [
+      e("Pan"), e("Tilt"), e("Color1"), e("Gobo1"), shutter,
+      d, e("PanTiltSpeed"), e("Generic: Other"), e("Generic: Other 2"), e("Generic: Other 3"),
+    ],
+  ),
+  personalRigProfile(
+    "personal-f3200a-laser-6ch",
+    "F3200A Laser",
+    "F3200A Laser",
+    "Mode 1 · 6-channel",
+    6,
+    "F3200A Laser (2).ssl2",
+    false,
+    f3200aLaserMode6Attributes,
+  ),
+  personalRigProfile(
+    "personal-f3200a-laser-34ch",
+    "F3200A Laser",
+    "F3200A Laser",
+    "Mode 2 · 34-channel",
+    34,
+    "F3200A Laser (2).ssl2",
+    true,
+    f3200aLaserMode34Attributes,
+  ),
+  personalRigProfile(
+    "personal-wristband-4ch",
+    "wristband",
+    "wristband",
+    "Mode 1 · 4-channel",
+    4,
+    "wristband.ssl2",
+    false,
+    wristbandAttributes(1),
+  ),
+  personalRigProfile(
+    "personal-wristband-8ch",
+    "wristband",
+    "wristband",
+    "Mode 2 · 8-channel",
+    8,
+    "wristband.ssl2",
+    false,
+    wristbandAttributes(2),
+  ),
+  personalRigProfile(
+    "personal-wristband-12ch",
+    "wristband",
+    "wristband",
+    "Mode 3 · 12-channel",
+    12,
+    "wristband.ssl2",
+    true,
+    wristbandAttributes(3),
+  ),
+];
+
+export const personalRigFixtureCount = 4;
+export const personalRigModeCount = 7;
+
+if (personalRigProfiles.length !== personalRigModeCount) {
+  throw new Error(`Personal rig pack must contain ${personalRigModeCount} modes`);
+}
+if (new Set(personalRigProfiles.map((entry) => entry.fixture_family)).size !== personalRigFixtureCount) {
+  throw new Error(`Personal rig pack must contain ${personalRigFixtureCount} fixture families`);
+}
+
 const genericVerifiedProfiles: VerifiedFixtureProfileSummary[] = [
   // PAR / Wash — direct color, dimmer-first, dimmer-last, and strobe-extended conventions.
   verifiedProfile("par-wash", "par-direct-rgb-3ch", "Direct Color PAR / Wash", "Generic Direct RGB PAR 3ch", "RGB · 3ch", 3, "R → G → B", [color.r, color.g, color.b]),
@@ -397,11 +578,12 @@ const genericVerifiedProfiles: VerifiedFixtureProfileSummary[] = [
 
 export const previewVerifiedProfiles: VerifiedFixtureProfileSummary[] = [
   ...universityRigProfiles,
+  ...personalRigProfiles,
   ...genericVerifiedProfiles,
 ];
 
-export const verifiedFixtureProfileCount = 100;
-export const verifiedFixtureCategoryCount = 7;
+export const verifiedFixtureProfileCount = 107;
+export const verifiedFixtureCategoryCount = 8;
 
 if (previewVerifiedProfiles.length !== verifiedFixtureProfileCount) {
   throw new Error(`Verified fixture pack must contain ${verifiedFixtureProfileCount} profiles`);
