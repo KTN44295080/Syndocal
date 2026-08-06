@@ -8,8 +8,8 @@ import { inflateSync } from "node:zlib";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
-const verifiedGenericProfileCount = 107;
-const verifiedGenericCategoryProfileCounts = [40, 7, 20, 12, 13, 5, 3, 7];
+const verifiedGenericProfileCount = 117;
+const verifiedGenericCategoryProfileCounts = [40, 17, 20, 12, 13, 5, 3, 7];
 const verifiedGenericCategoryCount = verifiedGenericCategoryProfileCounts.length;
 const verifiedGenericFirstProfileFavoriteKey = "verified:par-direct-rgb-3ch";
 const largeShowMode = process.argv.includes("--large-show");
@@ -12794,15 +12794,15 @@ async function checkPatchZoning(client) {
       initial.cacheManufacturerExpandedValues.every((value) => value === "false"),
     footprintFilterIsExactAndSearchAutoExpands:
       footprintFiltered.footprintFilterValue === "25" &&
-      footprintFiltered.verifiedSectionCountText === "2" &&
-      JSON.stringify(footprintFiltered.verifiedCategoryProfileCounts) === JSON.stringify([2]) &&
-      footprintFiltered.verifiedCategoryExpandedValues.length === 1 &&
+      footprintFiltered.verifiedSectionCountText === "3" &&
+      JSON.stringify(footprintFiltered.verifiedCategoryProfileCounts) === JSON.stringify([1, 2]) &&
+      footprintFiltered.verifiedCategoryExpandedValues.length === 2 &&
       footprintFiltered.verifiedCategoryExpandedValues.every((value) => value === "true") &&
       footprintFiltered.verifiedFixtureExpandedValues.every((value) => value === "true") &&
-      footprintFiltered.verifiedProfileRowCount === 2 &&
-      JSON.stringify(footprintFiltered.verifiedProfileFootprints) === JSON.stringify([25, 25]) &&
+      footprintFiltered.verifiedProfileRowCount === 3 &&
+      JSON.stringify(footprintFiltered.verifiedProfileFootprints) === JSON.stringify([25, 25, 25]) &&
       footprintFiltered.verifiedSingleModeProfileRowCount === 1 &&
-      footprintFiltered.verifiedModeProfileRowCount === 1,
+      footprintFiltered.verifiedModeProfileRowCount === 2,
     clearedSearchRecollapsesVerifiedCategories:
       searchCleared.footprintFilterValue === "" &&
       searchCleared.verifiedSectionCountText === String(verifiedGenericProfileCount) &&
@@ -14860,14 +14860,14 @@ async function runPatchEmptyStateViewport(client, viewport) {
       metrics.bundledAttributionText.includes('18cf9da'),
     footprintFilterIsExactAndAutoExpands:
       footprintFilterMetrics.filterValue === '25' &&
-      footprintFilterMetrics.sectionCountText === '2' &&
-      JSON.stringify(footprintFilterMetrics.categoryProfileCounts) === JSON.stringify([2]) &&
-      footprintFilterMetrics.categoryExpandedValues.length === 1 &&
+      footprintFilterMetrics.sectionCountText === '3' &&
+      JSON.stringify(footprintFilterMetrics.categoryProfileCounts) === JSON.stringify([1, 2]) &&
+      footprintFilterMetrics.categoryExpandedValues.length === 2 &&
       footprintFilterMetrics.categoryExpandedValues.every((value) => value === 'true') &&
       footprintFilterMetrics.fixtureExpandedValues.every((value) => value === 'true') &&
-      JSON.stringify(footprintFilterMetrics.rowFootprints) === JSON.stringify([25, 25]) &&
+      JSON.stringify(footprintFilterMetrics.rowFootprints) === JSON.stringify([25, 25, 25]) &&
       footprintFilterMetrics.singleModeRows === 1 &&
-      footprintFilterMetrics.modeRows === 1,
+      footprintFilterMetrics.modeRows === 2,
     qlcSupplementSearchShowsProvenanceAndFailsClosedWithoutBackend:
       qlcSupplementMetrics.rowCount === 1 &&
       qlcSupplementMetrics.modeKeys.every((key) => key?.startsWith('bundled:qlc:')) &&
@@ -14888,7 +14888,7 @@ async function runPatchEmptyStateViewport(client, viewport) {
       universityRigSearchMetrics.disabledValues.every((value) => value === true) &&
       universityRigSearchMetrics.draggableValues.every((value) => value === 'true'),
     compactProfileRows:
-      footprintFilterMetrics.rowHeights?.length === 2 &&
+      footprintFilterMetrics.rowHeights?.length === 3 &&
       footprintFilterMetrics.rowHeights.every((height) => height >= 24 && height <= 28),
     clearedSearchRecollapsesVerifiedCategories:
       clearedVerifiedTree.filterValue === '' &&

@@ -73,20 +73,35 @@ assert.deepEqual(catalog.verifiedFixtureProfileRequest("university-mega-bar-rgba
 assert.equal(catalog.verifiedFixtureProfileRequest("university-saber-spot-rgbw-programs-fine-12ch")?.attributes.at(-1), "Dimmer2@12:8");
 
 assert.equal(catalog.personalRigFixtureCount, 4);
-assert.equal(catalog.personalRigModeCount, 7);
-assert.equal(catalog.personalRigProfiles.length, 7);
+assert.equal(catalog.personalRigModeCount, 17);
+assert.equal(catalog.personalRigProfiles.length, 17);
 assert.deepEqual(
   Object.fromEntries([...new Set(catalog.personalRigProfiles.map((entry) => entry.fixture_family))]
     .map((fixture) => [fixture, catalog.personalRigProfiles.filter((entry) => entry.fixture_family === fixture).length])),
   {
-    "960 sound waves strongpoint": 1,
+    "960 sound waves strongpoint": 11,
     "Mini Moving Head Gobo Light": 1,
     "F3200A Laser": 2,
     wristband: 3,
   },
 );
-assert.equal(new Set(catalog.personalRigProfiles.map((entry) => entry.id)).size, 7);
+assert.equal(new Set(catalog.personalRigProfiles.map((entry) => entry.id)).size, 17);
 assert.equal(catalog.personalRigProfiles.filter((entry) => entry.description.includes("deployed in DSF2026.dvc")).length, 4);
+assert.equal(catalog.personalRigProfiles.filter((entry) => entry.description.includes("hardware manual channel map")).length, 11);
+assert.deepEqual(
+  catalog.personalRigProfiles
+    .filter((entry) => entry.fixture_family === "960 sound waves strongpoint")
+    .map((entry) => entry.footprint),
+  [3, 4, 8, 12, 13, 24, 25, 60, 61, 120, 121],
+);
+assert.deepEqual(catalog.verifiedFixtureProfileRequest("personal-960-sound-waves-strongpoint-8ch")?.attributes, [
+  "Dimmer@1:8",
+  "Shutter1@2:8",
+  "Generic: Effect / Voice Mode@3:8",
+  "Generic: Effect Speed / Voice Sensitivity@4:8",
+  "Color1@5:8",
+  "ColorAdd_R@6:8", "ColorAdd_G@7:8", "ColorAdd_B@8:8",
+]);
 assert.deepEqual(catalog.verifiedFixtureProfileRequest("personal-960-sound-waves-strongpoint-13ch")?.attributes, [
   "Dimmer@1:8",
   "ColorAdd_R@2:8", "ColorAdd_G@3:8", "ColorAdd_B@4:8",
@@ -94,6 +109,8 @@ assert.deepEqual(catalog.verifiedFixtureProfileRequest("personal-960-sound-waves
   "ColorAdd_R3@8:8", "ColorAdd_G3@9:8", "ColorAdd_B3@10:8",
   "ColorAdd_R4@11:8", "ColorAdd_G4@12:8", "ColorAdd_B4@13:8",
 ]);
+assert.equal(catalog.verifiedFixtureProfileRequest("personal-960-sound-waves-strongpoint-121ch")?.attributes.length, 121);
+assert.equal(catalog.verifiedFixtureProfileRequest("personal-960-sound-waves-strongpoint-121ch")?.attributes.at(-1), "ColorAdd_B40@121:8");
 assert.deepEqual(catalog.verifiedFixtureProfileRequest("personal-mini-moving-head-gobo-light-10ch")?.attributes, [
   "Pan@1:8", "Tilt@2:8", "Color1@3:8", "Gobo1@4:8", "Shutter1@5:8",
   "Dimmer@6:8", "PanTiltSpeed@7:8", "Generic: Other@8:8", "Generic: Other 2@9:8", "Generic: Other 3@10:8",
@@ -116,7 +133,7 @@ assert.deepEqual(catalog.verifiedFixtureProfileRequest("personal-wristband-8ch")
   "Shutter1@1:8", "ColorAdd_R@2:8", "ColorAdd_G@3:8", "ColorAdd_B@4:8",
   "Shutter2@5:8", "ColorAdd_R2@6:8", "ColorAdd_G2@7:8", "ColorAdd_B2@8:8",
 ]);
-assert.equal(catalog.verifiedFixtureProfileCount, 107);
+assert.equal(catalog.verifiedFixtureProfileCount, 117);
 assert.equal(catalog.verifiedFixtureCategoryCount, 8);
 
 assert.match(componentSource, /type="password"[\s\S]*?autocomplete="off"/, "credentials must remain an in-memory input");
@@ -138,4 +155,4 @@ assert.doesNotMatch(
 assert.match(tauriSource, /fixture_profile_repair_layout_matches/, "repair must compare the exact DMX layout");
 assert.match(tauriSource, /\?rid=\{rid\}[\s\S]*?downloadFile\.php/, "Share downloads must use the public revision-ID GET contract");
 
-console.log("fixture catalog helpers: 55 assertions passed");
+console.log("fixture catalog helpers: 60 assertions passed");

@@ -357,7 +357,7 @@ export function FixtureCatalogPanel(props: FixtureCatalogPanelProps) {
 
       <section class="fixtureCatalogSection verified">
         <header><strong>Verified fixture packs</strong><span>{visibleVerified().length}</span></header>
-        <p>University fixture modes are manual-verified, and personal fixture modes are matched to the supplied Daslight files. Confirm the fixture manual before using generic common-rig layouts.</p>
+        <p>University fixture modes are manual-verified, and personal fixture modes are matched to the supplied Daslight files and manual pages. Confirm the fixture manual before using generic common-rig layouts.</p>
         <div class="fixtureVerifiedGrid">
           <For each={visibleVerified()}>
             {(entry) => {

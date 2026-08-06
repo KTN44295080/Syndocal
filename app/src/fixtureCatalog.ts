@@ -104,7 +104,7 @@ const verifiedFixtureCategories: readonly VerifiedFixtureCategoryDefinition[] = 
   {
     id: "personal-rig",
     name: "Personal rig",
-    description: "Source-matched channel maps for the four user-owned fixtures supplied as Daslight ScanLibrary files, including every embedded mode.",
+    description: "Source-matched channel maps for the four user-owned fixtures supplied via Daslight files and hardware manuals, including every documented or embedded mode.",
   },
   { id: "par-wash", name: "PAR / Wash", description: "Additive color layouts for budget PAR cans and wash lights." },
   { id: "moving-heads", name: "Moving heads", description: "Common RGBW wash and spot channel layouts with position and optics controls." },
@@ -216,7 +216,7 @@ const personalRigProfile = (
   name: string,
   modeName: string,
   expectedFootprint: number,
-  sourceFile: string,
+  sourceDescription: string,
   deployedInDsf2026: boolean,
   attributes: readonly VerifiedFixtureAttributeDefinition[],
 ): VerifiedFixtureProfileSummary => {
@@ -238,7 +238,7 @@ const personalRigProfile = (
     name,
     mode_name: modeName,
     footprint,
-    description: `Daslight ScanLibrary channel map recovered from ${sourceFile} · ${footprint}ch.${deployedInDsf2026 ? " This mode is deployed in DSF2026.dvc." : ""}`,
+    description: `${sourceDescription} · ${footprint}ch.${deployedInDsf2026 ? " This mode is deployed in DSF2026.dvc." : ""}`,
     attributes,
   };
 };
@@ -416,24 +416,55 @@ const wristbandAttributes = (segments: number) =>
     ];
   }).flat();
 
+const soundWavesManualSource = "User-supplied 960 sound waves strongpoint hardware manual channel map";
+const daslightSource = (sourceFile: string) => `Daslight ScanLibrary channel map recovered from ${sourceFile}`;
+
+const soundWavesProfile = (
+  footprint: number,
+  modeName: string,
+  deployedInDsf2026: boolean,
+  attributes: readonly VerifiedFixtureAttributeDefinition[],
+) => personalRigProfile(
+  `personal-960-sound-waves-strongpoint-${footprint}ch`,
+  "960 sound waves strongpoint",
+  "960 sound waves strongpoint",
+  modeName,
+  footprint,
+  soundWavesManualSource,
+  deployedInDsf2026,
+  attributes,
+);
+
+const soundWavesProfiles: VerifiedFixtureProfileSummary[] = [
+  soundWavesProfile(3, "3-channel · RGB", false, rgbAttributes(1)),
+  soundWavesProfile(4, "4-channel · master + RGB", false, [d, ...rgbAttributes(1)]),
+  soundWavesProfile(8, "8-channel · programs", false, [
+    d,
+    shutter,
+    e("Generic: Effect / Voice Mode"),
+    e("Generic: Effect Speed / Voice Sensitivity"),
+    e("Color1"),
+    ...rgbAttributes(1),
+  ]),
+  soundWavesProfile(12, "12-channel · 4 blocks", false, rgbAttributes(4)),
+  soundWavesProfile(13, "13-channel · master + 4 blocks", true, [d, ...rgbAttributes(4)]),
+  soundWavesProfile(24, "24-channel · 8 blocks", false, rgbAttributes(8)),
+  soundWavesProfile(25, "25-channel · master + 8 blocks", false, [d, ...rgbAttributes(8)]),
+  soundWavesProfile(60, "60-channel · 20 groups", false, rgbAttributes(20)),
+  soundWavesProfile(61, "61-channel · master + 20 groups", false, [d, ...rgbAttributes(20)]),
+  soundWavesProfile(120, "120-channel · 40 groups", false, rgbAttributes(40)),
+  soundWavesProfile(121, "121-channel · master + 40 groups", false, [d, ...rgbAttributes(40)]),
+];
+
 export const personalRigProfiles: VerifiedFixtureProfileSummary[] = [
-  personalRigProfile(
-    "personal-960-sound-waves-strongpoint-13ch",
-    "960 sound waves strongpoint",
-    "960 sound waves strongpoint",
-    "Mode 1 · 13-channel",
-    13,
-    "960 sound waves strongpoint.ssl2",
-    true,
-    [d, ...rgbAttributes(4)],
-  ),
+  ...soundWavesProfiles,
   personalRigProfile(
     "personal-mini-moving-head-gobo-light-10ch",
     "Mini Moving Head Gobo Light",
     "Mini Moving Head Gobo Light",
     "Mode 1 · 10-channel",
     10,
-    "Mini Moving Head Gobo Light.ssl2",
+    daslightSource("Mini Moving Head Gobo Light.ssl2"),
     true,
     [
       e("Pan"), e("Tilt"), e("Color1"), e("Gobo1"), shutter,
@@ -446,7 +477,7 @@ export const personalRigProfiles: VerifiedFixtureProfileSummary[] = [
     "F3200A Laser",
     "Mode 1 · 6-channel",
     6,
-    "F3200A Laser (2).ssl2",
+    daslightSource("F3200A Laser (2).ssl2"),
     false,
     f3200aLaserMode6Attributes,
   ),
@@ -456,7 +487,7 @@ export const personalRigProfiles: VerifiedFixtureProfileSummary[] = [
     "F3200A Laser",
     "Mode 2 · 34-channel",
     34,
-    "F3200A Laser (2).ssl2",
+    daslightSource("F3200A Laser (2).ssl2"),
     true,
     f3200aLaserMode34Attributes,
   ),
@@ -466,7 +497,7 @@ export const personalRigProfiles: VerifiedFixtureProfileSummary[] = [
     "wristband",
     "Mode 1 · 4-channel",
     4,
-    "wristband.ssl2",
+    daslightSource("wristband.ssl2"),
     false,
     wristbandAttributes(1),
   ),
@@ -476,7 +507,7 @@ export const personalRigProfiles: VerifiedFixtureProfileSummary[] = [
     "wristband",
     "Mode 2 · 8-channel",
     8,
-    "wristband.ssl2",
+    daslightSource("wristband.ssl2"),
     false,
     wristbandAttributes(2),
   ),
@@ -486,14 +517,14 @@ export const personalRigProfiles: VerifiedFixtureProfileSummary[] = [
     "wristband",
     "Mode 3 · 12-channel",
     12,
-    "wristband.ssl2",
+    daslightSource("wristband.ssl2"),
     true,
     wristbandAttributes(3),
   ),
 ];
 
 export const personalRigFixtureCount = 4;
-export const personalRigModeCount = 7;
+export const personalRigModeCount = 17;
 
 if (personalRigProfiles.length !== personalRigModeCount) {
   throw new Error(`Personal rig pack must contain ${personalRigModeCount} modes`);
@@ -582,7 +613,7 @@ export const previewVerifiedProfiles: VerifiedFixtureProfileSummary[] = [
   ...genericVerifiedProfiles,
 ];
 
-export const verifiedFixtureProfileCount = 107;
+export const verifiedFixtureProfileCount = 117;
 export const verifiedFixtureCategoryCount = 8;
 
 if (previewVerifiedProfiles.length !== verifiedFixtureProfileCount) {
