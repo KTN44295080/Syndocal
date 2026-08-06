@@ -49,6 +49,27 @@ download, on first launch.
 
 The bundled data is a lossy conversion: each mode is reduced to its ordered
 DMX attribute layout (the same representation Syndocal uses for its own custom
-profiles). Capability ranges, wheel slot media, and physical data are not
-carried over - operators who need the full definition download the
-manufacturer's GDTF from GDTF Share.
+profiles). Matrix channel insert blocks are expanded before conversion.
+Capability ranges, wheel slot media, and physical data are not carried over -
+operators who need the full definition download the manufacturer's GDTF from
+GDTF Share.
+
+## Q Light Controller Plus fixture definitions (bundled fixture profiles)
+
+Syndocal also bundles a converted snapshot of QLC+'s fixture definitions as a
+supplemental offline source. Open Fixture Library has higher precedence: exact
+normalized manufacturer/model conflicts are omitted from the QLC+ bundle and
+recorded in its conversion audit.
+
+- Source: https://github.com/mcallegari/qlcplus
+- Snapshot revision: `18cf9da9934e5ea0b5026dd43b0f48be1e5b9550` (recorded in the
+  bundle's `sourceRevision` field; regenerate after the OFL bundle with
+  `node scripts/build-qlc-library.mjs <checkout> <sha>`)
+- License: Apache-2.0
+- Copyright QLC+ contributors and fixture definition authors
+- License text: `licenses/qlcplus-Apache-2.0.txt`
+
+This is the same lossy ordered-DMX-layout conversion described above. Adjacent
+coarse/fine pairs are represented as 16-bit controls; unrecognized channel
+semantics remain addressable as numbered generic controls so the source mode's
+DMX footprint is preserved exactly.

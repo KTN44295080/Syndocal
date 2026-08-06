@@ -13,6 +13,7 @@ export interface GdtfProfileTreeFixture {
   manufacturer: string;
   fixture: string;
   revision: string;
+  provenance?: string;
   modeCount: number;
   modes: GdtfProfileTreeMode[];
   manufacturerDescription?: string;
@@ -305,6 +306,9 @@ export function GdtfProfileTree(props: GdtfProfileTreeProps) {
                                       <Show when={fixture.revision}>
                                         <i><span>Rev.</span>{" "}<span data-no-localize>{fixture.revision}</span></i>
                                       </Show>
+                                      <Show when={fixture.provenance}>
+                                        <i data-profile-provenance data-no-localize>{fixture.provenance}</i>
+                                      </Show>
                                     </>
                                   )}>
                                     <i>Downloading…</i>
@@ -337,6 +341,9 @@ export function GdtfProfileTree(props: GdtfProfileTreeProps) {
                                 {fixture.modeCount === 1 ? "Mode" : "Modes"}
                                 <Show when={fixture.revision}>
                                   <i><span>Rev.</span>{" "}<span data-no-localize>{fixture.revision}</span></i>
+                                </Show>
+                                <Show when={fixture.provenance}>
+                                  <i data-profile-provenance data-no-localize>{fixture.provenance}</i>
                                 </Show>
                               </span>
                             </button>

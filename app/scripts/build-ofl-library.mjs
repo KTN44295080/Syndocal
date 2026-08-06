@@ -4,27 +4,25 @@
 //   node scripts/build-ofl-library.mjs <path-to-ofl-checkout> [source-revision]
 //
 // Pass the upstream commit SHA as the second argument so the bundle records
-// exactly which snapshot shipped (release evidence must be able to answer
-// "which OFL revision is in this installer?"). Regenerate against a pinned
-// checkout, never a moving `master` download, when refreshing for a release.
+// exactly which snapshot shipped. Regenerate against a pinned checkout, never
+// a moving master download, when refreshing for a release.
 //
-// Output: src/generated/oflLibrary.json  (lazy-loaded; never in the main chunk)
+// Output: src/generated/oflLibrary.json (lazy-loaded; never in main chunk)
 //
-// The bundle is intentionally lossy in the same way Syndocal's own custom
-// profiles are: every mode becomes an ordered list of `Attribute@offset:bits`
-// slots, which is exactly what create_custom_fixture_profile consumes. Channel
-// semantics beyond the attribute identity (capability ranges, wheel slots,
-// physical data) are NOT carried - operators who need them download the
-// manufacturer GDTF from Share.
+// The conversion carries the ordered DMX attribute layout consumed by
+// create_custom_fixture_profile. Capability ranges, wheel media and physical
+// data remain intentionally out of scope. Matrix insert blocks are expanded
+// according to OFL's documented repeatFor and channelOrder rules.
 import { readdirSync, readFileSync, mkdirSync, writeFileSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { encodeAttributeSlots, encodedAttributeFootprint } from "./profile-library-common.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appDir = join(scriptDir, "..");
 const oflRoot = process.argv[2];
 if (!oflRoot) {
-  console.error("usage: node scripts/build-ofl-library.mjs <path-to-ofl-checkout>");
+  console.error("usage: node scripts/build-ofl-library.mjs <path-to-ofl-checkout> [source-revision]");
   process.exit(1);
 }
 
@@ -49,72 +47,40 @@ const colorAttribute = (color) => {
 
 const wheelAttribute = (name) => (/gobo/i.test(name) ? "Gobo1" : "Color1");
 
-// OFL capability type -> Syndocal attribute. Unknown types fall through to a
-// stable generic slot so the footprint always matches the real fixture.
 const attributeForCapability = (capability, channelName) => {
   switch (capability?.type) {
-    case "Intensity":
-      return "Dimmer";
-    case "ColorIntensity":
-      return colorAttribute(capability.color);
-    case "ColorPreset":
-      return "Color1";
-    case "ColorTemperature":
-      return "CTO";
-    case "Pan":
-      return "Pan";
-    case "Tilt":
-      return "Tilt";
-    case "PanTiltSpeed":
-      return "PanTiltSpeed";
+    case "Intensity": return "Dimmer";
+    case "ColorIntensity": return colorAttribute(capability.color);
+    case "ColorPreset": return "Color1";
+    case "ColorTemperature": return "CTO";
+    case "Pan": return "Pan";
+    case "Tilt": return "Tilt";
+    case "PanTiltSpeed": return "PanTiltSpeed";
     case "ShutterStrobe":
     case "StrobeSpeed":
-    case "StrobeDuration":
-      return "Shutter1";
+    case "StrobeDuration": return "Shutter1";
     case "WheelSlot":
     case "WheelShake":
     case "WheelSlotRotation":
-    case "WheelRotation":
-      return wheelAttribute(capability.wheel ?? channelName);
-    case "Zoom":
-      return "Zoom";
-    case "Focus":
-      return "Focus1";
+    case "WheelRotation": return wheelAttribute(capability.wheel ?? channelName);
+    case "Zoom": return "Zoom";
+    case "Focus": return "Focus1";
     case "Iris":
-    case "IrisEffect":
-      return "Iris";
+    case "IrisEffect": return "Iris";
     case "Prism":
-    case "PrismRotation":
-      return "Prism1";
+    case "PrismRotation": return "Prism1";
     case "Frost":
-    case "FrostEffect":
-      return "Frost1";
+    case "FrostEffect": return "Frost1";
     case "Fog":
     case "FogOutput":
-    case "FogType":
-      return "Fog";
+    case "FogType": return "Fog";
     case "BladeInsertion":
     case "BladeRotation":
-    case "BladeSystemRotation":
-      return "Blade1A";
-    case "Speed":
-    case "EffectSpeed":
-    case "EffectDuration":
-    case "EffectParameter":
-    case "Effect":
-    case "SoundSensitivity":
-    case "Rotation":
-    case "Time":
-    case "Maintenance":
-    case "Generic":
-    case "NoFunction":
-    default:
-      return null;
+    case "BladeSystemRotation": return "Blade1A";
+    default: return null;
   }
 };
 
-// A channel's identity is the first capability that maps to something real;
-// channels that are purely effects/maintenance get a numbered generic slot.
 const attributeForChannel = (channel, channelName) => {
   const capabilities = channel?.capability ? [channel.capability] : (channel?.capabilities ?? []);
   for (const capability of capabilities) {
@@ -132,60 +98,166 @@ const attributeForChannel = (channel, channelName) => {
   return null;
 };
 
+const defaultPixelKey = (x, y, z, pixelCount) => {
+  const definedAxes = pixelCount.filter((count) => count > 1).length;
+  if (definedAxes === 1) return String(Math.max(x, y, z));
+  if (definedAxes === 2) {
+    const positions = [x, y, z].filter((_, index) => pixelCount[index] > 1);
+    return `(${positions[0]}, ${positions[1]})`;
+  }
+  return `(${x}, ${y}, ${z})`;
+};
+
+const matrixPixels = (matrix) => {
+  const pixelCount = matrix?.pixelCount ?? (() => {
+    const structure = matrix?.pixelKeys ?? [];
+    return [
+      Math.max(1, ...structure.flatMap((plane) => plane.map((row) => row.length))),
+      Math.max(1, ...structure.map((plane) => plane.length)),
+      Math.max(1, structure.length),
+    ];
+  })();
+  const structure = matrix?.pixelKeys ?? Array.from({ length: pixelCount[2] }, (_, z) =>
+    Array.from({ length: pixelCount[1] }, (_, y) =>
+      Array.from({ length: pixelCount[0] }, (_, x) =>
+        defaultPixelKey(x + 1, y + 1, z + 1, pixelCount))));
+  const pixels = [];
+  for (let z = 0; z < structure.length; z += 1) {
+    for (let y = 0; y < structure[z].length; y += 1) {
+      for (let x = 0; x < structure[z][y].length; x += 1) {
+        const key = structure[z][y][x];
+        if (key !== null) pixels.push({ key, position: [x + 1, y + 1, z + 1] });
+      }
+    }
+  }
+  return pixels;
+};
+
+const repeatPixelKeys = (fixture, repeatFor) => {
+  if (Array.isArray(repeatFor)) return repeatFor;
+  if (repeatFor === "eachPixelGroup") return Object.keys(fixture.matrix?.pixelGroups ?? {});
+  const pixels = matrixPixels(fixture.matrix);
+  if (repeatFor === "eachPixelABC") {
+    return pixels.map((pixel) => pixel.key).sort((left, right) =>
+      left.localeCompare(right, undefined, { numeric: true }));
+  }
+  const axes = repeatFor.replace("eachPixel", "");
+  const axisIndex = { X: 0, Y: 1, Z: 2 };
+  return pixels.sort((left, right) => {
+    for (const axis of [...axes].reverse()) {
+      const difference = left.position[axisIndex[axis]] - right.position[axisIndex[axis]];
+      if (difference !== 0) return difference;
+    }
+    return 0;
+  }).map((pixel) => pixel.key);
+};
+
+const expandModeChannels = (fixture, channels) => channels.flatMap((channel) => {
+  if (typeof channel === "string" || channel === null) return [channel];
+  if (channel?.insert !== "matrixChannels") return [];
+  const pixelKeys = repeatPixelKeys(fixture, channel.repeatFor);
+  const resolve = (template, pixelKey) => template === null
+    ? null
+    : template.replaceAll("$pixelKey", pixelKey);
+  return channel.channelOrder === "perChannel"
+    ? channel.templateChannels.flatMap((template) => pixelKeys.map((pixelKey) => resolve(template, pixelKey)))
+    : pixelKeys.flatMap((pixelKey) => channel.templateChannels.map((template) => resolve(template, pixelKey)));
+});
+
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const templateMatcher = (template) => new RegExp(`^${template.split("$pixelKey").map(escapeRegex).join("(.+)")}$`);
+
+const channelResolver = (fixture) => {
+  const available = fixture.availableChannels ?? {};
+  const fineOwner = new Map();
+  for (const [name, channel] of Object.entries(available)) {
+    for (const alias of channel?.fineChannelAliases ?? []) fineOwner.set(alias, name);
+  }
+  const templates = [];
+  for (const [key, definition] of Object.entries(fixture.templateChannels ?? {})) {
+    templates.push({ matcher: templateMatcher(key), definition, ownerTemplate: key, fine: false });
+    for (const alias of definition?.fineChannelAliases ?? []) {
+      templates.push({ matcher: templateMatcher(alias), definition, ownerTemplate: key, fine: true });
+    }
+    for (const alias of definition?.switchingChannelAliases ?? []) {
+      templates.push({ matcher: templateMatcher(alias), definition, ownerTemplate: key, fine: false });
+    }
+  }
+  return (name) => {
+    if (available[name]) return { definition: available[name], coarseName: null };
+    if (fineOwner.has(name)) return { definition: available[fineOwner.get(name)], coarseName: fineOwner.get(name) };
+    for (const template of templates) {
+      const match = name.match(template.matcher);
+      if (!match) continue;
+      return {
+        definition: template.definition,
+        coarseName: template.fine
+          ? template.ownerTemplate.replaceAll("$pixelKey", match[1])
+          : null,
+      };
+    }
+    return { definition: null, coarseName: null };
+  };
+};
+
 const manufacturers = JSON.parse(readFileSync(join(oflRoot, "fixtures", "manufacturers.json"), "utf8"));
 const fixtureDirs = readdirSync(join(oflRoot, "fixtures"))
   .filter((entry) => statSync(join(oflRoot, "fixtures", entry)).isDirectory())
   .sort();
 
 const bundleFixtures = [];
-let skippedModes = 0;
-let skippedFixtures = 0;
+const audit = {
+  inputFixtures: 0,
+  inputModes: 0,
+  bundledFixtures: 0,
+  bundledModes: 0,
+  matrixModesExpanded: 0,
+  malformedFixtures: 0,
+  emptyFixtures: 0,
+  skippedModes: 0,
+  unresolvedChannels: 0,
+};
 
 for (const slug of fixtureDirs) {
   const manufacturerName = manufacturers[slug]?.name;
   if (!manufacturerName) continue;
   const files = readdirSync(join(oflRoot, "fixtures", slug)).filter((file) => file.endsWith(".json")).sort();
   for (const file of files) {
+    audit.inputFixtures += 1;
     let fixture;
     try {
       fixture = JSON.parse(readFileSync(join(oflRoot, "fixtures", slug, file), "utf8"));
     } catch {
-      skippedFixtures += 1;
+      audit.malformedFixtures += 1;
       continue;
     }
-    if (!fixture?.name || !Array.isArray(fixture.modes)) continue;
-    const available = fixture.availableChannels ?? {};
-    // Fine channels are listed in modes under their alias; map alias -> coarse.
-    const fineOwner = new Map();
-    for (const [name, channel] of Object.entries(available)) {
-      for (const alias of channel?.fineChannelAliases ?? []) fineOwner.set(alias, name);
+    if (!fixture?.name || !Array.isArray(fixture.modes)) {
+      audit.emptyFixtures += 1;
+      continue;
     }
-
+    audit.inputModes += fixture.modes.length;
+    const resolveChannel = channelResolver(fixture);
     const modes = [];
     for (const mode of fixture.modes) {
-      const channels = mode?.channels;
-      // Matrix modes embed channel objects (templates/inserts); their real
-      // footprint depends on pixel counts, so they are out of scope here.
-      if (!Array.isArray(channels) || channels.some((channel) => typeof channel !== "string" && channel !== null)) {
-        skippedModes += 1;
+      if (!Array.isArray(mode?.channels)) {
+        audit.skippedModes += 1;
         continue;
       }
+      const hasMatrixInsert = mode.channels.some((channel) => channel && typeof channel === "object");
+      const channels = expandModeChannels(fixture, mode.channels);
+      if (hasMatrixInsert) audit.matrixModesExpanded += 1;
       const slots = [];
       let genericIndex = 0;
-      for (let index = 0; index < channels.length; index += 1) {
-        const name = channels[index];
+      for (const name of channels) {
         if (name === null) {
-          // OFL uses null for "unused DMX slot".
           genericIndex += 1;
-          slots.push({ attribute: `Unused${genericIndex}`, bits: 8 });
+          slots.push({ attribute: `Unused${genericIndex}`, bits: 8, sourceName: null });
           continue;
         }
-        const coarseName = fineOwner.get(name);
-        if (coarseName) {
-          // Fine channel: widen the previous slot when it is its coarse
-          // partner and directly adjacent, otherwise keep an 8-bit slot.
+        const resolved = resolveChannel(name);
+        if (resolved.coarseName) {
           const previous = slots[slots.length - 1];
-          if (previous && previous.sourceName === coarseName && previous.bits === 8) {
+          if (previous && previous.sourceName === resolved.coarseName && previous.bits === 8) {
             previous.bits = 16;
             continue;
           }
@@ -193,34 +265,26 @@ for (const slug of fixtureDirs) {
           slots.push({ attribute: `Fine${genericIndex}`, bits: 8, sourceName: name });
           continue;
         }
-        const attribute = attributeForChannel(available[name], name);
-        if (attribute) {
-          slots.push({ attribute, bits: 8, sourceName: name });
-        } else {
+        if (!resolved.definition) audit.unresolvedChannels += 1;
+        const attribute = attributeForChannel(resolved.definition, name);
+        if (attribute) slots.push({ attribute, bits: 8, sourceName: name });
+        else {
           genericIndex += 1;
           slots.push({ attribute: `Control${genericIndex}`, bits: 8, sourceName: name });
         }
       }
       if (slots.length === 0) {
-        skippedModes += 1;
+        audit.skippedModes += 1;
         continue;
       }
-      // Attribute identities must be unique inside a mode (Syndocal patches by
-      // attribute name); suffix duplicates in order.
-      const seen = new Map();
-      let offset = 1;
-      const attributes = slots.map((slot) => {
-        const count = (seen.get(slot.attribute) ?? 0) + 1;
-        seen.set(slot.attribute, count);
-        const attribute = count === 1 ? slot.attribute : `${slot.attribute}_${count}`;
-        const encoded = `${attribute}@${offset}:${slot.bits}`;
-        offset += slot.bits === 16 ? 2 : 1;
-        return encoded;
-      });
+      const attributes = encodeAttributeSlots(slots);
+      if (encodedAttributeFootprint(attributes) !== channels.length) {
+        throw new Error(`${manufacturerName} ${fixture.name} ${mode.name}: converted footprint drifted from ${channels.length}`);
+      }
       modes.push({ n: mode.name, a: attributes });
     }
     if (modes.length === 0) {
-      skippedFixtures += 1;
+      audit.emptyFixtures += 1;
       continue;
     }
     bundleFixtures.push({
@@ -232,13 +296,18 @@ for (const slug of fixtureDirs) {
   }
 }
 
+audit.bundledFixtures = bundleFixtures.length;
+audit.bundledModes = bundleFixtures.reduce((total, fixture) => total + fixture.modes.length, 0);
+
 const bundle = {
-  v: 1,
+  v: 2,
   source: "Open Fixture Library",
   sourceRevision: process.argv[3] ?? "unpinned",
   license: "MIT",
   copyright: "Copyright (c) 2017 Florian & Felix Edelmann and OFL contributors",
   url: "https://github.com/OpenLightingProject/open-fixture-library",
+  priority: 100,
+  audit,
   fixtures: bundleFixtures,
 };
 
@@ -248,7 +317,9 @@ const outPath = join(outDir, "oflLibrary.json");
 writeFileSync(outPath, JSON.stringify(bundle));
 const bytes = statSync(outPath).size;
 console.log(
-  `bundled ${bundleFixtures.length} fixtures / ` +
-    `${bundleFixtures.reduce((total, fixture) => total + fixture.modes.length, 0)} modes ` +
-    `(${(bytes / 1024).toFixed(0)} kB); skipped ${skippedFixtures} fixtures, ${skippedModes} matrix/empty modes`,
+  `bundled ${audit.bundledFixtures}/${audit.inputFixtures} fixtures, ` +
+    `${audit.bundledModes}/${audit.inputModes} modes (${(bytes / 1024).toFixed(0)} kB); ` +
+    `expanded ${audit.matrixModesExpanded} matrix modes; ` +
+    `skipped ${audit.malformedFixtures} malformed fixtures, ${audit.emptyFixtures} empty fixtures, ` +
+    `${audit.skippedModes} modes; ${audit.unresolvedChannels} unresolved channels preserved as generic controls`,
 );

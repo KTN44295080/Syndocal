@@ -13609,6 +13609,7 @@ function installPatchGdtfShareMockInPage() {
     activeDownloads: 0,
     maxActiveDownloads: 0,
     importCalls: [],
+    customProfileCalls: [],
     cache: [{
       key: "share-rid-7102",
       rid: fixtures[1].rid,
@@ -13644,9 +13645,39 @@ function installPatchGdtfShareMockInPage() {
     geometries: [],
     warnings: [],
   });
+  const customProfileFor = (request) => ({
+    source_path: `memory://custom/${request.manufacturer}-${request.name}`,
+    manufacturer: request.manufacturer,
+    name: request.name,
+    short_name: request.name,
+    fixture_type_id: null,
+    dmx_modes: [{
+      name: request.mode_name,
+      controls: request.attributes.map((encoded, index) => {
+        const match = encoded.match(/^(.+)@(\d+):(8|16)$/);
+        const offset = Number(match?.[2] || index + 1);
+        const sixteenBit = match?.[3] === "16";
+        return {
+          attribute: match?.[1] || `Attribute${index + 1}`,
+          channel_name: match?.[1] || `Channel ${index + 1}`,
+          offsets: sixteenBit ? [offset, offset + 1] : [offset],
+          resolution: sixteenBit ? "SixteenBit" : "EightBit",
+          default_value: 0,
+          functions: [],
+        };
+      }),
+    }],
+    geometries: [],
+    warnings: [],
+  });
   const invoke = async (command, args = {}) => {
     if (command === "list_gdtf_fixture_cache") return clone(state.cache);
     if (command === "get_fixture_profile_health") return [];
+    if (command === "create_custom_fixture_profile") {
+      const request = clone(args.request || {});
+      state.customProfileCalls.push({ at: performance.now(), request });
+      return clone(customProfileFor(request));
+    }
     if (command === "search_gdtf_share") {
       const request = clone(args.request || {});
       state.searchCalls.push({ at: performance.now(), request });
@@ -13940,6 +13971,54 @@ async function runPatchGdtfShareViewport(client, viewport) {
   );
   const defaultCollapsed = await readState("default-collapsed");
   await client.evaluate(`(() => {
+    const address = document.querySelector('[data-patch-field="address"] input');
+    if (address instanceof HTMLInputElement) {
+      address.value = '65';
+      address.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: '65' }));
+    }
+    const input = document.querySelector('[data-patch-profile-search]');
+    if (!(input instanceof HTMLInputElement)) return;
+    input.value = 'RGB 6ch crystal ball';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: 'RGB 6ch crystal ball' }));
+  })()`);
+  await sleep(80);
+  await client.evaluate(`document.querySelector(
+    '[data-patch-profile-row][data-profile-source="bundled"][data-profile-mode-key^="bundled:qlc:"]'
+  )?.click()`);
+  await waitForClientCondition(
+    client,
+    "window.__syndocalPatchGdtfShareMock?.customProfileCalls?.length === 1",
+    "QLC+ bundled profile create request",
+  );
+  await waitForClientCondition(
+    client,
+    "document.querySelector('[data-patch-minimal-form] button.primary')?.disabled === false",
+    "QLC+ bundled profile armed patch form",
+  );
+  const qlcBundledArmed = await client.evaluate(`(() => {
+    const row = document.querySelector(
+      '[data-patch-profile-row][data-profile-source="bundled"][data-profile-mode-key^="bundled:qlc:"]'
+    );
+    const mock = window.__syndocalPatchGdtfShareMock;
+    return {
+      modeKey: row?.getAttribute('data-profile-mode-key') || '',
+      footprint: Number(row?.getAttribute('data-profile-footprint') || 0),
+      selected: row?.getAttribute('aria-selected') || '',
+      provenance: (document.querySelector(
+        '[data-patch-profile-tree="bundled"] [data-profile-provenance]'
+      )?.textContent || '').trim(),
+      patchButtonDisabled: document.querySelector('[data-patch-minimal-form] button.primary')?.disabled !== false,
+      call: mock?.customProfileCalls?.[0] || null,
+    };
+  })()`);
+  await client.evaluate(`(() => {
+    const input = document.querySelector('[data-patch-profile-search]');
+    if (!(input instanceof HTMLInputElement)) return;
+    input.value = '';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
+  })()`);
+  await sleep(40);
+  await client.evaluate(`(() => {
     const mock = window.__syndocalPatchGdtfShareMock;
     mock.searchCalls = [];
     const address = document.querySelector('[data-patch-field="address"] input');
@@ -14187,6 +14266,16 @@ async function runPatchGdtfShareViewport(client, viewport) {
       defaultCollapsed.cacheTreeItems[0].level === "1" &&
       defaultCollapsed.cacheTreeItems[0].expanded === "false" &&
       defaultCollapsed.cacheRows.length === 0,
+    qlcBundledProfileUsesCustomProfilePath:
+      qlcBundledArmed.modeKey.startsWith('bundled:qlc:') &&
+      qlcBundledArmed.footprint === 6 &&
+      qlcBundledArmed.selected === 'true' &&
+      qlcBundledArmed.provenance.includes('QLC+') &&
+      qlcBundledArmed.patchButtonDisabled === false &&
+      qlcBundledArmed.call?.request?.manufacturer === 'AGPtek' &&
+      qlcBundledArmed.call?.request?.name === 'RGB 6ch crystal ball' &&
+      qlcBundledArmed.call?.request?.mode_name === '6 channel' &&
+      qlcBundledArmed.call?.request?.attributes?.length === 6,
     // #63: the Library tab (and its Open Library jump) no longer exists -
     // signed-in happens entirely through the inline credentials.
     signedOutGuidance:
@@ -14374,6 +14463,7 @@ async function runPatchGdtfShareViewport(client, viewport) {
     failedChecks,
     debounceDelayMs,
     defaultCollapsed,
+    qlcBundledArmed,
     signedOut,
     sharedCredentials,
     beforeDebounce,
@@ -14546,7 +14636,7 @@ async function runPatchEmptyStateViewport(client, viewport) {
       ).length,
       profileBrowserSectionNames: profileBrowserSections
         .map((section) => section.getAttribute('data-patch-profile-section')),
-      // #59: bundled Open Fixture Library section (lazy-loaded MIT snapshot).
+      // Offline OFL + QLC+ profiles share the existing bundled tree.
       bundledProfileTreeCount: document.querySelectorAll(
         '[data-patch-profile-section="bundled"] [data-patch-profile-tree="bundled"][role="tree"]'
       ).length,
@@ -14562,6 +14652,12 @@ async function runPatchEmptyStateViewport(client, viewport) {
       bundledAttributionText: (document.querySelector('[data-patch-bundled-attribution]')?.textContent || '')
         .replace(/\\s+/g, ' ')
         .trim(),
+      bundledAttributionCount: document.querySelectorAll(
+        '[data-patch-bundled-attribution] .patchProfileBundledAttribution'
+      ).length,
+      bundledSectionCountText: document.querySelector(
+        '[data-patch-profile-section="bundled"] > header span'
+      )?.textContent?.trim() || '',
       bundledLoadingRowCount: document.querySelectorAll('[data-patch-bundled-loading]').length,
       verifiedProfileRowCount: document.querySelectorAll(
         '[data-patch-profile-row][data-profile-source="verified"]'
@@ -14637,6 +14733,29 @@ async function runPatchEmptyStateViewport(client, viewport) {
   await client.evaluate(`(() => {
     const input = document.querySelector('[data-patch-profile-search]');
     if (!(input instanceof HTMLInputElement)) return false;
+    input.value = 'RGB 6ch crystal ball';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: 'RGB 6ch crystal ball' }));
+    return true;
+  })()`);
+  await sleep(80);
+  const qlcSupplementMetrics = await client.evaluate(`(() => {
+    const rows = [...document.querySelectorAll(
+      '[data-patch-profile-row][data-profile-source="bundled"]'
+    )];
+    const before = {
+      rowCount: rows.length,
+      modeKeys: rows.map((row) => row.getAttribute('data-profile-mode-key')),
+      footprints: rows.map((row) => Number(row.getAttribute('data-profile-footprint'))),
+      disabledValues: rows.map((row) => row instanceof HTMLButtonElement && row.disabled),
+      provenance: [...document.querySelectorAll(
+        '[data-patch-profile-tree="bundled"] [data-profile-provenance]'
+      )].map((item) => (item.textContent || '').trim()),
+    };
+    return before;
+  })()`);
+  await client.evaluate(`(() => {
+    const input = document.querySelector('[data-patch-profile-search]');
+    if (!(input instanceof HTMLInputElement)) return false;
     input.value = '';
     input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
     return true;
@@ -14688,16 +14807,21 @@ async function runPatchEmptyStateViewport(client, viewport) {
       metrics.cachedProfileTreeItemCount === 0 &&
       metrics.shareProfileTreeCount === 0 &&
       metrics.flatProfileSectionTreeCount === 0,
-    // #59: the bundled Open Fixture Library ships offline with no account -
-    // manufacturers collapsed by default, MIT attribution always visible.
+    // OFL and QLC+ ship offline with provenance, license and source precedence.
     bundledLibraryAvailableOffline:
       metrics.bundledProfileTreeCount === 1 &&
       metrics.bundledLoadingRowCount === 0 &&
-      metrics.bundledManufacturerCount >= 100 &&
+      metrics.bundledManufacturerCount >= 200 &&
+      Number(metrics.bundledSectionCountText) >= 7300 &&
       metrics.bundledManufacturerExpandedValues.every((value) => value === 'false') &&
       metrics.bundledProfileRowCount === 0 &&
+      metrics.bundledAttributionCount === 2 &&
       metrics.bundledAttributionText.includes('Open Fixture Library') &&
-      metrics.bundledAttributionText.includes('MIT'),
+      metrics.bundledAttributionText.includes('MIT') &&
+      metrics.bundledAttributionText.includes('c08598f') &&
+      metrics.bundledAttributionText.includes('Q Light Controller Plus') &&
+      metrics.bundledAttributionText.includes('Apache-2.0') &&
+      metrics.bundledAttributionText.includes('18cf9da'),
     footprintFilterIsExactAndAutoExpands:
       footprintFilterMetrics.filterValue === '25' &&
       footprintFilterMetrics.sectionCountText === '2' &&
@@ -14708,6 +14832,13 @@ async function runPatchEmptyStateViewport(client, viewport) {
       JSON.stringify(footprintFilterMetrics.rowFootprints) === JSON.stringify([25, 25]) &&
       footprintFilterMetrics.singleModeRows === 1 &&
       footprintFilterMetrics.modeRows === 1,
+    qlcSupplementSearchShowsProvenanceAndFailsClosedWithoutBackend:
+      qlcSupplementMetrics.rowCount === 1 &&
+      qlcSupplementMetrics.modeKeys.every((key) => key?.startsWith('bundled:qlc:')) &&
+      JSON.stringify(qlcSupplementMetrics.footprints) === JSON.stringify([6]) &&
+      qlcSupplementMetrics.disabledValues.every((disabled) => disabled) &&
+      qlcSupplementMetrics.provenance.length === 1 &&
+      qlcSupplementMetrics.provenance[0].includes('QLC+'),
     compactProfileRows:
       footprintFilterMetrics.rowHeights?.length === 2 &&
       footprintFilterMetrics.rowHeights.every((height) => height >= 24 && height <= 28),
@@ -14742,6 +14873,7 @@ async function runPatchEmptyStateViewport(client, viewport) {
     failedChecks,
     metrics,
     footprintFilterMetrics,
+    qlcSupplementMetrics,
     clearedVerifiedTree,
   };
 }

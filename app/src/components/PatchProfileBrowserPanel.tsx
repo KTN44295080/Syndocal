@@ -13,7 +13,7 @@ import {
   type VerifiedFixtureProfileSummary,
 } from "../fixtureCatalog";
 import {
-  loadBundledLibraryAttribution,
+  loadBundledLibraryAttributions,
   loadBundledLibraryFixtures,
   type BundledLibraryAttribution,
 } from "../bundledLibrary";
@@ -242,17 +242,17 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
     .reduce((total, fixture) => total + fixture.modes.length, 0));
   const verifiedEntryForMode = (mode: GdtfProfileTreeMode) =>
     previewVerifiedProfiles.find((entry) => entry.id === mode.key);
-  /* #59: bundled Open Fixture Library (MIT). Loaded lazily on first paint of
-     the browser so the ~324 kB payload stays out of the main chunk. */
+  /* Offline OFL + QLC+ manufacturer bundles. Loaded lazily on first paint so
+     the converted source payloads stay out of the main chunk. */
   const [bundledFixtures, setBundledFixtures] = createSignal<GdtfProfileTreeFixture[]>([]);
-  const [bundledAttribution, setBundledAttribution] = createSignal<BundledLibraryAttribution | null>(null);
+  const [bundledAttributions, setBundledAttributions] = createSignal<BundledLibraryAttribution[]>([]);
   onMount(() => {
     void loadBundledLibraryFixtures()
       .then((fixtures) => {
         setBundledFixtures(fixtures);
-        return loadBundledLibraryAttribution();
+        return loadBundledLibraryAttributions();
       })
-      .then((attribution) => setBundledAttribution(attribution))
+      .then((attributions) => setBundledAttributions(attributions))
       .catch(() => setBundledFixtures([]));
   });
   const visibleBundledFixtures = createMemo(() =>
@@ -736,15 +736,21 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
           <Show when={bundledFixtures().length > 0 && visibleBundledProfileCount() === 0}>
             <p class="empty patchProfileRowEmpty">No matching profiles.</p>
           </Show>
-          <Show when={bundledAttribution()}>
-            {(attribution) => (
-              <p class="patchProfileBundledAttribution" data-patch-bundled-attribution>
-                <span>Profiles from</span>{" "}
-                <b data-no-localize>{attribution().source}</b>{" "}
-                <span data-no-localize>({attribution().license})</span>{" · "}
-                <span data-no-localize>{attribution().copyright}</span>
-              </p>
-            )}
+          <Show when={bundledAttributions().length > 0}>
+            <div data-patch-bundled-attribution>
+              <For each={bundledAttributions()}>
+                {(attribution) => (
+                  <p class="patchProfileBundledAttribution">
+                    <span>Profiles from</span>{" "}
+                    <b data-no-localize>{attribution.source}</b>{" "}
+                    <span data-no-localize>
+                      ({attribution.license} · {attribution.sourceRevision.slice(0, 7)})
+                    </span>{" · "}
+                    <span data-no-localize>{attribution.copyright}</span>
+                  </p>
+                )}
+              </For>
+            </div>
           </Show>
         </section>
 
