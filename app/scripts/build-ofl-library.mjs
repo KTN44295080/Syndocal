@@ -1,7 +1,12 @@
 // Converts an Open Fixture Library snapshot (MIT, Florian & Felix Edelmann)
 // into Syndocal's compact bundled-library format.
 //
-//   node scripts/build-ofl-library.mjs <path-to-ofl-checkout>
+//   node scripts/build-ofl-library.mjs <path-to-ofl-checkout> [source-revision]
+//
+// Pass the upstream commit SHA as the second argument so the bundle records
+// exactly which snapshot shipped (release evidence must be able to answer
+// "which OFL revision is in this installer?"). Regenerate against a pinned
+// checkout, never a moving `master` download, when refreshing for a release.
 //
 // Output: src/generated/oflLibrary.json  (lazy-loaded; never in the main chunk)
 //
@@ -230,6 +235,7 @@ for (const slug of fixtureDirs) {
 const bundle = {
   v: 1,
   source: "Open Fixture Library",
+  sourceRevision: process.argv[3] ?? "unpinned",
   license: "MIT",
   copyright: "Copyright (c) 2017 Florian & Felix Edelmann and OFL contributors",
   url: "https://github.com/OpenLightingProject/open-fixture-library",

@@ -40,6 +40,9 @@ manufacturer fixture profiles are available offline, with no account or
 download, on first launch.
 
 - Source: https://github.com/OpenLightingProject/open-fixture-library
+- Snapshot revision: `c08598f45ce5e7cff4089a65bb67b5ba2777ee32` (recorded in the
+  bundle's `sourceRevision` field; regenerate with
+  `node scripts/build-ofl-library.mjs <checkout> <sha>`)
 - License: MIT
 - Copyright (c) 2017 Florian & Felix Edelmann and OFL contributors
 - License text: `licenses/open-fixture-library-MIT.txt`
