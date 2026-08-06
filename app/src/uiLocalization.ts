@@ -396,6 +396,7 @@ const japaneseText: Record<string, string> = {
   "Start ms": "開始 ms",
   "Duration ms": "長さ ms",
   "Source Offset ms": "ソースオフセット ms",
+  "Source Position ms": "ソース位置 ms",
   "Finder": "ファインダー",
   "Scene Block editor view": "シーンブロックエディタ表示",
   "Block Properties": "ブロックプロパティ",

@@ -155,7 +155,10 @@ ID3=Transform、ID10=Color Width、ID11=Angle、ID12=Gradient(UI=VAL×100)。MAP
 ### CHASER FX ID=322 = Chaser #2（SS-Blue 実UI照合）
 
 Daslight UI自身が「0 Beam(s)・Features空」を表示 — このFXは原本でも空（無発光）。321系と同じ
-「BEAMS resolved to no Chaser steps」スキップが正しい。ジェネレータ名のみ対応表に追加。
+無対象FXとして、ランタイムへ架空の対象やブラックアウトを作らず `source no-op` 変換記録だけを保持する。
+Shinkan2026 の Bar / New Scene (321)、SaberSpot / SS-Blue (322)、Par / Par-Chaser (321) はすべて
+`BEAMS NB="0"` を実XMLで確認済み。出力内容は原本どおり無発光で、欠損/Skippedには数えない。
+BEAMSを持つ322はアルゴリズム未確定のため、引き続き正直にSkippedとする。
 
 ### FXファミリー選択肢の全貌（新規シーンのFX追加メニュー実観察）
 

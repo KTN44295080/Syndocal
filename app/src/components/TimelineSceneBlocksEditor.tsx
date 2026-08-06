@@ -976,18 +976,14 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                         />
                       </label>
                       <label>
-                        Source Offset ms
+                        Source Position ms
                         <input
                           type="number"
-                          min="0"
                           data-scene-block-inspector-source-offset
                           value={draft().source_offset_ms}
                           onKeyDown={blurOnEnter}
                           onBlur={(inputEvent) => {
-                            const offsetMs = Math.max(
-                              0,
-                              Math.round(Number(inputEvent.currentTarget.value) || 0),
-                            );
+                            const offsetMs = Math.round(Number(inputEvent.currentTarget.value) || 0);
                             if (offsetMs !== draft().source_offset_ms) {
                               commitInspectorPatch({ source_offset_ms: offsetMs });
                             }
@@ -1253,16 +1249,12 @@ export function TimelineSceneBlocksEditor(props: TimelineSceneBlocksEditorProps)
                       />
                     </label>
                     <label>
-                      Source Offset ms
+                      Source Position ms
                       <input
                         type="number"
-                        min="0"
                         value={draft().source_offset_ms}
                         onInput={(inputEvent) => props.onUpdateEventDraft(event, {
-                          source_offset_ms: Math.max(
-                            0,
-                            Math.round(Number(inputEvent.currentTarget.value) || 0),
-                          ),
+                          source_offset_ms: Math.round(Number(inputEvent.currentTarget.value) || 0),
                         })}
                       />
                     </label>

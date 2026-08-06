@@ -739,7 +739,7 @@ pub enum EngineCommand {
         duration_beats: Option<f64>,
         conform_to_tempo: bool,
         loop_fill: bool,
-        source_offset_ms: u64,
+        source_offset_ms: i64,
         fade_in_ms: u64,
         fade_out_ms: u64,
         loop_count: u16,
@@ -758,7 +758,7 @@ pub enum EngineCommand {
         duration_beats: Option<f64>,
         conform_to_tempo: bool,
         loop_fill: bool,
-        source_offset_ms: u64,
+        source_offset_ms: i64,
         fade_in_ms: u64,
         fade_out_ms: u64,
         loop_count: u16,
@@ -2196,7 +2196,7 @@ impl EngineHandle {
         duration_beats: Option<f64>,
         conform_to_tempo: bool,
         loop_fill: bool,
-        source_offset_ms: u64,
+        source_offset_ms: i64,
         fade_in_ms: u64,
         fade_out_ms: u64,
         loop_count: u16,
@@ -2241,7 +2241,7 @@ impl EngineHandle {
         duration_beats: Option<f64>,
         conform_to_tempo: bool,
         loop_fill: bool,
-        source_offset_ms: u64,
+        source_offset_ms: i64,
         fade_in_ms: u64,
         fade_out_ms: u64,
         loop_count: u16,
@@ -3020,12 +3020,12 @@ enum RuntimeCueStepClock {
     },
     Timeline {
         starts_at_ms: u64,
-        source_offset_ms: u64,
+        source_offset_ms: i64,
     },
     ChildTimeline {
         transport_id: RuntimeChildTransportId,
         starts_at_ms: u64,
-        source_offset_ms: u64,
+        source_offset_ms: i64,
     },
 }
 
@@ -3686,7 +3686,7 @@ struct RuntimeTimelineEvent {
     duration_beats: Option<f64>,
     conform_to_tempo: bool,
     loop_fill: bool,
-    source_offset_ms: u64,
+    source_offset_ms: i64,
     iteration_period_ms: u64,
     rate: Option<f32>,
     fade_in_ms: u64,
@@ -13126,10 +13126,10 @@ impl EngineRuntime {
             let created_at = if iteration == previous_iteration {
                 saved_created_at
             } else {
-                now.checked_sub(Duration::from_millis(
-                    elapsed_ms.saturating_add(event.source_offset_ms),
-                ))
-                .unwrap_or(now)
+                instant_at_timeline_source_position(
+                    now,
+                    timeline_source_position_ms(elapsed_ms, event.source_offset_ms),
+                )
             };
             let key = RuntimeEffectActivationKey::Timeline {
                 event_id,
@@ -13506,10 +13506,10 @@ impl EngineRuntime {
             RuntimeCueStepClock::Timeline {
                 starts_at_ms,
                 source_offset_ms,
-            } => self
-                .timeline_position_ms
-                .saturating_sub(starts_at_ms)
-                .saturating_add(source_offset_ms),
+            } => clamped_timeline_source_elapsed_ms(
+                self.timeline_position_ms.saturating_sub(starts_at_ms),
+                source_offset_ms,
+            ),
             RuntimeCueStepClock::ChildTimeline {
                 transport_id,
                 starts_at_ms,
@@ -13519,10 +13519,10 @@ impl EngineRuntime {
                 if !transport.active {
                     return None;
                 }
-                transport
-                    .position_ms
-                    .saturating_sub(starts_at_ms)
-                    .saturating_add(source_offset_ms)
+                clamped_timeline_source_elapsed_ms(
+                    transport.position_ms.saturating_sub(starts_at_ms),
+                    source_offset_ms,
+                )
             }
         };
         Some(
@@ -13910,11 +13910,10 @@ impl EngineRuntime {
                     cue_id,
                     iteration: destination_iteration,
                 });
-                activation.effect.created_at = now
-                    .checked_sub(Duration::from_millis(
-                        elapsed_ms.saturating_add(event.source_offset_ms),
-                    ))
-                    .unwrap_or(now);
+                activation.effect.created_at = instant_at_timeline_source_position(
+                    now,
+                    timeline_source_position_ms(elapsed_ms, event.source_offset_ms),
+                );
             }
         }
         self.active_effect_activation_indices
@@ -16140,17 +16139,14 @@ impl EngineRuntime {
             step_range,
             rate,
             step_rate: rate,
-            created_at: (if dispatch.pre_wait_ms == 0 {
-                now
-            } else {
-                due_at
-            })
-            .checked_sub(Duration::from_millis(event.source_offset_ms))
-            .unwrap_or(if dispatch.pre_wait_ms == 0 {
-                now
-            } else {
-                due_at
-            }),
+            created_at: instant_at_timeline_source_position(
+                if dispatch.pre_wait_ms == 0 {
+                    now
+                } else {
+                    due_at
+                },
+                i128::from(event.source_offset_ms),
+            ),
             step_clock: RuntimeCueStepClock::Timeline {
                 starts_at_ms: event.time_ms,
                 source_offset_ms: event.source_offset_ms,
@@ -17762,18 +17758,16 @@ impl EngineRuntime {
                 && (!range.is_empty() || !step_range.is_empty()))
                 || direct_parent.is_some())
             .then(|| {
-                let activation_child_elapsed_ms =
-                    event
-                        .source_offset_ms
-                        .saturating_add(if dispatch.pre_wait_ms == 0 {
-                            elapsed_child_ms
-                        } else {
-                            0
-                        });
-                let activation_parent_elapsed_ms =
-                    ((activation_child_elapsed_ms as f64) / f64::from(parent_rate))
-                        .floor()
-                        .clamp(0.0, u64::MAX as f64) as u64;
+                let activation_child_position_ms = timeline_source_position_ms(
+                    if dispatch.pre_wait_ms == 0 {
+                        elapsed_child_ms
+                    } else {
+                        0
+                    },
+                    event.source_offset_ms,
+                );
+                let activation_parent_position_ms =
+                    scaled_timeline_source_position_ms(activation_child_position_ms, parent_rate);
                 let activation_at = if dispatch.pre_wait_ms == 0 {
                     now
                 } else {
@@ -17792,9 +17786,10 @@ impl EngineRuntime {
                     step_range,
                     rate: valid_effect_rate(parent_rate * event_rate),
                     step_rate: valid_effect_rate(event_rate),
-                    created_at: activation_at
-                        .checked_sub(Duration::from_millis(activation_parent_elapsed_ms))
-                        .unwrap_or(activation_at),
+                    created_at: instant_at_timeline_source_position(
+                        activation_at,
+                        activation_parent_position_ms,
+                    ),
                     step_clock: RuntimeCueStepClock::ChildTimeline {
                         transport_id,
                         starts_at_ms: occurrence.time_ms,
@@ -18176,22 +18171,23 @@ impl EngineRuntime {
                 })
                 .map(|event| {
                     let elapsed_ms = current_position.saturating_sub(occurrence.time_ms);
-                    let activation_elapsed_ms =
-                        event
-                            .source_offset_ms
-                            .saturating_add(if dispatch.pre_wait_ms == 0 {
-                                elapsed_ms
-                            } else {
-                                0
-                            });
+                    let activation_source_position_ms = timeline_source_position_ms(
+                        if dispatch.pre_wait_ms == 0 {
+                            elapsed_ms
+                        } else {
+                            0
+                        },
+                        event.source_offset_ms,
+                    );
                     let activation_at = if dispatch.pre_wait_ms == 0 {
                         now
                     } else {
                         due_at
                     };
-                    let created_at = activation_at
-                        .checked_sub(Duration::from_millis(activation_elapsed_ms))
-                        .unwrap_or(activation_at);
+                    let created_at = instant_at_timeline_source_position(
+                        activation_at,
+                        activation_source_position_ms,
+                    );
                     PendingTimelineEffectActivation {
                         event_id: occurrence.event_id,
                         cue_id,
@@ -20729,6 +20725,33 @@ fn valid_effect_rate(rate: f32) -> f32 {
     } else {
         1.0
     }
+}
+
+fn timeline_source_position_ms(elapsed_ms: u64, source_offset_ms: i64) -> i128 {
+    i128::from(elapsed_ms).saturating_add(i128::from(source_offset_ms))
+}
+
+fn clamped_timeline_source_elapsed_ms(elapsed_ms: u64, source_offset_ms: i64) -> u64 {
+    timeline_source_position_ms(elapsed_ms, source_offset_ms).clamp(0, i128::from(u64::MAX)) as u64
+}
+
+fn instant_at_timeline_source_position(anchor: Instant, source_position_ms: i128) -> Instant {
+    let magnitude_ms = source_position_ms.unsigned_abs().min(u128::from(u64::MAX)) as u64;
+    if source_position_ms >= 0 {
+        anchor
+            .checked_sub(Duration::from_millis(magnitude_ms))
+            .unwrap_or(anchor)
+    } else {
+        anchor
+            .checked_add(Duration::from_millis(magnitude_ms))
+            .unwrap_or(anchor)
+    }
+}
+
+fn scaled_timeline_source_position_ms(source_position_ms: i128, divisor: f32) -> i128 {
+    ((source_position_ms as f64) / f64::from(valid_effect_rate(divisor)))
+        .floor()
+        .clamp(i64::MIN as f64, i64::MAX as f64) as i128
 }
 
 fn timeline_event_summary(event: &RuntimeTimelineEvent) -> TimelineCueEventSummary {
@@ -58198,7 +58221,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_child_timeline_scene_block_source_offset_advances_owned_chaser_phase() {
+    fn direct_child_timeline_scene_block_source_positions_drive_owned_chaser_phase() {
         let mut runtime = runtime_with_chaser_fixtures(1);
         let chaser = test_chaser_request(&[1]);
         let chaser_period_ms = chaser.step_duration_ms * u64::try_from(chaser.steps.len()).unwrap();
@@ -58244,7 +58267,16 @@ mod tests {
                             time_ms: 0,
                             track: TimelineTrackKind::Lighting,
                             duration_ms: 1_000,
-                            source_offset_ms: half_period_ms,
+                            source_offset_ms: half_period_ms as i64,
+                            ..TimelineCueEventSummary::default()
+                        },
+                        TimelineCueEventSummary {
+                            id: 203,
+                            cue_id: 1,
+                            time_ms: 0,
+                            track: TimelineTrackKind::Lighting,
+                            duration_ms: 1_000,
+                            source_offset_ms: -(half_period_ms as i64),
                             ..TimelineCueEventSummary::default()
                         },
                     ],
@@ -58267,17 +58299,28 @@ mod tests {
                         parent_cue_id: 2,
                         event_id: candidate,
                         ..
-                    }) if candidate == event_id => Some(
+                    }) if candidate == event_id => Some((
                         started_at
                             .saturating_duration_since(activation.effect.created_at)
                             .as_millis() as u64,
-                    ),
+                        activation.effect.created_at,
+                    )),
                     _ => None,
                 })
                 .expect("direct child Scene Block must own an active Chaser instance")
         };
-        assert_eq!(elapsed_by_event(201), 0);
-        assert_eq!(elapsed_by_event(202), half_period_ms);
+        assert_eq!(elapsed_by_event(201), (0, started_at));
+        assert_eq!(
+            elapsed_by_event(202),
+            (
+                half_period_ms,
+                started_at - Duration::from_millis(half_period_ms),
+            )
+        );
+        assert_eq!(
+            elapsed_by_event(203),
+            (0, started_at + Duration::from_millis(half_period_ms),)
+        );
 
         runtime.apply_command(EngineCommand::SeekTimeline(0));
         assert!(runtime
@@ -58402,7 +58445,16 @@ mod tests {
                             time_ms: 0,
                             track: TimelineTrackKind::Lighting,
                             duration_ms: 1_000,
-                            source_offset_ms: half_period_ms,
+                            source_offset_ms: half_period_ms as i64,
+                            ..TimelineCueEventSummary::default()
+                        },
+                        TimelineCueEventSummary {
+                            id: 203,
+                            cue_id: 1,
+                            time_ms: 0,
+                            track: TimelineTrackKind::Lighting,
+                            duration_ms: 1_000,
+                            source_offset_ms: -(half_period_ms as i64),
                             ..TimelineCueEventSummary::default()
                         },
                     ],
@@ -58453,13 +58505,36 @@ mod tests {
                 &clock,
                 activation.rate,
             );
-            (elapsed_ms, step_position, level)
+            (
+                elapsed_ms,
+                step_position,
+                level,
+                activation.effect.created_at,
+            )
         };
 
         let live_zero = measure(&runtime, 201, live_at);
         let live_offset = measure(&runtime, 202, live_at);
-        assert_eq!(live_zero, (0, 0, u16::MAX));
-        assert_eq!(live_offset, (half_period_ms, 1, 0));
+        let live_preroll = measure(&runtime, 203, live_at);
+        assert_eq!(live_zero, (0, 0, u16::MAX, live_at));
+        assert_eq!(
+            live_offset,
+            (
+                half_period_ms,
+                1,
+                0,
+                live_at - Duration::from_millis(half_period_ms),
+            )
+        );
+        assert_eq!(
+            live_preroll,
+            (
+                0,
+                0,
+                u16::MAX,
+                live_at + Duration::from_millis(half_period_ms),
+            )
+        );
 
         runtime.deactivate_all_timeline_effect_activations();
         runtime.deactivate_all_child_transports();
@@ -58468,8 +58543,23 @@ mod tests {
         runtime.establish_child_transports_at_position(seek_at);
         let seek_zero = measure(&runtime, 201, seek_at);
         let seek_offset = measure(&runtime, 202, seek_at);
-        assert_eq!(seek_zero, live_zero);
-        assert_eq!(seek_offset, live_offset);
+        let seek_preroll = measure(&runtime, 203, seek_at);
+        assert_eq!(
+            (seek_zero.0, seek_zero.1, seek_zero.2),
+            (live_zero.0, live_zero.1, live_zero.2)
+        );
+        assert_eq!(
+            (seek_offset.0, seek_offset.1, seek_offset.2),
+            (live_offset.0, live_offset.1, live_offset.2)
+        );
+        assert_eq!(
+            (seek_preroll.0, seek_preroll.1, seek_preroll.2),
+            (live_preroll.0, live_preroll.1, live_preroll.2)
+        );
+        assert_eq!(
+            seek_preroll.3,
+            seek_at + Duration::from_millis(half_period_ms)
+        );
         eprintln!(
             "source-offset chaser measurement: wall_clock_ms=0 period_ms={chaser_period_ms} offset0_ms={} offset0_step={} offset0_level={} offset_half_ms={} offset_half_step={} offset_half_level={} seek_offset_half_step={} seek_offset_half_level={}",
             live_zero.0,

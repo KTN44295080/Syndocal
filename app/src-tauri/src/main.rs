@@ -8138,7 +8138,7 @@ fn add_timeline_scene_block(
     duration_beats: Option<f64>,
     conform_to_tempo: bool,
     loop_fill: bool,
-    source_offset_ms: u64,
+    source_offset_ms: i64,
     fade_in_ms: u64,
     fade_out_ms: u64,
     loop_count: u16,
@@ -8193,7 +8193,7 @@ fn set_timeline_scene_block(
     duration_beats: Option<f64>,
     conform_to_tempo: bool,
     loop_fill: bool,
-    source_offset_ms: u64,
+    source_offset_ms: i64,
     fade_in_ms: u64,
     fade_out_ms: u64,
     loop_count: u16,
@@ -33379,7 +33379,7 @@ f 1 2 3
                 duration_beats: None,
                 conform_to_tempo: false,
                 loop_fill: false,
-                source_offset_ms: 0,
+                source_offset_ms: -250,
                 fade_in_ms: 0,
                 fade_out_ms: 0,
                 rate: None,
@@ -33558,6 +33558,7 @@ f 1 2 3
         assert!(event.conform_to_tempo);
         assert!(event.loop_fill);
         assert_eq!(event.rate, Some(1.5));
+        assert_eq!(roundtrip.snapshot.timeline.events[1].source_offset_ms, -250);
 
         let mut legacy = serde_json::to_value(project).unwrap();
         legacy["snapshot"]["cues"][0]

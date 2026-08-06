@@ -17,7 +17,7 @@ The native import source was `C:\Users\kouty\Desktop\Shinkan-Left\Shinkan2026.dv
 - 16 scene banks and 77 Cues, including 2 Super Scenes
 - 65 value payloads, 1,009 beam records and 0 beam mismatches
 - 2 audio clips and 229 converted Scene Blocks
-- 27 converted effects, 3 skipped effects and 0 unknown channel types
+- 30 converted effects, 0 skipped effects and 0 unknown channel types
 - 0 skipped fixtures/Cues and 0 missing audio files
 
 ## Defects closed
@@ -28,6 +28,8 @@ The native import source was `C:\Users\kouty\Desktop\Shinkan-Left\Shinkan2026.dv
 - DVC import no longer reports a fixture-group warning by treating `CueSummary.group_id` as a fixture target. That field is the Scene Matrix playback identity.
 - Loading a replacement project clears direct child transport runtime even when the new project reuses the same Cue IDs. Authored/project state can reload, but position, playing state and generation do not leak across the project boundary.
 - Runtime-only child transport publication is stripped from engine persistence, Tauri save data and frontend project comparison/storage.
+- The three formerly skipped Chaser racks are now preserved as explicit source no-ops after verifying that all three original racks contain `BEAMS NB="0"`; no synthetic target or output is introduced.
+- Scene Block `POSITION` is now signed end-to-end. The 29 positive source trims and 9 negative source pre-rolls in the representative show survive import, `.sdc` save/reload, live playback and seek/rebuild instead of clamping the negative values to zero.
 
 ## Native operator evidence
 
@@ -43,12 +45,14 @@ The project was saved through native Save As to `target\qa\Shinkan2026-native-ro
 
 Fresh-process reload restored the authored show and live Cue state while the direct child transport began stopped at `0.000s`. A same-process reload after advancing the child beyond 16 seconds also republished `0.000s`, proving the project-load runtime boundary when Cue IDs are reused. Closing the cleanly reloaded project produced no unsaved-change prompt.
 
+The signed-position follow-up was then repeated with the embedded release build. Its native import report showed 41 fixtures, 77 Cues, 229 Scene Blocks, 30 accounted effect racks and 0 skipped effects. The report displayed all negative source positions without clamping, including `-120`, `-3840`, `-40`, `-39`, `-400` and `-760 ms`. `Shin` entered LIVE, advanced its child transport and changed the Stage output. Save As produced `target\qa\Shinkan2026-native-signed-position.sdc` (1,596,018 bytes); a fresh application process reopened it with 41 fixtures, 77 Cues, 27 runtime effect targets and all 229 signed source-position fields intact: 29 positive, 9 negative and 191 zero. The nine negative values were `-3840, -760, -400, -400, -400, -400, -120, -40, -39`.
+
 ## Automated evidence
 
 The final gate ladder was rerun from its first step after the last code/harness change:
 
 - Rust formatting: PASS.
-- Protocol additive/legacy serialization: 41 passed.
+- Protocol/legacy serialization: 42 passed, including positive legacy values and signed negative source-position round-trip.
 - Engine Timeline focus: 65 passed, including direct child audio and transport behavior.
 - Engine Cue focus: 74 passed.
 - Tauri project focus: 89 passed, including runtime stripping and Scene Matrix identity semantics.

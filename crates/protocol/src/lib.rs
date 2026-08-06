@@ -1683,8 +1683,10 @@ pub struct TimelineCueEventSummary {
     pub conform_to_tempo: bool,
     #[serde(default)]
     pub loop_fill: bool,
+    /// Signed source position at the block start. Positive values trim into the
+    /// source; negative values preserve Daslight pre-roll before source time 0.
     #[serde(default)]
-    pub source_offset_ms: u64,
+    pub source_offset_ms: i64,
     #[serde(default)]
     pub rate: Option<f32>,
     #[serde(default)]
@@ -3877,6 +3879,26 @@ mod tests {
         assert_eq!(encoded_value["track"], "Lighting");
         assert_eq!(encoded_value["layer_id"], 7);
         assert_eq!(encoded_value["source_offset_ms"], 375);
+    }
+
+    #[test]
+    fn timeline_scene_block_negative_source_position_roundtrips() {
+        let event = super::TimelineCueEventSummary {
+            id: 10,
+            cue_id: 3,
+            time_ms: 2_000,
+            track: super::TimelineTrackKind::Lighting,
+            duration_ms: 1_000,
+            source_offset_ms: -375,
+            ..super::TimelineCueEventSummary::default()
+        };
+
+        let encoded = serde_json::to_string(&event).unwrap();
+        let decoded: super::TimelineCueEventSummary = serde_json::from_str(&encoded).unwrap();
+
+        assert_eq!(decoded, event);
+        let encoded_value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(encoded_value["source_offset_ms"], -375);
     }
 
     #[test]

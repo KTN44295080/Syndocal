@@ -7815,7 +7815,7 @@ export default function App() {
             : Number(args.durationBeats),
           conform_to_tempo: conformToTempo,
           loop_fill: loopFill,
-          source_offset_ms: Math.max(0, Number(args?.sourceOffsetMs ?? 0)),
+          source_offset_ms: Math.round(Number(args?.sourceOffsetMs ?? 0)),
           rate: conformToTempo && !loopFill && authoredBeats !== null && durationMs > 0
             ? (authoredBeats * 60_000 / snapshot().clock.bpm) / durationMs
             : null,
@@ -7857,7 +7857,7 @@ export default function App() {
           conform_to_tempo: conformToTempo,
           loop_fill: loopFill,
           source_offset_ms: command === "set_timeline_scene_block"
-            ? Math.max(0, Number(args?.sourceOffsetMs ?? source.source_offset_ms ?? 0))
+            ? Math.round(Number(args?.sourceOffsetMs ?? source.source_offset_ms ?? 0))
             : 0,
           rate: conformToTempo && !loopFill && authoredBeats !== null && durationMs > 0
             ? (authoredBeats * 60_000 / snapshot().clock.bpm) / durationMs
@@ -7912,7 +7912,7 @@ export default function App() {
               : Number(args.durationBeats),
             conform_to_tempo: Boolean(args?.conformToTempo),
             loop_fill: Boolean(args?.loopFill),
-            source_offset_ms: Math.max(0, Number(args?.sourceOffsetMs ?? 0)),
+            source_offset_ms: Math.round(Number(args?.sourceOffsetMs ?? 0)),
             rate: Boolean(args?.conformToTempo) && !Boolean(args?.loopFill)
               ? (() => {
                   const cue = current.cues.find((candidate) => candidate.id === Number(args?.cueId));
@@ -7967,7 +7967,7 @@ export default function App() {
                   ? Boolean(args?.loopFill)
                   : false,
                 source_offset_ms: command === "set_timeline_scene_block"
-                  ? Math.max(0, Number(args?.sourceOffsetMs ?? event.source_offset_ms ?? 0))
+                  ? Math.round(Number(args?.sourceOffsetMs ?? event.source_offset_ms ?? 0))
                   : 0,
                 rate: command === "set_timeline_scene_block" && Boolean(args?.conformToTempo) && !Boolean(args?.loopFill)
                   ? (() => {

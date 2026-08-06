@@ -112,6 +112,7 @@ for (const patch of [
   { time_ms: 1200 },
   { track: "Video" },
   { duration_ms: 900 },
+  { source_offset_ms: -250 },
   { loop_count: 3 },
   { jump_to_event_id: 8 },
 ]) {
@@ -373,6 +374,10 @@ assert.match(messages.at(-1), /Saved linked Scene Block/);
 
 await controller.set(point, { time_ms: 1234 });
 assert.equal(commands.at(-1).command, "set_timeline_cue_event");
+
+await controller.set(block, { source_offset_ms: -250 });
+assert.equal(commands.at(-1).command, "set_timeline_scene_block");
+assert.equal(commands.at(-1).args.sourceOffsetMs, -250, "signed source pre-roll survives editor normalization");
 
 await controller.moveBy(block, 500);
 assert.equal(commands.at(-1).command, "set_timeline_scene_block");

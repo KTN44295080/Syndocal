@@ -161,7 +161,7 @@ struct ParsedSceneEffects {
 
 #[derive(Debug)]
 struct ConvertedDvcEffect {
-    target: CueEffectTarget,
+    target: Option<CueEffectTarget>,
     generator: &'static str,
     note: String,
     approximations: Vec<String>,
@@ -1125,8 +1125,10 @@ fn parse_scene_effects(
                         "Daslight effect {} converted: {}",
                         converted.generator, converted.note
                     ));
-                    parsed.targets.push(converted.target);
-                    *next_effect_id = (*next_effect_id).saturating_add(1);
+                    if let Some(target) = converted.target {
+                        parsed.targets.push(target);
+                        *next_effect_id = (*next_effect_id).saturating_add(1);
+                    }
                 }
                 Err(error) => {
                     report.summary.effects_skipped =
@@ -1506,12 +1508,12 @@ fn convert_dvc_color_spatial_effect(
         format!("confirmed {generator} parameters are not representable: {error}")
     })?;
     Ok(ConvertedDvcEffect {
-        target: CueEffectTarget {
+        target: Some(CueEffectTarget {
             effect_id,
             enabled: true,
             params: Some(EffectParamsSnapshot::Color(request)),
             transition_ms: None,
-        },
+        }),
         generator,
         note,
         approximations,
@@ -1528,11 +1530,23 @@ fn convert_dvc_chaser_effect(
     effect_id: u64,
     fixture_refs: &HashMap<String, FixtureImportRef>,
 ) -> Result<ConvertedDvcEffect, String> {
+    let targets = dvc_rack_targets(rack, fixture_refs)?;
+    if targets.ordered_steps.is_empty() {
+        let generator = match generator_id {
+            321 => "Chaser #1",
+            322 => "Chaser #2",
+            _ => "Chaser random",
+        };
+        return Ok(ConvertedDvcEffect {
+            target: None,
+            generator,
+            note: "source no-op preserved: Daslight BEAMS contains zero targets; no runtime effect was created"
+                .to_string(),
+            approximations: Vec::new(),
+            warnings: Vec::new(),
+        });
+    }
     if generator_id == 322 {
-        let targets = dvc_rack_targets(rack, fixture_refs)?;
-        if targets.ordered_steps.is_empty() {
-            return Err("BEAMS resolved to no Chaser steps".to_string());
-        }
         return Err(
             "Chaser #2 variant algorithm is unverified; populated BEAMS remain Skipped".to_string(),
         );
@@ -1550,7 +1564,7 @@ fn convert_dvc_chaser_effect(
     };
     require_exact_dvc_params(&params, expected_params)?;
 
-    let mut targets = dvc_rack_targets(rack, fixture_refs)?;
+    let mut targets = targets;
     let incompatible_dimmer_targets = retain_dvc_dimmer_targets(&mut targets, fixture_refs);
     let original_step_count = targets.ordered_steps.len();
     if original_step_count == 0 {
@@ -1680,12 +1694,12 @@ fn convert_dvc_chaser_effect(
         "feature=Dimmer; selections={original_step_count}; pixels_on={pixels_on}; {free_run_note}; {clock_note}; {generator_note}"
     );
     Ok(ConvertedDvcEffect {
-        target: CueEffectTarget {
+        target: Some(CueEffectTarget {
             effect_id,
             enabled: true,
             params: Some(EffectParamsSnapshot::Chaser(request)),
             transition_ms: None,
-        },
+        }),
         generator,
         note,
         approximations,
@@ -1767,12 +1781,12 @@ fn convert_dvc_move_effect(
         u8::from(symmetry)
     );
     Ok(ConvertedDvcEffect {
-        target: CueEffectTarget {
+        target: Some(CueEffectTarget {
             effect_id,
             enabled: true,
             params: Some(EffectParamsSnapshot::Move(request)),
             transition_ms: None,
-        },
+        }),
         generator,
         note,
         approximations,
@@ -1877,12 +1891,12 @@ fn convert_dvc_inverse_ramp_effect(
         "feature=Dimmer; period_ms=round(DURATION/Rate)={period_ms}; descending_ramp=Saw directed from low-field {low} to high-field {high}: output(t)={low}+({high}-{low})*fract(t/period+Phase); phase={phase}; size={size}; offset={offset}; {clock_note}"
     );
     Ok(ConvertedDvcEffect {
-        target: CueEffectTarget {
+        target: Some(CueEffectTarget {
             effect_id,
             enabled: true,
             params: Some(EffectParamsSnapshot::Lfo(request)),
             transition_ms: None,
-        },
+        }),
         generator: "Inverse Ramp",
         note,
         approximations,
@@ -1977,12 +1991,12 @@ fn convert_dvc_sinus_effect(
         "feature=Dimmer; period_ms=round(DURATION/Rate)={period_ms}; low={low}; high={high}; phase={phase}; offset={offset}; {clock_note}"
     );
     Ok(ConvertedDvcEffect {
-        target: CueEffectTarget {
+        target: Some(CueEffectTarget {
             effect_id,
             enabled: true,
             params: Some(EffectParamsSnapshot::Lfo(request)),
             transition_ms: None,
-        },
+        }),
         generator: "Sinus",
         note,
         approximations,
@@ -2090,12 +2104,12 @@ fn convert_dvc_strobe_effect(
         "feature=Dimmer; shape=Strobe; pulses_per_period=10; pulse_width=2% graph-derived approximation; period_ms=round(DURATION/Rate)={period_ms}; low={low}; high={high}; phase={phase}; size={size}; offset={offset}; {clock_note}"
     );
     Ok(ConvertedDvcEffect {
-        target: CueEffectTarget {
+        target: Some(CueEffectTarget {
             effect_id,
             enabled: true,
             params: Some(EffectParamsSnapshot::Lfo(request)),
             transition_ms: None,
-        },
+        }),
         generator: "Strobe",
         note,
         approximations,
@@ -3042,17 +3056,7 @@ fn parse_super_scenes(
                             .unwrap_or(0)
                             .min(block_duration.saturating_sub(fade_in));
                         let position = parse_i64_attribute(block, "POSITION").unwrap_or(0);
-                        let source_offset_ms = u64::try_from(position.max(0)).unwrap_or(0);
-                        if position < 0 {
-                            report.approximate.add(
-                                1,
-                                format!(
-                                    "Scene block: {}",
-                                    block.attribute("NAME").unwrap_or("Untitled")
-                                ),
-                                "Negative source offset was clamped to zero",
-                            );
-                        }
+                        let source_offset_ms = position;
                         events.push(TimelineCueEventSummary {
                             id: next_event_id,
                             cue_id: cues[source_index].id,
@@ -3081,9 +3085,9 @@ fn parse_super_scenes(
                                 "Scene block: {}",
                                 block.attribute("NAME").unwrap_or("Untitled")
                             ),
-                            if source_offset_ms > 0 {
+                            if source_offset_ms != 0 {
                                 format!(
-                                    "{start_ms}..{end_ms} ms -> cue {} +offset {source_offset_ms} ms",
+                                    "{start_ms}..{end_ms} ms -> cue {} source position {source_offset_ms:+} ms",
                                     cues[source_index].label
                                 )
                             } else {
@@ -3925,7 +3929,7 @@ mod tests {
     }
 
     #[test]
-    fn dvc_scene_block_position_maps_positive_and_clamps_negative_offsets() {
+    fn dvc_scene_block_position_preserves_positive_and_negative_offsets() {
         let positive_source = synthetic_dvc().replacen(
             r#"TYPE="1" NAME="Static" START="0" END="1000" POSITION="0""#,
             r#"TYPE="1" NAME="Static" START="0" END="1000" POSITION="250""#,
@@ -3939,7 +3943,8 @@ mod tests {
             .events[0];
         assert_eq!(positive_event.source_offset_ms, 250);
         assert!(positive.report.converted.details.iter().any(|detail| {
-            detail.item == "Scene block: Static" && detail.message.contains("+offset 250 ms")
+            detail.item == "Scene block: Static"
+                && detail.message.contains("source position +250 ms")
         }));
         assert!(!positive.report.skipped.details.iter().any(|detail| {
             detail.message == "Daslight source POSITION offset has no Scene Block field"
@@ -3956,11 +3961,17 @@ mod tests {
             .as_ref()
             .unwrap()
             .events[0];
-        assert_eq!(negative_event.source_offset_ms, 0);
-        assert!(negative.report.approximate.details.iter().any(|detail| {
+        assert_eq!(negative_event.source_offset_ms, -250);
+        assert!(negative.report.converted.details.iter().any(|detail| {
             detail.item == "Scene block: Static"
-                && detail.message == "Negative source offset was clamped to zero"
+                && detail.message.contains("source position -250 ms")
         }));
+        assert!(!negative
+            .report
+            .approximate
+            .details
+            .iter()
+            .any(|detail| { detail.message == "Negative source offset was clamped to zero" }));
     }
 
     #[test]
@@ -4334,7 +4345,9 @@ mod tests {
             &effect_test_fixture_refs(),
         )
         .unwrap();
-        let Some(EffectParamsSnapshot::Lfo(request)) = converted.target.params else {
+        let Some(EffectParamsSnapshot::Lfo(request)) =
+            converted.target.expect("runtime target").params
+        else {
             panic!("CURVE 7 must convert to LFO params");
         };
         assert_eq!(request.clock_sync.unwrap().beats, 0.25);
@@ -4370,7 +4383,9 @@ mod tests {
                 &effect_test_fixture_refs(),
             )
             .unwrap();
-            let Some(EffectParamsSnapshot::Lfo(request)) = converted.target.params else {
+            let Some(EffectParamsSnapshot::Lfo(request)) =
+                converted.target.expect("runtime target").params
+            else {
                 panic!("CURVE 10 must convert to cue-owned LFO params");
             };
             assert_eq!(request.shape, LfoShape::Strobe);
@@ -4407,7 +4422,9 @@ mod tests {
             &effect_test_fixture_refs(),
         )
         .unwrap();
-        let Some(EffectParamsSnapshot::Color(request)) = converted.target.params else {
+        let Some(EffectParamsSnapshot::Color(request)) =
+            converted.target.expect("runtime target").params
+        else {
             panic!("COLOR 129 must convert to cue-owned Color params");
         };
         assert_eq!(request.stops.len(), 5);
@@ -4462,7 +4479,9 @@ mod tests {
             &effect_test_fixture_refs(),
         )
         .unwrap();
-        let Some(EffectParamsSnapshot::Color(request)) = converted.target.params else {
+        let Some(EffectParamsSnapshot::Color(request)) =
+            converted.target.expect("runtime target").params
+        else {
             panic!("COLOR 130 must convert to cue-owned Color params");
         };
         assert!(matches!(
@@ -4483,7 +4502,7 @@ mod tests {
     }
 
     #[test]
-    fn dvc_chaser_322_uses_verified_label_and_keeps_variant_unverified() {
+    fn dvc_chaser_322_preserves_empty_source_noop_and_keeps_populated_variant_unverified() {
         let document = Document::parse(
             r#"<DLMFILE DASBUILD="test" VERSIONFILE="2"><SCENE NAME="SS-Blue" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="3"><EFFECT TYPE="6" ID="322" DURATION="5000"><PARAMS NB="1"><PARAM ID="10" VAL="1"/></PARAMS></EFFECT><BEAMS NB="0"/></RACK></RACKS></SCENE></DLMFILE>"#,
         )
@@ -4502,11 +4521,17 @@ mod tests {
             &mut report,
         );
         assert!(parsed.targets.is_empty());
-        assert_eq!(report.summary.effects_skipped, 1);
-        assert!(report.skipped.details.iter().any(|detail| {
+        assert_eq!(report.summary.effects_converted, 1);
+        assert_eq!(report.summary.effects_skipped, 0);
+        assert_eq!(next_effect_id, 1);
+        assert!(report.converted.details.iter().any(|detail| {
             detail.item == "Effect: SS-Blue (Chaser #2)"
-                && detail.message.contains("BEAMS resolved to no Chaser steps")
+                && detail.message.contains("source no-op preserved")
         }));
+        assert!(parsed
+            .notes
+            .iter()
+            .any(|note| note.contains("source no-op preserved")));
 
         let populated = Document::parse(
             r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="3"><EFFECT TYPE="6" ID="322" DURATION="5000"><PARAMS NB="1"><PARAM ID="10" VAL="1"/></PARAMS></EFFECT><BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS></RACK></RACKS></SCENE>"#,
@@ -5116,8 +5141,8 @@ mod tests {
         }
         let outcome = import_path(path).unwrap();
         crate::validate_project_file(&outcome.project).unwrap();
-        assert_eq!(outcome.report.summary.effects_converted, 27);
-        assert_eq!(outcome.report.summary.effects_skipped, 3);
+        assert_eq!(outcome.report.summary.effects_converted, 30);
+        assert_eq!(outcome.report.summary.effects_skipped, 0);
         let imported_scene_blocks = outcome
             .project
             .snapshot
@@ -5130,16 +5155,19 @@ mod tests {
             .iter()
             .filter(|event| event.source_offset_ms > 0)
             .count();
-        let clamped_negative_offsets = outcome
+        let negative_scene_block_offsets = imported_scene_blocks
+            .iter()
+            .filter(|event| event.source_offset_ms < 0)
+            .count();
+        assert_eq!(imported_scene_blocks.len(), 229);
+        assert_eq!(positive_scene_block_offsets, 29);
+        assert_eq!(negative_scene_block_offsets, 9);
+        assert!(!outcome
             .report
             .approximate
             .details
             .iter()
-            .filter(|detail| detail.message == "Negative source offset was clamped to zero")
-            .count();
-        assert_eq!(imported_scene_blocks.len(), 229);
-        assert_eq!(positive_scene_block_offsets, 29);
-        assert_eq!(clamped_negative_offsets, 9);
+            .any(|detail| { detail.message == "Negative source offset was clamped to zero" }));
         assert!(!outcome.report.skipped.details.iter().any(|detail| {
             detail.message == "Daslight source POSITION offset has no Scene Block field"
         }));
@@ -5191,10 +5219,10 @@ mod tests {
         assert_eq!(
             outcome
                 .report
-                .skipped
+                .converted
                 .details
                 .iter()
-                .filter(|detail| detail.message.contains("BEAMS resolved to no Chaser steps"))
+                .filter(|detail| detail.message.contains("source no-op preserved"))
                 .count(),
             3
         );
@@ -5545,7 +5573,9 @@ mod tests {
             &fixture_refs,
         )
         .unwrap();
-        let Some(EffectParamsSnapshot::Lfo(ramp)) = converted.target.params else {
+        let Some(EffectParamsSnapshot::Lfo(ramp)) =
+            converted.target.expect("runtime target").params
+        else {
             panic!("homecoming golden must convert all_rampFlash to an LFO");
         };
         assert_eq!(converted.generator, "Inverse Ramp");
