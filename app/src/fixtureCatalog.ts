@@ -462,13 +462,28 @@ export const personalRigProfiles: VerifiedFixtureProfileSummary[] = [
     "personal-mini-moving-head-gobo-light-10ch",
     "Mini Moving Head Gobo Light",
     "Mini Moving Head Gobo Light",
-    "Mode 1 · 10-channel",
+    "10-channel · basic",
     10,
-    daslightSource("Mini Moving Head Gobo Light.ssl2"),
+    "Daslight ScanLibrary and user-supplied Mini Moving Head Gobo Light manual channel map",
     true,
     [
       e("Pan"), e("Tilt"), e("Color1"), e("Gobo1"), shutter,
-      d, e("PanTiltSpeed"), e("Generic: Other"), e("Generic: Other 2"), e("Generic: Other 3"),
+      d, e("PanTiltSpeed"), e("Generic: Rotation Direction / Speed"),
+      e("Generic: Auto Motion / Reset"), e("Generic: Light Strip Color / Auto"),
+    ],
+  ),
+  personalRigProfile(
+    "personal-mini-moving-head-gobo-light-12ch",
+    "Mini Moving Head Gobo Light",
+    "Mini Moving Head Gobo Light",
+    "12-channel · fine + programs",
+    12,
+    "User-supplied Mini Moving Head Gobo Light manual channel map",
+    false,
+    [
+      s("Pan"), s("Tilt"), e("Color1"), e("Gobo1"), shutter,
+      d, e("PanTiltSpeed"), e("Generic: Auto / Sound Program"),
+      e("Generic: Auto Motion / Reset"), e("Generic: Light Strip Color / Auto"),
     ],
   ),
   personalRigProfile(
@@ -524,7 +539,7 @@ export const personalRigProfiles: VerifiedFixtureProfileSummary[] = [
 ];
 
 export const personalRigFixtureCount = 4;
-export const personalRigModeCount = 17;
+export const personalRigModeCount = 18;
 
 if (personalRigProfiles.length !== personalRigModeCount) {
   throw new Error(`Personal rig pack must contain ${personalRigModeCount} modes`);
@@ -613,7 +628,7 @@ export const previewVerifiedProfiles: VerifiedFixtureProfileSummary[] = [
   ...genericVerifiedProfiles,
 ];
 
-export const verifiedFixtureProfileCount = 117;
+export const verifiedFixtureProfileCount = 118;
 export const verifiedFixtureCategoryCount = 8;
 
 if (previewVerifiedProfiles.length !== verifiedFixtureProfileCount) {
