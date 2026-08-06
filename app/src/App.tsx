@@ -180,6 +180,7 @@ import {
   reserveDmxAddressRange,
 } from "./dmxAddressing";
 import { verifiedFixtureProfileRequest, type FixtureProfileHealthSummary } from "./fixtureCatalog";
+import { bundledLibraryProfileRequest } from "./bundledLibrary";
 import { confirmCueRemoval, confirmDestructiveAction } from "./destructiveActions";
 import { createLiveAudioInputStatusRequestGate } from "./liveAudioInputStatusSync";
 import type {
@@ -11791,6 +11792,19 @@ export default function App() {
     }
   };
 
+  const usePatchBundledProfile = async (modeKey: string, label: string) => {
+    try {
+      const request = bundledLibraryProfileRequest(modeKey);
+      if (!request) throw new Error(`Bundled library profile '${label}' was not found`);
+      const imported = await tauriInvoke<FixtureProfileSummary>("create_custom_fixture_profile", { request });
+      selectLoadedProfile(imported, `Loaded ${label}`, request.mode_name, false);
+      return true;
+    } catch (error) {
+      setMessage(String(error));
+      return false;
+    }
+  };
+
   const usePatchCachedProfile = async (path: string, modeName: string | null) => {
     try {
       await loadGdtfProfile(path, "Loaded cached profile", modeName, false);
@@ -17677,6 +17691,7 @@ export default function App() {
               onLoadGdtf={importGdtf}
               onDownloadGdtf={downloadGdtfFromUrl}
               onLoadVerified={usePatchVerifiedProfile}
+              onLoadBundled={usePatchBundledProfile}
               onLoadCached={usePatchCachedProfile}
               onLoadRecent={usePatchRecentProfile}
               onLoadProject={usePatchProjectProfile}

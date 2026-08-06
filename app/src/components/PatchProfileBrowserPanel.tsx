@@ -12,6 +12,11 @@ import {
   type GdtfShareSearchResponse,
   type VerifiedFixtureProfileSummary,
 } from "../fixtureCatalog";
+import {
+  loadBundledLibraryAttribution,
+  loadBundledLibraryFixtures,
+  type BundledLibraryAttribution,
+} from "../bundledLibrary";
 import type { FixtureProfileSummary, PatchedFixtureSummary } from "../types";
 import {
   filterGdtfProfileTreeFixtures,
@@ -28,7 +33,7 @@ export interface PatchRecentProfileEntry {
 }
 
 export interface PatchProfileDragItem {
-  source: "verified" | "cache" | "session" | "project";
+  source: "verified" | "bundled" | "cache" | "session" | "project";
   key: string;
   label: string;
   modeName: string;
@@ -45,6 +50,8 @@ interface PatchProfileBrowserPanelProps extends ProfileImportSourcesProps {
   recentProfiles: PatchRecentProfileEntry[];
   projectFixtures: PatchedFixtureSummary[];
   onLoadVerified: (profileId: string, modeName: string) => boolean | Promise<boolean>;
+  /* #59: bundled Open Fixture Library mode key -> armed profile. */
+  onLoadBundled: (modeKey: string, label: string) => boolean | Promise<boolean>;
   onLoadCached: (path: string, modeName: string | null) => boolean | Promise<boolean>;
   onLoadRecent: (entry: PatchRecentProfileEntry) => boolean | Promise<boolean>;
   onLoadProject: (fixture: PatchedFixtureSummary) => boolean | Promise<boolean>;
@@ -235,6 +242,24 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
     .reduce((total, fixture) => total + fixture.modes.length, 0));
   const verifiedEntryForMode = (mode: GdtfProfileTreeMode) =>
     previewVerifiedProfiles.find((entry) => entry.id === mode.key);
+  /* #59: bundled Open Fixture Library (MIT). Loaded lazily on first paint of
+     the browser so the ~324 kB payload stays out of the main chunk. */
+  const [bundledFixtures, setBundledFixtures] = createSignal<GdtfProfileTreeFixture[]>([]);
+  const [bundledAttribution, setBundledAttribution] = createSignal<BundledLibraryAttribution | null>(null);
+  onMount(() => {
+    void loadBundledLibraryFixtures()
+      .then((fixtures) => {
+        setBundledFixtures(fixtures);
+        return loadBundledLibraryAttribution();
+      })
+      .then((attribution) => setBundledAttribution(attribution))
+      .catch(() => setBundledFixtures([]));
+  });
+  const visibleBundledFixtures = createMemo(() =>
+    filterGdtfProfileTreeFixtures(bundledFixtures(), query()));
+  const visibleBundledProfileCount = createMemo(() => visibleBundledFixtures()
+    .reduce((total, fixture) => total + fixture.modes.length, 0));
+
   const cacheTreeFixtures = createMemo(() => cacheEntries().map((entry) =>
     profileTreeFixture(entry, entry.path)));
   const visibleCacheFixtures = createMemo(() =>
@@ -665,6 +690,61 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
           />
           <Show when={visibleVerifiedProfileCount() === 0}>
             <p class="empty patchProfileRowEmpty">No matching profiles.</p>
+          </Show>
+        </section>
+
+        <section class="patchProfileBrowserSection" data-patch-profile-section="bundled">
+          <header>
+            <strong>Bundled manufacturer library</strong>
+            <span>{visibleBundledProfileCount()}</span>
+          </header>
+          <GdtfProfileTree
+            ariaLabel="Bundled manufacturer profile tree"
+            source="bundled"
+            fixtures={visibleBundledFixtures()}
+            searchActive={Boolean(query().trim())}
+            disabled={() => !props.backendAvailable || busy()}
+            draggable={() => true}
+            selected={(fixture, mode) => selected(
+              mode.key,
+              fixture.manufacturer,
+              fixture.fixture,
+              mode.modeName ?? "",
+            )}
+            onActivate={(fixture, mode) => void props.onLoadBundled(
+              mode.key,
+              `${fixture.manufacturer} ${fixture.fixture}`,
+            )}
+            onDragStart={(event, fixture, mode) => beginProfileDrag(event, {
+              source: "bundled",
+              key: mode.key,
+              label: `${fixture.manufacturer} ${fixture.fixture}`,
+              modeName: mode.modeName ?? mode.name,
+              footprint: mode.footprint,
+              activate: () => props.onLoadBundled(
+                mode.key,
+                `${fixture.manufacturer} ${fixture.fixture}`,
+              ),
+            })}
+            onDragEnd={props.onProfileDragEnd}
+          />
+          <Show when={bundledFixtures().length === 0}>
+            <p class="empty patchProfileRowEmpty" data-patch-bundled-loading>
+              Loading the bundled library…
+            </p>
+          </Show>
+          <Show when={bundledFixtures().length > 0 && visibleBundledProfileCount() === 0}>
+            <p class="empty patchProfileRowEmpty">No matching profiles.</p>
+          </Show>
+          <Show when={bundledAttribution()}>
+            {(attribution) => (
+              <p class="patchProfileBundledAttribution" data-patch-bundled-attribution>
+                <span>Profiles from</span>{" "}
+                <b data-no-localize>{attribution().source}</b>{" "}
+                <span data-no-localize>({attribution().license})</span>{" · "}
+                <span data-no-localize>{attribution().copyright}</span>
+              </p>
+            )}
           </Show>
         </section>
 

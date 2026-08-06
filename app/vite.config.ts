@@ -47,6 +47,20 @@ export default defineConfig({
           ) {
             return "fixture-catalog";
           }
+          // #59/#63: the patch surface owns the profile browser, its tree, and
+          // the custom-profile workbench - large enough to keep out of index.
+          if (
+            normalizedId.includes("/src/components/PatchProfileBrowserPanel") ||
+            normalizedId.includes("/src/components/GdtfProfileTree") ||
+            normalizedId.includes("/src/components/CustomProfileEditorPanel") ||
+            normalizedId.includes("/src/components/DmxPatchMapPanel") ||
+            normalizedId.includes("/src/components/PatchFixtureFormPanel") ||
+            normalizedId.includes("/src/bundledLibrary") ||
+            normalizedId.includes("/src/customFixtureProfile") ||
+            normalizedId.includes("/src/dmxAddressing")
+          ) {
+            return "patch-panels";
+          }
           if (normalizedId.includes("/src/components/FaderGridPanel")) {
             return "fader-controls";
           }

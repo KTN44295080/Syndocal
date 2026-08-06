@@ -762,6 +762,9 @@ const japaneseText: Record<string, string> = {
   "Custom profile workbench": "自作プロファイル工房",
   "Broken profile source:": "プロファイル源が破損:",
   Repair: "修復",
+  "Bundled manufacturer library": "同梱メーカーライブラリ",
+  "Loading the bundled library…": "同梱ライブラリを読み込み中…",
+  "Profiles from": "プロファイル出典",
   "Relink the selected fixture to the armed profile with an exact DMX layout match.":
     "選択中の灯体を、DMXレイアウトが完全一致する武装中プロファイルへ再リンクします。",
   "Fixture profiles, DMX addressing, and assignment": "灯体プロファイル・DMXアドレス・割り当て",

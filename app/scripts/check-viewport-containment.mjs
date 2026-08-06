@@ -9947,7 +9947,7 @@ function hasExpectedSetupSurface(result) {
       result.visiblePatchTopFormCount === 0 &&
       result.visiblePatchProfileBrowserCount === 1 &&
       result.visiblePatchProfileSearchCount === 1 &&
-      JSON.stringify(result.patchProfileSectionNames) === JSON.stringify(["verified", "cache", "recent", "share"]) &&
+      JSON.stringify(result.patchProfileSectionNames) === JSON.stringify(["verified", "bundled", "cache", "recent", "share"]) &&
       result.visiblePatchVerifiedProfileTreeCount === 1 &&
       result.visiblePatchVerifiedCategoryCount === verifiedGenericCategoryCount &&
       JSON.stringify(result.patchVerifiedCategoryProfileCounts) === JSON.stringify(verifiedGenericCategoryProfileCounts) &&
@@ -14170,7 +14170,7 @@ async function runPatchGdtfShareViewport(client, viewport) {
   const cancelledDownloadCalls = batchCancelled.mock?.downloadCalls ?? [];
   const checks = {
     shareSectionOrder:
-      JSON.stringify(signedOut.sectionNames) === JSON.stringify(["verified", "cache", "recent", "share"]),
+      JSON.stringify(signedOut.sectionNames) === JSON.stringify(["verified", "bundled", "cache", "recent", "share"]),
     defaultVerifiedAndCacheTreesCollapsed:
       defaultCollapsed.verifiedTreeRole === "tree" &&
       defaultCollapsed.verifiedTreeItems.length === verifiedGenericCategoryCount &&
@@ -14546,6 +14546,23 @@ async function runPatchEmptyStateViewport(client, viewport) {
       ).length,
       profileBrowserSectionNames: profileBrowserSections
         .map((section) => section.getAttribute('data-patch-profile-section')),
+      // #59: bundled Open Fixture Library section (lazy-loaded MIT snapshot).
+      bundledProfileTreeCount: document.querySelectorAll(
+        '[data-patch-profile-section="bundled"] [data-patch-profile-tree="bundled"][role="tree"]'
+      ).length,
+      bundledManufacturerCount: document.querySelectorAll(
+        '[data-patch-profile-tree="bundled"] [role="treeitem"][data-profile-tree-item="manufacturer"]'
+      ).length,
+      bundledManufacturerExpandedValues: [...document.querySelectorAll(
+        '[data-patch-profile-tree="bundled"] [role="treeitem"][data-profile-tree-item="manufacturer"]'
+      )].map((item) => item.getAttribute('aria-expanded')),
+      bundledProfileRowCount: document.querySelectorAll(
+        '[data-patch-profile-row][data-profile-source="bundled"]'
+      ).length,
+      bundledAttributionText: (document.querySelector('[data-patch-bundled-attribution]')?.textContent || '')
+        .replace(/\\s+/g, ' ')
+        .trim(),
+      bundledLoadingRowCount: document.querySelectorAll('[data-patch-bundled-loading]').length,
       verifiedProfileRowCount: document.querySelectorAll(
         '[data-patch-profile-row][data-profile-source="verified"]'
       ).length,
@@ -14649,12 +14666,14 @@ async function runPatchEmptyStateViewport(client, viewport) {
       metrics.patchMinimalInputCount === 3 &&
       metrics.patchPrimaryButtonCount === 1 &&
       metrics.patchPrimaryButtonDisabled === true &&
-      metrics.placementDisclosureCount === 1 &&
+      // #64: placement options are hidden until a profile is armed - unarmed
+      // they only showed a meaningless zero-footprint summary.
+      metrics.placementDisclosureCount === 0 &&
       metrics.placementDisclosureOpenCount === 0,
     embeddedProfileBrowser:
       metrics.profileBrowserPresent === true &&
       metrics.profileSearchCount === 1 &&
-      JSON.stringify(metrics.profileBrowserSectionNames) === JSON.stringify(['verified', 'cache', 'recent', 'share']) &&
+      JSON.stringify(metrics.profileBrowserSectionNames) === JSON.stringify(['verified', 'bundled', 'cache', 'recent', 'share']) &&
       metrics.verifiedProfileTreeCount === 1 &&
       metrics.verifiedCategoryCount === verifiedGenericCategoryCount &&
       JSON.stringify(metrics.verifiedCategoryProfileCounts) === JSON.stringify(verifiedGenericCategoryProfileCounts) &&
@@ -14669,6 +14688,16 @@ async function runPatchEmptyStateViewport(client, viewport) {
       metrics.cachedProfileTreeItemCount === 0 &&
       metrics.shareProfileTreeCount === 0 &&
       metrics.flatProfileSectionTreeCount === 0,
+    // #59: the bundled Open Fixture Library ships offline with no account -
+    // manufacturers collapsed by default, MIT attribution always visible.
+    bundledLibraryAvailableOffline:
+      metrics.bundledProfileTreeCount === 1 &&
+      metrics.bundledLoadingRowCount === 0 &&
+      metrics.bundledManufacturerCount >= 100 &&
+      metrics.bundledManufacturerExpandedValues.every((value) => value === 'false') &&
+      metrics.bundledProfileRowCount === 0 &&
+      metrics.bundledAttributionText.includes('Open Fixture Library') &&
+      metrics.bundledAttributionText.includes('MIT'),
     footprintFilterIsExactAndAutoExpands:
       footprintFilterMetrics.filterValue === '25' &&
       footprintFilterMetrics.sectionCountText === '2' &&

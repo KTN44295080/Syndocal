@@ -37,7 +37,7 @@ export interface GdtfProfileTreeManufacturerBatchState {
 
 interface GdtfProfileTreeProps {
   ariaLabel: string;
-  source: "verified" | "cache" | "share";
+  source: "verified" | "bundled" | "cache" | "share";
   fixtures: GdtfProfileTreeFixture[];
   searchActive: boolean;
   disabled: (fixture: GdtfProfileTreeFixture, mode: GdtfProfileTreeMode) => boolean;

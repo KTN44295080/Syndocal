@@ -104,8 +104,16 @@ export function PatchFixtureFormPanel(props: PatchFixtureFormPanelProps) {
         <button class="primary patchFixtureSubmit" onClick={props.onPatch} disabled={!props.armed || props.invalid}>
           PATCH
         </button>
+        {/* #64: placement options only make sense once a profile is armed -
+            unarmed they showed a meaningless "0ch / end address 1" footer. */}
+        <Show when={props.armed}>
         <details class="patchFixtureOptionsDisclosure" data-patch-placement-disclosure>
-          <summary>Placement options</summary>
+          <summary>
+            Placement options
+            <Show when={props.normalizedCount > 1}>
+              <small data-patch-placement-multi>{props.normalizedCount}x</small>
+            </Show>
+          </summary>
           <div class="patchFixtureOptions">
             <div class="fieldWithAction">
               <label>
@@ -222,6 +230,7 @@ export function PatchFixtureFormPanel(props: PatchFixtureFormPanelProps) {
             </Show>
           </div>
         </details>
+        </Show>
       </div>
       <Show when={!props.armed}>
         <p class="patchProfileEmptyState" data-patch-profile-empty>
