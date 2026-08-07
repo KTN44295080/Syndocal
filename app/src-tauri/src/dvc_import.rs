@@ -3568,7 +3568,7 @@ fn non_empty_label(value: Option<&str>, fallback: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, io::Write};
+    use std::{collections::BTreeSet, io::Write, net::UdpSocket, time::Duration};
 
     use base64::Engine as _;
     use flate2::{write::ZlibEncoder, Compress, Compression, FlushCompress};
@@ -4831,11 +4831,21 @@ mod tests {
             .find(|cue| cue.label == "Shin" && cue.child_timeline.is_some())
             .expect("golden project should contain the Shin Timeline");
         let cue_id = shin.id;
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        receiver
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let artnet_port = receiver.local_addr().unwrap().port();
         let mut snapshot_to_load = outcome.project.snapshot;
-        snapshot_to_load.output.enabled = false;
-        for output in &mut snapshot_to_load.dmx_outputs {
-            output.enabled = false;
-        }
+        snapshot_to_load.output = DmxOutputConfig {
+            enabled: true,
+            protocol: protocol::DmxOutputProtocol::ArtNet,
+            target_ip: "127.0.0.1".to_string(),
+            port: artnet_port,
+            universe: 0,
+            ..DmxOutputConfig::default()
+        };
+        snapshot_to_load.dmx_outputs = vec![snapshot_to_load.output.clone()];
         let engine = engine::EngineHandle::start(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
@@ -4886,6 +4896,19 @@ mod tests {
                 channel + 2
             );
         }
+
+        let mut buffer = [0_u8; 600];
+        let packet = loop {
+            let (received, _) = receiver.recv_from(&mut buffer).unwrap();
+            let packet = io::artnet::parse_art_dmx_packet(&buffer[..received]).unwrap();
+            if packet.universe == 0 && packet.data.get(108) == Some(&255) {
+                break packet;
+            }
+        };
+        assert_eq!(
+            packet.data, frame,
+            "Art-Net must carry the paused seek frame"
+        );
     }
 
     #[test]
