@@ -48,7 +48,13 @@ The measured rate is 44 frames/s over the 20-second window. This is an external-
 
 ## Daslight-to-Syndocal A/B capture status (2026-08-07)
 
-The comparison path is executable, but a truthful Daslight reference frame is not available on this machine yet.
+The comparison path is executable without a Daslight Art-Net licence. The
+supported `DMX LEVELS` window exposes the internal 512-channel values; a captured
+730x601 frame can be converted into comparator-compatible JSON with
+`qa/harnesses/daslight-dmx-levels-reference.ps1`. Exact bytes are transcribed
+from the visible numbers and independently checked against the visible blue bar
+set and approximate bar height. This is a final-frame comparison path, not a
+44 Hz packet-stream capture.
 
 - Daslight source: `C:\Users\kouty\Desktop\Shinkan-Left\Shinkan2026.dvc` (344,765 bytes, SHA-256 `ED202B33878E42124D8DEDA2088239C9E8A1B7C65EFDC56821B6317FF9BE3099`).
 - Daslight virtual device: `Codex Capture`, active, Art-Net 4, `192.168.1.255`, mask `255.255.255.0`, port 6454, Art-Net universe 0 mapped to software universe 1.
@@ -56,7 +62,7 @@ The comparison path is executable, but a truthful Daslight reference frame is no
 - Broadcast capture with `Use Broadcast` enabled while switching `Unr`/`Shin`: 20 seconds, ArtDMX 0, rejected non-ArtDMX 1.
 - Hardware Manager reported no connected device. Daslight listed a cached `DVC GOLD` serial `1021943`, but its connectivity remained disabled.
 
-Daslight's manual states that Art-Net output needs a connected compatible SUT device with a valid Art-Net licence. The virtual device and universe mapping can therefore be configured without a reference ArtDMX stream being licensed for output. Connect the licensed Daslight interface, repeat one capture per named scene, then pass those JSON files to `artnet-compare.mjs`; until that reference exists, do not label the import/output byte-identical to Daslight.
+Daslight's manual states that Art-Net output needs a connected compatible SUT device with a valid Art-Net licence. The virtual device and universe mapping can therefore be configured without a reference ArtDMX stream being licensed for output. A licensed interface remains necessary for Daslight packet cadence/sequence comparison, but it is no longer required for stable visible final-frame byte comparison. Until the same named scene and time point pass `artnet-compare.mjs`, do not label the import/output byte-identical to Daslight.
 
 Official source: [Daslight 5 v1.4 manual](https://eu-litterature.n-g.co/Release/daslight_5_manual_en.pdf).
 

@@ -81,9 +81,19 @@ between-phase browser recycling (fresh profile each time) isolates it.
   Transition digests are diagnostic because independently started dynamic FX
   captures are not guaranteed to share a time origin.
 
+- `daslight-dmx-levels-reference.ps1` supplies a no-Art-Net Daslight reference
+  path. Capture the visible `DMX LEVELS` child window as a 730x601 PNG, transcribe
+  its non-zero numeric values, and the script writes comparator-compatible JSON.
+  It rejects a changed crop, missing/unexpected blue level bars, and values whose
+  bar estimate is outside the configured tolerance. This intentionally reads
+  the supported visible UI; it does not inspect Daslight process memory or its
+  protected internal visualizer transport.
+
   ```powershell
   node qa/harnesses/artnet-monitor.mjs --self-test
   node qa/harnesses/artnet-monitor.mjs --duration-seconds 20 --capture-changes --max-transitions 1024 --evidence target/qa/artnet-acceptance.json
+  pwsh qa/harnesses/daslight-dmx-levels-reference.ps1 -SelfTest
+  pwsh qa/harnesses/daslight-dmx-levels-reference.ps1 -InputPng target/qa/daslight-dmx-levels.png -Assignments "82=255,83=130" -OutPath target/qa/daslight-scene.json
   node qa/harnesses/artnet-compare.mjs --self-test
   node qa/harnesses/artnet-compare.mjs --reference target/qa/daslight-scene.json --candidate target/qa/syndocal-scene.json --universe 0 --evidence target/qa/artnet-comparison.json
   ```
