@@ -27351,29 +27351,17 @@ fn evaluate_color_spatial_sample_at_rate(
             let width = f32::from((*size).max(1));
             let half_width = width * 0.5;
             let phase = time_phase.rem_euclid(1.0) as f32;
-            let travel = if *one_way {
-                phase
-            } else if phase <= 0.5 {
-                phase * 2.0
-            } else {
-                (1.0 - phase) * 2.0
-            };
             let last_index = strip_count.saturating_sub(1) as f32;
-            let center = if *go_outside {
-                -half_width + travel * (last_index + width)
-            } else {
-                travel * last_index
-            };
-            let mut relative = target.strip_index as f32 - center;
-            if !*go_outside && width < strip_count as f32 && strip_count > 1 {
-                let cycle = strip_count as f32;
-                relative -= (relative / cycle).round() * cycle;
-            }
-            let window_position = relative + half_width;
-            let inside = (0.0..=width).contains(&window_position);
-            let level = if !inside {
-                0.0
-            } else {
+            let level_at_center = |center: f32| {
+                let mut relative = target.strip_index as f32 - center;
+                if !*go_outside && width < strip_count as f32 && strip_count > 1 {
+                    let cycle = strip_count as f32;
+                    relative -= (relative / cycle).round() * cycle;
+                }
+                let window_position = relative + half_width;
+                if !(0.0..=width).contains(&window_position) {
+                    return 0.0;
+                }
                 // The moving raster selects a palette position. It does not
                 // alpha-blend the effect with the previous DMX value: direct
                 // captures retain the first palette colour outside the peak.
@@ -27390,6 +27378,20 @@ fn evaluate_color_spatial_sample_at_rate(
                 }
                 .clamp(0.0, 1.0)
             };
+            let travel_span = last_index + if *go_outside { width } else { 0.0 };
+            let origin = if *go_outside { -half_width } else { 0.0 };
+            let center = if *one_way {
+                origin + phase * travel_span
+            } else if phase <= 0.5 {
+                // Daslight's bidirectional Knight Rider starts in the middle,
+                // reaches the first edge halfway through the authored period,
+                // then returns to the middle. It does not render two opposing
+                // heads and it does not begin at the first selected beam.
+                origin + (0.5 - phase) * travel_span
+            } else {
+                origin + (phase - 0.5) * travel_span
+            };
+            let level = level_at_center(center);
             return RuntimeColorSpatialSample {
                 // Fading changes interpolation inside the palette. With it
                 // disabled Daslight lands on discrete palette stops; it does
@@ -49570,6 +49572,38 @@ mod tests {
             })
             .count();
         assert_eq!(lit, 32);
+    }
+
+    #[test]
+    fn color_spatial_knight_rider_bidirectional_sweep_starts_at_strip_center() {
+        let request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
+            size: 3,
+            one_way: false,
+            fading: true,
+            go_outside: false,
+            gradient: 50.0,
+        });
+        let samples_at = |elapsed_ms| {
+            (0..7)
+                .map(|index| {
+                    evaluate_test_spatial_color(
+                        &request,
+                        &test_spatial_color_target(index, 7, index as f32 / 6.0, 0.5),
+                        elapsed_ms,
+                    )
+                    .red
+                })
+                .collect::<Vec<_>>()
+        };
+        let at_start = samples_at(0);
+        let at_quarter = samples_at(250);
+        let at_half = samples_at(500);
+        assert_eq!(
+            at_start.iter().position(|level| *level == u16::MAX),
+            Some(3)
+        );
+        assert!(at_quarter[1] > at_quarter[3]);
+        assert_eq!(at_half.iter().position(|level| *level == u16::MAX), Some(0));
     }
 
     #[test]

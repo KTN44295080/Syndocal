@@ -5009,6 +5009,24 @@ mod tests {
         }
         let frame_at_twenty =
             frame_at_twenty.expect("Shin 20-second seek should publish a stable paused frame");
+        // Daslight's on-screen DMX Levels cells are refreshed independently,
+        // so a screenshot is not packet-atomic while an FX generator is live.
+        // Keep the observed frame as a bounded visual-parity check while the
+        // Chaser values below remain exact packet assertions.
+        let daslight_levels_capture = [
+            255, 176, 116, 0, 255, 255, 180, 125, 0, 255, 255, 190, 143, 0, 255, 255, 180, 130, 0,
+            255, 255, 110, 0, 0, 255, 255, 128, 9, 0, 255, 255, 128, 8, 0, 255, 255, 113, 8, 0,
+            255, 255, 139, 80, 0, 255, 255, 133, 72, 0, 0, 0, 0, 255,
+        ];
+        let capture_absolute_error = frame_at_twenty[..daslight_levels_capture.len()]
+            .iter()
+            .zip(daslight_levels_capture)
+            .map(|(actual, observed)| actual.abs_diff(observed) as u64)
+            .sum::<u64>();
+        assert!(
+            capture_absolute_error <= 700,
+            "20.000 s Par-OrangeStrobe visual capture error {capture_absolute_error} exceeded the packet-skew allowance"
+        );
         assert_eq!(
             [
                 frame_at_twenty[85],
