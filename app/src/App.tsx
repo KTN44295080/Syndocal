@@ -670,6 +670,7 @@ const projectMutationCommands = new Set([
   "update_timeline_audio_clip",
   "remove_timeline_audio_clip",
   "set_timeline_audio_master",
+  "set_timeline_metronome",
   "create_custom_fixture_profile",
   "use_fixture_profile",
   "patch_fixture",
@@ -1952,6 +1953,8 @@ export default function App() {
     video_automations: child.video_automations ?? [],
     audio: child.audio ?? null,
     audio_clips: child.audio_clips ?? [],
+    metronome_enabled: child.metronome_enabled ?? false,
+    count_in_beats: Math.max(0, Math.min(16, Math.round(child.count_in_beats ?? 4))),
     duration_ms: Math.max(0, child.duration_ms ?? 0),
   });
   const activeTimeline = createMemo<TimelineSnapshot>(() => {
@@ -1968,6 +1971,9 @@ export default function App() {
       audio_clips: normalized.audio_clips ?? [],
       audio_offset_ms: 0,
       audio_muted: false,
+      metronome_enabled: normalized.metronome_enabled ?? false,
+      count_in_beats: normalized.count_in_beats ?? 4,
+      count_in_remaining_ms: transport?.count_in_remaining_ms ?? 0,
       playing: transport?.playing ?? false,
       position_ms: Math.min(transport?.position_ms ?? 0, normalized.duration_ms ?? 0),
       duration_ms: normalized.duration_ms ?? 0,
@@ -7664,6 +7670,16 @@ export default function App() {
     if (command === "seek_timeline") {
       return invoke<T>("seek_direct_child_timeline", { cueId: childCueId, ...args });
     }
+    if (command === "set_timeline_metronome") {
+      const enabled = Boolean(args?.enabled);
+      const countInBeats = Math.max(0, Math.min(16, Math.round(Number(args?.countInBeats) || 0)));
+      await persistChildTimeline(childCueId, (current) => ({
+        ...current,
+        metronome_enabled: enabled,
+        count_in_beats: countInBeats,
+      }));
+      return undefined as T;
+    }
     const child = normalizedChildTimeline(timelineChildCue()?.child_timeline ?? {});
     if (command === "set_timeline_automation_enabled") {
       const automationId = Number(args?.automationId);
@@ -13138,6 +13154,36 @@ export default function App() {
     setSceneSettingsSurface("details");
     setTimelineContextDrawer("none");
     setMessage(`Opened Cue details for ${cue.cue_number || cue.id}.`);
+  };
+
+  const setTimelineMetronome = async (enabled: boolean, countInBeats: number) => {
+    try {
+      const normalizedCountInBeats = Math.max(0, Math.min(16, Math.round(countInBeats)));
+      if (viewportFixture === "timeline-layered" && timelineChildCueId() === null) {
+        setSnapshot((current) => ({
+          ...current,
+          timeline: {
+            ...current.timeline,
+            metronome_enabled: enabled,
+            count_in_beats: normalizedCountInBeats,
+          },
+        }));
+        setMessage(enabled
+          ? (normalizedCountInBeats > 0 ? "Timeline click enabled with one bar count-in." : "Timeline click enabled.")
+          : "Timeline click disabled.");
+        return;
+      }
+      await invokeTimelineEditingCommand("set_timeline_metronome", {
+        enabled,
+        countInBeats: normalizedCountInBeats,
+      });
+      setMessage(enabled
+        ? (normalizedCountInBeats > 0 ? "Timeline click enabled with one bar count-in." : "Timeline click enabled.")
+        : "Timeline click disabled.");
+      await refreshTimelineEditingSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
   };
 
   const openOrCreateSuperScene = async (cueId: number) => {
@@ -18991,6 +19037,9 @@ export default function App() {
               bpm={snapshot().clock.bpm}
               durationMs={activeTimeline().duration_ms}
               playing={activeTimeline().playing}
+              metronomeEnabled={activeTimeline().metronome_enabled ?? false}
+              countInBeats={activeTimeline().count_in_beats ?? 4}
+              countInRemainingMs={activeTimeline().count_in_remaining_ms ?? 0}
               executingLive={timelineExecutionLive()}
               cuesCount={snapshot().cues.length}
               superSceneCueCount={superSceneCueCount()}
@@ -19042,6 +19091,7 @@ export default function App() {
               onOpenSuperScene={(cueId) => void openOrCreateSuperScene(cueId)}
               onPause={pauseTimeline}
               onPlay={playTimeline}
+              onSetMetronome={setTimelineMetronome}
               onSeekOverviewTime={seekTimelineFromOverviewTime}
               onMoveEventPlacement={moveTimelineCueEventToPlacement}
               onResizeEventTime={resizeTimelineCueEventToTime}

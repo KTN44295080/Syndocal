@@ -689,11 +689,60 @@ struct MediaAudioPlayback {
     timeline_failures: HashMap<TimelineAudioSinkKey, TimelineAudioPlaybackFailure>,
     timeline_last_resync_at: HashMap<TimelineAudioSinkKey, Instant>,
     timeline_transport: TimelineAudioTransportState,
+    metronome: TimelineMetronomePlaybackState,
     resync_count: u64,
     last_drift_ms: i64,
     max_abs_drift_ms: u64,
     last_sync_error: Option<String>,
     timeline_last_sync_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct TimelineMetronomePlaybackState {
+    transport: Option<engine::TimelineMetronomeTransport>,
+    last_count_in_step: Option<u8>,
+    last_beat_index: Option<u64>,
+}
+
+fn timeline_metronome_click_action(
+    state: &mut TimelineMetronomePlaybackState,
+    timeline: &engine::TimelineAudioRuntimeSnapshot,
+) -> Option<bool> {
+    let active =
+        timeline.playing && timeline.metronome_enabled && timeline.metronome_transport.is_some();
+    if !active {
+        *state = TimelineMetronomePlaybackState::default();
+        return None;
+    }
+
+    if state.transport != timeline.metronome_transport {
+        *state = TimelineMetronomePlaybackState {
+            transport: timeline.metronome_transport,
+            ..TimelineMetronomePlaybackState::default()
+        };
+    }
+
+    let beat_ms = (60_000.0 / f64::from(timeline.bpm.clamp(20.0, 300.0))).max(1.0);
+    if timeline.count_in_remaining_ms > 0 && timeline.count_in_beats > 0 {
+        let remaining_beats = ((timeline.count_in_remaining_ms as f64) / beat_ms)
+            .ceil()
+            .clamp(1.0, f64::from(timeline.count_in_beats)) as u8;
+        let step = timeline.count_in_beats.saturating_sub(remaining_beats);
+        if state.last_count_in_step == Some(step) {
+            return None;
+        }
+        state.last_count_in_step = Some(step);
+        state.last_beat_index = None;
+        return Some(step == 0);
+    }
+
+    let beat_index = ((timeline.position_ms as f64) / beat_ms).floor() as u64;
+    if state.last_beat_index == Some(beat_index) {
+        return None;
+    }
+    state.last_count_in_step = None;
+    state.last_beat_index = Some(beat_index);
+    Some(beat_index % 4 == 0)
 }
 
 /// Root clips retain their historic id domain. Child clips are isolated by the activation of the
@@ -1030,6 +1079,7 @@ impl MediaAudioSyncRuntime {
                                 audio.sync_to_video_layers(&snapshot.layers);
                             }
                             audio.sync_to_timeline_audio(&snapshot.timeline_audio);
+                            audio.sync_metronome(&snapshot.timeline_audio);
                             !audio.sinks.is_empty()
                                 || !audio.timeline_sinks.is_empty()
                                 || snapshot.timeline_audio.playing
@@ -2578,6 +2628,35 @@ impl MediaAudioPlayback {
             }
         }
         self.timeline_last_sync_error = (!errors.is_empty()).then(|| errors.join("; "));
+    }
+
+    fn play_metronome_click(&mut self, accented: bool) -> Result<(), String> {
+        use rodio::Source;
+
+        let requested_device_name = self.requested_device_name.clone();
+        self.ensure_output_stream(requested_device_name.as_deref())?;
+        let stream = self
+            .stream
+            .as_ref()
+            .ok_or_else(|| "Audio output stream was not initialized".to_string())?;
+        let sink = rodio::Sink::connect_new(stream.mixer());
+        let frequency = if accented { 1_320.0 } else { 880.0 };
+        let gain = if accented { 0.22 } else { 0.16 };
+        sink.append(
+            rodio::source::SineWave::new(frequency)
+                .take_duration(Duration::from_millis(42))
+                .amplify(gain),
+        );
+        sink.detach();
+        Ok(())
+    }
+
+    fn sync_metronome(&mut self, timeline: &engine::TimelineAudioRuntimeSnapshot) {
+        if let Some(accented) = timeline_metronome_click_action(&mut self.metronome, timeline) {
+            if let Err(error) = self.play_metronome_click(accented) {
+                self.timeline_last_sync_error = Some(format!("Timeline click failed: {error}"));
+            }
+        }
     }
 
     fn reconfigure_active(
@@ -8452,6 +8531,21 @@ fn set_timeline_playing(state: State<'_, AppState>, playing: bool) -> Result<(),
     state
         .engine
         .send(EngineCommand::SetTimelinePlaying(playing))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_timeline_metronome(
+    state: State<'_, AppState>,
+    enabled: bool,
+    count_in_beats: u8,
+) -> Result<(), String> {
+    state
+        .engine
+        .send(EngineCommand::SetTimelineMetronome {
+            enabled,
+            count_in_beats: count_in_beats.min(16),
+        })
         .map_err(|error| error.to_string())
 }
 
@@ -26759,6 +26853,55 @@ mod tests {
 
     const TEST_UPDATE_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVBQTZGNUI4MkEzRDkzQjEKUldTeGt6MHF1UFdtV3FzQUs5OEZubTdXcGNIeTQycmZEQmdseEVub3BHeGtyMUdVVU1Rb3Q3SEIK";
 
+    #[test]
+    fn metronome_action_emits_one_click_per_count_in_and_playback_beat() {
+        let mut state = TimelineMetronomePlaybackState::default();
+        let mut timeline = engine::TimelineAudioRuntimeSnapshot {
+            clips: Vec::new(),
+            child_clips: Vec::new(),
+            playing: true,
+            position_ms: 0,
+            muted: false,
+            transport_revision: 0,
+            bpm: 120.0,
+            metronome_enabled: true,
+            count_in_beats: 4,
+            count_in_remaining_ms: 2_000,
+            metronome_transport: Some(engine::TimelineMetronomeTransport::Root),
+        };
+
+        assert_eq!(
+            timeline_metronome_click_action(&mut state, &timeline),
+            Some(true)
+        );
+        assert_eq!(timeline_metronome_click_action(&mut state, &timeline), None);
+        for remaining_ms in [1_500, 1_000, 500] {
+            timeline.count_in_remaining_ms = remaining_ms;
+            assert_eq!(
+                timeline_metronome_click_action(&mut state, &timeline),
+                Some(false)
+            );
+            assert_eq!(timeline_metronome_click_action(&mut state, &timeline), None);
+        }
+
+        timeline.count_in_remaining_ms = 0;
+        assert_eq!(
+            timeline_metronome_click_action(&mut state, &timeline),
+            Some(true)
+        );
+        timeline.position_ms = 499;
+        assert_eq!(timeline_metronome_click_action(&mut state, &timeline), None);
+        timeline.position_ms = 500;
+        assert_eq!(
+            timeline_metronome_click_action(&mut state, &timeline),
+            Some(false)
+        );
+
+        timeline.playing = false;
+        assert_eq!(timeline_metronome_click_action(&mut state, &timeline), None);
+        assert_eq!(state.transport, None);
+    }
+
     fn unique_test_directory(label: &str) -> PathBuf {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -30984,6 +31127,7 @@ f 1 2 3
                 duration_ms: 12_000,
                 playing: true,
                 generation: 3,
+                count_in_remaining_ms: 0,
             }];
         snapshot.submasters = vec![protocol::SubmasterSummary {
             group_id: "front".to_string(),
@@ -41776,6 +41920,7 @@ fn main() {
             remove_timeline_automation,
             reconform_timeline_to_bpm,
             set_timeline_playing,
+            set_timeline_metronome,
             seek_timeline,
             set_direct_child_timeline_playing,
             seek_direct_child_timeline,

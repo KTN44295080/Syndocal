@@ -950,7 +950,11 @@ fn parse_scenes(
                             ));
                         }
                     }
-                    let values = fixture_attribute_values(profile, &decoded.values)?;
+                    let values = fixture_attribute_values(
+                        profile,
+                        &decoded.values,
+                        decoded.beam_features.as_deref(),
+                    )?;
                     if !values.is_empty() {
                         scene_targets.push(CueFixtureTarget {
                             fixture_id: fixture_ref.fixture_id,
@@ -2729,10 +2733,11 @@ fn normalized_dmx(value: f64) -> u16 {
 fn fixture_attribute_values(
     profile: &ParsedProfile,
     raw_values: &[Option<u8>],
+    beam_features: Option<&[[f32; DVC_BEAM_FEATURE_SLOTS]]>,
 ) -> Result<Vec<AttributeValueSummary>, String> {
     let mut values = Vec::new();
     for binding in &profile.bindings {
-        let value = match (&binding.resolution, binding.raw_offsets.as_slice()) {
+        let mut value = match (&binding.resolution, binding.raw_offsets.as_slice()) {
             (AttributeResolution::EightBit, [offset]) => raw_values
                 .get(*offset)
                 .copied()
@@ -2759,6 +2764,34 @@ fn fixture_attribute_values(
                 ))
             }
         };
+        // Daslight's live DMX renderer converts the single-beam feature floats
+        // back to 8-bit bytes by truncation. The channel section stores the
+        // editor value (for example Amber 136/26), while the corresponding
+        // half-float features produce the actual 135/25 output shown by DMX
+        // Levels. Only the verified one-beam + unique-attribute case is used;
+        // multi-beam payloads still keep their channel-section values because
+        // their beam-to-channel mapping is not established.
+        if let (AttributeResolution::EightBit, [feature_row]) =
+            (&binding.resolution, beam_features.unwrap_or_default())
+        {
+            if let Some((slot, _)) = DVC_BEAM_FEATURE_BINDINGS
+                .iter()
+                .find(|(_, attribute)| *attribute == binding.attribute)
+            {
+                let feature = feature_row[*slot];
+                if !beam_feature_is_unset(feature) {
+                    let byte = u16::from(dvc_live_feature_byte(feature));
+                    // A feature row is a live-value refinement, not permission
+                    // to replace a contradictory channel payload. The known
+                    // Daslight quantization drift is at most two DMX steps;
+                    // larger disagreements keep the channel-section fallback
+                    // and are reported by beam_feature_mismatch_details.
+                    if value.is_some_and(|raw| (raw / 257).abs_diff(byte) <= 2) {
+                        value = Some(byte * 257);
+                    }
+                }
+            }
+        }
         if let Some(value) = value {
             values.push(AttributeValueSummary {
                 attribute: binding.attribute.clone(),
@@ -2767,6 +2800,16 @@ fn fixture_attribute_values(
         }
     }
     Ok(values)
+}
+
+fn dvc_live_feature_byte(feature: f32) -> u8 {
+    // Daslight's observed conversion behaves as truncation with a tiny
+    // boundary tolerance: the half-float for 12/255 is 11.999816 after
+    // multiplication and still outputs 12, while 136/255 and 26/255 output
+    // 135 and 25. 1e-3 is below one DMX sub-step and reproduces both cases.
+    (feature.clamp(0.0, 1.0).mul_add(255.0, 1.0e-3))
+        .floor()
+        .clamp(0.0, 255.0) as u8
 }
 
 fn parse_super_scenes(
@@ -3121,6 +3164,8 @@ fn parse_super_scenes(
             video_automations: Vec::new(),
             audio: None,
             audio_clips,
+            metronome_enabled: false,
+            count_in_beats: 4,
             duration_ms,
         });
         cues[owner_index]
@@ -3283,8 +3328,9 @@ fn decode_fixture_data(
     // half-precision floats plus one trailing mode byte (0x00 and 0x02 are the
     // observed values): -1.0 marks an unset slot
     // and set slots hold normalized 0..1 feature values that mirror the
-    // channel section (slot 0..2 = RGB, slot 11 = dimmer). The channel section
-    // remains the authoritative DMX state; rows are decoded for validation.
+    // channel section (slot 0..2 = RGB, slot 11 = dimmer). In the verified
+    // single-beam case Daslight truncates these half-floats for live DMX; the
+    // channel section remains the fallback for every other mapping.
     let channel_count = u16::from_be_bytes([inflated[0], inflated[1]]) as usize;
     if channel_count != expected_channels {
         return Err(format!(
@@ -3336,9 +3382,9 @@ fn decode_fixture_data(
             }
         }
     }
-    // Beam-row interpretation is deliberately NON-fatal: the channel section
-    // above is the authoritative DMX state, so an unrecognized row variant must
-    // never discard the payload - it only downgrades to "rows not interpreted".
+    // Beam-row interpretation is deliberately NON-fatal: an unrecognized row
+    // variant must never discard the channel-section payload - it only
+    // downgrades to "rows not interpreted".
     let (beam_features, beam_feature_error) =
         match interpret_beam_features(&inflated[record_count_end..]) {
             Ok(features) => (Some(features), None),
@@ -4888,10 +4934,10 @@ mod tests {
         assert_eq!(frame[108], 255, "Encore FR50Z channel 109");
         for channel in [82_usize, 87, 92, 97] {
             assert_eq!(frame[channel - 1], 255, "PinSpot red channel {channel}");
-            assert_eq!(frame[channel], 136, "PinSpot green channel {}", channel + 1);
+            assert_eq!(frame[channel], 135, "PinSpot green channel {}", channel + 1);
             assert_eq!(
                 frame[channel + 1],
-                26,
+                25,
                 "PinSpot blue channel {}",
                 channel + 2
             );
@@ -5031,6 +5077,62 @@ mod tests {
             }
         }
         assert!(moved, "spatial color pattern output must sweep over time");
+    }
+
+    #[test]
+    fn dvc_local_golden_static_colors_match_daslight_live_truncation() {
+        let path = Path::new(r"C:\Users\kouty\Desktop\Shinkan-Left\Shinkan2026.dvc");
+        if !path.is_file() {
+            eprintln!(
+                "Skipping local Daslight golden: {} is unavailable",
+                path.display()
+            );
+            return;
+        }
+        let outcome = import_path(path).unwrap();
+        let cue_rgb = |group: &str, label: &str| {
+            outcome
+                .project
+                .snapshot
+                .cues
+                .iter()
+                .find(|cue| cue.group_id.as_deref() == Some(group) && cue.label == label)
+                .unwrap()
+                .targets
+                .iter()
+                .map(|target| {
+                    ["colorred", "colorgreen", "colorblue"].map(|attribute| {
+                        target
+                            .values
+                            .iter()
+                            .find(|value| normalize_dvc_attribute(&value.attribute) == attribute)
+                            .map(|value| value.value / 257)
+                            .unwrap_or_default()
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // Captured from Daslight Tools > DMX Levels. The editor channel bytes
+        // are 255/136/26 and 12/232/177, while live output truncates their
+        // normalized half-float beam features to 255/135/25 and 12/231/176.
+        let amber = cue_rgb("SaberSpot", "Amber");
+        assert_eq!(amber.len(), 4);
+        assert!(amber.iter().all(|rgb| *rgb == [255, 135, 25]));
+        let aqua = cue_rgb("Side-Par", "SP-Aqua");
+        assert_eq!(aqua.len(), 6);
+        assert!(aqua.iter().all(|rgb| *rgb == [12, 231, 176]));
+    }
+
+    #[test]
+    fn dvc_live_feature_bytes_match_captured_dmx_levels() {
+        assert_eq!(dvc_live_feature_byte(1.0), 255);
+        assert_eq!(dvc_live_feature_byte(0.533_203_1), 135);
+        assert_eq!(dvc_live_feature_byte(0.101_928_71), 25);
+        assert_eq!(dvc_live_feature_byte(0.047_058_105), 12);
+        assert_eq!(dvc_live_feature_byte(0.909_667_97), 231);
+        assert_eq!(dvc_live_feature_byte(0.693_847_66), 176);
+        assert_eq!(dvc_live_feature_byte(0.705_566_4), 179);
     }
 
     #[test]

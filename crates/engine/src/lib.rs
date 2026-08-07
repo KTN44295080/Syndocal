@@ -852,6 +852,10 @@ pub enum EngineCommand {
     },
     RemoveTimelineAutomation(AutomationId),
     SetTimelineAudio(Option<AudioAnalysisSummary>),
+    SetTimelineMetronome {
+        enabled: bool,
+        count_in_beats: u8,
+    },
     SetLiveAudioSpectrum(Option<AudioSpectrumPoint>),
     PublishLiveAudioFrame {
         frame: LiveAudioFrame,
@@ -1189,6 +1193,7 @@ impl EngineCommand {
                 | EngineCommand::RemoveCue(_)
                 | EngineCommand::RemoveCuePublished { .. }
                 | EngineCommand::SetTimelinePlaying(_)
+                | EngineCommand::SetTimelineMetronome { .. }
                 | EngineCommand::SetDirectChildTimelinePlaying { .. }
                 | EngineCommand::SetLiveAudioSpectrum(_)
                 | EngineCommand::PublishLiveAudioFrame { .. }
@@ -1242,6 +1247,17 @@ pub struct TimelineAudioRuntimeSnapshot {
     pub position_ms: u64,
     pub muted: bool,
     pub transport_revision: u64,
+    pub bpm: f32,
+    pub metronome_enabled: bool,
+    pub count_in_beats: u8,
+    pub count_in_remaining_ms: u64,
+    pub metronome_transport: Option<TimelineMetronomeTransport>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimelineMetronomeTransport {
+    Root,
+    DirectChild { cue_id: CueId, generation: u64 },
 }
 
 #[derive(Debug, Clone)]
@@ -2618,6 +2634,32 @@ impl EngineHandle {
                     snapshot.timeline.audio_transport_revision,
                     |revision, transport| revision.wrapping_add(transport.generation),
                 );
+                let (metronome_enabled, count_in_beats, count_in_remaining_ms, metronome_transport) =
+                    if snapshot.timeline.playing {
+                        (
+                            snapshot.timeline.metronome_enabled,
+                            snapshot.timeline.count_in_beats,
+                            snapshot.timeline.count_in_remaining_ms,
+                            Some(TimelineMetronomeTransport::Root),
+                        )
+                    } else if let Some(transport) = direct_playing {
+                        let child = snapshot
+                            .cues
+                            .iter()
+                            .find(|cue| cue.id == transport.cue_id)
+                            .and_then(|cue| cue.child_timeline.as_ref());
+                        (
+                            child.is_some_and(|child| child.metronome_enabled),
+                            child.map(|child| child.count_in_beats).unwrap_or(0),
+                            transport.count_in_remaining_ms,
+                            Some(TimelineMetronomeTransport::DirectChild {
+                                cue_id: transport.cue_id,
+                                generation: transport.generation,
+                            }),
+                        )
+                    } else {
+                        (false, 0, 0, None)
+                    };
                 VideoAudioRuntimeSnapshot {
                     layers: snapshot.video.layers.clone(),
                     auto_vj_status: snapshot.video.auto_vj.status.clone(),
@@ -2634,6 +2676,11 @@ impl EngineHandle {
                         },
                         muted: snapshot.timeline.audio_muted,
                         transport_revision,
+                        bpm: snapshot.clock.bpm,
+                        metronome_enabled,
+                        count_in_beats,
+                        count_in_remaining_ms,
+                        metronome_transport,
                     },
                 }
             })
@@ -3751,7 +3798,16 @@ struct RuntimeChildTransport {
     direct_started_at: Option<Instant>,
     direct_paused: bool,
     direct_generation: u64,
+    metronome_enabled: bool,
+    count_in_beats: u8,
     activated_events: Vec<bool>,
+}
+
+#[derive(Clone, Copy)]
+struct RuntimeDirectChildCountIn {
+    cue_id: CueId,
+    until: Instant,
+    generation: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4052,6 +4108,8 @@ struct EngineRuntime {
     timeline_audio_duration_ms: u64,
     timeline_audio_offset_ms: i64,
     timeline_audio_muted: bool,
+    timeline_metronome_enabled: bool,
+    timeline_count_in_beats: u8,
     timeline_audio_transport_revision: u64,
     live_audio_spectrum: Option<AudioSpectrumPoint>,
     live_audio_features: Option<LiveAudioReactiveFeatures>,
@@ -4064,6 +4122,8 @@ struct EngineRuntime {
     live_audio_generation: Option<u64>,
     last_live_audio_frame_sequence: Option<u64>,
     timeline_playing: bool,
+    timeline_count_in_until: Option<Instant>,
+    direct_child_count_in: Option<RuntimeDirectChildCountIn>,
     timeline_position_ms: u64,
     timeline_playhead_boundary_armed: bool,
     timeline_evaluated_boundary_position_ms: Option<u64>,
@@ -4252,6 +4312,8 @@ impl EngineRuntime {
             timeline_audio_duration_ms: 0,
             timeline_audio_offset_ms: 0,
             timeline_audio_muted: false,
+            timeline_metronome_enabled: false,
+            timeline_count_in_beats: 4,
             timeline_audio_transport_revision: 0,
             live_audio_spectrum: None,
             live_audio_features: None,
@@ -4264,6 +4326,8 @@ impl EngineRuntime {
             live_audio_generation: None,
             last_live_audio_frame_sequence: None,
             timeline_playing: false,
+            timeline_count_in_until: None,
+            direct_child_count_in: None,
             timeline_position_ms: 0,
             timeline_playhead_boundary_armed: false,
             timeline_evaluated_boundary_position_ms: None,
@@ -4402,6 +4466,7 @@ impl EngineRuntime {
         // transport position, pause state, and generation are runtime-only.
         self.direct_child_transports.clear();
         self.direct_child_transport_by_cue.clear();
+        self.direct_child_count_in = None;
         // T17 reset rule: project load always returns every scene to its
         // authored live-modifier dial position.
         self.cue_live_modifier_overrides.clear();
@@ -4497,6 +4562,8 @@ impl EngineRuntime {
         self.timeline_audio = snapshot.timeline.audio.clone();
         self.timeline_audio_offset_ms = snapshot.timeline.audio_offset_ms;
         self.timeline_audio_muted = snapshot.timeline.audio_muted;
+        self.timeline_metronome_enabled = snapshot.timeline.metronome_enabled;
+        self.timeline_count_in_beats = snapshot.timeline.count_in_beats.min(16);
         self.timeline_audio_transport_revision =
             self.timeline_audio_transport_revision.wrapping_add(1);
         self.timeline_audio_clips = snapshot.timeline.audio_clips.clone();
@@ -4517,6 +4584,7 @@ impl EngineRuntime {
         self.live_audio_generation = None;
         self.last_live_audio_frame_sequence = None;
         self.timeline_playing = snapshot.timeline.playing;
+        self.timeline_count_in_until = None;
         self.timeline_playhead_boundary_armed = false;
         self.timeline_evaluated_boundary_position_ms = None;
         self.timeline_jump_landed_event_id = None;
@@ -9016,6 +9084,17 @@ impl EngineRuntime {
                     self.timeline_position_ms.min(self.timeline_duration_ms());
                 self.last_error = None;
             }
+            EngineCommand::SetTimelineMetronome {
+                enabled,
+                count_in_beats,
+            } => {
+                self.timeline_metronome_enabled = enabled;
+                self.timeline_count_in_beats = count_in_beats.min(16);
+                if !enabled || count_in_beats == 0 {
+                    self.timeline_count_in_until = None;
+                }
+                self.last_error = None;
+            }
             EngineCommand::SetLiveAudioSpectrum(spectrum) => {
                 let input_cleared = spectrum.is_none();
                 self.live_audio_features = None;
@@ -9078,6 +9157,7 @@ impl EngineRuntime {
             EngineCommand::SetTimelinePlaying(playing) => {
                 let was_playing = self.timeline_playing;
                 self.timeline_playing = playing;
+                let now = Instant::now();
                 if playing {
                     // An explicit Play command hands the playhead back to the internal clock.
                     // Pause alone must not release external ownership while MTC/LTC/SPP frames
@@ -9085,6 +9165,15 @@ impl EngineRuntime {
                     self.timeline_external_sync_source = None;
                 }
                 if playing && !was_playing {
+                    self.timeline_count_in_until = (self.timeline_metronome_enabled
+                        && self.timeline_count_in_beats > 0)
+                        .then(|| {
+                            now.checked_add(timeline_count_in_duration(
+                                self.clock.bpm,
+                                self.timeline_count_in_beats,
+                            ))
+                            .unwrap_or(now)
+                        });
                     // Resume must not replay a boundary that the playhead already consumed.
                     // Fresh playback and explicit positioning clear the evaluated marker and
                     // therefore still arm the current boundary exactly once.
@@ -9094,10 +9183,12 @@ impl EngineRuntime {
                         self.timeline_playhead_boundary_armed = true;
                     }
                 } else if !playing {
+                    self.timeline_count_in_until = None;
                     self.timeline_jump_landed_event_id = None;
                 }
             }
             EngineCommand::SeekTimeline(position_ms) => {
+                self.timeline_count_in_until = None;
                 self.deactivate_all_timeline_effect_activations();
                 self.deactivate_all_child_transports();
                 self.timeline_jump_landed_event_id = None;
@@ -12701,6 +12792,8 @@ impl EngineRuntime {
             direct_started_at: None,
             direct_paused: false,
             direct_generation: 0,
+            metronome_enabled: child.metronome_enabled,
+            count_in_beats: child.count_in_beats.min(16),
         })
     }
 
@@ -17707,6 +17800,69 @@ impl EngineRuntime {
     }
 
     fn set_direct_child_timeline_playing(&mut self, cue_id: CueId, playing: bool, now: Instant) {
+        if !playing {
+            if self
+                .direct_child_count_in
+                .is_some_and(|count_in| count_in.cue_id == cue_id)
+            {
+                self.direct_child_count_in = None;
+            }
+            self.set_direct_child_timeline_playing_now(cue_id, false, now);
+            return;
+        }
+
+        let Some(cue_index) = self.cues.iter().position(|cue| cue.id == cue_id) else {
+            self.last_error = Some(format!("Cue {cue_id} was not found"));
+            return;
+        };
+        let Some(transport_index) = self
+            .direct_child_transport_by_cue
+            .get(cue_index)
+            .copied()
+            .flatten()
+        else {
+            self.last_error = Some(format!("Cue {cue_id} has no child timeline"));
+            return;
+        };
+        let (metronome_enabled, count_in_beats, active, paused, direct_generation) = {
+            let transport = &self.direct_child_transports[transport_index];
+            (
+                transport.metronome_enabled,
+                transport.count_in_beats,
+                transport.active,
+                transport.direct_paused,
+                transport.direct_generation,
+            )
+        };
+        if metronome_enabled && count_in_beats > 0 {
+            if active && !paused {
+                self.advance_child_transport(RuntimeChildTransportId::Direct(transport_index), now);
+                self.direct_child_transports[transport_index].direct_paused = true;
+            }
+            let generation = if active {
+                direct_generation
+            } else {
+                direct_generation.wrapping_add(1)
+            };
+            self.direct_child_count_in = Some(RuntimeDirectChildCountIn {
+                cue_id,
+                until: now
+                    .checked_add(timeline_count_in_duration(self.clock.bpm, count_in_beats))
+                    .unwrap_or(now),
+                generation,
+            });
+            self.last_error = None;
+            return;
+        }
+        self.set_direct_child_timeline_playing_now(cue_id, true, now);
+    }
+
+    fn set_direct_child_timeline_playing_now(
+        &mut self,
+        cue_id: CueId,
+        playing: bool,
+        now: Instant,
+    ) {
         let Some(cue_index) = self.cues.iter().position(|cue| cue.id == cue_id) else {
             self.last_error = Some(format!("Cue {cue_id} was not found"));
             return;
@@ -17749,6 +17905,17 @@ impl EngineRuntime {
             self.direct_child_transports[transport_index].direct_paused = true;
         }
         self.last_error = None;
+    }
+
+    fn advance_direct_child_count_in(&mut self, now: Instant) {
+        let Some(count_in) = self.direct_child_count_in else {
+            return;
+        };
+        if now < count_in.until {
+            return;
+        }
+        self.direct_child_count_in = None;
+        self.set_direct_child_timeline_playing_now(count_in.cue_id, true, now);
     }
 
     fn seek_direct_child_timeline(&mut self, cue_id: CueId, position_ms: u64, now: Instant) {
@@ -18146,8 +18313,17 @@ impl EngineRuntime {
     }
 
     fn advance_timeline(&mut self, now: Instant) {
+        self.advance_direct_child_count_in(now);
         if !self.timeline_playing || self.timeline_external_sync_source.is_some() {
             self.advance_child_transports(now);
+            return;
+        }
+        if let Some(count_in_until) = self.timeline_count_in_until {
+            if now < count_in_until {
+                return;
+            }
+            self.timeline_count_in_until = None;
+            self.timeline_playhead_boundary_armed = true;
             return;
         }
         let include_previous = std::mem::take(&mut self.timeline_playhead_boundary_armed);
@@ -18636,6 +18812,12 @@ impl EngineRuntime {
             audio_clips: self.timeline_audio_clips.clone(),
             audio_offset_ms: self.timeline_audio_offset_ms,
             audio_muted: self.timeline_audio_muted,
+            metronome_enabled: self.timeline_metronome_enabled,
+            count_in_beats: self.timeline_count_in_beats,
+            count_in_remaining_ms: self
+                .timeline_count_in_until
+                .map(|until| until.saturating_duration_since(self.last_tick).as_millis() as u64)
+                .unwrap_or(0),
             audio_transport_revision: self.timeline_audio_transport_revision,
             playing: self.timeline_playing,
             position_ms: self.timeline_position_ms,
@@ -19113,6 +19295,50 @@ impl EngineRuntime {
             })
             .collect();
 
+        let mut direct_child_timeline_transports = self
+            .direct_child_transports
+            .iter()
+            .filter_map(|transport| {
+                transport
+                    .active
+                    .then_some(DirectChildTimelineTransportSummary {
+                        cue_id: transport.direct_parent_cue_id?,
+                        position_ms: transport.position_ms,
+                        duration_ms: transport.duration_ms,
+                        playing: !transport.direct_paused
+                            && transport.position_ms < transport.duration_ms,
+                        generation: transport.direct_generation,
+                        count_in_remaining_ms: 0,
+                    })
+            })
+            .collect::<Vec<_>>();
+        if let Some(count_in) = self.direct_child_count_in {
+            let remaining_ms = count_in
+                .until
+                .saturating_duration_since(self.last_tick)
+                .as_millis() as u64;
+            if let Some(summary) = direct_child_timeline_transports
+                .iter_mut()
+                .find(|summary| summary.cue_id == count_in.cue_id)
+            {
+                summary.playing = true;
+                summary.count_in_remaining_ms = remaining_ms;
+            } else if let Some(transport) = self
+                .direct_child_transports
+                .iter()
+                .find(|transport| transport.direct_parent_cue_id == Some(count_in.cue_id))
+            {
+                direct_child_timeline_transports.push(DirectChildTimelineTransportSummary {
+                    cue_id: count_in.cue_id,
+                    position_ms: 0,
+                    duration_ms: transport.duration_ms,
+                    playing: true,
+                    generation: count_in.generation,
+                    count_in_remaining_ms: remaining_ms,
+                });
+            }
+        }
+
         EngineSnapshot {
             fixtures,
             cues: self.cues.iter().map(cue_summary).collect(),
@@ -19121,22 +19347,7 @@ impl EngineRuntime {
             playback_executors: self.playback_executors.clone(),
             playback_master: self.playback_master,
             active_cue_id: self.active_cue_id,
-            direct_child_timeline_transports: self
-                .direct_child_transports
-                .iter()
-                .filter_map(|transport| {
-                    transport
-                        .active
-                        .then_some(DirectChildTimelineTransportSummary {
-                            cue_id: transport.direct_parent_cue_id?,
-                            position_ms: transport.position_ms,
-                            duration_ms: transport.duration_ms,
-                            playing: !transport.direct_paused
-                                && transport.position_ms < transport.duration_ms,
-                            generation: transport.direct_generation,
-                        })
-                })
-                .collect(),
+            direct_child_timeline_transports,
             active_group_cue_ids: self
                 .active_group_cue_ids
                 .iter()
@@ -23790,8 +24001,8 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
     };
     match recipe {
         ColorEffectSpatialRecipe::KnightRider { size, gradient, .. } => {
-            if *size == 0 {
-                return Err("Knight Rider size must be at least 1".to_string());
+            if !(1..=100).contains(size) {
+                return Err("Knight Rider size must be within 1..100 percent".to_string());
             }
             percent("gradient", *gradient)
         }
@@ -26920,8 +27131,10 @@ fn evaluate_color_spatial_effect_at_rate(
             go_outside,
             gradient,
         } => {
-            let width =
-                (f32::from(*size) / strip_count as f32).clamp(1.0 / strip_count as f32, 1.0);
+            // Daslight's Size control is a percentage of the selected beam
+            // strip, not an absolute beam count. On the 48-beam golden fixture,
+            // Size=32 lights roughly 32% (15-16 beams), not 32 beams.
+            let width = (f32::from(*size) / 100.0).clamp(1.0 / strip_count as f32, 1.0);
             let half_width = width * 0.5;
             let phase = time_phase.rem_euclid(1.0) as f32;
             let travel = if *one_way {
@@ -28330,6 +28543,10 @@ fn clamp_bpm(bpm: f32) -> f32 {
     } else {
         120.0
     }
+}
+
+fn timeline_count_in_duration(bpm: f32, beats: u8) -> Duration {
+    Duration::from_secs_f64(f64::from(beats) * 60.0 / f64::from(clamp_bpm(bpm)))
 }
 
 fn sanitize_loaded_video_layers(layers: &[VideoLayerSummary]) -> Vec<RuntimeVideoLayer> {
@@ -32330,6 +32547,9 @@ mod tests {
                 audio_clips: Vec::new(),
                 audio_offset_ms: 0,
                 audio_muted: false,
+                metronome_enabled: false,
+                count_in_beats: 4,
+                count_in_remaining_ms: 0,
                 audio_transport_revision: 0,
                 playing: false,
                 position_ms: 250,
@@ -33827,6 +34047,9 @@ mod tests {
                 audio_clips: Vec::new(),
                 audio_offset_ms: 0,
                 audio_muted: false,
+                metronome_enabled: false,
+                count_in_beats: 4,
+                count_in_remaining_ms: 0,
                 audio_transport_revision: 0,
                 playing: false,
                 position_ms: 0,
@@ -49040,7 +49263,7 @@ mod tests {
     #[test]
     fn color_spatial_knight_rider_sweeps_a_gradient_window() {
         let request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
-            size: 3,
+            size: 60,
             one_way: true,
             fading: false,
             go_outside: false,
@@ -49055,6 +49278,28 @@ mod tests {
         assert_eq!(center, test_color(u16::MAX, u16::MAX, u16::MAX));
         assert!(shoulder.red > 0 && shoulder.red < center.red);
         assert_eq!(outside, test_color(0, 0, 0));
+    }
+
+    #[test]
+    fn color_spatial_knight_rider_size_is_strip_percentage() {
+        let request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
+            size: 32,
+            one_way: true,
+            fading: false,
+            go_outside: false,
+            gradient: 100.0,
+        });
+        let lit = (0..48)
+            .filter(|index| {
+                evaluate_test_spatial_color(
+                    &request,
+                    &test_spatial_color_target(*index, 48, *index as f32 / 47.0, 0.5),
+                    500,
+                )
+                .red > 0
+            })
+            .count();
+        assert_eq!(lit, 16);
     }
 
     #[test]
@@ -53213,6 +53458,65 @@ mod tests {
         assert_eq!(point.duration_ms, 0);
         assert_eq!(point.loop_count, 1);
         assert_eq!(point.jump_to_event_id, None);
+    }
+
+    #[test]
+    fn timeline_count_in_freezes_transport_and_defers_the_zero_boundary() {
+        let mut runtime = runtime_with_lfo_effects(&[(1, false)]);
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![CueEffectTarget {
+                effect_id: 1,
+                enabled: true,
+                params: None,
+                transition_ms: None,
+            }],
+        );
+        runtime.timeline_events = vec![RuntimeTimelineEvent {
+            time_beats: None,
+            duration_beats: None,
+            conform_to_tempo: false,
+            loop_fill: false,
+            source_offset_ms: 0,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+            iteration_period_ms: 0,
+            rate: None,
+            id: 10,
+            cue_id: 1,
+            time_ms: 0,
+            track: TimelineTrackKind::Lighting,
+            layer_id: None,
+            resolved_layer_id: 0,
+            layer_order: 0,
+            layer_muted_effective: false,
+            duration_ms: 1_000,
+            loop_count: 1,
+            jump_to_event_id: None,
+        }];
+        runtime.timeline_metronome_enabled = true;
+        runtime.timeline_count_in_beats = 4;
+        runtime.clock.bpm = 120.0;
+        runtime.last_tick_interval = Duration::from_millis(10);
+
+        runtime.apply_command(EngineCommand::SetTimelinePlaying(true));
+        let count_in_until = runtime.timeline_count_in_until.expect("count-in deadline");
+        assert!(runtime.timeline_playing);
+        assert_eq!(runtime.timeline_position_ms, 0);
+
+        runtime.advance_timeline(count_in_until - Duration::from_millis(1));
+        assert_eq!(runtime.timeline_position_ms, 0);
+        assert!(!runtime.effects[0].enabled);
+
+        runtime.advance_timeline(count_in_until);
+        assert_eq!(runtime.timeline_position_ms, 0);
+        assert!(!runtime.effects[0].enabled);
+        assert!(runtime.timeline_count_in_until.is_none());
+
+        runtime.advance_timeline(count_in_until + Duration::from_millis(10));
+        assert_eq!(runtime.timeline_position_ms, 10);
+        assert!(runtime.effects[0].enabled);
     }
 
     #[test]
@@ -58623,6 +58927,47 @@ mod tests {
     }
 
     #[test]
+    fn direct_child_count_in_defers_transport_start_and_can_be_cancelled() {
+        let mut runtime =
+            direct_child_static_test_runtime(vec![direct_child_static_event(201, 2, 100, 500)]);
+        runtime.clock.bpm = 120.0;
+        runtime.direct_child_transports[0].metronome_enabled = true;
+        runtime.direct_child_transports[0].count_in_beats = 4;
+        let started_at = Instant::now();
+
+        runtime.set_direct_child_timeline_playing(1, true, started_at);
+        let count_in = runtime
+            .direct_child_count_in
+            .expect("direct child count-in");
+        assert!(!runtime.direct_child_transports[0].active);
+        let published = runtime.build_snapshot(0);
+        assert_eq!(published.direct_child_timeline_transports.len(), 1);
+        assert!(published.direct_child_timeline_transports[0].playing);
+        assert!(published.direct_child_timeline_transports[0].count_in_remaining_ms > 0);
+
+        runtime.advance_timeline(count_in.until - Duration::from_millis(1));
+        assert!(!runtime.direct_child_transports[0].active);
+        runtime.advance_timeline(count_in.until);
+        assert!(runtime.direct_child_transports[0].active);
+        assert_eq!(runtime.direct_child_transports[0].position_ms, 0);
+
+        runtime.set_direct_child_timeline_playing(1, false, count_in.until);
+        runtime.set_direct_child_timeline_playing(
+            1,
+            true,
+            count_in.until + Duration::from_millis(1),
+        );
+        assert!(runtime.direct_child_count_in.is_some());
+        runtime.set_direct_child_timeline_playing(
+            1,
+            false,
+            count_in.until + Duration::from_millis(2),
+        );
+        assert!(runtime.direct_child_count_in.is_none());
+        assert!(!runtime.build_snapshot(0).direct_child_timeline_transports[0].playing);
+    }
+
+    #[test]
     fn direct_child_operator_transport_publishes_pauses_seeks_and_resumes() {
         let mut runtime =
             direct_child_static_test_runtime(vec![direct_child_static_event(201, 2, 100, 500)]);
@@ -59310,6 +59655,7 @@ mod tests {
             duration_ms: 2_000,
             playing: true,
             generation: 3,
+            count_in_remaining_ms: 0,
         }];
 
         let mapped = child_timeline_audio_runtime_clips(&snapshot);

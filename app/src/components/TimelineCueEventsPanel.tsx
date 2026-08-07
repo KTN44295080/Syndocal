@@ -64,6 +64,9 @@ interface TimelineCueEventsPanelProps {
   bpm: number;
   durationMs: number;
   playing: boolean;
+  metronomeEnabled: boolean;
+  countInBeats: number;
+  countInRemainingMs: number;
   executingLive: boolean;
   cuesCount: number;
   superSceneCueCount: number;
@@ -108,6 +111,7 @@ interface TimelineCueEventsPanelProps {
   onOpenSuperScene: (cueId: number) => void;
   onPause: () => void | Promise<void>;
   onPlay: () => void | Promise<void>;
+  onSetMetronome: (enabled: boolean, countInBeats: number) => void | Promise<void>;
   onSeekOverviewTime: (timeMs: number) => void;
   onMoveEventPlacement: (
     eventId: number,
@@ -518,6 +522,32 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         >
           <span class="timelineToolIcon" aria-hidden="true" data-no-localize>▶</span>
         </button>
+      </div>
+      <div class="timelineMetronomeControls" role="group" aria-label="Timeline click controls">
+        <button
+          type="button"
+          classList={{ active: props.metronomeEnabled }}
+          aria-pressed={props.metronomeEnabled}
+          data-timeline-metronome
+          onClick={() => void props.onSetMetronome(!props.metronomeEnabled, props.countInBeats || 4)}
+        >
+          クリック
+        </button>
+        <button
+          type="button"
+          classList={{ active: props.countInBeats > 0 }}
+          aria-pressed={props.countInBeats > 0}
+          data-timeline-count-in
+          title="One bar count-in (4 beats)"
+          onClick={() => void props.onSetMetronome(props.metronomeEnabled, props.countInBeats > 0 ? 0 : 4)}
+        >
+          1小節
+        </button>
+        <Show when={props.countInRemainingMs > 0}>
+          <output class="timelineCountInReadout tabularNums" aria-label="Count-in remaining">
+            {`${Math.ceil(props.countInRemainingMs / Math.max(1, 60_000 / props.bpm))}`}
+          </output>
+        </Show>
       </div>
       <input
         class="timelineScrubber"

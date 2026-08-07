@@ -3803,6 +3803,7 @@ h3 {
 }
 
 .timelineToolStrip .timelineTransport,
+.timelineToolStrip .timelineMetronomeControls,
 .timelineToolStrip .timelineViewportToolbar,
 .timelineToolStrip .timelineDirectToolbar,
 .timelineToolStrip .timelineStretchModeToggle {
@@ -3814,9 +3815,32 @@ h3 {
 }
 
 .timelineToolStrip .timelineTransport,
+.timelineToolStrip .timelineMetronomeControls,
 .timelineToolStrip .timelineViewportToolbar {
   padding-right: 3px;
   border-right: 1px solid #34383b;
+}
+
+.timelineToolStrip .timelineMetronomeControls button {
+  width: auto;
+  min-width: 52px;
+  padding: 0 7px;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.timelineToolStrip .timelineMetronomeControls button.active {
+  border-color: #f59b45;
+  background: #6c3a18;
+  color: #fff4e8;
+}
+
+.timelineCountInReadout {
+  min-width: 18px;
+  color: #ffad62;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
 }
 
 .timelineToolStrip .timelineScrubber {

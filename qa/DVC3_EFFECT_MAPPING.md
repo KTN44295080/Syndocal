@@ -39,7 +39,7 @@ Phasing = 選択ビーム間の位相分散（Syndocal側はLFO位相 + 分散�
 | ID | ジェネレータ | パラメータ対応（実測） |
 |---|---|---|
 | 121 | **Burst** | 10=Color Width(50⇔50✓), 11=?（Gradient=100.0関連か） |
-| 127 | **Knight Rider** | 10=Size(32/17/12 全✓), 11=One Way Only(1⇔ON✓/0⇔off✓), 12=Fading(1⇔ON✓), 13=Go Outside（B-WineRed 1⇔ON✓、BB-Amber 0⇔off✓。Bar-RedWaveのみUI ON vs 13=0の観測矛盾があり要再確認）, 14=Gradient(50✓×3) |
+| 127 | **Knight Rider** | 10=Size（選択ビーム列に対する百分率。32%/17%/12% 全✓。48-beam `BB-Amber-Chaser` の実出力は Size=32 で約15–16 beams）、11=One Way Only(1⇔ON✓/0⇔off✓), 12=Fading(1⇔ON✓), 13=Go Outside（B-WineRed 1⇔ON✓、BB-Amber 0⇔off✓。Bar-RedWaveのみUI ON vs 13=0の観測矛盾があり要再確認）, 14=Gradient(50✓×3) |
 | 131 | **Random fill** | 10=Point Width(1✓) |
 | 133 | **Sparkle** | 10=Sparkle Number(5✓), 11=Sparkle LifeSpan(0✓), 12=Sparkle Width(1✓) |
 | 129/130 | 未照合（WineRed系、Documents版） | パレット/変種サブレコードの可能性 |

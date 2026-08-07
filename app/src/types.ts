@@ -1771,6 +1771,8 @@ export interface ChildTimelineSummary {
   video_automations?: TimelineVideoAutomationSummary[];
   audio?: AudioAnalysisSummary | null;
   audio_clips?: TimelineAudioClipSummary[];
+  metronome_enabled?: boolean;
+  count_in_beats?: number;
   duration_ms?: number;
 }
 
@@ -1783,6 +1785,9 @@ export interface TimelineSnapshot {
   audio_clips?: TimelineAudioClipSummary[];
   audio_offset_ms?: number;
   audio_muted?: boolean;
+  metronome_enabled?: boolean;
+  count_in_beats?: number;
+  count_in_remaining_ms?: number;
   playing: boolean;
   position_ms: number;
   duration_ms: number;
@@ -2402,6 +2407,7 @@ export interface DirectChildTimelineTransportSummary {
   duration_ms: number;
   playing: boolean;
   generation: number;
+  count_in_remaining_ms?: number;
 }
 
 export interface EngineSnapshot {

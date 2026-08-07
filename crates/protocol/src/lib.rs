@@ -1849,7 +1849,7 @@ pub struct TimelineSnapRequest {
     pub video_automations: Vec<TimelineVideoAutomationKeyframesUpdate>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TimelineSnapshot {
     #[serde(default)]
     pub layers: Vec<TimelineLayerSummary>,
@@ -1864,6 +1864,12 @@ pub struct TimelineSnapshot {
     pub audio_offset_ms: i64,
     #[serde(default)]
     pub audio_muted: bool,
+    #[serde(default)]
+    pub metronome_enabled: bool,
+    #[serde(default = "default_timeline_count_in_beats")]
+    pub count_in_beats: u8,
+    #[serde(default, skip_serializing)]
+    pub count_in_remaining_ms: u64,
     #[serde(default, skip_serializing)]
     pub audio_transport_revision: u64,
     pub playing: bool,
@@ -1871,9 +1877,31 @@ pub struct TimelineSnapshot {
     pub duration_ms: u64,
 }
 
+impl Default for TimelineSnapshot {
+    fn default() -> Self {
+        Self {
+            layers: Vec::new(),
+            events: Vec::new(),
+            automations: Vec::new(),
+            video_automations: Vec::new(),
+            audio: None,
+            audio_clips: Vec::new(),
+            audio_offset_ms: 0,
+            audio_muted: false,
+            metronome_enabled: false,
+            count_in_beats: default_timeline_count_in_beats(),
+            count_in_remaining_ms: 0,
+            audio_transport_revision: 0,
+            playing: false,
+            position_ms: 0,
+            duration_ms: 0,
+        }
+    }
+}
+
 /// Authored timeline content owned by a Cue. Transport state deliberately remains on the
 /// parent [`TimelineSnapshot`], so every placement receives its own runtime transport.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChildTimelineSummary {
     #[serde(default)]
     pub layers: Vec<TimelineLayerSummary>,
@@ -1888,7 +1916,31 @@ pub struct ChildTimelineSummary {
     #[serde(default)]
     pub audio_clips: Vec<TimelineAudioClipSummary>,
     #[serde(default)]
+    pub metronome_enabled: bool,
+    #[serde(default = "default_timeline_count_in_beats")]
+    pub count_in_beats: u8,
+    #[serde(default)]
     pub duration_ms: u64,
+}
+
+impl Default for ChildTimelineSummary {
+    fn default() -> Self {
+        Self {
+            layers: Vec::new(),
+            events: Vec::new(),
+            automations: Vec::new(),
+            video_automations: Vec::new(),
+            audio: None,
+            audio_clips: Vec::new(),
+            metronome_enabled: false,
+            count_in_beats: default_timeline_count_in_beats(),
+            duration_ms: 0,
+        }
+    }
+}
+
+const fn default_timeline_count_in_beats() -> u8 {
+    4
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -2159,6 +2211,7 @@ pub struct ColorEffectBeamTarget {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ColorEffectSpatialRecipe {
     KnightRider {
+        /// Lit window width as a percentage of the ordered beam strip (1..=100).
         size: u16,
         one_way: bool,
         fading: bool,
@@ -3359,6 +3412,8 @@ pub struct DirectChildTimelineTransportSummary {
     pub duration_ms: u64,
     pub playing: bool,
     pub generation: u64,
+    #[serde(default)]
+    pub count_in_remaining_ms: u64,
 }
 
 impl TouchSurfaceSummary {
@@ -3806,6 +3861,9 @@ mod tests {
         assert!(snapshot.audio_clips.is_empty());
         assert_eq!(snapshot.audio_offset_ms, 0);
         assert!(!snapshot.audio_muted);
+        assert!(!snapshot.metronome_enabled);
+        assert_eq!(snapshot.count_in_beats, 4);
+        assert_eq!(snapshot.count_in_remaining_ms, 0);
         assert_eq!(snapshot.audio_transport_revision, 0);
     }
 
@@ -4604,6 +4662,8 @@ mod tests {
         assert!(child.video_automations.is_empty());
         assert!(child.audio.is_none());
         assert!(child.audio_clips.is_empty());
+        assert!(!child.metronome_enabled);
+        assert_eq!(child.count_in_beats, 4);
         assert_eq!(child.duration_ms, 1_200);
 
         let legacy = serde_json::to_value(super::CueSummary::default()).unwrap();
