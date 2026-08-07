@@ -24202,7 +24202,7 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
     match recipe {
         ColorEffectSpatialRecipe::KnightRider { size, gradient, .. } => {
             if !(1..=100).contains(size) {
-                return Err("Knight Rider size must be within 1..100 beam cells".to_string());
+                return Err("Knight Rider size must be within 1..100 percent".to_string());
             }
             percent("gradient", *gradient)
         }
@@ -27345,10 +27345,10 @@ fn evaluate_color_spatial_sample_at_rate(
             go_outside,
             gradient,
         } => {
-            // Daslight rasterizes an absolute-width alpha window, then moves it
-            // across the ordered beam strip. Size is therefore expressed in beam
-            // cells rather than as a percentage of the current selection.
-            let width = f32::from((*size).max(1));
+            // Daslight expresses Size as a percentage of the selected beam strip.
+            // The stored BB-Amber-Chaser capture lights 15-16 of 48 beams at
+            // Size=32, which rules out interpreting this value as a beam count.
+            let width = (f32::from((*size).max(1)) / 100.0).clamp(1.0 / strip_count as f32, 1.0);
             let half_width = width * 0.5;
             let phase = time_phase.rem_euclid(1.0) as f32;
             let travel = if *one_way {
@@ -27358,16 +27358,14 @@ fn evaluate_color_spatial_sample_at_rate(
             } else {
                 (1.0 - phase) * 2.0
             };
-            let last_index = strip_count.saturating_sub(1) as f32;
             let center = if *go_outside {
-                -half_width + travel * (last_index + width)
+                -half_width + travel * (1.0 + width)
             } else {
-                travel * last_index
+                travel
             };
-            let mut relative = target.strip_index as f32 - center;
-            if !*go_outside && width < strip_count as f32 && strip_count > 1 {
-                let cycle = strip_count as f32;
-                relative -= (relative / cycle).round() * cycle;
+            let mut relative = strip_position - center;
+            if !*go_outside && width < 1.0 && strip_count > 1 {
+                relative -= relative.round();
             }
             let window_position = relative + half_width;
             let inside = (0.0..=width).contains(&window_position);
@@ -49530,9 +49528,9 @@ mod tests {
     }
 
     #[test]
-    fn color_spatial_knight_rider_sweeps_an_absolute_window() {
+    fn color_spatial_knight_rider_sweeps_a_percentage_window() {
         let request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
-            size: 3,
+            size: 60,
             one_way: true,
             fading: false,
             go_outside: false,
@@ -49556,7 +49554,7 @@ mod tests {
     }
 
     #[test]
-    fn color_spatial_knight_rider_size_is_absolute_beam_cells() {
+    fn color_spatial_knight_rider_size_is_strip_percentage() {
         let request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
             size: 32,
             one_way: true,
@@ -49575,20 +49573,20 @@ mod tests {
                     > 0.0
             })
             .count();
-        assert_eq!(lit, 32);
+        assert_eq!(lit, 16);
     }
 
     #[test]
     fn color_spatial_knight_rider_fading_is_alpha_not_black_scaling() {
         let request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
-            size: 4,
+            size: 60,
             one_way: true,
             fading: true,
             go_outside: false,
             gradient: 50.0,
         });
         let edge =
-            evaluate_test_spatial_sample(&request, &test_spatial_color_target(1, 6, 0.2, 0.5), 500);
+            evaluate_test_spatial_sample(&request, &test_spatial_color_target(2, 6, 0.4, 0.5), 500);
         assert!(edge.opacity > 0.0 && edge.opacity < 1.0);
         assert_ne!(edge.color, test_color(0, 0, 0));
         assert_eq!(
