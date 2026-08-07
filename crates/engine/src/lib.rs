@@ -3797,6 +3797,7 @@ struct RuntimeChildTransport {
     direct_parent_cue_id: Option<CueId>,
     direct_started_at: Option<Instant>,
     direct_paused: bool,
+    direct_paused_at: Option<Instant>,
     direct_generation: u64,
     metronome_enabled: bool,
     count_in_beats: u8,
@@ -4123,6 +4124,7 @@ struct EngineRuntime {
     last_live_audio_frame_sequence: Option<u64>,
     timeline_playing: bool,
     timeline_count_in_until: Option<Instant>,
+    timeline_paused_at: Option<Instant>,
     direct_child_count_in: Option<RuntimeDirectChildCountIn>,
     timeline_position_ms: u64,
     timeline_playhead_boundary_armed: bool,
@@ -4327,6 +4329,7 @@ impl EngineRuntime {
             last_live_audio_frame_sequence: None,
             timeline_playing: false,
             timeline_count_in_until: None,
+            timeline_paused_at: None,
             direct_child_count_in: None,
             timeline_position_ms: 0,
             timeline_playhead_boundary_armed: false,
@@ -9165,6 +9168,9 @@ impl EngineRuntime {
                     self.timeline_external_sync_source = None;
                 }
                 if playing && !was_playing {
+                    if let Some(paused_at) = self.timeline_paused_at.take() {
+                        self.shift_timeline_effect_clocks(paused_at, now);
+                    }
                     self.timeline_count_in_until = (self.timeline_metronome_enabled
                         && self.timeline_count_in_beats > 0)
                         .then(|| {
@@ -9174,6 +9180,15 @@ impl EngineRuntime {
                             ))
                             .unwrap_or(now)
                         });
+                    if self.timeline_count_in_until.is_some() {
+                        self.timeline_paused_at = Some(now);
+                    } else if self
+                        .active_fade
+                        .as_ref()
+                        .is_some_and(|fade| fade.source == PendingCueTriggerSource::Timeline)
+                    {
+                        self.set_active_fade_paused(false, now);
+                    }
                     // Resume must not replay a boundary that the playhead already consumed.
                     // Fresh playback and explicit positioning clear the evaluated marker and
                     // therefore still arm the current boundary exactly once.
@@ -9185,9 +9200,20 @@ impl EngineRuntime {
                 } else if !playing {
                     self.timeline_count_in_until = None;
                     self.timeline_jump_landed_event_id = None;
+                    if was_playing {
+                        self.timeline_paused_at = Some(now);
+                        if self
+                            .active_fade
+                            .as_ref()
+                            .is_some_and(|fade| fade.source == PendingCueTriggerSource::Timeline)
+                        {
+                            self.set_active_fade_paused(true, now);
+                        }
+                    }
                 }
             }
             EngineCommand::SeekTimeline(position_ms) => {
+                let now = Instant::now();
                 self.timeline_count_in_until = None;
                 self.deactivate_all_timeline_effect_activations();
                 self.deactivate_all_child_transports();
@@ -9200,8 +9226,9 @@ impl EngineRuntime {
                 self.timeline_playhead_boundary_armed = self.timeline_playing;
                 self.apply_timeline_automations();
                 self.apply_timeline_video_automations();
-                self.establish_child_transports_at_position(Instant::now());
+                self.establish_child_transports_at_position(now);
                 self.apply_child_timeline_automations();
+                self.timeline_paused_at = (!self.timeline_playing).then_some(now);
             }
             EngineCommand::SetDirectChildTimelinePlaying { cue_id, playing } => {
                 self.set_direct_child_timeline_playing(cue_id, playing, Instant::now());
@@ -9226,6 +9253,7 @@ impl EngineRuntime {
                 source,
             } => {
                 let now = Instant::now();
+                self.timeline_paused_at = None;
                 self.timeline_jump_landed_event_id = None;
                 self.timeline_playhead_boundary_armed = false;
                 let source_changed = self.timeline_external_sync_source.as_ref() != Some(&source);
@@ -12791,6 +12819,7 @@ impl EngineRuntime {
             direct_parent_cue_id,
             direct_started_at: None,
             direct_paused: false,
+            direct_paused_at: None,
             direct_generation: 0,
             metronome_enabled: child.metronome_enabled,
             count_in_beats: child.count_in_beats.min(16),
@@ -12990,6 +13019,7 @@ impl EngineRuntime {
                     transport.direct_parent_cue_id?,
                     transport.direct_started_at?,
                     transport.direct_paused,
+                    transport.direct_paused_at,
                     transport.position_ms,
                     transport.direct_generation,
                 ))
@@ -13318,7 +13348,8 @@ impl EngineRuntime {
                 .map(|(_, _, transition)| transition.clone());
         }
         let mut has_immediate_trigger = false;
-        for (cue_id, started_at, paused, position_ms, generation) in active_direct_child_transports
+        for (cue_id, started_at, paused, paused_at, position_ms, generation) in
+            active_direct_child_transports
         {
             let Some(cue_index) = self.cues.iter().position(|cue| cue.id == cue_id) else {
                 continue;
@@ -13336,6 +13367,7 @@ impl EngineRuntime {
             transport.boundary_armed = true;
             transport.direct_started_at = Some(started_at);
             transport.direct_paused = false;
+            transport.direct_paused_at = None;
             transport.direct_generation = generation;
             transport.previous_position_ms = 0;
             transport.position_ms = 0;
@@ -13350,6 +13382,7 @@ impl EngineRuntime {
                 replay_at,
             );
             self.direct_child_transports[transport_index].direct_paused = paused;
+            self.direct_child_transports[transport_index].direct_paused_at = paused_at;
         }
         if has_immediate_trigger {
             self.advance_pending_cue(now);
@@ -15550,7 +15583,10 @@ impl EngineRuntime {
     ) -> Result<RuntimeTimelineEvent, String> {
         if !event.conform_to_tempo {
             event.iteration_period_ms = event.duration_ms;
-            event.rate = None;
+            // Fixed-time Scene Blocks may carry an explicit source playback rate
+            // (notably Daslight DVC SPEED). Preserve that authored rate instead of
+            // treating every serialized value as derived conform state.
+            event.rate = event.rate.map(valid_effect_rate);
             event.fade_in_ms = event.fade_in_ms.min(event.duration_ms);
             event.fade_out_ms = event.fade_out_ms.min(event.duration_ms);
             return Ok(event);
@@ -16180,31 +16216,40 @@ impl EngineRuntime {
             .filter_map(|index| self.effect_activations.get(*index))
             .filter(|activation| activation.key.is_some())
         {
+            let evaluation_now = self.effect_evaluation_now(activation.key, now);
             let input = value;
-            let activation_clock =
-                effect_activation_clock_snapshot(activation.key, &activation.effect, now, &clock);
+            let activation_clock = effect_activation_clock_snapshot(
+                activation.key,
+                &activation.effect,
+                evaluation_now,
+                &clock,
+            );
             let next = apply_runtime_effect_to_attribute(
                 &activation.effect,
                 fixture,
                 attribute,
                 input,
-                now,
+                evaluation_now,
                 &activation_clock,
                 activation.rate,
             );
             value = if let Some(transition) = &activation.transition {
-                let previous_clock =
-                    effect_activation_clock_snapshot(activation.key, &transition.from, now, &clock);
+                let previous_clock = effect_activation_clock_snapshot(
+                    activation.key,
+                    &transition.from,
+                    evaluation_now,
+                    &clock,
+                );
                 let previous = apply_runtime_effect_to_attribute(
                     &transition.from,
                     fixture,
                     attribute,
                     input,
-                    now,
+                    evaluation_now,
                     &previous_clock,
                     transition.from_rate,
                 );
-                let progress = runtime_effect_transition_progress(transition, now);
+                let progress = runtime_effect_transition_progress(transition, evaluation_now);
                 transition_effect_value(previous, next, progress, discrete)
             } else {
                 next
@@ -17685,6 +17730,7 @@ impl EngineRuntime {
         transport.position_ms = 0;
         transport.direct_started_at = Some(started_at);
         transport.direct_paused = false;
+        transport.direct_paused_at = None;
         transport.direct_generation = transport.direct_generation.wrapping_add(1);
         transport.activated_events.fill(false);
         let has_immediate_trigger =
@@ -17733,6 +17779,7 @@ impl EngineRuntime {
             transport.parent_iteration = 0;
             transport.direct_started_at = None;
             transport.direct_paused = false;
+            transport.direct_paused_at = None;
             transport.due.clear();
             transport.activated_events.fill(false);
         }
@@ -17838,6 +17885,7 @@ impl EngineRuntime {
             if active && !paused {
                 self.advance_child_transport(RuntimeChildTransportId::Direct(transport_index), now);
                 self.direct_child_transports[transport_index].direct_paused = true;
+                self.direct_child_transports[transport_index].direct_paused_at = Some(now);
             }
             let generation = if active {
                 direct_generation
@@ -17876,11 +17924,13 @@ impl EngineRuntime {
             self.last_error = Some(format!("Cue {cue_id} has no child timeline"));
             return;
         };
-        let (active, paused, position_ms, duration_ms) = {
+        let (active, paused, paused_at, generation, position_ms, duration_ms) = {
             let transport = &self.direct_child_transports[transport_index];
             (
                 transport.active,
                 transport.direct_paused,
+                transport.direct_paused_at,
+                transport.direct_generation,
                 transport.position_ms,
                 transport.duration_ms,
             )
@@ -17892,17 +17942,22 @@ impl EngineRuntime {
                 return;
             }
             if paused {
+                if let Some(paused_at) = paused_at {
+                    self.shift_direct_child_effect_clocks(cue_id, generation, paused_at, now);
+                }
                 let transport = &mut self.direct_child_transports[transport_index];
                 transport.direct_started_at = Some(
                     now.checked_sub(Duration::from_millis(position_ms))
                         .unwrap_or(now),
                 );
                 transport.direct_paused = false;
+                transport.direct_paused_at = None;
                 transport.boundary_armed = false;
             }
         } else if active && !paused {
             self.advance_child_transport(RuntimeChildTransportId::Direct(transport_index), now);
             self.direct_child_transports[transport_index].direct_paused = true;
+            self.direct_child_transports[transport_index].direct_paused_at = Some(now);
         }
         self.last_error = None;
     }
@@ -17916,6 +17971,116 @@ impl EngineRuntime {
         }
         self.direct_child_count_in = None;
         self.set_direct_child_timeline_playing_now(count_in.cue_id, true, now);
+    }
+
+    fn shift_direct_child_effect_clocks(
+        &mut self,
+        parent_cue_id: CueId,
+        generation: u64,
+        paused_at: Instant,
+        resumed_at: Instant,
+    ) {
+        let pause_duration = resumed_at.saturating_duration_since(paused_at);
+        if pause_duration.is_zero() {
+            return;
+        }
+        for activation in &mut self.effect_activations {
+            if !matches!(
+                activation.key,
+                Some(RuntimeEffectActivationKey::DirectChildTimeline {
+                    parent_cue_id: candidate,
+                    generation: candidate_generation,
+                    ..
+                }) if candidate == parent_cue_id && candidate_generation == generation
+            ) {
+                continue;
+            }
+            activation.effect.created_at = activation
+                .effect
+                .created_at
+                .checked_add(pause_duration)
+                .unwrap_or(resumed_at);
+            if let Some(transition) = &mut activation.transition {
+                transition.from.created_at = transition
+                    .from
+                    .created_at
+                    .checked_add(pause_duration)
+                    .unwrap_or(resumed_at);
+                transition.started_at = transition
+                    .started_at
+                    .checked_add(pause_duration)
+                    .unwrap_or(resumed_at);
+                transition.progress_cache.set(None);
+            }
+            clear_runtime_effect_caches(&activation.effect.kind);
+        }
+    }
+
+    fn shift_timeline_effect_clocks(&mut self, paused_at: Instant, resumed_at: Instant) {
+        let pause_duration = resumed_at.saturating_duration_since(paused_at);
+        if pause_duration.is_zero() {
+            return;
+        }
+        for activation in &mut self.effect_activations {
+            if !matches!(
+                activation.key,
+                Some(
+                    RuntimeEffectActivationKey::Timeline { .. }
+                        | RuntimeEffectActivationKey::ChildTimeline { .. }
+                )
+            ) {
+                continue;
+            }
+            activation.effect.created_at = activation
+                .effect
+                .created_at
+                .checked_add(pause_duration)
+                .unwrap_or(resumed_at);
+            if let Some(transition) = &mut activation.transition {
+                transition.from.created_at = transition
+                    .from
+                    .created_at
+                    .checked_add(pause_duration)
+                    .unwrap_or(resumed_at);
+                transition.started_at = transition
+                    .started_at
+                    .checked_add(pause_duration)
+                    .unwrap_or(resumed_at);
+                transition.progress_cache.set(None);
+            }
+            clear_runtime_effect_caches(&activation.effect.kind);
+        }
+    }
+
+    fn effect_evaluation_now(
+        &self,
+        key: Option<RuntimeEffectActivationKey>,
+        now: Instant,
+    ) -> Instant {
+        match key {
+            Some(RuntimeEffectActivationKey::DirectChildTimeline {
+                parent_cue_id,
+                generation,
+                ..
+            }) => self
+                .direct_child_transports
+                .iter()
+                .find(|transport| {
+                    transport.active
+                        && transport.direct_parent_cue_id == Some(parent_cue_id)
+                        && transport.direct_generation == generation
+                        && transport.direct_paused
+                })
+                .and_then(|transport| transport.direct_paused_at)
+                .unwrap_or(now),
+            Some(
+                RuntimeEffectActivationKey::Timeline { .. }
+                | RuntimeEffectActivationKey::ChildTimeline { .. },
+            ) if self.timeline_external_sync_source.is_none() => {
+                self.timeline_paused_at.unwrap_or(now)
+            }
+            _ => now,
+        }
     }
 
     fn seek_direct_child_timeline(&mut self, cue_id: CueId, position_ms: u64, now: Instant) {
@@ -17958,6 +18123,7 @@ impl EngineRuntime {
                 .unwrap_or(now),
         );
         transport.direct_paused = false;
+        transport.direct_paused_at = None;
         transport.direct_generation = transport.direct_generation.wrapping_add(1);
         transport.activated_events.fill(false);
         let has_immediate_trigger =
@@ -17966,6 +18132,8 @@ impl EngineRuntime {
             self.advance_pending_cue(now);
         }
         self.direct_child_transports[transport_index].direct_paused = !was_playing;
+        self.direct_child_transports[transport_index].direct_paused_at =
+            (!was_playing).then_some(now);
         self.apply_child_timeline_automations();
         self.last_error = None;
     }
@@ -18323,6 +18491,16 @@ impl EngineRuntime {
                 return;
             }
             self.timeline_count_in_until = None;
+            if let Some(paused_at) = self.timeline_paused_at.take() {
+                self.shift_timeline_effect_clocks(paused_at, now);
+            }
+            if self
+                .active_fade
+                .as_ref()
+                .is_some_and(|fade| fade.source == PendingCueTriggerSource::Timeline)
+            {
+                self.set_active_fade_paused(false, now);
+            }
             self.timeline_playhead_boundary_armed = true;
             return;
         }
@@ -18418,6 +18596,7 @@ impl EngineRuntime {
 
         if self.timeline_position_ms >= duration {
             self.timeline_playing = false;
+            self.timeline_paused_at = Some(now);
             self.timeline_playhead_boundary_armed = false;
         }
     }
@@ -19157,15 +19336,20 @@ impl EngineRuntime {
             .filter_map(|index| self.effect_activations.get(*index))
             .filter(|activation| activation.key.is_some())
         {
+            let evaluation_now = self.effect_evaluation_now(activation.key, now);
             if let Some(transition) = &activation.transition {
                 let mut previous = effect_state;
                 let mut next = effect_state;
-                let previous_clock =
-                    effect_activation_clock_snapshot(activation.key, &transition.from, now, &clock);
+                let previous_clock = effect_activation_clock_snapshot(
+                    activation.key,
+                    &transition.from,
+                    evaluation_now,
+                    &clock,
+                );
                 let activation_clock = effect_activation_clock_snapshot(
                     activation.key,
                     &activation.effect,
-                    now,
+                    evaluation_now,
                     &clock,
                 );
                 apply_runtime_video_effect_matching(
@@ -19173,7 +19357,7 @@ impl EngineRuntime {
                     transition.from_rate,
                     layer,
                     &mut previous,
-                    now,
+                    evaluation_now,
                     &previous_clock,
                     &include_param,
                 );
@@ -19182,20 +19366,20 @@ impl EngineRuntime {
                     activation.rate,
                     layer,
                     &mut next,
-                    now,
+                    evaluation_now,
                     &activation_clock,
                     &include_param,
                 );
                 effect_state = interpolate_runtime_video_effect_state(
                     previous,
                     next,
-                    runtime_effect_transition_progress(transition, now),
+                    runtime_effect_transition_progress(transition, evaluation_now),
                 );
             } else {
                 let activation_clock = effect_activation_clock_snapshot(
                     activation.key,
                     &activation.effect,
-                    now,
+                    evaluation_now,
                     &clock,
                 );
                 apply_runtime_video_effect_matching(
@@ -19203,7 +19387,7 @@ impl EngineRuntime {
                     activation.rate,
                     layer,
                     &mut effect_state,
-                    now,
+                    evaluation_now,
                     &activation_clock,
                     &include_param,
                 );
@@ -21233,8 +21417,9 @@ fn runtime_timeline_event_from_summary(event: &TimelineCueEventSummary) -> Runti
         loop_fill: event.loop_fill,
         source_offset_ms: event.source_offset_ms,
         iteration_period_ms: event.duration_ms,
-        // `rate` is derived runtime state. Never trust a persisted display value.
-        rate: None,
+        // Conformed rates remain derived from authored beats. Fixed-time blocks
+        // may persist an explicit source rate such as Daslight DVC SPEED.
+        rate: (!event.conform_to_tempo).then_some(event.rate).flatten(),
         fade_in_ms: event.fade_in_ms.min(event.duration_ms),
         fade_out_ms: event.fade_out_ms.min(event.duration_ms),
         loop_count,
@@ -55001,6 +55186,26 @@ mod tests {
     }
 
     #[test]
+    fn project_load_preserves_fixed_time_scene_block_source_rate() {
+        let mut source = runtime_with_lfo_effects(&[]);
+        create_effect_only_cue(&mut source, 1, Vec::new());
+        source.timeline_events = vec![test_scene_block(10, 1, 0, 4_000, 1, 2.779_32)];
+        let snapshot = source.build_snapshot(0);
+
+        let mut loaded = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        loaded.apply_command(EngineCommand::LoadProjectSnapshot(snapshot));
+
+        assert_eq!(loaded.timeline_events[0].rate, Some(2.779_32));
+        assert_eq!(
+            timeline_event_summary(&loaded.timeline_events[0]).rate,
+            Some(2.779_32)
+        );
+    }
+
+    #[test]
     fn no_effect_conform_rate_is_stable_across_cue_change_and_project_load() {
         let mut source = runtime_with_lfo_effects(&[(1, false)]);
         create_effect_only_cue(
@@ -55165,6 +55370,48 @@ mod tests {
         let periods_ms = [1_000.0 / active[0].1.rate, 1_000.0 / active[1].1.rate];
         assert!((periods_ms[0] - 1_000.0).abs() < f32::EPSILON);
         assert!((periods_ms[1] - 359.712_25).abs() < 0.001);
+    }
+
+    #[test]
+    fn paused_timeline_freezes_owned_effect_phase_and_resume_keeps_continuity() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let request = test_lfo_request(
+            "Paused owned saw",
+            LfoShape::Saw,
+            1_000,
+            0.0,
+            EffectBlendMode::Override,
+            0,
+            u16::MAX,
+        );
+        create_effect_only_cue(&mut runtime, 1, vec![owned_lfo_target(90, request)]);
+        runtime.timeline_events = vec![test_scene_block(10, 1, 0, 2_000, 1, 1.0)];
+        runtime.sort_timeline_events();
+        let started_at = Instant::now();
+        runtime.rebuild_effect_activations(started_at);
+        runtime.trigger_timeline_events_between(0, 0, true, true, started_at);
+
+        let paused_at = started_at + Duration::from_millis(250);
+        runtime.timeline_paused_at = Some(paused_at);
+        let paused_frame = runtime.render_dmx_frame_for_universe(0, paused_at);
+        assert_eq!(
+            runtime.render_dmx_frame_for_universe(0, paused_at + Duration::from_secs(2)),
+            paused_frame
+        );
+
+        let resumed_at = paused_at + Duration::from_secs(2);
+        runtime.shift_timeline_effect_clocks(paused_at, resumed_at);
+        runtime.timeline_paused_at = None;
+        assert_eq!(
+            runtime.render_dmx_frame_for_universe(0, resumed_at),
+            paused_frame,
+            "resume must not jump the source phase"
+        );
+        assert_ne!(
+            runtime.render_dmx_frame_for_universe(0, resumed_at + Duration::from_millis(100)),
+            paused_frame,
+            "resumed Timeline must advance again"
+        );
     }
 
     #[test]

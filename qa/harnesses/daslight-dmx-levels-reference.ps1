@@ -8,6 +8,7 @@ param(
   [string]$Assignments = "",
   [ValidateRange(0, 32767)][int]$Universe = 0,
   [ValidateRange(0, 255)][int]$BarTolerance = 25,
+  [switch]$DetectOnly,
   [switch]$SelfTest
 )
 
@@ -60,8 +61,9 @@ if ($SelfTest) {
   Invoke-SelfTest
   return
 }
-if ([string]::IsNullOrWhiteSpace($InputPng) -or [string]::IsNullOrWhiteSpace($OutPath)) {
-  throw 'Provide -InputPng and -OutPath, or use -SelfTest.'
+if ([string]::IsNullOrWhiteSpace($InputPng) -or
+    (-not $DetectOnly -and [string]::IsNullOrWhiteSpace($OutPath))) {
+  throw 'Provide -InputPng and -OutPath, use -DetectOnly with -InputPng, or use -SelfTest.'
 }
 
 Add-Type -AssemblyName System.Drawing
@@ -113,6 +115,23 @@ try {
         bluePixels = $bluePixels
       })
     }
+  }
+
+  if ($DetectOnly) {
+    [ordered]@{
+      sourceImage = $resolvedInput
+      detectedActiveChannels = @($detectedActive)
+      barEstimates = @(
+        $barEstimates | ForEach-Object {
+          [ordered]@{
+            channel = $_.channel
+            estimated = $_.estimated
+            bluePixels = $_.bluePixels
+          }
+        }
+      )
+    } | ConvertTo-Json -Depth 5
+    return
   }
 
   $expectedActive = @(

@@ -2607,7 +2607,7 @@ fn retain_dvc_color_spatial_targets(
 
 fn dvc_chaser_step_duration(
     effect: Node<'_, '_>,
-    scene: Node<'_, '_>,
+    _scene: Node<'_, '_>,
     step_count: usize,
     approximations: &mut Vec<String>,
 ) -> Result<(u64, String), String> {
@@ -2616,22 +2616,15 @@ fn dvc_chaser_step_duration(
         .ok_or_else(|| "Chaser EFFECT is missing DURATION".to_string())?
         .parse::<f64>()
         .map_err(|error| format!("Chaser DURATION is invalid: {error}"))?;
-    let speed = scene
-        .attribute("SPEED")
-        .unwrap_or("1")
-        .parse::<f64>()
-        .map_err(|error| format!("SCENE SPEED is invalid: {error}"))?;
     if !duration_ms.is_finite() || duration_ms <= 0.0 {
         return Err(format!(
             "Chaser DURATION must be finite and greater than 0, found {duration_ms}"
         ));
     }
-    if !speed.is_finite() || speed <= 0.0 {
-        return Err(format!(
-            "SCENE SPEED must be finite and greater than 0, found {speed}"
-        ));
-    }
-    let step_duration = duration_ms / speed / step_count.max(1) as f64;
+    // EFFECT DURATION is already the authored generator period. SCENE SPEED is
+    // the normalized live-speed dial (0.5 is neutral in Daslight), not a raw
+    // duration divisor.
+    let step_duration = duration_ms / step_count.max(1) as f64;
     if !step_duration.is_finite() || step_duration > u64::MAX as f64 {
         return Err("derived Chaser step duration exceeds the supported range".to_string());
     }
@@ -2644,15 +2637,13 @@ fn dvc_chaser_step_duration(
     }
     Ok((
         step_duration_ms,
-        format!(
-            "step_duration_ms=round(EFFECT DURATION / SCENE SPEED / selection_steps)={step_duration_ms}"
-        ),
+        format!("step_duration_ms=round(EFFECT DURATION / selection_steps)={step_duration_ms}"),
     ))
 }
 
 fn dvc_move_period(
     effect: Node<'_, '_>,
-    scene: Node<'_, '_>,
+    _scene: Node<'_, '_>,
     generator: &str,
     approximations: &mut Vec<String>,
 ) -> Result<(u64, String), String> {
@@ -2661,22 +2652,14 @@ fn dvc_move_period(
         .ok_or_else(|| format!("{generator} EFFECT is missing DURATION"))?
         .parse::<f64>()
         .map_err(|error| format!("{generator} DURATION is invalid: {error}"))?;
-    let speed = scene
-        .attribute("SPEED")
-        .unwrap_or("1")
-        .parse::<f64>()
-        .map_err(|error| format!("SCENE SPEED is invalid: {error}"))?;
     if !duration_ms.is_finite() || duration_ms <= 0.0 {
         return Err(format!(
             "{generator} DURATION must be finite and greater than 0, found {duration_ms}"
         ));
     }
-    if !speed.is_finite() || speed <= 0.0 {
-        return Err(format!(
-            "SCENE SPEED must be finite and greater than 0, found {speed}"
-        ));
-    }
-    let period = duration_ms / speed;
+    // EFFECT DURATION is already the authored generator period. SCENE SPEED is
+    // Daslight's normalized live-speed dial and 0.5 represents neutral.
+    let period = duration_ms;
     if !period.is_finite() || period > u64::MAX as f64 {
         return Err(format!(
             "derived {generator} period exceeds the supported range"
@@ -2691,7 +2674,7 @@ fn dvc_move_period(
     }
     Ok((
         period_ms,
-        format!("period_ms=round(EFFECT DURATION / SCENE SPEED)={period_ms}"),
+        format!("period_ms=round(EFFECT DURATION)={period_ms}"),
     ))
 }
 
@@ -2917,7 +2900,6 @@ fn parse_super_scenes(
         let mut audio_clips = Vec::new();
         let mut events = Vec::new();
         let mut duration_ms = 0_u64;
-        let mut authored_candidates = Vec::<(usize, f32)>::new();
 
         for timeline in timeline_nodes.iter().copied() {
             let layer_id = *layer_ids
@@ -3067,19 +3049,12 @@ fn parse_super_scenes(
                             .unwrap_or(1.0);
                         let conform = parse_bool_attribute(block, "CONFORM_TO_TEMPO");
                         let allow_loop = parse_bool_attribute(block, "ALLOWLOOP");
-                        let duration_beats =
-                            f64::from(timeline_bpm) * block_duration as f64 / 60_000.0;
                         if conform {
-                            let authored = (duration_beats * f64::from(speed)).clamp(
-                                f64::from(protocol::MIN_CUE_AUTHORED_BEATS),
-                                f64::from(protocol::MAX_CUE_AUTHORED_BEATS),
-                            ) as f32;
-                            authored_candidates.push((source_index, authored));
                             report.approximate.add(
                                 1,
                                 format!("Scene block: {}", block.attribute("NAME").unwrap_or("Untitled")),
                                 format!(
-                                    "Authored beat length inferred from {block_duration} ms at {timeline_bpm:.3} BPM"
+                                    "CONFORM_TO_TEMPO preserved at the imported {timeline_bpm:.3} BPM as fixed-ms placement so source SPEED={speed} remains exact"
                                 ),
                             );
                         } else if allow_loop {
@@ -3104,14 +3079,13 @@ fn parse_super_scenes(
                             id: next_event_id,
                             cue_id: cues[source_index].id,
                             time_ms: start_ms,
-                            time_beats: conform
-                                .then_some(f64::from(timeline_bpm) * start_ms as f64 / 60_000.0),
+                            time_beats: None,
                             track: TimelineTrackKind::Lighting,
                             layer_id: Some(layer_id),
                             duration_ms: block_duration,
-                            duration_beats: conform.then_some(duration_beats),
-                            conform_to_tempo: conform,
-                            loop_fill: conform && allow_loop,
+                            duration_beats: None,
+                            conform_to_tempo: false,
+                            loop_fill: false,
                             source_offset_ms,
                             rate: Some(speed),
                             fade_in_ms: fade_in,
@@ -3151,12 +3125,6 @@ fn parse_super_scenes(
             }
         }
 
-        authored_candidates.sort_by(|left, right| left.0.cmp(&right.0));
-        for (source_index, authored) in authored_candidates {
-            if cues[source_index].authored_beats.is_none() {
-                cues[source_index].authored_beats = Some(authored);
-            }
-        }
         cues[owner_index].child_timeline = Some(ChildTimelineSummary {
             layers,
             events,
@@ -3933,8 +3901,9 @@ mod tests {
         assert_eq!(child.layers.len(), 2);
         assert_eq!(child.audio_clips.len(), 1);
         assert_eq!(child.events.len(), 1);
-        assert!(child.events[0].conform_to_tempo);
-        assert!(child.events[0].loop_fill);
+        assert!(!child.events[0].conform_to_tempo);
+        assert!(!child.events[0].loop_fill);
+        assert_eq!(child.events[0].rate, Some(1.0));
         assert_eq!(child.events[0].source_offset_ms, 0);
         assert_eq!(outcome.report.summary.values_decoded, 1);
         assert_eq!(outcome.report.summary.values_skipped, 0);
@@ -4060,7 +4029,7 @@ mod tests {
         let Some(EffectParamsSnapshot::Chaser(chaser)) = &chaser.params else {
             panic!("CHASER 321 must be stored as cue-owned Chaser params");
         };
-        assert_eq!(chaser.step_duration_ms, 3_333);
+        assert_eq!(chaser.step_duration_ms, 1_667);
         assert_eq!(chaser.active_step_count, 2);
         assert_eq!(chaser.direction, ChaserDirection::Forward);
         assert_eq!(chaser.overlap, 1.0);
@@ -4147,7 +4116,7 @@ mod tests {
         assert_eq!(polygon.interpolation, MoveInterpolation::Line);
         assert_eq!(polygon.direction, MoveDirection::Forward);
         assert_eq!(polygon.coordinate_mode, MoveCoordinateMode::Absolute);
-        assert_eq!(polygon.period_ms, 4_000);
+        assert_eq!(polygon.period_ms, 2_000);
         assert!((polygon.fixture_spread - 0.02).abs() < f32::EPSILON);
         assert!(outcome.report.approximate.details.iter().any(|detail| {
             detail.item.contains("Polygon")
@@ -4859,7 +4828,7 @@ mod tests {
     }
 
     #[test]
-    fn dvc_local_golden_shin_seek_establishes_front_and_pinspot_fades() {
+    fn dvc_local_golden_shin_seek_matches_daslight_at_ten_seconds() {
         let path = Path::new(r"C:\Users\kouty\Desktop\Shinkan-Left\Shinkan2026.dvc");
         if !path.is_file() {
             eprintln!(
@@ -4909,7 +4878,7 @@ mod tests {
         engine
             .send(engine::EngineCommand::SeekDirectChildTimeline {
                 cue_id,
-                position_ms: 9_950,
+                position_ms: 10_000,
             })
             .unwrap();
 
@@ -4921,7 +4890,7 @@ mod tests {
                 .iter()
                 .any(|transport| {
                     transport.cue_id == cue_id
-                        && transport.position_ms == 9_950
+                        && transport.position_ms == 10_000
                         && !transport.playing
                 })
             {
@@ -4931,17 +4900,76 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let frame = seeked.expect("Shin seek should publish a stable paused frame");
-        assert_eq!(frame[108], 255, "Encore FR50Z channel 109");
-        for channel in [82_usize, 87, 92, 97] {
-            assert_eq!(frame[channel - 1], 255, "PinSpot red channel {channel}");
-            assert_eq!(frame[channel], 135, "PinSpot green channel {}", channel + 1);
-            assert_eq!(
-                frame[channel + 1],
-                25,
-                "PinSpot blue channel {}",
-                channel + 2
-            );
+        let mut daslight_at_ten = vec![0_u8; 512];
+        for (channel, value) in [
+            (6, 255),
+            (7, 135),
+            (8, 25),
+            (10, 255),
+            (11, 255),
+            (12, 135),
+            (13, 25),
+            (15, 255),
+            (16, 255),
+            (17, 135),
+            (18, 25),
+            (20, 255),
+            (21, 255),
+            (22, 135),
+            (23, 25),
+            (25, 255),
+            (26, 255),
+            (27, 135),
+            (28, 25),
+            (30, 255),
+            (31, 255),
+            (32, 135),
+            (33, 25),
+            (35, 255),
+            (41, 255),
+            (42, 135),
+            (43, 25),
+            (45, 255),
+            (54, 255),
+            (55, 135),
+            (56, 25),
+            (60, 255),
+            (61, 255),
+            (62, 255),
+            (63, 135),
+            (64, 25),
+            (68, 255),
+            (69, 255),
+            (70, 255),
+            (71, 135),
+            (72, 25),
+            (74, 255),
+            (76, 255),
+            (77, 135),
+            (78, 25),
+            (80, 255),
+            (82, 255),
+            (83, 135),
+            (84, 25),
+            (86, 255),
+            (87, 255),
+            (88, 135),
+            (89, 25),
+            (91, 255),
+            (92, 255),
+            (93, 135),
+            (94, 25),
+            (96, 255),
+            (97, 255),
+            (98, 135),
+            (99, 25),
+            (101, 255),
+            (109, 255),
+            (512, 255),
+        ] {
+            daslight_at_ten[channel - 1] = value;
         }
+        assert_eq!(frame, daslight_at_ten, "Daslight DMX Levels at 10.000 s");
 
         let mut buffer = [0_u8; 600];
         let packet = loop {
@@ -4954,6 +4982,54 @@ mod tests {
         assert_eq!(
             packet.data, frame,
             "Art-Net must carry the paused seek frame"
+        );
+
+        engine
+            .send(engine::EngineCommand::SeekDirectChildTimeline {
+                cue_id,
+                position_ms: 20_000,
+            })
+            .unwrap();
+        let mut frame_at_twenty = None;
+        for _ in 0..100 {
+            let snapshot = engine.snapshot();
+            if snapshot
+                .direct_child_timeline_transports
+                .iter()
+                .any(|transport| {
+                    transport.cue_id == cue_id
+                        && transport.position_ms == 20_000
+                        && !transport.playing
+                })
+            {
+                frame_at_twenty = Some(snapshot.dmx_preview);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let frame_at_twenty =
+            frame_at_twenty.expect("Shin 20-second seek should publish a stable paused frame");
+        assert_eq!(
+            [
+                frame_at_twenty[85],
+                frame_at_twenty[90],
+                frame_at_twenty[95],
+                frame_at_twenty[100],
+            ],
+            [0, 170, 85, 0],
+            "Daslight Chaser dimmers at 20.000 s"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let paused_preview = engine.snapshot().dmx_preview;
+        assert_eq!(
+            [
+                paused_preview[85],
+                paused_preview[90],
+                paused_preview[95],
+                paused_preview[100],
+            ],
+            [0, 170, 85, 0],
+            "paused Timeline FX must stay on the exact source frame"
         );
     }
 
