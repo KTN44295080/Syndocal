@@ -16088,23 +16088,27 @@ impl EngineRuntime {
             .filter(|activation| activation.key.is_some())
         {
             let input = value;
+            let activation_clock =
+                effect_activation_clock_snapshot(activation.key, &activation.effect, now, &clock);
             let next = apply_runtime_effect_to_attribute(
                 &activation.effect,
                 fixture,
                 attribute,
                 input,
                 now,
-                &clock,
+                &activation_clock,
                 activation.rate,
             );
             value = if let Some(transition) = &activation.transition {
+                let previous_clock =
+                    effect_activation_clock_snapshot(activation.key, &transition.from, now, &clock);
                 let previous = apply_runtime_effect_to_attribute(
                     &transition.from,
                     fixture,
                     attribute,
                     input,
                     now,
-                    &clock,
+                    &previous_clock,
                     transition.from_rate,
                 );
                 let progress = runtime_effect_transition_progress(transition, now);
@@ -18974,13 +18978,21 @@ impl EngineRuntime {
             if let Some(transition) = &activation.transition {
                 let mut previous = effect_state;
                 let mut next = effect_state;
+                let previous_clock =
+                    effect_activation_clock_snapshot(activation.key, &transition.from, now, &clock);
+                let activation_clock = effect_activation_clock_snapshot(
+                    activation.key,
+                    &activation.effect,
+                    now,
+                    &clock,
+                );
                 apply_runtime_video_effect_matching(
                     &transition.from,
                     transition.from_rate,
                     layer,
                     &mut previous,
                     now,
-                    &clock,
+                    &previous_clock,
                     &include_param,
                 );
                 apply_runtime_video_effect_matching(
@@ -18989,7 +19001,7 @@ impl EngineRuntime {
                     layer,
                     &mut next,
                     now,
-                    &clock,
+                    &activation_clock,
                     &include_param,
                 );
                 effect_state = interpolate_runtime_video_effect_state(
@@ -18998,13 +19010,19 @@ impl EngineRuntime {
                     runtime_effect_transition_progress(transition, now),
                 );
             } else {
+                let activation_clock = effect_activation_clock_snapshot(
+                    activation.key,
+                    &activation.effect,
+                    now,
+                    &clock,
+                );
                 apply_runtime_video_effect_matching(
                     &activation.effect,
                     activation.rate,
                     layer,
                     &mut effect_state,
                     now,
-                    &clock,
+                    &activation_clock,
                     &include_param,
                 );
             }
@@ -22403,6 +22421,38 @@ fn apply_runtime_video_effect_matching(
         | RuntimeEffectKind::Mapping(_)
         | RuntimeEffectKind::ColorMapping(_) => {}
     }
+}
+
+fn effect_activation_clock_snapshot(
+    key: Option<RuntimeEffectActivationKey>,
+    effect: &RuntimeEffect,
+    now: Instant,
+    global: &ClockSnapshot,
+) -> ClockSnapshot {
+    if !matches!(
+        key,
+        Some(
+            RuntimeEffectActivationKey::Timeline { .. }
+                | RuntimeEffectActivationKey::ChildTimeline { .. }
+                | RuntimeEffectActivationKey::DirectChildTimeline { .. }
+        )
+    ) {
+        return global.clone();
+    }
+
+    // Timeline-owned FX must evaluate from their Scene Block source position.
+    // The activation's created_at is already established/reconciled by the
+    // RuntimeChildTransport machinery, including seek and source offsets. A
+    // global beat counter here makes a paused seek depend on wall-clock phase.
+    let elapsed_beats = now
+        .saturating_duration_since(effect.created_at)
+        .as_secs_f64()
+        * f64::from(clamp_bpm(global.bpm))
+        / 60.0;
+    let mut local = global.clone();
+    local.beat_counter = elapsed_beats.floor().clamp(0.0, u64::MAX as f64) as u64;
+    local.beat_phase = elapsed_beats.rem_euclid(1.0) as f32;
+    local
 }
 
 fn apply_runtime_effect_to_attribute(
@@ -58767,6 +58817,70 @@ mod tests {
                 )
             }));
         assert!(runtime.direct_child_transports[0].active);
+    }
+
+    #[test]
+    fn direct_child_clock_synced_fx_seek_uses_transport_position_not_global_phase() {
+        let mut runtime = runtime_with_chaser_fixtures(2);
+        let mut chaser = test_chaser_request(&[1, 2]);
+        chaser.clock_sync = Some(protocol::EffectClockSync { beats: 1.0 });
+        chaser.step_duration_ms = 10_000;
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![CueEffectTarget {
+                effect_id: 901,
+                enabled: true,
+                params: Some(EffectParamsSnapshot::Chaser(chaser)),
+                transition_ms: None,
+            }],
+        );
+        runtime.apply_command(EngineCommand::CreateCue {
+            cue_id: 2,
+            label: "Clocked Direct Timeline".to_string(),
+            fade_ms: 0,
+            authored_beats: None,
+            targets: Vec::new(),
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: Vec::new(),
+        });
+        runtime
+            .set_cue_child_timeline_state(
+                2,
+                Some(ChildTimelineSummary {
+                    events: vec![TimelineCueEventSummary {
+                        id: 201,
+                        cue_id: 1,
+                        time_ms: 0,
+                        track: TimelineTrackKind::Lighting,
+                        duration_ms: 2_000,
+                        ..TimelineCueEventSummary::default()
+                    }],
+                    duration_ms: 2_000,
+                    ..ChildTimelineSummary::default()
+                }),
+            )
+            .unwrap();
+
+        let started_at = Instant::now();
+        runtime.clock.set_bpm(120.0, started_at);
+        runtime.rebuild_effect_activations(started_at);
+        runtime.start_cue(2, started_at, PendingCueTriggerSource::Manual);
+        runtime.set_direct_child_timeline_playing(2, false, started_at);
+        runtime.seek_direct_child_timeline(2, 750, started_at);
+        let first = runtime.render_dmx_frame_for_universe(0, started_at);
+
+        let later = started_at + Duration::from_millis(137);
+        runtime.seek_direct_child_timeline(2, 750, later);
+        let second = runtime.render_dmx_frame_for_universe(0, later);
+
+        assert!(first.iter().any(|value| *value > 0));
+        assert_eq!(
+            second, first,
+            "the same paused seek must not inherit a different global beat phase"
+        );
     }
 
     #[test]
