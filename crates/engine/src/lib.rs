@@ -3605,19 +3605,24 @@ struct CueBody {
 #[derive(Clone)]
 struct RuntimeFade {
     cue_id: CueId,
+    source: PendingCueTriggerSource,
     timeline_event_id: Option<TimelineEventId>,
     apply_mib_on_complete: bool,
+    completion_cue_ids: Vec<CueId>,
     started_at: Instant,
     duration: Duration,
     video_duration: Duration,
     paused_at: Option<Instant>,
     paused_duration: Duration,
+    lighting_owners: HashMap<(FixtureId, String), CueId>,
     start_values: HashMap<(FixtureId, String), u16>,
     target_values: HashMap<(FixtureId, String), u16>,
     attribute_timings: HashMap<(FixtureId, String), (Duration, Duration)>,
+    video_layer_owners: HashMap<VideoLayerId, CueId>,
     video_start_states: HashMap<VideoLayerId, VideoLayerState>,
     video_target_states: HashMap<VideoLayerId, VideoLayerState>,
     video_layer_timings: HashMap<VideoLayerId, (Duration, Duration)>,
+    video_output_owners: HashMap<VideoOutputId, CueId>,
     video_output_start_opacities: HashMap<VideoOutputId, f32>,
     video_output_target_opacities: HashMap<VideoOutputId, f32>,
     video_output_targets: HashMap<VideoOutputId, VideoOutputTarget>,
@@ -10408,12 +10413,8 @@ impl EngineRuntime {
         if edited_scene_cue_id.is_none() {
             self.active_cue_id = None;
             self.active_fade = None;
-        } else if self
-            .active_fade
-            .as_ref()
-            .is_some_and(|fade| edited_scene_cue_id.is_some_and(|cue_id| fade.cue_id == cue_id))
-        {
-            self.active_fade = None;
+        } else if let Some(cue_id) = edited_scene_cue_id {
+            self.remove_cue_from_active_fade(cue_id);
         }
 
         if let Some(cue_id) = edited_scene_cue_id {
@@ -10472,6 +10473,8 @@ impl EngineRuntime {
             cue.mib_fixture_ids.retain(|id| *id != fixture_id);
         }
         if let Some(fade) = &mut self.active_fade {
+            fade.lighting_owners
+                .retain(|(candidate_id, _), _| *candidate_id != fixture_id);
             fade.start_values
                 .retain(|(candidate_id, _), _| *candidate_id != fixture_id);
             fade.target_values
@@ -10568,6 +10571,7 @@ impl EngineRuntime {
         self.timeline_video_automations
             .retain(|automation| automation.layer_id != layer_id);
         if let Some(fade) = &mut self.active_fade {
+            fade.video_layer_owners.remove(&layer_id);
             fade.video_start_states.remove(&layer_id);
             fade.video_target_states.remove(&layer_id);
             fade.video_layer_timings.remove(&layer_id);
@@ -10609,6 +10613,7 @@ impl EngineRuntime {
             }
         }
         if let Some(fade) = &mut self.active_fade {
+            fade.video_output_owners.remove(&output_id);
             fade.video_output_start_opacities.remove(&output_id);
             fade.video_output_target_opacities.remove(&output_id);
             fade.video_output_targets.remove(&output_id);
@@ -13725,21 +13730,30 @@ impl EngineRuntime {
             .keys()
             .map(|key| (key.clone(), (Duration::ZERO, duration)))
             .collect::<HashMap<_, _>>();
+        let lighting_owners = start_values
+            .keys()
+            .map(|key| (key.clone(), cue.id))
+            .collect::<HashMap<_, _>>();
         self.active_fade = Some(RuntimeFade {
             cue_id: cue.id,
+            source: PendingCueTriggerSource::Timeline,
             timeline_event_id: Some(event.id),
             apply_mib_on_complete: true,
+            completion_cue_ids: vec![cue.id],
             started_at: now,
             duration,
             video_duration: Duration::ZERO,
             paused_at: None,
             paused_duration: Duration::ZERO,
+            lighting_owners,
             start_values,
             target_values,
             attribute_timings,
+            video_layer_owners: HashMap::new(),
             video_start_states: HashMap::new(),
             video_target_states: HashMap::new(),
             video_layer_timings: HashMap::new(),
+            video_output_owners: HashMap::new(),
             video_output_start_opacities: HashMap::new(),
             video_output_target_opacities: HashMap::new(),
             video_output_targets: HashMap::new(),
@@ -14733,9 +14747,9 @@ impl EngineRuntime {
             .retain(|_, active_cue_id| *active_cue_id != cue_id);
         self.cue_release_values.remove(&cue_id);
         self.pending_cues.retain(|pending| pending.cue_id != cue_id);
+        self.remove_cue_from_active_fade(cue_id);
         if self.active_cue_id == Some(cue_id) {
             self.active_cue_id = None;
-            self.active_fade = None;
         }
         if let Some(cue_list) = self
             .cue_lists
@@ -14747,6 +14761,49 @@ impl EngineRuntime {
             }
         }
         Ok(())
+    }
+
+    fn remove_cue_from_active_fade(&mut self, cue_id: CueId) {
+        let Some(fade) = &mut self.active_fade else {
+            return;
+        };
+        fade.completion_cue_ids
+            .retain(|completion_cue_id| *completion_cue_id != cue_id);
+        let lighting_keys = fade
+            .lighting_owners
+            .iter()
+            .filter_map(|(key, owner)| (*owner == cue_id).then_some(key.clone()))
+            .collect::<Vec<_>>();
+        for key in lighting_keys {
+            fade.lighting_owners.remove(&key);
+            fade.start_values.remove(&key);
+            fade.target_values.remove(&key);
+            fade.attribute_timings.remove(&key);
+        }
+        let video_layer_ids = fade
+            .video_layer_owners
+            .iter()
+            .filter_map(|(layer_id, owner)| (*owner == cue_id).then_some(*layer_id))
+            .collect::<Vec<_>>();
+        for layer_id in video_layer_ids {
+            fade.video_layer_owners.remove(&layer_id);
+            fade.video_start_states.remove(&layer_id);
+            fade.video_target_states.remove(&layer_id);
+            fade.video_layer_timings.remove(&layer_id);
+        }
+        let video_output_ids = fade
+            .video_output_owners
+            .iter()
+            .filter_map(|(output_id, owner)| (*owner == cue_id).then_some(*output_id))
+            .collect::<Vec<_>>();
+        for output_id in video_output_ids {
+            fade.video_output_owners.remove(&output_id);
+            fade.video_output_start_opacities.remove(&output_id);
+            fade.video_output_target_opacities.remove(&output_id);
+            fade.video_output_targets.remove(&output_id);
+            fade.video_output_timings.remove(&output_id);
+        }
+        self.clear_empty_active_fade();
     }
 
     fn cue_value_release_plan(&self, cue_id: CueId) -> CueValueReleasePlan {
@@ -14800,21 +14857,31 @@ impl EngineRuntime {
             self.values.extend(release_plan.target_values);
             return;
         }
+        let lighting_owners = release_plan
+            .target_values
+            .keys()
+            .map(|key| (key.clone(), cue_id))
+            .collect::<HashMap<_, _>>();
         self.active_fade = Some(RuntimeFade {
             cue_id,
+            source: PendingCueTriggerSource::Manual,
             timeline_event_id: None,
             apply_mib_on_complete: false,
+            completion_cue_ids: Vec::new(),
             started_at: now,
             duration,
             video_duration: Duration::ZERO,
             paused_at: None,
             paused_duration: Duration::ZERO,
+            lighting_owners,
             start_values,
             target_values: release_plan.target_values,
             attribute_timings: release_plan.attribute_timings,
+            video_layer_owners: HashMap::new(),
             video_start_states: HashMap::new(),
             video_target_states: HashMap::new(),
             video_layer_timings: HashMap::new(),
+            video_output_owners: HashMap::new(),
             video_output_start_opacities: HashMap::new(),
             video_output_target_opacities: HashMap::new(),
             video_output_targets: HashMap::new(),
@@ -16505,7 +16572,9 @@ impl EngineRuntime {
             && video_output_targets.is_empty()
             && node_graph_targets.is_empty()
         {
-            self.active_fade = None;
+            if source == PendingCueTriggerSource::Manual {
+                self.active_fade = None;
+            }
             self.apply_mib_for_next_cue_index(next_cue_index);
             if source == PendingCueTriggerSource::Manual {
                 self.start_direct_child_transport(
@@ -16602,9 +16671,23 @@ impl EngineRuntime {
             for (_, target) in video_output_targets {
                 self.apply_video_output_target(target, true);
             }
-            self.active_fade = None;
+            if source == PendingCueTriggerSource::Manual {
+                self.active_fade = None;
+            }
             self.apply_mib_for_next_cue_index(next_cue_index);
         } else {
+            let lighting_owners = target_values
+                .keys()
+                .map(|key| (key.clone(), cue_id))
+                .collect::<HashMap<_, _>>();
+            let video_layer_owners = video_target_states
+                .keys()
+                .map(|layer_id| (*layer_id, cue_id))
+                .collect::<HashMap<_, _>>();
+            let video_output_owners = video_output_targets
+                .keys()
+                .map(|output_id| (*output_id, cue_id))
+                .collect::<HashMap<_, _>>();
             for (layer_id, target_state) in &video_target_states {
                 if video_layer_timings
                     .get(layer_id)
@@ -16628,26 +16711,34 @@ impl EngineRuntime {
                     self.apply_video_output_target(target.clone(), false);
                 }
             }
-            self.active_fade = Some(RuntimeFade {
-                cue_id,
-                timeline_event_id: None,
-                apply_mib_on_complete: true,
-                started_at: now,
-                duration,
-                video_duration,
-                paused_at: None,
-                paused_duration: Duration::ZERO,
-                start_values,
-                target_values,
-                attribute_timings,
-                video_start_states,
-                video_target_states,
-                video_layer_timings,
-                video_output_start_opacities,
-                video_output_target_opacities,
-                video_output_targets,
-                video_output_timings,
-            });
+            self.install_active_fade(
+                RuntimeFade {
+                    cue_id,
+                    source,
+                    timeline_event_id: None,
+                    apply_mib_on_complete: true,
+                    completion_cue_ids: vec![cue_id],
+                    started_at: now,
+                    duration,
+                    video_duration,
+                    paused_at: None,
+                    paused_duration: Duration::ZERO,
+                    lighting_owners,
+                    start_values,
+                    target_values,
+                    attribute_timings,
+                    video_layer_owners,
+                    video_start_states,
+                    video_target_states,
+                    video_layer_timings,
+                    video_output_owners,
+                    video_output_start_opacities,
+                    video_output_target_opacities,
+                    video_output_targets,
+                    video_output_timings,
+                },
+                source == PendingCueTriggerSource::Timeline,
+            );
         }
         if source == PendingCueTriggerSource::Manual {
             self.start_direct_child_transport(
@@ -17246,6 +17337,58 @@ impl EngineRuntime {
             .retain(|fade| !completed.contains(&fade.output_id));
     }
 
+    fn install_active_fade(&mut self, fade: RuntimeFade, merge_parallel_timeline_fade: bool) {
+        let can_merge = merge_parallel_timeline_fade
+            && fade.source == PendingCueTriggerSource::Timeline
+            && fade.timeline_event_id.is_none()
+            && self.active_fade.as_ref().is_some_and(|active| {
+                active.source == PendingCueTriggerSource::Timeline
+                    && active.timeline_event_id.is_none()
+                    && active.started_at == fade.started_at
+                    && active.paused_at == fade.paused_at
+                    && active.paused_duration == fade.paused_duration
+            });
+        if !can_merge {
+            self.active_fade = Some(fade);
+            return;
+        }
+
+        let active = self
+            .active_fade
+            .as_mut()
+            .expect("merge eligibility requires an active fade");
+        active.cue_id = fade.cue_id;
+        active.apply_mib_on_complete |= fade.apply_mib_on_complete;
+        for cue_id in fade.completion_cue_ids {
+            if !active.completion_cue_ids.contains(&cue_id) {
+                active.completion_cue_ids.push(cue_id);
+            }
+        }
+        active.duration = active.duration.max(fade.duration);
+        active.video_duration = active.video_duration.max(fade.video_duration);
+        active.lighting_owners.extend(fade.lighting_owners);
+        active.start_values.extend(fade.start_values);
+        active.target_values.extend(fade.target_values);
+        active.attribute_timings.extend(fade.attribute_timings);
+        active.video_layer_owners.extend(fade.video_layer_owners);
+        active.video_start_states.extend(fade.video_start_states);
+        active.video_target_states.extend(fade.video_target_states);
+        active.video_layer_timings.extend(fade.video_layer_timings);
+        active.video_output_owners.extend(fade.video_output_owners);
+        active
+            .video_output_start_opacities
+            .extend(fade.video_output_start_opacities);
+        active
+            .video_output_target_opacities
+            .extend(fade.video_output_target_opacities);
+        active
+            .video_output_targets
+            .extend(fade.video_output_targets);
+        active
+            .video_output_timings
+            .extend(fade.video_output_timings);
+    }
+
     fn apply_active_fade(&mut self, now: Instant) {
         let Some(fade) = &self.active_fade else {
             return;
@@ -17323,8 +17466,8 @@ impl EngineRuntime {
             }
         }
         if elapsed >= fade.duration {
-            let cue_id = fade.cue_id;
             let apply_mib_on_complete = fade.apply_mib_on_complete;
+            let completion_cue_ids = fade.completion_cue_ids.clone();
             if fade.timeline_event_id.is_some() {
                 for key in fade.target_values.keys() {
                     self.cue_value_origins.remove(key);
@@ -17332,7 +17475,9 @@ impl EngineRuntime {
             }
             self.active_fade = None;
             if apply_mib_on_complete {
-                self.apply_mib_for_next_cue(cue_id);
+                for cue_id in completion_cue_ids {
+                    self.apply_mib_for_next_cue(cue_id);
+                }
             }
         }
     }
@@ -54764,6 +54909,141 @@ mod tests {
         let preview =
             runtime.render_dmx_frame_for_universe(0, started_at + Duration::from_millis(200))[0];
         assert!((126..=129).contains(&preview), "mid-fade DMX was {preview}");
+    }
+
+    #[test]
+    fn simultaneous_timeline_block_fade_ins_preserve_disjoint_fixture_outputs() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.apply_command(EngineCommand::PatchFixture {
+            fixture_id: 2,
+            request: sample_patch_request("Parallel Fade Fixture", 16),
+            profile: sample_profile(),
+        });
+        assert_eq!(runtime.last_error, None);
+        for (cue_id, fixture_id) in [(1, 1), (2, 2)] {
+            runtime.apply_command(EngineCommand::CreateCue {
+                authored_beats: None,
+                cue_id,
+                label: format!("Parallel fade {cue_id}"),
+                fade_ms: 0,
+                targets: vec![CueFixtureTarget {
+                    fixture_id,
+                    values: vec![AttributeValueSummary {
+                        attribute: "Dimmer".to_string(),
+                        value: u16::MAX,
+                    }],
+                }],
+                video_targets: Vec::new(),
+                video_output_targets: Vec::new(),
+                node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
+            });
+        }
+        let mut first = test_scene_block(10, 1, 0, 1_000, 1, 1.0);
+        first.fade_in_ms = 400;
+        let mut second = test_scene_block(11, 2, 0, 1_000, 1, 1.0);
+        second.fade_in_ms = 400;
+        runtime.timeline_events = vec![first, second];
+        runtime.sort_timeline_events();
+        let started_at = Instant::now();
+        runtime.rebuild_effect_activations(started_at);
+
+        runtime.trigger_timeline_events_between(0, 0, true, true, started_at);
+
+        let fade = runtime
+            .active_fade
+            .as_ref()
+            .expect("parallel timeline fade-ins");
+        assert_eq!(fade.duration, Duration::from_millis(400));
+        assert_eq!(fade.target_values.len(), 2);
+        assert_eq!(fade.completion_cue_ids, vec![1, 2]);
+        runtime.apply_active_fade(started_at + Duration::from_millis(200));
+        let frame =
+            runtime.render_dmx_frame_for_universe(0, started_at + Duration::from_millis(200));
+        assert!(
+            (126..=129).contains(&frame[0]),
+            "first mid-fade DMX was {}",
+            frame[0]
+        );
+        assert!(
+            (126..=129).contains(&frame[15]),
+            "second mid-fade DMX was {}",
+            frame[15]
+        );
+
+        runtime
+            .release_cue_with_value_restore(1, started_at + Duration::from_millis(200))
+            .unwrap();
+        let remaining = runtime
+            .active_fade
+            .as_ref()
+            .expect("the other Timeline fade must remain active");
+        assert_eq!(remaining.target_values.len(), 1);
+        assert_eq!(remaining.completion_cue_ids, vec![2]);
+        assert!(remaining.lighting_owners.values().all(|owner| *owner == 2));
+        runtime.apply_active_fade(started_at + Duration::from_millis(300));
+        let released_frame =
+            runtime.render_dmx_frame_for_universe(0, started_at + Duration::from_millis(300));
+        assert_eq!(released_frame[0], 0);
+        assert!(
+            (190..=193).contains(&released_frame[15]),
+            "remaining fade DMX was {}",
+            released_frame[15]
+        );
+    }
+
+    #[test]
+    fn zero_duration_parallel_timeline_block_does_not_cancel_active_fade() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.apply_command(EngineCommand::PatchFixture {
+            fixture_id: 2,
+            request: sample_patch_request("Parallel Cut Fixture", 16),
+            profile: sample_profile(),
+        });
+        assert_eq!(runtime.last_error, None);
+        for (cue_id, fixture_id) in [(1, 1), (2, 2)] {
+            runtime.apply_command(EngineCommand::CreateCue {
+                authored_beats: None,
+                cue_id,
+                label: format!("Parallel cut {cue_id}"),
+                fade_ms: 1_000,
+                targets: vec![CueFixtureTarget {
+                    fixture_id,
+                    values: vec![AttributeValueSummary {
+                        attribute: "Dimmer".to_string(),
+                        value: u16::MAX,
+                    }],
+                }],
+                video_targets: Vec::new(),
+                video_output_targets: Vec::new(),
+                node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
+            });
+        }
+        let mut fading = test_scene_block(10, 1, 0, 1_000, 1, 1.0);
+        fading.fade_in_ms = 400;
+        let mut cut = test_scene_block(11, 2, 0, 1_000, 1, 1.0);
+        cut.fade_in_ms = 0;
+        runtime.timeline_events = vec![fading, cut];
+        runtime.sort_timeline_events();
+        let started_at = Instant::now();
+        runtime.rebuild_effect_activations(started_at);
+
+        runtime.trigger_timeline_events_between(0, 0, true, true, started_at);
+
+        assert!(
+            runtime.active_fade.is_some(),
+            "parallel cut cancelled the fade"
+        );
+        runtime.apply_active_fade(started_at + Duration::from_millis(200));
+        let frame =
+            runtime.render_dmx_frame_for_universe(0, started_at + Duration::from_millis(200));
+        assert!(
+            (126..=129).contains(&frame[0]),
+            "mid-fade DMX was {}",
+            frame[0]
+        );
+        assert_eq!(frame[15], 255, "parallel zero-duration target must cut in");
     }
 
     #[test]

@@ -64,6 +64,14 @@ set and approximate bar height. This is a final-frame comparison path, not a
 
 Daslight's manual states that Art-Net output needs a connected compatible SUT device with a valid Art-Net licence. The virtual device and universe mapping can therefore be configured without a reference ArtDMX stream being licensed for output. A licensed interface remains necessary for Daslight packet cadence/sequence comparison, but it is no longer required for stable visible final-frame byte comparison. Until the same named scene and time point pass `artnet-compare.mjs`, do not label the import/output byte-identical to Daslight.
 
+### `Shin` Timeline investigation and correction (2026-08-07)
+
+The first screen-reference comparison was not a valid byte-equality result because the Daslight capture did not record its child-Timeline time point. It nevertheless exposed one real Syndocal runtime defect: Scene Blocks beginning in the same engine tick shared one `active_fade` slot, so the later fade could replace the earlier one. In `Shin`, the `Front` block's Encore FR50Z dimmer at DMX channel 109 was consequently absent.
+
+The engine now combines same-tick Timeline fade-ins while retaining disjoint lighting/video targets and does not let a simultaneous zero-duration Timeline target clear the active fade. Each merged target keeps its source-Cue ownership so releasing a child Timeline removes only that Cue's contribution without reviving it on the next engine tick or cancelling another Cue's fade. Focused regression tests cover two concurrent fades, owner-scoped release, and a fade plus a cut. The complete engine suite passed with 424 tests and 2 manual tests ignored; the real DVC direct-child playback/release golden also passed.
+
+A temporary local diagnostic imported `C:\Users\kouty\Desktop\Shinkan-Left\Shinkan2026.dvc`, triggered the real `Shin` child Timeline, and observed natural playback at 9,958 ms. After the correction, channel 109 reached 255. The active `SS-Amber` targets rendered red/green/blue as 255/136/26, exactly matching the imported 16-bit source values 65535/34952/6682 after 8-bit conversion. The Daslight screenshot's 130/25 values are compatible with a frame captured part-way through the authored 200 ms fade, but that inference is not a same-time equality proof. A new Daslight reference at an explicitly paused child-Timeline position is still required before claiming byte-identical parity.
+
 Official source: [Daslight 5 v1.4 manual](https://eu-litterature.n-g.co/Release/daslight_5_manual_en.pdf).
 
 The same current release build produced independent Syndocal evidence after Daslight released UDP 6454:
