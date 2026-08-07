@@ -3500,7 +3500,7 @@ struct RuntimeColorSpatialTarget {
     x: f32,
     z: f32,
     binding: RuntimeColorBinding,
-    cached: Cell<Option<RuntimeColorEvaluation>>,
+    cached: Cell<Option<RuntimeColorSpatialEvaluation>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -3510,6 +3510,18 @@ struct RuntimeColorEvaluation {
     rgbw: [u16; 4],
     cmy: [u16; 3],
     hsv: [u16; 3],
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RuntimeColorSpatialEvaluation {
+    color: RuntimeColorEvaluation,
+    opacity: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RuntimeColorSpatialSample {
+    color: ColorEffectColor,
+    opacity: f32,
 }
 
 #[derive(Clone)]
@@ -24190,7 +24202,7 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
     match recipe {
         ColorEffectSpatialRecipe::KnightRider { size, gradient, .. } => {
             if !(1..=100).contains(size) {
-                return Err("Knight Rider size must be within 1..100 percent".to_string());
+                return Err("Knight Rider size must be within 1..100 beam cells".to_string());
             }
             percent("gradient", *gradient)
         }
@@ -27111,9 +27123,9 @@ fn evaluate_runtime_color_spatial_attribute_at_rate(
     let evaluated = target
         .cached
         .get()
-        .filter(|cached| cached.at == now)
+        .filter(|cached| cached.color.at == now)
         .unwrap_or_else(|| {
-            let rgb = evaluate_color_spatial_effect_at_rate(
+            let sample = evaluate_color_spatial_sample_at_rate(
                 &runtime.request,
                 target,
                 effect_id,
@@ -27122,68 +27134,79 @@ fn evaluate_runtime_color_spatial_attribute_at_rate(
                 clock,
                 rate,
             );
-            let evaluated = runtime_color_evaluation_from_rgb(rgb, binding, now);
+            let evaluated = RuntimeColorSpatialEvaluation {
+                color: runtime_color_evaluation_from_rgb(sample.color, binding, now),
+                opacity: sample.opacity,
+            };
             target.cached.set(Some(evaluated));
             evaluated
         });
+    let color = evaluated.color;
     let component = match output {
         RuntimeColorOutput::Red { extract_white } => {
             if *extract_white {
-                evaluated.rgbw[0]
+                color.rgbw[0]
             } else {
-                evaluated.rgb.red
+                color.rgb.red
             }
         }
         RuntimeColorOutput::Green { extract_white } => {
             if *extract_white {
-                evaluated.rgbw[1]
+                color.rgbw[1]
             } else {
-                evaluated.rgb.green
+                color.rgb.green
             }
         }
         RuntimeColorOutput::Blue { extract_white } => {
             if *extract_white {
-                evaluated.rgbw[2]
+                color.rgbw[2]
             } else {
-                evaluated.rgb.blue
+                color.rgb.blue
             }
         }
-        RuntimeColorOutput::White => evaluated.rgbw[3],
+        RuntimeColorOutput::White => color.rgbw[3],
         RuntimeColorOutput::CalibratedEmitter(anchors) => {
-            runtime_calibrated_emitter_value(evaluated.rgb, anchors)
+            runtime_calibrated_emitter_value(color.rgb, anchors)
         }
         RuntimeColorOutput::Intensity => {
-            ((u32::from(evaluated.rgb.red)
-                + u32::from(evaluated.rgb.green)
-                + u32::from(evaluated.rgb.blue))
+            ((u32::from(color.rgb.red) + u32::from(color.rgb.green) + u32::from(color.rgb.blue))
                 / 3) as u16
         }
-        RuntimeColorOutput::Cyan => evaluated.cmy[0],
-        RuntimeColorOutput::Magenta => evaluated.cmy[1],
-        RuntimeColorOutput::Yellow => evaluated.cmy[2],
-        RuntimeColorOutput::Hue => evaluated.hsv[0],
-        RuntimeColorOutput::Saturation => evaluated.hsv[1],
-        RuntimeColorOutput::Value => evaluated.hsv[2],
+        RuntimeColorOutput::Cyan => color.cmy[0],
+        RuntimeColorOutput::Magenta => color.cmy[1],
+        RuntimeColorOutput::Yellow => color.cmy[2],
+        RuntimeColorOutput::Hue => color.hsv[0],
+        RuntimeColorOutput::Saturation => color.hsv[1],
+        RuntimeColorOutput::Value => color.hsv[2],
         RuntimeColorOutput::Zero => 0,
-        RuntimeColorOutput::OpenWheel(value) => return Some(*value),
+        RuntimeColorOutput::OpenWheel(value) => {
+            return Some(blend_effect_value_with_opacity(
+                base_value,
+                *value,
+                &runtime.request.blend_mode,
+                evaluated.opacity,
+            ));
+        }
         RuntimeColorOutput::Wheel(slots) => {
             let target_color = match runtime.request.blend_mode {
-                EffectBlendMode::Override => evaluated.rgb,
+                EffectBlendMode::Override => color.rgb,
                 EffectBlendMode::Add | EffectBlendMode::Multiply => {
                     let base_color = slots
                         .iter()
                         .find(|slot| (slot.dmx_from..=slot.dmx_to).contains(&base_value))
                         .map(|slot| slot.color)?;
-                    blend_runtime_color(base_color, evaluated.rgb, &runtime.request.blend_mode)
+                    blend_runtime_color(base_color, color.rgb, &runtime.request.blend_mode)
                 }
             };
-            return nearest_runtime_color_wheel_value(slots, target_color).or(Some(base_value));
+            let target_value = nearest_runtime_color_wheel_value(slots, target_color)?;
+            return Some(interpolate_u16(base_value, target_value, evaluated.opacity));
         }
     };
-    Some(blend_effect_value(
+    Some(blend_effect_value_with_opacity(
         base_value,
         component,
         &runtime.request.blend_mode,
+        evaluated.opacity,
     ))
 }
 
@@ -27267,7 +27290,7 @@ fn evaluate_color_effect_at_rate(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn evaluate_color_spatial_effect_at_rate(
+fn evaluate_color_spatial_sample_at_rate(
     request: &ColorEffectRequest,
     target: &RuntimeColorSpatialTarget,
     effect_id: EffectId,
@@ -27275,18 +27298,21 @@ fn evaluate_color_spatial_effect_at_rate(
     now: Instant,
     clock: &ClockSnapshot,
     rate: f32,
-) -> ColorEffectColor {
+) -> RuntimeColorSpatialSample {
     let Some(pattern) = request.spatial_pattern.as_ref() else {
-        return evaluate_color_effect_at_rate(
-            request,
-            0.0,
-            effect_id,
-            target.fixture_id,
-            created_at,
-            now,
-            clock,
-            rate,
-        );
+        return RuntimeColorSpatialSample {
+            color: evaluate_color_effect_at_rate(
+                request,
+                0.0,
+                effect_id,
+                target.fixture_id,
+                created_at,
+                now,
+                clock,
+                rate,
+            ),
+            opacity: 1.0,
+        };
     };
     let rate = f64::from(valid_effect_rate(rate));
     let time_phase = request
@@ -27311,7 +27337,7 @@ fn evaluate_color_spatial_effect_at_rate(
         ^ target.fixture_id.rotate_left(17)
         ^ u64::from(target.beam_index).rotate_left(41);
 
-    match &pattern.recipe {
+    let color = match &pattern.recipe {
         ColorEffectSpatialRecipe::KnightRider {
             size,
             one_way,
@@ -27319,10 +27345,10 @@ fn evaluate_color_spatial_effect_at_rate(
             go_outside,
             gradient,
         } => {
-            // Daslight's Size control is a percentage of the selected beam
-            // strip, not an absolute beam count. On the 48-beam golden fixture,
-            // Size=32 lights roughly 32% (15-16 beams), not 32 beams.
-            let width = (f32::from(*size) / 100.0).clamp(1.0 / strip_count as f32, 1.0);
+            // Daslight rasterizes an absolute-width alpha window, then moves it
+            // across the ordered beam strip. Size is therefore expressed in beam
+            // cells rather than as a percentage of the current selection.
+            let width = f32::from((*size).max(1));
             let half_width = width * 0.5;
             let phase = time_phase.rem_euclid(1.0) as f32;
             let travel = if *one_way {
@@ -27332,25 +27358,52 @@ fn evaluate_color_spatial_effect_at_rate(
             } else {
                 (1.0 - phase) * 2.0
             };
+            let last_index = strip_count.saturating_sub(1) as f32;
             let center = if *go_outside {
-                -half_width + travel * (1.0 + width)
+                -half_width + travel * (last_index + width)
             } else {
-                travel
+                travel * last_index
             };
-            let mut distance = (strip_position - center).abs();
-            if *one_way && !*go_outside {
-                distance = distance.min(1.0 - distance);
+            let mut relative = target.strip_index as f32 - center;
+            if !*go_outside && width < strip_count as f32 && strip_count > 1 {
+                let cycle = strip_count as f32;
+                relative -= (relative / cycle).round() * cycle;
             }
-            if distance > half_width {
-                return black_color();
-            }
-            let level = 1.0 - distance / half_width.max(f32::EPSILON);
-            let color = spatial_palette_color(request, level, *gradient);
-            if *fading {
-                scale_color(color, level)
+            let window_position = relative + half_width;
+            let inside = (0.0..=width).contains(&window_position);
+            let opacity = if !inside {
+                0.0
+            } else if !*fading {
+                1.0
             } else {
-                color
-            }
+                // The source alpha raster places its peak at
+                // (100 - Gradient)% of the window and linearly slopes on both
+                // sides. Gradient therefore changes the peak location; it is
+                // not a palette interpolation percentage.
+                let peak = width * (1.0 - (*gradient / 100.0).clamp(0.0, 1.0));
+                let tail = width - peak;
+                if peak <= f32::EPSILON {
+                    1.0 - window_position / width
+                } else if tail <= f32::EPSILON {
+                    window_position / width
+                } else if window_position <= peak {
+                    window_position / peak
+                } else {
+                    1.0 - (window_position - peak) / tail
+                }
+                .clamp(0.0, 1.0)
+            };
+            let palette_position = if *one_way {
+                strip_position
+            } else if strip_position <= 0.5 {
+                strip_position * 2.0
+            } else {
+                (1.0 - strip_position) * 2.0
+            };
+            return RuntimeColorSpatialSample {
+                color: evaluate_linear_stop_color(request, palette_position),
+                opacity,
+            };
         }
         ColorEffectSpatialRecipe::Burst {
             color_width,
@@ -27390,20 +27443,23 @@ fn evaluate_color_spatial_effect_at_rate(
             let age = time_phase.rem_euclid(1.0) as f32;
             let life = (*lifespan / 100.0).max(0.04);
             if age > life {
-                return black_color();
-            }
-            let radius = usize::from(*width).saturating_sub(1);
-            for sparkle in 0..usize::from(*number) {
-                let sparkle_seed =
-                    seed ^ (epoch as u64).rotate_left(29) ^ (sparkle as u64).rotate_left(47);
-                let center = splitmix64(sparkle_seed) as usize % strip_count;
-                if target.strip_index.abs_diff(center) <= radius {
-                    let palette_index =
-                        splitmix64(sparkle_seed ^ 0xA53C_9E17) as usize % request.stops.len();
-                    return scale_color(request.stops[palette_index].color, 1.0 - age / life);
+                black_color()
+            } else {
+                let radius = usize::from(*width).saturating_sub(1);
+                let mut color = black_color();
+                for sparkle in 0..usize::from(*number) {
+                    let sparkle_seed =
+                        seed ^ (epoch as u64).rotate_left(29) ^ (sparkle as u64).rotate_left(47);
+                    let center = splitmix64(sparkle_seed) as usize % strip_count;
+                    if target.strip_index.abs_diff(center) <= radius {
+                        let palette_index =
+                            splitmix64(sparkle_seed ^ 0xA53C_9E17) as usize % request.stops.len();
+                        color = scale_color(request.stops[palette_index].color, 1.0 - age / life);
+                        break;
+                    }
                 }
+                color
             }
-            black_color()
         }
         ColorEffectSpatialRecipe::Plasma {
             size_x,
@@ -27473,6 +27529,10 @@ fn evaluate_color_spatial_effect_at_rate(
             let value = (0.5 + (noise - 0.5) * (*amplitude / 100.0)).clamp(0.0, 1.0);
             spatial_palette_color(request, value, 100.0)
         }
+    };
+    RuntimeColorSpatialSample {
+        color,
+        opacity: 1.0,
     }
 }
 
@@ -27806,6 +27866,19 @@ fn blend_effect_value(base: u16, effect: u16, blend_mode: &EffectBlendMode) -> u
         EffectBlendMode::Add => base.saturating_add(effect),
         EffectBlendMode::Multiply => ((base as u32 * effect as u32) / 65_535) as u16,
     }
+}
+
+fn blend_effect_value_with_opacity(
+    base: u16,
+    effect: u16,
+    blend_mode: &EffectBlendMode,
+    opacity: f32,
+) -> u16 {
+    interpolate_u16(
+        base,
+        blend_effect_value(base, effect, blend_mode),
+        opacity.clamp(0.0, 1.0),
+    )
 }
 
 fn blend_effect_float(base: f32, effect: f32, blend_mode: &EffectBlendMode) -> f32 {
@@ -49290,8 +49363,16 @@ mod tests {
         target: &RuntimeColorSpatialTarget,
         elapsed_ms: u64,
     ) -> ColorEffectColor {
+        evaluate_test_spatial_sample(request, target, elapsed_ms).color
+    }
+
+    fn evaluate_test_spatial_sample(
+        request: &ColorEffectRequest,
+        target: &RuntimeColorSpatialTarget,
+        elapsed_ms: u64,
+    ) -> RuntimeColorSpatialSample {
         let created_at = Instant::now();
-        evaluate_color_spatial_effect_at_rate(
+        evaluate_color_spatial_sample_at_rate(
             request,
             target,
             97,
@@ -49449,27 +49530,33 @@ mod tests {
     }
 
     #[test]
-    fn color_spatial_knight_rider_sweeps_a_gradient_window() {
+    fn color_spatial_knight_rider_sweeps_an_absolute_window() {
         let request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
-            size: 60,
+            size: 3,
             one_way: true,
             fading: false,
             go_outside: false,
             gradient: 50.0,
         });
-        let center =
-            evaluate_test_spatial_color(&request, &test_spatial_color_target(2, 5, 0.5, 0.5), 500);
-        let shoulder =
-            evaluate_test_spatial_color(&request, &test_spatial_color_target(1, 5, 0.25, 0.5), 500);
-        let outside =
-            evaluate_test_spatial_color(&request, &test_spatial_color_target(0, 5, 0.0, 0.5), 500);
-        assert_eq!(center, test_color(u16::MAX, u16::MAX, u16::MAX));
-        assert!(shoulder.red > 0 && shoulder.red < center.red);
-        assert_eq!(outside, test_color(0, 0, 0));
+        let samples = (0..5)
+            .map(|index| {
+                evaluate_test_spatial_sample(
+                    &request,
+                    &test_spatial_color_target(index, 5, index as f32 / 4.0, 0.5),
+                    500,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(samples[0].opacity, 0.0);
+        assert_eq!(samples[1].opacity, 1.0);
+        assert_eq!(samples[2].opacity, 1.0);
+        assert_eq!(samples[3].opacity, 1.0);
+        assert_eq!(samples[4].opacity, 0.0);
+        assert_eq!(samples[2].color, test_color(32768, 32768, 32768));
     }
 
     #[test]
-    fn color_spatial_knight_rider_size_is_strip_percentage() {
+    fn color_spatial_knight_rider_size_is_absolute_beam_cells() {
         let request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
             size: 32,
             one_way: true,
@@ -49479,15 +49566,35 @@ mod tests {
         });
         let lit = (0..48)
             .filter(|index| {
-                evaluate_test_spatial_color(
+                evaluate_test_spatial_sample(
                     &request,
                     &test_spatial_color_target(*index, 48, *index as f32 / 47.0, 0.5),
                     500,
                 )
-                .red > 0
+                .opacity
+                    > 0.0
             })
             .count();
-        assert_eq!(lit, 16);
+        assert_eq!(lit, 32);
+    }
+
+    #[test]
+    fn color_spatial_knight_rider_fading_is_alpha_not_black_scaling() {
+        let request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
+            size: 4,
+            one_way: true,
+            fading: true,
+            go_outside: false,
+            gradient: 50.0,
+        });
+        let edge =
+            evaluate_test_spatial_sample(&request, &test_spatial_color_target(1, 6, 0.2, 0.5), 500);
+        assert!(edge.opacity > 0.0 && edge.opacity < 1.0);
+        assert_ne!(edge.color, test_color(0, 0, 0));
+        assert_eq!(
+            blend_effect_value_with_opacity(10_000, 60_000, &EffectBlendMode::Override, 0.25),
+            22_500
+        );
     }
 
     #[test]

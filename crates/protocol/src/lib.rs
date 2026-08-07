@@ -2211,7 +2211,7 @@ pub struct ColorEffectBeamTarget {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ColorEffectSpatialRecipe {
     KnightRider {
-        /// Lit window width as a percentage of the ordered beam strip (1..=100).
+        /// Lit window width in ordered beam cells (1..=100).
         size: u16,
         one_way: bool,
         fading: bool,
