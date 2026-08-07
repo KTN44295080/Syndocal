@@ -67,6 +67,7 @@ import { VideoControlPanel } from "./components/VideoControlPanel";
 import { defaultAutoVjSnapshot } from "./components/AutoVjStrip";
 import { readVideoOutputTestPattern, readVideoOutputWindowId, VideoOutputWindow } from "./components/VideoOutputWindow";
 import { TimelineCueEventsPanel } from "./components/TimelineCueEventsPanel";
+import { TimelineOperatorBar } from "./components/TimelineOperatorBar";
 import { TimelineLightingAutomationPanel } from "./components/TimelineLightingAutomationPanel";
 import { EditableTouchSurface } from "./components/EditableTouchSurface";
 import { TouchColorPalettePanel } from "./components/TouchColorPalettePanel";
@@ -112,6 +113,10 @@ import {
   zoomTimelineVisibleWindow,
 } from "./timelineViewport";
 import { buildTimelineOverlapClusters } from "./timelineOverlapClusters";
+import {
+  naturalTimelineBlockDurationMs,
+  type TimelineStretchMode,
+} from "./timelineBlockGestures";
 import { createTimelineLayerController } from "./createTimelineLayerController";
 import {
   cueDropDurationMs,
@@ -1549,6 +1554,9 @@ export default function App() {
   const [timelineSceneBlockSelectionRevision, setTimelineSceneBlockSelectionRevision] = createSignal(0);
   const [timelineSnapMode, setTimelineSnapMode] = createSignal<TimelineSnapMode>("Off");
   const [timelineGridMs, setTimelineGridMs] = createSignal(500);
+  const [timelineStretchMode, setTimelineStretchMode] = createSignal<TimelineStretchMode>("RATE");
+  const [timelineMagnetEnabled, setTimelineMagnetEnabled] = createSignal(true);
+  const [timelineArmedCueId, setTimelineArmedCueId] = createSignal<number | null>(null);
   const [selectedTimelineAutomation, setSelectedTimelineAutomation] =
     createSignal<SelectedTimelineAutomation | null>(null);
   const [timelineAutomationDrafts, setTimelineAutomationDrafts] = createSignal<Record<number, TimelineAutomationDraft>>({});
@@ -5314,6 +5322,28 @@ export default function App() {
     }
     return cues[0]?.id ?? null;
   });
+  const timelineArmedCue = createMemo(() => {
+    const cue = timelineCueOptions().find((candidate) => candidate.id === timelineArmedCueId());
+    return cue ? {
+      id: cue.id,
+      label: cue.label,
+      authored_beats: cue.authored_beats,
+      natural_duration_ms: naturalTimelineBlockDurationMs(
+        cue.authored_beats,
+        snapshot().clock.bpm,
+        timelineBlockDurationMs(),
+      ),
+    } : null;
+  });
+  const toggleTimelineArmedCue = (cueId: number | null) => {
+    const nextCueId = timelineArmedCueId() === cueId ? null : cueId;
+    setTimelineArmedCueId(nextCueId);
+    if (cueId !== null) {
+      setMessage(nextCueId === cueId
+        ? `Cue ${cueId} armed: double-click or sweep a Lighting lane to place it.`
+        : `Cue ${cueId} disarmed.`);
+    }
+  };
   const timelineEventRows = createMemo(
     () => buildTimelineSceneBlockRows(snapshotTimelineEvents(), snapshotCues()),
     [],
@@ -18442,6 +18472,69 @@ export default function App() {
                 onBlindCommit={commitProgrammer}
                 onBlindDiscard={clearProgrammer}
               />
+              <Show when={controlMode() === "live" && timelineDeskSurface() === "show"}>
+                <TimelineOperatorBar
+                  childTimelineLabel={timelineChildCue()?.label ?? null}
+                  positionMs={activeTimeline().position_ms}
+                  durationMs={activeTimeline().duration_ms}
+                  playing={activeTimeline().playing}
+                  bpm={snapshot().clock.bpm}
+                  metronomeEnabled={activeTimeline().metronome_enabled ?? false}
+                  countInBeats={activeTimeline().count_in_beats ?? 4}
+                  countInRemainingMs={activeTimeline().count_in_remaining_ms ?? 0}
+                  visibleWindow={timelineVisibleWindow()}
+                  overviewShowDurationMs={timelineOverviewShowDurationMs()}
+                  overviewEditExtentMs={timelineOverviewEditExtentMs()}
+                  selectedEventId={selectedTimelineSceneBlockEventId()}
+                  selectedCueId={selectedTimelineCueId()}
+                  selectedCueIsSuperScene={Boolean(
+                    snapshotCues().find((cue) => cue.id === selectedTimelineCueId())?.child_timeline,
+                  )}
+                  contextDrawer={timelineContextDrawer()}
+                  stretchMode={timelineStretchMode()}
+                  magnetEnabled={timelineMagnetEnabled()}
+                  armedCueId={timelineArmedCueId()}
+                  armedCueLabel={timelineArmedCue()?.label ?? null}
+                  deskSurface={timelineDeskSurface()}
+                  onExitChildTimeline={exitSuperScene}
+                  onSeek={seekTimeline}
+                  onPause={pauseTimeline}
+                  onPlay={playTimeline}
+                  onSetMetronome={setTimelineMetronome}
+                  onPanOverview={panTimelineOverview}
+                  onZoomOverview={zoomTimelineOverview}
+                  onFitOverview={fitTimelineOverview}
+                  onRevealSelected={() => {
+                    const eventId = selectedTimelineSceneBlockEventId();
+                    if (eventId !== null) revealTimelineSceneBlock(eventId);
+                  }}
+                  onRevealPlayhead={revealTimelinePlayhead}
+                  onStretchMode={setTimelineStretchMode}
+                  onMagnetEnabled={setTimelineMagnetEnabled}
+                  onArmCue={toggleTimelineArmedCue}
+                  onOpenOrCreateSuperScene={(cueId) => { void openOrCreateSuperScene(cueId); }}
+                  onContextDrawer={setTimelineContextDrawer}
+                  onDeskSurface={selectTimelineDeskSurface}
+                />
+                <details class="groupLiveMixerDisclosure">
+                  <summary title="Live Mixer" aria-label="Live Mixer">
+                    <span>Live Mixer</span>
+                  </summary>
+                  <div class="groupLiveMixerDisclosurePanel">
+                    <GroupLiveMixerStrip
+                      groupId={selectedFixtureGroupFilter()}
+                      fixtureCount={selectedGroupFixtures().length}
+                      strobeFixtureCount={selectedGroupStrobeFixtureCount()}
+                      submasterLevel={selectedGroupSubmaster()?.level ?? 1}
+                      strobeHz={selectedGroupSubmaster()?.strobe_hz ?? 0}
+                      soloed={selectedGroupFlagState().anySoloed}
+                      onSetSubmaster={setGroupSubmaster}
+                      onSetStrobe={setGroupStrobe}
+                      onSetSolo={setGroupSolo}
+                    />
+                  </div>
+                </details>
+              </Show>
             </>
           }
           operatorLockMode={operatorLockMode()}
@@ -18705,19 +18798,6 @@ export default function App() {
           class={`panel faders controlPanel timelineDesk-${timelineDeskSurface()} timelineDrawer-${timelineContextDrawer()} editDesk-${editDeskSurface()}`}
           data-timeline-context-drawer={timelineContextDrawer()}
         >
-          <Show when={controlMode() === "live"}>
-            <GroupLiveMixerStrip
-              groupId={selectedFixtureGroupFilter()}
-              fixtureCount={selectedGroupFixtures().length}
-              strobeFixtureCount={selectedGroupStrobeFixtureCount()}
-              submasterLevel={selectedGroupSubmaster()?.level ?? 1}
-              strobeHz={selectedGroupSubmaster()?.strobe_hz ?? 0}
-              soloed={selectedGroupFlagState().anySoloed}
-              onSetSubmaster={setGroupSubmaster}
-              onSetStrobe={setGroupStrobe}
-              onSetSolo={setGroupSolo}
-            />
-          </Show>
           <FaderFixtureControlPanel
             selectedGroupId={selectedFixtureGroupFilter()}
             selectedGroupLabel={selectedFixtureGroupLabel()}
@@ -19085,6 +19165,10 @@ export default function App() {
               track={timelineTrack()}
               cueOptions={timelineCueOptions()}
               eventRows={timelineEventRows()}
+              stretchMode={timelineStretchMode()}
+              magnetEnabled={timelineMagnetEnabled()}
+              armedCueId={timelineArmedCueId()}
+              armedCue={timelineArmedCue()}
               timelineEventDraft={timelineEventDraft}
               onSeek={seekTimeline}
               onExitChildTimeline={exitSuperScene}
@@ -19142,6 +19226,9 @@ export default function App() {
               onRemoveTimelineLayer={removeTimelineLayer}
               onReorderTimelineLayer={timelineLayerController.reorder}
               onTimelineStatus={setMessage}
+              onStretchMode={setTimelineStretchMode}
+              onMagnetEnabled={setTimelineMagnetEnabled}
+              onArmCue={toggleTimelineArmedCue}
               onContextDrawer={setTimelineContextDrawer}
             />
             </div>

@@ -72,6 +72,422 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+/* Timeline operator hard invariant (final cascade): only the shared Control
+   header is persistent. All secondary Timeline/Mixer controls remain
+   reachable from disclosures without reducing their control sizes. */
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane:has(> .faders.timelineDesk-show)
+  .controlContextHeaderTools:has(> .timelineOperatorBar)
+  > .timelineDeskTabs {
+  display: none !important;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane:has(> .faders.timelineDesk-show)
+  .timelineOperatorBar {
+  flex: 0 1 226px;
+  min-width: 226px;
+  overflow: visible;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane:has(> .faders.timelineDesk-show)
+  .controlFaderWriteHeader,
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane:has(> .faders.timelineDesk-show)
+  .controlFaderWriteMode,
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane:has(> .faders.timelineDesk-show)
+  .controlFaderWriteHeader .controlFaderWriteMode > button,
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane:has(> .faders.timelineDesk-show)
+  .controlBlindActions,
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane:has(> .faders.timelineDesk-show)
+  .controlFaderWriteHeader .controlBlindActions > button {
+  height: 28px;
+  min-height: 28px;
+  max-height: 28px;
+}
+
+.timelineToolsDisclosurePanel .timelineToolsScrubGroup,
+.timelineToolsDisclosurePanel .timelineBreadcrumb,
+.timelineToolsDisclosurePanel .timelineDeskTabs-disclosure {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  min-height: 28px;
+  padding-right: 4px;
+  border-right: 1px solid #34383b;
+}
+
+.timelineToolsDisclosurePanel .timelineScrubber {
+  width: 150px;
+  min-width: 150px;
+  min-height: 22px;
+  margin: 0 2px;
+}
+
+.timelineToolsDisclosurePanel .timelineBreadcrumb {
+  max-width: 180px;
+  overflow: hidden;
+}
+
+.timelineToolsDisclosurePanel .timelineBreadcrumb strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timelineToolsDisclosurePanel .timelineDeskTabs-disclosure button {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .mappingPersistentWorkspaceBand
+  .controlContextPane
+  > .faders.timelineDesk-show,
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .mappingPersistentWorkspaceBand.timelinePaneExpanded
+  .controlContextPane
+  > .faders.timelineDesk-show {
+  grid-template-rows: minmax(0, 1fr) !important;
+  gap: 0 !important;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .mappingPersistentWorkspaceBand
+  .controlContextPane
+  > .faders.timelineDesk-show
+  > .timelinePanel {
+  grid-row: 1 !important;
+  height: 100%;
+  min-height: 0;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .mappingPersistentWorkspaceBand
+  .controlContextPane
+  > .faders.timelineDesk-show
+  > .timelinePanel
+  > .timelineShowSurface {
+  grid-template-rows: minmax(0, 1fr) !important;
+  grid-auto-rows: 0 !important;
+  gap: 0 !important;
+  height: 100%;
+  min-height: 0;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .mappingPersistentWorkspaceBand
+  .timelineShowSurface
+  > .panelHeader,
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .mappingPersistentWorkspaceBand
+  .timelineShowSurface
+  > .timelineToolStrip {
+  display: none !important;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .mappingPersistentWorkspaceBand
+  .timelineShowSurface
+  > .timelineOverviewFrame {
+  grid-row: 1 !important;
+  height: 100% !important;
+  min-height: 0 !important;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeLive
+  > .mappingPersistentWorkspaceBand
+  .timelineShowSurfaceBlockDrawerOpen
+  > .timelineBlockPropertiesDrawer:not(.timelineBlockBrowserDrawer) {
+  grid-row: 1 !important;
+}
+
+/* Timeline operator invariant: EDIT/BLIND/LIVE, transport, click, timeline
+   tools, Mixer access, and desk modes share one persistent header row. The
+   full-size secondary controls open from that row instead of consuming more
+   permanent lane height. */
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane:has(> .faders.timelineDesk-show)
+  > .controlContextHeader {
+  position: relative;
+  z-index: 1400;
+  grid-template-columns: minmax(0, 1fr) auto;
+  overflow: visible;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane:has(> .faders.timelineDesk-show)
+  > .controlContextHeader
+  > h2 {
+  display: none;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane:has(> .faders.timelineDesk-show)
+  .controlContextHeaderTools {
+  flex-wrap: nowrap;
+  overflow: visible;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane:has(> .faders.timelineDesk-show)
+  .controlFaderWriteHeader {
+  order: 0;
+  flex: 0 0 124px;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane:has(> .faders.timelineDesk-show)
+  .controlFaderCompactReadout {
+  display: none;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane:has(> .faders.timelineDesk-show)
+  .timelineOperatorBar {
+  order: 1;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane:has(> .faders.timelineDesk-show)
+  .timelineDeskTabs {
+  order: 2;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane:has(> .faders.timelineDesk-show)
+  .groupLiveMixerDisclosure {
+  order: 3;
+}
+
+.timelineOperatorBar {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  height: 28px;
+  white-space: nowrap;
+}
+
+.timelineOperatorBar > .timelineTransport,
+.timelineOperatorBar > .timelineMetronomeControls {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  padding-right: 3px;
+  border-right: 1px solid #34383b;
+}
+
+.timelineOperatorBar button,
+.timelineOperatorBar summary,
+.groupLiveMixerDisclosure > summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  min-height: 28px;
+  border-radius: 2px;
+}
+
+.timelineOperatorBar .timelineTransport button,
+.timelineOperatorBar .timelineViewportToolbar button,
+.timelineOperatorBar .timelineDirectToolbar button,
+.timelineToolsDisclosure > summary {
+  width: 28px;
+  min-width: 28px;
+  padding: 0;
+}
+
+.timelineOperatorBar .timelineMetronomeControls button {
+  width: auto;
+  min-width: 52px;
+  padding: 0 7px;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.timelineOperatorBar .timelineMetronomeControls button.active {
+  border-color: #f59b45;
+  background: #6c3a18;
+  color: #fff4e8;
+}
+
+.timelineOperatorBar > .timelineScrubber {
+  flex: 1 1 90px;
+  width: auto;
+  min-width: 64px;
+  max-width: 150px;
+  min-height: 22px;
+  margin: 0 2px;
+}
+
+.timelineOperatorTime {
+  flex: 0 0 auto;
+  min-width: 92px;
+  color: #d7d1ca;
+  font-size: 9px;
+  text-align: center;
+}
+
+.timelineOperatorBar > .timelineBreadcrumb {
+  flex: 0 1 120px;
+  min-width: 0;
+  height: 28px;
+}
+
+.timelineOperatorBar > .timelineBreadcrumb strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timelineToolsDisclosure,
+.groupLiveMixerDisclosure {
+  position: relative;
+  flex: 0 0 auto;
+  height: 28px;
+}
+
+.timelineToolsDisclosure > summary,
+.groupLiveMixerDisclosure > summary {
+  border: 1px solid #403b36;
+  background: #1d2124;
+  color: #d4cec7;
+  cursor: pointer;
+  list-style: none;
+}
+
+.timelineToolsDisclosure > summary::-webkit-details-marker,
+.groupLiveMixerDisclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.timelineToolsDisclosure[open] > summary,
+.groupLiveMixerDisclosure[open] > summary {
+  border-color: #d68335;
+  background: #3a2a1d;
+  color: #fff4e8;
+}
+
+.timelineToolsDisclosurePanel,
+.groupLiveMixerDisclosurePanel {
+  position: absolute;
+  top: calc(100% + 3px);
+  right: 0;
+  z-index: 1400;
+  border: 1px solid #4b443d;
+  background: #1a1c1e;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.42);
+}
+
+.timelineToolsDisclosurePanel {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: max-content;
+  max-width: min(760px, calc(100vw - 24px));
+  padding: 4px;
+}
+
+.timelineToolsDisclosurePanel .timelineViewportToolbar,
+.timelineToolsDisclosurePanel .timelineDirectToolbar,
+.timelineToolsDisclosurePanel .timelineStretchModeToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.timelineToolsDisclosurePanel .timelineViewportToolbar,
+.timelineToolsDisclosurePanel .timelineDirectToolbar {
+  padding-right: 4px;
+  border-right: 1px solid #34383b;
+}
+
+.timelineToolsDisclosurePanel .timelineVisibleRange {
+  min-width: 132px;
+  padding: 0 3px;
+  font-size: 9px;
+  text-align: center;
+}
+
+.timelineToolsDisclosurePanel .timelineArmedCue {
+  max-width: 120px;
+  overflow: hidden;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.groupLiveMixerDisclosure > summary {
+  min-width: 58px;
+  padding: 0 8px;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.groupLiveMixerDisclosurePanel {
+  width: min(760px, calc(100vw - 24px));
+  padding: 4px;
+}
+
+.groupLiveMixerDisclosurePanel > .groupLiveMixerStrip {
+  grid-row: auto;
+  min-height: 42px;
+  border-top: 1px solid #4b443d;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane
+  > .faders.timelineDesk-show,
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .mappingPersistentWorkspaceBand.timelinePaneExpanded
+  .controlContextPane
+  > .faders.timelineDesk-show {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane
+  > .faders.timelineDesk-show
+  > .timelinePanel {
+  grid-row: 1;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane
+  .timelineShowSurface {
+  grid-template-rows: minmax(0, 1fr);
+  gap: 0;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane
+  .timelineShowSurface
+  > .panelHeader,
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane
+  .timelineShowSurface
+  > .timelineToolStrip {
+  display: none;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive
+  .controlContextPane
+  .timelineShowSurface
+  > .timelineOverviewFrame {
+  grid-row: 1;
+}
+
 .ioConnectionDesk {
   display: grid;
   align-content: start;
@@ -34543,4 +34959,51 @@ a[href]:focus-visible,
 .layoutSetup.setupMode-io .ioCompactZone .ioConnectionControls,
 .layoutSetup.setupMode-io .ioCompactZone .remoteConnectionControls {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* Timeline disclosures stay horizontally inside the context pane. Secondary
+   controls may wrap, but their hit targets and slider sizes remain unchanged. */
+.timelineToolsDisclosurePanel,
+.groupLiveMixerDisclosurePanel {
+  width: min(356px, calc(100vw - 24px));
+  max-width: min(356px, calc(100vw - 24px));
+}
+
+.timelineToolsDisclosurePanel {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.timelineToolsDisclosurePanel .timelineToolsScrubGroup,
+.timelineToolsDisclosurePanel .timelineViewportToolbar,
+.timelineToolsDisclosurePanel .timelineDirectToolbar {
+  flex: 1 0 100%;
+  width: 100%;
+  border-right: 0;
+}
+
+.timelineToolsDisclosurePanel .timelineToolsScrubGroup {
+  justify-content: space-between;
+}
+
+.groupLiveMixerDisclosurePanel > .groupLiveMixerStrip {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto auto;
+  height: auto;
+  min-height: 42px;
+}
+
+.groupLiveMixerDisclosurePanel .groupLiveMixerIdentity {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.groupLiveMixerDisclosurePanel .groupLiveMixerStrip > button {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.groupLiveMixerDisclosurePanel .groupLiveMixerControl,
+.groupLiveMixerDisclosurePanel .groupLiveMixerCoverage {
+  grid-column: 1 / -1;
 }

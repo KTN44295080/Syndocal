@@ -29,7 +29,6 @@ import {
   type TimelineSceneBlockRow,
 } from "./TimelineSceneBlocksEditor";
 import {
-  naturalTimelineBlockDurationMs,
   type TimelineStretchMode,
 } from "../timelineBlockGestures";
 
@@ -105,6 +104,15 @@ interface TimelineCueEventsPanelProps {
   track: TimelineTrackKind;
   cueOptions: TimelineSceneBlockCueOption[];
   eventRows: TimelineSceneBlockRow[];
+  stretchMode: TimelineStretchMode;
+  magnetEnabled: boolean;
+  armedCueId: number | null;
+  armedCue: {
+    id: number;
+    label: string;
+    authored_beats: number | null;
+    natural_duration_ms: number;
+  } | null;
   timelineEventDraft: (event: TimelineCueEventSummary) => TimelineEventDraft;
   onSeek: (timeMs: number) => void | Promise<void>;
   onExitChildTimeline: () => void;
@@ -185,6 +193,9 @@ interface TimelineCueEventsPanelProps {
   onRemoveTimelineLayer: (layerId: number, reassignToLayerId: number | null) => void | Promise<void>;
   onReorderTimelineLayer: (layerId: number, direction: -1 | 1) => void | Promise<void>;
   onTimelineStatus: (message: string) => void;
+  onStretchMode: (mode: TimelineStretchMode) => void;
+  onMagnetEnabled: (enabled: boolean) => void;
+  onArmCue: (cueId: number | null) => void;
   onContextDrawer: (drawer: TimelineContextDrawer) => void;
 }
 
@@ -195,9 +206,6 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
   let layerMenuElement: HTMLDivElement | undefined;
   let layerMenuReturnFocus: HTMLElement | null = null;
   let layerDialogReturnFocus: HTMLElement | null = null;
-  const [stretchMode, setStretchMode] = createSignal<TimelineStretchMode>("RATE");
-  const [magnetEnabled, setMagnetEnabled] = createSignal(true);
-  const [armedCueId, setArmedCueId] = createSignal<number | null>(null);
   const [selectedAudioClipId, setSelectedAudioClipId] = createSignal<number | null>(null);
   const [pendingRemoveAudioClipId, setPendingRemoveAudioClipId] = createSignal<number | null>(null);
   const [layerMenu, setLayerMenu] = createSignal<{ layerId: number; x: number; y: number } | null>(null);
@@ -394,23 +402,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
       window.removeEventListener("keydown", closeFromEscape, { capture: true });
     });
   });
-  const armedCue = () => {
-    const cue = props.cueOptions.find((candidate) => candidate.id === armedCueId());
-    return cue ? {
-      id: cue.id,
-      label: cue.label,
-      authored_beats: cue.authored_beats,
-      natural_duration_ms: naturalTimelineBlockDurationMs(cue.authored_beats, props.bpm, props.blockDurationMs),
-    } : null;
-  };
-  const toggleArmedCue = (cueId: number | null) => {
-    setArmedCueId((current) => current === cueId ? null : cueId);
-    if (cueId !== null) props.onTimelineStatus(
-      armedCueId() === cueId
-        ? `Cue ${cueId} armed: double-click or sweep a Lighting lane to place it.`
-        : `Cue ${cueId} disarmed.`,
-    );
-  };
+  const armedCue = () => props.armedCue;
   const [overlapFilter, setOverlapFilter] = createSignal<{
     eventIds: number[];
     label: string;
@@ -632,11 +624,11 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
             type="button"
             title="Stretch by rate"
             aria-label="Stretch by rate"
-            classList={{ active: stretchMode() === "RATE" }}
-            aria-pressed={stretchMode() === "RATE"}
+            classList={{ active: props.stretchMode === "RATE" }}
+            aria-pressed={props.stretchMode === "RATE"}
             data-timeline-stretch-mode="RATE"
             data-timeline-tool="stretch-rate"
-            onClick={() => setStretchMode("RATE")}
+            onClick={() => props.onStretchMode("RATE")}
           >
             <span class="timelineToolIcon" aria-hidden="true" data-no-localize>↯</span>
           </button>
@@ -644,39 +636,39 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
             type="button"
             title="Stretch block window"
             aria-label="Stretch block window"
-            classList={{ active: stretchMode() === "WINDOW" }}
-            aria-pressed={stretchMode() === "WINDOW"}
+            classList={{ active: props.stretchMode === "WINDOW" }}
+            aria-pressed={props.stretchMode === "WINDOW"}
             data-timeline-stretch-mode="WINDOW"
             data-timeline-tool="stretch-window"
-            onClick={() => setStretchMode("WINDOW")}
+            onClick={() => props.onStretchMode("WINDOW")}
           >
             <span class="timelineToolIcon" aria-hidden="true" data-no-localize>↔</span>
           </button>
         </div>
         <button
           type="button"
-          classList={{ active: magnetEnabled() }}
-          aria-pressed={magnetEnabled()}
-          aria-label={magnetEnabled() ? "Disable magnet snap" : "Enable magnet snap"}
-          title={magnetEnabled() ? "Disable magnet snap" : "Enable magnet snap"}
+          classList={{ active: props.magnetEnabled }}
+          aria-pressed={props.magnetEnabled}
+          aria-label={props.magnetEnabled ? "Disable magnet snap" : "Enable magnet snap"}
+          title={props.magnetEnabled ? "Disable magnet snap" : "Enable magnet snap"}
           data-timeline-magnet-toggle
           data-timeline-tool="magnet"
-          onClick={() => setMagnetEnabled((enabled) => !enabled)}
+          onClick={() => props.onMagnetEnabled(!props.magnetEnabled)}
         >
           <span class="timelineToolIcon" aria-hidden="true" data-no-localize>∩</span>
         </button>
         <button
           type="button"
-          classList={{ active: armedCueId() === props.selectedCueId }}
-          aria-pressed={props.selectedCueId !== null && armedCueId() === props.selectedCueId}
-          aria-label={armedCueId() === props.selectedCueId ? "Disarm Cue" : "Arm Cue"}
-          title={armedCueId() === props.selectedCueId ? "Disarm Cue" : "Arm Cue"}
+          classList={{ active: props.armedCueId === props.selectedCueId }}
+          aria-pressed={props.selectedCueId !== null && props.armedCueId === props.selectedCueId}
+          aria-label={props.armedCueId === props.selectedCueId ? "Disarm Cue" : "Arm Cue"}
+          title={props.armedCueId === props.selectedCueId ? "Disarm Cue" : "Arm Cue"}
           data-timeline-arm-cue={props.selectedCueId ?? undefined}
           data-timeline-tool="arm-cue"
           disabled={props.selectedCueId === null}
-          onClick={() => toggleArmedCue(props.selectedCueId)}
+          onClick={() => props.onArmCue(props.selectedCueId)}
         >
-          <span class="timelineToolIcon" aria-hidden="true" data-no-localize>{armedCueId() === props.selectedCueId ? "●" : "○"}</span>
+          <span class="timelineToolIcon" aria-hidden="true" data-no-localize>{props.armedCueId === props.selectedCueId ? "●" : "○"}</span>
         </button>
         <button
           type="button"
@@ -736,8 +728,8 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         playheadX={props.overviewPlayheadX}
         visibleWindow={props.visibleWindow}
         bpm={props.bpm}
-        stretchMode={stretchMode()}
-        magnetEnabled={magnetEnabled()}
+        stretchMode={props.stretchMode}
+        magnetEnabled={props.magnetEnabled}
         armedCue={armedCue()}
         snapTimeMs={props.snapTimeMs}
         onSeekTime={props.onSeekOverviewTime}
@@ -1251,8 +1243,8 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         onSelectEvent={(eventId) => props.onSelectEvent(eventId, true)}
         onClearEventFilter={clearOverlapFilter}
         onOpenSourceCue={props.onOpenSourceCue}
-        armedCueId={armedCueId()}
-        onArmCue={toggleArmedCue}
+        armedCueId={props.armedCueId}
+        onArmCue={props.onArmCue}
       />
         </div>
       </aside>

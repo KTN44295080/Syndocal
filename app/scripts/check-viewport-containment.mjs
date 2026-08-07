@@ -2025,6 +2025,7 @@ async function pressKey(client, code, key = code, modifiers = 0) {
 }
 
 async function focusTimelineOverlapClusterWithTab(client, track) {
+  await setTimelineToolsDisclosureOpen(client, true);
   await evaluatePageFunction(client, () => {
     const revealPlayhead = [...document.querySelectorAll(".timelineViewportToolbar button")]
       .find((button) => [
@@ -2060,6 +2061,7 @@ async function focusTimelineOverlapClusterWithTab(client, track) {
     clusterTabStopCount: document.querySelectorAll('.timelineOverlapCluster[tabindex="0"]').length,
     overviewRole: document.querySelector(".timelineOverview")?.getAttribute("role") ?? "",
   }));
+  await setTimelineToolsDisclosureOpen(client, false);
   return { active, tabsToCluster, axButtonFound, ...tabOrderStats };
 }
 
@@ -2304,6 +2306,9 @@ async function measureTimelinePaneExpansionState(client) {
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
     const isVisible = (element) => {
       if (!element) return false;
+      const closedDetails = element.closest('details:not([open])');
+      const closedDetailsSummary = closedDetails?.querySelector(':scope > summary');
+      if (closedDetails && !closedDetailsSummary?.contains(element)) return false;
       const rect = element.getBoundingClientRect();
       const style = getComputedStyle(element);
       return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
@@ -2374,6 +2379,24 @@ async function measureTimelinePaneExpansionState(client) {
     const controlContextHeader = [...document.querySelectorAll('[data-control-context-header]')].find(isVisible);
     const controlModeSegment = controlContextHeader?.querySelector('[data-control-mode-segment]') ?? null;
     const controlContextFaders = [...document.querySelectorAll('.controlContextPane > .faders')].find(isVisible);
+    const timelineOperatorBar = [...document.querySelectorAll('[data-timeline-operator-bar]')].find(isVisible);
+    const timelineOperatorControls = controlContextHeader
+      ? [...controlContextHeader.querySelectorAll('button, summary')].filter(isVisible)
+      : [];
+    const timelineOperatorControlCenters = timelineOperatorControls.map((control) => {
+      const rect = control.getBoundingClientRect();
+      return rect.top + rect.height / 2;
+    });
+    const timelineOperatorCenterSpread = timelineOperatorControlCenters.length > 0
+      ? Math.max(...timelineOperatorControlCenters) - Math.min(...timelineOperatorControlCenters)
+      : Number.POSITIVE_INFINITY;
+    const timelineOperatorControlMinimumHeight = timelineOperatorControls.length > 0
+      ? Math.min(...timelineOperatorControls.map((control) => control.getBoundingClientRect().height))
+      : 0;
+    const mixerDisclosure = document.querySelector('.groupLiveMixerDisclosure');
+    const toolsDisclosure = document.querySelector('.timelineToolsDisclosure');
+    const mixerDisclosurePanel = document.querySelector('.groupLiveMixerDisclosurePanel');
+    const toolsDisclosurePanel = document.querySelector('.timelineToolsDisclosurePanel');
     const topbarRect = measuredRect('.topbar');
     const topbarMasterClusterRect = measuredRect('[data-topbar-masters]');
     const topbarTapRect = measuredRect('[data-topbar-tap]');
@@ -2409,6 +2432,18 @@ async function measureTimelinePaneExpansionState(client) {
       inner.x + inner.width <= outer.x + outer.width + 1 &&
       inner.y + inner.height <= outer.y + outer.height + 1
     );
+    const horizontallyContained = (inner, outer) => Boolean(
+      inner && outer &&
+      inner.x >= outer.x - 1 &&
+      inner.x + inner.width <= outer.x + outer.width + 1
+    );
+    const contextPaneRect = measuredRect('[data-workspace-pane="lower-right"]');
+    const mixerDisclosurePanelRect = isVisible(mixerDisclosurePanel)
+      ? measuredRect('.groupLiveMixerDisclosurePanel')
+      : null;
+    const toolsDisclosurePanelRect = isVisible(toolsDisclosurePanel)
+      ? measuredRect('.timelineToolsDisclosurePanel')
+      : null;
     return {
       persistentBandRect: measuredRect('.mappingPersistentWorkspaceBand'),
       persistentBandRects: {
@@ -2441,6 +2476,31 @@ async function measureTimelinePaneExpansionState(client) {
       timelineFrameContain: timelineFrameStyle?.contain ?? '',
       timelineFadersGridRows: timelineFaders ? getComputedStyle(timelineFaders).gridTemplateRows : '',
       timelineShowSurfaceGridRows: timelineShowSurface ? getComputedStyle(timelineShowSurface).gridTemplateRows : '',
+      timelineOperatorBarRect: measuredRect('[data-timeline-operator-bar]'),
+      timelineOperatorControlCount: timelineOperatorControls.length,
+      timelineOperatorCenterSpread: Math.round(timelineOperatorCenterSpread * 100) / 100,
+      timelineOperatorControlMinimumHeight: Math.round(timelineOperatorControlMinimumHeight * 100) / 100,
+      timelineOperatorContainedInHeader: Boolean(
+        timelineOperatorBar &&
+        controlContextHeader &&
+        rectContained(timelineOperatorBar.getBoundingClientRect(), controlContextHeader.getBoundingClientRect())
+      ),
+      visibleLegacyTimelinePanelHeaderCount: [...document.querySelectorAll('.timelineShowSurface > .panelHeader')].filter(isVisible).length,
+      visibleLegacyTimelineToolStripCount: [...document.querySelectorAll('.timelineShowSurface > .timelineToolStrip')].filter(isVisible).length,
+      mixerDisclosureOpen: mixerDisclosure instanceof HTMLDetailsElement && mixerDisclosure.open,
+      mixerDisclosureSummaryRect: measuredRect('.groupLiveMixerDisclosure > summary'),
+      toolsDisclosureOpen: toolsDisclosure instanceof HTMLDetailsElement && toolsDisclosure.open,
+      toolsDisclosureSummaryRect: measuredRect('.timelineToolsDisclosure > summary'),
+      mixerDisclosurePanelRect,
+      mixerDisclosurePanelHorizontallyContained: horizontallyContained(mixerDisclosurePanelRect, contextPaneRect),
+      toolsDisclosurePanelRect,
+      toolsDisclosurePanelHorizontallyContained: horizontallyContained(toolsDisclosurePanelRect, contextPaneRect),
+      toolsDisclosureInteractiveCount: toolsDisclosurePanel
+        ? [...toolsDisclosurePanel.querySelectorAll('button, input, output')].filter(isVisible).length
+        : 0,
+      visibleLiveMixerCount: [...document.querySelectorAll('.groupLiveMixerStrip')].filter(isVisible).length,
+      visibleTimelineViewportToolbarCount: [...document.querySelectorAll('.timelineViewportToolbar')].filter(isVisible).length,
+      visibleTimelineDirectToolbarCount: [...document.querySelectorAll('.timelineDirectToolbar')].filter(isVisible).length,
       liveMixerRect: measuredRect('.groupLiveMixerStrip'),
       liveMixerGridColumns: liveMixerStyle?.gridTemplateColumns ?? '',
       liveMixerDirectChildCount: liveMixerChildren.length,
@@ -2545,6 +2605,26 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
   await clickVisibleByText(client, '.controlModeTabs button', 'Timeline');
   await sleep(120);
   const before = await measureTimelinePaneExpansionState(client);
+  const mixerDisclosureOpened = await client.evaluate(`(() => {
+    const summary = document.querySelector('.groupLiveMixerDisclosure > summary');
+    if (!(summary instanceof HTMLElement)) return false;
+    summary.click();
+    return true;
+  })()`);
+  await sleep(80);
+  const mixerOpened = await measureTimelinePaneExpansionState(client);
+  await client.evaluate(`document.querySelector('.groupLiveMixerDisclosure > summary')?.click()`);
+  await sleep(80);
+  const toolsDisclosureOpened = await client.evaluate(`(() => {
+    const summary = document.querySelector('.timelineToolsDisclosure > summary');
+    if (!(summary instanceof HTMLElement)) return false;
+    summary.click();
+    return true;
+  })()`);
+  await sleep(80);
+  const toolsOpened = await measureTimelinePaneExpansionState(client);
+  await client.evaluate(`document.querySelector('.timelineToolsDisclosure > summary')?.click()`);
+  await sleep(80);
   const resizedViewport = {
     width: viewport.width + 37,
     height: viewport.height + 23,
@@ -2612,11 +2692,13 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
   const expandedLaneTrackHeight = Number.parseFloat(
     expandedShowGridTracks[expandedShowGridTracks.length - 1] ?? '',
   );
-  const expandedMixerIsSingleCompactRow =
-    (expanded.liveMixerRect?.height ?? Number.POSITIVE_INFINITY) <= 36 &&
-    expanded.liveMixerDirectChildCount >= 5 &&
-    expanded.liveMixerCenterSpread <= 1 &&
-    expanded.liveMixerIdentityDisplay === 'flex';
+  const timelineOperatorIsOneFullSizeRow = Boolean(
+    before.timelineOperatorBarRect &&
+    before.timelineOperatorControlCount >= 15 &&
+    before.timelineOperatorCenterSpread <= 1 &&
+    before.timelineOperatorControlMinimumHeight >= 27 &&
+    before.timelineOperatorContainedInHeader
+  );
   const normalDensity = before.t25Density ?? {};
   const topbarIsSingleContainedRow = Boolean(
     normalDensity.topbarRect &&
@@ -2740,7 +2822,32 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
       expanded.timelineLaneFrameRect.height - expanded.timelineLaneScrollportRect.height >= 0 &&
       expanded.timelineLaneFrameRect.height - expanded.timelineLaneScrollportRect.height <= 2.5
     )],
-    ['expandedLiveMixerIsSingleCompactRow', () => expandedMixerIsSingleCompactRow],
+    ['timelineOperatorControlsShareOneFullSizeHeaderRow', () => timelineOperatorIsOneFullSizeRow],
+    ['timelineLegacyHeaderAndToolRowsAreNotVisible', () => Boolean(
+      before.visibleLegacyTimelinePanelHeaderCount === 0 &&
+      before.visibleLegacyTimelineToolStripCount === 0
+    )],
+    ['timelineMixerIsDisclosureNotPermanentRow', () => Boolean(
+      before.mixerDisclosureOpen === false &&
+      before.visibleLiveMixerCount === 0 &&
+      before.mixerDisclosureSummaryRect
+    )],
+    ['timelineMixerDisclosureRetainsFullControls', () => Boolean(
+      mixerDisclosureOpened &&
+      mixerOpened.mixerDisclosureOpen &&
+      mixerOpened.visibleLiveMixerCount === 1 &&
+      mixerOpened.liveMixerDirectChildCount >= 5 &&
+      (mixerOpened.liveMixerRect?.height ?? 0) >= 42 &&
+      mixerOpened.mixerDisclosurePanelHorizontallyContained
+    )],
+    ['timelineEditingToolsDisclosureRetainsBothToolbars', () => Boolean(
+      toolsDisclosureOpened &&
+      toolsOpened.toolsDisclosureOpen &&
+      toolsOpened.visibleTimelineViewportToolbarCount === 1 &&
+      toolsOpened.visibleTimelineDirectToolbarCount === 1 &&
+      toolsOpened.toolsDisclosureInteractiveCount >= 19 &&
+      toolsOpened.toolsDisclosurePanelHorizontallyContained
+    )],
     ['expandedResizeKeepsFocusAndPreferredRatios', () => Boolean(
       expandedResized.timelinePaneExpanded &&
       Math.abs(expandedResized.workspaceSplitRatios.top - before.workspaceSplitRatios.top) <= 0.001 &&
@@ -2794,10 +2901,9 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
       before.workspaceSplitterRects.lowerLeftRight,
       restored.workspaceSplitterRects.lowerLeftRight,
     )],
-    ['escapeRestoredTimelineLaneAndMixerRectsWithinOnePixel', () => Boolean(
+    ['escapeRestoredTimelineLaneRectsWithinOnePixel', () => Boolean(
       persistentBandRectsExactlyEqual(before.timelineLaneFrameRect, restored.timelineLaneFrameRect) &&
-      persistentBandRectsExactlyEqual(before.timelineLaneScrollportRect, restored.timelineLaneScrollportRect) &&
-      persistentBandRectsExactlyEqual(before.liveMixerRect, restored.liveMixerRect)
+      persistentBandRectsExactlyEqual(before.timelineLaneScrollportRect, restored.timelineLaneScrollportRect)
     )],
     ['escapeRestoredTimelineGridTracksExactly', () => Boolean(
       restored.timelineFadersGridRows === before.timelineFadersGridRows &&
@@ -19456,8 +19562,22 @@ async function measureTimelineSlimVisual(client) {
 async function exerciseTimelineDeskSurfaceAria(client) {
   return await evaluatePageFunction(client, async () => {
     const expected = ['show', 'automation', 'playback'];
+    const isRendered = (element) => {
+      if (!(element instanceof Element)) return false;
+      const closedDetails = element.closest('details:not([open])');
+      const closedSummary = closedDetails?.querySelector(':scope > summary');
+      if (closedDetails && !closedSummary?.contains(element)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const openTimelineTools = () => {
+      const details = document.querySelector('.timelineToolsDisclosure');
+      if (details instanceof HTMLDetailsElement && !details.open) details.open = true;
+    };
     const read = () => {
-      const buttons = [...document.querySelectorAll('.timelineDeskTabs button')];
+      openTimelineTools();
+      const buttons = [...document.querySelectorAll('.timelineDeskTabs button')].filter(isRendered);
       return buttons.map((button) => ({
         id: button.getAttribute('data-timeline-desk-surface') || '',
         pressed: button.getAttribute('aria-pressed') === 'true',
@@ -19466,7 +19586,9 @@ async function exerciseTimelineDeskSurfaceAria(client) {
     };
     const transitions = [];
     for (const id of expected) {
-      const button = document.querySelector(`[data-timeline-desk-surface="${id}"]`);
+      openTimelineTools();
+      const button = [...document.querySelectorAll(`[data-timeline-desk-surface="${id}"]`)]
+        .find(isRendered);
       if (!(button instanceof HTMLButtonElement)) {
         transitions.push({ id, state: read(), missing: true });
         continue;
@@ -19475,7 +19597,8 @@ async function exerciseTimelineDeskSurfaceAria(client) {
       await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
       transitions.push({ id, state: read(), missing: false });
     }
-    document.querySelector('[data-timeline-desk-surface="show"]')?.click();
+    openTimelineTools();
+    [...document.querySelectorAll('[data-timeline-desk-surface="show"]')].find(isRendered)?.click();
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
     const restored = read();
     const transitionStatesValid = transitions.every((transition) =>
@@ -19493,6 +19616,15 @@ async function exerciseTimelineDeskSurfaceAria(client) {
         restored.some((entry) => entry.id === 'show' && entry.pressed && entry.active),
     };
   });
+}
+
+async function setTimelineToolsDisclosureOpen(client, open) {
+  return await client.evaluate(`((shouldOpen) => {
+    const details = document.querySelector('.timelineToolsDisclosure');
+    if (!(details instanceof HTMLDetailsElement)) return false;
+    details.open = shouldOpen;
+    return details.open === shouldOpen;
+  })(${open ? 'true' : 'false'})`);
 }
 
 async function exerciseTimelineBlockPropertiesDrawerLayout(client) {
@@ -20044,11 +20176,13 @@ async function runTimelineSlimViewport(client, viewport) {
   await clickVisibleByText(client, '.workspaceTabs button', 'Control');
   await clickVisibleByText(client, '.controlModeTabs button', 'Timeline');
   await clickVisibleByText(client, '.timelineDeskTabs button', 'Show');
+  await setTimelineToolsDisclosureOpen(client, true);
   await sleep(120);
   const visual = await measureTimelineSlimVisual(client);
   const deskSurfaceAria = await exerciseTimelineDeskSurfaceAria(client);
   const laneCountStability = await exerciseTimelineLaneCountStability(client);
   const blockKeyboardFocus = await exerciseTimelineBlockKeyboardFocusVisual(client);
+  await setTimelineToolsDisclosureOpen(client, false);
   const blockPropertiesDrawer = await exerciseTimelineBlockPropertiesDrawerLayout(client);
   const laneMenuKeyboard = await exerciseTimelineLaneMenuKeyboard(client);
   const dialogEscapePriority = await exerciseTimelineDialogEscapePriority(client);
@@ -20058,6 +20192,7 @@ async function runTimelineSlimViewport(client, viewport) {
   await clickVisibleByText(client, '.workspaceTabs button', 'Control');
   await clickVisibleByText(client, '.controlModeTabs button', 'Timeline');
   await clickVisibleByText(client, '.timelineDeskTabs button', 'Show');
+  await setTimelineToolsDisclosureOpen(client, true);
   await sleep(120);
   const implicitVisual = await measureTimelineSlimVisual(client);
   const expectedDeskSurfaceIds = ['automation', 'playback', 'show'];
@@ -20490,8 +20625,15 @@ async function closeSceneBlockDrawer(client) {
 
 async function runSceneBlockHourViewport(client, viewport) {
   await openTimelineShowFixture(client, viewport, "scene-block-hour");
+  await setTimelineToolsDisclosureOpen(client, true);
 
   const initialStats = await evaluatePageFunction(client, () => {
+    const isRendered = (element) => {
+      if (!(element instanceof Element)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+    };
     const range = document.querySelector(".timelineVisibleRange");
     const overview = document.querySelector(".timelineOverview");
     const overviewRect = overview?.getBoundingClientRect();
@@ -20500,7 +20642,7 @@ async function runSceneBlockHourViewport(client, viewport) {
       editExtentMs: Number(range?.getAttribute("data-edit-extent-ms")),
       visibleStartMs: Number(range?.getAttribute("data-visible-start-ms")),
       visibleEndMs: Number(range?.getAttribute("data-visible-end-ms")),
-      toolbarButtonCount: document.querySelectorAll(".timelineViewportToolbar button").length,
+      toolbarButtonCount: [...document.querySelectorAll(".timelineViewportToolbar button")].filter(isRendered).length,
       rulerTickCount: document.querySelectorAll("[data-timeline-ruler-ms]").length,
       overviewNodeCount: document.querySelectorAll(".timelineOverview *").length,
       overviewWidth: overviewRect?.width ?? 0,
@@ -20709,6 +20851,7 @@ async function runSceneBlockHourViewport(client, viewport) {
     };
   });
   await openTimelineShowFixture(client, viewport, "scene-block-hour");
+  await setTimelineToolsDisclosureOpen(client, true);
   await openSceneBlockBrowser(client);
   await evaluatePageFunction(client, async () => {
     const search = document.querySelector(".sceneBlockRowSearch");
@@ -27434,11 +27577,13 @@ async function main() {
         const result = await runTimelinePaneExpansionViewport(client, viewport);
         timelineExpansionResults.push(result);
         const laneHeight = (state) => state.timelineLaneScrollportRect?.height ?? 0;
-        const mixerHeight = (state) => state.liveMixerRect?.height ?? 0;
         console.log(
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
             `lane=${laneHeight(result.before)}->${laneHeight(result.expanded)}->${laneHeight(result.restored)} ` +
-            `mixer=${mixerHeight(result.before)}->${mixerHeight(result.expanded)}->${mixerHeight(result.restored)} ` +
+            `operator=${result.before.timelineOperatorBarRect?.height ?? 0}px` +
+              `/${result.before.timelineOperatorControlCount ?? 0}` +
+              `/spread${result.before.timelineOperatorCenterSpread ?? 0} ` +
+            `mixerDisclosure=${result.before.visibleLiveMixerCount ?? 0} ` +
             `matrix=${result.before.t25Density?.sceneMatrixRect?.height ?? 0} ` +
             `liveToolbar=${result.before.t25Density?.liveDeskToolbarRect?.height ?? 0} ` +
             `band=${result.before.persistentBandRect?.height ?? 0} ` +
