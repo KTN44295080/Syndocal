@@ -582,8 +582,8 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     ? []
     : props.audioClips.filter((clip) => layerRowById().get(clip.layer_id)?.layer.kind === "Audio"));
   const superSceneEmptyHint = createMemo(() => props.superSceneEmptyHintCount === 1
-    ? "The timeline is empty. 1 Super Scene has a child timeline (open it from the SS badge in Scene Matrix)."
-    : `The timeline is empty. ${props.superSceneEmptyHintCount} Super Scenes have child timelines (open them from the SS badges in Scene Matrix).`);
+    ? "The timeline is empty. 1 Cue has a child Timeline (open it from the TL badge in Scene Matrix)."
+    : `The timeline is empty. ${props.superSceneEmptyHintCount} Cues have child Timelines (open them from the TL badges in Scene Matrix).`);
   const audioClipTabStopId = createMemo(() => {
     const clips = renderedAudioClips();
     return clips.some((clip) => clip.id === props.selectedAudioClipId)

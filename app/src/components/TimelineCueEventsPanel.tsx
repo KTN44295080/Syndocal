@@ -650,8 +650,8 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         </button>
         <button
           type="button"
-          title={props.selectedCueIsSuperScene ? "Edit Super Scene" : "Create Super Scene"}
-          aria-label={props.selectedCueIsSuperScene ? "Edit Super Scene" : "Create Super Scene"}
+          title={props.selectedCueIsSuperScene ? "Edit Timeline" : "Create Timeline"}
+          aria-label={props.selectedCueIsSuperScene ? "Edit Timeline" : "Create Timeline"}
           data-open-super-scene={props.selectedCueId ?? undefined}
           data-timeline-tool="super-scene"
           disabled={props.selectedCueId === null || props.childTimelineLabel !== null}

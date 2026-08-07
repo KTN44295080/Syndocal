@@ -28,6 +28,10 @@ const chooser = await importTypeScript(
   "EffectFamilyChooser.tsx",
   { solid: true },
 );
+const chooserSource = await readFile(
+  new URL("../src/components/EffectFamilyChooser.tsx", import.meta.url),
+  "utf8",
+);
 const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
 const sceneSettingsSource = await readFile(
   new URL("../src/components/SceneSettingsPane.tsx", import.meta.url),
@@ -77,7 +81,7 @@ assert.equal(
   "every chooser family must be unique",
 );
 const initialFamily = appSource.match(
-  /createSignal<EffectRecipeFamily>\("([^"]+)"\)/,
+  /createSignal<EffectChooserFamily>\("([^"]+)"\)/,
 )?.[1];
 assert.ok(initialFamily, "App must declare an initial effect chooser family");
 assert.equal(initialFamily, "CURVE FX", "the scene FX chooser must start on the Curve family");
@@ -85,6 +89,11 @@ assert.match(
   sceneSettingsSource,
   /data-scene-fx-chooser[\s\S]*?<EffectFamilyChooser/,
   "the nine-family chooser must live on the Scene Settings FX surface",
+);
+assert.match(
+  chooserSource,
+  /family === "SUPER SCENE" \? "TIMELINE" : family/,
+  "the internal Super Scene family must render with the product-facing Timeline label",
 );
 
 const closeTo = (actual, expected, message, epsilon = 1e-10) => {

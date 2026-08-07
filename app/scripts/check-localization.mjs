@@ -142,21 +142,39 @@ assert.equal(
 );
 assert.equal(
   localization.translateUiText("Open Super Scene Opening Wash", "ja"),
-  "Super Scene Opening Wash を開く",
+  "タイムライン Opening Wash を開く",
+);
+assert.equal(
+  localization.translateUiText("Open Timeline Opening Wash", "ja"),
+  "タイムライン Opening Wash を開く",
 );
 assert.equal(
   localization.translateUiText(
     "The timeline is empty. 1 Super Scene has a child timeline (open it from the SS badge in Scene Matrix).",
     "ja",
   ),
-  "タイムラインは空です。1件のSuper Sceneが子タイムラインを持っています（Scene MatrixのSSバッジから開けます）",
+  "タイムラインは空です。1件のCueが子タイムラインを持っています（Scene MatrixのTLバッジから開けます）",
 );
 assert.equal(
   localization.translateUiText(
     "The timeline is empty. 3 Super Scenes have child timelines (open them from the SS badges in Scene Matrix).",
     "ja",
   ),
-  "タイムラインは空です。3件のSuper Sceneが子タイムラインを持っています（Scene MatrixのSSバッジから開けます）",
+  "タイムラインは空です。3件のCueが子タイムラインを持っています（Scene MatrixのTLバッジから開けます）",
+);
+assert.equal(
+  localization.translateUiText(
+    "The timeline is empty. 1 Cue has a child Timeline (open it from the TL badge in Scene Matrix).",
+    "ja",
+  ),
+  "タイムラインは空です。1件のCueが子タイムラインを持っています（Scene MatrixのTLバッジから開けます）",
+);
+assert.equal(
+  localization.translateUiText(
+    "The timeline is empty. 3 Cues have child Timelines (open them from the TL badges in Scene Matrix).",
+    "ja",
+  ),
+  "タイムラインは空です。3件のCueが子タイムラインを持っています（Scene MatrixのTLバッジから開けます）",
 );
 assert.equal(localization.translateUiText("Cue-owned 50", "ja"), "Cue所有 50");
 assert.equal(
@@ -261,7 +279,8 @@ for (const family of [
 ]) {
   assert.equal(localization.translateUiText(family, "ja"), family);
 }
-assert.equal(localization.translateUiText("SUPER SCENE", "ja"), "SUPER SCENE");
+assert.equal(localization.translateUiText("SUPER SCENE", "ja"), "TIMELINE");
+assert.equal(localization.translateUiText("TIMELINE", "ja"), "TIMELINE");
 assert.equal(localization.translateUiText("Current effect waveform preview", "ja"), "現在のエフェクト波形プレビュー");
 assert.equal(localization.translateUiText("Move graphical preview", "ja"), "ムーブのグラフィカルプレビュー");
 assert.equal(localization.translateUiText("Value graphical preview", "ja"), "バリューのグラフィカルプレビュー");
@@ -543,7 +562,7 @@ const localeInvariantText = new Set([
   "COM3 or /dev/ttyUSB0", "Crop B", "Crop L", "Crop R", "Crop T", "ctl", "ctrl", "Cue #", "DECK A",
   "DECK B", "deg / Sat", "Dimmer@1:8, Pan@2:16, Tilt@4:16, ColorRed@6:8", "Dir X", "Dir Y", "Dir Z",
   "DMXKing ultraDMX", "e/", "Enttec Open DMX", "ENTTEC USB Pro", "fps", "front, bars",
-  "front, movers, floor", "FX", "FX面", "FX面を表示", "SS", "GDTF", "GDTF Share", "GET", "Hi", "HL",
+  "front, movers, floor", "FX", "FX面", "FX面を表示", "SS", "TL", "GDTF", "GDTF Share", "GET", "Hi", "HL",
   "https://gdtf-share.com/.../fixture.gdtf", "Key H", "Key V", "Keystone H", "Keystone V", "Keystone X",
   "Keystone Y", "LFO", "LIVE LINK", "m /", "MID", "MIB targets (", "ms ·", "ms · max", "NACK reason 0x",
   "PID (hex)", "Port-Address",

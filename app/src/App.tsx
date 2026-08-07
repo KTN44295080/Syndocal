@@ -1779,7 +1779,7 @@ export default function App() {
   const [effectVideoPositionY, setEffectVideoPositionY] = createSignal(0);
   const [effectVideoPositionZ, setEffectVideoPositionZ] = createSignal(0);
   const [effectVideoTargetLinked, setEffectVideoTargetLinked] = createSignal(false);
-  const [effectChooserFamily, setEffectChooserFamily] = createSignal<EffectRecipeFamily>("CURVE FX");
+  const [effectChooserFamily, setEffectChooserFamily] = createSignal<EffectChooserFamily>("CURVE FX");
   const [editingEffectId, setEditingEffectId] = createSignal<number | null>(null);
   const [effectPeriod, setEffectPeriod] = createSignal(1000);
   const [effectClockSyncBeats, setEffectClockSyncBeats] = createSignal<number | null>(null);
@@ -1915,6 +1915,7 @@ export default function App() {
     setSceneSettingsSurface(controlMode() === "edit" ? "fx" : "contents");
     setSceneFxStagePreview(null);
     if (effectId !== null) loadSceneEffectDraft(cueId, effectId);
+    if (cue.child_timeline) setEffectChooserFamily("SUPER SCENE");
   };
   const closeSceneSettings = () => {
     setSelectedSceneCueId(null);
@@ -1923,6 +1924,11 @@ export default function App() {
     setSceneFxStagePreview(null);
   };
   const openCueEditor = () => {
+    const cueId = selectedSceneCueId() ?? snapshot().active_cue_id ?? snapshot().cues[0]?.id ?? null;
+    if (cueId !== null) {
+      openTimelineSourceCue(cueId);
+      return;
+    }
     setTimelineDeskSurface("show");
     setTimelineContextDrawer("cue");
   };
@@ -7613,7 +7619,7 @@ export default function App() {
     update: (child: ChildTimelineSummary) => ChildTimelineSummary,
   ) => {
     const cue = snapshot().cues.find((candidate) => candidate.id === cueId);
-    if (!cue?.child_timeline) throw new Error(`Super Scene Cue ${cueId} was not found`);
+    if (!cue?.child_timeline) throw new Error(`Timeline Cue ${cueId} was not found`);
     const childTimeline = normalizedChildTimeline(update(normalizedChildTimeline(cue.child_timeline)));
     const localFixture = viewportFixture === "timeline-layered"
       || viewportFixture === "scene-block-large"
@@ -13127,12 +13133,11 @@ export default function App() {
     }
     setWorkspaceTab("control");
     setControlMode("live");
-    setTimelineDeskSurface("show");
-    setTimelineContextDrawer("cue");
     setSelectedCueListId(cue.cue_list_id);
-    setRevealedSourceCueId(cue.id);
-    setRevealedSourceCueRevision((revision) => revision + 1);
-    setMessage(`Opened source Cue ${cue.cue_number || cue.id} in Cue List ${cue.cue_list_id}.`);
+    selectSceneCue(cue.id);
+    setSceneSettingsSurface("details");
+    setTimelineContextDrawer("none");
+    setMessage(`Opened Cue details for ${cue.cue_number || cue.id}.`);
   };
 
   const openOrCreateSuperScene = async (cueId: number) => {
@@ -13142,7 +13147,7 @@ export default function App() {
       return false;
     }
     if (!confirmDiscardTimelineEditorDrafts()) {
-      setMessage("Super Scene open canceled; unsaved Timeline edits were kept.");
+      setMessage("Timeline open canceled; unsaved Timeline edits were kept.");
       return false;
     }
     if (!cue.child_timeline) {
@@ -13183,7 +13188,8 @@ export default function App() {
     setTimelineViewportState(createTimelineViewportState(
       Math.max(1, snapshot().cues.find((candidate) => candidate.id === cueId)?.child_timeline?.duration_ms ?? 1),
     ));
-    setMessage(`Opened Super Scene ${cue.label}.`);
+    setEffectChooserFamily("SUPER SCENE");
+    setMessage(`Opened Timeline ${cue.label}.`);
     return true;
   };
 
@@ -13212,7 +13218,7 @@ export default function App() {
     }
     if (family === "SUPER SCENE") {
       if (cueId === null) {
-        setMessage("Add or select a Cue before opening SUPER SCENE.");
+        setMessage("Add or select a Cue before opening TIMELINE.");
         return;
       }
       const opened = await openOrCreateSuperScene(cueId);
@@ -17161,6 +17167,81 @@ export default function App() {
                   running={selectedSceneIsRunning()}
                   liveStates={snapshot().cue_live_modifiers}
                   editor={sceneEffectEditor()}
+                  details={
+                    <CueManagementPanel
+                      mode="scene-settings"
+                      onSetCueColor={setCueColor}
+                      groupColors={groupColors()}
+                      onSetCueLiveModifierDefaults={setCueLiveModifierDefaults}
+                      cues={[cue()]}
+                      allCues={snapshot().cues}
+                      cueLists={snapshot().cue_lists}
+                      groupIds={fixtureGroupRows().map((row) => row.groupId)}
+                      palettes={snapshot().palettes}
+                      effects={snapshot().effects}
+                      cueCaptureEffects={cueCaptureEligibleEffects()}
+                      selectedCueListId={selectedCueList().id}
+                      cueListLabel={cueListLabel()}
+                      activeCueId={snapshot().active_cue_id}
+                      revealCueId={cue().id}
+                      revealCueRevision={revealedSourceCueRevision()}
+                      activeFade={snapshot().active_fade}
+                      timelinePositionMs={snapshot().timeline.position_ms}
+                      bpm={snapshot().clock.bpm}
+                      timelineTrack={timelineTrack()}
+                      cueLabel={cueLabel()}
+                      cueFadeMs={cueFadeMs()}
+                      cueAuthoredBeats={cueAuthoredBeats()}
+                      cueAuthoredBeatsSeeded={cueAuthoredBeatsSeeded()}
+                      cueAuthoredBeatsError={cueAuthoredBeatsError()}
+                      cueCaptureScope={cueCaptureScope()}
+                      cueCaptureScopeError={cueCaptureScopeError()}
+                      hasCueSources={hasCueSources()}
+                      cueEffectCaptureTargets={cueEffectCaptureTargets()}
+                      cueCapturePreview={cueCapturePreview()}
+                      stageViewBoxSize={stageViewBoxSize}
+                      stageOrigin={stageOrigin2d()}
+                      selectedFixtureId={selectedFixtureId()}
+                      timelinePlacementNudgeMs={timelinePlacementNudgeMs()}
+                      cueMetadataDraft={cueMetadataDraft}
+                      cueTimelinePlacementsForCue={cueTimelinePlacementsForCue}
+                      onCueLabel={setCueLabel}
+                      onCueFadeMs={setCueFadeMs}
+                      onCueAuthoredBeats={updateCueAuthoredBeats}
+                      onCueCaptureScope={setCueCaptureScope}
+                      onCueEffectCaptureTargets={updateCueEffectCaptureTargets}
+                      onSelectCueList={setSelectedCueListId}
+                      onCueListLabel={setCueListLabel}
+                      onCreateCueList={createCueList}
+                      onRenameCueList={renameCueList}
+                      onRemoveCueList={removeCueList}
+                      onSetCueList={setCueList}
+                      onSetCuePalette={setCuePalette}
+                      onTriggerCueList={triggerCueList}
+                      onCreateCue={createCue}
+                      onSelectFixture={setSelectedFixtureId}
+                      onTriggerPreviousCue={triggerPreviousCue}
+                      onTriggerNextCue={triggerNextCue}
+                      onSetCueFadePaused={setCueFadePaused}
+                      onUpdateCueMetadataDraft={updateCueMetadataDraft}
+                      onMoveCue={moveCue}
+                      onSetCueMetadata={setCueMetadata}
+                      onSetCueEffectTargets={setCueEffectTargets}
+                      onSetCueSteps={setCueSteps}
+                      onDuplicateCue={duplicateCue}
+                      onUpdateCue={updateCue}
+                      onTriggerCue={triggerCue}
+                      onAddTimelineCueEventAt={addTimelineCueEventAt}
+                      onRemoveCue={removeCue}
+                      onSeekTimeline={seekTimeline}
+                      onOpenTimeline={() => selectTimelineDeskSurface("show")}
+                      onMoveTimelineCueEvent={moveTimelineCueEvent}
+                      onRemoveTimelineEvent={removeTimelineEvent}
+                      onBeginTimelineCueDrag={beginTimelineCueDrag}
+                      onMoveTimelineCueDrag={moveTimelineCueDrag}
+                      onEndTimelineCueDrag={(point, moved, canceled) => void endTimelineCueDrag(point, moved, canceled)}
+                    />
+                  }
                   onSurface={setSceneSettingsSurface}
                   onDraft={(patch) => updateCueMetadataDraft(cue(), patch)}
                   onSaveMetadata={() => setCueMetadata(cue())}
@@ -17169,7 +17250,10 @@ export default function App() {
                   onClearLiveModifier={clearCueLiveModifierLive}
                   onSetLiveModifierDefaults={setCueLiveModifierDefaults}
                   onClose={closeSceneSettings}
-                  onEditSource={() => openTimelineSourceCue(cue().id)}
+                  onEditSource={() => {
+                    setSelectedCueListId(cue().cue_list_id);
+                    setSceneSettingsSurface("details");
+                  }}
                   onSelectEffect={selectSceneEffect}
                   onSelectFamily={createSceneEffect}
                   onSetEffectEnabled={setSceneEffectEnabled}
@@ -17276,20 +17360,6 @@ export default function App() {
               </svg>
             </button>
             <div class="liveDeskToolbarActions" data-live-desk-toolbar-actions>
-              <button
-                type="button"
-                class={`liveDeskIconButton liveDeskViewIconButton liveCueEditorToggle${timelineContextDrawer() === "cue" ? " active" : ""}`}
-                data-scene-matrix-open-cue-editor
-                data-live-desk-view-action="cue-editor"
-                aria-label="Cue editor"
-                title="Cue editor"
-                aria-pressed={timelineContextDrawer() === "cue"}
-                onClick={openCueEditor}
-              >
-                <svg viewBox="0 0 20 20" aria-hidden="true">
-                  <path d="M4 4.5h8M4 8h7M4 11.5h4M11 15.5l4.8-4.8 1.5 1.5-4.8 4.8-2.5.5z" />
-                </svg>
-              </button>
               <nav class="liveDeskViewToggle" aria-label="Live desk view">
                 <button
                   type="button"
@@ -18291,41 +18361,41 @@ export default function App() {
                     Attributes
                   </button>
                 </nav>
-                <ControlFaderWriteHeader
-                  targetKind={controlTargetKind()}
-                  compactReadout={controlCompactReadout()}
-                  writeMode={controlFaderWriteMode()}
-                  editingSceneLabel={selectedSceneCue()?.label ?? null}
-                  editingSceneIdentity={
-                    selectedSceneCue()
-                      ? cueIdentityCss(
-                          selectedSceneCue()!.id,
-                          selectedSceneCue()!.color,
-                          "fill",
-                          selectedSceneCue()!.group_id,
-                          selectedSceneCue()!.group_id ? groupColors()[selectedSceneCue()!.group_id!] : null,
-                        )
-                      : null
-                  }
-                  editingSceneIdentityText={
-                    selectedSceneCue()
-                      ? cueIdentityCss(
-                          selectedSceneCue()!.id,
-                          selectedSceneCue()!.color,
-                          "text",
-                          selectedSceneCue()!.group_id,
-                          selectedSceneCue()!.group_id ? groupColors()[selectedSceneCue()!.group_id!] : null,
-                        )
-                      : null
-                  }
-                  blindActive={snapshot().programmer.blind}
-                  blindStagedCount={snapshot().programmer.values.length}
-                  onWriteMode={changeControlFaderWriteMode}
-                  onBlindToggle={toggleBlindEditing}
-                  onBlindCommit={commitProgrammer}
-                  onBlindDiscard={clearProgrammer}
-                />
               </Show>
+              <ControlFaderWriteHeader
+                targetKind={controlTargetKind()}
+                compactReadout={controlCompactReadout()}
+                writeMode={controlFaderWriteMode()}
+                editingSceneLabel={selectedSceneCue()?.label ?? null}
+                editingSceneIdentity={
+                  selectedSceneCue()
+                    ? cueIdentityCss(
+                        selectedSceneCue()!.id,
+                        selectedSceneCue()!.color,
+                        "fill",
+                        selectedSceneCue()!.group_id,
+                        selectedSceneCue()!.group_id ? groupColors()[selectedSceneCue()!.group_id!] : null,
+                      )
+                    : null
+                }
+                editingSceneIdentityText={
+                  selectedSceneCue()
+                    ? cueIdentityCss(
+                        selectedSceneCue()!.id,
+                        selectedSceneCue()!.color,
+                        "text",
+                        selectedSceneCue()!.group_id,
+                        selectedSceneCue()!.group_id ? groupColors()[selectedSceneCue()!.group_id!] : null,
+                      )
+                    : null
+                }
+                blindActive={snapshot().programmer.blind}
+                blindStagedCount={snapshot().programmer.values.length}
+                onWriteMode={changeControlFaderWriteMode}
+                onBlindToggle={toggleBlindEditing}
+                onBlindCommit={commitProgrammer}
+                onBlindDiscard={clearProgrammer}
+              />
             </>
           }
           operatorLockMode={operatorLockMode()}
@@ -18810,22 +18880,22 @@ export default function App() {
             />
           </Show>
           </FaderAttributeEditorPanel>
-          <Show when={controlMode() === "live" && timelineContextDrawer() === "cue"}>
+          <Show when={controlMode() === "live" && timelineContextDrawer() === "cue" && snapshot().cues.length === 0}>
           <aside
             class="timelineContextDrawer"
             data-timeline-context-drawer-panel="cue"
-            aria-label="Cue editor drawer"
+            aria-label="Create scene drawer"
           >
             <header class="timelineContextDrawerHeader">
               <div>
-                <strong>Cue editor</strong>
+                <strong>Create scene</strong>
                 <span data-no-localize>{selectedCueList().label}</span>
               </div>
               <button
                 type="button"
                 class="timelineContextDrawerClose"
-                aria-label="Close Cue editor"
-                title="Close Cue editor"
+                aria-label="Close Create scene"
+                title="Close Create scene"
                 onClick={() => setTimelineContextDrawer("none")}
               >
                 <span aria-hidden="true" data-no-localize>×</span>

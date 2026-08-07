@@ -30271,7 +30271,7 @@ h3 {
   flex-flow: row nowrap;
   align-items: center;
   align-self: center;
-  min-width: 98px;
+  min-width: 124px;
   max-width: 420px;
   height: 24px;
   min-height: 24px;
@@ -30293,11 +30293,11 @@ h3 {
 
 .controlFaderWriteMode {
   display: grid;
-  grid-template-columns: repeat(2, minmax(44px, 1fr));
-  flex: 0 0 98px;
+  grid-template-columns: 48px 28px 48px;
+  flex: 0 0 124px;
   align-self: center;
-  width: 98px;
-  min-width: 98px;
+  width: 124px;
+  min-width: 124px;
   height: 24px;
   min-height: 24px;
   max-height: 24px;
@@ -30318,8 +30318,9 @@ h3 {
   border-radius: 0;
   background: #1d2124;
   padding: 1px 7px;
-  color: #9ca4a9;
-  font-size: 11px;
+  color: #aaa6a1;
+  font-size: 12px;
+  font-weight: 850;
 }
 
 .controlFaderWriteHeader .controlFaderWriteMode > button > span {
@@ -30336,18 +30337,30 @@ h3 {
 
 .controlFaderWriteHeader .controlFaderWriteMode
   > button[data-control-fader-write-mode-option="live"].active {
-  box-shadow: inset 0 -3px 0 var(--ray-live);
-  color: #f3d98a;
+  border-color: #e8d34c;
+  background: #c5ad1f;
+  box-shadow: inset 0 0 0 1px rgba(255, 245, 151, 0.3), 0 0 8px rgba(224, 198, 40, 0.4);
+  color: #fffdf2;
 }
 
 .controlFaderWriteHeader .controlFaderWriteMode
   > button[data-control-fader-write-mode-option="edit"].active {
-  background: #183126;
-  box-shadow: inset 0 -3px 0 var(--ray-edit);
-  color: #b9ebcc;
+  border-color: #6de45f;
+  background: #42c834;
+  box-shadow: inset 0 0 0 1px rgba(226, 255, 221, 0.28), 0 0 8px rgba(66, 200, 52, 0.42);
+  color: #ffffff;
 }
 
-.controlBlindControls {
+.controlFaderWriteHeader.blindActive .controlFaderWriteMode
+  > button[data-control-fader-write-mode-option="edit"].active,
+.controlFaderWriteHeader .controlFaderWriteMode > .controlBlindToggle.active {
+  border-color: #ff775e;
+  background: #f04b32;
+  box-shadow: inset 0 0 0 1px rgba(255, 224, 217, 0.28), 0 0 8px rgba(240, 75, 50, 0.48);
+  color: #ffffff;
+}
+
+.controlBlindActions {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
@@ -30358,7 +30371,7 @@ h3 {
   border-right: 1px solid #393530;
 }
 
-.controlFaderWriteHeader .controlBlindControls > button {
+.controlFaderWriteHeader .controlBlindActions > button {
   display: inline-flex;
   min-width: 24px;
   height: 24px;
@@ -30375,17 +30388,18 @@ h3 {
   font-size: 10px;
 }
 
-.controlFaderWriteHeader .controlBlindControls > button:last-child {
+.controlFaderWriteHeader .controlBlindActions > button:last-child {
   border-right: 0;
 }
 
-.controlFaderWriteHeader .controlBlindControls > .controlBlindToggle {
+.controlFaderWriteHeader .controlFaderWriteMode > .controlBlindToggle {
   width: 28px;
   min-width: 28px;
   padding-inline: 0;
 }
 
-.controlBlindControls svg {
+.controlFaderWriteMode .controlBlindToggle svg,
+.controlBlindActions svg {
   width: 14px;
   height: 14px;
   fill: none;
@@ -30395,17 +30409,15 @@ h3 {
   stroke-width: 1.6;
 }
 
-.controlBlindControls .controlBlindToggle.active {
-  background: #3a2414;
-  box-shadow: inset 0 -3px 0 #f28a2e;
-  color: #ffad5c;
+.controlFaderWriteMode .controlBlindToggle .controlBlindSlash {
+  stroke-width: 2.2;
 }
 
-.controlBlindControls .controlBlindCommit:not(:disabled) {
+.controlBlindActions .controlBlindCommit:not(:disabled) {
   color: #b9ebcc;
 }
 
-.controlBlindControls .controlBlindDiscard:not(:disabled) {
+.controlBlindActions .controlBlindDiscard:not(:disabled) {
   color: #f0a08e;
 }
 
@@ -30476,7 +30488,7 @@ h3 {
   }
 
   .controlFaderWriteHeader {
-    flex: 0 1 98px;
+    flex: 0 1 124px;
   }
 
   .controlFaderWriteHeader.edit {
@@ -31387,8 +31399,14 @@ h3 {
   white-space: nowrap;
 }
 
-.sceneMatrixKindBadge.fx {
+.sceneMatrixKindBadge.fx,
+.sceneMatrixKindBadge.super {
   color: var(--cue-identity-text);
+}
+
+.sceneMatrixKindBadge.super {
+  letter-spacing: 0.02em;
+  font-size: 9px;
 }
 
 .sceneMatrixKindBadge.superScene {
@@ -33568,7 +33586,8 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
   text-align: center;
 }
 
-.sceneSettingsKind.fx {
+.sceneSettingsKind.fx,
+.sceneSettingsKind.super {
   border-color: var(--cue-identity);
   color: var(--cue-identity-text);
 }
@@ -33580,6 +33599,11 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
   font-size: 11px;
 }
 
+.sceneSettingsEditSource.active {
+  border-color: var(--cue-identity);
+  color: var(--cue-identity-text);
+}
+
 .sceneSettingsClose {
   display: inline-grid;
   place-items: center;
@@ -33589,6 +33613,94 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
   min-height: 40px;
   padding: 0;
   font-size: 18px;
+}
+
+.sceneDetailsSurface > .cuePanelSceneSettings {
+  display: block;
+  min-height: 0;
+  overflow: visible;
+  border-top: 0;
+  padding-top: 0;
+}
+
+.sceneDetailsSurface .cuePanelSceneSettings > .cueList {
+  display: block;
+  overflow: visible;
+}
+
+.sceneDetailsSurface .cuePanelSceneSettings .cueItem {
+  min-height: 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.sceneDetailsSurface .cuePanelSceneSettings .cueItem::before {
+  display: none;
+}
+
+.sceneDetailsSurface .cuePanelSceneSettings .cueEditRow > label {
+  flex-basis: 116px;
+}
+
+.sceneDetailsSurface .cuePanelSceneSettings .cueActionRow {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.sceneDetailsSurface .cuePanelSceneSettings .cueActionRow > button {
+  max-width: none;
+}
+
+.sceneDetailsSurface .cueUpdateSourceTools {
+  min-width: 0;
+  border: 1px solid #303947;
+  border-radius: 4px;
+  background: #0d141c;
+  padding: 5px 7px;
+}
+
+.sceneDetailsSurface .cueUpdateSourceTools > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 30px;
+  cursor: pointer;
+  color: #c7d0dc;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.sceneDetailsSurface .cueUpdateSourceTools > summary small,
+.sceneDetailsSurface .cueUpdateSourceTools > p {
+  color: #8d9aaa;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.sceneDetailsSurface .cueUpdateSourceTools > p {
+  margin: 4px 0 8px;
+  line-height: 1.45;
+}
+
+.sceneDetailsSurface .cueUpdateSourceForm {
+  display: grid;
+  grid-template-columns: minmax(150px, 240px) minmax(0, 1fr);
+  align-items: end;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.sceneDetailsSurface .cueUpdateSourceForm label {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.sceneDetailsSurface .cueUpdateSourceTools > .cueEffectRecallEditor,
+.sceneDetailsSurface .cueUpdateSourceTools > .cueCapturePreview {
+  margin-top: 8px;
 }
 
 .sceneSettingsScroller {
@@ -33605,7 +33717,7 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
 
 .sceneSettingsSurfaceRail {
   display: grid;
-  grid-template-rows: repeat(3, 44px);
+  grid-template-rows: repeat(4, 44px);
   align-content: start;
   gap: 2px;
   min-width: 0;

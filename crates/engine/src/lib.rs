@@ -12340,7 +12340,7 @@ impl EngineRuntime {
                     ));
                 }
                 return Err(format!(
-                    "Cue {owner_cue_id} child event {} references Super Scene Cue {}; nesting depth greater than 1 is not supported",
+                    "Cue {owner_cue_id} child event {} references Timeline Cue {}; nesting depth greater than 1 is not supported",
                     event.id, event.cue_id
                 ));
             }

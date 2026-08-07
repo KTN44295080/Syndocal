@@ -40,7 +40,7 @@ const cueCaptureScopeLabel = (scope: CueCaptureScopeMode) => {
 };
 
 interface CueManagementPanelProps {
-  mode: "edit" | "live";
+  mode: "edit" | "live" | "scene-settings";
   onSetCueColor: (cueId: number, color: string | null) => void | Promise<void>;
   groupColors?: Record<string, string>;
   onSetCueLiveModifierDefaults: (
@@ -123,7 +123,7 @@ interface CueManagementPanelProps {
 
 export function CueManagementPanel(props: CueManagementPanelProps) {
   const [cuePage, setCuePage] = createSignal(0);
-  const [cueEditing, setCueEditing] = createSignal(false);
+  const [cueEditing, setCueEditing] = createSignal(props.mode === "scene-settings");
   const [timelineDragCueId, setTimelineDragCueId] = createSignal<number | null>(null);
   // Preserve cue-editor controls across snapshot polling. Solid's keyed <For>
   // otherwise sees each deserialized Cue object as a replacement and remounts
@@ -245,8 +245,11 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
     <div ref={(element) => { cuePanelElement = element; }} class={
       props.mode === "live"
         ? `cuePanel cuePanelLive ${cueEditing() ? "cuePanelEditing" : ""}`
-        : "cuePanel"
+        : props.mode === "scene-settings"
+          ? "cuePanel cuePanelSceneSettings cuePanelEditing"
+          : "cuePanel"
     }>
+      <Show when={props.mode !== "scene-settings"}>
       <div class="panelHeader">
         <h2>Cues</h2>
         <div class="cuePanelHeaderActions">
@@ -264,6 +267,8 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
           </Show>
         </div>
       </div>
+      </Show>
+      <Show when={props.mode !== "scene-settings"}>
       <div id="cue-list-editor" class="cueListManager cueEditOnly" aria-label="Cue List manager">
         <label>
           Cue List
@@ -279,6 +284,8 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
         <button onClick={() => void props.onRenameCueList()}>Rename</button>
         <button class="danger" disabled={props.selectedCueListId === 1} onClick={() => void props.onRemoveCueList()}>Remove List</button>
       </div>
+      </Show>
+      <Show when={props.mode !== "scene-settings"}>
       <div class="cueExecutorBank" aria-label="Cue List executors">
         <For each={props.cueLists}>
           {(cueList) => {
@@ -298,6 +305,8 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
           }}
         </For>
       </div>
+      </Show>
+      <Show when={props.mode !== "scene-settings"}>
       <div id="cue-store-form" class="cueForm">
         <label>
           Label
@@ -366,6 +375,8 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
           {(error) => <span id="cue-authored-beats-error" class="cueScopeHint invalid">{error()}</span>}
         </Show>
       </div>
+      </Show>
+      <Show when={props.mode !== "scene-settings"}>
       <CueEffectRecallEditor
         id="cue-effect-capture-editor"
         effects={props.cueCaptureEffects}
@@ -407,6 +418,55 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
             </div>
           </div>
         )}
+      </Show>
+      </Show>
+      <Show when={props.mode === "scene-settings"}>
+        <details class="cueUpdateSourceTools cueEditOnly" data-cue-update-source-tools>
+          <summary>
+            <span>Update Look source</span>
+            <small>{cueCaptureScopeLabel(props.cueCaptureScope)}</small>
+          </summary>
+          <p>
+            Choose which current outputs Update Look recaptures. This does not change the Cue's Effect Recall list.
+          </p>
+          <div class="cueUpdateSourceForm" data-cue-update-source-form>
+            <label>
+              Scope
+              <select
+                value={props.cueCaptureScope}
+                onInput={(event) => props.onCueCaptureScope(event.currentTarget.value as CueCaptureScopeMode)}
+              >
+                <option value="all">All Sources</option>
+                <option value="lighting">Lighting Only</option>
+                <option value="effects">Effects Only</option>
+                <option value="selectedFixture">Selected Fixture</option>
+                <option value="selectedGroup">Selected Group</option>
+                <option value="video">Video Only</option>
+              </select>
+            </label>
+            <Show when={props.cueCaptureScopeError}>
+              {(error) => <span class="cueScopeHint invalid">{error()}</span>}
+            </Show>
+          </div>
+          <CueEffectRecallEditor
+            id="cue-effect-capture-editor"
+            effects={props.cueCaptureEffects}
+            hasAnyEffects={props.effects.length > 0}
+            targets={props.cueEffectCaptureTargets}
+            expanded
+            currentMode="capture"
+            applyHint="Only Effects matching this Cue scope are listed. Mixed Lighting/Video Effects appear in both scopes."
+            onChange={props.onCueEffectCaptureTargets}
+          />
+          <CueCapturePreviewPanel
+            preview={props.cueCapturePreview}
+            invalid={Boolean(props.cueCaptureScopeError)}
+            stageViewBoxSize={props.stageViewBoxSize}
+            stageOrigin={props.stageOrigin}
+            selectedFixtureId={props.selectedFixtureId}
+            onSelectFixture={props.onSelectFixture}
+          />
+        </details>
       </Show>
       <Show when={cuePageCount() > 1}>
         <nav class="cuePager" aria-label="Cue Page">
@@ -515,6 +575,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                 <div class="cueMetaLine">
                   <div class="cueTitleRow">
                     <strong data-no-localize><b>{cue.cue_number || cue.id}</b> {cue.label}</strong>
+                    <Show when={props.mode !== "scene-settings"}>
                     <button
                       type="button"
                       class="cueTimelineDragHandle"
@@ -529,6 +590,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                     >
                       <span aria-hidden="true" data-no-localize>⠿</span>
                     </button>
+                    </Show>
                   </div>
                   <span>
                     {`${cue.targets.length} fixture(s) / ${(cue.steps ?? []).length} step(s) / ${cue.video_targets.length} video / ${cue.video_output_targets.length} video output(s) / ${(cue.effect_targets ?? []).length} effect(s) / ${displayNumber(cue.fade_ms, 0)}ms / ${cue.tracking ? "Track" : "Block"}${cue.mark ? " / MIB" : ""}`}
@@ -987,12 +1049,14 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                   </p>
                 </Show>
                 <div class="cueActionRow">
+                  <Show when={props.mode !== "scene-settings"}>
                   <button class="cueEditOnly" onClick={() => void props.onMoveCue(cue.id, -1)} disabled={cueIndex() === 0}>
                     Up
                   </button>
                   <button class="cueEditOnly" onClick={() => void props.onMoveCue(cue.id, 1)} disabled={cueIndex() === stableCues.length - 1}>
                     Down
                   </button>
+                  </Show>
                   <button
                     class="cueEditOnly cueSaveDetails"
                     title="Saves Cue details only. Effect Recall uses Save Recall."
@@ -1023,6 +1087,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                   >
                     Update Look
                   </button>
+                  <Show when={props.mode !== "scene-settings"}>
                   <button class="cueLiveGo" onClick={() => void props.onTriggerCue(cue.id)}>GO</button>
                   <button
                     class="cueEditOnly"
@@ -1031,8 +1096,10 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                   >
                     Block @ Playhead
                   </button>
+                  </Show>
                   <button class="cueEditOnly" onClick={() => void props.onRemoveCue(cue.id)}>Remove</button>
                 </div>
+                <Show when={props.mode !== "scene-settings"}>
                 <Show when={placements().length > 0}>
                   <div class="cueTimelinePlacements">
                     <For each={visiblePlacements()}>
@@ -1096,6 +1163,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                       </button>
                     </Show>
                   </div>
+                </Show>
                 </Show>
               </div>
             );

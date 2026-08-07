@@ -1,8 +1,9 @@
-import { For, Show, type ComponentProps } from "solid-js";
+import { For, Show, type ComponentProps, type JSX } from "solid-js";
 import { authoredCueLiveModifier } from "../cueLiveModifier";
 import type { CueMetadataDraft } from "../editorDrafts";
 import { cueIdentityCss } from "../identityColor";
 import { displayNumber } from "../numberDisplay";
+import { sceneCueKind } from "../sceneCueKind";
 import type {
   CueLiveDirection,
   CueLiveModifierSettings,
@@ -25,7 +26,7 @@ import {
 } from "./EffectFamilyChooser";
 import { ValueEffectEditorPanel } from "./ValueEffectEditorPanel";
 
-export type SceneSettingsSurface = "contents" | "fx" | "settings";
+export type SceneSettingsSurface = "contents" | "fx" | "settings" | "details";
 
 export interface SceneEffectEditorModel {
   effectType: EffectKind;
@@ -54,6 +55,7 @@ interface SceneSettingsPaneProps {
   running: boolean;
   liveStates?: CueLiveModifierState[];
   editor: SceneEffectEditorModel;
+  details: JSX.Element;
   onSurface: (surface: SceneSettingsSurface) => void;
   onDraft: (patch: Partial<CueMetadataDraft>) => void;
   onSaveMetadata: () => void | Promise<void>;
@@ -97,13 +99,24 @@ const SurfaceIcon = (props: { surface: SceneSettingsSurface }) => (
     <Show when={props.surface === "settings"}>
       <path d="M4 6h10v2H4zm14-2h2v6h-2zM10 11h10v2H10zm-6-2h2v6H4zm0 8h10v2H4zm14-2h2v6h-2z" />
     </Show>
+    <Show when={props.surface === "details"}>
+      <path d="M5 3.5h10l4 4v13H5zM15 3.5v4h4M8 11h8M8 14.5h8M8 18h5" />
+    </Show>
   </svg>
 );
 
 export function SceneSettingsPane(props: SceneSettingsPaneProps) {
   const selectedEffect = () =>
     props.effects.find((effect) => effect.id === props.selectedEffectId) ?? null;
-  const sceneKind = () => (props.effects.length > 0 ? "FX" : "STATIC");
+  const sceneKind = () => sceneCueKind(props.cue);
+  const sceneKindClass = () => sceneKind() === "TIMELINE"
+    ? "super"
+    : sceneKind().toLowerCase();
+  const sceneKindDescription = () => sceneKind() === "STATIC"
+    ? "Static scene"
+    : sceneKind() === "FX"
+      ? "FX scene"
+      : "Timeline scene";
   const setFlashMode = (flash: boolean) => {
     void props.onSetLiveModifierDefaults(props.cue.id, {
       ...authoredCueLiveModifier(props.cue),
@@ -141,16 +154,18 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
           <span class="uiMicroLabel">Scene settings</span>
           <strong data-no-localize title={props.cue.label}>{props.cue.label}</strong>
         </div>
-        <span class={`sceneSettingsKind uiMicroLabel ${sceneKind().toLowerCase()}`}>
+        <span class={`sceneSettingsKind uiMicroLabel ${sceneKindClass()}`}>
           {sceneKind()}
         </span>
         <button
           type="button"
           class="sceneSettingsEditSource"
+          classList={{ active: props.activeSurface === "details" }}
           data-scene-settings-edit-source
+          aria-pressed={props.activeSurface === "details"}
           onClick={props.onEditSource}
         >
-          Edit Source
+          Cue details
         </button>
         <button
           type="button"
@@ -169,7 +184,7 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
             <section class="sceneSettingsSection sceneContentsSurface" data-scene-contents>
               <header>
                 <strong class="uiMicroLabel">Scene properties</strong>
-                <span>{sceneKind() === "STATIC" ? "Static scene" : "FX scene"}</span>
+                <span>{sceneKindDescription()}</span>
               </header>
               <div class="sceneSettingsPropertyGrid">
                 <label class="sceneSettingsWideField">
@@ -516,6 +531,16 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
               </button>
             </section>
           </Show>
+
+          <Show when={props.activeSurface === "details"}>
+            <section class="sceneSettingsSection sceneDetailsSurface" data-scene-details>
+              <header>
+                <strong class="uiMicroLabel">Cue details</strong>
+                <span>Source, steps, timing and recall</span>
+              </header>
+              {props.details}
+            </section>
+          </Show>
         </div>
 
         <nav class="sceneSettingsSurfaceRail" aria-label="シーン設定の表示切替">
@@ -551,6 +576,17 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
             onClick={() => props.onSurface("settings")}
           >
             <SurfaceIcon surface="settings" />
+          </button>
+          <button
+            type="button"
+            classList={{ active: props.activeSurface === "details" }}
+            aria-label="キュー詳細面を表示"
+            title="キュー詳細"
+            aria-pressed={props.activeSurface === "details"}
+            data-scene-settings-surface-control="details"
+            onClick={() => props.onSurface("details")}
+          >
+            <SurfaceIcon surface="details" />
           </button>
         </nav>
       </div>

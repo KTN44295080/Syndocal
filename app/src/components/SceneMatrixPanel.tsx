@@ -3,6 +3,7 @@ import { createStore, reconcile } from "solid-js/store";
 import { cueIdentityCss, groupIdentityCss, groupIdentityHue } from "../identityColor";
 import { handleHorizontalWheel } from "../horizontalWheel";
 import { displayNumber } from "../numberDisplay";
+import { sceneCueKind } from "../sceneCueKind";
 import type {
   ActiveFadeSummary,
   CueLiveDirection,
@@ -272,7 +273,19 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
     setDragCueId(null);
     setDropTargetColumnId(null);
     setDropIndicator(null);
-    if (!moved) return;
+    if (!moved) {
+      if (canceled) return;
+      // WebView pointer sequences do not always synthesize a trailing click.
+      // Select on pointer-up so the strip remains a reliable click target,
+      // then swallow the compatibility click when the browser does emit one.
+      event.preventDefault();
+      suppressClickCueId = cueId;
+      props.onSelectCue(cueId);
+      window.setTimeout(() => {
+        if (suppressClickCueId === cueId) suppressClickCueId = null;
+      }, 0);
+      return;
+    }
     event.preventDefault();
     suppressClickCueId = cueId;
     window.setTimeout(() => {
@@ -343,7 +356,7 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
               data-scene-matrix-open-cue-editor
               onClick={props.onOpenCueEditor}
             >
-              Open Cue editor
+              Create scene
             </button>
           </div>
         }>
@@ -410,6 +423,7 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                       <For each={column.cues}>
                         {(cue) => {
                           const flashMode = () => authoredCueLiveModifier(cue).flash;
+                          const kind = () => sceneCueKind(cue);
                           const flashRelease = (event: PointerEvent) => {
                             if (!flashMode()) return;
                             event.stopPropagation();
@@ -525,11 +539,11 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                 >
                                   <span class="sceneMatrixTypeBadges">
                                     <span
-                                      class={`sceneMatrixKindBadge uiMicroLabel ${cue.effect_targets.length > 0 ? "fx" : "static"}`}
-                                      data-scene-matrix-kind={cue.effect_targets.length > 0 ? "FX" : "STATIC"}
+                                      class={`sceneMatrixKindBadge uiMicroLabel ${kind() === "TIMELINE" ? "super" : kind().toLowerCase()}`}
+                                      data-scene-matrix-kind={kind()}
                                       data-no-localize
                                     >
-                                      {cue.effect_targets.length > 0 ? "FX" : "STATIC"}
+                                      {kind()}
                                     </span>
                                   </span>
                                   <Show when={flashMode()}>
@@ -548,8 +562,9 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                   type="button"
                                   class="sceneMatrixKindBadge superScene sceneMatrixSuperSceneAction"
                                   data-scene-matrix-super-scene={cue.id}
-                                  title={`Open Super Scene ${cue.label}`}
-                                  aria-label={`Open Super Scene ${cue.label}`}
+                                  data-no-localize
+                                  title={`Open Timeline ${cue.label}`}
+                                  aria-label={`Open Timeline ${cue.label}`}
                                   onPointerDown={(event) => event.stopPropagation()}
                                   onPointerMove={(event) => event.stopPropagation()}
                                   onPointerUp={(event) => event.stopPropagation()}
@@ -560,7 +575,7 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                     void props.onOpenSuperScene(cue.id);
                                   }}
                                 >
-                                  SS
+                                  TL
                                 </button>
                               </Show>
                               <button
@@ -569,7 +584,7 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                 classList={{ dragging: dragCueId() === cue.id }}
                                 data-scene-matrix-edit-strip={cue.id}
                                 data-scene-matrix-drag-threshold={SCENE_MATRIX_STRIP_DRAG_THRESHOLD_PX}
-                                title={`Drag Cue ${cue.label} to reorder, move between banks, or place on Timeline`}
+                                title={`Click to select Cue ${cue.label}; drag to reorder, move between banks, or place on Timeline`}
                                 aria-label={`Edit scene settings for Cue ${cue.label}`}
                                 aria-pressed={props.selectedCueId === cue.id}
                                 onPointerDown={(event) => {

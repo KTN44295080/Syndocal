@@ -2993,7 +2993,7 @@ fn parse_super_scenes(
                                     "Scene block: {}",
                                     block.attribute("NAME").unwrap_or("Untitled")
                                 ),
-                                "Nested Super Scene reference was skipped (depth-1 model)",
+                                "Nested Timeline reference was skipped (depth-1 model)",
                             );
                             continue;
                         }

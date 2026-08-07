@@ -47,19 +47,6 @@ export function ControlFaderWriteHeader(props: ControlFaderWriteHeaderProps) {
         </button>
         <button
           type="button"
-          classList={{ active: props.writeMode === "live" }}
-          aria-label="Use LIVE fader mode"
-          aria-pressed={props.writeMode === "live"}
-          disabled={props.blindActive}
-          data-control-fader-write-mode-option="live"
-          onClick={() => props.onWriteMode("live")}
-        >
-          <span data-no-localize>LIVE</span>
-        </button>
-      </div>
-      <div class="controlBlindControls" role="group" aria-label="Blind edit controls">
-        <button
-          type="button"
           class="controlBlindToggle"
           classList={{ active: props.blindActive }}
           data-control-blind-toggle
@@ -72,9 +59,25 @@ export function ControlFaderWriteHeader(props: ControlFaderWriteHeaderProps) {
           <svg viewBox="0 0 18 18" aria-hidden="true">
             <path d="M1.5 9s2.8-4.5 7.5-4.5S16.5 9 16.5 9 13.7 13.5 9 13.5 1.5 9 1.5 9Z" />
             <circle cx="9" cy="9" r="2.25" />
+            <Show when={props.blindActive}>
+              <path class="controlBlindSlash" d="M2.25 15.75 15.75 2.25" />
+            </Show>
           </svg>
         </button>
-        <Show when={props.blindActive}>
+        <button
+          type="button"
+          classList={{ active: props.writeMode === "live" }}
+          aria-label="Use LIVE fader mode"
+          aria-pressed={props.writeMode === "live"}
+          disabled={props.blindActive}
+          data-control-fader-write-mode-option="live"
+          onClick={() => props.onWriteMode("live")}
+        >
+          <span data-no-localize>LIVE</span>
+        </button>
+      </div>
+      <Show when={props.blindActive}>
+        <div class="controlBlindActions" role="group" aria-label="Blind edit actions">
           <button
             type="button"
             class="controlBlindCommit"
@@ -97,8 +100,8 @@ export function ControlFaderWriteHeader(props: ControlFaderWriteHeaderProps) {
           >
             <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
           </button>
-        </Show>
-      </div>
+        </div>
+      </Show>
       <div
         class="controlFaderEditState"
         classList={{ unselected: !props.editingSceneLabel }}

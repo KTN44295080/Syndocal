@@ -35,7 +35,7 @@ const chooserFamilyCode = (family: EffectChooserFamily) => {
     case "CURVE FX": return "CV";
     case "MAPPINGS": return "MP";
     case "COLOUR MAPPINGS": return "CM";
-    case "SUPER SCENE": return "SS";
+    case "SUPER SCENE": return "TL";
   }
 };
 
@@ -70,7 +70,7 @@ export function EffectFamilyChooser(props: EffectFamilyChooserProps) {
             onClick={() => void props.onSelectFamily(family)}
           >
             <span class="effectFamilyGlyph" aria-hidden="true">{chooserFamilyCode(family)}</span>
-            <strong>{family}</strong>
+            <strong>{family === "SUPER SCENE" ? "TIMELINE" : family}</strong>
             {props.descriptions?.[family]
               ? <small>{props.descriptions[family]}</small>
               : null}
