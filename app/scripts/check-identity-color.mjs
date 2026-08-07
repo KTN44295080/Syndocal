@@ -119,9 +119,9 @@ for (const role of ["fill", "band", "text"]) {
   );
 }
 
-// 6. Scene Matrix identity is execution state, not selection state.
-// Idle cards keep a neutral strip/border while active cards opt into the cue
-// identity. Selection remains a thin app-wide neutral workspace outline.
+// 6. Scene Matrix keeps idle cards neutral, but the right-edge settings strip
+// uses the cue identity while selected. Execution remains the stronger state
+// because it also colors the card border and exposes the LIVE treatment.
 assert.match(
   stylesSource,
   /\.sceneMatrixEditStripBand\s*\{[^}]*background:\s*var\(--ui-border\);[^}]*\}/s,
@@ -144,8 +144,13 @@ assert.match(
 );
 assert.match(
   stylesSource,
-  /\.sceneMatrixCard\.selected\s*\{[^}]*outline:\s*1px solid var\(--ui-selection-line\);[^}]*\}/s,
-  "Scene Matrix selection must use the thin neutral workspace-selection token",
+  /\.sceneMatrixCard\.selected\s+\.sceneMatrixEditStripBand\s*\{[^}]*border-left:\s*0;[^}]*background:\s*var\(--cue-identity\);[^}]*\}/s,
+  "selected Scene Matrix settings strips must use the cue identity color without a white divider",
+);
+assert.match(
+  stylesSource,
+  /\.sceneMatrixCard\.selected\s*\{[^}]*outline:\s*none;[^}]*\}/s,
+  "Scene Matrix selection must not fall back to a white card outline",
 );
 assert.match(
   stylesSource,

@@ -32675,13 +32675,14 @@ h3 {
 }
 
 .sceneMatrixCard.selected .sceneMatrixEditStrip {
-  background: #2b3135;
-  box-shadow: inset 1px 0 0 var(--ui-selection-line);
+  background: var(--cue-identity);
+  box-shadow: none;
 }
 
 .sceneMatrixCard.selected .sceneMatrixEditStripBand {
   width: 100%;
-  border-left: 1px solid var(--ui-selection-line);
+  border-left: 0;
+  background: var(--cue-identity);
 }
 
 .sceneMatrixEmptyAction {
@@ -33961,8 +33962,7 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
 }
 
 .sceneMatrixCard.selected {
-  outline: 1px solid var(--ui-selection-line);
-  outline-offset: -2px;
+  outline: none;
   box-shadow: none;
 }
 

@@ -19011,24 +19011,20 @@ async function runSceneSettingsViewport(client, viewport) {
       && pointerOnlyStripGesture.pointerId === 77
       && pointerOnlySelected.selectedSceneId === "302"
       && JSON.stringify(pointerOnlySelected.activeCardIds) === JSON.stringify(activeBeforePointerOnlySelection)],
-    ["editSelectionUsesSubtleNeutralOutlineWithoutOverridingExecution", () =>
+    ["editSelectionColorsRightSettingsStripWithoutWhiteOutline", () =>
       [selectedStatic, editSelected, releasedStatic].every((state) =>
-        state.selectedOutlineWidth === 1
-        && state.selectedOutlineStyle === "solid"
-        && state.selectedOutlineColor === state.selectedSelectionColor
+        (state.selectedOutlineWidth === 0 || state.selectedOutlineStyle === "none")
         && state.selectedStripPressed === "true"
         && Math.abs(state.selectedStripHitWidth - 16) <= 0.1
         && Math.abs(state.selectedStripVisualWidth - 16) <= 0.1
-        && state.selectedStripBorderLeftWidth === 1)
+        && state.selectedStripBorderLeftWidth === 0
+        && state.selectedStripColor === state.selectedIdentityColor)
       && [selectedStatic, editSelected].every((state) =>
         state.selectedActive
-        && state.selectedStripColor === state.selectedIdentityColor
         && state.selectedCardBorderColors.every(
           (color) => color === state.selectedIdentityColor,
         ))
       && !releasedStatic.selectedActive
-      && releasedStatic.selectedStripColor === releasedStatic.selectedNeutralColor
-      && releasedStatic.selectedStripColor !== releasedStatic.selectedIdentityColor
       && releasedStatic.selectedCardBorderColors.every(
         (color) => color === releasedStatic.selectedNeutralColor,
       )],
