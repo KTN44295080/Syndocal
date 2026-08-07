@@ -4813,6 +4813,82 @@ mod tests {
     }
 
     #[test]
+    fn dvc_local_golden_shin_seek_establishes_front_and_pinspot_fades() {
+        let path = Path::new(r"C:\Users\kouty\Desktop\Shinkan-Left\Shinkan2026.dvc");
+        if !path.is_file() {
+            eprintln!(
+                "Skipping local Daslight golden: {} is unavailable",
+                path.display()
+            );
+            return;
+        }
+        let outcome = import_path(path).unwrap();
+        let shin = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .find(|cue| cue.label == "Shin" && cue.child_timeline.is_some())
+            .expect("golden project should contain the Shin Timeline");
+        let cue_id = shin.id;
+        let mut snapshot_to_load = outcome.project.snapshot;
+        snapshot_to_load.output.enabled = false;
+        for output in &mut snapshot_to_load.dmx_outputs {
+            output.enabled = false;
+        }
+        let engine = engine::EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine.load_project_snapshot(snapshot_to_load).unwrap();
+        engine
+            .send(engine::EngineCommand::TriggerCue(cue_id))
+            .unwrap();
+        engine
+            .send(engine::EngineCommand::SetDirectChildTimelinePlaying {
+                cue_id,
+                playing: false,
+            })
+            .unwrap();
+        engine
+            .send(engine::EngineCommand::SeekDirectChildTimeline {
+                cue_id,
+                position_ms: 9_950,
+            })
+            .unwrap();
+
+        let mut seeked = None;
+        for _ in 0..100 {
+            let snapshot = engine.snapshot();
+            if snapshot
+                .direct_child_timeline_transports
+                .iter()
+                .any(|transport| {
+                    transport.cue_id == cue_id
+                        && transport.position_ms == 9_950
+                        && !transport.playing
+                })
+            {
+                seeked = Some(snapshot.dmx_preview);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let frame = seeked.expect("Shin seek should publish a stable paused frame");
+        assert_eq!(frame[108], 255, "Encore FR50Z channel 109");
+        for channel in [82_usize, 87, 92, 97] {
+            assert_eq!(frame[channel - 1], 255, "PinSpot red channel {channel}");
+            assert_eq!(frame[channel], 136, "PinSpot green channel {}", channel + 1);
+            assert_eq!(
+                frame[channel + 1],
+                26,
+                "PinSpot blue channel {}",
+                channel + 2
+            );
+        }
+    }
+
+    #[test]
     fn dvc_local_golden_project_triggers_cue_and_renders_dmx() {
         let path = Path::new(r"C:\Users\kouty\Documents\Daslight 5\Projects\Shinkan2026.dvc");
         if !path.is_file() {

@@ -3663,6 +3663,7 @@ struct PendingCueTrigger {
     source: PendingCueTriggerSource,
     repeat_count: u64,
     fade_override_ms: Option<u64>,
+    fade_started_at: Option<Instant>,
     timeline_effect_activation: Option<PendingTimelineEffectActivation>,
     dispatch: Option<CueDispatchEntry>,
     child_transport_id: Option<RuntimeChildTransportId>,
@@ -16225,6 +16226,7 @@ impl EngineRuntime {
             source: PendingCueTriggerSource::Timeline,
             repeat_count: 1,
             fade_override_ms: Some(event.fade_in_ms),
+            fade_started_at: Some(due_at),
             timeline_effect_activation,
             dispatch: Some(dispatch),
             child_transport_id: None,
@@ -16259,6 +16261,7 @@ impl EngineRuntime {
                 source,
                 repeat_count: 1,
                 fade_override_ms: None,
+                fade_started_at: None,
                 timeline_effect_activation: None,
                 dispatch: None,
                 child_transport_id: None,
@@ -16301,6 +16304,7 @@ impl EngineRuntime {
                 if let Some(repeat_count) = previous.repeat_count.checked_add(pending.repeat_count)
                 {
                     previous.repeat_count = repeat_count;
+                    previous.fade_started_at = pending.fade_started_at;
                     return;
                 }
             }
@@ -16345,11 +16349,13 @@ impl EngineRuntime {
                 pending.source,
                 pending.repeat_count,
                 pending.fade_override_ms,
+                pending.fade_started_at,
                 pending.timeline_effect_activation,
                 pending.child_transport_id,
                 pending.direct_child_anchor_at,
             );
         }
+        self.apply_active_fade(now);
     }
 
     fn start_cue(&mut self, cue_id: CueId, now: Instant, source: PendingCueTriggerSource) {
@@ -16367,6 +16373,7 @@ impl EngineRuntime {
             None,
             None,
             None,
+            None,
             (source == PendingCueTriggerSource::Manual).then_some(now),
         );
     }
@@ -16379,6 +16386,7 @@ impl EngineRuntime {
         source: PendingCueTriggerSource,
         repeat_count: u64,
         fade_override_ms: Option<u64>,
+        fade_started_at: Option<Instant>,
         timeline_effect_activation: Option<PendingTimelineEffectActivation>,
         child_transport_id: Option<RuntimeChildTransportId>,
         direct_child_anchor_at: Option<Instant>,
@@ -16390,6 +16398,9 @@ impl EngineRuntime {
             self.last_error = Some(format!("Cue index {cue_index} was not found"));
             return;
         };
+        if source == PendingCueTriggerSource::Timeline {
+            self.apply_active_fade(now);
+        }
         let cue_id = cue.id;
         let direct_child_parent_cue_id =
             child_transport_id.and_then(|transport_id| match transport_id {
@@ -16464,6 +16475,7 @@ impl EngineRuntime {
                 source,
                 repeat_count,
                 fade_override_ms: None,
+                fade_started_at: None,
                 timeline_effect_activation: None,
                 dispatch: None,
                 child_transport_id: None,
@@ -16718,7 +16730,7 @@ impl EngineRuntime {
                     timeline_event_id: None,
                     apply_mib_on_complete: true,
                     completion_cue_ids: vec![cue_id],
-                    started_at: now,
+                    started_at: fade_started_at.unwrap_or(now),
                     duration,
                     video_duration,
                     paused_at: None,
@@ -17337,14 +17349,13 @@ impl EngineRuntime {
             .retain(|fade| !completed.contains(&fade.output_id));
     }
 
-    fn install_active_fade(&mut self, fade: RuntimeFade, merge_parallel_timeline_fade: bool) {
+    fn install_active_fade(&mut self, mut fade: RuntimeFade, merge_parallel_timeline_fade: bool) {
         let can_merge = merge_parallel_timeline_fade
             && fade.source == PendingCueTriggerSource::Timeline
             && fade.timeline_event_id.is_none()
             && self.active_fade.as_ref().is_some_and(|active| {
                 active.source == PendingCueTriggerSource::Timeline
                     && active.timeline_event_id.is_none()
-                    && active.started_at == fade.started_at
                     && active.paused_at == fade.paused_at
                     && active.paused_duration == fade.paused_duration
             });
@@ -17357,6 +17368,31 @@ impl EngineRuntime {
             .active_fade
             .as_mut()
             .expect("merge eligibility requires an active fade");
+        if fade.started_at < active.started_at {
+            let offset = active.started_at.duration_since(fade.started_at);
+            for (delay, _) in active.attribute_timings.values_mut() {
+                *delay = delay.saturating_add(offset);
+            }
+            for (delay, _) in active.video_layer_timings.values_mut() {
+                *delay = delay.saturating_add(offset);
+            }
+            for (delay, _) in active.video_output_timings.values_mut() {
+                *delay = delay.saturating_add(offset);
+            }
+            active.started_at = fade.started_at;
+            active.duration = active.duration.saturating_add(offset);
+            active.video_duration = active.video_duration.saturating_add(offset);
+        }
+        let fade_offset = fade.started_at.duration_since(active.started_at);
+        for (delay, _) in fade.attribute_timings.values_mut() {
+            *delay = delay.saturating_add(fade_offset);
+        }
+        for (delay, _) in fade.video_layer_timings.values_mut() {
+            *delay = delay.saturating_add(fade_offset);
+        }
+        for (delay, _) in fade.video_output_timings.values_mut() {
+            *delay = delay.saturating_add(fade_offset);
+        }
         active.cue_id = fade.cue_id;
         active.apply_mib_on_complete |= fade.apply_mib_on_complete;
         for cue_id in fade.completion_cue_ids {
@@ -17364,8 +17400,12 @@ impl EngineRuntime {
                 active.completion_cue_ids.push(cue_id);
             }
         }
-        active.duration = active.duration.max(fade.duration);
-        active.video_duration = active.video_duration.max(fade.video_duration);
+        active.duration = active
+            .duration
+            .max(fade_offset.saturating_add(fade.duration));
+        active.video_duration = active
+            .video_duration
+            .max(fade_offset.saturating_add(fade.video_duration));
         active.lighting_owners.extend(fade.lighting_owners);
         active.start_values.extend(fade.start_values);
         active.target_values.extend(fade.target_values);
@@ -17897,14 +17937,19 @@ impl EngineRuntime {
                 }
             }
             let event_rate = event.rate.unwrap_or(1.0);
-            let due_at = now + Duration::from_millis(dispatch.pre_wait_ms);
             let elapsed_child_ms = current_position_ms.saturating_sub(occurrence.time_ms);
+            let elapsed_parent_ms =
+                scaled_timeline_source_position_ms(i128::from(elapsed_child_ms), parent_rate)
+                    .clamp(0, i128::from(u64::MAX)) as u64;
+            let (due_at, fade_started_at) =
+                timeline_pending_trigger_timing(now, dispatch.pre_wait_ms, elapsed_parent_ms);
+            let immediate_trigger = due_at <= now;
             let timeline_effect_activation = ((event.duration_ms > 0
                 && (!range.is_empty() || !step_range.is_empty()))
                 || direct_parent.is_some())
             .then(|| {
                 let activation_child_position_ms = timeline_source_position_ms(
-                    if dispatch.pre_wait_ms == 0 {
+                    if immediate_trigger {
                         elapsed_child_ms
                     } else {
                         0
@@ -17913,11 +17958,7 @@ impl EngineRuntime {
                 );
                 let activation_parent_position_ms =
                     scaled_timeline_source_position_ms(activation_child_position_ms, parent_rate);
-                let activation_at = if dispatch.pre_wait_ms == 0 {
-                    now
-                } else {
-                    due_at
-                };
+                let activation_at = if immediate_trigger { now } else { due_at };
                 PendingTimelineEffectActivation {
                     event_id: occurrence.event_id,
                     cue_id: occurrence.cue_id,
@@ -17942,7 +17983,7 @@ impl EngineRuntime {
                     },
                 }
             });
-            has_immediate_trigger |= dispatch.pre_wait_ms == 0;
+            has_immediate_trigger |= immediate_trigger;
             let fade_override_ms = (occurrence.iteration == 0
                 || self
                     .cues
@@ -17955,6 +17996,7 @@ impl EngineRuntime {
                 source: PendingCueTriggerSource::Timeline,
                 repeat_count: 1,
                 fade_override_ms,
+                fade_started_at: Some(fade_started_at),
                 timeline_effect_activation,
                 dispatch: Some(dispatch),
                 child_transport_id: Some(transport_id),
@@ -18306,8 +18348,14 @@ impl EngineRuntime {
                 self.last_error = Some(format!("Cue {cue_id} was not found"));
                 continue;
             };
-            let due_at = now + Duration::from_millis(dispatch.pre_wait_ms);
-            has_immediate_trigger |= dispatch.pre_wait_ms == 0;
+            let elapsed_since_occurrence_ms = current_position.saturating_sub(occurrence.time_ms);
+            let (due_at, fade_started_at) = timeline_pending_trigger_timing(
+                now,
+                dispatch.pre_wait_ms,
+                elapsed_since_occurrence_ms,
+            );
+            let immediate_trigger = due_at <= now;
+            has_immediate_trigger |= immediate_trigger;
             let timeline_effect_activation = self
                 .timeline_events
                 .get(occurrence.event_index)
@@ -18315,20 +18363,13 @@ impl EngineRuntime {
                     event.duration_ms > 0 && (!range.is_empty() || !step_range.is_empty())
                 })
                 .map(|event| {
-                    let elapsed_ms = current_position.saturating_sub(occurrence.time_ms);
+                    let elapsed_ms =
+                        elapsed_since_occurrence_ms.saturating_sub(dispatch.pre_wait_ms);
                     let activation_source_position_ms = timeline_source_position_ms(
-                        if dispatch.pre_wait_ms == 0 {
-                            elapsed_ms
-                        } else {
-                            0
-                        },
+                        if immediate_trigger { elapsed_ms } else { 0 },
                         event.source_offset_ms,
                     );
-                    let activation_at = if dispatch.pre_wait_ms == 0 {
-                        now
-                    } else {
-                        due_at
-                    };
+                    let activation_at = if immediate_trigger { now } else { due_at };
                     let created_at = instant_at_timeline_source_position(
                         activation_at,
                         activation_source_position_ms,
@@ -18365,6 +18406,7 @@ impl EngineRuntime {
                         .then_some(event.fade_in_ms)
                     },
                 ),
+                fade_started_at: Some(fade_started_at),
                 timeline_effect_activation,
                 dispatch: Some(dispatch),
                 child_transport_id: None,
@@ -20891,6 +20933,23 @@ fn instant_at_timeline_source_position(anchor: Instant, source_position_ms: i128
             .checked_add(Duration::from_millis(magnitude_ms))
             .unwrap_or(anchor)
     }
+}
+
+fn timeline_pending_trigger_timing(
+    now: Instant,
+    pre_wait_ms: u64,
+    elapsed_since_occurrence_ms: u64,
+) -> (Instant, Instant) {
+    if pre_wait_ms > 0 {
+        let due_at = now
+            .checked_add(Duration::from_millis(pre_wait_ms))
+            .unwrap_or(now);
+        return (due_at, due_at);
+    }
+    (
+        now,
+        instant_at_timeline_source_position(now, i128::from(elapsed_since_occurrence_ms)),
+    )
 }
 
 fn scaled_timeline_source_position_ms(source_position_ms: i128, divisor: f32) -> i128 {
@@ -53448,6 +53507,7 @@ mod tests {
             source: PendingCueTriggerSource::Timeline,
             repeat_count: 1,
             fade_override_ms: None,
+            fade_started_at: None,
             timeline_effect_activation: None,
             dispatch: None,
             child_transport_id: None,
@@ -54214,6 +54274,7 @@ mod tests {
                 source: PendingCueTriggerSource::Timeline,
                 repeat_count,
                 fade_override_ms: None,
+                fade_started_at: None,
                 timeline_effect_activation: None,
                 dispatch: None,
                 child_transport_id: None,
@@ -55044,6 +55105,67 @@ mod tests {
             frame[0]
         );
         assert_eq!(frame[15], 255, "parallel zero-duration target must cut in");
+    }
+
+    #[test]
+    fn overlapping_timeline_fades_keep_independent_start_times() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.apply_command(EngineCommand::PatchFixture {
+            fixture_id: 2,
+            request: sample_patch_request("Delayed Fade Fixture", 16),
+            profile: sample_profile(),
+        });
+        assert_eq!(runtime.last_error, None);
+        for (cue_id, fixture_id) in [(1, 1), (2, 2)] {
+            runtime.apply_command(EngineCommand::CreateCue {
+                authored_beats: None,
+                cue_id,
+                label: format!("Overlapping fade {cue_id}"),
+                fade_ms: 0,
+                targets: vec![CueFixtureTarget {
+                    fixture_id,
+                    values: vec![AttributeValueSummary {
+                        attribute: "Dimmer".to_string(),
+                        value: u16::MAX,
+                    }],
+                }],
+                video_targets: Vec::new(),
+                video_output_targets: Vec::new(),
+                node_graph_targets: Vec::new(),
+                effect_targets: Vec::new(),
+            });
+        }
+        let mut first = test_scene_block(10, 1, 0, 1_000, 1, 1.0);
+        first.fade_in_ms = 400;
+        let mut second = test_scene_block(11, 2, 100, 1_000, 1, 1.0);
+        second.fade_in_ms = 400;
+        runtime.timeline_events = vec![first, second];
+        runtime.sort_timeline_events();
+        let started_at = Instant::now();
+        runtime.rebuild_effect_activations(started_at);
+
+        runtime.trigger_timeline_events_between(0, 0, true, true, started_at);
+        runtime.trigger_timeline_events_between(
+            0,
+            100,
+            false,
+            true,
+            started_at + Duration::from_millis(100),
+        );
+        runtime.apply_active_fade(started_at + Duration::from_millis(200));
+
+        let frame =
+            runtime.render_dmx_frame_for_universe(0, started_at + Duration::from_millis(200));
+        assert!(
+            (126..=129).contains(&frame[0]),
+            "first fade DMX was {}",
+            frame[0]
+        );
+        assert!(
+            (62..=65).contains(&frame[15]),
+            "second fade DMX was {}",
+            frame[15]
+        );
     }
 
     #[test]
@@ -56663,6 +56785,7 @@ mod tests {
             source: PendingCueTriggerSource::Timeline,
             repeat_count: 2,
             fade_override_ms: None,
+            fade_started_at: None,
             timeline_effect_activation: None,
             dispatch: None,
             child_transport_id: None,
@@ -58498,6 +58621,31 @@ mod tests {
         runtime.set_direct_child_timeline_playing(1, true, started_at + Duration::from_millis(700));
         runtime.advance_child_transports(started_at + Duration::from_millis(750));
         assert_eq!(runtime.direct_child_transports[0].position_ms, 250);
+    }
+
+    #[test]
+    fn direct_child_seek_establishes_elapsed_scene_block_fade() {
+        let mut event = direct_child_static_event(201, 2, 100, 1_000);
+        event.fade_in_ms = 400;
+        let mut runtime = direct_child_static_test_runtime(vec![event]);
+        let now = Instant::now();
+        runtime.start_cue(1, now, PendingCueTriggerSource::Manual);
+
+        runtime.seek_direct_child_timeline(1, 300, now);
+
+        assert_eq!(runtime.direct_child_transports[0].position_ms, 300);
+        let halfway = runtime.render_dmx_frame_for_universe(0, now)[0];
+        assert!(
+            (126..=129).contains(&halfway),
+            "seeked mid-fade DMX was {halfway}"
+        );
+
+        runtime.seek_direct_child_timeline(1, 600, now + Duration::from_millis(1));
+        assert_eq!(
+            runtime.render_dmx_frame_for_universe(0, now + Duration::from_millis(1))[0],
+            255,
+            "seek past fade completion must establish the target value"
+        );
     }
 
     #[test]
