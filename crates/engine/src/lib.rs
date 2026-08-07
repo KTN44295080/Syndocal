@@ -18309,7 +18309,10 @@ impl EngineRuntime {
                         .map(|parent_cue_id| (parent_cue_id, direct_generation)),
                     range,
                     step_range,
-                    rate: valid_effect_rate(parent_rate * event_rate),
+                    // Daslight Scene Block SPEED advances the child transport, but it does
+                    // not multiply an owned FX oscillator. The child cue's authored rate is
+                    // therefore intentionally independent from the parent block rate.
+                    rate: valid_effect_rate(event_rate),
                     step_rate: valid_effect_rate(event_rate),
                     created_at: instant_at_timeline_source_position(
                         activation_at,
@@ -58991,6 +58994,103 @@ mod tests {
             "child cue-step measurement: parent_elapsed_ms=125 parent_rate=2.0 child_position_ms={} dimmer={value}",
             runtime.child_transports[0].position_ms
         );
+    }
+
+    #[test]
+    fn child_timeline_owned_fx_rate_is_independent_from_parent_block_rate() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![owned_lfo_target(
+                201,
+                test_lfo_request(
+                    "Child oscillator",
+                    LfoShape::Saw,
+                    1_000,
+                    0.0,
+                    EffectBlendMode::Override,
+                    0,
+                    u16::MAX,
+                ),
+            )],
+        );
+        runtime.apply_command(EngineCommand::CreateCue {
+            cue_id: 2,
+            label: "Super scene".to_string(),
+            fade_ms: 0,
+            authored_beats: None,
+            targets: Vec::new(),
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: Vec::new(),
+        });
+        runtime
+            .set_cue_child_timeline_state(
+                2,
+                Some(ChildTimelineSummary {
+                    events: vec![TimelineCueEventSummary {
+                        id: 201,
+                        cue_id: 1,
+                        time_ms: 0,
+                        track: TimelineTrackKind::Lighting,
+                        duration_ms: 1_000,
+                        ..TimelineCueEventSummary::default()
+                    }],
+                    duration_ms: 1_000,
+                    ..ChildTimelineSummary::default()
+                }),
+            )
+            .unwrap();
+        let mut parent = timeline_test_event(200, 2, 1_000, 0, 1_000, 1);
+        parent.rate = Some(2.0);
+        runtime.timeline_events = vec![parent];
+        let started_at = Instant::now();
+        runtime.rebuild_effect_activations(started_at);
+        runtime.timeline_playing = true;
+        runtime.timeline_position_ms = 999;
+        runtime.last_tick_interval = Duration::from_millis(1);
+        runtime.advance_timeline(started_at);
+
+        let activation = runtime
+            .effect_activations
+            .iter()
+            .find(|activation| {
+                matches!(
+                    activation.key,
+                    Some(RuntimeEffectActivationKey::ChildTimeline {
+                        parent_event_id: 200,
+                        event_id: 201,
+                        cue_id: 1,
+                        ..
+                    })
+                )
+            })
+            .expect("child Timeline should activate its owned oscillator");
+        assert_eq!(activation.rate, 1.0);
+        assert_eq!(activation.effect.created_at, started_at);
+
+        runtime.last_tick_interval = Duration::from_millis(125);
+        runtime.advance_timeline(started_at + Duration::from_millis(125));
+        assert_eq!(runtime.child_transports[0].position_ms, 250);
+        let activation = runtime
+            .effect_activations
+            .iter()
+            .find(|activation| {
+                matches!(
+                    activation.key,
+                    Some(RuntimeEffectActivationKey::ChildTimeline {
+                        parent_event_id: 200,
+                        event_id: 201,
+                        cue_id: 1,
+                        ..
+                    })
+                )
+            })
+            .unwrap();
+        assert_eq!(activation.rate, 1.0);
+        assert_eq!(activation.effect.created_at, started_at);
     }
 
     fn direct_child_static_test_runtime(events: Vec<TimelineCueEventSummary>) -> EngineRuntime {
