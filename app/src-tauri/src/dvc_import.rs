@@ -5156,6 +5156,60 @@ mod tests {
     }
 
     #[test]
+    fn dvc_local_golden_knight_rider_keeps_palette_floor_opaque() {
+        let path = Path::new(r"C:\Users\kouty\Desktop\Shinkan-Left\Shinkan2026.dvc");
+        if !path.is_file() {
+            eprintln!(
+                "Skipping local Daslight golden: {} is unavailable",
+                path.display()
+            );
+            return;
+        }
+        let outcome = import_path(path).unwrap();
+        let cue_id = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .find(|cue| cue.label == "Par-OrangeStrobe")
+            .expect("full Shinkan project should contain Par-OrangeStrobe")
+            .id;
+        let mut snapshot_to_load = outcome.project.snapshot.clone();
+        snapshot_to_load.output.enabled = false;
+        for output in &mut snapshot_to_load.dmx_outputs {
+            output.enabled = false;
+        }
+        let engine = engine::EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine.load_project_snapshot(snapshot_to_load).unwrap();
+        engine
+            .send(engine::EngineCommand::TriggerCue(cue_id))
+            .unwrap();
+
+        let red_offsets = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45];
+        let green_offsets = [1, 6, 11, 16, 21, 26, 31, 36, 41, 46];
+        let dimmer_offsets = [4, 9, 14, 19, 24, 29, 34, 39, 44, 52];
+        let mut sampled = None;
+        for _ in 0..40 {
+            let snapshot = engine.snapshot();
+            if snapshot.active_cue_id == Some(cue_id)
+                && red_offsets
+                    .iter()
+                    .all(|offset| snapshot.dmx_preview[*offset] == 255)
+            {
+                sampled = Some(snapshot.dmx_preview);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        let sampled = sampled.expect("Knight Rider should retain the first palette colour");
+        assert!(green_offsets.iter().all(|offset| sampled[*offset] >= 108));
+        assert!(dimmer_offsets.iter().all(|offset| sampled[*offset] == 255));
+    }
+
+    #[test]
     fn dvc_local_golden_static_colors_match_daslight_live_truncation() {
         let path = Path::new(r"C:\Users\kouty\Desktop\Shinkan-Left\Shinkan2026.dvc");
         if !path.is_file() {

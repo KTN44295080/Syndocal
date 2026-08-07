@@ -24202,7 +24202,7 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
     match recipe {
         ColorEffectSpatialRecipe::KnightRider { size, gradient, .. } => {
             if !(1..=100).contains(size) {
-                return Err("Knight Rider size must be within 1..100 percent".to_string());
+                return Err("Knight Rider size must be within 1..100 beam cells".to_string());
             }
             percent("gradient", *gradient)
         }
@@ -27345,10 +27345,10 @@ fn evaluate_color_spatial_sample_at_rate(
             go_outside,
             gradient,
         } => {
-            // Daslight expresses Size as a percentage of the selected beam strip.
-            // The stored BB-Amber-Chaser capture lights 15-16 of 48 beams at
-            // Size=32, which rules out interpreting this value as a beam count.
-            let width = (f32::from((*size).max(1)) / 100.0).clamp(1.0 / strip_count as f32, 1.0);
+            // Daslight's mapping Size is an absolute cell width. Direct DMX
+            // captures of the same 10-beam scene at Size=1 and Size=3 show a
+            // wider raster at 3; scaling it by the selection length does not.
+            let width = f32::from((*size).max(1));
             let half_width = width * 0.5;
             let phase = time_phase.rem_euclid(1.0) as f32;
             let travel = if *one_way {
@@ -27358,26 +27358,25 @@ fn evaluate_color_spatial_sample_at_rate(
             } else {
                 (1.0 - phase) * 2.0
             };
+            let last_index = strip_count.saturating_sub(1) as f32;
             let center = if *go_outside {
-                -half_width + travel * (1.0 + width)
+                -half_width + travel * (last_index + width)
             } else {
-                travel
+                travel * last_index
             };
-            let mut relative = strip_position - center;
-            if !*go_outside && width < 1.0 && strip_count > 1 {
-                relative -= relative.round();
+            let mut relative = target.strip_index as f32 - center;
+            if !*go_outside && width < strip_count as f32 && strip_count > 1 {
+                let cycle = strip_count as f32;
+                relative -= (relative / cycle).round() * cycle;
             }
             let window_position = relative + half_width;
             let inside = (0.0..=width).contains(&window_position);
-            let opacity = if !inside {
+            let level = if !inside {
                 0.0
-            } else if !*fading {
-                1.0
             } else {
-                // The source alpha raster places its peak at
-                // (100 - Gradient)% of the window and linearly slopes on both
-                // sides. Gradient therefore changes the peak location; it is
-                // not a palette interpolation percentage.
+                // The moving raster selects a palette position. It does not
+                // alpha-blend the effect with the previous DMX value: direct
+                // captures retain the first palette colour outside the peak.
                 let peak = width * (1.0 - (*gradient / 100.0).clamp(0.0, 1.0));
                 let tail = width - peak;
                 if peak <= f32::EPSILON {
@@ -27391,16 +27390,12 @@ fn evaluate_color_spatial_sample_at_rate(
                 }
                 .clamp(0.0, 1.0)
             };
-            let palette_position = if *one_way {
-                strip_position
-            } else if strip_position <= 0.5 {
-                strip_position * 2.0
-            } else {
-                (1.0 - strip_position) * 2.0
-            };
             return RuntimeColorSpatialSample {
-                color: evaluate_linear_stop_color(request, palette_position),
-                opacity,
+                // Fading changes interpolation inside the palette. With it
+                // disabled Daslight lands on discrete palette stops; it does
+                // not make the mapping transparent.
+                color: spatial_palette_color(request, level, if *fading { *gradient } else { 0.0 }),
+                opacity: 1.0,
             };
         }
         ColorEffectSpatialRecipe::Burst {
@@ -49528,9 +49523,9 @@ mod tests {
     }
 
     #[test]
-    fn color_spatial_knight_rider_sweeps_a_percentage_window() {
+    fn color_spatial_knight_rider_sweeps_an_absolute_palette_window() {
         let request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
-            size: 60,
+            size: 3,
             one_way: true,
             fading: false,
             go_outside: false,
@@ -49545,20 +49540,21 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(samples[0].opacity, 0.0);
+        assert_eq!(samples[0].opacity, 1.0);
         assert_eq!(samples[1].opacity, 1.0);
         assert_eq!(samples[2].opacity, 1.0);
         assert_eq!(samples[3].opacity, 1.0);
-        assert_eq!(samples[4].opacity, 0.0);
-        assert_eq!(samples[2].color, test_color(32768, 32768, 32768));
+        assert_eq!(samples[4].opacity, 1.0);
+        assert_eq!(samples[0].color, test_color(0, 0, 0));
+        assert_eq!(samples[2].color, test_color(u16::MAX, u16::MAX, u16::MAX));
     }
 
     #[test]
-    fn color_spatial_knight_rider_size_is_strip_percentage() {
+    fn color_spatial_knight_rider_size_is_absolute_beam_cells() {
         let request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
             size: 32,
             one_way: true,
-            fading: false,
+            fading: true,
             go_outside: false,
             gradient: 100.0,
         });
@@ -49569,30 +49565,35 @@ mod tests {
                     &test_spatial_color_target(*index, 48, *index as f32 / 47.0, 0.5),
                     500,
                 )
-                .opacity
-                    > 0.0
+                .color
+                    != test_color(0, 0, 0)
             })
             .count();
-        assert_eq!(lit, 16);
+        assert_eq!(lit, 32);
     }
 
     #[test]
-    fn color_spatial_knight_rider_fading_is_alpha_not_black_scaling() {
-        let request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
-            size: 60,
+    fn color_spatial_knight_rider_fading_selects_palette_interpolation() {
+        let fading = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
+            size: 4,
             one_way: true,
             fading: true,
             go_outside: false,
             gradient: 50.0,
         });
-        let edge =
-            evaluate_test_spatial_sample(&request, &test_spatial_color_target(2, 6, 0.4, 0.5), 500);
-        assert!(edge.opacity > 0.0 && edge.opacity < 1.0);
-        assert_ne!(edge.color, test_color(0, 0, 0));
-        assert_eq!(
-            blend_effect_value_with_opacity(10_000, 60_000, &EffectBlendMode::Override, 0.25),
-            22_500
-        );
+        let stepped = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
+            size: 4,
+            one_way: true,
+            fading: false,
+            go_outside: false,
+            gradient: 50.0,
+        });
+        let target = test_spatial_color_target(1, 6, 0.2, 0.5);
+        let smooth = evaluate_test_spatial_sample(&fading, &target, 500);
+        let discrete = evaluate_test_spatial_sample(&stepped, &target, 500);
+        assert_eq!(smooth.opacity, 1.0);
+        assert_eq!(discrete.opacity, 1.0);
+        assert_ne!(smooth.color, discrete.color);
     }
 
     #[test]
