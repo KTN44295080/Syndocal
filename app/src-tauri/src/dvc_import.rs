@@ -1550,21 +1550,16 @@ fn convert_dvc_chaser_effect(
             warnings: Vec::new(),
         });
     }
-    if generator_id == 322 {
-        return Err(
-            "Chaser #2 variant algorithm is unverified; populated BEAMS remain Skipped".to_string(),
-        );
-    }
-    let generator = if generator_id == 321 {
-        "Chaser #1"
-    } else {
-        "Chaser random"
+    let generator = match generator_id {
+        321 => "Chaser #1",
+        322 => "Chaser #2",
+        _ => "Chaser random",
     };
     let params = dvc_effect_params(effect)?;
-    let expected_params: &[u16] = if generator_id == 321 {
-        &[10, 11, 12]
-    } else {
-        &[11, 12, 13, 14, 15]
+    let expected_params: &[u16] = match generator_id {
+        321 => &[10, 11, 12],
+        322 => &[10],
+        _ => &[11, 12, 13, 14, 15],
     };
     require_exact_dvc_params(&params, expected_params)?;
 
@@ -1583,7 +1578,7 @@ fn convert_dvc_chaser_effect(
     }
     let mut warnings = Vec::new();
     let mut ordered_steps = targets.ordered_steps;
-    if ordered_steps.len() == 1 {
+    if ordered_steps.len() == 1 && generator_id != 322 {
         ordered_steps.push(Vec::new());
         approximations.push(
             "single target selection requires an added blackout gap in the Chaser engine"
@@ -1594,7 +1589,11 @@ fn convert_dvc_chaser_effect(
         approximations.push("segment selection approximated to fixture".to_string());
     }
 
-    let pixels_on = dvc_positive_integer_param(&params, 12, "Nb pixels on")?;
+    let pixels_on = if generator_id == 322 {
+        1
+    } else {
+        dvc_positive_integer_param(&params, 12, "Nb pixels on")?
+    };
     let maximum_pixels = ordered_steps.len().min(64) as u64;
     let active_step_count = pixels_on.min(maximum_pixels) as u16;
     if pixels_on > maximum_pixels {
@@ -1603,7 +1602,7 @@ fn convert_dvc_chaser_effect(
         ));
     }
 
-    let fading = dvc_binary_param(&params, 11, "Fading")?;
+    let fading = dvc_binary_param(&params, if generator_id == 322 { 10 } else { 11 }, "Fading")?;
     let (direction, duty_cycle, generator_note) = if generator_id == 321 {
         let one_way = dvc_binary_param(&params, 10, "One Way Only")?;
         (
@@ -1616,6 +1615,15 @@ fn convert_dvc_chaser_effect(
             format!(
                 "param10=One Way Only({}); param11=Fading({}) per Daslight UI-order interpretation",
                 u8::from(one_way),
+                u8::from(fading)
+            ),
+        )
+    } else if generator_id == 322 {
+        (
+            ChaserDirection::BuildUpDown,
+            1.0,
+            format!(
+                "param10=Fading({}); build-up then source-order clear cycle confirmed from Daslight LIVE DMX Levels",
                 u8::from(fading)
             ),
         )
@@ -1653,8 +1661,13 @@ fn convert_dvc_chaser_effect(
         )
     };
 
+    let generator_slots = if generator_id == 322 {
+        ordered_steps.len().saturating_mul(2)
+    } else {
+        ordered_steps.len()
+    };
     let (step_duration_ms, free_run_note) =
-        dvc_chaser_step_duration(effect, scene, ordered_steps.len(), &mut approximations)?;
+        dvc_chaser_step_duration(effect, scene, generator_slots, &mut approximations)?;
     let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
     if let Some(clock_warning) = clock_warning {
         approximations.push(clock_warning);
@@ -2637,7 +2650,7 @@ fn dvc_chaser_step_duration(
     }
     Ok((
         step_duration_ms,
-        format!("step_duration_ms=round(EFFECT DURATION / selection_steps)={step_duration_ms}"),
+        format!("step_duration_ms=round(EFFECT DURATION / generator_slots)={step_duration_ms}"),
     ))
 }
 
@@ -4517,7 +4530,7 @@ mod tests {
     }
 
     #[test]
-    fn dvc_chaser_322_preserves_empty_source_noop_and_keeps_populated_variant_unverified() {
+    fn dvc_chaser_322_preserves_empty_noop_and_converts_populated_build_clear_cycle() {
         let document = Document::parse(
             r#"<DLMFILE DASBUILD="test" VERSIONFILE="2"><SCENE NAME="SS-Blue" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="3"><EFFECT TYPE="6" ID="322" DURATION="5000"><PARAMS NB="1"><PARAM ID="10" VAL="1"/></PARAMS></EFFECT><BEAMS NB="0"/></RACK></RACKS></SCENE></DLMFILE>"#,
         )
@@ -4549,13 +4562,13 @@ mod tests {
             .any(|note| note.contains("source no-op preserved")));
 
         let populated = Document::parse(
-            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="3"><EFFECT TYPE="6" ID="322" DURATION="5000"><PARAMS NB="1"><PARAM ID="10" VAL="1"/></PARAMS></EFFECT><BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS></RACK></RACKS></SCENE>"#,
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="3"><EFFECT TYPE="6" ID="322" DURATION="5000"><PARAMS NB="1"><PARAM ID="10" VAL="1"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
         )
         .unwrap();
         let scene = populated.root_element();
         let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
         let effect = direct_child(rack, "EFFECT").unwrap();
-        let error = convert_dvc_effect(
+        let converted = convert_dvc_effect(
             scene,
             "Future populated 322",
             rack,
@@ -4566,8 +4579,18 @@ mod tests {
             1,
             &effect_test_fixture_refs(),
         )
-        .unwrap_err();
-        assert!(error.contains("variant algorithm is unverified"));
+        .unwrap();
+        let Some(EffectParamsSnapshot::Chaser(chaser)) = converted.target.unwrap().params else {
+            panic!("CHASER 322 must be stored as cue-owned Chaser params");
+        };
+        assert_eq!(chaser.direction, ChaserDirection::BuildUpDown);
+        assert_eq!(chaser.steps.len(), 2);
+        assert_eq!(chaser.step_duration_ms, 1_250);
+        assert_eq!(chaser.active_step_count, 1);
+        assert_eq!(chaser.duty_cycle, 1.0);
+        assert_eq!(chaser.overlap, 1.0);
+        assert!(converted.approximations.is_empty());
+        assert!(converted.note.contains("build-up then source-order clear"));
     }
 
     #[test]

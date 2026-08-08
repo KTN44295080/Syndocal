@@ -23785,7 +23785,12 @@ h3 {
   text-align: center;
 }
 
-.chaserDirectionGrid,
+.chaserDirectionGrid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 3px;
+}
+
 .chaserClockPresets {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

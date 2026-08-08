@@ -25,6 +25,7 @@ const directionOptions: { value: ChaserDirection; label: string; detail: string 
   { value: "Forward", label: "One way only", detail: "first to last" },
   { value: "Reverse", label: "Reverse", detail: "last to first" },
   { value: "Bounce", label: "Bounce", detail: "return pass" },
+  { value: "BuildUpDown", label: "Build / clear", detail: "fill then clear" },
   { value: "Random", label: "Random", detail: "seeded order" },
 ];
 
@@ -78,6 +79,9 @@ export function ChaserEffectEditorPanel(props: ChaserEffectEditorPanelProps) {
   const visibleSteps = createMemo(() => props.steps.slice(pageStart(), pageStart() + chaserStepsPerPage));
   const activeStepMaximum = createMemo(() => Math.max(1, Math.min(props.steps.length, 64)));
   const wingMaximum = createMemo(() => Math.max(1, Math.min(props.steps.length, 16)));
+  const directionLabel = createMemo(() =>
+    directionOptions.find((option) => option.value === props.direction)?.label ?? props.direction,
+  );
   const directionOrder = createMemo(() => chaserPreviewOrder(props.steps.length, props.direction, props.randomSeed));
   const activeOrderPosition = createMemo(() => {
     const order = directionOrder();
@@ -95,7 +99,7 @@ export function ChaserEffectEditorPanel(props: ChaserEffectEditorPanelProps) {
   });
   const activePixels = createMemo(() => {
     const order = directionOrder();
-    return new Set(chaserActivePreviewIndices(order, activeOrderPosition(), props.activeStepCount));
+    return new Set(chaserActivePreviewIndices(order, activeOrderPosition(), props.activeStepCount, props.direction));
   });
   const clockSummary = createMemo(() =>
     props.clockSyncBeats === null
@@ -192,7 +196,7 @@ export function ChaserEffectEditorPanel(props: ChaserEffectEditorPanelProps) {
         <legend>Chase preview</legend>
         <div class="chaserPreviewHeader">
           <div>
-            <strong>{props.direction}</strong>
+            <strong>{directionLabel()}</strong>
             <span class="tabularNums">{props.activeStepCount} pixels on · {Math.round(props.dutyCycle * 100)}% size</span>
           </div>
           <span class="tabularNums">phase {Math.round(clampChaserUnit(props.phase) * 100)}%</span>
@@ -200,7 +204,7 @@ export function ChaserEffectEditorPanel(props: ChaserEffectEditorPanelProps) {
         <div
           class="chaserPreviewStrip"
           role="img"
-          aria-label={`Chaser preview: ${props.direction}, ${props.activeStepCount} pixels on, ${Math.round(props.dutyCycle * 100)} percent size, ${Math.round(props.phase * 100)} percent phase`}
+          aria-label={`Chaser preview: ${directionLabel()}, ${props.activeStepCount} pixels on, ${Math.round(props.dutyCycle * 100)} percent size, ${Math.round(props.phase * 100)} percent phase`}
           data-direction={props.direction}
           data-active-step-count={props.activeStepCount}
           data-size-percent={Math.round(props.dutyCycle * 100)}
@@ -244,7 +248,10 @@ export function ChaserEffectEditorPanel(props: ChaserEffectEditorPanelProps) {
                 type="button"
                 class={props.direction === option.value ? "active" : ""}
                 aria-pressed={props.direction === option.value}
-                onClick={() => props.onDirection(option.value)}
+                onClick={() => {
+                  props.onDirection(option.value);
+                  if (option.value === "BuildUpDown") props.onActiveStepCount(1);
+                }}
               >
                 <strong>{option.label}</strong>
                 <span>{option.detail}</span>
@@ -261,7 +268,9 @@ export function ChaserEffectEditorPanel(props: ChaserEffectEditorPanelProps) {
               min="1"
               max={activeStepMaximum()}
               step="1"
-              value={Math.min(props.activeStepCount, activeStepMaximum())}
+              value={props.direction === "BuildUpDown" ? 1 : Math.min(props.activeStepCount, activeStepMaximum())}
+              disabled={props.direction === "BuildUpDown"}
+              title={props.direction === "BuildUpDown" ? "Build / clear uses one transition frontier" : undefined}
               onChange={(event) => props.onActiveStepCount(Math.round(Number(event.currentTarget.value)))}
             />
           </label>

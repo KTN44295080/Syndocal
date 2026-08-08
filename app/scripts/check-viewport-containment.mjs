@@ -9527,7 +9527,7 @@ function hasExpectedControlModeSurface(result) {
         result.visibleChaserFeatureCount === 2 &&
         result.visibleChaserPreviewCellCount === 3 &&
         result.visibleActiveChaserPreviewCellCount === 2 &&
-        result.visibleChaserDirectionButtonCount === 4 &&
+        result.visibleChaserDirectionButtonCount === 5 &&
         result.visibleChaserReplaceButtonCount === 3 &&
         result.chaserDirectionValue === "Reverse" &&
         result.chaserActiveStepCount === 2 &&

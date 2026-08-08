@@ -45,6 +45,7 @@ const validDraft = {
     { attribute: "Dimmer", low: 0, high: 65_535 },
     { attribute: "ColorRed", low: 4_096, high: 49_152 },
   ],
+  direction: "Forward",
   stepDurationMs: 250,
   clockSyncBeats: 0.5,
   wings: 1,
@@ -83,6 +84,32 @@ assert.match(helpers.chaserDraftError({ ...validDraft, wings: 4 }), /step count/
 assert.deepEqual(helpers.chaserPreviewOrder(4, "Forward", 1_337), [0, 1, 2, 3]);
 assert.deepEqual(helpers.chaserPreviewOrder(4, "Reverse", 1_337), [3, 2, 1, 0]);
 assert.deepEqual(helpers.chaserPreviewOrder(4, "Bounce", 1_337), [0, 1, 2, 3, 2, 1]);
+assert.deepEqual(helpers.chaserPreviewOrder(4, "BuildUpDown", 1_337), [0, 1, 2, 3, 0, 1, 2, 3]);
+assert.deepEqual(
+  helpers.chaserActivePreviewIndices(helpers.chaserPreviewOrder(4, "BuildUpDown", 1_337), 2, 1, "BuildUpDown"),
+  [0, 1, 2],
+  "Build / clear preview must accumulate through the fill half",
+);
+assert.deepEqual(
+  helpers.chaserActivePreviewIndices(helpers.chaserPreviewOrder(4, "BuildUpDown", 1_337), 5, 1, "BuildUpDown"),
+  [2, 3],
+  "Build / clear preview must remove targets in source order",
+);
+assert.equal(
+  helpers.chaserDraftError({
+    ...validDraft,
+    direction: "BuildUpDown",
+    steps: validDraft.steps.slice(0, 1),
+    activeStepCount: 1,
+  }),
+  "",
+  "Build / clear must support the one-target cycle Daslight emits without a synthetic blackout step",
+);
+assert.match(
+  helpers.chaserDraftError({ ...validDraft, direction: "BuildUpDown", activeStepCount: 2 }),
+  /Pixels on must be 1/,
+  "Build / clear must reject a width control that its one-frontier algorithm cannot honor",
+);
 assert.deepEqual(
   helpers.chaserPreviewOrder(8, "Random", 1_337),
   helpers.chaserPreviewOrder(8, "Random", 1_337),
@@ -112,6 +139,7 @@ assert.match(componentSource, /<For each=\{visibleSteps\(\)\}>/);
 assert.match(componentSource, /aria-rowcount=\{props\.steps\.length\}/);
 assert.match(componentSource, /data-active-step-count=\{props\.activeStepCount\}/);
 assert.match(componentSource, /Pixels on\s*<input/);
+assert.match(componentSource, /disabled=\{props\.direction === "BuildUpDown"\}/);
 assert.match(componentSource, /Fading\s*<\/label>/);
 assert.match(componentSource, />Features<\/legend>/);
 assert.match(componentSource, /props\.onWings\(Math\.min\(/);

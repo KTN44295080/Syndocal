@@ -2332,6 +2332,8 @@ pub enum ChaserDirection {
     Forward,
     Reverse,
     Bounce,
+    /// Fill targets in order, then clear them in the same order.
+    BuildUpDown,
     Random,
 }
 

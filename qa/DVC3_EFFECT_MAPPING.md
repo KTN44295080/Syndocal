@@ -17,7 +17,7 @@
 |---|---|---|
 | 321 | **Chaser #1** | 10=One Way Only(1/0)※, 11=Fading(1/0)※, **12=Nb pixels on**（Moving Chaser2で12=2⇔UI 2を確認。Documents版BackBar-Amberの12=18=18chバー全点灯とも整合） |
 | 325 | **Chaser random** | 11=Fading(0⇔off✓), 12=Nb pixels on(1✓), 13=Flash(100⇔100.0✓), 14=Random sequence(0✓), 15=Nb cycles(1✓) — **全一致** |
-| 322 | 未照合（SS-Blue、Documents版のみ。[10=1]） | 保留 |
+| 322 | **Chaser #2** | **10=Fading**(1⇔ON✓)。選択順に1灯ずつ積み上げ、全点灯後に同じ順で1灯ずつ消す build/clear 周期 — LIVEのDMX Levelsで確定 |
 
 ※ 10/11は両方1の検体しかなくOneWay/Fadingの順序は未分離（UI表示順から10=OneWay仮）。Feature（対象属性）はラックの Features 行（実測は全てDimmer）。対象ビームは `BEAMS` 要素。
 
@@ -95,8 +95,8 @@ VALUE FX と COLOR MAPPINGS はユーザーの全ショーに検体なし（実�
    金標準変換数: 127:5 / 121:4 / 131:1 / 133:1 / 521:1 / 530:1。dvc 22/22（Knight Rider実発光・時間掃引の
    金標準テスト含む）、engine 370/370、マトリクス232全緑。同条件A/Bベンチ +3.8%（誤差内）で既存スタック非劣化。
    絶対値2ms予算は環境負荷40%のため未計測 — クリーン環境での再計測が残件。
-3. **DVC-3c（残り）**: ~~MOVE FX / TYPE=8~~（3a2/3bで完了）→ 残りは ID 322・129・130・CURVE波形10 の照合のみ
-   （検体のUI再確認が必要になった時点で実施）。VALUE FX / COLOR MAPPINGS は検体なしのため対象外のまま。
+3. **DVC-3c（照合完了）**: MOVE FX / TYPE=8、ID 322・129・130・CURVE波形10を照合済み。
+   VALUE FX / COLOR MAPPINGS はユーザーのDVCに検体がないため、既存のネイティブ実装を維持しDVC逆変換の対象外とする。
 
 ## 実機操作の記録（正直な状態申告）
 
@@ -152,13 +152,20 @@ UI: Color Width=0.0/Angle=0/Gradient=100.0、パレット10色、2 Beams。XML: 
 ID3=Transform、ID10=Color Width、ID11=Angle、ID12=Gradient(UI=VAL×100)。MAPPINGSの521 Rainbowとは別物
 （COLOR FX系はビームストリップ上の掃引、パラメータ構成も異なる）。
 
-### CHASER FX ID=322 = Chaser #2（SS-Blue 実UI照合）
+### CHASER FX ID=322 = Chaser #2（SS-Blue実UI + populatedスクラッチDMX照合）
 
 Daslight UI自身が「0 Beam(s)・Features空」を表示 — このFXは原本でも空（無発光）。321系と同じ
 無対象FXとして、ランタイムへ架空の対象やブラックアウトを作らず `source no-op` 変換記録だけを保持する。
 Shinkan2026 の Bar / New Scene (321)、SaberSpot / SS-Blue (322)、Par / Par-Chaser (321) はすべて
 `BEAMS NB="0"` を実XMLで確認済み。出力内容は原本どおり無発光で、欠損/Skippedには数えない。
-BEAMSを持つ322はアルゴリズム未確定のため、引き続き正直にSkippedとする。
+
+2026-08-08、最大化したDaslight 5のスクラッチ `Codex-Chaser322-Probe.dvc` で4台のSaberSpotを選択し、
+Chaser #2 / Fading ONをLIVE再生してDMX Levelsを連続採取した。対象Dimmerは ch86/91/96/101。
+観測は「ch86をフェード点灯→ch86保持のままch91→ch96→ch101を追加→全点灯→ch86から同順にフェード消灯→全消灯」。
+EDIT時に残留した255値は編集バッファ汚染として棄却し、LIVEでゼロから始まる周期だけを採用した。
+したがってID322は専用 `BuildUpDown` 方向へ厳密変換し、周期スロット数は `2 × BEAMS`、
+`step_duration_ms = round(EFFECT DURATION / generator_slots)` とする。1 Beamでも架空のブラックアウトを追加しない。
+Fading OFFは各追加/消去境界で即時切替、ONはスロット全長の線形フェード。物理灯体は未使用で、DMX値上の照合である。
 
 ### FXファミリー選択肢の全貌（新規シーンのFX追加メニュー実観察）
 

@@ -15438,6 +15438,7 @@ export default function App() {
   const currentChaserDraftError = createMemo(() => chaserDraftError({
     steps: chaserSteps(),
     features: chaserFeatures(),
+    direction: chaserDirection(),
     stepDurationMs: chaserStepDuration(),
     clockSyncBeats: effectClockSyncBeats(),
     wings: chaserWings(),

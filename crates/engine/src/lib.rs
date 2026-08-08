@@ -25762,8 +25762,15 @@ pub fn validate_chaser_effect_request(request: &ChaserEffectRequest) -> Result<(
             ));
         }
     }
-    if !(2..=256).contains(&request.steps.len()) {
-        return Err("Chaser effect requires between 2 and 256 steps".to_string());
+    let minimum_steps = if request.direction == ChaserDirection::BuildUpDown {
+        1
+    } else {
+        2
+    };
+    if !(minimum_steps..=256).contains(&request.steps.len()) {
+        return Err(format!(
+            "Chaser effect requires between {minimum_steps} and 256 steps for the selected direction"
+        ));
     }
     if !request
         .steps
@@ -25795,6 +25802,9 @@ pub fn validate_chaser_effect_request(request: &ChaserEffectRequest) -> Result<(
         return Err(
             "Chaser effect active step count must be between 1 and min(step count, 64)".to_string(),
         );
+    }
+    if request.direction == ChaserDirection::BuildUpDown && request.active_step_count != 1 {
+        return Err("Build / clear Chaser requires an active step count of 1".to_string());
     }
     if !request.duty_cycle.is_finite() || request.duty_cycle <= 0.0 || request.duty_cycle > 1.0 {
         return Err("Chaser effect duty cycle must be within (0, 1]".to_string());
@@ -25864,7 +25874,7 @@ fn runtime_chaser_effect_from_request(
         return Err("Chaser effect targets resolve to no fixtures".to_string());
     }
     let step_order = chaser_step_order(request.direction, request.steps.len(), request.random_seed);
-    let path_len = step_order.len().max(1) as f32;
+    let path_len = chaser_cycle_len(request.direction, step_order.len()) as f32;
     let target_denominator = target_order.len().max(1) as f32;
     let mut target_step_levels = target_order
         .iter()
@@ -28083,6 +28093,7 @@ fn evaluate_position_wave_effect_normalized(
 fn chaser_path_len(direction: ChaserDirection, step_count: usize) -> usize {
     match direction {
         ChaserDirection::Bounce if step_count > 1 => step_count * 2 - 2,
+        ChaserDirection::BuildUpDown => step_count.max(1) * 2,
         ChaserDirection::Forward
         | ChaserDirection::Reverse
         | ChaserDirection::Random
@@ -28103,6 +28114,7 @@ fn chaser_step_order(
             (0..step_count).chain((1..step_count - 1).rev()).collect()
         }
         ChaserDirection::Bounce => vec![0],
+        ChaserDirection::BuildUpDown => (0..step_count).collect(),
         ChaserDirection::Random => {
             let mut order = (0..step_count).collect::<Vec<_>>();
             let mut state = (random_seed ^ (random_seed >> 32)) as u32;
@@ -28140,10 +28152,23 @@ fn chaser_step_index(
                 path_len - position
             }
         }
+        ChaserDirection::BuildUpDown => {
+            absolute_slot.rem_euclid((step_count * 2) as i64) as usize % step_count
+        }
         ChaserDirection::Random => {
             let order = chaser_step_order(direction, step_count, random_seed);
             order[absolute_slot.rem_euclid(order.len() as i64) as usize]
         }
+    }
+}
+
+fn chaser_cycle_len(direction: ChaserDirection, step_order_len: usize) -> usize {
+    match direction {
+        ChaserDirection::BuildUpDown => step_order_len.max(1) * 2,
+        ChaserDirection::Forward
+        | ChaserDirection::Reverse
+        | ChaserDirection::Bounce
+        | ChaserDirection::Random => step_order_len.max(1),
     }
 }
 
@@ -28196,6 +28221,59 @@ fn chaser_block_level(
         }
     }
     level
+}
+
+fn chaser_build_up_down_level(
+    runtime: &RuntimeChaserEffect,
+    fixture_id: FixtureId,
+    absolute_slot: i64,
+    current_weight: f32,
+    next_weight: f32,
+) -> f32 {
+    let Some(step_levels) = runtime.target_step_levels.get(&fixture_id) else {
+        return 0.0;
+    };
+    let step_count = runtime.step_order.len();
+    if step_count == 0 {
+        return 0.0;
+    }
+    let cycle_position = absolute_slot.rem_euclid((step_count * 2) as i64) as usize;
+    let filling = cycle_position < step_count;
+    let frontier = if filling {
+        cycle_position
+    } else {
+        cycle_position - step_count
+    };
+    let fading = runtime.request.overlap > f32::EPSILON;
+    let mut normalized_level = 0.0_f32;
+    for (position, step_index) in runtime.step_order.iter().copied().enumerate() {
+        let weight = if filling {
+            if position < frontier {
+                1.0
+            } else if position == frontier {
+                if fading {
+                    next_weight
+                } else {
+                    1.0
+                }
+            } else {
+                0.0
+            }
+        } else if position < frontier {
+            0.0
+        } else if position == frontier {
+            if fading {
+                current_weight
+            } else {
+                0.0
+            }
+        } else {
+            1.0
+        };
+        normalized_level = normalized_level
+            .max(step_levels.get(step_index).copied().unwrap_or(0) as f32 / 65_535.0 * weight);
+    }
+    normalized_level
 }
 
 #[cfg(test)]
@@ -28259,7 +28337,7 @@ fn evaluate_chaser_effect_normalized(
         let elapsed_ms = now.saturating_duration_since(created_at).as_secs_f64() * 1000.0;
         elapsed_ms * rate / runtime.request.step_duration_ms.max(10) as f64
     };
-    let path_len = runtime.step_order.len().max(1);
+    let path_len = chaser_cycle_len(runtime.request.direction, runtime.step_order.len());
     let fixture_offset = runtime
         .target_phase_offsets
         .get(&fixture_id)
@@ -28278,9 +28356,19 @@ fn evaluate_chaser_effect_normalized(
     for wing in 0..wing_count {
         let wing_offset = (wing * path_len) / wing_count;
         let wing_slot = absolute_slot + wing_offset as i64;
-        let current = chaser_block_level(runtime, fixture_id, wing_slot) as f32 / 65_535.0;
-        let next = chaser_block_level(runtime, fixture_id, wing_slot + 1) as f32 / 65_535.0;
-        normalized_level = normalized_level.max(current * current_weight + next * next_weight);
+        if runtime.request.direction == ChaserDirection::BuildUpDown {
+            normalized_level = normalized_level.max(chaser_build_up_down_level(
+                runtime,
+                fixture_id,
+                wing_slot,
+                current_weight,
+                next_weight,
+            ));
+        } else {
+            let current = chaser_block_level(runtime, fixture_id, wing_slot) as f32 / 65_535.0;
+            let next = chaser_block_level(runtime, fixture_id, wing_slot + 1) as f32 / 65_535.0;
+            normalized_level = normalized_level.max(current * current_weight + next * next_weight);
+        }
     }
     let normalized_level = normalized_level.clamp(0.0, 1.0);
     cache.set(Some(RuntimeChaserEvaluation {
@@ -51661,6 +51749,17 @@ mod tests {
             .unwrap_err()
             .contains("between 2 and 256"));
 
+        let mut one_step_build_clear = too_short.clone();
+        one_step_build_clear.direction = ChaserDirection::BuildUpDown;
+        validate_chaser_effect_request(&one_step_build_clear).unwrap();
+
+        let mut invalid_build_clear_width = valid.clone();
+        invalid_build_clear_width.direction = ChaserDirection::BuildUpDown;
+        invalid_build_clear_width.active_step_count = 2;
+        assert!(validate_chaser_effect_request(&invalid_build_clear_width)
+            .unwrap_err()
+            .contains("active step count of 1"));
+
         let mut too_many = valid.clone();
         too_many.steps = (0..257)
             .map(|_| protocol::ChaserStep {
@@ -51736,6 +51835,77 @@ mod tests {
                 .unwrap_err()
                 .contains("random seed"));
         }
+    }
+
+    #[test]
+    fn chaser_build_up_down_matches_daslight_fill_then_source_order_clear_cycle() {
+        let runtime = runtime_with_chaser_fixtures(4);
+        let now = Instant::now();
+        let clock = ClockSnapshot::default();
+        let mut request = test_chaser_request(&[1, 2, 3, 4]);
+        request.direction = ChaserDirection::BuildUpDown;
+        request.overlap = 1.0;
+        let build_clear = runtime.resolve_chaser_effect_request(request).unwrap();
+
+        assert_eq!(chaser_path_len(ChaserDirection::BuildUpDown, 4), 8);
+        assert_eq!(
+            (0..8)
+                .map(|slot| chaser_step_index(ChaserDirection::BuildUpDown, 4, slot, 0))
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2, 3, 0, 1, 2, 3]
+        );
+
+        let level_at = |fixture_id, elapsed_ms| {
+            evaluate_chaser_effect(
+                &build_clear,
+                0,
+                fixture_id,
+                now,
+                now + Duration::from_millis(elapsed_ms),
+                &clock,
+            )
+        };
+        assert_eq!(
+            (1..=4).map(|id| level_at(id, 0)).collect::<Vec<_>>(),
+            vec![0; 4]
+        );
+        assert_eq!(level_at(1, 50), 32_768);
+        assert_eq!(
+            (1..=4).map(|id| level_at(id, 150)).collect::<Vec<_>>(),
+            vec![u16::MAX, 32_768, 0, 0]
+        );
+        assert_eq!(
+            (1..=4).map(|id| level_at(id, 350)).collect::<Vec<_>>(),
+            vec![u16::MAX, u16::MAX, u16::MAX, 32_768]
+        );
+        assert_eq!(
+            (1..=4).map(|id| level_at(id, 450)).collect::<Vec<_>>(),
+            vec![32_768, u16::MAX, u16::MAX, u16::MAX]
+        );
+        assert_eq!(
+            (1..=4).map(|id| level_at(id, 550)).collect::<Vec<_>>(),
+            vec![0, 32_768, u16::MAX, u16::MAX]
+        );
+        assert_eq!(
+            (1..=4).map(|id| level_at(id, 750)).collect::<Vec<_>>(),
+            vec![0, 0, 0, 32_768]
+        );
+        assert_eq!(
+            (1..=4).map(|id| level_at(id, 800)).collect::<Vec<_>>(),
+            vec![0; 4]
+        );
+
+        let mut hard_request = test_chaser_request(&[1, 2, 3, 4]);
+        hard_request.direction = ChaserDirection::BuildUpDown;
+        let hard = runtime.resolve_chaser_effect_request(hard_request).unwrap();
+        assert_eq!(
+            evaluate_chaser_effect(&hard, 0, 1, now, now, &clock),
+            u16::MAX
+        );
+        assert_eq!(
+            evaluate_chaser_effect(&hard, 0, 1, now, now + Duration::from_millis(400), &clock,),
+            0
+        );
     }
 
     #[test]

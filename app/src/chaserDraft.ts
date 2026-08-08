@@ -62,6 +62,7 @@ export const chaserStepsFromTargets = (
 export interface ChaserDraftValidationInput {
   steps: ChaserStep[];
   features: ChaserFeature[];
+  direction: ChaserDirection;
   stepDurationMs: number;
   clockSyncBeats: number | null;
   wings: number;
@@ -74,8 +75,9 @@ export interface ChaserDraftValidationInput {
 }
 
 export const chaserDraftError = (input: ChaserDraftValidationInput) => {
-  if (input.steps.length < chaserMinimumSteps || input.steps.length > chaserMaximumSteps) {
-    return `A Chaser requires ${chaserMinimumSteps} to ${chaserMaximumSteps} steps.`;
+  const minimumSteps = input.direction === "BuildUpDown" ? 1 : chaserMinimumSteps;
+  if (input.steps.length < minimumSteps || input.steps.length > chaserMaximumSteps) {
+    return `A ${input.direction === "BuildUpDown" ? "Build / clear Chaser" : "Chaser"} requires ${minimumSteps} to ${chaserMaximumSteps} steps.`;
   }
   if (!input.steps.some((step) => step.fixture_ids.length > 0 || step.target_group_ids.length > 0)) {
     return "At least one Chaser step must target a fixture or group.";
@@ -120,6 +122,9 @@ export const chaserDraftError = (input: ChaserDraftValidationInput) => {
   ) {
     return "Chaser Pixels on must be an integer from 1 to the step count, up to 64.";
   }
+  if (input.direction === "BuildUpDown" && input.activeStepCount !== 1) {
+    return "Build / clear uses exactly one transition frontier; Pixels on must be 1.";
+  }
   if (!Number.isFinite(input.dutyCycle) || input.dutyCycle <= 0 || input.dutyCycle > 1) {
     return "Chaser size must be greater than 0% and at most 100%.";
   }
@@ -156,6 +161,7 @@ export const chaserPreviewOrder = (stepCount: number, direction: ChaserDirection
     return [...forward, ...forward.slice(1, -1).reverse()];
   }
   if (direction === "Random") return seededStepOrder(forward.length, randomSeed);
+  if (direction === "BuildUpDown") return [...forward, ...forward];
   return forward;
 };
 
@@ -175,7 +181,17 @@ export const chaserActivePreviewIndices = (
   order: number[],
   activeOrderPosition: number,
   activeStepCount: number,
+  direction: ChaserDirection = "Forward",
 ) => {
+  if (direction === "BuildUpDown") {
+    const stepCount = order.length / 2;
+    if (!Number.isInteger(stepCount) || stepCount <= 0) return [];
+    const position = ((activeOrderPosition % order.length) + order.length) % order.length;
+    if (position < stepCount) {
+      return order.slice(0, position + 1);
+    }
+    return order.slice(position - stepCount + 1, stepCount);
+  }
   const active = new Set<number>();
   const targetCount = Math.min(Math.max(0, Math.round(activeStepCount)), new Set(order).size);
   if (order.length === 0 || targetCount === 0) return [];
