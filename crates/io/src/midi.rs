@@ -132,6 +132,7 @@ pub enum MidiControlEvent {
         enabled: bool,
     },
     TriggerCue(CueId),
+    ReleaseCue(CueId),
     TriggerNextCue,
     TriggerPreviousCue,
     SetEffectEnabled {
@@ -512,7 +513,7 @@ fn feedback_value_for_mapping(
             });
             Some(if parked { 1.0 } else { 0.0 })
         }
-        MidiControlAction::TriggerCue => {
+        MidiControlAction::TriggerCue | MidiControlAction::FlashCue => {
             let cue_id = mapping.cue_id?;
             Some(if snapshot.active_cue_id == Some(cue_id) {
                 1.0
@@ -969,7 +970,11 @@ impl MtcQuarterFrameDecoder {
 }
 
 fn mapping_matches(mapping: &MidiControlMapping, message: &MidiMessage) -> bool {
-    mapping.message == message.message
+    let message_matches = mapping.message == message.message
+        || (matches!(mapping.action, MidiControlAction::FlashCue)
+            && matches!(mapping.message, MidiControlMessage::NoteOn)
+            && matches!(message.message, MidiControlMessage::NoteOff));
+    message_matches
         && mapping.number == message.number
         && mapping
             .channel
@@ -1018,17 +1023,22 @@ fn event_from_mapping(
             enabled: midi_message_enabled(message),
         }),
         MidiControlAction::TriggerCue => {
-            if is_positive_trigger(message) {
+            if is_mapping_trigger(mapping, message) {
                 Some(MidiControlEvent::TriggerCue(mapping.cue_id?))
             } else {
                 None
             }
         }
+        MidiControlAction::FlashCue => Some(if is_positive_trigger(message) {
+            MidiControlEvent::TriggerCue(mapping.cue_id?)
+        } else {
+            MidiControlEvent::ReleaseCue(mapping.cue_id?)
+        }),
         MidiControlAction::TriggerNextCue => {
-            is_positive_trigger(message).then_some(MidiControlEvent::TriggerNextCue)
+            is_mapping_trigger(mapping, message).then_some(MidiControlEvent::TriggerNextCue)
         }
         MidiControlAction::TriggerPreviousCue => {
-            is_positive_trigger(message).then_some(MidiControlEvent::TriggerPreviousCue)
+            is_mapping_trigger(mapping, message).then_some(MidiControlEvent::TriggerPreviousCue)
         }
         MidiControlAction::EffectEnabled => Some(MidiControlEvent::SetEffectEnabled {
             effect_id: mapping.cue_id?,
@@ -1050,19 +1060,19 @@ fn event_from_mapping(
             value: ranged_value,
         }),
         MidiControlAction::VideoCuePointAdd => {
-            is_positive_trigger(message).then_some(MidiControlEvent::AddVideoCuePoint {
+            is_mapping_trigger(mapping, message).then_some(MidiControlEvent::AddVideoCuePoint {
                 layer_id: mapping.layer_id?,
                 position_ms: mapping.duration_ms,
             })
         }
         MidiControlAction::VideoCuePointRemove => {
-            is_positive_trigger(message).then_some(MidiControlEvent::RemoveVideoCuePoint {
+            is_mapping_trigger(mapping, message).then_some(MidiControlEvent::RemoveVideoCuePoint {
                 layer_id: mapping.layer_id?,
                 position_ms: mapping.duration_ms?,
             })
         }
         MidiControlAction::VideoCuePointJump => {
-            if is_positive_trigger(message) {
+            if is_mapping_trigger(mapping, message) {
                 Some(MidiControlEvent::JumpVideoCuePoint {
                     layer_id: mapping.layer_id?,
                     cue_point_index: mapping.cue_point_index.unwrap_or(0),
@@ -1071,18 +1081,18 @@ fn event_from_mapping(
                 None
             }
         }
-        MidiControlAction::VideoCuePointPrevious => {
-            is_positive_trigger(message).then_some(MidiControlEvent::JumpVideoCuePointRelative {
+        MidiControlAction::VideoCuePointPrevious => is_mapping_trigger(mapping, message).then_some(
+            MidiControlEvent::JumpVideoCuePointRelative {
                 layer_id: mapping.layer_id?,
                 direction: -1,
-            })
-        }
-        MidiControlAction::VideoCuePointNext => {
-            is_positive_trigger(message).then_some(MidiControlEvent::JumpVideoCuePointRelative {
+            },
+        ),
+        MidiControlAction::VideoCuePointNext => is_mapping_trigger(mapping, message).then_some(
+            MidiControlEvent::JumpVideoCuePointRelative {
                 layer_id: mapping.layer_id?,
                 direction: 1,
-            })
-        }
+            },
+        ),
         MidiControlAction::VideoLayerEnabled => Some(MidiControlEvent::SetVideoLayerEnabled {
             layer_id: mapping.layer_id?,
             enabled: match message.message {
@@ -1141,12 +1151,11 @@ fn event_from_mapping(
                 value: ranged_value,
             })
         }
-        MidiControlAction::VideoOutputMappingPreset => is_positive_trigger(message).then_some(
-            MidiControlEvent::ApplyVideoOutputMappingPreset {
+        MidiControlAction::VideoOutputMappingPreset => is_mapping_trigger(mapping, message)
+            .then_some(MidiControlEvent::ApplyVideoOutputMappingPreset {
                 output_id: mapping.output_id?,
                 label: mapping.attribute.as_ref()?.clone(),
-            },
-        ),
+            }),
         MidiControlAction::VideoOutputBlackout => Some(MidiControlEvent::SetVideoOutputBlackout {
             output_id: mapping.output_id?,
             blackout: match message.message {
@@ -1163,13 +1172,13 @@ fn event_from_mapping(
         MidiControlAction::TimelineSeek => Some(MidiControlEvent::SeekTimeline {
             position_ms: ranged_value.max(0.0).round() as u64,
         }),
-        MidiControlAction::TimelineBeatPrevious => is_positive_trigger(message)
+        MidiControlAction::TimelineBeatPrevious => is_mapping_trigger(mapping, message)
             .then_some(MidiControlEvent::SeekTimelineBeat { direction: -1 }),
-        MidiControlAction::TimelineBeatNext => is_positive_trigger(message)
+        MidiControlAction::TimelineBeatNext => is_mapping_trigger(mapping, message)
             .then_some(MidiControlEvent::SeekTimelineBeat { direction: 1 }),
         MidiControlAction::SetBpm => Some(MidiControlEvent::SetBpm(ranged_value)),
         MidiControlAction::TapBpm => {
-            is_positive_trigger(message).then_some(MidiControlEvent::TapBpm)
+            is_mapping_trigger(mapping, message).then_some(MidiControlEvent::TapBpm)
         }
         MidiControlAction::LightingMaster => Some(MidiControlEvent::LightingMaster(ranged_value)),
         MidiControlAction::VideoMaster => Some(MidiControlEvent::VideoMaster(ranged_value)),
@@ -1200,7 +1209,7 @@ fn event_from_mapping(
             }))
         }
         MidiControlAction::ClearFixtureFlags => {
-            is_positive_trigger(message).then_some(MidiControlEvent::ClearFixtureFlags {
+            is_mapping_trigger(mapping, message).then_some(MidiControlEvent::ClearFixtureFlags {
                 kind: mapping
                     .attribute
                     .as_deref()
@@ -1214,6 +1223,14 @@ fn event_from_mapping(
 
 fn is_positive_trigger(message: &MidiMessage) -> bool {
     !matches!(message.message, MidiControlMessage::NoteOff) && message.value > 0
+}
+
+fn is_mapping_trigger(mapping: &MidiControlMapping, message: &MidiMessage) -> bool {
+    if matches!(mapping.message, MidiControlMessage::NoteOff) {
+        matches!(message.message, MidiControlMessage::NoteOff)
+    } else {
+        is_positive_trigger(message)
+    }
 }
 
 fn midi_message_enabled(message: &MidiMessage) -> bool {
@@ -1596,6 +1613,62 @@ mod tests {
         assert_eq!(
             events_from_midi_message(&[0x90, 62, 127], &[previous]),
             vec![MidiControlEvent::TriggerPreviousCue]
+        );
+    }
+
+    #[test]
+    fn flash_cue_triggers_on_press_and_releases_on_note_off() {
+        let mapping = MidiControlMapping {
+            channel: Some(0),
+            message: MidiControlMessage::NoteOn,
+            number: 63,
+            action: MidiControlAction::FlashCue,
+            fixture_id: None,
+            attribute: None,
+            group_id: None,
+            cue_id: Some(7),
+            layer_id: None,
+            video_param: None,
+            cue_point_index: None,
+            output_id: None,
+            duration_ms: None,
+            low: 0.0,
+            high: 1.0,
+        };
+
+        assert_eq!(
+            events_from_midi_message(&[0x90, 63, 127], &[mapping.clone()]),
+            vec![MidiControlEvent::TriggerCue(7)]
+        );
+        assert_eq!(
+            events_from_midi_message(&[0x90, 63, 0], &[mapping]),
+            vec![MidiControlEvent::ReleaseCue(7)]
+        );
+    }
+
+    #[test]
+    fn note_off_mapping_can_drive_a_discrete_action() {
+        let mapping = MidiControlMapping {
+            channel: Some(2),
+            message: MidiControlMessage::NoteOff,
+            number: 64,
+            action: MidiControlAction::TriggerCue,
+            fixture_id: None,
+            attribute: None,
+            group_id: None,
+            cue_id: Some(8),
+            layer_id: None,
+            video_param: None,
+            cue_point_index: None,
+            output_id: None,
+            duration_ms: None,
+            low: 0.0,
+            high: 1.0,
+        };
+
+        assert_eq!(
+            events_from_midi_message(&[0x82, 64, 0], &[mapping]),
+            vec![MidiControlEvent::TriggerCue(8)]
         );
     }
 

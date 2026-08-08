@@ -16,6 +16,7 @@
     "check:live-desk-header": "node scripts/check-viewport-containment.mjs --live-desk-header-only",
     "check:topbar-pulse": "node scripts/check-viewport-containment.mjs --topbar-pulse-only",
     "check:touch": "node scripts/check-dvc-touch-feature-preset.mjs && node scripts/check-viewport-containment.mjs --touch-only",
+    "check:dvc-midi-shortcuts": "node scripts/check-dvc-midi-shortcuts.mjs",
     "check:native-window": "node scripts/run-native-window-acceptance.mjs",
     "check:empty-states": "node scripts/check-empty-state-guidance.mjs",
     "check:cue-effect-recall": "node scripts/check-cue-effect-recall.mjs",

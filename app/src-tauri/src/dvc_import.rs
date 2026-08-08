@@ -15,11 +15,12 @@ use protocol::{
     CueEffectTarget, CueFixtureTarget, CueSummary, DmxModeSummary, DmxOutputConfig,
     DmxUniversePreview, EffectBeamTarget, EffectBlendMode, EffectClockSync, EffectParamsSnapshot,
     EngineSnapshot, FixtureProfileSummary, GeometrySummary, LfoEffectRequest, LfoShape,
-    MoveCoordinateMode, MoveDirection, MoveEffectRequest, MoveInterpolation, MovePathPoint,
-    PatchedFixtureSummary, ProjectFile, Rotation3, StageMapConfig, TimelineAudioClipSummary,
-    TimelineCueEventSummary, TimelineLayerKind, TimelineLayerSummary, TimelineTrackKind,
-    TouchControlBinding, TouchControlKind, TouchControlSummary, TouchFeaturePresetTarget,
-    TouchPageSummary, TouchSurfaceSummary, Vec3,
+    MidiControlAction, MidiControlMapping, MidiControlMessage, MoveCoordinateMode, MoveDirection,
+    MoveEffectRequest, MoveInterpolation, MovePathPoint, PatchedFixtureSummary, ProjectFile,
+    Rotation3, StageMapConfig, TimelineAudioClipSummary, TimelineCueEventSummary,
+    TimelineLayerKind, TimelineLayerSummary, TimelineTrackKind, TouchControlBinding,
+    TouchControlKind, TouchControlSummary, TouchFeaturePresetTarget, TouchPageSummary,
+    TouchSurfaceSummary, Vec3,
 };
 use roxmltree::{Document, Node};
 use serde::Serialize;
@@ -100,7 +101,7 @@ pub(crate) struct DvcImportSummary {
     pub(crate) missing_audio_files: usize,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub(crate) struct DvcImportReport {
     pub(crate) path: String,
     pub(crate) das_build: String,
@@ -111,6 +112,7 @@ pub(crate) struct DvcImportReport {
     pub(crate) skipped: DvcImportCategory,
     pub(crate) unsupported: DvcImportCategory,
     pub(crate) warnings: Vec<String>,
+    pub(crate) midi_mappings: Vec<MidiControlMapping>,
 }
 
 impl DvcImportReport {
@@ -128,6 +130,7 @@ impl DvcImportReport {
             skipped: DvcImportCategory::default(),
             unsupported: DvcImportCategory::default(),
             warnings: Vec::new(),
+            midi_mappings: Vec::new(),
         }
     }
 }
@@ -280,6 +283,8 @@ fn import_bytes(bytes: &[u8], path_label: &str) -> Result<DvcImportOutcome, Stri
         &snapshot.fixtures,
         &mut report,
     );
+    let midi_mappings = parse_midi_shortcuts(root, &scene_indices, &snapshot.cues, &mut report);
+    report.midi_mappings = midi_mappings;
     configure_disabled_dmx_routes(&mut snapshot);
 
     let fixture_group_count = direct_child(root, "FIXTUREGROUPS")
@@ -962,6 +967,216 @@ fn parse_touch_feature_preset_binding(
     })
 }
 
+#[derive(Debug)]
+struct ParsedDvcMidiEvent {
+    message: MidiControlMessage,
+    channel: u8,
+    number: u8,
+    device: String,
+}
+
+fn parse_dvc_midi_event(data: &str) -> Result<ParsedDvcMidiEvent, String> {
+    let mut parts = data.splitn(5, ':');
+    let status = parts
+        .next()
+        .ok_or_else(|| "MIDI status was missing".to_string())?
+        .parse::<u8>()
+        .map_err(|_| "MIDI status was invalid".to_string())?;
+    let channel = parts
+        .next()
+        .ok_or_else(|| "MIDI channel was missing".to_string())?
+        .parse::<u8>()
+        .map_err(|_| "MIDI channel was invalid".to_string())?;
+    let number = parts
+        .next()
+        .ok_or_else(|| "MIDI control number was missing".to_string())?
+        .parse::<u8>()
+        .map_err(|_| "MIDI control number was invalid".to_string())?;
+    let learned_value = parts
+        .next()
+        .ok_or_else(|| "MIDI learned value was missing".to_string())?
+        .parse::<u8>()
+        .map_err(|_| "MIDI learned value was invalid".to_string())?;
+    if channel > 15 {
+        return Err(format!("MIDI channel {channel} is outside 0..15"));
+    }
+    if number > 127 {
+        return Err(format!("MIDI control number {number} is outside 0..127"));
+    }
+    if learned_value > 127 {
+        return Err(format!(
+            "MIDI learned value {learned_value} is outside 0..127"
+        ));
+    }
+    let message = match status & 0xf0 {
+        0x80 => MidiControlMessage::NoteOff,
+        0x90 => MidiControlMessage::NoteOn,
+        0xb0 => MidiControlMessage::ControlChange,
+        0xc0 => MidiControlMessage::ProgramChange,
+        _ => {
+            return Err(format!(
+                "MIDI status {status} is not a supported channel message"
+            ))
+        }
+    };
+    Ok(ParsedDvcMidiEvent {
+        message,
+        channel,
+        number,
+        device: parts.next().unwrap_or_default().trim().to_string(),
+    })
+}
+
+fn dvc_midi_mapping(
+    event: ParsedDvcMidiEvent,
+    action: MidiControlAction,
+    cue_id: Option<u64>,
+) -> MidiControlMapping {
+    MidiControlMapping {
+        channel: Some(event.channel),
+        message: event.message,
+        number: event.number,
+        action,
+        fixture_id: None,
+        attribute: None,
+        group_id: None,
+        cue_id,
+        layer_id: None,
+        output_id: None,
+        video_param: None,
+        cue_point_index: None,
+        duration_ms: None,
+        low: 0.0,
+        high: 1.0,
+    }
+}
+
+fn parse_midi_shortcuts(
+    root: Node<'_, '_>,
+    scene_indices: &HashMap<String, usize>,
+    cues: &[CueSummary],
+    report: &mut DvcImportReport,
+) -> Vec<MidiControlMapping> {
+    let Some(shortcuts) = direct_child(root, "SHORTCUTS") else {
+        return Vec::new();
+    };
+    let mut mappings = Vec::new();
+    let mut device_affinity_count = 0_usize;
+    let mut custom_feedback_count = 0_usize;
+    for (shortcut_index, shortcut) in element_children(shortcuts)
+        .filter(|node| node.has_tag_name("SHORTCUT"))
+        .enumerate()
+    {
+        let item = format!("Shortcut {}", shortcut_index + 1);
+        let shortcut_type = shortcut.attribute("TYPE").unwrap_or_default();
+        if shortcut_type == "2" {
+            continue;
+        }
+        if shortcut_type != "1" {
+            report.unsupported.add(
+                1,
+                item,
+                format!("Daslight shortcut type {shortcut_type} is not yet mapped"),
+            );
+            continue;
+        }
+        let Some(event_data) =
+            direct_child(shortcut, "EVENT").and_then(|event| event.attribute("DATA"))
+        else {
+            report
+                .skipped
+                .add(1, item, "MIDI mapping EVENT DATA was missing");
+            continue;
+        };
+        let event = match parse_dvc_midi_event(event_data) {
+            Ok(event) => event,
+            Err(message) => {
+                report.skipped.add(1, item, message);
+                continue;
+            }
+        };
+        let has_device_affinity = !event.device.is_empty();
+        let Some(action_node) = direct_child(shortcut, "ACTION") else {
+            report
+                .skipped
+                .add(1, item, "MIDI mapping ACTION was missing");
+            continue;
+        };
+        let action_type = action_node.attribute("TYPE").unwrap_or_default();
+        let settings = direct_child(shortcut, "SETTINGS");
+        let mapped = match action_type {
+            // Verified in Daslight's mapping UI and the matching Touch action.
+            "107" => {
+                let Some(cue_id) = action_node
+                    .attribute("TARGET")
+                    .and_then(|target| scene_indices.get(target))
+                    .and_then(|index| cues.get(*index))
+                    .map(|cue| cue.id)
+                else {
+                    report.skipped.add(
+                        1,
+                        item,
+                        "Daslight Scene Play mapping referenced a missing imported cue",
+                    );
+                    continue;
+                };
+                let action = if settings
+                    .and_then(|node| node.attribute("FLASH"))
+                    .is_some_and(|value| value == "1")
+                {
+                    MidiControlAction::FlashCue
+                } else {
+                    MidiControlAction::TriggerCue
+                };
+                dvc_midi_mapping(event, action, Some(cue_id))
+            }
+            // Verified by a local Daslight project and the matching Touch action.
+            "55" => dvc_midi_mapping(event, MidiControlAction::TapBpm, None),
+            _ => {
+                let target_index = action_node.attribute("TARGETINDEX").unwrap_or("unknown");
+                report.unsupported.add(
+                    1,
+                    item,
+                    format!(
+                        "Daslight MIDI action type {action_type} (target index {target_index}) is not yet mapped"
+                    ),
+                );
+                continue;
+            }
+        };
+        if has_device_affinity {
+            // The selected input remains a Setup > I/O concern in Syndocal.
+            // Count this separately so the import report keeps that boundary visible.
+            device_affinity_count = device_affinity_count.saturating_add(1);
+        }
+        if settings.is_some_and(|node| {
+            ["OUT", "OUT1"].iter().any(|name| {
+                node.attribute(*name)
+                    .is_some_and(|value| !value.trim().is_empty())
+            })
+        }) {
+            custom_feedback_count = custom_feedback_count.saturating_add(1);
+        }
+        mappings.push(mapped);
+    }
+    report.converted.add(
+        mappings.len(),
+        "MIDI mappings",
+        format!("{} verified Daslight MIDI shortcut(s)", mappings.len()),
+    );
+    report.approximate.add(
+        device_affinity_count,
+        "MIDI input device affinity",
+        "Mappings were restored; select the intended MIDI input in Setup > I/O",
+    );
+    report.approximate.add(
+        custom_feedback_count,
+        "MIDI feedback",
+        "Daslight-specific output device and ON/OFF velocity colours are not represented",
+    );
+    mappings
+}
+
 fn parse_touch_surface(
     root: Node<'_, '_>,
     scene_indices: &HashMap<String, usize>,
@@ -985,11 +1200,6 @@ fn parse_touch_surface(
             let item = format!("Shortcut {}", shortcut_index + 1);
             let shortcut_type = shortcut.attribute("TYPE").unwrap_or_default();
             if shortcut_type != "2" {
-                report.unsupported.add(
-                    1,
-                    item,
-                    format!("Daslight shortcut type {shortcut_type} is not a Touch mapping"),
-                );
                 continue;
             }
             let Some(event_data) =
@@ -4149,6 +4359,14 @@ mod tests {
         )
     }
 
+    fn synthetic_midi_shortcuts_dvc() -> String {
+        synthetic_dvc().replacen(
+            "<SHORTCUTS>",
+            r#"<SHORTCUTS><SHORTCUT TYPE="1"><EVENT DATA="144:2:60:127:Controller:Port"/><ACTION TYPE="107" TARGET="scene-1" TARGETINDEX="0"/><SETTINGS MIN="0" MAX="1" FLASH="0" OUT="144:2:60:5:Controller" OUT1="144:2:60:1:Controller"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="144:2:61:127:Controller"/><ACTION TYPE="107" TARGET="scene-2" TARGETINDEX="1"/><SETTINGS MIN="0" MAX="1" FLASH="1"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="176:3:20:64:Controller"/><ACTION TYPE="55" TARGETINDEX="-1"/><SETTINGS MIN="0" MAX="1" FLASH="1"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="144:2:62:127:Controller"/><ACTION TYPE="108" TARGET="scene-1" TARGETINDEX="0"/><SETTINGS MIN="0" MAX="1" FLASH="1"/></SHORTCUT>"#,
+            1,
+        )
+    }
+
     fn synthetic_layout_dvc() -> String {
         let patch = r#"<PATCH NBFIXTURE="3"><FIXTURES><SSLLIBRARY SSLFIXUID="profile-layout" SSLNAME="Test/Layout.ssl2"><SSLPROPERTIES SSLBEAMOPENING="20"/><SSLMODES SSLNBMODE="1"><SSLMODE SSLMODEINDEX="0" SSLNBCHANNEL="1"><SSLCHANNEL SSLCHANNELTYPE="7" SSLCHANNELNAME="Dimmer" SSLCHANNELMSB="0" SSLCHANNELLSB="0"><SSLPRESETS><SSLPRESET SSLPRESETNAME="Dimmer" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL></SSLMODE></SSLMODES></SSLLIBRARY><FIXTURE DASUID="layout-1" NAME="Layout 1" ADDRESS="1" UNIVERS="1" SIZE="20" POSX="100" POSY="20" ANGLE="15"/><FIXTURE DASUID="layout-2" NAME="Layout 2" ADDRESS="2" UNIVERS="1" SIZE="30" POSX="220" POSY="-40" ANGLE="75"/><FIXTURE DASUID="layout-3" NAME="Layout 3" ADDRESS="3" UNIVERS="1" SIZE="40" POSX="400" POSY="80" ANGLE="195"/></FIXTURES></PATCH>"#;
         format!(
@@ -4427,6 +4645,78 @@ mod tests {
                 max_z: 30.0,
             }
         );
+    }
+
+    #[test]
+    fn dvc_midi_shortcuts_import_scene_tap_and_flash_without_guessing_unknown_actions() {
+        let outcome = import_bytes(
+            synthetic_midi_shortcuts_dvc().as_bytes(),
+            "synthetic-midi-shortcuts.dvc",
+        )
+        .unwrap();
+        assert_eq!(outcome.report.midi_mappings.len(), 3);
+        assert_eq!(
+            outcome.report.midi_mappings[0],
+            MidiControlMapping {
+                channel: Some(2),
+                message: MidiControlMessage::NoteOn,
+                number: 60,
+                action: MidiControlAction::TriggerCue,
+                fixture_id: None,
+                attribute: None,
+                group_id: None,
+                cue_id: Some(1),
+                layer_id: None,
+                output_id: None,
+                video_param: None,
+                cue_point_index: None,
+                duration_ms: None,
+                low: 0.0,
+                high: 1.0,
+            }
+        );
+        assert!(matches!(
+            outcome.report.midi_mappings[1],
+            MidiControlMapping {
+                channel: Some(2),
+                message: MidiControlMessage::NoteOn,
+                number: 61,
+                action: MidiControlAction::FlashCue,
+                cue_id: Some(2),
+                ..
+            }
+        ));
+        assert!(matches!(
+            outcome.report.midi_mappings[2],
+            MidiControlMapping {
+                channel: Some(3),
+                message: MidiControlMessage::ControlChange,
+                number: 20,
+                action: MidiControlAction::TapBpm,
+                cue_id: None,
+                ..
+            }
+        ));
+        assert!(outcome.report.unsupported.details.iter().any(|detail| {
+            detail.item == "Shortcut 4"
+                && detail
+                    .message
+                    .contains("MIDI action type 108 (target index 0)")
+        }));
+        assert!(!outcome.report.unsupported.details.iter().any(|detail| {
+            detail.message.contains("shortcut type 1")
+                || detail.message.contains("not a Touch mapping")
+        }));
+        assert!(outcome.report.converted.details.iter().any(|detail| {
+            detail.item == "MIDI mappings"
+                && detail.message == "3 verified Daslight MIDI shortcut(s)"
+        }));
+        assert!(outcome.report.approximate.details.iter().any(|detail| {
+            detail.item == "MIDI input device affinity" && detail.message.contains("Setup > I/O")
+        }));
+        assert!(outcome.report.approximate.details.iter().any(|detail| {
+            detail.item == "MIDI feedback" && detail.message.contains("ON/OFF velocity colours")
+        }));
     }
 
     #[test]
@@ -6565,6 +6855,65 @@ mod tests {
             control.binding.as_ref(),
             Some(TouchControlBinding::TapTempo)
         ));
+    }
+
+    #[test]
+    fn dvc_local_homecoming_midi_scene_tap_and_flash_shortcuts_import_when_present() {
+        let path = Path::new(r"C:\Users\kouty\Desktop\homecoming2026\homecoming2606.dvc");
+        if !path.is_file() {
+            eprintln!(
+                "Skipping local homecoming MIDI golden: {} is unavailable",
+                path.display()
+            );
+            return;
+        }
+        let outcome = import_path(path).unwrap();
+        assert_eq!(outcome.report.midi_mappings.len(), 14);
+        assert_eq!(
+            outcome
+                .report
+                .midi_mappings
+                .iter()
+                .filter(|mapping| mapping.action == MidiControlAction::TriggerCue)
+                .count(),
+            12
+        );
+        assert_eq!(
+            outcome
+                .report
+                .midi_mappings
+                .iter()
+                .filter(|mapping| mapping.action == MidiControlAction::FlashCue)
+                .count(),
+            1
+        );
+        assert_eq!(
+            outcome
+                .report
+                .midi_mappings
+                .iter()
+                .filter(|mapping| mapping.action == MidiControlAction::TapBpm)
+                .count(),
+            1
+        );
+        let unsupported_midi_actions = outcome
+            .report
+            .unsupported
+            .details
+            .iter()
+            .filter(|detail| detail.message.contains("Daslight MIDI action type"))
+            .map(|detail| detail.message.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(unsupported_midi_actions.len(), 3);
+        assert!(unsupported_midi_actions
+            .iter()
+            .any(|message| message.contains("action type 108")));
+        assert!(unsupported_midi_actions
+            .iter()
+            .any(|message| message.contains("action type 110")));
+        assert!(unsupported_midi_actions
+            .iter()
+            .any(|message| message.contains("action type 113")));
     }
 
     #[test]

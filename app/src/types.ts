@@ -63,6 +63,7 @@ export type MidiControlAction =
   | "GroupSolo"
   | "GroupPark"
   | "TriggerCue"
+  | "FlashCue"
   | "TriggerNextCue"
   | "TriggerPreviousCue"
   | "EffectEnabled"
@@ -758,6 +759,7 @@ export interface DvcImportReport {
   skipped: DvcImportCategory;
   unsupported: DvcImportCategory;
   warnings: string[];
+  midi_mappings: MidiControlMapping[];
 }
 
 export interface UserTemplateLoadResult extends ProjectLoadResult {

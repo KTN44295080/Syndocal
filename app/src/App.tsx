@@ -11143,7 +11143,7 @@ export default function App() {
         setMessage("Daslight Project import canceled.");
         return;
       }
-      await replaceProjectControlMappings([], []);
+      await replaceProjectControlMappings(report.midi_mappings ?? [], []);
       await resetProjectHistory();
       setCurrentProjectPath(null);
       setWorkspaceTab("setup");
@@ -11156,7 +11156,7 @@ export default function App() {
       clearProjectRecovery();
       setDvcImportReport(report);
       setMessage(
-        `Imported Daslight Project (.dvc): ${report.summary.fixtures} fixtures, ${report.summary.cues} cues. Save As to create a Syndocal Project (.sdc).`,
+        `Imported Daslight Project (.dvc): ${report.summary.fixtures} fixtures, ${report.summary.cues} cues, ${report.midi_mappings?.length ?? 0} MIDI mappings. Save As to create a Syndocal Project (.sdc).`,
       );
     } catch (error) {
       setMessage(`Daslight Project import failed: ${String(error)}`);

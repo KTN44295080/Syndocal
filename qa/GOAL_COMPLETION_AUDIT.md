@@ -43,8 +43,15 @@ Scope: Syndocal as a unified lighting and VJ application, preserving `.sdc v1` a
 - A full-size MIDI Learn and OSC Learn control now lives in the shared topbar. Learn mode colors all supported visible controls purple without changing their geometry; selecting a target adds an opacity-only dashed pulse that honors reduced-motion and pauses while off-screen.
 - The selected scene/fixture/master/blackout/timeline/Touch target is not executed while Learn is active. The next MIDI note/CC or OSC address creates the production mapping, replaces an existing binding from the same source, and starts the listener automatically. Timeout or failure restores the previous connection/listener.
 - The existing detailed MIDI/OSC editors, feedback, `.midimap` / `.oscmap` files and user-template persistence remain available. Video Master was added to both protocols and has direct input/feedback tests.
-- Learned mappings are project data: normal `.sdc` Save/Open, browser Recovery checkpoints, desktop autosave backups and pre-update backups preserve both mapping sets. Empty legacy `.sdc` files retain their prior serialized shape and load with empty mappings; New and DVC import intentionally clear mappings from the previous show.
+- Learned mappings are project data: normal `.sdc` Save/Open, browser Recovery checkpoints, desktop autosave backups and pre-update backups preserve both mapping sets. Empty legacy `.sdc` files retain their prior serialized shape and load with empty mappings; New clears mappings, while DVC import clears the previous show and installs the verified MIDI shortcuts recovered from the imported show.
 - `check:live-desk-header` passes at 1920x1080, 1920x1032, 2048x1152, 1366x768 and 1280x720 while proving the 42px single-row topbar, 32x40 Learn controls, visible-target arming, dashed selection, Cue mapping creation and listener restart. `cargo test -p io` passed 91/91 software tests (one physical-port test explicitly ignored), DVC tests passed 37/37, localization passed 2931/2931, and the production web build passed.
+
+## Addendum 2026-08-09: DVC MIDI shortcut preservation
+
+- Daslight `SHORTCUT TYPE=1` input tuples are parsed fail-closed as status/channel/number/learned-value/device. Verified action 107 restores Scene Play and action 55 restores Tap Tempo; unresolved 108/110/113/229 remain individually reported instead of being guessed.
+- Action 107 with `FLASH=1` persists as `FlashCue`: Note/CC press triggers the imported cue and release reuses the engine's existing explicit `ReleaseCue` route. Manual Note Off discrete mappings now also fire instead of being accepted by the editor but ignored at runtime.
+- The import result carries its MIDI mappings into the production controller state and subsequent `.sdc` Save/Recovery/backup path. Daslight input-device affinity and custom OUT/OUT1 LED velocities remain visible approximation boundaries because Syndocal currently selects the device globally and computes standard feedback from live state.
+- Current gates: `cargo test -p io --locked` passed 93 software tests with one physical-port test explicitly ignored; `cargo test -p syndocal --locked dvc_ -- --nocapture` passed 39/39; the 11-assertion DVC MIDI source gate, 2932/2932 localization gate, and production web build all passed.
 
 ## Addendum 2026-07-17: Unified desk and lighting show model (Daslight-parity series)
 

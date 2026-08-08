@@ -3154,6 +3154,7 @@ pub enum MidiControlAction {
     GroupSolo,
     GroupPark,
     TriggerCue,
+    FlashCue,
     TriggerNextCue,
     TriggerPreviousCue,
     EffectEnabled,

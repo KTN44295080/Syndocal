@@ -11,6 +11,7 @@ export const controlMappingTargetLabel = (mapping: MidiControlMapping | OscContr
     case "GroupSolo": return `Group ${mapping.group_id} solo`;
     case "GroupPark": return `Group ${mapping.group_id} park`;
     case "TriggerCue": return `Cue ${mapping.cue_id}`;
+    case "FlashCue": return `Cue ${mapping.cue_id} flash`;
     case "TriggerNextCue": return "Cue next";
     case "TriggerPreviousCue": return "Cue previous";
     case "EffectEnabled": return `Effect ${mapping.cue_id} enabled`;

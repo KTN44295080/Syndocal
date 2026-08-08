@@ -103,7 +103,7 @@
 | TIMELINE + BLOCK TYPE=1（シーン） | タイムラインシーンブロック（F2、conform=F3） | **正確** |
 | TOUCH | T11 touch_surface | **部分**（レイアウト対応表しだい） |
 | DEVICES（DVC GOLD等） | DMX出力ルート設定の初期値 | **参考情報**（ハード非互換のため案内表示） |
-| SHORTCUTS | MIDI/キー割当 | **部分** |
+| SHORTCUTS | MIDI/キー割当 | **部分・安全復元**（TYPE=1の107 Scene Play / 55 Tap Tempo / FLASH holdを復元。108/110/113/229は未推測で個別Unsupported） |
 
 ## 3. 実装計画案（トランシェ1本 + 検証資産）
 
@@ -135,6 +135,13 @@ DVC-1 で「解釈保留」だった 27 バイト行を Fable 直接実装で解
 
 **実装**: 行解釈は非致死（未知バリアントでもチャンネル値は常に保持し警告計上）。一意に対応付く R/G/B/Dimmer スロットとチャンネル値の整合性照合を行い、レポートへ `beam_records` / `beam_feature_checks` / `beam_feature_mismatches` を追加（EN/JA 対応）。
 **検証**: `cargo test -p syndocal dvc` 9/9。金標準 Shinkan2026 で **221 レコード解読 / 109 件照合 / 不一致 0** — ミラー説が実ショーで無矛盾。合成テストは整合・不整合（警告化・値保持）の両経路をカバー。
+
+## 実装記録（2026-08-09 DVC MIDI shortcut）
+
+- 実DVCの`SHORTCUT TYPE="1"`を全数監査し、`EVENT DATA="status:channel:number:value:device"`を検証付きでMIDI mappingへ変換する経路を追加した。
+- Action 107はScene Play、55はTap Tempoとして既存Touch actionとDaslight UI証拠が一致するものだけを変換する。`FLASH=1`は通常Scene Playへ丸めず、pressでTrigger・Note Off/CC zeroでReleaseする`FlashCue`へ保存する。
+- Homecoming実検体は17件中14件（Scene 13 + Tap 1）を復元し、108/110/113の3件は個別Unsupported。DSF/Laserの229は選択中live faderの対象表現が未確定なため未変換。入力device名とDaslight固有OUT/OUT1 feedback velocityもApproximateに明記する。
+- DVC import UIは旧showのmappingを消去した後、report内の復元mappingを本番stateへ設置する。その後の通常`.sdc` Save/Recovery/backupで保持される。
 
 ## 4. リスクと限界（正直な列挙）
 

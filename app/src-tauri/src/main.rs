@@ -5320,6 +5320,7 @@ fn connect_midi_control(
                 EngineCommand::SetGroupPark { group_id, enabled }
             }
             MidiControlEvent::TriggerCue(cue_id) => EngineCommand::TriggerCue(cue_id),
+            MidiControlEvent::ReleaseCue(cue_id) => EngineCommand::ReleaseCue(cue_id),
             MidiControlEvent::TriggerNextCue => EngineCommand::TriggerNextCue,
             MidiControlEvent::TriggerPreviousCue => EngineCommand::TriggerPreviousCue,
             MidiControlEvent::SetEffectEnabled { effect_id, enabled } => {
@@ -5652,6 +5653,7 @@ fn validate_mapping_required_fields_for_midi(
             normalize_mapping_group_id(&mut mapping.group_id, owner)?;
         }
         MidiControlAction::TriggerCue
+        | MidiControlAction::FlashCue
         | MidiControlAction::EffectEnabled
         | MidiControlAction::NodeGraphEnabled => {
             require_mapping_id(mapping.cue_id, owner, "cue/effect/node graph")?;

@@ -195,6 +195,7 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
             <option value="GroupSolo">Group Solo</option>
             <option value="GroupPark">Group Park</option>
             <option value="TriggerCue">Trigger Cue</option>
+            <option value="FlashCue">Flash Cue (hold)</option>
             <option value="TriggerNextCue">Cue Next</option>
             <option value="TriggerPreviousCue">Cue Previous</option>
             <option value="EffectEnabled">Effect Enable</option>
@@ -248,7 +249,7 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
           </select>
         </label>
       </Show>
-      <Show when={props.mapAction === "TriggerCue"}>
+      <Show when={props.mapAction === "TriggerCue" || props.mapAction === "FlashCue"}>
         <label>
           Cue
           <select value={props.selectedCueId ?? ""} onInput={(event) => props.onMapCueId(Number(event.currentTarget.value))}>
