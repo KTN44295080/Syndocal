@@ -30,7 +30,7 @@
 | 10 | 波形未照合（Documents版Fl-Strobe） | 保留 |
 
 時間換算: `EFFECT DURATION=5000` × Rate=N → 周期 = 5000/N ms（Sinus Rate=10 → 500ms周期）。
-Phasing = 選択ビーム間の位相分散（Syndocal側はLFO位相 + 分散の実装が必要な可能性）。Attribute value=Absolute。
+Phasing = 選択ビーム順の位相分散。2026-08-08 に Syndocal LFO の `fixture_spread` へ 0..1 の正規化値を無変換で保存し、`phase_i = global_phase + i / target_count * Phasing` として command-time に灯体順をコンパイルする実装へ更新した。直接指定灯体の後に group を patch 順で展開し、group membership 変更時も再コンパイルする。Sinus / Inverse Ramp / Strobe の非ゼロ値 0.2 / 0.6 / 0.4 と、3灯体の DMX8 出力 `[64, 0, 128]`（authored order `[2,1,3]`, Saw, spread=0.75, t=0）を回帰試験で固定。旧 `.sdc` は欠落時 0、0 は従来どおり非出力。Attribute value=Absolute。
 
 ### COLOR FX（RACK=2, EFFECT TYPE=2）→ Syndocal Color エンジン + 新規パターンレシピ
 

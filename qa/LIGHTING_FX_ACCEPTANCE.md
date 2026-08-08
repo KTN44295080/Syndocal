@@ -1,6 +1,6 @@
 # Lighting FX Acceptance
 
-Updated: 2026-07-23
+Updated: 2026-08-08
 
 ## Implemented tranche
 
@@ -27,6 +27,8 @@ Fixture bindings are compiled when fixtures are patched. A color is evaluated on
 `EffectKind::Chaser` is also an independent production runtime, preset and project body. Its ordered steps can address fixtures, hierarchical groups or explicit gaps and can scale one to sixteen independently ranged feature attributes. Forward, Reverse, Bounce and seeded Random traversal share deterministic engine/UI ordering; Pixels on, Wings, duty, Fading/Overlap, Size, Phase and fixture spread are live-editable, with free-time or beat-synced step clocks and the existing Override/Add/Multiply stack modes. Mixed fixture selections retain each feature on compatible fixtures, while unsupported fixture/feature pairs are skipped. The runtime precompiles fixture/step levels and feature bindings, caches one normalized step level per fixture/effect/tick, and avoids allocation in the per-attribute hot path.
 
 `EffectKind::Value` is now an independent production runtime, preset, project body and editor. It drives one scalar attribute from an operator-drawn envelope of 2 to 32 strictly-increasing `(position, value)` points with Step, Line or centripetal Catmull-Rom Smooth interpolation, Forward/Reverse/Bounce traversal, free-time or beat-synced clocks, phase, fixture spread and the existing Override/Add/Multiply stack modes. Absolute mode maps the envelope into the low..high range; Relative mode applies a bipolar offset around the incoming value (0.5 means no change). The envelope is compiled once per resolution, evaluated once per effect/fixture/tick via a per-target cache, and avoids allocation in the per-attribute hot path. Add/Update wait for snapshot publication and roll back on contention; dormant group targets survive a zero-compatible-fixture state and rebind after patch/group recovery. The legacy Pulse/Shared/Flash/Random/Perlin quick-look files remain LFO presets and are not presented as Value-body evidence.
+
+The legacy/general LFO runtime now also carries an additive, backward-compatible `fixture_spread` field. Lighting targets are compiled once in authored fixture order followed by group/patch order; each target receives `index / target_count * fixture_spread`, while video targets retain the shared global phase. Patch and group-membership changes rebuild the order. The Scene Settings action dock exposes this as `Fixture phasing %` for lighting LFOs without shrinking the existing controls. Engine acceptance fixes the exact three-fixture Saw output and the reordered two-fixture result, and DVC import tests preserve non-zero Sinus, Inverse Ramp and Strobe `Phasing` rather than reporting it as an approximation. Missing legacy fields default to zero and remain omitted when serialized, preserving the prior project byte shape.
 
 `EffectKind::Curve` is an independent production runtime, preset, project body and editor. Two to 32 points carry position, value and separate finite in/out tangents; command-time compilation produces a Cubic Hermite channel function. Forward/Reverse/Bounce, Absolute/Relative, free/beat timing, phase, fixture spread and stack blending match the scalar production paths. Cue-owned parameters and rack previews preserve the authored tangents.
 

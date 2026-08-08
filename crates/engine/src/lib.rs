@@ -3151,7 +3151,7 @@ impl RuntimeAudioReactiveNode {
 
 #[derive(Clone)]
 enum RuntimeEffectKind {
-    Lfo(LfoEffectRequest),
+    Lfo(RuntimeLfoEffect),
     PositionWave(PositionWaveEffectRequest),
     Color(RuntimeColorEffect),
     Chaser(RuntimeChaserEffect),
@@ -3201,6 +3201,19 @@ fn clear_runtime_effect_caches(kind: &RuntimeEffectKind) {
         }
         RuntimeEffectKind::Lfo(_) | RuntimeEffectKind::PositionWave(_) => {}
     }
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeLfoEffect {
+    request: LfoEffectRequest,
+    targets: Vec<RuntimeLfoTarget>,
+    target_indices: HashMap<FixtureId, usize>,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeLfoTarget {
+    fixture_id: FixtureId,
+    phase_offset: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -4963,11 +4976,11 @@ impl EngineRuntime {
         self.effects = effects
             .into_iter()
             .filter_map(|effect| match effect.kind {
-                RuntimeEffectKind::Lfo(request) => {
-                    let request = self.resolve_lfo_effect_request(request).ok()?;
+                RuntimeEffectKind::Lfo(runtime) => {
+                    let runtime = self.resolve_lfo_effect_request(runtime.request).ok()?;
                     Some(RuntimeEffect {
                         id: effect.id,
-                        kind: RuntimeEffectKind::Lfo(request),
+                        kind: RuntimeEffectKind::Lfo(runtime),
                         enabled: effect.enabled,
                         created_at: now,
                     })
@@ -5339,6 +5352,7 @@ impl EngineRuntime {
                     limits: FixtureLimits::default(),
                     color_binding,
                 });
+                self.rebuild_lfo_effect_targets();
                 self.rebuild_color_effect_targets();
                 self.rebuild_chaser_effect_targets();
                 self.rebuild_move_effect_targets();
@@ -5420,6 +5434,7 @@ impl EngineRuntime {
                 fixture.profile = profile;
                 fixture.mode_index = mode_index;
                 fixture.color_binding = color_binding;
+                self.rebuild_lfo_effect_targets();
                 self.rebuild_color_effect_targets();
                 self.rebuild_chaser_effect_targets();
                 self.rebuild_move_effect_targets();
@@ -5724,6 +5739,7 @@ impl EngineRuntime {
                     .find(|fixture| fixture.id == fixture_id)
                 {
                     fixture.request.group_ids = group_ids;
+                    self.rebuild_lfo_effect_targets();
                     self.rebuild_color_effect_targets();
                     self.rebuild_chaser_effect_targets();
                     self.rebuild_move_effect_targets();
@@ -7018,7 +7034,7 @@ impl EngineRuntime {
                     return;
                 };
                 let video_targets = match &mut effect.kind {
-                    RuntimeEffectKind::Lfo(request) => &mut request.video_targets,
+                    RuntimeEffectKind::Lfo(runtime) => &mut runtime.request.video_targets,
                     RuntimeEffectKind::PositionWave(request) => &mut request.video_targets,
                     RuntimeEffectKind::Color(_)
                     | RuntimeEffectKind::Chaser(_)
@@ -10613,11 +10629,11 @@ impl EngineRuntime {
                 .retain(|(candidate_id, _), _| *candidate_id != fixture_id);
         }
         self.effects.retain_mut(|effect| match &mut effect.kind {
-            RuntimeEffectKind::Lfo(request) => {
-                request.fixture_ids.retain(|id| *id != fixture_id);
-                !request.fixture_ids.is_empty()
-                    || !request.target_group_ids.is_empty()
-                    || !request.video_targets.is_empty()
+            RuntimeEffectKind::Lfo(runtime) => {
+                runtime.request.fixture_ids.retain(|id| *id != fixture_id);
+                !runtime.request.fixture_ids.is_empty()
+                    || !runtime.request.target_group_ids.is_empty()
+                    || !runtime.request.video_targets.is_empty()
             }
             RuntimeEffectKind::PositionWave(request) => {
                 request.fixture_ids.retain(|id| *id != fixture_id);
@@ -10671,6 +10687,7 @@ impl EngineRuntime {
                     || !runtime.request.cells.is_empty()
             }
         });
+        self.rebuild_lfo_effect_targets();
         self.rebuild_color_effect_targets();
         self.rebuild_chaser_effect_targets();
         self.rebuild_move_effect_targets();
@@ -10709,11 +10726,11 @@ impl EngineRuntime {
             fade.video_layer_timings.remove(&layer_id);
         }
         self.effects.retain_mut(|effect| match &mut effect.kind {
-            RuntimeEffectKind::Lfo(request) => {
-                remove_video_effect_layer_targets(&mut request.video_targets, layer_id);
-                !request.fixture_ids.is_empty()
-                    || !request.target_group_ids.is_empty()
-                    || !request.video_targets.is_empty()
+            RuntimeEffectKind::Lfo(runtime) => {
+                remove_video_effect_layer_targets(&mut runtime.request.video_targets, layer_id);
+                !runtime.request.fixture_ids.is_empty()
+                    || !runtime.request.target_group_ids.is_empty()
+                    || !runtime.request.video_targets.is_empty()
             }
             RuntimeEffectKind::PositionWave(request) => {
                 remove_video_effect_layer_targets(&mut request.video_targets, layer_id);
@@ -14136,7 +14153,8 @@ impl EngineRuntime {
     fn resolve_lfo_effect_request(
         &self,
         mut request: LfoEffectRequest,
-    ) -> Result<LfoEffectRequest, String> {
+    ) -> Result<RuntimeLfoEffect, String> {
+        validate_lfo_effect_request(&request)?;
         let light_attribute = self.resolve_effect_light_targets(
             &mut request.fixture_ids,
             &mut request.target_group_ids,
@@ -14154,7 +14172,21 @@ impl EngineRuntime {
                 "Effect must target at least one fixture, group, or video layer".to_string(),
             );
         }
-        Ok(request)
+        Ok(runtime_lfo_effect_from_request(request, &self.fixtures))
+    }
+
+    fn rebuild_lfo_effect_targets(&mut self) {
+        let fixtures = &self.fixtures;
+        self.effects.retain_mut(|effect| {
+            let RuntimeEffectKind::Lfo(runtime) = &mut effect.kind else {
+                return true;
+            };
+            *runtime = runtime_lfo_effect_from_request(runtime.request.clone(), fixtures);
+            !runtime.targets.is_empty()
+                || !runtime.request.target_group_ids.is_empty()
+                || !runtime.request.video_targets.is_empty()
+        });
+        self.sanitize_cue_effect_targets();
     }
 
     fn resolve_position_wave_effect_request(
@@ -21303,7 +21335,7 @@ fn timeline_conform_rate(free_run_period_ms: f64, conformed_period_ms: f64) -> O
 
 fn runtime_effect_free_run_period_ms(kind: &RuntimeEffectKind) -> Option<f64> {
     let period_ms = match kind {
-        RuntimeEffectKind::Lfo(request) => request.period_ms as f64,
+        RuntimeEffectKind::Lfo(runtime) => runtime.request.period_ms as f64,
         RuntimeEffectKind::PositionWave(request) => {
             let speed = f64::from(request.speed).abs();
             let wavelength = f64::from(request.wavelength).abs();
@@ -22811,7 +22843,8 @@ fn apply_runtime_video_effect_matching(
     include_param: &impl Fn(&VideoParam) -> bool,
 ) {
     match &effect.kind {
-        RuntimeEffectKind::Lfo(request) => {
+        RuntimeEffectKind::Lfo(runtime) => {
+            let request = &runtime.request;
             for target in request.video_targets.iter().filter(|target| {
                 target.layer_ids.contains(&layer.id) && include_param(&target.param)
             }) {
@@ -22926,17 +22959,18 @@ fn apply_runtime_effect_to_attribute(
             };
             next.unwrap_or(base_value)
         }
-        RuntimeEffectKind::Lfo(request) => {
-            if effect_targets_fixture_attribute(effect, fixture, attribute) {
-                blend_effect_value(
-                    base_value,
-                    evaluate_lfo_effect_at_rate(request, effect.created_at, now, clock, rate),
-                    &request.blend_mode,
-                )
-            } else {
-                base_value
-            }
-        }
+        RuntimeEffectKind::Lfo(runtime) => evaluate_runtime_lfo_attribute_at_rate(
+            runtime,
+            fixture.id,
+            attribute,
+            base_value,
+            effect.created_at,
+            now,
+            clock,
+            rate,
+        )
+        .map(|evaluated| blend_effect_value(base_value, evaluated, &runtime.request.blend_mode))
+        .unwrap_or(base_value),
         RuntimeEffectKind::PositionWave(request) => {
             if effect_targets_fixture_attribute(effect, fixture, attribute) {
                 blend_effect_value(
@@ -23088,13 +23122,9 @@ fn effect_targets_fixture_attribute(
     attribute: &str,
 ) -> bool {
     match &effect.kind {
-        RuntimeEffectKind::Lfo(request) => {
-            request.attribute.eq_ignore_ascii_case(attribute)
-                && request_targets_fixture(
-                    request.fixture_ids.as_slice(),
-                    request.target_group_ids.as_slice(),
-                    fixture,
-                )
+        RuntimeEffectKind::Lfo(runtime) => {
+            runtime.request.attribute.eq_ignore_ascii_case(attribute)
+                && runtime.target_indices.contains_key(&fixture.id)
         }
         RuntimeEffectKind::PositionWave(request) => {
             request.attribute.eq_ignore_ascii_case(attribute)
@@ -23767,21 +23797,22 @@ fn validate_node_graph_output_node(
 
 fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
     match &effect.kind {
-        RuntimeEffectKind::Lfo(request) => EffectSummary {
+        RuntimeEffectKind::Lfo(runtime) => EffectSummary {
             id: effect.id,
-            label: request.label.clone(),
+            label: runtime.request.label.clone(),
             effect_type: EffectKind::Lfo,
-            fixture_ids: request.fixture_ids.clone(),
-            target_group_ids: request.target_group_ids.clone(),
-            attribute: request.attribute.clone(),
-            video_targets: request.video_targets.clone(),
-            shape: request.shape.clone(),
-            period_ms: Some(request.period_ms),
-            clock_sync: request.clock_sync,
-            low: request.low,
-            high: request.high,
-            phase: request.phase,
-            blend_mode: request.blend_mode.clone(),
+            fixture_ids: runtime.request.fixture_ids.clone(),
+            target_group_ids: runtime.request.target_group_ids.clone(),
+            attribute: runtime.request.attribute.clone(),
+            video_targets: runtime.request.video_targets.clone(),
+            shape: runtime.request.shape.clone(),
+            period_ms: Some(runtime.request.period_ms),
+            clock_sync: runtime.request.clock_sync,
+            low: runtime.request.low,
+            high: runtime.request.high,
+            phase: runtime.request.phase,
+            fixture_spread: runtime.request.fixture_spread,
+            blend_mode: runtime.request.blend_mode.clone(),
             origin: None,
             direction: None,
             speed: None,
@@ -23809,6 +23840,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             low: request.low,
             high: request.high,
             phase: request.phase,
+            fixture_spread: 0.0,
             blend_mode: request.blend_mode.clone(),
             origin: Some(request.origin),
             direction: Some(request.direction),
@@ -23837,6 +23869,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             low: 0,
             high: u16::MAX,
             phase: runtime.request.phase,
+            fixture_spread: runtime.request.fixture_spread,
             blend_mode: runtime.request.blend_mode.clone(),
             origin: None,
             direction: None,
@@ -23885,6 +23918,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
                 low: first_feature.map(|feature| feature.low).unwrap_or(0),
                 high: first_feature.map(|feature| feature.high).unwrap_or(0),
                 phase: runtime.request.phase,
+                fixture_spread: runtime.request.fixture_spread,
                 blend_mode: runtime.request.blend_mode.clone(),
                 origin: None,
                 direction: None,
@@ -23914,6 +23948,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             low: 0,
             high: u16::MAX,
             phase: runtime.request.phase,
+            fixture_spread: runtime.request.fixture_spread,
             blend_mode: runtime.request.blend_mode.clone(),
             origin: None,
             direction: None,
@@ -23942,6 +23977,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             low: runtime.request.low,
             high: runtime.request.high,
             phase: runtime.request.phase,
+            fixture_spread: runtime.request.fixture_spread,
             blend_mode: runtime.request.blend_mode.clone(),
             origin: None,
             direction: None,
@@ -23970,6 +24006,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             low: runtime.request.low,
             high: runtime.request.high,
             phase: runtime.request.phase,
+            fixture_spread: runtime.request.fixture_spread,
             blend_mode: runtime.request.blend_mode.clone(),
             origin: None,
             direction: None,
@@ -23998,6 +24035,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             low: runtime.request.low,
             high: runtime.request.high,
             phase: runtime.request.phase,
+            fixture_spread: runtime.request.fixture_spread,
             blend_mode: runtime.request.blend_mode.clone(),
             origin: None,
             direction: None,
@@ -24026,6 +24064,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             low: 0,
             high: u16::MAX,
             phase: runtime.request.phase,
+            fixture_spread: 0.0,
             blend_mode: runtime.request.blend_mode.clone(),
             origin: None,
             direction: None,
@@ -24045,19 +24084,24 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
 
 fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<RuntimeEffect> {
     let kind = match effect.effect_type {
-        EffectKind::Lfo => RuntimeEffectKind::Lfo(LfoEffectRequest {
-            label: effect.label.clone(),
-            fixture_ids: effect.fixture_ids.clone(),
-            target_group_ids: effect.target_group_ids.clone(),
-            attribute: effect.attribute.clone(),
-            video_targets: effect.video_targets.clone(),
-            shape: effect.shape.clone(),
-            period_ms: effect.period_ms?,
-            clock_sync: effect.clock_sync,
-            low: effect.low,
-            high: effect.high,
-            phase: effect.phase,
-            blend_mode: effect.blend_mode.clone(),
+        EffectKind::Lfo => RuntimeEffectKind::Lfo(RuntimeLfoEffect {
+            request: LfoEffectRequest {
+                label: effect.label.clone(),
+                fixture_ids: effect.fixture_ids.clone(),
+                target_group_ids: effect.target_group_ids.clone(),
+                attribute: effect.attribute.clone(),
+                video_targets: effect.video_targets.clone(),
+                shape: effect.shape.clone(),
+                period_ms: effect.period_ms?,
+                clock_sync: effect.clock_sync,
+                low: effect.low,
+                high: effect.high,
+                phase: effect.phase,
+                fixture_spread: effect.fixture_spread,
+                blend_mode: effect.blend_mode.clone(),
+            },
+            targets: Vec::new(),
+            target_indices: HashMap::new(),
         }),
         EffectKind::PositionWave => RuntimeEffectKind::PositionWave(PositionWaveEffectRequest {
             label: effect.label.clone(),
@@ -24145,6 +24189,74 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
         enabled: effect.enabled,
         created_at: now,
     })
+}
+
+fn validate_lfo_effect_request(request: &LfoEffectRequest) -> Result<(), String> {
+    if request.label.trim().is_empty() {
+        return Err("LFO effect label is required".to_string());
+    }
+    if request.period_ms < 10 {
+        return Err("LFO effect period must be at least 10 ms".to_string());
+    }
+    if let Some(clock_sync) = request.clock_sync {
+        if !clock_sync.beats.is_finite() || clock_sync.beats <= 0.0 {
+            return Err(
+                "LFO effect clock sync beats must be finite and greater than 0".to_string(),
+            );
+        }
+    }
+    if !request.phase.is_finite() || !request.fixture_spread.is_finite() {
+        return Err("LFO effect phase and fixture spread must be finite".to_string());
+    }
+    if !(0.0..=1.0).contains(&request.fixture_spread) {
+        return Err("LFO effect fixture spread must be within 0..1".to_string());
+    }
+    Ok(())
+}
+
+fn runtime_lfo_effect_from_request(
+    request: LfoEffectRequest,
+    fixtures: &[RuntimeFixture],
+) -> RuntimeLfoEffect {
+    let mut fixture_ids = Vec::new();
+    let mut seen = HashSet::new();
+    for fixture_id in &request.fixture_ids {
+        if fixtures.iter().any(|fixture| fixture.id == *fixture_id) && seen.insert(*fixture_id) {
+            fixture_ids.push(*fixture_id);
+        }
+    }
+    for group_id in &request.target_group_ids {
+        for fixture in fixtures.iter().filter(|fixture| {
+            fixture
+                .request
+                .group_ids
+                .iter()
+                .any(|fixture_group| group_matches(fixture_group, group_id))
+        }) {
+            if seen.insert(fixture.id) {
+                fixture_ids.push(fixture.id);
+            }
+        }
+    }
+    let count = fixture_ids.len().max(1) as f32;
+    let targets = fixture_ids
+        .into_iter()
+        .enumerate()
+        .map(|(index, fixture_id)| RuntimeLfoTarget {
+            fixture_id,
+            phase_offset: index as f32 / count * request.fixture_spread,
+        })
+        .collect::<Vec<_>>();
+    let target_indices = targets
+        .iter()
+        .enumerate()
+        .map(|(index, target)| (target.fixture_id, index))
+        .collect();
+    RuntimeLfoEffect {
+        request,
+        targets,
+        target_indices,
+    }
 }
 
 fn validate_runtime_color_effect_request(request: &ColorEffectRequest) -> Result<(), String> {
@@ -27924,6 +28036,7 @@ fn evaluate_lfo_effect(
     evaluate_lfo_effect_at_rate(request, created_at, now, clock, 1.0)
 }
 
+#[cfg(test)]
 fn evaluate_lfo_effect_at_rate(
     request: &LfoEffectRequest,
     created_at: Instant,
@@ -27934,8 +28047,40 @@ fn evaluate_lfo_effect_at_rate(
     scale_effect_u16_directed(
         request.low,
         request.high,
-        evaluate_lfo_effect_normalized(request, created_at, now, clock, rate),
+        evaluate_lfo_effect_normalized_with_offset(request, 0.0, created_at, now, clock, rate),
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_runtime_lfo_attribute_at_rate(
+    runtime: &RuntimeLfoEffect,
+    fixture_id: FixtureId,
+    attribute: &str,
+    _base_value: u16,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> Option<u16> {
+    if !runtime.request.attribute.eq_ignore_ascii_case(attribute) {
+        return None;
+    }
+    let target = runtime
+        .target_indices
+        .get(&fixture_id)
+        .and_then(|index| runtime.targets.get(*index))?;
+    Some(scale_effect_u16_directed(
+        runtime.request.low,
+        runtime.request.high,
+        evaluate_lfo_effect_normalized_with_offset(
+            &runtime.request,
+            target.phase_offset,
+            created_at,
+            now,
+            clock,
+            rate,
+        ),
+    ))
 }
 
 #[cfg(test)]
@@ -27961,12 +28106,24 @@ fn evaluate_lfo_video_effect_at_rate(
     scale_effect_float(
         target.low,
         target.high,
-        evaluate_lfo_effect_normalized(request, created_at, now, clock, rate),
+        evaluate_lfo_effect_normalized_with_offset(request, 0.0, created_at, now, clock, rate),
     )
 }
 
+#[cfg(test)]
 fn evaluate_lfo_effect_normalized(
     request: &LfoEffectRequest,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> f32 {
+    evaluate_lfo_effect_normalized_with_offset(request, 0.0, created_at, now, clock, rate)
+}
+
+fn evaluate_lfo_effect_normalized_with_offset(
+    request: &LfoEffectRequest,
+    fixture_phase_offset: f32,
     created_at: Instant,
     now: Instant,
     clock: &ClockSnapshot,
@@ -27976,12 +28133,13 @@ fn evaluate_lfo_effect_normalized(
     if let Some(clock_sync) = request.clock_sync {
         let beats = clock_sync.beats.max(0.000_1);
         let beat_position = clock.beat_counter as f32 + clock.beat_phase;
-        let phase = (beat_position / beats * rate + request.phase).rem_euclid(1.0);
+        let phase =
+            (beat_position / beats * rate + request.phase + fixture_phase_offset).rem_euclid(1.0);
         return evaluate_lfo_shape(&request.shape, phase);
     }
     let period = request.period_ms.max(10) as f32 / 1000.0;
     let elapsed = now.saturating_duration_since(created_at).as_secs_f32();
-    let phase = (elapsed * rate / period + request.phase).rem_euclid(1.0);
+    let phase = (elapsed * rate / period + request.phase + fixture_phase_offset).rem_euclid(1.0);
     evaluate_lfo_shape(&request.shape, phase)
 }
 
@@ -31124,6 +31282,7 @@ mod tests {
                     low: 0,
                     high: u16::MAX,
                     phase: 0.0,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Override,
                 },
             });
@@ -31468,6 +31627,7 @@ mod tests {
             low,
             high,
             phase,
+            fixture_spread: 0.0,
             blend_mode,
         }
     }
@@ -31499,7 +31659,7 @@ mod tests {
             runtime.effect_activations.len(),
         );
         match &runtime.effect_activations[range.start].effect.kind {
-            RuntimeEffectKind::Lfo(request) => request.clone(),
+            RuntimeEffectKind::Lfo(runtime) => runtime.request.clone(),
             _ => panic!("expected Lfo activation"),
         }
     }
@@ -32982,6 +33142,7 @@ mod tests {
                 low: 0,
                 high: 65_535,
                 phase: 0.0,
+                fixture_spread: 0.0,
                 blend_mode: EffectBlendMode::Override,
                 origin: None,
                 direction: None,
@@ -34471,6 +34632,7 @@ mod tests {
                     low: 0,
                     high: 65_535,
                     phase: 0.0,
+                    fixture_spread: 0.5,
                     blend_mode: EffectBlendMode::Override,
                     origin: None,
                     direction: None,
@@ -34499,6 +34661,7 @@ mod tests {
                     low: 0,
                     high: 65_535,
                     phase: 0.0,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Override,
                     origin: None,
                     direction: None,
@@ -34527,6 +34690,7 @@ mod tests {
                     low: 0,
                     high: 65_535,
                     phase: 0.0,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Override,
                     origin: None,
                     direction: None,
@@ -34576,6 +34740,7 @@ mod tests {
         assert_eq!(loaded.effects[0].fixture_ids, vec![1]);
         assert_eq!(loaded.effects[0].target_group_ids, vec!["front"]);
         assert_eq!(loaded.effects[0].attribute, "Dimmer");
+        assert_eq!(loaded.effects[0].fixture_spread, 0.5);
         assert_eq!(loaded.effects[0].video_targets[0].layer_ids, vec![2]);
     }
 
@@ -34716,6 +34881,7 @@ mod tests {
                     low: 0,
                     high: 65_535,
                     phase: 0.0,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Override,
                     origin: None,
                     direction: None,
@@ -34744,6 +34910,7 @@ mod tests {
                     low: 0,
                     high: 65_535,
                     phase: 0.0,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Override,
                     origin: None,
                     direction: None,
@@ -35953,6 +36120,7 @@ mod tests {
                     low: 0,
                     high: 65_535,
                     phase: 0.0,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -36396,6 +36564,7 @@ mod tests {
                     low: 0,
                     high: u16::MAX,
                     phase: 0.0,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -46235,6 +46404,7 @@ mod tests {
                     low: 0,
                     high: 65_535,
                     phase: 0.25,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -46546,6 +46716,7 @@ mod tests {
                     low: 0,
                     high: u16::MAX,
                     phase: 0.0,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -47087,6 +47258,7 @@ mod tests {
                     low: 0,
                     high: 65_535,
                     phase: 0.25,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -47126,6 +47298,7 @@ mod tests {
                     low: 0,
                     high: 65_535,
                     phase: 0.25,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -47190,6 +47363,7 @@ mod tests {
                     low: 0,
                     high: 65_535,
                     phase: 0.0,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -47226,6 +47400,7 @@ mod tests {
                     low: 0,
                     high: 65_535,
                     phase: 0.0,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -47261,6 +47436,7 @@ mod tests {
                     low: 0,
                     high: 65_535,
                     phase: 0.0,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -47325,6 +47501,7 @@ mod tests {
                     low: 0,
                     high: 65_535,
                     phase: 0.25,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -47366,6 +47543,7 @@ mod tests {
                     low: 0,
                     high: 65_535,
                     phase: 0.25,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -47495,6 +47673,7 @@ mod tests {
                     low: 0,
                     high: 65_535,
                     phase: 0.25,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -47583,6 +47762,7 @@ mod tests {
                     low: 0,
                     high: 65_535,
                     phase: 0.25,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -47664,6 +47844,7 @@ mod tests {
                     low: 0,
                     high: 65_535,
                     phase: 0.25,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -47735,6 +47916,7 @@ mod tests {
                     low: 0,
                     high: 65_535,
                     phase: 0.25,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -48127,6 +48309,7 @@ mod tests {
                     low: 0,
                     high: 65_535,
                     phase: 0.25,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -48214,6 +48397,7 @@ mod tests {
                     low: 0,
                     high: 65_535,
                     phase: 0.25,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -48283,6 +48467,7 @@ mod tests {
                     low: 0,
                     high: 65_535,
                     phase: 0.25,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -48366,6 +48551,7 @@ mod tests {
                         low,
                         high: low,
                         phase: 0.0,
+                        fixture_spread: 0.0,
                         blend_mode: EffectBlendMode::Override,
                     },
                 })
@@ -48407,6 +48593,7 @@ mod tests {
                     low: 4_000,
                     high: 5_000,
                     phase: 0.25,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Add,
                 },
             })
@@ -48628,6 +48815,7 @@ mod tests {
                         low,
                         high: low,
                         phase: 0.0,
+                        fixture_spread: 0.0,
                         blend_mode,
                     },
                 })
@@ -48721,6 +48909,7 @@ mod tests {
                     low: 0,
                     high: 65_535,
                     phase: 0.25,
+                    fixture_spread: 0.0,
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -49156,6 +49345,7 @@ mod tests {
             low: 0,
             high: 65_535,
             phase: 0.0,
+            fixture_spread: 0.0,
             blend_mode: EffectBlendMode::Override,
         };
         let clock = ClockSnapshot {
@@ -49176,6 +49366,81 @@ mod tests {
         );
 
         assert!((normalized - 0.375).abs() < 0.001, "{normalized}");
+    }
+
+    #[test]
+    fn lfo_fixture_spread_uses_authored_then_group_order_and_rebuilds_on_membership_change() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        for (fixture_id, address, groups) in [
+            (1, 1, vec!["Front".to_string()]),
+            (2, 5, Vec::new()),
+            (3, 9, vec!["Front".to_string()]),
+        ] {
+            let mut patch = sample_patch_request(&format!("LFO Fixture {fixture_id}"), address);
+            patch.group_ids = groups;
+            runtime.apply_command(EngineCommand::PatchFixture {
+                fixture_id,
+                request: patch,
+                profile: sample_profile(),
+            });
+        }
+        runtime.apply_command(EngineCommand::AddLfoEffect {
+            effect_id: 90,
+            request: LfoEffectRequest {
+                label: "Ordered phasing".to_string(),
+                fixture_ids: vec![2],
+                target_group_ids: vec!["Front".to_string()],
+                attribute: "Dimmer".to_string(),
+                video_targets: Vec::new(),
+                shape: LfoShape::Saw,
+                period_ms: 1_000,
+                clock_sync: None,
+                low: 0,
+                high: u16::MAX,
+                phase: 0.0,
+                fixture_spread: 0.75,
+                blend_mode: EffectBlendMode::Override,
+            },
+        });
+        assert_eq!(runtime.last_error, None);
+        let started_at = Instant::now();
+        runtime.effects[0].created_at = started_at;
+        let RuntimeEffectKind::Lfo(effect) = &runtime.effects[0].kind else {
+            panic!("expected LFO runtime");
+        };
+        assert_eq!(
+            effect
+                .targets
+                .iter()
+                .map(|target| target.fixture_id)
+                .collect::<Vec<_>>(),
+            vec![2, 1, 3],
+        );
+        let frame = runtime.render_dmx_frame_for_universe(0, started_at);
+        assert_eq!([frame[0], frame[4], frame[8]], [64, 0, 128]);
+
+        runtime.apply_command(EngineCommand::SetFixtureGroups {
+            fixture_id: 1,
+            group_ids: Vec::new(),
+        });
+        assert_eq!(runtime.last_error, None);
+        runtime.effects[0].created_at = started_at;
+        let RuntimeEffectKind::Lfo(effect) = &runtime.effects[0].kind else {
+            panic!("expected rebuilt LFO runtime");
+        };
+        assert_eq!(
+            effect
+                .targets
+                .iter()
+                .map(|target| target.fixture_id)
+                .collect::<Vec<_>>(),
+            vec![2, 3],
+        );
+        let rebuilt = runtime.render_dmx_frame_for_universe(0, started_at);
+        assert_eq!([rebuilt[0], rebuilt[4], rebuilt[8]], [0, 0, 96]);
     }
 
     #[test]
@@ -52381,20 +52646,24 @@ mod tests {
 
         runtime.effects.push(RuntimeEffect {
             id: 101,
-            kind: RuntimeEffectKind::Lfo(LfoEffectRequest {
-                label: "Keep LFO".to_string(),
-                fixture_ids: vec![1],
-                target_group_ids: Vec::new(),
-                attribute: "Dimmer".to_string(),
-                video_targets: Vec::new(),
-                shape: LfoShape::Sine,
-                period_ms: 500,
-                clock_sync: None,
-                low: 0,
-                high: u16::MAX,
-                phase: 0.0,
-                blend_mode: EffectBlendMode::Override,
-            }),
+            kind: RuntimeEffectKind::Lfo(runtime_lfo_effect_from_request(
+                LfoEffectRequest {
+                    label: "Keep LFO".to_string(),
+                    fixture_ids: vec![1],
+                    target_group_ids: Vec::new(),
+                    attribute: "Dimmer".to_string(),
+                    video_targets: Vec::new(),
+                    shape: LfoShape::Sine,
+                    period_ms: 500,
+                    clock_sync: None,
+                    low: 0,
+                    high: u16::MAX,
+                    phase: 0.0,
+                    fixture_spread: 0.0,
+                    blend_mode: EffectBlendMode::Override,
+                },
+                &runtime.fixtures,
+            )),
             enabled: true,
             created_at: Instant::now(),
         });
@@ -55649,9 +55918,10 @@ mod tests {
         assert_eq!(runtime.timeline_events[0].iteration_period_ms, 4_000);
         assert_eq!(runtime.timeline_events[0].rate, Some(0.25));
 
-        let RuntimeEffectKind::Lfo(mut request) = runtime.effects[0].kind.clone() else {
+        let RuntimeEffectKind::Lfo(runtime_effect) = runtime.effects[0].kind.clone() else {
             panic!("test effect must be an LFO");
         };
+        let mut request = runtime_effect.request;
         request.period_ms = 2_000;
         runtime.apply_command(EngineCommand::UpdateLfoEffect {
             effect_id: 1,
@@ -55715,11 +55985,11 @@ mod tests {
         let contributions = active
             .iter()
             .map(|(_, activation)| {
-                let RuntimeEffectKind::Lfo(request) = &activation.effect.kind else {
+                let RuntimeEffectKind::Lfo(runtime) = &activation.effect.kind else {
                     panic!("owned test effect must be an LFO");
                 };
                 evaluate_lfo_effect_at_rate(
-                    request,
+                    &runtime.request,
                     activation.effect.created_at,
                     sampled_at,
                     &clock,
@@ -55789,7 +56059,11 @@ mod tests {
         let RuntimeEffectKind::Lfo(captured) = runtime.effects[0].kind.clone() else {
             panic!("test stack effect must be an LFO");
         };
-        create_effect_only_cue(&mut runtime, 1, vec![owned_lfo_target(1, captured.clone())]);
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![owned_lfo_target(1, captured.request.clone())],
+        );
         create_effect_only_cue(
             &mut runtime,
             2,
@@ -55835,8 +56109,8 @@ mod tests {
         );
         assert!(matches!(
             &runtime.effects[0].kind,
-            RuntimeEffectKind::Lfo(request)
-                if request.shape == LfoShape::Square && request.phase == 0.75
+            RuntimeEffectKind::Lfo(runtime)
+                if runtime.request.shape == LfoShape::Square && runtime.request.phase == 0.75
         ));
     }
 
@@ -56280,7 +56554,7 @@ mod tests {
         let RuntimeEffectKind::Lfo(captured) = runtime.effects[0].kind.clone() else {
             panic!("test stack effect must be an LFO");
         };
-        create_effect_only_cue(&mut runtime, 1, vec![owned_lfo_target(7, captured)]);
+        create_effect_only_cue(&mut runtime, 1, vec![owned_lfo_target(7, captured.request)]);
         create_effect_only_cue(
             &mut runtime,
             2,

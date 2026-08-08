@@ -23751,12 +23751,17 @@ async function runFxVisualViewport(client, viewport) {
       const selector = specificSelectors[expectedType] ?? "";
       editor?.scrollIntoView({ block: "nearest", inline: "nearest" });
       const fields = [...(editor?.querySelectorAll("button, input, select") ?? [])];
+      const lfoFixturePhasing = editor?.querySelector('input[aria-label="LFO fixture phasing percent"]');
+      const lfoFixturePhasingRect = lfoFixturePhasing?.getBoundingClientRect();
       return {
         expectedType,
         editorType: editor?.getAttribute("data-scene-settings-effect-editor") ?? "",
         specificEditorCount: selector ? pane?.querySelectorAll(selector).length ?? 0 : 0,
         actionPanelCount: editor?.querySelectorAll(".effectActionDock").length ?? 0,
         fieldCount: fields.length,
+        lfoFixturePhasingCount: editor?.querySelectorAll('input[aria-label="LFO fixture phasing percent"]').length ?? 0,
+        lfoFixturePhasingValue: lfoFixturePhasing?.value ?? "",
+        lfoFixturePhasingVisible: Boolean(lfoFixturePhasingRect && lfoFixturePhasingRect.width > 0 && lfoFixturePhasingRect.height > 0),
         horizontalOverflowPx: editor
           ? Math.max(0, editor.scrollWidth - editor.clientWidth)
           : Number.POSITIVE_INFINITY,
@@ -23897,7 +23902,11 @@ async function runFxVisualViewport(client, viewport) {
         && entry.actionPanelCount === 1
         && entry.fieldCount > 0
         && entry.horizontalOverflowPx <= 1
-        && (entry.expectedType === "Lfo" || entry.specificEditorCount === 1))],
+        && (entry.expectedType === "Lfo"
+          ? entry.lfoFixturePhasingCount === 1
+            && entry.lfoFixturePhasingValue === "50"
+            && entry.lfoFixturePhasingVisible
+          : entry.specificEditorCount === 1))],
     ["stepsNavigationUsesIntegratedSceneDetails", () =>
       stepsNavigation.cueEditOpened
       && stepsNavigation.cueRecallOpened

@@ -2304,6 +2304,10 @@ pub struct LfoEffectRequest {
     pub low: u16,
     pub high: u16,
     pub phase: f32,
+    /// Distributes stable target-order offsets across one complete LFO cycle.
+    /// Zero preserves the legacy behavior where every lighting target shares one phase.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub fixture_spread: f32,
     pub blend_mode: EffectBlendMode,
 }
 
@@ -2678,6 +2682,8 @@ pub struct EffectSummary {
     pub low: u16,
     pub high: u16,
     pub phase: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub fixture_spread: f32,
     pub blend_mode: EffectBlendMode,
     pub origin: Option<Vec3>,
     pub direction: Option<Vec3>,
@@ -4065,6 +4071,7 @@ mod tests {
                 low: 1_024,
                 high: 60_000,
                 phase: 0.25,
+                fixture_spread: 0.5,
                 blend_mode: super::EffectBlendMode::Override,
             })),
             transition_ms: Some(900),
@@ -4078,7 +4085,28 @@ mod tests {
                 ["period_ms"],
             1_000
         );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&encoded).unwrap()["params"]["Lfo"]
+                ["fixture_spread"],
+            0.5
+        );
         assert_eq!(decoded.transition_ms, Some(900));
+
+        let mut legacy_owned_value = serde_json::to_value(&target).unwrap();
+        legacy_owned_value["params"]["Lfo"]
+            .as_object_mut()
+            .unwrap()
+            .remove("fixture_spread");
+        let legacy_owned: super::CueEffectTarget =
+            serde_json::from_value(legacy_owned_value).unwrap();
+        let Some(super::EffectParamsSnapshot::Lfo(legacy_request)) = legacy_owned.params else {
+            panic!("legacy owned LFO must remain an LFO");
+        };
+        assert_eq!(legacy_request.fixture_spread, 0.0);
+        assert!(serde_json::to_value(legacy_request)
+            .unwrap()
+            .get("fixture_spread")
+            .is_none());
 
         let legacy: super::CueEffectTarget =
             serde_json::from_str(r#"{"effect_id":3,"enabled":true}"#).unwrap();
@@ -4298,6 +4326,7 @@ mod tests {
         let parsed: super::EffectSummary = serde_json::from_value(value).unwrap();
 
         assert_eq!(parsed.effect_type, super::EffectKind::Lfo);
+        assert_eq!(parsed.fixture_spread, 0.0);
         assert!(parsed.color.is_none());
         assert!(parsed.chaser.is_none());
         assert!(parsed.move_effect.is_none());
@@ -4305,6 +4334,10 @@ mod tests {
         assert!(parsed.curve.is_none());
         assert!(parsed.mapping.is_none());
         assert!(parsed.color_mapping.is_none());
+        assert!(serde_json::to_value(&parsed)
+            .unwrap()
+            .get("fixture_spread")
+            .is_none());
         let serialized = serde_json::to_string(&parsed).unwrap();
         assert!(!serialized.contains("\"mapping\""));
         assert!(!serialized.contains("\"color_mapping\""));

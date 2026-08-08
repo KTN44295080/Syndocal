@@ -1842,6 +1842,9 @@ fn convert_dvc_inverse_ramp_effect(
     if !offset.is_finite() || !phasing.is_finite() {
         return Err("Offset and Phasing must be finite".to_string());
     }
+    if !(0.0..=1.0).contains(&phasing) {
+        return Err(format!("Phasing must be within 0..1, found {phasing}"));
+    }
     let duration_ms = effect
         .attribute("DURATION")
         .ok_or_else(|| "Inverse Ramp EFFECT is missing DURATION".to_string())?
@@ -1880,11 +1883,6 @@ fn convert_dvc_inverse_ramp_effect(
             "Size={size} and Offset={offset} produced raw range {raw_low:.3}..{raw_high:.3}; endpoints were clamped to DMX16"
         ));
     }
-    if phasing.abs() > f64::EPSILON {
-        approximations.push(format!(
-            "Phasing={phasing} is not reproduced by the LFO engine"
-        ));
-    }
     let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
     if let Some(clock_warning) = clock_warning {
         approximations.push(clock_warning);
@@ -1902,10 +1900,11 @@ fn convert_dvc_inverse_ramp_effect(
         low,
         high,
         phase: phase as f32,
+        fixture_spread: phasing as f32,
         blend_mode: EffectBlendMode::Override,
     };
     let note = format!(
-        "feature=Dimmer; period_ms=round(DURATION/Rate)={period_ms}; descending_ramp=Saw directed from low-field {low} to high-field {high}: output(t)={low}+({high}-{low})*fract(t/period+Phase); phase={phase}; size={size}; offset={offset}; {clock_note}"
+        "feature=Dimmer; period_ms=round(DURATION/Rate)={period_ms}; descending_ramp=Saw directed from low-field {low} to high-field {high}: output_i(t)={low}+({high}-{low})*fract(t/period+Phase+i/target_count*Phasing); phase={phase}; fixture_spread={phasing}; size={size}; offset={offset}; {clock_note}"
     );
     Ok(ConvertedDvcEffect {
         target: Some(CueEffectTarget {
@@ -1950,6 +1949,9 @@ fn convert_dvc_sinus_effect(
     if !offset.is_finite() || !phasing.is_finite() {
         return Err("Offset and Phasing must be finite".to_string());
     }
+    if !(0.0..=1.0).contains(&phasing) {
+        return Err(format!("Phasing must be within 0..1, found {phasing}"));
+    }
     let duration_ms = effect
         .attribute("DURATION")
         .ok_or_else(|| "Sinus EFFECT is missing DURATION".to_string())?
@@ -1985,11 +1987,6 @@ fn convert_dvc_sinus_effect(
     if let Some(clock_warning) = clock_warning {
         approximations.push(clock_warning);
     }
-    let mut warnings = Vec::new();
-    if phasing.abs() > f64::EPSILON {
-        warnings.push(format!("phasing not reproduced (Phasing={phasing})"));
-    }
-
     let request = LfoEffectRequest {
         label: format!("{scene_name} (Sinus)"),
         fixture_ids: targets.fixture_ids,
@@ -2002,10 +1999,11 @@ fn convert_dvc_sinus_effect(
         low,
         high,
         phase: phase as f32,
+        fixture_spread: phasing as f32,
         blend_mode: EffectBlendMode::Override,
     };
     let note = format!(
-        "feature=Dimmer; period_ms=round(DURATION/Rate)={period_ms}; low={low}; high={high}; phase={phase}; offset={offset}; {clock_note}"
+        "feature=Dimmer; period_ms=round(DURATION/Rate)={period_ms}; low={low}; high={high}; phase={phase}; fixture_spread={phasing}; output_i(t)=sine(t/period+Phase+i/target_count*Phasing); offset={offset}; {clock_note}"
     );
     Ok(ConvertedDvcEffect {
         target: Some(CueEffectTarget {
@@ -2017,7 +2015,7 @@ fn convert_dvc_sinus_effect(
         generator: "Sinus",
         note,
         approximations,
-        warnings,
+        warnings: Vec::new(),
     })
 }
 
@@ -2051,6 +2049,9 @@ fn convert_dvc_strobe_effect(
     }
     if !offset.is_finite() || !phasing.is_finite() {
         return Err("Offset and Phasing must be finite".to_string());
+    }
+    if !(0.0..=1.0).contains(&phasing) {
+        return Err(format!("Phasing must be within 0..1, found {phasing}"));
     }
     let duration_ms = effect
         .attribute("DURATION")
@@ -2093,11 +2094,6 @@ fn convert_dvc_strobe_effect(
             "Size={size} and Offset={offset} produced raw range {raw_low:.3}..{raw_high:.3}; endpoints were clamped to DMX16"
         ));
     }
-    if phasing.abs() > f64::EPSILON {
-        approximations.push(format!(
-            "Phasing={phasing} is not reproduced by the LFO engine"
-        ));
-    }
     let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
     if let Some(clock_warning) = clock_warning {
         approximations.push(clock_warning);
@@ -2115,10 +2111,11 @@ fn convert_dvc_strobe_effect(
         low,
         high,
         phase: phase as f32,
+        fixture_spread: phasing as f32,
         blend_mode: EffectBlendMode::Override,
     };
     let note = format!(
-        "feature=Dimmer; shape=Strobe; pulses_per_period=10; pulse_width=2% graph-derived approximation; period_ms=round(DURATION/Rate)={period_ms}; low={low}; high={high}; phase={phase}; size={size}; offset={offset}; {clock_note}"
+        "feature=Dimmer; shape=Strobe; pulses_per_period=10; pulse_width=2% graph-derived approximation; period_ms=round(DURATION/Rate)={period_ms}; low={low}; high={high}; phase={phase}; fixture_spread={phasing}; size={size}; offset={offset}; {clock_note}"
     );
     Ok(ConvertedDvcEffect {
         target: Some(CueEffectTarget {
@@ -4353,7 +4350,7 @@ mod tests {
     }
 
     #[test]
-    fn dvc_sinus_prefers_bpm_sync_and_reports_phasing_and_segment_approximation() {
+    fn dvc_sinus_prefers_bpm_sync_and_preserves_phasing_and_segment_approximation() {
         let document = Document::parse(
             r#"<SCENE SPEED="1" PLAY_TRIGGER="2" PLAY_DIVISION="4"><RACKS><RACK TYPE="8"><EFFECT TYPE="5" ID="7" DURATION="5000"><PARAMS NB="5"><PARAM ID="1" VAL="10"/><PARAM ID="2" VAL="1"/><PARAM ID="3" VAL="0.25"/><PARAM ID="4" VAL="0"/><PARAM ID="5" VAL="0.2"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="1" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
         )
@@ -4379,21 +4376,20 @@ mod tests {
             panic!("CURVE 7 must convert to LFO params");
         };
         assert_eq!(request.clock_sync.unwrap().beats, 0.25);
+        assert!((request.fixture_spread - 0.2).abs() < f32::EPSILON);
         assert!(converted
             .approximations
             .iter()
             .any(|note| note == "segment selection approximated to fixture"));
-        assert!(converted
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("phasing not reproduced")));
+        assert!(converted.warnings.is_empty());
+        assert!(converted.note.contains("fixture_spread=0.2"));
     }
 
     #[test]
     fn dvc_strobe_conversion_scales_size_and_reports_graph_approximation() {
         for (size, expected_high) in [(1.0, 32_768), (2.0, 65_535)] {
             let xml = format!(
-                r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="8"><EFFECT TYPE="5" ID="10" DURATION="5000"><PARAMS NB="5"><PARAM ID="1" VAL="2"/><PARAM ID="2" VAL="{size}"/><PARAM ID="3" VAL="0"/><PARAM ID="4" VAL="0"/><PARAM ID="5" VAL="0"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#
+                r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="8"><EFFECT TYPE="5" ID="10" DURATION="5000"><PARAMS NB="5"><PARAM ID="1" VAL="2"/><PARAM ID="2" VAL="{size}"/><PARAM ID="3" VAL="0"/><PARAM ID="4" VAL="0"/><PARAM ID="5" VAL="0.4"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#
             );
             let document = Document::parse(&xml).unwrap();
             let scene = document.root_element();
@@ -4421,12 +4417,48 @@ mod tests {
             assert_eq!(request.low, 0);
             assert_eq!(request.high, expected_high);
             assert_eq!(request.phase, 0.0);
+            assert!((request.fixture_spread - 0.4).abs() < f32::EPSILON);
             assert!(converted
                 .approximations
                 .iter()
                 .any(|note| note.contains("2% of the period")));
             assert!(converted.note.contains("pulses_per_period=10"));
+            assert!(converted.note.contains("fixture_spread=0.4"));
         }
+    }
+
+    #[test]
+    fn dvc_inverse_ramp_preserves_normalized_phasing_without_approximation() {
+        let document = Document::parse(
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="8"><EFFECT TYPE="5" ID="3" DURATION="5000"><PARAMS NB="5"><PARAM ID="1" VAL="2"/><PARAM ID="2" VAL="1"/><PARAM ID="3" VAL="0"/><PARAM ID="4" VAL="0"/><PARAM ID="5" VAL="0.6"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
+        )
+        .unwrap();
+        let scene = document.root_element();
+        let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+        let effect = direct_child(rack, "EFFECT").unwrap();
+        let converted = convert_dvc_effect(
+            scene,
+            "Inverse",
+            rack,
+            effect,
+            8,
+            5,
+            3,
+            1,
+            &effect_test_fixture_refs(),
+        )
+        .unwrap();
+        let Some(EffectParamsSnapshot::Lfo(request)) =
+            converted.target.expect("runtime target").params
+        else {
+            panic!("CURVE 3 must convert to cue-owned LFO params");
+        };
+        assert!((request.fixture_spread - 0.6).abs() < f32::EPSILON);
+        assert!(converted
+            .approximations
+            .iter()
+            .all(|note| !note.contains("Phasing")));
+        assert!(converted.note.contains("fixture_spread=0.6"));
     }
 
     #[test]

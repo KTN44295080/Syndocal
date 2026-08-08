@@ -1065,6 +1065,7 @@ const cueOwnedEffectSummary = (
     low,
     high,
     phase,
+    fixture_spread: 0,
     blend_mode: blendMode,
     enabled: target.enabled,
     color: null,
@@ -1093,6 +1094,7 @@ const cueOwnedEffectSummary = (
       ),
       video_targets: request.video_targets,
       shape: request.shape,
+      fixture_spread: request.fixture_spread ?? 0,
     };
   }
   if ("PositionWave" in params) {
@@ -1135,6 +1137,7 @@ const cueOwnedEffectSummary = (
         request.phase,
         request.blend_mode,
       ),
+      fixture_spread: request.fixture_spread,
       color: request,
     };
   }
@@ -1157,6 +1160,7 @@ const cueOwnedEffectSummary = (
         request.phase,
         request.blend_mode,
       ),
+      fixture_spread: request.fixture_spread,
       chaser: request,
     };
   }
@@ -1176,6 +1180,7 @@ const cueOwnedEffectSummary = (
         request.phase,
         request.blend_mode,
       ),
+      fixture_spread: request.fixture_spread,
       move_effect: request,
     };
   }
@@ -1195,6 +1200,7 @@ const cueOwnedEffectSummary = (
         request.phase,
         request.blend_mode,
       ),
+      fixture_spread: request.fixture_spread,
       value: request,
     };
   }
@@ -1214,6 +1220,7 @@ const cueOwnedEffectSummary = (
         request.phase,
         request.blend_mode,
       ),
+      fixture_spread: request.fixture_spread,
       curve: request,
     };
   }
@@ -1234,6 +1241,7 @@ const cueOwnedEffectSummary = (
         request.blend_mode,
       ),
       shape: request.shape,
+      fixture_spread: request.fixture_spread,
       mapping: request,
     };
   }
@@ -1797,6 +1805,7 @@ export default function App() {
   const [editingEffectId, setEditingEffectId] = createSignal<number | null>(null);
   const [effectPeriod, setEffectPeriod] = createSignal(1000);
   const [effectClockSyncBeats, setEffectClockSyncBeats] = createSignal<number | null>(null);
+  const [lfoFixtureSpread, setLfoFixtureSpread] = createSignal(0);
   const [colorEffectStops, setColorEffectStops] = createSignal<ColorEffectStop[]>(
     defaultColorEffectStops.map((stop) => ({ ...stop, color: { ...stop.color } })),
   );
@@ -15489,6 +15498,10 @@ export default function App() {
   });
   const effectSubmitDisabled = createMemo(() => {
     const linkedVideoMissing = effectVideoTargetLinked() && selectedEffectVideoLayerId() === null;
+    if (effectType() === "Lfo"
+      && (!Number.isFinite(lfoFixtureSpread()) || lfoFixtureSpread() < 0 || lfoFixtureSpread() > 1)) {
+      return true;
+    }
     if (effectType() === "Move") {
       return Boolean(currentMoveDraftError());
     }
@@ -15875,6 +15888,7 @@ export default function App() {
         request: {
           ...requestBase,
           period_ms: effectPeriod(),
+          fixture_spread: lfoFixtureSpread(),
         },
       };
     }
@@ -16157,6 +16171,9 @@ export default function App() {
     setEffectLow(effect.low);
     setEffectHigh(effect.high);
     setEffectPhase(effect.phase);
+    if (effect.effect_type === "Lfo") {
+      setLfoFixtureSpread(effect.fixture_spread ?? 0);
+    }
     setEffectBlendMode(effect.blend_mode);
     if (effect.origin) {
       setWaveOriginX(effect.origin.x);
@@ -16721,10 +16738,12 @@ export default function App() {
       showLightRange: effectTargetMode() !== "video"
         && !["Color", "ColorMapping", "Chaser", "Move"].includes(effectType()),
       showPhase: !["Move", "Value", "Curve", "Mapping", "ColorMapping"].includes(effectType()),
+      showFixtureSpread: effectType() === "Lfo" && effectTargetMode() !== "video",
       lockBlendMode: effectType() === "Move",
       low: effectLow(),
       high: effectHigh(),
       phase: effectPhase(),
+      fixtureSpread: lfoFixtureSpread(),
       blendMode: effectBlendMode(),
       addDisabled: effectSubmitDisabled(),
       submitLabel: "Save cue-owned FX",
@@ -16734,6 +16753,7 @@ export default function App() {
       onLow: setEffectLow,
       onHigh: setEffectHigh,
       onPhase: setEffectPhase,
+      onFixtureSpread: setLfoFixtureSpread,
       onBlendMode: setEffectBlendMode,
       onSubmitEffect: async () => {
         await saveSceneEffectDraft();

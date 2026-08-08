@@ -18712,6 +18712,7 @@ fn validate_project_effect_body(effect: &EffectSummary) -> Result<(), String> {
                 && effect.period_ms == Some(request.step_duration_ms)
                 && effect.clock_sync == request.clock_sync
                 && effect.phase == request.phase
+                && effect.fixture_spread == request.fixture_spread
                 && effect.blend_mode == request.blend_mode
                 && effect.shape == protocol::LfoShape::Square
                 && effect.origin.is_none()
@@ -18761,6 +18762,7 @@ fn validate_project_effect_body(effect: &EffectSummary) -> Result<(), String> {
                 && effect.low == 0
                 && effect.high == u16::MAX
                 && effect.phase == request.phase
+                && effect.fixture_spread == request.fixture_spread
                 && effect.blend_mode == request.blend_mode
                 && effect.origin.is_none()
                 && effect.direction.is_none()
@@ -18809,6 +18811,7 @@ fn validate_project_effect_body(effect: &EffectSummary) -> Result<(), String> {
                 && effect.low == request.low
                 && effect.high == request.high
                 && effect.phase == request.phase
+                && effect.fixture_spread == request.fixture_spread
                 && effect.blend_mode == request.blend_mode
                 && effect.origin.is_none()
                 && effect.direction.is_none()
@@ -18839,6 +18842,7 @@ fn validate_project_effect_body(effect: &EffectSummary) -> Result<(), String> {
                 && effect.low == request.low
                 && effect.high == request.high
                 && effect.phase == request.phase
+                && effect.fixture_spread == request.fixture_spread
                 && effect.blend_mode == request.blend_mode
                 && effect.origin.is_none()
                 && effect.direction.is_none()
@@ -18869,6 +18873,7 @@ fn validate_project_effect_body(effect: &EffectSummary) -> Result<(), String> {
                 && effect.low == request.low
                 && effect.high == request.high
                 && effect.phase == request.phase
+                && effect.fixture_spread == request.fixture_spread
                 && effect.blend_mode == request.blend_mode
                 && effect.origin.is_none()
                 && effect.direction.is_none()
@@ -18899,6 +18904,7 @@ fn validate_project_effect_body(effect: &EffectSummary) -> Result<(), String> {
                 && effect.low == 0
                 && effect.high == u16::MAX
                 && effect.phase == request.phase
+                && effect.fixture_spread == 0.0
                 && effect.blend_mode == request.blend_mode
                 && effect.origin.is_none()
                 && effect.direction.is_none()
@@ -19035,6 +19041,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                     low: effect.low,
                     high: effect.high,
                     phase: effect.phase,
+                    fixture_spread: effect.fixture_spread,
                     blend_mode: effect.blend_mode.clone(),
                 }),
                 position_wave: None,
@@ -25048,8 +25055,11 @@ fn validate_lfo_effect_request(request: &LfoEffectRequest) -> Result<(), String>
             return Err("LFO clock sync beats must be finite and greater than 0".to_string());
         }
     }
-    if !request.phase.is_finite() {
-        return Err("LFO phase must be finite".to_string());
+    if !request.phase.is_finite() || !request.fixture_spread.is_finite() {
+        return Err("LFO phase and fixture spread must be finite".to_string());
+    }
+    if !(0.0..=1.0).contains(&request.fixture_spread) {
+        return Err("LFO fixture spread must be within 0..1".to_string());
     }
     validate_group_ids(&request.target_group_ids)?;
     validate_video_effect_targets(&request.video_targets)?;
@@ -32813,6 +32823,7 @@ f 1 2 3
             low: 0,
             high: 65_535,
             phase: 0.0,
+            fixture_spread: 0.0,
             blend_mode: protocol::EffectBlendMode::Override,
             origin: None,
             direction: None,
@@ -32882,6 +32893,7 @@ f 1 2 3
             low: 0,
             high: u16::MAX,
             phase: request.phase,
+            fixture_spread: request.fixture_spread,
             blend_mode: request.blend_mode.clone(),
             origin: None,
             direction: None,
@@ -33208,6 +33220,7 @@ f 1 2 3
             low: 0,
             high: 65_535,
             phase: 0.0,
+            fixture_spread: 0.0,
             blend_mode: protocol::EffectBlendMode::Override,
             origin: None,
             direction: None,
@@ -33270,6 +33283,7 @@ f 1 2 3
             low: 0,
             high: 65_535,
             phase: 0.0,
+            fixture_spread: 0.0,
             blend_mode: protocol::EffectBlendMode::Override,
             origin: Some(Vec3 {
                 x: f32::NAN,
@@ -33444,6 +33458,7 @@ f 1 2 3
             low: request.features[0].low,
             high: request.features[0].high,
             phase: request.phase,
+            fixture_spread: request.fixture_spread,
             blend_mode: request.blend_mode.clone(),
             origin: None,
             direction: None,
@@ -36155,6 +36170,7 @@ f 1 2 3
             low: 0,
             high: 65_535,
             phase: 0.25,
+            fixture_spread: 0.0,
             blend_mode: protocol::EffectBlendMode::Override,
         }
     }
@@ -36318,6 +36334,7 @@ f 1 2 3
             low: 0,
             high: u16::MAX,
             phase: request.phase,
+            fixture_spread: request.fixture_spread,
             blend_mode: request.blend_mode.clone(),
             origin: None,
             direction: None,
@@ -36366,6 +36383,7 @@ f 1 2 3
             low: first_feature.low,
             high: first_feature.high,
             phase: request.phase,
+            fixture_spread: request.fixture_spread,
             blend_mode: request.blend_mode.clone(),
             origin: None,
             direction: None,
@@ -36561,6 +36579,7 @@ f 1 2 3
             low: 0,
             high: 65_535,
             phase: 0.25,
+            fixture_spread: 0.5,
             blend_mode: protocol::EffectBlendMode::Override,
             origin: None,
             direction: None,
@@ -36587,6 +36606,7 @@ f 1 2 3
             lfo.clock_sync,
             Some(protocol::EffectClockSync { beats: 2.0 })
         );
+        assert_eq!(lfo.fixture_spread, 0.5);
         assert_eq!(lfo.video_targets, vec![sample_video_effect_target(3)]);
         assert!(preset.position_wave.is_none());
     }
@@ -36628,6 +36648,7 @@ f 1 2 3
             low: 8_192,
             high: 57_344,
             phase: 0.125,
+            fixture_spread: 0.0,
             blend_mode: protocol::EffectBlendMode::Multiply,
             origin: Some(origin),
             direction: Some(direction),
@@ -36720,6 +36741,7 @@ f 1 2 3
             low: request.low,
             high: request.high,
             phase: request.phase,
+            fixture_spread: request.fixture_spread,
             blend_mode: request.blend_mode.clone(),
             origin: None,
             direction: None,
@@ -36783,6 +36805,7 @@ f 1 2 3
             low: request.low,
             high: request.high,
             phase: request.phase,
+            fixture_spread: request.fixture_spread,
             blend_mode: request.blend_mode.clone(),
             origin: None,
             direction: None,
@@ -36834,6 +36857,7 @@ f 1 2 3
             low: request.low,
             high: request.high,
             phase: request.phase,
+            fixture_spread: request.fixture_spread,
             blend_mode: request.blend_mode.clone(),
             origin: None,
             direction: None,
@@ -36917,6 +36941,7 @@ f 1 2 3
             low: 0,
             high: u16::MAX,
             phase: request.phase,
+            fixture_spread: 0.0,
             blend_mode: request.blend_mode.clone(),
             origin: None,
             direction: None,
@@ -37078,6 +37103,7 @@ f 1 2 3
             low: 0,
             high: u16::MAX,
             phase: request.phase,
+            fixture_spread: request.fixture_spread,
             blend_mode: request.blend_mode.clone(),
             origin: None,
             direction: None,
@@ -37122,6 +37148,7 @@ f 1 2 3
             low: request.features[0].low,
             high: request.features[0].high,
             phase: request.phase,
+            fixture_spread: request.fixture_spread,
             blend_mode: request.blend_mode.clone(),
             origin: None,
             direction: None,
@@ -38455,6 +38482,7 @@ f 1 2 3
                     low: 1_024,
                     high: 62_000,
                     phase: 0.125,
+                    fixture_spread: 0.0,
                     blend_mode: protocol::EffectBlendMode::Add,
                 }),
                 position_wave: None,

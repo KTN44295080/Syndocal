@@ -1805,6 +1805,7 @@ export interface LfoEffectRequest {
   low: number;
   high: number;
   phase: number;
+  fixture_spread?: number;
   blend_mode: EffectBlendMode;
 }
 
@@ -2062,6 +2063,7 @@ export interface EffectSummary {
   low: number;
   high: number;
   phase: number;
+  fixture_spread?: number;
   blend_mode: EffectBlendMode;
   origin?: { x: number; y: number; z: number } | null;
   direction?: { x: number; y: number; z: number } | null;

@@ -1481,6 +1481,8 @@ const japaneseText: Record<string, string> = {
   "Fixture spread": "灯体スプレッド",
   "Fixture color phase spread": "灯体Color Phaseスプレッド",
   "Fixture color phase spread percent": "灯体Color Phaseスプレッド（%）",
+  "Fixture phasing %": "灯体Phasing %",
+  "LFO fixture phasing percent": "LFO灯体Phasing（%）",
   "Color effect clock sync presets": "Colorエフェクトのクロック同期プリセット",
   "Move stop up": "ストップを上へ移動",
   "Move stop down": "ストップを下へ移動",

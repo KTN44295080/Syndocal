@@ -154,6 +154,7 @@ export const defaultSceneFxParams = (
         low: 0,
         high: 65_535,
         phase: 0,
+        fixture_spread: fixtureIds.length > 1 ? 1 : 0,
         blend_mode: "Override",
       },
     };

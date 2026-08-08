@@ -4,10 +4,12 @@ import type { EffectBlendMode } from "../types";
 interface EffectActionControlsPanelProps {
   showLightRange: boolean;
   showPhase?: boolean;
+  showFixtureSpread?: boolean;
   lockBlendMode?: boolean;
   low: number;
   high: number;
   phase: number;
+  fixtureSpread?: number;
   blendMode: EffectBlendMode;
   addDisabled: boolean;
   submitLabel: string;
@@ -16,6 +18,7 @@ interface EffectActionControlsPanelProps {
   onLow: (low: number) => void;
   onHigh: (high: number) => void;
   onPhase: (phase: number) => void;
+  onFixtureSpread?: (spread: number) => void;
   onBlendMode: (blendMode: EffectBlendMode) => void;
   onSubmitEffect: () => void | Promise<void>;
   onCancelEdit: () => void;
@@ -48,6 +51,20 @@ export function EffectActionControlsPanel(props: EffectActionControlsPanelProps)
           onInput={(event) => props.onPhase(Number(event.currentTarget.value))}
         />
       </label>
+      </Show>
+      <Show when={props.showFixtureSpread && props.onFixtureSpread}>
+        <label>
+          Fixture phasing %
+          <input
+            type="number"
+            min="0"
+            max="100"
+            step="1"
+            value={Math.round((props.fixtureSpread ?? 0) * 100)}
+            aria-label="LFO fixture phasing percent"
+            onInput={(event) => props.onFixtureSpread?.(Math.min(1, Math.max(0, Number(event.currentTarget.value) / 100)))}
+          />
+        </label>
       </Show>
       <label>
         Blend

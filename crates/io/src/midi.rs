@@ -2199,6 +2199,7 @@ mod tests {
                 low: 0,
                 high: 65_535,
                 phase: 0.0,
+                fixture_spread: 0.0,
                 blend_mode: protocol::EffectBlendMode::Override,
                 origin: None,
                 direction: None,
