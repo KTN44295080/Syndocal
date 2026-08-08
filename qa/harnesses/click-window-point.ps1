@@ -47,13 +47,14 @@ public static class CompetitiveClickNative {
   public static extern void mouse_event(uint flags, int dx, int dy, uint data, UIntPtr extraInfo);
 
   [DllImport("user32.dll")]
-  public static extern bool SetProcessDPIAware();
+  public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
 }
 "@
 }
 
-# Physical-pixel coordinates so window rects match captured bitmaps on scaled monitors.
-[void][CompetitiveClickNative]::SetProcessDPIAware()
+# Per-monitor-v2 physical coordinates keep window-relative clicks aligned with
+# captured bitmaps even when Daslight is maximized on a differently scaled display.
+$previousDpiContext = [CompetitiveClickNative]::SetThreadDpiAwarenessContext([IntPtr](-4))
 
 function Get-ClickWindowTitle {
   param([IntPtr]$Handle)
@@ -100,4 +101,5 @@ Start-Sleep -Milliseconds 150
 [CompetitiveClickNative]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)  # left down
 Start-Sleep -Milliseconds 60
 [CompetitiveClickNative]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)  # left up
+[void][CompetitiveClickNative]::SetThreadDpiAwarenessContext($previousDpiContext)
 Write-Host "clicked window-relative ($RelativeX,$RelativeY) -> screen ($x,$y)"

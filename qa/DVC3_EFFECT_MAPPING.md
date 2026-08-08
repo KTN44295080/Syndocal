@@ -59,7 +59,7 @@ RACK内の PRESETS/BEAMS 以外の要素にあるとみられ、実装時に特�
 
 Syndocal受け皿: PositionWave（空間走査）+ Perlin LFO形状 + Transform（対称/回転）は新規要素。
 
-### MOVE FX（RACK=4, EFFECT TYPE=4）→ Syndocal Move エンジン — 照合済み（2026-07-19、全ファミリー完了）
+### MOVE FX（RACK=4, EFFECT TYPE=4）→ Syndocal Move エンジン — 照合済み（2026-08-08、Symmetry出力まで実測）
 
 | ID | ジェネレータ | パラメータ対応（実測） |
 |---|---|---|
@@ -69,6 +69,13 @@ Syndocal受け皿: PositionWave（空間走査）+ Perlin LFO形状 + Transform�
 **軌道頂点**は `PARAM TYPE=5 ID=1` 内の `<POINTS NB=n><POINT X=.. Y=..>` — 正規化0..1のPan/Tilt座標列
 （M-PolyLoopのダイヤ (0.25,0.5)(0.5,0.75)(0.75,0.5)(0.5,0.25) がUI表示と完全一致）。Attribute value=Absolute。
 Syndocal Move エンジン（複数点 smooth/line closed path）が直接の受け皿。
+
+2026-08-08にDaslight 5の `M-PolyLoop` を同一時刻帯で `Symmetry=ON/OFF` 切替し、DMX Levelsを直接比較した。
+選択順 `[address 138, 120, 111, 129]` の前半2灯はPanが同方向、後半2灯はON時だけPanが中心線を挟んで反転し、
+Tiltは同じ軌道位相を維持した。観測例はON=`63/67/186/190`、OFF=`63/67/73/78`（各灯Panの8bit値）。
+Syndocalはこの規則を「解決済み灯体順の後半のみPan delta反転」としてruntime、DVC body、Scene Settings編集UI、
+Stage previewに実装し、legacy bodyは`false`へdefaultする。証跡は
+`target/qa/current-head/daslight-mpoly-sym-on-levels.png`、`daslight-mpoly-sym-off-levels.png`。
 
 ### FXファミリー全カタログ（2026-07-19 実機のFX追加チューザーで観測）
 

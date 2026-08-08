@@ -24594,6 +24594,49 @@ h3 {
   accent-color: var(--ray-accent);
 }
 
+.moveEffectSymmetryToggle {
+  display: grid;
+  grid-template-columns: minmax(92px, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 29px;
+  border-radius: 1px;
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.moveEffectSymmetryToggle strong,
+.moveEffectSymmetryToggle span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.moveEffectSymmetryToggle strong {
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.moveEffectSymmetryToggle span {
+  color: #8f999f;
+  font-size: 9px;
+}
+
+.moveEffectSymmetryToggle.active,
+.app .moveEffectSymmetryToggle[aria-pressed="true"] {
+  border-color: #806039;
+  background: #30261b;
+  color: #ffffff;
+  box-shadow: inset 0 -2px 0 var(--ray-accent);
+}
+
+.moveEffectSymmetryToggle.active span,
+.app .moveEffectSymmetryToggle[aria-pressed="true"] span {
+  color: #f4d4ad;
+}
+
 .moveEffectTransformPanel {
   display: grid;
   gap: 2px;

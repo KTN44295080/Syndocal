@@ -3465,6 +3465,7 @@ struct RuntimeMoveTarget {
     pan_attribute: String,
     tilt_attribute: String,
     phase_offset: f32,
+    mirror_pan: bool,
     cached: Cell<Option<RuntimeMoveEvaluation>>,
 }
 
@@ -24544,7 +24545,9 @@ fn runtime_move_effect_from_request(
         );
     }
 
-    let count = compatible.len().max(1) as f32;
+    let compatible_count = compatible.len();
+    let count = compatible_count.max(1) as f32;
+    let symmetry_split = compatible_count.div_ceil(2);
     let targets = compatible
         .into_iter()
         .enumerate()
@@ -24554,6 +24557,7 @@ fn runtime_move_effect_from_request(
                 pan_attribute,
                 tilt_attribute,
                 phase_offset: index as f32 / count * request.fixture_spread,
+                mirror_pan: request.symmetry && index >= symmetry_split,
                 cached: Cell::new(None),
             },
         )
@@ -24638,10 +24642,13 @@ fn evaluate_runtime_move_attribute_at_rate(
             target.cached.set(Some(evaluation));
             evaluation
         });
-    let delta = match axis {
+    let mut delta = match axis {
         MovementAxis::Pan => evaluation.delta.x,
         MovementAxis::Tilt => evaluation.delta.y,
     };
+    if axis == MovementAxis::Pan && target.mirror_pan {
+        delta = -delta;
+    }
     let normalized = match runtime.request.coordinate_mode {
         MoveCoordinateMode::Absolute => {
             let center = match axis {
@@ -51554,6 +51561,7 @@ mod tests {
             direction: protocol::MoveDirection::Forward,
             phase: 0.0,
             fixture_spread: 1.0,
+            symmetry: false,
             blend_mode: EffectBlendMode::Override,
         }
     }
@@ -51823,6 +51831,85 @@ mod tests {
         .unwrap();
         assert!((42_596..=42_600).contains(&relative_pan));
         assert!((6_552..=6_555).contains(&relative_tilt));
+    }
+
+    #[test]
+    fn move_symmetry_mirrors_second_half_pan_in_authored_fixture_order() {
+        let runtime = runtime_with_move_fixtures(4);
+        let fixture_order = [4, 2, 1, 3];
+        let mut plain_request = test_move_request(&fixture_order);
+        plain_request.points = vec![
+            MovePathPoint { x: 0.2, y: 0.35 },
+            MovePathPoint { x: 0.8, y: 0.65 },
+        ];
+        plain_request.closed = false;
+        plain_request.interpolation = protocol::MoveInterpolation::Line;
+        plain_request.size_x = 0.6;
+        plain_request.size_y = 0.6;
+        plain_request.fixture_spread = 0.6;
+        plain_request.period_ms = 1_000;
+        plain_request.symmetry = false;
+        let plain = runtime
+            .resolve_move_effect_request(plain_request.clone())
+            .unwrap();
+
+        let mut symmetric_request = plain_request;
+        symmetric_request.symmetry = true;
+        let symmetric = runtime
+            .resolve_move_effect_request(symmetric_request)
+            .unwrap();
+
+        assert_eq!(
+            symmetric
+                .targets
+                .iter()
+                .map(|target| target.fixture_id)
+                .collect::<Vec<_>>(),
+            fixture_order
+        );
+        assert_eq!(
+            symmetric
+                .targets
+                .iter()
+                .map(|target| target.mirror_pan)
+                .collect::<Vec<_>>(),
+            vec![false, false, true, true]
+        );
+
+        let created_at = Instant::now();
+        let now = created_at + Duration::from_millis(123);
+        let clock = ClockSnapshot::default();
+        for (index, fixture_id) in fixture_order.into_iter().enumerate() {
+            let plain_pan = evaluate_runtime_move_attribute(
+                &plain, fixture_id, "Pan", 0, created_at, now, &clock,
+            )
+            .unwrap();
+            let symmetric_pan = evaluate_runtime_move_attribute(
+                &symmetric, fixture_id, "Pan", 0, created_at, now, &clock,
+            )
+            .unwrap();
+            let plain_tilt = evaluate_runtime_move_attribute(
+                &plain, fixture_id, "Tilt", 0, created_at, now, &clock,
+            )
+            .unwrap();
+            let symmetric_tilt = evaluate_runtime_move_attribute(
+                &symmetric, fixture_id, "Tilt", 0, created_at, now, &clock,
+            )
+            .unwrap();
+
+            assert_eq!(symmetric_tilt, plain_tilt, "fixture {fixture_id} Tilt");
+            if index < 2 {
+                assert_eq!(symmetric_pan, plain_pan, "fixture {fixture_id} Pan");
+            } else {
+                assert!(
+                    (i32::from(symmetric_pan) + i32::from(plain_pan)
+                        - i32::from(u16::MAX))
+                    .abs()
+                        <= 1,
+                    "fixture {fixture_id} mirrored Pan: plain={plain_pan}, symmetric={symmetric_pan}",
+                );
+            }
+        }
     }
 
     #[test]

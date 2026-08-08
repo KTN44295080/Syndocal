@@ -180,6 +180,7 @@ export const defaultSceneFxParams = (
       direction: "Forward",
       phase: 0,
       fixture_spread: moveFixtureIds.length > 1 ? 1 : 0,
+      symmetry: false,
       blend_mode: "Override",
     },
   };
@@ -264,11 +265,27 @@ export const previewSceneFxFixtures = (
       sampleMovePath(request.points.map(movePointToPreview), request.interpolation, request.closed),
       request,
     );
-    const targetIds = new Set(request.fixture_ids);
-    const point = sampled[Math.floor(cycleProgress(elapsedMs, request.period_ms, request.phase) * sampled.length) % Math.max(1, sampled.length)];
-    if (!point) return fixtures;
+    if (sampled.length === 0) return fixtures;
+    const indexById = new Map(request.fixture_ids.map((fixtureId, index) => [fixtureId, index]));
+    const targetCount = Math.max(1, request.fixture_ids.length);
+    const symmetrySplit = Math.ceil(request.fixture_ids.length / 2);
+    const anchorX = request.coordinate_mode === "Relative" ? 50 : request.center_x * 100;
     return fixtures.map((fixture) => {
-      if (!targetIds.has(fixture.id)) return fixture;
+      const index = indexById.get(fixture.id);
+      if (index === undefined) return fixture;
+      const spread = index / targetCount * request.fixture_spread;
+      const baseProgress = cycleProgress(elapsedMs, request.period_ms, request.phase + spread);
+      const progress = request.direction === "Reverse"
+        ? 1 - baseProgress
+        : request.direction === "Bounce"
+          ? baseProgress * 2 <= 1 ? baseProgress * 2 : 2 - baseProgress * 2
+          : baseProgress;
+      const sampledIndex = Math.floor(progress * sampled.length) % sampled.length;
+      const sourcePoint = sampled[sampledIndex];
+      if (!sourcePoint) return fixture;
+      const point = request.symmetry && index >= symmetrySplit
+        ? { ...sourcePoint, x: Math.max(0, Math.min(100, anchorX * 2 - sourcePoint.x)) }
+        : sourcePoint;
       const values: Record<string, number> = {};
       for (const control of fixture.controls) {
         const attribute = normalizedAttribute(control.attribute);

@@ -8606,6 +8606,7 @@ async function measure(client, label) {
       visibleMoveEffectCoordinateButtonCount: visibleCount('.moveEffectSegmented[aria-label="Move coordinate mode"] button'),
       visibleMoveEffectInterpolationButtonCount: visibleCount('.moveEffectSegmented[aria-label="Move interpolation"] button'),
       visibleMoveEffectClosedToggleCount: visibleCount('.moveEffectClosedToggle input[type="checkbox"]'),
+      visibleMoveEffectSymmetryToggleCount: visibleCount('.moveEffectSymmetryToggle[aria-label="Move symmetry"]'),
       visibleMoveEffectPointRowCount: visibleCount('.moveEffectPointRow'),
       moveEffectEditorWidth: moveEffectEditorPanelRect ? Math.round(moveEffectEditorPanelRect.width) : 0,
       moveEffectEditorHeight: moveEffectEditorPanelRect ? Math.round(moveEffectEditorPanelRect.height) : 0,
@@ -9551,6 +9552,7 @@ function hasExpectedControlModeSurface(result) {
         result.visibleMoveEffectCoordinateButtonCount === 2 &&
         result.visibleMoveEffectInterpolationButtonCount === 2 &&
         result.visibleMoveEffectClosedToggleCount === 1 &&
+        result.visibleMoveEffectSymmetryToggleCount === 1 &&
         result.visibleMoveEffectPointRowCount >= 2 &&
         result.moveEffectEditorHorizontalOverflowPx <= 1 &&
         result.moveEffectSurfaceHorizontalOverflowPx <= 1 &&
@@ -23753,6 +23755,8 @@ async function runFxVisualViewport(client, viewport) {
       const fields = [...(editor?.querySelectorAll("button, input, select") ?? [])];
       const lfoFixturePhasing = editor?.querySelector('input[aria-label="LFO fixture phasing percent"]');
       const lfoFixturePhasingRect = lfoFixturePhasing?.getBoundingClientRect();
+      const moveSymmetry = editor?.querySelector('button[aria-label="Move symmetry"]');
+      const moveSymmetryRect = moveSymmetry?.getBoundingClientRect();
       return {
         expectedType,
         editorType: editor?.getAttribute("data-scene-settings-effect-editor") ?? "",
@@ -23762,6 +23766,9 @@ async function runFxVisualViewport(client, viewport) {
         lfoFixturePhasingCount: editor?.querySelectorAll('input[aria-label="LFO fixture phasing percent"]').length ?? 0,
         lfoFixturePhasingValue: lfoFixturePhasing?.value ?? "",
         lfoFixturePhasingVisible: Boolean(lfoFixturePhasingRect && lfoFixturePhasingRect.width > 0 && lfoFixturePhasingRect.height > 0),
+        moveSymmetryCount: editor?.querySelectorAll('button[aria-label="Move symmetry"]').length ?? 0,
+        moveSymmetryPressed: moveSymmetry?.getAttribute("aria-pressed") ?? "",
+        moveSymmetryVisible: Boolean(moveSymmetryRect && moveSymmetryRect.width > 0 && moveSymmetryRect.height > 0),
         horizontalOverflowPx: editor
           ? Math.max(0, editor.scrollWidth - editor.clientWidth)
           : Number.POSITIVE_INFINITY,
@@ -23906,6 +23913,11 @@ async function runFxVisualViewport(client, viewport) {
           ? entry.lfoFixturePhasingCount === 1
             && entry.lfoFixturePhasingValue === "50"
             && entry.lfoFixturePhasingVisible
+          : entry.expectedType === "Move"
+            ? entry.specificEditorCount === 1
+              && entry.moveSymmetryCount === 1
+              && entry.moveSymmetryPressed === "false"
+              && entry.moveSymmetryVisible
           : entry.specificEditorCount === 1))],
     ["stepsNavigationUsesIntegratedSceneDetails", () =>
       stepsNavigation.cueEditOpened

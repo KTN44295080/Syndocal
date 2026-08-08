@@ -1931,6 +1931,8 @@ export interface MoveEffectRequest {
   direction: MoveDirection;
   phase: number;
   fixture_spread: number;
+  /** Daslight-compatible Pan mirror for the second half of the resolved fixture order. */
+  symmetry?: boolean;
   blend_mode: EffectBlendMode;
 }
 

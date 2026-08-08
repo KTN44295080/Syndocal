@@ -331,6 +331,7 @@ fn add_mixed_lighting_effects(engine: &EngineHandle) -> Result<(), String> {
         direction: MoveDirection::Forward,
         phase: 0.0,
         fixture_spread: 0.0,
+        symmetry: false,
         blend_mode: EffectBlendMode::Override,
     };
     engine.add_move_effect(engine.allocate_effect_id(), move_request, true)?;

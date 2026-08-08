@@ -264,6 +264,7 @@ mod tests {
             direction: MoveDirection::Forward,
             phase: 0.0,
             fixture_spread: 0.0,
+            symmetry: false,
             blend_mode: EffectBlendMode::Override,
         }
     }

@@ -36315,6 +36315,7 @@ f 1 2 3
             direction: protocol::MoveDirection::Forward,
             phase: 0.125,
             fixture_spread: 1.0,
+            symmetry: false,
             blend_mode: protocol::EffectBlendMode::Override,
         }
     }
@@ -37072,6 +37073,7 @@ f 1 2 3
             direction: protocol::MoveDirection::Forward,
             phase: 0.0,
             fixture_spread: 0.0,
+            symmetry: false,
             blend_mode: protocol::EffectBlendMode::Override,
         });
         assert!(validate_project_effect_body(&cross_body)

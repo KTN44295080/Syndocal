@@ -38,6 +38,8 @@ export interface MoveEffectEditorPanelProps {
   phase: number;
   /** Normalized 0..1 fixture phase spread. */
   spread: number;
+  /** Mirrors Pan for the second half of the authored fixture order. */
+  symmetry: boolean;
   onPoints: (points: MoveEffectPoint[]) => void;
   onClosed: (closed: boolean) => void;
   onInterpolation: (interpolation: MoveEffectInterpolation) => void;
@@ -50,6 +52,7 @@ export interface MoveEffectEditorPanelProps {
   onDirection: (direction: MoveEffectDirection) => void;
   onPhase: (phase: number) => void;
   onSpread: (spread: number) => void;
+  onSymmetry: (symmetry: boolean) => void;
 }
 
 interface CanvasPoint {
@@ -623,6 +626,17 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
                 />
               </label>
             </div>
+            <button
+              type="button"
+              class="moveEffectSymmetryToggle"
+              classList={{ active: props.symmetry }}
+              aria-label="Move symmetry"
+              aria-pressed={props.symmetry}
+              onClick={() => props.onSymmetry(!props.symmetry)}
+            >
+              <strong>Symmetry</strong>
+              <span>Mirror second half Pan</span>
+            </button>
           </section>
 
           <section class="moveEffectTransformPanel" aria-label="Move transform">

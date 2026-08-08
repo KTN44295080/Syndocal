@@ -1292,6 +1292,10 @@ fn is_zero_f32(value: &f32) -> bool {
     *value == 0.0
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 fn is_zero_usize(value: &usize) -> bool {
     *value == 0
 }
@@ -2430,6 +2434,10 @@ pub struct MoveEffectRequest {
     pub direction: MoveDirection,
     pub phase: f32,
     pub fixture_spread: f32,
+    /// Mirrors Pan for the second half of the resolved fixture order. The
+    /// first half (and an odd centre fixture) retain the authored path.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub symmetry: bool,
     pub blend_mode: EffectBlendMode,
 }
 
@@ -4679,6 +4687,7 @@ mod tests {
             direction: super::MoveDirection::Bounce,
             phase: 0.125,
             fixture_spread: 1.0,
+            symmetry: true,
             blend_mode: super::EffectBlendMode::Override,
         };
         let preset = super::EffectPreset {
@@ -4700,6 +4709,14 @@ mod tests {
         let parsed: super::EffectPreset = serde_json::from_str(&json).unwrap();
 
         assert_eq!(parsed, preset);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&json).unwrap()["move_effect"]["symmetry"],
+            true
+        );
+
+        let legacy_json = json.replace(",\"symmetry\":true", "");
+        let legacy: super::EffectPreset = serde_json::from_str(&legacy_json).unwrap();
+        assert!(!legacy.move_effect.unwrap().symmetry);
     }
 
     #[test]

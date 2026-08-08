@@ -1838,6 +1838,7 @@ export default function App() {
   const [moveRotationDegrees, setMoveRotationDegrees] = createSignal(0);
   const [moveDirection, setMoveDirection] = createSignal<MoveDirection>("Forward");
   const [moveFixtureSpread, setMoveFixtureSpread] = createSignal(0);
+  const [moveSymmetry, setMoveSymmetry] = createSignal(false);
   const [movePathRecipe, setMovePathRecipe] = createSignal<MovePathRecipe>("Circle");
   const [valuePoints, setValuePoints] = createSignal<ValueEffectPoint[]>([
     { position: 0, value: 0 },
@@ -4967,6 +4968,7 @@ export default function App() {
       setMoveRotationDegrees(0);
       setMoveDirection("Forward");
       setMoveFixtureSpread(0);
+      setMoveSymmetry(false);
     }
   };
   const chooserFamilyForEffectType = (nextType: EffectKind): EffectRecipeFamily => {
@@ -15646,6 +15648,7 @@ export default function App() {
           direction: moveDirection(),
           phase: effectPhase(),
           fixture_spread: moveFixtureSpread(),
+          symmetry: moveSymmetry(),
           blend_mode: effectBlendMode(),
         },
       };
@@ -16078,6 +16081,7 @@ export default function App() {
       setMoveDirection(move.direction);
       setEffectPhase(move.phase);
       setMoveFixtureSpread(move.fixture_spread);
+      setMoveSymmetry(move.symmetry ?? false);
       setEffectBlendMode(move.blend_mode);
       setMovePathRecipe("Custom");
       setEffectVideoTargetLinked(false);
@@ -16600,6 +16604,7 @@ export default function App() {
       direction: moveDirection(),
       phase: effectPhase(),
       spread: moveFixtureSpread(),
+      symmetry: moveSymmetry(),
       onPoints: (points) => {
         setMovePathRecipe("Custom");
         setMovePathPoints(points);
@@ -16624,6 +16629,7 @@ export default function App() {
       onDirection: setMoveDirection,
       onPhase: setEffectPhase,
       onSpread: setMoveFixtureSpread,
+      onSymmetry: setMoveSymmetry,
     },
     value: {
       points: valuePoints(),

@@ -1748,9 +1748,6 @@ fn convert_dvc_move_effect(
     if targets.has_multi_beam_selection {
         approximations.push("segment selection approximated to fixture".to_string());
     }
-    if symmetry {
-        approximations.push("Symmetry=ON is not reproduced by the Move engine".to_string());
-    }
     let (period_ms, free_run_note) =
         dvc_move_period(effect, scene, generator, &mut approximations)?;
     let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
@@ -1782,6 +1779,7 @@ fn convert_dvc_move_effect(
         direction,
         phase: 0.0,
         fixture_spread: phasing,
+        symmetry,
         blend_mode: EffectBlendMode::Override,
     };
     engine::validate_move_effect_request(&request).map_err(|error| {
@@ -4128,9 +4126,9 @@ mod tests {
         assert_eq!(polygon.coordinate_mode, MoveCoordinateMode::Absolute);
         assert_eq!(polygon.period_ms, 2_000);
         assert!((polygon.fixture_spread - 0.02).abs() < f32::EPSILON);
-        assert!(outcome.report.approximate.details.iter().any(|detail| {
-            detail.item.contains("Polygon")
-                && detail.message.contains("Symmetry=ON is not reproduced")
+        assert!(polygon.symmetry);
+        assert!(!outcome.report.approximate.details.iter().any(|detail| {
+            detail.item.contains("Polygon") && detail.message.contains("Symmetry")
         }));
 
         let cue_id = outcome.project.snapshot.cues[1].id;
