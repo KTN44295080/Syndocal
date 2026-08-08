@@ -52,8 +52,6 @@ const japaneseText: Record<string, string> = {
     "RandomSeq=0サブモードをChaserエンジンのシード付きランダム順で近似しました",
   "A mixed Daslight lane was imported as Lighting; audio blocks on it are skipped":
     "音声と照明が混在するDaslightレーンを照明として取り込み、その音声ブロックはスキップしました",
-  "Daslight folded lane state has no persisted Syndocal equivalent":
-    "Daslightの折りたたみ状態には永続化可能なSyndocal側の対応先がありません",
   "Audio block was on a mixed non-Audio lane": "音声ブロックが音声以外の混在レーンにありました",
   "Audio path or duration was empty": "音声パスまたは長さが空でした",
   "Negative source offset was clamped to zero": "負のソースオフセットを0へ丸めました",

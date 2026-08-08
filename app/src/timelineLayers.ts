@@ -8,8 +8,8 @@ import type {
 export const timelineLayerKindOrder: readonly TimelineLayerKind[] = ["Audio", "Lighting", "Video"];
 
 export const implicitTimelineLayers = (): TimelineLayerSummary[] => [
-  { id: 0, label: "Lighting", order: 0, muted: false, locked: false, solo: false, kind: "Lighting" },
-  { id: 1, label: "Video", order: 1, muted: false, locked: false, solo: false, kind: "Video" },
+  { id: 0, label: "Lighting", order: 0, muted: false, locked: false, solo: false, expanded: false, kind: "Lighting" },
+  { id: 1, label: "Video", order: 1, muted: false, locked: false, solo: false, expanded: false, kind: "Video" },
 ];
 
 export const timelineLayerKindRank = (kind: TimelineLayerKind) => timelineLayerKindOrder.indexOf(kind);
@@ -34,6 +34,7 @@ export const sameTimelineLayerSummaries = (
     && layer.muted === candidate.muted
     && layer.locked === candidate.locked
     && layer.solo === candidate.solo
+    && Boolean(layer.expanded) === Boolean(candidate.expanded)
     && layer.kind === candidate.kind;
 });
 
@@ -47,13 +48,15 @@ export const isLegacyTimelineLayerSet = (layers: readonly TimelineLayerSummary[]
     && !ordered[0].muted
     && !ordered[0].locked
     && !ordered[0].solo
+    && !ordered[0].expanded
     && ordered[1].id === 1
     && ordered[1].label === "Video"
     && ordered[1].kind === "Video"
     && ordered[1].order === 1
     && !ordered[1].muted
     && !ordered[1].locked
-    && !ordered[1].solo;
+    && !ordered[1].solo
+    && !ordered[1].expanded;
 };
 
 export const timelineLayerForEvent = (

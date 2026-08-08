@@ -8242,6 +8242,7 @@ export default function App() {
               muted: false,
               locked: false,
               solo: false,
+              expanded: false,
               kind,
             }],
           };
@@ -8339,6 +8340,7 @@ export default function App() {
             muted: false,
             locked: false,
             solo: false,
+            expanded: false,
             kind,
           }],
         },

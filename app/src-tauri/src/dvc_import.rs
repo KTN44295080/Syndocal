@@ -2918,18 +2918,9 @@ fn parse_super_scenes(
                 muted: parse_bool_attribute(timeline, "DASTLMUTED"),
                 locked: parse_bool_attribute(timeline, "DASTLLOCKED"),
                 solo: false,
+                expanded: !parse_bool_attribute(timeline, "DASTLFOLDED"),
                 kind,
             });
-            if timeline
-                .attribute("DASTLFOLDED")
-                .is_some_and(|value| value != "0")
-            {
-                report.skipped.add(
-                    1,
-                    format!("Super Scene: {owner_label}"),
-                    "Daslight folded lane state has no persisted Syndocal equivalent",
-                );
-            }
         }
 
         let timeline_bpm = timeline_nodes
@@ -3944,6 +3935,7 @@ mod tests {
             .as_ref()
             .unwrap();
         assert_eq!(child.layers.len(), 2);
+        assert!(child.layers.iter().all(|layer| layer.expanded));
         assert_eq!(child.audio_clips.len(), 1);
         assert_eq!(child.events.len(), 1);
         assert!(!child.events[0].conform_to_tempo);
@@ -3955,6 +3947,22 @@ mod tests {
         assert_eq!(outcome.report.summary.beam_records, 1);
         assert_eq!(outcome.report.summary.beam_feature_checks, 1);
         assert_eq!(outcome.report.summary.beam_feature_mismatches, 0);
+
+        let folded_source = source.replacen("DASTLFOLDED=\"0\"", "DASTLFOLDED=\"1\"", 1);
+        let folded = import_bytes(folded_source.as_bytes(), "synthetic-folded.dvc").unwrap();
+        let folded_layers = &folded.project.snapshot.cues[1]
+            .child_timeline
+            .as_ref()
+            .unwrap()
+            .layers;
+        assert!(!folded_layers[0].expanded);
+        assert!(folded_layers[1].expanded);
+        assert!(!folded
+            .report
+            .skipped
+            .details
+            .iter()
+            .any(|detail| { detail.message.contains("folded lane state") }));
 
         let layout =
             import_bytes(synthetic_layout_dvc().as_bytes(), "synthetic-layout.dvc").unwrap();
@@ -5611,6 +5619,25 @@ mod tests {
         crate::validate_project_file(&outcome.project).unwrap();
         assert_eq!(outcome.report.summary.effects_converted, 30);
         assert_eq!(outcome.report.summary.effects_skipped, 0);
+        assert_eq!(
+            outcome.report.skipped.count, 0,
+            "full Shinkan import must not skip authored project data: {:#?}",
+            outcome.report.skipped
+        );
+        assert!(!outcome
+            .report
+            .skipped
+            .details
+            .iter()
+            .any(|detail| { detail.message.contains("folded lane state") }));
+        assert!(outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .filter_map(|cue| cue.child_timeline.as_ref())
+            .flat_map(|child| &child.layers)
+            .all(|layer| !layer.expanded));
         let imported_scene_blocks = outcome
             .project
             .snapshot

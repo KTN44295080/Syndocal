@@ -1626,6 +1626,8 @@ pub struct TimelineLayerSummary {
     #[serde(default)]
     pub solo: bool,
     #[serde(default)]
+    pub expanded: bool,
+    #[serde(default)]
     pub kind: TimelineLayerKind,
 }
 
@@ -3904,6 +3906,7 @@ mod tests {
         assert!(!layer.muted);
         assert!(!layer.locked);
         assert!(!layer.solo);
+        assert!(!layer.expanded);
         assert_eq!(layer.kind, super::TimelineLayerKind::Lighting);
     }
 
@@ -5017,6 +5020,7 @@ mod tests {
                 muted: false,
                 locked: false,
                 solo: false,
+                expanded: false,
                 kind: super::TimelineLayerKind::Audio,
             }],
             audio_clips: vec![super::TimelineAudioClipSummary {

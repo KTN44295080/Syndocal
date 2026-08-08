@@ -30,6 +30,7 @@ const cueRecallOnlyMode = process.argv.includes("--cue-recall-only");
 const setupDmxOnlyMode = process.argv.includes("--setup-dmx-only");
 const setupIoOnlyMode = process.argv.includes("--setup-io-only");
 const timelineSlimOnlyMode = process.argv.includes("--timeline-slim-only");
+const timelineLayeredOnlyMode = process.argv.includes("--timeline-layered-only");
 const patchOnlyMode = process.argv.includes("--patch-only");
 const fixtureGroupsOnlyMode = process.argv.includes("--fixture-groups-only");
 const patchEmptyStateOnlyMode = process.argv.includes("--patch-empty-state-only");
@@ -108,7 +109,9 @@ const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
             ? "audio-reactive"
             : vjEmptyMode || liveAudioOnlyMode || fullscreenVjOnlyMode
               ? "vj-empty"
-              : "timeline"
+              : timelineLayeredOnlyMode
+                ? "timeline-layered"
+                : "timeline"
 );
 const defaultUrl =
   viewportFixture === "none"
@@ -6277,6 +6280,7 @@ async function measureLayeredTimelineDeskState(client) {
     });
     const targetGutter = document.querySelector('[data-timeline-layer-id="12"][data-timeline-layer-gutter]');
     const targetToggle = targetGutter?.querySelector('[data-timeline-layer-mute-toggle]') ?? null;
+    const targetDetailsToggle = targetGutter?.querySelector('[data-timeline-layer-expand-toggle]') ?? null;
     const targetMarkers = visibleElements('.timelineMarker[data-timeline-layer-id="12"][data-timeline-layer-muted]');
     const audioClips = visibleElements('.timelineAudioClip[data-timeline-layer-kind="Audio"]');
     const audioWaveforms = [...document.querySelectorAll('.timelineAudioClip [data-timeline-audio-waveform]')];
@@ -6317,6 +6321,9 @@ async function measureLayeredTimelineDeskState(client) {
       gutterLayerIds: gutters.map((gutter) => gutter.getAttribute('data-timeline-layer-id') || ''),
       targetToggleVisible: isVisible(targetToggle),
       targetTogglePressed: targetToggle?.getAttribute('aria-pressed') ?? '',
+      targetDetailsToggleVisible: isVisible(targetDetailsToggle),
+      targetLayerExpanded: targetGutter?.getAttribute('data-timeline-layer-expanded') === 'true',
+      targetLayerHeight: Math.round(targetGutter?.getBoundingClientRect().height ?? 0),
       targetLayerMuted: targetGutter?.getAttribute('data-timeline-layer-muted') === 'true' ||
         targetToggle?.getAttribute('aria-pressed') === 'false',
       targetMarkerMutedStates: targetMarkers.map((marker) => marker.getAttribute('data-timeline-layer-muted') === 'true'),
@@ -6368,6 +6375,22 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
   await clickVisibleByText(client, '.timelineDeskTabs button', 'Show');
   await sleep(120);
   const before = await measureLayeredTimelineDeskState(client);
+  const expandToggleClicked = await client.evaluate(`(() => {
+    const toggle = document.querySelector('[data-timeline-layer-id="12"][data-timeline-layer-gutter] [data-timeline-layer-expand-toggle]');
+    if (!(toggle instanceof HTMLButtonElement) || toggle.disabled) return false;
+    toggle.click();
+    return true;
+  })()`);
+  await sleep(160);
+  const expandedLayer = await measureLayeredTimelineDeskState(client);
+  const collapseToggleClicked = await client.evaluate(`(() => {
+    const toggle = document.querySelector('[data-timeline-layer-id="12"][data-timeline-layer-gutter] [data-timeline-layer-expand-toggle]');
+    if (!(toggle instanceof HTMLButtonElement) || toggle.disabled) return false;
+    toggle.click();
+    return true;
+  })()`);
+  await sleep(160);
+  const restoredLayer = await measureLayeredTimelineDeskState(client);
   const muteToggleClicked = await client.evaluate(`(() => {
     const gutter = document.querySelector('[data-timeline-layer-id="12"][data-timeline-layer-gutter]');
     const toggle = gutter?.querySelector('[data-timeline-layer-mute-toggle]');
@@ -6697,6 +6720,11 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
     ['layeredDeskTargetLaneHasMarkers', () => before.targetMarkerMutedStates.length > 0],
     ['layeredDeskMuteToggleClicked', () => Boolean(muteToggleClicked)],
     ['layeredDeskLayerMuteStateChanged', () => !before.targetLayerMuted && muted.targetLayerMuted],
+    ['layeredDeskExpansionPersistsThroughLayerUpdate', () =>
+      expandToggleClicked && collapseToggleClicked && before.targetDetailsToggleVisible &&
+      !before.targetLayerExpanded && expandedLayer.targetLayerExpanded &&
+      expandedLayer.targetLayerHeight > before.targetLayerHeight &&
+      !restoredLayer.targetLayerExpanded && restoredLayer.targetLayerHeight === before.targetLayerHeight],
     ['layeredDeskMarkersReflectMutedState', () =>
       before.targetMarkerMutedStates.length > 0 &&
       before.targetMarkerMutedStates.every((state) => !state) &&
@@ -6791,9 +6819,13 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
     checks,
     failedChecks,
     before,
+    expandedLayer,
+    restoredLayer,
     muted,
     direct,
     muteToggleClicked,
+    expandToggleClicked,
+    collapseToggleClicked,
     expectedFrameHeight,
   };
   await client.send('Page.navigate', { url: appUrl });
@@ -28693,6 +28725,24 @@ async function main() {
       }
       const failures = sceneBlockResults.filter((result) => !result.passed);
       if (failures.length > 0) throw new Error(`Scene Block viewport failed: ${JSON.stringify(failures)}`);
+      return;
+    }
+    if (timelineLayeredOnlyMode) {
+      const layeredTimelineResults = [];
+      for (const viewport of viewports) {
+        const result = await runLayeredTimelineDeskCheck(client, viewport);
+        layeredTimelineResults.push(result);
+        console.log(
+          `${result.passed ? "pass" : "fail"} ${result.label} ` +
+            `expand=${result.before.targetLayerHeight}->${result.expandedLayer.targetLayerHeight}->${result.restoredLayer.targetLayerHeight} ` +
+            `muted=${result.before.targetLayerMuted}->${result.muted.targetLayerMuted} ` +
+            `failed=${JSON.stringify(result.failedChecks)}`,
+        );
+      }
+      const failures = layeredTimelineResults.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        throw new Error(`Layered Timeline viewport failed: ${JSON.stringify(failures)}`);
+      }
       return;
     }
 

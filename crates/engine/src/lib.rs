@@ -21145,6 +21145,7 @@ fn implicit_timeline_layers() -> Vec<TimelineLayerSummary> {
             muted: false,
             locked: false,
             solo: false,
+            expanded: false,
             kind: TimelineLayerKind::Lighting,
         },
         TimelineLayerSummary {
@@ -21154,6 +21155,7 @@ fn implicit_timeline_layers() -> Vec<TimelineLayerSummary> {
             muted: false,
             locked: false,
             solo: false,
+            expanded: false,
             kind: TimelineLayerKind::Video,
         },
     ]
@@ -21167,6 +21169,7 @@ fn default_timeline_audio_layer(id: u32) -> TimelineLayerSummary {
         muted: false,
         locked: false,
         solo: false,
+        expanded: false,
         kind: TimelineLayerKind::Audio,
     }
 }
@@ -56695,6 +56698,7 @@ mod tests {
             muted: false,
             locked: false,
             solo: false,
+            expanded: false,
             kind: TimelineLayerKind::Lighting,
         }];
         add_conformed_loop_fill_test_block(&mut runtime, 10, 1, 2.0, 9_000, Some(10));
@@ -58361,6 +58365,7 @@ mod tests {
                 muted: false,
                 locked: false,
                 solo: false,
+                expanded: false,
                 kind: TimelineLayerKind::Lighting,
             })
             .collect();
@@ -59524,6 +59529,7 @@ mod tests {
             muted,
             locked,
             solo,
+            expanded: false,
             kind,
         }
     }

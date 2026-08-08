@@ -1657,6 +1657,7 @@ export interface TimelineLayerSummary {
   muted: boolean;
   locked: boolean;
   solo: boolean;
+  expanded?: boolean;
   kind: TimelineLayerKind;
 }
 

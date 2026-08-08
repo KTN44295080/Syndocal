@@ -8031,6 +8031,7 @@ fn add_timeline_layer(
             muted: false,
             locked: false,
             solo: false,
+            expanded: false,
             kind,
         })?;
     Ok(layer_id)
@@ -33891,6 +33892,7 @@ f 1 2 3
             muted: false,
             locked: false,
             solo: false,
+            expanded: false,
             kind,
         }
     }

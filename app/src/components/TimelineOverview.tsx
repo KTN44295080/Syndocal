@@ -252,8 +252,8 @@ const timelineSectionHeaderHeightPx = 14;
 const timelineUserLaneHeightPx = 36;
 const timelineExpandedLaneHeightPx = 54;
 const legacyTimelineLayers: TimelineLayerSummary[] = [
-  { id: 0, label: "Lighting", order: 0, muted: false, locked: false, solo: false, kind: "Lighting" },
-  { id: 1, label: "Video", order: 1, muted: false, locked: false, solo: false, kind: "Video" },
+  { id: 0, label: "Lighting", order: 0, muted: false, locked: false, solo: false, expanded: false, kind: "Lighting" },
+  { id: 1, label: "Video", order: 1, muted: false, locked: false, solo: false, expanded: false, kind: "Video" },
 ];
 
 interface TimelineAutomationRangeDrag {
@@ -360,7 +360,6 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   const [lightingLaneVisible, setLightingLaneVisible] = createSignal(true);
   const [videoLaneVisible, setVideoLaneVisible] = createSignal(true);
   const [collapsedSections, setCollapsedSections] = createSignal<Set<TimelineLayerKind>>(new Set());
-  const [expandedLayerIds, setExpandedLayerIds] = createSignal<Set<number>>(new Set());
   let overviewElement: SVGSVGElement | undefined;
   onMount(() => {
     const updateViewBox = () => {
@@ -435,8 +434,10 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     new Set<number>(),
     { equals: sameNumberSet },
   );
-  const timelineLayerHeightPx = (layerId: number) =>
-    expandedLayerIds().has(layerId) || overlapLayerIds().has(layerId)
+  const timelineLayerIsExpanded = (layer: TimelineLayerSummary) =>
+    Boolean(layer.expanded) || overlapLayerIds().has(layer.id);
+  const timelineLayerHeightPx = (layer: TimelineLayerSummary) =>
+    timelineLayerIsExpanded(layer)
       ? timelineExpandedLaneHeightPx
       : timelineUserLaneHeightPx;
   const sectionLayout = createMemo(() => {
@@ -451,7 +452,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       top += timelineSectionHeaderHeightPx;
       if (!isCollapsed) {
         for (const layer of layers) {
-          const height = timelineLayerHeightPx(layer.id);
+          const height = timelineLayerHeightPx(layer);
           laneRows.push({ layer, top, height });
           top += height;
         }
@@ -479,14 +480,8 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       return next;
     });
   };
-  const toggleLayerExpanded = (layerId: number) => {
-    setExpandedLayerIds((current) => {
-      const next = new Set(current);
-      if (next.has(layerId)) next.delete(layerId);
-      else next.add(layerId);
-      return next;
-    });
-  };
+  const toggleLayerExpanded = (layer: TimelineLayerSummary) =>
+    void props.onUpdateLayer({ ...layer, expanded: !Boolean(layer.expanded) });
   const layerIdFromPoint = (clientX: number, clientY: number) => {
     if (typeof document === "undefined") return null;
     const target = document.elementFromPoint(clientX, clientY)?.closest<Element>("[data-timeline-layer-id]");
@@ -1913,7 +1908,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                   const cueDropState = () => cueDropStateForLayer(layer.id);
                   const markerDropState = () => markerDropStateForLayer(layer.id);
                   const row = () => layerRowById().get(layer.id);
-                  const expanded = () => expandedLayerIds().has(layer.id);
+                  const expanded = () => timelineLayerIsExpanded(layer);
                   return (
                     <div
                       class="timelineLaneGutter timelineUserLaneGutter"
@@ -1969,7 +1964,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                         aria-expanded={expanded()}
                         aria-label={layerActionAccessibleLabel(layer, expanded() ? "Collapse details" : "Expand details")}
                         title={layerActionAccessibleLabel(layer, expanded() ? "Collapse details" : "Expand details")}
-                        onClick={() => toggleLayerExpanded(layer.id)}
+                        onClick={() => toggleLayerExpanded(layer)}
                       >
                         <svg viewBox="0 0 16 16" aria-hidden="true">
                           <path d={expanded() ? "M3 5.5 8 10.5l5-5" : "M5.5 3 10.5 8l-5 5"} />
@@ -2115,7 +2110,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                 data-timeline-layer-kind={row.layer.kind}
                 data-timeline-layer-muted={row.layer.muted ? "true" : "false"}
                 data-timeline-layer-locked={row.layer.locked ? "true" : "false"}
-                data-timeline-layer-expanded={expandedLayerIds().has(row.layer.id) ? "true" : "false"}
+                data-timeline-layer-expanded={timelineLayerIsExpanded(row.layer) ? "true" : "false"}
               />
             );
           }}
