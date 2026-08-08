@@ -28,6 +28,7 @@ interface EditableTouchSurfaceProps {
   snapshot: EngineSnapshot;
   surface?: TouchSurfaceSummary;
   selectedFixtureId?: number | null;
+  selectedGroupId?: string | null;
   colorPalette?: readonly string[];
   onSurfaceChange: (surface: TouchSurfaceSummary) => void | Promise<void>;
   onTrigger: (binding: TouchControlBinding) => void | Promise<void>;
@@ -68,7 +69,9 @@ const bindingOptions: ReadonlyArray<{ value: string; label: string }> = [
   { value: "group_color", label: "Group color" },
   { value: "fixture_pan_tilt", label: "Fixture Pan/Tilt" },
   { value: "group_pan_tilt", label: "Group Pan/Tilt" },
+  { value: "group_select", label: "Group select" },
   { value: "group_submaster", label: "Group submaster" },
+  { value: "tap_tempo", label: "Tap tempo" },
   { value: "selected_fixture_attribute", label: "Selected fixture attribute" },
   { value: "selected_fixture_color", label: "Selected fixture color" },
   { value: "selected_fixture_pan_tilt", label: "Selected fixture Pan/Tilt" },
@@ -316,6 +319,8 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
         return { kind: option, cue_id: cueId };
       case "group_submaster":
         return { kind: option, group_id: groupId };
+      case "group_select":
+        return { kind: option, group_id: groupId };
       case "selected_fixture_attribute":
         return { kind: option, attribute: "Dimmer" };
       case "selected_fixture_pan_tilt":
@@ -323,6 +328,7 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
       case "cue_next":
       case "cue_previous":
       case "cue_fade_pause":
+      case "tap_tempo":
       case "lighting_master":
       case "video_master":
       case "blackout":
@@ -375,6 +381,8 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
     switch (control.binding?.kind) {
       case "cue_fade_pause":
         return props.snapshot.active_fade?.paused ?? false;
+      case "group_select":
+        return props.selectedGroupId === control.binding.group_id;
       case "blackout":
       case "video_blackout":
       case "all_blackout":
@@ -685,6 +693,7 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
             return current?.kind === "group_attribute"
               || current?.kind === "group_color"
               || current?.kind === "group_pan_tilt"
+              || current?.kind === "group_select"
               || current?.kind === "group_submaster"
               ? current
               : null;

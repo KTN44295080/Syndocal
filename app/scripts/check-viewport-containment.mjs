@@ -10373,10 +10373,11 @@ function hasExpectedTouchSurface(result) {
   );
 }
 
-async function checkEditableTouchSurface(client, expectedPage, expectedDefaultPreset) {
+async function checkEditableTouchSurface(client, expectedPage, expectedDefaultPreset, expectedGroupSelect = false) {
   return await client.evaluate(`(async () => {
     const expectedPage = ${JSON.stringify(expectedPage)};
     const expectedDefaultPreset = ${JSON.stringify(expectedDefaultPreset)};
+    const expectedGroupSelect = ${JSON.stringify(expectedGroupSelect)};
     const surface = document.querySelector('[data-touch-surface]');
     const modeButtons = [...document.querySelectorAll('.touchSurfaceModeToggle button')];
     const editButton = modeButtons[0];
@@ -10403,6 +10404,12 @@ async function checkEditableTouchSurface(client, expectedPage, expectedDefaultPr
       label: (control.querySelector('.touchPlacedButton')?.textContent || '').trim(),
     }));
     const operatedKinds = [];
+
+    const groupSelectButton = surface.querySelector('[data-touch-binding="group_select"] .touchPlacedButton:not(:disabled)');
+    groupSelectButton?.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const groupSelectOperationPassed = !expectedGroupSelect ||
+      (groupSelectButton instanceof HTMLButtonElement && groupSelectButton.getAttribute('aria-pressed') === 'true');
 
     const button = surface.querySelector('[data-touch-kind="Button"] .touchPlacedButton:not(:disabled)');
     button?.click();
@@ -10491,6 +10498,7 @@ async function checkEditableTouchSurface(client, expectedPage, expectedDefaultPr
         palettePassed &&
         allKindsPresent &&
         liveOperationsPassed &&
+        groupSelectOperationPassed &&
         editModeSameSurface &&
         liveModeSameSurface &&
         editHandlesPresent &&
@@ -10514,6 +10522,9 @@ async function checkEditableTouchSurface(client, expectedPage, expectedDefaultPr
       operatedKinds,
       liveActivationKinds,
       liveOperationsPassed,
+      expectedGroupSelect,
+      groupSelectPresent: groupSelectButton instanceof HTMLButtonElement,
+      groupSelectOperationPassed,
       editModeSameSurface,
       liveModeSameSurface,
       editHandlesPresent,
@@ -12637,7 +12648,7 @@ async function runComposedTouchViewport(client, viewport) {
   await waitForApp(client);
   await clickByText(client, "Touch");
   await sleep(180);
-  await checkEditableTouchSurface(client, "Viewport Touch", false);
+  await checkEditableTouchSurface(client, "Viewport Touch", false, true);
   return measure(client, `touch-composed-${viewport.width}x${viewport.height}`);
 }
 

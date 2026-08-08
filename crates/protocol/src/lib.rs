@@ -3418,9 +3418,13 @@ pub enum TouchControlBinding {
     Cue {
         cue_id: CueId,
     },
+    GroupSelect {
+        group_id: String,
+    },
     GroupSubmaster {
         group_id: String,
     },
+    TapTempo,
     LightingMaster,
     VideoMaster,
     Blackout,
@@ -4959,9 +4963,13 @@ mod tests {
                 tilt_attribute: "Tilt".to_string(),
             },
             Binding::Cue { cue_id: 12 },
+            Binding::GroupSelect {
+                group_id: "front".to_string(),
+            },
             Binding::GroupSubmaster {
                 group_id: "front".to_string(),
             },
+            Binding::TapTempo,
             Binding::LightingMaster,
             Binding::VideoMaster,
             Binding::Blackout,

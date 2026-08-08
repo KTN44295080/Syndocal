@@ -1227,7 +1227,7 @@ const touchSurface: TouchSurfaceSummary = {
         { id: 9_110, kind: "XyGrid", x: 6, y: 2, w: 3, h: 6, label: "POSITION", binding: { kind: "group_pan_tilt", group_id: "front", pan_attribute: "Pan", tilt_attribute: "Tilt" } },
         { id: 9_111, kind: "Button", x: 9, y: 2, w: 3, h: 3, label: "DMX BO", binding: { kind: "blackout" } },
         { id: 9_112, kind: "Button", x: 9, y: 5, w: 3, h: 3, label: "VIDEO BO", binding: { kind: "video_blackout" } },
-        { id: 9_113, kind: "Image", x: 0, y: 6, w: 6, h: 2, label: "Show Data", binding: null },
+        { id: 9_113, kind: "Button", x: 0, y: 6, w: 6, h: 2, label: "SELECT FRONT", binding: { kind: "group_select", group_id: "front" } },
         // Legacy saved surfaces may still contain shared-topbar controls. The
         // effective Touch surface must suppress all four before rendering.
         { id: 9_114, kind: "Button", x: 0, y: 0, w: 2, h: 2, label: "GO", binding: { kind: "cue_next" } },

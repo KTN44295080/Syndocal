@@ -17,7 +17,9 @@ use protocol::{
     EngineSnapshot, FixtureProfileSummary, GeometrySummary, LfoEffectRequest, LfoShape,
     MoveCoordinateMode, MoveDirection, MoveEffectRequest, MoveInterpolation, MovePathPoint,
     PatchedFixtureSummary, ProjectFile, Rotation3, StageMapConfig, TimelineAudioClipSummary,
-    TimelineCueEventSummary, TimelineLayerKind, TimelineLayerSummary, TimelineTrackKind, Vec3,
+    TimelineCueEventSummary, TimelineLayerKind, TimelineLayerSummary, TimelineTrackKind,
+    TouchControlBinding, TouchControlKind, TouchControlSummary, TouchPageSummary,
+    TouchSurfaceSummary, Vec3,
 };
 use roxmltree::{Document, Node};
 use serde::Serialize;
@@ -266,6 +268,7 @@ fn import_bytes(bytes: &[u8], path_label: &str) -> Result<DvcImportOutcome, Stri
     )?;
     parse_super_scenes(root, &mut cues, &scene_indices, &mut snapshot, &mut report)?;
     snapshot.cues = cues;
+    snapshot.touch_surface = parse_touch_surface(root, &scene_indices, &snapshot.cues, &mut report);
     configure_disabled_dmx_routes(&mut snapshot);
 
     let fixture_group_count = direct_child(root, "FIXTUREGROUPS")
@@ -795,6 +798,242 @@ fn fixture_group_memberships(root: Node<'_, '_>) -> HashMap<String, Vec<String>>
         }
     }
     memberships
+}
+
+fn fixture_group_identities(root: Node<'_, '_>) -> HashMap<String, String> {
+    let mut identities = HashMap::new();
+    let Some(section) = direct_child(root, "FIXTUREGROUPS") else {
+        return identities;
+    };
+    for (group_index, group) in element_children(section)
+        .filter(|node| node.has_tag_name("FIXTUREGROUP"))
+        .enumerate()
+    {
+        let Some(uid) = group.attribute("DASUID") else {
+            continue;
+        };
+        identities.insert(
+            uid.to_string(),
+            non_empty_label(
+                group.attribute("NAME"),
+                &format!("Fixture Group {}", group_index + 1),
+            ),
+        );
+    }
+    identities
+}
+
+fn parse_touch_surface(
+    root: Node<'_, '_>,
+    scene_indices: &HashMap<String, usize>,
+    cues: &[CueSummary],
+    report: &mut DvcImportReport,
+) -> TouchSurfaceSummary {
+    const TOUCH_GRID_COLUMNS: u16 = 12;
+    const TOUCH_GRID_ROWS: u16 = 8;
+
+    let group_identities = fixture_group_identities(root);
+    let mut bindings_by_control = HashMap::<String, TouchControlBinding>::new();
+    let mut converted_mapping_count = 0_usize;
+    if let Some(shortcuts) = direct_child(root, "SHORTCUTS") {
+        for (shortcut_index, shortcut) in element_children(shortcuts)
+            .filter(|node| node.has_tag_name("SHORTCUT"))
+            .enumerate()
+        {
+            let item = format!("Shortcut {}", shortcut_index + 1);
+            let shortcut_type = shortcut.attribute("TYPE").unwrap_or_default();
+            if shortcut_type != "2" {
+                report.unsupported.add(
+                    1,
+                    item,
+                    format!("Daslight shortcut type {shortcut_type} is not a Touch mapping"),
+                );
+                continue;
+            }
+            let Some(event_data) =
+                direct_child(shortcut, "EVENT").and_then(|event| event.attribute("DATA"))
+            else {
+                report
+                    .skipped
+                    .add(1, item, "Touch mapping EVENT DATA was missing");
+                continue;
+            };
+            let control_uid = event_data.split(':').next().unwrap_or_default().trim();
+            if control_uid.is_empty() {
+                report
+                    .skipped
+                    .add(1, item, "Touch mapping control UUID was empty");
+                continue;
+            }
+            let Some(action) = direct_child(shortcut, "ACTION") else {
+                report
+                    .skipped
+                    .add(1, item, "Touch mapping ACTION was missing");
+                continue;
+            };
+            let action_type = action.attribute("TYPE").unwrap_or_default();
+            let binding = match action_type {
+                // Verified in Daslight's TOUCH MAPPINGS window as Group Select.
+                "30" => action
+                    .attribute("TARGET")
+                    .and_then(|target| group_identities.get(target))
+                    .cloned()
+                    .map(|group_id| TouchControlBinding::GroupSelect { group_id }),
+                // A local Daslight project stores its Touch control named
+                // "Tap Tempo" as action 55.
+                "55" => Some(TouchControlBinding::TapTempo),
+                // Verified in Daslight's TOUCH MAPPINGS window as Scene Play.
+                "107" => action
+                    .attribute("TARGET")
+                    .and_then(|target| scene_indices.get(target))
+                    .and_then(|index| cues.get(*index))
+                    .map(|cue| TouchControlBinding::Cue { cue_id: cue.id }),
+                _ => {
+                    report.unsupported.add(
+                        1,
+                        item.clone(),
+                        format!("Daslight Touch action type {action_type} is not yet mapped"),
+                    );
+                    None
+                }
+            };
+            let Some(binding) = binding else {
+                if matches!(action_type, "30" | "107") {
+                    report.skipped.add(
+                        1,
+                        item,
+                        format!(
+                            "Daslight Touch action type {action_type} referenced a missing target"
+                        ),
+                    );
+                }
+                continue;
+            };
+            if bindings_by_control
+                .insert(control_uid.to_string(), binding)
+                .is_some()
+            {
+                report.approximate.add(
+                    1,
+                    item,
+                    "Multiple Daslight mappings targeted one Touch control; the last mapping wins",
+                );
+            }
+        }
+    }
+
+    let Some(touch) = direct_child(root, "TOUCH") else {
+        return TouchSurfaceSummary::default();
+    };
+    let mut pages = Vec::new();
+    let mut converted_control_count = 0_usize;
+    let mut imported_control_uids = HashSet::new();
+    for (page_index, page) in element_children(touch)
+        .filter(|node| node.has_tag_name("TOUCHPAGE"))
+        .enumerate()
+    {
+        let page_id = u64::try_from(page_index + 1).unwrap_or(u64::MAX);
+        let page_label =
+            non_empty_label(page.attribute("NAME"), &format!("Page {}", page_index + 1));
+        let mut controls = Vec::new();
+        for (control_index, control) in element_children(page)
+            .filter(|node| node.has_tag_name("TOUCHCONTROL"))
+            .enumerate()
+        {
+            let item = format!("Touch: {page_label} / Control {}", control_index + 1);
+            let Some(control_uid) = control.attribute("DASUID") else {
+                report
+                    .skipped
+                    .add(1, item, "Touch control UUID was missing");
+                continue;
+            };
+            let kind = match control.attribute("TYPE").unwrap_or_default() {
+                // Verified against rendered Daslight controls and local DVC files.
+                "2" => TouchControlKind::Button,
+                "3" => TouchControlKind::Fader,
+                control_type => {
+                    report.unsupported.add(
+                        1,
+                        item,
+                        format!("Daslight Touch control type {control_type} is not yet mapped"),
+                    );
+                    continue;
+                }
+            };
+            let coordinates =
+                ["GRIDPOSX", "GRIDPOSY", "GRIDWIDTH", "GRIDHEIGHT"].map(|attribute| {
+                    parse_u64_attribute(control, attribute)
+                        .and_then(|value| u16::try_from(value).ok())
+                });
+            let [Some(x), Some(y), Some(w), Some(h)] = coordinates else {
+                report
+                    .skipped
+                    .add(1, item, "Touch control grid geometry was invalid");
+                continue;
+            };
+            if w == 0
+                || h == 0
+                || x.saturating_add(w) > TOUCH_GRID_COLUMNS
+                || y.saturating_add(h) > TOUCH_GRID_ROWS
+            {
+                report
+                    .skipped
+                    .add(1, item, "Touch control was outside the 12x8 grid");
+                continue;
+            }
+            let control_id = u64::try_from(converted_control_count + 1).unwrap_or(u64::MAX);
+            let binding = bindings_by_control.remove(control_uid);
+            if binding.is_some() {
+                converted_mapping_count = converted_mapping_count.saturating_add(1);
+            }
+            controls.push(TouchControlSummary {
+                id: control_id,
+                kind,
+                x,
+                y,
+                w,
+                h,
+                label: non_empty_label(
+                    control.attribute("NAME"),
+                    &format!("Control {}", control_index + 1),
+                ),
+                binding,
+            });
+            imported_control_uids.insert(control_uid.to_string());
+            converted_control_count = converted_control_count.saturating_add(1);
+        }
+        pages.push(TouchPageSummary {
+            id: page_id,
+            label: page_label,
+            controls,
+        });
+    }
+
+    for control_uid in bindings_by_control.keys() {
+        if !imported_control_uids.contains(control_uid) {
+            report.skipped.add(
+                1,
+                format!("Touch mapping: {control_uid}"),
+                "Touch mapping referenced a control that was not imported",
+            );
+        }
+    }
+    report.converted.add(
+        pages.len(),
+        "Touch pages",
+        format!("{} Daslight Touch page(s)", pages.len()),
+    );
+    report.converted.add(
+        converted_control_count,
+        "Touch controls",
+        format!("{converted_control_count} positioned Touch control(s)"),
+    );
+    report.converted.add(
+        converted_mapping_count,
+        "Touch mappings",
+        format!("{converted_mapping_count} verified Touch binding(s)"),
+    );
+    TouchSurfaceSummary { pages }
 }
 
 fn parse_scenes(
@@ -3539,18 +3778,15 @@ fn inflate_sync_flush_tolerant(input: &[u8], max_output: usize) -> Result<Vec<u8
 }
 
 fn count_ignored_sections(root: Node<'_, '_>, report: &mut DvcImportReport) {
-    for (tag, label) in [
-        ("TOUCH", "Touch layout"),
-        ("SHORTCUTS", "Shortcuts"),
-        ("DEVICES", "Daslight hardware devices"),
-    ] {
-        let Some(section) = direct_child(root, tag) else {
-            continue;
-        };
-        let count = element_children(section).count().max(1);
-        report
-            .unsupported
-            .add(count, label, "Not supported in the DVC-1 tranche");
+    if let Some(devices) = direct_child(root, "DEVICES") {
+        let count = element_children(devices).count();
+        if count > 0 {
+            report.unsupported.add(
+                count,
+                "Daslight hardware devices",
+                "Hardware bindings are device-specific; configure Syndocal output routes explicitly",
+            );
+        }
     }
 }
 
@@ -3729,6 +3965,10 @@ mod tests {
             r##"<DLMFILE TYPE="Daslight" VERSION="5" DASBUILD="test" VERSIONFILE="2"><PATCHS DATA="{}"/><FIXTUREGROUPS><FIXTUREGROUP DASUID="group-1" NAME="All"><FIXTURES><FIXTURE DASUID="fixture-1"/></FIXTURES></FIXTUREGROUP></FIXTUREGROUPS><SCENES><BANK DASUID="bank-1" NAME="Bank 1" COLOR="#ff112233"><SCENE DASUID="scene-1" NAME="Static" COLOR="#ff112233" FADE_IN="100" FADE_OUT="200" LOOP="0" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><FIXTUREDATAS NB="1"><FIXTUREDATA FIXTURE="fixture-1" DATA="{}"/></FIXTUREDATAS></SCENE><SCENE DASUID="scene-2" NAME="Super" COLOR="#ff445566" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><FIXTUREDATAS NB="0"/><RACKS><RACK><TIMELINES><TIMELINE DASUID="lane-a" NAME="Audio" INDEX="0" DASTLLOCKED="0" DASTLMUTED="0" DASTLFOLDED="0"><BLOCKS><BLOCK TYPE="2" NAME="Track" START="0" END="1000" POSITION="0" FADEIN="0" FADEOUT="0" DASTLMEDIAPATH="C:/missing.mp3" BPM="120"/></BLOCKS></TIMELINE><TIMELINE DASUID="lane-l" NAME="Lighting" INDEX="1" DASTLLOCKED="0" DASTLMUTED="0" DASTLFOLDED="0"><BLOCKS><BLOCK TYPE="1" NAME="Static" START="0" END="1000" POSITION="0" FADEIN="100" FADEOUT="100" SPEED="1" ALLOWLOOP="1" CONFORM_TO_TEMPO="1" SCENEUUID="scene-1"/></BLOCKS></TIMELINE></TIMELINES></RACK></RACKS></SCENE></BANK></SCENES><SHORTCUTS/><TOUCH/><DEVICES/></DLMFILE>"##,
             qcompress(patch.as_bytes()),
             fixture_data,
+        )
+        .replace(
+            "<SHORTCUTS/><TOUCH/>",
+            r#"<SHORTCUTS><SHORTCUT TYPE="2"><EVENT DATA="touch-control-group:0"/><ACTION TYPE="30" TARGET="group-1" TARGETINDEX="0"/><SETTINGS MIN="0" MAX="1" FLASH="1"/></SHORTCUT><SHORTCUT TYPE="2"><EVENT DATA="touch-control-cue:0"/><ACTION TYPE="107" TARGET="scene-1" TARGETINDEX="0"/><SETTINGS MIN="0" MAX="1" FLASH="1"/></SHORTCUT><SHORTCUT TYPE="2"><EVENT DATA="touch-control-tap:0"/><ACTION TYPE="55" TARGETINDEX="-1"/><SETTINGS MIN="0" MAX="1" FLASH="1"/></SHORTCUT></SHORTCUTS><TOUCH><TOUCHPAGE DASUID="touch-page-1" NAME="Page 1" TOUCHCONTROL="3"><TOUCHCONTROL DASUID="touch-control-group" NAME="All" TYPE="2" GRIDWIDTH="1" GRIDHEIGHT="1" GRIDPOSX="0" GRIDPOSY="0"/><TOUCHCONTROL DASUID="touch-control-cue" NAME="Static" TYPE="2" GRIDWIDTH="1" GRIDHEIGHT="1" GRIDPOSX="1" GRIDPOSY="0"/><TOUCHCONTROL DASUID="touch-control-tap" NAME="Tap Tempo" TYPE="2" GRIDWIDTH="1" GRIDHEIGHT="1" GRIDPOSX="2" GRIDPOSY="0"/></TOUCHPAGE></TOUCH>"#,
         )
     }
 
@@ -3947,6 +4187,22 @@ mod tests {
         assert_eq!(outcome.report.summary.beam_records, 1);
         assert_eq!(outcome.report.summary.beam_feature_checks, 1);
         assert_eq!(outcome.report.summary.beam_feature_mismatches, 0);
+        let touch = &outcome.project.snapshot.touch_surface;
+        assert_eq!(touch.pages.len(), 1);
+        assert_eq!(touch.pages[0].label, "Page 1");
+        assert_eq!(touch.pages[0].controls.len(), 3);
+        assert!(matches!(
+            touch.pages[0].controls[0].binding.as_ref(),
+            Some(TouchControlBinding::GroupSelect { group_id }) if group_id == "All"
+        ));
+        assert!(matches!(
+            touch.pages[0].controls[1].binding.as_ref(),
+            Some(TouchControlBinding::Cue { cue_id: 1 })
+        ));
+        assert!(matches!(
+            touch.pages[0].controls[2].binding.as_ref(),
+            Some(TouchControlBinding::TapTempo)
+        ));
 
         let folded_source = source.replacen("DASTLFOLDED=\"0\"", "DASTLFOLDED=\"1\"", 1);
         let folded = import_bytes(folded_source.as_bytes(), "synthetic-folded.dvc").unwrap();
@@ -5624,6 +5880,13 @@ mod tests {
             "full Shinkan import must not skip authored project data: {:#?}",
             outcome.report.skipped
         );
+        assert_eq!(outcome.report.unsupported.count, 3);
+        assert!(outcome.report.unsupported.details.iter().all(|detail| {
+            detail.item == "Daslight hardware devices"
+                && detail
+                    .message
+                    .contains("configure Syndocal output routes explicitly")
+        }));
         assert!(!outcome
             .report
             .skipped
@@ -5638,6 +5901,17 @@ mod tests {
             .filter_map(|cue| cue.child_timeline.as_ref())
             .flat_map(|child| &child.layers)
             .all(|layer| !layer.expanded));
+        let touch = &outcome.project.snapshot.touch_surface;
+        assert_eq!(touch.pages.len(), 1);
+        assert_eq!(touch.pages[0].label, "Page 1");
+        assert_eq!(touch.pages[0].controls.len(), 1);
+        let control = &touch.pages[0].controls[0];
+        assert_eq!(control.kind, TouchControlKind::Button);
+        assert_eq!((control.x, control.y, control.w, control.h), (0, 0, 1, 1));
+        assert!(matches!(
+            control.binding.as_ref(),
+            Some(TouchControlBinding::GroupSelect { group_id }) if group_id == "saber spot rgbw"
+        ));
         let imported_scene_blocks = outcome
             .project
             .snapshot
@@ -6023,6 +6297,11 @@ mod tests {
                 serde_json::to_value(&outcome.project.snapshot.timeline).unwrap(),
                 serde_json::to_value(&roundtrip.snapshot.timeline).unwrap(),
             ),
+            (
+                "Touch",
+                serde_json::to_value(&outcome.project.snapshot.touch_surface).unwrap(),
+                serde_json::to_value(&roundtrip.snapshot.touch_surface).unwrap(),
+            ),
         ];
         for (label, before, after) in authored_sections {
             let difference = first_json_difference(&before, &after, label);
@@ -6081,6 +6360,72 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn dvc_local_homecoming_touch_tap_tempo_is_bound_when_present() {
+        let path = Path::new(r"C:\Users\kouty\Desktop\homecoming2026\homecoming2606.dvc");
+        if !path.is_file() {
+            eprintln!(
+                "Skipping local homecoming Touch golden: {} is unavailable",
+                path.display()
+            );
+            return;
+        }
+        let outcome = import_path(path).unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+        let control = outcome
+            .project
+            .snapshot
+            .touch_surface
+            .pages
+            .iter()
+            .flat_map(|page| &page.controls)
+            .find(|control| control.label == "Tap Tempo")
+            .expect("homecoming golden must preserve its Tap Tempo Touch control");
+        assert_eq!(control.kind, TouchControlKind::Button);
+        assert!(matches!(
+            control.binding.as_ref(),
+            Some(TouchControlBinding::TapTempo)
+        ));
+    }
+
+    #[test]
+    fn dvc_local_homecoming_laser_touch_faders_keep_layout_without_guessing_action_when_present() {
+        let path = Path::new(r"C:\Users\kouty\Desktop\homecoming2026\homecoming2606-Laser.dvc");
+        if !path.is_file() {
+            eprintln!(
+                "Skipping local homecoming Laser Touch golden: {} is unavailable",
+                path.display()
+            );
+            return;
+        }
+        let outcome = import_path(path).unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+        let controls = outcome
+            .project
+            .snapshot
+            .touch_surface
+            .pages
+            .iter()
+            .flat_map(|page| &page.controls)
+            .filter(|control| control.label == "Dimmer" || control.label == "Dimmer linear")
+            .collect::<Vec<_>>();
+        assert_eq!(controls.len(), 2);
+        assert!(controls
+            .iter()
+            .all(|control| control.kind == TouchControlKind::Fader && control.binding.is_none()));
+        assert!(controls.iter().any(|control| {
+            control.label == "Dimmer"
+                && (control.x, control.y, control.w, control.h) == (0, 0, 1, 4)
+        }));
+        assert!(controls.iter().any(|control| {
+            control.label == "Dimmer linear"
+                && (control.x, control.y, control.w, control.h) == (0, 4, 1, 4)
+        }));
+        assert!(outcome.report.unsupported.details.iter().any(|detail| {
+            detail.message == "Daslight Touch action type 223 is not yet mapped"
+        }));
     }
 
     #[test]

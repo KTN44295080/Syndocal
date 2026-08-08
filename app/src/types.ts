@@ -2390,7 +2390,9 @@ export type TouchControlBinding =
   | { kind: "fixture_pan_tilt"; fixture_id: number; pan_attribute: string; tilt_attribute: string }
   | { kind: "group_pan_tilt"; group_id: string; pan_attribute: string; tilt_attribute: string }
   | { kind: "cue"; cue_id: number }
+  | { kind: "group_select"; group_id: string }
   | { kind: "group_submaster"; group_id: string }
+  | { kind: "tap_tempo" }
   | { kind: "lighting_master" }
   | { kind: "video_master" }
   | { kind: "blackout" }

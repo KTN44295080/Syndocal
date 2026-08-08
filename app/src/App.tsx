@@ -11454,6 +11454,12 @@ export default function App() {
       case "cue_fade_pause":
         await setCueFadePaused(!snapshot().active_fade?.paused);
         break;
+      case "group_select":
+        selectFixtureGroupFilter(binding.group_id);
+        break;
+      case "tap_tempo":
+        await tapBpm();
+        break;
       case "blackout":
         await setBlackout(!snapshot().blackout);
         break;
@@ -18051,6 +18057,7 @@ export default function App() {
           snapshot={snapshot()}
           surface={snapshot().touch_surface}
           selectedFixtureId={selectedFixtureId()}
+          selectedGroupId={selectedFixtureGroupFilter()}
           colorPalette={selectedColorControls() ? defaultColorPalette.slice(0, 8) : []}
           onSurfaceChange={setTouchSurfaceLayout}
           onTrigger={triggerTouchBinding}

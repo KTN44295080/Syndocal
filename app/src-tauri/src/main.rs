@@ -16510,6 +16510,18 @@ fn validate_touch_surface(
                         ));
                     }
                 }
+                TouchControlBinding::GroupSelect { group_id } => {
+                    if !snapshot
+                        .fixtures
+                        .iter()
+                        .any(|fixture| fixture.group_ids.contains(group_id))
+                    {
+                        return Err(format!(
+                            "Touch control {} references missing selectable group '{}'",
+                            control.id, group_id
+                        ));
+                    }
+                }
                 TouchControlBinding::GroupSubmaster { group_id } => {
                     if !snapshot
                         .fixtures
