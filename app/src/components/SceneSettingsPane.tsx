@@ -18,9 +18,11 @@ import { ColorMappingEffectEditorPanel } from "./ColorMappingEffectEditorPanel";
 import { CueLiveModifierStrip } from "./CueLiveModifierStrip";
 import { CurveEffectEditorPanel } from "./CurveEffectEditorPanel";
 import { EffectActionControlsPanel } from "./EffectActionControlsPanel";
+import { EffectFeatureEditorPanel } from "./EffectFeatureEditorPanel";
 import { FxColorPaletteLibraryPanel } from "./FxColorPaletteLibraryPanel";
 import { MappingEffectEditorPanel } from "./MappingEffectEditorPanel";
 import { MoveEffectEditorPanel } from "./MoveEffectEditorPanel";
+import { SceneEffectTargetEditor } from "./SceneEffectTargetEditor";
 import {
   EffectFamilyChooser,
   type EffectChooserFamily,
@@ -41,6 +43,8 @@ export interface SceneEffectEditorModel {
   curve: ComponentProps<typeof CurveEffectEditorPanel>;
   mapping: ComponentProps<typeof MappingEffectEditorPanel>;
   colorMapping: ComponentProps<typeof ColorMappingEffectEditorPanel>;
+  features: ComponentProps<typeof EffectFeatureEditorPanel>;
+  target: ComponentProps<typeof SceneEffectTargetEditor>;
   palette: ComponentProps<typeof FxColorPaletteLibraryPanel>;
   action: ComponentProps<typeof EffectActionControlsPanel>;
 }
@@ -80,6 +84,8 @@ interface SceneSettingsPaneProps {
   onSelectEffect: (effectId: number) => void;
   onSelectFamily: (family: EffectChooserFamily) => void | Promise<void>;
   onSetEffectEnabled: (effectId: number, enabled: boolean) => void | Promise<void>;
+  onDuplicateEffect: (effectId: number) => void | Promise<void>;
+  onMoveEffect: (effectId: number, delta: -1 | 1) => void | Promise<void>;
   onRemoveEffect: (effectId: number) => void | Promise<void>;
 }
 
@@ -110,6 +116,8 @@ const SurfaceIcon = (props: { surface: SceneSettingsSurface }) => (
 export function SceneSettingsPane(props: SceneSettingsPaneProps) {
   const selectedEffect = () =>
     props.effects.find((effect) => effect.id === props.selectedEffectId) ?? null;
+  const selectedEffectIndex = () =>
+    props.effects.findIndex((effect) => effect.id === props.selectedEffectId);
   const sceneKind = () => sceneCueKind(props.cue);
   const sceneKindClass = () => sceneKind() === "TIMELINE"
     ? "super"
@@ -326,6 +334,7 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
                   "CHASER FX": "Dimmer chaser",
                   "VALUE FX": "Dimmer pulse",
                   "MOVE FX": props.moveFxEnabled ? "Pan/Tilt circle" : "Requires a Pan/Tilt fixture",
+                  "2D MAPPING": "Raster to lighting",
                 }}
                 disabledFamilies={{ "MOVE FX": !props.moveFxEnabled }}
               />
@@ -387,6 +396,32 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
                     )}
                   </For>
                 </nav>
+                <Show when={selectedEffect()}>
+                  <div class="sceneOwnedFxToolbar" role="toolbar" aria-label="Cue-owned FX rack actions">
+                    <button
+                      type="button"
+                      disabled={selectedEffectIndex() <= 0}
+                      onClick={() => void props.onMoveEffect(props.selectedEffectId!, -1)}
+                    >
+                      Move up
+                    </button>
+                    <button
+                      type="button"
+                      disabled={selectedEffectIndex() < 0 || selectedEffectIndex() >= props.effects.length - 1}
+                      onClick={() => void props.onMoveEffect(props.selectedEffectId!, 1)}
+                    >
+                      Move down
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!selectedEffect()?.params}
+                      title={selectedEffect()?.params ? "Duplicate this cue-owned FX" : "Linked project FX must be made cue-owned before duplication"}
+                      onClick={() => void props.onDuplicateEffect(props.selectedEffectId!)}
+                    >
+                      Duplicate
+                    </button>
+                  </div>
+                </Show>
               </section>
 
               <Show
@@ -401,9 +436,10 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
                     <strong class="uiMicroLabel">FX editor</strong>
                     <span>{props.editor.effectType}</span>
                   </header>
+                  <SceneEffectTargetEditor {...props.editor.target} />
                   <FxColorPaletteLibraryPanel {...props.editor.palette} />
                   <Show
-                    when={!["Color", "ColorMapping", "Chaser", "Move"].includes(props.editor.effectType)}
+                    when={["Lfo", "PositionWave"].includes(props.editor.effectType)}
                   >
                     <label class="sceneSettingsAttribute">
                       Attribute
@@ -418,6 +454,9 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
                         </For>
                       </select>
                     </label>
+                  </Show>
+                  <Show when={["Value", "Curve", "Mapping"].includes(props.editor.effectType)}>
+                    <EffectFeatureEditorPanel {...props.editor.features} />
                   </Show>
                   <Show when={props.editor.effectType === "Color"}>
                     <ColorEffectEditorPanel {...props.editor.color} />

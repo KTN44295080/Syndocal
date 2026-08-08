@@ -274,8 +274,7 @@ for (const family of [
   "MOVE FX",
   "VALUE FX",
   "CURVE FX",
-  "MAPPINGS",
-  "COLOUR MAPPINGS",
+  "2D MAPPING",
 ]) {
   assert.equal(localization.translateUiText(family, "ja"), family);
 }
@@ -548,7 +547,7 @@ const localeInvariantText = new Set([
   "GO", "SET", "FLASH", "EDIT", "EDIT:", "LIVE", "BLIND", "HTP", "LTP", "RGB", "BPM", "PULSE", "PATCH", "A", "B", "R", "G", "X", "Y", "Z", "Pan", "Tilt",
   "Dimmer", "Color", "Position", "Beam", "Speed", "Size", "Phase",
   "Sine", "Cosine", "Triangle", "Saw", "Square", "Random", "Perlin",
-  "STEPS", "COLOR FX", "CHASER FX", "MOVE FX", "VALUE FX", "CURVE FX", "MAPPINGS", "COLOUR MAPPINGS",
+  "STEPS", "COLOR FX", "CHASER FX", "MOVE FX", "VALUE FX", "CURVE FX", "2D MAPPING",
   "Phase %", "Position ms",
   "Art-Net", "sACN", "sACN / E1.31", "sACN E1.31", "Enttec USB PRO", "Syphon Server", "Spout Sender",
   "NDI Sender", "Bezier", "Linear", "Full", "Half", "Scale X", "Scale Y",

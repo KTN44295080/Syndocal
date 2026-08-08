@@ -1068,6 +1068,7 @@ const cueOwnedEffectSummary = (
     fixture_spread: 0,
     blend_mode: blendMode,
     enabled: target.enabled,
+    params,
     color: null,
     chaser: null,
     move_effect: null,
@@ -1264,6 +1265,21 @@ const cueOwnedEffectSummary = (
   };
 };
 
+const explicitBeamTargetCount = (effect: EffectSummary | null): number => {
+  if (!effect) return 0;
+  if (effect.lfo?.beam_targets?.length) return effect.lfo.beam_targets.length;
+  if (effect.color?.spatial_pattern?.beam_targets?.length) {
+    return effect.color.spatial_pattern.beam_targets.length;
+  }
+  if (effect.chaser) {
+    const keys = new Set(effect.chaser.steps.flatMap((step) =>
+      (step.beam_targets ?? []).map((target) =>
+        `${target.fixture_id}:${target.beam_index}:${target.feature_attribute}`)));
+    if (keys.size > 0) return keys.size;
+  }
+  return effect.color_mapping?.cells?.length ?? 0;
+};
+
 
 export default function App() {
   const outputWindowId = readVideoOutputWindowId();
@@ -1400,6 +1416,7 @@ export default function App() {
   const [mappingViewportZoom, setMappingViewportZoom] = createSignal(1);
   const [mappingViewportCenterX, setMappingViewportCenterX] = createSignal(stageViewBoxSize / 2);
   const [mappingViewportCenterZ, setMappingViewportCenterZ] = createSignal(stageViewBoxSize / 2);
+  const [mappingViewportInitialFitDone, setMappingViewportInitialFitDone] = createSignal(false);
   const [mappingSnapEnabled, setMappingSnapEnabled] = createSignal(false);
   const [mappingSnapSize, setMappingSnapSize] = createSignal(0.5);
   const [mappingFixtureSearch, setMappingFixtureSearch] = createSignal("");
@@ -1817,6 +1834,9 @@ export default function App() {
     createSignal<ColorEffectSpatialPattern | null>(null);
   const [chaserSteps, setChaserSteps] = createSignal<ChaserStep[]>([]);
   const [chaserFeatures, setChaserFeatures] = createSignal<ChaserFeature[]>([
+    { attribute: "Dimmer", low: 0, high: 65_535 },
+  ]);
+  const [scalarEffectFeatures, setScalarEffectFeatures] = createSignal<ChaserFeature[]>([
     { attribute: "Dimmer", low: 0, high: 65_535 },
   ]);
   const [chaserStepDuration, setChaserStepDuration] = createSignal(250);
@@ -4954,6 +4974,15 @@ export default function App() {
     setMovePathClosed(recipe !== "Line");
     setMoveInterpolation(recipe === "Line" || recipe === "Triangle" || recipe === "Square" ? "Line" : "Smooth");
   };
+  const prepareScalarFeatures = (forceReset = false) => {
+    if (!forceReset && scalarEffectFeatures().length > 0) return;
+    const attribute = selectedEffectAttribute() || chaserAttributeOptions()[0] || "Dimmer";
+    setScalarEffectFeatures([{
+      attribute,
+      low: Math.round(effectLow()),
+      high: Math.round(effectHigh()),
+    }]);
+  };
   const prepareMoveDraft = (forceReset = false) => {
     setEffectVideoTargetLinked(false);
     if (effectTargetMode() === "video") setEffectTargetMode(selectedFixture() ? "fixture" : "selection");
@@ -4977,9 +5006,8 @@ export default function App() {
     if (nextType === "Move") return "MOVE FX";
     if (nextType === "Value") return "VALUE FX";
     if (nextType === "Curve") return "CURVE FX";
-    if (nextType === "Mapping") return "MAPPINGS";
-    if (nextType === "ColorMapping") return "COLOUR MAPPINGS";
-    if (nextType === "PositionWave") return "MAPPINGS";
+    if (nextType === "Mapping" || nextType === "ColorMapping") return "2D MAPPING";
+    if (nextType === "PositionWave") return "VALUE FX";
     return "CURVE FX";
   };
   const selectEffectType = (nextType: EffectKind, preserveChooserFamily = false) => {
@@ -5010,14 +5038,17 @@ export default function App() {
     } else if (nextType === "Value") {
       setEffectVideoTargetLinked(false);
       if (effectTargetMode() === "video") setEffectTargetMode("fixture");
+      prepareScalarFeatures(nextType !== previousType);
       if (!startsNewEffect) setMessage("Prepared an envelope Value draft for the current scalar attribute.");
     } else if (nextType === "Curve") {
       setEffectVideoTargetLinked(false);
       if (effectTargetMode() === "video") setEffectTargetMode("fixture");
+      prepareScalarFeatures(nextType !== previousType);
       if (!startsNewEffect) setMessage("Prepared an independent cubic Curve draft for the current scalar attribute.");
     } else if (nextType === "Mapping") {
       setEffectVideoTargetLinked(false);
       if (effectTargetMode() === "video") setEffectTargetMode("fixture");
+      prepareScalarFeatures(nextType !== previousType);
       if (nextType !== previousType) {
         setMappingMode("Absolute");
         setMappingDirection("Forward");
@@ -5103,15 +5134,15 @@ export default function App() {
     }
     if (effectType() === "Value") {
       const clock = sync === null ? `${effectPeriod()}ms` : `${sync} beat`;
-      return `Value ${valuePoints().length} points / ${valueInterpolation()} / ${valueMode()} / ${valueDirection()} / ${clock}`;
+      return `Value ${valuePoints().length} points / ${scalarEffectFeatures().length} features / ${valueInterpolation()} / ${valueMode()} / ${valueDirection()} / ${clock}`;
     }
     if (effectType() === "Curve") {
       const clock = sync === null ? `${effectPeriod()}ms` : `${sync} beat`;
-      return `Curve ${curvePoints().length} points / Cubic / ${curveMode()} / ${curveDirection()} / ${clock}`;
+      return `Curve ${curvePoints().length} points / ${scalarEffectFeatures().length} features / Cubic / ${curveMode()} / ${curveDirection()} / ${clock}`;
     }
     if (effectType() === "Mapping") {
       const clock = sync === null ? `${effectPeriod()}ms` : `${sync} beat`;
-      return `Mapping ${mappingEffectOrderFixtures().length} fixtures / ${effectShape()} / ${mappingDirection()} / ${mappingRepetitions().toFixed(2)}× / ${clock}`;
+      return `Mapping ${mappingEffectOrderFixtures().length} fixtures / ${scalarEffectFeatures().length} features / ${effectShape()} / ${mappingDirection()} / ${mappingRepetitions().toFixed(2)}× / ${clock}`;
     }
     if (effectType() === "ColorMapping") {
       const clock = sync === null ? `${effectPeriod()}ms` : `${sync} beat`;
@@ -5119,7 +5150,36 @@ export default function App() {
     }
     return sync === null ? `LFO ${effectShape()} / ${effectPeriod()}ms` : `LFO ${effectShape()} / ${sync} beat`;
   });
+  const scalarAttributeCoverage = createMemo<Record<string, string>>(() => {
+    const fixtures = effectTargetFixtures();
+    return Object.fromEntries(chaserAttributeOptions().map((attribute) => {
+      const compatible = fixtures.filter((fixture) => fixture.controls.some((control) =>
+        control.attribute.toLowerCase() === attribute.toLowerCase()
+      )).length;
+      return [attribute.trim().toLowerCase(), `${compatible}/${fixtures.length} fixtures`];
+    }));
+  });
+  const currentScalarFeatureError = createMemo<string>(() => {
+    const features = scalarEffectFeatures();
+    if (features.length < 1 || features.length > 16) {
+      return "Value, Curve, and Mapping effects require between 1 and 16 Features.";
+    }
+    const seen = new Set<string>();
+    for (const feature of features) {
+      const attribute = feature.attribute.trim();
+      if (!attribute) return "Every Feature requires an attribute.";
+      const key = attribute.toLowerCase();
+      if (seen.has(key)) return `Feature ${attribute} is assigned more than once.`;
+      seen.add(key);
+      if (![feature.low, feature.high].every((value) => Number.isFinite(value) && value >= 0 && value <= 65_535)) {
+        return `Feature ${attribute} range must stay within 0..65535.`;
+      }
+    }
+    return "";
+  });
   const currentValueDraftError = createMemo<string>(() => {
+    const featureError = currentScalarFeatureError();
+    if (featureError) return featureError;
     const points = valuePoints();
     if (points.length < 2 || points.length > 32) {
       return "Value effect requires between 2 and 32 envelope points.";
@@ -5140,6 +5200,8 @@ export default function App() {
     return "";
   });
   const currentCurveDraftError = createMemo<string>(() => {
+    const featureError = currentScalarFeatureError();
+    if (featureError) return featureError;
     const points = curvePoints();
     if (points.length < 2 || points.length > 32) return "Curve effect requires between 2 and 32 points.";
     let previous: number | null = null;
@@ -5153,6 +5215,8 @@ export default function App() {
     return "";
   });
   const currentMappingDraftError = createMemo<string>(() => {
+    const featureError = currentScalarFeatureError();
+    if (featureError) return featureError;
     if (!Number.isFinite(effectPeriod()) || effectPeriod() < 10) return "Mapping period must be at least 10 ms.";
     const clockSyncBeats = effectClockSyncBeats();
     if (clockSyncBeats !== null && (!Number.isFinite(clockSyncBeats) || clockSyncBeats <= 0)) return "Mapping clock beats must be positive.";
@@ -7324,6 +7388,16 @@ export default function App() {
   const canFitMappingViewportToSelection = createMemo(
     () => selectedMappingFixtures().length > 0 || selectedVideoOutputId() !== null || selectedStageObjectId() !== null,
   );
+  createEffect(() => {
+    const visibleItemCount = visualizerFixtures().length
+      + visualizerVideoSurfaces2d().length
+      + visualizerStageObjects2d().length;
+    if (!liveMappingStageVisible() || mappingViewportInitialFitDone() || visibleItemCount === 0) {
+      return;
+    }
+    setMappingViewportInitialFitDone(true);
+    fitMappingViewportToVisible();
+  });
   const effectVideoTargetPosition = () => ({
     x: effectVideoPositionX(),
     y: effectVideoPositionY(),
@@ -13428,7 +13502,7 @@ export default function App() {
     setEffectChooserFamily(recipeFamily);
     const nextType: EffectKind = family === "COLOR FX"
       ? "Color"
-      : family === "COLOUR MAPPINGS"
+      : family === "2D MAPPING"
         ? "ColorMapping"
       : family === "CHASER FX"
         ? "Chaser"
@@ -13436,9 +13510,7 @@ export default function App() {
           ? "Move"
           : family === "VALUE FX"
             ? "Value"
-          : family === "MAPPINGS"
-            ? "Mapping"
-            : family === "CURVE FX"
+          : family === "CURVE FX"
               ? "Curve"
               : "Lfo";
     selectEffectType(nextType, true);
@@ -15540,12 +15612,12 @@ export default function App() {
       if (currentValueDraftError()) return true;
       switch (effectTargetMode()) {
         case "selection":
-          return selectedMappingFixtures().length === 0 || !selectedEffectAttribute();
+          return selectedMappingFixtures().length === 0;
         case "group":
-          return parseGroupIds(effectTargetGroups()).length === 0 || !selectedEffectAttribute();
+          return parseGroupIds(effectTargetGroups()).length === 0;
         case "fixture":
         default:
-          return !selectedFixture() || !selectedEffectAttribute();
+          return !selectedFixture();
       }
     }
     if (effectType() === "Curve") {
@@ -15553,12 +15625,12 @@ export default function App() {
       if (effectVideoTargetLinked() || effectTargetMode() === "video") return true;
       switch (effectTargetMode()) {
         case "selection":
-          return selectedMappingFixtures().length === 0 || !selectedEffectAttribute();
+          return selectedMappingFixtures().length === 0;
         case "group":
-          return parseGroupIds(effectTargetGroups()).length === 0 || !selectedEffectAttribute();
+          return parseGroupIds(effectTargetGroups()).length === 0;
         case "fixture":
         default:
-          return !selectedFixture() || !selectedEffectAttribute();
+          return !selectedFixture();
       }
     }
     if (effectType() === "Mapping") {
@@ -15566,12 +15638,12 @@ export default function App() {
       if (effectVideoTargetLinked() || effectTargetMode() === "video") return true;
       switch (effectTargetMode()) {
         case "selection":
-          return orderedMappingSelectionFixtures().length === 0 || !selectedEffectAttribute();
+          return orderedMappingSelectionFixtures().length === 0;
         case "group":
-          return parseGroupIds(effectTargetGroups()).length === 0 || !selectedEffectAttribute();
+          return parseGroupIds(effectTargetGroups()).length === 0;
         case "fixture":
         default:
-          return !selectedFixture() || !selectedEffectAttribute();
+          return !selectedFixture();
       }
     }
     switch (effectTargetMode()) {
@@ -15622,6 +15694,7 @@ export default function App() {
     const wholeFixtureColorEffect = colorEffect || colorMappingEffect;
     const chaserEffect = effectType() === "Chaser";
     const moveEffect = effectType() === "Move";
+    const multiFeatureEffect = ["Value", "Curve", "Mapping"].includes(effectType());
     if (moveEffect) {
       const error = currentMoveDraftError();
       if (error) {
@@ -15693,7 +15766,7 @@ export default function App() {
       setMessage("Color and Colour Mapping effects target complete lighting fixtures and cannot link a video parameter.");
       return null;
     }
-    if (targetMode === "fixture" && (!fixture || (!wholeFixtureColorEffect && !attribute))) {
+    if (targetMode === "fixture" && (!fixture || (!wholeFixtureColorEffect && !multiFeatureEffect && !attribute))) {
       setMessage("Select a fixture and attribute first.");
       return null;
     }
@@ -15702,7 +15775,7 @@ export default function App() {
       setMessage("Select one or more fixtures on the 2D mapping stage first.");
       return null;
     }
-    if (!wholeFixtureColorEffect && targetMode === "selection" && !attribute) {
+    if (!wholeFixtureColorEffect && !multiFeatureEffect && targetMode === "selection" && !attribute) {
       setMessage("Select a fixture profile attribute before targeting a map selection.");
       return null;
     }
@@ -15711,7 +15784,7 @@ export default function App() {
       setMessage("Enter at least one target group.");
       return null;
     }
-    if (!wholeFixtureColorEffect && targetMode === "group" && !attribute) {
+    if (!wholeFixtureColorEffect && !multiFeatureEffect && targetMode === "group" && !attribute) {
       setMessage("Select a fixture profile attribute before targeting a group.");
       return null;
     }
@@ -15748,21 +15821,28 @@ export default function App() {
         setMessage(error);
         return null;
       }
+      const features = scalarEffectFeatures().map((feature) => ({
+        attribute: feature.attribute.trim(),
+        low: Math.round(feature.low),
+        high: Math.round(feature.high),
+      }));
+      const primary = features[0]!;
       return {
         effectType: "Value",
         request: {
-          label: `${lightAttribute} Value`,
+          label: `${primary.attribute} Value`,
           fixture_ids: requestBase.fixture_ids,
           target_group_ids: requestBase.target_group_ids,
-          attribute: lightAttribute,
+          attribute: primary.attribute,
+          features,
           points: valuePoints().map((point) => ({ ...point })),
           interpolation: valueInterpolation(),
           mode: valueMode(),
           direction: valueDirection(),
           period_ms: Math.round(effectPeriod()),
           clock_sync: requestBase.clock_sync,
-          low: effectLow(),
-          high: effectHigh(),
+          low: primary.low,
+          high: primary.high,
           phase: effectPhase(),
           fixture_spread: valueFixtureSpread(),
           blend_mode: effectBlendMode(),
@@ -15775,20 +15855,27 @@ export default function App() {
         setMessage(error);
         return null;
       }
+      const features = scalarEffectFeatures().map((feature) => ({
+        attribute: feature.attribute.trim(),
+        low: Math.round(feature.low),
+        high: Math.round(feature.high),
+      }));
+      const primary = features[0]!;
       return {
         effectType: "Curve",
         request: {
-          label: `${lightAttribute} Curve`,
+          label: `${primary.attribute} Curve`,
           fixture_ids: requestBase.fixture_ids,
           target_group_ids: requestBase.target_group_ids,
-          attribute: lightAttribute,
+          attribute: primary.attribute,
+          features,
           points: curvePoints().map((point) => ({ ...point })),
           mode: curveMode(),
           direction: curveDirection(),
           period_ms: Math.round(effectPeriod()),
           clock_sync: requestBase.clock_sync,
-          low: effectLow(),
-          high: effectHigh(),
+          low: primary.low,
+          high: primary.high,
           phase: effectPhase(),
           fixture_spread: curveFixtureSpread(),
           blend_mode: effectBlendMode(),
@@ -15801,22 +15888,29 @@ export default function App() {
         setMessage(error);
         return null;
       }
+      const features = scalarEffectFeatures().map((feature) => ({
+        attribute: feature.attribute.trim(),
+        low: Math.round(feature.low),
+        high: Math.round(feature.high),
+      }));
+      const primary = features[0]!;
       return {
         effectType: "Mapping",
         request: {
-          label: `${lightAttribute} Mapping`,
+          label: `${primary.attribute} Mapping`,
           fixture_ids: targetMode === "selection"
             ? orderedMappingSelectionFixtures().map((candidate) => candidate.id)
             : requestBase.fixture_ids,
           target_group_ids: requestBase.target_group_ids,
-          attribute: lightAttribute,
+          attribute: primary.attribute,
+          features,
           shape: effectShape(),
           mode: mappingMode(),
           direction: mappingDirection(),
           period_ms: Math.round(effectPeriod()),
           clock_sync: requestBase.clock_sync,
-          low: effectLow(),
-          high: effectHigh(),
+          low: primary.low,
+          high: primary.high,
           phase: effectPhase(),
           fixture_spread: mappingFixtureSpread(),
           repetitions: mappingRepetitions(),
@@ -16098,6 +16192,11 @@ export default function App() {
       setValueMode(value.mode);
       setValueDirection(value.direction);
       setValueFixtureSpread(value.fixture_spread);
+      setScalarEffectFeatures((value.features?.length ? value.features : [{
+        attribute: value.attribute,
+        low: value.low,
+        high: value.high,
+      }]).map((feature) => ({ ...feature })));
       setEffectPeriod(value.period_ms);
       setEffectClockSyncBeats(value.clock_sync?.beats ?? null);
       setEffectPhase(value.phase);
@@ -16115,6 +16214,11 @@ export default function App() {
       setCurveMode(curve.mode);
       setCurveDirection(curve.direction);
       setCurveFixtureSpread(curve.fixture_spread);
+      setScalarEffectFeatures((curve.features?.length ? curve.features : [{
+        attribute: curve.attribute,
+        low: curve.low,
+        high: curve.high,
+      }]).map((feature) => ({ ...feature })));
       setEffectPeriod(curve.period_ms);
       setEffectClockSyncBeats(curve.clock_sync?.beats ?? null);
       setEffectPhase(curve.phase);
@@ -16131,6 +16235,11 @@ export default function App() {
       setEffectShape(mapping.shape);
       setMappingMode(mapping.mode);
       setMappingDirection(mapping.direction);
+      setScalarEffectFeatures((mapping.features?.length ? mapping.features : [{
+        attribute: mapping.attribute,
+        low: mapping.low,
+        high: mapping.high,
+      }]).map((feature) => ({ ...feature })));
       setEffectPeriod(mapping.period_ms);
       setEffectClockSyncBeats(mapping.clock_sync?.beats ?? null);
       setEffectLow(mapping.low);
@@ -16442,6 +16551,55 @@ export default function App() {
     setMessage(`Removed cue-owned FX ${effectId} from scene ${cue.id}.`);
   };
 
+  const moveSceneEffect = async (effectId: number, delta: -1 | 1) => {
+    const cue = selectedSceneCue();
+    if (!cue) return;
+    const sourceIndex = cue.effect_targets.findIndex((target) => target.effect_id === effectId);
+    const destination = sourceIndex + delta;
+    if (sourceIndex < 0 || destination < 0 || destination >= cue.effect_targets.length) return;
+    const nextTargets = cue.effect_targets.map((target) => ({ ...target }));
+    [nextTargets[sourceIndex], nextTargets[destination]] = [nextTargets[destination]!, nextTargets[sourceIndex]!];
+    if (!await persistSceneEffectTargets(cue.id, nextTargets)) return;
+    if (!snapshot().programmer.blind) await triggerCue(cue.id);
+    setMessage(`Moved cue-owned FX ${effectId} to rack position ${destination + 1}.`);
+  };
+
+  const duplicateSceneEffect = async (effectId: number) => {
+    const cue = selectedSceneCue();
+    const sourceIndex = cue?.effect_targets.findIndex((target) => target.effect_id === effectId) ?? -1;
+    const source = sourceIndex >= 0 ? cue!.effect_targets[sourceIndex] : null;
+    if (!cue || !source?.params) {
+      setMessage("Only cue-owned FX with embedded parameters can be duplicated in this rack.");
+      return;
+    }
+    const params = structuredClone(source.params);
+    let duplicateId: number;
+    if (viewportFixture) {
+      const cueEffectIds = snapshot().cues.flatMap((candidate) =>
+        candidate.effect_targets.map((target) => target.effect_id));
+      duplicateId = Math.max(900, ...snapshot().effects.map((effect) => effect.id), ...cueEffectIds) + 1;
+    } else {
+      try {
+        duplicateId = await invoke<number>("add_cue_owned_effect", { cueId: cue.id, params });
+      } catch (error) {
+        setMessage(String(error));
+        return;
+      }
+    }
+    const nextTargets = cue.effect_targets.map((target) => ({ ...target }));
+    nextTargets.splice(sourceIndex + 1, 0, {
+      effect_id: duplicateId,
+      enabled: source.enabled,
+      params,
+      transition_ms: source.transition_ms ?? null,
+    });
+    if (!await persistSceneEffectTargets(cue.id, nextTargets)) return;
+    setSelectedSceneEffectId(duplicateId);
+    loadSceneEffectDraft(cue.id, duplicateId);
+    if (!snapshot().programmer.blind) await triggerCue(cue.id);
+    setMessage(`Duplicated cue-owned FX ${effectId} as rack position ${sourceIndex + 2}.`);
+  };
+
   const saveSceneEffectDraft = async () => {
     const cue = selectedSceneCue();
     const effectId = selectedSceneEffectId();
@@ -16534,6 +16692,41 @@ export default function App() {
     } catch (error) {
       setMessage(String(error));
     }
+  };
+
+  const setSceneEffectTargetScope = (mode: Exclude<EffectTargetMode, "video">) => {
+    if (mode === "selection" && selectedMappingFixtureIds().length === 0 && selectedFixture()) {
+      setSelectedMappingFixtureIds([selectedFixture()!.id]);
+    }
+    if (mode === "group" && parseGroupIds(effectTargetGroups()).length === 0) {
+      const initialGroup = selectedFixture()?.group_ids[0] ?? fixtureGroupRows()[0]?.groupId;
+      if (initialGroup) setEffectTargetGroups(initialGroup);
+    }
+    setEffectVideoTargetLinked(false);
+    setEffectTargetMode(mode);
+  };
+  const setSceneEffectActiveFixture = (fixtureId: number) => {
+    const fixture = snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
+    if (!fixture) return;
+    activateFixture(fixture);
+    setEffectVideoTargetLinked(false);
+    setEffectTargetMode("fixture");
+  };
+  const toggleSceneEffectFixture = (fixtureId: number) => {
+    setSelectedMappingFixtureIds((current) => current.includes(fixtureId)
+      ? current.filter((candidate) => candidate !== fixtureId)
+      : [...current, fixtureId]);
+    setEffectVideoTargetLinked(false);
+    setEffectTargetMode("selection");
+  };
+  const toggleSceneEffectGroup = (groupId: string) => {
+    const current = parseGroupIds(effectTargetGroups());
+    const next = current.includes(groupId)
+      ? current.filter((candidate) => candidate !== groupId)
+      : [...current, groupId];
+    setEffectTargetGroups(next.join(", "));
+    setEffectVideoTargetLinked(false);
+    setEffectTargetMode("group");
   };
 
   const sceneEffectEditor = createMemo<SceneEffectEditorModel>(() => ({
@@ -16732,6 +16925,35 @@ export default function App() {
       onWrapMode: setColorMappingWrapMode,
       onSampling: setColorMappingSampling,
     },
+    features: {
+      effectLabel: effectType(),
+      features: scalarEffectFeatures(),
+      attributeOptions: chaserAttributeOptions(),
+      attributeCoverage: scalarAttributeCoverage(),
+      onFeatures: setScalarEffectFeatures,
+    },
+    target: {
+      mode: effectTargetMode(),
+      summary: effectTargetSummary(),
+      explicitBeamCount: explicitBeamTargetCount(selectedSceneEffects()
+        .find((effect) => effect.id === selectedSceneEffectId()) ?? null),
+      activeFixtureId: selectedFixtureId(),
+      fixtureOptions: snapshot().fixtures.map((fixture) => ({
+        id: fixture.id,
+        label: fixture.label,
+        selected: selectedMappingFixtureIdSet().has(fixture.id),
+      })),
+      groupOptions: fixtureGroupRows().map((group) => ({
+        id: group.groupId,
+        label: group.label,
+        count: group.count,
+        selected: parseGroupIds(effectTargetGroups()).includes(group.groupId),
+      })),
+      onMode: setSceneEffectTargetScope,
+      onActiveFixture: setSceneEffectActiveFixture,
+      onToggleFixture: toggleSceneEffectFixture,
+      onToggleGroup: toggleSceneEffectGroup,
+    },
     palette: {
       effectType: effectType(),
       palettes: snapshot().palettes,
@@ -16742,7 +16964,7 @@ export default function App() {
     },
     action: {
       showLightRange: effectTargetMode() !== "video"
-        && !["Color", "ColorMapping", "Chaser", "Move"].includes(effectType()),
+        && !["Color", "ColorMapping", "Chaser", "Move", "Value", "Curve", "Mapping"].includes(effectType()),
       showPhase: !["Move", "Value", "Curve", "Mapping", "ColorMapping"].includes(effectType()),
       showFixtureSpread: effectType() === "Lfo" && effectTargetMode() !== "video",
       lockBlendMode: effectType() === "Move",
@@ -17551,6 +17773,8 @@ export default function App() {
                   onSelectEffect={selectSceneEffect}
                   onSelectFamily={createSceneEffect}
                   onSetEffectEnabled={setSceneEffectEnabled}
+                  onDuplicateEffect={duplicateSceneEffect}
+                  onMoveEffect={moveSceneEffect}
                   onRemoveEffect={removeSceneEffect}
                 />
               )}

@@ -65,8 +65,7 @@ const expectedFamilies = [
   "MOVE FX",
   "VALUE FX",
   "CURVE FX",
-  "MAPPINGS",
-  "COLOUR MAPPINGS",
+  "2D MAPPING",
   "SUPER SCENE",
 ];
 assert.deepEqual(
@@ -74,7 +73,7 @@ assert.deepEqual(
   expectedFamilies,
   "the chooser must expose the T16 families in the exact operator order",
 );
-assert.equal(chooser.effectChooserFamilies.length, 9, "the chooser must expose exactly nine families");
+assert.equal(chooser.effectChooserFamilies.length, 8, "the chooser must expose exactly eight operator families");
 assert.equal(
   new Set(chooser.effectChooserFamilies).size,
   chooser.effectChooserFamilies.length,
@@ -411,8 +410,8 @@ assert.match(
 );
 assert.match(
   appSource,
-  /family === "MAPPINGS"\s*\? "Mapping"/,
-  "the MAPPINGS family must select the independent Mapping kind",
+  /family === "2D MAPPING"\s*\? "ColorMapping"/,
+  "the unified 2D MAPPING family must start in raster colour output mode",
 );
 for (const preset of ["wave", "ball", "fan"]) {
   assert.match(
@@ -424,8 +423,8 @@ for (const preset of ["wave", "ball", "fan"]) {
 
 assert.match(
   appSource,
-  /family === "COLOUR MAPPINGS"[\s\S]*?\? "ColorMapping"/,
-  "the COLOUR MAPPINGS family must select the independent ColorMapping kind",
+  /nextType === "Mapping" \|\| nextType === "ColorMapping"\) return "2D MAPPING"/,
+  "both persisted mapping kinds must return to the unified authoring family",
 );
 assert.match(
   tauriSource,

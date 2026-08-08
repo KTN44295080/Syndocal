@@ -7,8 +7,7 @@ export type EffectChooserFamily =
   | "MOVE FX"
   | "VALUE FX"
   | "CURVE FX"
-  | "MAPPINGS"
-  | "COLOUR MAPPINGS"
+  | "2D MAPPING"
   | "SUPER SCENE";
 
 export type EffectRecipeFamily = Exclude<EffectChooserFamily, "STEPS" | "SUPER SCENE">;
@@ -20,8 +19,7 @@ export const effectChooserFamilies: EffectChooserFamily[] = [
   "MOVE FX",
   "VALUE FX",
   "CURVE FX",
-  "MAPPINGS",
-  "COLOUR MAPPINGS",
+  "2D MAPPING",
   "SUPER SCENE",
 ];
 
@@ -33,8 +31,7 @@ const chooserFamilyCode = (family: EffectChooserFamily) => {
     case "MOVE FX": return "MV";
     case "VALUE FX": return "VL";
     case "CURVE FX": return "CV";
-    case "MAPPINGS": return "MP";
-    case "COLOUR MAPPINGS": return "CM";
+    case "2D MAPPING": return "2D";
     case "SUPER SCENE": return "TL";
   }
 };

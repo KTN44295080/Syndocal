@@ -2,12 +2,13 @@ import { createMemo, createSignal, For, Show } from "solid-js";
 import type { FixtureLiveColorSegment } from "../fixtureLiveColor";
 import type { MappingFixtureVisualKind } from "../fixtureVisuals";
 import { MAPPING_FIXTURE_DRAG_THRESHOLD_PX } from "../createMappingInteractionController";
+import type { MappingStageTool } from "../mappingViewPresets";
 import { planStageFixtureLabels, type StageLabelViewport } from "../stageLabelLayout";
 import {
+  stageFixtureYawHandleScreenSizePx,
   stageFixtureYawHandlePoint,
+  stageFixtureYawHandleWorldRadius,
   stageOverlayHandleMinimumHitSizePx,
-  stageOverlayHandleScreenSizePx,
-  stageOverlayHandleWorldRadius,
 } from "../stageOverlayLayout";
 import {
   StageFixtureGlyph,
@@ -46,6 +47,7 @@ export type MappingPlacePreview2D = Pick<
 type MappingFixturesLayerProps = {
   readOnly?: boolean;
   fixtureTransformsEditable?: boolean;
+  stageTool: MappingStageTool;
   fixtures: MappingFixture2D[];
   labelFixtures?: MappingFixture2D[];
   selectedFixtureIds: Set<number>;
@@ -132,13 +134,12 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
       </For>
       <For each={props.fixtures}>
         {(fixture) => {
-          const selected = () => props.selectedFixtureIds.has(fixture.id);
           const yawDragging = () => props.isYawDragging(fixture.id);
           const showYawHandle = () =>
             (props.fixtureTransformsEditable ?? !props.readOnly) &&
-            (selected() || props.selectedFixtureId === fixture.id || yawDragging());
+            (yawDragging() || (props.stageTool === "rotate" && props.selectedFixtureId === fixture.id));
           const yawHandlePoint = () => stageFixtureYawHandlePoint(fixture, props.worldPerCssPixel);
-          const yawHandleRadius = () => stageOverlayHandleWorldRadius(props.worldPerCssPixel);
+          const yawHandleRadius = () => stageFixtureYawHandleWorldRadius(props.worldPerCssPixel);
           return (
             <Show when={showYawHandle()}>
               <line
@@ -150,7 +151,7 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
               />
               <circle
                 data-stage-overlay-handle="fixture-yaw"
-                data-stage-overlay-handle-screen-size={stageOverlayHandleScreenSizePx}
+                data-stage-overlay-handle-screen-size={stageFixtureYawHandleScreenSizePx}
                 data-stage-overlay-handle-min-hit-size={stageOverlayHandleMinimumHitSizePx}
                 class={yawDragging() ? "stageYawHandle dragging" : "stageYawHandle"}
                 cx={yawHandlePoint().x}

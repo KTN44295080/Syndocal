@@ -4848,6 +4848,9 @@ function readMappingViewportConformanceStateInPage() {
       }];
     }),
   );
+  const fixtureYawHandleCount = stage?.querySelectorAll(
+    '[data-stage-overlay-handle="fixture-yaw"]',
+  ).length ?? 0;
   const inspectOriginGridAlignment = (pattern) => {
     const stageMatrix = stage instanceof SVGGraphicsElement ? stage.getScreenCTM() : null;
     const width = numberAttribute(pattern, "width");
@@ -4974,6 +4977,7 @@ function readMappingViewportConformanceStateInPage() {
       screenHeight: selectedStageObjectShapeRect?.height ?? 0,
     },
     detachedHandles,
+    fixtureYawHandleCount,
     grid: {
       minor: {
         svgWidth: numberAttribute(minor, "width"),
@@ -5122,7 +5126,8 @@ async function runMappingViewportConformanceViewport(client, viewport) {
       return slider instanceof HTMLInputElement
         && Number(slider.max) > 4
         && Boolean(fixture)
-        && document.querySelectorAll(".setupStageContext [data-stage-overlay-handle]").length === 5;
+        && document.querySelectorAll(".setupStageContext [data-stage-overlay-handle]").length === 4
+        && document.querySelectorAll('.setupStageContext [data-stage-overlay-handle="fixture-yaw"]').length === 0;
     })()`,
     "mapping viewport adaptive maximum",
   );
@@ -5144,6 +5149,20 @@ async function runMappingViewportConformanceViewport(client, viewport) {
   await sleep(40);
   const initial = await readMappingViewportConformanceState(client);
 
+  await clickVisibleSelector(client, '[data-mapping-tool="rotate"]');
+  await waitForClientCondition(
+    client,
+    `document.querySelectorAll('.setupStageContext [data-stage-overlay-handle="fixture-yaw"]').length === 1`,
+    "one active fixture yaw handle in rotate mode",
+  );
+  const rotateMode = await readMappingViewportConformanceState(client);
+  await clickVisibleSelector(client, '[data-mapping-tool="select"]');
+  await waitForClientCondition(
+    client,
+    `document.querySelectorAll('.setupStageContext [data-stage-overlay-handle="fixture-yaw"]').length === 0`,
+    "fixture yaw handles hidden in select mode",
+  );
+
   await setMappingViewportConformanceZoom(client, "max");
   await sleep(60);
   const maxZoom = await readMappingViewportConformanceState(client);
@@ -5161,33 +5180,36 @@ async function runMappingViewportConformanceViewport(client, viewport) {
 
   const close = (left, right, tolerance = 0.001) =>
     Number.isFinite(left) && Number.isFinite(right) && Math.abs(left - right) <= tolerance;
-  const expectedDetachedHandleNames = [
-    "fixture-yaw",
+  const expectedStageObjectHandleNames = [
     "stage-object-rotate",
     "stage-object-resize-width",
     "stage-object-resize-depth",
     "stage-object-resize-both",
   ];
-  const detachedHandlesAreComplete = (state) =>
-    expectedDetachedHandleNames.every((name) => Boolean(state.detachedHandles[name]))
-    && Object.keys(state.detachedHandles).length === expectedDetachedHandleNames.length;
-  const detachedHandlesStayWithinScreenSize = (state) =>
-    detachedHandlesAreComplete(state)
-    && expectedDetachedHandleNames.every((name) => {
+  const stageObjectHandlesAreComplete = (state) =>
+    expectedStageObjectHandleNames.every((name) => Boolean(state.detachedHandles[name]));
+  const stageObjectHandlesStayWithinScreenSize = (state) =>
+    stageObjectHandlesAreComplete(state)
+    && expectedStageObjectHandleNames.every((name) => {
       const handle = state.detachedHandles[name];
       return handle.targetScreenSizePx === 22
         && handle.screenMinPx >= 18
         && handle.screenMaxPx <= 26;
     });
-  const detachedHandleHitTargetsMeetFloor = (state) =>
-    detachedHandlesAreComplete(state)
-    && expectedDetachedHandleNames.every((name) => {
+  const stageObjectHandleHitTargetsMeetFloor = (state) =>
+    stageObjectHandlesAreComplete(state)
+    && expectedStageObjectHandleNames.every((name) => {
       const handle = state.detachedHandles[name];
       return handle.minimumHitSizePx === 16
         && handle.screenMinPx >= handle.minimumHitSizePx
         && handle.topHitOwnsHandle;
     });
+  const rotateFixtureHandle = rotateMode.detachedHandles["fixture-yaw"];
   const checks = {
+    initialViewportFitsVisibleContentCloserThanFullStage:
+      initial.zoom.value > 1
+      && initial.viewBox.width < 100
+      && initial.viewBox.height < 100,
     adaptiveMaximumExceedsLegacyFourX:
       initial.zoom.min === 1
       && initial.zoom.max > 4
@@ -5208,8 +5230,8 @@ async function runMappingViewportConformanceViewport(client, viewport) {
       close(initial.grid.major.worldSize, initial.grid.minor.worldSize * 5)
       && close(initial.grid.major.svgWidth, initial.grid.minor.svgWidth * 5)
       && close(initial.grid.major.svgHeight, initial.grid.minor.svgHeight * 5),
-    originAxesCoincideWithMinorAndMajorGridAtDefaultZoom:
-      initial.zoom.value === 1
+    originAxesCoincideWithMinorAndMajorGridAtInitialFit:
+      initial.zoom.value > 1
       && initial.grid.minor.originAlignment.maxOffsetPx <= 1
       && initial.grid.major.originAlignment.maxOffsetPx <= 1,
     originAxesCoincideWithMinorAndMajorGridAtMaximumZoom:
@@ -5226,19 +5248,19 @@ async function runMappingViewportConformanceViewport(client, viewport) {
           && close(axis.dashPatternPx[1], 4)
         )
       ),
-    fixtureSelectionAndHoverUseRestrainedScreenFixedWeights:
+    fixtureSelectionUsesHighlightedScreenFixedOutline:
       zoomOne.fixtureShape.vectorEffect === "non-scaling-stroke"
       && maxZoom.fixtureShape.vectorEffect === "non-scaling-stroke"
-      && close(zoomOne.fixtureShape.strokeWidthPx, maxZoom.fixtureShape.strokeWidthPx)
-      && zoomOne.fixtureShape.strokeWidthPx <= 1.1
-      && zoomOne.fixtureShape.filter === "none"
+      && close(zoomOne.fixtureShape.strokeWidthPx, 1.4)
+      && close(maxZoom.fixtureShape.strokeWidthPx, 0.7)
       && initial.fixtureVisualRules.base.filter === "none"
       && close(initial.fixtureVisualRules.base.strokeWidthPx, 0.55)
       && close(initial.fixtureVisualRules.hover.strokeWidthPx, 0.8)
-      && close(initial.fixtureVisualRules.selected.strokeWidthPx, 1.1)
+      && close(initial.fixtureVisualRules.selected.strokeWidthPx, 1.4)
       && initial.fixtureVisualRules.base.strokeWidthPx < initial.fixtureVisualRules.hover.strokeWidthPx
       && initial.fixtureVisualRules.hover.strokeWidthPx < initial.fixtureVisualRules.selected.strokeWidthPx
-      && initial.fixtureVisualRules.selected.filter === "none",
+      && ["#ffdd74", "rgb(255, 221, 116)"].includes(initial.fixtureVisualRules.selected.stroke)
+      && initial.fixtureVisualRules.selected.filter.includes("drop-shadow"),
     cursorGuideLinesAreAbsent:
       initial.cursor.groupCount === 0
       && initial.cursor.lineCount === 0
@@ -5260,17 +5282,29 @@ async function runMappingViewportConformanceViewport(client, viewport) {
       && zoomOne.label.screenHeight > 0
       && zoomOne.label.screenFontSizePx >= 9
       && zoomOne.label.screenFontSizePx <= 13,
-    detachedHandleSetCoversFixtureAndStageObjectGrabHandles:
-      detachedHandlesAreComplete(zoomOne)
-      && detachedHandlesAreComplete(maxZoom),
-    detachedHandleScreenSizeIsEighteenToTwentySixPxAtZoomOne:
+    selectModeUsesOutlineWithoutFixtureYawPins:
+      initial.fixtureYawHandleCount === 0
+      && zoomOne.fixtureYawHandleCount === 0
+      && maxZoom.fixtureYawHandleCount === 0,
+    rotateModeShowsOneSmallerHandleForActiveFixture:
+      rotateMode.fixtureYawHandleCount === 1
+      && Boolean(rotateFixtureHandle)
+      && rotateFixtureHandle.targetScreenSizePx === 16
+      && rotateFixtureHandle.minimumHitSizePx === 16
+      && rotateFixtureHandle.screenMinPx >= 14
+      && rotateFixtureHandle.screenMaxPx <= 20
+      && rotateFixtureHandle.topHitOwnsHandle,
+    detachedHandleSetCoversStageObjectGrabHandles:
+      stageObjectHandlesAreComplete(zoomOne)
+      && stageObjectHandlesAreComplete(maxZoom),
+    stageObjectHandleScreenSizeIsEighteenToTwentySixPxAtZoomOne:
       zoomOne.zoom.value === 1
-      && detachedHandlesStayWithinScreenSize(zoomOne),
-    detachedHandleScreenSizeIsEighteenToTwentySixPxAtMaxZoom:
+      && stageObjectHandlesStayWithinScreenSize(zoomOne),
+    stageObjectHandleScreenSizeIsEighteenToTwentySixPxAtMaxZoom:
       maxZoom.zoom.value === initial.zoom.max
-      && detachedHandlesStayWithinScreenSize(maxZoom),
-    detachedHandleHitTargetsStayAtLeastSixteenPxAtMaxZoom:
-      detachedHandleHitTargetsMeetFloor(maxZoom),
+      && stageObjectHandlesStayWithinScreenSize(maxZoom),
+    stageObjectHandleHitTargetsStayAtLeastSixteenPxAtMaxZoom:
+      stageObjectHandleHitTargetsMeetFloor(maxZoom),
     geometryTracedSelectionOutlinesRemainZoomScaled:
       zoomOne.selectedStageObjectShape.present
       && maxZoom.selectedStageObjectShape.present
@@ -5300,6 +5334,7 @@ async function runMappingViewportConformanceViewport(client, viewport) {
     failedChecks,
     viewport,
     initial,
+    rotateMode,
     maxZoom,
     maxTracking,
     zoomOne,
@@ -18929,8 +18964,7 @@ async function runSceneSettingsViewport(client, viewport) {
     "MOVE FX",
     "VALUE FX",
     "CURVE FX",
-    "MAPPINGS",
-    "COLOUR MAPPINGS",
+    "2D MAPPING",
     "SUPER SCENE",
   ];
   const expectedQuickFamilies = ["COLOR FX", "CHASER FX", "MOVE FX", "VALUE FX"];
@@ -19111,7 +19145,7 @@ async function runSceneSettingsViewport(client, viewport) {
       && fxSurface.activeSurface === "fx"
       && !fxSurface.contentsVisible
       && !fxSurface.advancedSettingsVisible
-      && fxSurface.chooserButtonCount === 9
+      && fxSurface.chooserButtonCount === 8
       && JSON.stringify(fxSurface.chooserFamilies) === JSON.stringify(expectedFamilies)
       && fxSurface.chooserMinimumHitSize >= 40],
     ["advancedSurfaceContainsOnlyExistingSyndocalSettings", () =>
@@ -19168,7 +19202,7 @@ async function runSceneSettingsViewport(client, viewport) {
       && oneClickBeforeEdit.kind === "STATIC"
       && oneClickBeforeEdit.ownedFxCount === 0
       && oneClickEditContext.activeSurface === "fx"
-      && oneClickEditContext.chooserButtonCount === 9
+      && oneClickEditContext.chooserButtonCount === 8
       && JSON.stringify(oneClickEditContext.quickBlockFamilies)
         === JSON.stringify(expectedQuickFamilies)
       && oneClickEditContext.disabledQuickBlockFamilies.length === 0],
@@ -23139,8 +23173,7 @@ const fxVisualFamilyOrder = [
   "MOVE FX",
   "VALUE FX",
   "CURVE FX",
-  "MAPPINGS",
-  "COLOUR MAPPINGS",
+  "2D MAPPING",
   "SUPER SCENE",
 ];
 

@@ -1955,6 +1955,7 @@ export interface ValueEffectRequest {
   fixture_ids: number[];
   target_group_ids: string[];
   attribute: string;
+  features?: ChaserFeature[];
   points: ValueEffectPoint[];
   interpolation: ValueEffectInterpolation;
   mode: ValueEffectMode;
@@ -1980,6 +1981,7 @@ export interface CurveEffectRequest {
   fixture_ids: number[];
   target_group_ids: string[];
   attribute: string;
+  features?: ChaserFeature[];
   points: CurveEffectPoint[];
   mode: ValueEffectMode;
   direction: ValueEffectDirection;
@@ -1997,6 +1999,7 @@ export interface MappingEffectRequest {
   fixture_ids: number[];
   target_group_ids: string[];
   attribute: string;
+  features?: ChaserFeature[];
   shape: LfoShape;
   mode: ValueEffectMode;
   direction: MappingEffectDirection;
@@ -2081,6 +2084,8 @@ export interface EffectSummary {
   speed?: number | null;
   wavelength?: number | null;
   enabled: boolean;
+  /** Present for Cue-owned FX synthesized from the owning Cue target. */
+  params?: EffectParamsSnapshot | null;
   lfo?: LfoEffectRequest | null;
   color?: ColorEffectRequest | null;
   chaser?: ChaserEffectRequest | null;

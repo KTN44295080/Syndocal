@@ -27,34 +27,34 @@ use protocol::{
     AudioSpectrumBand, AudioSpectrumPoint, AudioSpectrumSource, AutoVjAction, AutoVjConfig,
     AutoVjMode, AutoVjRhythmSource, AutoVjSnapshot, AutoVjStatus, AutoVjTrigger, AutomationId,
     AutomationInterpolation, AutomationKeyframeSummary, ChaserDirection, ChaserEffectRequest,
-    ChildTimelineSummary, ClockSnapshot, ClockSource, ColorEffectAlgorithm, ColorEffectColor,
-    ColorEffectInterpolation, ColorEffectRequest, ColorEffectSpatialRecipe, ColorMappingCellTarget,
-    ColorMappingEffectRequest, ColorMappingPlaybackDirection, ColorMappingSampling,
-    ColorMappingWrapMode, CompositionId, CompositionSummary, CueEffectTarget, CueFixtureTarget,
-    CueId, CueIfcbTiming, CueListId, CueListSummary, CueLiveDirection, CueLiveModifierSettings,
-    CueLiveModifierState, CueNodeGraphTarget, CuePaletteTarget, CuePartSummary, CueStepSummary,
-    CueSummary, CurveEffectPoint, CurveEffectRequest, DirectChildTimelineTransportSummary,
-    DmxMergeMode, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, DmxOutputRouteTelemetry,
-    DmxUniversePreview, EffectBeamTarget, EffectBlendMode, EffectClockSync, EffectId, EffectKind,
-    EffectParamsSnapshot, EffectSummary, EngineSnapshot, EngineTelemetry,
-    ExclusiveVideoTakeRequest, ExecutorId, FixtureId, FixtureLimits, FixtureProfileSummary,
-    LfoEffectRequest, LfoShape, LiveAudioFrame, LiveAudioReactiveFeatures, MappingEffectDirection,
-    MappingEffectRequest, MoveCoordinateMode, MoveDirection, MoveEffectRequest, MovePathPoint,
-    NodeGraphAudioRuntimeStatus, NodeGraphId, NodeGraphNodeKind, NodeGraphNodeSummary,
-    NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest, PatchedFixtureSummary,
-    PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot, ProgrammerValueSummary,
-    RecallMode, ReferencePaletteSummary, Rotation3, StageMapConfig, StageMapPresetSummary,
-    StageObjectId, StageObjectSummary, SubmasterSummary, TimelineAudioClipId,
-    TimelineAudioClipSummary, TimelineAutomationSummary, TimelineCueEventSummary, TimelineEventId,
-    TimelineLayerKind, TimelineLayerSummary, TimelineSnapRequest, TimelineSnapshot,
-    TimelineTrackKind, TimelineVideoAutomationSummary, TouchSurfaceSummary, Transform2D,
-    ValueEffectDirection, ValueEffectInterpolation, ValueEffectMode, ValueEffectPoint,
-    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBlendMode, VideoColorAdjust,
-    VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust, VideoIsfControlKind,
-    VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
-    VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
-    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
-    VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
+    ChaserFeature, ChildTimelineSummary, ClockSnapshot, ClockSource, ColorEffectAlgorithm,
+    ColorEffectColor, ColorEffectInterpolation, ColorEffectRequest, ColorEffectSpatialRecipe,
+    ColorMappingCellTarget, ColorMappingEffectRequest, ColorMappingPlaybackDirection,
+    ColorMappingSampling, ColorMappingWrapMode, CompositionId, CompositionSummary, CueEffectTarget,
+    CueFixtureTarget, CueId, CueIfcbTiming, CueListId, CueListSummary, CueLiveDirection,
+    CueLiveModifierSettings, CueLiveModifierState, CueNodeGraphTarget, CuePaletteTarget,
+    CuePartSummary, CueStepSummary, CueSummary, CurveEffectPoint, CurveEffectRequest,
+    DirectChildTimelineTransportSummary, DmxMergeMode, DmxModeSummary, DmxOutputConfig,
+    DmxOutputProtocol, DmxOutputRouteTelemetry, DmxUniversePreview, EffectBeamTarget,
+    EffectBlendMode, EffectClockSync, EffectId, EffectKind, EffectParamsSnapshot, EffectSummary,
+    EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId, FixtureId,
+    FixtureLimits, FixtureProfileSummary, LfoEffectRequest, LfoShape, LiveAudioFrame,
+    LiveAudioReactiveFeatures, MappingEffectDirection, MappingEffectRequest, MoveCoordinateMode,
+    MoveDirection, MoveEffectRequest, MovePathPoint, NodeGraphAudioRuntimeStatus, NodeGraphId,
+    NodeGraphNodeKind, NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId,
+    PatchFixtureRequest, PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest,
+    ProgrammerSnapshot, ProgrammerValueSummary, RecallMode, ReferencePaletteSummary, Rotation3,
+    StageMapConfig, StageMapPresetSummary, StageObjectId, StageObjectSummary, SubmasterSummary,
+    TimelineAudioClipId, TimelineAudioClipSummary, TimelineAutomationSummary,
+    TimelineCueEventSummary, TimelineEventId, TimelineLayerKind, TimelineLayerSummary,
+    TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind, TimelineVideoAutomationSummary,
+    TouchSurfaceSummary, Transform2D, ValueEffectDirection, ValueEffectInterpolation,
+    ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
+    VideoBlendMode, VideoColorAdjust, VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust,
+    VideoIsfControlKind, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId,
+    VideoLayerState, VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind,
+    VideoOutputMapping, VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget,
+    VideoParam, VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
     LIVE_AUDIO_FEATURE_BAND_CAPACITY, MAX_CUE_AUTHORED_BEATS, MAX_TIMELINE_SCENE_BLOCK_LOOPS,
     MIN_CUE_AUTHORED_BEATS,
 };
@@ -5171,10 +5171,11 @@ impl EngineRuntime {
             .map(|effect| effect.id)
             .collect::<HashSet<_>>();
         for cue in &mut self.cues {
-            cue.effect_targets
-                .retain(|target| target.params.is_some() || effect_ids.contains(&target.effect_id));
-            cue.effect_targets.sort_by_key(|target| target.effect_id);
-            cue.effect_targets.dedup_by_key(|target| target.effect_id);
+            let mut seen = HashSet::new();
+            cue.effect_targets.retain(|target| {
+                (target.params.is_some() || effect_ids.contains(&target.effect_id))
+                    && seen.insert(target.effect_id)
+            });
         }
     }
 
@@ -12644,19 +12645,16 @@ impl EngineRuntime {
 
     fn resolve_cue_effect_targets(
         &self,
-        mut targets: Vec<CueEffectTarget>,
+        targets: Vec<CueEffectTarget>,
     ) -> Result<Vec<CueEffectTarget>, String> {
-        targets.sort_by_key(|target| target.effect_id);
-        if let Some(duplicate) = targets
-            .windows(2)
-            .find(|pair| pair[0].effect_id == pair[1].effect_id)
-        {
-            return Err(format!(
-                "Effect {} is targeted more than once by the cue",
-                duplicate[0].effect_id
-            ));
-        }
+        let mut seen = HashSet::new();
         for target in &targets {
+            if !seen.insert(target.effect_id) {
+                return Err(format!(
+                    "Effect {} is targeted more than once by the cue",
+                    target.effect_id
+                ));
+            }
             if target.transition_ms.is_some() && target.params.is_none() {
                 return Err(format!(
                     "Effect {} cannot fade without Cue-owned parameters",
@@ -20593,6 +20591,12 @@ fn effect_params_with_live_modifier(
                 live_modifier_scaled_level_range(request.low, request.high, modifier.size);
             request.low = low;
             request.high = high;
+            for feature in &mut request.features {
+                let (low, high) =
+                    live_modifier_scaled_level_range(feature.low, feature.high, modifier.size);
+                feature.low = low;
+                feature.high = high;
+            }
             request.phase = live_modifier_shifted_phase(request.phase, modifier.phase);
             request.direction =
                 live_modifier_value_direction(request.direction, modifier.direction);
@@ -20605,6 +20609,12 @@ fn effect_params_with_live_modifier(
                 live_modifier_scaled_level_range(request.low, request.high, modifier.size);
             request.low = low;
             request.high = high;
+            for feature in &mut request.features {
+                let (low, high) =
+                    live_modifier_scaled_level_range(feature.low, feature.high, modifier.size);
+                feature.low = low;
+                feature.high = high;
+            }
             request.phase = live_modifier_shifted_phase(request.phase, modifier.phase);
             request.direction =
                 live_modifier_value_direction(request.direction, modifier.direction);
@@ -20617,6 +20627,12 @@ fn effect_params_with_live_modifier(
                 live_modifier_scaled_level_range(request.low, request.high, modifier.size);
             request.low = low;
             request.high = high;
+            for feature in &mut request.features {
+                let (low, high) =
+                    live_modifier_scaled_level_range(feature.low, feature.high, modifier.size);
+                feature.low = low;
+                feature.high = high;
+            }
             request.phase = live_modifier_shifted_phase(request.phase, modifier.phase);
             request.direction =
                 live_modifier_mapping_direction(request.direction, modifier.direction);
@@ -23258,7 +23274,14 @@ fn effect_targets_fixture_attribute(
                 )
         }
         RuntimeEffectKind::Value(runtime) => {
-            runtime.request.attribute.eq_ignore_ascii_case(attribute)
+            scalar_effect_feature_range(
+                attribute,
+                &runtime.request.attribute,
+                runtime.request.low,
+                runtime.request.high,
+                &runtime.request.features,
+            )
+            .is_some()
                 && request_targets_fixture(
                     runtime.request.fixture_ids.as_slice(),
                     runtime.request.target_group_ids.as_slice(),
@@ -23266,7 +23289,14 @@ fn effect_targets_fixture_attribute(
                 )
         }
         RuntimeEffectKind::Curve(runtime) => {
-            runtime.request.attribute.eq_ignore_ascii_case(attribute)
+            scalar_effect_feature_range(
+                attribute,
+                &runtime.request.attribute,
+                runtime.request.low,
+                runtime.request.high,
+                &runtime.request.features,
+            )
+            .is_some()
                 && request_targets_fixture(
                     runtime.request.fixture_ids.as_slice(),
                     runtime.request.target_group_ids.as_slice(),
@@ -23274,7 +23304,14 @@ fn effect_targets_fixture_attribute(
                 )
         }
         RuntimeEffectKind::Mapping(runtime) => {
-            runtime.request.attribute.eq_ignore_ascii_case(attribute)
+            scalar_effect_feature_range(
+                attribute,
+                &runtime.request.attribute,
+                runtime.request.low,
+                runtime.request.high,
+                &runtime.request.features,
+            )
+            .is_some()
                 && request_targets_fixture(
                     runtime.request.fixture_ids.as_slice(),
                     runtime.request.target_group_ids.as_slice(),
@@ -24956,13 +24993,60 @@ fn move_effect_progress(
     }
 }
 
+fn validate_scalar_effect_features(
+    effect_label: &str,
+    attribute: &str,
+    features: &[ChaserFeature],
+) -> Result<(), String> {
+    if features.is_empty() {
+        if attribute.trim().is_empty() {
+            return Err(format!("{effect_label} effect attribute is required"));
+        }
+        return Ok(());
+    }
+    if features.len() > 16 {
+        return Err(format!(
+            "{effect_label} effect supports at most 16 features"
+        ));
+    }
+    let mut seen = HashSet::new();
+    for feature in features {
+        let attribute = feature.attribute.trim();
+        if attribute.is_empty() {
+            return Err(format!("{effect_label} feature attribute is required"));
+        }
+        if !seen.insert(attribute.to_ascii_lowercase()) {
+            return Err(format!(
+                "{effect_label} feature '{attribute}' is assigned more than once"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn scalar_effect_feature_range(
+    attribute: &str,
+    legacy_attribute: &str,
+    legacy_low: u16,
+    legacy_high: u16,
+    features: &[ChaserFeature],
+) -> Option<(u16, u16)> {
+    if features.is_empty() {
+        return legacy_attribute
+            .eq_ignore_ascii_case(attribute)
+            .then_some((legacy_low, legacy_high));
+    }
+    features
+        .iter()
+        .find(|feature| feature.attribute.eq_ignore_ascii_case(attribute))
+        .map(|feature| (feature.low, feature.high))
+}
+
 pub fn validate_value_effect_request(request: &ValueEffectRequest) -> Result<(), String> {
     if request.label.trim().is_empty() {
         return Err("Value effect label is required".to_string());
     }
-    if request.attribute.trim().is_empty() {
-        return Err("Value effect attribute is required".to_string());
-    }
+    validate_scalar_effect_features("Value", &request.attribute, &request.features)?;
     if request.fixture_ids.is_empty() && request.target_group_ids.is_empty() {
         return Err("Value effect must target at least one fixture or group".to_string());
     }
@@ -25082,9 +25166,13 @@ fn evaluate_runtime_value_attribute_at_rate(
     clock: &ClockSnapshot,
     rate: f32,
 ) -> Option<u16> {
-    if !runtime.request.attribute.eq_ignore_ascii_case(attribute) {
-        return None;
-    }
+    let (low, high) = scalar_effect_feature_range(
+        attribute,
+        &runtime.request.attribute,
+        runtime.request.low,
+        runtime.request.high,
+        &runtime.request.features,
+    )?;
     let target = runtime
         .target_indices
         .get(&fixture_id)
@@ -25111,12 +25199,9 @@ fn evaluate_runtime_value_attribute_at_rate(
             normalized
         });
     let value = match runtime.request.mode {
-        ValueEffectMode::Absolute => {
-            scale_effect_u16(runtime.request.low, runtime.request.high, normalized)
-        }
+        ValueEffectMode::Absolute => scale_effect_u16(low, high, normalized),
         ValueEffectMode::Relative => {
-            let span = runtime.request.low.max(runtime.request.high) as f32
-                - runtime.request.low.min(runtime.request.high) as f32;
+            let span = low.max(high) as f32 - low.min(high) as f32;
             let offset = (normalized - 0.5) * 2.0 * span;
             (base_value as f32 + offset).round().clamp(0.0, 65_535.0) as u16
         }
@@ -25159,9 +25244,7 @@ pub fn validate_curve_effect_request(request: &CurveEffectRequest) -> Result<(),
     if request.label.trim().is_empty() {
         return Err("Curve effect label is required".to_string());
     }
-    if request.attribute.trim().is_empty() {
-        return Err("Curve effect attribute is required".to_string());
-    }
+    validate_scalar_effect_features("Curve", &request.attribute, &request.features)?;
     if request.fixture_ids.is_empty() && request.target_group_ids.is_empty() {
         return Err("Curve effect must target at least one fixture or group".to_string());
     }
@@ -25287,9 +25370,13 @@ fn evaluate_runtime_curve_attribute_at_rate(
     clock: &ClockSnapshot,
     rate: f32,
 ) -> Option<u16> {
-    if !runtime.request.attribute.eq_ignore_ascii_case(attribute) {
-        return None;
-    }
+    let (low, high) = scalar_effect_feature_range(
+        attribute,
+        &runtime.request.attribute,
+        runtime.request.low,
+        runtime.request.high,
+        &runtime.request.features,
+    )?;
     let target = runtime
         .target_indices
         .get(&fixture_id)
@@ -25316,12 +25403,9 @@ fn evaluate_runtime_curve_attribute_at_rate(
             normalized
         });
     let value = match runtime.request.mode {
-        ValueEffectMode::Absolute => {
-            scale_effect_u16(runtime.request.low, runtime.request.high, normalized)
-        }
+        ValueEffectMode::Absolute => scale_effect_u16(low, high, normalized),
         ValueEffectMode::Relative => {
-            let span = runtime.request.low.max(runtime.request.high) as f32
-                - runtime.request.low.min(runtime.request.high) as f32;
+            let span = low.max(high) as f32 - low.min(high) as f32;
             let offset = (normalized - 0.5) * 2.0 * span;
             (base_value as f32 + offset).round().clamp(0.0, 65_535.0) as u16
         }
@@ -25364,9 +25448,7 @@ pub fn validate_mapping_effect_request(request: &MappingEffectRequest) -> Result
     if request.label.trim().is_empty() {
         return Err("Mapping effect label is required".to_string());
     }
-    if request.attribute.trim().is_empty() {
-        return Err("Mapping effect attribute is required".to_string());
-    }
+    validate_scalar_effect_features("Mapping", &request.attribute, &request.features)?;
     if request.fixture_ids.is_empty() && request.target_group_ids.is_empty() {
         return Err("Mapping effect must target at least one fixture or group".to_string());
     }
@@ -25567,9 +25649,13 @@ fn evaluate_runtime_mapping_attribute_at_rate(
     clock: &ClockSnapshot,
     rate: f32,
 ) -> Option<u16> {
-    if !runtime.request.attribute.eq_ignore_ascii_case(attribute) {
-        return None;
-    }
+    let (low, high) = scalar_effect_feature_range(
+        attribute,
+        &runtime.request.attribute,
+        runtime.request.low,
+        runtime.request.high,
+        &runtime.request.features,
+    )?;
     let target = runtime
         .target_indices
         .get(&fixture_id)
@@ -25595,12 +25681,9 @@ fn evaluate_runtime_mapping_attribute_at_rate(
             normalized
         });
     let value = match runtime.request.mode {
-        ValueEffectMode::Absolute => {
-            scale_effect_u16(runtime.request.low, runtime.request.high, normalized)
-        }
+        ValueEffectMode::Absolute => scale_effect_u16(low, high, normalized),
         ValueEffectMode::Relative => {
-            let span = runtime.request.low.max(runtime.request.high) as f32
-                - runtime.request.low.min(runtime.request.high) as f32;
+            let span = low.max(high) as f32 - low.min(high) as f32;
             let offset = (normalized - 0.5) * 2.0 * span;
             (base_value as f32 + offset).round().clamp(0.0, 65_535.0) as u16
         }
@@ -36725,14 +36808,14 @@ mod tests {
             runtime.cues[0].effect_targets,
             vec![
                 CueEffectTarget {
-                    effect_id: 1,
-                    enabled: true,
+                    effect_id: 2,
+                    enabled: false,
                     params: None,
                     transition_ms: None,
                 },
                 CueEffectTarget {
-                    effect_id: 2,
-                    enabled: false,
+                    effect_id: 1,
+                    enabled: true,
                     params: None,
                     transition_ms: None,
                 },
@@ -53643,6 +53726,7 @@ mod tests {
             fixture_ids: fixture_ids.to_vec(),
             target_group_ids: Vec::new(),
             attribute: "Dimmer".to_string(),
+            features: Vec::new(),
             points: vec![
                 ValueEffectPoint {
                     position: 0.0,
@@ -54022,6 +54106,7 @@ mod tests {
             fixture_ids: fixture_ids.to_vec(),
             target_group_ids: Vec::new(),
             attribute: "Dimmer".to_string(),
+            features: Vec::new(),
             points: vec![
                 CurveEffectPoint {
                     position: 0.0,
@@ -54188,6 +54273,7 @@ mod tests {
             fixture_ids: fixture_ids.to_vec(),
             target_group_ids: Vec::new(),
             attribute: "Dimmer".to_string(),
+            features: Vec::new(),
             shape: LfoShape::Saw,
             mode: ValueEffectMode::Absolute,
             direction: MappingEffectDirection::Forward,
@@ -54248,6 +54334,84 @@ mod tests {
             &effect, 3, "Pan", 0, created_at, created_at, &clock,
         )
         .is_none());
+    }
+
+    #[test]
+    fn value_curve_and_mapping_share_one_generator_across_feature_ranges() {
+        let runtime = runtime_with_move_fixtures(1);
+        let created_at = Instant::now();
+        let at = created_at + Duration::from_millis(250);
+        let clock = ClockSnapshot::default();
+        let features = vec![
+            ChaserFeature {
+                attribute: "Dimmer".to_string(),
+                low: 0,
+                high: 10_000,
+            },
+            ChaserFeature {
+                attribute: "Pan".to_string(),
+                low: 10_000,
+                high: 30_000,
+            },
+        ];
+
+        let mut value_request = test_value_request(&[1]);
+        value_request.attribute = "Legacy ignored while Features exist".to_string();
+        value_request.features = features.clone();
+        let value = runtime.resolve_value_effect_request(value_request).unwrap();
+        let value_dimmer =
+            evaluate_runtime_value_attribute(&value, 1, "Dimmer", 0, created_at, at, &clock)
+                .unwrap();
+        let value_pan =
+            evaluate_runtime_value_attribute(&value, 1, "Pan", 0, created_at, at, &clock).unwrap();
+        let value_normalized = value.targets[0].cached.get().unwrap().normalized;
+        assert_eq!(
+            value_pan,
+            scale_effect_u16(10_000, 30_000, value_normalized)
+        );
+        assert_eq!(value_dimmer, scale_effect_u16(0, 10_000, value_normalized));
+
+        let mut curve_request = test_curve_request(&[1]);
+        curve_request.attribute = "Legacy ignored while Features exist".to_string();
+        curve_request.features = features.clone();
+        let curve = runtime.resolve_curve_effect_request(curve_request).unwrap();
+        let curve_dimmer =
+            evaluate_runtime_curve_attribute(&curve, 1, "Dimmer", 0, created_at, at, &clock)
+                .unwrap();
+        let curve_pan =
+            evaluate_runtime_curve_attribute(&curve, 1, "Pan", 0, created_at, at, &clock).unwrap();
+        let curve_normalized = curve.targets[0].cached.get().unwrap().normalized;
+        assert_eq!(
+            curve_pan,
+            scale_effect_u16(10_000, 30_000, curve_normalized)
+        );
+        assert_eq!(curve_dimmer, scale_effect_u16(0, 10_000, curve_normalized));
+
+        let mut mapping_request = test_mapping_request(&[1]);
+        mapping_request.attribute = "Legacy ignored while Features exist".to_string();
+        mapping_request.features = features;
+        let mapping = runtime
+            .resolve_mapping_effect_request(mapping_request)
+            .unwrap();
+        let mapping_dimmer =
+            evaluate_runtime_mapping_attribute(&mapping, 1, "Dimmer", 0, created_at, at, &clock)
+                .unwrap();
+        let mapping_pan =
+            evaluate_runtime_mapping_attribute(&mapping, 1, "Pan", 0, created_at, at, &clock)
+                .unwrap();
+        let mapping_normalized = mapping.targets[0].cached.get().unwrap().normalized;
+        assert_eq!(
+            mapping_pan,
+            scale_effect_u16(10_000, 30_000, mapping_normalized)
+        );
+        assert_eq!(
+            mapping_dimmer,
+            scale_effect_u16(0, 10_000, mapping_normalized)
+        );
+        assert!(
+            evaluate_runtime_mapping_attribute(&mapping, 1, "Tilt", 0, created_at, at, &clock,)
+                .is_none()
+        );
     }
 
     #[test]

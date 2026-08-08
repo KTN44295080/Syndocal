@@ -10284,9 +10284,9 @@ progress {
 
 .editableStage .stageFixture.picked,
 .editableStage .stageFixture.selected {
-  stroke: #ffffff;
-  stroke-width: 1.1;
-  filter: none;
+  stroke: #ffdd74;
+  stroke-width: 1.4;
+  filter: drop-shadow(0 0 2px rgba(255, 221, 116, 0.52));
 }
 
 .editableStage .stageFixture.parked {
@@ -34435,6 +34435,18 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
   color: #c8a0a0;
 }
 
+.sceneOwnedFxToolbar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.sceneOwnedFxToolbar button {
+  min-width: 0;
+  min-height: 40px !important;
+  padding: 4px 6px;
+}
+
 .sceneFxEditor {
   container-name: effect-form;
   container-type: inline-size;
@@ -34443,6 +34455,198 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
 
 .sceneFxEditor > .sceneSettingsAttribute {
   margin-bottom: 2px;
+}
+
+.sceneEffectTargetEditor,
+.effectFeaturesPanel {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  border: 1px solid #3a444a;
+  border-radius: var(--ui-radius-card);
+  background: #151a1d;
+  padding: 8px;
+}
+
+.sceneEffectTargetEditor > legend,
+.effectFeaturesPanel > legend {
+  padding: 0 4px;
+  color: #dbe2e7;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.sceneEffectTargetModes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.sceneEffectTargetModes button,
+.sceneEffectTargetChipGrid button {
+  min-width: 0;
+}
+
+.sceneEffectTargetModes button.active,
+.sceneEffectTargetChipGrid button.active {
+  border-color: var(--cue-identity);
+  background: color-mix(in srgb, var(--cue-identity) 24%, #1c2226);
+  color: var(--cue-identity-text);
+  box-shadow: inset 0 -2px 0 var(--cue-identity);
+}
+
+.sceneEffectTargetSummary {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  border-left: 3px solid var(--cue-identity);
+  background: #1c2226;
+  padding: 6px 7px;
+}
+
+.sceneEffectTargetSummary strong,
+.sceneEffectTargetSummary span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sceneEffectTargetSummary span,
+.effectFeaturesHint,
+.sceneEffectTargetNotice {
+  margin: 0;
+  color: #98a2a9;
+  font-size: 11px !important;
+}
+
+.sceneEffectTargetFixtureSelect {
+  display: grid;
+  gap: 3px;
+  color: #aeb5ba;
+}
+
+.sceneEffectTargetFixtureSelect select {
+  width: 100%;
+  min-width: 0;
+}
+
+.sceneEffectTargetDisclosure {
+  min-width: 0;
+}
+
+.sceneEffectTargetDisclosure > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 5px;
+  cursor: pointer;
+}
+
+.sceneEffectTargetChipGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+  max-height: 176px;
+  margin-top: 4px;
+  overflow: auto;
+}
+
+.sceneEffectTargetChipGrid button {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  padding: 4px 6px;
+  text-align: left;
+}
+
+.sceneEffectTargetChipGrid.groups button {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.sceneEffectTargetChipGrid strong,
+.sceneEffectTargetChipGrid span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.effectFeatureList {
+  display: grid;
+  gap: 4px;
+}
+
+.effectFeatureRow {
+  display: grid;
+  grid-template-columns: 20px repeat(2, minmax(0, 1fr)) repeat(3, 40px);
+  gap: 3px;
+  align-items: end;
+  min-width: 0;
+  border: 1px solid #343c41;
+  background: #191e21;
+  padding: 4px;
+}
+
+.effectFeatureNumber {
+  grid-row: 1 / span 2;
+  align-self: center;
+  color: #89939a;
+  text-align: center;
+}
+
+.effectFeatureRow > label {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  color: #aeb5ba;
+}
+
+.effectFeatureRow > label:first-of-type {
+  grid-column: 2 / 4;
+}
+
+.effectFeatureRow > label:nth-of-type(2) {
+  grid-column: 2;
+}
+
+.effectFeatureRow > label:nth-of-type(3) {
+  grid-column: 3;
+}
+
+.effectFeatureRow > button {
+  grid-row: 1;
+  min-width: 40px;
+  padding: 0;
+}
+
+.effectFeatureRow > button:nth-of-type(1) { grid-column: 4; }
+.effectFeatureRow > button:nth-of-type(2) { grid-column: 5; }
+.effectFeatureRow > button:nth-of-type(3) { grid-column: 6; }
+
+.effectFeatureRow :is(input, select) {
+  width: 100%;
+  min-width: 0;
+}
+
+.effectFeatureCoverage {
+  overflow: hidden;
+  color: #8c969d;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.effectFeatureFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #9ba5ab;
 }
 
 .fxColorPaletteLibrary {
@@ -34618,16 +34822,16 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
 }
 
 .sceneFxEditor .colorEffectStopRow {
-  grid-template-columns: 16px 22px minmax(42px, 1fr) 40px repeat(3, 22px);
+  grid-template-columns: 16px 40px minmax(42px, 1fr) 40px repeat(3, 40px);
   gap: 2px;
 }
 
 .sceneFxEditor .colorEffectStopPicker,
 .sceneFxEditor .colorEffectStopAction {
-  width: 22px;
-  min-width: 22px;
-  height: 28px;
-  min-height: 28px;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
 }
 
 .sceneFxEditor .colorEffectPeriodInput,
@@ -34643,7 +34847,7 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
 }
 
 .sceneFxEditor .colorEffectSpreadControl {
-  grid-template-columns: 54px minmax(34px, 1fr) 34px 10px;
+  grid-template-columns: 54px minmax(40px, 1fr) 40px 10px;
   gap: 3px;
 }
 

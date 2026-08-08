@@ -107,6 +107,7 @@ export function MappingStageLayersPanel(props: MappingStageLayersPanelProps) {
         placePreview={props.placePreview}
         readOnly={props.readOnly}
         fixtureTransformsEditable={props.fixtureTransformsEditable}
+        stageTool={props.stageTool}
         isDragging={props.isDraggingFixture}
         isYawDragging={props.isYawDragging}
         onBeginYawDrag={props.onBeginFixtureYawDrag}

@@ -1,6 +1,7 @@
 export const stageOverlayHandleScreenSizePx = 22;
 export const stageOverlayHandleMinimumHitSizePx = 16;
 export const stageOverlayHandleGapScreenPx = 6;
+export const stageFixtureYawHandleScreenSizePx = 16;
 
 export const stageWorldPerCssPixel = (
   viewBox: { width: number; height: number },
@@ -27,6 +28,9 @@ export const stageOverlayHandleWorldSize = (worldPerCssPixel: number) =>
 export const stageOverlayHandleWorldRadius = (worldPerCssPixel: number) =>
   stageOverlayHandleWorldSize(worldPerCssPixel) / 2;
 
+export const stageFixtureYawHandleWorldRadius = (worldPerCssPixel: number) =>
+  (stageFixtureYawHandleScreenSizePx * worldPerCssPixel) / 2;
+
 export const stageOverlayHandleWorldOffsetFromEdge = (worldPerCssPixel: number) =>
   (stageOverlayHandleScreenSizePx / 2 + stageOverlayHandleGapScreenPx) * worldPerCssPixel;
 
@@ -35,7 +39,8 @@ export const stageFixtureYawHandlePoint = (
   worldPerCssPixel: number,
 ) => {
   const angle = ((fixture.yaw - 90) * Math.PI) / 180;
-  const distance = fixture.height / 2 + stageOverlayHandleWorldOffsetFromEdge(worldPerCssPixel);
+  const distance = fixture.height / 2
+    + (stageFixtureYawHandleScreenSizePx / 2 + stageOverlayHandleGapScreenPx) * worldPerCssPixel;
   return {
     x: fixture.x + Math.cos(angle) * distance,
     z: fixture.z + Math.sin(angle) * distance,

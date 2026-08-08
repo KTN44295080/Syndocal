@@ -2516,6 +2516,10 @@ pub struct ValueEffectRequest {
     pub fixture_ids: Vec<FixtureId>,
     pub target_group_ids: Vec<String>,
     pub attribute: String,
+    /// Optional multi-attribute feature ranges. Empty preserves the legacy
+    /// single `attribute` / `low` / `high` representation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<ChaserFeature>,
     /// Operator-drawn value envelope points, 2..32, strictly increasing positions.
     pub points: Vec<ValueEffectPoint>,
     pub interpolation: ValueEffectInterpolation,
@@ -2539,6 +2543,10 @@ pub struct CurveEffectRequest {
     pub fixture_ids: Vec<FixtureId>,
     pub target_group_ids: Vec<String>,
     pub attribute: String,
+    /// Optional multi-attribute feature ranges. Empty preserves the legacy
+    /// single `attribute` / `low` / `high` representation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<ChaserFeature>,
     /// Editable cubic channel-function points, 2..32, strictly increasing.
     pub points: Vec<CurveEffectPoint>,
     pub mode: ValueEffectMode,
@@ -2569,6 +2577,10 @@ pub struct MappingEffectRequest {
     pub fixture_ids: Vec<FixtureId>,
     pub target_group_ids: Vec<String>,
     pub attribute: String,
+    /// Optional multi-attribute feature ranges. Empty preserves the legacy
+    /// single `attribute` / `low` / `high` representation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<ChaserFeature>,
     /// Scalar function sampled over the resolved fixture order.
     pub shape: LfoShape,
     pub mode: ValueEffectMode,
@@ -4395,6 +4407,8 @@ mod tests {
             fixture_ids: vec![1, 2],
             target_group_ids: vec!["Front".to_string()],
             attribute: "Dimmer".to_string(),
+            features: Vec::new(),
+            features: Vec::new(),
             points: vec![
                 super::CurveEffectPoint {
                     position: 0.0,
@@ -4448,6 +4462,8 @@ mod tests {
             fixture_ids: vec![3, 1, 2],
             target_group_ids: vec!["Front".to_string()],
             attribute: "Dimmer".to_string(),
+            features: Vec::new(),
+            features: Vec::new(),
             shape: super::LfoShape::Sine,
             mode: super::ValueEffectMode::Absolute,
             direction: super::MappingEffectDirection::Bounce,

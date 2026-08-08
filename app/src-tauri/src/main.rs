@@ -36896,6 +36896,7 @@ f 1 2 3
             fixture_ids: vec![4],
             target_group_ids: vec!["Front".to_string()],
             attribute: "Dimmer".to_string(),
+            features: Vec::new(),
             points: vec![
                 protocol::ValueEffectPoint {
                     position: 0.0,
@@ -36962,6 +36963,7 @@ f 1 2 3
             fixture_ids: vec![4],
             target_group_ids: vec!["Front".to_string()],
             attribute: "Dimmer".to_string(),
+            features: Vec::new(),
             points: vec![
                 protocol::CurveEffectPoint {
                     position: 0.0,
@@ -37027,6 +37029,7 @@ f 1 2 3
             fixture_ids: vec![4, 2, 3],
             target_group_ids: vec!["Front".to_string()],
             attribute: "Dimmer".to_string(),
+            features: Vec::new(),
             shape: protocol::LfoShape::Triangle,
             mode: protocol::ValueEffectMode::Absolute,
             direction: protocol::MappingEffectDirection::Bounce,
