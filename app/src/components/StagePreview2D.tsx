@@ -1,6 +1,9 @@
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import type { FixtureLiveColorSegment } from "../fixtureLiveColor";
-import type { MappingFixtureVisualKind } from "../fixtureVisuals";
+import type {
+  MappingFixtureSegmentOrder,
+  MappingFixtureVisualKind,
+} from "../fixtureVisuals";
 import type { VisualizerFixtureBeam } from "../mappingRuntime";
 import { planStageFixtureLabels } from "../stageLabelLayout";
 import { stageViewBoxSize } from "../stageGeometry";
@@ -28,6 +31,7 @@ export interface StagePreviewFixture {
   height: number;
   segmentColumns: number;
   segmentRows: number;
+  segmentOrder: MappingFixtureSegmentOrder;
   yaw: number;
   beamPoints: string;
   beams?: VisualizerFixtureBeam[];
@@ -319,6 +323,7 @@ export function StagePreview2D(props: StagePreview2DProps) {
               data-live-segment-count={fixture.liveSegments?.length ?? 1}
               data-live-segment-columns={fixture.segmentColumns}
               data-live-segment-rows={fixture.segmentRows}
+              data-live-segment-order={fixture.segmentOrder}
               transform={`translate(${fixture.x} ${fixture.z}) rotate(${fixture.yaw})`}
               onPointerDown={(event) => {
                 event.stopPropagation();
@@ -337,6 +342,7 @@ export function StagePreview2D(props: StagePreview2DProps) {
                 segments={fixture.liveSegments}
                 segmentColumns={fixture.segmentColumns}
                 segmentRows={fixture.segmentRows}
+                segmentOrder={fixture.segmentOrder}
                 hitTargetRadius={6}
                 title={`${fixture.label} / ${fixture.dmxLabel} / ${fixture.groupLabel}`}
               />

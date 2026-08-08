@@ -1,4 +1,7 @@
-import type { MappingFixtureVisualKind } from "./fixtureVisuals";
+import type {
+  MappingFixtureSegmentOrder,
+  MappingFixtureVisualKind,
+} from "./fixtureVisuals";
 import { clampRange, finiteOr } from "./numericHelpers";
 import type {
   GeometrySummary,
@@ -36,6 +39,7 @@ export interface VisualizerFixture {
   height: number;
   segmentColumns: number;
   segmentRows: number;
+  segmentOrder: MappingFixtureSegmentOrder;
   yaw: number;
   beamYaw: number;
   beamPoints: string;

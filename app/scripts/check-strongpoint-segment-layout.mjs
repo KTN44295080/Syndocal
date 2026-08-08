@@ -89,6 +89,7 @@ try {
     const fixture = fixtureFromRequest(request, footprint);
     const skeleton = liveColor.fixtureLiveSegmentSkeleton(fixture);
     const grid = visuals.mappingFixtureSegmentGrid(fixture, skeleton.length);
+    const order = visuals.mappingFixtureSegmentOrder(fixture);
     const size = visuals.mappingFixtureStageSize(
       visuals.fixtureVisualKind(fixture),
       grid.columns,
@@ -97,13 +98,31 @@ try {
     );
     assert.equal(skeleton.length, expectedSegments, `${footprint}ch segment count`);
     assert.deepEqual(grid, { columns, rows }, `${footprint}ch control grid`);
+    assert.equal(order, "column-major-bottom-left", `${footprint}ch physical segment order`);
     assert.deepEqual(size, { width: columns * 5, height: rows * 5 }, `${footprint}ch stage size`);
     assert.equal(visuals.fixtureVisualKind(fixture), "panel", `${footprint}ch visual kind`);
   }
 
+  const strongpointOrder = "column-major-bottom-left";
   assert.deepEqual(
-    visuals.mappingFixtureSegmentCell({ columns: 4, rows: 10 }, 39),
-    { column: 3, row: 9 },
+    visuals.mappingFixtureSegmentCell({ columns: 4, rows: 10 }, 0, strongpointOrder),
+    { column: 0, row: 9 },
+    "segment 1 is the bottom cell of the leftmost column",
+  );
+  assert.deepEqual(
+    visuals.mappingFixtureSegmentCell({ columns: 4, rows: 10 }, 9, strongpointOrder),
+    { column: 0, row: 0 },
+    "segment 10 is the top cell of the leftmost column",
+  );
+  assert.deepEqual(
+    visuals.mappingFixtureSegmentCell({ columns: 4, rows: 10 }, 10, strongpointOrder),
+    { column: 1, row: 9 },
+    "segment 11 restarts at the bottom of the second column",
+  );
+  assert.deepEqual(
+    visuals.mappingFixtureSegmentCell({ columns: 4, rows: 10 }, 39, strongpointOrder),
+    { column: 3, row: 0 },
+    "segment 40 is the top cell of the rightmost column",
   );
 
   const request13 = catalog.verifiedFixtureProfileRequest(
@@ -154,6 +173,7 @@ try {
   console.log(
     "pass strongpoint segment layout " +
       "13ch=4x1 25ch=4x2 61ch=4x5 121ch=4x10 " +
+      "order=left-columns-bottom-to-top " +
       `dvc13=${JSON.stringify(dvc13Live.segments.map((segment) => segment.color))}`,
   );
 } finally {

@@ -15,6 +15,10 @@ export interface MappingFixtureSegmentCell {
   row: number;
 }
 
+export type MappingFixtureSegmentOrder =
+  | "row-major-top-left"
+  | "column-major-bottom-left";
+
 const fixtureIdentityText = (fixture: PatchedFixtureSummary) =>
   `${fixture.manufacturer} ${fixture.profile_name} ${fixture.mode_name} ${fixture.label}`.toLowerCase();
 
@@ -71,12 +75,26 @@ export const mappingFixtureSegmentGrid = (
   return { columns: count, rows: 1 };
 };
 
+export const mappingFixtureSegmentOrder = (
+  fixture: PatchedFixtureSummary,
+): MappingFixtureSegmentOrder => isSoundWavesStrongpointFixture(fixture)
+  ? "column-major-bottom-left"
+  : "row-major-top-left";
+
 export const mappingFixtureSegmentCell = (
   grid: MappingFixtureSegmentGrid,
   index: number,
+  order: MappingFixtureSegmentOrder = "row-major-top-left",
 ): MappingFixtureSegmentCell => {
   const columns = Math.max(1, Math.floor(grid.columns));
+  const rows = Math.max(1, Math.floor(grid.rows));
   const safeIndex = Math.max(0, Math.floor(index));
+  if (order === "column-major-bottom-left") {
+    return {
+      column: Math.floor(safeIndex / rows),
+      row: rows - 1 - (safeIndex % rows),
+    };
+  }
   return {
     column: safeIndex % columns,
     row: Math.floor(safeIndex / columns),

@@ -1,6 +1,9 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import type { FixtureLiveColorSegment } from "../fixtureLiveColor";
-import type { MappingFixtureVisualKind } from "../fixtureVisuals";
+import type {
+  MappingFixtureSegmentOrder,
+  MappingFixtureVisualKind,
+} from "../fixtureVisuals";
 import { MAPPING_FIXTURE_DRAG_THRESHOLD_PX } from "../createMappingInteractionController";
 import type { MappingStageTool } from "../mappingViewPresets";
 import { planStageFixtureLabels, type StageLabelViewport } from "../stageLabelLayout";
@@ -29,6 +32,7 @@ export interface MappingFixture2D {
   height: number;
   segmentColumns: number;
   segmentRows: number;
+  segmentOrder: MappingFixtureSegmentOrder;
   yaw: number;
   intensity: number;
   color: string;
@@ -108,6 +112,7 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
                 data-live-segment-count={fixture.liveSegments?.length ?? 1}
                 data-live-segment-columns={fixture.segmentColumns}
                 data-live-segment-rows={fixture.segmentRows}
+                data-live-segment-order={fixture.segmentOrder}
                 data-stage-fixture-drag-threshold={MAPPING_FIXTURE_DRAG_THRESHOLD_PX}
                 transform={`translate(${fixture.x} ${fixture.z}) rotate(${fixture.yaw})`}
                 onPointerDown={(event) => props.onFixturePointerDown(event, fixture.id)}
@@ -124,6 +129,7 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
                   segments={fixture.liveSegments}
                   segmentColumns={fixture.segmentColumns}
                   segmentRows={fixture.segmentRows}
+                  segmentOrder={fixture.segmentOrder}
                   liveSegmentScreenScale={1 / Math.max(1, props.labelZoom)}
                   hitTargetRadius={6}
                   title={`${fixture.label} / ${fixture.dmxLabel} / ${fixture.groupLabel}`}

@@ -4,6 +4,7 @@ import {
   mappingFixtureCellGap,
   mappingFixtureGridUnit,
   mappingFixtureSegmentCell,
+  type MappingFixtureSegmentOrder,
   type MappingFixtureVisualKind,
 } from "../fixtureVisuals";
 import type { StageFixtureLabelLayout } from "../stageLabelLayout";
@@ -24,6 +25,7 @@ type StageFixtureGlyphProps = {
   segments?: FixtureLiveColorSegment[];
   segmentColumns?: number;
   segmentRows?: number;
+  segmentOrder?: MappingFixtureSegmentOrder;
   liveSegmentScreenScale?: number;
   title?: string;
 };
@@ -55,6 +57,7 @@ export function StageFixtureGlyph(props: StageFixtureGlyphProps) {
   const segmentCell = (index: number) => mappingFixtureSegmentCell(
     { columns: segmentColumns(), rows: segmentRows() },
     index,
+    props.segmentOrder,
   );
   const segmentX = (index: number) => {
     const cell = segmentCell(index);

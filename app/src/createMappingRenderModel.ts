@@ -11,6 +11,7 @@ import {
   fixtureVisualKind,
   mappingFixtureSegmentCell,
   mappingFixtureSegmentGrid,
+  mappingFixtureSegmentOrder,
   mappingFixtureStageSize,
   mappingFixtureWorldToSvgScale,
 } from "./fixtureVisuals";
@@ -350,6 +351,7 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
         fixture,
         fixtureSegmentSkeleton(fixture).length,
       );
+      const segmentOrder = mappingFixtureSegmentOrder(fixture);
       const size = mappingFixtureStageSize(
         visualKind,
         segmentGrid.columns,
@@ -370,6 +372,7 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
         height: size.height,
         segmentColumns: segmentGrid.columns,
         segmentRows: segmentGrid.rows,
+        segmentOrder,
         yaw,
         beamYaw: yaw + panDegrees,
         beamPoints: beamPoints(point.x, point.z, yaw + panDegrees, intensity),
@@ -421,7 +424,11 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
         ? liveSegments.map((segment, index) => {
             const columns = Math.max(1, base.segmentColumns);
             const rows = Math.max(1, base.segmentRows);
-            const cell = mappingFixtureSegmentCell({ columns, rows }, index);
+            const cell = mappingFixtureSegmentCell(
+              { columns, rows },
+              index,
+              base.segmentOrder,
+            );
             const cellPitchX = base.width / columns;
             const cellPitchZ = base.height / rows;
             const localX = (cell.column - (columns - 1) / 2) * cellPitchX;

@@ -23212,6 +23212,7 @@ async function runStrongpointSegmentsViewport(client, viewport) {
         count: Number(fixture?.getAttribute('data-live-segment-count') ?? 0),
         columns: Number(fixture?.getAttribute('data-live-segment-columns') ?? 0),
         rows: Number(fixture?.getAttribute('data-live-segment-rows') ?? 0),
+        order: fixture?.getAttribute('data-live-segment-order') ?? '',
         colors: segments.map((segment) => segment.getAttribute('fill')),
         cells: segments.map((segment) => ({
           column: Number(segment.getAttribute('data-stage-fixture-segment-column')),
@@ -28120,15 +28121,21 @@ async function main() {
     if (strongpointSegmentsOnlyMode) {
       const result = await runStrongpointSegmentsViewport(client, viewports[0]);
       const red = "rgb(255, 0, 0)";
+      const beamOrigin = (index) => result.mode121.beamOrigins[index].split(',').map(Number);
+      const [beam1X, beam1Z] = beamOrigin(0);
+      const [beam10X, beam10Z] = beamOrigin(9);
+      const [beam11X, beam11Z] = beamOrigin(10);
+      const [beam40X, beam40Z] = beamOrigin(39);
       const checks = {
         mode13UsesFourByOneGrid:
           result.mode13.found
           && result.mode13.count === 4
           && result.mode13.columns === 4
           && result.mode13.rows === 1
+          && result.mode13.order === "column-major-bottom-left"
           && result.mode13.outline.width === 20
           && result.mode13.outline.height === 5,
-        mode13RowMajorCells:
+        mode13PhysicalLeftToRightCells:
           JSON.stringify(result.mode13.cells.map(({ column, row }) => [column, row]))
             === JSON.stringify([[1, 1], [2, 1], [3, 1], [4, 1]]),
         mode121UsesFourByTenGrid:
@@ -28136,17 +28143,18 @@ async function main() {
           && result.mode121.count === 40
           && result.mode121.columns === 4
           && result.mode121.rows === 10
+          && result.mode121.order === "column-major-bottom-left"
           && result.mode121.outline.width === 20
           && result.mode121.outline.height === 50,
-        mode121RowMajorCells:
+        mode121PhysicalColumnOrder:
           result.mode121.cells[0]?.column === 1
-          && result.mode121.cells[0]?.row === 1
-          && result.mode121.cells[3]?.column === 4
-          && result.mode121.cells[3]?.row === 1
-          && result.mode121.cells[4]?.column === 1
-          && result.mode121.cells[4]?.row === 2
+          && result.mode121.cells[0]?.row === 10
+          && result.mode121.cells[9]?.column === 1
+          && result.mode121.cells[9]?.row === 1
+          && result.mode121.cells[10]?.column === 2
+          && result.mode121.cells[10]?.row === 10
           && result.mode121.cells[39]?.column === 4
-          && result.mode121.cells[39]?.row === 10
+          && result.mode121.cells[39]?.row === 1
           && new Set(result.mode121.cells.map((cell) => cell.x)).size === 4
           && new Set(result.mode121.cells.map((cell) => cell.y)).size === 10,
         independentCellColors:
@@ -28158,7 +28166,13 @@ async function main() {
           result.mode13.beamCount === 4
           && new Set(result.mode13.beamOrigins).size === 4
           && result.mode121.beamCount === 40
-          && new Set(result.mode121.beamOrigins).size === 40,
+          && new Set(result.mode121.beamOrigins).size === 40
+          && beam1X === beam10X
+          && beam1Z > beam10Z
+          && beam11X > beam1X
+          && beam11Z === beam1Z
+          && beam40X > beam10X
+          && beam40Z === beam10Z,
       };
       const failedChecks = Object.entries(checks)
         .filter(([, passed]) => !passed)
