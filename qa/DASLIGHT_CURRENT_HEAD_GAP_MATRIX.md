@@ -1,7 +1,7 @@
 # Daslight parity current-HEAD gap matrix
 
-- 監査日: 2026-07-23
-- 監査基準: `83970ea` + T23受入差分
+- 監査日: 2026-08-08
+- 監査基準: 本ファイルを含む現HEAD（Move Symmetry照合 + DVC beam-target保持）
 - 製品境界: 内蔵3Dビジュアライザーは対象外。Art-Netを外部ビジュアライザーへ送る経路を正式な可視化受入とする
 - 判定規則: Syndocal実装、同一タスク計測、ネイティブ/物理出力を別々に扱い、証拠のないDaslight比較は`未計測`とする
 
@@ -15,7 +15,8 @@
 | Scene trigger / Live speed / reset | すべて1 gesture、DOM runtime truthまで検証 | **2026-07-29実測**: trigger=1クリック（ユーザー実操作、Shinkan実ショー・B-WineRed FX）。live speed=トリガーでDIMMER/SPEED/PHASE/SIZEダイヤルパネルが自動表示→1ドラッグ。停止=⏸1クリック（構造） | **同**（trigger/live speed）。resetは未計測 | 証跡: audit-2026-07-29/dl-16-triggered.png。SyndocalのT17ストリップとDaslightのダイヤルパネルは「アクティブシーンへライブ操作が自動表示」の同型モデル |
 | Touch live / flash / Edit / control追加 | 各1 gesture、flashはdown/up、追加は件数増加を検証 | 未計測 | 未計測 | Daslight remote/touch面を同一タスク実測 |
 | FX family / recipe選択 | 各1 click、active familyとrecipe選択を検証 | 未計測 | 未計測 | 作成、target適用、Cue保存まで比較を拡張 |
-| Independent FX | 7系統が独立body/runtime/editor。Colour Mappingは埋め込みimage/text/video、matrix cell、UV/sampling/playbackを持ち、GDTF CIE xyY付き3–16 emitterはcalibrated fixed-anchor mixingを共有する。metadata無し追加emittersはzero | Daslightは7独立generator群 | ソフトウェア構造差は解消。Shinkan動的FXの別プロセスArt-Net受信PASS | プリセット量と実灯体/商用visualizer目視は外部比較 |
+| Independent FX | 7系統が独立body/runtime/editor。Colour Mappingは埋め込みimage/text/video、matrix cell、UV/sampling/playbackを持つ。Move SymmetryはDaslight実測どおり後半Panのみ鏡像化。Curve/ChaserはDVCのfixture/BEAMID/selection順を保持し、RGB/RGBAの選択セグメントだけを変調する | Daslightは7独立generator群。Move SymmetryとChaser #2は最大化UI + DMX Levelsで実測 | 対象検体のソフトウェア/DMX規則差は解消。Shinkan動的FXの別プロセスArt-Net受信PASS | プリセット量と実灯体/商用visualizer目視は外部比較 |
+| DVC dynamic FX import | フルShinkanの30 effectをSkipped 0で変換。Bar-StrobeAMber=64 beams / 48 selections / BEAMID 0..7、Bar-Side Chaser=16 steps / 16 beams / BEAMID 0..7を保存・再読込・DMX隔離テストで固定 | 原XMLのBEAMS列とDaslightのgenerator/bodyを比較 | Curve/Chaserの旧fixture平坦化を解消 | VALUE FX / COLOR MAPPINGSはユーザーDVCに検体なし。MoveのBEAMID>0検体のみ未証明 |
 | Cue FX parameter transition | Cue-owned Effectごとに任意fade、同一IDの直前live result→次state、連続/離散属性別policy、video target対応 | あり | ソフトウェア構造差は解消・Daslight同一タスク未計測 | 実灯体とDaslight操作を外部比較 |
 | Scene Live | scene speed / size / phase / direction / segment / flash、group dimmer / strobe / solo。Shinkanでspeed x4→retrigger x1とArt-Net変化をnative実証 | 同等機能あり | ソフトウェア/実出力PASS・Daslight同一タスク未計測 | 実灯体とDaslight操作を外部比較 |
 | Fixture onboarding | GDTF import、faceted Share検索、favorites、検証付きoffline cache/health、exact-layout repair、generic verified common pack、custom builder | 商用統合catalogと復旧UXあり | ソフトウェア構造差は解消・catalog規模/live account未計測 | live Shareとcatalog-scale比較を外部実施 |

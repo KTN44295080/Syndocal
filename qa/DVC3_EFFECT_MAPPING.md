@@ -105,6 +105,18 @@ VALUE FX と COLOR MAPPINGS はユーザーの全ショーに検体なし（実�
 3. **DVC-3c（照合完了）**: MOVE FX / TYPE=8、ID 322・129・130・CURVE波形10を照合済み。
    VALUE FX / COLOR MAPPINGS はユーザーのDVCに検体がないため、既存のネイティブ実装を維持しDVC逆変換の対象外とする。
 
+4. **DVC-3d（2026-08-08、ビーム選択の厳密保持）**: CURVE FXのSinus / Inverse Ramp / Strobeと
+   CHASER FX 321 / 322 / 325は、`BEAM@FIXTURE`、`BEAMID`、最初に現れた`IDSELECTION`順を
+   `EffectBeamTarget`としてcue所有bodyへ保存する。複数セグメントRGB/RGBA灯体のDimmerは、全体Dimmerへ
+   平坦化せず、選択セグメントの現在色を同率でスケールする。単一セグメント灯体で実Dimmerがある場合は
+   従来どおりその属性を直接駆動する。旧`.sdc`はフィールド欠落を空配列として読み、通常LFOの新しい
+   スナップショットbodyは保存、プリセット化、複製、再読込でビーム列を保持する。
+
+   フル`Shinkan2026.dvc`の固定証拠は、`Bar-StrobeAMber` Curveが64 beam、BEAMID 0..7、
+   48 selectionを保持し、`Bar-Side / New Scene` Chaserが16 step / 16 beam、BEAMID 0..7を保持すること。
+   これらについてインポートレポートの`segment selection approximated to fixture`は消えた。Move FXは
+   Pan/Tiltが灯体単位のため、将来BEAMID>0のMove検体が現れた場合だけ従来の近似報告を残す。
+
 ## 実機操作の記録（正直な状態申告）
 
 2026-07-18（Shinkan2026 Desktop版）: EDITモードでのシーン選択クリック13回とキャプチャのみ。保存・GO・LIVEトグル・
@@ -161,10 +173,11 @@ ID3=Transform、ID10=Color Width、ID11=Angle、ID12=Gradient(UI=VAL×100)。MAP
 
 ### CHASER FX ID=322 = Chaser #2（SS-Blue実UI + populatedスクラッチDMX照合）
 
-Daslight UI自身が「0 Beam(s)・Features空」を表示 — このFXは原本でも空（無発光）。321系と同じ
+Daslight UI自身が「0 Beam(s)・Features空」を表示する個体は原本でも空（無発光）。321系と同じ
 無対象FXとして、ランタイムへ架空の対象やブラックアウトを作らず `source no-op` 変換記録だけを保持する。
-Shinkan2026 の Bar / New Scene (321)、SaberSpot / SS-Blue (322)、Par / Par-Chaser (321) はすべて
-`BEAMS NB="0"` を実XMLで確認済み。出力内容は原本どおり無発光で、欠損/Skippedには数えない。
+Documents版Shinkan2026の Bar / New Scene (321)、SaberSpot / SS-Blue (322)、Par / Par-Chaser (321) は
+`BEAMS NB="0"` を実XMLで確認済み。Desktopフル版にはこれらとは別に16 beamのBar-Side / New Scene (321)があり、
+DVC-3dで16 stepのビーム列として保持する。空個体は原本どおり無発光で、欠損/Skippedには数えない。
 
 2026-08-08、最大化したDaslight 5のスクラッチ `Codex-Chaser322-Probe.dvc` で4台のSaberSpotを選択し、
 Chaser #2 / Fading ONをLIVE再生してDMX Levelsを連続採取した。対象Dimmerは ch86/91/96/101。

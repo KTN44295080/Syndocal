@@ -2214,6 +2214,22 @@ pub struct ColorEffectBeamTarget {
     pub feature_attribute: Option<String>,
 }
 
+/// An explicitly authored beam/segment target for value-domain effects.
+///
+/// This is separate from `ColorEffectBeamTarget` because LFO and Chaser
+/// effects modulate an existing feature (for example a virtual Dimmer over an
+/// RGB segment) rather than replacing it with a generated colour.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EffectBeamTarget {
+    pub fixture_id: FixtureId,
+    /// Zero-based beam/segment index within the fixture profile.
+    pub beam_index: u16,
+    /// Stable source selection order. Equal values intentionally share phase.
+    pub selection_index: u32,
+    /// Authored feature being modulated, for example `Dimmer`.
+    pub feature_attribute: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ColorEffectSpatialRecipe {
     KnightRider {
@@ -2312,6 +2328,10 @@ pub struct LfoEffectRequest {
     /// Zero preserves the legacy behavior where every lighting target shares one phase.
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub fixture_spread: f32,
+    /// Optional explicit beam/segment targets. Empty preserves the legacy
+    /// fixture/group attribute path and byte shape.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub beam_targets: Vec<EffectBeamTarget>,
     pub blend_mode: EffectBlendMode,
 }
 
@@ -2349,6 +2369,10 @@ pub enum ChaserDirection {
 pub struct ChaserStep {
     pub fixture_ids: Vec<FixtureId>,
     pub target_group_ids: Vec<String>,
+    /// Optional explicit beam/segment cells for this step. Empty preserves the
+    /// original fixture/group Chaser representation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub beam_targets: Vec<EffectBeamTarget>,
     pub level: u16,
 }
 
@@ -2698,6 +2722,8 @@ pub struct EffectSummary {
     pub speed: Option<f32>,
     pub wavelength: Option<f32>,
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lfo: Option<LfoEffectRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<ColorEffectRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4080,6 +4106,12 @@ mod tests {
                 high: 60_000,
                 phase: 0.25,
                 fixture_spread: 0.5,
+                beam_targets: vec![super::EffectBeamTarget {
+                    fixture_id: 7,
+                    beam_index: 3,
+                    selection_index: 2,
+                    feature_attribute: "Dimmer".to_string(),
+                }],
                 blend_mode: super::EffectBlendMode::Override,
             })),
             transition_ms: Some(900),
@@ -4105,12 +4137,17 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("fixture_spread");
+        legacy_owned_value["params"]["Lfo"]
+            .as_object_mut()
+            .unwrap()
+            .remove("beam_targets");
         let legacy_owned: super::CueEffectTarget =
             serde_json::from_value(legacy_owned_value).unwrap();
         let Some(super::EffectParamsSnapshot::Lfo(legacy_request)) = legacy_owned.params else {
             panic!("legacy owned LFO must remain an LFO");
         };
         assert_eq!(legacy_request.fixture_spread, 0.0);
+        assert!(legacy_request.beam_targets.is_empty());
         assert!(serde_json::to_value(legacy_request)
             .unwrap()
             .get("fixture_spread")
@@ -4609,11 +4646,18 @@ mod tests {
                 super::ChaserStep {
                     fixture_ids: vec![1],
                     target_group_ids: Vec::new(),
+                    beam_targets: vec![super::EffectBeamTarget {
+                        fixture_id: 1,
+                        beam_index: 7,
+                        selection_index: 0,
+                        feature_attribute: "Dimmer".to_string(),
+                    }],
                     level: 65_535,
                 },
                 super::ChaserStep {
                     fixture_ids: vec![2],
                     target_group_ids: vec!["Front".to_string()],
+                    beam_targets: Vec::new(),
                     level: 32_768,
                 },
             ],
@@ -4660,6 +4704,14 @@ mod tests {
         let parsed: super::EffectPreset = serde_json::from_str(&json).unwrap();
 
         assert_eq!(parsed, preset);
+
+        let mut legacy_json = serde_json::to_value(&preset).unwrap();
+        legacy_json["chaser"]["steps"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("beam_targets");
+        let legacy: super::EffectPreset = serde_json::from_value(legacy_json).unwrap();
+        assert!(legacy.chaser.unwrap().steps[0].beam_targets.is_empty());
     }
 
     #[test]

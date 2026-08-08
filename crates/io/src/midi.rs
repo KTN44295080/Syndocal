@@ -2206,6 +2206,7 @@ mod tests {
                 speed: None,
                 wavelength: None,
                 enabled: true,
+                lfo: None,
                 color: None,
                 chaser: None,
                 move_effect: None,

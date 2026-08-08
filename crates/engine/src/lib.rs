@@ -35,7 +35,7 @@ use protocol::{
     CueLiveModifierState, CueNodeGraphTarget, CuePaletteTarget, CuePartSummary, CueStepSummary,
     CueSummary, CurveEffectPoint, CurveEffectRequest, DirectChildTimelineTransportSummary,
     DmxMergeMode, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, DmxOutputRouteTelemetry,
-    DmxUniversePreview, EffectBlendMode, EffectClockSync, EffectId, EffectKind,
+    DmxUniversePreview, EffectBeamTarget, EffectBlendMode, EffectClockSync, EffectId, EffectKind,
     EffectParamsSnapshot, EffectSummary, EngineSnapshot, EngineTelemetry,
     ExclusiveVideoTakeRequest, ExecutorId, FixtureId, FixtureLimits, FixtureProfileSummary,
     LfoEffectRequest, LfoShape, LiveAudioFrame, LiveAudioReactiveFeatures, MappingEffectDirection,
@@ -3173,6 +3173,9 @@ fn clear_runtime_effect_caches(kind: &RuntimeEffectKind) {
             for cache in runtime.target_level_cache.values() {
                 cache.set(None);
             }
+            for target in &runtime.beam_targets {
+                target.cache.set(None);
+            }
         }
         RuntimeEffectKind::Move(runtime) => {
             for target in &runtime.targets {
@@ -3208,12 +3211,20 @@ struct RuntimeLfoEffect {
     request: LfoEffectRequest,
     targets: Vec<RuntimeLfoTarget>,
     target_indices: HashMap<FixtureId, usize>,
+    beam_targets: Vec<RuntimeLfoBeamTarget>,
+    beam_attribute_indices: HashMap<FixtureId, HashMap<String, usize>>,
 }
 
 #[derive(Debug, Clone)]
 struct RuntimeLfoTarget {
     fixture_id: FixtureId,
     phase_offset: f32,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeLfoBeamTarget {
+    phase_offset: f32,
+    virtual_intensity: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -3484,6 +3495,8 @@ struct RuntimeChaserEffect {
     target_level_cache: HashMap<FixtureId, Cell<Option<RuntimeChaserEvaluation>>>,
     feature_indices: HashMap<String, usize>,
     feature_fixture_ids: Vec<Vec<FixtureId>>,
+    beam_targets: Vec<RuntimeChaserBeamTarget>,
+    beam_attribute_indices: HashMap<FixtureId, HashMap<String, usize>>,
 }
 
 #[derive(Debug, Clone)]
@@ -3496,6 +3509,15 @@ struct RuntimeChaserStep {
 struct RuntimeChaserEvaluation {
     at: Instant,
     normalized_level: f32,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeChaserBeamTarget {
+    phase_offset: f32,
+    step_levels: Vec<u16>,
+    feature_index: usize,
+    virtual_intensity: bool,
+    cache: Cell<Option<RuntimeChaserEvaluation>>,
 }
 
 #[derive(Clone)]
@@ -10632,6 +10654,10 @@ impl EngineRuntime {
         self.effects.retain_mut(|effect| match &mut effect.kind {
             RuntimeEffectKind::Lfo(runtime) => {
                 runtime.request.fixture_ids.retain(|id| *id != fixture_id);
+                runtime
+                    .request
+                    .beam_targets
+                    .retain(|target| target.fixture_id != fixture_id);
                 !runtime.request.fixture_ids.is_empty()
                     || !runtime.request.target_group_ids.is_empty()
                     || !runtime.request.video_targets.is_empty()
@@ -10650,12 +10676,14 @@ impl EngineRuntime {
             RuntimeEffectKind::Chaser(runtime) => {
                 for step in &mut runtime.request.steps {
                     step.fixture_ids.retain(|id| *id != fixture_id);
+                    step.beam_targets
+                        .retain(|target| target.fixture_id != fixture_id);
                 }
-                runtime
-                    .request
-                    .steps
-                    .iter()
-                    .any(|step| !step.fixture_ids.is_empty() || !step.target_group_ids.is_empty())
+                runtime.request.steps.iter().any(|step| {
+                    !step.fixture_ids.is_empty()
+                        || !step.target_group_ids.is_empty()
+                        || !step.beam_targets.is_empty()
+                })
             }
             RuntimeEffectKind::Move(runtime) => {
                 runtime.request.fixture_ids.retain(|id| *id != fixture_id);
@@ -14156,11 +14184,22 @@ impl EngineRuntime {
         mut request: LfoEffectRequest,
     ) -> Result<RuntimeLfoEffect, String> {
         validate_lfo_effect_request(&request)?;
-        let light_attribute = self.resolve_effect_light_targets(
-            &mut request.fixture_ids,
-            &mut request.target_group_ids,
-            &request.attribute,
-        )?;
+        let light_attribute = if request.beam_targets.is_empty() {
+            self.resolve_effect_light_targets(
+                &mut request.fixture_ids,
+                &mut request.target_group_ids,
+                &request.attribute,
+            )?
+        } else {
+            request.fixture_ids = self.normalize_effect_fixture_ids(request.fixture_ids)?;
+            request.target_group_ids = normalize_runtime_group_ids(request.target_group_ids)?;
+            if !request.target_group_ids.is_empty() {
+                return Err(
+                    "Explicit LFO beam targets cannot be combined with fixture groups".to_string(),
+                );
+            }
+            None
+        };
         request.video_targets = self.resolve_video_effect_targets(request.video_targets)?;
         if let Some(attribute) = light_attribute {
             request.attribute = attribute;
@@ -14173,7 +14212,7 @@ impl EngineRuntime {
                 "Effect must target at least one fixture, group, or video layer".to_string(),
             );
         }
-        Ok(runtime_lfo_effect_from_request(request, &self.fixtures))
+        runtime_lfo_effect_from_request(request, &self.fixtures)
     }
 
     fn rebuild_lfo_effect_targets(&mut self) {
@@ -14182,7 +14221,11 @@ impl EngineRuntime {
             let RuntimeEffectKind::Lfo(runtime) = &mut effect.kind else {
                 return true;
             };
-            *runtime = runtime_lfo_effect_from_request(runtime.request.clone(), fixtures);
+            let Ok(next) = runtime_lfo_effect_from_request(runtime.request.clone(), fixtures)
+            else {
+                return false;
+            };
+            *runtime = next;
             !runtime.targets.is_empty()
                 || !runtime.request.target_group_ids.is_empty()
                 || !runtime.request.video_targets.is_empty()
@@ -14264,6 +14307,21 @@ impl EngineRuntime {
                     target_fixture_ids.push(*fixture_id);
                 }
             }
+            for target in &step.beam_targets {
+                if !self
+                    .fixtures
+                    .iter()
+                    .any(|fixture| fixture.id == target.fixture_id)
+                {
+                    return Err(format!(
+                        "Chaser beam target fixture {} was not found",
+                        target.fixture_id
+                    ));
+                }
+                if seen_targets.insert(target.fixture_id) {
+                    target_fixture_ids.push(target.fixture_id);
+                }
+            }
             for group_id in &step.target_group_ids {
                 has_group_reference = true;
                 let group_fixture_ids = self.fixture_ids_in_group(group_id);
@@ -14292,6 +14350,12 @@ impl EngineRuntime {
         let mut has_unresolved_feature = false;
         for feature in &mut request.features {
             let requested_attribute = feature.attribute.clone();
+            let has_beam_feature = request.steps.iter().any(|step| {
+                step.beam_targets.iter().any(|target| {
+                    normalize_chaser_attribute(&target.feature_attribute)
+                        == normalize_chaser_attribute(&requested_attribute)
+                })
+            });
             let mut canonical_attribute: Option<String> = None;
             for fixture_id in &target_fixture_ids {
                 let Some(fixture) = self
@@ -14316,6 +14380,8 @@ impl EngineRuntime {
                     canonical_attribute = Some(resolved.to_string());
                 }
             }
+            let canonical_attribute = canonical_attribute
+                .or_else(|| has_beam_feature.then(|| requested_attribute.trim().to_string()));
             let Some(canonical_attribute) = canonical_attribute else {
                 if allow_unresolved_groups && has_group_reference {
                     has_unresolved_feature = true;
@@ -14684,7 +14750,9 @@ impl EngineRuntime {
             match runtime_chaser_effect_from_request(runtime.request.clone(), fixtures, false) {
                 Ok(rebuilt) => {
                     *runtime = rebuilt;
-                    !runtime.target_phase_offsets.is_empty() || has_group_reference
+                    !runtime.target_phase_offsets.is_empty()
+                        || !runtime.beam_targets.is_empty()
+                        || has_group_reference
                 }
                 Err(_) => has_group_reference,
             }
@@ -22960,18 +23028,42 @@ fn apply_runtime_effect_to_attribute(
             };
             next.unwrap_or(base_value)
         }
-        RuntimeEffectKind::Lfo(runtime) => evaluate_runtime_lfo_attribute_at_rate(
-            runtime,
-            fixture.id,
-            attribute,
-            base_value,
-            effect.created_at,
-            now,
-            clock,
-            rate,
-        )
-        .map(|evaluated| blend_effect_value(base_value, evaluated, &runtime.request.blend_mode))
-        .unwrap_or(base_value),
+        RuntimeEffectKind::Lfo(runtime) => {
+            if runtime.request.beam_targets.is_empty() {
+                evaluate_runtime_lfo_attribute_at_rate(
+                    runtime,
+                    fixture.id,
+                    attribute,
+                    base_value,
+                    effect.created_at,
+                    now,
+                    clock,
+                    rate,
+                )
+                .map(|evaluated| {
+                    blend_effect_value(base_value, evaluated, &runtime.request.blend_mode)
+                })
+                .unwrap_or(base_value)
+            } else {
+                evaluate_runtime_lfo_beam_attribute_at_rate(
+                    runtime,
+                    fixture.id,
+                    attribute,
+                    effect.created_at,
+                    now,
+                    clock,
+                    rate,
+                )
+                .map(|(evaluated, virtual_intensity)| {
+                    if virtual_intensity {
+                        scale_u16(base_value, evaluated as f32 / u16::MAX as f32)
+                    } else {
+                        blend_effect_value(base_value, evaluated, &runtime.request.blend_mode)
+                    }
+                })
+                .unwrap_or(base_value)
+            }
+        }
         RuntimeEffectKind::PositionWave(request) => {
             if effect_targets_fixture_attribute(effect, fixture, attribute) {
                 blend_effect_value(
@@ -22991,6 +23083,29 @@ fn apply_runtime_effect_to_attribute(
             }
         }
         RuntimeEffectKind::Chaser(runtime) => {
+            if let Some(target_index) = runtime
+                .beam_attribute_indices
+                .get(&fixture.id)
+                .and_then(|attributes| attributes.get(attribute))
+                .copied()
+            {
+                return evaluate_chaser_beam_effect_at_rate(
+                    runtime,
+                    target_index,
+                    effect.created_at,
+                    now,
+                    clock,
+                    rate,
+                )
+                .map(|(evaluated, virtual_intensity)| {
+                    if virtual_intensity {
+                        scale_u16(base_value, evaluated as f32 / u16::MAX as f32)
+                    } else {
+                        blend_effect_value(base_value, evaluated, &runtime.request.blend_mode)
+                    }
+                })
+                .unwrap_or(base_value);
+            }
             let Some(feature_index) = runtime.feature_indices.get(attribute) else {
                 return base_value;
             };
@@ -23124,8 +23239,15 @@ fn effect_targets_fixture_attribute(
 ) -> bool {
     match &effect.kind {
         RuntimeEffectKind::Lfo(runtime) => {
-            runtime.request.attribute.eq_ignore_ascii_case(attribute)
-                && runtime.target_indices.contains_key(&fixture.id)
+            if runtime.request.beam_targets.is_empty() {
+                runtime.request.attribute.eq_ignore_ascii_case(attribute)
+                    && runtime.target_indices.contains_key(&fixture.id)
+            } else {
+                runtime
+                    .beam_attribute_indices
+                    .get(&fixture.id)
+                    .is_some_and(|attributes| attributes.contains_key(attribute))
+            }
         }
         RuntimeEffectKind::PositionWave(request) => {
             request.attribute.eq_ignore_ascii_case(attribute)
@@ -23819,6 +23941,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             speed: None,
             wavelength: None,
             enabled: effect.enabled,
+            lfo: Some(runtime.request.clone()),
             color: None,
             chaser: None,
             move_effect: None,
@@ -23848,6 +23971,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             speed: Some(request.speed),
             wavelength: Some(request.wavelength),
             enabled: effect.enabled,
+            lfo: None,
             color: None,
             chaser: None,
             move_effect: None,
@@ -23877,6 +24001,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             speed: None,
             wavelength: None,
             enabled: effect.enabled,
+            lfo: None,
             color: Some(runtime.request.clone()),
             chaser: None,
             move_effect: None,
@@ -23894,6 +24019,11 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
                 for fixture_id in &step.fixture_ids {
                     if seen_fixtures.insert(*fixture_id) {
                         fixture_ids.push(*fixture_id);
+                    }
+                }
+                for target in &step.beam_targets {
+                    if seen_fixtures.insert(target.fixture_id) {
+                        fixture_ids.push(target.fixture_id);
                     }
                 }
                 for group_id in &step.target_group_ids {
@@ -23926,6 +24056,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
                 speed: None,
                 wavelength: None,
                 enabled: effect.enabled,
+                lfo: None,
                 color: None,
                 chaser: Some(runtime.request.clone()),
                 move_effect: None,
@@ -23956,6 +24087,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             speed: None,
             wavelength: None,
             enabled: effect.enabled,
+            lfo: None,
             color: None,
             chaser: None,
             move_effect: Some(runtime.request.clone()),
@@ -23985,6 +24117,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             speed: None,
             wavelength: None,
             enabled: effect.enabled,
+            lfo: None,
             color: None,
             chaser: None,
             move_effect: None,
@@ -24014,6 +24147,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             speed: None,
             wavelength: None,
             enabled: effect.enabled,
+            lfo: None,
             color: None,
             chaser: None,
             move_effect: None,
@@ -24043,6 +24177,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             speed: None,
             wavelength: None,
             enabled: effect.enabled,
+            lfo: None,
             color: None,
             chaser: None,
             move_effect: None,
@@ -24072,6 +24207,7 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
             speed: None,
             wavelength: None,
             enabled: effect.enabled,
+            lfo: None,
             color: None,
             chaser: None,
             move_effect: None,
@@ -24085,25 +24221,35 @@ fn effect_summary(effect: &RuntimeEffect) -> EffectSummary {
 
 fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<RuntimeEffect> {
     let kind = match effect.effect_type {
-        EffectKind::Lfo => RuntimeEffectKind::Lfo(RuntimeLfoEffect {
-            request: LfoEffectRequest {
-                label: effect.label.clone(),
-                fixture_ids: effect.fixture_ids.clone(),
-                target_group_ids: effect.target_group_ids.clone(),
-                attribute: effect.attribute.clone(),
-                video_targets: effect.video_targets.clone(),
-                shape: effect.shape.clone(),
-                period_ms: effect.period_ms?,
-                clock_sync: effect.clock_sync,
-                low: effect.low,
-                high: effect.high,
-                phase: effect.phase,
-                fixture_spread: effect.fixture_spread,
-                blend_mode: effect.blend_mode.clone(),
-            },
-            targets: Vec::new(),
-            target_indices: HashMap::new(),
-        }),
+        EffectKind::Lfo => {
+            let request = if let Some(request) = &effect.lfo {
+                request.clone()
+            } else {
+                LfoEffectRequest {
+                    label: effect.label.clone(),
+                    fixture_ids: effect.fixture_ids.clone(),
+                    target_group_ids: effect.target_group_ids.clone(),
+                    attribute: effect.attribute.clone(),
+                    video_targets: effect.video_targets.clone(),
+                    shape: effect.shape.clone(),
+                    period_ms: effect.period_ms?,
+                    clock_sync: effect.clock_sync,
+                    low: effect.low,
+                    high: effect.high,
+                    phase: effect.phase,
+                    fixture_spread: effect.fixture_spread,
+                    beam_targets: Vec::new(),
+                    blend_mode: effect.blend_mode.clone(),
+                }
+            };
+            RuntimeEffectKind::Lfo(RuntimeLfoEffect {
+                request,
+                targets: Vec::new(),
+                target_indices: HashMap::new(),
+                beam_targets: Vec::new(),
+                beam_attribute_indices: HashMap::new(),
+            })
+        }
         EffectKind::PositionWave => RuntimeEffectKind::PositionWave(PositionWaveEffectRequest {
             label: effect.label.clone(),
             fixture_ids: effect.fixture_ids.clone(),
@@ -24135,6 +24281,8 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
             target_level_cache: HashMap::new(),
             feature_indices: HashMap::new(),
             feature_fixture_ids: Vec::new(),
+            beam_targets: Vec::new(),
+            beam_attribute_indices: HashMap::new(),
         }),
         EffectKind::Move => {
             let request = effect.move_effect.clone()?;
@@ -24212,13 +24360,28 @@ fn validate_lfo_effect_request(request: &LfoEffectRequest) -> Result<(), String>
     if !(0.0..=1.0).contains(&request.fixture_spread) {
         return Err("LFO effect fixture spread must be within 0..1".to_string());
     }
+    if request.beam_targets.len() > 4_096 {
+        return Err("LFO effect cannot target more than 4096 beams".to_string());
+    }
+    let mut beam_targets = HashSet::new();
+    for target in &request.beam_targets {
+        if target.feature_attribute.trim().is_empty() {
+            return Err("LFO beam target feature is required".to_string());
+        }
+        if !beam_targets.insert((target.fixture_id, target.beam_index)) {
+            return Err(format!(
+                "LFO beam target fixture {} segment {} is duplicated",
+                target.fixture_id, target.beam_index
+            ));
+        }
+    }
     Ok(())
 }
 
 fn runtime_lfo_effect_from_request(
     request: LfoEffectRequest,
     fixtures: &[RuntimeFixture],
-) -> RuntimeLfoEffect {
+) -> Result<RuntimeLfoEffect, String> {
     let mut fixture_ids = Vec::new();
     let mut seen = HashSet::new();
     for fixture_id in &request.fixture_ids {
@@ -24253,11 +24416,104 @@ fn runtime_lfo_effect_from_request(
         .enumerate()
         .map(|(index, target)| (target.fixture_id, index))
         .collect();
-    RuntimeLfoEffect {
+    let mut beam_targets = Vec::new();
+    let mut beam_attribute_indices = HashMap::<FixtureId, HashMap<String, usize>>::new();
+    if !request.beam_targets.is_empty() {
+        let mut selections = request
+            .beam_targets
+            .iter()
+            .map(|target| target.selection_index)
+            .collect::<Vec<_>>();
+        selections.sort_unstable();
+        selections.dedup();
+        let selection_count = selections.len().max(1) as f32;
+        for target in &request.beam_targets {
+            if !request.fixture_ids.contains(&target.fixture_id) {
+                return Err(format!(
+                    "LFO beam target fixture {} is not present in the resolved fixture targets",
+                    target.fixture_id
+                ));
+            }
+            let fixture = fixtures
+                .iter()
+                .find(|fixture| fixture.id == target.fixture_id)
+                .ok_or_else(|| {
+                    format!(
+                        "LFO beam target fixture {} was not found",
+                        target.fixture_id
+                    )
+                })?;
+            let (attributes, virtual_intensity) =
+                runtime_effect_beam_intensity_attributes(fixture, target)?;
+            let selection_rank = selections
+                .binary_search(&target.selection_index)
+                .unwrap_or_default();
+            let target_index = beam_targets.len();
+            for attribute in attributes {
+                if beam_attribute_indices
+                    .entry(target.fixture_id)
+                    .or_default()
+                    .insert(attribute.clone(), target_index)
+                    .is_some()
+                {
+                    return Err(format!(
+                        "LFO beam target fixture {} maps attribute '{}' more than once",
+                        target.fixture_id, attribute
+                    ));
+                }
+            }
+            beam_targets.push(RuntimeLfoBeamTarget {
+                phase_offset: selection_rank as f32 / selection_count * request.fixture_spread,
+                virtual_intensity,
+            });
+        }
+    }
+    Ok(RuntimeLfoEffect {
         request,
         targets,
         target_indices,
-    }
+        beam_targets,
+        beam_attribute_indices,
+    })
+}
+
+fn runtime_effect_beam_intensity_attributes(
+    fixture: &RuntimeFixture,
+    target: &EffectBeamTarget,
+) -> Result<(Vec<String>, bool), String> {
+    let controls = &fixture.profile.dmx_modes[fixture.mode_index].controls;
+    let segment_bindings = compile_runtime_color_segment_bindings(controls);
+    let feature_attribute = controls
+        .iter()
+        .find(|control| {
+            normalize_chaser_attribute(&control.attribute)
+                == normalize_chaser_attribute(&target.feature_attribute)
+        })
+        .map(|control| control.attribute.clone());
+    let segment_attributes = segment_bindings
+        .get(target.beam_index as usize)
+        .or_else(|| {
+            (target.beam_index == 0)
+                .then(|| fixture.color_binding.as_ref())
+                .flatten()
+        })
+        .map(|binding| binding.outputs.keys().cloned().collect::<Vec<_>>())
+        .filter(|attributes| !attributes.is_empty());
+    let resolved = if segment_bindings.len() <= 1 {
+        feature_attribute
+            .map(|attribute| (vec![attribute], false))
+            .or_else(|| segment_attributes.map(|attributes| (attributes, true)))
+    } else {
+        segment_attributes
+            .map(|attributes| (attributes, true))
+            .or_else(|| feature_attribute.map(|attribute| (vec![attribute], false)))
+    };
+    resolved.ok_or_else(|| {
+        format!(
+            "Effect beam target fixture {} has no segment {} or feature '{}'",
+            target.fixture_id, target.beam_index, target.feature_attribute
+        )
+    })
 }
 
 fn validate_runtime_color_effect_request(request: &ColorEffectRequest) -> Result<(), String> {
@@ -25891,12 +26147,43 @@ pub fn validate_chaser_effect_request(request: &ChaserEffectRequest) -> Result<(
             "Chaser effect requires between {minimum_steps} and 256 steps for the selected direction"
         ));
     }
-    if !request
+    if !request.steps.iter().any(|step| {
+        !step.fixture_ids.is_empty()
+            || !step.target_group_ids.is_empty()
+            || !step.beam_targets.is_empty()
+    }) {
+        return Err("Chaser effect must target at least one fixture, group, or beam".to_string());
+    }
+    let feature_attributes = request
+        .features
+        .iter()
+        .map(|feature| normalize_chaser_attribute(&feature.attribute))
+        .collect::<HashSet<_>>();
+    let total_beam_targets = request
         .steps
         .iter()
-        .any(|step| !step.fixture_ids.is_empty() || !step.target_group_ids.is_empty())
-    {
-        return Err("Chaser effect must target at least one fixture or group".to_string());
+        .map(|step| step.beam_targets.len())
+        .sum::<usize>();
+    if total_beam_targets > 4_096 {
+        return Err("Chaser effect cannot target more than 4096 beam cells".to_string());
+    }
+    for step in &request.steps {
+        let mut seen = HashSet::new();
+        for target in &step.beam_targets {
+            let feature = normalize_chaser_attribute(&target.feature_attribute);
+            if feature.is_empty() || !feature_attributes.contains(&feature) {
+                return Err(format!(
+                    "Chaser beam target feature '{}' is not present in the Chaser feature list",
+                    target.feature_attribute
+                ));
+            }
+            if !seen.insert((target.fixture_id, target.beam_index, feature)) {
+                return Err(format!(
+                    "Chaser step duplicates fixture {} segment {} feature '{}'",
+                    target.fixture_id, target.beam_index, target.feature_attribute
+                ));
+            }
+        }
     }
     if request.step_duration_ms < 10 {
         return Err("Chaser effect step duration must be at least 10 ms".to_string());
@@ -25989,7 +26276,11 @@ fn runtime_chaser_effect_from_request(
             }
         })
         .collect::<Vec<_>>();
-    if require_resolved_target && target_order.is_empty() {
+    let has_beam_targets = request
+        .steps
+        .iter()
+        .any(|step| !step.beam_targets.is_empty());
+    if require_resolved_target && target_order.is_empty() && !has_beam_targets {
         return Err("Chaser effect targets resolve to no fixtures".to_string());
     }
     let step_order = chaser_step_order(request.direction, request.steps.len(), request.random_seed);
@@ -26040,10 +26331,80 @@ fn runtime_chaser_effect_from_request(
             fixture_ids
         })
         .collect::<Vec<_>>();
+    let mut beam_targets = Vec::<RuntimeChaserBeamTarget>::new();
+    let mut beam_target_indices = HashMap::<(FixtureId, u16, String), usize>::new();
+    let mut beam_attribute_indices = HashMap::<FixtureId, HashMap<String, usize>>::new();
+    for (step_index, step) in request.steps.iter().enumerate() {
+        for target in &step.beam_targets {
+            let normalized_feature = normalize_chaser_attribute(&target.feature_attribute);
+            let feature_index = request
+                .features
+                .iter()
+                .position(|feature| {
+                    normalize_chaser_attribute(&feature.attribute) == normalized_feature
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "Chaser beam target feature '{}' was not found",
+                        target.feature_attribute
+                    )
+                })?;
+            let key = (target.fixture_id, target.beam_index, normalized_feature);
+            let target_index = if let Some(index) = beam_target_indices.get(&key).copied() {
+                index
+            } else {
+                let fixture = fixtures
+                    .iter()
+                    .find(|fixture| fixture.id == target.fixture_id)
+                    .ok_or_else(|| {
+                        format!(
+                            "Chaser beam target fixture {} was not found",
+                            target.fixture_id
+                        )
+                    })?;
+                let (attributes, virtual_intensity) =
+                    runtime_effect_beam_intensity_attributes(fixture, target)?;
+                let index = beam_targets.len();
+                for attribute in attributes {
+                    if beam_attribute_indices
+                        .entry(target.fixture_id)
+                        .or_default()
+                        .insert(attribute.clone(), index)
+                        .is_some()
+                    {
+                        return Err(format!(
+                            "Chaser beam target fixture {} maps attribute '{}' more than once",
+                            target.fixture_id, attribute
+                        ));
+                    }
+                }
+                beam_targets.push(RuntimeChaserBeamTarget {
+                    phase_offset: 0.0,
+                    step_levels: vec![0; steps.len()],
+                    feature_index,
+                    virtual_intensity,
+                    cache: Cell::new(None),
+                });
+                beam_target_indices.insert(key, index);
+                index
+            };
+            beam_targets[target_index].step_levels[step_index] = step.level;
+        }
+    }
+    let beam_target_count = beam_targets.len().max(1) as f32;
+    for (index, target) in beam_targets.iter_mut().enumerate() {
+        target.phase_offset = index as f32 / beam_target_count * request.fixture_spread * path_len;
+    }
     if require_resolved_target
         && feature_fixture_ids
             .iter()
-            .any(|fixture_ids| fixture_ids.is_empty())
+            .enumerate()
+            .any(|(feature_index, fixture_ids)| {
+                fixture_ids.is_empty()
+                    && !beam_targets
+                        .iter()
+                        .any(|target| target.feature_index == feature_index)
+            })
     {
         return Err("Each Chaser feature must resolve on at least one target fixture".to_string());
     }
@@ -26055,6 +26416,8 @@ fn runtime_chaser_effect_from_request(
         target_level_cache,
         feature_indices,
         feature_fixture_ids,
+        beam_targets,
+        beam_attribute_indices,
     })
 }
 
@@ -28090,6 +28453,36 @@ fn evaluate_runtime_lfo_attribute_at_rate(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn evaluate_runtime_lfo_beam_attribute_at_rate(
+    runtime: &RuntimeLfoEffect,
+    fixture_id: FixtureId,
+    attribute: &str,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> Option<(u16, bool)> {
+    let target = runtime
+        .beam_attribute_indices
+        .get(&fixture_id)
+        .and_then(|attributes| attributes.get(attribute))
+        .and_then(|index| runtime.beam_targets.get(*index))?;
+    let value = scale_effect_u16_directed(
+        runtime.request.low,
+        runtime.request.high,
+        evaluate_lfo_effect_normalized_with_offset(
+            &runtime.request,
+            target.phase_offset,
+            created_at,
+            now,
+            clock,
+            rate,
+        ),
+    );
+    Some((value, target.virtual_intensity))
+}
+
 #[cfg(test)]
 #[allow(dead_code)]
 fn evaluate_lfo_video_effect(
@@ -28354,14 +28747,11 @@ fn chaser_slot_weights(fraction: f64, duty_cycle: f32, overlap: f32) -> (f32, f3
     }
 }
 
-fn chaser_block_level(
+fn chaser_block_level_for_steps(
     runtime: &RuntimeChaserEffect,
-    fixture_id: FixtureId,
+    step_levels: &[u16],
     absolute_slot: i64,
 ) -> u16 {
-    let Some(step_levels) = runtime.target_step_levels.get(&fixture_id) else {
-        return 0;
-    };
     if runtime.step_order.is_empty() {
         return 0;
     }
@@ -28388,16 +28778,13 @@ fn chaser_block_level(
     level
 }
 
-fn chaser_build_up_down_level(
+fn chaser_build_up_down_level_for_steps(
     runtime: &RuntimeChaserEffect,
-    fixture_id: FixtureId,
+    step_levels: &[u16],
     absolute_slot: i64,
     current_weight: f32,
     next_weight: f32,
 ) -> f32 {
-    let Some(step_levels) = runtime.target_step_levels.get(&fixture_id) else {
-        return 0.0;
-    };
     let step_count = runtime.step_order.len();
     if step_count == 0 {
         return 0.0;
@@ -28491,6 +28878,64 @@ fn evaluate_chaser_effect_normalized(
     let Some(cache) = runtime.target_level_cache.get(&fixture_id) else {
         return 0.0;
     };
+    let Some(step_levels) = runtime.target_step_levels.get(&fixture_id) else {
+        return 0.0;
+    };
+    let phase_offset = runtime
+        .target_phase_offsets
+        .get(&fixture_id)
+        .copied()
+        .unwrap_or(0.0);
+    evaluate_chaser_target_normalized(
+        runtime,
+        phase_offset,
+        step_levels,
+        cache,
+        created_at,
+        now,
+        clock,
+        rate,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_chaser_beam_effect_at_rate(
+    runtime: &RuntimeChaserEffect,
+    target_index: usize,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> Option<(u16, bool)> {
+    let target = runtime.beam_targets.get(target_index)?;
+    let feature = runtime.request.features.get(target.feature_index)?;
+    let normalized_level = evaluate_chaser_target_normalized(
+        runtime,
+        target.phase_offset,
+        &target.step_levels,
+        &target.cache,
+        created_at,
+        now,
+        clock,
+        rate,
+    );
+    Some((
+        scale_effect_u16(feature.low, feature.high, normalized_level),
+        target.virtual_intensity,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_chaser_target_normalized(
+    runtime: &RuntimeChaserEffect,
+    phase_offset: f32,
+    step_levels: &[u16],
+    cache: &Cell<Option<RuntimeChaserEvaluation>>,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> f32 {
     if let Some(cached) = cache.get().filter(|cached| cached.at == now) {
         return cached.normalized_level;
     }
@@ -28503,12 +28948,8 @@ fn evaluate_chaser_effect_normalized(
         elapsed_ms * rate / runtime.request.step_duration_ms.max(10) as f64
     };
     let path_len = chaser_cycle_len(runtime.request.direction, runtime.step_order.len());
-    let fixture_offset = runtime
-        .target_phase_offsets
-        .get(&fixture_id)
-        .copied()
-        .unwrap_or(0.0) as f64;
-    let cursor = step_position + runtime.request.phase as f64 * path_len as f64 + fixture_offset;
+    let cursor =
+        step_position + runtime.request.phase as f64 * path_len as f64 + f64::from(phase_offset);
     let absolute_slot = cursor.floor() as i64;
     let fraction = cursor.rem_euclid(1.0);
     let (current_weight, next_weight) = chaser_slot_weights(
@@ -28522,16 +28963,18 @@ fn evaluate_chaser_effect_normalized(
         let wing_offset = (wing * path_len) / wing_count;
         let wing_slot = absolute_slot + wing_offset as i64;
         if runtime.request.direction == ChaserDirection::BuildUpDown {
-            normalized_level = normalized_level.max(chaser_build_up_down_level(
+            normalized_level = normalized_level.max(chaser_build_up_down_level_for_steps(
                 runtime,
-                fixture_id,
+                step_levels,
                 wing_slot,
                 current_weight,
                 next_weight,
             ));
         } else {
-            let current = chaser_block_level(runtime, fixture_id, wing_slot) as f32 / 65_535.0;
-            let next = chaser_block_level(runtime, fixture_id, wing_slot + 1) as f32 / 65_535.0;
+            let current =
+                chaser_block_level_for_steps(runtime, step_levels, wing_slot) as f32 / 65_535.0;
+            let next =
+                chaser_block_level_for_steps(runtime, step_levels, wing_slot + 1) as f32 / 65_535.0;
             normalized_level = normalized_level.max(current * current_weight + next * next_weight);
         }
     }
@@ -31290,6 +31733,7 @@ mod tests {
                     high: u16::MAX,
                     phase: 0.0,
                     fixture_spread: 0.0,
+                    beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                 },
             });
@@ -31635,6 +32079,7 @@ mod tests {
             high,
             phase,
             fixture_spread: 0.0,
+            beam_targets: Vec::new(),
             blend_mode,
         }
     }
@@ -33156,6 +33601,7 @@ mod tests {
                 speed: None,
                 wavelength: None,
                 enabled: false,
+                lfo: None,
                 color: None,
                 chaser: None,
                 move_effect: None,
@@ -34646,6 +35092,7 @@ mod tests {
                     speed: None,
                     wavelength: None,
                     enabled: true,
+                    lfo: None,
                     color: None,
                     chaser: None,
                     move_effect: None,
@@ -34675,6 +35122,7 @@ mod tests {
                     speed: None,
                     wavelength: None,
                     enabled: true,
+                    lfo: None,
                     color: None,
                     chaser: None,
                     move_effect: None,
@@ -34704,6 +35152,7 @@ mod tests {
                     speed: None,
                     wavelength: None,
                     enabled: true,
+                    lfo: None,
                     color: None,
                     chaser: None,
                     move_effect: None,
@@ -34895,6 +35344,7 @@ mod tests {
                     speed: None,
                     wavelength: None,
                     enabled: true,
+                    lfo: None,
                     color: None,
                     chaser: None,
                     move_effect: None,
@@ -34924,6 +35374,7 @@ mod tests {
                     speed: None,
                     wavelength: None,
                     enabled: true,
+                    lfo: None,
                     color: None,
                     chaser: None,
                     move_effect: None,
@@ -36128,6 +36579,7 @@ mod tests {
                     high: 65_535,
                     phase: 0.0,
                     fixture_spread: 0.0,
+                    beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -36572,6 +37024,7 @@ mod tests {
                     high: u16::MAX,
                     phase: 0.0,
                     fixture_spread: 0.0,
+                    beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -46412,6 +46865,7 @@ mod tests {
                     high: 65_535,
                     phase: 0.25,
                     fixture_spread: 0.0,
+                    beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -46724,6 +47178,7 @@ mod tests {
                     high: u16::MAX,
                     phase: 0.0,
                     fixture_spread: 0.0,
+                    beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -47266,6 +47721,7 @@ mod tests {
                     high: 65_535,
                     phase: 0.25,
                     fixture_spread: 0.0,
+                    beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -47306,6 +47762,7 @@ mod tests {
                     high: 65_535,
                     phase: 0.25,
                     fixture_spread: 0.0,
+                    beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -47371,6 +47828,7 @@ mod tests {
                     high: 65_535,
                     phase: 0.0,
                     fixture_spread: 0.0,
+                    beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -47408,6 +47866,7 @@ mod tests {
                     high: 65_535,
                     phase: 0.0,
                     fixture_spread: 0.0,
+                    beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -47444,6 +47903,7 @@ mod tests {
                     high: 65_535,
                     phase: 0.0,
                     fixture_spread: 0.0,
+                    beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -47509,6 +47969,7 @@ mod tests {
                     high: 65_535,
                     phase: 0.25,
                     fixture_spread: 0.0,
+                    beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -47551,6 +48012,7 @@ mod tests {
                     high: 65_535,
                     phase: 0.25,
                     fixture_spread: 0.0,
+                    beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -47681,6 +48143,7 @@ mod tests {
                     high: 65_535,
                     phase: 0.25,
                     fixture_spread: 0.0,
+                    beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -47770,6 +48233,7 @@ mod tests {
                     high: 65_535,
                     phase: 0.25,
                     fixture_spread: 0.0,
+                    beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -47852,6 +48316,7 @@ mod tests {
                     high: 65_535,
                     phase: 0.25,
                     fixture_spread: 0.0,
+                    beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -47924,6 +48389,7 @@ mod tests {
                     high: 65_535,
                     phase: 0.25,
                     fixture_spread: 0.0,
+                    beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -48317,6 +48783,7 @@ mod tests {
                     high: 65_535,
                     phase: 0.25,
                     fixture_spread: 0.0,
+                    beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -48405,6 +48872,7 @@ mod tests {
                     high: 65_535,
                     phase: 0.25,
                     fixture_spread: 0.0,
+                    beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -48475,6 +48943,7 @@ mod tests {
                     high: 65_535,
                     phase: 0.25,
                     fixture_spread: 0.0,
+                    beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -48559,6 +49028,7 @@ mod tests {
                         high: low,
                         phase: 0.0,
                         fixture_spread: 0.0,
+                        beam_targets: Vec::new(),
                         blend_mode: EffectBlendMode::Override,
                     },
                 })
@@ -48601,6 +49071,7 @@ mod tests {
                     high: 5_000,
                     phase: 0.25,
                     fixture_spread: 0.0,
+                    beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Add,
                 },
             })
@@ -48823,6 +49294,7 @@ mod tests {
                         high: low,
                         phase: 0.0,
                         fixture_spread: 0.0,
+                        beam_targets: Vec::new(),
                         blend_mode,
                     },
                 })
@@ -48917,6 +49389,7 @@ mod tests {
                     high: 65_535,
                     phase: 0.25,
                     fixture_spread: 0.0,
+                    beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                 },
             })
@@ -49353,6 +49826,7 @@ mod tests {
             high: 65_535,
             phase: 0.0,
             fixture_spread: 0.0,
+            beam_targets: Vec::new(),
             blend_mode: EffectBlendMode::Override,
         };
         let clock = ClockSnapshot {
@@ -49409,6 +49883,7 @@ mod tests {
                 high: u16::MAX,
                 phase: 0.0,
                 fixture_spread: 0.75,
+                beam_targets: Vec::new(),
                 blend_mode: EffectBlendMode::Override,
             },
         });
@@ -50220,6 +50695,187 @@ mod tests {
             bindings[1].outputs.get("ColorAmber 2"),
             Some(RuntimeColorOutput::Zero)
         ));
+    }
+
+    #[test]
+    fn lfo_beam_target_scales_only_the_selected_rgba_segment() {
+        let controls = vec![
+            test_color_control("Dimmer", 1),
+            test_color_control("ColorRed", 2),
+            test_color_control("ColorGreen", 3),
+            test_color_control("ColorBlue", 4),
+            test_color_control("ColorAmber", 5),
+            test_color_control("ColorRed 2", 6),
+            test_color_control("ColorGreen 2", 7),
+            test_color_control("ColorBlue 2", 8),
+            test_color_control("ColorAmber 2", 9),
+        ];
+        let fixture = test_runtime_color_fixture(1, Vec::new(), controls);
+        let request = LfoEffectRequest {
+            label: "Daslight segment sinus".to_string(),
+            fixture_ids: vec![1],
+            target_group_ids: Vec::new(),
+            attribute: "Dimmer".to_string(),
+            video_targets: Vec::new(),
+            shape: LfoShape::Saw,
+            period_ms: 1_000,
+            clock_sync: None,
+            low: 0,
+            high: u16::MAX,
+            phase: 0.5,
+            fixture_spread: 0.0,
+            beam_targets: vec![EffectBeamTarget {
+                fixture_id: 1,
+                beam_index: 1,
+                selection_index: 0,
+                feature_attribute: "Dimmer".to_string(),
+            }],
+            blend_mode: EffectBlendMode::Override,
+        };
+        let now = Instant::now();
+        let effect = RuntimeEffect {
+            id: 97,
+            kind: RuntimeEffectKind::Lfo(
+                runtime_lfo_effect_from_request(request.clone(), std::slice::from_ref(&fixture))
+                    .unwrap(),
+            ),
+            enabled: true,
+            created_at: now,
+        };
+        let summary = effect_summary(&effect);
+        assert_eq!(summary.lfo, Some(request.clone()));
+        let restored = runtime_effect_from_summary(&summary, now).unwrap();
+        assert!(matches!(
+            restored.kind,
+            RuntimeEffectKind::Lfo(runtime) if runtime.request == request
+        ));
+        let evaluate = |attribute| {
+            apply_runtime_effect_to_attribute(
+                &effect,
+                &fixture,
+                attribute,
+                40_000,
+                now,
+                &ClockSnapshot::default(),
+                1.0,
+            )
+        };
+
+        assert_eq!(evaluate("Dimmer"), 40_000);
+        assert_eq!(evaluate("ColorRed"), 40_000);
+        assert_eq!(evaluate("ColorAmber"), 40_000);
+        assert_eq!(evaluate("ColorRed 2"), 20_000);
+        assert_eq!(evaluate("ColorGreen 2"), 20_000);
+        assert_eq!(evaluate("ColorBlue 2"), 20_000);
+        assert_eq!(evaluate("ColorAmber 2"), 20_000);
+    }
+
+    #[test]
+    fn chaser_beam_steps_do_not_leak_into_global_dimmer_or_adjacent_segment() {
+        let controls = vec![
+            test_color_control("Dimmer", 1),
+            test_color_control("ColorRed", 2),
+            test_color_control("ColorGreen", 3),
+            test_color_control("ColorBlue", 4),
+            test_color_control("ColorRed 2", 5),
+            test_color_control("ColorGreen 2", 6),
+            test_color_control("ColorBlue 2", 7),
+        ];
+        let rebuild_controls = controls.clone();
+        let fixture = test_runtime_color_fixture(1, Vec::new(), controls);
+        let beam = |beam_index, selection_index| EffectBeamTarget {
+            fixture_id: 1,
+            beam_index,
+            selection_index,
+            feature_attribute: "Dimmer".to_string(),
+        };
+        let request = ChaserEffectRequest {
+            label: "Daslight segment chaser".to_string(),
+            steps: vec![
+                protocol::ChaserStep {
+                    fixture_ids: Vec::new(),
+                    target_group_ids: Vec::new(),
+                    beam_targets: vec![beam(0, 0)],
+                    level: u16::MAX,
+                },
+                protocol::ChaserStep {
+                    fixture_ids: Vec::new(),
+                    target_group_ids: Vec::new(),
+                    beam_targets: vec![beam(1, 1)],
+                    level: u16::MAX,
+                },
+            ],
+            features: vec![protocol::ChaserFeature {
+                attribute: "Dimmer".to_string(),
+                low: 0,
+                high: u16::MAX,
+            }],
+            step_duration_ms: 100,
+            clock_sync: None,
+            direction: ChaserDirection::Forward,
+            wings: 1,
+            active_step_count: 1,
+            duty_cycle: 1.0,
+            overlap: 0.0,
+            phase: 0.0,
+            fixture_spread: 0.0,
+            random_seed: 97,
+            blend_mode: EffectBlendMode::Override,
+        };
+        let runtime =
+            runtime_chaser_effect_from_request(request, std::slice::from_ref(&fixture), true)
+                .unwrap();
+        let now = Instant::now();
+        let effect = RuntimeEffect {
+            id: 98,
+            kind: RuntimeEffectKind::Chaser(runtime),
+            enabled: true,
+            created_at: now,
+        };
+        let summary = effect_summary(&effect);
+        assert_eq!(summary.fixture_ids, vec![1]);
+        assert_eq!(
+            summary
+                .chaser
+                .as_ref()
+                .unwrap()
+                .steps
+                .iter()
+                .map(|step| step.beam_targets.len())
+                .sum::<usize>(),
+            2
+        );
+        let mut rebuilt = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        rebuilt
+            .fixtures
+            .push(test_runtime_color_fixture(1, Vec::new(), rebuild_controls));
+        rebuilt.effects.push(effect.clone());
+        rebuilt.rebuild_chaser_effect_targets();
+        assert_eq!(rebuilt.effects.len(), 1);
+        assert!(matches!(
+            &rebuilt.effects[0].kind,
+            RuntimeEffectKind::Chaser(runtime) if runtime.beam_targets.len() == 2
+        ));
+        let evaluate = |attribute, elapsed_ms| {
+            apply_runtime_effect_to_attribute(
+                &effect,
+                &fixture,
+                attribute,
+                u16::MAX,
+                now + Duration::from_millis(elapsed_ms),
+                &ClockSnapshot::default(),
+                1.0,
+            )
+        };
+
+        assert_eq!(evaluate("Dimmer", 0), u16::MAX);
+        assert_eq!(evaluate("ColorRed", 0), u16::MAX);
+        assert_eq!(evaluate("ColorRed 2", 0), 0);
+        assert_eq!(evaluate("ColorRed", 100), 0);
+        assert_eq!(evaluate("ColorRed 2", 100), u16::MAX);
     }
 
     #[test]
@@ -52054,6 +52710,7 @@ mod tests {
             .map(|fixture_id| protocol::ChaserStep {
                 fixture_ids: vec![*fixture_id],
                 target_group_ids: Vec::new(),
+                beam_targets: Vec::new(),
                 level: u16::MAX,
             })
             .collect::<Vec<_>>();
@@ -52061,6 +52718,7 @@ mod tests {
             steps.push(protocol::ChaserStep {
                 fixture_ids: Vec::new(),
                 target_group_ids: Vec::new(),
+                beam_targets: Vec::new(),
                 level: 0,
             });
         }
@@ -52117,6 +52775,7 @@ mod tests {
             .map(|_| protocol::ChaserStep {
                 fixture_ids: Vec::new(),
                 target_group_ids: Vec::new(),
+                beam_targets: Vec::new(),
                 level: 0,
             })
             .collect();
@@ -52161,6 +52820,7 @@ mod tests {
             .map(|index| protocol::ChaserStep {
                 fixture_ids: if index == 0 { vec![1] } else { Vec::new() },
                 target_group_ids: Vec::new(),
+                beam_targets: Vec::new(),
                 level: u16::MAX,
             })
             .collect();
@@ -52733,24 +53393,28 @@ mod tests {
 
         runtime.effects.push(RuntimeEffect {
             id: 101,
-            kind: RuntimeEffectKind::Lfo(runtime_lfo_effect_from_request(
-                LfoEffectRequest {
-                    label: "Keep LFO".to_string(),
-                    fixture_ids: vec![1],
-                    target_group_ids: Vec::new(),
-                    attribute: "Dimmer".to_string(),
-                    video_targets: Vec::new(),
-                    shape: LfoShape::Sine,
-                    period_ms: 500,
-                    clock_sync: None,
-                    low: 0,
-                    high: u16::MAX,
-                    phase: 0.0,
-                    fixture_spread: 0.0,
-                    blend_mode: EffectBlendMode::Override,
-                },
-                &runtime.fixtures,
-            )),
+            kind: RuntimeEffectKind::Lfo(
+                runtime_lfo_effect_from_request(
+                    LfoEffectRequest {
+                        label: "Keep LFO".to_string(),
+                        fixture_ids: vec![1],
+                        target_group_ids: Vec::new(),
+                        attribute: "Dimmer".to_string(),
+                        video_targets: Vec::new(),
+                        shape: LfoShape::Sine,
+                        period_ms: 500,
+                        clock_sync: None,
+                        low: 0,
+                        high: u16::MAX,
+                        phase: 0.0,
+                        fixture_spread: 0.0,
+                        beam_targets: Vec::new(),
+                        blend_mode: EffectBlendMode::Override,
+                    },
+                    &runtime.fixtures,
+                )
+                .unwrap(),
+            ),
             enabled: true,
             created_at: Instant::now(),
         });

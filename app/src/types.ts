@@ -1806,6 +1806,7 @@ export interface LfoEffectRequest {
   high: number;
   phase: number;
   fixture_spread?: number;
+  beam_targets?: EffectBeamTarget[];
   blend_mode: EffectBlendMode;
 }
 
@@ -1879,9 +1880,17 @@ export interface PositionWaveEffectRequest {
   blend_mode: EffectBlendMode;
 }
 
+export interface EffectBeamTarget {
+  fixture_id: number;
+  beam_index: number;
+  selection_index: number;
+  feature_attribute: string;
+}
+
 export interface ChaserStep {
   fixture_ids: number[];
   target_group_ids: string[];
+  beam_targets?: EffectBeamTarget[];
   level: number;
 }
 
@@ -2072,6 +2081,7 @@ export interface EffectSummary {
   speed?: number | null;
   wavelength?: number | null;
   enabled: boolean;
+  lfo?: LfoEffectRequest | null;
   color?: ColorEffectRequest | null;
   chaser?: ChaserEffectRequest | null;
   move_effect?: MoveEffectRequest | null;

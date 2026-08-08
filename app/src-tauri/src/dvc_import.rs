@@ -13,11 +13,11 @@ use protocol::{
     ColorEffectAlgorithm, ColorEffectBeamTarget, ColorEffectColor, ColorEffectInterpolation,
     ColorEffectRequest, ColorEffectSpatialPattern, ColorEffectSpatialRecipe, ColorEffectStop,
     CueEffectTarget, CueFixtureTarget, CueSummary, DmxModeSummary, DmxOutputConfig,
-    DmxUniversePreview, EffectBlendMode, EffectClockSync, EffectParamsSnapshot, EngineSnapshot,
-    FixtureProfileSummary, GeometrySummary, LfoEffectRequest, LfoShape, MoveCoordinateMode,
-    MoveDirection, MoveEffectRequest, MoveInterpolation, MovePathPoint, PatchedFixtureSummary,
-    ProjectFile, Rotation3, StageMapConfig, TimelineAudioClipSummary, TimelineCueEventSummary,
-    TimelineLayerKind, TimelineLayerSummary, TimelineTrackKind, Vec3,
+    DmxUniversePreview, EffectBeamTarget, EffectBlendMode, EffectClockSync, EffectParamsSnapshot,
+    EngineSnapshot, FixtureProfileSummary, GeometrySummary, LfoEffectRequest, LfoShape,
+    MoveCoordinateMode, MoveDirection, MoveEffectRequest, MoveInterpolation, MovePathPoint,
+    PatchedFixtureSummary, ProjectFile, Rotation3, StageMapConfig, TimelineAudioClipSummary,
+    TimelineCueEventSummary, TimelineLayerKind, TimelineLayerSummary, TimelineTrackKind, Vec3,
 };
 use roxmltree::{Document, Node};
 use serde::Serialize;
@@ -1573,22 +1573,30 @@ fn convert_dvc_chaser_effect(
     let mut approximations = Vec::new();
     if incompatible_dimmer_targets > 0 {
         approximations.push(format!(
-            "{incompatible_dimmer_targets} fixture target(s) without a Dimmer attribute were omitted"
+            "{incompatible_dimmer_targets} fixture target(s) without a Dimmer attribute or addressable color beam were omitted"
         ));
     }
     let mut warnings = Vec::new();
     let mut ordered_steps = targets.ordered_steps;
+    let mut ordered_beam_steps = vec![Vec::new(); ordered_steps.len()];
+    for target in &targets.beam_targets {
+        if let Some(step) = ordered_beam_steps.get_mut(target.selection_index as usize) {
+            step.push(EffectBeamTarget {
+                fixture_id: target.fixture_id,
+                beam_index: target.beam_index,
+                selection_index: target.selection_index,
+                feature_attribute: "Dimmer".to_string(),
+            });
+        }
+    }
     if ordered_steps.len() == 1 && generator_id != 322 {
         ordered_steps.push(Vec::new());
+        ordered_beam_steps.push(Vec::new());
         approximations.push(
             "single target selection requires an added blackout gap in the Chaser engine"
                 .to_string(),
         );
     }
-    if targets.has_multi_beam_selection {
-        approximations.push("segment selection approximated to fixture".to_string());
-    }
-
     let pixels_on = if generator_id == 322 {
         1
     } else {
@@ -1675,9 +1683,15 @@ fn convert_dvc_chaser_effect(
 
     let steps = ordered_steps
         .into_iter()
-        .map(|fixture_ids| ChaserStep {
-            fixture_ids,
+        .zip(ordered_beam_steps)
+        .map(|(fixture_ids, beam_targets)| ChaserStep {
+            fixture_ids: if beam_targets.is_empty() {
+                fixture_ids
+            } else {
+                Vec::new()
+            },
             target_group_ids: Vec::new(),
+            beam_targets,
             level: u16::MAX,
         })
         .collect::<Vec<_>>();
@@ -1870,11 +1884,8 @@ fn convert_dvc_inverse_ramp_effect(
     let mut approximations = Vec::new();
     if incompatible_dimmer_targets > 0 {
         approximations.push(format!(
-            "{incompatible_dimmer_targets} fixture target(s) without a Dimmer attribute were omitted"
+            "{incompatible_dimmer_targets} fixture target(s) without a Dimmer attribute or addressable color beam were omitted"
         ));
-    }
-    if targets.has_multi_beam_selection {
-        approximations.push("segment selection approximated to fixture".to_string());
     }
     if raw_low < 0.0 || raw_high > 1.0 {
         approximations.push(format!(
@@ -1886,6 +1897,7 @@ fn convert_dvc_inverse_ramp_effect(
         approximations.push(clock_warning);
     }
 
+    let beam_targets = dvc_effect_beam_targets(&targets, "Dimmer");
     let request = LfoEffectRequest {
         label: format!("{scene_name} (Inverse Ramp)"),
         fixture_ids: targets.fixture_ids,
@@ -1899,6 +1911,7 @@ fn convert_dvc_inverse_ramp_effect(
         high,
         phase: phase as f32,
         fixture_spread: phasing as f32,
+        beam_targets,
         blend_mode: EffectBlendMode::Override,
     };
     let note = format!(
@@ -1975,16 +1988,14 @@ fn convert_dvc_sinus_effect(
     let mut approximations = Vec::new();
     if incompatible_dimmer_targets > 0 {
         approximations.push(format!(
-            "{incompatible_dimmer_targets} fixture target(s) without a Dimmer attribute were omitted"
+            "{incompatible_dimmer_targets} fixture target(s) without a Dimmer attribute or addressable color beam were omitted"
         ));
-    }
-    if targets.has_multi_beam_selection {
-        approximations.push("segment selection approximated to fixture".to_string());
     }
     let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
     if let Some(clock_warning) = clock_warning {
         approximations.push(clock_warning);
     }
+    let beam_targets = dvc_effect_beam_targets(&targets, "Dimmer");
     let request = LfoEffectRequest {
         label: format!("{scene_name} (Sinus)"),
         fixture_ids: targets.fixture_ids,
@@ -1998,6 +2009,7 @@ fn convert_dvc_sinus_effect(
         high,
         phase: phase as f32,
         fixture_spread: phasing as f32,
+        beam_targets,
         blend_mode: EffectBlendMode::Override,
     };
     let note = format!(
@@ -2081,11 +2093,8 @@ fn convert_dvc_strobe_effect(
     ];
     if incompatible_dimmer_targets > 0 {
         approximations.push(format!(
-            "{incompatible_dimmer_targets} fixture target(s) without a Dimmer attribute were omitted"
+            "{incompatible_dimmer_targets} fixture target(s) without a Dimmer attribute or addressable color beam were omitted"
         ));
-    }
-    if targets.has_multi_beam_selection {
-        approximations.push("segment selection approximated to fixture".to_string());
     }
     if raw_low < 0.0 || raw_high > 1.0 {
         approximations.push(format!(
@@ -2097,6 +2106,7 @@ fn convert_dvc_strobe_effect(
         approximations.push(clock_warning);
     }
 
+    let beam_targets = dvc_effect_beam_targets(&targets, "Dimmer");
     let request = LfoEffectRequest {
         label: format!("{scene_name} (Strobe)"),
         fixture_ids: targets.fixture_ids,
@@ -2110,6 +2120,7 @@ fn convert_dvc_strobe_effect(
         high,
         phase: phase as f32,
         fixture_spread: phasing as f32,
+        beam_targets,
         blend_mode: EffectBlendMode::Override,
     };
     let note = format!(
@@ -2562,25 +2573,46 @@ fn dvc_rack_targets(
     })
 }
 
+fn dvc_effect_beam_targets(targets: &DvcRackTargets, feature: &str) -> Vec<EffectBeamTarget> {
+    targets
+        .beam_targets
+        .iter()
+        .map(|target| EffectBeamTarget {
+            fixture_id: target.fixture_id,
+            beam_index: target.beam_index,
+            selection_index: target.selection_index,
+            feature_attribute: feature.to_string(),
+        })
+        .collect()
+}
+
 fn retain_dvc_dimmer_targets(
     targets: &mut DvcRackTargets,
     fixture_refs: &HashMap<String, FixtureImportRef>,
 ) -> usize {
-    let supported = fixture_refs
+    let capabilities = fixture_refs
         .values()
-        .filter(|fixture_ref| fixture_ref.supports_dimmer)
-        .map(|fixture_ref| fixture_ref.fixture_id)
-        .collect::<HashSet<_>>();
+        .map(|fixture_ref| (fixture_ref.fixture_id, *fixture_ref))
+        .collect::<HashMap<_, _>>();
     let before = targets.fixture_ids.len();
+    targets.beam_targets.retain(|target| {
+        capabilities
+            .get(&target.fixture_id)
+            .is_some_and(|fixture_ref| {
+                fixture_ref.supports_dimmer || target.beam_index < fixture_ref.color_beam_count
+            })
+    });
+    let supported = targets
+        .beam_targets
+        .iter()
+        .map(|target| target.fixture_id)
+        .collect::<HashSet<_>>();
     targets
         .fixture_ids
         .retain(|fixture_id| supported.contains(fixture_id));
     for step in &mut targets.ordered_steps {
         step.retain(|fixture_id| supported.contains(fixture_id));
     }
-    targets
-        .beam_targets
-        .retain(|target| supported.contains(&target.fixture_id));
     before.saturating_sub(targets.fixture_ids.len())
 }
 
@@ -4348,7 +4380,7 @@ mod tests {
     }
 
     #[test]
-    fn dvc_sinus_prefers_bpm_sync_and_preserves_phasing_and_segment_approximation() {
+    fn dvc_sinus_prefers_bpm_sync_and_preserves_phasing_and_segment_targets() {
         let document = Document::parse(
             r#"<SCENE SPEED="1" PLAY_TRIGGER="2" PLAY_DIVISION="4"><RACKS><RACK TYPE="8"><EFFECT TYPE="5" ID="7" DURATION="5000"><PARAMS NB="5"><PARAM ID="1" VAL="10"/><PARAM ID="2" VAL="1"/><PARAM ID="3" VAL="0.25"/><PARAM ID="4" VAL="0"/><PARAM ID="5" VAL="0.2"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="1" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
         )
@@ -4375,7 +4407,11 @@ mod tests {
         };
         assert_eq!(request.clock_sync.unwrap().beats, 0.25);
         assert!((request.fixture_spread - 0.2).abs() < f32::EPSILON);
-        assert!(converted
+        assert_eq!(request.beam_targets.len(), 2);
+        assert_eq!(request.beam_targets[0].beam_index, 1);
+        assert_eq!(request.beam_targets[0].selection_index, 0);
+        assert_eq!(request.beam_targets[0].feature_attribute, "Dimmer");
+        assert!(!converted
             .approximations
             .iter()
             .any(|note| note == "segment selection approximated to fixture"));
@@ -4619,6 +4655,11 @@ mod tests {
         assert_eq!(chaser.active_step_count, 1);
         assert_eq!(chaser.duty_cycle, 1.0);
         assert_eq!(chaser.overlap, 1.0);
+        assert!(chaser.steps.iter().all(|step| step.fixture_ids.is_empty()));
+        assert_eq!(chaser.steps[0].beam_targets[0].fixture_id, 1);
+        assert_eq!(chaser.steps[0].beam_targets[0].selection_index, 0);
+        assert_eq!(chaser.steps[1].beam_targets[0].fixture_id, 2);
+        assert_eq!(chaser.steps[1].beam_targets[0].selection_index, 1);
         assert!(converted.approximations.is_empty());
         assert!(converted.note.contains("build-up then source-order clear"));
     }
@@ -5523,7 +5564,7 @@ mod tests {
             detail.item == "Effect: Fl-Strobe (Strobe)"
                 && detail.message.contains("2% of the period")
         }));
-        assert!(outcome
+        assert!(!outcome
             .report
             .approximate
             .details
@@ -5627,6 +5668,85 @@ mod tests {
                 .filter(|detail| detail.message.contains("source no-op preserved"))
                 .count(),
             3
+        );
+        assert!(!outcome
+            .report
+            .approximate
+            .details
+            .iter()
+            .any(|detail| detail.message == "segment selection approximated to fixture"));
+
+        let bar_strobe = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .find(|cue| cue.label == "Bar-StrobeAMber")
+            .and_then(|cue| {
+                cue.effect_targets
+                    .iter()
+                    .find_map(|target| match target.params.as_ref() {
+                        Some(EffectParamsSnapshot::Lfo(request)) => Some(request),
+                        _ => None,
+                    })
+            })
+            .expect("full Shinkan golden must preserve Bar-StrobeAMber Curve FX");
+        assert_eq!(bar_strobe.beam_targets.len(), 64);
+        assert_eq!(
+            bar_strobe
+                .beam_targets
+                .iter()
+                .map(|target| target.beam_index)
+                .collect::<HashSet<_>>(),
+            HashSet::from([0, 1, 2, 3, 4, 5, 6, 7])
+        );
+        assert_eq!(
+            bar_strobe
+                .beam_targets
+                .iter()
+                .map(|target| target.selection_index)
+                .collect::<HashSet<_>>()
+                .len(),
+            48
+        );
+
+        let bar_side_chaser = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .filter(|cue| cue.label == "New Scene")
+            .find_map(|cue| {
+                cue.effect_targets
+                    .iter()
+                    .find_map(|target| match target.params.as_ref() {
+                        Some(EffectParamsSnapshot::Chaser(request))
+                            if request
+                                .steps
+                                .iter()
+                                .map(|step| step.beam_targets.len())
+                                .sum::<usize>()
+                                == 16 =>
+                        {
+                            Some(request)
+                        }
+                        _ => None,
+                    })
+            })
+            .expect("full Shinkan golden must preserve the 16-cell Bar-Side Chaser");
+        assert_eq!(bar_side_chaser.steps.len(), 16);
+        assert!(bar_side_chaser
+            .steps
+            .iter()
+            .all(|step| step.fixture_ids.is_empty() && step.beam_targets.len() == 1));
+        assert_eq!(
+            bar_side_chaser
+                .steps
+                .iter()
+                .flat_map(|step| &step.beam_targets)
+                .map(|target| target.beam_index)
+                .collect::<HashSet<_>>(),
+            HashSet::from([0, 1, 2, 3, 4, 5, 6, 7])
         );
 
         let moves = outcome

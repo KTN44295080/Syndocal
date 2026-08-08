@@ -38,16 +38,17 @@ use protocol::{
     ColorMappingEffectRequest, CompositionId, CompositionSummary, CueEffectTarget,
     CueFixtureTarget, CueId, CueNodeGraphTarget, CurveEffectRequest, CustomFixtureProfileFile,
     CustomFixtureProfileRequest, DmxInputConfig, DmxInputProtocol, DmxInputStatus, DmxModeSummary,
-    DmxOutputConfig, DmxOutputProtocol, EffectId, EffectKind, EffectParamsSnapshot, EffectPreset,
-    EffectSummary, EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, FixtureGroupSummary,
-    FixtureId, FixtureLimits, FixturePreset, FixtureProfileSummary, GeometrySummary,
-    LearnedMidiControl, LearnedOscControl, LfoEffectRequest, MappingEffectRequest,
-    MidiControlAction, MidiControlMapping, MidiInputSummary, MidiOutputSummary, MoveEffectRequest,
-    NodeGraphId, NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp,
-    OperatorPolicy, OscControlAction, OscControlMapping, OscInputConfig, PatchFixtureRequest,
-    PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RecallMode, RemoteControlConfig,
-    RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile,
-    StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary, TimelineAudioClipId,
+    DmxOutputConfig, DmxOutputProtocol, EffectBeamTarget, EffectId, EffectKind,
+    EffectParamsSnapshot, EffectPreset, EffectSummary, EngineSnapshot, EngineTelemetry,
+    ExclusiveVideoTakeRequest, FixtureGroupSummary, FixtureId, FixtureLimits, FixturePreset,
+    FixtureProfileSummary, GeometrySummary, LearnedMidiControl, LearnedOscControl,
+    LfoEffectRequest, MappingEffectRequest, MidiControlAction, MidiControlMapping,
+    MidiInputSummary, MidiOutputSummary, MoveEffectRequest, NodeGraphId, NodeGraphNodeKind,
+    NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp, OperatorPolicy, OscControlAction,
+    OscControlMapping, OscInputConfig, PatchFixtureRequest, PatchedFixtureSummary,
+    PositionWaveEffectRequest, ProjectFile, RecallMode, RemoteControlConfig, RemoteControlStatus,
+    Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile, StageMapPresetSummary,
+    StageObjectId, StageObjectKind, StageObjectSummary, TimelineAudioClipId,
     TimelineAudioClipSummary, TimelineEventId, TimelineLayerKind, TimelineSnapRequest,
     TimelineTrackKind, TouchControlBinding, TouchSurfaceSummary, ValueEffectRequest, Vec3,
     VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode, VideoEffectTarget,
@@ -17261,14 +17262,23 @@ fn validate_project_cue_effect_params(
 
     match params {
         EffectParamsSnapshot::Lfo(request) => {
-            validate_project_effect_fixture_targets(
-                snapshot,
-                fixtures_by_id,
-                &request.fixture_ids,
-                &request.target_group_ids,
-                &request.attribute,
-                &owner_label,
-            )?;
+            if request.beam_targets.is_empty() {
+                validate_project_effect_fixture_targets(
+                    snapshot,
+                    fixtures_by_id,
+                    &request.fixture_ids,
+                    &request.target_group_ids,
+                    &request.attribute,
+                    &owner_label,
+                )?;
+            } else {
+                validate_project_effect_beam_targets(
+                    fixtures_by_id,
+                    &request.fixture_ids,
+                    &request.beam_targets,
+                    &owner_label,
+                )?;
+            }
             validate_video_targets(&request.video_targets)
         }
         EffectParamsSnapshot::PositionWave(request) => {
@@ -17624,14 +17634,27 @@ fn validate_project_lighting_references(snapshot: &EngineSnapshot) -> Result<(),
             ));
         }
         validate_group_ids(&effect.target_group_ids)?;
-        validate_project_effect_fixture_targets(
-            snapshot,
-            &fixtures_by_id,
-            &effect.fixture_ids,
-            &effect.target_group_ids,
-            &effect.attribute,
-            &format!("effect {}", effect.id),
-        )?;
+        if let Some(request) = effect
+            .lfo
+            .as_ref()
+            .filter(|request| !request.beam_targets.is_empty())
+        {
+            validate_project_effect_beam_targets(
+                &fixtures_by_id,
+                &request.fixture_ids,
+                &request.beam_targets,
+                &format!("effect {}", effect.id),
+            )?;
+        } else {
+            validate_project_effect_fixture_targets(
+                snapshot,
+                &fixtures_by_id,
+                &effect.fixture_ids,
+                &effect.target_group_ids,
+                &effect.attribute,
+                &format!("effect {}", effect.id),
+            )?;
+        }
     }
 
     Ok(())
@@ -17736,6 +17759,44 @@ fn validate_project_effect_fixture_targets(
         }) {
             return Err(format!(
                 "Project {owner_label} group '{group_id}' has no fixtures exposing attribute {attribute}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_project_effect_beam_targets(
+    fixtures_by_id: &HashMap<FixtureId, &PatchedFixtureSummary>,
+    fixture_ids: &[FixtureId],
+    beam_targets: &[EffectBeamTarget],
+    owner_label: &str,
+) -> Result<(), String> {
+    validate_project_unique_refs(owner_label, fixture_ids)?;
+    for fixture_id in fixture_ids {
+        if !fixtures_by_id.contains_key(fixture_id) {
+            return Err(format!(
+                "Project {owner_label} references missing fixture {fixture_id}"
+            ));
+        }
+    }
+    let mut seen = HashSet::new();
+    for target in beam_targets {
+        if !fixture_ids.contains(&target.fixture_id) {
+            return Err(format!(
+                "Project {owner_label} beam target fixture {} is absent from fixture targets",
+                target.fixture_id
+            ));
+        }
+        if !fixtures_by_id.contains_key(&target.fixture_id) {
+            return Err(format!(
+                "Project {owner_label} beam target references missing fixture {}",
+                target.fixture_id
+            ));
+        }
+        if !seen.insert((target.fixture_id, target.beam_index)) {
+            return Err(format!(
+                "Project {owner_label} repeats fixture {} segment {}",
+                target.fixture_id, target.beam_index
             ));
         }
     }
@@ -17873,6 +17934,28 @@ fn validate_project_chaser_effect_targets(
                 fixture_ids.push(*fixture_id);
             }
         }
+        let mut seen_beams = HashSet::new();
+        for target in &step.beam_targets {
+            if !fixtures_by_id.contains_key(&target.fixture_id) {
+                return Err(format!(
+                    "Project {owner_label} step {} beam target references missing fixture {}",
+                    step_index + 1,
+                    target.fixture_id
+                ));
+            }
+            if !seen_beams.insert((target.fixture_id, target.beam_index)) {
+                return Err(format!(
+                    "Project {owner_label} step {} repeats fixture {} segment {}",
+                    step_index + 1,
+                    target.fixture_id,
+                    target.beam_index
+                ));
+            }
+            resolved_target_ids.insert(target.fixture_id);
+            if seen_fixture_ids.insert(target.fixture_id) {
+                fixture_ids.push(target.fixture_id);
+            }
+        }
         for group_id in &step.target_group_ids {
             has_group_reference = true;
             for fixture in &snapshot.fixtures {
@@ -17897,7 +17980,11 @@ fn validate_project_chaser_effect_targets(
     }
     for feature in &request.features {
         let feature_key = normalize_custom_attribute_name(&feature.attribute);
-        let compatible = resolved_target_ids.iter().any(|fixture_id| {
+        let compatible = request.steps.iter().any(|step| {
+            step.beam_targets.iter().any(|target| {
+                normalize_custom_attribute_name(&target.feature_attribute) == feature_key
+            })
+        }) || resolved_target_ids.iter().any(|fixture_id| {
             fixtures_by_id.get(fixture_id).is_some_and(|fixture| {
                 fixture.controls.iter().any(|control| {
                     control.attribute.eq_ignore_ascii_case(&feature.attribute)
@@ -18589,6 +18676,12 @@ fn validate_project_video_keyframes(
 }
 
 fn validate_project_effect_body(effect: &EffectSummary) -> Result<(), String> {
+    if effect.effect_type != EffectKind::Lfo && effect.lfo.is_some() {
+        return Err(format!(
+            "Project {:?} effect {} contains an LFO body",
+            effect.effect_type, effect.id
+        ));
+    }
     if effect.effect_type != EffectKind::ColorMapping && effect.color_mapping.is_some() {
         return Err(format!(
             "Project {:?} effect {} contains a Colour Mapping body",
@@ -18644,7 +18737,44 @@ fn validate_project_effect_body(effect: &EffectSummary) -> Result<(), String> {
         ));
     }
     match effect.effect_type {
-        EffectKind::Lfo | EffectKind::PositionWave => {
+        EffectKind::Lfo => {
+            if effect.color.is_some()
+                || effect.chaser.is_some()
+                || effect.move_effect.is_some()
+                || effect.value.is_some()
+            {
+                return Err(format!(
+                    "Project effect {} contains a body for another effect kind",
+                    effect.id
+                ));
+            }
+            if let Some(request) = &effect.lfo {
+                let scalar_body_matches = effect.label == request.label
+                    && effect.fixture_ids == request.fixture_ids
+                    && effect.target_group_ids == request.target_group_ids
+                    && effect.attribute == request.attribute
+                    && effect.video_targets == request.video_targets
+                    && effect.shape == request.shape
+                    && effect.period_ms == Some(request.period_ms)
+                    && effect.clock_sync == request.clock_sync
+                    && effect.low == request.low
+                    && effect.high == request.high
+                    && effect.phase == request.phase
+                    && effect.fixture_spread == request.fixture_spread
+                    && effect.blend_mode == request.blend_mode
+                    && effect.origin.is_none()
+                    && effect.direction.is_none()
+                    && effect.speed.is_none()
+                    && effect.wavelength.is_none();
+                if !scalar_body_matches {
+                    return Err(format!(
+                        "Project LFO effect {} summary fields do not match its request body",
+                        effect.id
+                    ));
+                }
+            }
+        }
+        EffectKind::PositionWave => {
             if effect.color.is_some()
                 || effect.chaser.is_some()
                 || effect.move_effect.is_some()
@@ -19022,14 +19152,13 @@ fn validate_project_video_cue_points(state: &VideoLayerState, label: &str) -> Re
 fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, String> {
     match effect.effect_type {
         EffectKind::Lfo => {
-            let period_ms = effect
-                .period_ms
-                .ok_or_else(|| "LFO effect summary is missing period_ms".to_string())?;
-            Ok(EffectPreset {
-                version: 1,
-                effect_type: EffectKind::Lfo,
-                enabled: effect.enabled,
-                lfo: Some(LfoEffectRequest {
+            let request = if let Some(request) = &effect.lfo {
+                request.clone()
+            } else {
+                let period_ms = effect
+                    .period_ms
+                    .ok_or_else(|| "LFO effect summary is missing period_ms".to_string())?;
+                LfoEffectRequest {
                     label: effect.label.clone(),
                     fixture_ids: effect.fixture_ids.clone(),
                     target_group_ids: effect.target_group_ids.clone(),
@@ -19042,8 +19171,15 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                     high: effect.high,
                     phase: effect.phase,
                     fixture_spread: effect.fixture_spread,
+                    beam_targets: Vec::new(),
                     blend_mode: effect.blend_mode.clone(),
-                }),
+                }
+            };
+            Ok(EffectPreset {
+                version: 1,
+                effect_type: EffectKind::Lfo,
+                enabled: effect.enabled,
+                lfo: Some(request),
                 position_wave: None,
                 color: None,
                 chaser: None,
@@ -19292,6 +19428,7 @@ fn apply_lfo_effect_target_override(
     request.target_group_ids = target_override.target_group_ids.clone();
     request.video_targets = target_override.video_targets.clone();
     request.attribute = overridden_light_attribute(target_override);
+    request.beam_targets.clear();
     request
 }
 
@@ -19328,11 +19465,13 @@ fn apply_chaser_effect_target_override(
         .steps
         .into_iter()
         .map(|step| {
-            let target_slot_count = step.fixture_ids.len() + step.target_group_ids.len();
+            let target_slot_count =
+                step.fixture_ids.len() + step.target_group_ids.len() + step.beam_targets.len();
             if target_slot_count == 0 {
                 return ChaserStep {
                     fixture_ids: Vec::new(),
                     target_group_ids: Vec::new(),
+                    beam_targets: Vec::new(),
                     level: step.level,
                 };
             }
@@ -19348,6 +19487,7 @@ fn apply_chaser_effect_target_override(
             ChaserStep {
                 fixture_ids: remapped_fixture_ids,
                 target_group_ids: Vec::new(),
+                beam_targets: Vec::new(),
                 level: step.level,
             }
         })
@@ -19431,6 +19571,7 @@ fn apply_fixture_index_chaser_effect_target_override(
         .map(|fixture_id| ChaserStep {
             fixture_ids: vec![fixture_id],
             target_group_ids: Vec::new(),
+            beam_targets: Vec::new(),
             level: active_level,
         })
         .collect();
@@ -19438,6 +19579,7 @@ fn apply_fixture_index_chaser_effect_target_override(
         request.steps.push(ChaserStep {
             fixture_ids: Vec::new(),
             target_group_ids: Vec::new(),
+            beam_targets: Vec::new(),
             level: 0,
         });
     }
@@ -25060,6 +25202,24 @@ fn validate_lfo_effect_request(request: &LfoEffectRequest) -> Result<(), String>
     }
     if !(0.0..=1.0).contains(&request.fixture_spread) {
         return Err("LFO fixture spread must be within 0..1".to_string());
+    }
+    if request.beam_targets.len() > 4_096 {
+        return Err("LFO cannot target more than 4096 beams".to_string());
+    }
+    if !request.beam_targets.is_empty() && !request.target_group_ids.is_empty() {
+        return Err("LFO beam targets cannot be combined with fixture groups".to_string());
+    }
+    let mut beam_targets = HashSet::new();
+    for target in &request.beam_targets {
+        if target.feature_attribute.trim().is_empty() {
+            return Err("LFO beam target feature is required".to_string());
+        }
+        if !beam_targets.insert((target.fixture_id, target.beam_index)) {
+            return Err(format!(
+                "LFO beam target fixture {} segment {} is duplicated",
+                target.fixture_id, target.beam_index
+            ));
+        }
     }
     validate_group_ids(&request.target_group_ids)?;
     validate_video_effect_targets(&request.video_targets)?;
@@ -32830,6 +32990,7 @@ f 1 2 3
             speed: None,
             wavelength: None,
             enabled: true,
+            lfo: None,
             color: None,
             chaser: None,
             move_effect: None,
@@ -32900,6 +33061,7 @@ f 1 2 3
             speed: None,
             wavelength: None,
             enabled: true,
+            lfo: None,
             color: Some(request),
             chaser: None,
             move_effect: None,
@@ -33227,6 +33389,7 @@ f 1 2 3
             speed: None,
             wavelength: None,
             enabled: true,
+            lfo: None,
             color: None,
             chaser: None,
             move_effect: None,
@@ -33298,6 +33461,7 @@ f 1 2 3
             speed: Some(1.0),
             wavelength: Some(1.0),
             enabled: true,
+            lfo: None,
             color: None,
             chaser: None,
             move_effect: None,
@@ -33465,6 +33629,7 @@ f 1 2 3
             speed: None,
             wavelength: None,
             enabled: true,
+            lfo: None,
             color: None,
             chaser: Some(request.clone()),
             move_effect: None,
@@ -36171,6 +36336,7 @@ f 1 2 3
             high: 65_535,
             phase: 0.25,
             fixture_spread: 0.0,
+            beam_targets: Vec::new(),
             blend_mode: protocol::EffectBlendMode::Override,
         }
     }
@@ -36252,16 +36418,19 @@ f 1 2 3
                 ChaserStep {
                     fixture_ids: vec![1],
                     target_group_ids: Vec::new(),
+                    beam_targets: Vec::new(),
                     level: u16::MAX,
                 },
                 ChaserStep {
                     fixture_ids: vec![2],
                     target_group_ids: Vec::new(),
+                    beam_targets: Vec::new(),
                     level: 48_000,
                 },
                 ChaserStep {
                     fixture_ids: Vec::new(),
                     target_group_ids: Vec::new(),
+                    beam_targets: Vec::new(),
                     level: 0,
                 },
             ],
@@ -36342,6 +36511,7 @@ f 1 2 3
             speed: None,
             wavelength: None,
             enabled: true,
+            lfo: None,
             color: None,
             chaser: None,
             move_effect: Some(request),
@@ -36391,6 +36561,7 @@ f 1 2 3
             speed: None,
             wavelength: None,
             enabled: true,
+            lfo: None,
             color: None,
             chaser: Some(request),
             move_effect: None,
@@ -36587,6 +36758,27 @@ f 1 2 3
             speed: None,
             wavelength: None,
             enabled: false,
+            lfo: Some(LfoEffectRequest {
+                label: "Dimmer chase".to_string(),
+                fixture_ids: vec![1],
+                target_group_ids: Vec::new(),
+                attribute: "Dimmer".to_string(),
+                video_targets: vec![sample_video_effect_target(3)],
+                shape: protocol::LfoShape::Sine,
+                period_ms: 500,
+                clock_sync: Some(protocol::EffectClockSync { beats: 2.0 }),
+                low: 0,
+                high: 65_535,
+                phase: 0.25,
+                fixture_spread: 0.5,
+                beam_targets: vec![EffectBeamTarget {
+                    fixture_id: 1,
+                    beam_index: 3,
+                    selection_index: 2,
+                    feature_attribute: "Dimmer".to_string(),
+                }],
+                blend_mode: protocol::EffectBlendMode::Override,
+            }),
             color: None,
             chaser: None,
             move_effect: None,
@@ -36596,6 +36788,7 @@ f 1 2 3
             color_mapping: None,
         };
 
+        validate_project_effect_body(&effect).unwrap();
         let preset = effect_summary_to_preset(&effect).unwrap();
 
         assert_eq!(preset.version, 1);
@@ -36609,6 +36802,8 @@ f 1 2 3
         );
         assert_eq!(lfo.fixture_spread, 0.5);
         assert_eq!(lfo.video_targets, vec![sample_video_effect_target(3)]);
+        assert_eq!(lfo.beam_targets.len(), 1);
+        assert_eq!(lfo.beam_targets[0].beam_index, 3);
         assert!(preset.position_wave.is_none());
     }
 
@@ -36656,6 +36851,7 @@ f 1 2 3
             speed: Some(1.25),
             wavelength: Some(3.5),
             enabled: false,
+            lfo: None,
             color: None,
             chaser: None,
             move_effect: None,
@@ -36749,6 +36945,7 @@ f 1 2 3
             speed: None,
             wavelength: None,
             enabled: true,
+            lfo: None,
             color: None,
             chaser: None,
             move_effect: None,
@@ -36813,6 +37010,7 @@ f 1 2 3
             speed: None,
             wavelength: None,
             enabled: true,
+            lfo: None,
             color: None,
             chaser: None,
             move_effect: None,
@@ -36865,6 +37063,7 @@ f 1 2 3
             speed: None,
             wavelength: None,
             enabled: true,
+            lfo: None,
             color: None,
             chaser: None,
             move_effect: None,
@@ -36949,6 +37148,7 @@ f 1 2 3
             speed: None,
             wavelength: None,
             enabled: true,
+            lfo: None,
             color: None,
             chaser: None,
             move_effect: None,
@@ -37112,6 +37312,7 @@ f 1 2 3
             speed: None,
             wavelength: None,
             enabled: false,
+            lfo: None,
             color: Some(request.clone()),
             chaser: None,
             move_effect: None,
@@ -37157,6 +37358,7 @@ f 1 2 3
             speed: None,
             wavelength: None,
             enabled: false,
+            lfo: None,
             color: None,
             chaser: Some(request.clone()),
             move_effect: None,
@@ -38485,6 +38687,7 @@ f 1 2 3
                     high: 62_000,
                     phase: 0.125,
                     fixture_spread: 0.0,
+                    beam_targets: Vec::new(),
                     blend_mode: protocol::EffectBlendMode::Add,
                 }),
                 position_wave: None,

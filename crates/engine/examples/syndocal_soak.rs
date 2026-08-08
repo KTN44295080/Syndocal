@@ -271,21 +271,25 @@ fn add_mixed_lighting_effects(engine: &EngineHandle) -> Result<(), String> {
             ChaserStep {
                 fixture_ids: vec![1],
                 target_group_ids: Vec::new(),
+                beam_targets: Vec::new(),
                 level: u16::MAX,
             },
             ChaserStep {
                 fixture_ids: Vec::new(),
                 target_group_ids: Vec::new(),
+                beam_targets: Vec::new(),
                 level: 0,
             },
             ChaserStep {
                 fixture_ids: vec![1],
                 target_group_ids: Vec::new(),
+                beam_targets: Vec::new(),
                 level: 49_151,
             },
             ChaserStep {
                 fixture_ids: Vec::new(),
                 target_group_ids: Vec::new(),
+                beam_targets: Vec::new(),
                 level: 0,
             },
         ],
