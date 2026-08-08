@@ -82,6 +82,12 @@ Stage previewに実装し、legacy bodyは`false`へdefaultする。証跡は
 STEPS / COLOR FX / CHASER FX / MOVE FX / VALUE FX / CURVE FX / MAPPINGS / COLOR MAPPINGS / SUPER SCENE の9種。
 VALUE FX と COLOR MAPPINGS はユーザーの全ショーに検体なし（実装優先度低・将来検体待ち）。
 
+Syndocalの現行Scene Settingsでは、作成時のMAPPINGS / COLOR MAPPINGSを
+`2D MAPPING`の1入口へ統合し、既定の新規作成を`ColorMapping`とする。これは
+入口の整理であり、`.dvc` importerと保存済みcue-owned FXでは`Mapping`と
+`ColorMapping`を別body/editor/runtimeとして保持するため、9種のDaslight
+入力語彙と既存DVCの互換性は失わない。
+
 ## Syndocal実装方針（DVC-3分割）
 
 1. **DVC-3a（確定分の変換）**: CHASER FX 321/325 → Chaserエフェクト、CURVE FX（ID=波形）→ LFO/Valueエフェクト。

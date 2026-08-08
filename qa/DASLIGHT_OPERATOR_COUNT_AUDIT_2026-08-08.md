@@ -15,7 +15,9 @@
   button labels.
 - 2026-08-09 addendum: Save/reopen used a new scratch copy,
   `C:\tmp\syndocal-daslight-op-audit-20260809.dvc`; the original user project
-  was not overwritten. Daslight remained maximized during both observations.
+  was not overwritten. Patch, Static and FX-target observations used that same
+  disposable copy. Daslight remained maximized; after the comparison it was
+  returned to its original monitor and explicitly maximized again.
 
 ## Same-task results
 
@@ -33,14 +35,16 @@
 | Momentary flash from Touch | 1 press/release | 1 press/release | Same | Enabled `Flash mode` in the selected scene's Advanced Properties, added that scene to Touch, then verified one click gesture fired it without latching after pointer release. |
 | Enter Touch Edit mode | 1 click | 1 click | Same | Daslight palette/grid and Syndocal Edit surface became editable. |
 | Add Touch button control | 2 clicks | 1 click | Syndocal fewer | Daslight required `BUTTON` in the palette, then a placement click on the grid. Syndocal creates the control from its palette click. |
-| Create Mapping FX from an open family chooser | 1 click | 1 click | Same | Daslight `+` menu was opened as setup; one `MAPPINGS` click added a visible `MAPPINGS` generator. |
+| Create Mapping FX and inherit the prepared lighting target | 1 click | 1 click | Same | Daslight `+` menu was opened as setup; one `MAPPINGS` click added the generator and showed `Selected beams / 4 Beam(s)` for the selected Strongpoint 13ch fixture. Syndocal's one `2D MAPPING` click created `ColorMapping` and reopened it with `fixture:1`; the single target is intentionally normalized from selection mode to fixture mode. |
+| Patch a prepared profile at a prepared free address | 1 click | 1 click | Same | Daslight patched the prepared Strongpoint 13ch profile at A400-A412 with one `PATCH` click. Syndocal's CDP gate patches its prepared session profile at A65, proves fixture-block count `3 -> 4`, and proves A65 became occupied. |
+| Program prepared EDIT scene Dimmer from Out to Full | 1 click | 1 click | Same | Daslight changed the selected Strongpoint Dimmer from `OFF` to `100.0%` in `EDIT: Red`. Syndocal prepares Cue 301 at `0`, clicks `Full` once, proves Cue 301 became `65535`, and proves Cue 302 remained `32768`. |
 | Save current project | 1 key (`Ctrl+S`) | 1 key (`Ctrl+S`) | Same | Daslight kept the scratch-project title clean after one key gesture. Syndocal wrote `C:\tmp\syndocal-op-audit-20260809.sdc` in the native app; `check:project-shortcuts` proves that one `Ctrl+S` gesture dispatches only Save. |
 | Reopen a named project | 3 ops (`Ctrl+O`, path, `Enter`) | 3 ops (`Ctrl+O`, path, `Enter`) | Same | Daslight reopened the scratch `.dvc` with its groups/scenes restored. Syndocal reopened the scratch `.sdc` with its Touch surface restored and reported `プロジェクトを読み込みました`; `check:project-shortcuts` proves that the first gesture dispatches only Open. |
 
 ## Honest boundary
 
-Fourteen of the fifteen executable tasks now have direct, same-task Daslight
-counts: thirteen are equal and one (`Add Touch button control`) requires one
+Sixteen of the seventeen executable tasks now have direct, same-task Daslight
+counts: fifteen are equal and one (`Add Touch button control`) requires one
 fewer operation in Syndocal. The remaining task (`Reset all scene live
 modifiers`) has no matching one-action Daslight control and is a measured
 Syndocal usability advantage.

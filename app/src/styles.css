@@ -2256,7 +2256,7 @@ h3 {
   align-items: stretch;
 }
 
-.layoutTouch .panel:not(.touchPanel) {
+.layoutTouch > .panel:not(.touchPanel) {
   display: none;
 }
 
@@ -3569,15 +3569,15 @@ h3 {
   }
 }
 
-.app .layoutTouch button,
-.app .layoutTouch .buttonLink,
-.app .layoutTouch input:not([type="checkbox"]),
-.app .layoutTouch select {
+.app .layoutTouch > .touchSurfacePanel button,
+.app .layoutTouch > .touchSurfacePanel .buttonLink,
+.app .layoutTouch > .touchSurfacePanel input:not([type="checkbox"]),
+.app .layoutTouch > .touchSurfacePanel select {
   min-width: 48px;
   min-height: 48px;
 }
 
-.app .layoutTouch label:has(input[type="checkbox"]) {
+.app .layoutTouch > .touchSurfacePanel label:has(input[type="checkbox"]) {
   min-height: 48px;
 }
 
@@ -20255,15 +20255,15 @@ input[type="color"] {
 .appStatusLine.error .appStatusIndicator { background: #eb6a6a; }
 .appStatusLine.error .appStatusText { color: #ffc0c0; }
 
-.app .layoutTouch button,
-.app .layoutTouch .buttonLink,
-.app .layoutTouch input:not([type="checkbox"]),
-.app .layoutTouch select {
+.app .layoutTouch > .touchSurfacePanel button,
+.app .layoutTouch > .touchSurfacePanel .buttonLink,
+.app .layoutTouch > .touchSurfacePanel input:not([type="checkbox"]),
+.app .layoutTouch > .touchSurfacePanel select {
   min-width: 40px;
   min-height: 40px;
 }
 
-.app .layoutTouch label:has(input[type="checkbox"]) {
+.app .layoutTouch > .touchSurfacePanel label:has(input[type="checkbox"]) {
   min-height: 40px;
   align-items: center;
 }
@@ -25408,16 +25408,17 @@ h3 {
   }
 }
 
-/* Final touch-size guard: late desktop tokens must not shrink the live surface. */
-.app .layoutTouch button,
-.app .layoutTouch .buttonLink,
-.app .layoutTouch input:not([type="checkbox"]),
-.app .layoutTouch select {
+/* Final touch-size guard: late desktop tokens must not shrink the authored
+   Touch surface. The persistent Mapping/Faders band keeps desktop geometry. */
+.app .layoutTouch > .touchSurfacePanel button,
+.app .layoutTouch > .touchSurfacePanel .buttonLink,
+.app .layoutTouch > .touchSurfacePanel input:not([type="checkbox"]),
+.app .layoutTouch > .touchSurfacePanel select {
   min-width: 48px;
   min-height: 48px;
 }
 
-.app .layoutTouch label:has(input[type="checkbox"]) {
+.app .layoutTouch > .touchSurfacePanel label:has(input[type="checkbox"]) {
   min-height: 48px;
 }
 
@@ -29943,10 +29944,11 @@ h3 {
   min-height: 18px;
 }
 
-/* One composed Touch surface switches in place between EDIT and LIVE. */
+/* The composed Touch surface occupies the shared upper pane. Mapping and
+   Faders remain mounted in the persistent lower band, matching the operator
+   layout used by Daslight instead of replacing the whole workspace. */
 .layoutTouch {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr);
 }
 
 .layoutTouch .touchSurfacePanel {
@@ -32236,7 +32238,7 @@ h3 {
 }
 
 .layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .sceneMatrixPanel {
-  grid-template-rows: 28px minmax(0, 1fr);
+  grid-template-rows: 32px minmax(0, 1fr);
 }
 
 .layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveStatusGrid {
@@ -32343,7 +32345,7 @@ h3 {
   width: 28px;
   min-width: 28px;
   height: 28px;
-  min-height: 28px;
+  min-height: 32px;
   padding: 0;
   font-size: 13px;
 }
@@ -35423,4 +35425,130 @@ a[href]:focus-visible,
 .groupLiveMixerDisclosurePanel .groupLiveMixerControl,
 .groupLiveMixerDisclosurePanel .groupLiveMixerCoverage {
   grid-column: 1 / -1;
+}
+
+/* Global operator strip: show-wide transport and safety controls belong to
+   the common chrome. Control-local view choices stay with their surface. */
+.topbar {
+  grid-template-columns: minmax(235px, 0.65fr) minmax(54px, 0.2fr) minmax(0, 2.15fr) 120px;
+}
+
+.topbarTransportCluster {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  height: 40px;
+}
+
+.status .topbarTransportCluster > .topbarIconButton,
+.status .topbarTransportCluster > .goButton {
+  display: inline-grid;
+  flex: 0 0 auto;
+  height: 40px;
+  min-height: 40px;
+  place-items: center;
+  border-radius: var(--ui-radius-control);
+  padding: 0;
+  font-weight: 800;
+}
+
+.status .topbarTransportCluster > .topbarIconButton {
+  width: 32px;
+  min-width: 32px;
+}
+
+.status .topbarTransportCluster > .goButton {
+  width: 48px;
+  min-width: 48px;
+}
+
+.status .topbarTransportCluster > .topbarSafetyButton {
+  width: 42px;
+  min-width: 42px;
+  border-color: #6f3a3a;
+  color: #e7bcbc;
+  font-size: 10px;
+}
+
+.status .topbarTransportCluster > .topbarSafetyButton.engaged {
+  border-color: #ef5656;
+  background: #8e2026;
+  color: #fff;
+  box-shadow: inset 0 -2px 0 #ff8a8a;
+}
+
+.topbarIconButton svg {
+  width: var(--ui-icon-size);
+  height: var(--ui-icon-size);
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+}
+
+/* The Control-only transport row no longer exists. Matrix/Cue Pads/Status
+   share the current surface header and the recovered row stays with content. */
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel {
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .sceneMatrixPanel,
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveCuePadSurface {
+  grid-row: 1;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveStatusGrid {
+  grid-row: 1 / -1;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .liveFadeMeter {
+  grid-row: 2;
+}
+
+.layout.layoutSharedWorkspace.layoutControl .liveControlPanel > .sceneMatrixPanel {
+  grid-template-rows: 32px minmax(0, 1fr);
+}
+
+.sceneMatrixSurfaceHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 32px;
+  overflow: hidden;
+  border-bottom: 1px solid #343a3e;
+  background: #1b2023;
+}
+
+.sceneMatrixSurfaceHeader > .sceneMatrixBankJumpStrip {
+  border-bottom: 0;
+}
+
+.sceneMatrixSurfaceHeader > .liveDeskToolbarActions,
+.liveCuePadHeader > .liveDeskToolbarActions {
+  align-self: center;
+  padding: 0 2px;
+}
+
+.layoutControl .liveCuePadSurface > .liveCuePadHeader {
+  grid-template-columns: minmax(0, 1fr) auto auto 54px 54px auto;
+  height: 32px;
+  min-height: 32px;
+  box-sizing: border-box;
+}
+
+/* Touch preserves the same upper/lower workspace contract as Control. Its
+   48 px tile tracks scroll internally when the upper split is shorter. */
+.layout.layoutSharedWorkspace.layoutTouch > .touchSurfacePanel {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+
+.layout.layoutSharedWorkspace.layoutTouch .touchSurfaceGrid {
+  min-height: 0;
+  grid-template-rows: repeat(8, 48px);
+  align-content: start;
+  overflow: auto;
 }

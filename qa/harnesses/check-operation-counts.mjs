@@ -467,6 +467,8 @@ try {
   // ---- Task 13: create a cue-owned Mapping FX from its family. The current
   // Scene Settings workflow creates and selects the default family draft in
   // the same click; the retired sample-recipe cards are not part of this UI.
+  // Mapping and Colour Mapping intentionally share the 2D MAPPING family, so
+  // the production chooser has eight families rather than Daslight's nine.
   {
     await openFixture("fx-visual");
     const fxSetup = JSON.parse(await evalJs(`(async () => {
@@ -491,40 +493,211 @@ try {
         families: document.querySelectorAll('[data-scene-fx-chooser] [data-effect-family]').length,
       });
     })()`));
-    if (!fxSetup.scene || !fxSetup.fx || fxSetup.surface !== "fx" || fxSetup.families !== 9) {
+    if (!fxSetup.scene || !fxSetup.fx || fxSetup.surface !== "fx" || fxSetup.families !== 8) {
       throw new Error(`FX operation-count starting state unavailable: ${JSON.stringify(fxSetup)}`);
     }
     const effectsBefore = Number(await evalJs("document.querySelectorAll('[data-scene-owned-effect]').length"));
     const mappings = JSON.parse(await evalJs(`(() => {
-      const el = document.querySelector('[data-effect-family="MAPPINGS"]');
+      const el = document.querySelector('[data-effect-family="2D MAPPING"]');
       if (!el) return 'null';
       const r = el.getBoundingClientRect();
       return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
     })()`));
-    if (!mappings) throw new Error("MAPPINGS family control unavailable after FX setup");
+    if (!mappings) throw new Error("2D MAPPING family control unavailable after FX setup");
     await opClick(mappings.x, mappings.y); // op 1
     const mappingState = JSON.parse(await evalJs(`(() => {
       const active = document.querySelector('.effectFamilyChooser button.active[aria-pressed="true"]');
       const effects = [...document.querySelectorAll('[data-scene-owned-effect]')];
       const selected = effects.find((row) => row.querySelector('.sceneOwnedFxSelect[aria-pressed="true"]'));
       const editor = document.querySelector('[data-scene-settings-effect-editor]');
+      const targetEditor = document.querySelector('[data-scene-effect-target-mode]');
+      const activeFixture = document.querySelector('.sceneEffectTargetFixtureSelect select');
       return JSON.stringify({
         family: active?.getAttribute('data-effect-family') || '',
         effects: effects.length,
         selectedType: selected?.querySelector('small')?.textContent?.trim() || '',
         editorType: editor?.getAttribute('data-scene-settings-effect-editor') || '',
+        targetMode: targetEditor?.getAttribute('data-scene-effect-target-mode') || '',
+        activeFixtureId: activeFixture instanceof HTMLSelectElement ? Number(activeFixture.value) : null,
       });
     })()`));
     record(
       "create-mapping-fx-from-family",
       1,
       1,
-      mappingState.family === "MAPPINGS"
+      mappingState.family === "2D MAPPING"
         && mappingState.effects === effectsBefore + 1
-        && mappingState.selectedType === "Mapping"
-        && mappingState.editorType === "Mapping",
-      "1 click from open FX menu",
-      `${mappingState.family}; effects ${effectsBefore} -> ${mappingState.effects}; selected=${mappingState.selectedType}; editor=${mappingState.editorType}`,
+        && mappingState.selectedType === "ColorMapping"
+        && mappingState.editorType === "ColorMapping"
+        && mappingState.targetMode === "fixture"
+        && mappingState.activeFixtureId === 1,
+      "1 click from open FX menu; Selected beams inherited",
+      `${mappingState.family}; effects ${effectsBefore} -> ${mappingState.effects}; selected=${mappingState.selectedType}; editor=${mappingState.editorType}; target=${mappingState.targetMode}:fixture${mappingState.activeFixtureId}`,
+    );
+  }
+
+  // ---- Task 14: patch a prepared profile at a prepared free address.
+  // The profile choice, address and count are starting-state preparation.
+  // Completion is one PATCH click in both applications. Daslight was observed
+  // maximized with Strongpoint 13ch prepared at A400; one PATCH click created
+  // the A400-412 block. Syndocal must retain the same one-operation finish.
+  {
+    await navigateFixture("patch");
+    const localeChanged = await evalJs(`(() => {
+      const key = 'syndocal.uiLocale.v1';
+      const changed = window.localStorage.getItem(key) !== 'en';
+      window.localStorage.setItem(key, 'en');
+      return changed;
+    })()`);
+    if (localeChanged) {
+      await send("Page.reload", { ignoreCache: true });
+      await sleep(5000);
+    }
+    const patchSetup = JSON.parse(await evalJs(`(async () => {
+      const raf2 = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const clickVisibleText = (text) => {
+        const el = [...document.querySelectorAll('button')]
+          .find(candidate => candidate.textContent.trim() === text && candidate.getBoundingClientRect().width > 0);
+        el?.click();
+        return Boolean(el);
+      };
+      clickVisibleText('Setup'); await raf2();
+      clickVisibleText('Lighting'); await raf2();
+      clickVisibleText('Patch'); await raf2(); await raf2();
+      const row = document.querySelector('[data-patch-profile-row][data-profile-source="session"]');
+      const address = document.querySelector('[data-patch-field="address"] input');
+      const count = document.querySelector('[data-patch-field="count"] input');
+      if (!(row instanceof HTMLButtonElement) || !(address instanceof HTMLInputElement) || !(count instanceof HTMLInputElement)) {
+        return JSON.stringify({ ready: false, reason: 'missing prepared profile row, address, or count input' });
+      }
+      row.click(); await raf2();
+      address.value = '65';
+      address.dispatchEvent(new Event('input', { bubbles: true }));
+      count.value = '1';
+      count.dispatchEvent(new Event('input', { bubbles: true }));
+      await raf2(); await raf2();
+      const button = [...document.querySelectorAll('[data-patch-minimal-form] button.primary')]
+        .find(candidate => candidate.textContent.trim().toUpperCase() === 'PATCH' && candidate.getBoundingClientRect().width > 0);
+      const target = document.querySelector('[data-dmx-address="65"]');
+      if (!(button instanceof HTMLButtonElement) || !(target instanceof HTMLButtonElement)) {
+        return JSON.stringify({ ready: false, reason: 'missing visible PATCH button or A65 target' });
+      }
+      const rect = button.getBoundingClientRect();
+      return JSON.stringify({
+        ready: !button.disabled && !target.classList.contains('occupied'),
+        buttonDisabled: button.disabled,
+        targetOccupied: target.classList.contains('occupied'),
+        x: rect.x + rect.width / 2,
+        y: rect.y + rect.height / 2,
+        before: document.querySelectorAll('.dmxPatchFixtureBlock').length,
+      });
+    })()`));
+    if (!patchSetup.ready) throw new Error(`PATCH operation-count starting state unavailable: ${JSON.stringify(patchSetup)}`);
+    await opClick(patchSetup.x, patchSetup.y); // op 1
+    await sleep(700);
+    const patchResult = JSON.parse(await evalJs(`(() => JSON.stringify({
+      after: document.querySelectorAll('.dmxPatchFixtureBlock').length,
+      targetOccupied: document.querySelector('[data-dmx-address="65"]')?.classList.contains('occupied') === true,
+      selectedStart: document.querySelector('.dmxPatchFixtureBlock.selected small')?.textContent?.trim() || '',
+    }))()`));
+    record(
+      "patch-prepared-profile-to-address",
+      1,
+      1,
+      patchResult.after === patchSetup.before + 1 && patchResult.targetOccupied,
+      "1 click on PATCH (prepared profile/address)",
+      `blocks ${patchSetup.before} -> ${patchResult.after}; A65=${patchResult.targetOccupied}; ${patchResult.selectedStart}`,
+    );
+  }
+
+  // ---- Task 15: write a static Dimmer Full value into a prepared EDIT
+  // scene. Scene selection, fixture selection and EDIT mode are starting-state
+  // preparation. Daslight was observed maximized: one click on the selected
+  // Strongpoint Dimmer control changed it from OFF to 100.0% in scene Red.
+  {
+    await navigateFixture("edit-live");
+    const staticSetup = JSON.parse(await evalJs(`(async () => {
+      const raf2 = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const clickVisible = (selector, predicate) => {
+        const el = [...document.querySelectorAll(selector)]
+          .find(candidate => predicate(candidate) && candidate.getBoundingClientRect().width > 0);
+        el?.click();
+        return Boolean(el);
+      };
+      const control = clickVisible('.workspaceTabs button', el => el.textContent.trim() === 'Control');
+      await raf2();
+      const liveEdit = clickVisible('.controlModeTabs button', el => el.textContent.trim() === 'Live Edit');
+      await raf2();
+      const dimmer = clickVisible('.attributeCategoryRail button', el => el.textContent.trim().toUpperCase() === 'DIMMER');
+      window.__syndocalSetControlFixtureSelection?.([1], 1, '');
+      await raf2(); await raf2();
+      const scene = clickVisible('[data-scene-matrix-edit-strip="301"]', () => true);
+      await raf2();
+      const edit = clickVisible('[data-control-fader-write-mode-option="edit"]', () => true);
+      await raf2(); await raf2();
+      const quickButtons = [...document.querySelectorAll('.dimmerQuickRow button')]
+        .filter(candidate => candidate.getBoundingClientRect().width > 0);
+      const outButton = quickButtons.find(candidate => candidate.textContent.trim() === 'Out');
+      const button = quickButtons
+        .find(candidate => candidate.textContent.trim() === 'Full' && candidate.getBoundingClientRect().width > 0);
+      if (!(outButton instanceof HTMLButtonElement) || !(button instanceof HTMLButtonElement)) {
+        return JSON.stringify({ ready: false, control, liveEdit, dimmer, scene, edit, reason: 'visible Dimmer Out/Full buttons missing' });
+      }
+      outButton.click();
+      await new Promise(resolve => setTimeout(resolve, 420));
+      const snapshot = window.__syndocalReadEditLiveFixtureSnapshot?.();
+      const cue = snapshot?.cues?.find(candidate => candidate.id === 301);
+      const before = cue?.targets
+        ?.find(target => target.fixture_id === 1)
+        ?.values?.find(value => value.attribute === 'Dimmer')?.value ?? null;
+      const rect = button.getBoundingClientRect();
+      return JSON.stringify({
+        ready: control && liveEdit && scene && edit && before === 0 && !button.disabled,
+        control,
+        liveEdit,
+        dimmer,
+        scene,
+        edit,
+        before,
+        selectedScene: document.querySelector('[data-scene-matrix-selected="true"]')
+          ?.getAttribute('data-scene-matrix-cue-id') || '',
+        writeMode: document.querySelector('[data-control-fader-write-header]')
+          ?.getAttribute('data-control-fader-write-mode') || '',
+        x: rect.x + rect.width / 2,
+        y: rect.y + rect.height / 2,
+      });
+    })()`));
+    if (!staticSetup.ready) throw new Error(`Static programming starting state unavailable: ${JSON.stringify(staticSetup)}`);
+    await opClick(staticSetup.x, staticSetup.y); // op 1
+    await sleep(600);
+    const staticResult = JSON.parse(await evalJs(`(() => {
+      const snapshot = window.__syndocalReadEditLiveFixtureSnapshot?.();
+      const cue = snapshot?.cues?.find(candidate => candidate.id === 301);
+      const otherCue = snapshot?.cues?.find(candidate => candidate.id === 302);
+      return JSON.stringify({
+        after: cue?.targets
+          ?.find(target => target.fixture_id === 1)
+          ?.values?.find(value => value.attribute === 'Dimmer')?.value ?? null,
+        other: otherCue?.targets
+          ?.find(target => target.fixture_id === 1)
+          ?.values?.find(value => value.attribute === 'Dimmer')?.value ?? null,
+        selectedScene: document.querySelector('[data-scene-matrix-selected="true"]')
+          ?.getAttribute('data-scene-matrix-cue-id') || '',
+        writeMode: document.querySelector('[data-control-fader-write-header]')
+          ?.getAttribute('data-control-fader-write-mode') || '',
+      });
+    })()`));
+    record(
+      "program-static-dimmer-full",
+      1,
+      1,
+      staticSetup.selectedScene === "301"
+        && staticSetup.writeMode === "edit"
+        && staticResult.after === 65_535
+        && staticResult.selectedScene === "301"
+        && staticResult.writeMode === "edit",
+      "1 click on Dimmer Full (prepared EDIT scene)",
+      `cue301 ${staticSetup.before} -> ${staticResult.after}; cue302=${staticResult.other}`,
     );
   }
 

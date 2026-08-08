@@ -585,6 +585,7 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
       class="panel touchPanel touchSurfacePanel"
       aria-label="Editable Touch surface"
       data-touch-surface
+      data-workspace-pane="upper"
       data-touch-mode={mode()}
       data-touch-default-preset={props.surface?.pages.length ? "false" : "true"}
     >

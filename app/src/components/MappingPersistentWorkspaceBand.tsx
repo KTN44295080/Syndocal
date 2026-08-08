@@ -21,7 +21,7 @@ import { WorkspaceSplitHandle } from "./WorkspaceSplitHandle";
 type WithoutChildren<T> = Omit<T, "children">;
 
 type MappingPersistentWorkspaceBandProps = {
-  workspace: "setup" | "control";
+  workspace: "setup" | "control" | "touch";
   controlMode: ControlMode;
   controlHeaderTitle: JSX.Element;
   controlHeaderTools?: JSX.Element;
@@ -109,7 +109,7 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
 
   createEffect(() => {
     if (
-      props.workspace === "control" &&
+      props.workspace !== "setup" &&
       props.toolRail.stageTool !== "select" &&
       props.toolRail.stageTool !== "pan"
     ) {
@@ -128,7 +128,7 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
     <section
       class={`mappingPersistentWorkspaceBand${timelinePaneExpanded() ? " timelinePaneExpanded" : ""}${props.poppedPanes.includes("stage") ? " stagePanePopped" : ""}${props.poppedPanes.includes("timeline") ? " timelinePanePopped" : ""}`}
       data-timeline-pane-expanded={timelinePaneExpanded() ? "true" : "false"}
-      data-control-stage-chrome={props.workspace === "control" ? "true" : undefined}
+      data-control-stage-chrome={props.workspace !== "setup" ? "true" : undefined}
       data-workspace-pane="lower"
       aria-label="Persistent workspace band"
     >
@@ -145,7 +145,7 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
           onRenameGroup={props.filters.onRenameGroup}
           onDeleteGroup={props.filters.onDeleteGroup}
           onRecolorGroup={props.filters.onRecolorGroup}
-          controlChrome={props.workspace === "control"}
+          controlChrome={props.workspace !== "setup"}
         />
         <Show when={props.poppedPanes.includes("timeline")}>
           <button
@@ -164,8 +164,8 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
         </Show>
         <section class="mappingWorkspaceLeftPane" data-workspace-pane="lower-left" aria-label="Groups and Stage pane">
           <section
-            class={`mappingPersistentStage${props.workspace === "control" ? " controlStageContext" : " setupStageContext"}`}
-            aria-label={props.workspace === "control" ? "2D fixture and projection surface mapping stage" : "Editable 2D stage map"}
+            class={`mappingPersistentStage${props.workspace === "setup" ? " setupStageContext" : " controlStageContext"}`}
+            aria-label={props.workspace === "setup" ? "Editable 2D stage map" : "2D fixture and projection surface mapping stage"}
           >
             <Show
               when={props.workspace === "setup"}
@@ -262,7 +262,7 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
           defaultRatio={defaultWorkspaceLayout.lower_split_ratio}
           minFirstPx={430}
           minSecondPx={480}
-          label="Resize Stage and Timeline panes"
+          label={props.workspace === "touch" ? "Resize Mapping and Faders panes" : "Resize Stage and Timeline panes"}
           splitter="lower-left-right"
           onCommit={props.onLowerSplitRatio}
         />
@@ -281,53 +281,55 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
                   <div class="controlContextHeaderTools">
                     {props.controlHeaderTools}
                   </div>
-                  <ControlModeSegment
-                    controlMode={props.controlMode}
-                    operatorLockMode={props.operatorLockMode}
-                    onControlMode={selectControlMode}
-                  >
-                  <Show when={props.controlMode === "live"}>
-                    <button
-                      type="button"
-                      class={`timelinePaneExpandToggle${timelinePaneExpanded() ? " expanded" : ""}`}
-                      data-timeline-pane-expand-toggle
-                      title={timelinePaneActionLabel()}
-                      aria-label={timelinePaneActionLabel()}
-                      aria-expanded={timelinePaneExpanded()}
-                      onClick={() => setTimelinePaneExpanded((expanded) => !expanded)}
+                  <Show when={props.workspace === "control"}>
+                    <ControlModeSegment
+                      controlMode={props.controlMode}
+                      operatorLockMode={props.operatorLockMode}
+                      onControlMode={selectControlMode}
                     >
-                      <svg viewBox="0 0 16 16" aria-hidden="true">
-                        <path d={timelinePaneExpanded() ? "M3 6h3V3M13 6h-3V3M13 10h-3v3M3 10h3v3" : "M6 3H3v3M10 3h3v3M13 10v3h-3M3 10v3h3"} />
+                      <Show when={props.controlMode === "live"}>
+                        <button
+                          type="button"
+                          class={`timelinePaneExpandToggle${timelinePaneExpanded() ? " expanded" : ""}`}
+                          data-timeline-pane-expand-toggle
+                          title={timelinePaneActionLabel()}
+                          aria-label={timelinePaneActionLabel()}
+                          aria-expanded={timelinePaneExpanded()}
+                          onClick={() => setTimelinePaneExpanded((expanded) => !expanded)}
+                        >
+                          <svg viewBox="0 0 16 16" aria-hidden="true">
+                            <path d={timelinePaneExpanded() ? "M3 6h3V3M13 6h-3V3M13 10h-3v3M3 10h3v3" : "M6 3H3v3M10 3h3v3M13 10v3h-3M3 10v3h3"} />
+                          </svg>
+                        </button>
+                      </Show>
+                      <button
+                        type="button"
+                        class={`timelinePaneExpandToggle panePopoutToggle${props.poppedPanes.includes("stage") ? " expanded" : ""}`}
+                        data-pane-popout-toggle="stage"
+                        title={props.poppedPanes.includes("stage") ? "Close Stage window" : "Open Stage in a window"}
+                        aria-label={props.poppedPanes.includes("stage") ? "Close Stage window" : "Open Stage in a window"}
+                        aria-pressed={props.poppedPanes.includes("stage")}
+                        onClick={() => props.onTogglePaneWindow("stage")}
+                      >
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                          <path d="M3 5h7v8H3zM6 5V3h7v8h-2" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        class={`timelinePaneExpandToggle panePopoutToggle${props.poppedPanes.includes("timeline") ? " expanded" : ""}`}
+                        data-pane-popout-toggle="timeline"
+                        title={props.poppedPanes.includes("timeline") ? "Close Timeline window" : "Open Timeline in a window"}
+                        aria-label={props.poppedPanes.includes("timeline") ? "Close Timeline window" : "Open Timeline in a window"}
+                        aria-pressed={props.poppedPanes.includes("timeline")}
+                        onClick={() => props.onTogglePaneWindow("timeline")}
+                      >
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                          <path d="M2 6h12M2 6v6h12V6M6 3h7v3" />
                       </svg>
                     </button>
+                    </ControlModeSegment>
                   </Show>
-                  <button
-                    type="button"
-                    class={`timelinePaneExpandToggle panePopoutToggle${props.poppedPanes.includes("stage") ? " expanded" : ""}`}
-                    data-pane-popout-toggle="stage"
-                    title={props.poppedPanes.includes("stage") ? "Close Stage window" : "Open Stage in a window"}
-                    aria-label={props.poppedPanes.includes("stage") ? "Close Stage window" : "Open Stage in a window"}
-                    aria-pressed={props.poppedPanes.includes("stage")}
-                    onClick={() => props.onTogglePaneWindow("stage")}
-                  >
-                    <svg viewBox="0 0 16 16" aria-hidden="true">
-                      <path d="M3 5h7v8H3zM6 5V3h7v8h-2" />
-                    </svg>
-                  </button>
-                  <button
-                    type="button"
-                    class={`timelinePaneExpandToggle panePopoutToggle${props.poppedPanes.includes("timeline") ? " expanded" : ""}`}
-                    data-pane-popout-toggle="timeline"
-                    title={props.poppedPanes.includes("timeline") ? "Close Timeline window" : "Open Timeline in a window"}
-                    aria-label={props.poppedPanes.includes("timeline") ? "Close Timeline window" : "Open Timeline in a window"}
-                    aria-pressed={props.poppedPanes.includes("timeline")}
-                    onClick={() => props.onTogglePaneWindow("timeline")}
-                  >
-                    <svg viewBox="0 0 16 16" aria-hidden="true">
-                      <path d="M2 6h12M2 6v6h12V6M6 3h7v3" />
-                      </svg>
-                    </button>
-                  </ControlModeSegment>
                 </header>
                 {props.children}
               </>

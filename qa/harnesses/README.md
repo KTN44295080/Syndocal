@@ -55,18 +55,20 @@ between-phase browser recycling (fresh profile each time) isolates it.
   T14/T15 closed the measured place-scene gap by keeping Scene Matrix and
   Timeline visible together. The harness now performs the production path as
   one direct drag and fails unless one Scene Block is added. T18 expands the
-  executable Syndocal side to 13 tasks: the three rows above plus matrix
+  executable Syndocal side to 15 tasks: the three rows above plus matrix
   trigger, Scene Live speed/reset, Touch open/trigger/flash/Edit/control-add,
-  and FX family/recipe selection. Daslight same-task observations now cover 12
-  of those 13: eleven are equal, Touch control creation is one click shorter in
-  Syndocal, and bulk Scene Live reset has no one-action Daslight equivalent.
+  FX family/target selection, prepared-profile Patch, and prepared-EDIT Static
+  Full. Daslight same-task observations now cover 14 of those 15: thirteen are
+  equal, Touch control creation is one click shorter in Syndocal, and bulk
+  Scene Live reset has no one-action Daslight equivalent.
 
   `app/scripts/check-project-shortcuts.mjs` adds two executable project tasks.
   It calls the production Save/Open dispatcher and fixes `Ctrl+S` and `Ctrl+O`
   at one key gesture. Native `.sdc` write/read and maximized Daslight Save/reopen
   were observed separately, yielding parity for Save (one operation) and named
-  reopen (three operations). Patch, static programming, and FX target
-  application remain unmeasured.
+  reopen (three operations). The combined corpus is therefore 17 tasks: 16
+  direct Daslight comparisons (15 equal, one Syndocal-fewer) and one task for
+  which Daslight has no equivalent one-action bulk reset.
 
 ## External Art-Net monitor
 

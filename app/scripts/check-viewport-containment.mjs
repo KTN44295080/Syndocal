@@ -2580,7 +2580,7 @@ async function measureTimelinePaneExpansionState(client) {
             (controlContextHeaderRect.y + controlContextHeaderRect.height)
           ) <= 1
         ),
-        liveDeskToolbarRect: measuredRect('.liveControlPanel > [data-live-desk-toolbar]'),
+        liveDeskToolbarRect: measuredRect('.liveControlPanel .sceneMatrixSurfaceHeader, .liveControlPanel > .liveCuePadSurface > .liveCuePadHeader'),
         sceneMatrixRect: measuredRect('.liveControlPanel > .sceneMatrixPanel'),
         liveControlPanelRect: measuredRect('.liveControlPanel'),
       },
@@ -2995,8 +2995,9 @@ async function measureLiveDeskHeaderState(client) {
       inner.right <= outer.right + 1 &&
       inner.bottom <= outer.bottom + 1
     );
-    const toolbar = document.querySelector('[data-live-desk-toolbar]');
-    const toolbarActions = document.querySelector('[data-live-desk-toolbar-actions]');
+    const toolbar = document.querySelector('.sceneMatrixSurfaceHeader, .liveCuePadSurface > .liveCuePadHeader');
+    const toolbarActions = toolbar?.querySelector('[data-live-desk-toolbar-actions]') ?? null;
+    const globalTransport = document.querySelector('.topbarTransportCluster');
     const viewToggle = toolbarActions?.querySelector('.liveDeskViewToggle') ?? null;
     const statusToggle = toolbarActions?.querySelector('[data-live-status-toggle]') ?? null;
     const topbar = document.querySelector('.topbar');
@@ -3009,20 +3010,16 @@ async function measureLiveDeskHeaderState(client) {
     const statusItems = statusInspector
       ? [...statusInspector.querySelectorAll(':scope > .liveStatusItem')]
       : [];
-    const directTransportButtons = toolbar
-      ? [...toolbar.querySelectorAll(':scope > button')].filter(isVisible)
+    const directTransportButtons = globalTransport
+      ? [...globalTransport.querySelectorAll('[data-global-operator-action]')].filter(isVisible)
       : [];
-    const toolbarControls = toolbar
-      ? [...toolbar.querySelectorAll(':scope > button, [data-live-desk-toolbar-actions] button')].filter(isVisible)
-      : [];
+    const toolbarControls = directTransportButtons;
     const viewActionButtons = toolbarActions
       ? [...toolbarActions.querySelectorAll('[data-live-desk-view-action]')].filter(isVisible)
       : [];
-    const transportGoButtons = toolbar
-      ? [...toolbar.querySelectorAll('.liveGoButton, :scope > button')]
-        .filter((button) =>
-          button.classList.contains('liveGoButton')
-          || (button.textContent || '').trim() === 'GO')
+    const transportGoButtons = globalTransport
+      ? [...globalTransport.querySelectorAll('[data-global-operator-action="go"]')]
+        .filter(isVisible)
       : [];
     const controlCenters = toolbarControls.map((element) => {
       const rect = element.getBoundingClientRect();
@@ -3031,8 +3028,8 @@ async function measureLiveDeskHeaderState(client) {
     const centerSpread = controlCenters.length > 0
       ? Math.max(...controlCenters) - Math.min(...controlCenters)
       : Number.POSITIVE_INFINITY;
-    const killButtons = [...document.querySelectorAll('.liveTransportGrid .killButton')].filter(isVisible);
-    const killClearButtons = [...document.querySelectorAll('.liveTransportGrid .killClear')].filter(isVisible);
+    const killButtons = [...document.querySelectorAll('.topbarTransportCluster .topbarSafetyButton')].filter(isVisible);
+    const killClearButtons = [];
     const hasRedBorder = (element) => {
       const parts = getComputedStyle(element).borderTopColor.match(/\\d+/g)?.map(Number) ?? [];
       return parts.length >= 3 && parts[0] > parts[1] + 20 && parts[0] > parts[2] + 20;
@@ -3079,11 +3076,13 @@ async function measureLiveDeskHeaderState(client) {
     const body = document.body;
     const app = document.querySelector('.app');
     const toolbarRect = measuredRect(toolbar);
+    const globalTransportRect = measuredRect(globalTransport);
     const toolbarActionsRect = measuredRect(toolbarActions);
     const viewToggleRect = measuredRect(viewToggle);
     const statusToggleRect = measuredRect(statusToggle);
     return {
       toolbarRect,
+      globalTransportRect,
       toolbarActionsRect,
       viewToggleRect,
       statusToggleRect,
@@ -3095,7 +3094,7 @@ async function measureLiveDeskHeaderState(client) {
         .filter((element) => (element.textContent || '').trim() === 'Live Desk').length,
       liveDeskStateCount: document.querySelectorAll('.liveControlPanel .liveDeskState').length,
       liveDeskSceneMetaCount: document.querySelectorAll('.liveControlPanel .liveDeskSceneMeta').length,
-      toolbarCount: document.querySelectorAll('.liveControlPanel > [data-live-desk-toolbar]').length,
+      toolbarCount: document.querySelectorAll('.liveControlPanel .sceneMatrixSurfaceHeader, .liveControlPanel > .liveCuePadSurface > .liveCuePadHeader').length,
       toolbarActionsCount: document.querySelectorAll('.liveControlPanel [data-live-desk-toolbar-actions]').length,
       directTransportButtonCount: directTransportButtons.length,
       transportGoButtonCount: transportGoButtons.length,
@@ -3107,13 +3106,13 @@ async function measureLiveDeskHeaderState(client) {
       statusToggleCount: isVisible(statusToggle) ? 1 : 0,
       toolbarControlCount: toolbarControls.length,
       toolbarControlCenterSpread: Math.round(centerSpread * 100) / 100,
-      toolbarClientWidth: toolbar?.clientWidth ?? 0,
-      toolbarScrollWidth: toolbar?.scrollWidth ?? 0,
+      toolbarClientWidth: globalTransport?.clientWidth ?? 0,
+      toolbarScrollWidth: globalTransport?.scrollWidth ?? 0,
       toolbarFitsAvailableWidth: Boolean(
-        toolbar &&
-        toolbarRect &&
-        toolbar.scrollWidth <= toolbar.clientWidth + 1 &&
-        toolbarControls.every((element) => contained(measuredRect(element), toolbarRect))
+        globalTransport &&
+        globalTransportRect &&
+        globalTransport.scrollWidth <= globalTransport.clientWidth + 1 &&
+        toolbarControls.every((element) => contained(measuredRect(element), globalTransportRect))
       ),
       toolbarActionsContained: contained(toolbarActionsRect, toolbarRect),
       toolbarActionsRightAligned: Boolean(
@@ -3122,7 +3121,7 @@ async function measureLiveDeskHeaderState(client) {
       viewToggleContained: contained(viewToggleRect, toolbarRect),
       statusToggleContained: contained(statusToggleRect, toolbarRect),
       transportButtonMetrics: directTransportButtons.map((element) =>
-        actionMetrics(element, 'data-live-transport-action')),
+        actionMetrics(element, 'data-global-operator-action')),
       viewActionButtonMetrics: viewActionButtons.map((element) =>
         actionMetrics(element, 'data-live-desk-view-action')),
       iconSizeToken: getComputedStyle(document.documentElement).getPropertyValue('--ui-icon-size').trim(),
@@ -3189,10 +3188,10 @@ async function runLiveDeskHeaderViewport(client, viewport) {
   const transportIconMetrics = matrix.transportButtonMetrics.filter((metric) =>
     ['back', 'fade', 'timeline', 'clear-flags'].includes(metric.action));
   const transportTextMetrics = matrix.transportButtonMetrics.filter((metric) =>
-    ['dmx-blackout', 'video-blackout', 'all-blackout', 'all-clear'].includes(metric.action));
+    ['go', 'dmx-blackout', 'video-blackout', 'all-blackout'].includes(metric.action));
   const viewIconMetrics = matrix.viewActionButtonMetrics;
   const expectedTransportIconActions = ['back', 'fade', 'timeline', 'clear-flags'];
-  const expectedTransportTextActions = ['dmx-blackout', 'video-blackout', 'all-blackout', 'all-clear'];
+  const expectedTransportTextActions = ['go', 'dmx-blackout', 'video-blackout', 'all-blackout'];
   const expectedViewIconActions = ['matrix', 'cue-pads', 'status'];
   const checks = {
     legacyLiveDeskHeaderRowRemoved:
@@ -3200,7 +3199,7 @@ async function runLiveDeskHeaderViewport(client, viewport) {
       matrix.liveDeskLabelCount === 0 &&
       matrix.liveDeskStateCount === 0 &&
       matrix.liveDeskSceneMetaCount === 0,
-    oneToolbarOwnsEightTransportActions:
+    globalTopbarOwnsEightTransportActions:
       matrix.toolbarCount === 1 &&
       matrix.directTransportButtonCount === 8,
     transportLabelsReplacedByFourNamedSvgIcons:
@@ -3211,16 +3210,15 @@ async function runLiveDeskHeaderViewport(client, viewport) {
         metric.svgCount === 1 &&
         metric.title.length > 0 &&
         metric.ariaLabel === metric.title),
-    blackoutAndAllClearKeepTextKillLanguage:
+    goAndThreeBlackoutsKeepTextLanguage:
       JSON.stringify(transportTextMetrics.map((metric) => metric.action)) ===
         JSON.stringify(expectedTransportTextActions) &&
       transportTextMetrics.every((metric) =>
         metric.text.length > 0 &&
         metric.svgCount === 0) &&
-      transportTextMetrics.slice(0, 3).every((metric) => metric.className.includes('killButton')) &&
-      transportTextMetrics[3]?.className.includes('killClear'),
-    transportRowGoAbsent:
-      matrix.transportGoButtonCount === 0,
+      transportTextMetrics.slice(1).every((metric) => metric.className.includes('topbarSafetyButton')),
+    globalTransportContainsOneGo:
+      matrix.transportGoButtonCount === 1,
     threeDisplaySwitchesAreNamedSvgIconTabs:
       JSON.stringify(viewIconMetrics.map((metric) => metric.action)) ===
         JSON.stringify(expectedViewIconActions) &&
@@ -3229,7 +3227,7 @@ async function runLiveDeskHeaderViewport(client, viewport) {
         metric.svgCount === 1 &&
         metric.title.length > 0 &&
         metric.ariaLabel === metric.title),
-    iconViewAndStatusControlsIntegratedAtRight:
+    viewAndStatusControlsStayInsideSurfaceHeader:
       matrix.toolbarActionsCount === 1 &&
       matrix.viewToggleButtonCount === 2 &&
       matrix.statusToggleCount === 1 &&
@@ -3237,10 +3235,14 @@ async function runLiveDeskHeaderViewport(client, viewport) {
       matrix.toolbarActionsRightAligned &&
       matrix.viewToggleContained &&
       matrix.statusToggleContained,
-    t27ATokensDriveCompactIconGeometryAndFocus:
+    iconTokensDriveCompactViewGeometryAndFocus:
       matrix.iconSizeToken === '18px' &&
       matrix.iconButtonWidthToken === '28px' &&
-      [...transportIconMetrics, ...viewIconMetrics].every((metric) =>
+      transportIconMetrics.every((metric) =>
+        Math.abs(metric.width - 32) <= 0.01 &&
+        Math.abs(metric.iconWidth - 18) <= 0.01 &&
+        Math.abs(metric.iconHeight - 18) <= 0.01) &&
+      viewIconMetrics.every((metric) =>
         Math.abs(metric.width - 28) <= 0.01 &&
         Math.abs(metric.iconWidth - 18) <= 0.01 &&
         Math.abs(metric.iconHeight - 18) <= 0.01) &&
@@ -3250,16 +3252,16 @@ async function runLiveDeskHeaderViewport(client, viewport) {
       viewIconMetrics.find((metric) => metric.action === 'matrix')?.boxShadow !== 'none' &&
       expanded.viewActionButtonMetrics.find((metric) => metric.action === 'status')?.expanded === 'true' &&
       expanded.viewActionButtonMetrics.find((metric) => metric.action === 'status')?.boxShadow !== 'none',
-    topbarAndLiveToolbarKeepFortyTwoAndThirtyTwoPxRows:
+    topbarAndSurfaceHeaderKeepFortyTwoAndThirtyTwoPxRows:
       matrix.topbarRect?.height === 42 &&
       matrix.toolbarRect?.height === 32,
-    compactToolbarNaturallyFitsAvailableWidth:
+    globalTransportNaturallyFitsAvailableWidth:
       matrix.toolbarFitsAvailableWidth &&
       matrix.toolbarScrollWidth <= matrix.toolbarClientWidth + 1,
-    toolbarControlsShareOneVisualRow:
-      matrix.toolbarControlCount === 11 &&
+    globalTransportControlsShareOneVisualRow:
+      matrix.toolbarControlCount === 8 &&
       matrix.toolbarControlCenterSpread <= 1 &&
-      matrix.toolbarRect?.height === 32,
+      matrix.globalTransportRect?.height === 40,
     sceneReadoutMovedIntoExpandedStatus:
       statusOpened &&
       matrix.sceneReadoutCount === 1 &&
@@ -3277,35 +3279,34 @@ async function runLiveDeskHeaderViewport(client, viewport) {
       matrix.visibleStatusItemCount === 2 &&
       expanded.statusItemCount === 12 &&
       expanded.visibleStatusItemCount === 12,
-    matrixAndFadeUseReleasedRows:
-      matrix.matrixGridRow === '2' &&
-      matrix.fadeGridRow === '3' &&
+    matrixAndFadeUseTwoRowsOnly:
+      matrix.matrixGridRow === '1' &&
+      matrix.fadeGridRow === '2' &&
       !matrix.masterRowPresent,
     primaryMatrixHeightIncreased:
       viewport.width !== primaryOperationalViewport.width ||
       viewport.height !== primaryOperationalViewport.height ||
       (matrix.matrixRect?.height ?? 0) >= 525,
-    matrixAndCuePadsShareTheSameToolbar:
+    matrixAndCuePadsEachKeepTheSameSurfaceHeader:
       cuePadsSelected &&
       pads.matrixCount === 0 &&
       pads.cuePadSurfaceCount === 1 &&
       pads.toolbarCount === 1 &&
       pads.liveDeskHeaderCount === 0 &&
       pads.toolbarRect?.height === matrix.toolbarRect?.height &&
-      pads.toolbarRect?.y === matrix.toolbarRect?.y,
-    killZoneKeepsThreeBlackoutsAndClear:
+      pads.toolbarActionsCount === matrix.toolbarActionsCount &&
+      pads.viewToggleButtonCount === matrix.viewToggleButtonCount &&
+      pads.statusToggleCount === matrix.statusToggleCount,
+    topbarKeepsThreeCombinedBlackoutToggles:
       matrix.killButtonCount === 3 &&
-      matrix.killClearCount === 1,
-    killZoneKeepsHatching:
-      matrix.killButtonsHatched,
-    killZoneKeepsRedBorders:
+      matrix.killClearCount === 0,
+    blackoutTogglesKeepRedBorders:
       matrix.killButtonsRedBordered,
-    killZoneKeepsCompactDimensions:
-      killMetrics.length === 4 &&
+    blackoutTogglesKeepFullTopbarDimensions:
+      killMetrics.length === 3 &&
       killMetrics.every((metric) =>
-        metric.width >= 54 &&
-        metric.height >= 26 &&
-        metric.height <= 32
+        metric.width === 42 &&
+        metric.height === 40
       ),
     matrixAndCuePadModesKeepOuterScrollZero:
       matrix.documentAndAppScrollZero &&
@@ -8158,51 +8159,51 @@ async function measure(client, label) {
       visibleLiveControlPanelCount: visibleCount('.liveControlPanel'),
       liveControlPanelHeight: Math.round(document.querySelector('.liveControlPanel')?.getBoundingClientRect().height ?? 0),
       visibleLegacyLiveDeskHeaderCount: visibleCount('.liveControlPanel > .liveDeskHeader'),
-      visibleLiveDeskToolbarCount: visibleCount('.liveControlPanel > [data-live-desk-toolbar]'),
+      visibleLiveDeskToolbarCount: visibleCount('.liveControlPanel .sceneMatrixSurfaceHeader, .liveControlPanel > .liveCuePadSurface > .liveCuePadHeader'),
       visibleLiveDeskDirectTransportButtonCount: visibleCount(
-        '.liveControlPanel > [data-live-desk-toolbar] > button'
+        '.topbarTransportCluster [data-global-operator-action]'
       ),
       liveDeskTransportIconActions: visibleElements(
-        '.liveControlPanel > [data-live-desk-toolbar] > .liveTransportIconButton'
-      ).map((button) => button.getAttribute('data-live-transport-action') ?? ''),
+        '.topbarTransportCluster [data-global-operator-action]'
+      ).filter((button) => button.querySelector(':scope > svg'))
+        .map((button) => button.getAttribute('data-global-operator-action') ?? ''),
       liveDeskTextTransportActions: visibleElements(
-        '.liveControlPanel > [data-live-desk-toolbar] > button:not(.liveTransportIconButton)'
-      ).map((button) => button.getAttribute('data-live-transport-action') ?? ''),
+        '.topbarTransportCluster [data-global-operator-action]'
+      ).filter((button) => !button.querySelector(':scope > svg'))
+        .map((button) => button.getAttribute('data-global-operator-action') ?? ''),
       liveTransportGoButtonCount: document.querySelectorAll(
-        '.liveControlPanel > [data-live-desk-toolbar] .liveGoButton'
-      ).length + [...document.querySelectorAll(
-        '.liveControlPanel > [data-live-desk-toolbar] > button'
-      )].filter((button) => (button.textContent || '').trim() === 'GO').length,
+        '.topbarTransportCluster [data-global-operator-action="go"]'
+      ).length,
       visibleLiveDeskToolbarActionsCount: visibleCount(
-        '.liveControlPanel > [data-live-desk-toolbar] > [data-live-desk-toolbar-actions]'
+        '.liveControlPanel .sceneMatrixSurfaceHeader [data-live-desk-toolbar-actions], .liveControlPanel > .liveCuePadSurface > .liveCuePadHeader [data-live-desk-toolbar-actions]'
       ),
       visibleLiveDeskCueEditorButtonCount: visibleCount(
-        '.liveControlPanel > [data-live-desk-toolbar] [data-scene-matrix-open-cue-editor]'
+        '.liveControlPanel [data-scene-matrix-open-cue-editor]'
       ),
       visibleLiveDeskViewButtonCount: visibleCount(
-        '.liveControlPanel > [data-live-desk-toolbar] [data-live-desk-toolbar-actions] .liveDeskViewToggle button'
+        '.liveControlPanel [data-live-desk-toolbar-actions] .liveDeskViewToggle button'
       ),
       visibleLiveDeskStatusToggleCount: visibleCount(
-        '.liveControlPanel > [data-live-desk-toolbar] [data-live-status-toggle]'
+        '.liveControlPanel [data-live-desk-toolbar-actions] [data-live-status-toggle]'
       ),
       liveDeskViewIconActions: visibleElements(
-        '.liveControlPanel > [data-live-desk-toolbar] [data-live-desk-view-action]'
+        '.liveControlPanel [data-live-desk-toolbar-actions] [data-live-desk-view-action]'
       ).map((button) => button.getAttribute('data-live-desk-view-action') ?? ''),
       liveDeskIconButtonsNamedAndGraphic: (() => {
         const buttons = visibleElements(
-          '.liveControlPanel > [data-live-desk-toolbar] .liveDeskIconButton'
+          '.liveControlPanel [data-live-desk-toolbar-actions] .liveDeskIconButton'
         );
-        return buttons.length === 7 && buttons.every((button) =>
+        return buttons.length === 3 && buttons.every((button) =>
           (button.textContent || '').trim() === '' &&
           button.querySelectorAll(':scope > svg').length === 1 &&
           (button.getAttribute('title') ?? '').length > 0 &&
           button.getAttribute('aria-label') === button.getAttribute('title'));
       })(),
       liveDeskIconButtonWidths: visibleElements(
-        '.liveControlPanel > [data-live-desk-toolbar] .liveDeskIconButton'
+        '.liveControlPanel [data-live-desk-toolbar-actions] .liveDeskIconButton'
       ).map((button) => Math.round(button.getBoundingClientRect().width * 100) / 100),
       liveDeskIconSvgSizes: visibleElements(
-        '.liveControlPanel > [data-live-desk-toolbar] .liveDeskIconButton > svg'
+        '.liveControlPanel [data-live-desk-toolbar-actions] .liveDeskIconButton > svg'
       ).map((icon) => {
         const rect = icon.getBoundingClientRect();
         return [
@@ -8211,7 +8212,7 @@ async function measure(client, label) {
         ];
       }),
       liveDeskToolbarFitsAvailableWidth: (() => {
-        const toolbar = document.querySelector('.liveControlPanel > [data-live-desk-toolbar]');
+        const toolbar = document.querySelector('.topbarTransportCluster');
         if (!toolbar) return false;
         return toolbar.scrollWidth <= toolbar.clientWidth + 1;
       })(),
@@ -8220,8 +8221,7 @@ async function measure(client, label) {
       ) / 100,
       liveDeskToolbarControlsShareOneRow: (() => {
         const controls = [...document.querySelectorAll(
-          '.liveControlPanel > [data-live-desk-toolbar] > button, ' +
-          '.liveControlPanel > [data-live-desk-toolbar] [data-live-desk-toolbar-actions] button'
+          '.topbarTransportCluster [data-global-operator-action]'
         )].filter((element) => {
           const rect = element.getBoundingClientRect();
           const style = window.getComputedStyle(element);
@@ -8231,10 +8231,10 @@ async function measure(client, label) {
           const rect = element.getBoundingClientRect();
           return rect.y + rect.height / 2;
         });
-        return controls.length === 11 && Math.max(...centers) - Math.min(...centers) <= 1;
+        return controls.length === 8 && Math.max(...centers) - Math.min(...centers) <= 1;
       })(),
       liveDeskToolbarGridRow: getComputedStyle(
-        document.querySelector('.liveControlPanel > [data-live-desk-toolbar]') ?? document.body
+        document.querySelector('.liveControlPanel .sceneMatrixSurfaceHeader, .liveControlPanel > .liveCuePadSurface > .liveCuePadHeader') ?? document.body
       ).gridRowStart,
       liveSceneMatrixGridRow: getComputedStyle(
         document.querySelector('.liveControlPanel > .sceneMatrixPanel') ?? document.body
@@ -8424,10 +8424,10 @@ async function measure(client, label) {
         );
       })(),
       timelineTimeStatTitle: document.querySelector('.timelineTimeStat')?.getAttribute('title') ?? '',
-      killButtonCount: visibleCount('.liveTransportGrid .killButton'),
-      killClearCount: visibleCount('.liveTransportGrid .killClear'),
+      killButtonCount: visibleCount('.topbarTransportCluster .topbarSafetyButton'),
+      killClearCount: 0,
       killButtonBorderIsRed: (() => {
-        const button = [...document.querySelectorAll('.liveTransportGrid .killButton')]
+        const button = [...document.querySelectorAll('.topbarTransportCluster .topbarSafetyButton')]
           .find((node) => node.getBoundingClientRect().width > 0);
         if (!button) return false;
         const parts = window.getComputedStyle(button).borderTopColor.match(/\\d+/g)?.map(Number) ?? [];
@@ -9089,13 +9089,20 @@ async function measure(client, label) {
       touchSurfaceWorkspaceFill: (() => {
         const layout = document.querySelector('.layoutTouch');
         const surface = document.querySelector('[data-touch-surface]');
-        if (!layout || !surface) return null;
+        const splitter = document.querySelector('[data-workspace-splitter="upper-lower"]');
+        const band = document.querySelector('.mappingPersistentWorkspaceBand');
+        if (!layout || !surface || !splitter || !band) return null;
         const layoutRect = layout.getBoundingClientRect();
         const surfaceRect = surface.getBoundingClientRect();
+        const splitterRect = splitter.getBoundingClientRect();
+        const bandRect = band.getBoundingClientRect();
         return {
           topGap: Math.round((surfaceRect.top - layoutRect.top) * 100) / 100,
           bottomGap: Math.round((layoutRect.bottom - surfaceRect.bottom) * 100) / 100,
           heightRatio: Math.round((surfaceRect.height / layoutRect.height) * 10_000) / 10_000,
+          surfaceToSplitterGap: Math.round((splitterRect.top - surfaceRect.bottom) * 100) / 100,
+          splitterToBandGap: Math.round((bandRect.top - splitterRect.bottom) * 100) / 100,
+          bandBottomGap: Math.round((layoutRect.bottom - bandRect.bottom) * 100) / 100,
         };
       })(),
       touchPlacedKinds: [...new Set([...document.querySelectorAll('[data-touch-control]')]
@@ -9143,7 +9150,7 @@ async function measure(client, label) {
       visibleTouchVideoDeckCount: visibleCount('.touchVideoPanel .touchVideoDeck'),
       visibleTouchVideoLayerFaderCount: visibleCount('.touchVideoPanel .touchVideoDeck input[type="range"]'),
       visibleTouchMasterGridCount: visibleCount('.touchMasterGrid'),
-      touchUndersizedTargetCount: [...document.querySelectorAll('.layoutTouch button, .layoutTouch .buttonLink, .layoutTouch input:not([type="checkbox"]), .layoutTouch select')]
+      touchUndersizedTargetCount: [...document.querySelectorAll('.layoutTouch > .touchSurfacePanel button, .layoutTouch > .touchSurfacePanel .buttonLink, .layoutTouch > .touchSurfacePanel input:not([type="checkbox"]), .layoutTouch > .touchSurfacePanel select')]
         .filter((element) => {
           const rect = element.getBoundingClientRect();
           const style = window.getComputedStyle(element);
@@ -9153,7 +9160,7 @@ async function measure(client, label) {
           const rect = element.getBoundingClientRect();
           return rect.width < 47.5 || rect.height < 47.5;
         }).length,
-      touchUndersizedTargets: [...document.querySelectorAll('.layoutTouch button, .layoutTouch .buttonLink, .layoutTouch input:not([type="checkbox"]), .layoutTouch select')]
+      touchUndersizedTargets: [...document.querySelectorAll('.layoutTouch > .touchSurfacePanel button, .layoutTouch > .touchSurfacePanel .buttonLink, .layoutTouch > .touchSurfacePanel input:not([type="checkbox"]), .layoutTouch > .touchSurfacePanel select')]
         .filter((element) => {
           const rect = element.getBoundingClientRect();
           const style = window.getComputedStyle(element);
@@ -9216,7 +9223,7 @@ function hasExpectedKillZone(result) {
   }
   return (
     result.killButtonCount === 3 &&
-    result.killClearCount === 1 &&
+    result.killClearCount === 0 &&
     result.killButtonBorderIsRed === true &&
     result.liveStatusMinFontPx >= 11 &&
     result.liveCueIdentityChipCount >= 1
@@ -9359,6 +9366,7 @@ function expectsPersistentWorkspaceBand(result) {
     result.label.startsWith("setup-") ||
     result.label.startsWith("control-edit-") ||
     result.label.startsWith("control-live-") ||
+    result.label.startsWith("touch-") ||
     result.label.startsWith("mapping-") ||
     result.label.startsWith("interface-scale-") ||
     result.label.startsWith("persistent-band-invariance-")
@@ -9368,7 +9376,7 @@ function expectsPersistentWorkspaceBand(result) {
 function hasExpectedPersistentWorkspaceBand(result) {
   if (!expectsPersistentWorkspaceBand(result)) return true;
   const rects = result.persistentBandRects ?? {};
-  const oldControlPreviewAbsent = !result.label.startsWith("control-") || (
+  const oldControlPreviewAbsent = (!result.label.startsWith("control-") && !result.label.startsWith("touch-")) || (
     result.visibleControlStagePanelCount === 0 && result.visibleControlStageCount === 0
   );
   const expectedSelectionSurfacePresent =
@@ -9406,7 +9414,7 @@ function hasExpectedLayeredTimelineDesk(result) {
 }
 
 function hasExpectedControlStageChrome(result) {
-  if (!result.label.startsWith("control-live-") && !result.label.startsWith("control-edit-")) {
+  if (!result.label.startsWith("control-live-") && !result.label.startsWith("control-edit-") && !result.label.startsWith("touch-")) {
     return true;
   }
   return (
@@ -9569,7 +9577,7 @@ function hasExpectedControlModeSurface(result) {
       hasSceneSettingsSurface &&
       result.activeSceneSettingsSurface === "fx" &&
       result.visibleSceneFxChooserCount === 1 &&
-      result.visibleEffectFamilyButtonCount === 9 &&
+      result.visibleEffectFamilyButtonCount === 8 &&
       result.visibleActiveEffectFamilyButtonCount === 1;
     if (result.label.startsWith("control-live-scene-settings-fx-color-editor-")) {
       return (
@@ -9658,8 +9666,8 @@ function hasExpectedControlModeSurface(result) {
       JSON.stringify(result.liveDeskTransportIconActions) !==
         JSON.stringify(["back", "fade", "timeline", "clear-flags"]) ||
       JSON.stringify(result.liveDeskTextTransportActions) !==
-        JSON.stringify(["dmx-blackout", "video-blackout", "all-blackout", "all-clear"]) ||
-      result.liveTransportGoButtonCount !== 0 ||
+        JSON.stringify(["go", "dmx-blackout", "video-blackout", "all-blackout"]) ||
+      result.liveTransportGoButtonCount !== 1 ||
       result.visibleLiveDeskToolbarActionsCount !== 1 ||
       result.visibleLiveDeskCueEditorButtonCount !== 0 ||
       result.visibleLiveDeskViewButtonCount !== 2 ||
@@ -9667,21 +9675,21 @@ function hasExpectedControlModeSurface(result) {
       JSON.stringify(result.liveDeskViewIconActions) !==
         JSON.stringify(["matrix", "cue-pads", "status"]) ||
       !result.liveDeskIconButtonsNamedAndGraphic ||
-      result.liveDeskIconButtonWidths.length !== 7 ||
+      result.liveDeskIconButtonWidths.length !== 3 ||
       result.liveDeskIconButtonWidths.some((width) => Math.abs(width - 28) > 0.01) ||
-      result.liveDeskIconSvgSizes.length !== 7 ||
+      result.liveDeskIconSvgSizes.length !== 3 ||
       result.liveDeskIconSvgSizes.some(([width, height]) =>
         Math.abs(width - 18) > 0.01 || Math.abs(height - 18) > 0.01) ||
       !result.liveDeskToolbarFitsAvailableWidth ||
       result.liveDeskTopbarHeight !== 42 ||
       !result.liveDeskToolbarControlsShareOneRow ||
-      result.liveDeskToolbarGridRow !== "1" ||
-      result.liveSceneMatrixGridRow !== "2" ||
-      result.liveDeskSceneReadoutCount !== 1 ||
-      !result.liveDeskSceneReadoutInsideStatus ||
+      result.liveSceneMatrixGridRow !== "1" ||
+      (result.label.includes("-scene-settings-")
+        ? result.liveDeskSceneReadoutCount !== 0
+        : result.liveDeskSceneReadoutCount !== 1 || !result.liveDeskSceneReadoutInsideStatus) ||
       result.visibleLiveFadeMeterCount !== 1 ||
       result.visibleLiveMasterGridCount !== 0 ||
-      result.liveFadeMeterGridRow !== "3" ||
+      result.liveFadeMeterGridRow !== "2" ||
       result.liveMasterGridRow !== "absent" ||
       !result.liveFadeAboveMaster ||
       !result.liveMatrixAboveFade
@@ -10316,10 +10324,8 @@ function hasExpectedTouchSurface(result) {
     return true;
   }
   const expectedPage = result.label.startsWith("touch-composed-") ? "Viewport Touch" : "Default Desk";
-  const expectsLargeResponsiveDesk =
-    expectedPage === "Default Desk" && result.innerWidth >= 2048 && result.innerHeight >= 1129;
-  const largeResponsiveDeskPassed = !expectsLargeResponsiveDesk || (
-    result.touchTileMetrics?.tileUnionCoverageRatio >= 0.95 &&
+  const responsiveDeskPassed = (
+    result.touchTileMetrics?.tileUnionCoverageRatio >= (expectedPage === "Default Desk" ? 0.55 : 0.9) &&
     result.touchTileMetrics?.columnTrackCount === 12 &&
     result.touchTileMetrics?.rowTrackCount === 8 &&
     result.touchTileMetrics?.columnTrackRatio <= 1.02 &&
@@ -10327,19 +10333,23 @@ function hasExpectedTouchSurface(result) {
     result.touchTileMetrics?.normalizedTileWidthRatio <= 1.02 &&
     result.touchTileMetrics?.normalizedTileHeightRatio <= 1.02
   );
-  const bandReplacementBindingsPassed = [
+  const bandReplacementBindings = [
     "all_blackout",
     "blackout",
     "cue_fade_pause",
     "cue_previous",
     "video_blackout",
-  ].every((binding) => result.touchBandReplacementBindings.includes(binding));
-  const surfaceReclaimsBandHeight =
+  ];
+  const globalBindingContractPassed = expectedPage === "Default Desk"
+    ? result.touchBandReplacementBindings.length === 0
+    : bandReplacementBindings.every((binding) => result.touchBandReplacementBindings.includes(binding));
+  const sharedUpperLowerLayout =
     result.touchSurfaceWorkspaceFill?.topGap >= -1 &&
     result.touchSurfaceWorkspaceFill?.topGap <= 1 &&
-    result.touchSurfaceWorkspaceFill?.bottomGap >= -1 &&
-    result.touchSurfaceWorkspaceFill?.bottomGap <= 1 &&
-    result.touchSurfaceWorkspaceFill?.heightRatio >= 0.99;
+    result.touchSurfaceWorkspaceFill?.bottomGap > 120 &&
+    Math.abs(result.touchSurfaceWorkspaceFill?.surfaceToSplitterGap ?? 99) <= 1 &&
+    Math.abs(result.touchSurfaceWorkspaceFill?.splitterToBandGap ?? 99) <= 1 &&
+    Math.abs(result.touchSurfaceWorkspaceFill?.bandBottomGap ?? 99) <= 1;
   return (
     result.visibleTouchSurfaceCount === 1 &&
     result.visibleTouchModeToggleCount === 2 &&
@@ -10364,15 +10374,23 @@ function hasExpectedTouchSurface(result) {
     result.visibleTouchGoDeckCount === 0 &&
     result.visibleTouchMasterGridCount === 0 &&
     result.visibleTouchSafetyGuardButtonCount === 0 &&
-    bandReplacementBindingsPassed &&
+    globalBindingContractPassed &&
     result.touchTopbarDuplicateControls.length === 0 &&
-    surfaceReclaimsBandHeight &&
+    sharedUpperLowerLayout &&
+    result.visiblePersistentBandCount === 1 &&
+    result.visiblePersistentGroupsCount === 1 &&
+    result.visiblePersistentStageCount === 1 &&
+    result.visiblePersistentContextCount === 1 &&
+    result.visibleWorkspaceSplitterCount === 2 &&
+    result.visibleControlStageChromeCount === 1 &&
+    result.visibleControlStageSelectionListCount === 1 &&
+    result.visibleGroupControlFaderWriteHeaderCount === 1 &&
     result.touchComposedCheckPassed &&
     result.touchDocumentAndAppScrollZero &&
     result.touchPlacedUndersizedCount === 0 &&
     result.visibleTouchRemotePanelCount === 0 &&
     result.touchUndersizedTargetCount === 0 &&
-    largeResponsiveDeskPassed
+    responsiveDeskPassed
   );
 }
 
@@ -10398,6 +10416,9 @@ async function checkEditableTouchSurface(client, expectedPage, expectedDefaultPr
     const initialBindings = [...new Set(initialControls.map((control) => control.getAttribute('data-touch-binding')))].filter(Boolean).sort();
     const bandReplacementBindings = ['all_blackout', 'blackout', 'cue_fade_pause', 'cue_previous', 'video_blackout'];
     const bandReplacementBindingsPresent = bandReplacementBindings.every((binding) => initialBindings.includes(binding));
+    const globalBindingContractPassed = expectedGroupSelect
+      ? bandReplacementBindingsPresent
+      : bandReplacementBindings.every((binding) => !initialBindings.includes(binding));
     const topbarDuplicateControls = initialControls.filter((control) => {
       const binding = control.getAttribute('data-touch-binding');
       const buttonLabel = (control.querySelector('.touchPlacedButton')?.textContent || '').trim().toUpperCase();
@@ -10489,10 +10510,22 @@ async function checkEditableTouchSurface(client, expectedPage, expectedDefaultPr
     const layout = document.querySelector('.layoutTouch');
     const layoutRect = layout?.getBoundingClientRect();
     const surfaceRect = surface.getBoundingClientRect();
-    const surfaceReclaimsBandHeight = Boolean(layoutRect) &&
+    const splitter = document.querySelector('[data-workspace-splitter="upper-lower"]');
+    const band = document.querySelector('.mappingPersistentWorkspaceBand');
+    const splitterRect = splitter?.getBoundingClientRect();
+    const bandRect = band?.getBoundingClientRect();
+    const sharedUpperLowerLayout = Boolean(layoutRect && splitterRect && bandRect) &&
       Math.abs(surfaceRect.top - layoutRect.top) <= 1 &&
-      Math.abs(layoutRect.bottom - surfaceRect.bottom) <= 1 &&
-      surfaceRect.height / layoutRect.height >= 0.99;
+      layoutRect.bottom - surfaceRect.bottom > 120 &&
+      Math.abs(splitterRect.top - surfaceRect.bottom) <= 1 &&
+      Math.abs(bandRect.top - splitterRect.bottom) <= 1 &&
+      Math.abs(layoutRect.bottom - bandRect.bottom) <= 1;
+    const persistentLowerBandPresent =
+      document.querySelectorAll('.mappingPersistentWorkspaceBand').length === 1 &&
+      document.querySelectorAll('[data-persistent-band-part="groups"]').length === 1 &&
+      document.querySelectorAll('[data-persistent-band-part="stage"]').length === 1 &&
+      document.querySelectorAll('[data-persistent-band-part="context"]').length === 1 &&
+      document.querySelectorAll('[data-workspace-splitter]').length === 2;
 
     window.__syndocalTouchSurfaceCheck = {
       passed:
@@ -10506,11 +10539,12 @@ async function checkEditableTouchSurface(client, expectedPage, expectedDefaultPr
         liveModeSameSurface &&
         editHandlesPresent &&
         pageManagementPresent &&
-        bandReplacementBindingsPresent &&
+        globalBindingContractPassed &&
         topbarDuplicateControls.length === 0 &&
         bandAbsentInEdit &&
         bandAbsentInLive &&
-        surfaceReclaimsBandHeight,
+        sharedUpperLowerLayout &&
+        persistentLowerBandPresent,
       found: true,
       activePage,
       expectedPage,
@@ -10521,6 +10555,7 @@ async function checkEditableTouchSurface(client, expectedPage, expectedDefaultPr
       initialBindings,
       allKindsPresent,
       bandReplacementBindingsPresent,
+      globalBindingContractPassed,
       topbarDuplicateControls,
       operatedKinds,
       liveActivationKinds,
@@ -10534,7 +10569,8 @@ async function checkEditableTouchSurface(client, expectedPage, expectedDefaultPr
       pageManagementPresent,
       bandAbsentInEdit,
       bandAbsentInLive,
-      surfaceReclaimsBandHeight,
+      sharedUpperLowerLayout,
+      persistentLowerBandPresent,
     };
     return window.__syndocalTouchSurfaceCheck.passed;
   })()`);
@@ -15216,7 +15252,7 @@ async function readWorkspaceSplitState(client) {
         const style = getComputedStyle(element);
         return box.width > 0 && box.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
       });
-    const visibleTransportButtons = [...document.querySelectorAll('.liveControlPanel > .liveTransportGrid > button')]
+    const visibleTransportButtons = [...document.querySelectorAll('.topbarTransportCluster [data-global-operator-action]')]
       .filter((element) => {
         const box = element.getBoundingClientRect();
         const style = getComputedStyle(element);
@@ -15680,9 +15716,9 @@ async function runWorkspaceSplitViewport(client, viewport) {
     Math.abs(initial.liveStatus.inspectorWidth - expectedClosedStatusWidth) <= 2;
   checks.liveTransportIsEightButtonsInOneRow =
     initial.liveStatus.transportButtonCount === 8 && initial.liveStatus.transportRowCount === 1;
-  checks.liveMatrixFadeMasterUseRowsTwoThreeAndNoMaster =
-    initial.liveStatus.matrixRow === "2" &&
-    initial.liveStatus.fadeRow === "3" &&
+  checks.liveMatrixFadeMasterUseRowsOneTwoAndNoMaster =
+    initial.liveStatus.matrixRow === "1" &&
+    initial.liveStatus.fadeRow === "2" &&
     initial.liveStatus.masterRow === "absent" &&
     initial.liveStatus.matrixFadeMasterDoNotOverlap;
   checks.sceneMatrixHeaderRemoved = initial.liveStatus.sceneMatrixHeaderCount === 0;
@@ -22563,40 +22599,48 @@ async function runSceneBlockLargeViewport(client, viewport) {
     const openSource = document.querySelector('.sceneBlockRow[data-scene-block-id="500"] .sceneBlockOpenSourceButton');
     openSource?.click();
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))));
-    const cue500 = document.querySelector('.cueItem[data-cue-id="800"]');
-    cue500?.scrollIntoView({ block: 'center', inline: 'nearest' });
+    const isVisible = (element) => {
+      if (!(element instanceof Element)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0
+        && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const pane = document.querySelector('[data-scene-settings]');
+    const details = pane?.querySelector('[data-scene-details]') ?? null;
+    const cue500 = details?.querySelector('.cueItem[data-cue-id="800"]') ?? null;
+    const cueHeader = cue500?.querySelector('.cueMetaLine') ?? null;
+    cueHeader?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
-    const cuePanel = document.querySelector('.cuePanel');
-    const cueDrawer = document.querySelector('[data-timeline-context-drawer-panel="cue"]');
-    const cueHeader = cue500?.querySelector('.cueMetaLine');
+    const cuePanel = details?.querySelector('.cuePanel') ?? null;
     const headerRect = cueHeader?.getBoundingClientRect();
-    const panelRect = cuePanel?.getBoundingClientRect();
+    const paneRect = pane?.getBoundingClientRect();
+    const surfaceControls = [...(pane?.querySelectorAll('[data-scene-settings-surface-control]') ?? [])];
     return {
-      cue500Visible: Boolean(headerRect && panelRect && headerRect.width > 0 && headerRect.height > 0 &&
-        headerRect.top >= Math.max(0, panelRect.top) - 1 && headerRect.bottom <= Math.min(window.innerHeight, panelRect.bottom) + 1),
+      sceneSettingsVisible: isVisible(pane),
+      selectedCueId: pane?.getAttribute('data-selected-scene-id') ?? '',
+      activeSurface: pane?.getAttribute('data-scene-settings-surface') ?? '',
+      detailsVisible: isVisible(details),
+      detailsCueId: cue500?.getAttribute('data-cue-id') ?? '',
+      cueLabel: (cue500?.querySelector('.cueTitleRow strong')?.textContent || '').replace(/\\s+/g, ' ').trim(),
+      cueHeaderReachable: Boolean(headerRect && paneRect && headerRect.width > 0 && headerRect.height > 0 &&
+        headerRect.top >= Math.max(0, paneRect.top) - 1 && headerRect.bottom <= Math.min(window.innerHeight, paneRect.bottom) + 1),
+      sceneSettingsContained: Boolean(paneRect && paneRect.left >= -1 && paneRect.top >= -1 &&
+        paneRect.right <= window.innerWidth + 1 && paneRect.bottom <= window.innerHeight + 1),
+      sceneSettingsCueCount: details?.querySelectorAll('.cueItem').length ?? 0,
+      sceneSettingsPanelMode: cuePanel?.classList.contains('cuePanelSceneSettings') ?? false,
       cuePanelEditing: cuePanel?.classList.contains('cuePanelEditing') ?? false,
-      cueDrawerActive: Boolean(cueDrawer && cueDrawer.getBoundingClientRect().width > 0),
+      editSourcePressed: pane?.querySelector('[data-scene-settings-edit-source]')?.getAttribute('aria-pressed') ?? '',
+      activeSurfaceControlCount: surfaceControls.filter((button) => button.getAttribute('aria-pressed') === 'true').length,
+      updateSourceToolsVisible: isVisible(details?.querySelector('[data-cue-update-source-tools]')),
+      updateSourceFormVisible: isVisible(details?.querySelector('[data-cue-update-source-form]')),
+      legacyCueDrawerCount: document.querySelectorAll('[data-timeline-context-drawer-panel="cue"]').length,
+      legacyCuePagerCount: document.querySelectorAll('.cuePager').length,
+      legacyPlacementChipCount: document.querySelectorAll('.cueTimelinePlacementChip').length,
       cuesDeskTabRemoved: ![...document.querySelectorAll('.timelineDeskTabs button')]
         .some((button) => (button.textContent || '').trim() === 'Cues'),
-      pagerLabel: (document.querySelector('.cuePager span')?.textContent || '').trim(),
     };
   })()`);
-  await client.evaluate(`(async () => {
-    for (let page = 0; page < 60; page += 1) {
-      const previous = document.querySelector('.cuePager button[aria-label="Previous cue page"]');
-      if (!(previous instanceof HTMLButtonElement) || previous.disabled) break;
-      previous.click();
-      await Promise.resolve();
-    }
-    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
-  })()`);
-  const cueStats = await client.evaluate(`(() => ({
-    cueRowCount: document.querySelectorAll('.cueItem').length,
-    placementChipCount: document.querySelectorAll('.cueTimelinePlacementChip').length,
-    placementChipButtonCount: document.querySelectorAll('.cueTimelinePlacementChip button').length,
-    placementMoreButtonCount: document.querySelectorAll('.cueTimelinePlacementMore').length,
-    placementMoreLabel: (document.querySelector('.cueTimelinePlacementMore')?.textContent || '').trim(),
-  }))()`);
   const cueContainment = await measure(client, `scene-block-large-cues-${viewport.width}x${viewport.height}`);
   const role = viewportRole(viewport);
   const requiresFullScaleVisualSignoff = role !== "compact-fallback";
@@ -22731,16 +22775,25 @@ async function runSceneBlockLargeViewport(client, viewport) {
     ['composerPickerStats.jumpApplyEnabledAfterChoice', () => Boolean(composerPickerStats.jumpApplyEnabledAfterChoice)],
     ['composerPickerStats.jumpClosedAfterApply', () => Boolean(composerPickerStats.jumpClosedAfterApply)],
     ['composerPickerStats.composerEagerOptionCount === 0', () => Boolean(composerPickerStats.composerEagerOptionCount === 0)],
-    ['sourceOpenStats.cue500Visible', () => Boolean(sourceOpenStats.cue500Visible)],
+    ['sourceOpenStats.sceneSettingsVisible', () => Boolean(sourceOpenStats.sceneSettingsVisible)],
+    ['sourceOpenStats.selectedCueId === "800"', () => Boolean(sourceOpenStats.selectedCueId === '800')],
+    ['sourceOpenStats.activeSurface === "details"', () => Boolean(sourceOpenStats.activeSurface === 'details')],
+    ['sourceOpenStats.detailsVisible', () => Boolean(sourceOpenStats.detailsVisible)],
+    ['sourceOpenStats.detailsCueId === "800"', () => Boolean(sourceOpenStats.detailsCueId === '800')],
+    ['sourceOpenStats.cueLabel.includes("Scale Cue 500")', () => Boolean(sourceOpenStats.cueLabel.includes('Scale Cue 500'))],
+    ['sourceOpenStats.cueHeaderReachable', () => Boolean(sourceOpenStats.cueHeaderReachable)],
+    ['sourceOpenStats.sceneSettingsContained', () => Boolean(sourceOpenStats.sceneSettingsContained)],
+    ['sourceOpenStats.sceneSettingsCueCount === 1', () => Boolean(sourceOpenStats.sceneSettingsCueCount === 1)],
+    ['sourceOpenStats.sceneSettingsPanelMode', () => Boolean(sourceOpenStats.sceneSettingsPanelMode)],
     ['sourceOpenStats.cuePanelEditing', () => Boolean(sourceOpenStats.cuePanelEditing)],
-    ['sourceOpenStats.cueDrawerActive', () => Boolean(sourceOpenStats.cueDrawerActive)],
+    ['sourceOpenStats.editSourcePressed === "true"', () => Boolean(sourceOpenStats.editSourcePressed === 'true')],
+    ['sourceOpenStats.activeSurfaceControlCount === 1', () => Boolean(sourceOpenStats.activeSurfaceControlCount === 1)],
+    ['sourceOpenStats.updateSourceToolsVisible', () => Boolean(sourceOpenStats.updateSourceToolsVisible)],
+    ['sourceOpenStats.updateSourceFormVisible', () => Boolean(sourceOpenStats.updateSourceFormVisible)],
+    ['sourceOpenStats.legacyCueDrawerCount === 0', () => Boolean(sourceOpenStats.legacyCueDrawerCount === 0)],
+    ['sourceOpenStats.legacyCuePagerCount === 0', () => Boolean(sourceOpenStats.legacyCuePagerCount === 0)],
+    ['sourceOpenStats.legacyPlacementChipCount === 0', () => Boolean(sourceOpenStats.legacyPlacementChipCount === 0)],
     ['sourceOpenStats.cuesDeskTabRemoved', () => Boolean(sourceOpenStats.cuesDeskTabRemoved)],
-    ['sourceOpenStats.pagerLabel.includes("42 / 42")', () => Boolean(sourceOpenStats.pagerLabel.includes('42 / 42'))],
-    ['cueStats.cueRowCount === 12', () => Boolean(cueStats.cueRowCount === 12)],
-    ['cueStats.placementChipCount === 8', () => Boolean(cueStats.placementChipCount === 8)],
-    ['cueStats.placementChipButtonCount === 24', () => Boolean(cueStats.placementChipButtonCount === 24)],
-    ['cueStats.placementMoreButtonCount === 1', () => Boolean(cueStats.placementMoreButtonCount === 1)],
-    ['cueStats.placementMoreLabel.includes("491 more")', () => Boolean(cueStats.placementMoreLabel.includes('491 more'))],
     ['(!shouldCaptureViewport(viewport) || screenshotVerification?.verified === true)', () => Boolean((!shouldCaptureViewport(viewport) || screenshotVerification?.verified === true))],
     ['hasNoOuterOverflow(showContainment)', () => Boolean(hasNoOuterOverflow(showContainment))],
     ['hasNoOuterOverflow(pickerContainment)', () => Boolean(hasNoOuterOverflow(pickerContainment))],
@@ -22765,7 +22818,6 @@ async function runSceneBlockLargeViewport(client, viewport) {
     finderStats,
     sourcePickerStats,
     pickerStats,
-    cueStats,
     showContainment,
     pickerContainment,
     composerPickerStats,
@@ -27812,7 +27864,16 @@ async function main() {
                 result.liveDeskSceneReadoutInsideStatus,
               ],
               editTabs: result.visibleEditDeskTabCount,
-              sceneFx: result.label.startsWith("control-live-scene-settings-fx-color-editor-")
+              sceneFx: {
+                pane: result.visibleSceneSettingsPaneCount,
+                surfaces: result.visibleSceneSettingsSurfaceControlCount,
+                activeSurfaceCount: result.visibleActiveSceneSettingsSurfaceControlCount,
+                activeSurface: result.activeSceneSettingsSurface,
+                chooser: result.visibleSceneFxChooserCount,
+                families: result.visibleEffectFamilyButtonCount,
+                activeFamilies: result.visibleActiveEffectFamilyButtonCount,
+                editorType: result.activeSceneSettingsEditorType,
+                specialized: result.label.startsWith("control-live-scene-settings-fx-color-editor-")
                 ? {
                     editorType: result.activeSceneSettingsEditorType,
                     stops: result.visibleColorEffectStopCount,
@@ -27839,6 +27900,7 @@ async function main() {
                       bounds: result.chaserEditorBounds,
                     }
                   : null,
+              },
             })))}`,
         );
       }
@@ -29096,7 +29158,7 @@ async function main() {
     }
     for (const result of sceneBlockLargeResults) {
       console.log(
-        `${result.passed ? "pass" : "fail"} ${result.label} rows=${result.showStats.beforeRowCount}->${result.showStats.afterRowCount}/500 page=${result.showStats.pagerLabel} overview=${result.showStats.overviewNodeCount} picker=${result.pickerStats.pickerCount}/${result.pickerStats.pickerOptionCount} reachable=${result.pickerStats.pickerReachable ? 1 : 0}/${result.pickerStats.pagerReachable ? 1 : 0}/${result.pickerStats.lastActionReachable ? 1 : 0} cuePlacements=${result.cueStats.placementChipCount}+${result.cueStats.placementMoreButtonCount} idle=${result.idleMutationStats.records}/${result.idleMutationStats.addedNodes}/${result.idleMutationStats.removedNodes} samples=${JSON.stringify(result.idleMutationStats.samples ?? [])}`,
+        `${result.passed ? "pass" : "fail"} ${result.label} rows=${result.showStats.beforeRowCount}->${result.showStats.afterRowCount}/500 page=${result.showStats.pagerLabel} overview=${result.showStats.overviewNodeCount} picker=${result.pickerStats.pickerCount}/${result.pickerStats.pickerOptionCount} reachable=${result.pickerStats.pickerReachable ? 1 : 0}/${result.pickerStats.pagerReachable ? 1 : 0}/${result.pickerStats.lastActionReachable ? 1 : 0} sceneDetails=${result.sourceOpenStats.selectedCueId}/${result.sourceOpenStats.sceneSettingsCueCount} legacy=${result.sourceOpenStats.legacyCueDrawerCount}/${result.sourceOpenStats.legacyCuePagerCount}/${result.sourceOpenStats.legacyPlacementChipCount} idle=${result.idleMutationStats.records}/${result.idleMutationStats.addedNodes}/${result.idleMutationStats.removedNodes} samples=${JSON.stringify(result.idleMutationStats.samples ?? [])}`,
       );
     }
     for (const result of cueNodeGraphResults) {

@@ -6851,20 +6851,70 @@ export default function App() {
       default: return "Show Timeline";
     }
   });
+  const liveDeskViewActions = () => (
+    <div class="liveDeskToolbarActions" data-live-desk-toolbar-actions>
+      <nav class="liveDeskViewToggle" aria-label="Live desk view">
+        <button
+          type="button"
+          class={`liveDeskIconButton liveDeskViewIconButton${controlLiveView() === "matrix" ? " active" : ""}`}
+          data-live-desk-view-action="matrix"
+          title="Matrix"
+          aria-label="Matrix"
+          aria-pressed={controlLiveView() === "matrix"}
+          onClick={() => setControlLiveView("matrix")}
+        >
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M3.5 3.5h5v5h-5zM11.5 3.5h5v5h-5zM3.5 11.5h5v5h-5zM11.5 11.5h5v5h-5z" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class={`liveDeskIconButton liveDeskViewIconButton${controlLiveView() === "pads" ? " active" : ""}`}
+          data-live-desk-view-action="cue-pads"
+          title="Cue Pads"
+          aria-label="Cue Pads"
+          aria-pressed={controlLiveView() === "pads"}
+          onClick={() => setControlLiveView("pads")}
+        >
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M4 4h3v3H4zM8.5 4h3v3h-3zM13 4h3v3h-3zM4 8.5h3v3H4zM8.5 8.5h3v3h-3zM13 8.5h3v3h-3zM4 13h3v3H4zM8.5 13h3v3h-3zM13 13h3v3h-3z" />
+          </svg>
+        </button>
+      </nav>
+      <button
+        type="button"
+        class="liveDeskIconButton liveDeskViewIconButton liveStatusToggle"
+        data-live-status-toggle
+        data-live-desk-view-action="status"
+        aria-controls="live-status-inspector"
+        aria-expanded={liveStatusExpanded()}
+        aria-label={liveStatusExpanded() ? "Hide live status details" : "Show live status details"}
+        title={liveStatusExpanded() ? "Hide live status details" : "Show live status details"}
+        onClick={() => setLiveStatusExpanded((expanded) => !expanded)}
+      >
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          <path d="M3.5 3.5h13v13h-13zM7 6v8M9.5 6.5H14M9.5 10H14M9.5 13.5H14" />
+        </svg>
+      </button>
+    </div>
+  );
   const touchLayoutClass = createMemo(() =>
     workspaceTab() === "setup"
       ? `layoutSharedWorkspace layoutSetup setupMode-${setupSubTab()}`
       : workspaceTab() === "touch"
-        ? "layoutTouch"
+        ? "layoutSharedWorkspace layoutControl layoutTouch controlModeEdit editDesk-faders"
         : `${controlMode() === "mixer" ? "" : "layoutSharedWorkspace "}layoutControl controlMode${controlMode()[0].toUpperCase()}${controlMode().slice(1)}${
             controlMode() === "edit" ? ` editDesk-${editDeskSurface()}` : ""
           }`,
   );
   const sharedWorkspaceVisible = createMemo(
-    () => workspaceTab() === "setup" || (workspaceTab() === "control" && controlMode() !== "mixer"),
+    () => workspaceTab() === "touch"
+      || workspaceTab() === "setup"
+      || (workspaceTab() === "control" && controlMode() !== "mixer"),
   );
   const liveMappingStageVisible = createMemo(
     () => (workspaceTab() === "setup" && setupSubTab() === "mapping")
+      || workspaceTab() === "touch"
       || (workspaceTab() === "control" && controlMode() !== "mixer"),
   );
   const remoteConfig = createMemo<RemoteControlConfig>(() => ({
@@ -17516,7 +17566,13 @@ export default function App() {
         applicationUpdateError={applicationUpdateError()}
         uiScale={uiScale()}
         uiLocale={uiLocale()}
+        canBack={snapshot().cues.length > 0}
         canGo={snapshot().cues.length > 0}
+        canPauseFade={Boolean(snapshot().active_fade)}
+        fadePaused={Boolean(snapshot().active_fade?.paused)}
+        canToggleTimeline={snapshot().timeline.playing || snapshot().timeline.duration_ms > 0}
+        timelinePlaying={snapshot().timeline.playing}
+        anyFixtureFlags={globalFixtureFlagState().anyFlagged}
         nextCueLabel={nextCue()?.label ?? "No cue"}
         operatorLockMode={operatorLockMode()}
         operations={
@@ -17539,7 +17595,14 @@ export default function App() {
         }
         onWorkspaceTab={setWorkspaceTab}
         onSetupSubTab={selectSetupMode}
+        onBack={() => void triggerPreviousCue()}
         onGo={() => void triggerNextCue()}
+        onToggleFade={() => void setCueFadePaused(!snapshot().active_fade?.paused)}
+        onToggleTimeline={() => void (snapshot().timeline.playing ? pauseTimeline() : playTimeline())}
+        onSetBlackout={(enabled) => void setBlackout(enabled)}
+        onSetVideoBlackout={(enabled) => void setVideoBlackout(enabled)}
+        onSetAllBlackout={(enabled) => void setAllBlackout(enabled)}
+        onClearFixtureFlags={() => void clearFixtureFlags("all")}
         onLightingMaster={setLightingMaster}
         onVideoMaster={setVideoMasterOpacity}
         onTapBpm={tapBpm}
@@ -17858,151 +17921,9 @@ export default function App() {
               )}
             </Show>
           </div>
-          <div class="liveTransportGrid" data-live-desk-toolbar>
-            <button
-              type="button"
-              class="liveDeskIconButton liveTransportIconButton"
-              data-live-transport-action="back"
-              title="Back"
-              aria-label="Back"
-              onClick={triggerPreviousCue}
-              disabled={snapshot().cues.length === 0}
-            >
-              <svg viewBox="0 0 20 20" aria-hidden="true">
-                <path d="M5 4v12M15 5l-7 5 7 5z" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              class="liveDeskIconButton liveTransportIconButton"
-              data-live-transport-action="fade"
-              title={snapshot().active_fade?.paused ? "Resume Fade" : "Pause Fade"}
-              aria-label={snapshot().active_fade?.paused ? "Resume Fade" : "Pause Fade"}
-              aria-pressed={Boolean(snapshot().active_fade?.paused)}
-              onClick={() => void setCueFadePaused(!snapshot().active_fade?.paused)}
-              disabled={!snapshot().active_fade}
-            >
-              <svg viewBox="0 0 20 20" aria-hidden="true">
-                <path d="M3.5 15.5 16.5 4.5" />
-                <Show
-                  when={snapshot().active_fade?.paused}
-                  fallback={<path d="M7 5.5 14 10l-7 4.5z" />}
-                >
-                  <path d="M7 5.5v9M12.5 5.5v9" />
-                </Show>
-              </svg>
-            </button>
-            <button
-              type="button"
-              class="liveDeskIconButton liveTransportIconButton"
-              data-live-transport-action="timeline"
-              title={snapshot().timeline.playing ? "Pause Timeline" : "Play Timeline"}
-              aria-label={snapshot().timeline.playing ? "Pause Timeline" : "Play Timeline"}
-              aria-pressed={snapshot().timeline.playing}
-              onClick={() => void (snapshot().timeline.playing ? pauseTimeline() : playTimeline())}
-              disabled={!snapshot().timeline.playing && snapshot().timeline.duration_ms === 0}
-            >
-              <svg viewBox="0 0 20 20" aria-hidden="true">
-                <path d="M3.5 16h13M5 14v4M10 14v4M15 14v4" />
-                <Show
-                  when={snapshot().timeline.playing}
-                  fallback={<path d="M7 4.5 14 9l-7 4.5z" />}
-                >
-                  <path d="M7 4.5v9M12.5 4.5v9" />
-                </Show>
-              </svg>
-            </button>
-            <button
-              class={`killButton${snapshot().blackout ? " engaged" : ""}`}
-              data-live-transport-action="dmx-blackout"
-              onClick={() => void setBlackout(!snapshot().blackout)}
-            >
-              {snapshot().blackout ? "Clear DMX BO" : "DMX BO"}
-            </button>
-            <button
-              class={`killButton${snapshot().video.blackout ? " engaged" : ""}`}
-              data-live-transport-action="video-blackout"
-              onClick={() => void setVideoBlackout(!snapshot().video.blackout)}
-            >
-              {snapshot().video.blackout ? "Clear Video BO" : "Video BO"}
-            </button>
-            <button
-              class={`killButton${snapshot().blackout && snapshot().video.blackout ? " engaged" : ""}`}
-              data-live-transport-action="all-blackout"
-              onClick={() => void setAllBlackout(true)}
-              disabled={snapshot().blackout && snapshot().video.blackout}
-            >
-              All BO
-            </button>
-            <button
-              class="killClear"
-              data-live-transport-action="all-clear"
-              onClick={() => void setAllBlackout(false)}
-              disabled={!snapshot().blackout && !snapshot().video.blackout}
-            >
-              All Clear
-            </button>
-            <button
-              type="button"
-              class="liveDeskIconButton liveTransportIconButton"
-              data-live-transport-action="clear-flags"
-              title="Clear Flags"
-              aria-label="Clear Flags"
-              disabled={!globalFixtureFlagState().anyFlagged}
-              onClick={() => void clearFixtureFlags("all")}
-            >
-              <svg viewBox="0 0 20 20" aria-hidden="true">
-                <path d="M5 17V3.5M5 4h8l-1.5 3L13 10H5M10 13l5 5M15 13l-5 5" />
-              </svg>
-            </button>
-            <div class="liveDeskToolbarActions" data-live-desk-toolbar-actions>
-              <nav class="liveDeskViewToggle" aria-label="Live desk view">
-                <button
-                  type="button"
-                  class={`liveDeskIconButton liveDeskViewIconButton${controlLiveView() === "matrix" ? " active" : ""}`}
-                  data-live-desk-view-action="matrix"
-                  title="Matrix"
-                  aria-label="Matrix"
-                  aria-pressed={controlLiveView() === "matrix"}
-                  onClick={() => setControlLiveView("matrix")}
-                >
-                  <svg viewBox="0 0 20 20" aria-hidden="true">
-                    <path d="M3.5 3.5h5v5h-5zM11.5 3.5h5v5h-5zM3.5 11.5h5v5h-5zM11.5 11.5h5v5h-5z" />
-                  </svg>
-                </button>
-                <button
-                  type="button"
-                  class={`liveDeskIconButton liveDeskViewIconButton${controlLiveView() === "pads" ? " active" : ""}`}
-                  data-live-desk-view-action="cue-pads"
-                  title="Cue Pads"
-                  aria-label="Cue Pads"
-                  aria-pressed={controlLiveView() === "pads"}
-                  onClick={() => setControlLiveView("pads")}
-                >
-                  <svg viewBox="0 0 20 20" aria-hidden="true">
-                    <path d="M4 4h3v3H4zM8.5 4h3v3h-3zM13 4h3v3h-3zM4 8.5h3v3H4zM8.5 8.5h3v3h-3zM13 8.5h3v3h-3zM4 13h3v3H4zM8.5 13h3v3h-3zM13 13h3v3h-3z" />
-                  </svg>
-                </button>
-              </nav>
-              <button
-                type="button"
-                class="liveDeskIconButton liveDeskViewIconButton liveStatusToggle"
-                data-live-status-toggle
-                data-live-desk-view-action="status"
-                aria-controls="live-status-inspector"
-                aria-expanded={liveStatusExpanded()}
-                aria-label={liveStatusExpanded() ? "Hide live status details" : "Show live status details"}
-                title={liveStatusExpanded() ? "Hide live status details" : "Show live status details"}
-                onClick={() => setLiveStatusExpanded((expanded) => !expanded)}
-              >
-                <svg viewBox="0 0 20 20" aria-hidden="true">
-                  <path d="M3.5 3.5h13v13h-13zM7 6v8M9.5 6.5H14M9.5 10H14M9.5 13.5H14" />
-                </svg>
-              </button>
-            </div>
-          </div>
           <Show when={controlLiveView() === "matrix"}>
             <SceneMatrixPanel
+              toolbar={liveDeskViewActions()}
               cues={snapshot().cues}
               groupColors={groupColors()}
               onSetGroupColor={setGroupColor}
@@ -18056,6 +17977,7 @@ export default function App() {
                 >
                   Next
                 </button>
+                {liveDeskViewActions()}
               </div>
               <div class="liveCuePadGrid">
                 <For each={liveCuePads()}>
@@ -18899,12 +18821,12 @@ export default function App() {
             setWorkspaceTab("setup");
             selectSetupMode("patch");
           }}
-          workspace={workspaceTab() === "control" ? "control" : "setup"}
-          controlMode={controlMode()}
-          controlHeaderTitle={faderDeskTitle()}
+          workspace={workspaceTab() === "setup" ? "setup" : workspaceTab() === "touch" ? "touch" : "control"}
+          controlMode={workspaceTab() === "touch" ? "edit" : controlMode()}
+          controlHeaderTitle={workspaceTab() === "touch" ? "Faders" : faderDeskTitle()}
           controlHeaderTools={
             <>
-              <Show when={controlMode() === "live"}>
+              <Show when={workspaceTab() === "control" && controlMode() === "live"}>
                 <nav class="timelineDeskTabs" aria-label="Timeline desk surface">
                   <button
                     type="button"
@@ -18941,7 +18863,7 @@ export default function App() {
                   </button>
                 </nav>
               </Show>
-              <Show when={controlMode() === "edit"}>
+              <Show when={workspaceTab() === "control" && controlMode() === "edit"}>
                 <nav class="editDeskTabs" aria-label="Live edit desk surface">
                   <button
                     class={editDeskSurface() === "faders" ? "active" : ""}
@@ -18993,7 +18915,7 @@ export default function App() {
                 onBlindCommit={commitProgrammer}
                 onBlindDiscard={clearProgrammer}
               />
-              <Show when={controlMode() === "live" && timelineDeskSurface() === "show"}>
+              <Show when={workspaceTab() === "control" && controlMode() === "live" && timelineDeskSurface() === "show"}>
                 <TimelineOperatorBar
                   childTimelineLabel={timelineChildCue()?.label ?? null}
                   positionMs={activeTimeline().position_ms}
@@ -19314,7 +19236,7 @@ export default function App() {
           hotkeyHelpOpen={mappingHotkeyHelpOpen()}
           onCloseHotkeyHelp={() => setMappingHotkeyHelpOpen(false)}
         >
-        <Show when={workspaceTab() === "control"}>
+        <Show when={workspaceTab() === "control" || workspaceTab() === "touch"}>
         <section
           class={`panel faders controlPanel timelineDesk-${timelineDeskSurface()} timelineDrawer-${timelineContextDrawer()} editDesk-${editDeskSurface()}`}
           data-timeline-context-drawer={timelineContextDrawer()}

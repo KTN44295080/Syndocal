@@ -53,13 +53,26 @@ type WorkspaceChromeProps = {
   applicationUpdateError: string | null;
   uiScale: 90 | 100 | 110;
   uiLocale: UiLocale;
+  canBack: boolean;
   canGo: boolean;
+  canPauseFade: boolean;
+  fadePaused: boolean;
+  canToggleTimeline: boolean;
+  timelinePlaying: boolean;
+  anyFixtureFlags: boolean;
   nextCueLabel: string;
   operatorLockMode: OperatorLockMode | null;
   operations: JSX.Element;
   onWorkspaceTab: (tab: WorkspaceTab) => void;
   onSetupSubTab: (tab: SetupSubTab) => void;
+  onBack: () => void;
   onGo: () => void;
+  onToggleFade: () => void;
+  onToggleTimeline: () => void;
+  onSetBlackout: (enabled: boolean) => void;
+  onSetVideoBlackout: (enabled: boolean) => void;
+  onSetAllBlackout: (enabled: boolean) => void;
+  onClearFixtureFlags: () => void;
   onLightingMaster: (level: number) => void | Promise<void>;
   onVideoMaster: (level: number) => void | Promise<void>;
   onTapBpm: () => void | Promise<void>;
@@ -491,6 +504,110 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
         </div>
 
         <div class="status" data-tauri-drag-region>
+          <div class="topbarTransportCluster" role="group" aria-label="Global show controls">
+            <button
+              type="button"
+              class="topbarIconButton"
+              data-global-operator-action="back"
+              title="Back"
+              aria-label="Back"
+              disabled={!props.canBack}
+              onClick={props.onBack}
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M5 4v12M15 5l-7 5 7 5z" />
+              </svg>
+            </button>
+            <button
+              class="goButton"
+              type="button"
+              data-global-operator-action="go"
+              title={`GO: ${props.nextCueLabel}`}
+              disabled={!props.canGo}
+              onClick={props.onGo}
+            >
+              GO
+            </button>
+            <button
+              type="button"
+              class="topbarIconButton"
+              data-global-operator-action="fade"
+              title={props.fadePaused ? "Resume Fade" : "Pause Fade"}
+              aria-label={props.fadePaused ? "Resume Fade" : "Pause Fade"}
+              aria-pressed={props.fadePaused}
+              disabled={!props.canPauseFade}
+              onClick={props.onToggleFade}
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                {props.fadePaused
+                  ? <path d="M7 5.5v9M12.5 5.5v9" />
+                  : <path d="M7 4.5 14 10l-7 5z" />}
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="topbarIconButton"
+              data-global-operator-action="timeline"
+              title={props.timelinePlaying ? "Pause Timeline" : "Play Timeline"}
+              aria-label={props.timelinePlaying ? "Pause Timeline" : "Play Timeline"}
+              aria-pressed={props.timelinePlaying}
+              disabled={!props.canToggleTimeline}
+              onClick={props.onToggleTimeline}
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M3.5 16h13M5 14v4M10 14v4M15 14v4" />
+                {props.timelinePlaying
+                  ? <path d="M7 4.5v9M12.5 4.5v9" />
+                  : <path d="M7 4.5 14 9l-7 4.5z" />}
+              </svg>
+            </button>
+            <button
+              type="button"
+              class={`topbarIconButton topbarSafetyButton${props.blackout ? " engaged" : ""}`}
+              data-global-operator-action="dmx-blackout"
+              title={props.blackout ? "Clear DMX Blackout" : "DMX Blackout"}
+              aria-label={props.blackout ? "Clear DMX Blackout" : "DMX Blackout"}
+              aria-pressed={props.blackout}
+              onClick={() => props.onSetBlackout(!props.blackout)}
+            >
+              <span data-no-localize>DMX</span>
+            </button>
+            <button
+              type="button"
+              class={`topbarIconButton topbarSafetyButton${props.videoBlackout ? " engaged" : ""}`}
+              data-global-operator-action="video-blackout"
+              title={props.videoBlackout ? "Clear Video Blackout" : "Video Blackout"}
+              aria-label={props.videoBlackout ? "Clear Video Blackout" : "Video Blackout"}
+              aria-pressed={props.videoBlackout}
+              onClick={() => props.onSetVideoBlackout(!props.videoBlackout)}
+            >
+              <span data-no-localize>VID</span>
+            </button>
+            <button
+              type="button"
+              class={`topbarIconButton topbarSafetyButton${props.blackout && props.videoBlackout ? " engaged" : ""}`}
+              data-global-operator-action="all-blackout"
+              title={props.blackout && props.videoBlackout ? "Clear All Blackout" : "All Blackout"}
+              aria-label={props.blackout && props.videoBlackout ? "Clear All Blackout" : "All Blackout"}
+              aria-pressed={props.blackout && props.videoBlackout}
+              onClick={() => props.onSetAllBlackout(!(props.blackout && props.videoBlackout))}
+            >
+              <span data-no-localize>ALL</span>
+            </button>
+            <button
+              type="button"
+              class="topbarIconButton"
+              data-global-operator-action="clear-flags"
+              title="Clear Fixture Flags"
+              aria-label="Clear Fixture Flags"
+              disabled={!props.anyFixtureFlags}
+              onClick={props.onClearFixtureFlags}
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M5 17V3.5M5 4h8l-1.5 3L13 10H5M10 13l5 5M15 13l-5 5" />
+              </svg>
+            </button>
+          </div>
           <div class="topbarMasterCluster" data-topbar-masters data-tauri-drag-region>
             <label
               class="topbarMasterControl"
@@ -525,15 +642,6 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               />
             </label>
           </div>
-          <button
-            class="goButton"
-            type="button"
-            title={`GO: ${props.nextCueLabel}`}
-            disabled={!props.canGo}
-            onClick={props.onGo}
-          >
-            GO
-          </button>
           <span class="bpmReadout" data-tauri-drag-region>
             <small data-tauri-drag-region>BPM</small>
             <strong data-tauri-drag-region>{props.bpm.toFixed(0)}</strong>
@@ -559,24 +667,10 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
           />
           <span
             class={props.blackout || props.videoBlackout ? "pill danger" : "pill ok"}
+            title={`${liveLabel()} · Engine ${props.tickMs} ms / jitter ${props.jitterUs} us / ${props.packetBytes} B · DMX ${props.dmxSuccessCount}/${props.dmxOutputCount}`}
             data-tauri-drag-region
           >
             {liveLabel()}
-          </span>
-          <span
-            class="metric tickMetric"
-            title={`Engine ${props.tickMs} ms / jitter ${props.jitterUs} us / ${props.packetBytes} B`}
-            data-tauri-drag-region
-          >
-            {props.tickMs} ms
-          </span>
-          <span
-            class="metric outputMetric"
-            title="Healthy DMX outputs / configured DMX outputs"
-            data-tauri-drag-region
-          >
-            <small data-tauri-drag-region>DMX</small>
-            <strong data-tauri-drag-region>{props.dmxSuccessCount}/{props.dmxOutputCount}</strong>
           </span>
         </div>
         <WindowControls />

@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, type JSX } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { cueIdentityCss, groupIdentityCss, groupIdentityHue } from "../identityColor";
 import { handleHorizontalWheel } from "../horizontalWheel";
@@ -16,6 +16,7 @@ import { authoredCueLiveModifier } from "../cueLiveModifier";
 import { CueLiveModifierStrip } from "./CueLiveModifierStrip";
 
 interface SceneMatrixPanelProps {
+  toolbar?: JSX.Element;
   cues: CueSummary[];
   groupColors?: Record<string, string>;
   onSetGroupColor?: (groupId: string, color: string | null) => void | Promise<void>;
@@ -311,34 +312,37 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
       aria-label="Scene matrix grouped by scene bank"
       data-timeline-track={props.timelineTrack}
     >
-      <nav
-        class="sceneMatrixBankJumpStrip"
-        aria-label="Scene bank navigation"
-        data-wheel-scroll-surface="scene-bank-chips"
-        onWheel={handleHorizontalWheel}
-      >
-        <For each={columns()}>
-          {(column) => {
-            const columnId = () => column.id ?? "Show";
-            const groupText = () =>
-              groupIdentityCss(columnId(), props.groupColors, "text");
-            return (
-              <button
-                type="button"
-                classList={{ active: activeBankId() === columnId() }}
-                style={{ "--group-identity-text": groupText() }}
-                data-scene-matrix-bank-jump={columnId()}
-                aria-current={activeBankId() === columnId() ? "true" : undefined}
-                aria-label={`Jump to scene bank ${column.label}`}
-                onClick={() => jumpToBank(columnId())}
-              >
-                <span data-no-localize={column.id !== null ? true : undefined}>{column.label}</span>
-                <small>{column.cues.length}</small>
-              </button>
-            );
-          }}
-        </For>
-      </nav>
+      <header class="sceneMatrixSurfaceHeader">
+        <nav
+          class="sceneMatrixBankJumpStrip"
+          aria-label="Scene bank navigation"
+          data-wheel-scroll-surface="scene-bank-chips"
+          onWheel={handleHorizontalWheel}
+        >
+          <For each={columns()}>
+            {(column) => {
+              const columnId = () => column.id ?? "Show";
+              const groupText = () =>
+                groupIdentityCss(columnId(), props.groupColors, "text");
+              return (
+                <button
+                  type="button"
+                  classList={{ active: activeBankId() === columnId() }}
+                  style={{ "--group-identity-text": groupText() }}
+                  data-scene-matrix-bank-jump={columnId()}
+                  aria-current={activeBankId() === columnId() ? "true" : undefined}
+                  aria-label={`Jump to scene bank ${column.label}`}
+                  onClick={() => jumpToBank(columnId())}
+                >
+                  <span data-no-localize={column.id !== null ? true : undefined}>{column.label}</span>
+                  <small>{column.cues.length}</small>
+                </button>
+              );
+            }}
+          </For>
+        </nav>
+        {props.toolbar}
+      </header>
       <div
         class="sceneMatrixScroller"
         ref={(element) => {

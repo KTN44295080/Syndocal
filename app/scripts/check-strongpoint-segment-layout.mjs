@@ -101,6 +101,29 @@ try {
     assert.equal(order, "column-major-bottom-left", `${footprint}ch physical segment order`);
     assert.deepEqual(size, { width: columns * 5, height: rows * 5 }, `${footprint}ch stage size`);
     assert.equal(visuals.fixtureVisualKind(fixture), "panel", `${footprint}ch visual kind`);
+
+    if (expectedSegments > 1) {
+      assert.deepEqual(
+        visuals.mappingFixtureSegmentCell(grid, 0, order),
+        { column: 0, row: rows - 1 },
+        `${footprint}ch segment 1 starts at the bottom-left`,
+      );
+      assert.deepEqual(
+        visuals.mappingFixtureSegmentCell(grid, rows - 1, order),
+        { column: 0, row: 0 },
+        `${footprint}ch left column runs bottom-to-top`,
+      );
+      assert.deepEqual(
+        visuals.mappingFixtureSegmentCell(grid, rows, order),
+        { column: 1, row: rows - 1 },
+        `${footprint}ch next segment restarts at the next column bottom`,
+      );
+      assert.deepEqual(
+        visuals.mappingFixtureSegmentCell(grid, expectedSegments - 1, order),
+        { column: columns - 1, row: 0 },
+        `${footprint}ch final segment ends at the top-right`,
+      );
+    }
   }
 
   const strongpointOrder = "column-major-bottom-left";

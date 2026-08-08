@@ -77,27 +77,11 @@ export const defaultTouchSurface = (
         { ...createTouchControl(1, "Label", 0, 0), label: "SHOW CONTROL" },
         { ...createTouchControl(2, "Image", 0, 1), h: 1, label: "Touch Stage" },
         {
-          ...createTouchControl(3, "Button", 2, 0),
-          label: "BACK",
-          binding: { kind: "cue_previous" },
-        },
-        {
-          ...createTouchControl(5, "Button", 4, 0),
-          label: "PAUSE",
-          binding: { kind: "cue_fade_pause" },
-        },
-        {
-          ...createTouchControl(6, "Fader", 9, 0),
-          w: 3,
+          ...createTouchControl(6, "Fader", 2, 0),
+          w: 4,
           h: 2,
           label: "FRONT",
           binding: { kind: "group_submaster", group_id: "front" },
-        },
-        {
-          ...createTouchControl(8, "Button", 6, 0),
-          w: 3,
-          label: "ALL BO",
-          binding: { kind: "all_blackout" },
         },
         {
           ...createTouchControl(9, "Dial", 0, 2),
@@ -123,20 +107,6 @@ export const defaultTouchSurface = (
           h: 6,
           label: "POSITION",
           binding: { kind: "selected_fixture_pan_tilt", pan_attribute: "Pan", tilt_attribute: "Tilt" },
-        },
-        {
-          ...createTouchControl(13, "Button", 9, 2),
-          w: 3,
-          h: 3,
-          label: "DMX BO",
-          binding: { kind: "blackout" },
-        },
-        {
-          ...createTouchControl(14, "Button", 9, 5),
-          w: 3,
-          h: 3,
-          label: "VIDEO BO",
-          binding: { kind: "video_blackout" },
         },
         ...visibleCues.map((cue, index) => {
           const start = Math.floor(index * 6 / visibleCues.length);
