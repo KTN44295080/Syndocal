@@ -18,8 +18,8 @@ use protocol::{
     MoveCoordinateMode, MoveDirection, MoveEffectRequest, MoveInterpolation, MovePathPoint,
     PatchedFixtureSummary, ProjectFile, Rotation3, StageMapConfig, TimelineAudioClipSummary,
     TimelineCueEventSummary, TimelineLayerKind, TimelineLayerSummary, TimelineTrackKind,
-    TouchControlBinding, TouchControlKind, TouchControlSummary, TouchPageSummary,
-    TouchSurfaceSummary, Vec3,
+    TouchControlBinding, TouchControlKind, TouchControlSummary, TouchFeaturePresetTarget,
+    TouchPageSummary, TouchSurfaceSummary, Vec3,
 };
 use roxmltree::{Document, Node};
 use serde::Serialize;
@@ -137,6 +137,9 @@ struct DvcChannelBinding {
     attribute: String,
     raw_offsets: Vec<usize>,
     resolution: AttributeResolution,
+    raw_channel_index: usize,
+    channel_type: u16,
+    preset_names: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -268,7 +271,15 @@ fn import_bytes(bytes: &[u8], path_label: &str) -> Result<DvcImportOutcome, Stri
     )?;
     parse_super_scenes(root, &mut cues, &scene_indices, &mut snapshot, &mut report)?;
     snapshot.cues = cues;
-    snapshot.touch_surface = parse_touch_surface(root, &scene_indices, &snapshot.cues, &mut report);
+    snapshot.touch_surface = parse_touch_surface(
+        root,
+        &scene_indices,
+        &snapshot.cues,
+        &profiles,
+        &fixture_refs,
+        &snapshot.fixtures,
+        &mut report,
+    );
     configure_disabled_dmx_routes(&mut snapshot);
 
     let fixture_group_count = direct_child(root, "FIXTUREGROUPS")
@@ -602,6 +613,10 @@ fn parse_profile(
         };
         let attribute = unique_attribute(attribute_base, &mut attribute_counts);
         let functions = parse_channel_functions(channel, &attribute, &resolution);
+        let preset_names = functions
+            .iter()
+            .map(|function| function.name.clone())
+            .collect();
         // Daslight LIVE has a blackout baseline when no scene is active. The
         // profile's SSLPRESETDMXDEFAULT is an editor reference value, so it is
         // intentionally not used as the imported control's idle default.
@@ -622,6 +637,9 @@ fn parse_profile(
             attribute,
             raw_offsets,
             resolution,
+            raw_channel_index: channel_index,
+            channel_type,
+            preset_names,
         });
     }
 
@@ -823,10 +841,134 @@ fn fixture_group_identities(root: Node<'_, '_>) -> HashMap<String, String> {
     identities
 }
 
+fn parse_touch_feature_preset_binding(
+    shortcut: Node<'_, '_>,
+    action: Node<'_, '_>,
+    profiles: &[ParsedProfile],
+    fixture_refs: &HashMap<String, FixtureImportRef>,
+) -> Result<TouchControlBinding, String> {
+    let target = action
+        .attribute("TARGET")
+        .ok_or_else(|| "Daslight Feature Preset target was missing".to_string())?;
+    let target_parts = target.split(':').collect::<Vec<_>>();
+    if target_parts.len() != 3 {
+        return Err(format!(
+            "Daslight Feature Preset target '{target}' has an unsupported shape"
+        ));
+    }
+
+    let selected_fixture_uids = direct_child(action, "BEAMS")
+        .into_iter()
+        .flat_map(element_children)
+        .filter(|node| node.has_tag_name("BEAM"))
+        .filter_map(|beam| beam.attribute("FIXTURE"))
+        .collect::<Vec<_>>();
+    if selected_fixture_uids.is_empty() {
+        return Err("Daslight Feature Preset has no selected BEAMS".to_string());
+    }
+
+    let mut targets = Vec::new();
+    let mut seen_targets = HashSet::<(u64, String)>::new();
+    for fixture_uid in selected_fixture_uids {
+        let Some(fixture_ref) = fixture_refs.get(fixture_uid) else {
+            continue;
+        };
+        let Some(profile) = profiles.get(fixture_ref.profile_index) else {
+            continue;
+        };
+        let binding = if target == ":-1:4" {
+            // Daslight exposes this target as "Generic: Dimmer". Live DMX
+            // Levels verification shows that it applies to canonical Dimmer
+            // presets, but not profile-specific presets such as "Dimmer
+            // linear" even when both channels use SSLCHANNELTYPE=7.
+            let candidates = profile
+                .bindings
+                .iter()
+                .filter(|binding| {
+                    binding.channel_type == 7
+                        && binding
+                            .preset_names
+                            .iter()
+                            .any(|name| name.eq_ignore_ascii_case("Dimmer"))
+                })
+                .collect::<Vec<_>>();
+            match candidates.as_slice() {
+                [binding] => Some(*binding),
+                _ => None,
+            }
+        } else {
+            let profile_uid = target_parts[0];
+            let channel_index = target_parts[1].parse::<usize>().map_err(|_| {
+                format!("Daslight Feature Preset target '{target}' has an invalid channel index")
+            })?;
+            let preset_index = target_parts[2].parse::<usize>().map_err(|_| {
+                format!("Daslight Feature Preset target '{target}' has an invalid preset index")
+            })?;
+            if profile.summary.fixture_type_id.as_deref() != Some(profile_uid) {
+                None
+            } else {
+                profile.bindings.iter().find(|binding| {
+                    binding.raw_channel_index == channel_index
+                        && binding.preset_names.get(preset_index).is_some()
+                })
+            }
+        };
+        let Some(binding) = binding else {
+            continue;
+        };
+        let key = (fixture_ref.fixture_id, binding.attribute.clone());
+        if seen_targets.insert(key.clone()) {
+            targets.push(TouchFeaturePresetTarget {
+                fixture_id: key.0,
+                attribute: key.1,
+            });
+        }
+    }
+    if targets.is_empty() {
+        return Err(format!(
+            "Daslight Feature Preset target '{target}' resolved to no imported fixture attributes"
+        ));
+    }
+
+    let settings = direct_child(shortcut, "SETTINGS");
+    let parse_normalized = |attribute: &str, fallback: f32| -> Result<u16, String> {
+        let value = settings
+            .and_then(|node| node.attribute(attribute))
+            .map(str::parse::<f32>)
+            .transpose()
+            .map_err(|_| format!("Daslight Feature Preset {attribute} was invalid"))?
+            .unwrap_or(fallback);
+        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+            return Err(format!(
+                "Daslight Feature Preset {attribute}={value} is outside the supported 0..1 range"
+            ));
+        }
+        Ok((value * f32::from(u16::MAX)).round() as u16)
+    };
+    let min_value = parse_normalized("MIN", 0.0)?;
+    let max_value = parse_normalized("MAX", 1.0)?;
+    if min_value > max_value {
+        return Err("Daslight Feature Preset MIN is greater than MAX".to_string());
+    }
+    let inverted = settings
+        .and_then(|node| node.attribute("INV"))
+        .is_some_and(|value| value == "1");
+
+    Ok(TouchControlBinding::FeaturePreset {
+        targets,
+        min_value,
+        max_value,
+        inverted,
+    })
+}
+
 fn parse_touch_surface(
     root: Node<'_, '_>,
     scene_indices: &HashMap<String, usize>,
     cues: &[CueSummary],
+    profiles: &[ParsedProfile],
+    fixture_refs: &HashMap<String, FixtureImportRef>,
+    fixtures: &[PatchedFixtureSummary],
     report: &mut DvcImportReport,
 ) -> TouchSurfaceSummary {
     const TOUCH_GRID_COLUMNS: u16 = 12;
@@ -888,6 +1030,22 @@ fn parse_touch_surface(
                     .and_then(|target| scene_indices.get(target))
                     .and_then(|index| cues.get(*index))
                     .map(|cue| TouchControlBinding::Cue { cue_id: cue.id }),
+                // Verified in Daslight's TOUCH MAPPINGS and DMX LEVELS windows.
+                // Action 223 is a Feature Preset over an explicit BEAMS set;
+                // preserve the exact fixture/attribute expansion rather than
+                // widening it to every fixture that happens to say Dimmer.
+                "223" => match parse_touch_feature_preset_binding(
+                    shortcut,
+                    action,
+                    profiles,
+                    fixture_refs,
+                ) {
+                    Ok(binding) => Some(binding),
+                    Err(message) => {
+                        report.unsupported.add(1, item.clone(), message);
+                        None
+                    }
+                },
                 _ => {
                     report.unsupported.add(
                         1,
@@ -909,6 +1067,24 @@ fn parse_touch_surface(
                 }
                 continue;
             };
+            if let TouchControlBinding::FeaturePreset { targets, .. } = &binding {
+                if !targets.iter().all(|target| {
+                    fixtures.iter().any(|fixture| {
+                        fixture.id == target.fixture_id
+                            && fixture
+                                .controls
+                                .iter()
+                                .any(|control| control.attribute == target.attribute)
+                    })
+                }) {
+                    report.skipped.add(
+                        1,
+                        item,
+                        "Daslight Feature Preset referenced a missing imported fixture attribute",
+                    );
+                    continue;
+                }
+            }
             if bindings_by_control
                 .insert(control_uid.to_string(), binding)
                 .is_some()
@@ -3857,6 +4033,7 @@ mod tests {
     use std::{collections::BTreeSet, io::Write, net::UdpSocket, time::Duration};
 
     use base64::Engine as _;
+    use engine::{EngineCommand, EngineHandle};
     use flate2::{write::ZlibEncoder, Compress, Compression, FlushCompress};
 
     use super::*;
@@ -6391,7 +6568,7 @@ mod tests {
     }
 
     #[test]
-    fn dvc_local_homecoming_laser_touch_faders_keep_layout_without_guessing_action_when_present() {
+    fn dvc_local_homecoming_laser_touch_faders_map_verified_feature_presets_when_present() {
         let path = Path::new(r"C:\Users\kouty\Desktop\homecoming2026\homecoming2606-Laser.dvc");
         if !path.is_file() {
             eprintln!(
@@ -6414,18 +6591,123 @@ mod tests {
         assert_eq!(controls.len(), 2);
         assert!(controls
             .iter()
-            .all(|control| control.kind == TouchControlKind::Fader && control.binding.is_none()));
+            .all(|control| control.kind == TouchControlKind::Fader));
         assert!(controls.iter().any(|control| {
             control.label == "Dimmer"
                 && (control.x, control.y, control.w, control.h) == (0, 0, 1, 4)
+                && matches!(
+                    control.binding.as_ref(),
+                    Some(TouchControlBinding::FeaturePreset {
+                        targets,
+                        min_value: 0,
+                        max_value: u16::MAX,
+                        inverted: false,
+                    }) if targets.iter().map(|target| target.fixture_id).collect::<Vec<_>>()
+                        == vec![8, 11, 9, 10, 1, 2]
+                        && targets.iter().all(|target| target.attribute == "Dimmer")
+                )
         }));
         assert!(controls.iter().any(|control| {
             control.label == "Dimmer linear"
                 && (control.x, control.y, control.w, control.h) == (0, 4, 1, 4)
+                && matches!(
+                    control.binding.as_ref(),
+                    Some(TouchControlBinding::FeaturePreset {
+                        targets,
+                        min_value: 0,
+                        max_value: u16::MAX,
+                        inverted: false,
+                    }) if targets.iter().map(|target| target.fixture_id).collect::<Vec<_>>()
+                        == vec![5, 6, 4, 7]
+                        && targets.iter().all(|target| target.attribute == "Dimmer")
+                )
         }));
-        assert!(outcome.report.unsupported.details.iter().any(|detail| {
-            detail.message == "Daslight Touch action type 223 is not yet mapped"
-        }));
+        assert!(!outcome
+            .report
+            .unsupported
+            .details
+            .iter()
+            .any(|detail| detail.item.starts_with("Shortcut")
+                && detail.message.contains("Feature Preset")));
+
+        let feature_targets = |label: &str| {
+            let binding = controls
+                .iter()
+                .find(|control| control.label == label)
+                .and_then(|control| control.binding.as_ref())
+                .expect("verified Touch fader must remain bound");
+            let TouchControlBinding::FeaturePreset { targets, .. } = binding else {
+                panic!("verified Touch fader must use a Feature Preset binding");
+            };
+            targets.clone()
+        };
+        let dimmer_targets = feature_targets("Dimmer");
+        let linear_targets = feature_targets("Dimmer linear");
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine
+            .send(EngineCommand::LoadProjectSnapshot(
+                outcome.project.snapshot.clone(),
+            ))
+            .unwrap();
+        for _ in 0..40 {
+            if engine.snapshot().telemetry.queue_depth == 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        engine
+            .send(EngineCommand::SetFixtureAttributeBatch {
+                targets: dimmer_targets.clone(),
+                value: u16::MAX,
+            })
+            .unwrap();
+        let mut snapshot = engine.snapshot();
+        for _ in 0..40 {
+            snapshot = engine.snapshot();
+            if snapshot.telemetry.queue_depth == 0 && snapshot.dmx_preview.get(0) == Some(&255) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let lit_addresses = snapshot
+            .dmx_preview
+            .iter()
+            .enumerate()
+            .filter(|(_, value)| **value != 0)
+            .map(|(index, _)| index + 1)
+            .collect::<Vec<_>>();
+        assert_eq!(lit_addresses, vec![1, 14, 173, 178, 183, 188]);
+
+        engine
+            .send(EngineCommand::SetFixtureAttributeBatch {
+                targets: dimmer_targets,
+                value: 0,
+            })
+            .unwrap();
+        engine
+            .send(EngineCommand::SetFixtureAttributeBatch {
+                targets: linear_targets,
+                value: u16::MAX,
+            })
+            .unwrap();
+        for _ in 0..40 {
+            snapshot = engine.snapshot();
+            if snapshot.telemetry.queue_depth == 0 && snapshot.dmx_preview.get(65) == Some(&255) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let lit_addresses = snapshot
+            .dmx_preview
+            .iter()
+            .enumerate()
+            .filter(|(_, value)| **value != 0)
+            .map(|(index, _)| index + 1)
+            .collect::<Vec<_>>();
+        assert_eq!(lit_addresses, vec![66, 100, 134, 168]);
     }
 
     #[test]

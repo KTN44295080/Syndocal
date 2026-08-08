@@ -65,6 +65,11 @@ const japaneseText: Record<string, string> = {
     "CONFORM_TO_TEMPOを伴わないALLOWLOOPは固定長の1回再生ブロックとして扱います",
   "Unsupported Daslight timeline block type": "未対応のDaslightタイムラインブロック種別です",
   "Touch layout": "タッチレイアウト",
+  "Imported feature preset": "インポート済みFeature Preset",
+  "Imported Daslight Feature Preset ·": "インポート済みDaslight Feature Preset ·",
+  "target(s)": "ターゲット",
+  "Exact fixture/attribute selection and fader range are preserved.":
+    "灯体・属性の選択範囲とフェーダー範囲をそのまま維持しています。",
   Shortcuts: "ショートカット",
   "Daslight hardware devices": "Daslightハードウェアデバイス",
   "Not supported in the DVC-1 tranche": "DVC-1トランシェでは未対応です",
@@ -2519,6 +2524,10 @@ const japaneseText: Record<string, string> = {
 };
 
 const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
+  [
+    /^Imported Daslight Feature Preset · (\d+) target\(s\)$/,
+    (count) => `インポート済みDaslight Feature Preset · ${count}ターゲット`,
+  ],
   [
     /^GDTF Share manufacturer catalog failed: Manufacturer catalog returned only (\d+) of (\d+) revisions\.$/,
     (shown, total) => `GDTF Shareのメーカーカタログ取得に失敗しました: ${total}件中${shown}件しか取得できませんでした。`,

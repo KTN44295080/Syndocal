@@ -48,15 +48,15 @@ use protocol::{
     TimelineAudioClipId, TimelineAudioClipSummary, TimelineAutomationSummary,
     TimelineCueEventSummary, TimelineEventId, TimelineLayerKind, TimelineLayerSummary,
     TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind, TimelineVideoAutomationSummary,
-    TouchSurfaceSummary, Transform2D, ValueEffectDirection, ValueEffectInterpolation,
-    ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
-    VideoBlendMode, VideoColorAdjust, VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust,
-    VideoIsfControlKind, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId,
-    VideoLayerState, VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind,
-    VideoOutputMapping, VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget,
-    VideoParam, VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
-    LIVE_AUDIO_FEATURE_BAND_CAPACITY, MAX_CUE_AUTHORED_BEATS, MAX_TIMELINE_SCENE_BLOCK_LOOPS,
-    MIN_CUE_AUTHORED_BEATS,
+    TouchFeaturePresetTarget, TouchSurfaceSummary, Transform2D, ValueEffectDirection,
+    ValueEffectInterpolation, ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3,
+    VideoAutomationKeyframeSummary, VideoBlendMode, VideoColorAdjust, VideoCuePointSummary,
+    VideoEffectTarget, VideoFxAdjust, VideoIsfControlKind, VideoIsfEffectStageSummary,
+    VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerSummary, VideoLayerTarget,
+    VideoOutputId, VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetSummary,
+    VideoOutputSummary, VideoOutputTarget, VideoParam, VideoSnapshot, VideoSourceKind,
+    VideoSourceSummary, DEFAULT_CUE_LIST_ID, LIVE_AUDIO_FEATURE_BAND_CAPACITY,
+    MAX_CUE_AUTHORED_BEATS, MAX_TIMELINE_SCENE_BLOCK_LOOPS, MIN_CUE_AUTHORED_BEATS,
 };
 use thiserror::Error;
 
@@ -217,6 +217,10 @@ pub enum EngineCommand {
         attribute: String,
         value: u16,
     },
+    SetFixtureAttributeBatch {
+        targets: Vec<TouchFeaturePresetTarget>,
+        value: u16,
+    },
     SetGroupAttribute {
         group_id: String,
         attribute: String,
@@ -230,6 +234,10 @@ pub enum EngineCommand {
     SetProgrammerAttribute {
         fixture_id: FixtureId,
         attribute: String,
+        value: u16,
+    },
+    SetProgrammerFixtureAttributeBatch {
+        targets: Vec<TouchFeaturePresetTarget>,
         value: u16,
     },
     SetProgrammerGroupAttribute {
@@ -1097,9 +1105,11 @@ impl EngineCommand {
                 | EngineCommand::ReplaceFixtureProfile { .. }
                 | EngineCommand::RemoveFixture(_)
                 | EngineCommand::SetAttribute { .. }
+                | EngineCommand::SetFixtureAttributeBatch { .. }
                 | EngineCommand::SetGroupAttribute { .. }
                 | EngineCommand::SetProgrammerMode { .. }
                 | EngineCommand::SetProgrammerAttribute { .. }
+                | EngineCommand::SetProgrammerFixtureAttributeBatch { .. }
                 | EngineCommand::SetProgrammerGroupAttribute { .. }
                 | EngineCommand::ClearProgrammer
                 | EngineCommand::CommitProgrammer { .. }
@@ -5488,6 +5498,21 @@ impl EngineRuntime {
                 }
                 Err(error) => self.last_error = Some(error),
             },
+            EngineCommand::SetFixtureAttributeBatch { targets, value } => {
+                match self.resolve_fixture_attribute_batch(targets) {
+                    Ok(targets) => {
+                        self.active_cue_id = None;
+                        self.active_fade = None;
+                        for (fixture_id, attribute) in targets {
+                            let key = (fixture_id, attribute);
+                            self.cue_value_origins.remove(&key);
+                            self.values.insert(key, value);
+                        }
+                        self.last_error = None;
+                    }
+                    Err(error) => self.last_error = Some(error),
+                }
+            }
             EngineCommand::SetGroupAttribute {
                 group_id,
                 attribute,
@@ -5529,6 +5554,18 @@ impl EngineRuntime {
                 }
                 Err(error) => self.last_error = Some(error),
             },
+            EngineCommand::SetProgrammerFixtureAttributeBatch { targets, value } => {
+                match self.resolve_fixture_attribute_batch(targets) {
+                    Ok(targets) => {
+                        for (fixture_id, attribute) in targets {
+                            self.programmer_values
+                                .insert((fixture_id, attribute), value);
+                        }
+                        self.last_error = None;
+                    }
+                    Err(error) => self.last_error = Some(error),
+                }
+            }
             EngineCommand::SetProgrammerGroupAttribute {
                 group_id,
                 attribute,
@@ -12069,6 +12106,27 @@ impl EngineRuntime {
                     .map(|attribute| (attribute, value.value))
             })
             .collect()
+    }
+
+    fn resolve_fixture_attribute_batch(
+        &self,
+        targets: Vec<TouchFeaturePresetTarget>,
+    ) -> Result<Vec<(FixtureId, String)>, String> {
+        if targets.is_empty() {
+            return Err("Fixture attribute batch requires at least one target".to_string());
+        }
+        if targets.len() > 512 {
+            return Err("Fixture attribute batch contains more than 512 targets".to_string());
+        }
+        let mut seen = HashSet::new();
+        let mut resolved = Vec::with_capacity(targets.len());
+        for target in targets {
+            let attribute = self.resolve_fixture_attribute(target.fixture_id, &target.attribute)?;
+            if seen.insert((target.fixture_id, attribute.clone())) {
+                resolved.push((target.fixture_id, attribute));
+            }
+        }
+        Ok(resolved)
     }
 
     fn resolve_group_attribute_targets(
@@ -40829,6 +40887,79 @@ mod tests {
         assert_eq!(snapshot.dmx_preview[0], 255);
         assert_eq!(snapshot.dmx_preview[9], 255);
         assert_eq!(snapshot.dmx_preview[19], 0);
+    }
+
+    #[test]
+    fn fixture_attribute_batch_updates_only_explicit_targets() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        for (fixture_id, address) in [(1, 1), (2, 10), (3, 20)] {
+            runtime.apply_command(EngineCommand::PatchFixture {
+                fixture_id,
+                request: sample_patch_request(&format!("Fixture {fixture_id}"), address),
+                profile: sample_profile(),
+            });
+        }
+        runtime.apply_command(EngineCommand::SetFixtureAttributeBatch {
+            targets: vec![
+                TouchFeaturePresetTarget {
+                    fixture_id: 1,
+                    attribute: "Dimmer".to_string(),
+                },
+                TouchFeaturePresetTarget {
+                    fixture_id: 3,
+                    attribute: "Dimmer".to_string(),
+                },
+            ],
+            value: u16::MAX,
+        });
+
+        let mut frame = [0_u8; 512];
+        runtime.render_dmx_frame(&mut frame, 0, Instant::now());
+        assert_eq!(runtime.last_error, None);
+        assert_eq!(frame[0], 255);
+        assert_eq!(frame[9], 0);
+        assert_eq!(frame[19], 255);
+    }
+
+    #[test]
+    fn fixture_attribute_batch_rejects_invalid_target_without_partial_update() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        for (fixture_id, address) in [(1, 1), (2, 10)] {
+            runtime.apply_command(EngineCommand::PatchFixture {
+                fixture_id,
+                request: sample_patch_request(&format!("Fixture {fixture_id}"), address),
+                profile: sample_profile(),
+            });
+        }
+        runtime.apply_command(EngineCommand::SetFixtureAttributeBatch {
+            targets: vec![
+                TouchFeaturePresetTarget {
+                    fixture_id: 1,
+                    attribute: "Dimmer".to_string(),
+                },
+                TouchFeaturePresetTarget {
+                    fixture_id: 2,
+                    attribute: "Missing".to_string(),
+                },
+            ],
+            value: u16::MAX,
+        });
+
+        let mut frame = [0_u8; 512];
+        runtime.render_dmx_frame(&mut frame, 0, Instant::now());
+        assert!(runtime
+            .last_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Attribute 'Missing' was not found on fixture 2"));
+        assert_eq!(frame[0], 0);
+        assert_eq!(frame[9], 0);
     }
 
     #[test]

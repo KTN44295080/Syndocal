@@ -3389,6 +3389,12 @@ pub enum TouchControlKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TouchFeaturePresetTarget {
+    pub fixture_id: FixtureId,
+    pub attribute: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TouchControlBinding {
     FixtureAttribute {
@@ -3398,6 +3404,12 @@ pub enum TouchControlBinding {
     GroupAttribute {
         group_id: String,
         attribute: String,
+    },
+    FeaturePreset {
+        targets: Vec<TouchFeaturePresetTarget>,
+        min_value: u16,
+        max_value: u16,
+        inverted: bool,
     },
     FixtureColor {
         fixture_id: FixtureId,
@@ -4947,6 +4959,15 @@ mod tests {
             Binding::GroupAttribute {
                 group_id: "front".to_string(),
                 attribute: "Dimmer".to_string(),
+            },
+            Binding::FeaturePreset {
+                targets: vec![super::TouchFeaturePresetTarget {
+                    fixture_id: 7,
+                    attribute: "Dimmer".to_string(),
+                }],
+                min_value: 0,
+                max_value: u16::MAX,
+                inverted: false,
             },
             Binding::FixtureColor { fixture_id: 7 },
             Binding::GroupColor {

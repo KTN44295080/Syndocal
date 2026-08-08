@@ -50,10 +50,10 @@ use protocol::{
     Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile, StageMapPresetSummary,
     StageObjectId, StageObjectKind, StageObjectSummary, TimelineAudioClipId,
     TimelineAudioClipSummary, TimelineEventId, TimelineLayerKind, TimelineSnapRequest,
-    TimelineTrackKind, TouchControlBinding, TouchSurfaceSummary, ValueEffectRequest, Vec3,
-    VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode, VideoEffectTarget,
-    VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId, VideoLayerState,
-    VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
+    TimelineTrackKind, TouchControlBinding, TouchFeaturePresetTarget, TouchSurfaceSummary,
+    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode,
+    VideoEffectTarget, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId,
+    VideoLayerState, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
     VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary, VideoOutputSummary,
     VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
 };
@@ -4551,6 +4551,35 @@ fn set_attribute(
         .map_err(|error| error.to_string())
 }
 
+fn normalize_touch_feature_targets(
+    targets: Vec<TouchFeaturePresetTarget>,
+) -> Result<Vec<TouchFeaturePresetTarget>, String> {
+    targets
+        .into_iter()
+        .map(|target| {
+            Ok(TouchFeaturePresetTarget {
+                fixture_id: target.fixture_id,
+                attribute: normalize_attribute_name(target.attribute)?,
+            })
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn set_fixture_attribute_batch(
+    state: State<'_, AppState>,
+    targets: Vec<TouchFeaturePresetTarget>,
+    value: u16,
+) -> Result<(), String> {
+    state
+        .engine
+        .send(EngineCommand::SetFixtureAttributeBatch {
+            targets: normalize_touch_feature_targets(targets)?,
+            value,
+        })
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 fn set_group_attribute(
     state: State<'_, AppState>,
@@ -4600,6 +4629,21 @@ fn set_programmer_attribute(
         .send(EngineCommand::SetProgrammerAttribute {
             fixture_id,
             attribute,
+            value,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_programmer_fixture_attribute_batch(
+    state: State<'_, AppState>,
+    targets: Vec<TouchFeaturePresetTarget>,
+    value: u16,
+) -> Result<(), String> {
+    state
+        .engine
+        .send(EngineCommand::SetProgrammerFixtureAttributeBatch {
+            targets: normalize_touch_feature_targets(targets)?,
             value,
         })
         .map_err(|error| error.to_string())
@@ -16427,6 +16471,54 @@ fn validate_touch_surface(
                             "Touch control {} references missing group attribute '{} / {}'",
                             control.id, group_id, attribute
                         ));
+                    }
+                }
+                TouchControlBinding::FeaturePreset {
+                    targets,
+                    min_value,
+                    max_value,
+                    ..
+                } => {
+                    if targets.is_empty() || targets.len() > 512 {
+                        return Err(format!(
+                            "Touch control {} requires 1..512 Feature Preset targets",
+                            control.id
+                        ));
+                    }
+                    if min_value > max_value {
+                        return Err(format!(
+                            "Touch control {} has an invalid Feature Preset range",
+                            control.id
+                        ));
+                    }
+                    let mut seen = HashSet::new();
+                    for target in targets {
+                        if !seen.insert((target.fixture_id, target.attribute.as_str())) {
+                            return Err(format!(
+                                "Touch control {} contains a duplicate Feature Preset target",
+                                control.id
+                            ));
+                        }
+                        let fixture = snapshot
+                            .fixtures
+                            .iter()
+                            .find(|fixture| fixture.id == target.fixture_id)
+                            .ok_or_else(|| {
+                                format!(
+                                    "Touch control {} references missing Feature Preset fixture {}",
+                                    control.id, target.fixture_id
+                                )
+                            })?;
+                        if !fixture
+                            .controls
+                            .iter()
+                            .any(|candidate| candidate.attribute == target.attribute)
+                        {
+                            return Err(format!(
+                                "Touch control {} references missing Feature Preset attribute '{}'",
+                                control.id, target.attribute
+                            ));
+                        }
                     }
                 }
                 TouchControlBinding::FixtureColor { fixture_id } => {
@@ -33891,6 +33983,58 @@ f 1 2 3
             .contains("outside the 12x8 surface grid"));
     }
 
+    #[test]
+    fn project_touch_feature_preset_validates_exact_fixture_attributes() {
+        let mut project = project_with_timeline_scene_blocks();
+        project.snapshot.fixtures = vec![
+            project_fixture(1, "First", 0, 1),
+            project_fixture(2, "Second", 0, 10),
+        ];
+        project.snapshot.touch_surface = TouchSurfaceSummary {
+            pages: vec![protocol::TouchPageSummary {
+                id: 1,
+                label: "Imported".to_string(),
+                controls: vec![protocol::TouchControlSummary {
+                    id: 1,
+                    kind: protocol::TouchControlKind::Fader,
+                    x: 0,
+                    y: 0,
+                    w: 1,
+                    h: 4,
+                    label: "Dimmer".to_string(),
+                    binding: Some(TouchControlBinding::FeaturePreset {
+                        targets: vec![
+                            TouchFeaturePresetTarget {
+                                fixture_id: 1,
+                                attribute: "Dimmer".to_string(),
+                            },
+                            TouchFeaturePresetTarget {
+                                fixture_id: 2,
+                                attribute: "Dimmer".to_string(),
+                            },
+                        ],
+                        min_value: 0,
+                        max_value: u16::MAX,
+                        inverted: false,
+                    }),
+                }],
+            }],
+        };
+
+        validate_project_file(&project).unwrap();
+        let binding = project.snapshot.touch_surface.pages[0].controls[0]
+            .binding
+            .as_mut()
+            .unwrap();
+        let TouchControlBinding::FeaturePreset { targets, .. } = binding else {
+            unreachable!();
+        };
+        targets[1].attribute = "Missing".to_string();
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("missing Feature Preset attribute 'Missing'"));
+    }
+
     fn project_timeline_layer(
         id: u32,
         label: &str,
@@ -42137,9 +42281,11 @@ fn main() {
             delete_fixture_group,
             undo_delete_fixture_group,
             set_attribute,
+            set_fixture_attribute_batch,
             set_group_attribute,
             set_programmer_mode,
             set_programmer_attribute,
+            set_programmer_fixture_attribute_batch,
             set_programmer_group_attribute,
             clear_programmer,
             commit_programmer,

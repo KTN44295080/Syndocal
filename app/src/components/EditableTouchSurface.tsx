@@ -65,6 +65,7 @@ const bindingOptions: ReadonlyArray<{ value: string; label: string }> = [
   { value: "all_blackout", label: "All Blackout" },
   { value: "fixture_attribute", label: "Fixture attribute" },
   { value: "group_attribute", label: "Group attribute" },
+  { value: "feature_preset", label: "Imported feature preset" },
   { value: "fixture_color", label: "Fixture color" },
   { value: "group_color", label: "Group color" },
   { value: "fixture_pan_tilt", label: "Fixture Pan/Tilt" },
@@ -246,6 +247,20 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
         const fixture = props.snapshot.fixtures.find((candidate) => candidate.group_ids.includes(binding.group_id));
         return fixture ? normalizedFixtureAttribute(props.snapshot, fixture.id, binding.attribute) : 0;
       }
+      case "feature_preset": {
+        const target = binding.targets[0];
+        if (!target || binding.max_value <= binding.min_value) return 0;
+        const normalized = normalizedFixtureAttribute(
+          props.snapshot,
+          target.fixture_id,
+          target.attribute,
+        );
+        const ranged = clamp01(
+          (normalized * 65_535 - binding.min_value)
+            / (binding.max_value - binding.min_value),
+        );
+        return binding.inverted ? 1 - ranged : ranged;
+      }
       case "selected_fixture_attribute":
         return normalizedFixtureAttribute(props.snapshot, selectedFixtureId(), binding.attribute);
       case "lighting_master":
@@ -307,6 +322,10 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
         return { kind: option, fixture_id: fixtureId, attribute: "Dimmer" };
       case "group_attribute":
         return { kind: option, group_id: groupId, attribute: "Dimmer" };
+      case "feature_preset": {
+        const current = selectedControl()?.binding;
+        return current?.kind === "feature_preset" ? current : null;
+      }
       case "fixture_color":
         return { kind: option, fixture_id: fixtureId };
       case "group_color":
@@ -720,6 +739,16 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
                   <For each={bindingOptions}>{(option) => <option value={option.value}>{option.label}</option>}</For>
                 </select>
               </label>
+              <Show when={binding()?.kind === "feature_preset"}>
+                <div class="touchBindingPair">
+                  <span>
+                    Imported Daslight Feature Preset · {(binding() as Extract<TouchControlBinding, { kind: "feature_preset" }>).targets.length} target(s)
+                  </span>
+                  <span>
+                    Exact fixture/attribute selection and fader range are preserved.
+                  </span>
+                </div>
+              </Show>
               <Show when={fixtureBinding()}>
                 {(currentAccessor) => (
                   <label>

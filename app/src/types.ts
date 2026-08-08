@@ -2382,9 +2382,21 @@ export type TouchControlKind =
   | "ColorWheel"
   | "XyGrid";
 
+export interface TouchFeaturePresetTarget {
+  fixture_id: number;
+  attribute: string;
+}
+
 export type TouchControlBinding =
   | { kind: "fixture_attribute"; fixture_id: number; attribute: string }
   | { kind: "group_attribute"; group_id: string; attribute: string }
+  | {
+      kind: "feature_preset";
+      targets: TouchFeaturePresetTarget[];
+      min_value: number;
+      max_value: number;
+      inverted: boolean;
+    }
   | { kind: "fixture_color"; fixture_id: number }
   | { kind: "group_color"; group_id: string }
   | { kind: "fixture_pan_tilt"; fixture_id: number; pan_attribute: string; tilt_attribute: string }

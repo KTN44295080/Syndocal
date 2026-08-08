@@ -128,6 +128,7 @@ const partialLockBoundaryCommands = new Set([
   "clear_operator_policy",
   "set_programmer_mode",
   "set_programmer_attribute",
+  "set_programmer_fixture_attribute_batch",
   "set_programmer_group_attribute",
   "clear_programmer",
 ]);

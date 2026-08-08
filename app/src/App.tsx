@@ -697,6 +697,7 @@ const projectMutationCommands = new Set([
   "delete_fixture_group",
   "undo_delete_fixture_group",
   "set_attribute",
+  "set_fixture_attribute_batch",
   "set_group_attribute",
   "commit_programmer",
   "set_fixture_transform",
@@ -11475,7 +11476,8 @@ export default function App() {
   };
 
   const setTouchBindingValue = async (binding: TouchControlBinding, normalizedValue: number) => {
-    const value = Math.round(clamp01(normalizedValue) * 65_535);
+    const normalized = clamp01(normalizedValue);
+    const value = Math.round(normalized * 65_535);
     switch (binding.kind) {
       case "fixture_attribute":
         await setAttribute(binding.fixture_id, binding.attribute, value);
@@ -11483,6 +11485,44 @@ export default function App() {
       case "group_attribute":
         await setGroupAttribute(binding.group_id, binding.attribute, value);
         break;
+      case "feature_preset": {
+        const ranged = binding.inverted ? 1 - normalized : normalized;
+        const featureValue = Math.round(
+          binding.min_value + (binding.max_value - binding.min_value) * ranged,
+        );
+        const fixtureIds = [...new Set(binding.targets.map((target) => target.fixture_id))];
+        const editCueId = controlEditCueIdForWrite();
+        setSceneFxStagePreview(null);
+        setFaderValues((current) => {
+          const next = { ...current };
+          for (const target of binding.targets) {
+            next[`${target.fixture_id}:${target.attribute}`] = featureValue;
+          }
+          return next;
+        });
+        if (viewportFixture === "blind") {
+          applyViewportBlindAttributes(binding.targets.map((target) => ({
+            fixtureId: target.fixture_id,
+            attribute: target.attribute,
+            value: featureValue,
+          })));
+        } else if (viewportFixture !== "edit-live" && viewportFixture !== "color-wheel") {
+          try {
+            await invoke(
+              snapshot().programmer.enabled
+                ? "set_programmer_fixture_attribute_batch"
+                : "set_fixture_attribute_batch",
+              { targets: binding.targets, value: featureValue },
+            );
+          } catch (error) {
+            setMessage(String(error));
+          }
+        }
+        for (const fixtureId of fixtureIds) {
+          queueControlEditLookUpdate(editCueId, { kind: "selectedFixture", fixtureId });
+        }
+        break;
+      }
       case "selected_fixture_attribute": {
         const groupId = selectedFixtureGroupFilter();
         const fixtureId = selectedFixtureId();
