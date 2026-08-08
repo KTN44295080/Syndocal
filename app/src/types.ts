@@ -54,6 +54,20 @@ export interface MidiOutputSummary {
 }
 
 export type MidiControlMessage = "NoteOn" | "NoteOff" | "ControlChange" | "ProgramChange";
+
+export interface MidiFeedbackMessage {
+  message: MidiControlMessage;
+  channel: number;
+  number: number;
+  value: number;
+}
+
+export interface MidiControlFeedback {
+  off?: MidiFeedbackMessage | null;
+  on?: MidiFeedbackMessage | null;
+  unknown?: MidiFeedbackMessage | null;
+}
+
 export type MidiControlAction =
   | "FixtureAttribute"
   | "SelectedFeatureFader"
@@ -118,6 +132,7 @@ export interface MidiControlMapping {
   video_param?: VideoParam | null;
   cue_point_index?: number | null;
   duration_ms?: number | null;
+  feedback?: MidiControlFeedback | null;
   low: number;
   high: number;
 }

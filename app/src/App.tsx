@@ -12704,6 +12704,7 @@ export default function App() {
     disconnectMidiClock,
     addMidiMapping,
     removeMidiMapping,
+    updateMidiMapping,
     learnMidiControl,
     learnMidiControlForTargets,
     saveMidiMappings,
@@ -20070,6 +20071,7 @@ export default function App() {
             onLoadMappings={loadMidiMappings}
             onSaveMappings={saveMidiMappings}
             onRemoveMapping={removeMidiMapping}
+            onUpdateMapping={updateMidiMapping}
           />
           </section>
           <section class="ioUnifiedZone ioCompactZone" data-io-zone="osc">

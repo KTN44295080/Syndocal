@@ -141,8 +141,9 @@ DVC-1 で「解釈保留」だった 27 バイト行を Fable 直接実装で解
 - 実DVCの`SHORTCUT TYPE="1"`を全数監査し、`EVENT DATA="status:channel:number:value:device"`を検証付きでMIDI mappingへ変換する経路を追加した。
 - Action 107はScene Play、55はTap Tempoとして既存Touch actionとDaslight UI証拠が一致するものを変換する。`FLASH=1`は通常Scene Playへ丸めず、pressでTrigger・Note Off/CC zeroでReleaseする`FlashCue`へ保存する。
 - Daslight実行ファイル内の連続action tableから108/109/110をScene Play Forwards/Backwards/Back & Forth、113をBank Nextと確定した。各DVC BankをCue Listへ1:1保存し、方向付きPlayはone-shot方向を既存Cue起動へ渡してpre-wait後も維持する。Homecoming実検体17件は全件復元し、合成検体で未使用109と非holdも固定した。
-- 229は固定Dimmerへ推測せず、`TARGETINDEX`を選択中の表示Featureフェーダー番号として保存する。UIが現在の`fixture_ids`と表示`attributes`順をruntime-only backend contextへ同期し、Tauri/MIDI/OSC/Remoteは共通resolverから既存`SetFixtureAttributeBatch`へ到達する。標準MIDI feedbackも同じ選択から現在値を返し、複数灯体の値が不一致なら誤値を返さない。Laser実検体のCC8/9・index 0/1を2/2 goldenで固定した。
-- 入力device名とDaslight固有OUT/OUT1 feedback velocityは引き続きApproximateに明記する。
+- 229は固定Dimmerへ推測せず、`TARGETINDEX`を選択中の表示Featureフェーダー番号として保存する。UIが現在の`fixture_ids`と表示`attributes`順をruntime-only backend contextへ同期し、Tauri/MIDI/OSC/Remoteは共通resolverから既存`SetFixtureAttributeBatch`へ到達する。MIDI feedbackも同じ選択から現在値を返し、複数灯体の値が不一致なら誤値を返さない。Laser実検体のCC8/9・index 0/1を2/2 goldenで固定した。
+- `SETTINGS OUT` / `OUT1` / `OUT2`はそれぞれOFF / ON / Unknown（混在・不定）feedbackとして、message種別・出力channel・number・velocity/valueを丸めず保存する。連続controlではOFF/ON端点間を補間し、離散controlではlive stateに応じた厳密messageを送る。複数Cue List / groupで並列起動中のCueもactive判定へ含める。通常mappingにも同じ3状態editorを設け、`.midimap` / `.sdc` / Recovery / backupで往復する。
+- 入出力device affinityだけはプロジェクト固有名へ自動bindingせず、Setup > I/Oで対象portを選ぶ外部境界としてApproximateに明記する。
 - DVC import UIは旧showのmappingを消去した後、report内の復元mappingを本番stateへ設置する。その後の通常`.sdc` Save/Recovery/backupで保持される。
 
 ## 4. リスクと限界（正直な列挙）

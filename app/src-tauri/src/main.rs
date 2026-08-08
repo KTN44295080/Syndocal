@@ -43,20 +43,20 @@ use protocol::{
     ExclusiveVideoTakeRequest, FixtureGroupSummary, FixtureId, FixtureLimits, FixturePreset,
     FixtureProfileSummary, GeometrySummary, LearnedMidiControl, LearnedOscControl,
     LfoEffectRequest, MappingEffectRequest, MidiControlAction, MidiControlMapping,
-    MidiInputSummary, MidiOutputSummary, MoveEffectRequest, NodeGraphId, NodeGraphNodeKind,
-    NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp, OperatorFeatureFaderResult,
-    OperatorPolicy, OperatorSelectionContext, OscControlAction, OscControlMapping, OscInputConfig,
-    PatchFixtureRequest, PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RecallMode,
-    RemoteControlConfig, RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig,
-    StageMapPresetFile, StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary,
-    TimelineAudioClipId, TimelineAudioClipSummary, TimelineEventId, TimelineLayerKind,
-    TimelineSnapRequest, TimelineTrackKind, TouchControlBinding, TouchFeaturePresetTarget,
-    TouchSurfaceSummary, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
-    VideoBackendState, VideoBlendMode, VideoEffectTarget, VideoIsfEffectStageSummary,
-    VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerTarget, VideoOutputId,
-    VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetFile,
-    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
-    VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
+    MidiFeedbackMessage, MidiInputSummary, MidiOutputSummary, MoveEffectRequest, NodeGraphId,
+    NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp,
+    OperatorFeatureFaderResult, OperatorPolicy, OperatorSelectionContext, OscControlAction,
+    OscControlMapping, OscInputConfig, PatchFixtureRequest, PatchedFixtureSummary,
+    PositionWaveEffectRequest, ProjectFile, RecallMode, RemoteControlConfig, RemoteControlStatus,
+    Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile, StageMapPresetSummary,
+    StageObjectId, StageObjectKind, StageObjectSummary, TimelineAudioClipId,
+    TimelineAudioClipSummary, TimelineEventId, TimelineLayerKind, TimelineSnapRequest,
+    TimelineTrackKind, TouchControlBinding, TouchFeaturePresetTarget, TouchSurfaceSummary,
+    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode,
+    VideoEffectTarget, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId,
+    VideoLayerState, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
+    VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary, VideoOutputSummary,
+    VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -5813,8 +5813,52 @@ fn validate_midi_control_mapping(
         return Err(format!("{owner} control number must be 0-127"));
     }
     validate_mapping_range(&owner, mapping.low, mapping.high)?;
+    validate_midi_feedback(&owner, mapping.feedback.as_ref())?;
     validate_mapping_required_fields_for_midi(&owner, &mut mapping)?;
     Ok(mapping)
+}
+
+fn validate_midi_feedback(
+    owner: &str,
+    feedback: Option<&protocol::MidiControlFeedback>,
+) -> Result<(), String> {
+    let Some(feedback) = feedback else {
+        return Ok(());
+    };
+    if feedback.off.is_none() && feedback.on.is_none() && feedback.unknown.is_none() {
+        return Err(format!("{owner} MIDI feedback requires at least one state"));
+    }
+    for (state, message) in [
+        ("Off", feedback.off.as_ref()),
+        ("On", feedback.on.as_ref()),
+        ("Unknown", feedback.unknown.as_ref()),
+    ] {
+        if let Some(message) = message {
+            validate_midi_feedback_message(owner, state, message)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_midi_feedback_message(
+    owner: &str,
+    state: &str,
+    message: &MidiFeedbackMessage,
+) -> Result<(), String> {
+    if message.channel > 15 {
+        return Err(format!(
+            "{owner} MIDI feedback {state} channel must be 0-15"
+        ));
+    }
+    if message.number > 127 {
+        return Err(format!(
+            "{owner} MIDI feedback {state} control number must be 0-127"
+        ));
+    }
+    if message.value > 127 {
+        return Err(format!("{owner} MIDI feedback {state} value must be 0-127"));
+    }
+    Ok(())
 }
 
 fn validate_mapping_required_fields_for_midi(
@@ -27905,6 +27949,21 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: Some(protocol::MidiControlFeedback {
+                off: Some(MidiFeedbackMessage {
+                    message: protocol::MidiControlMessage::ControlChange,
+                    channel: 1,
+                    number: 74,
+                    value: 3,
+                }),
+                on: Some(MidiFeedbackMessage {
+                    message: protocol::MidiControlMessage::ControlChange,
+                    channel: 2,
+                    number: 74,
+                    value: 120,
+                }),
+                unknown: None,
+            }),
             low: 0.0,
             high: 1.0,
         };
@@ -29563,6 +29622,7 @@ f 1 2 3
                     video_param: None,
                     cue_point_index: None,
                     duration_ms: None,
+                    feedback: None,
                     low: 20.0,
                     high: 300.0,
                 },
@@ -29580,6 +29640,7 @@ f 1 2 3
                     video_param: None,
                     cue_point_index: None,
                     duration_ms: None,
+                    feedback: None,
                     low: 0.0,
                     high: 1.0,
                 },
@@ -29659,6 +29720,7 @@ f 1 2 3
                 video_param: None,
                 cue_point_index: None,
                 duration_ms: None,
+                feedback: None,
                 low: 20.0,
                 high: 300.0,
             }],
@@ -29780,6 +29842,21 @@ f 1 2 3
                 video_param: None,
                 cue_point_index: None,
                 duration_ms: None,
+                feedback: Some(protocol::MidiControlFeedback {
+                    off: Some(MidiFeedbackMessage {
+                        message: protocol::MidiControlMessage::ControlChange,
+                        channel: 4,
+                        number: 24,
+                        value: 2,
+                    }),
+                    on: Some(MidiFeedbackMessage {
+                        message: protocol::MidiControlMessage::ControlChange,
+                        channel: 4,
+                        number: 24,
+                        value: 125,
+                    }),
+                    unknown: None,
+                }),
                 low: 0.0,
                 high: 1.0,
             },
@@ -29797,6 +29874,7 @@ f 1 2 3
                 video_param: None,
                 cue_point_index: None,
                 duration_ms: None,
+                feedback: None,
                 low: 0.0,
                 high: 1.0,
             },
@@ -29814,6 +29892,7 @@ f 1 2 3
                 video_param: None,
                 cue_point_index: None,
                 duration_ms: None,
+                feedback: None,
                 low: 0.0,
                 high: 1.0,
             },
@@ -29831,6 +29910,7 @@ f 1 2 3
                 video_param: None,
                 cue_point_index: None,
                 duration_ms: None,
+                feedback: None,
                 low: 0.0,
                 high: 1.0,
             },
@@ -29838,6 +29918,14 @@ f 1 2 3
         .unwrap();
 
         assert_eq!(mappings[0].group_id.as_deref(), Some("front/movers"));
+        assert_eq!(
+            mappings[0]
+                .feedback
+                .as_ref()
+                .and_then(|feedback| feedback.on.as_ref())
+                .map(|message| (message.channel, message.number, message.value)),
+            Some((4, 24, 125))
+        );
         assert_eq!(mappings[1].attribute.as_deref(), Some("Front Projector"));
         assert_eq!(mappings[2].attribute.as_deref(), Some("solo"));
         assert_eq!(mappings[3].attribute.as_deref(), Some("Reverse"));
@@ -29856,11 +29944,42 @@ f 1 2 3
             video_param: Some(VideoParam::Opacity),
             cue_point_index: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         }])
         .unwrap_err();
         assert!(error.contains("channel"));
+
+        let error = validate_midi_control_mappings(vec![MidiControlMapping {
+            channel: Some(0),
+            message: protocol::MidiControlMessage::ControlChange,
+            number: 24,
+            action: MidiControlAction::GroupSubmaster,
+            fixture_id: None,
+            attribute: None,
+            group_id: Some("front/movers".to_string()),
+            cue_id: None,
+            layer_id: None,
+            output_id: None,
+            video_param: None,
+            cue_point_index: None,
+            duration_ms: None,
+            feedback: Some(protocol::MidiControlFeedback {
+                off: Some(MidiFeedbackMessage {
+                    message: protocol::MidiControlMessage::ControlChange,
+                    channel: 16,
+                    number: 24,
+                    value: 0,
+                }),
+                on: None,
+                unknown: None,
+            }),
+            low: 0.0,
+            high: 1.0,
+        }])
+        .unwrap_err();
+        assert!(error.contains("feedback Off channel"));
 
         let error = validate_midi_control_mappings(vec![MidiControlMapping {
             channel: None,
@@ -29876,6 +29995,7 @@ f 1 2 3
             video_param: Some(VideoParam::Opacity),
             cue_point_index: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         }])
@@ -29896,6 +30016,7 @@ f 1 2 3
             video_param: None,
             cue_point_index: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         }])
@@ -32035,6 +32156,21 @@ f 1 2 3
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: Some(protocol::MidiControlFeedback {
+                off: Some(MidiFeedbackMessage {
+                    message: protocol::MidiControlMessage::ControlChange,
+                    channel: 0,
+                    number: 74,
+                    value: 0,
+                }),
+                on: Some(MidiFeedbackMessage {
+                    message: protocol::MidiControlMessage::ControlChange,
+                    channel: 0,
+                    number: 74,
+                    value: 127,
+                }),
+                unknown: None,
+            }),
             low: 0.0,
             high: 1.0,
         };

@@ -15,12 +15,12 @@ use protocol::{
     CueEffectTarget, CueFixtureTarget, CueListSummary, CueSummary, DmxModeSummary, DmxOutputConfig,
     DmxUniversePreview, EffectBeamTarget, EffectBlendMode, EffectClockSync, EffectParamsSnapshot,
     EngineSnapshot, FixtureProfileSummary, GeometrySummary, LfoEffectRequest, LfoShape,
-    MidiControlAction, MidiControlMapping, MidiControlMessage, MoveCoordinateMode, MoveDirection,
-    MoveEffectRequest, MoveInterpolation, MovePathPoint, PatchedFixtureSummary, ProjectFile,
-    Rotation3, StageMapConfig, TimelineAudioClipSummary, TimelineCueEventSummary,
-    TimelineLayerKind, TimelineLayerSummary, TimelineTrackKind, TouchControlBinding,
-    TouchControlKind, TouchControlSummary, TouchFeaturePresetTarget, TouchPageSummary,
-    TouchSurfaceSummary, Vec3,
+    MidiControlAction, MidiControlFeedback, MidiControlMapping, MidiControlMessage,
+    MidiFeedbackMessage, MoveCoordinateMode, MoveDirection, MoveEffectRequest, MoveInterpolation,
+    MovePathPoint, PatchedFixtureSummary, ProjectFile, Rotation3, StageMapConfig,
+    TimelineAudioClipSummary, TimelineCueEventSummary, TimelineLayerKind, TimelineLayerSummary,
+    TimelineTrackKind, TouchControlBinding, TouchControlKind, TouchControlSummary,
+    TouchFeaturePresetTarget, TouchPageSummary, TouchSurfaceSummary, Vec3,
 };
 use roxmltree::{Document, Node};
 use serde::Serialize;
@@ -976,6 +976,7 @@ struct ParsedDvcMidiEvent {
     message: MidiControlMessage,
     channel: u8,
     number: u8,
+    value: u8,
     device: String,
 }
 
@@ -1027,8 +1028,18 @@ fn parse_dvc_midi_event(data: &str) -> Result<ParsedDvcMidiEvent, String> {
         message,
         channel,
         number,
+        value: learned_value,
         device: parts.next().unwrap_or_default().trim().to_string(),
     })
+}
+
+fn dvc_midi_feedback_message(event: ParsedDvcMidiEvent) -> MidiFeedbackMessage {
+    MidiFeedbackMessage {
+        message: event.message,
+        channel: event.channel,
+        number: event.number,
+        value: event.value,
+    }
 }
 
 fn dvc_midi_mapping(
@@ -1050,6 +1061,7 @@ fn dvc_midi_mapping(
         video_param: None,
         cue_point_index: None,
         duration_ms: None,
+        feedback: None,
         low: 0.0,
         high: 1.0,
     }
@@ -1088,6 +1100,7 @@ fn parse_midi_shortcuts(
     let mut mappings = Vec::new();
     let mut device_affinity_count = 0_usize;
     let mut custom_feedback_count = 0_usize;
+    let mut feedback_output_affinity_count = 0_usize;
     for (shortcut_index, shortcut) in element_children(shortcuts)
         .filter(|node| node.has_tag_name("SHORTCUT"))
         .enumerate()
@@ -1129,7 +1142,7 @@ fn parse_midi_shortcuts(
         };
         let action_type = action_node.attribute("TYPE").unwrap_or_default();
         let settings = direct_child(shortcut, "SETTINGS");
-        let mapped = match action_type {
+        let mut mapped = match action_type {
             // Verified in Daslight's mapping UI and the matching Touch action.
             "107" => {
                 let Some(cue_id) = action_node
@@ -1261,13 +1274,43 @@ fn parse_midi_shortcuts(
             // Count this separately so the import report keeps that boundary visible.
             device_affinity_count = device_affinity_count.saturating_add(1);
         }
-        if settings.is_some_and(|node| {
-            ["OUT", "OUT1"].iter().any(|name| {
-                node.attribute(*name)
-                    .is_some_and(|value| !value.trim().is_empty())
-            })
-        }) {
-            custom_feedback_count = custom_feedback_count.saturating_add(1);
+        if let Some(settings) = settings {
+            let mut feedback = MidiControlFeedback::default();
+            let mut output_has_device_affinity = settings
+                .attribute("DEVICEOUT")
+                .is_some_and(|value| !value.trim().is_empty());
+            for (attribute, state) in [("OUT", "Off"), ("OUT1", "On"), ("OUT2", "Unknown")] {
+                let Some(raw) = settings
+                    .attribute(attribute)
+                    .filter(|value| !value.trim().is_empty())
+                else {
+                    continue;
+                };
+                match parse_dvc_midi_event(raw) {
+                    Ok(event) => {
+                        output_has_device_affinity |= !event.device.is_empty();
+                        let message = Some(dvc_midi_feedback_message(event));
+                        match attribute {
+                            "OUT" => feedback.off = message,
+                            "OUT1" => feedback.on = message,
+                            "OUT2" => feedback.unknown = message,
+                            _ => unreachable!(),
+                        }
+                        custom_feedback_count = custom_feedback_count.saturating_add(1);
+                    }
+                    Err(message) => {
+                        report
+                            .skipped
+                            .add(1, format!("{item} MIDI feedback {state}"), message)
+                    }
+                }
+            }
+            if feedback.off.is_some() || feedback.on.is_some() || feedback.unknown.is_some() {
+                mapped.feedback = Some(feedback);
+            }
+            if output_has_device_affinity {
+                feedback_output_affinity_count = feedback_output_affinity_count.saturating_add(1);
+            }
         }
         mappings.push(mapped);
     }
@@ -1281,10 +1324,15 @@ fn parse_midi_shortcuts(
         "MIDI input device affinity",
         "Mappings were restored; select the intended MIDI input in Setup > I/O",
     );
-    report.approximate.add(
+    report.converted.add(
         custom_feedback_count,
-        "MIDI feedback",
-        "Daslight-specific output device and ON/OFF velocity colours are not represented",
+        "MIDI feedback states",
+        "Daslight Off/On/Unknown output messages, channels, control numbers, and velocity colours were restored",
+    );
+    report.approximate.add(
+        feedback_output_affinity_count,
+        "MIDI feedback output device affinity",
+        "Feedback messages were restored; select the intended MIDI output in Setup > I/O",
     );
     mappings
 }
@@ -4799,6 +4847,21 @@ mod tests {
                 video_param: None,
                 cue_point_index: None,
                 duration_ms: None,
+                feedback: Some(MidiControlFeedback {
+                    off: Some(MidiFeedbackMessage {
+                        message: MidiControlMessage::NoteOn,
+                        channel: 2,
+                        number: 60,
+                        value: 5,
+                    }),
+                    on: Some(MidiFeedbackMessage {
+                        message: MidiControlMessage::NoteOn,
+                        channel: 2,
+                        number: 60,
+                        value: 1,
+                    }),
+                    unknown: None,
+                }),
                 low: 0.0,
                 high: 1.0,
             }
@@ -4896,8 +4959,13 @@ mod tests {
         assert!(outcome.report.approximate.details.iter().any(|detail| {
             detail.item == "MIDI input device affinity" && detail.message.contains("Setup > I/O")
         }));
+        assert!(outcome.report.converted.details.iter().any(|detail| {
+            detail.item == "MIDI feedback states"
+                && detail.message.contains("velocity colours were restored")
+        }));
         assert!(outcome.report.approximate.details.iter().any(|detail| {
-            detail.item == "MIDI feedback" && detail.message.contains("ON/OFF velocity colours")
+            detail.item == "MIDI feedback output device affinity"
+                && detail.message.contains("select the intended MIDI output")
         }));
     }
 
@@ -7285,6 +7353,19 @@ mod tests {
                 && mapping.cue_point_index == Some(0)
                 && mapping.low == 0.0
                 && mapping.high == 65_535.0
+                && mapping.feedback.as_ref().is_some_and(|feedback| {
+                    feedback.off.as_ref().is_some_and(|message| {
+                        message.message == MidiControlMessage::ControlChange
+                            && message.channel == 0
+                            && message.number == 8
+                            && message.value == 0
+                    }) && feedback.on.as_ref().is_some_and(|message| {
+                        message.message == MidiControlMessage::ControlChange
+                            && message.channel == 0
+                            && message.number == 8
+                            && message.value == 1
+                    })
+                })
         }));
         assert!(outcome.report.midi_mappings.iter().any(|mapping| {
             mapping.action == MidiControlAction::SelectedFeatureFader
@@ -7292,6 +7373,19 @@ mod tests {
                 && mapping.cue_point_index == Some(1)
                 && mapping.low == 0.0
                 && mapping.high == 65_535.0
+                && mapping.feedback.as_ref().is_some_and(|feedback| {
+                    feedback.off.as_ref().is_some_and(|message| {
+                        message.message == MidiControlMessage::ControlChange
+                            && message.channel == 0
+                            && message.number == 9
+                            && message.value == 0
+                    }) && feedback.on.as_ref().is_some_and(|message| {
+                        message.message == MidiControlMessage::ControlChange
+                            && message.channel == 0
+                            && message.number == 9
+                            && message.value == 1
+                    })
+                })
         }));
         assert!(!outcome
             .report
@@ -7299,6 +7393,74 @@ mod tests {
             .details
             .iter()
             .any(|detail| detail.message.contains("Daslight MIDI action type 229")));
+    }
+
+    #[test]
+    fn dvc_local_project_inventory_reports_every_available_import_boundary() {
+        let candidates = [
+            r"C:\Users\kouty\Desktop\INMDAISUKI\DSF2026.dvc",
+            r"C:\Users\kouty\Desktop\INMDAISUKI\DFS2026.dvc",
+            r"C:\Users\kouty\Desktop\Shinkan-Left\Shinkan2026.dvc",
+            r"C:\Users\kouty\Desktop\Shinkan-Left\Left1.dvc",
+            r"C:\Users\kouty\Desktop\Shinkan-Left\Codex-Chaser322-Probe.dvc",
+            r"C:\Users\kouty\Documents\Daslight 5\Projects\Sin.dvc",
+            r"C:\Users\kouty\Documents\Daslight 5\Projects\Shinkan2026.dvc",
+            r"C:\Users\kouty\Documents\Daslight 5\Projects\Panel.dvc",
+            r"C:\Users\kouty\Desktop\homecoming2026\homecoming2606.dvc",
+            r"C:\Users\kouty\Desktop\homecoming2026\homecoming2606-scenes.dvc",
+            r"C:\Users\kouty\Desktop\homecoming2026\homecoming2606-Laser.dvc",
+        ];
+        let mut audited = 0_usize;
+        for candidate in candidates {
+            let path = Path::new(candidate);
+            if !path.is_file() {
+                continue;
+            }
+            let outcome = import_path(path).unwrap_or_else(|error| {
+                panic!(
+                    "local DVC inventory failed to import {}: {error}",
+                    path.display()
+                )
+            });
+            crate::validate_project_file(&outcome.project).unwrap_or_else(|error| {
+                panic!(
+                    "local DVC inventory produced an invalid project for {}: {error}",
+                    path.display()
+                )
+            });
+            audited = audited.saturating_add(1);
+            eprintln!(
+                "DVC_AUDIT|{}|fixtures={}|cues={}|effects={}/{}|midi={}|approximate={}|skipped={}|unsupported={}|warnings={}",
+                path.display(),
+                outcome.report.summary.fixtures,
+                outcome.report.summary.cues,
+                outcome.report.summary.effects_converted,
+                outcome.report.summary.effects_skipped,
+                outcome.report.midi_mappings.len(),
+                outcome.report.approximate.count,
+                outcome.report.skipped.count,
+                outcome.report.unsupported.count,
+                outcome.report.warnings.len(),
+            );
+            for (category, details) in [
+                ("APPROXIMATE", &outcome.report.approximate.details),
+                ("SKIPPED", &outcome.report.skipped.details),
+                ("UNSUPPORTED", &outcome.report.unsupported.details),
+            ] {
+                for detail in details {
+                    eprintln!(
+                        "DVC_AUDIT_DETAIL|{}|{}|{}|{}",
+                        path.display(),
+                        category,
+                        detail.item,
+                        detail.message,
+                    );
+                }
+            }
+        }
+        if audited == 0 {
+            eprintln!("Skipping local DVC inventory: no known project files are available");
+        }
     }
 
     #[test]

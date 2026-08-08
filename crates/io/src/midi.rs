@@ -7,8 +7,8 @@ use midir::{Ignore, MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnec
 use protocol::{
     video_output_mapping_field_value, CueId, CueLiveDirection, EffectId, EngineSnapshot, FixtureId,
     LearnedMidiControl, MidiControlAction, MidiControlMapping, MidiControlMessage,
-    MidiInputSummary, MidiOutputSummary, NodeGraphId, OperatorSelectionContext, VideoLayerId,
-    VideoLayerState, VideoOutputId, VideoParam,
+    MidiFeedbackMessage, MidiInputSummary, MidiOutputSummary, NodeGraphId,
+    OperatorSelectionContext, VideoLayerId, VideoLayerState, VideoOutputId, VideoParam,
 };
 use thiserror::Error;
 
@@ -438,8 +438,12 @@ pub fn build_feedback_messages_with_operator_selection(
     mappings
         .iter()
         .filter_map(|mapping| {
-            let normalized = feedback_value_for_mapping(snapshot, mapping, operator_selection)?;
-            midi_feedback_message(mapping, normalized)
+            let normalized = feedback_value_for_mapping(snapshot, mapping, operator_selection);
+            if mapping.feedback.is_some() {
+                custom_midi_feedback_message(mapping, normalized)
+            } else {
+                midi_feedback_message(mapping, normalized?)
+            }
         })
         .collect()
 }
@@ -561,7 +565,7 @@ fn feedback_value_for_mapping(
         | MidiControlAction::TriggerCueDirection
         | MidiControlAction::FlashCueDirection => {
             let cue_id = mapping.cue_id?;
-            Some(if snapshot.active_cue_id == Some(cue_id) {
+            Some(if cue_is_active(snapshot, cue_id) {
                 1.0
             } else {
                 0.0
@@ -776,6 +780,84 @@ fn feedback_value_for_mapping(
             0.0
         }),
         MidiControlAction::VideoBlackout => Some(if snapshot.video.blackout { 1.0 } else { 0.0 }),
+    }
+}
+
+fn cue_is_active(snapshot: &EngineSnapshot, cue_id: CueId) -> bool {
+    snapshot.active_cue_id == Some(cue_id)
+        || snapshot
+            .cue_lists
+            .iter()
+            .any(|cue_list| cue_list.active_cue_id == Some(cue_id))
+        || snapshot
+            .active_group_cue_ids
+            .values()
+            .any(|active_cue_id| *active_cue_id == cue_id)
+}
+
+fn custom_midi_feedback_message(
+    mapping: &MidiControlMapping,
+    normalized: Option<f32>,
+) -> Option<Vec<u8>> {
+    let feedback = mapping.feedback.as_ref()?;
+    let Some(normalized) = normalized else {
+        return feedback
+            .unknown
+            .as_ref()
+            .and_then(midi_feedback_message_from_spec);
+    };
+    let normalized = normalized.clamp(0.0, 1.0);
+    if midi_feedback_action_is_continuous(&mapping.action) {
+        if let (Some(off), Some(on)) = (&feedback.off, &feedback.on) {
+            if off.message == on.message && off.channel == on.channel && off.number == on.number {
+                let value = (f32::from(off.value)
+                    + (f32::from(on.value) - f32::from(off.value)) * normalized)
+                    .round()
+                    .clamp(0.0, 127.0) as u8;
+                return midi_feedback_message_from_spec(&MidiFeedbackMessage {
+                    message: off.message.clone(),
+                    channel: off.channel,
+                    number: off.number,
+                    value,
+                });
+            }
+        }
+    }
+    let selected = if normalized >= 0.5 {
+        feedback.on.as_ref()
+    } else {
+        feedback.off.as_ref()
+    };
+    selected.and_then(midi_feedback_message_from_spec)
+}
+
+fn midi_feedback_action_is_continuous(action: &MidiControlAction) -> bool {
+    matches!(
+        action,
+        MidiControlAction::FixtureAttribute
+            | MidiControlAction::SelectedFeatureFader
+            | MidiControlAction::VideoParam
+            | MidiControlAction::VideoLayerFade
+            | MidiControlAction::VideoOutputOpacity
+            | MidiControlAction::VideoOutputFade
+            | MidiControlAction::VideoOutputMappingField
+            | MidiControlAction::TimelineSeek
+            | MidiControlAction::SetBpm
+            | MidiControlAction::LightingMaster
+            | MidiControlAction::GroupSubmaster
+            | MidiControlAction::VideoMaster
+    )
+}
+
+fn midi_feedback_message_from_spec(spec: &MidiFeedbackMessage) -> Option<Vec<u8>> {
+    let channel = spec.channel.min(15);
+    let number = spec.number.min(127);
+    let value = spec.value.min(127);
+    match spec.message {
+        MidiControlMessage::NoteOn => Some(vec![0x90 | channel, number, value]),
+        MidiControlMessage::NoteOff => Some(vec![0x80 | channel, number, value]),
+        MidiControlMessage::ControlChange => Some(vec![0xb0 | channel, number, value]),
+        MidiControlMessage::ProgramChange => Some(vec![0xc0 | channel, number]),
     }
 }
 
@@ -1367,6 +1449,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 65_535.0,
         }
@@ -1432,6 +1515,69 @@ mod tests {
         .is_empty());
     }
 
+    #[test]
+    fn custom_feedback_interpolates_continuous_values_and_reports_unknown_state() {
+        let mut mapping = fixture_cc_mapping();
+        mapping.action = MidiControlAction::SelectedFeatureFader;
+        mapping.fixture_id = None;
+        mapping.attribute = None;
+        mapping.cue_point_index = Some(0);
+        mapping.feedback = Some(protocol::MidiControlFeedback {
+            off: Some(MidiFeedbackMessage {
+                message: MidiControlMessage::ControlChange,
+                channel: 1,
+                number: 23,
+                value: 10,
+            }),
+            on: Some(MidiFeedbackMessage {
+                message: MidiControlMessage::ControlChange,
+                channel: 1,
+                number: 23,
+                value: 110,
+            }),
+            unknown: Some(MidiFeedbackMessage {
+                message: MidiControlMessage::NoteOn,
+                channel: 3,
+                number: 99,
+                value: 2,
+            }),
+        });
+        let mut first = flagged_fixture(3, &[], false, false, false);
+        first.attribute_values = vec![protocol::AttributeValueSummary {
+            attribute: "Dimmer".to_string(),
+            value: 32_768,
+        }];
+        let mut second = flagged_fixture(4, &[], false, false, false);
+        second.attribute_values = first.attribute_values.clone();
+        let mut snapshot = EngineSnapshot {
+            fixtures: vec![first, second],
+            ..EngineSnapshot::default()
+        };
+        let selection = OperatorSelectionContext {
+            fixture_ids: vec![3, 4],
+            attributes: vec!["Dimmer".to_string()],
+        };
+
+        assert_eq!(
+            build_feedback_messages_with_operator_selection(
+                &snapshot,
+                std::slice::from_ref(&mapping),
+                Some(&selection),
+            ),
+            vec![vec![0xb1, 23, 60]]
+        );
+
+        snapshot.fixtures[1].attribute_values[0].value = 65_535;
+        assert_eq!(
+            build_feedback_messages_with_operator_selection(
+                &snapshot,
+                &[mapping],
+                Some(&selection),
+            ),
+            vec![vec![0x93, 99, 2]]
+        );
+    }
+
     fn fixture_flag_mapping(
         action: MidiControlAction,
         number: u8,
@@ -1451,6 +1597,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         }
@@ -1475,6 +1622,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         }
@@ -1708,6 +1856,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -1725,6 +1874,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -1742,6 +1892,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -1777,6 +1928,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -1807,6 +1959,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -1840,6 +1993,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -1866,6 +2020,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -1893,6 +2048,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -1910,6 +2066,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -1927,6 +2084,7 @@ mod tests {
             cue_point_index: Some(1),
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -1944,6 +2102,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -1961,6 +2120,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -1978,6 +2138,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: Some(2_500),
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -1995,6 +2156,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: Some(2_500),
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -2012,6 +2174,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -2029,6 +2192,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -2046,6 +2210,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 500.0,
             high: 2_000.0,
         };
@@ -2063,6 +2228,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: Some(750),
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -2218,6 +2384,7 @@ mod tests {
             cue_point_index: None,
             output_id: Some(7),
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -2235,6 +2402,7 @@ mod tests {
             cue_point_index: None,
             output_id: Some(7),
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -2252,6 +2420,7 @@ mod tests {
             cue_point_index: None,
             output_id: Some(7),
             duration_ms: Some(500),
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -2269,6 +2438,7 @@ mod tests {
             cue_point_index: None,
             output_id: Some(7),
             duration_ms: None,
+            feedback: None,
             low: -1.0,
             high: 1.0,
         };
@@ -2286,6 +2456,7 @@ mod tests {
             cue_point_index: None,
             output_id: Some(7),
             duration_ms: None,
+            feedback: None,
             low: -1000.0,
             high: 1000.0,
         };
@@ -2303,6 +2474,7 @@ mod tests {
             cue_point_index: None,
             output_id: Some(7),
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -2320,6 +2492,7 @@ mod tests {
             cue_point_index: None,
             output_id: Some(7),
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -2446,6 +2619,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -2521,6 +2695,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -2574,6 +2749,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -2591,6 +2767,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 127_000.0,
         };
@@ -2608,6 +2785,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -2625,6 +2803,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -2642,6 +2821,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 20.0,
             high: 300.0,
         };
@@ -2659,6 +2839,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -2713,6 +2894,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -2730,6 +2912,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -2768,6 +2951,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -2810,6 +2994,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -2939,6 +3124,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -2956,6 +3142,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -2973,6 +3160,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -2990,6 +3178,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -3051,6 +3240,7 @@ mod tests {
             cue_point_index: None,
             output_id: None,
             duration_ms: None,
+            feedback: None,
             low: 0.0,
             high: 1.0,
         };
@@ -3058,6 +3248,104 @@ mod tests {
         assert_eq!(
             build_feedback_messages(&snapshot, &[mapping]),
             vec![vec![0x92, 60, 127]]
+        );
+    }
+
+    #[test]
+    fn builds_midi_feedback_for_parallel_cue_list_and_group_activity() {
+        let mapping = MidiControlMapping {
+            channel: Some(2),
+            message: MidiControlMessage::NoteOn,
+            number: 60,
+            action: MidiControlAction::TriggerCue,
+            fixture_id: None,
+            attribute: None,
+            group_id: None,
+            cue_id: Some(9),
+            layer_id: None,
+            video_param: None,
+            cue_point_index: None,
+            output_id: None,
+            duration_ms: None,
+            feedback: None,
+            low: 0.0,
+            high: 1.0,
+        };
+        let mut cue_list_snapshot = EngineSnapshot::default();
+        cue_list_snapshot.cue_lists = vec![protocol::CueListSummary {
+            id: 2,
+            label: "Parallel".to_string(),
+            active_cue_id: Some(9),
+        }];
+        assert_eq!(
+            build_feedback_messages(&cue_list_snapshot, std::slice::from_ref(&mapping)),
+            vec![vec![0x92, 60, 127]]
+        );
+
+        let mut group_snapshot = EngineSnapshot::default();
+        group_snapshot
+            .active_group_cue_ids
+            .insert("Front".to_string(), 9);
+        assert_eq!(
+            build_feedback_messages(&group_snapshot, std::slice::from_ref(&mapping)),
+            vec![vec![0x92, 60, 127]]
+        );
+
+        assert_eq!(
+            build_feedback_messages(&EngineSnapshot::default(), &[mapping]),
+            vec![vec![0x92, 60, 0]]
+        );
+    }
+
+    #[test]
+    fn custom_cue_feedback_uses_exact_off_and_on_messages() {
+        let mut mapping = MidiControlMapping {
+            channel: Some(0),
+            message: MidiControlMessage::NoteOn,
+            number: 81,
+            action: MidiControlAction::TriggerCue,
+            fixture_id: None,
+            attribute: None,
+            group_id: None,
+            cue_id: Some(9),
+            layer_id: None,
+            video_param: None,
+            cue_point_index: None,
+            output_id: None,
+            duration_ms: None,
+            feedback: None,
+            low: 0.0,
+            high: 1.0,
+        };
+        mapping.feedback = Some(protocol::MidiControlFeedback {
+            off: Some(MidiFeedbackMessage {
+                message: MidiControlMessage::NoteOn,
+                channel: 0,
+                number: 81,
+                value: 126,
+            }),
+            on: Some(MidiFeedbackMessage {
+                message: MidiControlMessage::NoteOn,
+                channel: 2,
+                number: 81,
+                value: 5,
+            }),
+            unknown: None,
+        });
+
+        assert_eq!(
+            build_feedback_messages(&EngineSnapshot::default(), std::slice::from_ref(&mapping)),
+            vec![vec![0x90, 81, 126]]
+        );
+        assert_eq!(
+            build_feedback_messages(
+                &EngineSnapshot {
+                    active_cue_id: Some(9),
+                    ..EngineSnapshot::default()
+                },
+                &[mapping],
+            ),
+            vec![vec![0x92, 81, 5]]
         );
     }
 
@@ -3092,6 +3380,7 @@ mod tests {
                 cue_point_index: None,
                 output_id: None,
                 duration_ms: None,
+                feedback: None,
                 low: 0.0,
                 high: 1.0,
             },
@@ -3109,6 +3398,7 @@ mod tests {
                 cue_point_index: None,
                 output_id: None,
                 duration_ms: None,
+                feedback: None,
                 low: 0.0,
                 high: 1.0,
             },
@@ -3126,6 +3416,7 @@ mod tests {
                 cue_point_index: None,
                 output_id: None,
                 duration_ms: None,
+                feedback: None,
                 low: 20.0,
                 high: 300.0,
             },
@@ -3143,6 +3434,7 @@ mod tests {
                 cue_point_index: None,
                 output_id: None,
                 duration_ms: None,
+                feedback: None,
                 low: 0.0,
                 high: 1.0,
             },
@@ -3179,6 +3471,7 @@ mod tests {
                 cue_point_index: None,
                 output_id: None,
                 duration_ms: None,
+                feedback: None,
                 low: 0.0,
                 high: 1.0,
             },
@@ -3196,6 +3489,7 @@ mod tests {
                 cue_point_index: None,
                 output_id: None,
                 duration_ms: None,
+                feedback: None,
                 low: 0.0,
                 high: 1.0,
             },
@@ -3213,6 +3507,7 @@ mod tests {
                 cue_point_index: None,
                 output_id: None,
                 duration_ms: None,
+                feedback: None,
                 low: 0.0,
                 high: 1.0,
             },
@@ -3254,6 +3549,7 @@ mod tests {
                 cue_point_index: None,
                 output_id: None,
                 duration_ms: None,
+                feedback: None,
                 low: 0.0,
                 high: 1.0,
             },
@@ -3271,6 +3567,7 @@ mod tests {
                 cue_point_index: None,
                 output_id: None,
                 duration_ms: None,
+                feedback: None,
                 low: 0.0,
                 high: 120_000.0,
             },

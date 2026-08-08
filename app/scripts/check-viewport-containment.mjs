@@ -3792,8 +3792,19 @@ async function exerciseSetupIoDisclosure(client, name, controlSelector) {
     const disclosureControls = disclosure
       ? [...disclosure.querySelectorAll('button, input, select, textarea')].filter((candidate) => !candidate.closest('dialog'))
       : [];
+    const nestedDisclosures = disclosure
+      ? [...disclosure.querySelectorAll('details')].filter((candidate) => candidate !== disclosure)
+      : [];
+    const nestedDisclosureOpenStates = nestedDisclosures.map((candidate) => candidate.open);
     const hiddenControlCountBefore = disclosureControls.filter((candidate) => !visible(candidate)).length;
     if (summary instanceof HTMLElement) summary.click();
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    for (const nestedDisclosure of nestedDisclosures) {
+      if (!nestedDisclosure.open) {
+        const nestedSummary = nestedDisclosure.querySelector(':scope > summary');
+        if (nestedSummary instanceof HTMLElement) nestedSummary.click();
+      }
+    }
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     control?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     await new Promise((resolve) => requestAnimationFrame(resolve));
@@ -3826,6 +3837,9 @@ async function exerciseSetupIoDisclosure(client, name, controlSelector) {
       }
     }
     const opened = disclosure?.open === true;
+    nestedDisclosures.forEach((nestedDisclosure, index) => {
+      nestedDisclosure.open = nestedDisclosureOpenStates[index];
+    });
     if (summary instanceof HTMLElement) summary.click();
     await new Promise((resolve) => requestAnimationFrame(resolve));
     return {

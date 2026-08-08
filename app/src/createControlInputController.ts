@@ -199,6 +199,11 @@ export function createControlInputController(options: ControlInputControllerOpti
   };
 
   const removeMidiMapping = (index: number) => options.setMidiMappings((current) => current.filter((_, candidate) => candidate !== index));
+  const updateMidiMapping = (index: number, mapping: MidiControlMapping) => {
+    options.setMidiMappings((current) => current.map((candidate, candidateIndex) => (
+      candidateIndex === index ? mapping : candidate
+    )));
+  };
 
   const applyLearnedMidiControl = (learned: LearnedMidiControl) => {
     options.setMidiMapChannel(learned.channel);
@@ -515,6 +520,7 @@ export function createControlInputController(options: ControlInputControllerOpti
     disconnectMidiClock,
     addMidiMapping,
     removeMidiMapping,
+    updateMidiMapping,
     learnMidiControl,
     learnMidiControlForTargets,
     saveMidiMappings,

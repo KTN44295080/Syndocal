@@ -10,6 +10,8 @@ const engine = await readFile(new URL("../../crates/engine/src/lib.rs", import.m
 const backend = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
 const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
 const types = await readFile(new URL("../src/types.ts", import.meta.url), "utf8");
+const midiPanel = await readFile(new URL("../src/components/MidiControlMappingPanel.tsx", import.meta.url), "utf8");
+const controlController = await readFile(new URL("../src/createControlInputController.ts", import.meta.url), "utf8");
 
 const checks = [
   [types.includes("midi_mappings: MidiControlMapping[];"), "DVC report exposes imported MIDI mappings"],
@@ -17,6 +19,7 @@ const checks = [
   [importer.includes('"55" => dvc_midi_mapping(event, MidiControlAction::TapBpm'), "DVC action 55 is decoded as Tap BPM"],
   [importer.includes('"113" => {') && importer.includes("MidiControlAction::TriggerCueListNext"), "DVC action 113 is decoded as Bank Next"],
   [importer.includes('"229" =>') && importer.includes("dvc_midi_selected_feature_fader_mapping"), "DVC action 229 preserves the visible feature-fader index"],
+  [importer.includes('[("OUT", "Off"), ("OUT1", "On"), ("OUT2", "Unknown")]') && importer.includes("mapped.feedback = Some(feedback)"), "DVC OUT/OUT1/OUT2 preserve exact Off/On/Unknown feedback states"],
   [importer.includes('"108" | "109" | "110" => {') && importer.includes('"108" => "Forward"') && importer.includes('"109" => "Reverse"') && importer.includes('"110" => "Bounce"'), "DVC directional Scene actions preserve their verified directions"],
   [importer.includes("cue_lists.push(CueListSummary") && importer.includes("cue_list_id,"), "DVC banks remain distinct Cue Lists"],
   [importer.includes("MidiControlAction::FlashCue"), "DVC FLASH=1 remains a hold-to-release cue mapping"],
@@ -26,6 +29,7 @@ const checks = [
   [protocol.includes("pub enum MidiControlAction") && protocol.includes("FlashCue,"), "protocol persists FlashCue"],
   [protocol.includes("TriggerCueListNext,"), "protocol persists Cue List Next"],
   [protocol.includes("SelectedFeatureFader,"), "protocol persists Selected Feature Fader"],
+  [protocol.includes("pub struct MidiControlFeedback") && protocol.includes("pub feedback: Option<MidiControlFeedback>"), "protocol persists typed custom MIDI feedback"],
   [midi.includes("MidiControlEvent::ReleaseCue"), "MIDI Note Off releases a flashed cue"],
   [midi.includes("MidiControlEvent::TriggerCueWithDirection") && midi.includes("cue_live_direction(mapping.attribute.as_deref()?)"), "MIDI emits the persisted directional Scene trigger"],
   [midi.includes("SetSelectedFeatureFader") && midi.includes("target_index: mapping.cue_point_index?"), "MIDI emits the selected visible-fader slot"],
@@ -35,10 +39,15 @@ const checks = [
   [backend.includes("MidiControlEvent::TriggerCueListNext(anchor_cue_id)") && backend.includes("EngineCommand::TriggerCueListNext(cue_list_id)"), "backend resolves the imported Bank anchor to its Cue List"],
   [(backend.match(/operator_feature_fader_command\(/g) ?? []).length >= 4 && backend.includes("EngineCommand::SetFixtureAttributeBatch"), "UI, MIDI, OSC, and Remote converge on the existing engine batch command"],
   [midi.includes("build_feedback_messages_with_operator_selection") && backend.includes("Some(&operator_selection)"), "MIDI feedback resolves the same runtime selection instead of guessing a fixed fixture"],
+  [midi.includes("custom_midi_feedback_message") && midi.includes("midi_feedback_action_is_continuous"), "MIDI output selects exact states and interpolates continuous feedback endpoints"],
+  [midi.includes("fn cue_is_active") && midi.includes("active_group_cue_ids"), "MIDI feedback includes parallel Cue List and group activity"],
+  [backend.includes("validate_midi_feedback") && backend.includes("MIDI feedback requires at least one state"), "custom MIDI feedback is validated at every persistence and connection boundary"],
   [remote.includes("SetOperatorSelection(OperatorSelectionContext)") && remote.includes("SetOperatorFeatureFader"), "Remote and future AI callers have typed operator-selection commands"],
   [app.includes("selectedControlTargetFixtures().map((fixture) => fixture.id)") && app.includes("visibleControls().map((control) => control.attribute)"), "frontend publishes the exact selected fixtures and visible fader order"],
   [app.includes("replaceProjectControlMappings(report.midi_mappings ?? [], [])"), "DVC import installs mappings instead of clearing them"],
   [app.includes("report.midi_mappings?.length ?? 0} MIDI mappings"), "operator import status reports the restored mapping count"],
+  [controlController.includes("const updateMidiMapping") && app.includes("onUpdateMapping={updateMidiMapping}"), "operator can update feedback without replacing the mapping route"],
+  [midiPanel.includes("Create Off / On feedback") && midiPanel.includes("Unknown / mixed") && midiPanel.includes("Clear feedback"), "normal MIDI mapping editor exposes all feedback states"],
 ];
 
 for (const [condition, message] of checks) assert.ok(condition, message);

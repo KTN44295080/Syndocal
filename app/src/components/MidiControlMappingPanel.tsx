@@ -10,8 +10,10 @@ import {
 import type {
   EngineSnapshot,
   MidiControlAction,
+  MidiControlFeedback,
   MidiControlMapping,
   MidiControlMessage,
+  MidiFeedbackMessage,
   MidiInputSummary,
   MidiOutputSummary,
   VideoParam,
@@ -83,7 +85,27 @@ interface MidiControlMappingPanelProps {
   onLoadMappings: () => void | Promise<void>;
   onSaveMappings: () => void | Promise<void>;
   onRemoveMapping: (index: number) => void;
+  onUpdateMapping: (index: number, mapping: MidiControlMapping) => void;
 }
+
+type MidiFeedbackState = keyof MidiControlFeedback;
+
+const feedbackStateLabels: Record<MidiFeedbackState, string> = {
+  off: "Off",
+  on: "On",
+  unknown: "Unknown / mixed",
+};
+
+const defaultFeedbackMessage = (mapping: MidiControlMapping, value: number): MidiFeedbackMessage => ({
+  message: mapping.message,
+  channel: mapping.channel ?? 0,
+  number: mapping.number,
+  value,
+});
+
+const feedbackMessageLabel = (message: MidiFeedbackMessage) => (
+  `${message.message === "ControlChange" ? "CC" : message.message === "NoteOn" ? "Note On" : message.message === "NoteOff" ? "Note Off" : "Program"} · Ch ${message.channel + 1} · #${message.number} · ${message.value}`
+);
 
 export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
   return (
@@ -446,6 +468,123 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
             <div class="timelineItem">
               <strong>{mapping.message} {mapping.number}</strong>
               <span>{mapping.channel === null || mapping.channel === undefined ? "Any ch" : `Ch ${mapping.channel}`} / {props.mappingTargetLabel(mapping)}</span>
+              <Show when={mapping.feedback}>
+                {(feedback) => (
+                  <span>
+                    <span>Feedback:</span>{" "}
+                    <span data-no-localize>{[feedback().off, feedback().on, feedback().unknown]
+                      .filter((message): message is MidiFeedbackMessage => Boolean(message))
+                      .map(feedbackMessageLabel)
+                      .join(" / ")}</span>
+                  </span>
+                )}
+              </Show>
+              <details class="mappingFeedbackEditor">
+                <summary>{mapping.feedback ? "Edit feedback" : "Add feedback"}</summary>
+                <div class="mappingFeedbackEditorBody">
+                  <Show when={mapping.feedback} fallback={
+                    <button
+                      onClick={() => props.onUpdateMapping(index(), {
+                        ...mapping,
+                        feedback: {
+                          off: defaultFeedbackMessage(mapping, 0),
+                          on: defaultFeedbackMessage(mapping, 127),
+                          unknown: null,
+                        },
+                      })}
+                    >Create Off / On feedback</button>
+                  }>
+                    <For each={(["off", "on", "unknown"] as MidiFeedbackState[])}>
+                      {(state) => {
+                        const message = () => mapping.feedback?.[state] ?? null;
+                        const updateMessage = (patch: Partial<MidiFeedbackMessage>) => {
+                          const current = message();
+                          if (!current) return;
+                          props.onUpdateMapping(index(), {
+                            ...mapping,
+                            feedback: {
+                              ...mapping.feedback,
+                              [state]: { ...current, ...patch },
+                            },
+                          });
+                        };
+                        return (
+                          <fieldset>
+                            <legend>{feedbackStateLabels[state]}</legend>
+                            <Show when={message()} fallback={
+                              <button
+                                onClick={() => props.onUpdateMapping(index(), {
+                                  ...mapping,
+                                  feedback: {
+                                    ...mapping.feedback,
+                                    [state]: defaultFeedbackMessage(mapping, state === "on" ? 127 : 0),
+                                  },
+                                })}
+                              >Add state</button>
+                            }>
+                              {(current) => (
+                                <>
+                                  <label>
+                                    Message
+                                    <select
+                                      value={current().message}
+                                      onInput={(event) => updateMessage({ message: event.currentTarget.value as MidiControlMessage })}
+                                    >
+                                      <option value="ControlChange">CC</option>
+                                      <option value="NoteOn">Note On</option>
+                                      <option value="NoteOff">Note Off</option>
+                                      <option value="ProgramChange">Program</option>
+                                    </select>
+                                  </label>
+                                  <label>
+                                    Channel
+                                    <input
+                                      type="number"
+                                      min="1"
+                                      max="16"
+                                      value={current().channel + 1}
+                                      onInput={(event) => updateMessage({ channel: Math.max(0, Math.min(15, Number(event.currentTarget.value) - 1)) })}
+                                    />
+                                  </label>
+                                  <label>
+                                    Number
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      max="127"
+                                      value={current().number}
+                                      onInput={(event) => updateMessage({ number: Math.max(0, Math.min(127, Number(event.currentTarget.value))) })}
+                                    />
+                                  </label>
+                                  <label>
+                                    Velocity / value
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      max="127"
+                                      value={current().value}
+                                      onInput={(event) => updateMessage({ value: Math.max(0, Math.min(127, Number(event.currentTarget.value))) })}
+                                    />
+                                  </label>
+                                  <button
+                                    onClick={() => props.onUpdateMapping(index(), {
+                                      ...mapping,
+                                      feedback: { ...mapping.feedback, [state]: null },
+                                    })}
+                                  >Remove state</button>
+                                </>
+                              )}
+                            </Show>
+                          </fieldset>
+                        );
+                      }}
+                    </For>
+                    <button onClick={() => props.onUpdateMapping(index(), { ...mapping, feedback: null })}>
+                      Clear feedback
+                    </button>
+                  </Show>
+                </div>
+              </details>
               <button onClick={() => props.onRemoveMapping(index())}>Remove</button>
             </div>
           )}

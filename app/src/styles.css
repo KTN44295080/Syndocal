@@ -21476,11 +21476,59 @@ h3 {
 }
 
 .mappingListDesk .timelineItem {
+  grid-template-columns: minmax(0, 1fr) auto;
   min-height: 38px;
   border: 1px solid #393530;
   border-radius: 2px;
   background: #181715;
   padding: 6px 7px;
+}
+
+.mappingListDesk .timelineItem > strong,
+.mappingListDesk .timelineItem > span {
+  grid-column: 1;
+}
+
+.mappingListDesk .timelineItem > button:last-child {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.mappingFeedbackEditor {
+  grid-column: 1 / -1;
+  min-width: 0;
+  border-top: 1px solid #393530;
+  padding-top: 4px;
+}
+
+.mappingFeedbackEditor > summary {
+  cursor: pointer;
+  color: #c6ced8;
+  font-weight: 700;
+}
+
+.mappingFeedbackEditorBody {
+  display: grid;
+  gap: 6px;
+  padding-top: 6px;
+}
+
+.mappingFeedbackEditorBody fieldset {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid #393530;
+  padding: 6px;
+}
+
+.mappingFeedbackEditorBody fieldset label {
+  min-width: 0;
+}
+
+.mappingFeedbackEditorBody fieldset input,
+.mappingFeedbackEditorBody fieldset select {
+  width: 100%;
 }
 
 .layoutSetup.setupMode-io > .setupIoPanel {

@@ -3146,6 +3146,24 @@ pub enum MidiControlMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MidiFeedbackMessage {
+    pub message: MidiControlMessage,
+    pub channel: u8,
+    pub number: u8,
+    pub value: u8,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MidiControlFeedback {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub off: Option<MidiFeedbackMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on: Option<MidiFeedbackMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unknown: Option<MidiFeedbackMessage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MidiControlAction {
     FixtureAttribute,
     SelectedFeatureFader,
@@ -3215,6 +3233,8 @@ pub struct MidiControlMapping {
     pub cue_point_index: Option<usize>,
     #[serde(default)]
     pub duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feedback: Option<MidiControlFeedback>,
     pub low: f32,
     pub high: f32,
 }
