@@ -20551,8 +20551,8 @@ fn validate_and_sanitize_palette(
     if palette.label.is_empty() {
         return Err("Palette label is required".to_string());
     }
-    if palette.values.is_empty() || palette.values.len() > 128 {
-        return Err("A palette must contain from 1 to 128 attribute values".to_string());
+    if palette.values.len() > 128 {
+        return Err("A palette can contain at most 128 attribute values".to_string());
     }
     let mut attributes = HashSet::new();
     for value in &mut palette.values {
@@ -20560,6 +20560,25 @@ fn validate_and_sanitize_palette(
         if value.attribute.is_empty() || !attributes.insert(value.attribute.to_ascii_lowercase()) {
             return Err("Palette attributes must be non-empty and unique".to_string());
         }
+    }
+    if !palette.color_stops.is_empty() && !(2..=16).contains(&palette.color_stops.len()) {
+        return Err("An FX color palette must contain from 2 to 16 stops".to_string());
+    }
+    palette
+        .color_stops
+        .sort_by(|left, right| left.position.total_cmp(&right.position));
+    let mut previous_position = None;
+    for stop in &palette.color_stops {
+        if !stop.position.is_finite() || !(0.0..=1.0).contains(&stop.position) {
+            return Err("FX palette stop positions must be finite and within 0 to 1".to_string());
+        }
+        if previous_position.is_some_and(|previous| stop.position <= previous) {
+            return Err("FX palette stop positions must be unique and increasing".to_string());
+        }
+        previous_position = Some(stop.position);
+    }
+    if palette.values.is_empty() && palette.color_stops.is_empty() {
+        return Err("A palette must contain attribute values or FX color stops".to_string());
     }
     Ok(palette)
 }
@@ -36805,6 +36824,7 @@ mod tests {
                 attribute: "Dimmer".to_string(),
                 value: 20_000,
             }],
+            color_stops: Vec::new(),
         }));
         create_effect_only_cue(
             &mut runtime,
@@ -36911,6 +36931,7 @@ mod tests {
                         value: 1_000,
                     },
                 ],
+                color_stops: Vec::new(),
             }))
             .unwrap();
         let cue_id = engine.allocate_cue_id();
@@ -36958,6 +36979,7 @@ mod tests {
                         value: 2_000,
                     },
                 ],
+                color_stops: Vec::new(),
             }))
             .unwrap();
         engine.send(EngineCommand::TriggerCue(cue_id)).unwrap();
@@ -37011,6 +37033,40 @@ mod tests {
             Some(40_000)
         );
         assert_eq!(snapshot.cues[0].palette_targets[0].palette_id, palette_id);
+    }
+
+    #[test]
+    fn fx_color_palette_accepts_sorted_multistops_without_static_values() {
+        let palette = validate_and_sanitize_palette(ReferencePaletteSummary {
+            id: 9,
+            label: "  Campus FX  ".to_string(),
+            kind: protocol::PaletteKind::Color,
+            values: Vec::new(),
+            color_stops: vec![
+                protocol::ColorEffectStop {
+                    position: 1.0,
+                    color: protocol::ColorEffectColor {
+                        red: 0,
+                        green: 0,
+                        blue: 65_535,
+                    },
+                },
+                protocol::ColorEffectStop {
+                    position: 0.0,
+                    color: protocol::ColorEffectColor {
+                        red: 65_535,
+                        green: 0,
+                        blue: 0,
+                    },
+                },
+            ],
+        })
+        .unwrap();
+
+        assert_eq!(palette.label, "Campus FX");
+        assert!(palette.values.is_empty());
+        assert_eq!(palette.color_stops[0].position, 0.0);
+        assert_eq!(palette.color_stops[1].position, 1.0);
     }
 
     #[test]

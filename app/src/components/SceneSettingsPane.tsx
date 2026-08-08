@@ -18,6 +18,7 @@ import { ColorMappingEffectEditorPanel } from "./ColorMappingEffectEditorPanel";
 import { CueLiveModifierStrip } from "./CueLiveModifierStrip";
 import { CurveEffectEditorPanel } from "./CurveEffectEditorPanel";
 import { EffectActionControlsPanel } from "./EffectActionControlsPanel";
+import { FxColorPaletteLibraryPanel } from "./FxColorPaletteLibraryPanel";
 import { MappingEffectEditorPanel } from "./MappingEffectEditorPanel";
 import { MoveEffectEditorPanel } from "./MoveEffectEditorPanel";
 import {
@@ -40,6 +41,7 @@ export interface SceneEffectEditorModel {
   curve: ComponentProps<typeof CurveEffectEditorPanel>;
   mapping: ComponentProps<typeof MappingEffectEditorPanel>;
   colorMapping: ComponentProps<typeof ColorMappingEffectEditorPanel>;
+  palette: ComponentProps<typeof FxColorPaletteLibraryPanel>;
   action: ComponentProps<typeof EffectActionControlsPanel>;
 }
 
@@ -399,6 +401,7 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
                     <strong class="uiMicroLabel">FX editor</strong>
                     <span>{props.editor.effectType}</span>
                   </header>
+                  <FxColorPaletteLibraryPanel {...props.editor.palette} />
                   <Show
                     when={!["Color", "ColorMapping", "Chaser", "Move"].includes(props.editor.effectType)}
                   >

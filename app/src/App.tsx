@@ -14,6 +14,11 @@ import { AppStatusLine } from "./components/AppStatusLine";
 import { ArtRdmPanel } from "./components/ArtRdmPanel";
 import { defaultColorEffectStops } from "./components/ColorEffectEditorPanel";
 import {
+  cloneFxPaletteStops,
+  fxPaletteStopsToColorMappingFrame,
+  type FxColorPaletteDefinition,
+} from "./fxColorPalettes";
+import {
   defaultColorMappingRaster,
 } from "./components/ColorMappingEffectEditorPanel";
 import { CustomProfileEditorPanel } from "./components/CustomProfileEditorPanel";
@@ -10027,6 +10032,9 @@ export default function App() {
     return [...values].map(([attribute, value]) => ({ attribute, value }));
   };
 
+  const referencePalettes = createMemo(() =>
+    snapshot().palettes.filter((palette) => palette.values.length > 0));
+
   const createReferencePalette = async (label: string, kind: PaletteKind) => {
     const fixture = selectedFixture();
     if (!fixture) {
@@ -10039,7 +10047,12 @@ export default function App() {
       return;
     }
     try {
-      const paletteId = await invoke<number>("create_reference_palette", { label, kind, values });
+      const paletteId = await invoke<number>("create_reference_palette", {
+        label,
+        kind,
+        values,
+        colorStops: [],
+      });
       setMessage(`Captured palette ${paletteId} from ${fixture.label}.`);
       await refreshSnapshot();
     } catch (error) {
@@ -10064,6 +10077,7 @@ export default function App() {
         label: palette.label,
         kind: palette.kind,
         values,
+        colorStops: palette.color_stops ?? [],
       });
       setMessage(`Recaptured ${palette.label} from ${fixture.label}; linked Cues will use it on their next GO.`);
       await refreshSnapshot();
@@ -10099,6 +10113,100 @@ export default function App() {
       await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
+    }
+  };
+
+  const createFxColorPalette = async (label: string, stops: ColorEffectStop[]) => {
+    const colorStops = cloneFxPaletteStops(stops);
+    if (snapshot().palettes.length >= 128) {
+      setMessage("A project can contain at most 128 saved palettes.");
+      return null;
+    }
+    if (viewportFixture) {
+      const paletteId = Math.max(0, ...snapshot().palettes.map((palette) => palette.id)) + 1;
+      setSnapshot((current) => ({
+        ...current,
+        palettes: [...current.palettes, {
+          id: paletteId,
+          label: label.trim().slice(0, 64),
+          kind: "Color",
+          values: [],
+          color_stops: colorStops,
+        }],
+      }));
+      setMessage(`Created FX color palette ${label.trim()}.`);
+      return paletteId;
+    }
+    try {
+      const paletteId = await invoke<number>("create_reference_palette", {
+        label,
+        kind: "Color",
+        values: [],
+        colorStops,
+      });
+      await refreshSnapshot();
+      setMessage(`Created FX color palette ${label.trim()}.`);
+      return paletteId;
+    } catch (error) {
+      setMessage(String(error));
+      return null;
+    }
+  };
+
+  const updateFxColorPalette = async (
+    paletteId: number,
+    label: string,
+    stops: ColorEffectStop[],
+  ) => {
+    const existing = snapshot().palettes.find((palette) => palette.id === paletteId);
+    if (!existing) {
+      setMessage(`FX color palette ${paletteId} was not found.`);
+      return;
+    }
+    const colorStops = cloneFxPaletteStops(stops);
+    if (viewportFixture) {
+      setSnapshot((current) => ({
+        ...current,
+        palettes: current.palettes.map((palette) => palette.id === paletteId
+          ? { ...palette, label: label.trim().slice(0, 64), color_stops: colorStops }
+          : palette),
+      }));
+      setMessage(`Updated FX color palette ${label.trim()}.`);
+      return;
+    }
+    try {
+      await invoke("update_reference_palette", {
+        paletteId,
+        label,
+        kind: existing.kind,
+        values: existing.values,
+        colorStops,
+      });
+      await refreshSnapshot();
+      setMessage(`Updated FX color palette ${label.trim()}.`);
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
+  const removeFxColorPalette = async (paletteId: number, label: string) => {
+    if (!confirmDestructiveAction("palette", label)) return false;
+    if (viewportFixture) {
+      setSnapshot((current) => ({
+        ...current,
+        palettes: current.palettes.filter((palette) => palette.id !== paletteId),
+      }));
+      setMessage(`Removed FX color palette ${label}.`);
+      return true;
+    }
+    try {
+      await invoke("remove_reference_palette", { paletteId });
+      await refreshSnapshot();
+      setMessage(`Removed FX color palette ${label}.`);
+      return true;
+    } catch (error) {
+      setMessage(String(error));
+      return false;
     }
   };
 
@@ -16315,15 +16423,15 @@ export default function App() {
   const saveSceneEffectDraft = async () => {
     const cue = selectedSceneCue();
     const effectId = selectedSceneEffectId();
-    if (!cue || effectId === null) return;
+    if (!cue || effectId === null) return false;
     const draft = buildEffectRequestFromForm();
-    if (!draft) return;
+    if (!draft) return false;
     const params = effectParamsSnapshotFromDraft(draft);
     const effectTargets = cue.effect_targets.map((target) =>
       target.effect_id === effectId ? { ...target, enabled: true, params } : target
     );
     const saved = await persistSceneEffectTargets(cue.id, effectTargets);
-    if (!saved) return;
+    if (!saved) return false;
     const effect = cueOwnedEffectSummary(
       { ...effectTargets.find((target) => target.effect_id === effectId)!, params },
       snapshot().effects.find((candidate) => candidate.id === effectId) ?? null,
@@ -16331,6 +16439,79 @@ export default function App() {
     if (effect) useEffectAsDraft(effect);
     await previewAndRunSceneEffect(cue.id, effectId, params);
     setMessage(`Saved cue-owned ${draft.effectType} FX for scene ${cue.id}.`);
+    return true;
+  };
+
+  const applyFxColorPalette = async (palette: FxColorPaletteDefinition) => {
+    if (effectType() === "Color") {
+      setColorEffectStops(cloneFxPaletteStops(palette.stops));
+      if (!await saveSceneEffectDraft()) return;
+      setMessage(`Applied ${palette.label} to the selected Colour FX.`);
+      return;
+    }
+    if (effectType() === "ColorMapping") {
+      setColorMappingSourceKind("Image");
+      setColorMappingWidth(palette.stops.length);
+      setColorMappingHeight(1);
+      setColorMappingFrames([fxPaletteStopsToColorMappingFrame(palette.stops)]);
+      if (!await saveSceneEffectDraft()) return;
+      setMessage(`Applied ${palette.label} as a Colour Mapping raster.`);
+      return;
+    }
+
+    const cue = selectedSceneCue();
+    const source = selectedSceneEffects()
+      .find((effect) => effect.id === selectedSceneEffectId());
+    if (!cue || !source) return;
+    const defaults = defaultSceneFxParams("COLOR FX", cue, snapshot().fixtures);
+    if (!defaults || !("Color" in defaults)) {
+      setMessage("This scene has no color-capable fixture target for an FX palette.");
+      return;
+    }
+    const base = defaults.Color;
+    const targetGroupIds = source.target_group_ids.length > 0 ? source.target_group_ids : [];
+    const fixtureIds = source.fixture_ids.length > 0
+      ? source.fixture_ids
+      : targetGroupIds.length > 0
+        ? []
+        : base.fixture_ids;
+    const params: EffectParamsSnapshot = {
+      Color: {
+        ...base,
+        label: `${palette.label} · ${source.label}`.slice(0, 64),
+        fixture_ids: [...new Set(fixtureIds)],
+        target_group_ids: [...new Set(targetGroupIds)],
+        stops: cloneFxPaletteStops(palette.stops),
+        period_ms: source.period_ms ?? base.period_ms,
+        clock_sync: source.clock_sync ?? base.clock_sync,
+        phase: source.phase,
+        fixture_spread: fixtureIds.length > 1 || targetGroupIds.length > 0 ? 1 : 0,
+        spatial_pattern: null,
+      },
+    };
+
+    try {
+      let effectId: number;
+      if (viewportFixture) {
+        const cueEffectIds = snapshot().cues.flatMap((candidate) =>
+          candidate.effect_targets.map((target) => target.effect_id));
+        effectId = Math.max(900, ...snapshot().effects.map((effect) => effect.id), ...cueEffectIds) + 1;
+        const effectTarget: CueEffectTarget = { effect_id: effectId, enabled: true, params };
+        setSnapshot((current) => ({
+          ...current,
+          cues: current.cues.map((candidate) => candidate.id === cue.id
+            ? { ...candidate, effect_targets: [...candidate.effect_targets, effectTarget] }
+            : candidate),
+        }));
+      } else {
+        effectId = await invoke<number>("add_cue_owned_effect", { cueId: cue.id, params });
+        await refreshSnapshot();
+      }
+      await previewAndRunSceneEffect(cue.id, effectId, params);
+      setMessage(`Added ${palette.label} as a synchronized Colour layer beside ${source.label}.`);
+    } catch (error) {
+      setMessage(String(error));
+    }
   };
 
   const sceneEffectEditor = createMemo<SceneEffectEditorModel>(() => ({
@@ -16527,6 +16708,14 @@ export default function App() {
       onWrapMode: setColorMappingWrapMode,
       onSampling: setColorMappingSampling,
     },
+    palette: {
+      effectType: effectType(),
+      palettes: snapshot().palettes,
+      onApply: applyFxColorPalette,
+      onCreate: createFxColorPalette,
+      onUpdate: updateFxColorPalette,
+      onRemove: removeFxColorPalette,
+    },
     action: {
       showLightRange: effectTargetMode() !== "video"
         && !["Color", "ColorMapping", "Chaser", "Move"].includes(effectType()),
@@ -16545,7 +16734,9 @@ export default function App() {
       onHigh: setEffectHigh,
       onPhase: setEffectPhase,
       onBlendMode: setEffectBlendMode,
-      onSubmitEffect: saveSceneEffectDraft,
+      onSubmitEffect: async () => {
+        await saveSceneEffectDraft();
+      },
       onCancelEdit: () => {
         const cue = selectedSceneCue();
         const effectId = selectedSceneEffectId();
@@ -17253,7 +17444,7 @@ export default function App() {
                       allCues={snapshot().cues}
                       cueLists={snapshot().cue_lists}
                       groupIds={fixtureGroupRows().map((row) => row.groupId)}
-                      palettes={snapshot().palettes}
+                      palettes={referencePalettes()}
                       effects={snapshot().effects}
                       cueCaptureEffects={cueCaptureEligibleEffects()}
                       selectedCueListId={selectedCueList().id}
@@ -18831,7 +19022,7 @@ export default function App() {
               onClear={clearProgrammer}
             />
             <ReferencePalettePanel
-              palettes={snapshot().palettes}
+              palettes={referencePalettes()}
               captureFixtureLabel={selectedFixture()?.label ?? null}
               targetLabel={controlTargetLabel()}
               targetFixtureCount={selectedControlTargetFixtures().length}
@@ -19037,7 +19228,7 @@ export default function App() {
             allCues={snapshot().cues}
             cueLists={snapshot().cue_lists}
             groupIds={fixtureGroupRows().map((row) => row.groupId)}
-            palettes={snapshot().palettes}
+            palettes={referencePalettes()}
             effects={snapshot().effects}
             cueCaptureEffects={cueCaptureEligibleEffects()}
             selectedCueListId={selectedCueList().id}

@@ -7043,8 +7043,8 @@ fn create_cue_list(
 fn validate_reference_palette_values(
     values: &mut Vec<protocol::AttributeValueSummary>,
 ) -> Result<(), String> {
-    if values.is_empty() || values.len() > 128 {
-        return Err("A palette must contain from 1 to 128 attribute values".to_string());
+    if values.len() > 128 {
+        return Err("A palette can contain at most 128 attribute values".to_string());
     }
     let mut attributes = HashSet::new();
     for value in values {
@@ -7056,18 +7056,42 @@ fn validate_reference_palette_values(
     Ok(())
 }
 
+fn validate_fx_palette_stops(stops: &mut Vec<protocol::ColorEffectStop>) -> Result<(), String> {
+    if !stops.is_empty() && !(2..=16).contains(&stops.len()) {
+        return Err("An FX color palette must contain from 2 to 16 stops".to_string());
+    }
+    stops.sort_by(|left, right| left.position.total_cmp(&right.position));
+    let mut previous_position = None;
+    for stop in stops {
+        if !stop.position.is_finite() || !(0.0..=1.0).contains(&stop.position) {
+            return Err("FX palette stop positions must be finite and within 0 to 1".to_string());
+        }
+        if previous_position.is_some_and(|previous| stop.position <= previous) {
+            return Err("FX palette stop positions must be unique and increasing".to_string());
+        }
+        previous_position = Some(stop.position);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn create_reference_palette(
     state: State<'_, AppState>,
     label: String,
     kind: protocol::PaletteKind,
     mut values: Vec<protocol::AttributeValueSummary>,
+    color_stops: Option<Vec<protocol::ColorEffectStop>>,
 ) -> Result<protocol::PaletteId, String> {
     let label = label.trim().chars().take(64).collect::<String>();
     if label.is_empty() {
         return Err("Palette label is required".to_string());
     }
     validate_reference_palette_values(&mut values)?;
+    let mut color_stops = color_stops.unwrap_or_default();
+    validate_fx_palette_stops(&mut color_stops)?;
+    if values.is_empty() && color_stops.is_empty() {
+        return Err("A palette must contain attribute values or FX color stops".to_string());
+    }
     let palette_id = state.engine.allocate_palette_id();
     state
         .engine
@@ -7077,6 +7101,7 @@ fn create_reference_palette(
                 label,
                 kind,
                 values,
+                color_stops,
             },
         ))
         .map_err(|error| error.to_string())?;
@@ -7090,6 +7115,7 @@ fn update_reference_palette(
     label: String,
     kind: protocol::PaletteKind,
     mut values: Vec<protocol::AttributeValueSummary>,
+    color_stops: Option<Vec<protocol::ColorEffectStop>>,
 ) -> Result<(), String> {
     let label = label.trim().chars().take(64).collect::<String>();
     if label.is_empty() {
@@ -7105,6 +7131,11 @@ fn update_reference_palette(
         return Err(format!("Palette {palette_id} was not found"));
     }
     validate_reference_palette_values(&mut values)?;
+    let mut color_stops = color_stops.unwrap_or_default();
+    validate_fx_palette_stops(&mut color_stops)?;
+    if values.is_empty() && color_stops.is_empty() {
+        return Err("A palette must contain attribute values or FX color stops".to_string());
+    }
     state
         .engine
         .send(EngineCommand::UpsertPalette(
@@ -7113,6 +7144,7 @@ fn update_reference_palette(
                 label,
                 kind,
                 values,
+                color_stops,
             },
         ))
         .map_err(|error| error.to_string())
@@ -16557,6 +16589,19 @@ fn validate_project_file(project: &ProjectFile) -> Result<(), String> {
                 palette.id, palette.label
             )
         })?;
+        let mut color_stops = palette.color_stops.clone();
+        validate_fx_palette_stops(&mut color_stops).map_err(|error| {
+            format!(
+                "Project palette {} '{}' is invalid: {error}",
+                palette.id, palette.label
+            )
+        })?;
+        if values.is_empty() && color_stops.is_empty() {
+            return Err(format!(
+                "Project palette {} '{}' contains neither attribute values nor FX color stops",
+                palette.id, palette.label
+            ));
+        }
     }
     validate_unique_ids(
         "playback executor",
@@ -32993,6 +33038,51 @@ f 1 2 3
     }
 
     #[test]
+    fn project_file_roundtrips_fx_color_palette_without_static_values() {
+        let project = ProjectFile {
+            version: PROJECT_FILE_VERSION,
+            app: "Syndocal".to_string(),
+            operator_policy: None,
+            custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
+            snapshot: EngineSnapshot {
+                palettes: vec![protocol::ReferencePaletteSummary {
+                    id: 12,
+                    label: "Campus FX".to_string(),
+                    kind: protocol::PaletteKind::Color,
+                    values: Vec::new(),
+                    color_stops: vec![
+                        protocol::ColorEffectStop {
+                            position: 0.0,
+                            color: protocol::ColorEffectColor {
+                                red: 65_535,
+                                green: 0,
+                                blue: 0,
+                            },
+                        },
+                        protocol::ColorEffectStop {
+                            position: 1.0,
+                            color: protocol::ColorEffectColor {
+                                red: 0,
+                                green: 0,
+                                blue: 65_535,
+                            },
+                        },
+                    ],
+                }],
+                ..EngineSnapshot::default()
+            },
+        };
+
+        validate_project_file(&project).unwrap();
+        let encoded = serde_json::to_vec(&project).unwrap();
+        let decoded: ProjectFile = serde_json::from_slice(&encoded).unwrap();
+        validate_project_file(&decoded).unwrap();
+        assert_eq!(decoded.snapshot.palettes[0].color_stops.len(), 2);
+        assert!(decoded.snapshot.palettes[0].values.is_empty());
+    }
+
+    #[test]
     fn project_file_validation_rejects_corrupt_emitter_calibration() {
         let mut fixture = project_fixture(1, "Emitter Fixture", 0, 1);
         let mut function = project_color_wheel_function("Red", "Red", "#ff0000", 0, 65_535);
@@ -33066,6 +33156,7 @@ f 1 2 3
                 attribute: "Dimmer".to_string(),
                 value: 32_768,
             }],
+            color_stops: Vec::new(),
         }];
         project.snapshot.cues.push(protocol::CueSummary {
             id: 2,

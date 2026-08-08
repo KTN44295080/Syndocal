@@ -2145,6 +2145,7 @@ export interface ReferencePaletteSummary {
   label: string;
   kind: PaletteKind;
   values: AttributeValueSummary[];
+  color_stops?: ColorEffectStop[];
 }
 
 export interface PlaybackExecutorSummary {

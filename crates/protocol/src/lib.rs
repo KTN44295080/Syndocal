@@ -1442,6 +1442,8 @@ pub struct ReferencePaletteSummary {
     pub label: String,
     pub kind: PaletteKind,
     pub values: Vec<AttributeValueSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub color_stops: Vec<ColorEffectStop>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -4100,6 +4102,19 @@ mod tests {
             vec![super::PlaybackExecutorSummary::default()]
         );
         assert_eq!(parsed.playback_master, 1.0);
+    }
+
+    #[test]
+    fn legacy_reference_palette_defaults_fx_color_stops_to_empty() {
+        let parsed: super::ReferencePaletteSummary = serde_json::from_str(
+            r#"{"id":7,"label":"Legacy look","kind":"Color","values":[{"attribute":"Red","value":65535}]}"#,
+        )
+        .unwrap();
+
+        assert!(parsed.color_stops.is_empty());
+        assert_eq!(parsed.values.len(), 1);
+        let encoded = serde_json::to_value(parsed).unwrap();
+        assert!(encoded.get("color_stops").is_none());
     }
 
     #[test]

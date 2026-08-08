@@ -18401,6 +18401,25 @@ async function readSceneSettingsState(client) {
       )?.getAttribute("data-scene-matrix-kind") ?? "",
       editorType: document.querySelector("[data-scene-settings-effect-editor]")
         ?.getAttribute("data-scene-settings-effect-editor") ?? "",
+      fxPaletteLibraryType: document.querySelector("[data-fx-color-palette-library]")
+        ?.getAttribute("data-fx-color-palette-library") ?? "",
+      fxPaletteBuiltInCount: Number(document.querySelector("[data-fx-color-palette-library]")
+        ?.getAttribute("data-built-in-palette-count") ?? 0),
+      fxPaletteEditorDisclosureCount: document.querySelectorAll(
+        "[data-fx-color-palette-library] .fxColorPaletteEditorDisclosure",
+      ).length,
+      fxPaletteEditorOpen: document.querySelector(
+        "[data-fx-color-palette-library] .fxColorPaletteEditorDisclosure",
+      )?.hasAttribute("open") ?? false,
+      fxPaletteCustomOptionCount: document.querySelectorAll(
+        '[data-fx-color-palette-library] option[value^="custom:"]',
+      ).length,
+      fxPaletteSelectedValue: document.querySelector(
+        "[data-fx-color-palette-library] select",
+      )?.value ?? "",
+      fxPaletteApplyLabel: document.querySelector(
+        "[data-fx-color-palette-library] > header > button",
+      )?.textContent?.trim() ?? "",
       curveEditorVisible: isVisible(document.querySelector(
         "[data-scene-settings-effect-editor] .curveEffectEditor",
       )),
@@ -18847,6 +18866,40 @@ async function runSceneSettingsViewport(client, viewport) {
   );
   await sleep(120);
   const oneClickAdded = await readSceneSettingsState(client);
+  const paletteEditorOpened = await clickSceneSettingsTarget(
+    client,
+    "[data-fx-color-palette-library] .fxColorPaletteEditorDisclosure > summary",
+  );
+  const paletteDraftChanged = await evaluatePageFunction(client, () => {
+    const label = document.querySelector(
+      "[data-fx-color-palette-editor] .fxColorPaletteLabel input",
+    );
+    const color = document.querySelector(
+      '[data-fx-color-palette-editor] input[type="color"]',
+    );
+    if (!(label instanceof HTMLInputElement) || !(color instanceof HTMLInputElement)) return false;
+    label.value = "Viewport Custom FX";
+    label.dispatchEvent(new Event("input", { bubbles: true }));
+    color.value = "#123456";
+    color.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  });
+  const paletteSaved = await clickSceneSettingsTarget(
+    client,
+    "[data-fx-color-palette-editor] .fxColorPaletteEditorActions button:nth-child(2)",
+  );
+  await waitForClientCondition(
+    client,
+    'document.querySelectorAll(\'[data-fx-color-palette-library] option[value^="custom:"]\').length === 1',
+    `FX custom palette create ${viewport.width}x${viewport.height}`,
+  );
+  const oneClickPaletteCreated = await readSceneSettingsState(client);
+  const paletteApplied = await clickSceneSettingsTarget(
+    client,
+    "[data-fx-color-palette-library] > header > button",
+  );
+  await sleep(120);
+  const oneClickPaletteApplied = await readSceneSettingsState(client);
   const superSceneStripGesture = await clickSceneSettingsStrip(
     client,
     '[data-scene-matrix-edit-strip="303"]',
@@ -19086,6 +19139,27 @@ async function runSceneSettingsViewport(client, viewport) {
       && createdFx.curveEditorVisible
       && createdFx.saveFxButtonVisible
       && createdFx.activeCardIds.includes("302")],
+    ["everySceneFxEditorOwnsDaslightPlusColorPaletteLibrary", () =>
+      createdFx.fxPaletteLibraryType === "Curve"
+      && createdFx.fxPaletteBuiltInCount === 32
+      && createdFx.fxPaletteEditorDisclosureCount === 1
+      && createdFx.fxPaletteApplyLabel === "Add Colour layer"
+      && oneClickAdded.fxPaletteLibraryType === "Color"
+      && oneClickAdded.fxPaletteBuiltInCount === 32
+      && oneClickAdded.fxPaletteEditorDisclosureCount === 1
+      && oneClickAdded.fxPaletteApplyLabel === "Load into Colour FX"],
+    ["fxPaletteEditorCreatesProjectPaletteAndAppliesIt", () =>
+      paletteEditorOpened
+      && paletteDraftChanged
+      && paletteSaved
+      && oneClickPaletteCreated.fxPaletteEditorOpen
+      && oneClickPaletteCreated.fxPaletteCustomOptionCount === 1
+      && oneClickPaletteCreated.fxPaletteSelectedValue.startsWith("custom:")
+      && paletteApplied
+      && oneClickPaletteApplied.ownedFxCount === 1
+      && oneClickPaletteApplied.editorType === "Color"
+      && oneClickPaletteApplied.documentAndAppScrollZero
+      && oneClickPaletteApplied.settingsHorizontalOverflowPx <= 1],
     ["editSceneContextShowsDaslightStyleQuickFxBlocks", () =>
       oneClickStripGesture.dispatched
       && editModeClicked
@@ -19223,6 +19297,8 @@ async function runSceneSettingsViewport(client, viewport) {
     oneClickEditContext,
     oneClickAddGesture,
     oneClickAdded,
+    oneClickPaletteCreated,
+    oneClickPaletteApplied,
     pointerOnlyStripGesture,
     pointerOnlySelected,
   };

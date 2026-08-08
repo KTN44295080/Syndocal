@@ -34397,6 +34397,145 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
   margin-bottom: 2px;
 }
 
+.fxColorPaletteLibrary {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid #3a444a;
+  border-radius: var(--ui-radius-card);
+  background: #151a1d;
+  padding: 8px;
+}
+
+.fxColorPaletteLibrary > header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.fxColorPaletteLibrary > header > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fxColorPaletteLibrary > header span,
+.fxColorPaletteLibrary .hint {
+  color: #929ba1;
+}
+
+.fxColorPalettePickerRow,
+.fxColorPalettePickerRow > label,
+.fxColorPaletteEditor,
+.fxColorPaletteLabel {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.fxColorPalettePickerRow select,
+.fxColorPaletteLabel input {
+  width: 100%;
+  min-width: 0;
+}
+
+.fxColorPaletteSwatches {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(24px, 1fr));
+  min-height: 32px;
+  overflow: hidden;
+  border: 1px solid #424c52;
+  border-radius: 3px;
+}
+
+.fxColorPaletteSwatches > span {
+  min-width: 24px;
+  min-height: 30px;
+}
+
+.fxColorPaletteEditorDisclosure {
+  min-width: 0;
+  border-top: 1px solid #30383d;
+}
+
+.fxColorPaletteEditorDisclosure > summary {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  color: #cbd2d6;
+  font-weight: 700;
+}
+
+.fxColorPaletteEditor {
+  padding-top: 8px;
+}
+
+.fxColorPaletteStopList {
+  display: grid;
+  gap: 5px;
+}
+
+.fxColorPaletteStopRow {
+  display: grid;
+  grid-template-columns: 24px 48px minmax(76px, 1fr) 40px;
+  grid-template-rows: 40px 40px;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  border: 1px solid #333c41;
+  background: #111619;
+  padding: 5px;
+}
+
+.fxColorPaletteStopRow > input[type="color"] {
+  width: 48px;
+  min-width: 48px;
+  padding: 2px;
+}
+
+.fxColorPaletteStopRow > output {
+  overflow: hidden;
+  color: #cbd2d6;
+  text-overflow: ellipsis;
+}
+
+.fxColorPaletteStopRow > label {
+  display: grid;
+  grid-column: 2 / -1;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.fxColorPaletteStopRow > label input {
+  width: 100%;
+  min-width: 0;
+}
+
+.fxColorPaletteStopRow > button {
+  width: 40px;
+  min-width: 40px;
+  padding: 0;
+}
+
+.fxColorPaletteEditorActions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.fxColorPaletteEditorActions button {
+  min-width: 0;
+  white-space: normal;
+}
+
+.fxColorPaletteEditor .fieldError,
+.fxColorPaletteEditor .hint {
+  margin: 0;
+}
+
 .sceneFxEditor .colorEffectEditor,
 .sceneFxEditor .chaserEffectEditor,
 .sceneFxEditor .moveEffectEditorPanel,
