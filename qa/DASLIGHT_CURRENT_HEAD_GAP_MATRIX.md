@@ -12,9 +12,9 @@
 | Scene配置 | 常設Scene MatrixからTimelineへ1 drag | 実測1 drag | 同 | 13タスクoperation-count gateで回帰固定 |
 | Timeline layer mute | 1 click | 実測1 click | 同 | gate維持 |
 | Timeline pane expand/restore | 2操作 | 実測2操作 | 同 | gate維持 |
-| Scene trigger / Live speed / reset | すべて1 gesture、DOM runtime truthまで検証 | **2026-07-29実測**: trigger=1クリック（ユーザー実操作、Shinkan実ショー・B-WineRed FX）。live speed=トリガーでDIMMER/SPEED/PHASE/SIZEダイヤルパネルが自動表示→1ドラッグ。停止=⏸1クリック（構造） | **同**（trigger/live speed）。resetは未計測 | 証跡: audit-2026-07-29/dl-16-triggered.png。SyndocalのT17ストリップとDaslightのダイヤルパネルは「アクティブシーンへライブ操作が自動表示」の同型モデル |
-| Touch live / flash / Edit / control追加 | 各1 gesture、flashはdown/up、追加は件数増加を検証 | 未計測 | 未計測 | Daslight remote/touch面を同一タスク実測 |
-| FX family / recipe選択 | 各1 click、active familyとrecipe選択を検証 | 未計測 | 未計測 | 作成、target適用、Cue保存まで比較を拡張 |
+| Scene trigger / Live speed / reset | trigger、speed、全modifier reset、releaseが各1 gesture。DOM runtime truthまで検証 | **2026-08-08最大化実測**: trigger=1 click、live speed=1 drag、release=1 click。Daslightは4ダイヤルの一括Resetなし。右クリックはTouch追加、double-clickは値変更であり、manual v1.4もLive Control Dial resetを定義しない | trigger/live speed/releaseは**同**。一括resetはSyndocalが**1 click少ない経路を独占** | `qa/DASLIGHT_OPERATOR_COUNT_AUDIT_2026-08-08.md`で回帰根拠を固定 |
+| Touch live / flash / Edit / control追加 | 各1 gesture、flashはdown/up、追加は件数増加を検証 | **2026-08-08最大化実測**: workspace=1 click、scene trigger=1 click、Flash=1 press/release、Edit=1 click、control追加=2 clicks。FlashはAdvanced Propertiesで有効化したsceneをTouchへ追加し、解放後に非latchedとなることを確認 | 4件同、control追加はSyndocalが1 click少ない | `qa/DASLIGHT_OPERATOR_COUNT_AUDIT_2026-08-08.md`で回帰根拠を固定 |
+| FX family / recipe選択 | 各1 click、active familyとrecipe選択を検証 | **2026-08-08最大化実測**: 開いたFX追加menuからMAPPINGSを1 clickで生成し、MAPPINGS editor表示まで確認 | Mapping FX family作成は**同** | target適用/Cue保存は別タスクとして比較を拡張 |
 | Independent FX | 7系統が独立body/runtime/editor。Colour Mappingは埋め込みimage/text/video、matrix cell、UV/sampling/playbackを持つ。Move SymmetryはDaslight実測どおり後半Panのみ鏡像化。Curve/ChaserはDVCのfixture/BEAMID/selection順を保持し、RGB/RGBAの選択セグメントだけを変調する | Daslightは7独立generator群。Move SymmetryとChaser #2は最大化UI + DMX Levelsで実測 | 対象検体のソフトウェア/DMX規則差は解消。Shinkan動的FXの別プロセスArt-Net受信PASS | プリセット量と実灯体/商用visualizer目視は外部比較 |
 | DVC dynamic FX import | フルShinkanの30 effectをSkipped 0で変換。Bar-StrobeAMber=64 beams / 48 selections / BEAMID 0..7、Bar-Side Chaser=16 steps / 16 beams / BEAMID 0..7を保存・再読込・DMX隔離テストで固定 | 原XMLのBEAMS列とDaslightのgenerator/bodyを比較 | Curve/Chaserの旧fixture平坦化を解消 | VALUE FX / COLOR MAPPINGSはユーザーDVCに検体なし。MoveのBEAMID>0検体のみ未証明 |
 | Cue FX parameter transition | Cue-owned Effectごとに任意fade、同一IDの直前live result→次state、連続/離散属性別policy、video target対応 | あり | ソフトウェア構造差は解消・Daslight同一タスク未計測 | 実灯体とDaslight操作を外部比較 |
@@ -30,9 +30,9 @@
 
 `qa/harnesses/check-operation-counts.mjs` は13タスクを実CDP gestureで実行し、結果のDOM/runtime反映までfail-closedで確認する。
 
-- Daslight同一タスク実測あり: 3件（すべて同数）
-- Syndocal回帰予算のみ、Daslight未計測: 10件
+- Daslight同一タスク実測あり: 12件（11件同数、1件はSyndocalが少ない）
+- Daslightに同等の1操作がない: 1件（全scene live modifier reset）
 - Matrix/Touch flashのpointer down/up契約は、専用`--scene-live-modifier-only`でも5解像度を別途検証する
 - patch、static programming、FX target適用、native Save/reopenはこの13件にまだ含めず、未計測のまま残す
 
-この表は「13件PASS = 全体同等」を意味しない。比較判定を更新できるのは、同じ開始状態と完了条件でDaslight側の操作数も取得したタスクだけである。
+この表は「13件PASS = 全体同等」を意味しない。比較判定を更新できるのは、同じ開始状態と完了条件でDaslight側の操作数も取得したタスクだけである。直接実測の詳細は`qa/DASLIGHT_OPERATOR_COUNT_AUDIT_2026-08-08.md`を正本とする。

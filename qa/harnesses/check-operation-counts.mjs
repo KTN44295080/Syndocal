@@ -8,11 +8,11 @@
 // If a UI change adds a required gesture, the task fails - operation-count
 // regressions become visible instead of anecdotal.
 //
-// Daslight reference counts come from the observed sessions recorded in
-// target/qa/ui-comparison/PRIMARY_OBSERVATIONS.md (manual counts on the real
-// application; not automatable). Keep the comparison honest: a Syndocal PASS
-// here plus the recorded Daslight count for the same task is evidence; a
-// missing Daslight observation means "no claim yet", never an assumed win.
+// Daslight reference counts come from the maximized real-application sessions
+// recorded in qa/DASLIGHT_OPERATOR_COUNT_AUDIT_2026-08-08.md. Keep the
+// comparison honest: a Syndocal PASS here plus the recorded Daslight count for
+// the same task is evidence; a missing Daslight observation means "no claim
+// yet", never an assumed win.
 //
 // Usage: node qa/harnesses/check-operation-counts.mjs [appUrl]
 //   appUrl defaults to http://127.0.0.1:5173 (a running dev server is
@@ -311,8 +311,6 @@ try {
   }
 
   // ---- Tasks 4-7: live scene operation from the always-visible matrix.
-  // The Daslight side has not been counted for these exact fixture/task
-  // starting states, so these are Syndocal regression budgets only.
   {
     await openFixture("scene-matrix");
     const trigger = JSON.parse(await evalJs(`(() => {
@@ -324,7 +322,7 @@ try {
     await opClick(trigger.x, trigger.y); // op 1
     const active = await evalJs(`document.querySelector('[data-scene-matrix-cue-id="303"]')?.getAttribute('data-scene-matrix-active')`);
     const authored = await evalJs(`document.querySelector('[data-cue-live-modifier="303"]')?.getAttribute('data-live-override')`);
-    record("trigger-scene-from-matrix", 1, 1, active === "true" && authored === "false", "未計測");
+    record("trigger-scene-from-matrix", 1, 1, active === "true" && authored === "false", "1 click");
 
     const speed = JSON.parse(await evalJs(`(() => {
       const el = document.querySelector('[data-cue-live-modifier-speed="303"]');
@@ -352,7 +350,7 @@ try {
       1,
       1,
       latched.override === "true" && latched.speed !== "x2" && latched.resetDisabled === false,
-      "未計測",
+      "1 drag",
       `speed ${latched.speed}`,
     );
 
@@ -375,7 +373,7 @@ try {
       1,
       1,
       resetState.override === "false" && resetState.speed === "x2",
-      "未計測",
+      "no equivalent one-action dial reset",
       `speed ${resetState.speed}`,
     );
 
@@ -389,7 +387,7 @@ try {
       1,
       1,
       released.active === "false" && released.stripPresent === false,
-      "未計測",
+      "1 click",
     );
 
   }
@@ -410,7 +408,7 @@ try {
       const el = document.querySelector('[data-touch-surface]');
       return Boolean(el && el.getBoundingClientRect().width > 0);
     })()`);
-    record("open-touch-workspace", 1, 1, touchVisible === true, "未計測");
+    record("open-touch-workspace", 1, 1, touchVisible === true, "1 click");
 
     const cuePad = JSON.parse(await evalJs(`(() => {
       const el = document.querySelector('[data-touch-cue-pad="303"]');
@@ -420,7 +418,7 @@ try {
     })()`));
     await opClick(cuePad.x, cuePad.y); // op 1
     const touchActive = await evalJs(`Boolean(document.querySelector('.cueLiveModifierStrip.touch[data-cue-live-modifier="303"]'))`);
-    record("trigger-scene-from-touch", 1, 1, touchActive === true, "未計測");
+    record("trigger-scene-from-touch", 1, 1, touchActive === true, "1 click");
 
     const touchFlash = JSON.parse(await evalJs(`(() => {
       const el = document.querySelector('[data-touch-flash-cue="320"]');
@@ -434,7 +432,7 @@ try {
     await mouse("mouseReleased", touchFlash.x, touchFlash.y, { buttons: 0 });
     await sleep(250);
     const touchFlashUp = await evalJs(`Boolean(document.querySelector('.cueLiveModifierStrip.touch[data-cue-live-modifier="320"]'))`);
-    record("momentary-flash-from-touch", 1, 1, touchFlashDown === true && touchFlashUp === false, "未計測");
+    record("momentary-flash-from-touch", 1, 1, touchFlashDown === true && touchFlashUp === false, "1 press/release gesture");
 
     const edit = JSON.parse(await evalJs(`(() => {
       const el = [...document.querySelectorAll('.touchSurfaceModeToggle button')]
@@ -445,7 +443,7 @@ try {
     })()`));
     await opClick(edit.x, edit.y); // op 1
     const editMode = await evalJs(`document.querySelector('[data-touch-surface]')?.getAttribute('data-touch-mode')`);
-    record("enter-touch-edit-mode", 1, 1, editMode === "edit", "未計測");
+    record("enter-touch-edit-mode", 1, 1, editMode === "edit", "1 click");
 
     const controlsBefore = Number(await evalJs(`document.querySelectorAll('[data-touch-control]').length`));
     const addButton = JSON.parse(await evalJs(`(() => {
@@ -461,7 +459,7 @@ try {
       1,
       1,
       controlsAfter === controlsBefore + 1,
-      "未計測",
+      "2 clicks (palette + placement)",
       `controls ${controlsBefore} -> ${controlsAfter}`,
     );
   }
@@ -525,7 +523,7 @@ try {
         && mappingState.effects === effectsBefore + 1
         && mappingState.selectedType === "Mapping"
         && mappingState.editorType === "Mapping",
-      "未計測",
+      "1 click from open FX menu",
       `${mappingState.family}; effects ${effectsBefore} -> ${mappingState.effects}; selected=${mappingState.selectedType}; editor=${mappingState.editorType}`,
     );
   }
