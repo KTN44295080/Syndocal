@@ -52,6 +52,45 @@ const fixture = {
   parked: false,
 };
 
+const strongpoint13Fixture = {
+  ...fixture,
+  id: 13,
+  label: "960 sound waves strongpoint 13ch",
+  profile_name: "960 sound waves strongpoint",
+  mode_name: "13-channel · master + 4 blocks",
+  address: 30,
+  controls: [
+    control("Dimmer", 1),
+    control("ColorAdd_R", 2),
+    control("ColorAdd_G", 3),
+    control("ColorAdd_B", 4),
+    control("ColorAdd_R2", 5),
+    control("ColorAdd_G2", 6),
+    control("ColorAdd_B2", 7),
+    control("ColorAdd_R3", 8),
+    control("ColorAdd_G3", 9),
+    control("ColorAdd_B3", 10),
+    control("ColorAdd_R4", 11),
+    control("ColorAdd_G4", 12),
+    control("ColorAdd_B4", 13),
+  ],
+  attribute_values: [
+    { attribute: "Dimmer", value: 65_535 },
+    { attribute: "ColorAdd_R", value: 65_535 },
+    { attribute: "ColorAdd_G", value: 0 },
+    { attribute: "ColorAdd_B", value: 0 },
+    { attribute: "ColorAdd_R2", value: 0 },
+    { attribute: "ColorAdd_G2", value: 65_535 },
+    { attribute: "ColorAdd_B2", value: 0 },
+    { attribute: "ColorAdd_R3", value: 0 },
+    { attribute: "ColorAdd_G3", value: 0 },
+    { attribute: "ColorAdd_B3", value: 65_535 },
+    { attribute: "ColorAdd_R4", value: 65_535 },
+    { attribute: "ColorAdd_G4", value: 65_535 },
+    { attribute: "ColorAdd_B4", value: 0 },
+  ],
+};
+
 const server = await createServer({
   root: appRoot,
   configFile: false,
@@ -143,11 +182,19 @@ try {
     ["rgb(128, 0, 0)", "rgb(0, 128, 0)"],
   );
 
+  const strongpoint13 = fixtureLiveColor(strongpoint13Fixture, new Map());
+  assert.equal(strongpoint13.segmentCount, 4);
+  assert.deepEqual(
+    strongpoint13.segments.map((segment) => segment.color),
+    ["rgb(255, 0, 0)", "rgb(0, 255, 0)", "rgb(0, 0, 255)", "rgb(255, 255, 0)"],
+  );
+
   console.log(
     "pass fixture live-color source selection " +
       `previewZero=${previewZero.valueSource}:${previewZero.intensity}x${previewZero.segmentCount} ` +
       `previewNonzero=${previewNonzero.valueSource}:${JSON.stringify(previewNonzero.segments.map((segment) => segment.color))} ` +
       `previewAbsent=${previewAbsent.valueSource}:${JSON.stringify(previewAbsent.segments.map((segment) => segment.color))} ` +
+      `strongpoint13=${strongpoint13.segmentCount}:${JSON.stringify(strongpoint13.segments.map((segment) => segment.color))} ` +
       `compactZero=${compactZero.valueSource}:${compactZero.intensity}x${compactZero.segmentCount} ` +
       `gdtfAdditive=${additiveResolution.red}/${additiveResolution.green}/${additiveResolution.blue} ` +
       `extras=${additiveResolution.white}/${additiveResolution.amber}/${additiveResolution.uv}`,

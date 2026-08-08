@@ -2875,15 +2875,24 @@ export default function App() {
         auto_vj: defaultAutoVjSnapshot(),
       },
     }));
-  } else if (viewportFixture === "mapping-live-color" || viewportFixture === "mapping-viewport-conformance") {
-    const fixtures = structuredClone(viewportFixtureData.mappingLiveColorFixtures);
+  } else if (
+    viewportFixture === "mapping-live-color"
+    || viewportFixture === "mapping-viewport-conformance"
+    || viewportFixture === "strongpoint-segments"
+  ) {
+    const fixtures = structuredClone(
+      viewportFixture === "strongpoint-segments"
+        ? viewportFixtureData.mappingStrongpointFixtures
+        : viewportFixtureData.mappingLiveColorFixtures,
+    );
     const conformanceFixture = viewportFixture === "mapping-viewport-conformance";
     setWorkspaceTab("setup");
     setSetupSubTab("mapping");
     setControlMode("edit");
     setSelectedFixtureGroupFilter("front");
-    setSelectedFixtureId(1);
-    setSelectedMappingFixtureIds([1]);
+    const firstFixtureId = fixtures[0]?.id ?? null;
+    setSelectedFixtureId(firstFixtureId);
+    setSelectedMappingFixtureIds(firstFixtureId === null ? [] : [firstFixtureId]);
     if (conformanceFixture) setSelectedStageObjectId(1);
     setLiveDmxPreviews([]);
     setLiveFixtures(fixtures);

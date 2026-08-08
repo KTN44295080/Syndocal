@@ -27,6 +27,8 @@ export interface MappingFixture2D {
   z: number;
   width: number;
   height: number;
+  segmentColumns: number;
+  segmentRows: number;
   yaw: number;
   intensity: number;
   color: string;
@@ -104,6 +106,8 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
                 data-live-color-applied={fixture.liveColorApplied ? "true" : "false"}
                 data-live-color-source={fixture.liveColorValueSource ?? "none"}
                 data-live-segment-count={fixture.liveSegments?.length ?? 1}
+                data-live-segment-columns={fixture.segmentColumns}
+                data-live-segment-rows={fixture.segmentRows}
                 data-stage-fixture-drag-threshold={MAPPING_FIXTURE_DRAG_THRESHOLD_PX}
                 transform={`translate(${fixture.x} ${fixture.z}) rotate(${fixture.yaw})`}
                 onPointerDown={(event) => props.onFixturePointerDown(event, fixture.id)}
@@ -118,6 +122,8 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
                   height={fixture.height}
                   color={fixture.color}
                   segments={fixture.liveSegments}
+                  segmentColumns={fixture.segmentColumns}
+                  segmentRows={fixture.segmentRows}
                   liveSegmentScreenScale={1 / Math.max(1, props.labelZoom)}
                   hitTargetRadius={6}
                   title={`${fixture.label} / ${fixture.dmxLabel} / ${fixture.groupLabel}`}

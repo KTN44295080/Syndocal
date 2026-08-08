@@ -64,6 +64,7 @@ const mappingLiveSegmentsOnlyMode = process.argv.includes("--mapping-live-segmen
 const mappingLiveSnapshotOnlyMode = process.argv.includes("--mapping-live-snapshot-only");
 const mappingViewportConformanceOnlyMode = process.argv.includes("--mapping-viewport-conformance-only");
 const barBeamsOnlyMode = process.argv.includes("--bar-beams-only");
+const strongpointSegmentsOnlyMode = process.argv.includes("--strongpoint-segments-only");
 const controlModeSurfaceOnlyMode = process.argv.includes("--control-mode-surface-only");
 const liveDeskHeaderOnlyMode = process.argv.includes("--live-desk-header-only");
 const topbarPulseOnlyMode = process.argv.includes("--topbar-pulse-only");
@@ -81,6 +82,8 @@ const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
         ? "mapping-viewport-conformance"
       : mappingLiveSnapshotOnlyMode
         ? "mapping-live-snapshot"
+    : strongpointSegmentsOnlyMode
+      ? "strongpoint-segments"
     : mappingLiveColorOnlyMode || mappingLiveSegmentsOnlyMode || barBeamsOnlyMode
       ? "mapping-live-color"
     : colorWheelOnlyMode
@@ -23178,6 +23181,56 @@ async function runBarBeamsViewport(client, viewport) {
   return { viewport, on, off };
 }
 
+async function runStrongpointSegmentsViewport(client, viewport) {
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await client.send("Page.navigate", { url: appUrl });
+  await waitForApp(client);
+  await waitForClientCondition(
+    client,
+    "document.querySelectorAll('.setupStageContext [data-stage-fixture-id]').length === 2",
+    "strongpoint segment fixtures",
+  );
+  await waitForClientCondition(
+    client,
+    "document.querySelectorAll('.setupStageContext [data-stage-fixture-id=\"121\"] [data-stage-fixture-segment]').length === 40",
+    "strongpoint 121ch cells",
+  );
+  return client.evaluate(`(() => {
+    const root = document.querySelector('.setupStageContext');
+    const inspect = (id) => {
+      const fixture = root?.querySelector('[data-stage-fixture-id="' + id + '"]');
+      const segments = [...(fixture?.querySelectorAll('[data-stage-fixture-segment]') ?? [])];
+      const outline = fixture?.querySelector('[data-stage-fixture-outline]');
+      const beams = [...(root?.querySelectorAll('[data-stage-beam-fixture-id="' + id + '"]') ?? [])];
+      return {
+        found: Boolean(fixture),
+        count: Number(fixture?.getAttribute('data-live-segment-count') ?? 0),
+        columns: Number(fixture?.getAttribute('data-live-segment-columns') ?? 0),
+        rows: Number(fixture?.getAttribute('data-live-segment-rows') ?? 0),
+        colors: segments.map((segment) => segment.getAttribute('fill')),
+        cells: segments.map((segment) => ({
+          column: Number(segment.getAttribute('data-stage-fixture-segment-column')),
+          row: Number(segment.getAttribute('data-stage-fixture-segment-row')),
+          x: Number(segment.getAttribute('x')),
+          y: Number(segment.getAttribute('y')),
+        })),
+        outline: {
+          width: Number(outline?.getAttribute('width')),
+          height: Number(outline?.getAttribute('height')),
+        },
+        beamCount: beams.length,
+        beamOrigins: beams.map((beam) => (beam.getAttribute('points') || '').split(' ')[0]),
+      };
+    };
+    return { viewport: ${JSON.stringify(viewport)}, mode13: inspect(13), mode121: inspect(121) };
+  })()`);
+}
+
 async function runLargeShowViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -28064,6 +28117,64 @@ async function main() {
       }
       return;
     }
+    if (strongpointSegmentsOnlyMode) {
+      const result = await runStrongpointSegmentsViewport(client, viewports[0]);
+      const red = "rgb(255, 0, 0)";
+      const checks = {
+        mode13UsesFourByOneGrid:
+          result.mode13.found
+          && result.mode13.count === 4
+          && result.mode13.columns === 4
+          && result.mode13.rows === 1
+          && result.mode13.outline.width === 20
+          && result.mode13.outline.height === 5,
+        mode13RowMajorCells:
+          JSON.stringify(result.mode13.cells.map(({ column, row }) => [column, row]))
+            === JSON.stringify([[1, 1], [2, 1], [3, 1], [4, 1]]),
+        mode121UsesFourByTenGrid:
+          result.mode121.found
+          && result.mode121.count === 40
+          && result.mode121.columns === 4
+          && result.mode121.rows === 10
+          && result.mode121.outline.width === 20
+          && result.mode121.outline.height === 50,
+        mode121RowMajorCells:
+          result.mode121.cells[0]?.column === 1
+          && result.mode121.cells[0]?.row === 1
+          && result.mode121.cells[3]?.column === 4
+          && result.mode121.cells[3]?.row === 1
+          && result.mode121.cells[4]?.column === 1
+          && result.mode121.cells[4]?.row === 2
+          && result.mode121.cells[39]?.column === 4
+          && result.mode121.cells[39]?.row === 10
+          && new Set(result.mode121.cells.map((cell) => cell.x)).size === 4
+          && new Set(result.mode121.cells.map((cell) => cell.y)).size === 10,
+        independentCellColors:
+          result.mode13.colors.length === 4
+          && result.mode13.colors.every((color) => color === red)
+          && result.mode121.colors.length === 40
+          && result.mode121.colors.every((color) => color === red),
+        perCellBeamOriginsFollowGrid:
+          result.mode13.beamCount === 4
+          && new Set(result.mode13.beamOrigins).size === 4
+          && result.mode121.beamCount === 40
+          && new Set(result.mode121.beamOrigins).size === 40,
+      };
+      const failedChecks = Object.entries(checks)
+        .filter(([, passed]) => !passed)
+        .map(([name]) => name);
+      const passed = failedChecks.length === 0;
+      console.log(
+        `${passed ? "pass" : "fail"} strongpoint browser segments ` +
+        `13ch=${result.mode13.columns}x${result.mode13.rows}:${result.mode13.count}:beam${result.mode13.beamCount} ` +
+        `121ch=${result.mode121.columns}x${result.mode121.rows}:${result.mode121.count}:beam${result.mode121.beamCount} ` +
+        `checks=${JSON.stringify(checks)}`,
+      );
+      if (!passed) {
+        throw new Error(`Strongpoint browser segments failed: ${JSON.stringify({ failedChecks, result })}`);
+      }
+      return;
+    }
     if (mappingLiveSnapshotOnlyMode) {
       const result = await runMappingLiveSnapshotViewport(client, viewports[0]);
       const appSource = readFileSync(join(appRoot, "src", "App.tsx"), "utf8");
@@ -28168,7 +28279,7 @@ async function main() {
           && result.initial.screenFixedLabels.projectionSurface.text === "Viewport Video Output"
           && result.initial.screenFixedLabels.stageObject.text === "Viewport Screen",
         multiSegmentGlyphAndStripHeightStayFixedAtZoom:
-          result.initial.zoom === 1
+          result.initial.zoom >= 1
           && result.auditZoom.zoom === 3.8
           && result.structureOnly.zoom > 1
           && result.initial.mega.segmentScreenSizes.length === 8
@@ -28192,7 +28303,7 @@ async function main() {
           && result.initial.mega.hitTargetMinCssPx > 0
           && closePx(
             result.auditZoom.mega.hitTargetMinCssPx / result.initial.mega.hitTargetMinCssPx,
-            result.auditZoom.zoom,
+            result.auditZoom.zoom / result.initial.zoom,
             0.1,
           ),
       };

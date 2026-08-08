@@ -26,6 +26,8 @@ export interface StagePreviewFixture {
   z: number;
   width: number;
   height: number;
+  segmentColumns: number;
+  segmentRows: number;
   yaw: number;
   beamPoints: string;
   beams?: VisualizerFixtureBeam[];
@@ -315,6 +317,8 @@ export function StagePreview2D(props: StagePreview2DProps) {
               data-live-color-applied={fixture.liveColorApplied ? "true" : "false"}
               data-live-color-source={fixture.liveColorValueSource ?? "none"}
               data-live-segment-count={fixture.liveSegments?.length ?? 1}
+              data-live-segment-columns={fixture.segmentColumns}
+              data-live-segment-rows={fixture.segmentRows}
               transform={`translate(${fixture.x} ${fixture.z}) rotate(${fixture.yaw})`}
               onPointerDown={(event) => {
                 event.stopPropagation();
@@ -331,6 +335,8 @@ export function StagePreview2D(props: StagePreview2DProps) {
                 height={fixture.height}
                 color={fixture.color}
                 segments={fixture.liveSegments}
+                segmentColumns={fixture.segmentColumns}
+                segmentRows={fixture.segmentRows}
                 hitTargetRadius={6}
                 title={`${fixture.label} / ${fixture.dmxLabel} / ${fixture.groupLabel}`}
               />

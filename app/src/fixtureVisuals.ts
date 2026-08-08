@@ -5,13 +5,29 @@ import { stagePadding, stageViewBoxSize, type StageWorldBounds } from "./stageGe
 
 export type MappingFixtureVisualKind = "point" | "moving" | "bar" | "panel" | "laser" | "par";
 
+export interface MappingFixtureSegmentGrid {
+  columns: number;
+  rows: number;
+}
+
+export interface MappingFixtureSegmentCell {
+  column: number;
+  row: number;
+}
+
+const fixtureIdentityText = (fixture: PatchedFixtureSummary) =>
+  `${fixture.manufacturer} ${fixture.profile_name} ${fixture.mode_name} ${fixture.label}`.toLowerCase();
+
+export const isSoundWavesStrongpointFixture = (fixture: PatchedFixtureSummary) =>
+  /(?:960\s*)?sound\s*waves\s*strongpoint/.test(fixtureIdentityText(fixture));
+
 export const fixtureVisualKind = (fixture: PatchedFixtureSummary): MappingFixtureVisualKind => {
-  const text = `${fixture.manufacturer} ${fixture.profile_name} ${fixture.mode_name} ${fixture.label}`.toLowerCase();
+  const text = fixtureIdentityText(fixture);
   const attributes = fixture.controls.map((control) => control.attribute.toLowerCase()).join(" ");
   if (/(laser)/.test(text)) {
     return "laser";
   }
-  if (/(matrix|panel|pixel)/.test(text)) {
+  if (isSoundWavesStrongpointFixture(fixture) || /(matrix|panel|pixel)/.test(text)) {
     return "panel";
   }
   if (/(bar|strip|batten|tube|linear)/.test(text)) {
@@ -44,13 +60,37 @@ export const mappingFixtureWorldToSvgScale = (bounds: StageWorldBounds) => {
 export const mappingFixtureGridStageSize = (bounds: StageWorldBounds) =>
   mappingFixtureGridUnit * mappingFixtureWorldToSvgScale(bounds);
 
+export const mappingFixtureSegmentGrid = (
+  fixture: PatchedFixtureSummary,
+  segmentCount = 1,
+): MappingFixtureSegmentGrid => {
+  const count = Math.max(1, Math.floor(segmentCount));
+  if (isSoundWavesStrongpointFixture(fixture) && count >= 4 && count % 4 === 0) {
+    return { columns: 4, rows: count / 4 };
+  }
+  return { columns: count, rows: 1 };
+};
+
+export const mappingFixtureSegmentCell = (
+  grid: MappingFixtureSegmentGrid,
+  index: number,
+): MappingFixtureSegmentCell => {
+  const columns = Math.max(1, Math.floor(grid.columns));
+  const safeIndex = Math.max(0, Math.floor(index));
+  return {
+    column: safeIndex % columns,
+    row: Math.floor(safeIndex / columns),
+  };
+};
+
 export const mappingFixtureStageSize = (
   _visualKind: MappingFixtureVisualKind,
-  segmentCount = 1,
+  segmentColumns = 1,
   worldToSvgScale = 1,
+  segmentRows = 1,
 ) => ({
-  width: mappingFixtureGridUnit * worldToSvgScale * Math.max(1, Math.floor(segmentCount)),
-  height: mappingFixtureGridUnit * worldToSvgScale,
+  width: mappingFixtureGridUnit * worldToSvgScale * Math.max(1, Math.floor(segmentColumns)),
+  height: mappingFixtureGridUnit * worldToSvgScale * Math.max(1, Math.floor(segmentRows)),
 });
 
 export const fixtureTypeKey = (fixture: PatchedFixtureSummary) =>

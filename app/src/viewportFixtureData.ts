@@ -660,6 +660,61 @@ const mappingLiveColorFixtures: PatchedFixtureSummary[] = [
   },
 ];
 
+const mappingStrongpointControls = (segmentCount: number): AttributeControl[] => [
+  mappingLiveDimmerControl(1),
+  ...Array.from({ length: segmentCount }, (_, index) => {
+    const suffix = index === 0 ? "" : `${index + 1}`;
+    const firstOffset = 2 + index * 3;
+    return [
+      {
+        ...mappingLiveColorControl("Red", index + 1, firstOffset),
+        attribute: `ColorAdd_R${suffix}`,
+        channel_name: `ColorAdd_R${suffix}`,
+      },
+      {
+        ...mappingLiveColorControl("Green", index + 1, firstOffset + 1),
+        attribute: `ColorAdd_G${suffix}`,
+        channel_name: `ColorAdd_G${suffix}`,
+      },
+      {
+        ...mappingLiveColorControl("Blue", index + 1, firstOffset + 2),
+        attribute: `ColorAdd_B${suffix}`,
+        channel_name: `ColorAdd_B${suffix}`,
+      },
+    ];
+  }).flat(),
+];
+
+const mappingStrongpointFixture = (
+  id: number,
+  footprint: 13 | 121,
+  segmentCount: number,
+  x: number,
+) => {
+  const fixture = mappingLiveFixture(
+    id,
+    `Strongpoint ${footprint}ch`,
+    "960 sound waves strongpoint",
+    `${footprint}-channel`,
+    footprint === 13 ? 1 : 30,
+    x,
+    0,
+    mappingStrongpointControls(segmentCount),
+  );
+  return mappingLiveFixtureWithValues(
+    fixture,
+    Object.fromEntries(fixture.controls.map((control) => [
+      control.attribute,
+      control.attribute === "Dimmer" || control.attribute.startsWith("ColorAdd_R") ? 65_535 : 0,
+    ])),
+  );
+};
+
+const mappingStrongpointFixtures: PatchedFixtureSummary[] = [
+  mappingStrongpointFixture(13, 13, 4, -5),
+  mappingStrongpointFixture(121, 121, 40, 5),
+];
+
 const mappingLiveSnapshotFixtures: PatchedFixtureSummary[] =
   mappingLiveColorFixtures.filter((fixture) => fixture.id !== 9).map((fixture) => ({
     ...fixture,
@@ -2065,6 +2120,7 @@ export const viewportFixtureData = {
   liveEditTypeFixtures,
   colorWheelFixtures,
   mappingLiveColorFixtures,
+  mappingStrongpointFixtures,
   mappingLiveSnapshotFixtures,
   mappingLiveSnapshotAmberCue,
 } as const;

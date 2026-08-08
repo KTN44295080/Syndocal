@@ -3,6 +3,7 @@ import type { FixtureLiveColorSegment } from "../fixtureLiveColor";
 import {
   mappingFixtureCellGap,
   mappingFixtureGridUnit,
+  mappingFixtureSegmentCell,
   type MappingFixtureVisualKind,
 } from "../fixtureVisuals";
 import type { StageFixtureLabelLayout } from "../stageLabelLayout";
@@ -21,6 +22,8 @@ type StageFixtureGlyphProps = {
   hitTargetRadius?: number;
   showFacingMark?: boolean;
   segments?: FixtureLiveColorSegment[];
+  segmentColumns?: number;
+  segmentRows?: number;
   liveSegmentScreenScale?: number;
   title?: string;
 };
@@ -35,16 +38,34 @@ export function StageFixtureGlyph(props: StageFixtureGlyphProps) {
   const shapeClass = () => props.shapeClass ?? "stageFixtureShape";
   const tickLength = () => stageFixtureFacingTickLength(props.width, props.height);
   const segments = () => props.segments?.length && props.segments.length > 1 ? props.segments : null;
-  const segmentPitch = () => {
+  const segmentColumns = () => {
     const count = segments()?.length ?? 1;
-    return props.width / count;
+    return Math.max(1, Math.min(count, Math.floor(props.segmentColumns ?? count)));
   };
-  const segmentGap = () => Math.min(mappingFixtureCellGap, segmentPitch() * 0.12);
+  const segmentRows = () => {
+    const count = segments()?.length ?? 1;
+    return Math.max(Math.ceil(count / segmentColumns()), Math.floor(props.segmentRows ?? 1));
+  };
+  const segmentPitchX = () => props.width / segmentColumns();
+  const segmentPitchY = () => props.height / segmentRows();
+  const segmentGap = () => Math.min(
+    mappingFixtureCellGap,
+    Math.min(segmentPitchX(), segmentPitchY()) * 0.12,
+  );
+  const segmentCell = (index: number) => mappingFixtureSegmentCell(
+    { columns: segmentColumns(), rows: segmentRows() },
+    index,
+  );
   const segmentX = (index: number) => {
-    return -props.width / 2 + segmentGap() / 2 + index * segmentPitch();
+    const cell = segmentCell(index);
+    return -props.width / 2 + segmentGap() / 2 + cell.column * segmentPitchX();
   };
-  const segmentWidth = () => Math.max(0.1, segmentPitch() - segmentGap());
-  const segmentHeight = () => Math.max(0.1, props.height - segmentGap());
+  const segmentY = (index: number) => {
+    const cell = segmentCell(index);
+    return -props.height / 2 + segmentGap() / 2 + cell.row * segmentPitchY();
+  };
+  const segmentWidth = () => Math.max(0.1, segmentPitchX() - segmentGap());
+  const segmentHeight = () => Math.max(0.1, segmentPitchY() - segmentGap());
   const liveSegmentScreenScale = () => props.liveSegmentScreenScale ?? 1;
   const fixtureCornerRadius = () => Math.min(0.8, props.height * 0.2);
 
@@ -101,9 +122,11 @@ export function StageFixtureGlyph(props: StageFixtureGlyphProps) {
             {liveSegments().map((segment, index) => (
               <rect
                 data-stage-fixture-segment={index + 1}
+                data-stage-fixture-segment-column={segmentCell(index).column + 1}
+                data-stage-fixture-segment-row={segmentCell(index).row + 1}
                 class="stageFixtureSegment"
                 x={segmentX(index)}
-                y={-segmentHeight() / 2}
+                y={segmentY(index)}
                 width={segmentWidth()}
                 height={segmentHeight()}
                 rx={fixtureCornerRadius()}

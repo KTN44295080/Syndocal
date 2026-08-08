@@ -112,17 +112,24 @@ const describeControl = (control: AttributeControl): ControlDescriptor => ({
 
 const fixtureSegmentControlGroups = (fixture: PatchedFixtureSummary): SegmentControlGroup[] => {
   const descriptors = fixture.controls.map(describeControl);
+  const hasUnnumberedColor = descriptors.some((descriptor) =>
+    descriptor.colorRole !== null && descriptor.segmentIndex === null);
   const numberedColorIndices = [...new Set(
     descriptors
       .filter((descriptor) => descriptor.colorRole && descriptor.segmentIndex !== null)
       .map((descriptor) => descriptor.segmentIndex!),
   )].sort((left, right) => left - right);
-  if (numberedColorIndices.length > 1) {
-    return numberedColorIndices.map((segmentIndex) => ({
+  if (numberedColorIndices.length > 1 || (hasUnnumberedColor && numberedColorIndices.length > 0)) {
+    const segmentIndices = [...new Set([
+      ...(hasUnnumberedColor ? [1] : []),
+      ...numberedColorIndices,
+    ])].sort((left, right) => left - right);
+    return segmentIndices.map((segmentIndex) => ({
       key: `attribute-${segmentIndex}`,
       controls: descriptors.filter((descriptor) =>
         descriptor.segmentIndex === segmentIndex
-        || (descriptor.segmentIndex === null && (descriptor.dimmer || descriptor.colorRole !== null))),
+        || (descriptor.segmentIndex === null && descriptor.dimmer)
+        || (segmentIndex === 1 && descriptor.segmentIndex === null && descriptor.colorRole !== null)),
     }));
   }
 

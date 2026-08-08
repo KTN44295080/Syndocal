@@ -9,6 +9,8 @@ import { colorCandidates, readFixtureAttribute } from "./fixtureControlRuntime";
 import {
   fixtureTypeKey,
   fixtureVisualKind,
+  mappingFixtureSegmentCell,
+  mappingFixtureSegmentGrid,
   mappingFixtureStageSize,
   mappingFixtureWorldToSvgScale,
 } from "./fixtureVisuals";
@@ -344,10 +346,15 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
       const panDegrees = pan === undefined ? 0 : ((pan - 32_768) / 65_535) * 540;
       const yaw = mappingFixtureYaw(fixture);
       const visualKind = fixtureVisualKind(fixture);
+      const segmentGrid = mappingFixtureSegmentGrid(
+        fixture,
+        fixtureSegmentSkeleton(fixture).length,
+      );
       const size = mappingFixtureStageSize(
         visualKind,
-        Math.max(1, fixtureSegmentSkeleton(fixture).length),
+        segmentGrid.columns,
         fixtureWorldToSvgScale,
+        segmentGrid.rows,
       );
       return {
         id: fixture.id,
@@ -361,6 +368,8 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
         z: point.z,
         width: size.width,
         height: size.height,
+        segmentColumns: segmentGrid.columns,
+        segmentRows: segmentGrid.rows,
         yaw,
         beamYaw: yaw + panDegrees,
         beamPoints: beamPoints(point.x, point.z, yaw + panDegrees, intensity),
@@ -410,9 +419,14 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
         : undefined;
       const beams = live && liveSegments
         ? liveSegments.map((segment, index) => {
-            const cellPitch = base.width / liveSegments.length;
-            const localX = (index - (liveSegments.length - 1) / 2) * cellPitch;
-            const offset = rotateStageOffsetYaw({ x: localX, z: 0 }, base.yaw);
+            const columns = Math.max(1, base.segmentColumns);
+            const rows = Math.max(1, base.segmentRows);
+            const cell = mappingFixtureSegmentCell({ columns, rows }, index);
+            const cellPitchX = base.width / columns;
+            const cellPitchZ = base.height / rows;
+            const localX = (cell.column - (columns - 1) / 2) * cellPitchX;
+            const localZ = (cell.row - (rows - 1) / 2) * cellPitchZ;
+            const offset = rotateStageOffsetYaw({ x: localX, z: localZ }, base.yaw);
             const x = base.x + offset.x;
             const z = base.z + offset.z;
             return {
