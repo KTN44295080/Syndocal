@@ -18438,6 +18438,29 @@ async function readSceneSettingsState(client) {
       )?.getAttribute("data-scene-matrix-kind") ?? "",
       editorType: document.querySelector("[data-scene-settings-effect-editor]")
         ?.getAttribute("data-scene-settings-effect-editor") ?? "",
+      twoDMappingEditorVisible: isVisible(document.querySelector(
+        '[data-scene-settings-effect-editor="ColorMapping"] .colorMappingEffectEditor',
+      )),
+      twoDMappingOutputModes: [...document.querySelectorAll(
+        '.colorMappingOutputMode [aria-label="2D Mapping output mode"] button',
+      )].filter(isVisible).map((button) => (button.textContent || "").trim()),
+      twoDMappingActiveOutputModes: [...document.querySelectorAll(
+        '.colorMappingOutputMode [aria-label="2D Mapping output mode"] button[aria-pressed="true"]',
+      )].filter(isVisible).map((button) => (button.textContent || "").trim()),
+      twoDMappingOutputMinimumHitSize: (() => {
+        const buttons = [...document.querySelectorAll(
+          '.colorMappingOutputMode [aria-label="2D Mapping output mode"] button',
+        )].filter(isVisible);
+        return buttons.length > 0
+          ? Math.min(...buttons.map((button) => {
+            const box = button.getBoundingClientRect();
+            return Math.min(box.width, box.height);
+          }))
+          : 0;
+      })(),
+      twoDMappingFeatureEditorVisible: isVisible(document.querySelector(
+        '[data-effect-feature-editor="2D Mapping"]',
+      )),
       fxPaletteLibraryType: document.querySelector("[data-fx-color-palette-library]")
         ?.getAttribute("data-fx-color-palette-library") ?? "",
       fxPaletteBuiltInCount: Number(document.querySelector("[data-fx-color-palette-library]")
@@ -18761,6 +18784,26 @@ async function runSceneSettingsViewport(client, viewport) {
   );
   await sleep(120);
   const createdFx = await readSceneSettingsState(client);
+  const twoDMappingClicked = await clickSceneSettingsTarget(
+    client,
+    '[data-scene-fx-chooser] [data-effect-family="2D MAPPING"]',
+  );
+  await waitForClientCondition(
+    client,
+    'document.querySelector("[data-scene-settings-effect-editor=\\"ColorMapping\\"] .colorMappingEffectEditor") !== null',
+    `T26-A unified 2D Mapping editor ${viewport.width}x${viewport.height}`,
+  );
+  const twoDMappingColourDraft = await readSceneSettingsState(client);
+  const twoDMappingFeatureClicked = await clickSceneSettingsTarget(
+    client,
+    '.colorMappingOutputMode [aria-label="2D Mapping output mode"] button:nth-child(2)',
+  );
+  await waitForClientCondition(
+    client,
+    'document.querySelector("[data-effect-feature-editor=\\"2D Mapping\\"]") !== null',
+    `T26-A 2D Mapping Feature output ${viewport.width}x${viewport.height}`,
+  );
+  const twoDMappingFeatureDraft = await readSceneSettingsState(client);
   const returnContentsSurfaceClicked = await clickSceneSettingsTarget(
     client,
     '[data-scene-settings-surface-control="contents"]',
@@ -19010,6 +19053,17 @@ async function runSceneSettingsViewport(client, viewport) {
       && selectedStatic.runtimeModifierStripCount === 1
       && !selectedStatic.advancedSettingsVisible
       && selectedStatic.chooserButtonCount === 0],
+    ["unified2DMappingCreatesColourThenFeatureOutputInOneEditor", () =>
+      twoDMappingClicked
+      && twoDMappingColourDraft.editorType === "ColorMapping"
+      && twoDMappingColourDraft.twoDMappingEditorVisible
+      && JSON.stringify(twoDMappingColourDraft.activeChooserFamilies) === JSON.stringify(["2D MAPPING"])
+      && JSON.stringify(twoDMappingColourDraft.twoDMappingOutputModes) === JSON.stringify(["Colour", "Feature"])
+      && JSON.stringify(twoDMappingColourDraft.twoDMappingActiveOutputModes) === JSON.stringify(["Colour"])
+      && twoDMappingColourDraft.twoDMappingOutputMinimumHitSize >= 40
+      && twoDMappingFeatureClicked
+      && JSON.stringify(twoDMappingFeatureDraft.twoDMappingActiveOutputModes) === JSON.stringify(["Feature"])
+      && twoDMappingFeatureDraft.twoDMappingFeatureEditorVisible],
     ["rightRailHasFourJapaneseSvgSurfaceControls", () =>
       selectedStatic.surfaceControlCount === 4
       && selectedStatic.activeSurfaceControlCount === 1
@@ -23728,7 +23782,7 @@ async function runFxVisualViewport(client, viewport) {
   );
   await waitForClientCondition(
     client,
-    "document.querySelectorAll('[data-scene-owned-effect]').length === 8 && document.querySelectorAll('[data-scene-fx-chooser] .effectFamilyChooser button').length === 9",
+    "document.querySelectorAll('[data-scene-owned-effect]').length === 8 && document.querySelectorAll('[data-scene-fx-chooser] .effectFamilyChooser button').length === 8",
     "T19 Scene Settings FX fixture",
   );
   await sleep(120);
@@ -23902,7 +23956,7 @@ async function runFxVisualViewport(client, viewport) {
   await waitForApp(client);
   await clickSceneSettingsStrip(client, '[data-scene-matrix-edit-strip="401"]');
   await clickSceneSettingsTarget(client, '[data-scene-settings-surface-control="fx"]');
-  await waitForClientCondition(client, "document.querySelectorAll('[data-scene-fx-chooser] .effectFamilyChooser button').length === 9", "T16 Scene FX chooser reload");
+  await waitForClientCondition(client, "document.querySelectorAll('[data-scene-fx-chooser] .effectFamilyChooser button').length === 8", "T16 Scene FX chooser reload");
   await clickVisibleByText(client, "[data-scene-fx-chooser] .effectFamilyChooser button", "TIMELINE");
   await sleep(180);
   const superSceneNavigation = await evaluatePageFunction(client, () => ({

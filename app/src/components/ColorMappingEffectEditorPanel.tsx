@@ -1,5 +1,6 @@
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import type {
+  ChaserFeature,
   ColorMappingCellTarget,
   ColorMappingFrame,
   ColorMappingPlaybackDirection,
@@ -7,6 +8,7 @@ import type {
   ColorMappingSourceKind,
   ColorMappingWrapMode,
 } from "../types";
+import { EffectFeatureEditorPanel } from "./EffectFeatureEditorPanel";
 
 export interface ColorMappingFixtureOption {
   id: number;
@@ -22,6 +24,8 @@ export interface ColorMappingEffectEditorPanelProps {
   frames: ColorMappingFrame[];
   cells: ColorMappingCellTarget[];
   fixtures: ColorMappingFixtureOption[];
+  attributeOptions: string[];
+  attributeCoverage: Record<string, string>;
   playbackDirection: ColorMappingPlaybackDirection;
   periodMs: number;
   bpm: number;
@@ -54,6 +58,7 @@ const MAX_FRAMES = 64;
 const playbackDirections: ColorMappingPlaybackDirection[] = ["Forward", "Reverse", "Bounce"];
 const clockPresets = [null, 0.25, 0.5, 1, 2, 4] as const;
 const TWO_POW_32 = 4_294_967_296;
+const featureKey = (attribute: string) => attribute.trim().toLowerCase();
 
 const clamp = (value: number, minimum: number, maximum: number) =>
   Math.min(maximum, Math.max(minimum, Number.isFinite(value) ? value : minimum));
@@ -191,11 +196,107 @@ export function ColorMappingEffectEditorPanel(props: ColorMappingEffectEditorPan
       v: normalize(fixture.z, minZ, maxZ),
     }));
   });
-  const previewCells = createMemo(() =>
-    props.cells.length > 0
-      ? props.cells.map((cell) => ({ id: cell.fixture_id, label: `#${cell.fixture_id}`, u: cell.u, v: cell.v }))
-      : normalizedFixturePoints(),
-  );
+  const featureRanges = createMemo<ChaserFeature[]>(() => {
+    const ranges: ChaserFeature[] = [];
+    const seen = new Set<string>();
+    for (const cell of props.cells) {
+      const attribute = cell.feature_attribute?.trim();
+      const canonical = featureKey(attribute ?? "");
+      if (!attribute || seen.has(canonical)) continue;
+      seen.add(canonical);
+      ranges.push({
+        attribute,
+        low: cell.feature_low ?? 0,
+        high: cell.feature_high ?? 65_535,
+      });
+    }
+    return ranges;
+  });
+  const featureOutput = createMemo(() => featureRanges().length > 0);
+  const previewCells = createMemo(() => {
+    const cells = props.cells.length > 0
+      ? props.cells.map((cell) => ({
+          id: cell.fixture_id,
+          beamIndex: cell.beam_index,
+          label: `#${cell.fixture_id}`,
+          u: cell.u,
+          v: cell.v,
+        }))
+      : normalizedFixturePoints().map((fixture) => ({ ...fixture, beamIndex: 0 }));
+    const seen = new Set<string>();
+    return cells.filter((cell) => {
+      const key = `${cell.id}:${cell.beamIndex}:${cell.u}:${cell.v}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  });
+
+  const featureBaseCells = () => {
+    const authored = new Map<number, ColorMappingCellTarget>();
+    for (const cell of props.cells) {
+      if (!authored.has(cell.fixture_id)) authored.set(cell.fixture_id, cell);
+    }
+    const normalized = normalizedFixturePoints();
+    if (normalized.length > 0) {
+      return normalized.map((fixture) => {
+        const current = authored.get(fixture.id);
+        return {
+          fixture_id: fixture.id,
+          beam_index: 0,
+          u: current?.u ?? fixture.u,
+          v: current?.v ?? fixture.v,
+        };
+      });
+    }
+    return [...authored.values()].map((cell) => ({
+      fixture_id: cell.fixture_id,
+      beam_index: 0,
+      u: cell.u,
+      v: cell.v,
+    }));
+  };
+
+  const applyFeatureRanges = (features: ChaserFeature[]) => {
+    const baseCells = featureBaseCells();
+    const cells = baseCells.flatMap((cell) => features.map((feature) => ({
+      ...cell,
+      selection_index: 0,
+      feature_attribute: feature.attribute,
+      feature_low: Math.round(clamp(feature.low, 0, 65_535)),
+      feature_high: Math.round(clamp(feature.high, 0, 65_535)),
+    })));
+    if (cells.length > 4_096) {
+      setStatus("2D Mapping supports at most 4096 fixture-feature cells.");
+      return;
+    }
+    props.onCells(cells.map((cell, index) => ({ ...cell, selection_index: index })));
+    setStatus(`Mapped ${features.length} feature${features.length === 1 ? "" : "s"} across ${baseCells.length} fixtures.`);
+  };
+
+  const selectOutputMode = (mode: "Colour" | "Feature") => {
+    if ((mode === "Feature") === featureOutput()) return;
+    if (mode === "Feature") {
+      const attribute = featureRanges()[0]?.attribute ?? props.attributeOptions[0];
+      if (!attribute) {
+        setStatus("The current target has no common feature available for 2D Mapping.");
+        return;
+      }
+      applyFeatureRanges(featureRanges().length > 0
+        ? featureRanges()
+        : [{ attribute, low: 0, high: 65_535 }]);
+      return;
+    }
+    const cells = featureBaseCells().map((cell, index) => ({
+      ...cell,
+      selection_index: index,
+      feature_attribute: null,
+      feature_low: null,
+      feature_high: null,
+    }));
+    props.onCells(cells);
+    setStatus(`Mapped RGB colour across ${cells.length} fixtures.`);
+  };
 
   const importImage = async (file: File) => {
     setBusy(true);
@@ -279,6 +380,10 @@ export function ColorMappingEffectEditorPanel(props: ColorMappingEffectEditorPan
   };
 
   const freezeFixtureCells = () => {
+    if (featureOutput()) {
+      applyFeatureRanges(featureRanges());
+      return;
+    }
     props.onCells(normalizedFixturePoints().map((fixture) => ({
       fixture_id: fixture.id,
       beam_index: 0,
@@ -286,6 +391,8 @@ export function ColorMappingEffectEditorPanel(props: ColorMappingEffectEditorPan
       u: fixture.u,
       v: fixture.v,
       feature_attribute: null,
+      feature_low: null,
+      feature_high: null,
     })));
     setStatus(`Frozen ${props.fixtures.length} stage positions as matrix cells.`);
   };
@@ -293,13 +400,23 @@ export function ColorMappingEffectEditorPanel(props: ColorMappingEffectEditorPan
   return (
     <section class="colorMappingEffectEditor" aria-label="Colour Mapping effect editor">
       <header class="valueEffectHeader">
-        <div><strong>2D Colour Mapping</strong><span>Embedded image, text, or bounded video frames mapped to lighting cells</span></div>
+        <div><strong>2D Mapping</strong><span>One raster workspace for colour or fixture-feature output</span></div>
         <div class="valueEffectStatusStrip">
+          <span><small>Output</small><strong>{featureOutput() ? "Feature" : "Colour"}</strong></span>
           <span><small>Source</small><strong>{props.sourceKind}</strong></span>
           <span><small>Raster</small><strong>{props.width}×{props.height}</strong></span>
           <span><small>Frames / cells</small><strong>{frameCount()} / {previewCells().length}</strong></span>
         </div>
       </header>
+
+      <div class="colorMappingOutputMode">
+        <span>Output mode</span>
+        <div class="moveEffectSegmented" role="group" aria-label="2D Mapping output mode">
+          <button type="button" class={!featureOutput() ? "active" : ""} aria-pressed={!featureOutput()} onClick={() => selectOutputMode("Colour")}>Colour</button>
+          <button type="button" class={featureOutput() ? "active" : ""} aria-pressed={featureOutput()} disabled={props.attributeOptions.length === 0 && !featureOutput()} onClick={() => selectOutputMode("Feature")}>Feature</button>
+        </div>
+        <small>{featureOutput() ? "Raster luminance drives each selected Feature range." : "Raster RGB drives fixture colour emitters."}</small>
+      </div>
 
       <div class="colorMappingPreviewGrid">
         <div class="colorMappingPreview" role="img" aria-label={`Colour Mapping raster preview with ${previewCells().length} cells`}>
@@ -320,9 +437,19 @@ export function ColorMappingEffectEditorPanel(props: ColorMappingEffectEditorPan
 
       <div class="colorMappingCellActions">
         <button type="button" disabled={props.fixtures.length === 0} onClick={freezeFixtureCells}>Freeze stage positions as cells</button>
-        <button type="button" disabled={props.cells.length === 0} onClick={() => props.onCells([])}>Follow live stage positions</button>
-        <span>{props.cells.length > 0 ? `${props.cells.length} authored cells` : "Stage X/Z normalized at command time"}</span>
+        <button type="button" disabled={featureOutput() || props.cells.length === 0} title={featureOutput() ? "Feature output requires explicit fixture-feature cells" : undefined} onClick={() => props.onCells([])}>Follow live stage positions</button>
+        <span>{featureOutput() ? `${previewCells().length} cells × ${featureRanges().length} features` : props.cells.length > 0 ? `${props.cells.length} authored cells` : "Stage X/Z normalized at command time"}</span>
       </div>
+
+      <Show when={featureOutput()}>
+        <EffectFeatureEditorPanel
+          effectLabel="2D Mapping"
+          features={featureRanges()}
+          attributeOptions={props.attributeOptions}
+          attributeCoverage={props.attributeCoverage}
+          onFeatures={applyFeatureRanges}
+        />
+      </Show>
 
       <div class="colorMappingControlGrid">
         <label>Direction<select value={props.playbackDirection} onInput={(event) => props.onPlaybackDirection(event.currentTarget.value as ColorMappingPlaybackDirection)}><For each={playbackDirections}>{(direction) => <option value={direction}>{direction}</option>}</For></select></label>

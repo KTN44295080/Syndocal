@@ -1483,6 +1483,11 @@ fn convert_dvc_color_spatial_effect(
         ),
     };
     let mapping_recipe = matches!(generator_id, 521 | 530);
+    let source_family = if mapping_recipe {
+        "Mappings"
+    } else {
+        "Colour Mappings"
+    };
     let request = ColorEffectRequest {
         label: format!("{scene_name} ({generator})"),
         fixture_ids: targets.fixture_ids,
@@ -1505,7 +1510,7 @@ fn convert_dvc_color_spatial_effect(
         })),
     };
     let note = format!(
-        "palette_source=PARAM TYPE=4 ID=1/COLORS/COLOR@VAL; palette_colors={}; beams={beam_count}; selections={selection_count}; {period_note}; {clock_note}; {recipe_note}",
+        "source_family={source_family}; palette_source=PARAM TYPE=4 ID=1/COLORS/COLOR@VAL; palette_colors={}; beams={beam_count}; selections={selection_count}; {period_note}; {clock_note}; {recipe_note}",
         request.stops.len()
     );
     engine::validate_color_effect_request(&request).map_err(|error| {
@@ -4216,6 +4221,26 @@ mod tests {
             .all(|detail| detail
                 .message
                 .contains("palette_source=PARAM TYPE=4 ID=1/COLORS/COLOR@VAL")));
+        assert_eq!(
+            outcome
+                .report
+                .converted
+                .details
+                .iter()
+                .filter(|detail| detail.message.contains("source_family=Mappings;"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            outcome
+                .report
+                .converted
+                .details
+                .iter()
+                .filter(|detail| detail.message.contains("source_family=Colour Mappings;"))
+                .count(),
+            4
+        );
 
         let requests = outcome
             .project

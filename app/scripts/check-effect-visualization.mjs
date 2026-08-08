@@ -57,6 +57,14 @@ const colorMappingEditorSource = await readFile(
   new URL("../src/components/ColorMappingEffectEditorPanel.tsx", import.meta.url),
   "utf8",
 );
+const protocolSource = await readFile(
+  new URL("../../crates/protocol/src/lib.rs", import.meta.url),
+  "utf8",
+);
+const engineSource = await readFile(
+  new URL("../../crates/engine/src/lib.rs", import.meta.url),
+  "utf8",
+);
 
 const expectedFamilies = [
   "STEPS",
@@ -456,5 +464,25 @@ assert.match(
   /no decoder runs at 44 Hz/,
   "the Colour Mapping editor must disclose the command-time decode contract",
 );
+assert.match(
+  colorMappingEditorSource,
+  /aria-label="2D Mapping output mode"[\s\S]*?>Colour<[\s\S]*?>Feature</,
+  "the unified 2D Mapping editor must expose Colour and Feature output modes",
+);
+assert.match(
+  colorMappingEditorSource,
+  /feature_low: Math\.round\(clamp\(feature\.low, 0, 65_535\)\)[\s\S]*?feature_high: Math\.round\(clamp\(feature\.high, 0, 65_535\)\)/,
+  "2D Mapping Feature output must author independent low/high ranges",
+);
+assert.match(
+  protocolSource,
+  /pub struct ColorMappingCellTarget[\s\S]*?serde\(default, skip_serializing_if = "Option::is_none"\)[\s\S]*?pub feature_low: Option<u16>[\s\S]*?pub feature_high: Option<u16>/,
+  "2D Mapping Feature ranges must remain additive for legacy project and DVC-derived JSON",
+);
+assert.match(
+  engineSource,
+  /feature_range[\s\S]*?scale_effect_u16_directed/,
+  "the engine must scale 2D Mapping luminance into the authored Feature range",
+);
 
-console.log("T19 effect family, LFO, palette, Move, Value, independent Curve, fixture-order Mapping, and 2D Colour Mapping visualization contracts ok");
+console.log("T19 effect family, LFO, palette, Move, Value, independent Curve, legacy fixture-order Mapping, and unified 2D Mapping visualization contracts ok");

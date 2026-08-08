@@ -37101,6 +37101,8 @@ f 1 2 3
                     u: 0.0,
                     v: 0.5,
                     feature_attribute: None,
+                    feature_low: None,
+                    feature_high: None,
                 },
                 protocol::ColorMappingCellTarget {
                     fixture_id: 2,
@@ -37108,7 +37110,9 @@ f 1 2 3
                     selection_index: 1,
                     u: 1.0,
                     v: 0.5,
-                    feature_attribute: None,
+                    feature_attribute: Some("Dimmer".to_string()),
+                    feature_low: Some(1_000),
+                    feature_high: Some(5_000),
                 },
             ],
             playback_direction: protocol::ColorMappingPlaybackDirection::Bounce,
@@ -37174,6 +37178,8 @@ f 1 2 3
         let roundtrip: EffectPreset = serde_json::from_str(&json).unwrap();
         assert_eq!(roundtrip.effect_type, EffectKind::ColorMapping);
         assert_eq!(roundtrip.color_mapping, Some(request.clone()));
+        assert!(json.contains("\"feature_low\": 1000"));
+        assert!(json.contains("\"feature_high\": 5000"));
         assert!(roundtrip.color.is_none());
         assert!(roundtrip.mapping.is_none());
 

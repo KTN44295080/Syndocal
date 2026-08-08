@@ -5146,7 +5146,10 @@ export default function App() {
     }
     if (effectType() === "ColorMapping") {
       const clock = sync === null ? `${effectPeriod()}ms` : `${sync} beat`;
-      return `Colour Mapping ${colorMappingWidth()}×${colorMappingHeight()} / ${colorMappingFrames().length} frames / ${colorMappingCells().length || effectTargetFixtures().length} cells / ${clock}`;
+      const output = colorMappingCells().some((cell) => Boolean(cell.feature_attribute?.trim()))
+        ? "Feature"
+        : "Colour";
+      return `2D Mapping ${output} / ${colorMappingWidth()}×${colorMappingHeight()} / ${colorMappingFrames().length} frames / ${colorMappingCells().length || effectTargetFixtures().length} cells / ${clock}`;
     }
     return sync === null ? `LFO ${effectShape()} / ${effectPeriod()}ms` : `LFO ${effectShape()} / ${sync} beat`;
   });
@@ -5248,6 +5251,24 @@ export default function App() {
     if (![colorMappingScaleU(), colorMappingScaleV()].every((value) => Number.isFinite(value) && Math.abs(value) >= 0.01 && Math.abs(value) <= 16)) return "Colour Mapping scale magnitude must be within 0.01..16.";
     if (!Number.isFinite(colorMappingRotationDegrees()) || colorMappingRotationDegrees() < -3600 || colorMappingRotationDegrees() > 3600) return "Colour Mapping rotation must be within -3600..3600 degrees.";
     if (colorMappingCells().some((cell) => !Number.isFinite(cell.u) || !Number.isFinite(cell.v) || cell.u < -16 || cell.u > 16 || cell.v < -16 || cell.v > 16)) return "Colour Mapping cell coordinates must be within -16..16.";
+    const featureTargets = new Set<string>();
+    for (const cell of colorMappingCells()) {
+      const attribute = cell.feature_attribute?.trim() ?? "";
+      if (!attribute) {
+        if (cell.feature_low != null || cell.feature_high != null) {
+          return "2D Mapping feature ranges require a Feature attribute.";
+        }
+        continue;
+      }
+      const low = cell.feature_low ?? 0;
+      const high = cell.feature_high ?? 65_535;
+      if (![low, high].every((value) => Number.isInteger(value) && value >= 0 && value <= 65_535)) {
+        return "2D Mapping Feature ranges must use integer DMX values within 0..65535.";
+      }
+      const key = `${cell.fixture_id}:${canonicalChaserAttribute(attribute)}`;
+      if (featureTargets.has(key)) return `2D Mapping duplicates Feature ${attribute} on fixture ${cell.fixture_id}.`;
+      featureTargets.add(key);
+    }
     return "";
   });
   const editingEffectSummary = createMemo<EffectSummary | null>(() => {
@@ -15924,12 +15945,10 @@ export default function App() {
         setMessage(error);
         return null;
       }
-      const targetFixtureIds = new Set(requestBase.fixture_ids);
-      const cells = targetMode === "group"
-        ? []
-        : colorMappingCells()
-            .filter((cell) => targetFixtureIds.has(cell.fixture_id))
-            .map((cell) => ({ ...cell }));
+      const targetFixtureIds = new Set(effectTargetFixtures().map((candidate) => candidate.id));
+      const cells = colorMappingCells()
+        .filter((cell) => targetFixtureIds.has(cell.fixture_id))
+        .map((cell) => ({ ...cell }));
       return {
         effectType: "ColorMapping",
         request: {
@@ -16894,6 +16913,8 @@ export default function App() {
         x: fixture.position.x,
         z: fixture.position.z,
       })),
+      attributeOptions: effectTargetControls().map((control) => control.attribute),
+      attributeCoverage: scalarAttributeCoverage(),
       playbackDirection: colorMappingPlaybackDirection(),
       periodMs: effectPeriod(),
       bpm: snapshot().clock.bpm,

@@ -2025,6 +2025,8 @@ export interface ColorMappingCellTarget {
   u: number;
   v: number;
   feature_attribute?: string | null;
+  feature_low?: number | null;
+  feature_high?: number | null;
 }
 
 export interface ColorMappingFrame {

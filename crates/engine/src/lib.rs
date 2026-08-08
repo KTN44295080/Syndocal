@@ -3451,6 +3451,7 @@ struct RuntimeColorMappingEffect {
 struct RuntimeColorMappingTarget {
     sample: RuntimeColorMappingSample,
     binding: RuntimeColorBinding,
+    feature_range: Option<(u16, u16)>,
     cached: Cell<Option<RuntimeColorEvaluation>>,
 }
 
@@ -20641,6 +20642,17 @@ fn effect_params_with_live_modifier(
             request.period_ms = live_modifier_scaled_period_ms(request.period_ms, modifier.speed);
             request.clock_sync =
                 live_modifier_scaled_clock_sync(request.clock_sync, modifier.speed);
+            for cell in &mut request.cells {
+                if cell.feature_attribute.is_some() {
+                    let (low, high) = live_modifier_scaled_level_range(
+                        cell.feature_low.unwrap_or(0),
+                        cell.feature_high.unwrap_or(u16::MAX),
+                        modifier.size,
+                    );
+                    cell.feature_low = Some(low);
+                    cell.feature_high = Some(high);
+                }
+            }
             request.phase = live_modifier_shifted_phase(request.phase, modifier.phase);
             request.playback_direction = live_modifier_color_mapping_direction(
                 request.playback_direction,
@@ -25521,6 +25533,7 @@ pub fn validate_color_mapping_effect_request(
     if request.cells.len() > 4_096 {
         return Err("Colour Mapping supports at most 4096 authored matrix cells".to_string());
     }
+    let mut feature_targets = HashSet::new();
     for cell in &request.cells {
         if !cell.u.is_finite()
             || !cell.v.is_finite()
@@ -25530,6 +25543,21 @@ pub fn validate_color_mapping_effect_request(
             return Err(
                 "Colour Mapping cell coordinates must be finite and within -16..16".to_string(),
             );
+        }
+        if let Some(attribute) = &cell.feature_attribute {
+            let canonical = normalize_chaser_attribute(attribute);
+            if canonical.is_empty() {
+                return Err("Colour Mapping feature attributes must not be empty".to_string());
+            }
+            if !feature_targets.insert((cell.fixture_id, canonical)) {
+                return Err(format!(
+                    "Colour Mapping fixture {} targets feature '{}' more than once",
+                    cell.fixture_id,
+                    attribute.trim()
+                ));
+            }
+        } else if cell.feature_low.is_some() || cell.feature_high.is_some() {
+            return Err("Colour Mapping feature ranges require a feature attribute".to_string());
         }
     }
     if request.period_ms < 10 {
@@ -25748,7 +25776,15 @@ fn runtime_color_mapping_effect_from_request(
         })
         .collect::<Vec<_>>();
 
-    let mut pending = Vec::<(FixtureId, u16, u32, f32, f32, RuntimeColorBinding)>::new();
+    let mut pending = Vec::<(
+        FixtureId,
+        u16,
+        u32,
+        f32,
+        f32,
+        RuntimeColorBinding,
+        Option<(u16, u16)>,
+    )>::new();
     if request.cells.is_empty() {
         let mut selected = Vec::<&RuntimeFixture>::new();
         let mut seen = HashSet::new();
@@ -25811,6 +25847,7 @@ fn runtime_color_mapping_effect_from_request(
                     .color_binding
                     .clone()
                     .expect("selected Colour Mapping fixture has a colour binding"),
+                None,
             ));
         }
     } else {
@@ -25832,6 +25869,12 @@ fn runtime_color_mapping_effect_from_request(
                 cell.u,
                 cell.v,
                 binding,
+                cell.feature_attribute.as_ref().map(|_| {
+                    (
+                        cell.feature_low.unwrap_or(0),
+                        cell.feature_high.unwrap_or(u16::MAX),
+                    )
+                }),
             ));
         }
     }
@@ -25843,7 +25886,7 @@ fn runtime_color_mapping_effect_from_request(
 
     let mut targets = Vec::with_capacity(pending.len());
     let mut attribute_indices = HashMap::<FixtureId, HashMap<String, usize>>::new();
-    for (fixture_id, _beam_index, _selection_index, u, v, binding) in pending {
+    for (fixture_id, _beam_index, _selection_index, u, v, binding, feature_range) in pending {
         let sample = compile_runtime_color_mapping_sample(&request, u, v);
         let target_index = targets.len();
         for attribute in binding.outputs.keys() {
@@ -25861,6 +25904,7 @@ fn runtime_color_mapping_effect_from_request(
         targets.push(RuntimeColorMappingTarget {
             sample,
             binding,
+            feature_range,
             cached: Cell::new(None),
         });
     }
@@ -26083,6 +26127,12 @@ fn evaluate_runtime_color_mapping_attribute_at_rate(
             return nearest_runtime_color_wheel_value(slots, target_color).or(Some(base_value));
         }
     };
+    let component = target
+        .feature_range
+        .map(|(low, high)| {
+            scale_effect_u16_directed(low, high, f32::from(component) / f32::from(u16::MAX))
+        })
+        .unwrap_or(component);
     Some(blend_effect_value(
         base_value,
         component,
@@ -51088,6 +51138,8 @@ mod tests {
             u: 0.5,
             v: 0.5,
             feature_attribute: None,
+            feature_low: None,
+            feature_high: None,
         }];
         bilinear.sampling = ColorMappingSampling::Bilinear;
         let bilinear =
@@ -51157,6 +51209,8 @@ mod tests {
                 u: 0.5,
                 v: 0.5,
                 feature_attribute: Some("Dimmer".to_string()),
+                feature_low: Some(1_000),
+                feature_high: Some(5_000),
             },
         )
         .unwrap();
@@ -51165,6 +51219,39 @@ mod tests {
             feature_binding.outputs.get("Dimmer"),
             Some(RuntimeColorOutput::Intensity)
         ));
+
+        let mut feature_request = test_color_mapping_request(vec![3]);
+        feature_request.width = 1;
+        feature_request.height = 1;
+        feature_request.frames = vec![protocol::ColorMappingFrame {
+            pixels: vec![pack_test_color(32_768, 32_768, 32_768)],
+        }];
+        feature_request.cells = vec![ColorMappingCellTarget {
+            fixture_id: 3,
+            beam_index: 0,
+            selection_index: 0,
+            u: 0.5,
+            v: 0.5,
+            feature_attribute: Some("Dimmer".to_string()),
+            feature_low: Some(1_000),
+            feature_high: Some(5_000),
+        }];
+        let feature_runtime =
+            runtime_color_mapping_effect_from_request(feature_request, &[feature_fixture], true)
+                .unwrap();
+        assert_eq!(
+            evaluate_runtime_color_mapping_attribute_at_rate(
+                &feature_runtime,
+                3,
+                "Dimmer",
+                0,
+                now,
+                now,
+                &ClockSnapshot::default(),
+                1.0,
+            ),
+            Some(3_000)
+        );
     }
 
     #[test]

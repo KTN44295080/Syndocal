@@ -25113,6 +25113,31 @@ h3 {
   min-width: 0;
 }
 
+.colorMappingOutputMode {
+  display: grid;
+  grid-template-columns: auto minmax(220px, 0.5fr) minmax(240px, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #384147;
+  background: #151a1d;
+}
+
+.colorMappingOutputMode > span {
+  color: #c5cdd1;
+  font-weight: 700;
+}
+
+.colorMappingOutputMode .moveEffectSegmented button {
+  min-height: 40px;
+}
+
+.colorMappingOutputMode > small {
+  color: #9aa6ac;
+  line-height: 1.35;
+}
+
 .colorMappingPreviewGrid {
   display: grid;
   grid-template-columns: minmax(260px, 1.2fr) minmax(260px, 0.8fr);
@@ -25268,6 +25293,7 @@ h3 {
 }
 
 @container effect-form (max-width: 780px) {
+  .colorMappingOutputMode,
   .colorMappingPreviewGrid,
   .colorMappingControlGrid {
     grid-template-columns: minmax(0, 1fr);

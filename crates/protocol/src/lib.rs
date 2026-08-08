@@ -2642,6 +2642,12 @@ pub struct ColorMappingCellTarget {
     pub v: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feature_attribute: Option<String>,
+    /// Optional DMX range for a scalar feature mapping. Legacy projects that
+    /// omit these fields retain the full 0..65535 range.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_low: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_high: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -4408,7 +4414,6 @@ mod tests {
             target_group_ids: vec!["Front".to_string()],
             attribute: "Dimmer".to_string(),
             features: Vec::new(),
-            features: Vec::new(),
             points: vec![
                 super::CurveEffectPoint {
                     position: 0.0,
@@ -4462,7 +4467,6 @@ mod tests {
             fixture_ids: vec![3, 1, 2],
             target_group_ids: vec!["Front".to_string()],
             attribute: "Dimmer".to_string(),
-            features: Vec::new(),
             features: Vec::new(),
             shape: super::LfoShape::Sine,
             mode: super::ValueEffectMode::Absolute,
@@ -4522,6 +4526,8 @@ mod tests {
                 u: 0.25,
                 v: 0.5,
                 feature_attribute: None,
+                feature_low: None,
+                feature_high: None,
             }],
             playback_direction: super::ColorMappingPlaybackDirection::Bounce,
             period_ms: 2_000,
@@ -4556,6 +4562,15 @@ mod tests {
         assert!(json.contains("281470681743360"));
         let parsed: super::EffectPreset = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, preset);
+        assert!(!json.contains("feature_low"));
+        assert!(!json.contains("feature_high"));
+
+        let legacy_cell: super::ColorMappingCellTarget = serde_json::from_str(
+            r#"{"fixture_id":9,"beam_index":0,"selection_index":0,"u":0.5,"v":0.5,"feature_attribute":"Dimmer"}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy_cell.feature_low, None);
+        assert_eq!(legacy_cell.feature_high, None);
     }
 
     #[test]
