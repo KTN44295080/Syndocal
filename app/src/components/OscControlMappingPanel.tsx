@@ -141,6 +141,7 @@ export function OscControlMappingPanel(props: OscControlMappingPanelProps) {
             <option value="TimelineBeatPrevious">Beat Previous</option>
             <option value="TimelineBeatNext">Beat Next</option>
             <option value="LightingMaster">Lighting Master</option>
+            <option value="VideoMaster">Video Master</option>
             <option value="GroupSubmaster">Group Submaster</option>
             <option value="SetBpm">Set BPM</option>
             <option value="TapBpm">Tap BPM</option>

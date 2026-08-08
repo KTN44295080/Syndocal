@@ -42,6 +42,7 @@ export const controlMappingTargetLabel = (mapping: MidiControlMapping | OscContr
     case "SetBpm": return `Set BPM ${mapping.low}-${mapping.high}`;
     case "TapBpm": return "Tap BPM";
     case "LightingMaster": return "Lighting master";
+    case "VideoMaster": return "Video master";
     case "GroupSubmaster": return `Group ${mapping.group_id} submaster`;
     case "CueFadePause": return "Cue fade pause";
     case "Blackout": return "Lighting blackout";

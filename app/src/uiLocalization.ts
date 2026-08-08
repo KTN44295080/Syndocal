@@ -4,6 +4,18 @@ export const uiLocaleStorageKey = "syndocal.uiLocale.v1";
 
 const japaneseText: Record<string, string> = {
   "Project menu": "プロジェクトメニュー",
+  "Control mapping learn": "コントロールマッピングLearn",
+  "MIDI Learn": "MIDI Learn",
+  "OSC Learn": "OSC Learn",
+  "Exit MIDI Learn": "MIDI Learnを終了",
+  "Exit OSC Learn": "OSC Learnを終了",
+  "Global show controls": "ショー共通操作",
+  "Esc": "Escキー",
+  "VID": "映像",
+  "ALL": "全体",
+  "Select a pink control, then move or press the hardware control":
+    "ピンク色の操作対象を選び、ハードウェア側を動かすか押してください",
+  "Listening for input": "入力待機中",
   "Unsaved project": "未保存プロジェクト",
   New: "新規",
   Save: "保存",

@@ -222,6 +222,7 @@ pub enum MidiControlEvent {
     SetBpm(f32),
     TapBpm,
     LightingMaster(f32),
+    VideoMaster(f32),
     SetGroupSubmaster {
         group_id: String,
         level: f32,
@@ -698,6 +699,7 @@ fn feedback_value_for_mapping(
             300.0,
         )),
         MidiControlAction::LightingMaster => Some(snapshot.lighting_master),
+        MidiControlAction::VideoMaster => Some(snapshot.video.master_opacity),
         MidiControlAction::GroupSubmaster => {
             let group_id = mapping.group_id.as_ref()?;
             let level = snapshot
@@ -1170,6 +1172,7 @@ fn event_from_mapping(
             is_positive_trigger(message).then_some(MidiControlEvent::TapBpm)
         }
         MidiControlAction::LightingMaster => Some(MidiControlEvent::LightingMaster(ranged_value)),
+        MidiControlAction::VideoMaster => Some(MidiControlEvent::VideoMaster(ranged_value)),
         MidiControlAction::GroupSubmaster => Some(MidiControlEvent::SetGroupSubmaster {
             group_id: mapping.group_id.as_ref()?.clone(),
             level: ranged_value,
@@ -2468,6 +2471,48 @@ mod tests {
         assert_eq!(
             events_from_midi_message(&[0xb0, 12, 0], &[pause]),
             vec![MidiControlEvent::SetCueFadePaused(false)]
+        );
+    }
+
+    #[test]
+    fn maps_video_master_control_and_feedback() {
+        let mapping = MidiControlMapping {
+            channel: Some(0),
+            message: MidiControlMessage::ControlChange,
+            number: 10,
+            action: MidiControlAction::VideoMaster,
+            fixture_id: None,
+            attribute: None,
+            group_id: None,
+            cue_id: None,
+            layer_id: None,
+            video_param: None,
+            cue_point_index: None,
+            output_id: None,
+            duration_ms: None,
+            low: 0.0,
+            high: 1.0,
+        };
+
+        let events = events_from_midi_message(&[0xb0, 10, 64], std::slice::from_ref(&mapping));
+        assert_eq!(events.len(), 1);
+        match events[0] {
+            MidiControlEvent::VideoMaster(value) => {
+                assert!((value - (64.0 / 127.0)).abs() < 0.0001);
+            }
+            _ => panic!("expected video master event"),
+        }
+
+        let snapshot = EngineSnapshot {
+            video: protocol::VideoSnapshot {
+                master_opacity: 0.25,
+                ..protocol::VideoSnapshot::default()
+            },
+            ..EngineSnapshot::default()
+        };
+        assert_eq!(
+            build_feedback_messages(&snapshot, &[mapping]),
+            vec![vec![0xb0, 10, 32]]
         );
     }
 

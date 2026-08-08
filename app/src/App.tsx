@@ -623,6 +623,10 @@ import {
 import { controlMappingTargetLabel } from "./controlMappingLabels";
 import { createControlInputController } from "./createControlInputController";
 import {
+  controlMappingTargetsFromElement,
+  type ControlLearnMode,
+} from "./controlMappingLearn";
+import {
   installUiLocalization,
   loadUiLocale,
   saveUiLocale,
@@ -1473,6 +1477,9 @@ export default function App() {
   const [midiFeedbackConnected, setMidiFeedbackConnected] = createSignal(false);
   const [midiFeedbackEnabled, setMidiFeedbackEnabled] = createSignal(false);
   const [midiMappings, setMidiMappings] = createSignal<MidiControlMapping[]>([]);
+  const [controlLearnMode, setControlLearnModeState] = createSignal<ControlLearnMode | null>(null);
+  const [controlLearnBusy, setControlLearnBusy] = createSignal(false);
+  const [controlLearnTargetLabel, setControlLearnTargetLabel] = createSignal<string | null>(null);
   const [midiMapMessage, setMidiMapMessage] = createSignal<MidiControlMessage>("ControlChange");
   const [midiMapChannel, setMidiMapChannel] = createSignal(-1);
   const [midiMapNumber, setMidiMapNumber] = createSignal(7);
@@ -12640,6 +12647,7 @@ export default function App() {
     addMidiMapping,
     removeMidiMapping,
     learnMidiControl,
+    learnMidiControlForTargets,
     saveMidiMappings,
     loadMidiMappings,
     connectMidiControl,
@@ -12652,6 +12660,7 @@ export default function App() {
     saveOscMappings,
     loadOscMappings,
     learnOscControl,
+    learnOscControlForTargets,
     startOscInput,
     stopOscInput,
   } = createControlInputController({
@@ -12666,6 +12675,7 @@ export default function App() {
     selectedMidiOutput,
     setSelectedMidiOutput,
     setMidiConnected,
+    midiControlConnected,
     setMidiControlConnected,
     midiFeedbackConnected,
     setMidiFeedbackConnected,
@@ -12719,6 +12729,77 @@ export default function App() {
     oscMapDurationMs,
     oscMapLow,
     oscMapHigh,
+  });
+
+  let controlLearnSelectedElement: HTMLElement | null = null;
+  const controlLearnVisibilityObserver = typeof IntersectionObserver === "undefined"
+    ? null
+    : new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (!(entry.target instanceof HTMLElement)) continue;
+          if (entry.isIntersecting) {
+            entry.target.setAttribute("data-control-map-selected-visible", "true");
+          } else {
+            entry.target.removeAttribute("data-control-map-selected-visible");
+          }
+        }
+      });
+  const clearControlLearnSelection = () => {
+    if (controlLearnSelectedElement) controlLearnVisibilityObserver?.unobserve(controlLearnSelectedElement);
+    controlLearnSelectedElement?.removeAttribute("data-control-map-selected");
+    controlLearnSelectedElement?.removeAttribute("data-control-map-selected-visible");
+    controlLearnSelectedElement = null;
+    setControlLearnTargetLabel(null);
+  };
+  const selectControlLearnElement = (element: HTMLElement) => {
+    if (controlLearnSelectedElement !== element) {
+      controlLearnSelectedElement?.removeAttribute("data-control-map-selected");
+      controlLearnSelectedElement = element;
+      element.setAttribute("data-control-map-selected", "true");
+      controlLearnVisibilityObserver?.observe(element);
+      if (!controlLearnVisibilityObserver) element.setAttribute("data-control-map-selected-visible", "true");
+    }
+    setControlLearnTargetLabel(element.dataset.controlMapLabel ?? "Selected control");
+  };
+  const setControlLearnMode = (mode: ControlLearnMode | null) => {
+    if (controlLearnBusy()) return;
+    clearControlLearnSelection();
+    setControlLearnModeState(mode);
+    if (mode === "midi") {
+      setMessage("MIDI Learn: select a pink control, then move or press the MIDI control.");
+      if (midiInputs().length === 0) void refreshMidiInputs();
+    } else if (mode === "osc") {
+      setMessage("OSC Learn: select a pink control, then send its OSC message.");
+    } else {
+      setMessage("Control Learn closed. Existing mappings remain active.");
+    }
+  };
+  const handleControlLearnClick = (event: MouseEvent) => {
+    const mode = controlLearnMode();
+    if (!mode || !(event.target instanceof Element)) return;
+    if (event.target.closest("[data-control-learn-toggle]")) return;
+    const element = event.target.closest<HTMLElement>("[data-control-map-target]");
+    if (!element) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (controlLearnBusy()) return;
+    const targets = controlMappingTargetsFromElement(element);
+    if (targets.length === 0) {
+      setMessage("This control cannot be mapped with the current MIDI/OSC action model.");
+      return;
+    }
+    selectControlLearnElement(element);
+    setControlLearnBusy(true);
+    void (mode === "midi"
+      ? learnMidiControlForTargets(targets)
+      : learnOscControlForTargets(targets))
+      .finally(() => setControlLearnBusy(false));
+  };
+  document.addEventListener("click", handleControlLearnClick, true);
+  onCleanup(() => {
+    document.removeEventListener("click", handleControlLearnClick, true);
+    controlLearnVisibilityObserver?.disconnect();
+    clearControlLearnSelection();
   });
 
   const refreshRemoteAccessUrls = async (config: RemoteControlConfig = remoteConfig()) => {
@@ -17421,6 +17502,11 @@ export default function App() {
   });
 
   const handleAppKeyDown = (event: KeyboardEvent) => {
+    if (event.key === "Escape" && !event.defaultPrevented && controlLearnMode() && !controlLearnBusy()) {
+      event.preventDefault();
+      setControlLearnMode(null);
+      return;
+    }
     if (
       event.key === "Escape" &&
       !event.defaultPrevented &&
@@ -17527,6 +17613,8 @@ export default function App() {
       class={`app${paneWindow ? ` paneWindow paneWindow-${paneWindow}` : ""}`}
       style={paneWindow ? "grid-template-rows: minmax(0, 1fr) auto !important" : undefined}
       data-pane-window-mode={paneWindow || "main"}
+      data-control-learn-mode={controlLearnMode() ?? undefined}
+      data-control-learn-busy={controlLearnBusy() ? "true" : undefined}
     >
       <WorkspaceChrome
         workspaceTab={workspaceTab()}
@@ -17575,6 +17663,9 @@ export default function App() {
         anyFixtureFlags={globalFixtureFlagState().anyFlagged}
         nextCueLabel={nextCue()?.label ?? "No cue"}
         operatorLockMode={operatorLockMode()}
+        controlLearnMode={controlLearnMode()}
+        controlLearnBusy={controlLearnBusy()}
+        controlLearnTargetLabel={controlLearnTargetLabel()}
         operations={
           <WorkspaceOperationsMenu
             profiles={namedWorkspaces()}
@@ -17603,6 +17694,7 @@ export default function App() {
         onSetVideoBlackout={(enabled) => void setVideoBlackout(enabled)}
         onSetAllBlackout={(enabled) => void setAllBlackout(enabled)}
         onClearFixtureFlags={() => void clearFixtureFlags("all")}
+        onControlLearnMode={setControlLearnMode}
         onLightingMaster={setLightingMaster}
         onVideoMaster={setVideoMasterOpacity}
         onTapBpm={tapBpm}

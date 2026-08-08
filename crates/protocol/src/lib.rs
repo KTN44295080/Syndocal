@@ -2969,6 +2969,7 @@ pub enum OscControlAction {
     CueFadePause,
     Blackout,
     AllBlackout,
+    VideoMaster,
     VideoBlackout,
     ClearFixtureFlags,
 }
@@ -3185,6 +3186,7 @@ pub enum MidiControlAction {
     CueFadePause,
     Blackout,
     AllBlackout,
+    VideoMaster,
     VideoBlackout,
     ClearFixtureFlags,
 }

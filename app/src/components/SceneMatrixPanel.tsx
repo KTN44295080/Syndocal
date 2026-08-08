@@ -14,6 +14,7 @@ import type {
 import type { TimelineCueDragPoint } from "../timelineCueDrag";
 import { authoredCueLiveModifier } from "../cueLiveModifier";
 import { CueLiveModifierStrip } from "./CueLiveModifierStrip";
+import { controlMappingTargetData } from "../controlMappingLearn";
 
 interface SceneMatrixPanelProps {
   toolbar?: JSX.Element;
@@ -473,6 +474,11 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                 class="sceneMatrixTrigger"
                                 classList={{ flash: flashMode() }}
                                 data-scene-flash-cue={flashMode() ? cue.id : undefined}
+                                {...controlMappingTargetData({
+                                  action: "TriggerCue",
+                                  cue_id: cue.id,
+                                  label: `Cue ${cue.cue_number || cue.id} ${cue.label}`,
+                                })}
                                 aria-label={
                                   flashMode()
                                     ? `Flash Cue ${cue.label}`

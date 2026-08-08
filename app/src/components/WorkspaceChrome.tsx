@@ -18,6 +18,10 @@ import { setupAreaForSubTab, setupAreas, setupSubTabs, setupSubTabsForArea } fro
 import type { SetupSubTab, WorkspaceTab } from "../uiModes";
 import type { UiLocale } from "../uiLocalization";
 import { TopbarPulseMeter } from "./TopbarPulseMeter";
+import {
+  controlMappingTargetData,
+  type ControlLearnMode,
+} from "../controlMappingLearn";
 
 type WorkspaceChromeProps = {
   workspaceTab: WorkspaceTab;
@@ -62,6 +66,9 @@ type WorkspaceChromeProps = {
   anyFixtureFlags: boolean;
   nextCueLabel: string;
   operatorLockMode: OperatorLockMode | null;
+  controlLearnMode: ControlLearnMode | null;
+  controlLearnBusy: boolean;
+  controlLearnTargetLabel: string | null;
   operations: JSX.Element;
   onWorkspaceTab: (tab: WorkspaceTab) => void;
   onSetupSubTab: (tab: SetupSubTab) => void;
@@ -73,6 +80,7 @@ type WorkspaceChromeProps = {
   onSetVideoBlackout: (enabled: boolean) => void;
   onSetAllBlackout: (enabled: boolean) => void;
   onClearFixtureFlags: () => void;
+  onControlLearnMode: (mode: ControlLearnMode | null) => void;
   onLightingMaster: (level: number) => void | Promise<void>;
   onVideoMaster: (level: number) => void | Promise<void>;
   onTapBpm: () => void | Promise<void>;
@@ -513,6 +521,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               aria-label="Back"
               disabled={!props.canBack}
               onClick={props.onBack}
+              {...controlMappingTargetData({ action: "TriggerPreviousCue", label: "Back" })}
             >
               <svg viewBox="0 0 20 20" aria-hidden="true">
                 <path d="M5 4v12M15 5l-7 5 7 5z" />
@@ -525,6 +534,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               title={`GO: ${props.nextCueLabel}`}
               disabled={!props.canGo}
               onClick={props.onGo}
+              {...controlMappingTargetData({ action: "TriggerNextCue", label: "GO" })}
             >
               GO
             </button>
@@ -537,6 +547,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               aria-pressed={props.fadePaused}
               disabled={!props.canPauseFade}
               onClick={props.onToggleFade}
+              {...controlMappingTargetData({ action: "CueFadePause", label: "Cue fade pause" })}
             >
               <svg viewBox="0 0 20 20" aria-hidden="true">
                 {props.fadePaused
@@ -553,6 +564,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               aria-pressed={props.timelinePlaying}
               disabled={!props.canToggleTimeline}
               onClick={props.onToggleTimeline}
+              {...controlMappingTargetData({ action: "TimelinePlay", label: "Timeline play" })}
             >
               <svg viewBox="0 0 20 20" aria-hidden="true">
                 <path d="M3.5 16h13M5 14v4M10 14v4M15 14v4" />
@@ -569,6 +581,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               aria-label={props.blackout ? "Clear DMX Blackout" : "DMX Blackout"}
               aria-pressed={props.blackout}
               onClick={() => props.onSetBlackout(!props.blackout)}
+              {...controlMappingTargetData({ action: "Blackout", label: "DMX Blackout" })}
             >
               <span data-no-localize>DMX</span>
             </button>
@@ -580,6 +593,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               aria-label={props.videoBlackout ? "Clear Video Blackout" : "Video Blackout"}
               aria-pressed={props.videoBlackout}
               onClick={() => props.onSetVideoBlackout(!props.videoBlackout)}
+              {...controlMappingTargetData({ action: "VideoBlackout", label: "Video Blackout" })}
             >
               <span data-no-localize>VID</span>
             </button>
@@ -591,6 +605,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               aria-label={props.blackout && props.videoBlackout ? "Clear All Blackout" : "All Blackout"}
               aria-pressed={props.blackout && props.videoBlackout}
               onClick={() => props.onSetAllBlackout(!(props.blackout && props.videoBlackout))}
+              {...controlMappingTargetData({ action: "AllBlackout", label: "All Blackout" })}
             >
               <span data-no-localize>ALL</span>
             </button>
@@ -602,9 +617,43 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               aria-label="Clear Fixture Flags"
               disabled={!props.anyFixtureFlags}
               onClick={props.onClearFixtureFlags}
+              {...controlMappingTargetData({ action: "ClearFixtureFlags", attribute: "all", label: "Clear fixture flags" })}
             >
               <svg viewBox="0 0 20 20" aria-hidden="true">
                 <path d="M5 17V3.5M5 4h8l-1.5 3L13 10H5M10 13l5 5M15 13l-5 5" />
+              </svg>
+            </button>
+          </div>
+          <div class="topbarLearnCluster" role="group" aria-label="Control mapping learn">
+            <button
+              type="button"
+              class="topbarIconButton topbarLearnButton"
+              classList={{ active: props.controlLearnMode === "midi", waiting: props.controlLearnMode === "midi" && props.controlLearnBusy }}
+              data-control-learn-toggle="midi"
+              title={props.controlLearnMode === "midi" ? "Exit MIDI Learn" : "MIDI Learn"}
+              aria-label={props.controlLearnMode === "midi" ? "Exit MIDI Learn" : "MIDI Learn"}
+              aria-pressed={props.controlLearnMode === "midi"}
+              onClick={() => props.onControlLearnMode(props.controlLearnMode === "midi" ? null : "midi")}
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M3 5h14v10H3zM6 5v6M10 5v6M14 5v6M5 11v4M9 11v4M13 11v4" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="topbarIconButton topbarLearnButton"
+              classList={{ active: props.controlLearnMode === "osc", waiting: props.controlLearnMode === "osc" && props.controlLearnBusy }}
+              data-control-learn-toggle="osc"
+              title={props.controlLearnMode === "osc" ? "Exit OSC Learn" : "OSC Learn"}
+              aria-label={props.controlLearnMode === "osc" ? "Exit OSC Learn" : "OSC Learn"}
+              aria-pressed={props.controlLearnMode === "osc"}
+              onClick={() => props.onControlLearnMode(props.controlLearnMode === "osc" ? null : "osc")}
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <circle cx="5" cy="10" r="2" />
+                <circle cx="15" cy="5" r="2" />
+                <circle cx="15" cy="15" r="2" />
+                <path d="M7 9l6-3M7 11l6 3" />
               </svg>
             </button>
           </div>
@@ -613,6 +662,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               class="topbarMasterControl"
               title={`${Math.round(props.lightingMaster * 100)}%`}
               data-topbar-master="lighting"
+              {...controlMappingTargetData({ action: "LightingMaster", label: "Lighting Master" })}
             >
               <span>Lighting</span>
               <input
@@ -629,6 +679,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               class="topbarMasterControl"
               title={`${Math.round(props.videoMaster * 100)}%`}
               data-topbar-master="video"
+              {...controlMappingTargetData({ action: "VideoMaster", label: "Video Master" })}
             >
               <span>Video</span>
               <input
@@ -653,6 +704,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
             title="Tap"
             aria-label="Tap"
             onClick={() => void props.onTapBpm()}
+            {...controlMappingTargetData({ action: "TapBpm", label: "Tap BPM" })}
           >
             Tap
           </button>
@@ -675,6 +727,26 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
         </div>
         <WindowControls />
       </header>
+      <Show when={props.controlLearnMode}>
+        {(mode) => (
+          <div
+            class="controlLearnPrompt"
+            classList={{ waiting: props.controlLearnBusy }}
+            role="status"
+            aria-live="polite"
+            data-control-learn-prompt={mode()}
+          >
+            <strong>{mode().toUpperCase()} Learn</strong>
+            <Show when={props.controlLearnBusy} fallback={
+              <span>Select a pink control, then move or press the hardware control</span>
+            }>
+              <span>Listening for input</span>
+              <b data-no-localize>{props.controlLearnTargetLabel ?? "selected control"}</b>
+            </Show>
+            <kbd>Esc</kbd>
+          </div>
+        )}
+      </Show>
 
       <Show when={props.workspaceTab === "setup"}>
         <div class="setupNavigation">

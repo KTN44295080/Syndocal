@@ -35442,6 +35442,115 @@ a[href]:focus-visible,
   height: 40px;
 }
 
+.topbarLearnCluster {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  height: 40px;
+}
+
+.status .topbarLearnCluster > .topbarLearnButton {
+  display: inline-grid;
+  flex: 0 0 32px;
+  width: 32px;
+  min-width: 32px;
+  height: 40px;
+  min-height: 40px;
+  place-items: center;
+  border-radius: var(--ui-radius-control);
+  padding: 0;
+}
+
+.status .topbarLearnCluster > .topbarLearnButton.active {
+  border-color: #d184dc;
+  background: #68406f;
+  color: #fff;
+  box-shadow: inset 0 -2px 0 #efb1f6;
+}
+
+.status .topbarLearnCluster > .topbarLearnButton.waiting {
+  background: #7c4b83;
+}
+
+.controlLearnPrompt {
+  position: fixed;
+  top: 46px;
+  right: 126px;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  max-width: min(560px, calc(100vw - 24px));
+  border: 1px solid #d184dc;
+  border-radius: var(--ui-radius-control);
+  background: #352638;
+  padding: 5px 8px;
+  color: #f5e8f7;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 45%);
+  pointer-events: none;
+}
+
+.controlLearnPrompt strong {
+  flex: 0 0 auto;
+  color: #f2b8f8;
+}
+
+.controlLearnPrompt span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.controlLearnPrompt kbd {
+  flex: 0 0 auto;
+  border: 1px solid #87618c;
+  border-radius: 3px;
+  background: #211923;
+  padding: 2px 5px;
+  color: #d9c7dc;
+}
+
+.app[data-control-learn-mode] [data-control-map-target] {
+  position: relative;
+  border-color: #c66bd1 !important;
+  background-color: #57365c !important;
+  color: #fff !important;
+  box-shadow: inset 0 0 0 1px #e39bea !important;
+  cursor: crosshair !important;
+}
+
+.app[data-control-learn-mode] [data-control-map-selected="true"]::after {
+  position: absolute;
+  z-index: 2;
+  inset: 2px;
+  border: 2px dashed #fff;
+  border-radius: inherit;
+  content: "";
+  opacity: 1;
+  pointer-events: none;
+  animation: controlLearnSelectionPulse 800ms step-end infinite;
+  animation-play-state: paused;
+}
+
+.app[data-control-learn-mode] [data-control-map-selected-visible="true"]::after {
+  animation-play-state: running;
+}
+
+@keyframes controlLearnSelectionPulse {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app[data-control-learn-mode] [data-control-map-selected="true"]::after {
+    animation: none;
+    opacity: 1;
+  }
+}
+
 .status .topbarTransportCluster > .topbarIconButton,
 .status .topbarTransportCluster > .goButton {
   display: inline-grid;

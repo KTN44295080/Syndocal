@@ -5426,6 +5426,7 @@ fn connect_midi_control(
             MidiControlEvent::SetBpm(bpm) => EngineCommand::SetBpm(bpm),
             MidiControlEvent::TapBpm => EngineCommand::TapBpm,
             MidiControlEvent::LightingMaster(master) => EngineCommand::SetLightingMaster(master),
+            MidiControlEvent::VideoMaster(master) => EngineCommand::SetVideoMasterOpacity(master),
             MidiControlEvent::SetGroupSubmaster { group_id, level } => {
                 EngineCommand::SetGroupSubmaster { group_id, level }
             }
@@ -5686,6 +5687,7 @@ fn validate_mapping_required_fields_for_midi(
         | MidiControlAction::SetBpm
         | MidiControlAction::TapBpm
         | MidiControlAction::LightingMaster
+        | MidiControlAction::VideoMaster
         | MidiControlAction::CueFadePause
         | MidiControlAction::Blackout
         | MidiControlAction::AllBlackout
@@ -5786,6 +5788,7 @@ fn validate_mapping_required_fields_for_osc(
         | OscControlAction::SetBpm
         | OscControlAction::TapBpm
         | OscControlAction::LightingMaster
+        | OscControlAction::VideoMaster
         | OscControlAction::CueFadePause
         | OscControlAction::Blackout
         | OscControlAction::AllBlackout

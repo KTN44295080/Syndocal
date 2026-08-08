@@ -20,6 +20,13 @@ import type {
   PatchedFixtureSummary,
   VideoParam,
 } from "./types";
+import {
+  midiMappingsFromLearnedControl,
+  oscMappingsFromLearnedControl,
+  sameMidiSource,
+  sameOscSource,
+  type ControlMappingTarget,
+} from "./controlMappingLearn";
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -35,6 +42,7 @@ interface ControlInputControllerOptions {
   selectedMidiOutput: Accessor<number | null>;
   setSelectedMidiOutput: Setter<number | null>;
   setMidiConnected: Setter<boolean>;
+  midiControlConnected: Accessor<boolean>;
   setMidiControlConnected: Setter<boolean>;
   midiFeedbackConnected: Accessor<boolean>;
   setMidiFeedbackConnected: Setter<boolean>;
@@ -210,6 +218,70 @@ export function createControlInputController(options: ControlInputControllerOpti
     }
   };
 
+  const learnMidiControlForTargets = async (targets: readonly ControlMappingTarget[]) => {
+    const inputIndex = options.selectedMidiInput();
+    if (inputIndex === null) {
+      reportMessage("Select a MIDI input in Setup > I/O before MIDI Learn.");
+      return false;
+    }
+    if (targets.length === 0) {
+      reportMessage("This control does not expose a MIDI mapping target.");
+      return false;
+    }
+    const previousMappings = options.midiMappings();
+    const wasConnected = options.midiControlConnected();
+    let disconnectedForLearn = false;
+    try {
+      if (wasConnected) {
+        await options.invoke("disconnect_midi_control");
+        options.setMidiControlConnected(false);
+        disconnectedForLearn = true;
+      }
+      options.setMessage(`MIDI Learn: move a control for ${targets[0].label}...`);
+      const learned = await options.invoke<LearnedMidiControl | null>("learn_midi_control", { inputIndex });
+      if (!learned) {
+        if (wasConnected && previousMappings.length > 0) {
+          await options.invoke("connect_midi_control", { inputIndex, mappings: previousMappings });
+          options.setMidiControlConnected(true);
+        }
+        options.setMessage("MIDI Learn timed out; the previous mapping connection was restored.");
+        return false;
+      }
+      applyLearnedMidiControl(learned);
+      const replaced = previousMappings.filter((mapping) => sameMidiSource(mapping, learned));
+      const nextMappings = [
+        ...previousMappings.filter((mapping) => !sameMidiSource(mapping, learned)),
+        ...midiMappingsFromLearnedControl(targets, learned),
+      ];
+      options.setMidiMappings(nextMappings);
+      await options.invoke("connect_midi_control", { inputIndex, mappings: nextMappings });
+      options.setMidiControlConnected(true);
+      options.setMessage(
+        `MIDI mapped ${learned.message} ch ${learned.channel + 1} #${learned.number} to ${targets[0].label}`
+        + (targets.length > 1 ? ` and ${targets.length - 1} linked target(s)` : "")
+        + (replaced.length > 0 ? `; replaced ${replaced.length} previous binding(s)` : ""),
+      );
+      return true;
+    } catch (error) {
+      let restored = false;
+      if (wasConnected && disconnectedForLearn && previousMappings.length > 0) {
+        try {
+          await options.invoke("connect_midi_control", { inputIndex, mappings: previousMappings });
+          options.setMidiMappings(previousMappings);
+          options.setMidiControlConnected(true);
+          restored = true;
+        } catch {
+          options.setMidiControlConnected(false);
+        }
+      }
+      options.setMessage(
+        `MIDI Learn failed: ${String(error)}`
+        + (restored ? "; the previous mapping connection was restored." : ""),
+      );
+      return false;
+    }
+  };
+
   const saveMidiMappings = async () => {
     try {
       const path = await options.invoke<string | null>("save_midi_mappings", { mappings: options.midiMappings() });
@@ -358,6 +430,65 @@ export function createControlInputController(options: ControlInputControllerOpti
       else options.setMessage("OSC learn timed out.");
     } catch (error) { options.setMessage(String(error)); }
   };
+  const learnOscControlForTargets = async (targets: readonly ControlMappingTarget[]) => {
+    if (targets.length === 0) {
+      reportMessage("This control does not expose an OSC mapping target.");
+      return false;
+    }
+    const config: OscInputConfig = { bind_ip: options.oscBindIp(), port: options.oscPort() };
+    const previousMappings = options.oscMappings();
+    const wasRunning = options.oscRunning();
+    let stoppedForLearn = false;
+    try {
+      if (wasRunning) {
+        await options.invoke("stop_osc_input");
+        options.setOscRunning(false);
+        stoppedForLearn = true;
+      }
+      options.setMessage(`OSC Learn: send a message for ${targets[0].label}...`);
+      const learned = await options.invoke<LearnedOscControl | null>("learn_osc_control", { config });
+      if (!learned) {
+        if (wasRunning) {
+          await options.invoke("start_osc_input", { config, mappings: previousMappings });
+          options.setOscRunning(true);
+        }
+        options.setMessage("OSC Learn timed out; the previous listener was restored.");
+        return false;
+      }
+      applyLearnedOscControl(learned);
+      const replaced = previousMappings.filter((mapping) => sameOscSource(mapping, learned));
+      const nextMappings = [
+        ...previousMappings.filter((mapping) => !sameOscSource(mapping, learned)),
+        ...oscMappingsFromLearnedControl(targets, learned),
+      ];
+      options.setOscMappings(nextMappings);
+      await options.invoke("start_osc_input", { config, mappings: nextMappings });
+      options.setOscRunning(true);
+      options.setMessage(
+        `OSC mapped ${learned.address} to ${targets[0].label}`
+        + (targets.length > 1 ? ` and ${targets.length - 1} linked target(s)` : "")
+        + (replaced.length > 0 ? `; replaced ${replaced.length} previous binding(s)` : ""),
+      );
+      return true;
+    } catch (error) {
+      let restored = false;
+      if (wasRunning && stoppedForLearn) {
+        try {
+          await options.invoke("start_osc_input", { config, mappings: previousMappings });
+          options.setOscMappings(previousMappings);
+          options.setOscRunning(true);
+          restored = true;
+        } catch {
+          options.setOscRunning(false);
+        }
+      }
+      options.setMessage(
+        `OSC Learn failed: ${String(error)}`
+        + (restored ? "; the previous listener was restored." : ""),
+      );
+      return false;
+    }
+  };
   const startOscInput = async () => {
     const config: OscInputConfig = { bind_ip: options.oscBindIp(), port: options.oscPort() };
     try {
@@ -382,6 +513,7 @@ export function createControlInputController(options: ControlInputControllerOpti
     addMidiMapping,
     removeMidiMapping,
     learnMidiControl,
+    learnMidiControlForTargets,
     saveMidiMappings,
     loadMidiMappings,
     connectMidiControl,
@@ -394,6 +526,7 @@ export function createControlInputController(options: ControlInputControllerOpti
     saveOscMappings,
     loadOscMappings,
     learnOscControl,
+    learnOscControlForTargets,
     startOscInput,
     stopOscInput,
   };

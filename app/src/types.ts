@@ -95,6 +95,7 @@ export type MidiControlAction =
   | "CueFadePause"
   | "Blackout"
   | "AllBlackout"
+  | "VideoMaster"
   | "VideoBlackout"
   | "ClearFixtureFlags";
 
@@ -180,6 +181,7 @@ export type OscControlAction =
   | "CueFadePause"
   | "Blackout"
   | "AllBlackout"
+  | "VideoMaster"
   | "VideoBlackout"
   | "ClearFixtureFlags";
 

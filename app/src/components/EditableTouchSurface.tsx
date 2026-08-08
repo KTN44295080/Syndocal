@@ -20,6 +20,10 @@ import type {
   TouchSurfaceSummary,
 } from "../types";
 import { authoredCueLiveModifier } from "../cueLiveModifier";
+import {
+  controlMappingTargetData,
+  controlMappingTargetsForTouchBinding,
+} from "../controlMappingLearn";
 import { CueLiveModifierStrip } from "./CueLiveModifierStrip";
 
 type TouchSurfaceMode = "edit" | "live";
@@ -666,6 +670,11 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
                  data-touch-kind={control.kind}
                  data-touch-binding={control.binding?.kind ?? "unassigned"}
                  data-no-localize
+                 {...controlMappingTargetData(controlMappingTargetsForTouchBinding(
+                   control.binding,
+                   control.label,
+                   props.selectedFixtureId,
+                 ))}
               >
                 {renderLiveControl(control)}
                 <Show when={mode() === "edit"}>

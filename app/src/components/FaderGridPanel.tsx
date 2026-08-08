@@ -8,6 +8,7 @@ import {
 } from "../channelFunctionHelpers";
 import { handleHorizontalWheel } from "../horizontalWheel";
 import type { AttributeControl } from "../types";
+import { controlMappingTargetData } from "../controlMappingLearn";
 import { VerticalFaderInput } from "./VerticalFaderInput";
 
 type AttributeFaderGlyph =
@@ -206,10 +207,21 @@ export function FaderGridPanel(props: FaderGridPanelProps) {
           const written = () => props.isControlWritten(control());
           const swatch = () => swatchColor(control(), value());
           const glyph = () => attributeGlyph(control(), value());
+          const mappingTarget = () => {
+            const fixtureId = props.selectedFixtureId;
+            if (fixtureId === null || fixtureId === undefined || props.selectedGroupId) return null;
+            return {
+              action: "FixtureAttribute" as const,
+              fixture_id: fixtureId,
+              attribute: control().attribute,
+              label: `${control().attribute} · Fixture ${fixtureId}`,
+            };
+          };
           return (
             <div
               classList={{ fader: true, attributeFaderColumn: true, written: written(), off: !written() }}
               data-fader-control-id={entry.id}
+              {...controlMappingTargetData(mappingTarget())}
             >
               <div class="attributeFaderWriteRow">
                 <span

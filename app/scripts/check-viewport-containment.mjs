@@ -2998,6 +2998,10 @@ async function measureLiveDeskHeaderState(client) {
     const toolbar = document.querySelector('.sceneMatrixSurfaceHeader, .liveCuePadSurface > .liveCuePadHeader');
     const toolbarActions = toolbar?.querySelector('[data-live-desk-toolbar-actions]') ?? null;
     const globalTransport = document.querySelector('.topbarTransportCluster');
+    const learnCluster = document.querySelector('.topbarLearnCluster');
+    const learnButtons = learnCluster
+      ? [...learnCluster.querySelectorAll('[data-control-learn-toggle]')].filter(isVisible)
+      : [];
     const viewToggle = toolbarActions?.querySelector('.liveDeskViewToggle') ?? null;
     const statusToggle = toolbarActions?.querySelector('[data-live-status-toggle]') ?? null;
     const topbar = document.querySelector('.topbar');
@@ -3083,6 +3087,7 @@ async function measureLiveDeskHeaderState(client) {
     return {
       toolbarRect,
       globalTransportRect,
+      learnClusterRect: measuredRect(learnCluster),
       toolbarActionsRect,
       viewToggleRect,
       statusToggleRect,
@@ -3097,6 +3102,16 @@ async function measureLiveDeskHeaderState(client) {
       toolbarCount: document.querySelectorAll('.liveControlPanel .sceneMatrixSurfaceHeader, .liveControlPanel > .liveCuePadSurface > .liveCuePadHeader').length,
       toolbarActionsCount: document.querySelectorAll('.liveControlPanel [data-live-desk-toolbar-actions]').length,
       directTransportButtonCount: directTransportButtons.length,
+      learnButtonCount: learnButtons.length,
+      learnButtonMetrics: learnButtons.map((element) => actionMetrics(element, 'data-control-learn-toggle')),
+      activeLearnMode: document.querySelector('.app')?.getAttribute('data-control-learn-mode') ?? '',
+      learnPromptCount: [...document.querySelectorAll('[data-control-learn-prompt]')].filter(isVisible).length,
+      learnPromptMode: document.querySelector('[data-control-learn-prompt]')?.getAttribute('data-control-learn-prompt') ?? '',
+      visibleMappingTargetCount: [...document.querySelectorAll('[data-control-map-target]')].filter(isVisible).length,
+      selectedMappingTargetCount: [...document.querySelectorAll('[data-control-map-selected="true"]')].filter(isVisible).length,
+      selectedMappingTargetVisibleAnimationCount: [...document.querySelectorAll('[data-control-map-selected-visible="true"]')].filter(isVisible).length,
+      selectedMappingTargetLabel: document.querySelector('[data-control-map-selected="true"]')?.getAttribute('data-control-map-label') ?? '',
+      controlLearnMockCalls: window.__syndocalControlLearnMock?.calls ?? [],
       transportGoButtonCount: transportGoButtons.length,
       cueEditorToggleCount: [...document.querySelectorAll('.liveDeskToolbarActions .liveCueEditorToggle')]
         .filter(isVisible).length,
@@ -3174,6 +3189,42 @@ async function runLiveDeskHeaderViewport(client, viewport) {
   await clickVisibleByText(client, '.controlModeTabs button', 'Timeline');
   await sleep(120);
   const matrix = await measureLiveDeskHeaderState(client);
+  await client.evaluate(`(() => {
+    const clone = (value) => JSON.parse(JSON.stringify(value));
+    const mock = { calls: [] };
+    window.__TAURI_INTERNALS__ = {
+      invoke: async (command, args = {}) => {
+        mock.calls.push({ command, args: clone(args) });
+        if (command === 'list_midi_inputs') return [{ index: 4, name: 'Learn Controller' }];
+        if (command === 'learn_midi_control') {
+          return { channel: 1, message: 'ControlChange', number: 74, value: 96 };
+        }
+        if (command === 'connect_midi_control' || command === 'disconnect_midi_control') return null;
+        if (command === 'learn_osc_control') {
+          return { address: '/learn/cue', value: 1, argument_count: 1 };
+        }
+        if (command === 'start_osc_input' || command === 'stop_osc_input') return null;
+        throw new Error('Unexpected control-learn invoke: ' + command);
+      },
+    };
+    window.__syndocalControlLearnMock = mock;
+  })()`);
+  const midiLearnOpened = await clickWorkspaceSelector(client, '[data-control-learn-toggle="midi"]');
+  await sleep(100);
+  const midiArmed = await measureLiveDeskHeaderState(client);
+  const midiTargetSelected = await clickWorkspaceSelector(client, '.sceneMatrixTrigger[data-control-map-target]');
+  await sleep(120);
+  const midiSelected = await measureLiveDeskHeaderState(client);
+  await pressKey(client, 'Escape', 'Escape', 0);
+  await sleep(100);
+  const learnClosed = await measureLiveDeskHeaderState(client);
+  const oscLearnOpened = await clickWorkspaceSelector(client, '[data-control-learn-toggle="osc"]');
+  await sleep(80);
+  const oscTargetSelected = await clickWorkspaceSelector(client, '.sceneMatrixTrigger[data-control-map-target]');
+  await sleep(120);
+  const oscSelected = await measureLiveDeskHeaderState(client);
+  await pressKey(client, 'Escape', 'Escape', 0);
+  await sleep(80);
   const statusOpened = await clickWorkspaceSelector(client, '[data-live-status-toggle]');
   await sleep(100);
   const expanded = await measureLiveDeskHeaderState(client);
@@ -3202,6 +3253,52 @@ async function runLiveDeskHeaderViewport(client, viewport) {
     globalTopbarOwnsEightTransportActions:
       matrix.toolbarCount === 1 &&
       matrix.directTransportButtonCount === 8,
+    globalTopbarOwnsMidiAndOscLearnWithoutShrinking:
+      matrix.learnButtonCount === 2 &&
+      JSON.stringify(matrix.learnButtonMetrics.map((metric) => metric.action)) === JSON.stringify(['midi', 'osc']) &&
+      matrix.learnButtonMetrics.every((metric) => metric.width === 32 && metric.height === 40 && metric.svgCount === 1) &&
+      matrix.learnClusterRect?.height === 40,
+    midiLearnArmsEveryVisibleMappingTarget:
+      midiLearnOpened &&
+      midiArmed.activeLearnMode === 'midi' &&
+      midiArmed.learnPromptCount === 1 &&
+      midiArmed.learnPromptMode === 'midi' &&
+      midiArmed.visibleMappingTargetCount >= 12 &&
+      midiArmed.learnButtonMetrics.find((metric) => metric.action === 'midi')?.pressed === 'true',
+    clickingSceneSelectsOneBlinkingTargetWithoutPlayingIt:
+      midiTargetSelected &&
+      midiSelected.selectedMappingTargetCount === 1 &&
+      midiSelected.selectedMappingTargetVisibleAnimationCount === 1 &&
+      /^Cue /.test(midiSelected.selectedMappingTargetLabel),
+    nextMidiInputCreatesAndConnectsTheSelectedMapping:
+      midiSelected.controlLearnMockCalls.some((call) =>
+        call.command === 'learn_midi_control' && call.args?.inputIndex === 4) &&
+      midiSelected.controlLearnMockCalls.some((call) =>
+        call.command === 'connect_midi_control' &&
+        call.args?.inputIndex === 4 &&
+        call.args?.mappings?.some((mapping) =>
+          mapping.message === 'ControlChange' &&
+          mapping.channel === 1 &&
+          mapping.number === 74 &&
+          mapping.action === 'TriggerCue' &&
+          Number.isInteger(mapping.cue_id) &&
+          mapping.cue_id > 0)),
+    nextOscInputCreatesAndStartsTheSelectedMapping:
+      oscLearnOpened &&
+      oscTargetSelected &&
+      oscSelected.controlLearnMockCalls.some((call) => call.command === 'learn_osc_control') &&
+      oscSelected.controlLearnMockCalls.some((call) =>
+        call.command === 'start_osc_input' &&
+        call.args?.config?.port === 9000 &&
+        call.args?.mappings?.some((mapping) =>
+          mapping.address === '/learn/cue' &&
+          mapping.action === 'TriggerCue' &&
+          Number.isInteger(mapping.cue_id) &&
+          mapping.cue_id > 0)),
+    escapeClosesLearnAndClearsSelection:
+      learnClosed.activeLearnMode === '' &&
+      learnClosed.learnPromptCount === 0 &&
+      learnClosed.selectedMappingTargetCount === 0,
     transportLabelsReplacedByFourNamedSvgIcons:
       JSON.stringify(transportIconMetrics.map((metric) => metric.action)) ===
         JSON.stringify(expectedTransportIconActions) &&
@@ -3310,6 +3407,10 @@ async function runLiveDeskHeaderViewport(client, viewport) {
       ),
     matrixAndCuePadModesKeepOuterScrollZero:
       matrix.documentAndAppScrollZero &&
+      midiArmed.documentAndAppScrollZero &&
+      midiSelected.documentAndAppScrollZero &&
+      learnClosed.documentAndAppScrollZero &&
+      oscSelected.documentAndAppScrollZero &&
       expanded.documentAndAppScrollZero &&
       restored.documentAndAppScrollZero &&
       pads.documentAndAppScrollZero,
@@ -3323,6 +3424,10 @@ async function runLiveDeskHeaderViewport(client, viewport) {
     failedChecks,
     checks,
     matrix,
+    midiArmed,
+    midiSelected,
+    learnClosed,
+    oscSelected,
     expanded,
     restored,
     pads,

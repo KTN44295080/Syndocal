@@ -956,6 +956,7 @@ fn event_from_mapping(message: &OscMessage, mapping: &OscControlMapping) -> Opti
             is_positive_osc_trigger(first_arg).then_some(OscInputEvent::TapBpm)
         }
         OscControlAction::LightingMaster => Some(OscInputEvent::LightingMaster(ranged_value)),
+        OscControlAction::VideoMaster => Some(OscInputEvent::VideoMasterOpacity(ranged_value)),
         OscControlAction::GroupSubmaster => Some(OscInputEvent::SetGroupSubmaster {
             group_id: mapping.group_id.as_ref()?.clone(),
             level: ranged_value,
@@ -1707,6 +1708,34 @@ mod tests {
                 value: Some(0.25),
                 argument_count: 1,
             })
+        );
+    }
+
+    #[test]
+    fn maps_custom_osc_video_master() {
+        let packet = OscPacket::Message(OscMessage {
+            addr: "/touchosc/video_master".to_string(),
+            args: vec![OscType::Float(0.25)],
+        });
+        let mapping = OscControlMapping {
+            address: "/touchosc/video_master".to_string(),
+            action: OscControlAction::VideoMaster,
+            fixture_id: None,
+            attribute: None,
+            group_id: None,
+            cue_id: None,
+            layer_id: None,
+            video_param: None,
+            cue_point_index: None,
+            output_id: None,
+            duration_ms: None,
+            low: 0.0,
+            high: 1.0,
+        };
+
+        assert_eq!(
+            events_from_packet_with_mappings(&packet, &[mapping]),
+            vec![OscInputEvent::VideoMasterOpacity(0.25)]
         );
     }
 
