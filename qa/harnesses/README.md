@@ -45,7 +45,7 @@ between-phase browser recycling (fresh profile each time) isolates it.
     `target/qa/ui-comparison/PRIMARY_OBSERVATIONS.md` from real sessions.
   - a missing Daslight observation means "no claim yet", never an assumed win.
 
-  Current honest standings (2026-07-23, post-T18 rerun):
+  Current honest standings (2026-08-09):
   | task | Syndocal | Daslight 5 |
   |---|---|---|
   | place scene on a timeline lane | 1 drag (always-visible Scene Matrix) | 1 drag (always-visible pool) |
@@ -57,10 +57,16 @@ between-phase browser recycling (fresh profile each time) isolates it.
   one direct drag and fails unless one Scene Block is added. T18 expands the
   executable Syndocal side to 13 tasks: the three rows above plus matrix
   trigger, Scene Live speed/reset, Touch open/trigger/flash/Edit/control-add,
-  and FX family/recipe selection. The ten added tasks carry Daslight
-  `未計測`; only the three rows above support a same-task parity statement.
-  Patch, static programming, FX target application, and native Save/reopen
-  are still outside this harness and remain unmeasured.
+  and FX family/recipe selection. Daslight same-task observations now cover 12
+  of those 13: eleven are equal, Touch control creation is one click shorter in
+  Syndocal, and bulk Scene Live reset has no one-action Daslight equivalent.
+
+  `app/scripts/check-project-shortcuts.mjs` adds two executable project tasks.
+  It calls the production Save/Open dispatcher and fixes `Ctrl+S` and `Ctrl+O`
+  at one key gesture. Native `.sdc` write/read and maximized Daslight Save/reopen
+  were observed separately, yielding parity for Save (one operation) and named
+  reopen (three operations). Patch, static programming, and FX target
+  application remain unmeasured.
 
 ## External Art-Net monitor
 

@@ -28,11 +28,12 @@
 
 ## T18 operation-count coverage
 
-`qa/harnesses/check-operation-counts.mjs` は13タスクを実CDP gestureで実行し、結果のDOM/runtime反映までfail-closedで確認する。
+`qa/harnesses/check-operation-counts.mjs` は13タスクを実CDP gestureで実行し、結果のDOM/runtime反映までfail-closedで確認する。さらにSave/Openは`app/scripts/check-project-shortcuts.mjs`がグローバルkeyboard controllerの1 gesture dispatchを実行検証し、Windowsネイティブ版で`.sdc`の実write/readを確認する。
 
-- Daslight同一タスク実測あり: 12件（11件同数、1件はSyndocalが少ない）
+- Daslight同一タスク実測あり: 14件（13件同数、1件はSyndocalが少ない）
 - Daslightに同等の1操作がない: 1件（全scene live modifier reset）
 - Matrix/Touch flashのpointer down/up契約は、専用`--scene-live-modifier-only`でも5解像度を別途検証する
-- patch、static programming、FX target適用、native Save/reopenはこの13件にまだ含めず、未計測のまま残す
+- Saveは両者`Ctrl+S`の1操作、名前付きproject再読込は両者`Ctrl+O`→path→`Enter`の3操作。SyndocalはWebView2への修飾キー注入が効かなかったため、shortcut dispatch gateとnative menu persistenceで経路を分けてfail-closed検証した
+- patch、static programming、FX target適用はまだ含めず、未計測のまま残す
 
-この表は「13件PASS = 全体同等」を意味しない。比較判定を更新できるのは、同じ開始状態と完了条件でDaslight側の操作数も取得したタスクだけである。直接実測の詳細は`qa/DASLIGHT_OPERATOR_COUNT_AUDIT_2026-08-08.md`を正本とする。
+この表は「15件で優位または同数 = 全体同等」を意味しない。比較判定を更新できるのは、同じ開始状態と完了条件でDaslight側の操作数も取得したタスクだけである。直接実測の詳細は`qa/DASLIGHT_OPERATOR_COUNT_AUDIT_2026-08-08.md`を正本とする。

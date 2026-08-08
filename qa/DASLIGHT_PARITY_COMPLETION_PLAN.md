@@ -45,9 +45,9 @@
 
 ### P0 操作性と証拠
 
-- T18差分でSyndocal側を13タスクへ拡張したが、Daslight同一タスク実測は3件のみ。
-- patch、static programming、FX target適用、native show保存/再開はoperation-count未計測。
-- 4軸の最終再判定は完了したが、未計測10タスクを競合同等へ数えない。
+- 2026-08-09時点で13 CDPタスク + 2 project shortcutタスクを固定し、Daslight同一タスク実測は14件（13件同数、1件Syndocalが少ない）。残る1件はDaslightに同等の一括resetなし。
+- native show保存/再開はSyndocalの実write/readとshortcut dispatcher、Daslight最大化GUIで閉じた。patch、static programming、FX target適用はoperation-count未計測。
+- 4軸の最終再判定は継続中で、未計測3領域を競合同等へ数えない。
 
 ### P1 FX
 
@@ -81,7 +81,7 @@
 
 受入: harness fail-closed、対象結果のDOM/engine反映、操作予算回帰、1920x1080 primary + compact containment、JA/EN。
 
-進捗（2026-07-23）: 現行UIへ修復し、13タスクが実CDP gestureと結果反映を含めてPASS。Daslight実測のある3タスクは同数、残る10タスクは`未計測`のまま分離した。current-HEAD監査は`qa/DASLIGHT_CURRENT_HEAD_GAP_MATRIX.md`へ固定。patch / static programming / FX target適用 / native Save-reopenの操作計測は次のT18追加対象として残る。
+進捗（2026-08-09更新）: 現行UIの13タスクが実CDP gestureと結果反映を含めてPASS。さらにSave/Openの1-key dispatcherを実行gate化し、native `.sdc` write/readとDaslight最大化GUIの同一タスク計測を完了した。全15タスク中、Daslight実測14件は13件同数・1件Syndocalが少なく、残る1件はDaslightに同等一括操作なし。patch / static programming / FX target適用は次のT18追加対象として残る。
 
 ### T19: Independent FX Completion
 

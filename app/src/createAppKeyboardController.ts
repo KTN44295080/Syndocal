@@ -12,6 +12,7 @@ import {
 } from "./hotkeyHelpers";
 import type { MappingDragState, MappingMarqueeState, MappingViewportPanDragState } from "./mappingRuntime";
 import type { MappingStageTool } from "./mappingViewPresets";
+import { dispatchProjectFileShortcut } from "./projectFileShortcuts";
 import type { EngineSnapshot } from "./types";
 import {
   controlModeForShortcut,
@@ -68,20 +69,11 @@ interface AppKeyboardControllerOptions {
 
 export function createAppKeyboardController(options: AppKeyboardControllerOptions) {
   const handleControlKeyDown = (event: KeyboardEvent) => {
+    if (dispatchProjectFileShortcut(event, options)) return;
     if (event.repeat || event.altKey) return;
 
     const commandModifier = event.ctrlKey || event.metaKey;
     if (commandModifier) {
-      if (event.code === "KeyS") {
-        event.preventDefault();
-        void (event.shiftKey ? options.saveProjectAs() : options.saveProject());
-        return;
-      }
-      if (!event.shiftKey && event.code === "KeyO") {
-        event.preventDefault();
-        void options.loadProject();
-        return;
-      }
       if (!event.shiftKey && event.code === "KeyN") {
         event.preventDefault();
         void options.newProject();

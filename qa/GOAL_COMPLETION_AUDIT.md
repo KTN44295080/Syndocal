@@ -30,6 +30,14 @@ Scope: Syndocal as a unified lighting and VJ application, preserving `.sdc v1` a
 - T23: native WebView2 imported Shinkan2026 as 41 fixtures / 13 banks / 30 cues. `1.1 新宝島`, dynamic `2.1 Fl-StrobeChase`, Scene Live x4 and re-trigger x1 were operated against an independent Art-Net receiver. The final 20-second artifact records 880 valid changing U0 512-byte ArtDMX frames, 0 rejected frames, 0 per-stream sequence discontinuities and 25 ms maximum gap. Full Rust, five-size full viewport, focused Scene Live 5/5, 2802/2802 localization, 506.33 kB production build and the 13-task operation harness are green.
 - IP boundary: same-host send to the machine's own `192.168.1.34` adapter address did not return to local receivers; `127.0.0.1` immediately did. This is recorded as a same-NIC return/bind/firewall distinction. A real receiver uses the external PC/node LAN address and remains a physical acceptance gate.
 
+## Addendum 2026-08-09: Save/reopen operation evidence
+
+- The current operation corpus is 15 tasks: 13 production CDP gestures plus Save and named-project reopen.
+- Fourteen have direct same-task Daslight observations: thirteen are equal and Touch control creation is one click shorter in Syndocal. Scene Live modifier bulk reset has no one-action Daslight equivalent.
+- Daslight Save is one `Ctrl+S` gesture and named reopen is `Ctrl+O`, path, `Enter` (three operations), observed in the maximized desktop app against a disposable scratch `.dvc`.
+- Syndocal native Save/Open wrote and reread a disposable `.sdc`, restoring its Touch surface. `app/scripts/check-project-shortcuts.mjs` executes the exact production dispatcher and fixes `Ctrl+S` and `Ctrl+O` at one key gesture each; direct modifier-key injection into WebView2 was unavailable to Computer Use and is not represented as native observation.
+- Patch, static programming and FX target application remain the unmeasured operator-comparison surfaces.
+
 ## Addendum 2026-07-17: Unified desk and lighting show model (Daslight-parity series)
 
 Landed since the 2026-07-15 table, all with full viewport-matrix and focused-test evidence

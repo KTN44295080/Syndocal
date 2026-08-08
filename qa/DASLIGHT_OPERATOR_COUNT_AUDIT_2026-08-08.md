@@ -13,6 +13,9 @@
   counted.
 - Outcomes were verified in the visible application state, not inferred from
   button labels.
+- 2026-08-09 addendum: Save/reopen used a new scratch copy,
+  `C:\tmp\syndocal-daslight-op-audit-20260809.dvc`; the original user project
+  was not overwritten. Daslight remained maximized during both observations.
 
 ## Same-task results
 
@@ -31,14 +34,23 @@
 | Enter Touch Edit mode | 1 click | 1 click | Same | Daslight palette/grid and Syndocal Edit surface became editable. |
 | Add Touch button control | 2 clicks | 1 click | Syndocal fewer | Daslight required `BUTTON` in the palette, then a placement click on the grid. Syndocal creates the control from its palette click. |
 | Create Mapping FX from an open family chooser | 1 click | 1 click | Same | Daslight `+` menu was opened as setup; one `MAPPINGS` click added a visible `MAPPINGS` generator. |
+| Save current project | 1 key (`Ctrl+S`) | 1 key (`Ctrl+S`) | Same | Daslight kept the scratch-project title clean after one key gesture. Syndocal wrote `C:\tmp\syndocal-op-audit-20260809.sdc` in the native app; `check:project-shortcuts` proves that one `Ctrl+S` gesture dispatches only Save. |
+| Reopen a named project | 3 ops (`Ctrl+O`, path, `Enter`) | 3 ops (`Ctrl+O`, path, `Enter`) | Same | Daslight reopened the scratch `.dvc` with its groups/scenes restored. Syndocal reopened the scratch `.sdc` with its Touch surface restored and reported `プロジェクトを読み込みました`; `check:project-shortcuts` proves that the first gesture dispatches only Open. |
 
 ## Honest boundary
 
-Twelve of the thirteen executable tasks now have direct, same-task Daslight
-counts: eleven are equal and one (`Add Touch button control`) requires one fewer
-operation in Syndocal. The remaining task (`Reset all scene live modifiers`)
-has no matching one-action Daslight control and is a measured Syndocal usability
-advantage.
+Fourteen of the fifteen executable tasks now have direct, same-task Daslight
+counts: thirteen are equal and one (`Add Touch button control`) requires one
+fewer operation in Syndocal. The remaining task (`Reset all scene live
+modifiers`) has no matching one-action Daslight control and is a measured
+Syndocal usability advantage.
+
+Windows Computer Use delivered text and Enter to the native file picker but did
+not deliver modifier shortcuts into the WebView2 content. Therefore the
+Syndocal evidence is deliberately split without inventing a result: native menu
+Save/Open proves actual `.sdc` write/read persistence, while the executable
+`check:project-shortcuts` gate proves the one-key `Ctrl+S` and `Ctrl+O`
+dispatch routes. Daslight accepted the modifier shortcuts directly.
 
 This audit measures operator gestures and visible state changes. It does not
 replace physical-fixture output acceptance or a commercial visualizer render
