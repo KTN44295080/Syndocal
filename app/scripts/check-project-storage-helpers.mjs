@@ -48,12 +48,16 @@ const project = {
   version: 1,
   app: "Syndocal",
   custom_profiles: [],
+  midi_mappings: [{ channel: 0, message: "ControlChange", number: 74, action: "LightingMaster" }],
+  osc_mappings: [{ address: "/show/go", action: "TriggerNextCue" }],
   snapshot: { fixtures: [], cues: [] },
 };
 const checkpoint = recovery.createProjectRecoveryCheckpoint(project, "C:/shows/main.sdc", "sig-1");
 assert.equal(checkpoint.version, 1);
 assert.equal(checkpoint.app, "Syndocal");
 assert.equal(checkpoint.project, project);
+assert.equal(checkpoint.project.midi_mappings[0].number, 74);
+assert.equal(checkpoint.project.osc_mappings[0].address, "/show/go");
 assert.equal(checkpoint.signature, "sig-1");
 assert.equal(checkpoint.source_path, "C:/shows/main.sdc");
 assert.equal(recovery.projectRecoverySourceLabel(checkpoint), "main.sdc");

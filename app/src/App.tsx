@@ -8593,7 +8593,8 @@ export default function App() {
   };
 
   const projectStateSignature = (nextSnapshot = snapshot()) =>
-    `${projectSnapshotSignature(nextSnapshot)}|operator:${JSON.stringify(operatorPolicy())}`;
+    `${projectSnapshotSignature(nextSnapshot)}|operator:${JSON.stringify(operatorPolicy())}`
+    + `|control-mappings:${JSON.stringify({ midi: midiMappings(), osc: oscMappings() })}`;
   const markProjectClean = (nextSnapshot = snapshot()) => {
     setCleanProjectSignature(projectStateSignature(nextSnapshot));
     setProjectDirty(false);
@@ -8677,7 +8678,11 @@ export default function App() {
     setApplicationUpdateProgress({ phase: "downloading", downloaded_bytes: 0, total_bytes: null });
     setMessage(`Downloading signed Syndocal ${update.version} update...`);
     try {
-      await invoke<ProjectBackupSummary>("install_application_update", { expectedVersion: update.version });
+      await invoke<ProjectBackupSummary>("install_application_update", {
+        expectedVersion: update.version,
+        midiMappings: midiMappings(),
+        oscMappings: oscMappings(),
+      });
       await refreshProjectBackups();
       setMessage(`Syndocal ${update.version} was verified and handed to the platform installer.`);
     } catch (error) {
@@ -8838,7 +8843,10 @@ export default function App() {
     )}`;
     try {
       if (signature !== lastRecoverySignature) {
-        const project = await invoke<ProjectFile>("get_project_checkpoint");
+        const project = await invoke<ProjectFile>("get_project_checkpoint", {
+          midiMappings: midiMappings(),
+          oscMappings: oscMappings(),
+        });
         const checkpoint = createProjectRecoveryCheckpoint(
           project,
           currentProjectPath(),
@@ -8856,6 +8864,8 @@ export default function App() {
         await invoke<ProjectBackupSummary>("save_project_backup", {
           sourcePath: currentProjectPath(),
           reason: "autosave",
+          midiMappings: midiMappings(),
+          oscMappings: oscMappings(),
         });
         lastDesktopBackupSignature = signature;
         lastDesktopBackupAt = now;
@@ -10929,6 +10939,30 @@ export default function App() {
     }));
   };
 
+  const replaceProjectControlMappings = async (
+    nextMidiMappings: MidiControlMapping[],
+    nextOscMappings: OscControlMapping[],
+  ) => {
+    if (midiControlConnected()) {
+      try {
+        await invoke("disconnect_midi_control");
+      } catch {
+        // Project replacement still owns the frontend mapping state.
+      }
+    }
+    if (oscRunning()) {
+      try {
+        await invoke("stop_osc_input");
+      } catch {
+        // The newly loaded project's mappings must still replace the old set.
+      }
+    }
+    setMidiControlConnected(false);
+    setOscRunning(false);
+    setMidiMappings(nextMidiMappings);
+    setOscMappings(nextOscMappings);
+  };
+
   const applySelectedFixtureLimits = () => {
     const fixture = selectedFixture();
     if (!fixture) {
@@ -10945,6 +10979,7 @@ export default function App() {
     }
     try {
       await invoke("new_project");
+      await replaceProjectControlMappings([], []);
       await resetProjectHistory();
       setCurrentProjectPath(null);
       setWorkspaceTab("setup");
@@ -10983,16 +11018,7 @@ export default function App() {
         setMessage("Template load canceled.");
         return;
       }
-      if (midiControlConnected()) {
-        await invoke("disconnect_midi_control");
-        setMidiControlConnected(false);
-      }
-      if (oscRunning()) {
-        await invoke("stop_osc_input");
-        setOscRunning(false);
-      }
-      setMidiMappings(result.midi_mappings);
-      setOscMappings(result.osc_mappings);
+      await replaceProjectControlMappings(result.midi_mappings, result.osc_mappings);
       await resetProjectHistory();
       setCurrentProjectPath(null);
       setWorkspaceTab("setup");
@@ -11017,7 +11043,10 @@ export default function App() {
       return;
     }
     try {
-      const path = await invoke<string | null>("save_project");
+      const path = await invoke<string | null>("save_project", {
+        midiMappings: midiMappings(),
+        oscMappings: oscMappings(),
+      });
       if (path) {
         setCurrentProjectPath(path);
         rememberRecentProjectPath(path);
@@ -11039,7 +11068,10 @@ export default function App() {
       return;
     }
     try {
-      const path = await invoke<string | null>("save_project_as");
+      const path = await invoke<string | null>("save_project_as", {
+        midiMappings: midiMappings(),
+        oscMappings: oscMappings(),
+      });
       if (path) {
         setCurrentProjectPath(path);
         rememberRecentProjectPath(path);
@@ -11057,14 +11089,16 @@ export default function App() {
 
   const loadedProjectMessage = (result: ProjectLoadResult) => {
     const profileLabel = result.profiles.length === 1 ? "1 embedded profile" : `${result.profiles.length} embedded profiles`;
+    const mappingLabel = `${result.midi_mappings?.length ?? 0} MIDI / ${result.osc_mappings?.length ?? 0} OSC mappings`;
     const warnings = result.warnings ?? [];
     const warningLabel = warnings.length === 1 ? "1 validation warning" : `${warnings.length} validation warnings`;
     return warnings.length > 0
-      ? `Loaded project ${result.path} (${profileLabel}; ${warningLabel}): ${warnings.join(" | ")}`
-      : `Loaded project ${result.path} (${profileLabel})`;
+      ? `Loaded project ${result.path} (${profileLabel}; ${mappingLabel}; ${warningLabel}): ${warnings.join(" | ")}`
+      : `Loaded project ${result.path} (${profileLabel}; ${mappingLabel})`;
   };
 
   const applyLoadedProjectResult = async (result: ProjectLoadResult, currentPath: string | null) => {
+    await replaceProjectControlMappings(result.midi_mappings ?? [], result.osc_mappings ?? []);
     await resetProjectHistory();
     setCurrentProjectPath(currentPath);
     rememberRecentProjectPath(currentPath);
@@ -11109,6 +11143,7 @@ export default function App() {
         setMessage("Daslight Project import canceled.");
         return;
       }
+      await replaceProjectControlMappings([], []);
       await resetProjectHistory();
       setCurrentProjectPath(null);
       setWorkspaceTab("setup");
@@ -11163,6 +11198,7 @@ export default function App() {
         label: `Recovery ${checkpoint.saved_at}`,
         currentPath: checkpoint.source_path,
       });
+      await replaceProjectControlMappings(result.midi_mappings ?? [], result.osc_mappings ?? []);
       await resetProjectHistory();
       setCurrentProjectPath(checkpoint.source_path);
       setMessage(
@@ -11193,6 +11229,7 @@ export default function App() {
     }
     try {
       const result = await invoke<ProjectLoadResult>("load_project_backup", { backupId: backup.id });
+      await replaceProjectControlMappings(result.midi_mappings ?? [], result.osc_mappings ?? []);
       await resetProjectHistory();
       setCurrentProjectPath(backup.source_path ?? null);
       setMessage(
@@ -11266,6 +11303,7 @@ export default function App() {
     }
     try {
       const result = await invoke<ProjectLoadResult>("load_phase1_sample_project");
+      await replaceProjectControlMappings(result.midi_mappings ?? [], result.osc_mappings ?? []);
       await resetProjectHistory();
       setPhase1SmokeReport(null);
       setCurrentProjectPath(null);
@@ -11285,6 +11323,7 @@ export default function App() {
   const runPhase1Smoke = async () => {
     try {
       const report = await invoke<Phase1SmokeReport>("run_phase1_smoke");
+      await replaceProjectControlMappings([], []);
       await resetProjectHistory();
       setPhase1SmokeReport(report);
       setCurrentProjectPath(null);

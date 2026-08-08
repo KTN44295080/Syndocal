@@ -38,7 +38,7 @@ Syndocal は `target/debug/syndocal.exe`（2026-07-18 ビルド = シリーズ�
 | 軸 | Fable判定 | Codex判定 | 合成 | 根拠要約 |
 |---|---|---|---|---|
 | UI見た目のリッチさ | 同等圏（劣位点あり） | native Shinkan再確認 | **同等圏（全面優位は未証明）** | 同一ショー並置のidentity色/キュー組織に加え、current nativeでMatrix/Timeline/Scene Liveを確認。41灯密度の2Dラベル重なりと小型メタ情報は弱点。内蔵3Dは製品境界から除外し、外部Art-Netを正式経路とする。 |
-| 操作性 | 未計測 | 17-task current実測 + visual Learn | **主要17タスクは同等以上・製品全体は未計測** | 2026-08-09更新: 既存17タスクに加え、Daslight同型のMIDI Mapping visual Learn（紫target→点線選択→次入力で即割当）を共通トップバーへ実装し、OSCにも同じ手順を拡張。5解像度で一行/非縮小と実mapping生成を固定。物理controller比較は未実施。 |
+| 操作性 | 未計測 | 17-task current実測 + visual Learn | **主要17タスクは同等以上・製品全体は未計測** | 2026-08-09更新: 既存17タスクに加え、Daslight同型のMIDI Mapping visual Learn（紫target→点線選択→次入力で即割当）を共通トップバーへ実装し、OSCにも同じ手順を拡張。5解像度で一行/非縮小と実mapping生成を固定し、通常`.sdc`/Recovery/backupへの割当保存も閉じた。物理controller比較は未実施。 |
 | 見やすさ | 同 | 同（構造面） | **同等圏** | identity色、名前/時間/fade、固定インスペクタ、危険表現、型付きlane、一画面契約をnative/5 viewportで確認。暗所・距離・色覚を含むoperator実視認性は未計測。 |
 | 機能面 | 部分超過・部分劣位 | software監査PASS | **比較可能（全面同等ではない）** | 7独立FX、Cue transition、Scene Live/Live Mixer、GDTF onboarding、workspace/lock、Art-Net process境界を閉じた。一方、商用catalog規模、standalone hardware、native mobile、実運用実績はDaslightが優位。 |
 

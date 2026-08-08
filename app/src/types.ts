@@ -706,12 +706,16 @@ export interface ProjectFile {
   operator_policy?: OperatorPolicy | null;
   custom_profiles?: FixtureProfileSummary[];
   fixture_groups?: FixtureGroupSummary[];
+  midi_mappings?: MidiControlMapping[];
+  osc_mappings?: OscControlMapping[];
   snapshot: EngineSnapshot;
 }
 
 export interface ProjectLoadResult {
   path: string;
   profiles: FixtureProfileSummary[];
+  midi_mappings: MidiControlMapping[];
+  osc_mappings: OscControlMapping[];
   warnings: string[];
 }
 

@@ -3069,7 +3069,17 @@ struct PreparedFixturePatch {
 struct ProjectLoadResult {
     path: String,
     profiles: Vec<FixtureProfileSummary>,
+    midi_mappings: Vec<MidiControlMapping>,
+    osc_mappings: Vec<OscControlMapping>,
     warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+struct ProjectControlMappings {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    midi_mappings: Vec<MidiControlMapping>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    osc_mappings: Vec<OscControlMapping>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3091,6 +3101,10 @@ struct ProjectBackupEnvelope {
     source_path: Option<String>,
     reason: String,
     project: ProjectFile,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    midi_mappings: Vec<MidiControlMapping>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    osc_mappings: Vec<OscControlMapping>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -14124,6 +14138,8 @@ fn load_user_template(
 fn save_project(
     window: WebviewWindow,
     state: State<'_, AppState>,
+    midi_mappings: Vec<MidiControlMapping>,
+    osc_mappings: Vec<OscControlMapping>,
 ) -> Result<Option<String>, String> {
     let current_path = state
         .current_project_path
@@ -14131,23 +14147,27 @@ fn save_project(
         .map_err(|_| "Current project path lock was poisoned".to_string())?
         .clone();
     if let Some(path) = current_path {
-        write_project_file(&state, &path)?;
+        write_project_file(&state, &path, midi_mappings, osc_mappings)?;
         return Ok(Some(path.to_string_lossy().to_string()));
     }
-    save_project_with_dialog(&window, &state)
+    save_project_with_dialog(&window, &state, midi_mappings, osc_mappings)
 }
 
 #[tauri::command]
 fn save_project_as(
     window: WebviewWindow,
     state: State<'_, AppState>,
+    midi_mappings: Vec<MidiControlMapping>,
+    osc_mappings: Vec<OscControlMapping>,
 ) -> Result<Option<String>, String> {
-    save_project_with_dialog(&window, &state)
+    save_project_with_dialog(&window, &state, midi_mappings, osc_mappings)
 }
 
 fn save_project_with_dialog(
     window: &WebviewWindow,
     state: &State<'_, AppState>,
+    midi_mappings: Vec<MidiControlMapping>,
+    osc_mappings: Vec<OscControlMapping>,
 ) -> Result<Option<String>, String> {
     let Some(path) = parented_file_dialog(window)
         .add_filter("Syndocal Project", &["sdc"])
@@ -14157,20 +14177,54 @@ fn save_project_with_dialog(
         return Ok(None);
     };
     let path = normalize_project_save_path(path)?;
-    write_project_file(state, &path)?;
+    write_project_file(state, &path, midi_mappings, osc_mappings)?;
     set_current_project_path(state, &path)?;
     Ok(Some(path.to_string_lossy().to_string()))
 }
 
-fn write_project_file(state: &State<'_, AppState>, path: &Path) -> Result<(), String> {
+fn write_project_file(
+    state: &State<'_, AppState>,
+    path: &Path,
+    midi_mappings: Vec<MidiControlMapping>,
+    osc_mappings: Vec<OscControlMapping>,
+) -> Result<(), String> {
     let project = project_file_for_save(state)?;
-    let json = project_json_for_write(&project)?;
+    let json = project_json_for_write_with_control_mappings(&project, midi_mappings, osc_mappings)?;
     fs::write(path, json).map_err(|error| error.to_string())
 }
 
+#[cfg(test)]
 fn project_json_for_write(project: &ProjectFile) -> Result<String, String> {
+    project_json_for_write_with_control_mappings(project, Vec::new(), Vec::new())
+}
+
+fn project_json_for_write_with_control_mappings(
+    project: &ProjectFile,
+    midi_mappings: Vec<MidiControlMapping>,
+    osc_mappings: Vec<OscControlMapping>,
+) -> Result<String, String> {
     validate_project_file(project)?;
-    let json = serde_json::to_string_pretty(project).map_err(|error| error.to_string())?;
+    let mappings = ProjectControlMappings {
+        midi_mappings: validate_midi_control_mappings(midi_mappings)?,
+        osc_mappings: validate_osc_control_mappings(osc_mappings)?,
+    };
+    let mut value = serde_json::to_value(project).map_err(|error| error.to_string())?;
+    let root = value
+        .as_object_mut()
+        .ok_or_else(|| "Project root must be a JSON object".to_string())?;
+    if !mappings.midi_mappings.is_empty() {
+        root.insert(
+            "midi_mappings".to_string(),
+            serde_json::to_value(&mappings.midi_mappings).map_err(|error| error.to_string())?,
+        );
+    }
+    if !mappings.osc_mappings.is_empty() {
+        root.insert(
+            "osc_mappings".to_string(),
+            serde_json::to_value(&mappings.osc_mappings).map_err(|error| error.to_string())?,
+        );
+    }
+    let json = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
     if json.len() as u64 > PROJECT_FILE_MAX_BYTES {
         return Err(format!(
             "Project JSON is {} bytes; the limit is {PROJECT_FILE_MAX_BYTES} bytes",
@@ -14213,8 +14267,14 @@ fn project_file_for_save(state: &State<'_, AppState>) -> Result<ProjectFile, Str
 }
 
 #[tauri::command]
-fn get_project_checkpoint(state: State<'_, AppState>) -> Result<ProjectFile, String> {
-    project_file_for_save(&state)
+fn get_project_checkpoint(
+    state: State<'_, AppState>,
+    midi_mappings: Vec<MidiControlMapping>,
+    osc_mappings: Vec<OscControlMapping>,
+) -> Result<Value, String> {
+    let project = project_file_for_save(&state)?;
+    let json = project_json_for_write_with_control_mappings(&project, midi_mappings, osc_mappings)?;
+    serde_json::from_str(&json).map_err(|error| error.to_string())
 }
 
 fn project_history_status(history: &ProjectHistory) -> ProjectHistoryStatus {
@@ -14591,6 +14651,8 @@ async fn check_application_update(app: tauri::AppHandle) -> Result<ApplicationUp
 async fn install_application_update(
     app: tauri::AppHandle,
     expected_version: String,
+    midi_mappings: Vec<MidiControlMapping>,
+    osc_mappings: Vec<OscControlMapping>,
 ) -> Result<ProjectBackupSummary, String> {
     let expected_version = expected_version.trim();
     if expected_version.is_empty() || expected_version.chars().count() > 64 {
@@ -14623,6 +14685,10 @@ async fn install_application_update(
             project_file_for_save(&state)?,
             source_path,
             format!("before update {expected_version}"),
+            ProjectControlMappings {
+                midi_mappings,
+                osc_mappings,
+            },
         )?
     };
 
@@ -14719,6 +14785,7 @@ fn write_project_backup_in(
     project: ProjectFile,
     source_path: Option<String>,
     reason: String,
+    mappings: ProjectControlMappings,
 ) -> Result<ProjectBackupSummary, String> {
     fs::create_dir_all(directory)
         .map_err(|error| format!("Unable to create project backup directory: {error}"))?;
@@ -14726,6 +14793,10 @@ fn write_project_backup_in(
     while project_backup_path(directory, id).exists() {
         id = id.saturating_add(1);
     }
+    let mappings = ProjectControlMappings {
+        midi_mappings: validate_midi_control_mappings(mappings.midi_mappings)?,
+        osc_mappings: validate_osc_control_mappings(mappings.osc_mappings)?,
+    };
     let envelope = ProjectBackupEnvelope {
         version: PROJECT_BACKUP_VERSION,
         app: APP_NAME.to_string(),
@@ -14734,6 +14805,8 @@ fn write_project_backup_in(
         source_path,
         reason: reason.trim().chars().take(80).collect(),
         project,
+        midi_mappings: mappings.midi_mappings,
+        osc_mappings: mappings.osc_mappings,
     };
     let bytes = serde_json::to_vec_pretty(&envelope).map_err(|error| error.to_string())?;
     let path = project_backup_path(directory, id);
@@ -14767,6 +14840,8 @@ fn save_project_backup(
     state: State<'_, AppState>,
     source_path: Option<String>,
     reason: String,
+    midi_mappings: Vec<MidiControlMapping>,
+    osc_mappings: Vec<OscControlMapping>,
 ) -> Result<ProjectBackupSummary, String> {
     if let Some(path) = source_path.as_deref() {
         if !is_syndocal_project_path(Path::new(path)) {
@@ -14779,6 +14854,10 @@ fn save_project_backup(
         project_file_for_save(&state)?,
         source_path,
         reason,
+        ProjectControlMappings {
+            midi_mappings,
+            osc_mappings,
+        },
     )
 }
 
@@ -14801,9 +14880,13 @@ fn load_project_backup(
         .as_deref()
         .map(Path::new)
         .filter(|path| is_syndocal_project_path(path));
-    load_project_from_file(
+    load_project_from_file_with_control_mappings(
         &state,
         backup.project,
+        ProjectControlMappings {
+            midi_mappings: backup.midi_mappings,
+            osc_mappings: backup.osc_mappings,
+        },
         format!("Backup {}", backup.created_at_unix_ms),
         current_path,
     )
@@ -15943,14 +16026,15 @@ fn load_project_from_json(
             json.len()
         ));
     }
-    let project: ProjectFile = serde_json::from_str(&json).map_err(|error| error.to_string())?;
-    load_project_from_file(state, project, path_label, current_path)
+    let value: Value = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let (project, mappings) = project_and_control_mappings_from_value(value)?;
+    load_project_from_file_with_control_mappings(state, project, mappings, path_label, current_path)
 }
 
 #[tauri::command]
 fn load_project_checkpoint(
     state: State<'_, AppState>,
-    project: ProjectFile,
+    project: Value,
     label: String,
     current_path: Option<String>,
 ) -> Result<ProjectLoadResult, String> {
@@ -15963,15 +16047,58 @@ fn load_project_checkpoint(
             ));
         }
     }
-    load_project_from_file(&state, project, label, current_path.as_deref())
+    let (project, mappings) = project_and_control_mappings_from_value(project)?;
+    load_project_from_file_with_control_mappings(
+        &state,
+        project,
+        mappings,
+        label,
+        current_path.as_deref(),
+    )
+}
+
+fn project_and_control_mappings_from_value(
+    value: Value,
+) -> Result<(ProjectFile, ProjectControlMappings), String> {
+    let project: ProjectFile =
+        serde_json::from_value(value.clone()).map_err(|error| error.to_string())?;
+    let mappings: ProjectControlMappings =
+        serde_json::from_value(value).map_err(|error| error.to_string())?;
+    Ok((
+        project,
+        ProjectControlMappings {
+            midi_mappings: validate_midi_control_mappings(mappings.midi_mappings)?,
+            osc_mappings: validate_osc_control_mappings(mappings.osc_mappings)?,
+        },
+    ))
 }
 
 fn load_project_from_file(
     state: &State<'_, AppState>,
-    mut project: ProjectFile,
+    project: ProjectFile,
     path_label: String,
     current_path: Option<&Path>,
 ) -> Result<ProjectLoadResult, String> {
+    load_project_from_file_with_control_mappings(
+        state,
+        project,
+        ProjectControlMappings::default(),
+        path_label,
+        current_path,
+    )
+}
+
+fn load_project_from_file_with_control_mappings(
+    state: &State<'_, AppState>,
+    mut project: ProjectFile,
+    mappings: ProjectControlMappings,
+    path_label: String,
+    current_path: Option<&Path>,
+) -> Result<ProjectLoadResult, String> {
+    let mappings = ProjectControlMappings {
+        midi_mappings: validate_midi_control_mappings(mappings.midi_mappings)?,
+        osc_mappings: validate_osc_control_mappings(mappings.osc_mappings)?,
+    };
     use_authored_video_snapshot(&mut project.snapshot);
     normalize_project_timeline_layers(&mut project.snapshot);
     clear_runtime_programmer_state(&mut project.snapshot);
@@ -16016,6 +16143,8 @@ fn load_project_from_file(
     Ok(ProjectLoadResult {
         path: path_label,
         profiles,
+        midi_mappings: mappings.midi_mappings,
+        osc_mappings: mappings.osc_mappings,
         warnings,
     })
 }
@@ -27333,6 +27462,7 @@ mod tests {
                 empty_project_file(),
                 Some("C:/shows/main.sdc".to_string()),
                 format!("autosave-{index}"),
+                ProjectControlMappings::default(),
             )
             .unwrap();
         }
@@ -27347,7 +27477,62 @@ mod tests {
         );
         let loaded = read_project_backup(&project_backup_path(&directory, backups[0].id)).unwrap();
         assert_eq!(loaded.source_path.as_deref(), Some("C:/shows/main.sdc"));
+        assert!(loaded.midi_mappings.is_empty());
+        assert!(loaded.osc_mappings.is_empty());
         validate_project_file(&loaded.project).unwrap();
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn project_backup_preserves_control_mappings() {
+        let directory = unique_test_directory("backup-control-mappings");
+        let midi_mapping = MidiControlMapping {
+            channel: Some(0),
+            message: protocol::MidiControlMessage::ControlChange,
+            number: 1,
+            action: MidiControlAction::VideoMaster,
+            fixture_id: None,
+            attribute: None,
+            group_id: None,
+            cue_id: None,
+            layer_id: None,
+            video_param: None,
+            cue_point_index: None,
+            output_id: None,
+            duration_ms: None,
+            low: 0.0,
+            high: 1.0,
+        };
+        let osc_mapping = OscControlMapping {
+            address: "/show/video_master".to_string(),
+            action: OscControlAction::VideoMaster,
+            fixture_id: None,
+            attribute: None,
+            group_id: None,
+            cue_id: None,
+            layer_id: None,
+            video_param: None,
+            cue_point_index: None,
+            output_id: None,
+            duration_ms: None,
+            low: 0.0,
+            high: 1.0,
+        };
+        let summary = write_project_backup_in(
+            &directory,
+            empty_project_file(),
+            Some("C:/shows/mapped.sdc".to_string()),
+            "autosave".to_string(),
+            ProjectControlMappings {
+                midi_mappings: vec![midi_mapping.clone()],
+                osc_mappings: vec![osc_mapping.clone()],
+            },
+        )
+        .unwrap();
+        let loaded = read_project_backup(&project_backup_path(&directory, summary.id)).unwrap();
+        assert_eq!(loaded.midi_mappings, vec![midi_mapping]);
+        assert_eq!(loaded.osc_mappings, vec![osc_mapping]);
 
         fs::remove_dir_all(directory).unwrap();
     }
@@ -31381,6 +31566,63 @@ f 1 2 3
             vec![protocol::PlaybackExecutorSummary::default()]
         );
         assert_eq!(project.snapshot.playback_master, 1.0);
+    }
+
+    #[test]
+    fn project_control_mappings_roundtrip_and_legacy_absence_stays_empty() {
+        let project = empty_project_file();
+        let legacy_json = project_json_for_write(&project).unwrap();
+        assert!(!legacy_json.contains("midi_mappings"));
+        assert!(!legacy_json.contains("osc_mappings"));
+        let (_, legacy_mappings) =
+            project_and_control_mappings_from_value(serde_json::from_str(&legacy_json).unwrap())
+                .unwrap();
+        assert_eq!(legacy_mappings, ProjectControlMappings::default());
+
+        let midi_mapping = MidiControlMapping {
+            channel: Some(0),
+            message: protocol::MidiControlMessage::ControlChange,
+            number: 74,
+            action: MidiControlAction::LightingMaster,
+            fixture_id: None,
+            attribute: None,
+            group_id: None,
+            cue_id: None,
+            layer_id: None,
+            video_param: None,
+            cue_point_index: None,
+            output_id: None,
+            duration_ms: None,
+            low: 0.0,
+            high: 1.0,
+        };
+        let osc_mapping = OscControlMapping {
+            address: "/show/go".to_string(),
+            action: OscControlAction::TriggerNextCue,
+            fixture_id: None,
+            attribute: None,
+            group_id: None,
+            cue_id: None,
+            layer_id: None,
+            video_param: None,
+            cue_point_index: None,
+            output_id: None,
+            duration_ms: None,
+            low: 0.0,
+            high: 1.0,
+        };
+        let json = project_json_for_write_with_control_mappings(
+            &project,
+            vec![midi_mapping.clone()],
+            vec![osc_mapping.clone()],
+        )
+        .unwrap();
+        let (roundtrip, mappings) =
+            project_and_control_mappings_from_value(serde_json::from_str(&json).unwrap()).unwrap();
+
+        assert_eq!(roundtrip, project);
+        assert_eq!(mappings.midi_mappings, vec![midi_mapping]);
+        assert_eq!(mappings.osc_mappings, vec![osc_mapping]);
     }
 
     #[test]
