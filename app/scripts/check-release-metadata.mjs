@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const expectedVersion = "1.0.0";
+const expectedVersion = "1.1.0";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
 const workspaceRoot = resolve(appRoot, "..");
@@ -12,7 +12,7 @@ const tauri = JSON.parse(read("app/src-tauri/tauri.conf.json"));
 const updaterOverlay = JSON.parse(read("app/src-tauri/tauri.updater.conf.json"));
 
 if (appPackage.name !== "syndocal" || appPackage.version !== expectedVersion) {
-  throw new Error("Frontend package metadata is not Syndocal 1.0.0.");
+  throw new Error(`Frontend package metadata is not Syndocal ${expectedVersion}.`);
 }
 if (tauri.productName !== "Syndocal" || tauri.version !== expectedVersion || !tauri.bundle?.active) {
   throw new Error("Tauri product/version/bundle metadata is inconsistent.");
@@ -56,7 +56,7 @@ if (!existsSync(resolve(workspaceRoot, "qa", "UPDATE_RELEASE_RUNBOOK.md"))) {
 
 const rootManifest = read("Cargo.toml");
 if (!rootManifest.includes(`version = "${expectedVersion}"`)) {
-  throw new Error("Cargo workspace version is not 1.0.0.");
+  throw new Error(`Cargo workspace version is not ${expectedVersion}.`);
 }
 for (const manifest of [
   "app/src-tauri/Cargo.toml",
@@ -73,4 +73,17 @@ for (const manifest of [
   }
 }
 
-console.log("release metadata ok: Syndocal 1.0.0 / .sdc / signed updater overlay / Seraf()のKTN");
+const macBundleScript = read("app/scripts/bundle-macos-runtime.sh");
+if (!macBundleScript.includes(`Syndocal_${expectedVersion}_$(uname -m).dmg`)) {
+  throw new Error("macOS DMG filename does not match the product version.");
+}
+if (!macBundleScript.includes(`-volname 'Syndocal ${expectedVersion}'`)) {
+  throw new Error("macOS DMG volume name does not match the product version.");
+}
+
+const crossPlatformWorkflow = read(".github/workflows/cross-platform.yml");
+if (!crossPlatformWorkflow.includes(`name: syndocal-${expectedVersion}-\${{ matrix.os }}`)) {
+  throw new Error("Cross-platform artifact name does not match the product version.");
+}
+
+console.log(`release metadata ok: Syndocal ${expectedVersion} / .sdc / signed updater overlay / Seraf()のKTN`);

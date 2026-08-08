@@ -2,7 +2,7 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.0.0**
+- 製品名: **Syndocal 1.1.0**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
@@ -52,13 +52,13 @@ Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPM
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.0.0_x64-setup.exe` (NSIS)、`Syndocal_1.0.0_x64_ja-JP.msi`
+- Windows: `Syndocal_1.1.0_x64-setup.exe` (NSIS)、`Syndocal_1.1.0_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 
 ### 未署名ビルド
 
-v1.0の個人配布物はコード署名されていません。
+v1.1の個人配布物はコード署名されていません。
 
 - Windows SmartScreen: ファイルのプロパティに「ブロックの解除」があれば有効にし、警告画面では発行元とハッシュを確認してから「詳細情報」→「実行」を選択します。
 - macOS Gatekeeper: Finderでアプリを右クリックして「開く」、または「システム設定」→「プライバシーとセキュリティ」から対象アプリを許可します。
