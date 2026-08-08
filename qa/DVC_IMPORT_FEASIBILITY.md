@@ -103,7 +103,7 @@
 | TIMELINE + BLOCK TYPE=1（シーン） | タイムラインシーンブロック（F2、conform=F3） | **正確** |
 | TOUCH | T11 touch_surface | **部分**（レイアウト対応表しだい） |
 | DEVICES（DVC GOLD等） | DMX出力ルート設定の初期値 | **参考情報**（ハード非互換のため案内表示） |
-| SHORTCUTS | MIDI/キー割当 | **部分・安全復元**（TYPE=1の107 Scene Play / 55 Tap Tempo / FLASH holdを復元。108/110/113/229は未推測で個別Unsupported） |
+| SHORTCUTS | MIDI/キー割当 | **部分・安全復元**（TYPE=1の107 Scene Play / 55 Tap Tempo / 108-110方向付きPlay / 113 Bank Next / FLASH holdを復元。229 Faderのみ選択文脈未確定で個別Unsupported） |
 
 ## 3. 実装計画案（トランシェ1本 + 検証資産）
 
@@ -139,8 +139,9 @@ DVC-1 で「解釈保留」だった 27 バイト行を Fable 直接実装で解
 ## 実装記録（2026-08-09 DVC MIDI shortcut）
 
 - 実DVCの`SHORTCUT TYPE="1"`を全数監査し、`EVENT DATA="status:channel:number:value:device"`を検証付きでMIDI mappingへ変換する経路を追加した。
-- Action 107はScene Play、55はTap Tempoとして既存Touch actionとDaslight UI証拠が一致するものだけを変換する。`FLASH=1`は通常Scene Playへ丸めず、pressでTrigger・Note Off/CC zeroでReleaseする`FlashCue`へ保存する。
-- Homecoming実検体は17件中14件（Scene 13 + Tap 1）を復元し、108/110/113の3件は個別Unsupported。DSF/Laserの229は選択中live faderの対象表現が未確定なため未変換。入力device名とDaslight固有OUT/OUT1 feedback velocityもApproximateに明記する。
+- Action 107はScene Play、55はTap Tempoとして既存Touch actionとDaslight UI証拠が一致するものを変換する。`FLASH=1`は通常Scene Playへ丸めず、pressでTrigger・Note Off/CC zeroでReleaseする`FlashCue`へ保存する。
+- Daslight実行ファイル内の連続action tableから108/109/110をScene Play Forwards/Backwards/Back & Forth、113をBank Nextと確定した。各DVC BankをCue Listへ1:1保存し、方向付きPlayはone-shot方向を既存Cue起動へ渡してpre-wait後も維持する。Homecoming実検体17件は全件復元し、合成検体で未使用109と非holdも固定した。
+- DSF/Laserの229は選択中live faderの対象表現が未確定なため未変換。入力device名とDaslight固有OUT/OUT1 feedback velocityもApproximateに明記する。
 - DVC import UIは旧showのmappingを消去した後、report内の復元mappingを本番stateへ設置する。その後の通常`.sdc` Save/Recovery/backupで保持される。
 
 ## 4. リスクと限界（正直な列挙）

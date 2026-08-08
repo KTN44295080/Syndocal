@@ -186,7 +186,13 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
         </label>
         <label>
           Action
-          <select value={props.mapAction} onInput={(event) => props.onMapAction(event.currentTarget.value as MidiControlAction)}>
+          <select value={props.mapAction} onInput={(event) => {
+            const action = event.currentTarget.value as MidiControlAction;
+            props.onMapAction(action);
+            if ((action === "TriggerCueDirection" || action === "FlashCueDirection") && !["Forward", "Reverse", "Bounce"].includes(props.mapAttribute)) {
+              props.onMapAttribute("Forward");
+            }
+          }}>
             <option value="FixtureAttribute">Fixture Attribute</option>
             <option value="FixtureHighlight">Fixture Highlight</option>
             <option value="FixtureSolo">Fixture Solo</option>
@@ -196,6 +202,9 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
             <option value="GroupPark">Group Park</option>
             <option value="TriggerCue">Trigger Cue</option>
             <option value="FlashCue">Flash Cue (hold)</option>
+            <option value="TriggerCueDirection">Directional Cue</option>
+            <option value="FlashCueDirection">Directional Cue (hold)</option>
+            <option value="TriggerCueListNext">Cue List Next</option>
             <option value="TriggerNextCue">Cue Next</option>
             <option value="TriggerPreviousCue">Cue Previous</option>
             <option value="EffectEnabled">Effect Enable</option>
@@ -249,11 +258,21 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
           </select>
         </label>
       </Show>
-      <Show when={props.mapAction === "TriggerCue" || props.mapAction === "FlashCue"}>
+      <Show when={props.mapAction === "TriggerCue" || props.mapAction === "FlashCue" || props.mapAction === "TriggerCueDirection" || props.mapAction === "FlashCueDirection" || props.mapAction === "TriggerCueListNext"}>
         <label>
           Cue
           <select value={props.selectedCueId ?? ""} onInput={(event) => props.onMapCueId(Number(event.currentTarget.value))}>
             <For each={props.snapshot.cues}>{(cue) => <option data-no-localize value={cue.id}>{cue.id}: {cue.label}</option>}</For>
+          </select>
+        </label>
+      </Show>
+      <Show when={props.mapAction === "TriggerCueDirection" || props.mapAction === "FlashCueDirection"}>
+        <label>
+          Direction
+          <select value={props.mapAttribute} onInput={(event) => props.onMapAttribute(event.currentTarget.value)}>
+            <option value="Forward">Forward</option>
+            <option value="Reverse">Reverse</option>
+            <option value="Bounce">Back &amp; Forth</option>
           </select>
         </label>
       </Show>

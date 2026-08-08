@@ -662,6 +662,10 @@ pub enum EngineCommand {
     TriggerPlaybackExecutorNext(ExecutorId),
     TriggerPlaybackExecutorPrevious(ExecutorId),
     TriggerCue(CueId),
+    TriggerCueWithDirection {
+        cue_id: CueId,
+        direction: CueLiveDirection,
+    },
     TriggerNextCue,
     TriggerPreviousCue,
     TriggerCueListNext(CueListId),
@@ -1194,6 +1198,7 @@ impl EngineCommand {
                 | EngineCommand::TriggerPlaybackExecutorNext(_)
                 | EngineCommand::TriggerPlaybackExecutorPrevious(_)
                 | EngineCommand::TriggerCue(_)
+                | EngineCommand::TriggerCueWithDirection { .. }
                 | EngineCommand::TriggerNextCue
                 | EngineCommand::TriggerPreviousCue
                 | EngineCommand::TriggerCueListNext(_)
@@ -4154,6 +4159,9 @@ struct EngineRuntime {
     // 44 Hz tick never reads this map because overrides are resolved into the
     // cue's activation params when a command arrives.
     cue_live_modifier_overrides: HashMap<CueId, CueLiveModifierSettings>,
+    // One-shot direction carried from a direction-specific manual Scene
+    // trigger through an authored pre-wait. Consumed by start_cue_at_index.
+    pending_manual_cue_direction: Option<(CueId, CueLiveDirection)>,
     cue_release_values: HashMap<CueId, HashMap<(FixtureId, String), u16>>,
     palettes: Vec<ReferencePaletteSummary>,
     playback_executors: Vec<PlaybackExecutorSummary>,
@@ -4358,6 +4366,7 @@ impl EngineRuntime {
             cue_list_effect_activation_cues: HashMap::new(),
             active_group_cue_ids: HashMap::new(),
             cue_live_modifier_overrides: HashMap::new(),
+            pending_manual_cue_direction: None,
             group_colors: BTreeMap::new(),
             cue_release_values: HashMap::new(),
             palettes: Vec::new(),
@@ -4532,6 +4541,7 @@ impl EngineRuntime {
         // T17 reset rule: project load always returns every scene to its
         // authored live-modifier dial position.
         self.cue_live_modifier_overrides.clear();
+        self.pending_manual_cue_direction = None;
         // Live Mixer strobe is latched operator state, never authored project
         // data. A project load always returns it to Off.
         self.group_strobe_rates.clear();
@@ -8287,6 +8297,9 @@ impl EngineRuntime {
             }
             EngineCommand::TriggerCue(cue_id) => {
                 self.request_cue(cue_id, Instant::now());
+            }
+            EngineCommand::TriggerCueWithDirection { cue_id, direction } => {
+                self.request_cue_with_direction(cue_id, direction, Instant::now());
             }
             EngineCommand::TriggerNextCue => {
                 if let Some(cue_id) = self.relative_cue_id_for_list(DEFAULT_CUE_LIST_ID, 1) {
@@ -15032,6 +15045,12 @@ impl EngineRuntime {
             .find(|cue| cue.id == cue_id)
             .map(|cue| cue.cue_list_id)
             .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
+        if self
+            .pending_manual_cue_direction
+            .is_some_and(|(pending_cue_id, _)| pending_cue_id == cue_id)
+        {
+            self.pending_manual_cue_direction = None;
+        }
         self.deactivate_cue_effect_activations(cue_id);
         // T17 reset rule: releasing a scene drops its latched live override
         // and restores the authored params for the next activation.
@@ -16475,7 +16494,23 @@ impl EngineRuntime {
             self.last_error = Some(format!("Cue {cue_id} was not found"));
             return;
         }
+        self.pending_manual_cue_direction = None;
         self.pending_cues.clear();
+        self.request_cue_from_source(cue_id, now, PendingCueTriggerSource::Manual);
+    }
+
+    fn request_cue_with_direction(
+        &mut self,
+        cue_id: CueId,
+        direction: CueLiveDirection,
+        now: Instant,
+    ) {
+        if !self.cues.iter().any(|cue| cue.id == cue_id) {
+            self.last_error = Some(format!("Cue {cue_id} was not found"));
+            return;
+        }
+        self.pending_cues.clear();
+        self.pending_manual_cue_direction = Some((cue_id, direction));
         self.request_cue_from_source(cue_id, now, PendingCueTriggerSource::Manual);
     }
 
@@ -16714,6 +16749,17 @@ impl EngineRuntime {
             self.apply_active_fade(now);
         }
         let cue_id = cue.id;
+        let launch_direction = if source == PendingCueTriggerSource::Manual
+            && self
+                .pending_manual_cue_direction
+                .is_some_and(|(pending_cue_id, _)| pending_cue_id == cue_id)
+        {
+            self.pending_manual_cue_direction
+                .take()
+                .map(|(_, direction)| direction)
+        } else {
+            None
+        };
         let direct_child_parent_cue_id =
             child_transport_id.and_then(|transport_id| match transport_id {
                 RuntimeChildTransportId::Direct(index) => self
@@ -16842,9 +16888,17 @@ impl EngineRuntime {
                 cue_list_id: cue.cue_list_id,
                 cue_id,
             };
-            // T17 reset rule: a fresh Matrix/Touch trigger always starts from
-            // the authored live-modifier dial position.
-            if self.cue_live_modifier_overrides.remove(&cue_id).is_some() {
+            // A normal Matrix/Touch trigger starts from authored live controls.
+            // A Daslight direction-specific trigger replaces only direction
+            // for this activation; ReleaseCue clears the resulting latch.
+            if let Some(direction) = launch_direction {
+                let mut settings = cue.live_modifiers.unwrap_or_default();
+                settings.direction = direction;
+                settings.segment =
+                    sanitize_live_modifier_segment(settings.segment, cue.steps.len());
+                self.cue_live_modifier_overrides.insert(cue_id, settings);
+                self.reapply_cue_live_modifier(cue_index, now, true);
+            } else if self.cue_live_modifier_overrides.remove(&cue_id).is_some() {
                 self.reapply_cue_live_modifier_by_id(cue_id, now, true);
             }
             self.activate_cue_effect_range_with_transitions(
@@ -20202,6 +20256,7 @@ fn auto_vj_manual_override_command(command: &EngineCommand) -> bool {
             | EngineCommand::TriggerPlaybackExecutorNext(_)
             | EngineCommand::TriggerPlaybackExecutorPrevious(_)
             | EngineCommand::TriggerCue(_)
+            | EngineCommand::TriggerCueWithDirection { .. }
             | EngineCommand::TriggerNextCue
             | EngineCommand::TriggerPreviousCue
             | EngineCommand::TriggerCueListNext(_)
@@ -60682,6 +60737,37 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![0, 1, 2]
         );
+        assert!(runtime.cue_live_modifier_states().is_empty());
+    }
+
+    #[test]
+    fn direction_specific_cue_trigger_survives_prewait_and_resets_on_release() {
+        let mut runtime = cue_step_test_runtime();
+        runtime.cues[0].pre_wait_ms = 20;
+        let requested_at = Instant::now();
+        runtime.rebuild_effect_activations(requested_at);
+
+        runtime.request_cue_with_direction(1, CueLiveDirection::Reverse, requested_at);
+        assert!(runtime.cue_live_modifier_states().is_empty());
+        runtime.advance_pending_cue(requested_at + Duration::from_millis(20));
+
+        let cue = runtime.cues.iter().find(|cue| cue.id == 1).unwrap();
+        let manual = &runtime.step_activations[cue.step_activation_range.start];
+        assert_eq!(
+            manual
+                .sequence
+                .steps
+                .iter()
+                .map(|step| step.source_index)
+                .collect::<Vec<_>>(),
+            vec![2, 1, 0]
+        );
+        assert_eq!(
+            runtime.cue_live_modifier_states()[0].direction,
+            CueLiveDirection::Reverse
+        );
+
+        runtime.apply_command(EngineCommand::ReleaseCue(1));
         assert!(runtime.cue_live_modifier_states().is_empty());
     }
 

@@ -48,10 +48,10 @@ Scope: Syndocal as a unified lighting and VJ application, preserving `.sdc v1` a
 
 ## Addendum 2026-08-09: DVC MIDI shortcut preservation
 
-- Daslight `SHORTCUT TYPE=1` input tuples are parsed fail-closed as status/channel/number/learned-value/device. Verified action 107 restores Scene Play and action 55 restores Tap Tempo; unresolved 108/110/113/229 remain individually reported instead of being guessed.
+- Daslight `SHORTCUT TYPE=1` input tuples are parsed fail-closed as status/channel/number/learned-value/device. Verified action 107 restores Scene Play and action 55 restores Tap Tempo. Embedded Daslight action-table evidence identifies 108/109/110 as directional Scene Play and 113 as Bank Next; imported Banks are now distinct Cue Lists, direction survives Cue pre-wait, and Homecoming restores all 17/17 mappings. Unresolved 229 remains individually reported instead of being guessed.
 - Action 107 with `FLASH=1` persists as `FlashCue`: Note/CC press triggers the imported cue and release reuses the engine's existing explicit `ReleaseCue` route. Manual Note Off discrete mappings now also fire instead of being accepted by the editor but ignored at runtime.
 - The import result carries its MIDI mappings into the production controller state and subsequent `.sdc` Save/Recovery/backup path. Daslight input-device affinity and custom OUT/OUT1 LED velocities remain visible approximation boundaries because Syndocal currently selects the device globally and computes standard feedback from live state.
-- Current gates: `cargo test -p io --locked` passed 93 software tests with one physical-port test explicitly ignored; `cargo test -p syndocal --locked dvc_ -- --nocapture` passed 39/39; the 11-assertion DVC MIDI source gate, 2932/2932 localization gate, and production web build all passed.
+- Current gates: `cargo test -p engine --locked` passed 445 software tests with two explicit physical/benchmark ignores; `cargo test -p io --locked` passed 95 software tests with one physical-port test explicitly ignored; `cargo test -p syndocal --locked dvc_ -- --nocapture` passed 39/39; the 18-assertion DVC MIDI source gate, 2939/2939 localization gate, and production web build all passed.
 
 ## Addendum 2026-07-17: Unified desk and lighting show model (Daslight-parity series)
 

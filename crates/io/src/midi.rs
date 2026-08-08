@@ -5,7 +5,7 @@ use std::{
 
 use midir::{Ignore, MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
 use protocol::{
-    video_output_mapping_field_value, CueId, EffectId, EngineSnapshot, FixtureId,
+    video_output_mapping_field_value, CueId, CueLiveDirection, EffectId, EngineSnapshot, FixtureId,
     LearnedMidiControl, MidiControlAction, MidiControlMapping, MidiControlMessage,
     MidiInputSummary, MidiOutputSummary, NodeGraphId, VideoLayerId, VideoLayerState, VideoOutputId,
     VideoParam,
@@ -132,7 +132,12 @@ pub enum MidiControlEvent {
         enabled: bool,
     },
     TriggerCue(CueId),
+    TriggerCueWithDirection {
+        cue_id: CueId,
+        direction: CueLiveDirection,
+    },
     ReleaseCue(CueId),
+    TriggerCueListNext(CueId),
     TriggerNextCue,
     TriggerPreviousCue,
     SetEffectEnabled {
@@ -513,7 +518,10 @@ fn feedback_value_for_mapping(
             });
             Some(if parked { 1.0 } else { 0.0 })
         }
-        MidiControlAction::TriggerCue | MidiControlAction::FlashCue => {
+        MidiControlAction::TriggerCue
+        | MidiControlAction::FlashCue
+        | MidiControlAction::TriggerCueDirection
+        | MidiControlAction::FlashCueDirection => {
             let cue_id = mapping.cue_id?;
             Some(if snapshot.active_cue_id == Some(cue_id) {
                 1.0
@@ -539,7 +547,8 @@ fn feedback_value_for_mapping(
                 .enabled;
             Some(if enabled { 1.0 } else { 0.0 })
         }
-        MidiControlAction::TriggerNextCue
+        MidiControlAction::TriggerCueListNext
+        | MidiControlAction::TriggerNextCue
         | MidiControlAction::TriggerPreviousCue
         | MidiControlAction::TimelineBeatPrevious
         | MidiControlAction::TimelineBeatNext
@@ -973,6 +982,9 @@ fn mapping_matches(mapping: &MidiControlMapping, message: &MidiMessage) -> bool 
     let message_matches = mapping.message == message.message
         || (matches!(mapping.action, MidiControlAction::FlashCue)
             && matches!(mapping.message, MidiControlMessage::NoteOn)
+            && matches!(message.message, MidiControlMessage::NoteOff))
+        || (matches!(mapping.action, MidiControlAction::FlashCueDirection)
+            && matches!(mapping.message, MidiControlMessage::NoteOn)
             && matches!(message.message, MidiControlMessage::NoteOff));
     message_matches
         && mapping.number == message.number
@@ -1034,6 +1046,26 @@ fn event_from_mapping(
         } else {
             MidiControlEvent::ReleaseCue(mapping.cue_id?)
         }),
+        MidiControlAction::TriggerCueDirection => {
+            if is_mapping_trigger(mapping, message) {
+                Some(MidiControlEvent::TriggerCueWithDirection {
+                    cue_id: mapping.cue_id?,
+                    direction: cue_live_direction(mapping.attribute.as_deref()?)?,
+                })
+            } else {
+                None
+            }
+        }
+        MidiControlAction::FlashCueDirection => Some(if is_positive_trigger(message) {
+            MidiControlEvent::TriggerCueWithDirection {
+                cue_id: mapping.cue_id?,
+                direction: cue_live_direction(mapping.attribute.as_deref()?)?,
+            }
+        } else {
+            MidiControlEvent::ReleaseCue(mapping.cue_id?)
+        }),
+        MidiControlAction::TriggerCueListNext => is_mapping_trigger(mapping, message)
+            .then_some(MidiControlEvent::TriggerCueListNext(mapping.cue_id?)),
         MidiControlAction::TriggerNextCue => {
             is_mapping_trigger(mapping, message).then_some(MidiControlEvent::TriggerNextCue)
         }
@@ -1230,6 +1262,15 @@ fn is_mapping_trigger(mapping: &MidiControlMapping, message: &MidiMessage) -> bo
         matches!(message.message, MidiControlMessage::NoteOff)
     } else {
         is_positive_trigger(message)
+    }
+}
+
+fn cue_live_direction(value: &str) -> Option<CueLiveDirection> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "forward" => Some(CueLiveDirection::Forward),
+        "reverse" => Some(CueLiveDirection::Reverse),
+        "bounce" => Some(CueLiveDirection::Bounce),
+        _ => None,
     }
 }
 
@@ -1647,6 +1688,39 @@ mod tests {
     }
 
     #[test]
+    fn directional_flash_cue_preserves_direction_and_releases() {
+        let mapping = MidiControlMapping {
+            channel: Some(0),
+            message: MidiControlMessage::NoteOn,
+            number: 62,
+            action: MidiControlAction::FlashCueDirection,
+            fixture_id: None,
+            attribute: Some("Bounce".to_string()),
+            group_id: None,
+            cue_id: Some(7),
+            layer_id: None,
+            video_param: None,
+            cue_point_index: None,
+            output_id: None,
+            duration_ms: None,
+            low: 0.0,
+            high: 1.0,
+        };
+
+        assert_eq!(
+            events_from_midi_message(&[0x90, 62, 127], &[mapping.clone()]),
+            vec![MidiControlEvent::TriggerCueWithDirection {
+                cue_id: 7,
+                direction: CueLiveDirection::Bounce,
+            }]
+        );
+        assert_eq!(
+            events_from_midi_message(&[0x90, 62, 0], &[mapping]),
+            vec![MidiControlEvent::ReleaseCue(7)]
+        );
+    }
+
+    #[test]
     fn note_off_mapping_can_drive_a_discrete_action() {
         let mapping = MidiControlMapping {
             channel: Some(2),
@@ -1670,6 +1744,33 @@ mod tests {
             events_from_midi_message(&[0x82, 64, 0], &[mapping]),
             vec![MidiControlEvent::TriggerCue(8)]
         );
+    }
+
+    #[test]
+    fn cue_list_next_mapping_preserves_its_anchor_cue() {
+        let mapping = MidiControlMapping {
+            channel: Some(0),
+            message: MidiControlMessage::NoteOn,
+            number: 52,
+            action: MidiControlAction::TriggerCueListNext,
+            fixture_id: None,
+            attribute: None,
+            group_id: None,
+            cue_id: Some(31),
+            layer_id: None,
+            video_param: None,
+            cue_point_index: None,
+            output_id: None,
+            duration_ms: None,
+            low: 0.0,
+            high: 1.0,
+        };
+
+        assert_eq!(
+            events_from_midi_message(&[0x90, 52, 127], &[mapping.clone()]),
+            vec![MidiControlEvent::TriggerCueListNext(31)]
+        );
+        assert!(events_from_midi_message(&[0x90, 52, 0], &[mapping]).is_empty());
     }
 
     #[test]

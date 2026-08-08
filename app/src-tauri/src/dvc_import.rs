@@ -12,7 +12,7 @@ use protocol::{
     ChaserDirection, ChaserEffectRequest, ChaserFeature, ChaserStep, ChildTimelineSummary,
     ColorEffectAlgorithm, ColorEffectBeamTarget, ColorEffectColor, ColorEffectInterpolation,
     ColorEffectRequest, ColorEffectSpatialPattern, ColorEffectSpatialRecipe, ColorEffectStop,
-    CueEffectTarget, CueFixtureTarget, CueSummary, DmxModeSummary, DmxOutputConfig,
+    CueEffectTarget, CueFixtureTarget, CueListSummary, CueSummary, DmxModeSummary, DmxOutputConfig,
     DmxUniversePreview, EffectBeamTarget, EffectBlendMode, EffectClockSync, EffectParamsSnapshot,
     EngineSnapshot, FixtureProfileSummary, GeometrySummary, LfoEffectRequest, LfoShape,
     MidiControlAction, MidiControlMapping, MidiControlMessage, MoveCoordinateMode, MoveDirection,
@@ -264,7 +264,7 @@ fn import_bytes(bytes: &[u8], path_label: &str) -> Result<DvcImportOutcome, Stri
     snapshot.fixtures = fixtures;
     snapshot.stage_map = stage_map;
     snapshot.group_colors = BTreeMap::new();
-    let (mut cues, scene_indices, bank_count) = parse_scenes(
+    let (mut cues, scene_indices, cue_lists) = parse_scenes(
         root,
         &profiles,
         &fixture_refs,
@@ -272,6 +272,10 @@ fn import_bytes(bytes: &[u8], path_label: &str) -> Result<DvcImportOutcome, Stri
         &mut snapshot.group_colors,
         &mut report,
     )?;
+    let bank_count = cue_lists.len();
+    if !cue_lists.is_empty() {
+        snapshot.cue_lists = cue_lists;
+    }
     parse_super_scenes(root, &mut cues, &scene_indices, &mut snapshot, &mut report)?;
     snapshot.cues = cues;
     snapshot.touch_surface = parse_touch_surface(
@@ -1051,6 +1055,17 @@ fn dvc_midi_mapping(
     }
 }
 
+fn dvc_midi_direction_mapping(
+    event: ParsedDvcMidiEvent,
+    action: MidiControlAction,
+    cue_id: u64,
+    direction: &str,
+) -> MidiControlMapping {
+    let mut mapping = dvc_midi_mapping(event, action, Some(cue_id));
+    mapping.attribute = Some(direction.to_string());
+    mapping
+}
+
 fn parse_midi_shortcuts(
     root: Node<'_, '_>,
     scene_indices: &HashMap<String, usize>,
@@ -1132,6 +1147,75 @@ fn parse_midi_shortcuts(
             }
             // Verified by a local Daslight project and the matching Touch action.
             "55" => dvc_midi_mapping(event, MidiControlAction::TapBpm, None),
+            // Daslight's embedded contiguous action table identifies these as
+            // Scene Play Forwards / Backwards / Back & Forth. Preserve both
+            // the target Scene and its launch direction.
+            "108" | "109" | "110" => {
+                let Some(cue_id) = action_node
+                    .attribute("TARGET")
+                    .and_then(|target| scene_indices.get(target))
+                    .and_then(|index| cues.get(*index))
+                    .map(|cue| cue.id)
+                else {
+                    report.skipped.add(
+                        1,
+                        item,
+                        "Daslight directional Scene Play mapping referenced a missing imported cue",
+                    );
+                    continue;
+                };
+                let direction = match action_type {
+                    "108" => "Forward",
+                    "109" => "Reverse",
+                    "110" => "Bounce",
+                    _ => unreachable!(),
+                };
+                let flash = settings
+                    .and_then(|node| node.attribute("FLASH"))
+                    .is_some_and(|value| value == "1");
+                if flash
+                    && !matches!(
+                        event.message,
+                        MidiControlMessage::NoteOn | MidiControlMessage::ControlChange
+                    )
+                {
+                    report.skipped.add(
+                        1,
+                        item,
+                        "Directional Scene flash requires a Note On or Control Change input with a release value",
+                    );
+                    continue;
+                }
+                dvc_midi_direction_mapping(
+                    event,
+                    if flash {
+                        MidiControlAction::FlashCueDirection
+                    } else {
+                        MidiControlAction::TriggerCueDirection
+                    },
+                    cue_id,
+                    direction,
+                )
+            }
+            // Daslight's embedded action table places Bank Next at 113. TARGET
+            // is a Scene in that Bank, so preserve it as the Cue List anchor
+            // instead of rounding this down to the global Next action.
+            "113" => {
+                let Some(cue_id) = action_node
+                    .attribute("TARGET")
+                    .and_then(|target| scene_indices.get(target))
+                    .and_then(|index| cues.get(*index))
+                    .map(|cue| cue.id)
+                else {
+                    report.skipped.add(
+                        1,
+                        item,
+                        "Daslight Bank Next mapping referenced a missing imported cue",
+                    );
+                    continue;
+                };
+                dvc_midi_mapping(event, MidiControlAction::TriggerCueListNext, Some(cue_id))
+            }
             _ => {
                 let target_index = action_node.attribute("TARGETINDEX").unwrap_or("unknown");
                 report.unsupported.add(
@@ -1429,20 +1513,27 @@ fn parse_scenes(
     fixtures: &mut [PatchedFixtureSummary],
     group_colors: &mut BTreeMap<String, String>,
     report: &mut DvcImportReport,
-) -> Result<(Vec<CueSummary>, HashMap<String, usize>, usize), String> {
+) -> Result<(Vec<CueSummary>, HashMap<String, usize>, Vec<CueListSummary>), String> {
     let Some(scenes_section) = direct_child(root, "SCENES") else {
-        return Ok((Vec::new(), HashMap::new(), 0));
+        return Ok((Vec::new(), HashMap::new(), Vec::new()));
     };
     let banks = element_children(scenes_section)
         .filter(|node| node.has_tag_name("BANK"))
         .collect::<Vec<_>>();
     let mut cues = Vec::new();
     let mut scene_indices = HashMap::new();
+    let mut cue_lists = Vec::with_capacity(banks.len());
     let mut next_effect_id = 1_u64;
 
     for (bank_index, bank) in banks.iter().copied().enumerate() {
         let bank_name =
             non_empty_label(bank.attribute("NAME"), &format!("Bank {}", bank_index + 1));
+        let cue_list_id = u64::try_from(bank_index + 1).unwrap_or(u64::MAX);
+        cue_lists.push(CueListSummary {
+            id: cue_list_id,
+            label: bank_name.clone(),
+            active_cue_id: None,
+        });
         if let Some(color) = bank.attribute("COLOR").and_then(dvc_argb_to_rgb) {
             group_colors.insert(bank_name.clone(), color);
         }
@@ -1475,7 +1566,7 @@ fn parse_scenes(
             notes.extend(parsed_effects.notes);
             let cue = CueSummary {
                 id: cue_id,
-                cue_list_id: protocol::DEFAULT_CUE_LIST_ID,
+                cue_list_id,
                 cue_number: format!("{}.{}", bank_index + 1, scene_index + 1),
                 label: scene_name,
                 group_id: Some(bank_name.clone()),
@@ -1646,7 +1737,7 @@ fn parse_scenes(
             }
         }
     }
-    Ok((cues, scene_indices, banks.len()))
+    Ok((cues, scene_indices, cue_lists))
 }
 
 fn parse_scene_effects(
@@ -4362,7 +4453,7 @@ mod tests {
     fn synthetic_midi_shortcuts_dvc() -> String {
         synthetic_dvc().replacen(
             "<SHORTCUTS>",
-            r#"<SHORTCUTS><SHORTCUT TYPE="1"><EVENT DATA="144:2:60:127:Controller:Port"/><ACTION TYPE="107" TARGET="scene-1" TARGETINDEX="0"/><SETTINGS MIN="0" MAX="1" FLASH="0" OUT="144:2:60:5:Controller" OUT1="144:2:60:1:Controller"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="144:2:61:127:Controller"/><ACTION TYPE="107" TARGET="scene-2" TARGETINDEX="1"/><SETTINGS MIN="0" MAX="1" FLASH="1"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="176:3:20:64:Controller"/><ACTION TYPE="55" TARGETINDEX="-1"/><SETTINGS MIN="0" MAX="1" FLASH="1"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="144:2:62:127:Controller"/><ACTION TYPE="108" TARGET="scene-1" TARGETINDEX="0"/><SETTINGS MIN="0" MAX="1" FLASH="1"/></SHORTCUT>"#,
+            r#"<SHORTCUTS><SHORTCUT TYPE="1"><EVENT DATA="144:2:60:127:Controller:Port"/><ACTION TYPE="107" TARGET="scene-1" TARGETINDEX="0"/><SETTINGS MIN="0" MAX="1" FLASH="0" OUT="144:2:60:5:Controller" OUT1="144:2:60:1:Controller"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="144:2:61:127:Controller"/><ACTION TYPE="107" TARGET="scene-2" TARGETINDEX="1"/><SETTINGS MIN="0" MAX="1" FLASH="1"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="176:3:20:64:Controller"/><ACTION TYPE="55" TARGETINDEX="-1"/><SETTINGS MIN="0" MAX="1" FLASH="1"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="144:2:62:127:Controller"/><ACTION TYPE="108" TARGET="scene-1" TARGETINDEX="0"/><SETTINGS MIN="0" MAX="1" FLASH="1"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="144:2:63:127:Controller"/><ACTION TYPE="113" TARGET="scene-2" TARGETINDEX="1" TARGETINDEX2="0"/><SETTINGS MIN="0.2" MAX="0.8" FLASH="1"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="144:2:64:127:Controller"/><ACTION TYPE="110" TARGET="scene-2" TARGETINDEX="1"/><SETTINGS MIN="0" MAX="1" FLASH="1"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="144:2:65:127:Controller"/><ACTION TYPE="109" TARGET="scene-1" TARGETINDEX="0"/><SETTINGS MIN="0" MAX="1" FLASH="0"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="144:2:66:127:Controller"/><ACTION TYPE="999" TARGET="scene-1" TARGETINDEX="0"/><SETTINGS MIN="0" MAX="1" FLASH="0"/></SHORTCUT>"#,
             1,
         )
     }
@@ -4559,6 +4650,15 @@ mod tests {
         assert_eq!(outcome.project.snapshot.fixtures[0].address, 1);
         assert_eq!(outcome.project.snapshot.group_colors["Bank 1"], "#112233");
         assert_eq!(outcome.project.snapshot.cues.len(), 2);
+        assert_eq!(outcome.project.snapshot.cue_lists.len(), 1);
+        assert_eq!(outcome.project.snapshot.cue_lists[0].id, 1);
+        assert_eq!(outcome.project.snapshot.cue_lists[0].label, "Bank 1");
+        assert!(outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .all(|cue| cue.cue_list_id == 1));
         assert!(outcome.project.snapshot.cues[0].color.is_none());
         assert!(outcome.project.snapshot.cues[1].color.is_none());
         assert_eq!(
@@ -4654,7 +4754,7 @@ mod tests {
             "synthetic-midi-shortcuts.dvc",
         )
         .unwrap();
-        assert_eq!(outcome.report.midi_mappings.len(), 3);
+        assert_eq!(outcome.report.midi_mappings.len(), 7);
         assert_eq!(
             outcome.report.midi_mappings[0],
             MidiControlMapping {
@@ -4697,11 +4797,54 @@ mod tests {
                 ..
             }
         ));
+        assert!(matches!(
+            outcome.report.midi_mappings[3],
+            MidiControlMapping {
+                channel: Some(2),
+                message: MidiControlMessage::NoteOn,
+                number: 62,
+                action: MidiControlAction::FlashCueDirection,
+                cue_id: Some(1),
+                ref attribute,
+                ..
+            } if attribute.as_deref() == Some("Forward")
+        ));
+        assert!(matches!(
+            outcome.report.midi_mappings[4],
+            MidiControlMapping {
+                channel: Some(2),
+                message: MidiControlMessage::NoteOn,
+                number: 63,
+                action: MidiControlAction::TriggerCueListNext,
+                cue_id: Some(2),
+                ..
+            }
+        ));
+        assert!(matches!(
+            outcome.report.midi_mappings[5],
+            MidiControlMapping {
+                number: 64,
+                action: MidiControlAction::FlashCueDirection,
+                cue_id: Some(2),
+                ref attribute,
+                ..
+            } if attribute.as_deref() == Some("Bounce")
+        ));
+        assert!(matches!(
+            outcome.report.midi_mappings[6],
+            MidiControlMapping {
+                number: 65,
+                action: MidiControlAction::TriggerCueDirection,
+                cue_id: Some(1),
+                ref attribute,
+                ..
+            } if attribute.as_deref() == Some("Reverse")
+        ));
         assert!(outcome.report.unsupported.details.iter().any(|detail| {
-            detail.item == "Shortcut 4"
+            detail.item == "Shortcut 8"
                 && detail
                     .message
-                    .contains("MIDI action type 108 (target index 0)")
+                    .contains("MIDI action type 999 (target index 0)")
         }));
         assert!(!outcome.report.unsupported.details.iter().any(|detail| {
             detail.message.contains("shortcut type 1")
@@ -4709,7 +4852,7 @@ mod tests {
         }));
         assert!(outcome.report.converted.details.iter().any(|detail| {
             detail.item == "MIDI mappings"
-                && detail.message == "3 verified Daslight MIDI shortcut(s)"
+                && detail.message == "7 verified Daslight MIDI shortcut(s)"
         }));
         assert!(outcome.report.approximate.details.iter().any(|detail| {
             detail.item == "MIDI input device affinity" && detail.message.contains("Setup > I/O")
@@ -6868,7 +7011,7 @@ mod tests {
             return;
         }
         let outcome = import_path(path).unwrap();
-        assert_eq!(outcome.report.midi_mappings.len(), 14);
+        assert_eq!(outcome.report.midi_mappings.len(), 17);
         assert_eq!(
             outcome
                 .report
@@ -6892,6 +7035,41 @@ mod tests {
                 .report
                 .midi_mappings
                 .iter()
+                .filter(|mapping| mapping.action == MidiControlAction::FlashCueDirection)
+                .count(),
+            2
+        );
+        assert!(outcome.report.midi_mappings.iter().any(|mapping| {
+            mapping.action == MidiControlAction::FlashCueDirection
+                && mapping.attribute.as_deref() == Some("Forward")
+        }));
+        assert!(outcome.report.midi_mappings.iter().any(|mapping| {
+            mapping.action == MidiControlAction::FlashCueDirection
+                && mapping.attribute.as_deref() == Some("Bounce")
+        }));
+        assert_eq!(
+            outcome
+                .report
+                .midi_mappings
+                .iter()
+                .filter(|mapping| mapping.action == MidiControlAction::TriggerCueListNext)
+                .count(),
+            1
+        );
+        assert_eq!(
+            outcome.project.snapshot.cue_lists.len(),
+            outcome.report.summary.groups
+        );
+        assert!(outcome.project.snapshot.cues.iter().all(|cue| {
+            outcome.project.snapshot.cue_lists.iter().any(|list| {
+                list.id == cue.cue_list_id && Some(list.label.as_str()) == cue.group_id.as_deref()
+            })
+        }));
+        assert_eq!(
+            outcome
+                .report
+                .midi_mappings
+                .iter()
                 .filter(|mapping| mapping.action == MidiControlAction::TapBpm)
                 .count(),
             1
@@ -6904,16 +7082,7 @@ mod tests {
             .filter(|detail| detail.message.contains("Daslight MIDI action type"))
             .map(|detail| detail.message.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(unsupported_midi_actions.len(), 3);
-        assert!(unsupported_midi_actions
-            .iter()
-            .any(|message| message.contains("action type 108")));
-        assert!(unsupported_midi_actions
-            .iter()
-            .any(|message| message.contains("action type 110")));
-        assert!(unsupported_midi_actions
-            .iter()
-            .any(|message| message.contains("action type 113")));
+        assert!(unsupported_midi_actions.is_empty());
     }
 
     #[test]

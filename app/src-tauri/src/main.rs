@@ -5320,7 +5320,25 @@ fn connect_midi_control(
                 EngineCommand::SetGroupPark { group_id, enabled }
             }
             MidiControlEvent::TriggerCue(cue_id) => EngineCommand::TriggerCue(cue_id),
+            MidiControlEvent::TriggerCueWithDirection { cue_id, direction } => {
+                EngineCommand::TriggerCueWithDirection { cue_id, direction }
+            }
             MidiControlEvent::ReleaseCue(cue_id) => EngineCommand::ReleaseCue(cue_id),
+            MidiControlEvent::TriggerCueListNext(anchor_cue_id) => {
+                let Some(cue_list_id) = engine
+                    .snapshot()
+                    .cues
+                    .iter()
+                    .find(|cue| cue.id == anchor_cue_id)
+                    .map(|cue| cue.cue_list_id)
+                else {
+                    eprintln!(
+                        "Ignoring MIDI Cue List Next: anchor Cue {anchor_cue_id} was not found"
+                    );
+                    return;
+                };
+                EngineCommand::TriggerCueListNext(cue_list_id)
+            }
             MidiControlEvent::TriggerNextCue => EngineCommand::TriggerNextCue,
             MidiControlEvent::TriggerPreviousCue => EngineCommand::TriggerPreviousCue,
             MidiControlEvent::SetEffectEnabled { effect_id, enabled } => {
@@ -5652,8 +5670,13 @@ fn validate_mapping_required_fields_for_midi(
         | MidiControlAction::GroupSubmaster => {
             normalize_mapping_group_id(&mut mapping.group_id, owner)?;
         }
+        MidiControlAction::TriggerCueDirection | MidiControlAction::FlashCueDirection => {
+            require_mapping_id(mapping.cue_id, owner, "cue")?;
+            normalize_mapping_cue_direction(&mut mapping.attribute, owner)?;
+        }
         MidiControlAction::TriggerCue
         | MidiControlAction::FlashCue
+        | MidiControlAction::TriggerCueListNext
         | MidiControlAction::EffectEnabled
         | MidiControlAction::NodeGraphEnabled => {
             require_mapping_id(mapping.cue_id, owner, "cue/effect/node graph")?;
@@ -5845,6 +5868,27 @@ fn normalize_mapping_attribute(value: &mut Option<String>, owner: &str) -> Resul
 fn normalize_mapping_group_id(value: &mut Option<String>, owner: &str) -> Result<(), String> {
     let raw = normalize_required_mapping_text(value.as_deref(), owner, "group ID")?;
     *value = Some(normalize_group_id(&raw).map_err(|error| format!("{owner} {error}"))?);
+    Ok(())
+}
+
+fn normalize_mapping_cue_direction(value: &mut Option<String>, owner: &str) -> Result<(), String> {
+    normalize_mapping_attribute(value, owner)?;
+    let normalized = match value
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "forward" => "Forward",
+        "reverse" => "Reverse",
+        "bounce" => "Bounce",
+        _ => {
+            return Err(format!(
+                "{owner} cue direction must be Forward, Reverse, or Bounce"
+            ))
+        }
+    };
+    *value = Some(normalized.to_string());
     Ok(())
 }
 
@@ -29415,12 +29459,30 @@ f 1 2 3
                 low: 0.0,
                 high: 1.0,
             },
+            MidiControlMapping {
+                channel: None,
+                message: protocol::MidiControlMessage::NoteOn,
+                number: 27,
+                action: MidiControlAction::FlashCueDirection,
+                fixture_id: None,
+                attribute: Some(" reverse ".to_string()),
+                group_id: None,
+                cue_id: Some(9),
+                layer_id: None,
+                output_id: None,
+                video_param: None,
+                cue_point_index: None,
+                duration_ms: None,
+                low: 0.0,
+                high: 1.0,
+            },
         ])
         .unwrap();
 
         assert_eq!(mappings[0].group_id.as_deref(), Some("front/movers"));
         assert_eq!(mappings[1].attribute.as_deref(), Some("Front Projector"));
         assert_eq!(mappings[2].attribute.as_deref(), Some("solo"));
+        assert_eq!(mappings[3].attribute.as_deref(), Some("Reverse"));
 
         let error = validate_midi_control_mappings(vec![MidiControlMapping {
             channel: Some(16),
@@ -29461,6 +29523,26 @@ f 1 2 3
         }])
         .unwrap_err();
         assert!(error.contains("video layer"));
+
+        let error = validate_midi_control_mappings(vec![MidiControlMapping {
+            channel: None,
+            message: protocol::MidiControlMessage::NoteOn,
+            number: 27,
+            action: MidiControlAction::TriggerCueDirection,
+            fixture_id: None,
+            attribute: Some("sideways".to_string()),
+            group_id: None,
+            cue_id: Some(9),
+            layer_id: None,
+            output_id: None,
+            video_param: None,
+            cue_point_index: None,
+            duration_ms: None,
+            low: 0.0,
+            high: 1.0,
+        }])
+        .unwrap_err();
+        assert!(error.contains("Forward, Reverse, or Bounce"));
     }
 
     #[test]

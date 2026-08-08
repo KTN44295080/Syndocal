@@ -160,7 +160,7 @@ export function createControlInputController(options: ControlInputControllerOpti
     const attribute = options.midiMapAttribute() || options.selectedEffectAttribute();
     if (action === "FixtureAttribute" && (!fixture || !attribute)) return reportMessage("Select a fixture and MIDI attribute target first.");
     if (isFixtureFlagMappingAction(action) && !fixture) return reportMessage("Select a fixture before mapping MIDI to a fixture flag.");
-    if ((action === "TriggerCue" || action === "FlashCue") && cueId === null) return reportMessage("Create a cue before mapping MIDI to cues.");
+    if ((action === "TriggerCue" || action === "FlashCue" || action === "TriggerCueDirection" || action === "FlashCueDirection" || action === "TriggerCueListNext") && cueId === null) return reportMessage("Create a cue before mapping MIDI to cues.");
     if (action === "EffectEnabled" && effectId === null) return reportMessage("Add an effect before mapping MIDI to effect enable.");
     if (action === "NodeGraphEnabled" && nodeGraphId === null) return reportMessage("Add a node graph before mapping MIDI to node graph enable.");
     if ((action === "GroupSubmaster" || isGroupFlagMappingAction(action)) && !options.midiMapGroupId().trim()) {
@@ -178,11 +178,12 @@ export function createControlInputController(options: ControlInputControllerOpti
       action,
       fixture_id: action === "FixtureAttribute" || isFixtureFlagMappingAction(action) ? fixture?.id ?? null : null,
       attribute: action === "FixtureAttribute" ? attribute
+        : action === "TriggerCueDirection" || action === "FlashCueDirection" ? (["Forward", "Reverse", "Bounce"].includes(options.midiMapAttribute()) ? options.midiMapAttribute() : "Forward")
         : action === "ClearFixtureFlags" ? options.midiClearFixtureFlagKind()
         : action === "VideoOutputMappingField" ? outputMappingField
         : action === "VideoOutputMappingPreset" ? outputMappingPresetLabel : null,
       group_id: action === "GroupSubmaster" || isGroupFlagMappingAction(action) ? options.midiMapGroupId().trim() : null,
-      cue_id: action === "TriggerCue" || action === "FlashCue" ? cueId : action === "EffectEnabled" ? effectId : action === "NodeGraphEnabled" ? nodeGraphId : null,
+      cue_id: action === "TriggerCue" || action === "FlashCue" || action === "TriggerCueDirection" || action === "FlashCueDirection" || action === "TriggerCueListNext" ? cueId : action === "EffectEnabled" ? effectId : action === "NodeGraphEnabled" ? nodeGraphId : null,
       layer_id: isVideoLayerMappingAction(action) ? layerId : null,
       output_id: isVideoOutputMappingAction(action) ? outputId : null,
       video_param: action === "VideoParam" ? options.midiMapVideoParam() : null,
