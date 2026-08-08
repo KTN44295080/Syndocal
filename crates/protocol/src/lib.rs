@@ -2930,6 +2930,7 @@ impl Default for OscInputConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum OscControlAction {
     FixtureAttribute,
+    SelectedFeatureFader,
     FixtureHighlight,
     FixtureSolo,
     FixturePark,
@@ -3147,6 +3148,7 @@ pub enum MidiControlMessage {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MidiControlAction {
     FixtureAttribute,
+    SelectedFeatureFader,
     FixtureHighlight,
     FixtureSolo,
     FixturePark,
@@ -3255,6 +3257,26 @@ pub struct RemoteControlConfig {
     pub max_message_bytes: usize,
     #[serde(default = "default_remote_max_messages_per_second")]
     pub max_messages_per_second: u16,
+}
+
+/// Runtime-only operator targeting state shared by the desktop UI, MIDI/OSC,
+/// Remote WebSocket clients, and future automation clients. The attribute
+/// order is the authoritative visible fader order; it is never persisted in a
+/// project file.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OperatorSelectionContext {
+    #[serde(default)]
+    pub fixture_ids: Vec<FixtureId>,
+    #[serde(default)]
+    pub attributes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OperatorFeatureFaderResult {
+    pub target_index: usize,
+    pub attribute: String,
+    pub fixture_ids: Vec<FixtureId>,
+    pub value: u16,
 }
 
 fn default_remote_max_connections() -> u16 {

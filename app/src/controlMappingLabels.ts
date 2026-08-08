@@ -4,6 +4,7 @@ import type { MidiControlMapping, OscControlMapping } from "./types";
 export const controlMappingTargetLabel = (mapping: MidiControlMapping | OscControlMapping) => {
   switch (mapping.action) {
     case "FixtureAttribute": return `Fixture ${mapping.fixture_id} ${mapping.attribute}`;
+    case "SelectedFeatureFader": return `Selected feature fader ${(mapping.cue_point_index ?? 0) + 1}`;
     case "FixtureHighlight": return `Fixture ${mapping.fixture_id} highlight`;
     case "FixtureSolo": return `Fixture ${mapping.fixture_id} solo`;
     case "FixturePark": return `Fixture ${mapping.fixture_id} park`;

@@ -187,7 +187,8 @@ export function createControlInputController(options: ControlInputControllerOpti
       layer_id: isVideoLayerMappingAction(action) ? layerId : null,
       output_id: isVideoOutputMappingAction(action) ? outputId : null,
       video_param: action === "VideoParam" ? options.midiMapVideoParam() : null,
-      cue_point_index: action === "VideoCuePointJump" ? Math.max(0, Math.round(options.midiMapCuePointIndex())) : null,
+      cue_point_index: action === "VideoCuePointJump" || action === "SelectedFeatureFader"
+        ? Math.max(0, Math.round(options.midiMapCuePointIndex())) : null,
       duration_ms: action === "VideoOutputFade" || action === "VideoLayerFade" || action === "VideoCuePointAdd" || action === "VideoCuePointRemove"
         ? Math.max(0, Math.round(options.midiMapDurationMs())) : null,
       low: options.midiMapLow(),
@@ -391,7 +392,8 @@ export function createControlInputController(options: ControlInputControllerOpti
       layer_id: isVideoLayerMappingAction(action) ? layerId : null,
       output_id: isVideoOutputMappingAction(action) ? outputId : null,
       video_param: action === "VideoParam" ? options.oscMapVideoParam() : null,
-      cue_point_index: action === "VideoCuePointJump" ? Math.max(0, Math.round(options.oscMapCuePointIndex())) : null,
+      cue_point_index: action === "VideoCuePointJump" || action === "SelectedFeatureFader"
+        ? Math.max(0, Math.round(options.oscMapCuePointIndex())) : null,
       duration_ms: action === "VideoOutputFade" || action === "VideoLayerFade" || action === "VideoCuePointAdd" || action === "VideoCuePointRemove"
         ? Math.max(0, Math.round(options.oscMapDurationMs())) : null,
       low: options.oscMapLow(),

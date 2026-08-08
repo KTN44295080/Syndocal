@@ -4,6 +4,8 @@ import { readFile } from "node:fs/promises";
 const importer = await readFile(new URL("../src-tauri/src/dvc_import.rs", import.meta.url), "utf8");
 const protocol = await readFile(new URL("../../crates/protocol/src/lib.rs", import.meta.url), "utf8");
 const midi = await readFile(new URL("../../crates/io/src/midi.rs", import.meta.url), "utf8");
+const osc = await readFile(new URL("../../crates/io/src/osc.rs", import.meta.url), "utf8");
+const remote = await readFile(new URL("../../crates/io/src/remote_ws.rs", import.meta.url), "utf8");
 const engine = await readFile(new URL("../../crates/engine/src/lib.rs", import.meta.url), "utf8");
 const backend = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
 const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
@@ -14,18 +16,27 @@ const checks = [
   [importer.includes('"107" => {'), "DVC action 107 is decoded as a verified scene mapping"],
   [importer.includes('"55" => dvc_midi_mapping(event, MidiControlAction::TapBpm'), "DVC action 55 is decoded as Tap BPM"],
   [importer.includes('"113" => {') && importer.includes("MidiControlAction::TriggerCueListNext"), "DVC action 113 is decoded as Bank Next"],
+  [importer.includes('"229" =>') && importer.includes("dvc_midi_selected_feature_fader_mapping"), "DVC action 229 preserves the visible feature-fader index"],
   [importer.includes('"108" | "109" | "110" => {') && importer.includes('"108" => "Forward"') && importer.includes('"109" => "Reverse"') && importer.includes('"110" => "Bounce"'), "DVC directional Scene actions preserve their verified directions"],
   [importer.includes("cue_lists.push(CueListSummary") && importer.includes("cue_list_id,"), "DVC banks remain distinct Cue Lists"],
   [importer.includes("MidiControlAction::FlashCue"), "DVC FLASH=1 remains a hold-to-release cue mapping"],
   [importer.includes("dvc_midi_shortcuts_import_scene_tap_and_flash_without_guessing_unknown_actions"), "synthetic DVC regression is retained"],
   [importer.includes("dvc_local_homecoming_midi_scene_tap_and_flash_shortcuts_import_when_present"), "real Homecoming DVC golden is retained"],
+  [importer.includes("dvc_local_homecoming_laser_midi_faders_follow_operator_selection_when_present"), "real Laser DVC action-229 golden is retained"],
   [protocol.includes("pub enum MidiControlAction") && protocol.includes("FlashCue,"), "protocol persists FlashCue"],
   [protocol.includes("TriggerCueListNext,"), "protocol persists Cue List Next"],
+  [protocol.includes("SelectedFeatureFader,"), "protocol persists Selected Feature Fader"],
   [midi.includes("MidiControlEvent::ReleaseCue"), "MIDI Note Off releases a flashed cue"],
   [midi.includes("MidiControlEvent::TriggerCueWithDirection") && midi.includes("cue_live_direction(mapping.attribute.as_deref()?)"), "MIDI emits the persisted directional Scene trigger"],
+  [midi.includes("SetSelectedFeatureFader") && midi.includes("target_index: mapping.cue_point_index?"), "MIDI emits the selected visible-fader slot"],
+  [osc.includes("SetSelectedFeatureFader") && osc.includes("target_index: mapping.cue_point_index?"), "OSC emits the selected visible-fader slot"],
   [engine.includes("EngineCommand::TriggerCueWithDirection") && engine.includes("pending_manual_cue_direction"), "engine carries a one-shot direction through Cue pre-wait"],
   [backend.includes("MidiControlEvent::ReleaseCue(cue_id) => EngineCommand::ReleaseCue(cue_id)"), "backend reuses the engine ReleaseCue route"],
   [backend.includes("MidiControlEvent::TriggerCueListNext(anchor_cue_id)") && backend.includes("EngineCommand::TriggerCueListNext(cue_list_id)"), "backend resolves the imported Bank anchor to its Cue List"],
+  [(backend.match(/operator_feature_fader_command\(/g) ?? []).length >= 4 && backend.includes("EngineCommand::SetFixtureAttributeBatch"), "UI, MIDI, OSC, and Remote converge on the existing engine batch command"],
+  [midi.includes("build_feedback_messages_with_operator_selection") && backend.includes("Some(&operator_selection)"), "MIDI feedback resolves the same runtime selection instead of guessing a fixed fixture"],
+  [remote.includes("SetOperatorSelection(OperatorSelectionContext)") && remote.includes("SetOperatorFeatureFader"), "Remote and future AI callers have typed operator-selection commands"],
+  [app.includes("selectedControlTargetFixtures().map((fixture) => fixture.id)") && app.includes("visibleControls().map((control) => control.attribute)"), "frontend publishes the exact selected fixtures and visible fader order"],
   [app.includes("replaceProjectControlMappings(report.midi_mappings ?? [], [])"), "DVC import installs mappings instead of clearing them"],
   [app.includes("report.midi_mappings?.length ?? 0} MIDI mappings"), "operator import status reports the restored mapping count"],
 ];

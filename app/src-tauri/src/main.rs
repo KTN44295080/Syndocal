@@ -44,18 +44,19 @@ use protocol::{
     FixtureProfileSummary, GeometrySummary, LearnedMidiControl, LearnedOscControl,
     LfoEffectRequest, MappingEffectRequest, MidiControlAction, MidiControlMapping,
     MidiInputSummary, MidiOutputSummary, MoveEffectRequest, NodeGraphId, NodeGraphNodeKind,
-    NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp, OperatorPolicy, OscControlAction,
-    OscControlMapping, OscInputConfig, PatchFixtureRequest, PatchedFixtureSummary,
-    PositionWaveEffectRequest, ProjectFile, RecallMode, RemoteControlConfig, RemoteControlStatus,
-    Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile, StageMapPresetSummary,
-    StageObjectId, StageObjectKind, StageObjectSummary, TimelineAudioClipId,
-    TimelineAudioClipSummary, TimelineEventId, TimelineLayerKind, TimelineSnapRequest,
-    TimelineTrackKind, TouchControlBinding, TouchFeaturePresetTarget, TouchSurfaceSummary,
-    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode,
-    VideoEffectTarget, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId,
-    VideoLayerState, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
-    VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary, VideoOutputSummary,
-    VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
+    NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp, OperatorFeatureFaderResult,
+    OperatorPolicy, OperatorSelectionContext, OscControlAction, OscControlMapping, OscInputConfig,
+    PatchFixtureRequest, PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RecallMode,
+    RemoteControlConfig, RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig,
+    StageMapPresetFile, StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary,
+    TimelineAudioClipId, TimelineAudioClipSummary, TimelineEventId, TimelineLayerKind,
+    TimelineSnapRequest, TimelineTrackKind, TouchControlBinding, TouchFeaturePresetTarget,
+    TouchSurfaceSummary, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
+    VideoBackendState, VideoBlendMode, VideoEffectTarget, VideoIsfEffectStageSummary,
+    VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerTarget, VideoOutputId,
+    VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetFile,
+    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
+    VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -194,6 +195,7 @@ struct AppState {
     pending_project_open_paths: Mutex<Vec<String>>,
     current_project_path: Mutex<Option<PathBuf>>,
     operator_policy: Mutex<Option<OperatorPolicy>>,
+    operator_selection: Arc<Mutex<OperatorSelectionContext>>,
     project_history: Mutex<ProjectHistory>,
     snapshot_sync: Mutex<SnapshotSyncState>,
     standby_sync: Mutex<StandbySyncRuntime>,
@@ -4579,6 +4581,146 @@ fn normalize_touch_feature_targets(
         .collect()
 }
 
+const MAX_OPERATOR_SELECTION_FIXTURES: usize = 4_096;
+const MAX_OPERATOR_SELECTION_ATTRIBUTES: usize = 512;
+
+fn normalize_operator_selection_context(
+    context: OperatorSelectionContext,
+) -> Result<OperatorSelectionContext, String> {
+    if context.fixture_ids.len() > MAX_OPERATOR_SELECTION_FIXTURES {
+        return Err(format!(
+            "Operator selection supports at most {MAX_OPERATOR_SELECTION_FIXTURES} fixtures"
+        ));
+    }
+    if context.attributes.len() > MAX_OPERATOR_SELECTION_ATTRIBUTES {
+        return Err(format!(
+            "Operator selection supports at most {MAX_OPERATOR_SELECTION_ATTRIBUTES} visible faders"
+        ));
+    }
+    let mut fixture_ids = Vec::with_capacity(context.fixture_ids.len());
+    let mut seen_fixture_ids = HashSet::new();
+    for fixture_id in context.fixture_ids {
+        if seen_fixture_ids.insert(fixture_id) {
+            fixture_ids.push(fixture_id);
+        }
+    }
+    let mut attributes = Vec::with_capacity(context.attributes.len());
+    let mut seen_attributes = HashSet::new();
+    for attribute in context.attributes {
+        let attribute = normalize_attribute_name(attribute)?;
+        if !seen_attributes.insert(attribute.clone()) {
+            return Err(format!(
+                "Operator selection contains duplicate visible fader attribute '{attribute}'"
+            ));
+        }
+        attributes.push(attribute);
+    }
+    Ok(OperatorSelectionContext {
+        fixture_ids,
+        attributes,
+    })
+}
+
+fn operator_feature_fader_command(
+    engine: &EngineHandle,
+    selection: &Arc<Mutex<OperatorSelectionContext>>,
+    target_index: usize,
+    value: u16,
+) -> Result<(EngineCommand, OperatorFeatureFaderResult), String> {
+    let context = selection
+        .lock()
+        .map_err(|_| "Operator selection state lock was poisoned".to_string())?
+        .clone();
+    let attribute = context
+        .attributes
+        .get(target_index)
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "Operator feature fader index {target_index} is outside the current {}-fader selection",
+                context.attributes.len()
+            )
+        })?;
+    if context.fixture_ids.is_empty() {
+        return Err("Operator feature fader requires at least one selected fixture".to_string());
+    }
+    let snapshot = engine.snapshot();
+    let mut targets = Vec::with_capacity(context.fixture_ids.len());
+    for fixture_id in &context.fixture_ids {
+        let fixture = snapshot
+            .fixtures
+            .iter()
+            .find(|fixture| fixture.id == *fixture_id)
+            .ok_or_else(|| format!("Selected fixture {fixture_id} is no longer patched"))?;
+        if !fixture
+            .controls
+            .iter()
+            .any(|control| control.attribute == attribute)
+        {
+            return Err(format!(
+                "Selected fixture {fixture_id} does not expose visible fader '{attribute}'"
+            ));
+        }
+        targets.push(TouchFeaturePresetTarget {
+            fixture_id: *fixture_id,
+            attribute: attribute.clone(),
+        });
+    }
+    let result = OperatorFeatureFaderResult {
+        target_index,
+        attribute,
+        fixture_ids: context.fixture_ids,
+        value,
+    };
+    Ok((
+        EngineCommand::SetFixtureAttributeBatch { targets, value },
+        result,
+    ))
+}
+
+#[tauri::command]
+fn set_operator_selection_context(
+    state: State<'_, AppState>,
+    context: OperatorSelectionContext,
+) -> Result<OperatorSelectionContext, String> {
+    let context = normalize_operator_selection_context(context)?;
+    *state
+        .operator_selection
+        .lock()
+        .map_err(|_| "Operator selection state lock was poisoned".to_string())? = context.clone();
+    Ok(context)
+}
+
+#[tauri::command]
+fn get_operator_selection_context(
+    state: State<'_, AppState>,
+) -> Result<OperatorSelectionContext, String> {
+    state
+        .operator_selection
+        .lock()
+        .map_err(|_| "Operator selection state lock was poisoned".to_string())
+        .map(|context| context.clone())
+}
+
+#[tauri::command]
+fn set_operator_feature_fader(
+    state: State<'_, AppState>,
+    target_index: usize,
+    value: u16,
+) -> Result<OperatorFeatureFaderResult, String> {
+    let (command, result) = operator_feature_fader_command(
+        &state.engine,
+        &state.operator_selection,
+        target_index,
+        value,
+    )?;
+    state
+        .engine
+        .send(command)
+        .map_err(|error| error.to_string())?;
+    Ok(result)
+}
+
 #[tauri::command]
 fn set_fixture_attribute_batch(
     state: State<'_, AppState>,
@@ -5278,6 +5420,7 @@ fn connect_midi_control(
         return Err("At least one MIDI control mapping is required".to_string());
     }
     let engine = state.engine.clone();
+    let operator_selection = Arc::clone(&state.operator_selection);
     let connection = io::midi::connect_midi_control(input_index, mappings, move |event| {
         let command = match event {
             MidiControlEvent::SetAttribute {
@@ -5288,6 +5431,21 @@ fn connect_midi_control(
                 fixture_id,
                 attribute,
                 value,
+            },
+            MidiControlEvent::SetSelectedFeatureFader {
+                target_index,
+                value,
+            } => match operator_feature_fader_command(
+                &engine,
+                &operator_selection,
+                target_index,
+                value,
+            ) {
+                Ok((command, _)) => command,
+                Err(error) => {
+                    eprintln!("Ignoring MIDI selected feature fader: {error}");
+                    return;
+                }
             },
             MidiControlEvent::SetFixtureHighlight {
                 fixture_id,
@@ -5527,7 +5685,16 @@ fn send_midi_feedback(
 ) -> Result<usize, String> {
     let mappings = validate_midi_control_mappings(mappings)?;
     let snapshot = state.engine.snapshot();
-    let messages = io::midi::build_feedback_messages(&snapshot, &mappings);
+    let operator_selection = state
+        .operator_selection
+        .lock()
+        .map_err(|_| "Operator selection state lock was poisoned".to_string())?
+        .clone();
+    let messages = io::midi::build_feedback_messages_with_operator_selection(
+        &snapshot,
+        &mappings,
+        Some(&operator_selection),
+    );
     let mut guard = state
         .midi_feedback
         .lock()
@@ -5659,6 +5826,13 @@ fn validate_mapping_required_fields_for_midi(
             require_mapping_id(mapping.fixture_id, owner, "fixture")?;
             normalize_mapping_attribute(&mut mapping.attribute, owner)?;
         }
+        MidiControlAction::SelectedFeatureFader => {
+            require_mapping_id(
+                mapping.cue_point_index,
+                owner,
+                "selected feature fader index",
+            )?;
+        }
         MidiControlAction::FixtureHighlight
         | MidiControlAction::FixtureSolo
         | MidiControlAction::FixturePark => {
@@ -5765,6 +5939,13 @@ fn validate_mapping_required_fields_for_osc(
         OscControlAction::FixtureAttribute => {
             require_mapping_id(mapping.fixture_id, owner, "fixture")?;
             normalize_mapping_attribute(&mut mapping.attribute, owner)?;
+        }
+        OscControlAction::SelectedFeatureFader => {
+            require_mapping_id(
+                mapping.cue_point_index,
+                owner,
+                "selected feature fader index",
+            )?;
         }
         OscControlAction::FixtureHighlight
         | OscControlAction::FixtureSolo
@@ -5968,6 +6149,7 @@ fn start_osc_input(
 ) -> Result<(), String> {
     let mappings = validate_osc_control_mappings(mappings.unwrap_or_default())?;
     let engine = state.engine.clone();
+    let operator_selection = Arc::clone(&state.operator_selection);
     let input = OscInput::start_with_mappings(config, mappings, move |event| {
         let command = match event {
             OscInputEvent::SetAttribute {
@@ -5978,6 +6160,21 @@ fn start_osc_input(
                 fixture_id,
                 attribute,
                 value,
+            },
+            OscInputEvent::SetSelectedFeatureFader {
+                target_index,
+                value,
+            } => match operator_feature_fader_command(
+                &engine,
+                &operator_selection,
+                target_index,
+                value,
+            ) {
+                Ok((command, _)) => command,
+                Err(error) => {
+                    eprintln!("Ignoring OSC selected feature fader: {error}");
+                    return;
+                }
             },
             OscInputEvent::SetFixtureHighlight {
                 fixture_id,
@@ -6254,6 +6451,7 @@ fn start_remote_control(
     config: RemoteControlConfig,
 ) -> Result<(), String> {
     let command_engine = state.engine.clone();
+    let remote_operator_selection = Arc::clone(&state.operator_selection);
     let snapshot_engine = state.engine.clone();
     let render_plans_engine = state.engine.clone();
     let io_plans_engine = state.engine.clone();
@@ -6278,6 +6476,39 @@ fn start_remote_control(
                     fixture_id,
                     attribute,
                     value,
+                },
+                RemoteInputEvent::SetOperatorSelection(context) => {
+                    let context = match normalize_operator_selection_context(context) {
+                        Ok(context) => context,
+                        Err(error) => {
+                            eprintln!("Ignoring remote operator selection: {error}");
+                            return;
+                        }
+                    };
+                    match remote_operator_selection.lock() {
+                        Ok(mut selection) => *selection = context,
+                        Err(_) => {
+                            eprintln!(
+                                "Ignoring remote operator selection: state lock was poisoned"
+                            );
+                        }
+                    }
+                    return;
+                }
+                RemoteInputEvent::SetOperatorFeatureFader {
+                    target_index,
+                    value,
+                } => match operator_feature_fader_command(
+                    &command_engine,
+                    &remote_operator_selection,
+                    target_index,
+                    value,
+                ) {
+                    Ok((command, _)) => command,
+                    Err(error) => {
+                        eprintln!("Ignoring remote selected feature fader: {error}");
+                        return;
+                    }
                 },
                 RemoteInputEvent::SetGroupAttribute {
                     group_id,
@@ -27409,6 +27640,133 @@ mod tests {
     }
 
     #[test]
+    fn operator_selection_context_is_ordered_deduplicated_and_runtime_only() {
+        let normalized = normalize_operator_selection_context(OperatorSelectionContext {
+            fixture_ids: vec![7, 3, 7],
+            attributes: vec![" Dimmer ".to_string(), "ColorRed".to_string()],
+        })
+        .unwrap();
+
+        assert_eq!(normalized.fixture_ids, vec![7, 3]);
+        assert_eq!(
+            normalized.attributes,
+            vec!["Dimmer".to_string(), "ColorRed".to_string()]
+        );
+        assert!(
+            normalize_operator_selection_context(OperatorSelectionContext {
+                fixture_ids: vec![7],
+                attributes: vec!["Dimmer".to_string(), " Dimmer ".to_string()],
+            })
+            .unwrap_err()
+            .contains("duplicate")
+        );
+    }
+
+    #[test]
+    fn operator_feature_fader_resolves_visible_slot_to_existing_engine_batch_command() {
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let profile = custom_fixture_profile_from_request(CustomFixtureProfileRequest {
+            manufacturer: "Syndocal".to_string(),
+            name: "Operator Surface Target".to_string(),
+            mode_name: "2ch".to_string(),
+            attributes: vec!["Dimmer".to_string(), "ColorRed".to_string()],
+        });
+        let fixture_id = engine.allocate_fixture_id();
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id,
+                request: PatchFixtureRequest {
+                    profile_path: profile.source_path.clone(),
+                    mode_name: Some("2ch".to_string()),
+                    label: "Operator Surface Target".to_string(),
+                    universe: 0,
+                    address: 1,
+                    group_ids: Vec::new(),
+                    position: Vec3::default(),
+                    rotation: Rotation3::default(),
+                },
+                profile,
+            })
+            .unwrap();
+
+        for _ in 0..20 {
+            if engine
+                .snapshot()
+                .fixtures
+                .iter()
+                .any(|fixture| fixture.id == fixture_id)
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+
+        let selection = Arc::new(Mutex::new(OperatorSelectionContext {
+            fixture_ids: vec![fixture_id],
+            attributes: vec!["Dimmer".to_string(), "ColorRed".to_string()],
+        }));
+        let (command, result) =
+            operator_feature_fader_command(&engine, &selection, 1, 45_000).unwrap();
+
+        assert_eq!(
+            result,
+            OperatorFeatureFaderResult {
+                target_index: 1,
+                attribute: "ColorRed".to_string(),
+                fixture_ids: vec![fixture_id],
+                value: 45_000,
+            }
+        );
+        match &command {
+            EngineCommand::SetFixtureAttributeBatch { targets, value } => {
+                assert_eq!(*value, 45_000);
+                assert_eq!(targets.len(), 1);
+                assert_eq!(targets[0].fixture_id, fixture_id);
+                assert_eq!(targets[0].attribute, "ColorRed");
+            }
+            other => panic!("unexpected operator fader command: {other:?}"),
+        }
+        engine.send(command).unwrap();
+
+        let mut snapshot = engine.snapshot();
+        for _ in 0..20 {
+            let rendered_value = snapshot
+                .fixtures
+                .iter()
+                .find(|fixture| fixture.id == fixture_id)
+                .and_then(|fixture| {
+                    fixture
+                        .attribute_values
+                        .iter()
+                        .find(|value| value.attribute == "ColorRed")
+                })
+                .map(|value| value.value);
+            if rendered_value == Some(45_000) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+            snapshot = engine.snapshot();
+        }
+        assert_eq!(
+            snapshot
+                .fixtures
+                .iter()
+                .find(|fixture| fixture.id == fixture_id)
+                .and_then(|fixture| {
+                    fixture
+                        .attribute_values
+                        .iter()
+                        .find(|value| value.attribute == "ColorRed")
+                })
+                .map(|value| value.value),
+            Some(45_000)
+        );
+    }
+
+    #[test]
     fn application_update_settings_require_https_key_pair_and_known_channel() {
         assert!(application_update_settings_from(None, None, Some("beta"))
             .unwrap()
@@ -42545,6 +42903,7 @@ fn main() {
             pending_project_open_paths: Mutex::new(Vec::new()),
             current_project_path: Mutex::new(None),
             operator_policy: Mutex::new(None),
+            operator_selection: Arc::new(Mutex::new(OperatorSelectionContext::default())),
             project_history: Mutex::new(ProjectHistory::default()),
             snapshot_sync: Mutex::new(SnapshotSyncState::default()),
             standby_sync: Mutex::new(StandbySyncRuntime::default()),
@@ -42611,6 +42970,9 @@ fn main() {
             undo_delete_fixture_group,
             set_attribute,
             set_fixture_attribute_batch,
+            set_operator_selection_context,
+            get_operator_selection_context,
+            set_operator_feature_fader,
             set_group_attribute,
             set_programmer_mode,
             set_programmer_attribute,

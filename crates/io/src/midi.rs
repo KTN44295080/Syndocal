@@ -7,8 +7,8 @@ use midir::{Ignore, MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnec
 use protocol::{
     video_output_mapping_field_value, CueId, CueLiveDirection, EffectId, EngineSnapshot, FixtureId,
     LearnedMidiControl, MidiControlAction, MidiControlMapping, MidiControlMessage,
-    MidiInputSummary, MidiOutputSummary, NodeGraphId, VideoLayerId, VideoLayerState, VideoOutputId,
-    VideoParam,
+    MidiInputSummary, MidiOutputSummary, NodeGraphId, OperatorSelectionContext, VideoLayerId,
+    VideoLayerState, VideoOutputId, VideoParam,
 };
 use thiserror::Error;
 
@@ -105,6 +105,10 @@ pub enum MidiControlEvent {
     SetAttribute {
         fixture_id: FixtureId,
         attribute: String,
+        value: u16,
+    },
+    SetSelectedFeatureFader {
+        target_index: usize,
         value: u16,
     },
     SetFixtureHighlight {
@@ -423,10 +427,18 @@ pub fn build_feedback_messages(
     snapshot: &EngineSnapshot,
     mappings: &[MidiControlMapping],
 ) -> Vec<Vec<u8>> {
+    build_feedback_messages_with_operator_selection(snapshot, mappings, None)
+}
+
+pub fn build_feedback_messages_with_operator_selection(
+    snapshot: &EngineSnapshot,
+    mappings: &[MidiControlMapping],
+    operator_selection: Option<&OperatorSelectionContext>,
+) -> Vec<Vec<u8>> {
     mappings
         .iter()
         .filter_map(|mapping| {
-            let normalized = feedback_value_for_mapping(snapshot, mapping)?;
+            let normalized = feedback_value_for_mapping(snapshot, mapping, operator_selection)?;
             midi_feedback_message(mapping, normalized)
         })
         .collect()
@@ -449,6 +461,7 @@ pub fn events_from_midi_message(
 fn feedback_value_for_mapping(
     snapshot: &EngineSnapshot,
     mapping: &MidiControlMapping,
+    operator_selection: Option<&OperatorSelectionContext>,
 ) -> Option<f32> {
     match mapping.action {
         MidiControlAction::FixtureAttribute => {
@@ -464,6 +477,31 @@ fn feedback_value_for_mapping(
                 .value as f32;
             Some(normalize_feedback_range(
                 value,
+                mapping.low,
+                mapping.high,
+                0.0,
+                65_535.0,
+            ))
+        }
+        MidiControlAction::SelectedFeatureFader => {
+            let context = operator_selection?;
+            let attribute = context.attributes.get(mapping.cue_point_index?)?;
+            let mut values = context.fixture_ids.iter().map(|fixture_id| {
+                snapshot
+                    .fixtures
+                    .iter()
+                    .find(|fixture| fixture.id == *fixture_id)?
+                    .attribute_values
+                    .iter()
+                    .find(|candidate| candidate.attribute == *attribute)
+                    .map(|candidate| candidate.value)
+            });
+            let value = values.next()??;
+            if values.any(|candidate| candidate != Some(value)) {
+                return None;
+            }
+            Some(normalize_feedback_range(
+                value as f32,
                 mapping.low,
                 mapping.high,
                 0.0,
@@ -1010,6 +1048,12 @@ fn event_from_mapping(
             attribute: mapping.attribute.as_ref()?.clone(),
             value: (ranged_value.round()).clamp(0.0, 65_535.0) as u16,
         }),
+        MidiControlAction::SelectedFeatureFader => {
+            Some(MidiControlEvent::SetSelectedFeatureFader {
+                target_index: mapping.cue_point_index?,
+                value: ranged_value.round().clamp(0.0, 65_535.0) as u16,
+            })
+        }
         MidiControlAction::FixtureHighlight => Some(MidiControlEvent::SetFixtureHighlight {
             fixture_id: mapping.fixture_id?,
             enabled: midi_message_enabled(message),
@@ -1326,6 +1370,66 @@ mod tests {
             low: 0.0,
             high: 65_535.0,
         }
+    }
+
+    #[test]
+    fn selected_feature_fader_mapping_preserves_visible_slot_and_value() {
+        let mut mapping = fixture_cc_mapping();
+        mapping.action = MidiControlAction::SelectedFeatureFader;
+        mapping.fixture_id = None;
+        mapping.attribute = None;
+        mapping.cue_point_index = Some(2);
+        let events = events_from_midi_message(&[0xb0, 7, 64], std::slice::from_ref(&mapping));
+        assert_eq!(
+            events,
+            vec![MidiControlEvent::SetSelectedFeatureFader {
+                target_index: 2,
+                value: 33_026,
+            }]
+        );
+        assert!(build_feedback_messages(&EngineSnapshot::default(), &[mapping]).is_empty());
+    }
+
+    #[test]
+    fn selected_feature_fader_feedback_uses_runtime_selection_and_rejects_mixed_values() {
+        let mut mapping = fixture_cc_mapping();
+        mapping.action = MidiControlAction::SelectedFeatureFader;
+        mapping.fixture_id = None;
+        mapping.attribute = None;
+        mapping.cue_point_index = Some(1);
+        let mut first = flagged_fixture(3, &[], false, false, false);
+        first.attribute_values = vec![protocol::AttributeValueSummary {
+            attribute: "ColorRed".to_string(),
+            value: 32_768,
+        }];
+        let mut second = flagged_fixture(4, &[], false, false, false);
+        second.attribute_values = first.attribute_values.clone();
+        let snapshot = EngineSnapshot {
+            fixtures: vec![first, second],
+            ..EngineSnapshot::default()
+        };
+        let selection = OperatorSelectionContext {
+            fixture_ids: vec![3, 4],
+            attributes: vec!["Dimmer".to_string(), "ColorRed".to_string()],
+        };
+
+        assert_eq!(
+            build_feedback_messages_with_operator_selection(
+                &snapshot,
+                std::slice::from_ref(&mapping),
+                Some(&selection),
+            ),
+            vec![vec![0xb0, 7, 64]]
+        );
+
+        let mut mixed = snapshot;
+        mixed.fixtures[1].attribute_values[0].value = 65_535;
+        assert!(build_feedback_messages_with_operator_selection(
+            &mixed,
+            &[mapping],
+            Some(&selection),
+        )
+        .is_empty());
     }
 
     fn fixture_flag_mapping(

@@ -108,6 +108,7 @@ export function OscControlMappingPanel(props: OscControlMappingPanelProps) {
           Action
           <select value={props.mapAction} onInput={(event) => props.onMapAction(event.currentTarget.value as OscControlAction)}>
             <option value="FixtureAttribute">Fixture Attribute</option>
+            <option value="SelectedFeatureFader">Selected Feature Fader</option>
             <option value="FixtureHighlight">Fixture Highlight</option>
             <option value="FixtureSolo">Fixture Solo</option>
             <option value="FixturePark">Fixture Park</option>
@@ -168,6 +169,18 @@ export function OscControlMappingPanel(props: OscControlMappingPanelProps) {
           <select value={props.clearFixtureFlagKind} onInput={(event) => props.onMapAttribute(event.currentTarget.value)}>
             <For each={fixtureFlagClearKinds}>{(kind) => <option value={kind}>{kind}</option>}</For>
           </select>
+        </label>
+      </Show>
+      <Show when={props.mapAction === "SelectedFeatureFader"}>
+        <label>
+          Visible fader number
+          <input
+            type="number"
+            min="1"
+            max="512"
+            value={props.mapCuePointIndex + 1}
+            onInput={(event) => props.onMapCuePointIndex(Math.max(0, Number(event.currentTarget.value) - 1))}
+          />
         </label>
       </Show>
       <Show when={props.mapAction === "TriggerCue"}>

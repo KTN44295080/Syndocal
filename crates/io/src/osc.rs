@@ -26,6 +26,10 @@ pub enum OscInputEvent {
         attribute: String,
         value: u16,
     },
+    SetSelectedFeatureFader {
+        target_index: usize,
+        value: u16,
+    },
     SetFixtureHighlight {
         fixture_id: FixtureId,
         enabled: bool,
@@ -810,6 +814,10 @@ fn event_from_mapping(message: &OscMessage, mapping: &OscControlMapping) -> Opti
         OscControlAction::FixtureAttribute => Some(OscInputEvent::SetAttribute {
             fixture_id: mapping.fixture_id?,
             attribute: mapping.attribute.as_ref()?.clone(),
+            value: ranged_value.round().clamp(0.0, 65_535.0) as u16,
+        }),
+        OscControlAction::SelectedFeatureFader => Some(OscInputEvent::SetSelectedFeatureFader {
+            target_index: mapping.cue_point_index?,
             value: ranged_value.round().clamp(0.0, 65_535.0) as u16,
         }),
         OscControlAction::FixtureHighlight => Some(OscInputEvent::SetFixtureHighlight {
@@ -1736,6 +1744,37 @@ mod tests {
         assert_eq!(
             events_from_packet_with_mappings(&packet, &[mapping]),
             vec![OscInputEvent::VideoMasterOpacity(0.25)]
+        );
+    }
+
+    #[test]
+    fn maps_selected_feature_fader_to_runtime_slot() {
+        let packet = OscPacket::Message(OscMessage {
+            addr: "/operator/fader/2".to_string(),
+            args: vec![OscType::Float(0.5)],
+        });
+        let mapping = OscControlMapping {
+            address: "/operator/fader/2".to_string(),
+            action: OscControlAction::SelectedFeatureFader,
+            fixture_id: None,
+            attribute: None,
+            group_id: None,
+            cue_id: None,
+            layer_id: None,
+            video_param: None,
+            cue_point_index: Some(2),
+            output_id: None,
+            duration_ms: None,
+            low: 0.0,
+            high: 65_535.0,
+        };
+
+        assert_eq!(
+            events_from_packet_with_mappings(&packet, &[mapping]),
+            vec![OscInputEvent::SetSelectedFeatureFader {
+                target_index: 2,
+                value: 32_768,
+            }]
         );
     }
 

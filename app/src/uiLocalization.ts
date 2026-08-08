@@ -1948,6 +1948,8 @@ const japaneseText: Record<string, string> = {
   "Messages / sec": "メッセージ / 秒",
   "MIDI Control": "MIDIコントロール",
   "MIDI Feedback": "MIDIフィードバック",
+  "Selected Feature Fader": "選択中フィーチャーフェーダー",
+  "Visible fader number": "表示フェーダー番号",
   "Min X": "X最小",
   "Min Z": "Z最小",
   "Mini show": "ミニショー",
@@ -2540,6 +2542,7 @@ const japaneseText: Record<string, string> = {
 };
 
 const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
+  [/^Selected feature fader (\d+)$/, (index) => `選択中フィーチャーフェーダー ${index}`],
   [
     /^Imported Daslight Feature Preset · (\d+) target\(s\)$/,
     (count) => `インポート済みDaslight Feature Preset · ${count}ターゲット`,

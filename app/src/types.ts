@@ -56,6 +56,7 @@ export interface MidiOutputSummary {
 export type MidiControlMessage = "NoteOn" | "NoteOff" | "ControlChange" | "ProgramChange";
 export type MidiControlAction =
   | "FixtureAttribute"
+  | "SelectedFeatureFader"
   | "FixtureHighlight"
   | "FixtureSolo"
   | "FixturePark"
@@ -146,6 +147,7 @@ export interface OscInputConfig {
 
 export type OscControlAction =
   | "FixtureAttribute"
+  | "SelectedFeatureFader"
   | "FixtureHighlight"
   | "FixtureSolo"
   | "FixturePark"
@@ -681,6 +683,18 @@ export interface NodeGraphPresetFile {
   version: number;
   app: string;
   graph: NodeGraphSummary;
+}
+
+export interface OperatorSelectionContext {
+  fixture_ids: number[];
+  attributes: string[];
+}
+
+export interface OperatorFeatureFaderResult {
+  target_index: number;
+  attribute: string;
+  fixture_ids: number[];
+  value: number;
 }
 
 export type OperatorLockMode = "Full" | "Partial";

@@ -194,6 +194,7 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
             }
           }}>
             <option value="FixtureAttribute">Fixture Attribute</option>
+            <option value="SelectedFeatureFader">Selected Feature Fader</option>
             <option value="FixtureHighlight">Fixture Highlight</option>
             <option value="FixtureSolo">Fixture Solo</option>
             <option value="FixturePark">Fixture Park</option>
@@ -248,6 +249,18 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
         <label>
           Attribute
           <input value={props.mapAttribute} onInput={(event) => props.onMapAttribute(event.currentTarget.value)} />
+        </label>
+      </Show>
+      <Show when={props.mapAction === "SelectedFeatureFader"}>
+        <label>
+          Visible fader number
+          <input
+            type="number"
+            min="1"
+            max="512"
+            value={props.mapCuePointIndex + 1}
+            onInput={(event) => props.onMapCuePointIndex(Math.max(0, Number(event.currentTarget.value) - 1))}
+          />
         </label>
       </Show>
       <Show when={props.mapAction === "ClearFixtureFlags"}>

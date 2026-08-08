@@ -286,6 +286,7 @@ import type {
   OscInputConfig,
   OperatorLockMode,
   OperatorPolicy,
+  OperatorSelectionContext,
   PatchFixtureRequest,
   PatchedFixtureSummary,
   Phase1SmokeReport,
@@ -4508,6 +4509,24 @@ export default function App() {
       return controls;
     }
     return controls.filter((control) => controlCategoryForAttribute(control.attribute) === category);
+  });
+  let syncedOperatorSelectionKey = "";
+  createEffect(() => {
+    const context: OperatorSelectionContext = {
+      fixture_ids: selectedControlTargetFixtures().map((fixture) => fixture.id),
+      attributes: visibleControls().map((control) => control.attribute),
+    };
+    const key = JSON.stringify(context);
+    if (key === syncedOperatorSelectionKey) {
+      return;
+    }
+    syncedOperatorSelectionKey = key;
+    if (!isTauriRuntime()) {
+      return;
+    }
+    void tauriInvoke<OperatorSelectionContext>("set_operator_selection_context", { context }).catch((error) => {
+      console.warn("Unable to synchronize the backend operator selection context", error);
+    });
   });
   const showDimmerPanel = createMemo(() => Boolean(selectedDimmerControl()) && activeControlCategory() === "dimmer");
   const showPositionPad = createMemo(() => Boolean(selectedPositionControls()) && activeControlCategory() === "position");

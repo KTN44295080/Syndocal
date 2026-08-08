@@ -12,8 +12,9 @@ use std::{
 
 use protocol::{
     canonical_video_output_mapping_field, ClockSource, CueId, EffectId, EngineSnapshot, FixtureId,
-    NodeGraphId, RemoteClientSummary, RemoteControlConfig, RemoteControlStatus, VideoLayerId,
-    VideoOutputId, VideoOutputMapping, VideoParam, VideoRuntimeStatus,
+    NodeGraphId, OperatorSelectionContext, RemoteClientSummary, RemoteControlConfig,
+    RemoteControlStatus, VideoLayerId, VideoOutputId, VideoOutputMapping, VideoParam,
+    VideoRuntimeStatus,
 };
 use serde_json::{json, Value};
 use thiserror::Error;
@@ -2654,6 +2655,11 @@ pub enum RemoteInputEvent {
         attribute: String,
         value: u16,
     },
+    SetOperatorSelection(OperatorSelectionContext),
+    SetOperatorFeatureFader {
+        target_index: usize,
+        value: u16,
+    },
     SetGroupAttribute {
         group_id: String,
         attribute: String,
@@ -3141,6 +3147,18 @@ pub fn request_from_text(text: &str) -> Result<RemoteClientRequest, RemoteParseE
             attribute: read_string(&value, "attribute")?,
             value: read_u16_value(&value, "value")?,
         })),
+        "setOperatorSelection" => Ok(RemoteClientRequest::Event(
+            RemoteInputEvent::SetOperatorSelection(OperatorSelectionContext {
+                fixture_ids: read_u64_array(&value, "fixture_ids")?,
+                attributes: read_string_array(&value, "attributes")?,
+            }),
+        )),
+        "setOperatorFeatureFader" => Ok(RemoteClientRequest::Event(
+            RemoteInputEvent::SetOperatorFeatureFader {
+                target_index: read_u64(&value, "target_index")? as usize,
+                value: read_u16_value(&value, "value")?,
+            },
+        )),
         "setGroupAttribute" => Ok(RemoteClientRequest::Event(
             RemoteInputEvent::SetGroupAttribute {
                 group_id: read_string(&value, "group_id")?,
@@ -3846,6 +3864,33 @@ fn read_string(value: &Value, key: &'static str) -> Result<String, RemoteParseEr
         .ok_or(RemoteParseError::MissingField(key))
 }
 
+fn read_u64_array(value: &Value, key: &'static str) -> Result<Vec<u64>, RemoteParseError> {
+    value
+        .get(key)
+        .ok_or(RemoteParseError::MissingField(key))?
+        .as_array()
+        .ok_or(RemoteParseError::InvalidField(key))?
+        .iter()
+        .map(|entry| entry.as_u64().ok_or(RemoteParseError::InvalidField(key)))
+        .collect()
+}
+
+fn read_string_array(value: &Value, key: &'static str) -> Result<Vec<String>, RemoteParseError> {
+    value
+        .get(key)
+        .ok_or(RemoteParseError::MissingField(key))?
+        .as_array()
+        .ok_or(RemoteParseError::InvalidField(key))?
+        .iter()
+        .map(|entry| {
+            entry
+                .as_str()
+                .map(ToString::to_string)
+                .ok_or(RemoteParseError::InvalidField(key))
+        })
+        .collect()
+}
+
 fn read_bool(value: &Value, key: &'static str) -> Result<bool, RemoteParseError> {
     value
         .get(key)
@@ -4058,6 +4103,24 @@ mod tests {
             Ok(RemoteInputEvent::SetGroupAttribute {
                 group_id: "front".to_string(),
                 attribute: "Dimmer".to_string(),
+                value: 32_768,
+            })
+        );
+        assert_eq!(
+            event_from_text(
+                r#"{"type":"setOperatorSelection","fixture_ids":[4,9,4],"attributes":["Dimmer","ColorRed"]}"#
+            ),
+            Ok(RemoteInputEvent::SetOperatorSelection(
+                OperatorSelectionContext {
+                    fixture_ids: vec![4, 9, 4],
+                    attributes: vec!["Dimmer".to_string(), "ColorRed".to_string()],
+                }
+            ))
+        );
+        assert_eq!(
+            event_from_text(r#"{"type":"setOperatorFeatureFader","target_index":1,"value":0.5}"#),
+            Ok(RemoteInputEvent::SetOperatorFeatureFader {
+                target_index: 1,
                 value: 32_768,
             })
         );

@@ -1066,6 +1066,16 @@ fn dvc_midi_direction_mapping(
     mapping
 }
 
+fn dvc_midi_selected_feature_fader_mapping(
+    event: ParsedDvcMidiEvent,
+    target_index: usize,
+) -> MidiControlMapping {
+    let mut mapping = dvc_midi_mapping(event, MidiControlAction::SelectedFeatureFader, None);
+    mapping.cue_point_index = Some(target_index);
+    mapping.high = 65_535.0;
+    mapping
+}
+
 fn parse_midi_shortcuts(
     root: Node<'_, '_>,
     scene_indices: &HashMap<String, usize>,
@@ -1215,6 +1225,24 @@ fn parse_midi_shortcuts(
                     continue;
                 };
                 dvc_midi_mapping(event, MidiControlAction::TriggerCueListNext, Some(cue_id))
+            }
+            // Daslight's embedded action table identifies 229 as Fader. Its
+            // DVC payload carries only TARGETINDEX, so it intentionally follows
+            // the current selected fixtures and visible feature-fader order
+            // instead of being guessed as a fixed Dimmer attribute.
+            "229" => {
+                let Some(target_index) = action_node
+                    .attribute("TARGETINDEX")
+                    .and_then(|value| value.parse::<usize>().ok())
+                else {
+                    report.skipped.add(
+                        1,
+                        item,
+                        "Daslight Fader mapping was missing a numeric target index",
+                    );
+                    continue;
+                };
+                dvc_midi_selected_feature_fader_mapping(event, target_index)
             }
             _ => {
                 let target_index = action_node.attribute("TARGETINDEX").unwrap_or("unknown");
@@ -4453,7 +4481,7 @@ mod tests {
     fn synthetic_midi_shortcuts_dvc() -> String {
         synthetic_dvc().replacen(
             "<SHORTCUTS>",
-            r#"<SHORTCUTS><SHORTCUT TYPE="1"><EVENT DATA="144:2:60:127:Controller:Port"/><ACTION TYPE="107" TARGET="scene-1" TARGETINDEX="0"/><SETTINGS MIN="0" MAX="1" FLASH="0" OUT="144:2:60:5:Controller" OUT1="144:2:60:1:Controller"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="144:2:61:127:Controller"/><ACTION TYPE="107" TARGET="scene-2" TARGETINDEX="1"/><SETTINGS MIN="0" MAX="1" FLASH="1"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="176:3:20:64:Controller"/><ACTION TYPE="55" TARGETINDEX="-1"/><SETTINGS MIN="0" MAX="1" FLASH="1"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="144:2:62:127:Controller"/><ACTION TYPE="108" TARGET="scene-1" TARGETINDEX="0"/><SETTINGS MIN="0" MAX="1" FLASH="1"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="144:2:63:127:Controller"/><ACTION TYPE="113" TARGET="scene-2" TARGETINDEX="1" TARGETINDEX2="0"/><SETTINGS MIN="0.2" MAX="0.8" FLASH="1"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="144:2:64:127:Controller"/><ACTION TYPE="110" TARGET="scene-2" TARGETINDEX="1"/><SETTINGS MIN="0" MAX="1" FLASH="1"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="144:2:65:127:Controller"/><ACTION TYPE="109" TARGET="scene-1" TARGETINDEX="0"/><SETTINGS MIN="0" MAX="1" FLASH="0"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="144:2:66:127:Controller"/><ACTION TYPE="999" TARGET="scene-1" TARGETINDEX="0"/><SETTINGS MIN="0" MAX="1" FLASH="0"/></SHORTCUT>"#,
+            r#"<SHORTCUTS><SHORTCUT TYPE="1"><EVENT DATA="144:2:60:127:Controller:Port"/><ACTION TYPE="107" TARGET="scene-1" TARGETINDEX="0"/><SETTINGS MIN="0" MAX="1" FLASH="0" OUT="144:2:60:5:Controller" OUT1="144:2:60:1:Controller"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="144:2:61:127:Controller"/><ACTION TYPE="107" TARGET="scene-2" TARGETINDEX="1"/><SETTINGS MIN="0" MAX="1" FLASH="1"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="176:3:20:64:Controller"/><ACTION TYPE="55" TARGETINDEX="-1"/><SETTINGS MIN="0" MAX="1" FLASH="1"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="144:2:62:127:Controller"/><ACTION TYPE="108" TARGET="scene-1" TARGETINDEX="0"/><SETTINGS MIN="0" MAX="1" FLASH="1"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="144:2:63:127:Controller"/><ACTION TYPE="113" TARGET="scene-2" TARGETINDEX="1" TARGETINDEX2="0"/><SETTINGS MIN="0.2" MAX="0.8" FLASH="1"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="144:2:64:127:Controller"/><ACTION TYPE="110" TARGET="scene-2" TARGETINDEX="1"/><SETTINGS MIN="0" MAX="1" FLASH="1"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="144:2:65:127:Controller"/><ACTION TYPE="109" TARGET="scene-1" TARGETINDEX="0"/><SETTINGS MIN="0" MAX="1" FLASH="0"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="176:3:21:64:Controller"/><ACTION TYPE="229" TARGETINDEX="1"/><SETTINGS MIN="0" MAX="1" FLASH="0"/></SHORTCUT><SHORTCUT TYPE="1"><EVENT DATA="144:2:66:127:Controller"/><ACTION TYPE="999" TARGET="scene-1" TARGETINDEX="0"/><SETTINGS MIN="0" MAX="1" FLASH="0"/></SHORTCUT>"#,
             1,
         )
     }
@@ -4754,7 +4782,7 @@ mod tests {
             "synthetic-midi-shortcuts.dvc",
         )
         .unwrap();
-        assert_eq!(outcome.report.midi_mappings.len(), 7);
+        assert_eq!(outcome.report.midi_mappings.len(), 8);
         assert_eq!(
             outcome.report.midi_mappings[0],
             MidiControlMapping {
@@ -4840,8 +4868,19 @@ mod tests {
                 ..
             } if attribute.as_deref() == Some("Reverse")
         ));
+        assert!(matches!(
+            outcome.report.midi_mappings[7],
+            MidiControlMapping {
+                number: 21,
+                action: MidiControlAction::SelectedFeatureFader,
+                cue_point_index: Some(1),
+                low: 0.0,
+                high: 65_535.0,
+                ..
+            }
+        ));
         assert!(outcome.report.unsupported.details.iter().any(|detail| {
-            detail.item == "Shortcut 8"
+            detail.item == "Shortcut 9"
                 && detail
                     .message
                     .contains("MIDI action type 999 (target index 0)")
@@ -4852,7 +4891,7 @@ mod tests {
         }));
         assert!(outcome.report.converted.details.iter().any(|detail| {
             detail.item == "MIDI mappings"
-                && detail.message == "7 verified Daslight MIDI shortcut(s)"
+                && detail.message == "8 verified Daslight MIDI shortcut(s)"
         }));
         assert!(outcome.report.approximate.details.iter().any(|detail| {
             detail.item == "MIDI input device affinity" && detail.message.contains("Setup > I/O")
@@ -7226,6 +7265,40 @@ mod tests {
             .map(|(index, _)| index + 1)
             .collect::<Vec<_>>();
         assert_eq!(lit_addresses, vec![66, 100, 134, 168]);
+    }
+
+    #[test]
+    fn dvc_local_homecoming_laser_midi_faders_follow_operator_selection_when_present() {
+        let path = Path::new(r"C:\Users\kouty\Desktop\homecoming2026\homecoming2606-Laser.dvc");
+        if !path.is_file() {
+            eprintln!(
+                "Skipping local homecoming Laser MIDI golden: {} is unavailable",
+                path.display()
+            );
+            return;
+        }
+        let outcome = import_path(path).unwrap();
+        assert_eq!(outcome.report.midi_mappings.len(), 2);
+        assert!(outcome.report.midi_mappings.iter().any(|mapping| {
+            mapping.action == MidiControlAction::SelectedFeatureFader
+                && mapping.number == 8
+                && mapping.cue_point_index == Some(0)
+                && mapping.low == 0.0
+                && mapping.high == 65_535.0
+        }));
+        assert!(outcome.report.midi_mappings.iter().any(|mapping| {
+            mapping.action == MidiControlAction::SelectedFeatureFader
+                && mapping.number == 9
+                && mapping.cue_point_index == Some(1)
+                && mapping.low == 0.0
+                && mapping.high == 65_535.0
+        }));
+        assert!(!outcome
+            .report
+            .unsupported
+            .details
+            .iter()
+            .any(|detail| detail.message.contains("Daslight MIDI action type 229")));
     }
 
     #[test]
