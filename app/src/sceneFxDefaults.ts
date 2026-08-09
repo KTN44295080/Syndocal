@@ -1,5 +1,6 @@
 import {
   evaluateLfoShape,
+  moveFanoutPreviewState,
   sampleColorStops,
   sampleMovePath,
   transformMovePreview,
@@ -195,7 +196,7 @@ export const defaultSceneFxParams = (
       target_group_ids: [],
       points: defaultMovePathPoints(),
       closed: true,
-      interpolation: "Smooth",
+      interpolation: "Circle",
       coordinate_mode: "Absolute",
       center_x: 0.5,
       center_y: 0.5,
@@ -293,24 +294,23 @@ export const previewSceneFxFixtures = (
       request,
     );
     if (sampled.length === 0) return fixtures;
-    const indexById = new Map(request.fixture_ids.map((fixtureId, index) => [fixtureId, index]));
-    const targetCount = Math.max(1, request.fixture_ids.length);
-    const symmetrySplit = Math.ceil(request.fixture_ids.length / 2);
+    // This preview model stores one value per fixture attribute and cannot
+    // represent multiple beam-local Pan/Tilt bindings without collapsing
+    // identity. Keep explicit-beam source bodies dormant here, as the engine
+    // does when their exact bindings are unavailable.
+    if (request.beam_targets?.length) return fixtures;
+    const rankByFixtureId = new Map(request.fixture_ids.map((fixtureId, index) => [fixtureId, index]));
+    const selectionCount = Math.max(1, request.fixture_ids.length);
     const anchorX = request.coordinate_mode === "Relative" ? 50 : request.center_x * 100;
     return fixtures.map((fixture) => {
-      const index = indexById.get(fixture.id);
-      if (index === undefined) return fixture;
-      const spread = index / targetCount * request.fixture_spread;
-      const baseProgress = cycleProgress(elapsedMs, request.period_ms, request.phase + spread);
-      const progress = request.direction === "Reverse"
-        ? 1 - baseProgress
-        : request.direction === "Bounce"
-          ? baseProgress * 2 <= 1 ? baseProgress * 2 : 2 - baseProgress * 2
-          : baseProgress;
-      const sampledIndex = Math.floor(progress * sampled.length) % sampled.length;
+      const selectionRank = rankByFixtureId.get(fixture.id);
+      if (selectionRank === undefined) return fixture;
+      const fanout = moveFanoutPreviewState(request, elapsedMs, selectionRank, selectionCount);
+      const sampleIntervals = Math.max(1, sampled.length - 1);
+      const sampledIndex = Math.min(sampled.length - 1, Math.floor(fanout.progress * sampleIntervals));
       const sourcePoint = sampled[sampledIndex];
       if (!sourcePoint) return fixture;
-      const point = request.symmetry && index >= symmetrySplit
+      const point = fanout.mirrorPan
         ? { ...sourcePoint, x: Math.max(0, Math.min(100, anchorX * 2 - sourcePoint.x)) }
         : sourcePoint;
       const values: Record<string, number> = {};

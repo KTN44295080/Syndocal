@@ -46,20 +46,20 @@ use protocol::{
     FixtureId, FixtureLimits, FixturePreset, FixtureProfileSummary, GeometrySummary,
     LearnedDmxControl, LearnedMidiControl, LearnedOscControl, LfoEffectRequest,
     MappingEffectRequest, MidiControlAction, MidiControlMapping, MidiFeedbackMessage,
-    MidiInputSummary, MidiOutputSummary, MoveEffectRequest, NodeGraphId, NodeGraphNodeKind,
-    NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp, OperatorFeatureFaderResult,
-    OperatorPolicy, OperatorSelectionContext, OscControlAction, OscControlMapping, OscInputConfig,
-    PatchFixtureRequest, PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RecallMode,
-    RemoteControlConfig, RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig,
-    StageMapPresetFile, StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary,
-    TimelineAudioClipId, TimelineAudioClipSummary, TimelineEventId, TimelineLayerKind,
-    TimelineSnapRequest, TimelineTrackKind, TouchControlBinding, TouchFeaturePresetTarget,
-    TouchSurfaceSummary, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
-    VideoBackendState, VideoBlendMode, VideoEffectTarget, VideoIsfEffectStageSummary,
-    VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerTarget, VideoOutputId,
-    VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetFile,
-    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
-    VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
+    MidiInputSummary, MidiOutputSummary, MoveEffectBeamTarget, MoveEffectRequest, NodeGraphId,
+    NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp,
+    OperatorFeatureFaderResult, OperatorPolicy, OperatorSelectionContext, OscControlAction,
+    OscControlMapping, OscInputConfig, PatchFixtureRequest, PatchedFixtureSummary,
+    PositionWaveEffectRequest, ProjectFile, RecallMode, RemoteControlConfig, RemoteControlStatus,
+    Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile, StageMapPresetSummary,
+    StageObjectId, StageObjectKind, StageObjectSummary, TimelineAudioClipId,
+    TimelineAudioClipSummary, TimelineEventId, TimelineLayerKind, TimelineSnapRequest,
+    TimelineTrackKind, TouchControlBinding, TouchFeaturePresetTarget, TouchSurfaceSummary,
+    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode,
+    VideoEffectTarget, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId,
+    VideoLayerState, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
+    VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary, VideoOutputSummary,
+    VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -18424,6 +18424,7 @@ fn validate_project_cue_effect_params(
             fixtures_by_id,
             &request.fixture_ids,
             &request.target_group_ids,
+            &request.beam_targets,
             &owner_label,
         ),
         EffectParamsSnapshot::Value(request) => validate_project_effect_fixture_targets(
@@ -18717,6 +18718,7 @@ fn validate_project_lighting_references(snapshot: &EngineSnapshot) -> Result<(),
                 &fixtures_by_id,
                 &request.fixture_ids,
                 &request.target_group_ids,
+                &request.beam_targets,
                 &format!("Move effect {}", effect.id),
             )?;
             if effect.fixture_ids != request.fixture_ids
@@ -18972,6 +18974,7 @@ fn validate_project_move_effect_targets(
     fixtures_by_id: &HashMap<FixtureId, &PatchedFixtureSummary>,
     fixture_ids: &[FixtureId],
     target_group_ids: &[String],
+    beam_targets: &[MoveEffectBeamTarget],
     owner_label: &str,
 ) -> Result<(), String> {
     validate_project_unique_refs(owner_label, fixture_ids)?;
@@ -19001,6 +19004,38 @@ fn validate_project_move_effect_targets(
                 "Project {owner_label} references missing fixture group '{group_id}'"
             ));
         }
+    }
+    if !beam_targets.is_empty() {
+        if !target_group_ids.is_empty() {
+            return Err(format!(
+                "Project {owner_label} explicit Move beam targets cannot be combined with fixture groups"
+            ));
+        }
+        let mut seen = HashSet::new();
+        for target in beam_targets {
+            if !fixture_ids.contains(&target.fixture_id) {
+                return Err(format!(
+                    "Project {owner_label} Move beam target fixture {} is absent from fixture targets",
+                    target.fixture_id
+                ));
+            }
+            if !fixtures_by_id.contains_key(&target.fixture_id) {
+                return Err(format!(
+                    "Project {owner_label} Move beam target references missing fixture {}",
+                    target.fixture_id
+                ));
+            }
+            if !seen.insert((target.fixture_id, target.beam_index)) {
+                return Err(format!(
+                    "Project {owner_label} repeats Move fixture {} beam {}",
+                    target.fixture_id, target.beam_index
+                ));
+            }
+        }
+        // Exact imported source bodies may intentionally be dormant when the
+        // patched fixture has no Pan/Tilt axes. Preserve their authored beam
+        // identity instead of inventing compatible attributes.
+        return Ok(());
     }
     if !target_ids.iter().any(|fixture_id| {
         fixtures_by_id
@@ -20617,6 +20652,7 @@ fn apply_move_effect_target_override(
     validate_move_effect_target_override(target_override)?;
     request.fixture_ids = target_override.fixture_ids.clone();
     request.target_group_ids = target_override.target_group_ids.clone();
+    request.beam_targets.clear();
     Ok(request)
 }
 
@@ -38087,6 +38123,7 @@ f 1 2 3
             label: "Front circle Move".to_string(),
             fixture_ids: vec![1],
             target_group_ids: Vec::new(),
+            beam_targets: Vec::new(),
             points: vec![
                 protocol::MovePathPoint { x: 0.5, y: 0.0 },
                 protocol::MovePathPoint { x: 1.0, y: 0.5 },
@@ -38331,6 +38368,56 @@ f 1 2 3
         assert!(validate_project_file(&project)
             .unwrap_err()
             .contains("paired Pan and Tilt"));
+
+        let mut dormant_request = request.clone();
+        dormant_request.beam_targets = vec![MoveEffectBeamTarget {
+            fixture_id: 1,
+            beam_index: 6,
+            selection_index: 0,
+        }];
+        project.snapshot.effects = vec![move_effect_summary_for_test(20, dormant_request.clone())];
+        validate_project_file(&project).unwrap();
+        let dormant_json = serde_json::to_string_pretty(&ProjectFile {
+            snapshot: project_snapshot_for_save(project.snapshot.clone()),
+            ..project.clone()
+        })
+        .unwrap();
+        let dormant_roundtrip: ProjectFile = serde_json::from_str(&dormant_json).unwrap();
+        validate_project_file(&dormant_roundtrip).unwrap();
+        assert_eq!(
+            dormant_roundtrip.snapshot.effects[0]
+                .move_effect
+                .as_ref()
+                .unwrap()
+                .beam_targets,
+            dormant_request.beam_targets,
+            "an explicit imported Move beam body must survive while dormant on a fixture without Pan/Tilt"
+        );
+
+        let mut outside_request = dormant_request.clone();
+        outside_request.beam_targets[0].fixture_id = 2;
+        project.snapshot.effects = vec![move_effect_summary_for_test(21, outside_request)];
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("absent from fixture targets"));
+
+        let mut duplicate_request = dormant_request.clone();
+        duplicate_request.beam_targets.push(MoveEffectBeamTarget {
+            fixture_id: 1,
+            beam_index: 6,
+            selection_index: 1,
+        });
+        project.snapshot.effects = vec![move_effect_summary_for_test(22, duplicate_request)];
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("fixture 1 beam 6"));
+
+        let mut grouped_request = dormant_request;
+        grouped_request.target_group_ids = vec!["Moving".to_string()];
+        project.snapshot.effects = vec![move_effect_summary_for_test(23, grouped_request)];
+        assert!(validate_project_file(&project)
+            .unwrap_err()
+            .contains("cannot be combined with group targets"));
     }
 
     #[test]
@@ -38349,6 +38436,19 @@ f 1 2 3
         assert_eq!(retargeted.points, request.points);
         assert_eq!(retargeted.center_x, request.center_x);
         assert_eq!(retargeted.rotation_degrees, request.rotation_degrees);
+
+        let mut beam_request = request.clone();
+        beam_request.beam_targets = vec![MoveEffectBeamTarget {
+            fixture_id: 1,
+            beam_index: 4,
+            selection_index: 0,
+        }];
+        let beam_retargeted =
+            apply_move_effect_target_override(beam_request, &target_override).unwrap();
+        assert!(
+            beam_retargeted.beam_targets.is_empty(),
+            "retargeting must discard source-specific Move beam identities"
+        );
 
         let mut video_override = target_override;
         video_override.video_targets = vec![sample_video_effect_target(7)];
@@ -38889,6 +38989,7 @@ f 1 2 3
             label: request.label.clone(),
             fixture_ids: request.fixture_ids.clone(),
             target_group_ids: request.target_group_ids.clone(),
+            beam_targets: Vec::new(),
             points: vec![
                 protocol::MovePathPoint { x: 0.0, y: 0.0 },
                 protocol::MovePathPoint { x: 1.0, y: 1.0 },

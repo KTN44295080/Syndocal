@@ -3521,6 +3521,9 @@ struct RuntimeMoveEffect {
     path: CompiledMovePath,
     targets: Vec<RuntimeMoveTarget>,
     target_indices: HashMap<FixtureId, usize>,
+    /// Fixture/control identity is compiled once on add/update/rebuild. The
+    /// 44 Hz evaluator performs two fixed hash reads and no beam search.
+    attribute_indices: HashMap<FixtureId, HashMap<String, usize>>,
     rotation_cosine: f32,
     rotation_sine: f32,
 }
@@ -3531,6 +3534,7 @@ struct RuntimeMoveTarget {
     pan_attribute: String,
     tilt_attribute: String,
     phase_offset: f32,
+    reverse_time: bool,
     mirror_pan: bool,
     cached: Cell<Option<RuntimeMoveEvaluation>>,
 }
@@ -10946,8 +10950,13 @@ impl EngineRuntime {
             }
             RuntimeEffectKind::Move(runtime) => {
                 runtime.request.fixture_ids.retain(|id| *id != fixture_id);
+                runtime
+                    .request
+                    .beam_targets
+                    .retain(|target| target.fixture_id != fixture_id);
                 !runtime.request.fixture_ids.is_empty()
                     || !runtime.request.target_group_ids.is_empty()
+                    || !runtime.request.beam_targets.is_empty()
             }
             RuntimeEffectKind::Value(runtime) => {
                 runtime.request.fixture_ids.retain(|id| *id != fixture_id);
@@ -13024,7 +13033,16 @@ impl EngineRuntime {
                 RuntimeEffectKind::Chaser(self.resolve_chaser_effect_request(request.clone())?)
             }
             EffectParamsSnapshot::Move(request) => {
-                RuntimeEffectKind::Move(self.resolve_move_effect_request(request.clone())?)
+                // Cue-owned imports can deliberately retain a beam body whose
+                // current fixture profile exposes no Pan/Tilt pairs. Compile it
+                // as a dormant no-op so a later patch/profile rebuild can bind
+                // those authored beams without losing source identity/order.
+                let runtime = if request.beam_targets.is_empty() {
+                    self.resolve_move_effect_request(request.clone())?
+                } else {
+                    self.restore_move_effect_request(request.clone())?
+                };
+                RuntimeEffectKind::Move(runtime)
             }
             EffectParamsSnapshot::Value(request) => {
                 RuntimeEffectKind::Value(self.resolve_value_effect_request(request.clone())?)
@@ -14994,6 +15012,7 @@ impl EngineRuntime {
         request.target_group_ids = normalize_runtime_group_ids(request.target_group_ids)?;
 
         let has_group_reference = !request.target_group_ids.is_empty();
+        let has_authored_beam_body = !request.beam_targets.is_empty();
         for group_id in &request.target_group_ids {
             let fixture_ids = self.fixture_ids_in_group(group_id);
             if fixture_ids.is_empty() {
@@ -15008,7 +15027,7 @@ impl EngineRuntime {
         runtime_move_effect_from_request(
             request,
             &self.fixtures,
-            !(allow_unresolved_groups && has_group_reference),
+            !(allow_unresolved_groups && (has_group_reference || has_authored_beam_body)),
         )
     }
 
@@ -15335,7 +15354,19 @@ impl EngineRuntime {
             match runtime_move_effect_from_request(runtime.request.clone(), fixtures, false) {
                 Ok(rebuilt) => {
                     *runtime = rebuilt;
-                    !runtime.targets.is_empty() || has_group_reference
+                    !runtime.targets.is_empty()
+                        || !runtime.request.beam_targets.is_empty()
+                        || has_group_reference
+                }
+                Err(_) if !runtime.request.beam_targets.is_empty() => {
+                    // An explicit beam body is atomic. If a fixture/profile
+                    // rebuild leaves only some authored beams resolvable, drop
+                    // every compiled binding rather than emitting through stale
+                    // attribute maps from the previous profile.
+                    runtime.targets.clear();
+                    runtime.target_indices.clear();
+                    runtime.attribute_indices.clear();
+                    true
                 }
                 Err(_) => has_group_reference,
             }
@@ -25170,6 +25201,7 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
                 path,
                 targets: Vec::new(),
                 target_indices: HashMap::new(),
+                attribute_indices: HashMap::new(),
                 rotation_cosine,
                 rotation_sine,
             })
@@ -25690,8 +25722,18 @@ pub fn validate_move_effect_request(request: &MoveEffectRequest) -> Result<(), S
     if request.fixture_ids.is_empty() && request.target_group_ids.is_empty() {
         return Err("Move effect must target at least one fixture or group".to_string());
     }
-    if !(2..=256).contains(&request.points.len()) {
-        return Err("Move effect requires between 2 and 256 path points".to_string());
+    let maximum_points = if request.interpolation == protocol::MoveInterpolation::Circle {
+        255
+    } else {
+        256
+    };
+    if !(2..=maximum_points).contains(&request.points.len()) {
+        return Err(format!(
+            "Move effect requires between 2 and {maximum_points} path points"
+        ));
+    }
+    if request.interpolation == protocol::MoveInterpolation::Circle && !request.closed {
+        return Err("Move Circle interpolation requires a closed path".to_string());
     }
     if request.points.iter().any(|point| {
         !point.x.is_finite()
@@ -25745,6 +25787,21 @@ pub fn validate_move_effect_request(request: &MoveEffectRequest) -> Result<(), S
     if !request.fixture_spread.is_finite() || !(0.0..=1.0).contains(&request.fixture_spread) {
         return Err("Move effect fixture spread must be finite and within 0..1".to_string());
     }
+    if request.beam_targets.len() > 4_096 {
+        return Err("Move effect cannot target more than 4096 beams".to_string());
+    }
+    if !request.beam_targets.is_empty() && !request.target_group_ids.is_empty() {
+        return Err("Move beam targets cannot be combined with group targets".to_string());
+    }
+    let mut beam_targets = HashSet::new();
+    for target in &request.beam_targets {
+        if !beam_targets.insert((target.fixture_id, target.beam_index)) {
+            return Err(format!(
+                "Move beam target fixture {} beam {} is duplicated",
+                target.fixture_id, target.beam_index
+            ));
+        }
+    }
     if request.blend_mode != EffectBlendMode::Override {
         return Err(
             "Move effects use Override semantics; Relative mode applies a signed offset"
@@ -25782,39 +25839,124 @@ fn runtime_move_effect_from_request(
         }
     }
 
-    let compatible = fixture_ids
-        .into_iter()
-        .filter_map(|fixture_id| {
-            let fixture = fixtures.iter().find(|fixture| fixture.id == fixture_id)?;
-            let (pan_attribute, tilt_attribute) = runtime_move_attribute_pair(fixture)?;
-            Some((
+    let allowed_fixture_ids = fixture_ids.iter().copied().collect::<HashSet<_>>();
+    let mut compatible = Vec::<(FixtureId, Option<u16>, u32, String, String)>::new();
+    let mut unresolved_beam_error = None;
+    if request.beam_targets.is_empty() {
+        for fixture_id in fixture_ids {
+            let Some(fixture) = fixtures.iter().find(|fixture| fixture.id == fixture_id) else {
+                continue;
+            };
+            let Some((pan_attribute, tilt_attribute)) = runtime_move_attribute_pair(fixture) else {
+                continue;
+            };
+            let selection_index = u32::try_from(compatible.len()).unwrap_or(u32::MAX);
+            compatible.push((
                 fixture_id,
+                None,
+                selection_index,
                 pan_attribute.to_string(),
                 tilt_attribute.to_string(),
-            ))
-        })
-        .collect::<Vec<_>>();
+            ));
+        }
+    } else {
+        for target in &request.beam_targets {
+            if !allowed_fixture_ids.contains(&target.fixture_id) {
+                return Err(format!(
+                    "Move beam target fixture {} is not present in the resolved fixture targets",
+                    target.fixture_id
+                ));
+            }
+            let Some(fixture) = fixtures
+                .iter()
+                .find(|fixture| fixture.id == target.fixture_id)
+            else {
+                unresolved_beam_error.get_or_insert_with(|| {
+                    format!(
+                        "Move beam target fixture {} was not found",
+                        target.fixture_id
+                    )
+                });
+                continue;
+            };
+            let pairs = runtime_move_attribute_pairs(fixture);
+            let Some((pan_attribute, tilt_attribute)) =
+                pairs.get(target.beam_index as usize).copied().flatten()
+            else {
+                unresolved_beam_error.get_or_insert_with(|| {
+                    format!(
+                        "Move beam target fixture {} has no paired Pan/Tilt beam {}",
+                        target.fixture_id, target.beam_index
+                    )
+                });
+                continue;
+            };
+            compatible.push((
+                target.fixture_id,
+                Some(target.beam_index),
+                target.selection_index,
+                pan_attribute.to_string(),
+                tilt_attribute.to_string(),
+            ));
+        }
+        // Restore/rebuild treats an explicit beam body atomically: any missing
+        // authored beam makes the whole body dormant, preserving source order
+        // for a later compatible profile. Strict Add/Update still rejects it.
+        if let Some(error) = unresolved_beam_error {
+            if require_resolved_target {
+                return Err(error);
+            }
+            compatible.clear();
+        }
+    }
     if require_resolved_target && compatible.is_empty() {
-        return Err(
-            "Move effect must resolve at least one fixture with one paired Pan and Tilt control"
-                .to_string(),
-        );
+        let target_kind = if request.beam_targets.is_empty() {
+            "fixture"
+        } else {
+            "beam"
+        };
+        return Err(format!(
+            "Move effect must resolve at least one {target_kind} target with one paired Pan and Tilt control"
+        ));
     }
 
     let compatible_count = compatible.len();
     let count = compatible_count.max(1) as f32;
-    let symmetry_split = compatible_count.div_ceil(2);
+    let (selection_ranks, selection_count) =
+        authored_move_selection_ranks(&compatible, 0, compatible.len());
+    let symmetry_selection_split = selection_count.div_ceil(2);
+    let circle = request.interpolation == protocol::MoveInterpolation::Circle;
     let targets = compatible
         .into_iter()
         .enumerate()
         .map(
-            |(index, (fixture_id, pan_attribute, tilt_attribute))| RuntimeMoveTarget {
-                fixture_id,
-                pan_attribute,
-                tilt_attribute,
-                phase_offset: index as f32 / count * request.fixture_spread,
-                mirror_pan: request.symmetry && index >= symmetry_split,
-                cached: Cell::new(None),
+            |(
+                index,
+                (fixture_id, _beam_index, _selection_index, pan_attribute, tilt_attribute),
+            )| {
+                let selection_rank = selection_ranks.get(index).copied().unwrap_or(index);
+                let second_wing = request.symmetry && selection_rank >= symmetry_selection_split;
+                let rank = if circle && second_wing {
+                    selection_rank - symmetry_selection_split
+                } else {
+                    selection_rank
+                };
+                let phase_offset = if circle {
+                    -(rank as f32 / selection_count.max(1) as f32 * request.fixture_spread)
+                } else if !request.beam_targets.is_empty() {
+                    selection_rank as f32 / selection_count.max(1) as f32 * request.fixture_spread
+                } else {
+                    index as f32 / count * request.fixture_spread
+                };
+                RuntimeMoveTarget {
+                    fixture_id,
+                    pan_attribute,
+                    tilt_attribute,
+                    phase_offset,
+                    reverse_time: circle && second_wing,
+                    mirror_pan: !circle && second_wing,
+                    cached: Cell::new(None),
+                }
             },
         )
         .collect::<Vec<_>>();
@@ -25823,15 +25965,44 @@ fn runtime_move_effect_from_request(
         .enumerate()
         .map(|(index, target)| (target.fixture_id, index))
         .collect();
+    let mut attribute_indices = HashMap::<FixtureId, HashMap<String, usize>>::new();
+    for (index, target) in targets.iter().enumerate() {
+        let attributes = attribute_indices.entry(target.fixture_id).or_default();
+        for attribute in [&target.pan_attribute, &target.tilt_attribute] {
+            if attributes.insert(attribute.clone(), index).is_some() {
+                return Err(format!(
+                    "Move target fixture {} maps attribute '{}' more than once",
+                    target.fixture_id, attribute
+                ));
+            }
+        }
+    }
     let (rotation_cosine, rotation_sine) = move_rotation(request.rotation_degrees);
     Ok(RuntimeMoveEffect {
         request,
         path,
         targets,
         target_indices,
+        attribute_indices,
         rotation_cosine,
         rotation_sine,
     })
+}
+
+fn authored_move_selection_ranks(
+    compatible: &[(FixtureId, Option<u16>, u32, String, String)],
+    start: usize,
+    end: usize,
+) -> (Vec<usize>, usize) {
+    let mut ranks = HashMap::<u32, usize>::new();
+    let mut ordered = Vec::with_capacity(end.saturating_sub(start));
+    for (_, _, selection_index, _, _) in &compatible[start..end] {
+        let next_rank = ranks.len();
+        let rank = *ranks.entry(*selection_index).or_insert(next_rank);
+        ordered.push(rank);
+    }
+    let count = ranks.len().max(1);
+    (ordered, count)
 }
 
 #[cfg(test)]
@@ -25862,8 +26033,9 @@ fn evaluate_runtime_move_attribute_at_rate(
     rate: f32,
 ) -> Option<u16> {
     let target = runtime
-        .target_indices
+        .attribute_indices
         .get(&fixture_id)
+        .and_then(|attributes| attributes.get(attribute))
         .and_then(|index| runtime.targets.get(*index))?;
     let axis = if target.pan_attribute.eq_ignore_ascii_case(attribute) {
         MovementAxis::Pan
@@ -25880,6 +26052,7 @@ fn evaluate_runtime_move_attribute_at_rate(
             let progress = move_effect_progress(
                 &runtime.request,
                 target.phase_offset,
+                target.reverse_time,
                 created_at,
                 now,
                 clock,
@@ -25928,6 +26101,7 @@ fn evaluate_runtime_move_attribute_at_rate(
 fn move_effect_progress(
     request: &MoveEffectRequest,
     fixture_phase_offset: f32,
+    reverse_time: bool,
     created_at: Instant,
     now: Instant,
     clock: &ClockSnapshot,
@@ -25941,7 +26115,13 @@ fn move_effect_progress(
         let period = request.period_ms.max(10) as f32 / 1_000.0;
         now.saturating_duration_since(created_at).as_secs_f32() * rate / period
     };
-    let phase = (cycle + request.phase + fixture_phase_offset).rem_euclid(1.0);
+    let time = cycle + request.phase;
+    let phase = if reverse_time {
+        0.5 - time + fixture_phase_offset
+    } else {
+        time + fixture_phase_offset
+    }
+    .rem_euclid(1.0);
     match request.direction {
         MoveDirection::Forward => phase,
         MoveDirection::Reverse => 1.0 - phase,
@@ -32167,24 +32347,34 @@ fn control_for_attribute<'a>(
 }
 
 fn runtime_move_attribute_pair(fixture: &RuntimeFixture) -> Option<(&str, &str)> {
-    let mode = fixture.profile.dmx_modes.get(fixture.mode_index)?;
-    let mut pan_controls = mode
+    let pairs = runtime_move_attribute_pairs(fixture);
+    (pairs.len() == 1).then(|| pairs[0]).flatten()
+}
+
+fn runtime_move_attribute_pairs(fixture: &RuntimeFixture) -> Vec<Option<(&str, &str)>> {
+    let Some(mode) = fixture.profile.dmx_modes.get(fixture.mode_index) else {
+        return Vec::new();
+    };
+    let pan_controls = mode
         .controls
         .iter()
-        .filter(|control| movement_axis(&control.attribute) == Some(MovementAxis::Pan));
-    let pan = pan_controls.next()?;
-    if pan_controls.next().is_some() {
-        return None;
-    }
-    let mut tilt_controls = mode
+        .filter(|control| movement_axis(&control.attribute) == Some(MovementAxis::Pan))
+        .collect::<Vec<_>>();
+    let tilt_controls = mode
         .controls
         .iter()
-        .filter(|control| movement_axis(&control.attribute) == Some(MovementAxis::Tilt));
-    let tilt = tilt_controls.next()?;
-    if tilt_controls.next().is_some() {
-        return None;
-    }
-    Some((pan.attribute.as_str(), tilt.attribute.as_str()))
+        .filter(|control| movement_axis(&control.attribute) == Some(MovementAxis::Tilt))
+        .collect::<Vec<_>>();
+    let pair_count = pan_controls.len().max(tilt_controls.len());
+    (0..pair_count)
+        .map(|index| {
+            let (Some(pan), Some(tilt)) = (pan_controls.get(index), tilt_controls.get(index))
+            else {
+                return None;
+            };
+            Some((pan.attribute.as_str(), tilt.attribute.as_str()))
+        })
+        .collect()
 }
 
 fn clamp_to_range(value: u16, min: u16, max: u16, invert: bool) -> u16 {
@@ -54709,11 +54899,58 @@ mod tests {
         runtime
     }
 
+    fn runtime_with_move_beam_fixture(pair_count: usize) -> EngineRuntime {
+        assert!(pair_count >= 1);
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut profile = sample_profile();
+        profile.dmx_modes[0].controls.push(AttributeControl {
+            attribute: "Tilt".to_string(),
+            channel_name: "Tilt".to_string(),
+            geometry: None,
+            offsets: vec![4, 5],
+            resolution: AttributeResolution::SixteenBit,
+            default_value: 0,
+            functions: Vec::new(),
+        });
+        for beam_index in 1..pair_count {
+            let first_offset = u16::try_from(beam_index * 4 + 2).unwrap();
+            profile.dmx_modes[0].controls.push(AttributeControl {
+                attribute: format!("Pan {}", beam_index + 1),
+                channel_name: format!("Pan {}", beam_index + 1),
+                geometry: None,
+                offsets: vec![first_offset, first_offset + 1],
+                resolution: AttributeResolution::SixteenBit,
+                default_value: 0,
+                functions: Vec::new(),
+            });
+            profile.dmx_modes[0].controls.push(AttributeControl {
+                attribute: format!("Tilt {}", beam_index + 1),
+                channel_name: format!("Tilt {}", beam_index + 1),
+                geometry: None,
+                offsets: vec![first_offset + 2, first_offset + 3],
+                resolution: AttributeResolution::SixteenBit,
+                default_value: 0,
+                functions: Vec::new(),
+            });
+        }
+        runtime.apply_command(EngineCommand::PatchFixture {
+            fixture_id: 1,
+            request: sample_patch_request("Multi-head mover", 1),
+            profile,
+        });
+        assert_eq!(runtime.last_error, None);
+        runtime
+    }
+
     fn test_move_request(fixture_ids: &[FixtureId]) -> MoveEffectRequest {
         MoveEffectRequest {
             label: "Production Move".to_string(),
             fixture_ids: fixture_ids.to_vec(),
             target_group_ids: Vec::new(),
+            beam_targets: Vec::new(),
             points: vec![
                 protocol::MovePathPoint { x: 0.5, y: 0.0 },
                 protocol::MovePathPoint { x: 1.0, y: 0.5 },
@@ -54766,6 +55003,53 @@ mod tests {
         assert!(validate_move_effect_request(&invalid_size)
             .unwrap_err()
             .contains("greater than 0"));
+
+        let mut open_circle = valid.clone();
+        open_circle.interpolation = protocol::MoveInterpolation::Circle;
+        open_circle.closed = false;
+        assert!(validate_move_effect_request(&open_circle)
+            .unwrap_err()
+            .contains("requires a closed path"));
+
+        let mut circle_too_many_points = valid.clone();
+        circle_too_many_points.interpolation = protocol::MoveInterpolation::Circle;
+        circle_too_many_points.points = (0..256)
+            .map(|index| MovePathPoint {
+                x: index as f32 / 255.0,
+                y: if index % 2 == 0 { 0.25 } else { 0.75 },
+            })
+            .collect();
+        assert!(validate_move_effect_request(&circle_too_many_points)
+            .unwrap_err()
+            .contains("between 2 and 255"));
+
+        let mut grouped_beams = valid.clone();
+        grouped_beams.target_group_ids = vec!["Moving".to_string()];
+        grouped_beams.beam_targets = vec![protocol::MoveEffectBeamTarget {
+            fixture_id: 1,
+            beam_index: 0,
+            selection_index: 0,
+        }];
+        assert!(validate_move_effect_request(&grouped_beams)
+            .unwrap_err()
+            .contains("cannot be combined with group targets"));
+
+        let mut duplicate_beam = valid.clone();
+        duplicate_beam.beam_targets = vec![
+            protocol::MoveEffectBeamTarget {
+                fixture_id: 1,
+                beam_index: 0,
+                selection_index: 0,
+            },
+            protocol::MoveEffectBeamTarget {
+                fixture_id: 1,
+                beam_index: 0,
+                selection_index: 1,
+            },
+        ];
+        assert!(validate_move_effect_request(&duplicate_beam)
+            .unwrap_err()
+            .contains("is duplicated"));
 
         let paired = runtime_with_move_fixtures(1);
         assert_eq!(
@@ -55085,6 +55369,401 @@ mod tests {
     }
 
     #[test]
+    fn move_circle_beam_fanout_compiles_authored_order_and_negative_total_spread() {
+        let runtime = runtime_with_move_beam_fixture(3);
+        let mut request = test_move_request(&[1]);
+        request.interpolation = protocol::MoveInterpolation::Circle;
+        request.fixture_spread = 0.75;
+        request.beam_targets = vec![
+            protocol::MoveEffectBeamTarget {
+                fixture_id: 1,
+                beam_index: 2,
+                selection_index: 0,
+            },
+            protocol::MoveEffectBeamTarget {
+                fixture_id: 1,
+                beam_index: 0,
+                selection_index: 1,
+            },
+            protocol::MoveEffectBeamTarget {
+                fixture_id: 1,
+                beam_index: 1,
+                selection_index: 2,
+            },
+        ];
+        let effect = runtime.resolve_move_effect_request(request).unwrap();
+
+        assert_eq!(
+            effect
+                .targets
+                .iter()
+                .map(|target| target.pan_attribute.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Pan 3", "Pan", "Pan 2"]
+        );
+        assert_eq!(
+            effect
+                .targets
+                .iter()
+                .map(|target| target.phase_offset)
+                .collect::<Vec<_>>(),
+            vec![0.0, -0.25, -0.5]
+        );
+        assert!(effect.targets.iter().all(|target| !target.reverse_time));
+        let at = Instant::now();
+        let pan = evaluate_runtime_move_attribute(
+            &effect,
+            1,
+            "Pan",
+            0,
+            at,
+            at,
+            &ClockSnapshot::default(),
+        )
+        .unwrap();
+        assert!((8_191..=8_193).contains(&pan), "negative-spread Pan={pan}");
+    }
+
+    #[test]
+    fn move_circle_symmetry_groups_shared_selections_and_reverses_time() {
+        let runtime = runtime_with_move_beam_fixture(4);
+        let mut grouped_request = test_move_request(&[1]);
+        grouped_request.interpolation = protocol::MoveInterpolation::Circle;
+        grouped_request.fixture_spread = 0.8;
+        grouped_request.symmetry = true;
+        grouped_request.beam_targets = [0_u16, 1, 2, 3]
+            .into_iter()
+            .zip([0_u32, 0, 1, 1])
+            .map(
+                |(beam_index, selection_index)| protocol::MoveEffectBeamTarget {
+                    fixture_id: 1,
+                    beam_index,
+                    selection_index,
+                },
+            )
+            .collect();
+        let grouped = runtime
+            .resolve_move_effect_request(grouped_request)
+            .unwrap();
+        assert_eq!(
+            grouped
+                .targets
+                .iter()
+                .map(|target| (target.phase_offset, target.reverse_time))
+                .collect::<Vec<_>>(),
+            vec![(0.0, false), (0.0, false), (0.0, true), (0.0, true)]
+        );
+
+        let mut reverse_request = test_move_request(&[1]);
+        reverse_request.interpolation = protocol::MoveInterpolation::Circle;
+        reverse_request.rotation_degrees = 30.0;
+        reverse_request.fixture_spread = 0.0;
+        reverse_request.symmetry = true;
+        reverse_request.beam_targets = vec![
+            protocol::MoveEffectBeamTarget {
+                fixture_id: 1,
+                beam_index: 0,
+                selection_index: 0,
+            },
+            protocol::MoveEffectBeamTarget {
+                fixture_id: 1,
+                beam_index: 1,
+                selection_index: 1,
+            },
+        ];
+        let reversed = runtime
+            .resolve_move_effect_request(reverse_request)
+            .unwrap();
+        assert!(!reversed.targets[0].reverse_time);
+        assert!(reversed.targets[1].reverse_time);
+        assert!(!reversed.targets[1].mirror_pan);
+
+        let created_at = Instant::now();
+        let now = created_at + Duration::from_millis(250);
+        let clock = ClockSnapshot::default();
+        let first_pan =
+            evaluate_runtime_move_attribute(&reversed, 1, "Pan", 0, created_at, now, &clock)
+                .unwrap();
+        let first_tilt =
+            evaluate_runtime_move_attribute(&reversed, 1, "Tilt", 0, created_at, now, &clock)
+                .unwrap();
+        let second_pan =
+            evaluate_runtime_move_attribute(&reversed, 1, "Pan 2", 0, created_at, now, &clock)
+                .unwrap();
+        let second_tilt =
+            evaluate_runtime_move_attribute(&reversed, 1, "Tilt 2", 0, created_at, now, &clock)
+                .unwrap();
+        assert!(
+            (42_022..=42_026).contains(&first_pan),
+            "first Pan={first_pan}"
+        );
+        assert!(
+            (14_044..=14_048).contains(&first_tilt),
+            "first Tilt={first_tilt}"
+        );
+        assert!(
+            (53_607..=53_611).contains(&second_pan),
+            "second Pan={second_pan}"
+        );
+        assert!(
+            (34_110..=34_114).contains(&second_tilt),
+            "second Tilt={second_tilt}"
+        );
+        assert_ne!(second_tilt, first_tilt, "symmetry must reverse path time");
+    }
+
+    #[test]
+    fn move_explicit_beam_selection_indices_share_phase_for_line_paths() {
+        let runtime = runtime_with_move_beam_fixture(3);
+        let mut request = test_move_request(&[1]);
+        request.interpolation = protocol::MoveInterpolation::Line;
+        request.fixture_spread = 0.75;
+        request.beam_targets = [0_u16, 1, 2]
+            .into_iter()
+            .zip([7_u32, 3, 7])
+            .map(
+                |(beam_index, selection_index)| protocol::MoveEffectBeamTarget {
+                    fixture_id: 1,
+                    beam_index,
+                    selection_index,
+                },
+            )
+            .collect();
+        let effect = runtime.resolve_move_effect_request(request).unwrap();
+
+        assert_eq!(effect.targets[0].phase_offset, 0.0);
+        assert_eq!(effect.targets[1].phase_offset, 0.375);
+        assert_eq!(effect.targets[2].phase_offset, 0.0);
+    }
+
+    #[test]
+    fn move_beam_axis_count_mismatch_keeps_raw_beam_index_stable() {
+        let mut runtime = runtime_with_move_beam_fixture(3);
+        let controls = &mut runtime.fixtures[0].profile.dmx_modes[0].controls;
+        controls.retain(|control| control.attribute != "Tilt 3");
+        let pairs = runtime_move_attribute_pairs(&runtime.fixtures[0]);
+        assert_eq!(pairs.len(), 3);
+        assert_eq!(pairs[0], Some(("Pan", "Tilt")));
+        assert_eq!(pairs[1], Some(("Pan 2", "Tilt 2")));
+        assert!(pairs[2].is_none());
+
+        let mut valid = test_move_request(&[1]);
+        valid.beam_targets = vec![protocol::MoveEffectBeamTarget {
+            fixture_id: 1,
+            beam_index: 1,
+            selection_index: 0,
+        }];
+        let resolved = runtime.resolve_move_effect_request(valid).unwrap();
+        assert_eq!(resolved.targets[0].pan_attribute, "Pan 2");
+        assert_eq!(resolved.targets[0].tilt_attribute, "Tilt 2");
+
+        let mut invalid = test_move_request(&[1]);
+        invalid.beam_targets = vec![protocol::MoveEffectBeamTarget {
+            fixture_id: 1,
+            beam_index: 2,
+            selection_index: 0,
+        }];
+        assert!(runtime
+            .resolve_move_effect_request(invalid)
+            .unwrap_err()
+            .contains("beam 2"));
+
+        let mut partially_compatible = test_move_request(&[1]);
+        partially_compatible.beam_targets = vec![
+            protocol::MoveEffectBeamTarget {
+                fixture_id: 1,
+                beam_index: 0,
+                selection_index: 0,
+            },
+            protocol::MoveEffectBeamTarget {
+                fixture_id: 1,
+                beam_index: 2,
+                selection_index: 1,
+            },
+        ];
+        assert!(runtime
+            .resolve_move_effect_request(partially_compatible.clone())
+            .unwrap_err()
+            .contains("beam 2"));
+        let restored = runtime
+            .restore_move_effect_request(partially_compatible.clone())
+            .expect("project restore must preserve a partial authored body atomically");
+        assert!(restored.targets.is_empty());
+        assert!(restored.attribute_indices.is_empty());
+        assert_eq!(restored.request, partially_compatible);
+    }
+
+    #[test]
+    fn move_incompatible_authored_beams_rebuild_as_dormant_without_invented_axes() {
+        let mut runtime = runtime_with_move_fixtures(1);
+        runtime.fixtures[0].profile.dmx_modes[0]
+            .controls
+            .retain(|control| movement_axis(&control.attribute).is_none());
+        let mut request = test_move_request(&[1]);
+        request.interpolation = protocol::MoveInterpolation::Circle;
+        request.beam_targets = (1_u16..=6)
+            .map(|beam_index| protocol::MoveEffectBeamTarget {
+                fixture_id: 1,
+                beam_index,
+                selection_index: u32::from(beam_index - 1),
+            })
+            .collect();
+
+        let dormant = runtime_move_effect_from_request(request.clone(), &runtime.fixtures, false)
+            .expect("project rebuild must preserve an authored no-axis beam body");
+        assert!(dormant.targets.is_empty());
+        assert_eq!(dormant.request, request);
+        assert!(
+            runtime_move_effect_from_request(request.clone(), &runtime.fixtures, true)
+                .unwrap_err()
+                .contains("beam target")
+        );
+
+        runtime.effects.push(RuntimeEffect {
+            id: 990,
+            kind: RuntimeEffectKind::Move(dormant),
+            enabled: true,
+            created_at: Instant::now(),
+        });
+        runtime.rebuild_move_effect_targets();
+        assert_eq!(runtime.effects.len(), 1);
+        let RuntimeEffectKind::Move(rebuilt) = &runtime.effects[0].kind else {
+            panic!("dormant authored Move must remain a Move");
+        };
+        assert!(rebuilt.targets.is_empty());
+        assert_eq!(rebuilt.request.beam_targets.len(), 6);
+    }
+
+    #[test]
+    fn cue_owned_move_beam_body_activates_dormant_then_rebinds_after_profile_change() {
+        let mut runtime = runtime_with_move_fixtures(1);
+        runtime.fixtures[0].profile.dmx_modes[0]
+            .controls
+            .retain(|control| movement_axis(&control.attribute).is_none());
+        let mut request = test_move_request(&[1]);
+        request.interpolation = protocol::MoveInterpolation::Circle;
+        request.beam_targets = (1_u16..=6)
+            .map(|beam_index| protocol::MoveEffectBeamTarget {
+                fixture_id: 1,
+                beam_index,
+                selection_index: u32::from(beam_index - 1),
+            })
+            .collect();
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![CueEffectTarget {
+                effect_id: 991,
+                enabled: true,
+                params: Some(EffectParamsSnapshot::Move(request.clone())),
+                transition_ms: None,
+            }],
+        );
+
+        let recalled_at = Instant::now();
+        runtime.request_cue(1, recalled_at);
+        assert_eq!(runtime.last_error, None);
+        assert_eq!(runtime.active_effect_activation_indices.len(), 1);
+        let dormant_index = runtime.active_effect_activation_indices[0];
+        let RuntimeEffectKind::Move(dormant) =
+            &runtime.effect_activations[dormant_index].effect.kind
+        else {
+            panic!("Cue-owned authored beam body must remain a Move activation");
+        };
+        assert!(dormant.targets.is_empty());
+        assert_eq!(dormant.request, request);
+
+        let compatible = runtime_with_move_beam_fixture(7);
+        runtime.fixtures[0].profile = compatible.fixtures[0].profile.clone();
+        runtime.fixtures[0].mode_index = compatible.fixtures[0].mode_index;
+        runtime.rebuild_effect_activations(recalled_at + Duration::from_millis(1));
+
+        assert_eq!(runtime.last_error, None);
+        assert_eq!(runtime.active_effect_activation_indices.len(), 1);
+        let rebound_index = runtime.active_effect_activation_indices[0];
+        let RuntimeEffectKind::Move(rebound) =
+            &runtime.effect_activations[rebound_index].effect.kind
+        else {
+            panic!("Cue-owned authored beam body must rebind as a Move activation");
+        };
+        assert_eq!(rebound.targets.len(), 6);
+        assert_eq!(
+            rebound
+                .targets
+                .iter()
+                .map(|target| target.pan_attribute.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Pan 2", "Pan 3", "Pan 4", "Pan 5", "Pan 6", "Pan 7"]
+        );
+        assert_eq!(rebound.request.beam_targets, request.beam_targets);
+    }
+
+    #[test]
+    fn move_beam_rebuild_drops_all_stale_bindings_when_only_some_beams_remain_compatible() {
+        let mut runtime = runtime_with_move_beam_fixture(3);
+        let mut request = test_move_request(&[1]);
+        request.interpolation = protocol::MoveInterpolation::Circle;
+        request.beam_targets = (0_u16..3)
+            .map(|beam_index| protocol::MoveEffectBeamTarget {
+                fixture_id: 1,
+                beam_index,
+                selection_index: u32::from(beam_index),
+            })
+            .collect();
+        let resolved = runtime
+            .resolve_move_effect_request(request.clone())
+            .unwrap();
+        let at = Instant::now();
+        assert!(evaluate_runtime_move_attribute(
+            &resolved,
+            1,
+            "Pan",
+            0,
+            at,
+            at,
+            &ClockSnapshot::default(),
+        )
+        .is_some());
+        runtime.effects.push(RuntimeEffect {
+            id: 992,
+            kind: RuntimeEffectKind::Move(resolved),
+            enabled: true,
+            created_at: at,
+        });
+
+        runtime.fixtures[0].profile.dmx_modes[0]
+            .controls
+            .retain(|control| control.attribute != "Tilt 3");
+        assert_eq!(
+            runtime_move_attribute_pairs(&runtime.fixtures[0]),
+            vec![Some(("Pan", "Tilt")), Some(("Pan 2", "Tilt 2")), None]
+        );
+        runtime.rebuild_move_effect_targets();
+
+        assert_eq!(runtime.effects.len(), 1);
+        let RuntimeEffectKind::Move(dormant) = &runtime.effects[0].kind else {
+            panic!("partially incompatible authored beam body must remain a Move");
+        };
+        assert!(dormant.targets.is_empty());
+        assert!(dormant.target_indices.is_empty());
+        assert!(dormant.attribute_indices.is_empty());
+        assert_eq!(dormant.request, request);
+        assert_eq!(
+            evaluate_runtime_move_attribute(
+                dormant,
+                1,
+                "Pan",
+                0,
+                at,
+                at + Duration::from_millis(1),
+                &ClockSnapshot::default(),
+            ),
+            None,
+            "rebuild must not keep emitting through the old Pan binding"
+        );
+    }
+
+    #[test]
     fn move_output_is_limited_swapped_and_inverted_after_pair_evaluation() {
         let runtime = runtime_with_move_fixtures(1);
         let mut request = test_move_request(&[1]);
@@ -55130,10 +55809,22 @@ mod tests {
     }
 
     #[test]
-    fn move_venue_stack_200_fixtures_64_effects_reuses_pair_cache_and_stays_bounded() {
+    fn move_circle_beam_venue_stack_200_fixtures_64_effects_reuses_pair_cache_and_stays_bounded() {
         let runtime = runtime_with_move_fixtures(200);
         let fixture_ids = (1..=200).collect::<Vec<_>>();
-        let base = test_move_request(&fixture_ids);
+        let mut base = test_move_request(&fixture_ids);
+        base.interpolation = protocol::MoveInterpolation::Circle;
+        base.beam_targets = fixture_ids
+            .iter()
+            .enumerate()
+            .map(
+                |(selection_index, fixture_id)| protocol::MoveEffectBeamTarget {
+                    fixture_id: *fixture_id,
+                    beam_index: 0,
+                    selection_index: selection_index as u32,
+                },
+            )
+            .collect();
         let stack = (0..64)
             .map(|index| {
                 let mut request = base.clone();
@@ -55186,13 +55877,13 @@ mod tests {
 
         let elapsed = started.elapsed();
         eprintln!(
-            "Move venue benchmark: 200 fixtures x 64 effects x 10 frames in {:?}",
+            "Move Circle beam venue benchmark: 200 fixtures x 64 effects x 10 frames in {:?}",
             elapsed
         );
         assert_ne!(checksum, 0);
         assert!(
             elapsed < Duration::from_secs(5),
-            "200-fixture, 64-effect Move venue regression took {:?}",
+            "200-fixture, 64-effect Move Circle beam venue regression took {:?}",
             elapsed
         );
     }
@@ -57263,7 +57954,19 @@ mod tests {
         chaser_base.duty_cycle = 0.75;
         chaser_base.overlap = 0.25;
         chaser_base.fixture_spread = 0.5;
-        let move_base = test_move_request(fixture_ids);
+        let mut move_base = test_move_request(fixture_ids);
+        move_base.interpolation = protocol::MoveInterpolation::Circle;
+        move_base.beam_targets = fixture_ids
+            .iter()
+            .enumerate()
+            .map(
+                |(selection_index, fixture_id)| protocol::MoveEffectBeamTarget {
+                    fixture_id: *fixture_id,
+                    beam_index: 0,
+                    selection_index: selection_index as u32,
+                },
+            )
+            .collect();
         let curve_base = test_curve_request(fixture_ids);
         let mapping_base = test_mapping_request(fixture_ids);
         let color_mapping_base = test_color_mapping_request(fixture_ids.to_vec());

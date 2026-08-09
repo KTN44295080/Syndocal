@@ -5,8 +5,24 @@ const MIN_PATH_LENGTH: f32 = 1.0e-6;
 
 #[derive(Debug, Clone)]
 pub(super) struct CompiledMovePath {
-    samples: Vec<MoveArcSample>,
-    total_length: f32,
+    kind: CompiledMovePathKind,
+}
+
+#[derive(Debug, Clone)]
+enum CompiledMovePathKind {
+    ArcLength {
+        samples: Vec<MoveArcSample>,
+        total_length: f32,
+    },
+    TwoPointCircle {
+        center_x: f64,
+        center_y: f64,
+        radius: f64,
+        start_angle: f64,
+    },
+    Circle {
+        segments: Vec<CompiledCircleSegment>,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -15,10 +31,38 @@ struct MoveArcSample {
     point: MovePathPoint,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum CompiledCircleSegment {
+    Arc(CompiledCircularArc),
+    /// Daslight joins opposite signed adjacent circumcircles as two half-arcs.
+    /// The second half is the first half reflected through the chord midpoint.
+    Inflection {
+        first_half: CompiledCircularArc,
+        midpoint_x: f64,
+        midpoint_y: f64,
+    },
+    Linear {
+        from: MovePathPoint,
+        to: MovePathPoint,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CompiledCircularArc {
+    center_x: f64,
+    center_y: f64,
+    radius: f64,
+    start_angle: f64,
+    sweep_angle: f64,
+}
+
 impl CompiledMovePath {
     pub(super) fn compile(request: &MoveEffectRequest) -> Result<Self, String> {
         if request.points.len() < 2 {
             return Err("Move effect requires at least two path points".to_string());
+        }
+        if request.interpolation == MoveInterpolation::Circle {
+            return compile_circle_path(&request.points);
         }
         let mut points = Vec::with_capacity(request.points.len());
         for point in &request.points {
@@ -48,6 +92,7 @@ impl CompiledMovePath {
         let samples_per_segment = match request.interpolation {
             MoveInterpolation::Line => 1,
             MoveInterpolation::Smooth => SMOOTH_SAMPLES_PER_SEGMENT,
+            MoveInterpolation::Circle => unreachable!("Circle paths compile analytically"),
         };
         let mut samples = Vec::with_capacity(
             segment_count
@@ -90,8 +135,10 @@ impl CompiledMovePath {
         }
 
         Ok(Self {
-            samples,
-            total_length,
+            kind: CompiledMovePathKind::ArcLength {
+                samples,
+                total_length,
+            },
         })
     }
 
@@ -101,33 +148,257 @@ impl CompiledMovePath {
         } else {
             0.0
         };
-        if progress <= 0.0 {
-            return self.samples[0].point;
-        }
-        if progress >= 1.0 {
-            return self.samples[self.samples.len() - 1].point;
-        }
-
-        let target_distance = progress * self.total_length;
-        let mut lower = 0_usize;
-        let mut upper = self.samples.len() - 1;
-        while lower + 1 < upper {
-            let middle = lower + (upper - lower) / 2;
-            if self.samples[middle].distance < target_distance {
-                lower = middle;
-            } else {
-                upper = middle;
+        match &self.kind {
+            CompiledMovePathKind::ArcLength {
+                samples,
+                total_length,
+            } => sample_arc_length_path(samples, *total_length, progress),
+            CompiledMovePathKind::TwoPointCircle {
+                center_x,
+                center_y,
+                radius,
+                start_angle,
+            } => {
+                let angle = start_angle + std::f64::consts::TAU * f64::from(progress);
+                clamped_circle_point(*center_x, *center_y, *radius, angle)
+            }
+            CompiledMovePathKind::Circle { segments } => {
+                let scaled = f64::from(progress) * segments.len() as f64;
+                let (segment_index, local_progress) = if progress >= 1.0 {
+                    (segments.len() - 1, 1.0)
+                } else {
+                    let segment_index = scaled.floor() as usize;
+                    (segment_index, scaled - segment_index as f64)
+                };
+                sample_circle_segment(segments[segment_index], local_progress)
             }
         }
+    }
+}
 
-        let from = self.samples[lower];
-        let to = self.samples[upper];
-        let distance = (to.distance - from.distance).max(MIN_PATH_LENGTH);
-        let t = ((target_distance - from.distance) / distance).clamp(0.0, 1.0);
-        MovePathPoint {
-            x: from.point.x + (to.point.x - from.point.x) * t,
-            y: from.point.y + (to.point.y - from.point.y) * t,
+fn sample_arc_length_path(
+    samples: &[MoveArcSample],
+    total_length: f32,
+    progress: f32,
+) -> MovePathPoint {
+    if progress <= 0.0 {
+        return samples[0].point;
+    }
+    if progress >= 1.0 {
+        return samples[samples.len() - 1].point;
+    }
+
+    let target_distance = progress * total_length;
+    let mut lower = 0_usize;
+    let mut upper = samples.len() - 1;
+    while lower + 1 < upper {
+        let middle = lower + (upper - lower) / 2;
+        if samples[middle].distance < target_distance {
+            lower = middle;
+        } else {
+            upper = middle;
         }
+    }
+
+    let from = samples[lower];
+    let to = samples[upper];
+    let distance = (to.distance - from.distance).max(MIN_PATH_LENGTH);
+    let t = ((target_distance - from.distance) / distance).clamp(0.0, 1.0);
+    MovePathPoint {
+        x: from.point.x + (to.point.x - from.point.x) * t,
+        y: from.point.y + (to.point.y - from.point.y) * t,
+    }
+}
+
+fn compile_circle_path(points: &[MovePathPoint]) -> Result<CompiledMovePath, String> {
+    if points.len() == 2 {
+        let from = points[0];
+        let to = points[1];
+        let center_x = (f64::from(from.x) + f64::from(to.x)) * 0.5;
+        let center_y = (f64::from(from.y) + f64::from(to.y)) * 0.5;
+        let radius = (f64::from(from.x) - center_x).hypot(f64::from(from.y) - center_y);
+        if radius <= f64::from(MIN_PATH_LENGTH) {
+            return Err("Move effect path must contain at least two distinct points".to_string());
+        }
+        let start_angle = (f64::from(from.y) - center_y)
+            .atan2(f64::from(from.x) - center_x)
+            .rem_euclid(std::f64::consts::TAU);
+        return Ok(CompiledMovePath {
+            kind: CompiledMovePathKind::TwoPointCircle {
+                center_x,
+                center_y,
+                radius,
+                start_angle,
+            },
+        });
+    }
+
+    let mut segments = Vec::with_capacity(points.len());
+    for index in 0..points.len() {
+        let previous = points[(index + points.len() - 1) % points.len()];
+        let from = points[index];
+        let to = points[(index + 1) % points.len()];
+        let after = points[(index + 2) % points.len()];
+        let mut incoming_radius = signed_circumradius(previous, from, to);
+        let mut outgoing_radius = signed_circumradius(from, to, after);
+        // The recovered evaluator substitutes the adjacent non-degenerate
+        // radius when only one wrapped triple is collinear.
+        if outgoing_radius == 0.0 {
+            outgoing_radius = incoming_radius;
+        }
+        if incoming_radius == 0.0 {
+            incoming_radius = outgoing_radius;
+        }
+        let average_radius = (incoming_radius.abs() + outgoing_radius.abs()) * 0.5;
+        let signed_average = average_radius.copysign(incoming_radius);
+        let opposite_signs = incoming_radius.is_sign_positive()
+            != outgoing_radius.is_sign_positive()
+            && incoming_radius != 0.0
+            && outgoing_radius != 0.0;
+        let segment = if opposite_signs {
+            let midpoint = MovePathPoint {
+                x: (from.x + to.x) * 0.5,
+                y: (from.y + to.y) * 0.5,
+            };
+            compile_circular_arc(from, midpoint, signed_average * 0.5)
+                .map(|first_half| CompiledCircleSegment::Inflection {
+                    first_half,
+                    midpoint_x: f64::from(midpoint.x),
+                    midpoint_y: f64::from(midpoint.y),
+                })
+                .unwrap_or(CompiledCircleSegment::Linear { from, to })
+        } else {
+            compile_circular_arc(from, to, signed_average)
+                .map(CompiledCircleSegment::Arc)
+                .unwrap_or(CompiledCircleSegment::Linear { from, to })
+        };
+        segments.push(segment);
+    }
+    Ok(CompiledMovePath {
+        kind: CompiledMovePathKind::Circle { segments },
+    })
+}
+
+fn signed_circumradius(a: MovePathPoint, b: MovePathPoint, c: MovePathPoint) -> f64 {
+    let ax = f64::from(a.x);
+    let ay = f64::from(a.y);
+    let bx = f64::from(b.x);
+    let by = f64::from(b.y);
+    let cx = f64::from(c.x);
+    let cy = f64::from(c.y);
+    let determinant = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+    if determinant == 0.0 || !determinant.is_finite() {
+        return 0.0;
+    }
+    let a_squared = ax * ax + ay * ay;
+    let b_squared = bx * bx + by * by;
+    let c_squared = cx * cx + cy * cy;
+    let center_x =
+        (a_squared * (by - cy) + b_squared * (cy - ay) + c_squared * (ay - by)) / determinant;
+    let center_y =
+        (a_squared * (cx - bx) + b_squared * (ax - cx) + c_squared * (bx - ax)) / determinant;
+    let radius = (ax - center_x).hypot(ay - center_y);
+    if radius.is_finite() {
+        radius.copysign(determinant)
+    } else {
+        0.0
+    }
+}
+
+fn compile_circular_arc(
+    from: MovePathPoint,
+    to: MovePathPoint,
+    signed_radius: f64,
+) -> Option<CompiledCircularArc> {
+    if signed_radius == 0.0 || !signed_radius.is_finite() {
+        return None;
+    }
+    let from_x = f64::from(from.x);
+    let from_y = f64::from(from.y);
+    let to_x = f64::from(to.x);
+    let to_y = f64::from(to.y);
+    let chord_x = to_x - from_x;
+    let chord_y = to_y - from_y;
+    let chord_length = chord_x.hypot(chord_y);
+    if chord_length == 0.0 {
+        return None;
+    }
+    let radius = signed_radius.abs();
+    let height_squared = radius * radius - chord_length * chord_length * 0.25;
+    if height_squared < 0.0 {
+        return None;
+    }
+    let midpoint_x = (from_x + to_x) * 0.5;
+    let midpoint_y = (from_y + to_y) * 0.5;
+    let height = height_squared.sqrt();
+    let side = signed_radius.signum();
+    let center_x = midpoint_x - side * chord_y / chord_length * height;
+    let center_y = midpoint_y + side * chord_x / chord_length * height;
+    let start_angle = (from_y - center_y)
+        .atan2(from_x - center_x)
+        .rem_euclid(std::f64::consts::TAU);
+    let end_angle = (to_y - center_y)
+        .atan2(to_x - center_x)
+        .rem_euclid(std::f64::consts::TAU);
+    let mut sweep_angle = end_angle - start_angle;
+    if signed_radius > 0.0 && sweep_angle < 0.0 {
+        sweep_angle += std::f64::consts::TAU;
+    } else if signed_radius < 0.0 && sweep_angle > 0.0 {
+        sweep_angle -= std::f64::consts::TAU;
+    }
+    Some(CompiledCircularArc {
+        center_x,
+        center_y,
+        radius,
+        start_angle,
+        sweep_angle,
+    })
+}
+
+fn sample_circle_segment(segment: CompiledCircleSegment, progress: f64) -> MovePathPoint {
+    match segment {
+        CompiledCircleSegment::Arc(arc) => {
+            let (x, y) = sample_circular_arc_raw(arc, progress);
+            clamped_move_point(x, y)
+        }
+        CompiledCircleSegment::Inflection {
+            first_half,
+            midpoint_x,
+            midpoint_y,
+        } => {
+            if progress <= 0.5 {
+                let (x, y) = sample_circular_arc_raw(first_half, progress * 2.0);
+                clamped_move_point(x, y)
+            } else {
+                let (x, y) = sample_circular_arc_raw(first_half, (1.0 - progress) * 2.0);
+                clamped_move_point(2.0 * midpoint_x - x, 2.0 * midpoint_y - y)
+            }
+        }
+        CompiledCircleSegment::Linear { from, to } => lerp_point(from, to, progress as f32),
+    }
+}
+
+fn sample_circular_arc_raw(arc: CompiledCircularArc, progress: f64) -> (f64, f64) {
+    let angle = arc.start_angle + arc.sweep_angle * progress.clamp(0.0, 1.0);
+    let (sine, cosine) = angle.sin_cos();
+    (
+        arc.center_x + cosine * arc.radius,
+        arc.center_y + sine * arc.radius,
+    )
+}
+
+fn clamped_circle_point(center_x: f64, center_y: f64, radius: f64, angle: f64) -> MovePathPoint {
+    let (x, y) = {
+        let (sine, cosine) = angle.sin_cos();
+        (center_x + cosine * radius, center_y + sine * radius)
+    };
+    clamped_move_point(x, y)
+}
+
+fn clamped_move_point(x: f64, y: f64) -> MovePathPoint {
+    MovePathPoint {
+        x: x.clamp(0.0, 1.0) as f32,
+        y: y.clamp(0.0, 1.0) as f32,
     }
 }
 
@@ -190,6 +461,7 @@ fn segment_point(
             };
             centripetal_catmull_rom(previous, from, to, next, t)
         }
+        MoveInterpolation::Circle => unreachable!("Circle paths compile analytically"),
     }
 }
 
@@ -250,6 +522,7 @@ mod tests {
             label: "Move test".to_string(),
             fixture_ids: vec![1],
             target_group_ids: Vec::new(),
+            beam_targets: Vec::new(),
             points,
             closed: false,
             interpolation: MoveInterpolation::Line,
@@ -313,6 +586,182 @@ mod tests {
         assert!(middle.x.is_finite() && middle.y.is_finite());
         assert_eq!(path.sample(0.0), request.points[0]);
         assert_eq!(path.sample(1.0), request.points[2]);
+    }
+
+    #[test]
+    fn circle_square_uses_exact_equal_time_quarter_arcs() {
+        let mut request = request(vec![
+            MovePathPoint { x: 0.25, y: 0.5 },
+            MovePathPoint { x: 0.5, y: 0.75 },
+            MovePathPoint { x: 0.75, y: 0.5 },
+            MovePathPoint { x: 0.5, y: 0.25 },
+        ]);
+        request.closed = true;
+        request.interpolation = MoveInterpolation::Circle;
+        let path = CompiledMovePath::compile(&request).unwrap();
+
+        let first_arc_midpoint = path.sample(0.125);
+        assert!((first_arc_midpoint.x - 0.323_223_3).abs() < 1.0e-6);
+        assert!((first_arc_midpoint.y - 0.676_776_7).abs() < 1.0e-6);
+        assert_eq!(path.sample(0.25), request.points[1]);
+        assert_eq!(path.sample(1.0), request.points[0]);
+    }
+
+    #[test]
+    fn circle_uses_equal_control_segment_time_with_unequal_radii() {
+        let mut request = request(vec![
+            MovePathPoint { x: 0.08, y: 0.12 },
+            MovePathPoint { x: 0.18, y: 0.82 },
+            MovePathPoint { x: 0.92, y: 0.72 },
+            MovePathPoint { x: 0.66, y: 0.18 },
+        ]);
+        request.closed = true;
+        request.interpolation = MoveInterpolation::Circle;
+        let path = CompiledMovePath::compile(&request).unwrap();
+
+        let CompiledMovePathKind::Circle { segments } = &path.kind else {
+            panic!("Circle must retain analytical segments");
+        };
+        let radius = |segment: &CompiledCircleSegment| match segment {
+            CompiledCircleSegment::Arc(arc) => arc.radius,
+            CompiledCircleSegment::Inflection { first_half, .. } => first_half.radius,
+            CompiledCircleSegment::Linear { .. } => 0.0,
+        };
+        assert!((radius(&segments[0]) - radius(&segments[1])).abs() > 1.0e-3);
+        let unequal_arc_midpoint = path.sample(0.375);
+        assert!((unequal_arc_midpoint.x - 0.574_851_0).abs() < 2.0e-6);
+        assert!((unequal_arc_midpoint.y - 0.953_897_36).abs() < 2.0e-6);
+        for (index, point) in request.points.iter().enumerate() {
+            let sampled = path.sample(index as f32 / request.points.len() as f32);
+            assert!((sampled.x - point.x).abs() < 1.0e-6, "point {index} X");
+            assert!((sampled.y - point.y).abs() < 1.0e-6, "point {index} Y");
+        }
+    }
+
+    #[test]
+    fn circle_opposite_signed_curvature_uses_recovered_mirrored_half_arcs() {
+        let mut request = request(vec![
+            MovePathPoint {
+                x: 0.459_197_01,
+                y: 0.546_359_5,
+            },
+            MovePathPoint {
+                x: 0.266_559_27,
+                y: 0.064_987_13,
+            },
+            MovePathPoint {
+                x: 0.419_338_2,
+                y: 0.116_473_87,
+            },
+            MovePathPoint {
+                x: 0.452_318_88,
+                y: 0.677_404_64,
+            },
+        ]);
+        request.closed = true;
+        request.interpolation = MoveInterpolation::Circle;
+        let path = CompiledMovePath::compile(&request).unwrap();
+
+        let first_quarter = path.sample(0.0625);
+        let third_quarter = path.sample(0.1875);
+        assert!((first_quarter.x - 0.442_961_54).abs() < 2.0e-6);
+        assert!((first_quarter.y - 0.413_240_9).abs() < 2.0e-6);
+        assert!((third_quarter.x - 0.282_794_74).abs() < 2.0e-6);
+        assert!((third_quarter.y - 0.198_105_68).abs() < 2.0e-6);
+        assert!(
+            (first_quarter.x + third_quarter.x - request.points[0].x - request.points[1].x).abs()
+                < 2.0e-6
+        );
+        assert!(
+            (first_quarter.y + third_quarter.y - request.points[0].y - request.points[1].y).abs()
+                < 2.0e-6
+        );
+    }
+
+    #[test]
+    fn circle_inflection_reflects_raw_arc_before_final_output_clamp() {
+        let mut request = request(vec![
+            MovePathPoint {
+                x: 0.058_411_848,
+                y: 0.102_016_88,
+            },
+            MovePathPoint {
+                x: 0.132_351_59,
+                y: 0.955_008_1,
+            },
+            MovePathPoint {
+                x: 0.094_556_22,
+                y: 0.951_056_5,
+            },
+            MovePathPoint {
+                x: 0.837_385_65,
+                y: 0.753_317_95,
+            },
+        ]);
+        request.closed = true;
+        request.interpolation = MoveInterpolation::Circle;
+        let path = CompiledMovePath::compile(&request).unwrap();
+
+        let reflected = path.sample(0.1875);
+        assert!((reflected.x - 0.247_971_55).abs() < 2.0e-6);
+        assert!((reflected.y - 0.730_135_7).abs() < 2.0e-6);
+        assert!((reflected.x - 0.190_763_44).abs() > 0.05);
+    }
+
+    #[test]
+    fn two_point_circle_is_a_full_analytical_rotation() {
+        let mut request = request(vec![
+            MovePathPoint { x: 0.25, y: 0.5 },
+            MovePathPoint { x: 0.75, y: 0.5 },
+        ]);
+        request.closed = true;
+        request.interpolation = MoveInterpolation::Circle;
+        let path = CompiledMovePath::compile(&request).unwrap();
+
+        let quarter = path.sample(0.25);
+        assert!((quarter.x - 0.5).abs() < 1.0e-6);
+        assert!((quarter.y - 0.25).abs() < 1.0e-6);
+        assert_eq!(path.sample(0.5), request.points[1]);
+        assert_eq!(path.sample(1.0), request.points[0]);
+    }
+
+    #[test]
+    fn degenerate_circle_segments_fall_back_to_equal_time_lines() {
+        let mut request = request(vec![
+            MovePathPoint { x: 0.1, y: 0.5 },
+            MovePathPoint { x: 0.3, y: 0.5 },
+            MovePathPoint { x: 0.8, y: 0.5 },
+        ]);
+        request.closed = true;
+        request.interpolation = MoveInterpolation::Circle;
+        let path = CompiledMovePath::compile(&request).unwrap();
+
+        let first_midpoint = path.sample(1.0 / 6.0);
+        assert!((first_midpoint.x - 0.2).abs() < 1.0e-6);
+        assert!((first_midpoint.y - 0.5).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn circle_preserves_duplicate_points_as_equal_time_degenerate_segments() {
+        let mut request = request(vec![
+            MovePathPoint { x: 0.1, y: 0.5 },
+            MovePathPoint { x: 0.1, y: 0.5 },
+            MovePathPoint { x: 0.9, y: 0.5 },
+        ]);
+        request.closed = true;
+        request.interpolation = MoveInterpolation::Circle;
+        let path = CompiledMovePath::compile(&request).unwrap();
+
+        let CompiledMovePathKind::Circle { segments } = &path.kind else {
+            panic!("Circle must retain its raw point segmentation");
+        };
+        assert_eq!(segments.len(), 3);
+        let duplicate_midpoint = path.sample(1.0 / 6.0);
+        assert!((duplicate_midpoint.x - request.points[0].x).abs() < 1.0e-6);
+        assert!((duplicate_midpoint.y - request.points[0].y).abs() < 1.0e-6);
+        let duplicate_boundary = path.sample(1.0 / 3.0);
+        assert!((duplicate_boundary.x - request.points[1].x).abs() < 1.0e-6);
+        assert!((duplicate_boundary.y - request.points[1].y).abs() < 1.0e-6);
     }
 
     #[test]

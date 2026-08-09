@@ -2581,6 +2581,18 @@ pub struct MovePathPoint {
 pub enum MoveInterpolation {
     Line,
     Smooth,
+    /// Equal-time analytical circular arcs through adjacent path points.
+    Circle,
+}
+
+/// An explicitly authored fixture beam/segment target for Move effects.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MoveEffectBeamTarget {
+    pub fixture_id: FixtureId,
+    /// Raw Daslight BEAMID, retained as the fixture beam/segment index.
+    pub beam_index: u16,
+    /// Stable source-selection index. Equal values intentionally share phase.
+    pub selection_index: u32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -2601,6 +2613,10 @@ pub struct MoveEffectRequest {
     pub label: String,
     pub fixture_ids: Vec<FixtureId>,
     pub target_group_ids: Vec<String>,
+    /// Explicit beam/segment targets in authored source order. Empty preserves
+    /// the legacy fixture-only Move target contract and `.sdc` byte shape.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub beam_targets: Vec<MoveEffectBeamTarget>,
     pub points: Vec<MovePathPoint>,
     pub closed: bool,
     pub interpolation: MoveInterpolation,
@@ -2616,8 +2632,10 @@ pub struct MoveEffectRequest {
     pub direction: MoveDirection,
     pub phase: f32,
     pub fixture_spread: f32,
-    /// Mirrors Pan for the second half of the resolved fixture order. The
-    /// first half (and an odd centre fixture) retain the authored path.
+    /// Applies the generator's second-half symmetry in resolved selection
+    /// order: Circle reverses traversal from half-cycle, while legacy
+    /// Line/Smooth Move paths mirror Pan. An odd centre selection remains in
+    /// the first half.
     #[serde(default, skip_serializing_if = "is_false")]
     pub symmetry: bool,
     pub blend_mode: EffectBlendMode,
@@ -5245,6 +5263,7 @@ mod tests {
             label: "Front circle".to_string(),
             fixture_ids: vec![1, 2],
             target_group_ids: vec!["Moving".to_string()],
+            beam_targets: Vec::new(),
             points: vec![
                 super::MovePathPoint { x: 0.5, y: 0.0 },
                 super::MovePathPoint { x: 1.0, y: 0.5 },
@@ -5294,6 +5313,97 @@ mod tests {
         let legacy_json = json.replace(",\"symmetry\":true", "");
         let legacy: super::EffectPreset = serde_json::from_str(&legacy_json).unwrap();
         assert!(!legacy.move_effect.unwrap().symmetry);
+    }
+
+    #[test]
+    fn move_circle_beam_targets_roundtrip_in_authored_order() {
+        let request = super::MoveEffectRequest {
+            label: "Imported Circle".to_string(),
+            fixture_ids: vec![1, 2],
+            target_group_ids: Vec::new(),
+            beam_targets: vec![
+                super::MoveEffectBeamTarget {
+                    fixture_id: 1,
+                    beam_index: 4,
+                    selection_index: 0,
+                },
+                super::MoveEffectBeamTarget {
+                    fixture_id: 1,
+                    beam_index: 2,
+                    selection_index: 1,
+                },
+                super::MoveEffectBeamTarget {
+                    fixture_id: 2,
+                    beam_index: 7,
+                    selection_index: 2,
+                },
+            ],
+            points: vec![
+                super::MovePathPoint { x: 0.25, y: 0.5 },
+                super::MovePathPoint { x: 0.5, y: 0.75 },
+                super::MovePathPoint { x: 0.75, y: 0.5 },
+                super::MovePathPoint { x: 0.5, y: 0.25 },
+            ],
+            closed: true,
+            interpolation: super::MoveInterpolation::Circle,
+            coordinate_mode: super::MoveCoordinateMode::Absolute,
+            center_x: 0.5,
+            center_y: 0.5,
+            size_x: 1.0,
+            size_y: 1.0,
+            rotation_degrees: 0.0,
+            period_ms: 2_000,
+            clock_sync: None,
+            direction: super::MoveDirection::Forward,
+            phase: 0.0,
+            fixture_spread: 0.0,
+            symmetry: false,
+            blend_mode: super::EffectBlendMode::Override,
+        };
+        let preset = super::EffectPreset {
+            version: 1,
+            effect_type: super::EffectKind::Move,
+            enabled: true,
+            lfo: None,
+            position_wave: None,
+            color: None,
+            chaser: None,
+            move_effect: Some(request),
+            value: None,
+            curve: None,
+            mapping: None,
+            color_mapping: None,
+        };
+
+        let json = serde_json::to_string(&preset).unwrap();
+        let parsed: super::EffectPreset = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed, preset);
+        let value = serde_json::from_str::<serde_json::Value>(&json).unwrap();
+        assert_eq!(value["move_effect"]["interpolation"], "Circle");
+        assert_eq!(
+            value["move_effect"]["beam_targets"],
+            serde_json::json!([
+                {"fixture_id": 1, "beam_index": 4, "selection_index": 0},
+                {"fixture_id": 1, "beam_index": 2, "selection_index": 1},
+                {"fixture_id": 2, "beam_index": 7, "selection_index": 2}
+            ]),
+            "Move beam targets must retain authored Vec order"
+        );
+    }
+
+    #[test]
+    fn legacy_move_effect_request_roundtrips_without_changing_bytes() {
+        let legacy_json = r#"{"label":"Legacy move","fixture_ids":[1,2],"target_group_ids":["Moving"],"points":[{"x":0.5,"y":0.0},{"x":1.0,"y":0.5}],"closed":false,"interpolation":"Smooth","coordinate_mode":"Absolute","center_x":0.5,"center_y":0.5,"size_x":1.0,"size_y":1.0,"rotation_degrees":0.0,"period_ms":2000,"direction":"Forward","phase":0.0,"fixture_spread":0.0,"blend_mode":"Override"}"#;
+
+        let parsed: super::MoveEffectRequest = serde_json::from_str(legacy_json).unwrap();
+
+        assert!(parsed.beam_targets.is_empty());
+        assert_eq!(
+            serde_json::to_string(&parsed).unwrap(),
+            legacy_json,
+            "a missing Move beam target list must stay omitted and preserve the legacy byte shape"
+        );
     }
 
     #[test]

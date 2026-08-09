@@ -1,5 +1,5 @@
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
-import { normalizeMovePathPoints, transformMovePreview } from "../effectVisualization";
+import { normalizeMovePathPoints, sampleMovePath, transformMovePreview } from "../effectVisualization";
 import {
   beginMoveEffectPointDrag,
   commitMoveEffectPointDrag,
@@ -12,7 +12,7 @@ import {
   type MoveEffectPointDragState,
 } from "../moveEffectDrag";
 
-export type MoveEffectInterpolation = "Line" | "Smooth";
+export type MoveEffectInterpolation = "Line" | "Smooth" | "Circle";
 export type MoveEffectCoordinateMode = "Absolute" | "Relative";
 export type MoveEffectDirection = "Forward" | "Reverse" | "Bounce";
 
@@ -38,8 +38,10 @@ export interface MoveEffectEditorPanelProps {
   phase: number;
   /** Normalized 0..1 fixture phase spread. */
   spread: number;
-  /** Mirrors Pan for the second half of the authored fixture order. */
+  /** Applies interpolation-specific symmetry to the second half of target order. */
   symmetry: boolean;
+  /** Imported fixture/beam identities retained in authored source order. */
+  beamTargetCount: number;
   onPoints: (points: MoveEffectPoint[]) => void;
   onClosed: (closed: boolean) => void;
   onInterpolation: (interpolation: MoveEffectInterpolation) => void;
@@ -63,7 +65,7 @@ interface CanvasPoint {
 export { moveEffectMaximumPoints };
 
 const coordinateModes: MoveEffectCoordinateMode[] = ["Absolute", "Relative"];
-const interpolationModes: MoveEffectInterpolation[] = ["Line", "Smooth"];
+const interpolationModes: MoveEffectInterpolation[] = ["Line", "Smooth", "Circle"];
 const directionModes: MoveEffectDirection[] = ["Forward", "Reverse", "Bounce"];
 const clockPresets = [
   { label: "Free", beats: null },
@@ -81,55 +83,6 @@ const roundCoordinate = (value: number) => Number(value.toFixed(4));
 const pathNumber = (value: number) => Number(value.toFixed(3));
 const nearlyEqual = (first: number | null, second: number | null) =>
   first === null || second === null ? first === second : Math.abs(first - second) < 0.001;
-
-const pointDistance = (first: CanvasPoint, second: CanvasPoint) => Math.hypot(second.x - first.x, second.y - first.y);
-const lerpPoint = (first: CanvasPoint, second: CanvasPoint, amount: number): CanvasPoint => ({
-  x: first.x + (second.x - first.x) * amount,
-  y: first.y + (second.y - first.y) * amount,
-});
-const parameterizedLerp = (first: CanvasPoint, second: CanvasPoint, firstTime: number, secondTime: number, at: number) => {
-  const denominator = Math.max(0.000_001, secondTime - firstTime);
-  return lerpPoint(first, second, (at - firstTime) / denominator);
-};
-const centripetalStep = (first: CanvasPoint, second: CanvasPoint) => Math.max(0.000_1, Math.sqrt(pointDistance(first, second)));
-const centripetalPoint = (
-  previous: CanvasPoint,
-  first: CanvasPoint,
-  second: CanvasPoint,
-  next: CanvasPoint,
-  amount: number,
-) => {
-  const time0 = 0;
-  const time1 = time0 + centripetalStep(previous, first);
-  const time2 = time1 + centripetalStep(first, second);
-  const time3 = time2 + centripetalStep(second, next);
-  const at = time1 + (time2 - time1) * clampUnit(amount);
-  const levelA1 = parameterizedLerp(previous, first, time0, time1, at);
-  const levelA2 = parameterizedLerp(first, second, time1, time2, at);
-  const levelA3 = parameterizedLerp(second, next, time2, time3, at);
-  const levelB1 = parameterizedLerp(levelA1, levelA2, time0, time2, at);
-  const levelB2 = parameterizedLerp(levelA2, levelA3, time1, time3, at);
-  return parameterizedLerp(levelB1, levelB2, time1, time2, at);
-};
-
-const samplePath = (points: CanvasPoint[], interpolation: MoveEffectInterpolation, closed: boolean) => {
-  if (points.length < 2 || interpolation === "Line") return [...points];
-  const samples: CanvasPoint[] = [points[0]];
-  const segmentCount = closed ? points.length : points.length - 1;
-  for (let segment = 0; segment < segmentCount; segment += 1) {
-    const fromIndex = Math.min(segment, points.length - 1);
-    const toIndex = fromIndex + 1 < points.length ? fromIndex + 1 : 0;
-    const first = points[fromIndex];
-    const second = points[toIndex];
-    const previous = fromIndex === 0 ? closed ? points[points.length - 1] : first : points[fromIndex - 1];
-    const nextIndex = toIndex + 1;
-    const next = nextIndex < points.length ? points[nextIndex] : closed ? points[nextIndex % points.length] : second;
-    for (let sample = 1; sample <= 32; sample += 1) {
-      samples.push(centripetalPoint(previous, first, second, next, sample / 32));
-    }
-  }
-  return samples;
-};
 
 const buildPath = (points: CanvasPoint[], closed: boolean) => {
   if (points.length === 0) return "";
@@ -181,6 +134,7 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
   const phasePercent = createMemo(() => Math.round(clampUnit(props.phase) * 100));
   const spreadPercent = createMemo(() => Math.round(clampUnit(props.spread) * 100));
   const normalizedPeriodMs = createMemo(() => Math.max(10, Math.round(Number.isFinite(props.periodMs) ? props.periodMs : 10)));
+  const maximumPoints = createMemo(() => props.interpolation === "Circle" ? 255 : moveEffectMaximumPoints);
   const effectiveBpm = createMemo(() => Number.isFinite(props.bpm) && props.bpm > 0 ? props.bpm : 120);
   const beatPeriodMs = (beats: number) => Math.max(10, Math.round((60_000 / effectiveBpm()) * beats));
   const clockSummary = createMemo(() =>
@@ -214,9 +168,9 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
   });
   const editableCanvasPoints = createMemo(() => editablePoints().map(pointToCanvas));
   const runtimeEditableCanvasPoints = createMemo(() =>
-    normalizeMovePathPoints(editablePoints(), props.closed).map(pointToCanvas),
+    normalizeMovePathPoints(editablePoints(), props.closed, props.interpolation).map(pointToCanvas),
   );
-  const editablePathSamples = createMemo(() => samplePath(runtimeEditableCanvasPoints(), props.interpolation, props.closed));
+  const editablePathSamples = createMemo(() => sampleMovePath(runtimeEditableCanvasPoints(), props.interpolation, props.closed));
   const previewTransform = createMemo(() => ({
     coordinate_mode: props.coordinateMode,
     center_x: props.center.x,
@@ -242,7 +196,7 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
   };
 
   const addPoint = (point?: MoveEffectPoint) => {
-    if (props.points.length >= moveEffectMaximumPoints) return;
+    if (props.points.length >= maximumPoints()) return;
     const domain = coordinateDomain();
     const activeIndex = activePointIndex();
     const fallback = activeIndex === null
@@ -406,9 +360,9 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
           <div class="moveEffectPathToolbar">
             <div>
               <strong>Path points</strong>
-              <span class="tabularNums">{props.points.length} / {moveEffectMaximumPoints}</span>
+              <span class="tabularNums">{props.points.length} / {maximumPoints()}</span>
             </div>
-            <button type="button" onClick={() => addPoint()} disabled={props.points.length >= moveEffectMaximumPoints}>Add point</button>
+            <button type="button" onClick={() => addPoint()} disabled={props.points.length >= maximumPoints()}>Add point</button>
             <button
               type="button"
               onClick={() => {
@@ -420,7 +374,12 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
               Remove point
             </button>
             <label class="checkbox inlineCheckbox moveEffectClosedToggle">
-              <input type="checkbox" checked={props.closed} onChange={(event) => props.onClosed(event.currentTarget.checked)} />
+              <input
+                type="checkbox"
+                checked={props.closed}
+                disabled={props.interpolation === "Circle"}
+                onChange={(event) => props.onClosed(event.currentTarget.checked)}
+              />
               Closed
             </label>
           </div>
@@ -635,7 +594,7 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
               onClick={() => props.onSymmetry(!props.symmetry)}
             >
               <strong>Symmetry</strong>
-              <span>Mirror second half Pan</span>
+              <span>{props.interpolation === "Circle" ? "Reverse second-half traversal" : "Mirror second half Pan"}</span>
             </button>
           </section>
 
@@ -742,6 +701,11 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
                   )}
                 </For>
               </div>
+            </div>
+            <div class="effectFormHint textPretty">
+              {props.beamTargetCount > 0
+                ? `${props.beamTargetCount} imported beam targets`
+                : "Beam targets follow fixture profile channel order."}
             </div>
           </section>
 

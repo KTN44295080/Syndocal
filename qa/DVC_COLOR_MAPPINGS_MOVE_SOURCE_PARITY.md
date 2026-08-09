@@ -12,8 +12,8 @@
 - Specimen size: `51,273` bytes
 - Specimen SHA-256: `0A4785BC8F2929AA781AC2CD2D5121D63424371EC3421BBD3C95D7F13E6493B4`
 - Method: static PE RTTI/vtable tracing, read-only disassembly, committed XML and
-  PATCH-body decoding, followed by importer-only regression coverage. Daslight was
-  not launched or modified.
+  PATCH-body decoding, followed by protocol, engine, importer, project-persistence,
+  and editor-preview regression coverage. Daslight was not launched or modified.
 
 All addresses below are image virtual addresses for the exact audited hash. They are
 evidence for that build, not a compatibility promise for another Daslight version.
@@ -23,12 +23,13 @@ evidence for that build, not a compatibility promise for another Daslight versio
 | Source | Disposition | Exactness boundary |
 |---|---|---|
 | `RACK TYPE=5 / EFFECT TYPE=3 / ID=36` Rainbow | **Implemented exactly in DVC-V5a** | The approved additive Rainbow/placement protocol represents all seven properties and the Patch-canvas Rectangle sampler. The committed body has no runtime targets, so it is validated and reported as a converted source no-op without fabricating a cue effect target. |
-| `RACK TYPE=4 / EFFECT TYPE=4 / ID=221` Circle | **Skipped with a dedicated fail-closed error** | Daslight evaluates analytical circular arcs, not Syndocal Line or centripetal Catmull-Rom Smooth. `MoveEffectRequest` is fixture-only and cannot retain the saved six `BEAMID` targets. |
+| `RACK TYPE=4 / EFFECT TYPE=4 / ID=221` Circle | **Implemented exactly for the committed zero-Phasing body in DVC-V5b** | The additive Move protocol retains all six ordered fixture/`BEAMID`/selection identities and selects the recovered equal-time analytical Circle evaluator. The patched Mega Bar has no Pan/Tilt, so this exact source body is preserved as a dormant no-output effect rather than fabricating movement. Nonzero raw ID2 remains temporarily fail-closed pending its scalar composition. |
 
-DVC-V5a implements only the approved COLOR proposal and the related MAPPINGS ID521
-Rectangle-preservation fix. It adds the protocol representation, importer population,
-engine command/rebuild-time compilation, and minimal Rainbow Grayscale editor exposure.
-Move ID221 is deliberately unchanged and remains the separately scoped DVC-V5b work.
+DVC-V5a implemented the approved COLOR proposal and related MAPPINGS ID521
+Rectangle-preservation fix. DVC-V5b implements the separately approved Move extension:
+ordered beam targets, exact Circle path/fan-out semantics, the committed ID221 import,
+and minimal Scene Settings exposure. Both tranches keep legacy `.sdc v1` bodies
+additive and byte-shaped as before when their optional fields are absent.
 
 ## Saved-specimen cross-check and corrected target fact
 
@@ -220,11 +221,18 @@ Circle's vtable slot `+0x80` resolves to evaluator `0x140349650`.
 2. The two-point branch at `0x140349754..0x140349937` constructs a full analytical
    circle from the pair.
 3. For more than two points, `0x14034993C..0x1403499E0` loads wrapped neighboring
-   points. Helper `0x1403480F0` recovers signed circumcircles from adjacent triples;
-   helper `0x140348540` constructs the centre for the current chord.
-4. `0x140349B83..0x140349F63` evaluates the arc with sine/cosine. Only a degenerate
-   circle falls back to linear interpolation at `0x140349FA9..0x14034A06E`.
-5. Outputs are clamped to normalized 0..1. The saved four cardinal points share centre
+   points. Helper `0x1403480F0` recovers signed circumradii for `(prev,from,to)` and
+   `(from,to,next2)`. `0x140349A28..0x140349AB7` substitutes the adjacent nonzero
+   radius when only one triple is degenerate, then computes the signed average
+   `sign(r0) × (abs(r0)+abs(r1))/2`.
+4. Equal-sign curvature uses one signed chord arc. Opposite signs use a half-radius
+   arc from `from` to the chord midpoint for the first half, then
+   `2×midpoint - firstArc(2×(1-t))` for the second half. The recovered ranges are
+   `0x140349AC4..0x140349D69`; reflection occurs before the final output clamp.
+5. `0x140349B83..0x140349F63` evaluates analytical arcs with sine/cosine. Only a
+   degenerate circle falls back to linear interpolation at
+   `0x140349FA9..0x14034A06E`.
+6. Outputs are clamped to normalized 0..1. The saved four cardinal points share centre
    `(0.5,0.5)` and radius `0.25`, so they produce four exact quarter-circle arcs in
    listed order.
 
@@ -236,12 +244,14 @@ from `wrap(floor(cycle/2) - time - k×step)` at
 `0x14034AD28..0x14034AE66`. For the centred circle at zero phasing, this mirrors Pan
 about 0.5 and leaves Tilt unchanged. The exact composition of raw ID2 into the
 runtime scalar was not fully recovered; saved ID2=0 and ID3=0 make that unresolved
-composition immaterial to this specimen and its fail-closed disposition.
+composition immaterial to this specimen. DVC-V5b imports its exact zero value and
+keeps nonzero raw ID2 temporarily fail-closed.
 
-### Syndocal comparison and measured mismatch
+### Pre-V5b Syndocal mismatch and its closure
 
-Syndocal Move supports only `Line` and `Smooth`. Smooth is centripetal Catmull-Rom,
-sampled 32 times per segment and then approximately reparameterized by arc length. At
+Before DVC-V5b, Syndocal Move supported only `Line` and `Smooth`. Smooth is
+centripetal Catmull-Rom, sampled 32 times per segment and then approximately
+reparameterized by arc length. At
 the first saved arc midpoint:
 
 | Evaluator | X/Y |
@@ -250,36 +260,76 @@ the first saved arc midpoint:
 | Syndocal closed Smooth | `(0.34375, 0.65625)` |
 | Absolute delta | `0.0205266953` per axis; Euclidean `0.0290291309`; about `1,345` DMX16 counts per axis |
 
-Line is the inscribed chord and is also non-equivalent. The normalized coordinate
+Line is the inscribed chord and is also non-equivalent. DVC-V5b adds a distinct
+`Circle` mode and locks the recovered midpoint, equal-time boundaries, signed-radius
+averaging, inflection reflection-before-clamp, two-point full turn, and degenerate
+linear fallback in focused Rust and shared-preview regressions. The normalized coordinate
 domain itself is compatible with Absolute mode: Syndocal writes
 `round(normalized × 65535)` to Pan/Tilt. Physical-degree calibration is outside the
 effect body and was not statically recovered.
 
-The second independent blocker is targeting. `dvc_rack_targets` retains XML order and
+The former second blocker was targeting. `dvc_rack_targets` retains XML order and
 raw `BEAMID`, while literal `IDSELECTION` values establish first-seen zero-based
 selection indices. The saved `1..6` therefore becomes internal selection index
-`0..5`, still in order. `MoveEffectRequest` carries only deduplicated `fixture_ids`,
-so all six saved sub-beams collapse to one fixture and their identities/order cannot
-reach the runtime.
+`0..5`, still in order. DVC-V5b carries those six identities in the request and
+compiles compatible fixture/beam Pan/Tilt bindings once at command/rebuild time.
+Repeated source selection IDs retain first-seen rank and intentionally share phase.
 
-### Protocol-change proposal — approval required, not implemented
+### Approved Move protocol-change disposition — implemented in DVC-V5b
 
-An additive exact representation would need:
+The explicit 2026-08-10 approval was implemented with this additive shape:
 
-1. A Circle/analytical-arc interpolation kind whose two-point and wrapped multi-point
-   rules are defined by the recovered evaluator, including equal time per segment and
-   linear fallback only for degenerate circumcircles.
-2. Optional serde-defaulted Move beam targets carrying fixture ID, raw beam ID, and
-   selection order. Missing targets would preserve legacy fixture-only `.sdc` bodies.
-3. A defined phase/symmetry fan-out over that retained target order. Before importing
-   nonzero Phasing, finish recovery of how raw ID2 composes into the scalar received by
-   `0x14034AB70`.
-4. Preservation of the scene-level Absolute/Relative source mode; this specimen is
-   proven Absolute.
+1. `MoveInterpolation::Circle` selects the wrapped equal-time analytical evaluator.
+   Circle requires `closed=true`, accepts the recovered `2..=255` POINTS domain, and
+   does not reuse Smooth's sampled arc-length table.
+2. `MoveEffectRequest::beam_targets` is a serde-defaulted, empty-omitted ordered Vec of
+   `{fixture_id, beam_index, selection_index}`. Empty requests preserve the legacy
+   fixture-only serialized shape; focused old-JSON round-trip coverage pins identical
+   bytes in both directions.
+3. Runtime rebuild resolves each explicit beam to its beam-local Pan/Tilt pair and
+   stores fixed attribute names, selection-ranked phase offset, and symmetry role.
+   Non-required project/cue restore treats the authored list atomically: if any explicit
+   beam cannot bind, the entire source body compiles dormant with zero bindings and can
+   rebind after a compatible profile change. Strict Add/Update still rejects the
+   unresolved body. The 44 Hz path performs no fixture/beam identity search or allocation.
+4. Circle fan-out reads the compiled selection rank as
+   `time - rank×step`. Symmetry marks the second half of selection order for recovered
+   reverse traversal from half-cycle; legacy Line/Smooth symmetry retains its Pan-mirror
+   behavior. Equal selection indices share one phase rank.
+5. The importer preserves scene-level `ATTRIBUTEVALUE_MODE` as Absolute or Relative;
+   the committed specimen is proven Absolute. It maps saved ID2=0 exactly, while any
+   nonzero raw ID2 is rejected with a dedicated message until raw-to-runtime scalar
+   composition is recovered.
 
-No Scene Settings work is proposed in this importer-only tranche. If the protocol is
-approved later, the Circle interpolation and any nonzero Phasing behavior would also
-need an editor surface and localized labels.
+Scene Settings now exposes Circle beside Line/Smooth, forces its recovered closed-path
+contract, applies the 255-point limit locally, shows preserved imported beam-target
+count, and describes Circle symmetry as reverse traversal. The shared graphical
+preview uses the same analytical rules, including degenerate equal-time segments.
+Japanese localization covers the new symmetry description; the existing localized
+Circle, Closed, and imported-beam labels are reused.
+
+### Runtime compilation and 44 Hz benchmark disposition
+
+Command/rebuild time compiles Circle into either the two-point full circle or a fixed
+Vec of signed arc, inflection, and degenerate-line segment records. It also resolves
+raw beam slots to fixed Pan/Tilt attribute pairs, normalizes first-seen selection
+ranks, and stores phase/reverse/mirror flags plus attribute lookup tables. Initial
+restore and later rebuild are atomic: any unresolved beam retains a zero-binding
+dormant body; partially broken rebuilds clear every old binding rather than emitting
+through stale attributes.
+
+At 44 Hz, the evaluator reads those compiled records and target fields. It performs
+no allocation, fixture/beam scan, or geometry/identity matching. Exact Circle sampling
+uses one analytical `sin_cos` for the selected arc and caches the resulting pair so
+Pan and Tilt at the same tick do not evaluate the path twice.
+
+The owning release gates passed on 2026-08-10:
+
+| Gate | Measured | Limit |
+|---|---:|---:|
+| Circle beam venue, 200 fixtures × 64 effects × 10 frames | `23.5278 ms` total | `< 5 s` |
+| Mixed 64-effect × 200-fixture steady tick | p95 `4.308 ms`; p99 `5.179 ms`; max `5.974 ms` | p95 `<=5 ms`; p99 `<=8 ms`; max `<=12 ms` |
+| Same mixed stack, outgoing+incoming cue transition | p95 `10.007 ms`; p99 `10.498 ms`; max `10.905 ms` | p95 `<=12 ms`; p99 `<=16 ms`; max `<=20 ms` |
 
 ## Importer regression contract
 
@@ -293,7 +343,13 @@ The repo-portable golden test consumes the committed specimen and pins:
 - raw fixture UUID plus XML `BEAMID=1..6` / `IDSELECTION=1..6` order;
 - importer target parsing as raw beam IDs `1..6`, first-seen selection indices
   `0..5`, one deduplicated fixture, and six ordered steps;
-- the literal Move fail-closed report message.
+- exactly one converted Circle request with the four POINTS and all path parameters;
+- imported fixture/beam targets equal the raw XML order, with exact `BEAMID=1..6` and
+  first-seen selection ranks `0..5`;
+- no ID221 skipped or approximate entry for the committed zero-Phasing body;
+- a synthetic repeated/nonsequential selection order remains byte-semantic through
+  target parsing and normalized first-seen ranks; and
+- nonzero ID2 and unknown `(4,4)` generator IDs retain dedicated fail-closed coverage.
 
 The saved ID36 outcome is exact because Daslight's recovered enumeration chooses the
 external SELECTIONS container when present and otherwise the owned BEAMS container.
@@ -316,14 +372,28 @@ meaning. The old stage-normalized centre was not serialized or asserted; DVC-V5a
 the missing raw Patch-window/coordinate assertions, while focused engine coverage pins
 the resulting raster cells and signed integer truncation boundaries.
 
-The shared Move validator change from the evidence tranche remains additive: Circle
-accepts the recovered TYPE5 point-count domain `2..=255`; existing Line and Polygon
-validation branches retain their prior rules.
+The DVC-V5b assertion disposition is:
+
+| Test contract | Old assertion | DVC-V5b assertion | Reason |
+|---|---|---|---|
+| Existing protocol Move preset round-trip | Smooth, fixture/group targets, no beam field | unchanged; `beam_targets=[]` remains omitted | Preserve legacy assertion shape and serialized bytes. |
+| New protocol Circle round-trip | no coverage | Circle plus three deliberately reordered beam targets round-trip exactly; legacy JSON reserializes byte-for-byte without a beam field | Additive protocol coverage without replacing the Smooth contract. |
+| Saved-specimen ID221 golden | dedicated skipped error; no Move body | one exact Circle body; four raw points and six beam targets equal XML order; no skipped/approximate ID221 entry | The approved representation closes both prior blockers. |
+| Unknown `(4,4)` generator | generic family fail-closed behavior | explicit ID222 mutation remains skipped with no Circle body | Circle must not broaden unproven generators. |
+| Move Circle nonzero raw Phasing | no focused assertion | ID2=0.5 mutation emits the dedicated scalar-composition fail-closed error and no Circle body | Makes the remaining evidence boundary auditable. |
+| Project Move validation | fixture-only bodies require a paired Pan/Tilt fixture | unchanged for legacy bodies; explicit imported beam bodies persist atomically dormant when any axis is unavailable, while outside-fixture, duplicate-beam, and group-combination cases reject | Preserve exact source identity without inventing, partially widening, or retaining stale outputs. |
+| Default named Circle authoring path | Circle-shaped points used Smooth interpolation | selects analytical Circle and a closed path | The named editor/default recipe now matches its path semantics. |
+| Owning Move release regression | 200 fixtures × 64 fixture-only Move effects × 10 frames, `<5 s` | same scale/limit, now analytical Circle with an explicit beam per fixture | Measure the newly owned path/fan-out under the existing worst-case gate instead of leaving it on the legacy path. |
+| Mixed 64×200 release regression | Move member used the legacy request shape; established steady/transition percentile limits | Move member uses Circle plus explicit ordered beam targets; all limits unchanged | Exercise Circle inside the production mixed stack without renegotiating the budget. |
+
+No existing numeric expected value was relaxed. Line/Smooth validators retain their
+`2..=256` domain and legacy target/symmetry behavior; only Circle uses `2..=255` and
+requires a closed path.
 
 ## Deliberate boundaries
 
-- Protocol changes are additive only. Default-off Grayscale and absent placement keep
-  the legacy `.sdc v1` serialized shape.
+- Protocol changes are additive only. Default-off Grayscale, absent placement, and an
+  empty Move beam-target Vec keep the legacy `.sdc v1` serialized shape.
 - No Rectangle overlap is promoted into target membership. The empty committed ID36
   rack stays an exact converted no-op.
 - Family-5 generators other than the confirmed `(5,3,36)` contract remain unknown and
@@ -331,12 +401,18 @@ validation branches retain their prior rules.
   that source-target mode is proven.
 - DVC-V5a corrects MAPPINGS Rainbow ID521 only. It does not broaden the placement claim
   to MAPPINGS Perlin ID530 or another generator family.
-- Move ID221 remains fail-closed. Its implementation and the intact Move protocol-change
-  proposal above are reserved for DVC-V5b.
+- Move ID221 is exact for the committed saved body. Its Mega Bar target fixture has
+  RGBA/strobe/dimmer channels but no Pan/Tilt; the request therefore persists with all
+  six beam identities and compiles dormant instead of fabricating a movement binding.
+- The fixture-level Scene default simulator has no beam-local value model, so explicit
+  Move beam bodies remain unchanged/dormant there rather than collapsing several beam
+  identities onto one fixture value. The editor's path preview is still analytically
+  exact and the beam count remains visible.
 - The Rectangle placement body is importer provenance/runtime input, not a new Scene
   Settings placement authoring workflow. Only the newly representable Rainbow
   Grayscale parameter is minimally exposed, reusing its existing localized label.
-- No claim is made for nonzero Move Phasing composition until its last call-chain
-  mapping is recovered.
+- Nonzero raw Move Phasing remains temporarily fail-closed until its last call-chain
+  scalar mapping is recovered. Unknown `(4,4)` Move generators likewise remain
+  temporarily fail-closed for their own exact-parity tranches.
 - No claim is made about physical fixture optics, mechanical Pan/Tilt calibration,
   controller latency, or visual output.

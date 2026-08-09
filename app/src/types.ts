@@ -285,7 +285,7 @@ export type EffectBlendMode = "Override" | "Add" | "Multiply";
 export type ColorEffectAlgorithm = "Cycle" | "Bounce" | "Sequence" | "Random";
 export type ColorEffectInterpolation = "Rgb" | "HsvShortest" | "HsvLongest";
 export type ChaserDirection = "Forward" | "Reverse" | "Bounce" | "BuildUpDown" | "Random";
-export type MoveInterpolation = "Line" | "Smooth";
+export type MoveInterpolation = "Line" | "Smooth" | "Circle";
 export type MoveCoordinateMode = "Absolute" | "Relative";
 export type MoveDirection = "Forward" | "Reverse" | "Bounce";
 export type ValueEffectInterpolation = "Step" | "Line" | "Smooth";
@@ -2030,10 +2030,20 @@ export interface MovePathPoint {
   y: number;
 }
 
+export interface MoveEffectBeamTarget {
+  fixture_id: number;
+  /** Raw Daslight BEAMID retained as the fixture beam/segment index. */
+  beam_index: number;
+  /** Stable zero-based source-selection index; equal values share phase. */
+  selection_index: number;
+}
+
 export interface MoveEffectRequest {
   label: string;
   fixture_ids: number[];
   target_group_ids: string[];
+  /** Explicit beam/segment targets in authored source order. */
+  beam_targets?: MoveEffectBeamTarget[];
   points: MovePathPoint[];
   closed: boolean;
   interpolation: MoveInterpolation;

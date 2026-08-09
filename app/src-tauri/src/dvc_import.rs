@@ -19,12 +19,12 @@ use protocol::{
     EffectBlendMode, EffectClockSync, EffectParamsSnapshot, EngineSnapshot, FixtureProfileSummary,
     GeometrySummary, LfoEffectRequest, LfoShape, MidiControlAction, MidiControlFeedback,
     MidiControlMapping, MidiControlMessage, MidiFeedbackMessage, MoveCoordinateMode, MoveDirection,
-    MoveEffectRequest, MoveInterpolation, MovePathPoint, PatchedFixtureSummary, ProjectFile,
-    Rotation3, StageMapConfig, TimelineAudioClipSummary, TimelineCueEventSummary,
-    TimelineLayerKind, TimelineLayerSummary, TimelineTrackKind, TouchControlBinding,
-    TouchControlKind, TouchControlSummary, TouchFeaturePresetTarget, TouchPageSummary,
-    TouchSurfaceSummary, ValueEffectDirection, ValueEffectInterpolation, ValueEffectMode,
-    ValueEffectPoint, ValueEffectRequest, Vec3,
+    MoveEffectBeamTarget, MoveEffectRequest, MoveInterpolation, MovePathPoint,
+    PatchedFixtureSummary, ProjectFile, Rotation3, StageMapConfig, TimelineAudioClipSummary,
+    TimelineCueEventSummary, TimelineLayerKind, TimelineLayerSummary, TimelineTrackKind,
+    TouchControlBinding, TouchControlKind, TouchControlSummary, TouchFeaturePresetTarget,
+    TouchPageSummary, TouchSurfaceSummary, ValueEffectDirection, ValueEffectInterpolation,
+    ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3,
 };
 use roxmltree::{Document, Node};
 use serde::Serialize;
@@ -2286,7 +2286,14 @@ fn convert_dvc_effect(
     fixture_refs: &HashMap<String, FixtureImportRef>,
 ) -> Result<ConvertedDvcEffect, String> {
     match (rack_type, effect_type, generator_id) {
-        (4, 4, 221) => reject_dvc_move_circle_effect(rack, effect, fixture_refs),
+        (4, 4, 221) => convert_dvc_move_circle_effect(
+            scene,
+            scene_name,
+            rack,
+            effect,
+            effect_id,
+            fixture_refs,
+        ),
         (3, 6, 321 | 322 | 325) => convert_dvc_chaser_effect(
             scene,
             scene_name,
@@ -2505,9 +2512,12 @@ fn dvc_color_spatial_placement(
     })
 }
 
-fn reject_dvc_move_circle_effect(
+fn convert_dvc_move_circle_effect(
+    scene: Node<'_, '_>,
+    scene_name: &str,
     rack: Node<'_, '_>,
     effect: Node<'_, '_>,
+    effect_id: u64,
     fixture_refs: &HashMap<String, FixtureImportRef>,
 ) -> Result<ConvertedDvcEffect, String> {
     let params_node = direct_child(effect, "PARAMS")
@@ -2518,15 +2528,89 @@ fn reject_dvc_move_circle_effect(
             params_node.attribute("NB").unwrap_or("missing")
         ));
     }
-    let (_points, _phasing, _symmetry) = dvc_move_effect_params(effect, "Circle")?;
+    let (points, phasing, symmetry) = dvc_move_effect_params(effect, "Circle")?;
+    if phasing != 0.0 {
+        return Err(format!(
+            "Move Circle ID=221 Phasing PARAM 2={phasing} remains fail-closed because its raw-to-runtime fan-out scalar composition is not recovered"
+        ));
+    }
     let targets = dvc_rack_targets(rack, fixture_refs)?;
     if targets.beam_targets.is_empty() {
         return Err("Move Circle ID=221 BEAMS resolved to no targets".to_string());
     }
-    if !targets.has_multi_beam_selection {
-        return Err("Move Circle ID=221 remains fail-closed: Daslight analytic circular arcs are not equivalent to the existing Line or centripetal Catmull-Rom Move paths".to_string());
+
+    let coordinate_mode = match scene.attribute("ATTRIBUTEVALUE_MODE") {
+        Some("0") => MoveCoordinateMode::Absolute,
+        Some("1") => MoveCoordinateMode::Relative,
+        Some(value) => {
+            return Err(format!(
+                "Move Circle ID=221 ATTRIBUTEVALUE_MODE must be 0 (Absolute) or 1 (Relative), found {value}"
+            ));
+        }
+        None => {
+            return Err(
+                "Move Circle ID=221 owning scene is missing ATTRIBUTEVALUE_MODE".to_string(),
+            );
+        }
+    };
+    let mut approximations = Vec::new();
+    let (period_ms, free_run_note) = dvc_move_period(effect, scene, "Circle", &mut approximations)?;
+    let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
+    if let Some(clock_warning) = clock_warning {
+        approximations.push(clock_warning);
     }
-    Err("Move Circle ID=221 remains fail-closed: Daslight analytic circular arcs are not equivalent to Line or centripetal Catmull-Rom, and fixture-only MoveEffectRequest targets cannot preserve this specimen's BEAMID 1..6 / IDSELECTION 1..6".to_string())
+    let beam_count = targets.beam_targets.len();
+    let selection_count = targets.ordered_steps.len();
+    let beam_targets = targets
+        .beam_targets
+        .into_iter()
+        .map(|target| MoveEffectBeamTarget {
+            fixture_id: target.fixture_id,
+            beam_index: target.beam_index,
+            selection_index: target.selection_index,
+        })
+        .collect();
+    let point_count = points.len();
+    let request = MoveEffectRequest {
+        label: format!("{scene_name} (Circle)"),
+        fixture_ids: targets.fixture_ids,
+        target_group_ids: Vec::new(),
+        beam_targets,
+        points,
+        closed: true,
+        interpolation: MoveInterpolation::Circle,
+        coordinate_mode,
+        center_x: 0.5,
+        center_y: 0.5,
+        size_x: 1.0,
+        size_y: 1.0,
+        rotation_degrees: 0.0,
+        period_ms,
+        clock_sync,
+        direction: MoveDirection::Forward,
+        phase: 0.0,
+        fixture_spread: phasing,
+        symmetry,
+        blend_mode: EffectBlendMode::Override,
+    };
+    engine::validate_move_effect_request(&request)
+        .map_err(|error| format!("confirmed Circle parameters are not representable: {error}"))?;
+
+    Ok(ConvertedDvcEffect {
+        target: Some(CueEffectTarget {
+            effect_id,
+            enabled: true,
+            params: Some(EffectParamsSnapshot::Move(request)),
+            transition_ms: None,
+        }),
+        generator: "Circle",
+        note: format!(
+            "points={point_count} normalized Pan/Tilt vertices (DMX16=round(point*65535)); interpolation=Circle analytical circumcircle arcs; closed=true; direction=Forward; beam_targets={beam_count}; selections={selection_count}; coordinate_mode={coordinate_mode:?}; fixture_spread=id2=Phasing={phasing}; symmetry={}; {free_run_note}; {clock_note}",
+            u8::from(symmetry)
+        ),
+        approximations,
+        warnings: Vec::new(),
+    })
 }
 
 fn convert_dvc_value_effect(
@@ -3569,6 +3653,7 @@ fn convert_dvc_move_effect(
         label: format!("{scene_name} ({generator})"),
         fixture_ids: targets.fixture_ids,
         target_group_ids: Vec::new(),
+        beam_targets: Vec::new(),
         points,
         closed,
         interpolation: MoveInterpolation::Line,
@@ -6891,6 +6976,65 @@ mod tests {
     }
 
     #[test]
+    fn dvc_rack_targets_preserve_xml_order_and_normalize_repeated_selection_ids() {
+        let document = Document::parse(
+            r#"<RACK><BEAMS NB="5"><BEAM FIXTURE="fixture-a" BEAMID="7" IDSELECTION="30"/><BEAM FIXTURE="fixture-b" BEAMID="2" IDSELECTION="10"/><BEAM FIXTURE="fixture-a" BEAMID="5" IDSELECTION="30"/><BEAM FIXTURE="fixture-b" BEAMID="9" IDSELECTION="20"/><BEAM FIXTURE="fixture-a" BEAMID="1" IDSELECTION="10"/></BEAMS></RACK>"#,
+        )
+        .unwrap();
+        let fixture_refs = HashMap::from([
+            (
+                "fixture-a".to_string(),
+                FixtureImportRef {
+                    fixture_id: 101,
+                    fixture_index: 0,
+                    profile_index: 0,
+                    supports_dimmer: false,
+                    color_beam_count: 10,
+                    patch_beam_positions: HashMap::new(),
+                },
+            ),
+            (
+                "fixture-b".to_string(),
+                FixtureImportRef {
+                    fixture_id: 202,
+                    fixture_index: 1,
+                    profile_index: 0,
+                    supports_dimmer: false,
+                    color_beam_count: 10,
+                    patch_beam_positions: HashMap::new(),
+                },
+            ),
+        ]);
+
+        let targets = dvc_rack_targets(document.root_element(), &fixture_refs).unwrap();
+
+        assert_eq!(targets.fixture_ids, vec![101, 202]);
+        assert_eq!(
+            targets.ordered_steps,
+            vec![vec![101], vec![202, 101], vec![202]]
+        );
+        assert_eq!(
+            targets
+                .beam_targets
+                .iter()
+                .map(|target| (
+                    target.fixture_id,
+                    target.beam_index,
+                    target.selection_index,
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (101, 7, 0),
+                (202, 2, 1),
+                (101, 5, 0),
+                (202, 9, 2),
+                (101, 1, 1),
+            ],
+            "beam target Vec must retain XML fixture/BEAMID order while repeated and out-of-order raw IDSELECTION values normalize by first occurrence"
+        );
+    }
+
+    #[test]
     fn dvc_move_unexpected_params_and_empty_points_stay_skipped() {
         let empty_document = Document::parse(
             r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="4"><EFFECT TYPE="4" ID="224" DURATION="1000"><PARAMS NB="3"><PARAM TYPE="5" ID="1"><POINTS NB="0"/></PARAM><PARAM TYPE="1" ID="2" VAL="0"/><PARAM TYPE="2" ID="3" VAL="0"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
@@ -9940,7 +10084,6 @@ mod tests {
 
         let outcome = import_path(path).unwrap();
         crate::validate_project_file(&outcome.project).unwrap();
-        let expected_move_error = "RACK TYPE=4 EFFECT TYPE=4 ID=221: Move Circle ID=221 remains fail-closed: Daslight analytic circular arcs are not equivalent to Line or centripetal Catmull-Rom, and fixture-only MoveEffectRequest targets cannot preserve this specimen's BEAMID 1..6 / IDSELECTION 1..6";
         assert_eq!(
             outcome
                 .report
@@ -10076,17 +10219,182 @@ mod tests {
             ],
             "521 must retain authored absolute Patch coordinates rather than normalize stage X/Z"
         );
+
+        let circles = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .flat_map(|cue| &cue.effect_targets)
+            .filter_map(|target| match target.params.as_ref() {
+                Some(EffectParamsSnapshot::Move(request))
+                    if request.interpolation == MoveInterpolation::Circle =>
+                {
+                    Some(request)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            circles.len(),
+            1,
+            "saved Move Circle rack must import as exactly one cue-owned Move request"
+        );
+        let circle = circles[0];
+        assert_eq!(circle.label, "New Scene (Circle)");
+        assert_eq!(circle.fixture_ids.len(), 1);
+        assert!(circle.target_group_ids.is_empty());
+        assert_eq!(
+            circle.points,
+            vec![
+                MovePathPoint { x: 0.25, y: 0.5 },
+                MovePathPoint { x: 0.5, y: 0.75 },
+                MovePathPoint { x: 0.75, y: 0.5 },
+                MovePathPoint { x: 0.5, y: 0.25 },
+            ],
+            "imported Circle path must equal the four raw XML POINTS in source order"
+        );
+        assert!(circle.closed);
+        assert_eq!(circle.interpolation, MoveInterpolation::Circle);
+        assert_eq!(circle.coordinate_mode, MoveCoordinateMode::Absolute);
+        assert_eq!(circle.center_x, 0.5);
+        assert_eq!(circle.center_y, 0.5);
+        assert_eq!(circle.size_x, 1.0);
+        assert_eq!(circle.size_y, 1.0);
+        assert_eq!(circle.rotation_degrees, 0.0);
+        assert_eq!(circle.period_ms, 5_000);
+        assert_eq!(circle.clock_sync, None);
+        assert_eq!(circle.direction, MoveDirection::Forward);
+        assert_eq!(circle.phase, 0.0);
+        assert_eq!(circle.fixture_spread, 0.0);
+        assert!(!circle.symmetry);
+        assert_eq!(circle.blend_mode, EffectBlendMode::Override);
+        assert_eq!(
+            circle
+                .beam_targets
+                .iter()
+                .map(|target| (
+                    target.fixture_id,
+                    target.beam_index,
+                    target.selection_index,
+                ))
+                .collect::<Vec<_>>(),
+            raw_order
+                .iter()
+                .enumerate()
+                .map(|(selection_index, (_fixture_uid, beam_index, _raw_selection))| (
+                    circle.fixture_ids[0],
+                    *beam_index,
+                    u32::try_from(selection_index).unwrap(),
+                ))
+                .collect::<Vec<_>>(),
+            "imported Move beam targets must preserve raw XML fixture/BEAMID order and first-seen IDSELECTION order exactly"
+        );
         assert_eq!(
             outcome
                 .report
-                .skipped
+                .converted
                 .details
                 .iter()
-                .filter(|detail| detail.message == expected_move_error)
+                .filter(|detail| {
+                    detail.item == "Effect: New Scene (Circle)"
+                        && detail
+                            .message
+                            .contains("interpolation=Circle analytical circumcircle arcs")
+                        && detail.message.contains("beam_targets=6; selections=6")
+                        && detail.message.contains("coordinate_mode=Absolute")
+                        && detail.message.contains("fixture_spread=id2=Phasing=0")
+                        && detail.message.contains("symmetry=0")
+                })
                 .count(),
             1,
-            "saved Move Circle rack must reach the precise beam-target rejection"
+            "saved Move Circle rack must be reported once as an exact converted Circle"
         );
+        assert!(!outcome
+            .report
+            .skipped
+            .details
+            .iter()
+            .any(|detail| { detail.message.contains("RACK TYPE=4 EFFECT TYPE=4 ID=221") }));
+        assert!(!outcome
+            .report
+            .approximate
+            .details
+            .iter()
+            .any(|detail| detail.item == "Effect: New Scene (Circle)"));
+    }
+
+    #[test]
+    fn dvc_unknown_move_generator_stays_fail_closed() {
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../qa/specimens/ValueCatalog-Sweep-Plasma.dvc"
+        ));
+        let source = fs::read_to_string(path).unwrap();
+        let unknown_source = source.replacen(
+            r#"<EFFECT TYPE="4" ID="221" DURATION="5000">"#,
+            r#"<EFFECT TYPE="4" ID="222" DURATION="5000">"#,
+            1,
+        );
+        assert_ne!(unknown_source, source);
+
+        let outcome = import_bytes(unknown_source.as_bytes(), "unknown-move-222.dvc").unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+        assert!(outcome.report.skipped.details.iter().any(|detail| {
+            detail.message == "RACK TYPE=4 EFFECT TYPE=4 ID=222 is not confirmed for DVC-3b"
+        }));
+        assert!(!outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .flat_map(|cue| &cue.effect_targets)
+            .any(|target| matches!(
+                target.params.as_ref(),
+                Some(EffectParamsSnapshot::Move(request))
+                    if request.label.ends_with("(Circle)")
+            )));
+    }
+
+    #[test]
+    fn dvc_move_circle_nonzero_raw_phasing_stays_fail_closed() {
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../qa/specimens/ValueCatalog-Sweep-Plasma.dvc"
+        ));
+        let source = fs::read_to_string(path).unwrap();
+        let effect_offset = source
+            .find(r#"<EFFECT TYPE="4" ID="221" DURATION="5000">"#)
+            .expect("saved specimen must contain Move Circle ID=221");
+        let phasing = r#"<PARAM TYPE="1" ID="2" VAL="0"/>"#;
+        let relative_offset = source[effect_offset..]
+            .find(phasing)
+            .expect("saved Move Circle must contain zero Phasing PARAM 2");
+        let phasing_offset = effect_offset + relative_offset;
+        let mut nonzero_source = source.clone();
+        nonzero_source.replace_range(
+            phasing_offset..phasing_offset + phasing.len(),
+            r#"<PARAM TYPE="1" ID="2" VAL="0.5"/>"#,
+        );
+
+        let outcome =
+            import_bytes(nonzero_source.as_bytes(), "circle-nonzero-phasing.dvc").unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+        assert!(outcome.report.skipped.details.iter().any(|detail| {
+            detail.item == "Effect: New Scene (Circle)"
+                && detail.message == "RACK TYPE=4 EFFECT TYPE=4 ID=221: Move Circle ID=221 Phasing PARAM 2=0.5 remains fail-closed because its raw-to-runtime fan-out scalar composition is not recovered"
+        }));
+        assert!(!outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .flat_map(|cue| &cue.effect_targets)
+            .any(|target| matches!(
+                target.params.as_ref(),
+                Some(EffectParamsSnapshot::Move(request))
+                    if request.interpolation == MoveInterpolation::Circle
+            )));
     }
 
     #[test]

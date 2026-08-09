@@ -23,6 +23,10 @@ const visualization = await importTypeScript(
   "../src/effectVisualization.ts",
   "effectVisualization.ts",
 );
+const moveEffect = await importTypeScript(
+  "../src/moveEffect.ts",
+  "moveEffect.ts",
+);
 const chooser = await importTypeScript(
   "../src/components/EffectFamilyChooser.tsx",
   "EffectFamilyChooser.tsx",
@@ -35,6 +39,10 @@ const chooserSource = await readFile(
 const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
 const sceneSettingsSource = await readFile(
   new URL("../src/components/SceneSettingsPane.tsx", import.meta.url),
+  "utf8",
+);
+const sceneFxDefaultsSource = await readFile(
+  new URL("../src/sceneFxDefaults.ts", import.meta.url),
   "utf8",
 );
 const tauriSource = await readFile(
@@ -241,6 +249,136 @@ closeTo(smoothMove[32].y, 50, "the first smooth segment must finish on its autho
 closeTo(smoothMove.at(-1).x, 100, "the smooth path must finish on its final authored vertex");
 closeTo(smoothMove.at(-1).y, 0, "the smooth path must finish on its final authored vertex");
 assert.deepEqual(movePoints, moveBefore, "path sampling must not mutate authored vertices");
+const circleSquare = [
+  { x: 25, y: 50 },
+  { x: 50, y: 25 },
+  { x: 75, y: 50 },
+  { x: 50, y: 75 },
+];
+const circleMove = visualization.sampleMovePath(circleSquare, "Circle", true);
+assert.equal(circleMove.length, 129, "four Circle segments must receive equal 32-sample time slices");
+closeTo(circleMove[16].x, 32.32233047, "Circle first-segment midpoint X", 1e-8);
+closeTo(circleMove[16].y, 32.32233047, "Circle first-segment midpoint Y", 1e-8);
+const circleBoundaries = circleMove.filter((_, index) => index % 32 === 0);
+for (const [index, expected] of [...circleSquare, circleSquare[0]].entries()) {
+  closeTo(circleBoundaries[index].x, expected.x, `Circle equal-time boundary ${index} X`);
+  closeTo(circleBoundaries[index].y, expected.y, `Circle equal-time boundary ${index} Y`);
+}
+const inflectionCircle = visualization.sampleMovePath([
+  { x: 5.8411848, y: 10.201688 },
+  { x: 13.235159, y: 95.50081 },
+  { x: 9.455622, y: 95.10565 },
+  { x: 83.738565, y: 75.331795 },
+], "Circle", true);
+closeTo(
+  inflectionCircle[24].x,
+  24.79715493,
+  "Circle inflection must reflect the raw first-half arc before final X clamp",
+  2e-6,
+);
+closeTo(
+  inflectionCircle[24].y,
+  73.01356758,
+  "Circle inflection must reflect the raw first-half arc before final Y clamp",
+  2e-6,
+);
+const validMoveDraft = {
+  fixtureIds: [1],
+  targetGroupIds: [],
+  points: [{ x: 0, y: 0 }, { x: 1, y: 1 }],
+  beamTargets: [],
+  closed: true,
+  interpolation: "Circle",
+  centerX: 0.5,
+  centerY: 0.5,
+  sizeX: 1,
+  sizeY: 1,
+  rotationDegrees: 0,
+  periodMs: 1_000,
+  clockSyncBeats: null,
+  phase: 0,
+  fixtureSpread: 0,
+  coordinateMode: "Absolute",
+  blendMode: "Override",
+};
+const circleFanoutRequest = {
+  period_ms: 1_000,
+  direction: "Forward",
+  phase: 0,
+  fixture_spread: 1,
+  symmetry: false,
+  interpolation: "Circle",
+};
+assert.deepEqual(
+  visualization.moveFanoutPreviewState(circleFanoutRequest, 250, 1, 4),
+  { progress: 0, mirrorPan: false },
+  "Circle fan-out must subtract first-wing selection spread",
+);
+assert.deepEqual(
+  visualization.moveFanoutPreviewState({ ...circleFanoutRequest, symmetry: true }, 250, 2, 4),
+  { progress: 0.25, mirrorPan: false },
+  "Circle symmetry must reverse second-wing traversal from half-cycle",
+);
+assert.deepEqual(
+  visualization.moveFanoutPreviewState({
+    ...circleFanoutRequest,
+    interpolation: "Smooth",
+    symmetry: true,
+  }, 250, 3, 4),
+  { progress: 0, mirrorPan: true },
+  "legacy Smooth fan-out must retain positive spread and second-wing Pan mirroring",
+);
+assert.equal(moveEffect.moveEffectDraftError(validMoveDraft), "", "a closed two-point Circle draft must remain valid");
+assert.equal(
+  moveEffect.moveEffectDraftError({
+    ...validMoveDraft,
+    targetGroupIds: ["Moving"],
+    beamTargets: [{ fixture_id: 1, beam_index: 3, selection_index: 0 }],
+  }),
+  "Move beam targets cannot be combined with group targets.",
+);
+assert.equal(
+  moveEffect.moveEffectDraftError({
+    ...validMoveDraft,
+    beamTargets: [{ fixture_id: 2, beam_index: 3, selection_index: 0 }],
+  }),
+  "Move beam target is absent from fixture targets.",
+);
+assert.equal(
+  moveEffect.moveEffectDraftError({
+    ...validMoveDraft,
+    beamTargets: [
+      { fixture_id: 1, beam_index: 3, selection_index: 0 },
+      { fixture_id: 1, beam_index: 3, selection_index: 1 },
+    ],
+  }),
+  "Move beam target fixture/beam pairs must be unique.",
+);
+assert.match(
+  appSource,
+  /const cancelEffectEdit = \(\) => \{[\s\S]*?setEditingEffectId\(null\);[\s\S]*?setMoveBeamTargets\(\[\]\);/,
+  "canceling a Move edit must clear source-specific beam identities before a new draft",
+);
+assert.equal(
+  moveEffect.moveEffectDraftError({ ...validMoveDraft, closed: false }),
+  "Move Circle interpolation requires a closed path.",
+  "Circle drafts must expose their recovered closed-path requirement before save",
+);
+assert.equal(
+  moveEffect.moveEffectDraftError({ ...validMoveDraft, points: Array.from({ length: 256 }, (_, index) => ({ x: index / 255, y: 0.5 })) }),
+  "Move paths require between 2 and 255 points.",
+  "Circle drafts must enforce the recovered POINTS maximum",
+);
+assert.equal(
+  moveEffect.moveEffectDraftError({
+    ...validMoveDraft,
+    interpolation: "Smooth",
+    closed: false,
+    points: Array.from({ length: 256 }, (_, index) => ({ x: index / 255, y: 0.5 })),
+  }),
+  "",
+  "the Circle limit must not shrink the legacy Line/Smooth 256-point domain",
+);
 const duplicateMovePoints = [
   { x: 0, y: 0 },
   { x: 0, y: 0 },
@@ -263,6 +401,32 @@ assert.deepEqual(
   "runtime Move preview normalization must use the engine's 1e-6 distance threshold",
 );
 assert.deepEqual(duplicateMovePoints, duplicateMoveBefore, "Move normalization must not mutate authored vertices");
+const duplicateCirclePoints = [
+  { x: 0.1, y: 0.2 },
+  { x: 0.1, y: 0.2 },
+  { x: 0.8, y: 0.2 },
+  { x: 0.4, y: 0.9 },
+];
+const duplicateCircleRuntime = visualization.normalizeMovePathPoints(
+  duplicateCirclePoints,
+  true,
+  "Circle",
+);
+assert.deepEqual(
+  duplicateCircleRuntime,
+  duplicateCirclePoints,
+  "Circle normalization must retain degenerate points as equal-time segment boundaries",
+);
+const duplicateCircleSamples = visualization.sampleMovePath(
+  duplicateCircleRuntime.map((point) => ({ x: point.x * 100, y: point.y * 100 })),
+  "Circle",
+  true,
+);
+assert.equal(duplicateCircleSamples.length, 129, "four authored Circle points must retain four time segments");
+closeTo(duplicateCircleSamples[32].x, 10, "degenerate Circle boundary X");
+closeTo(duplicateCircleSamples[32].y, 20, "the degenerate first Circle segment must consume its full time slice");
+closeTo(duplicateCircleSamples[64].x, 80, "the next Circle boundary must remain at half-cycle X");
+closeTo(duplicateCircleSamples[64].y, 20, "the next Circle boundary must remain at half-cycle Y");
 assert.deepEqual(
   visualization.movePointToPreview({ x: 1.2, y: -0.2 }),
   { x: 100, y: 100 },
@@ -394,6 +558,16 @@ assert.match(
   appSource,
   /family === "CURVE FX"\s*\? "Curve"/,
   "the CURVE FX family must select the independent Curve kind",
+);
+assert.match(
+  sceneFxDefaultsSource,
+  /if \(request\.beam_targets\?\.length\) return fixtures;/,
+  "fixture-level scene preview must leave explicit beam bodies dormant instead of collapsing beam identity",
+);
+assert.match(
+  sceneFxDefaultsSource,
+  /sampled\.length - 1[\s\S]*?Math\.floor\(fanout\.progress \* sampleIntervals\)/,
+  "Move scene preview must map phase across sampled path intervals rather than array length",
 );
 assert.match(
   tauriSource,

@@ -317,6 +317,7 @@ fn add_mixed_lighting_effects(engine: &EngineHandle) -> Result<(), String> {
         label: "Soak Move".to_string(),
         fixture_ids: vec![1],
         target_group_ids: Vec::new(),
+        beam_targets: Vec::new(),
         points: vec![
             MovePathPoint { x: 0.5, y: 0.0 },
             MovePathPoint { x: 1.0, y: 0.5 },

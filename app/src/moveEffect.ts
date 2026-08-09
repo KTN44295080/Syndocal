@@ -1,6 +1,8 @@
 import type {
   EffectBlendMode,
   MoveCoordinateMode,
+  MoveEffectBeamTarget,
+  MoveInterpolation,
   MovePathPoint,
 } from "./types";
 
@@ -65,6 +67,9 @@ interface MoveDraftValidationInput {
   fixtureIds: number[];
   targetGroupIds: string[];
   points: MovePathPoint[];
+  beamTargets?: MoveEffectBeamTarget[];
+  closed: boolean;
+  interpolation: MoveInterpolation;
   centerX: number;
   centerY: number;
   sizeX: number;
@@ -82,8 +87,29 @@ export const moveEffectDraftError = (input: MoveDraftValidationInput) => {
   if (input.fixtureIds.length === 0 && input.targetGroupIds.length === 0) {
     return "Move effects require at least one fixture or group target.";
   }
-  if (input.points.length < 2 || input.points.length > 256) {
-    return "Move paths require between 2 and 256 points.";
+  if (input.beamTargets?.length) {
+    if (input.targetGroupIds.length > 0) {
+      return "Move beam targets cannot be combined with group targets.";
+    }
+    const fixtureIds = new Set(input.fixtureIds);
+    const identities = new Set<string>();
+    for (const target of input.beamTargets) {
+      if (!fixtureIds.has(target.fixture_id)) {
+        return "Move beam target is absent from fixture targets.";
+      }
+      const identity = `${target.fixture_id}/${target.beam_index}`;
+      if (identities.has(identity)) {
+        return "Move beam target fixture/beam pairs must be unique.";
+      }
+      identities.add(identity);
+    }
+  }
+  const maximumPoints = input.interpolation === "Circle" ? 255 : 256;
+  if (input.points.length < 2 || input.points.length > maximumPoints) {
+    return `Move paths require between 2 and ${maximumPoints} points.`;
+  }
+  if (input.interpolation === "Circle" && !input.closed) {
+    return "Move Circle interpolation requires a closed path.";
   }
   if (input.points.some((point) =>
     !Number.isFinite(point.x)

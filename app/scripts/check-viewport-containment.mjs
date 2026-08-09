@@ -9781,7 +9781,9 @@ function hasExpectedControlModeSurface(result) {
         result.visibleMoveEffectDirectionButtonCount === 3 &&
         result.visibleMoveEffectTransformInputCount === 5 &&
         result.visibleMoveEffectCoordinateButtonCount === 2 &&
-        result.visibleMoveEffectInterpolationButtonCount === 2 &&
+        // DVC-V5b: interpolation grew Line/Smooth -> Line/Smooth/Circle
+        // (approved Move Circle exposure), so the segmented control is 3.
+        result.visibleMoveEffectInterpolationButtonCount === 3 &&
         result.visibleMoveEffectClosedToggleCount === 1 &&
         result.visibleMoveEffectSymmetryToggleCount === 1 &&
         result.visibleMoveEffectPointRowCount >= 2 &&

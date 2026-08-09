@@ -276,6 +276,7 @@ import type {
   MidiOutputSummary,
   MoveCoordinateMode,
   MoveDirection,
+  MoveEffectBeamTarget,
   MoveEffectRequest,
   MoveInterpolation,
   MovePathPoint,
@@ -1284,6 +1285,7 @@ const cueOwnedEffectSummary = (
 const explicitBeamTargetCount = (effect: EffectSummary | null): number => {
   if (!effect) return 0;
   if (effect.lfo?.beam_targets?.length) return effect.lfo.beam_targets.length;
+  if (effect.move_effect?.beam_targets?.length) return effect.move_effect.beam_targets.length;
   if (effect.color?.spatial_pattern?.beam_targets?.length) {
     return effect.color.spatial_pattern.beam_targets.length;
   }
@@ -1873,7 +1875,8 @@ export default function App() {
   const [chaserRandomCycleCount, setChaserRandomCycleCount] = createSignal(1);
   const [movePathPoints, setMovePathPoints] = createSignal<MovePathPoint[]>(defaultMovePathPoints());
   const [movePathClosed, setMovePathClosed] = createSignal(true);
-  const [moveInterpolation, setMoveInterpolation] = createSignal<MoveInterpolation>("Smooth");
+  const [moveInterpolation, setMoveInterpolation] = createSignal<MoveInterpolation>("Circle");
+  const [moveBeamTargets, setMoveBeamTargets] = createSignal<MoveEffectBeamTarget[]>([]);
   const [moveCoordinateMode, setMoveCoordinateMode] = createSignal<MoveCoordinateMode>("Absolute");
   const [moveCenterX, setMoveCenterX] = createSignal(0.5);
   const [moveCenterY, setMoveCenterY] = createSignal(0.5);
@@ -5025,7 +5028,13 @@ export default function App() {
     setMovePathRecipe(recipe);
     setMovePathPoints(movePathRecipePoints(recipe));
     setMovePathClosed(recipe !== "Line");
-    setMoveInterpolation(recipe === "Line" || recipe === "Triangle" || recipe === "Square" ? "Line" : "Smooth");
+    setMoveInterpolation(
+      recipe === "Circle"
+        ? "Circle"
+        : recipe === "Line" || recipe === "Triangle" || recipe === "Square"
+          ? "Line"
+          : "Smooth",
+    );
   };
   const prepareScalarFeatures = (forceReset = false) => {
     if (!forceReset && scalarEffectFeatures().length > 0) return;
@@ -5042,6 +5051,7 @@ export default function App() {
     setEffectBlendMode("Override");
     if (forceReset) {
       applyMovePathRecipe("Circle");
+      setMoveBeamTargets([]);
       setMoveCoordinateMode("Absolute");
       setMoveCenterX(0.5);
       setMoveCenterY(0.5);
@@ -5069,6 +5079,7 @@ export default function App() {
     const startsNewEffect = sourceEffectId !== null && nextType !== previousType;
     if (startsNewEffect) {
       setEditingEffectId(null);
+      if (previousType === "Move") setMoveBeamTargets([]);
       setMessage(`Effect ${sourceEffectId} remains unchanged; Type change starts a new ${nextType} effect.`);
     }
     setEffectType(nextType);
@@ -15926,6 +15937,9 @@ export default function App() {
       fixtureIds: moveDraftFixtureIds(),
       targetGroupIds: moveDraftTargetGroupIds(),
       points: movePathPoints(),
+      beamTargets: moveBeamTargets(),
+      closed: movePathClosed(),
+      interpolation: moveInterpolation(),
       centerX: moveCenterX(),
       centerY: moveCenterY(),
       sizeX: moveSizeX(),
@@ -15939,7 +15953,7 @@ export default function App() {
       blendMode: effectBlendMode(),
     });
     if (error) return error;
-    if (moveCompatibleTargetFixtures().length === 0) {
+    if (moveBeamTargets().length === 0 && moveCompatibleTargetFixtures().length === 0) {
       return "The current target has no fixture with exactly one paired Pan and Tilt control.";
     }
     return "";
@@ -16081,6 +16095,7 @@ export default function App() {
           label: editingEffectSummary()?.label ?? "Pan/Tilt Move",
           fixture_ids: moveDraftFixtureIds(),
           target_group_ids: moveDraftTargetGroupIds(),
+          beam_targets: moveBeamTargets().map((target) => ({ ...target })),
           points: movePathPoints().map((point) => ({ ...point })),
           closed: movePathClosed(),
           interpolation: moveInterpolation(),
@@ -16400,6 +16415,7 @@ export default function App() {
                   ? await invoke<number>("add_color_mapping_effect", { request: draft.request })
                 : await invoke<number>("add_move_effect", { request: draft.request });
       setEditingEffectId(null);
+      if (draft.effectType === "Move") setMoveBeamTargets([]);
       setMessage(`Added ${draft.effectType === "PositionWave" ? "position wave" : draft.effectType === "Color" ? "color" : draft.effectType === "Chaser" ? "Chaser" : draft.effectType === "Move" ? "Move" : draft.effectType === "Value" ? "Value" : draft.effectType === "Curve" ? "Curve" : draft.effectType === "Mapping" ? "Mapping" : draft.effectType === "ColorMapping" ? "Colour Mapping" : "LFO"} effect ${effectId}`);
       await refreshSnapshot();
       return effectId;
@@ -16449,6 +16465,7 @@ export default function App() {
   const cancelEffectEdit = () => {
     const effectId = editingEffectId();
     setEditingEffectId(null);
+    if (effectType() === "Move") setMoveBeamTargets([]);
     setMessage(effectId === null ? "No effect draft edit is active." : `Canceled edit for effect ${effectId}.`);
   };
 
@@ -16461,6 +16478,7 @@ export default function App() {
       await invoke("remove_effect", { effectId });
       if (editingEffectId() === effectId) {
         setEditingEffectId(null);
+        if (effect?.effect_type === "Move") setMoveBeamTargets([]);
       }
       setMessage(`Removed effect ${effectId}`);
       await refreshSnapshot();
@@ -16537,12 +16555,14 @@ export default function App() {
       const move = effect.move_effect;
       if (!move) {
         setEditingEffectId(null);
+        setMoveBeamTargets([]);
         setMessage(`Move effect ${effect.id} is missing its editor body.`);
         return;
       }
       setMovePathPoints(move.points.map((point) => ({ ...point })));
       setMovePathClosed(move.closed);
       setMoveInterpolation(move.interpolation);
+      setMoveBeamTargets((move.beam_targets ?? []).map((target) => ({ ...target })));
       setMoveCoordinateMode(move.coordinate_mode);
       setMoveCenterX(move.center_x);
       setMoveCenterY(move.center_y);
@@ -17181,6 +17201,7 @@ export default function App() {
       phase: effectPhase(),
       spread: moveFixtureSpread(),
       symmetry: moveSymmetry(),
+      beamTargetCount: moveBeamTargets().length,
       onPoints: (points) => {
         setMovePathRecipe("Custom");
         setMovePathPoints(points);
@@ -17189,7 +17210,10 @@ export default function App() {
         setMovePathRecipe("Custom");
         setMovePathClosed(closed);
       },
-      onInterpolation: setMoveInterpolation,
+      onInterpolation: (interpolation) => {
+        setMoveInterpolation(interpolation);
+        if (interpolation === "Circle") setMovePathClosed(true);
+      },
       onCoordinateMode: setMoveCoordinateMode,
       onCenter: (center) => {
         setMoveCenterX(center.x);

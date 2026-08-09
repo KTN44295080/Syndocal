@@ -137,7 +137,9 @@ export function EffectGraphicalPreview(props: EffectGraphicalPreviewProps) {
   const moveControlPoints = createMemo(() => model()?.move?.points.map(movePointToPreview) ?? []);
   const moveRuntimePoints = createMemo(() => {
     const move = model()?.move;
-    return move ? normalizeMovePathPoints(move.points, move.closed).map(movePointToPreview) : [];
+    return move
+      ? normalizeMovePathPoints(move.points, move.closed, move.interpolation).map(movePointToPreview)
+      : [];
   });
   const moveControlSamples = createMemo(() => {
     const move = model()?.move;

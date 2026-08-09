@@ -240,12 +240,150 @@ const centripetalPoint = (
   return parameterizedLerp(levelB1, levelB2, time1, time2, at);
 };
 
+interface PreviewCircularArc {
+  centerX: number;
+  centerY: number;
+  radius: number;
+  startAngle: number;
+  sweepAngle: number;
+}
+
+type PreviewCircleSegment =
+  | { kind: "Arc"; arc: PreviewCircularArc }
+  | { kind: "Inflection"; firstHalf: PreviewCircularArc; midpoint: PreviewPoint }
+  | { kind: "Linear"; from: PreviewPoint; to: PreviewPoint };
+
+const signedCircumradius = (first: PreviewPoint, second: PreviewPoint, third: PreviewPoint) => {
+  const determinant = 2 * (
+    first.x * (second.y - third.y) +
+    second.x * (third.y - first.y) +
+    third.x * (first.y - second.y)
+  );
+  if (determinant === 0 || !Number.isFinite(determinant)) return 0;
+  const firstSquared = first.x * first.x + first.y * first.y;
+  const secondSquared = second.x * second.x + second.y * second.y;
+  const thirdSquared = third.x * third.x + third.y * third.y;
+  const centerX = (
+    firstSquared * (second.y - third.y) +
+    secondSquared * (third.y - first.y) +
+    thirdSquared * (first.y - second.y)
+  ) / determinant;
+  const centerY = (
+    firstSquared * (third.x - second.x) +
+    secondSquared * (first.x - third.x) +
+    thirdSquared * (second.x - first.x)
+  ) / determinant;
+  const radius = Math.hypot(first.x - centerX, first.y - centerY);
+  return Number.isFinite(radius) ? Math.sign(determinant) * radius : 0;
+};
+
+const compilePreviewCircularArc = (
+  from: PreviewPoint,
+  to: PreviewPoint,
+  signedRadius: number,
+): PreviewCircularArc | null => {
+  if (signedRadius === 0 || !Number.isFinite(signedRadius)) return null;
+  const chordX = to.x - from.x;
+  const chordY = to.y - from.y;
+  const chordLength = Math.hypot(chordX, chordY);
+  if (chordLength === 0) return null;
+  const radius = Math.abs(signedRadius);
+  const heightSquared = radius * radius - chordLength * chordLength * 0.25;
+  if (heightSquared < 0) return null;
+  const midpointX = (from.x + to.x) * 0.5;
+  const midpointY = (from.y + to.y) * 0.5;
+  const height = Math.sqrt(heightSquared);
+  const side = Math.sign(signedRadius);
+  const centerX = midpointX - side * chordY / chordLength * height;
+  const centerY = midpointY + side * chordX / chordLength * height;
+  const startAngle = Math.atan2(from.y - centerY, from.x - centerX);
+  const endAngle = Math.atan2(to.y - centerY, to.x - centerX);
+  let sweepAngle = endAngle - startAngle;
+  if (signedRadius > 0 && sweepAngle < 0) sweepAngle += Math.PI * 2;
+  else if (signedRadius < 0 && sweepAngle > 0) sweepAngle -= Math.PI * 2;
+  return { centerX, centerY, radius, startAngle, sweepAngle };
+};
+
+const samplePreviewCircularArcRaw = (arc: PreviewCircularArc, progress: number): PreviewPoint => {
+  const angle = arc.startAngle + arc.sweepAngle * clampUnit(progress);
+  return {
+    x: arc.centerX + Math.cos(angle) * arc.radius,
+    y: arc.centerY + Math.sin(angle) * arc.radius,
+  };
+};
+
+const samplePreviewCircularArc = (arc: PreviewCircularArc, progress: number): PreviewPoint => {
+  const point = samplePreviewCircularArcRaw(arc, progress);
+  return { x: clamp(point.x, 0, 100), y: clamp(point.y, 0, 100) };
+};
+
+const compilePreviewCircleSegment = (
+  points: PreviewPoint[],
+  index: number,
+): PreviewCircleSegment => {
+  const previous = points[(index + points.length - 1) % points.length];
+  const from = points[index];
+  const to = points[(index + 1) % points.length];
+  const after = points[(index + 2) % points.length];
+  let incomingRadius = signedCircumradius(previous, from, to);
+  let outgoingRadius = signedCircumradius(from, to, after);
+  if (outgoingRadius === 0) outgoingRadius = incomingRadius;
+  if (incomingRadius === 0) incomingRadius = outgoingRadius;
+  const averageRadius = (Math.abs(incomingRadius) + Math.abs(outgoingRadius)) * 0.5;
+  const signedAverage = Math.sign(incomingRadius) * averageRadius;
+  const oppositeSigns = incomingRadius !== 0 && outgoingRadius !== 0 &&
+    Math.sign(incomingRadius) !== Math.sign(outgoingRadius);
+  if (oppositeSigns) {
+    const midpoint = lerpPoint(from, to, 0.5);
+    const firstHalf = compilePreviewCircularArc(from, midpoint, signedAverage * 0.5);
+    return firstHalf ? { kind: "Inflection", firstHalf, midpoint } : { kind: "Linear", from, to };
+  }
+  const arc = compilePreviewCircularArc(from, to, signedAverage);
+  return arc ? { kind: "Arc", arc } : { kind: "Linear", from, to };
+};
+
+const samplePreviewCircleSegment = (segment: PreviewCircleSegment, progress: number): PreviewPoint => {
+  if (segment.kind === "Arc") return samplePreviewCircularArc(segment.arc, progress);
+  if (segment.kind === "Linear") return lerpPoint(segment.from, segment.to, clampUnit(progress));
+  if (progress <= 0.5) return samplePreviewCircularArc(segment.firstHalf, progress * 2);
+  const reflected = samplePreviewCircularArcRaw(segment.firstHalf, (1 - progress) * 2);
+  return {
+    x: clamp(2 * segment.midpoint.x - reflected.x, 0, 100),
+    y: clamp(2 * segment.midpoint.y - reflected.y, 0, 100),
+  };
+};
+
+const sampleCirclePath = (points: PreviewPoint[]): PreviewPoint[] => {
+  const samples: PreviewPoint[] = [points[0]];
+  if (points.length === 2) {
+    const center = lerpPoint(points[0], points[1], 0.5);
+    const radius = pointDistance(points[0], center);
+    const startAngle = Math.atan2(points[0].y - center.y, points[0].x - center.x);
+    for (let sample = 1; sample <= 64; sample += 1) {
+      const angle = startAngle + Math.PI * 2 * sample / 64;
+      samples.push({
+        x: clamp(center.x + Math.cos(angle) * radius, 0, 100),
+        y: clamp(center.y + Math.sin(angle) * radius, 0, 100),
+      });
+    }
+    return samples;
+  }
+  const segments = points.map((_, index) => compilePreviewCircleSegment(points, index));
+  for (const segment of segments) {
+    for (let sample = 1; sample <= 32; sample += 1) {
+      samples.push(samplePreviewCircleSegment(segment, sample / 32));
+    }
+  }
+  return samples;
+};
+
 export const sampleMovePath = (
   points: PreviewPoint[],
   interpolation: MoveInterpolation,
   closed: boolean,
 ): PreviewPoint[] => {
   if (points.length < 2 || interpolation === "Line") return [...points];
+  if (interpolation === "Circle") return sampleCirclePath(points);
   const samples: PreviewPoint[] = [points[0]];
   const segmentCount = closed ? points.length : points.length - 1;
   for (let segment = 0; segment < segmentCount; segment += 1) {
@@ -263,6 +401,35 @@ export const sampleMovePath = (
   return samples;
 };
 
+type MoveFanoutPreview = Pick<
+  MoveEffectRequest,
+  "period_ms" | "direction" | "phase" | "fixture_spread" | "symmetry" | "interpolation"
+>;
+
+/** Mirrors the compiled Move target phase/reverse flags used by the 44 Hz evaluator. */
+export const moveFanoutPreviewState = (
+  request: MoveFanoutPreview,
+  elapsedMs: number,
+  selectionRank: number,
+  selectionCount: number,
+): { progress: number; mirrorPan: boolean } => {
+  const count = Math.max(1, Math.round(selectionCount));
+  const rank = Math.max(0, Math.min(count - 1, Math.round(selectionRank)));
+  const circle = request.interpolation === "Circle";
+  const secondWing = request.symmetry === true && rank >= Math.ceil(count / 2);
+  const fanoutRank = circle && secondWing ? rank - Math.ceil(count / 2) : rank;
+  const offset = fanoutRank / count * clampUnit(request.fixture_spread) * (circle ? -1 : 1);
+  const time = Math.max(0, Number.isFinite(elapsedMs) ? elapsedMs : 0)
+    / Math.max(10, request.period_ms) + request.phase;
+  const phase = normalizePhase(circle && secondWing ? 0.5 - time + offset : time + offset);
+  const progress = request.direction === "Reverse"
+    ? 1 - phase
+    : request.direction === "Bounce"
+      ? phase * 2 <= 1 ? phase * 2 : 2 - phase * 2
+      : phase;
+  return { progress, mirrorPan: !circle && secondWing };
+};
+
 export const movePointToPreview = (point: MovePathPoint): PreviewPoint => ({
   x: clampUnit(point.x) * 100,
   y: (1 - clampUnit(point.y)) * 100,
@@ -271,7 +438,11 @@ export const movePointToPreview = (point: MovePathPoint): PreviewPoint => ({
 export const normalizeMovePathPoints = (
   points: readonly MovePathPoint[],
   closed: boolean,
+  interpolation?: MoveInterpolation,
 ): MovePathPoint[] => {
+  // Circle keeps every authored point as an equal-time segment boundary,
+  // including degenerate adjacent/closing duplicates from source files.
+  if (interpolation === "Circle") return points.map((point) => ({ ...point }));
   const normalized: MovePathPoint[] = [];
   for (const point of points) {
     const previous = normalized.at(-1);
