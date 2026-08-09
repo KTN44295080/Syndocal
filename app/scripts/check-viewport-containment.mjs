@@ -2422,10 +2422,9 @@ async function measureTimelinePaneExpansionState(client) {
       ':scope > .status > .bpmReadout > small',
       ':scope > .status > .bpmReadout > strong',
       ':scope > .status > .pill',
-      ':scope > .status > .tickMetric',
-      ':scope > .status > .outputMetric',
-      ':scope > .status > .outputMetric > small',
-      ':scope > .status > .outputMetric > strong',
+      // .tickMetric / .outputMetric were consolidated into the .pill status
+      // indicator (its title now carries Engine tick/jitter/bytes + DMX
+      // success/output counts). The topbar background drag surface is now 11.
     ];
     const missingTopbarDragRegionSelectors = requiredTopbarDragRegionSelectors.filter((selector) => {
       const element = selector === ':scope' ? topbar : topbar?.querySelector(selector);
@@ -2755,7 +2754,7 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
       normalDensity.interactiveDragRegionCount === 0
     )],
     ['t25ETopbarEmptySurfaceMapIsComplete', () => Boolean(
-      normalDensity.requiredTopbarDragRegionSurfaceCount === 15 &&
+      normalDensity.requiredTopbarDragRegionSurfaceCount === 11 &&
       normalDensity.missingTopbarDragRegionSelectors?.length === 0
     )],
     ['t25EWindowControlsExistInRequiredOrder', () => Boolean(
@@ -11231,10 +11230,8 @@ function readTopbarPulseStateInPage() {
     ":scope > .status > .bpmReadout > small",
     ":scope > .status > .bpmReadout > strong",
     ":scope > .status > .pill",
-    ":scope > .status > .tickMetric",
-    ":scope > .status > .outputMetric",
-    ":scope > .status > .outputMetric > small",
-    ":scope > .status > .outputMetric > strong",
+    // .tickMetric / .outputMetric consolidated into .pill (see normal-density
+    // requiredTopbarDragRegionSelectors). Background drag surface count is 11.
   ];
   const missingDragRegionSelectors = requiredDragRegionSelectors.filter((selector) => {
     const element = selector === ":scope" ? topbar : topbar?.querySelector(selector);
@@ -11247,7 +11244,6 @@ function readTopbarPulseStateInPage() {
     tap: [...(topbar?.querySelectorAll("[data-topbar-tap]") ?? [])].filter(visible),
     pulse: [...(topbar?.querySelectorAll("[data-topbar-pulse]") ?? [])].filter(visible),
     live: [...(topbar?.querySelectorAll(".pill") ?? [])].filter(visible),
-    dmx: [...(topbar?.querySelectorAll(".outputMetric") ?? [])].filter(visible),
     project: [...(topbar?.querySelectorAll(".projectAction") ?? [])].filter(visible),
     window: [...(topbar?.querySelectorAll("[data-window-controls] button") ?? [])].filter(visible),
   };
@@ -11487,7 +11483,7 @@ async function runTopbarPulseViewport(client, viewport) {
       projectMenu.saveShortcut.includes("Control+S") &&
       projectMenu.loadShortcut.includes("Control+O"),
     emptyTopbarSurfacesAreDragRegionsOnly:
-      stopped.requiredDragRegionSurfaceCount === 15 &&
+      stopped.requiredDragRegionSurfaceCount === 11 &&
       stopped.missingDragRegionSelectors.length === 0 &&
       stopped.interactiveDragRegionCount === 0 &&
       projectMenu.interactiveDragRegionCount === 0,
@@ -11497,7 +11493,6 @@ async function runTopbarPulseViewport(client, viewport) {
       stopped.controlCounts.bpm === 1 &&
       stopped.controlCounts.tap === 1 &&
       stopped.controlCounts.live === 1 &&
-      stopped.controlCounts.dmx === 1 &&
       stopped.controlCounts.project === 0 &&
       stopped.controlCounts.window === 3 &&
       stopped.statusOverflowX <= 1 &&

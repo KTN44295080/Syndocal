@@ -74,3 +74,14 @@ Daslight 5を起動し（ユーザー許可済み）、Shinkan2026.dvcの読込�
 - **F-1（M・✅修正済み 1bdce3a）**: SceneSettingsPaneの「長さ（beats）」欄が生float表示（Amberで「0.94716597」）。.dvcインポートのms→beats変換値が丸めなしで主要ペインに出る。表示丸め+保存往復非破壊（未編集フィールドの元値維持）で修正。実機検死で同種欠陥をタイムラインドロワーのキュー編集行とキューストアフォームにも発見（F-1b）し、共有numberDisplayヘルパーで41サーフェス棚卸しの上6箇所を統一、実保存経路の捕捉でauthoredBeats全精度維持を証明。実機で両サーフェス0.947表示を確認。これによりH/M級所見はゼロ。
 - H級所見: なし。上記以外のM級所見: なし。
 - 参考（非所見）: 複数キュー同時アクティブ時に複数セルへLIVEバッジが並ぶ一方、右レール「実行中キュー」は最新1件のみ表示する既存設計は、マルチキューHTPの意味論としては正しいが表示語彙の将来課題として記録。debugビルドのコンソール窓が復旧直後に前面へ来るのはdebug限定アーティファクト（リリースビルドには存在しない）。
+
+## 再監査（2026-08-10、Fable引き継ぎ・フルviewportマトリクスによる継承回帰スイープ）
+
+対象リビジョン: df2709b（引き継ぎ`cb8c61d`+ドキュメント）。フロントエンド全ゲート（tsc/build/localization/identity/status/large-show/timeline-viewport）緑を確認後、**フルviewportマトリクスを回して継承回帰を2件検出**した。いずれも私（Fable）のドキュメントコミットとは無関係で、Value Sweepトランシェ群が焦点ゲートのみを回していたため見逃されていた継承赤。
+
+### 所見（いずれも修正済み・フルマトリクス緑で確認）
+
+- **A-1（M・✅修正 6e476a0）** Scene Matrixバンクジャンプ帯の縦密度ドリフト: `matrixBankChipRowEndsWithinThirtySixPixelsOfColumnHeaders`が全5解像度で赤。来歴＝断言追加（14aa6df）→T27-B 156px列再設計（05fa507）で帯が3px離れ、以後ずっと継承赤。実測でstrip→列gap 7px（契約≤4）・headerTop 40px（契約≤36.5）を確認し、`.sceneMatrixColumns`のpadding-top 3→0＋列内identity帯4→3pxで整数box-model由来の決定論的値としてgap 4/headerTop 36へ。stripHeight 28（≤30）・docScroll 0/0不変。
+- **A-2（M・✅修正 <この commit>）** T25-Eトップバードラッグ領域の陳腐化断言（3サイト）: `t25ETopbarOwnsDragRegionOnlyOnBackground`＋`t25ETopbarEmptySurfaceMapIsComplete`が全5解像度で赤（ただし`^fail`行を出さずサマリの`timeline pane expansion`カテゴリにのみ計上——サマリ構築コードを読んで捕捉、危うく偽緑）。真因＝旧`.tickMetric`/`.outputMetric`（DMX健全性readout）がトップバー再設計で`.pill`のtitle（`Engine {tickMs}ms / jitter / bytes · DMX {success}/{output}`, WorkspaceChrome.tsx:736）へ統合された際、ハーネスの必須ドラッグ領域セレクタ15個リストが未再交渉。機能喪失ではなく断言の陳腐化と裏取り（現11背景サーフェス全てdraggable・interactive全て非draggable・interactiveDragRegionCount 0を実測）。再交渉全列挙: (1)normal-density必須リスト15→11（tickMetric/outputMetric×4除去）＋`t25ETopbarEmptySurfaceMapIsComplete`の`=== 15`→`=== 11`、(2)pane-window必須リスト同様15→11＋`emptyTopbarSurfacesAreDragRegionsOnly`の`=== 15`→`=== 11`、(3)pane-window `controlGroups.dmx`（死んだ`.outputMetric`参照）除去＋`allTopbarControlsCoexistAt1280`の`controlCounts.dmx === 1`除去（DMX健全性は`.pill`=`live`側で計上済み・カバレッジ損失なし）。既存の他断言変更なし。
+- H級所見: なし。上記2件以外のM級所見: なし。
+- 検証: A-1修正後フルマトリクス緑、A-2修正後 `--timeline-expansion-only` 5/5＋`--pane-window-only` 5/5＋フルマトリクス`MATRIX_EXIT=0`（0失敗）。**学び（スキル反映済み）: フルマトリクスは0失敗時にサマリ行を出さない**（`N category check(s) failed`は失敗存在時のみ）。合否は①`MATRIX_EXIT`②`^fail`＋`timelineExpansion=fail`ゼロ③サマリ行が出た場合はその全カテゴリ0、の複合で判定する。
