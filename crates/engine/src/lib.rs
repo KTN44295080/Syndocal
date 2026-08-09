@@ -24856,6 +24856,7 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
             param_sx,
             speed_y,
             param_sy,
+            ..
         } => {
             for (label, value) in [
                 ("Plasma Size X", *size_x),
@@ -24879,6 +24880,7 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
             color_width,
             angle_degrees,
             gradient,
+            ..
         } => {
             if !color_width.is_finite() || !(0.0..=1.0).contains(color_width) {
                 return Err("Color Rainbow width must be finite and within 0..1".to_string());
@@ -24887,12 +24889,16 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
             percent("gradient", *gradient)
         }
         ColorEffectSpatialRecipe::Rainbow {
+            vertical_symmetry,
+            horizontal_symmetry,
             rotation_degrees,
             color_width,
             angle_degrees,
             gradient,
-            ..
         } => {
+            if *vertical_symmetry && *horizontal_symmetry {
+                return Err("Rainbow transform must select at most one symmetry axis".to_string());
+            }
             if !rotation_degrees.is_finite() || !angle_degrees.is_finite() {
                 return Err("Rainbow rotation and angle must be finite".to_string());
             }
@@ -28298,6 +28304,8 @@ fn evaluate_color_spatial_sample_at_rate(
             }
         }
         ColorEffectSpatialRecipe::Plasma {
+            grayscale,
+            vertical_symmetry,
             size_x,
             param_x,
             size_y,
@@ -28311,7 +28319,12 @@ fn evaluate_color_spatial_sample_at_rate(
             // COLOR FX is a profile-order strip in every imported DVC sample.
             // Daslight's evaluator still runs its two-dimensional byte formula;
             // the unrepresented Y axis is therefore zero, not a mirrored X.
-            let x = target.strip_index as u8;
+            let x = if *vertical_symmetry {
+                let transformed = daslight_symmetry_coordinate(strip_position);
+                (transformed * strip_count.saturating_sub(1) as f32).round() as usize as u8
+            } else {
+                target.strip_index as u8
+            };
             let y = 0_u8;
             let value = daslight_plasma_palette_byte(
                 phase,
@@ -28326,36 +28339,58 @@ fn evaluate_color_spatial_sample_at_rate(
                 *speed_y as i32,
                 *param_sy as i32,
             );
-            spatial_palette_color(request, f32::from(value) / 255.0, 100.0)
+            let color = spatial_palette_color(request, f32::from(value) / 255.0, 100.0);
+            if *grayscale {
+                daslight_grayscale_color(color)
+            } else {
+                color
+            }
         }
         ColorEffectSpatialRecipe::ColorRainbow {
+            grayscale,
+            vertical_symmetry,
             color_width,
             angle_degrees,
             gradient,
         } => {
             let angle = f64::from(*angle_degrees).to_radians();
-            let projected = (f64::from(strip_position) * angle.cos()) as f32;
+            let source_position = if *vertical_symmetry {
+                daslight_symmetry_coordinate(strip_position)
+            } else {
+                strip_position
+            };
+            let projected = (f64::from(source_position) * angle.cos()) as f32;
             let position = daslight_rainbow_palette_position(
                 projected,
                 time_phase as f32,
                 *color_width,
                 request.stops.len(),
             );
-            spatial_palette_color(request, position, *gradient)
+            let color = spatial_palette_color(request, position, *gradient);
+            if *grayscale {
+                daslight_grayscale_color(color)
+            } else {
+                color
+            }
         }
         ColorEffectSpatialRecipe::Rainbow {
             vertical_symmetry,
+            horizontal_symmetry,
             rotation_degrees,
             color_width,
             angle_degrees,
             gradient,
         } => {
             let x = if *vertical_symmetry {
-                (target.x * 2.0 - 1.0).abs()
+                daslight_symmetry_coordinate(target.x)
             } else {
                 target.x
             } - 0.5;
-            let z = target.z - 0.5;
+            let z = if *horizontal_symmetry {
+                daslight_symmetry_coordinate(target.z)
+            } else {
+                target.z
+            } - 0.5;
             let angle = f64::from(*rotation_degrees + *angle_degrees).to_radians();
             let projected = (f64::from(x) * angle.cos() + f64::from(z) * angle.sin()) as f32;
             let position = daslight_rainbow_palette_position(
@@ -28404,6 +28439,29 @@ fn scale_color(color: ColorEffectColor, amount: f32) -> ColorEffectColor {
         green: (color.green as f32 * amount).round() as u16,
         blue: (color.blue as f32 * amount).round() as u16,
     }
+}
+
+fn daslight_grayscale_color(color: ColorEffectColor) -> ColorEffectColor {
+    // QColor/qGray uses the 8-bit integer formula below. Daslight applies it
+    // after rendering the RGB palette into a QImage, so quantize before the
+    // conversion and expand the result back to the engine's 16-bit channels.
+    let red = u32::from(color.red >> 8);
+    let green = u32::from(color.green >> 8);
+    let blue = u32::from(color.blue >> 8);
+    let gray = ((red * 11 + green * 16 + blue * 5) / 32) as u16;
+    let value = gray * 257;
+    ColorEffectColor {
+        red: value,
+        green: value,
+        blue: value,
+    }
+}
+
+fn daslight_symmetry_coordinate(coordinate: f32) -> f32 {
+    // Daslight draws the full source image into the first half, then draws a
+    // mirrored copy into the second half. This tent map is the equivalent
+    // source coordinate for the normalized beam/mapping position.
+    1.0 - (coordinate * 2.0 - 1.0).abs()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -51361,6 +51419,8 @@ mod tests {
     #[test]
     fn color_spatial_plasma_matches_daslight_byte_table_and_wrapping() {
         let request = test_spatial_color_request(ColorEffectSpatialRecipe::Plasma {
+            grayscale: false,
+            vertical_symmetry: false,
             size_x: 1.0,
             param_x: 2.0,
             size_y: 1.0,
@@ -51389,6 +51449,8 @@ mod tests {
     #[test]
     fn color_spatial_color_rainbow_sweeps_profile_order_with_gradient() {
         let request = test_spatial_color_request(ColorEffectSpatialRecipe::ColorRainbow {
+            grayscale: false,
+            vertical_symmetry: false,
             color_width: 0.0,
             angle_degrees: 0.0,
             gradient: 100.0,
@@ -51406,6 +51468,8 @@ mod tests {
     #[test]
     fn color_spatial_color_rainbow_uses_palette_count_width_and_true_angle() {
         let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::ColorRainbow {
+            grayscale: false,
+            vertical_symmetry: false,
             color_width: 1.0,
             angle_degrees: 0.0,
             gradient: 100.0,
@@ -51422,6 +51486,8 @@ mod tests {
         assert_eq!(end, test_color(21_845, 21_845, 21_845));
 
         let vertical = test_spatial_color_request(ColorEffectSpatialRecipe::ColorRainbow {
+            grayscale: false,
+            vertical_symmetry: false,
             color_width: 0.0,
             angle_degrees: 90.0,
             gradient: 100.0,
@@ -51439,9 +51505,86 @@ mod tests {
     }
 
     #[test]
+    fn color_spatial_grayscale_matches_qgray_eight_bit_integer_conversion() {
+        assert_eq!(
+            daslight_grayscale_color(test_color(u16::MAX, 0, 0)),
+            test_color(87 * 257, 87 * 257, 87 * 257)
+        );
+        assert_eq!(
+            daslight_grayscale_color(test_color(0, u16::MAX, 0)),
+            test_color(127 * 257, 127 * 257, 127 * 257)
+        );
+        assert_eq!(
+            daslight_grayscale_color(test_color(0, 0, u16::MAX)),
+            test_color(39 * 257, 39 * 257, 39 * 257)
+        );
+
+        let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::ColorRainbow {
+            grayscale: true,
+            vertical_symmetry: false,
+            color_width: 0.0,
+            angle_degrees: 0.0,
+            gradient: 100.0,
+        });
+        request.stops.iter_mut().for_each(|stop| {
+            stop.color = test_color(u16::MAX, 0, 0);
+        });
+        assert_eq!(
+            evaluate_test_spatial_color(&request, &test_spatial_color_target(0, 1, 0.5, 0.5), 0,),
+            test_color(87 * 257, 87 * 257, 87 * 257)
+        );
+    }
+
+    #[test]
+    fn color_fx_vertical_symmetry_uses_daslight_source_image_tent_map() {
+        assert_eq!(daslight_symmetry_coordinate(0.0), 0.0);
+        assert_eq!(daslight_symmetry_coordinate(0.5), 1.0);
+        assert_eq!(daslight_symmetry_coordinate(1.0), 0.0);
+
+        let rainbow = test_spatial_color_request(ColorEffectSpatialRecipe::ColorRainbow {
+            grayscale: false,
+            vertical_symmetry: true,
+            color_width: 1.0,
+            angle_degrees: 0.0,
+            gradient: 100.0,
+        });
+        let rainbow_left =
+            evaluate_test_spatial_color(&rainbow, &test_spatial_color_target(0, 5, 0.0, 0.5), 0);
+        let rainbow_center =
+            evaluate_test_spatial_color(&rainbow, &test_spatial_color_target(2, 5, 0.5, 0.5), 0);
+        let rainbow_right =
+            evaluate_test_spatial_color(&rainbow, &test_spatial_color_target(4, 5, 1.0, 0.5), 0);
+        assert_eq!(rainbow_left, rainbow_right);
+        assert_ne!(rainbow_left, rainbow_center);
+
+        let plasma = test_spatial_color_request(ColorEffectSpatialRecipe::Plasma {
+            grayscale: false,
+            vertical_symmetry: true,
+            size_x: 1.0,
+            param_x: 2.0,
+            size_y: 1.0,
+            param_y: 2.0,
+            speed_x: -1.0,
+            param_sx: 2.0,
+            speed_y: 1.0,
+            param_sy: -1.0,
+        });
+        let plasma_left =
+            evaluate_test_spatial_color(&plasma, &test_spatial_color_target(0, 5, 0.0, 0.5), 0);
+        let plasma_center =
+            evaluate_test_spatial_color(&plasma, &test_spatial_color_target(2, 5, 0.5, 0.5), 0);
+        let plasma_right =
+            evaluate_test_spatial_color(&plasma, &test_spatial_color_target(4, 5, 1.0, 0.5), 0);
+        assert_eq!(plasma_left, plasma_right);
+        assert_ne!(plasma_left, plasma_center);
+    }
+
+    #[test]
     fn color_spatial_exact_daslight_ranges_reject_fractional_or_out_of_range_values() {
         for recipe in [
             ColorEffectSpatialRecipe::Plasma {
+                grayscale: false,
+                vertical_symmetry: false,
                 size_x: 1.5,
                 param_x: 2.0,
                 size_y: 1.0,
@@ -51452,6 +51595,8 @@ mod tests {
                 param_sy: -1.0,
             },
             ColorEffectSpatialRecipe::Plasma {
+                grayscale: false,
+                vertical_symmetry: false,
                 size_x: 1.0,
                 param_x: 2.0,
                 size_y: 1.0,
@@ -51462,11 +51607,15 @@ mod tests {
                 param_sy: -1.0,
             },
             ColorEffectSpatialRecipe::ColorRainbow {
+                grayscale: false,
+                vertical_symmetry: false,
                 color_width: 1.01,
                 angle_degrees: 0.0,
                 gradient: 100.0,
             },
             ColorEffectSpatialRecipe::ColorRainbow {
+                grayscale: false,
+                vertical_symmetry: false,
                 color_width: 0.0,
                 angle_degrees: 45.5,
                 gradient: 100.0,
@@ -51482,6 +51631,7 @@ mod tests {
     fn color_spatial_rainbow_vertical_symmetry_mirrors_mapping_coordinates() {
         let request = test_spatial_color_request(ColorEffectSpatialRecipe::Rainbow {
             vertical_symmetry: true,
+            horizontal_symmetry: false,
             rotation_degrees: 171.0,
             color_width: 0.0,
             angle_degrees: 0.0,
@@ -51492,6 +51642,36 @@ mod tests {
         let right =
             evaluate_test_spatial_color(&request, &test_spatial_color_target(1, 2, 0.75, 0.4), 250);
         assert_eq!(left, right);
+    }
+
+    #[test]
+    fn color_spatial_rainbow_horizontal_symmetry_mirrors_mapping_coordinates() {
+        let request = test_spatial_color_request(ColorEffectSpatialRecipe::Rainbow {
+            vertical_symmetry: false,
+            horizontal_symmetry: true,
+            rotation_degrees: 90.0,
+            color_width: 100.0,
+            angle_degrees: 0.0,
+            gradient: 100.0,
+        });
+        let top =
+            evaluate_test_spatial_color(&request, &test_spatial_color_target(0, 2, 0.4, 0.25), 0);
+        let bottom =
+            evaluate_test_spatial_color(&request, &test_spatial_color_target(1, 2, 0.4, 0.75), 0);
+        assert_eq!(top, bottom);
+    }
+
+    #[test]
+    fn color_spatial_rainbow_rejects_two_transform_axes_at_once() {
+        let request = test_spatial_color_request(ColorEffectSpatialRecipe::Rainbow {
+            vertical_symmetry: true,
+            horizontal_symmetry: true,
+            rotation_degrees: 0.0,
+            color_width: 0.0,
+            angle_degrees: 0.0,
+            gradient: 100.0,
+        });
+        assert!(validate_runtime_color_effect_request(&request).is_err());
     }
 
     #[test]

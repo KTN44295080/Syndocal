@@ -412,6 +412,8 @@ for (const [sourceText, expectedJapaneseDisplay] of [
   ["Plasma", "プラズマ"],
   ["Rainbow strip", "Rainbowストリップ"],
   ["Perlin mapping", "Perlinマッピング"],
+  ["Grayscale", "グレースケール"],
+  ["Horizontal symmetry", "左右対称"],
   ["Color width %", "Color幅（%）"],
   ["Color width", "Color幅"],
   ["Size X", "サイズ X"],

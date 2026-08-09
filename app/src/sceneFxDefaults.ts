@@ -114,7 +114,15 @@ export const defaultSceneFxParams = (
         fixture_spread: fixtureIds.length > 1 ? 1 : 0,
         blend_mode: "Override",
         spatial_pattern: {
-          recipe: { ColorRainbow: { color_width: 0, angle_degrees: 0, gradient: 100 } },
+          recipe: {
+            ColorRainbow: {
+              grayscale: false,
+              vertical_symmetry: false,
+              color_width: 0,
+              angle_degrees: 0,
+              gradient: 100,
+            },
+          },
           beam_targets: [],
         },
       },

@@ -2287,7 +2287,7 @@ fn convert_dvc_color_spatial_effect(
             ))
         }
     };
-    let mut generator_approximations = Vec::new();
+    let generator_approximations = Vec::new();
     let recipe = match generator_id {
         127 => {
             require_exact_dvc_params(&params, &[2, 3, 10, 11, 12, 13, 14])?;
@@ -2331,19 +2331,15 @@ fn convert_dvc_color_spatial_effect(
         129 => {
             require_exact_dvc_params(&params, &[2, 3, 10, 11, 12, 13, 14, 15, 16, 17])?;
             let grayscale = dvc_binary_param(&params, 2, "Plasma Grayscale")?;
-            let transform = dvc_finite_param(&params, 3, "Plasma Transform")?;
-            if grayscale {
-                generator_approximations.push(
-                    "Plasma Grayscale=1 is not reproduced; the verified RGB palette is retained"
-                        .to_string(),
-                );
-            }
-            if transform != 0.0 {
-                generator_approximations.push(format!(
-                    "Plasma Transform={transform} is not reproduced on the profile-order beam strip"
+            let transform = dvc_param(&params, 3, "Plasma Transform")?;
+            if !matches!(transform, 0.0 | 1.0) {
+                return Err(format!(
+                    "Plasma Transform PARAM 3 must be None(0) or Vertical symmetry(1), found {transform}"
                 ));
             }
             ColorEffectSpatialRecipe::Plasma {
+                grayscale,
+                vertical_symmetry: transform == 1.0,
                 size_x: dvc_finite_param(&params, 10, "Size X")?,
                 param_x: dvc_finite_param(&params, 11, "Param X")?,
                 size_y: dvc_finite_param(&params, 12, "Size Y")?,
@@ -2357,16 +2353,10 @@ fn convert_dvc_color_spatial_effect(
         130 => {
             require_exact_dvc_params(&params, &[2, 3, 10, 11, 12])?;
             let grayscale = dvc_binary_param(&params, 2, "Rainbow Grayscale")?;
-            let transform = dvc_finite_param(&params, 3, "Rainbow Transform")?;
-            if grayscale {
-                generator_approximations.push(
-                    "Rainbow Grayscale=1 is not reproduced; the verified RGB palette is retained"
-                        .to_string(),
-                );
-            }
-            if transform != 0.0 {
-                generator_approximations.push(format!(
-                    "Rainbow Transform={transform} is not reproduced on the profile-order beam strip"
+            let transform = dvc_param(&params, 3, "Rainbow Transform")?;
+            if !matches!(transform, 0.0 | 1.0) {
+                return Err(format!(
+                    "Rainbow Transform PARAM 3 must be None(0) or Vertical symmetry(1), found {transform}"
                 ));
             }
             let angle_degrees = dvc_finite_param(&params, 11, "Angle")?;
@@ -2376,6 +2366,8 @@ fn convert_dvc_color_spatial_effect(
                 ));
             }
             ColorEffectSpatialRecipe::ColorRainbow {
+                grayscale,
+                vertical_symmetry: transform == 1.0,
                 color_width: dvc_finite_param(&params, 10, "Color Width")?,
                 angle_degrees,
                 gradient: dvc_unit_param(&params, 12, "Gradient")? * 100.0,
@@ -2384,13 +2376,14 @@ fn convert_dvc_color_spatial_effect(
         521 => {
             require_exact_dvc_params(&params, &[3, 4, 10, 11, 12])?;
             let transform = dvc_param(&params, 3, "Transform")?;
-            if !matches!(transform, 0.0 | 1.0) {
+            if !matches!(transform, 0.0 | 1.0 | 2.0) {
                 return Err(format!(
-                    "Rainbow Transform PARAM 3 must be None(0) or Vertical symmetry(1), found {transform}"
+                    "Rainbow Transform PARAM 3 must be None(0), Vertical symmetry(1), or Horizontal symmetry(2), found {transform}"
                 ));
             }
             ColorEffectSpatialRecipe::Rainbow {
                 vertical_symmetry: transform == 1.0,
+                horizontal_symmetry: transform == 2.0,
                 rotation_degrees: dvc_finite_param(&params, 4, "Rotation")?,
                 color_width: dvc_percent_param(&params, 10, "Color Width")?,
                 angle_degrees: dvc_finite_param(&params, 11, "Angle")?,
@@ -2479,6 +2472,8 @@ fn convert_dvc_color_spatial_effect(
             width,
         } => format!("Number={number}; LifeSpan={lifespan}; Width={width}"),
         ColorEffectSpatialRecipe::Plasma {
+            grayscale,
+            vertical_symmetry,
             size_x,
             param_x,
             size_y,
@@ -2488,24 +2483,37 @@ fn convert_dvc_color_spatial_effect(
             speed_y,
             param_sy,
         } => format!(
-            "SizeX={size_x}; ParamX={param_x}; SizeY={size_y}; ParamY={param_y}; SpeedX={speed_x}; ParamSX={param_sx}; SpeedY={speed_y}; ParamSY={param_sy}"
+            "Grayscale={}; Transform={}; SizeX={size_x}; ParamX={param_x}; SizeY={size_y}; ParamY={param_y}; SpeedX={speed_x}; ParamSX={param_sx}; SpeedY={speed_y}; ParamSY={param_sy}",
+            u8::from(*grayscale),
+            if *vertical_symmetry { "Vertical symmetry" } else { "None" }
         ),
         ColorEffectSpatialRecipe::ColorRainbow {
+            grayscale,
+            vertical_symmetry,
             color_width,
             angle_degrees,
             gradient,
         } => format!(
-            "ColorWidth={color_width}; Angle={angle_degrees}; Gradient=raw*100={gradient}"
+            "Grayscale={}; Transform={}; ColorWidth={color_width}; Angle={angle_degrees}; Gradient=raw*100={gradient}",
+            u8::from(*grayscale),
+            if *vertical_symmetry { "Vertical symmetry" } else { "None" }
         ),
         ColorEffectSpatialRecipe::Rainbow {
             vertical_symmetry,
+            horizontal_symmetry,
             rotation_degrees,
             color_width,
             angle_degrees,
             gradient,
         } => format!(
-            "VerticalSymmetry={}; Rotation={rotation_degrees}; ColorWidth={color_width}; Angle={angle_degrees}; Gradient={gradient}",
-            u8::from(*vertical_symmetry)
+            "Transform={}; Rotation={rotation_degrees}; ColorWidth={color_width}; Angle={angle_degrees}; Gradient={gradient}",
+            if *vertical_symmetry {
+                "Vertical symmetry"
+            } else if *horizontal_symmetry {
+                "Horizontal symmetry"
+            } else {
+                "None"
+            }
         ),
         ColorEffectSpatialRecipe::Perlin {
             octaves,
@@ -5941,6 +5949,8 @@ mod tests {
                 .as_ref()
                 .map(|pattern| &pattern.recipe),
             Some(ColorEffectSpatialRecipe::Plasma {
+                grayscale: false,
+                vertical_symmetry: false,
                 size_x: 1.0,
                 param_x: 2.0,
                 size_y: 1.0,
@@ -5986,12 +5996,80 @@ mod tests {
                 .as_ref()
                 .map(|pattern| &pattern.recipe),
             Some(ColorEffectSpatialRecipe::ColorRainbow {
+                grayscale: false,
+                vertical_symmetry: false,
                 color_width: 0.25,
                 angle_degrees: 45.0,
                 gradient: 75.0,
             })
         ));
         assert!(converted.approximations.is_empty());
+    }
+
+    #[test]
+    fn dvc_color_fx_grayscale_and_all_verified_transforms_import_exactly() {
+        let convert = |xml: &str, generator_id: u16| {
+            let document = Document::parse(xml).unwrap();
+            let scene = document.root_element();
+            let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+            let effect = direct_child(rack, "EFFECT").unwrap();
+            convert_dvc_color_spatial_effect(
+                scene,
+                "Transform evidence",
+                rack,
+                effect,
+                generator_id,
+                1,
+                &effect_test_fixture_refs(),
+            )
+            .unwrap()
+        };
+        let recipe = |converted: ConvertedDvcEffect| {
+            assert!(converted.approximations.is_empty());
+            let Some(EffectParamsSnapshot::Color(request)) =
+                converted.target.expect("runtime target").params
+            else {
+                panic!("COLOR/MAPPINGS generator must convert to Color params");
+            };
+            request.spatial_pattern.expect("spatial pattern").recipe
+        };
+        let palette = r#"<PARAM TYPE="4" ID="1"><COLORS NB="2"><COLOR VAL="1/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0/0/1/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/></COLORS></PARAM>"#;
+
+        let plasma_xml = format!(
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="2"><EFFECT TYPE="2" ID="129" DURATION="1000"><PARAMS NB="11">{palette}<PARAM ID="2" VAL="1"/><PARAM ID="3" VAL="1"/><PARAM ID="10" VAL="1"/><PARAM ID="11" VAL="2"/><PARAM ID="12" VAL="1"/><PARAM ID="13" VAL="2"/><PARAM ID="14" VAL="-1"/><PARAM ID="15" VAL="2"/><PARAM ID="16" VAL="1"/><PARAM ID="17" VAL="-1"/></PARAMS></EFFECT><BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS></RACK></RACKS></SCENE>"#
+        );
+        assert!(matches!(
+            recipe(convert(&plasma_xml, 129)),
+            ColorEffectSpatialRecipe::Plasma {
+                grayscale: true,
+                vertical_symmetry: true,
+                ..
+            }
+        ));
+
+        let rainbow_xml = format!(
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="2"><EFFECT TYPE="2" ID="130" DURATION="1000"><PARAMS NB="6">{palette}<PARAM ID="2" VAL="1"/><PARAM ID="3" VAL="1"/><PARAM ID="10" VAL="0.25"/><PARAM ID="11" VAL="45"/><PARAM ID="12" VAL="0.75"/></PARAMS></EFFECT><BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS></RACK></RACKS></SCENE>"#
+        );
+        assert!(matches!(
+            recipe(convert(&rainbow_xml, 130)),
+            ColorEffectSpatialRecipe::ColorRainbow {
+                grayscale: true,
+                vertical_symmetry: true,
+                ..
+            }
+        ));
+
+        let mapping_xml = format!(
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="2"><EFFECT TYPE="2" ID="521" DURATION="1000"><PARAMS NB="6">{palette}<PARAM ID="3" VAL="2"/><PARAM ID="4" VAL="0"/><PARAM ID="10" VAL="50"/><PARAM ID="11" VAL="90"/><PARAM ID="12" VAL="1"/></PARAMS></EFFECT><BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS></RACK></RACKS></SCENE>"#
+        );
+        assert!(matches!(
+            recipe(convert(&mapping_xml, 521)),
+            ColorEffectSpatialRecipe::Rainbow {
+                vertical_symmetry: false,
+                horizontal_symmetry: true,
+                ..
+            }
+        ));
     }
 
     #[test]

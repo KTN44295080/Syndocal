@@ -40,11 +40,11 @@ const defaultSpatialRecipe = (kind: Exclude<ColorSpatialKind, "PaletteFlow">): C
     case "Sparkle":
       return { Sparkle: { number: 5, lifespan: 25, width: 1 } };
     case "Plasma":
-      return { Plasma: { size_x: 1, param_x: 2, size_y: 1, param_y: 2, speed_x: -1, param_sx: 2, speed_y: 1, param_sy: -1 } };
+      return { Plasma: { grayscale: false, vertical_symmetry: false, size_x: 1, param_x: 2, size_y: 1, param_y: 2, speed_x: -1, param_sx: 2, speed_y: 1, param_sy: -1 } };
     case "ColorRainbow":
-      return { ColorRainbow: { color_width: 0, angle_degrees: 0, gradient: 100 } };
+      return { ColorRainbow: { grayscale: false, vertical_symmetry: false, color_width: 0, angle_degrees: 0, gradient: 100 } };
     case "Rainbow":
-      return { Rainbow: { vertical_symmetry: false, rotation_degrees: 0, color_width: 0, angle_degrees: 0, gradient: 100 } };
+      return { Rainbow: { vertical_symmetry: false, horizontal_symmetry: false, rotation_degrees: 0, color_width: 0, angle_degrees: 0, gradient: 100 } };
     case "Perlin":
       return { Perlin: { octaves: 5, zoom: 20, direction_degrees: 0, speed: 1, amplitude: 100 } };
   }
@@ -130,6 +130,11 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
     return typeof value === "number" && Number.isFinite(value) ? value : fallback;
   };
   const spatialBoolean = (key: string) => spatialValues()[key] === true;
+  const spatialTransform = () => spatialBoolean("vertical_symmetry")
+    ? "vertical"
+    : spatialBoolean("horizontal_symmetry")
+      ? "horizontal"
+      : "none";
   const selectSpatialKind = (kind: ColorSpatialKind) => {
     if (kind === "PaletteFlow") {
       props.onSpatialPattern(null);
@@ -450,6 +455,8 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
         </Show>
         <Show when={spatialKind() === "Plasma"}>
           <div class="colorEffectModeGrid">
+            <label><input type="checkbox" checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
+            <label>Transform<select value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
             <label>Size X<input type="number" min="0" max="20" step="1" value={spatialNumber("size_x", 1)} onInput={(event) => patchSpatialValues({ size_x: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 20) })} /></label>
             <label>Param X<input type="number" min="0" max="20" step="1" value={spatialNumber("param_x", 2)} onInput={(event) => patchSpatialValues({ param_x: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 20) })} /></label>
             <label>Size Y<input type="number" min="0" max="20" step="1" value={spatialNumber("size_y", 1)} onInput={(event) => patchSpatialValues({ size_y: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 20) })} /></label>
@@ -462,6 +469,8 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
         </Show>
         <Show when={spatialKind() === "ColorRainbow"}>
           <div class="colorEffectModeGrid">
+            <label><input type="checkbox" checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
+            <label>Transform<select value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
             <label>Color width<input type="number" min="0" max="1" step="0.01" value={spatialNumber("color_width")} onInput={(event) => patchSpatialValues({ color_width: clamp(Number(event.currentTarget.value), 0, 1) })} /></label>
             <label>Angle °<input type="number" min="0" max="360" step="1" value={spatialNumber("angle_degrees")} onInput={(event) => patchSpatialValues({ angle_degrees: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 360) })} /></label>
             <label>Gradient %<input type="number" min="0" max="100" step="1" value={spatialNumber("gradient", 100)} onInput={(event) => patchSpatialValues({ gradient: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
@@ -473,7 +482,7 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
             <label>Angle °<input type="number" min="0" max="360" step="1" value={spatialNumber("angle_degrees")} onInput={(event) => patchSpatialValues({ angle_degrees: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 360) })} /></label>
             <label>Color width %<input type="number" min="0" max="100" step="1" value={spatialNumber("color_width")} onInput={(event) => patchSpatialValues({ color_width: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
             <label>Gradient %<input type="number" min="0" max="100" step="1" value={spatialNumber("gradient", 100)} onInput={(event) => patchSpatialValues({ gradient: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
-            <label><input type="checkbox" checked={spatialBoolean("vertical_symmetry")} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.checked })} /> Vertical symmetry</label>
+            <label>Transform<select value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical", horizontal_symmetry: event.currentTarget.value === "horizontal" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option><option value="horizontal">Horizontal symmetry</option></select></label>
           </div>
         </Show>
         <Show when={spatialKind() === "Perlin"}>

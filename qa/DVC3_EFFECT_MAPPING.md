@@ -34,7 +34,7 @@ Phasing = 選択ビーム順の位相分散。2026-08-08 に Syndocal LFO の `f
 
 ### COLOR FX（RACK=2, EFFECT TYPE=2）→ Syndocal Color エンジン + 新規パターンレシピ
 
-共通ヘッダ: 1=空, 2=0, 3=0（意味未確定、全検体で同値）。
+共通ヘッダ: 1=パレット、Plasma/Rainbowでは2=Grayscale（0/1）、3=Transform（0=None / 1=Vertical symmetry）。その他の確認済みCOLOR FXでは2/3=0を要求する。
 
 | ID | ジェネレータ | パラメータ対応（実測） |
 |---|---|---|
@@ -42,8 +42,8 @@ Phasing = 選択ビーム順の位相分散。2026-08-08 に Syndocal LFO の `f
 | 127 | **Knight Rider** | 10=Size（選択ビーム列に対する百分率。32%/17%/12% 全✓。48-beam `BB-Amber-Chaser` の実出力は Size=32 で約15–16 beams）、11=One Way Only(1⇔ON✓/0⇔off✓), 12=Fading(1⇔ON✓), 13=Go Outside（B-WineRed 1⇔ON✓、BB-Amber 0⇔off✓。Bar-RedWaveのみUI ON vs 13=0の観測矛盾があり要再確認）, 14=Gradient(50✓×3) |
 | 131 | **Random fill** | 10=Point Width(1✓) |
 | 133 | **Sparkle** | 10=Sparkle Number(5✓), 11=Sparkle LifeSpan(0✓), 12=Sparkle Width(1✓) |
-| 129 | **Plasma** | 10..17=Size X / Param X / Size Y / Param Y / Speed X / Param SX / Speed Y / Param SY。UI・XML一致に加え、Daslight 5.0.6.2バイナリから8bit sine-table生成式と範囲を確定。詳細は `qa/DVC_PLASMA_RAINBOW_SOURCE_PARITY.md`。 |
-| 130 | **Rainbow** | 10=Color Width、11=Angle、12=Gradient。UI・XML一致に加え、パレット数依存のgradient length・投影・時間方向をDaslightバイナリから確定。詳細は `qa/DVC_PLASMA_RAINBOW_SOURCE_PARITY.md`。 |
+| 129 | **Plasma** | 2=Grayscale、3=Transform、10..17=Size X / Param X / Size Y / Param Y / Speed X / Param SX / Speed Y / Param SY。UI・XML一致に加え、Daslight 5.0.6.2バイナリから8bit sine-table生成式、Qt整数Grayscale、半幅反転Transform、各範囲を確定。詳細は `qa/DVC_PLASMA_RAINBOW_SOURCE_PARITY.md`。 |
+| 130 | **Rainbow** | 2=Grayscale、3=Transform、10=Color Width、11=Angle、12=Gradient。UI・XML一致に加え、パレット数依存のgradient length・投影・時間方向、Qt整数Grayscale、半幅反転TransformをDaslightバイナリから確定。詳細は `qa/DVC_PLASMA_RAINBOW_SOURCE_PARITY.md`。 |
 
 カラーパレットはUI上5枠程度のスウォッチ列（実測: WineRed系5色、FillCyan青系5色+等）。XML上の格納位置は
 `EFFECT/PARAMS/PARAM[@TYPE='4'][@ID='1']/COLORS/COLOR/@VAL`で確定し、先頭3値を正規化RGBとして変換する。Beams は 4（ムービング群）〜64（8バー×8セグメント）
@@ -55,7 +55,7 @@ Phasing = 選択ビーム順の位相分散。2026-08-08 に Syndocal LFO の `f
 
 | ID | ジェネレータ | パラメータ対応（実測） |
 |---|---|---|
-| 521 | **Rainbow** | 3=Transform(1⇔Vertical symmetry✓), **4=Rotation**(171⇔171✓), 10=Color Width(0⇔0.0✓), 11=Angle(0✓), 12=Gradient/100?(1⇔100.0) |
+| 521 | **Rainbow** | 3=Transform(0=None / 1=Vertical symmetry / 2=Horizontal symmetry)、**4=Rotation**(171⇔171✓), 10=Color Width(0⇔0.0✓), 11=Angle(0✓), 12=Gradient/100?(1⇔100.0) |
 | 530 | **Perlin** | **10=Octaves**(5✓), **11=Zoom**(20✓), **12=Direction**(1✓), **13=Speed**(1✓), **14=Amplitude**(100✓) — **全一致** |
 
 Syndocal受け皿: PositionWave（空間走査）+ Perlin LFO形状 + Transform（対称/回転）は新規要素。
@@ -187,7 +187,9 @@ Daslight 5.0.6.2のRTTI/vtableから `CPlasmaEffect` と `CRainbowEffect` を特
 Plasmaは連続sinの近似ではなく、周期128・振幅30のbyte sine tableを4本加算する低byte wrapping式である。
 Rainbowは `1 + (palette_count - 1) * ColorWidth` をgradient lengthとし、空間投影をその長さで割った後に
 time phaseを減算する。Syndocal engineは両式へ置換し、129/130の無条件Approximate表示を撤去した。
-非ゼロGrayscale/Transformと、X/Y配置メタデータのない任意2D Plasmaだけは引き続き正直に境界表示する。
+追加解析ではQt `qGray=(11R+16G+5B)/32` と、元画像を半幅/半高へ圧縮して反転コピーするTransformを確定した。
+非ゼロGrayscale、COLOR FX Vertical、MAPPINGS Vertical/Horizontalをengine/importer/Scene Settingsへ同じ意味で実装し、
+残る式上の境界はX/Y配置メタデータのない任意2D Plasmaだけである。
 式、アドレス、バイナリhash、入力範囲、残境界は `qa/DVC_PLASMA_RAINBOW_SOURCE_PARITY.md` に固定した。
 
 ### CHASER FX ID=322 = Chaser #2（SS-Blue実UI + populatedスクラッチDMX照合）

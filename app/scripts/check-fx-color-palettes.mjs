@@ -52,13 +52,14 @@ try {
   assert.equal(frame.pixels.length, custom[0].stops.length);
   assert.ok(frame.pixels.every(Number.isSafeInteger));
 
-  const [appSource, paneSource, editorSource, protocolSource, tauriSource, engineSource] = await Promise.all([
+  const [appSource, paneSource, editorSource, protocolSource, tauriSource, engineSource, dvcSource] = await Promise.all([
     readFile(resolve(appRoot, "src/App.tsx"), "utf8"),
     readFile(resolve(appRoot, "src/components/SceneSettingsPane.tsx"), "utf8"),
     readFile(resolve(appRoot, "src/components/ColorEffectEditorPanel.tsx"), "utf8"),
     readFile(resolve(workspaceRoot, "crates/protocol/src/lib.rs"), "utf8"),
     readFile(resolve(appRoot, "src-tauri/src/main.rs"), "utf8"),
     readFile(resolve(workspaceRoot, "crates/engine/src/lib.rs"), "utf8"),
+    readFile(resolve(appRoot, "src-tauri/src/dvc_import.rs"), "utf8"),
   ]);
   assert.match(paneSource, /<FxColorPaletteLibraryPanel \{\.\.\.props\.editor\.palette\} \/>/);
   assert.match(appSource, /effectType: effectType\(\),\s*palettes: snapshot\(\)\.palettes,/);
@@ -69,14 +70,23 @@ try {
   assert.match(editorSource, /min="0" max="20" step="1" value=\{spatialNumber\("size_x", 1\)\}/);
   assert.match(editorSource, /min="-5" max="5" step="1" value=\{spatialNumber\("speed_x", -1\)\}/);
   assert.match(editorSource, /min="0" max="1" step="0\.01" value=\{spatialNumber\("color_width"\)\}/);
+  assert.match(editorSource, /checked=\{spatialBoolean\("grayscale"\)\}/);
+  assert.match(editorSource, /<option value="vertical">Vertical symmetry<\/option>/);
+  assert.match(editorSource, /<option value="horizontal">Horizontal symmetry<\/option>/);
+  assert.match(protocolSource, /Plasma \{[\s\S]*?serde\(default\)[\s\S]*?grayscale: bool,[\s\S]*?vertical_symmetry: bool/);
+  assert.match(protocolSource, /Rainbow \{[\s\S]*?horizontal_symmetry: bool/);
   assert.match(protocolSource, /serde\(default, skip_serializing_if = "Vec::is_empty"\)[\s\S]*pub color_stops: Vec<ColorEffectStop>/);
   assert.match(tauriSource, /fn validate_fx_palette_stops[\s\S]*2\.\.=16/);
   assert.match(engineSource, /fn validate_and_sanitize_palette[\s\S]*palette\.color_stops/);
+  assert.match(engineSource, /fn daslight_grayscale_color[\s\S]*red \* 11 \+ green \* 16 \+ blue \* 5/);
+  assert.match(engineSource, /fn daslight_symmetry_coordinate[\s\S]*1\.0 - \(coordinate \* 2\.0 - 1\.0\)\.abs\(\)/);
+  assert.match(dvcSource, /Plasma Transform PARAM 3 must be None\(0\) or Vertical symmetry\(1\)/);
+  assert.match(dvcSource, /Horizontal symmetry\(2\)/);
 
   console.log(
     `pass FX color palettes builtIn=${builtinFxColorPalettes.length} ` +
       `custom=${custom.length} maxStops=16 colorMappingPixels=${frame.pixels.length} ` +
-      "allSceneFx=true plasmaRainbowEditable=true persistence=backward-compatible",
+      "allSceneFx=true plasmaRainbowEditable=true grayscaleTransform=exact persistence=backward-compatible",
   );
 } finally {
   await server.close();

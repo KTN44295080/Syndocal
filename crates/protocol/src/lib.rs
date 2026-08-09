@@ -2255,6 +2255,10 @@ pub enum ColorEffectSpatialRecipe {
         width: u16,
     },
     Plasma {
+        #[serde(default)]
+        grayscale: bool,
+        #[serde(default)]
+        vertical_symmetry: bool,
         size_x: f32,
         param_x: f32,
         size_y: f32,
@@ -2265,12 +2269,19 @@ pub enum ColorEffectSpatialRecipe {
         param_sy: f32,
     },
     ColorRainbow {
+        #[serde(default)]
+        grayscale: bool,
+        #[serde(default)]
+        vertical_symmetry: bool,
         color_width: f32,
         angle_degrees: f32,
         gradient: f32,
     },
     Rainbow {
+        #[serde(default)]
         vertical_symmetry: bool,
+        #[serde(default)]
+        horizontal_symmetry: bool,
         rotation_degrees: f32,
         color_width: f32,
         angle_degrees: f32,
@@ -4846,6 +4857,49 @@ mod tests {
         let json = serde_json::to_string(&spatial).unwrap();
         let roundtrip: super::ColorEffectRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(roundtrip, spatial);
+
+        let legacy_plasma: super::ColorEffectSpatialRecipe =
+            serde_json::from_value(serde_json::json!({
+                "Plasma": {
+                    "size_x": 1.0,
+                    "param_x": 2.0,
+                    "size_y": 1.0,
+                    "param_y": 2.0,
+                    "speed_x": -1.0,
+                    "param_sx": 2.0,
+                    "speed_y": 1.0,
+                    "param_sy": -1.0
+                }
+            }))
+            .unwrap();
+        assert!(matches!(
+            legacy_plasma,
+            super::ColorEffectSpatialRecipe::Plasma {
+                grayscale: false,
+                vertical_symmetry: false,
+                ..
+            }
+        ));
+
+        let legacy_mapping_rainbow: super::ColorEffectSpatialRecipe =
+            serde_json::from_value(serde_json::json!({
+                "Rainbow": {
+                    "vertical_symmetry": true,
+                    "rotation_degrees": 0.0,
+                    "color_width": 50.0,
+                    "angle_degrees": 90.0,
+                    "gradient": 100.0
+                }
+            }))
+            .unwrap();
+        assert!(matches!(
+            legacy_mapping_rainbow,
+            super::ColorEffectSpatialRecipe::Rainbow {
+                vertical_symmetry: true,
+                horizontal_symmetry: false,
+                ..
+            }
+        ));
     }
 
     #[test]

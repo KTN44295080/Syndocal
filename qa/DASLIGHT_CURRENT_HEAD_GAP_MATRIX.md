@@ -1,7 +1,7 @@
 # Daslight parity current-HEAD gap matrix
 
 - 監査日: 2026-08-09
-- 監査基準: 本ファイルを含む現HEAD（visual MIDI/OSC/DMX Learn + DVC MIDI feedback + backend 44 Hz差分feedback + DVC DMX Control Mapping復元 + Move Symmetry照合 + DVC beam-target保持 + Plasma/Rainbow source parity）
+- 監査基準: 本ファイルを含む現HEAD（visual MIDI/OSC/DMX Learn + DVC MIDI feedback + backend 44 Hz差分feedback + DVC DMX Control Mapping復元 + Move Symmetry照合 + DVC beam-target保持 + Plasma/Rainbow/Grayscale/Transform source parity）
 - 製品境界: 内蔵3Dビジュアライザーは対象外。Art-Netを外部ビジュアライザーへ送る経路を正式な可視化受入とする
 - 判定規則: Syndocal実装、同一タスク計測、ネイティブ/物理出力を別々に扱い、証拠のないDaslight比較は`未計測`とする
 
@@ -20,7 +20,7 @@
 | FX family / target適用 | 1 clickで`2D MAPPING`の`ColorMapping`を生成し、選択由来の`fixture:1` targetとeditor再表示までfail-closed検証 | **2026-08-09最大化実測**: 開いたFX追加menuからMAPPINGSを1 clickで生成し、`Selected beams / 4 Beam(s)`としてStrongpoint 13chの選択を継承 | family作成とprepared target適用は**同** | Cue固有FXの保存・再読込は既存`.sdc`/DVC gateを維持 |
 | Patch | prepared profile/addressから1 `PATCH` click。fixture block `3 -> 4`、A65 occupiedを検証 | **2026-08-09最大化実測**: prepared Strongpoint 13chをA400-A412へ1 `PATCH` click | **同** | profile妥当性と衝突拒否は別のpatch gateを維持 |
 | Static programming | prepared EDIT Cue 301をOutにし、1 `Full` clickでDimmer `0 -> 65535`。Cue 302は32768のまま | **2026-08-09最大化実測**: `EDIT: Red`でselected Strongpoint Dimmerを1 click、`OFF -> 100.0%` | **同** | Blind/undo/他Cue非変更の既存focused gateを維持 |
-| Independent FX | 7系統が独立body/runtime/editor。Colour Mappingは埋め込みimage/text/video、matrix cell、UV/sampling/playbackを持つ。Move SymmetryはDaslight実測どおり後半Panのみ鏡像化。Curve/ChaserはDVCのfixture/BEAMID/selection順を保持し、RGB/RGBAの選択セグメントだけを変調する。PlasmaはDaslightの8bit sine table/wrapping式、COLOR/MAPPINGS Rainbowはpalette-count依存gradient lengthと逆向きtime sweepを使用し、全パラメータをScene Settingsで編集できる | Daslightは7独立generator群。Move SymmetryとChaser #2は最大化UI + DMX Levelsで実測。Plasma/Rainbowは5.0.6.2バイナリのRTTI/vtable/evaluatorを静的解析 | 対象検体のソフトウェア/DMX規則差は解消。Shinkan動的FXの別プロセスArt-Net受信PASS | nonzero Grayscale/Transform、任意2D Plasma配置、プリセット量、実灯体/商用visualizer目視は外部比較 |
+| Independent FX | 7系統が独立body/runtime/editor。Colour Mappingは埋め込みimage/text/video、matrix cell、UV/sampling/playbackを持つ。Move SymmetryはDaslight実測どおり後半Panのみ鏡像化。Curve/ChaserはDVCのfixture/BEAMID/selection順を保持し、RGB/RGBAの選択セグメントだけを変調する。PlasmaはDaslightの8bit sine table/wrapping式、COLOR/MAPPINGS Rainbowはpalette-count依存gradient lengthと逆向きtime sweepを使用する。Qt整数Grayscaleと、COLOR FX Vertical / MAPPINGS Vertical・Horizontal TransformもDVC値のまま出力し、全パラメータをScene Settingsで編集できる | Daslightは7独立generator群。Move SymmetryとChaser #2は最大化UI + DMX Levelsで実測。Plasma/Rainbow/Grayscale/Transformは5.0.6.2バイナリのRTTI/vtable/evaluator/post-processを静的解析し、Transform optionを最大化UIで照合 | 対象検体のソフトウェア/DMX規則差は解消。非ゼロGrayscale/Transformのimport/engine/schema/UI focused gateと、Shinkan動的FXの別プロセスArt-Net受信がPASS | 任意2D Plasma配置、プリセット量、実灯体/商用visualizer目視は外部比較 |
 | DVC dynamic FX import | フルShinkanの30 effectをSkipped 0で変換。Bar-StrobeAMber=64 beams / 48 selections / BEAMID 0..7、Bar-Side Chaser=16 steps / 16 beams / BEAMID 0..7を保存・再読込・DMX隔離テストで固定。DVC MIDI shortcut追加後もDVC 40/40 PASS | 原XMLのBEAMS列とDaslightのgenerator/bodyを比較 | Curve/Chaserの旧fixture平坦化を解消、今回のmapping UI追加による非退行なし | VALUE FX / COLOR MAPPINGSはユーザーDVCに検体なし。MoveのBEAMID>0検体のみ未証明 |
 | Cue FX parameter transition | Cue-owned Effectごとに任意fade、同一IDの直前live result→次state、連続/離散属性別policy、video target対応 | あり | ソフトウェア構造差は解消・Daslight同一タスク未計測 | 実灯体とDaslight操作を外部比較 |
 | Scene Live | scene speed / size / phase / direction / segment / flash、group dimmer / strobe / solo。Shinkanでspeed x4→retrigger x1とArt-Net変化をnative実証 | 同等機能あり | ソフトウェア/実出力PASS・Daslight同一タスク未計測 | 実灯体とDaslight操作を外部比較 |
