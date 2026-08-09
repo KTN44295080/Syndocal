@@ -3944,7 +3944,7 @@ fn parse_super_scenes(
     let mut next_layer_id = 1_u32;
     let mut next_event_id = 1_u64;
     let mut next_audio_clip_id = 1_u64;
-    let mut first_timeline_bpm = None;
+    let mut first_grid_bpm = None;
 
     for scene in scenes_section
         .descendants()
@@ -3961,6 +3961,19 @@ fn parse_super_scenes(
             .get(scene_uid)
             .ok_or_else(|| format!("Super Scene index missing for {scene_uid}"))?;
         let owner_label = cues[owner_index].label.clone();
+        // Daslight only applies a block's CONFORM_TO_TEMPO flag while the
+        // owning Super Scene itself uses BPM driving mode. PLAY_TRIGGER follows
+        // the documented driving-mode order: 0=Off, 1=BeatGO, 2=BPM, 3=Pulse.
+        let owner_bpm_driven = scene.attribute("PLAY_TRIGGER") == Some("2");
+        let grid_bpm = timelines
+            .ancestors()
+            .find(|node| node.has_tag_name("RACK"))
+            .and_then(|rack| parse_f32_attribute(rack, "GRID_BPM"))
+            .filter(|bpm| bpm.is_finite() && *bpm > 0.0)
+            .unwrap_or(snapshot.clock.bpm);
+        if first_grid_bpm.is_none() {
+            first_grid_bpm = Some(grid_bpm);
+        }
         let timeline_nodes = element_children(timelines)
             .filter(|node| node.has_tag_name("TIMELINE"))
             .collect::<Vec<_>>();
@@ -4004,16 +4017,6 @@ fn parse_super_scenes(
             });
         }
 
-        let timeline_bpm = timeline_nodes
-            .iter()
-            .flat_map(|timeline| timeline.descendants())
-            .filter(|node| node.has_tag_name("BLOCK") && node.attribute("TYPE") == Some("2"))
-            .filter_map(|node| parse_f32_attribute(node, "BPM"))
-            .find(|bpm| bpm.is_finite() && *bpm > 0.0)
-            .unwrap_or(120.0);
-        if first_timeline_bpm.is_none() && timeline_bpm > 0.0 {
-            first_timeline_bpm = Some(timeline_bpm);
-        }
         let mut audio_clips = Vec::new();
         let mut events = Vec::new();
         let mut duration_ms = 0_u64;
@@ -4166,22 +4169,28 @@ fn parse_super_scenes(
                             .unwrap_or(1.0);
                         let conform = parse_bool_attribute(block, "CONFORM_TO_TEMPO");
                         let allow_loop = parse_bool_attribute(block, "ALLOWLOOP");
-                        if conform {
+                        if conform && owner_bpm_driven {
                             report.approximate.add(
                                 1,
                                 format!("Scene block: {}", block.attribute("NAME").unwrap_or("Untitled")),
                                 format!(
-                                    "CONFORM_TO_TEMPO preserved at the imported {timeline_bpm:.3} BPM as fixed-ms placement so source SPEED={speed} remains exact"
+                                    "BPM-driven CONFORM_TO_TEMPO remains fixed at the authored {grid_bpm:.3} BPM; source SPEED={speed} is exact at that tempo but does not yet follow later global BPM changes"
                                 ),
                             );
-                        } else if allow_loop {
+                        }
+                        let source_has_time_varying_content = !cues[source_index].steps.is_empty()
+                            || cues[source_index]
+                                .effect_targets
+                                .iter()
+                                .any(|target| target.enabled);
+                        if !allow_loop && source_has_time_varying_content {
                             report.approximate.add(
                                 1,
                                 format!(
                                     "Scene block: {}",
                                     block.attribute("NAME").unwrap_or("Untitled")
                                 ),
-                                "ALLOWLOOP without CONFORM_TO_TEMPO remains a fixed one-pass block",
+                                "Loop is disabled in Daslight, so stretched content should hold its final source frame; the imported effect remains live through the block window",
                             );
                         }
                         let fade_in = parse_u64_attribute(block, "FADEIN")
@@ -4219,17 +4228,15 @@ fn parse_super_scenes(
                                 "Scene block: {}",
                                 block.attribute("NAME").unwrap_or("Untitled")
                             ),
-                            if source_offset_ms != 0 {
-                                format!(
-                                    "{start_ms}..{end_ms} ms -> cue {} source position {source_offset_ms:+} ms",
-                                    cues[source_index].label
-                                )
-                            } else {
-                                format!(
-                                    "{start_ms}..{end_ms} ms -> cue {}",
-                                    cues[source_index].label
-                                )
-                            },
+                            format!(
+                                "{start_ms}..{end_ms} ms -> cue {}{}; speed={speed}; loop={allow_loop}; conform={conform}; parent_bpm_driven={owner_bpm_driven}; grid_bpm={grid_bpm:.3}",
+                                cues[source_index].label,
+                                if source_offset_ms != 0 {
+                                    format!(" source position {source_offset_ms:+} ms")
+                                } else {
+                                    String::new()
+                                }
+                            ),
                         );
                     }
                     Some(other) => report.skipped.add(
@@ -4257,7 +4264,7 @@ fn parse_super_scenes(
             .notes
             .push_str(" | Daslight Super Scene child timeline imported");
     }
-    if let Some(bpm) = first_timeline_bpm {
+    if let Some(bpm) = first_grid_bpm {
         snapshot.clock.bpm = bpm;
     }
     Ok(())
@@ -4810,6 +4817,11 @@ mod tests {
             fixture_data,
         )
         .replace(
+            "<RACK><TIMELINES>",
+            "<RACK GRID_BPM=\"96\"><TIMELINES>",
+        )
+        .replace("BPM=\"120\"", "BPM=\"143\"")
+        .replace(
             "<SHORTCUTS/><TOUCH/>",
             r#"<SHORTCUTS><SHORTCUT TYPE="2"><EVENT DATA="touch-control-group:0"/><ACTION TYPE="30" TARGET="group-1" TARGETINDEX="0"/><SETTINGS MIN="0" MAX="1" FLASH="1"/></SHORTCUT><SHORTCUT TYPE="2"><EVENT DATA="touch-control-cue:0"/><ACTION TYPE="107" TARGET="scene-1" TARGETINDEX="0"/><SETTINGS MIN="0" MAX="1" FLASH="1"/></SHORTCUT><SHORTCUT TYPE="2"><EVENT DATA="touch-control-tap:0"/><ACTION TYPE="55" TARGETINDEX="-1"/><SETTINGS MIN="0" MAX="1" FLASH="1"/></SHORTCUT></SHORTCUTS><TOUCH><TOUCHPAGE DASUID="touch-page-1" NAME="Page 1" TOUCHCONTROL="3"><TOUCHCONTROL DASUID="touch-control-group" NAME="All" TYPE="2" GRIDWIDTH="1" GRIDHEIGHT="1" GRIDPOSX="0" GRIDPOSY="0"/><TOUCHCONTROL DASUID="touch-control-cue" NAME="Static" TYPE="2" GRIDWIDTH="1" GRIDHEIGHT="1" GRIDPOSX="1" GRIDPOSY="0"/><TOUCHCONTROL DASUID="touch-control-tap" NAME="Tap Tempo" TYPE="2" GRIDWIDTH="1" GRIDHEIGHT="1" GRIDPOSX="2" GRIDPOSY="0"/></TOUCHPAGE></TOUCH>"#,
         )
@@ -5050,6 +5062,18 @@ mod tests {
         assert!(!child.events[0].loop_fill);
         assert_eq!(child.events[0].rate, Some(1.0));
         assert_eq!(child.events[0].source_offset_ms, 0);
+        assert_eq!(outcome.project.snapshot.clock.bpm, 96.0);
+        assert!(!outcome
+            .report
+            .approximate
+            .details
+            .iter()
+            .any(|detail| { detail.message.contains("CONFORM_TO_TEMPO") }));
+        assert!(outcome.report.converted.details.iter().any(|detail| {
+            detail.item == "Scene block: Static"
+                && detail.message.contains("parent_bpm_driven=false")
+                && detail.message.contains("grid_bpm=96.000")
+        }));
         assert_eq!(outcome.report.summary.values_decoded, 1);
         assert_eq!(outcome.report.summary.values_skipped, 0);
         assert_eq!(outcome.report.summary.beam_records, 1);
@@ -5118,6 +5142,34 @@ mod tests {
                 max_z: 30.0,
             }
         );
+    }
+
+    #[test]
+    fn dvc_super_scene_conform_is_only_a_boundary_when_parent_uses_bpm_driving() {
+        let source = synthetic_dvc().replacen(
+            r##"NAME="Super" COLOR="#ff445566" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="1" PLAY_TRIGGER="0""##,
+            r##"NAME="Super" COLOR="#ff445566" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="1" PLAY_TRIGGER="2""##,
+            1,
+        );
+        let outcome = import_bytes(source.as_bytes(), "synthetic-bpm-super.dvc").unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+
+        assert_eq!(outcome.project.snapshot.clock.bpm, 96.0);
+        let child = outcome.project.snapshot.cues[1]
+            .child_timeline
+            .as_ref()
+            .unwrap();
+        assert!(!child.events[0].conform_to_tempo);
+        assert_eq!(child.events[0].rate, Some(1.0));
+        assert!(outcome.report.approximate.details.iter().any(|detail| {
+            detail.item == "Scene block: Static"
+                && detail.message.contains("BPM-driven CONFORM_TO_TEMPO")
+                && detail.message.contains("96.000 BPM")
+        }));
+        assert!(outcome.report.converted.details.iter().any(|detail| {
+            detail.item == "Scene block: Static"
+                && detail.message.contains("parent_bpm_driven=true")
+        }));
     }
 
     #[test]
@@ -7049,6 +7101,52 @@ mod tests {
             .details
             .iter()
             .any(|detail| { detail.message == "segment selection approximated to fixture" }));
+    }
+
+    #[test]
+    fn dvc_local_full_shinkan_super_scene_grid_and_dormant_conform_are_exact_when_present() {
+        let path = Path::new(r"C:\Users\kouty\Desktop\Shinkan-Left\Shinkan2026.dvc");
+        if !path.is_file() {
+            eprintln!(
+                "Skipping local full Daslight golden: {} is unavailable",
+                path.display()
+            );
+            return;
+        }
+        let outcome = import_path(path).unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+
+        assert_eq!(outcome.project.snapshot.clock.bpm, 120.0);
+        let child_events = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .filter_map(|cue| cue.child_timeline.as_ref())
+            .flat_map(|child| child.events.iter())
+            .collect::<Vec<_>>();
+        assert_eq!(child_events.len(), 229);
+        assert!(child_events
+            .iter()
+            .all(|event| !event.conform_to_tempo && !event.loop_fill));
+        assert!(!outcome
+            .report
+            .approximate
+            .details
+            .iter()
+            .any(|detail| { detail.message.contains("CONFORM_TO_TEMPO") }));
+        let reported_scene_blocks = outcome
+            .report
+            .converted
+            .details
+            .iter()
+            .filter(|detail| detail.item.starts_with("Scene block: "))
+            .collect::<Vec<_>>();
+        assert!(!reported_scene_blocks.is_empty());
+        assert!(reported_scene_blocks.iter().all(|detail| {
+            detail.message.contains("parent_bpm_driven=false")
+                && detail.message.contains("grid_bpm=120.000")
+        }));
     }
 
     #[test]
