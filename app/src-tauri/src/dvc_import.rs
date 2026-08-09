@@ -3965,6 +3965,26 @@ fn parse_super_scenes(
         // owning Super Scene itself uses BPM driving mode. PLAY_TRIGGER follows
         // the documented driving-mode order: 0=Off, 1=BeatGO, 2=BPM, 3=Pulse.
         let owner_bpm_driven = scene.attribute("PLAY_TRIGGER") == Some("2");
+        let tempo_driven = if owner_bpm_driven {
+            let play_division = parse_f32_attribute(scene, "PLAY_DIVISION").filter(|beats| {
+                beats.is_finite()
+                    && (protocol::MIN_CUE_AUTHORED_BEATS..=protocol::MAX_CUE_AUTHORED_BEATS)
+                        .contains(beats)
+            });
+            if let Some(beats) = play_division {
+                cues[owner_index].authored_beats = Some(beats);
+                true
+            } else {
+                report.approximate.add(
+                    1,
+                    format!("Super Scene: {owner_label}"),
+                    "PLAY_TRIGGER=2 had no supported positive PLAY_DIVISION; fixed-time child transport retained",
+                );
+                false
+            }
+        } else {
+            false
+        };
         let grid_bpm = timelines
             .ancestors()
             .find(|node| node.has_tag_name("RACK"))
@@ -4169,15 +4189,6 @@ fn parse_super_scenes(
                             .unwrap_or(1.0);
                         let conform = parse_bool_attribute(block, "CONFORM_TO_TEMPO");
                         let allow_loop = parse_bool_attribute(block, "ALLOWLOOP");
-                        if conform && owner_bpm_driven {
-                            report.approximate.add(
-                                1,
-                                format!("Scene block: {}", block.attribute("NAME").unwrap_or("Untitled")),
-                                format!(
-                                    "BPM-driven CONFORM_TO_TEMPO remains fixed at the authored {grid_bpm:.3} BPM; source SPEED={speed} is exact at that tempo but does not yet follow later global BPM changes"
-                                ),
-                            );
-                        }
                         let source_has_time_varying_content = !cues[source_index].steps.is_empty()
                             || cues[source_index]
                                 .effect_targets
@@ -4210,7 +4221,7 @@ fn parse_super_scenes(
                             layer_id: Some(layer_id),
                             duration_ms: block_duration,
                             duration_beats: None,
-                            conform_to_tempo: false,
+                            conform_to_tempo: conform && tempo_driven,
                             loop_fill: false,
                             source_offset_ms,
                             rate: Some(speed),
@@ -4256,6 +4267,7 @@ fn parse_super_scenes(
             video_automations: Vec::new(),
             audio: None,
             audio_clips,
+            tempo_driven,
             metronome_enabled: false,
             count_in_beats: 4,
             duration_ms,
@@ -5145,7 +5157,7 @@ mod tests {
     }
 
     #[test]
-    fn dvc_super_scene_conform_is_only_a_boundary_when_parent_uses_bpm_driving() {
+    fn dvc_bpm_driven_super_scene_preserves_dynamic_conform_semantics() {
         let source = synthetic_dvc().replacen(
             r##"NAME="Super" COLOR="#ff445566" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="1" PLAY_TRIGGER="0""##,
             r##"NAME="Super" COLOR="#ff445566" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="1" PLAY_TRIGGER="2""##,
@@ -5159,16 +5171,39 @@ mod tests {
             .child_timeline
             .as_ref()
             .unwrap();
-        assert!(!child.events[0].conform_to_tempo);
+        assert!(child.tempo_driven);
+        assert!(child.events[0].conform_to_tempo);
         assert_eq!(child.events[0].rate, Some(1.0));
-        assert!(outcome.report.approximate.details.iter().any(|detail| {
-            detail.item == "Scene block: Static"
-                && detail.message.contains("BPM-driven CONFORM_TO_TEMPO")
-                && detail.message.contains("96.000 BPM")
+        assert_eq!(outcome.project.snapshot.cues[1].authored_beats, Some(1.0));
+        assert!(!outcome.report.approximate.details.iter().any(|detail| {
+            detail.item == "Scene block: Static" && detail.message.contains("CONFORM_TO_TEMPO")
         }));
         assert!(outcome.report.converted.details.iter().any(|detail| {
             detail.item == "Scene block: Static"
                 && detail.message.contains("parent_bpm_driven=true")
+        }));
+    }
+
+    #[test]
+    fn dvc_bpm_driven_super_scene_with_invalid_division_falls_back_consistently() {
+        let source = synthetic_dvc().replacen(
+            r##"NAME="Super" COLOR="#ff445566" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1""##,
+            r##"NAME="Super" COLOR="#ff445566" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="1" PLAY_TRIGGER="2" PLAY_DIVISION="0""##,
+            1,
+        );
+        let outcome = import_bytes(source.as_bytes(), "synthetic-invalid-bpm-super.dvc").unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+
+        let owner = &outcome.project.snapshot.cues[1];
+        let child = owner.child_timeline.as_ref().unwrap();
+        assert!(!child.tempo_driven);
+        assert!(!child.events[0].conform_to_tempo);
+        assert_eq!(owner.authored_beats, None);
+        assert!(outcome.report.approximate.details.iter().any(|detail| {
+            detail.item == "Super Scene: Super"
+                && detail
+                    .message
+                    .contains("no supported positive PLAY_DIVISION")
         }));
     }
 
@@ -7117,12 +7152,17 @@ mod tests {
         crate::validate_project_file(&outcome.project).unwrap();
 
         assert_eq!(outcome.project.snapshot.clock.bpm, 120.0);
-        let child_events = outcome
+        let child_timelines = outcome
             .project
             .snapshot
             .cues
             .iter()
             .filter_map(|cue| cue.child_timeline.as_ref())
+            .collect::<Vec<_>>();
+        assert_eq!(child_timelines.len(), 2);
+        assert!(child_timelines.iter().all(|child| !child.tempo_driven));
+        let child_events = child_timelines
+            .iter()
             .flat_map(|child| child.events.iter())
             .collect::<Vec<_>>();
         assert_eq!(child_events.len(), 229);

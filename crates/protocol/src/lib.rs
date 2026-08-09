@@ -1923,6 +1923,13 @@ pub struct ChildTimelineSummary {
     pub audio: Option<AudioAnalysisSummary>,
     #[serde(default)]
     pub audio_clips: Vec<TimelineAudioClipSummary>,
+    /// Drives the authored child-timeline duration from the owning Cue's
+    /// `authored_beats` and the live project BPM. Child event millisecond
+    /// placement remains the authoring coordinate; Scene Block
+    /// `conform_to_tempo` then controls whether source content inherits that
+    /// transport rate.
+    #[serde(default)]
+    pub tempo_driven: bool,
     #[serde(default)]
     pub metronome_enabled: bool,
     #[serde(default = "default_timeline_count_in_beats")]
@@ -1940,6 +1947,7 @@ impl Default for ChildTimelineSummary {
             video_automations: Vec::new(),
             audio: None,
             audio_clips: Vec::new(),
+            tempo_driven: false,
             metronome_enabled: false,
             count_in_beats: default_timeline_count_in_beats(),
             duration_ms: 0,
@@ -5054,6 +5062,7 @@ mod tests {
         assert!(child.video_automations.is_empty());
         assert!(child.audio.is_none());
         assert!(child.audio_clips.is_empty());
+        assert!(!child.tempo_driven);
         assert!(!child.metronome_enabled);
         assert_eq!(child.count_in_beats, 4);
         assert_eq!(child.duration_ms, 1_200);

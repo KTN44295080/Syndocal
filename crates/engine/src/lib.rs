@@ -3854,11 +3854,16 @@ struct RuntimeChildTransport {
     window_end_ms: u64,
     iteration_period_ms: u64,
     rate: f32,
+    tempo_driven: bool,
     loop_fill: bool,
     duration_ms: u64,
     active: bool,
     boundary_armed: bool,
     parent_iteration: u64,
+    /// Signed authored-position correction used only when a live BPM change
+    /// re-anchors an already-running tempo-driven child transport. Fresh
+    /// starts and explicit seeks always reset this to zero.
+    position_offset_ms: i128,
     previous_position_ms: u64,
     position_ms: u64,
     events: Vec<RuntimeTimelineEvent>,
@@ -12868,6 +12873,7 @@ impl EngineRuntime {
         cue_dispatch: &HashMap<CueId, CueDispatchEntry>,
     ) -> Result<RuntimeChildTransport, String> {
         self.normalize_and_validate_child_timeline(owner_cue_id, &mut child)?;
+        let tempo_driven = child.tempo_driven;
         let any_solo = child.layers.iter().any(|layer| layer.solo);
         let mut events = Vec::with_capacity(child.events.len());
         for summary in &child.events {
@@ -12884,12 +12890,24 @@ impl EngineRuntime {
             event.layer_muted_effective = layer.muted_effective;
             event.track = timeline_track_for_layer_kind(layer.kind)
                 .expect("validated child Cue event cannot use an Audio layer");
-            events.push(
-                self.resolve_timeline_event_timing(event, self.clock.bpm)
-                    .map_err(|error| {
-                        format!("Cue {owner_cue_id} child timeline timing is invalid: {error}")
-                    })?,
-            );
+            if tempo_driven {
+                // Daslight BPM-driven Super Scenes keep every block on the
+                // authored millisecond grid. The parent transport retimes that
+                // grid as a whole; the block conform bit controls source-rate
+                // inheritance rather than independently rewriting placement.
+                event.iteration_period_ms = event.duration_ms;
+                event.rate = summary.rate.map(valid_effect_rate);
+                event.fade_in_ms = event.fade_in_ms.min(event.duration_ms);
+                event.fade_out_ms = event.fade_out_ms.min(event.duration_ms);
+                events.push(event);
+            } else {
+                events.push(
+                    self.resolve_timeline_event_timing(event, self.clock.bpm)
+                        .map_err(|error| {
+                            format!("Cue {owner_cue_id} child timeline timing is invalid: {error}")
+                        })?,
+                );
+            }
         }
         events.sort_by(|left, right| {
             left.time_ms
@@ -12925,17 +12943,47 @@ impl EngineRuntime {
             .iter()
             .map(|event| cue_dispatch.get(&event.cue_id).copied())
             .collect();
+        let tempo_rate = if tempo_driven {
+            let authored_beats = self
+                .cues
+                .iter()
+                .find(|cue| cue.id == owner_cue_id)
+                .ok_or_else(|| format!("Cue {owner_cue_id} was not found"))?
+                .authored_beats;
+            let authored_beats = validate_cue_authored_beats(authored_beats)?
+                .ok_or_else(|| {
+                    format!(
+                        "Cue {owner_cue_id} requires authored beats before its child Timeline can use BPM driving"
+                    )
+                })?;
+            let target_duration_ms =
+                f64::from(authored_beats) * 60_000.0 / f64::from(clamp_bpm(self.clock.bpm));
+            if duration_ms == 0 || !target_duration_ms.is_finite() || target_duration_ms <= 0.0 {
+                return Err(format!(
+                    "Cue {owner_cue_id} has no positive child Timeline duration for BPM driving"
+                ));
+            }
+            (duration_ms as f64 / target_duration_ms)
+                .clamp(f64::from(f32::MIN_POSITIVE), f64::from(f32::MAX)) as f32
+        } else {
+            1.0
+        };
+        let transport_rate = (f64::from(valid_effect_rate(rate)) * f64::from(tempo_rate))
+            .clamp(f64::from(f32::MIN_POSITIVE), f64::from(f32::MAX))
+            as f32;
         Ok(RuntimeChildTransport {
             parent_event_id,
             window_start_ms,
             window_end_ms,
             iteration_period_ms: iteration_period_ms.max(1),
-            rate: valid_effect_rate(rate),
+            rate: transport_rate,
+            tempo_driven,
             loop_fill,
             duration_ms,
             active: false,
             boundary_armed: false,
             parent_iteration: 0,
+            position_offset_ms: 0,
             previous_position_ms: 0,
             position_ms: 0,
             activated_events: vec![false; events.len()],
@@ -13149,6 +13197,18 @@ impl EngineRuntime {
     }
 
     fn rebuild_effect_activations(&mut self, now: Instant) {
+        let active_child_transports = self
+            .child_transports
+            .iter()
+            .filter(|transport| transport.active)
+            .map(|transport| {
+                (
+                    transport.parent_event_id,
+                    transport.position_ms,
+                    transport.parent_iteration,
+                )
+            })
+            .collect::<Vec<_>>();
         let active_direct_child_transports = self
             .direct_child_transports
             .iter()
@@ -13361,7 +13421,7 @@ impl EngineRuntime {
             self.activate_effect_range(range, key, created_at, 1.0);
         }
 
-        for (key, saved_created_at, _) in previously_active {
+        for &(key, saved_created_at, _) in &previously_active {
             let RuntimeEffectActivationKey::Timeline {
                 event_id,
                 cue_id,
@@ -13474,18 +13534,32 @@ impl EngineRuntime {
         // authored non-neutral live modifiers so a mid-scene rebuild (BPM tap,
         // patch edit, ...) does not silently drop the operator's dials.
         self.reapply_all_cue_live_modifiers(now);
-        for activation in &mut self.effect_activations {
-            let Some(key) = activation.key else {
+        let mut has_immediate_trigger = false;
+        for (parent_event_id, position_ms, parent_iteration) in active_child_transports {
+            let Some(transport_index) = self
+                .child_transports
+                .iter()
+                .position(|transport| transport.parent_event_id == parent_event_id)
+            else {
                 continue;
             };
-            activation.transition = previously_active_transitions
-                .iter()
-                .find(|(candidate_key, effect_id, _)| {
-                    *candidate_key == key && *effect_id == activation.effect.id
-                })
-                .map(|(_, _, transition)| transition.clone());
+            let parent_position_ms = self.timeline_position_ms;
+            let transport = &mut self.child_transports[transport_index];
+            let uncorrected = ((parent_position_ms.saturating_sub(transport.window_start_ms)
+                as f64)
+                * f64::from(transport.rate))
+            .floor()
+            .clamp(0.0, u64::MAX as f64) as u64;
+            transport.active = true;
+            transport.boundary_armed = true;
+            transport.parent_iteration = parent_iteration;
+            transport.position_offset_ms =
+                i128::from(position_ms).saturating_sub(i128::from(uncorrected));
+            transport.previous_position_ms = 0;
+            transport.position_ms = 0;
+            has_immediate_trigger |= self
+                .advance_child_transport(RuntimeChildTransportId::Timeline(transport_index), now);
         }
-        let mut has_immediate_trigger = false;
         for (cue_id, started_at, paused, paused_at, position_ms, generation) in
             active_direct_child_transports
         {
@@ -13503,18 +13577,31 @@ impl EngineRuntime {
             let transport = &mut self.direct_child_transports[transport_index];
             transport.active = true;
             transport.boundary_armed = true;
-            transport.direct_started_at = Some(started_at);
+            let tempo_driven = transport.tempo_driven;
+            let replay_at = if tempo_driven {
+                let elapsed_ms = ((position_ms as f64) / f64::from(transport.rate))
+                    .floor()
+                    .clamp(0.0, u64::MAX as f64) as u64;
+                transport.direct_started_at = Some(
+                    now.checked_sub(Duration::from_millis(elapsed_ms))
+                        .unwrap_or(now),
+                );
+                now
+            } else {
+                transport.direct_started_at = Some(started_at);
+                started_at
+                    .checked_add(Duration::from_millis(position_ms))
+                    .unwrap_or(now)
+                    .min(now)
+            };
             transport.direct_paused = false;
             transport.direct_paused_at = None;
             transport.direct_generation = generation;
+            transport.position_offset_ms = 0;
             transport.previous_position_ms = 0;
             transport.position_ms = 0;
             transport.parent_iteration = 0;
             transport.activated_events.fill(false);
-            let replay_at = started_at
-                .checked_add(Duration::from_millis(position_ms))
-                .unwrap_or(now)
-                .min(now);
             has_immediate_trigger |= self.advance_child_transport(
                 RuntimeChildTransportId::Direct(transport_index),
                 replay_at,
@@ -13524,6 +13611,71 @@ impl EngineRuntime {
         }
         if has_immediate_trigger {
             self.advance_pending_cue(now);
+        }
+        let free_running_tempo_child_keys = self
+            .effect_activations
+            .iter()
+            .filter_map(|activation| {
+                let key = activation.key?;
+                let is_free_running = match key {
+                    RuntimeEffectActivationKey::ChildTimeline {
+                        parent_event_id,
+                        event_id,
+                        cue_id,
+                        ..
+                    } => self
+                        .child_transports
+                        .iter()
+                        .find(|transport| transport.parent_event_id == parent_event_id)
+                        .filter(|transport| transport.tempo_driven)
+                        .and_then(|transport| {
+                            transport
+                                .events
+                                .iter()
+                                .find(|event| event.id == event_id && event.cue_id == cue_id)
+                        })
+                        .is_some_and(|event| !event.conform_to_tempo),
+                    RuntimeEffectActivationKey::DirectChildTimeline {
+                        parent_cue_id,
+                        event_id,
+                        cue_id,
+                        ..
+                    } => self
+                        .direct_child_transports
+                        .iter()
+                        .find(|transport| transport.direct_parent_cue_id == Some(parent_cue_id))
+                        .filter(|transport| transport.tempo_driven)
+                        .and_then(|transport| {
+                            transport
+                                .events
+                                .iter()
+                                .find(|event| event.id == event_id && event.cue_id == cue_id)
+                        })
+                        .is_some_and(|event| !event.conform_to_tempo),
+                    _ => false,
+                };
+                is_free_running.then_some(key)
+            })
+            .collect::<Vec<_>>();
+        for activation in &mut self.effect_activations {
+            let Some(key) = activation.key else {
+                continue;
+            };
+            if free_running_tempo_child_keys.contains(&key) {
+                if let Some((_, saved_created_at, _)) = previously_active
+                    .iter()
+                    .find(|(candidate, _, _)| *candidate == key)
+                {
+                    activation.effect.created_at = *saved_created_at;
+                    clear_runtime_effect_caches(&activation.effect.kind);
+                }
+            }
+            activation.transition = previously_active_transitions
+                .iter()
+                .find(|(candidate_key, effect_id, _)| {
+                    *candidate_key == key && *effect_id == activation.effect.id
+                })
+                .map(|(_, _, transition)| transition.clone());
         }
     }
 
@@ -17935,6 +18087,7 @@ impl EngineRuntime {
         transport.active = true;
         transport.boundary_armed = true;
         transport.parent_iteration = parent_iteration;
+        transport.position_offset_ms = 0;
         transport.previous_position_ms = position_ms;
         transport.position_ms = position_ms;
     }
@@ -17960,6 +18113,7 @@ impl EngineRuntime {
         transport.active = true;
         transport.boundary_armed = true;
         transport.parent_iteration = 0;
+        transport.position_offset_ms = 0;
         transport.previous_position_ms = 0;
         transport.position_ms = 0;
         transport.direct_started_at = Some(started_at);
@@ -18011,6 +18165,7 @@ impl EngineRuntime {
             transport.previous_position_ms = 0;
             transport.position_ms = 0;
             transport.parent_iteration = 0;
+            transport.position_offset_ms = 0;
             transport.direct_started_at = None;
             transport.direct_paused = false;
             transport.direct_paused_at = None;
@@ -18180,10 +18335,14 @@ impl EngineRuntime {
                     self.shift_direct_child_effect_clocks(cue_id, generation, paused_at, now);
                 }
                 let transport = &mut self.direct_child_transports[transport_index];
+                let elapsed_ms = ((position_ms as f64) / f64::from(transport.rate))
+                    .floor()
+                    .clamp(0.0, u64::MAX as f64) as u64;
                 transport.direct_started_at = Some(
-                    now.checked_sub(Duration::from_millis(position_ms))
+                    now.checked_sub(Duration::from_millis(elapsed_ms))
                         .unwrap_or(now),
                 );
+                transport.position_offset_ms = 0;
                 transport.direct_paused = false;
                 transport.direct_paused_at = None;
                 transport.boundary_armed = false;
@@ -18350,10 +18509,14 @@ impl EngineRuntime {
         transport.active = true;
         transport.boundary_armed = true;
         transport.parent_iteration = 0;
+        transport.position_offset_ms = 0;
         transport.previous_position_ms = 0;
         transport.position_ms = 0;
+        let elapsed_ms = ((target_ms as f64) / f64::from(transport.rate))
+            .floor()
+            .clamp(0.0, u64::MAX as f64) as u64;
         transport.direct_started_at = Some(
-            now.checked_sub(Duration::from_millis(target_ms))
+            now.checked_sub(Duration::from_millis(elapsed_ms))
                 .unwrap_or(now),
         );
         transport.direct_paused = false;
@@ -18407,6 +18570,7 @@ impl EngineRuntime {
             transport.boundary_armed = true;
             transport.parent_iteration = parent_position.saturating_sub(event.time_ms)
                 / timeline_event_iteration_period_ms(event).max(1);
+            transport.position_offset_ms = 0;
             transport.previous_position_ms = 0;
             transport.position_ms = position_ms;
         }
@@ -18510,6 +18674,26 @@ impl EngineRuntime {
                 }
             }
             let event_rate = event.rate.unwrap_or(1.0);
+            let tempo_driven = self
+                .child_transport(transport_id)
+                .is_some_and(|transport| transport.tempo_driven);
+            let inherits_parent_rate = event.conform_to_tempo && tempo_driven;
+            let effect_rate = valid_effect_rate(
+                event_rate
+                    * if inherits_parent_rate {
+                        parent_rate
+                    } else {
+                        1.0
+                    },
+            );
+            let step_rate = valid_effect_rate(
+                event_rate
+                    / if tempo_driven && !inherits_parent_rate {
+                        parent_rate
+                    } else {
+                        1.0
+                    },
+            );
             let elapsed_child_ms = current_position_ms.saturating_sub(occurrence.time_ms);
             let elapsed_parent_ms =
                 scaled_timeline_source_position_ms(i128::from(elapsed_child_ms), parent_rate)
@@ -18546,8 +18730,8 @@ impl EngineRuntime {
                     // Daslight Scene Block SPEED advances the child transport, but it does
                     // not multiply an owned FX oscillator. The child cue's authored rate is
                     // therefore intentionally independent from the parent block rate.
-                    rate: valid_effect_rate(event_rate),
-                    step_rate: valid_effect_rate(event_rate),
+                    rate: effect_rate,
+                    step_rate,
                     created_at: instant_at_timeline_source_position(
                         activation_at,
                         activation_parent_position_ms,
@@ -21744,6 +21928,9 @@ fn child_transport_position_ms(transport: &RuntimeChildTransport, parent_positio
     let scaled = ((parent_delta_ms as f64) * f64::from(transport.rate))
         .floor()
         .clamp(0.0, u64::MAX as f64) as u64;
+    let scaled = i128::from(scaled)
+        .saturating_add(transport.position_offset_ms)
+        .clamp(0, i128::from(u64::MAX)) as u64;
     if transport.loop_fill && transport.duration_ms > 0 {
         scaled % transport.duration_ms
     } else {
@@ -61736,6 +61923,34 @@ mod tests {
         assert_eq!(activation.effect.created_at, started_at);
     }
 
+    #[test]
+    fn timeline_owned_tempo_child_reanchors_without_position_jump_after_bpm_change() {
+        let mut runtime =
+            direct_child_static_test_runtime(vec![direct_child_static_event(201, 2, 900, 100)]);
+        let started_at = Instant::now();
+        enable_direct_child_tempo_driving(&mut runtime, 1, 1.0, 120.0, started_at);
+        runtime.timeline_events = vec![timeline_test_event(200, 1, 0, 0, 2_000, 1)];
+        runtime.rebuild_effect_activations(started_at);
+        runtime.timeline_position_ms = 0;
+        runtime.establish_child_transports_at_position(started_at);
+        assert_eq!(runtime.child_transports[0].rate, 2.0);
+
+        runtime.timeline_position_ms = 100;
+        runtime.advance_child_transports(started_at + Duration::from_millis(100));
+        assert_eq!(runtime.child_transports[0].position_ms, 200);
+
+        let bpm_changed_at = started_at + Duration::from_millis(100);
+        runtime.clock.set_bpm(60.0, bpm_changed_at);
+        runtime.rebuild_effect_activations(bpm_changed_at);
+        assert_eq!(runtime.child_transports[0].rate, 1.0);
+        assert_eq!(runtime.child_transports[0].position_ms, 200);
+
+        runtime.timeline_position_ms = 200;
+        runtime.advance_child_transports(bpm_changed_at + Duration::from_millis(100));
+        assert_eq!(runtime.child_transports[0].position_ms, 300);
+        assert_eq!(runtime.values[&(1, "Dimmer".to_string())], 0);
+    }
+
     fn direct_child_static_test_runtime(events: Vec<TimelineCueEventSummary>) -> EngineRuntime {
         let mut runtime = runtime_with_lfo_effects(&[]);
         for (cue_id, label, value) in [
@@ -61790,6 +62005,33 @@ mod tests {
         runtime
     }
 
+    fn enable_direct_child_tempo_driving(
+        runtime: &mut EngineRuntime,
+        cue_id: CueId,
+        authored_beats: f32,
+        bpm: f32,
+        now: Instant,
+    ) {
+        runtime
+            .cues
+            .iter_mut()
+            .find(|cue| cue.id == cue_id)
+            .expect("tempo-driven child owner")
+            .authored_beats = Some(authored_beats);
+        let mut child = runtime
+            .cues
+            .iter()
+            .find(|cue| cue.id == cue_id)
+            .and_then(|cue| cue.child_timeline.clone())
+            .expect("child Timeline");
+        child.tempo_driven = true;
+        runtime.clock.set_bpm(bpm, now);
+        runtime
+            .set_cue_child_timeline_state(cue_id, Some(child))
+            .unwrap();
+        runtime.rebuild_effect_activations(now);
+    }
+
     fn direct_child_static_event(
         id: TimelineEventId,
         cue_id: CueId,
@@ -61839,6 +62081,176 @@ mod tests {
         );
         assert!(runtime.direct_child_transports[0].active);
         assert_eq!(runtime.direct_child_transports[0].position_ms, 100);
+    }
+
+    #[test]
+    fn direct_tempo_driven_child_scales_authored_grid_to_owner_beats() {
+        let mut runtime =
+            direct_child_static_test_runtime(vec![direct_child_static_event(201, 2, 500, 500)]);
+        let configured_at = Instant::now();
+        enable_direct_child_tempo_driving(&mut runtime, 1, 1.0, 120.0, configured_at);
+        assert_eq!(runtime.direct_child_transports[0].rate, 2.0);
+
+        let started_at = configured_at + Duration::from_millis(10);
+        runtime.start_cue(1, started_at, PendingCueTriggerSource::Manual);
+        runtime.advance_child_transports(started_at + Duration::from_millis(249));
+        assert_eq!(runtime.direct_child_transports[0].position_ms, 498);
+        assert_eq!(runtime.values[&(1, "Dimmer".to_string())], 0);
+
+        runtime.advance_child_transports(started_at + Duration::from_millis(250));
+        assert_eq!(runtime.direct_child_transports[0].position_ms, 500);
+        assert_eq!(runtime.values[&(1, "Dimmer".to_string())], u16::MAX);
+    }
+
+    #[test]
+    fn direct_tempo_driven_child_reanchors_without_position_jump_after_bpm_change() {
+        let mut runtime =
+            direct_child_static_test_runtime(vec![direct_child_static_event(201, 2, 1_500, 500)]);
+        let configured_at = Instant::now();
+        enable_direct_child_tempo_driving(&mut runtime, 1, 4.0, 120.0, configured_at);
+        assert_eq!(runtime.direct_child_transports[0].rate, 1.0);
+
+        let started_at = configured_at + Duration::from_millis(10);
+        runtime.start_cue(1, started_at, PendingCueTriggerSource::Manual);
+        let bpm_changed_at = started_at + Duration::from_millis(500);
+        runtime.advance_child_transports(bpm_changed_at);
+        assert_eq!(runtime.direct_child_transports[0].position_ms, 500);
+
+        runtime.clock.set_bpm(60.0, bpm_changed_at);
+        runtime.rebuild_effect_activations(bpm_changed_at);
+        assert_eq!(runtime.direct_child_transports[0].rate, 0.5);
+        assert_eq!(runtime.direct_child_transports[0].position_ms, 500);
+
+        runtime.advance_child_transports(bpm_changed_at + Duration::from_millis(1_000));
+        assert_eq!(runtime.direct_child_transports[0].position_ms, 1_000);
+        assert_eq!(runtime.values[&(1, "Dimmer".to_string())], 0);
+    }
+
+    #[test]
+    fn direct_tempo_driven_child_pause_resume_and_seek_use_authored_position() {
+        let mut runtime =
+            direct_child_static_test_runtime(vec![direct_child_static_event(201, 2, 900, 100)]);
+        let configured_at = Instant::now();
+        enable_direct_child_tempo_driving(&mut runtime, 1, 1.0, 120.0, configured_at);
+
+        let started_at = configured_at + Duration::from_millis(10);
+        runtime.start_cue(1, started_at, PendingCueTriggerSource::Manual);
+        let paused_at = started_at + Duration::from_millis(100);
+        runtime.advance_child_transports(paused_at);
+        assert_eq!(runtime.direct_child_transports[0].position_ms, 200);
+        runtime.set_direct_child_timeline_playing(1, false, paused_at);
+        runtime.advance_child_transports(started_at + Duration::from_millis(300));
+        assert_eq!(runtime.direct_child_transports[0].position_ms, 200);
+
+        let resumed_at = started_at + Duration::from_millis(300);
+        runtime.set_direct_child_timeline_playing(1, true, resumed_at);
+        runtime.advance_child_transports(resumed_at + Duration::from_millis(50));
+        assert_eq!(runtime.direct_child_transports[0].position_ms, 300);
+
+        let seek_at = started_at + Duration::from_millis(400);
+        runtime.seek_direct_child_timeline(1, 400, seek_at);
+        assert_eq!(runtime.direct_child_transports[0].position_ms, 400);
+        runtime.advance_child_transports(seek_at + Duration::from_millis(50));
+        assert_eq!(runtime.direct_child_transports[0].position_ms, 500);
+    }
+
+    #[test]
+    fn direct_tempo_driven_child_conform_controls_owned_fx_rate_and_bpm_rebuild_phase() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        create_effect_only_cue(
+            &mut runtime,
+            2,
+            vec![owned_lfo_target(
+                901,
+                test_lfo_request(
+                    "Tempo child",
+                    LfoShape::Sine,
+                    1_000,
+                    0.0,
+                    EffectBlendMode::Override,
+                    0,
+                    u16::MAX,
+                ),
+            )],
+        );
+        runtime.apply_command(EngineCommand::CreateCue {
+            cue_id: 1,
+            label: "Tempo Super Scene".to_string(),
+            fade_ms: 0,
+            authored_beats: Some(1.0),
+            targets: Vec::new(),
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: Vec::new(),
+        });
+        let mut free_running = direct_child_static_event(201, 2, 0, 1_000);
+        free_running.rate = Some(0.5);
+        let mut conforming = direct_child_static_event(202, 2, 0, 1_000);
+        conforming.rate = Some(0.5);
+        conforming.conform_to_tempo = true;
+        let configured_at = Instant::now();
+        runtime.clock.set_bpm(120.0, configured_at);
+        runtime
+            .set_cue_child_timeline_state(
+                1,
+                Some(ChildTimelineSummary {
+                    events: vec![free_running, conforming],
+                    tempo_driven: true,
+                    duration_ms: 1_000,
+                    ..ChildTimelineSummary::default()
+                }),
+            )
+            .unwrap();
+        runtime.rebuild_effect_activations(configured_at);
+
+        let started_at = configured_at + Duration::from_millis(10);
+        runtime.start_cue(1, started_at, PendingCueTriggerSource::Manual);
+        let activation = |runtime: &EngineRuntime, event_id| {
+            runtime
+                .active_effect_activation_indices
+                .iter()
+                .filter_map(|index| runtime.effect_activations.get(*index))
+                .find_map(|activation| match activation.key {
+                    Some(RuntimeEffectActivationKey::DirectChildTimeline {
+                        parent_cue_id: 1,
+                        event_id: candidate,
+                        ..
+                    }) if candidate == event_id => {
+                        Some((activation.effect.created_at, activation.rate))
+                    }
+                    _ => None,
+                })
+                .expect("tempo-driven Scene Block FX activation")
+        };
+        let free_before = activation(&runtime, 201);
+        let conform_before = activation(&runtime, 202);
+        assert_eq!(free_before.1, 0.5);
+        assert_eq!(conform_before.1, 1.0);
+
+        let bpm_changed_at = started_at + Duration::from_millis(100);
+        runtime.advance_child_transports(bpm_changed_at);
+        assert_eq!(runtime.direct_child_transports[0].position_ms, 200);
+        runtime.clock.set_bpm(60.0, bpm_changed_at);
+        runtime.rebuild_effect_activations(bpm_changed_at);
+
+        let free_after = activation(&runtime, 201);
+        let conform_after = activation(&runtime, 202);
+        assert_eq!(free_after.1, 0.5);
+        assert_eq!(
+            free_after.0, free_before.0,
+            "non-conforming source FX must keep its wall-clock phase"
+        );
+        assert_eq!(conform_after.1, 0.5);
+        let conform_phase_before = bpm_changed_at
+            .saturating_duration_since(conform_before.0)
+            .as_secs_f64()
+            * f64::from(conform_before.1);
+        let conform_phase_after = bpm_changed_at
+            .saturating_duration_since(conform_after.0)
+            .as_secs_f64()
+            * f64::from(conform_after.1);
+        assert!((conform_phase_before - conform_phase_after).abs() < 0.001);
     }
 
     #[test]

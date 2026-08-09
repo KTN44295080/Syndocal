@@ -1841,6 +1841,8 @@ export interface ChildTimelineSummary {
   video_automations?: TimelineVideoAutomationSummary[];
   audio?: AudioAnalysisSummary | null;
   audio_clips?: TimelineAudioClipSummary[];
+  /** Scale this Timeline scene's authored millisecond grid to the owning Scene duration in beats. */
+  tempo_driven?: boolean;
   metronome_enabled?: boolean;
   count_in_beats?: number;
   duration_ms?: number;
