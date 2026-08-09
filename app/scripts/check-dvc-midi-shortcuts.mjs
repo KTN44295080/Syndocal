@@ -40,6 +40,7 @@ const checks = [
   [(backend.match(/operator_feature_fader_command\(/g) ?? []).length >= 4 && backend.includes("EngineCommand::SetFixtureAttributeBatch"), "UI, MIDI, OSC, and Remote converge on the existing engine batch command"],
   [midi.includes("build_feedback_messages_with_operator_selection") && backend.includes("Some(&operator_selection)"), "MIDI feedback resolves the same runtime selection instead of guessing a fixed fixture"],
   [midi.includes("custom_midi_feedback_message") && midi.includes("midi_feedback_action_is_continuous"), "MIDI output selects exact states and interpolates continuous feedback endpoints"],
+  [midi.includes("struct MidiFeedbackCache") && midi.includes("send_changed_feedback_slots") && midi.includes("last_slot_by_address"), "MIDI output suppresses unchanged mapping slots and collapses duplicate hardware addresses"],
   [midi.includes("fn cue_is_active") && midi.includes("active_group_cue_ids"), "MIDI feedback includes parallel Cue List and group activity"],
   [backend.includes("validate_midi_feedback") && backend.includes("MIDI feedback requires at least one state"), "custom MIDI feedback is validated at every persistence and connection boundary"],
   [remote.includes("SetOperatorSelection(OperatorSelectionContext)") && remote.includes("SetOperatorFeatureFader"), "Remote and future AI callers have typed operator-selection commands"],
@@ -47,6 +48,10 @@ const checks = [
   [app.includes("replaceProjectControlMappings(report.midi_mappings ?? [], [], report.dmx_mappings ?? [])"), "DVC import installs MIDI and DMX mappings instead of clearing them"],
   [app.includes("report.midi_mappings?.length ?? 0} MIDI and ${report.dmx_mappings?.length ?? 0} DMX mappings"), "operator import status reports the restored MIDI and DMX mapping counts"],
   [controlController.includes("const updateMidiMapping") && app.includes("onUpdateMapping={updateMidiMapping}"), "operator can update feedback without replacing the mapping route"],
+  [backend.includes('name("syndocal-midi-feedback".to_string())') && backend.includes("MIDI_FEEDBACK_REFRESH_INTERVAL") && backend.includes("TELEMETRY_DMX_TARGET_FRAME_RATE_HZ") && backend.includes("engine.inspect_snapshot"), "auto feedback reads the published snapshot without full clones at the engine's 44 Hz rate"],
+  [backend.includes("fn set_midi_feedback_auto(") && backend.includes("fn midi_feedback_status("), "backend exposes explicit auto-feedback configuration and health commands"],
+  [controlController.includes('"set_midi_feedback_auto"') && controlController.includes('"midi_feedback_status"') && !controlController.includes("midiFeedbackTimer"), "frontend configures the backend worker instead of sending feedback on a 500 ms UI timer"],
+  [controlController.includes("force: true") && backend.includes("force.unwrap_or(true)"), "manual feedback remains an explicit forced hardware refresh"],
   [midiPanel.includes("Create Off / On feedback") && midiPanel.includes("Unknown / mixed") && midiPanel.includes("Clear feedback"), "normal MIDI mapping editor exposes all feedback states"],
 ];
 

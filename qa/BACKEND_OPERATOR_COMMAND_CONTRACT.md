@@ -19,6 +19,7 @@ Daslightのaction 229は固定Dimmerではなく、現在表示中のFeatureフ�
 3. 検証成功時だけ既存の`EngineCommand::SetFixtureAttributeBatch`を生成する。
 4. Tauri、MIDI、OSC、Remote WebSocketは同じ`operator_feature_fader_command`を使う。選択なし、範囲外、非対応属性では出力せずfail closedにする。
 5. MIDI feedbackも同じruntime selectionから現在値を解決する。複数選択の値が一致するときだけCC/Note値を返し、mixed valueでは誤ったモーターフェーダー位置を送らずfail closedにする。
+6. Auto feedbackは`set_midi_feedback_auto`でbackend workerを構成する。workerはEngineと同じ44 Hzで公開snapshotを読み、変化したMIDI addressだけを送る。`midi_feedback_status`でfaultを外部から監視でき、`send_midi_feedback(force=true)`で全状態を明示再送できる。UI timerを正規実行経路にしない。
 
 Remote WebSocketの外部呼び出し例:
 

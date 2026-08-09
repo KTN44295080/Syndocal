@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     sync::mpsc,
     time::{Duration, Instant},
 };
@@ -36,6 +37,60 @@ pub struct MidiControlInput {
 
 pub struct MidiFeedbackOutput {
     connection: MidiOutputConnection,
+    cache: MidiFeedbackCache,
+}
+
+#[derive(Debug, Default)]
+struct MidiFeedbackCache {
+    sent_by_slot: HashMap<usize, Vec<u8>>,
+}
+
+impl MidiFeedbackCache {
+    fn message_address(message: &[u8]) -> Vec<u8> {
+        if message.len() >= 3 {
+            message[..2].to_vec()
+        } else {
+            message.to_vec()
+        }
+    }
+
+    fn pending_slots(&self, slots: &[Option<Vec<u8>>], force: bool) -> Vec<(usize, Vec<u8>)> {
+        let mut last_slot_by_address = HashMap::<Vec<u8>, usize>::new();
+        for (slot, message) in slots.iter().enumerate() {
+            if let Some(message) = message {
+                last_slot_by_address.insert(Self::message_address(message), slot);
+            }
+        }
+
+        slots
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, message)| {
+                let message = message.as_ref()?;
+                let address = Self::message_address(message);
+                (last_slot_by_address.get(&address) == Some(&slot)
+                    && (force || self.sent_by_slot.get(&slot) != Some(message)))
+                .then(|| (slot, message.clone()))
+            })
+            .collect()
+    }
+
+    #[cfg(test)]
+    fn pending_messages(&self, messages: &[Vec<u8>], force: bool) -> Vec<Vec<u8>> {
+        let slots = messages.iter().cloned().map(Some).collect::<Vec<_>>();
+        self.pending_slots(&slots, force)
+            .into_iter()
+            .map(|(_, message)| message)
+            .collect()
+    }
+
+    fn record_sent(&mut self, slot: usize, message: &[u8]) {
+        let address = Self::message_address(message);
+        self.sent_by_slot.retain(|other_slot, other_message| {
+            *other_slot == slot || Self::message_address(other_message) != address
+        });
+        self.sent_by_slot.insert(slot, message.to_vec());
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -293,7 +348,10 @@ pub fn connect_midi_feedback_output(port_index: usize) -> Result<MidiFeedbackOut
     let connection = output
         .connect(port, "syndocal-midi-feedback-output")
         .map_err(|error| MidiError::Connect(error.to_string()))?;
-    Ok(MidiFeedbackOutput { connection })
+    Ok(MidiFeedbackOutput {
+        connection,
+        cache: MidiFeedbackCache::default(),
+    })
 }
 
 pub fn connect_midi_clock<F>(
@@ -414,12 +472,51 @@ pub fn learned_control_from_midi_message(message: &[u8]) -> Option<LearnedMidiCo
 
 impl MidiFeedbackOutput {
     pub fn send_feedback_messages(&mut self, messages: &[Vec<u8>]) -> Result<usize, MidiError> {
-        for message in messages {
+        self.send_feedback_messages_with_force(messages, true)
+    }
+
+    pub fn send_changed_feedback_messages(
+        &mut self,
+        messages: &[Vec<u8>],
+    ) -> Result<usize, MidiError> {
+        self.send_feedback_messages_with_force(messages, false)
+    }
+
+    pub fn send_changed_feedback_slots(
+        &mut self,
+        slots: &[Option<Vec<u8>>],
+    ) -> Result<usize, MidiError> {
+        self.send_feedback_slots_with_force(slots, false)
+    }
+
+    pub fn send_feedback_slots(&mut self, slots: &[Option<Vec<u8>>]) -> Result<usize, MidiError> {
+        self.send_feedback_slots_with_force(slots, true)
+    }
+
+    pub fn send_feedback_messages_with_force(
+        &mut self,
+        messages: &[Vec<u8>],
+        force: bool,
+    ) -> Result<usize, MidiError> {
+        let slots = messages.iter().cloned().map(Some).collect::<Vec<_>>();
+        self.send_feedback_slots_with_force(&slots, force)
+    }
+
+    fn send_feedback_slots_with_force(
+        &mut self,
+        slots: &[Option<Vec<u8>>],
+        force: bool,
+    ) -> Result<usize, MidiError> {
+        let pending = self.cache.pending_slots(slots, force);
+        let mut sent = 0;
+        for (slot, message) in pending {
             self.connection
-                .send(message)
+                .send(&message)
                 .map_err(|error| MidiError::Send(error.to_string()))?;
+            self.cache.record_sent(slot, &message);
+            sent += 1;
         }
-        Ok(messages.len())
+        Ok(sent)
     }
 }
 
@@ -435,14 +532,25 @@ pub fn build_feedback_messages_with_operator_selection(
     mappings: &[MidiControlMapping],
     operator_selection: Option<&OperatorSelectionContext>,
 ) -> Vec<Vec<u8>> {
+    build_feedback_message_slots_with_operator_selection(snapshot, mappings, operator_selection)
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+pub fn build_feedback_message_slots_with_operator_selection(
+    snapshot: &EngineSnapshot,
+    mappings: &[MidiControlMapping],
+    operator_selection: Option<&OperatorSelectionContext>,
+) -> Vec<Option<Vec<u8>>> {
     mappings
         .iter()
-        .filter_map(|mapping| {
+        .map(|mapping| {
             let normalized = feedback_value_for_mapping(snapshot, mapping, operator_selection);
             if mapping.feedback.is_some() {
                 custom_midi_feedback_message(mapping, normalized)
             } else {
-                midi_feedback_message(mapping, normalized?)
+                normalized.and_then(|normalized| midi_feedback_message(mapping, normalized))
             }
         })
         .collect()
@@ -1434,6 +1542,56 @@ fn normalize_group_path(group_id: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn feedback_cache_sends_only_changed_addresses_and_force_resends_current_state() {
+        let mut cache = MidiFeedbackCache::default();
+        let initial = vec![vec![0x90, 10, 127], vec![0xb0, 11, 32]];
+
+        let pending = cache.pending_messages(&initial, false);
+        assert_eq!(pending, initial);
+        for (slot, message) in pending.iter().enumerate() {
+            cache.record_sent(slot, message);
+        }
+        assert!(cache.pending_messages(&initial, false).is_empty());
+
+        let changed = vec![vec![0x90, 10, 0], vec![0xb0, 11, 32]];
+        assert_eq!(
+            cache.pending_messages(&changed, false),
+            vec![vec![0x90, 10, 0]]
+        );
+        assert_eq!(cache.pending_messages(&changed, true), changed);
+    }
+
+    #[test]
+    fn feedback_cache_collapses_duplicate_addresses_to_the_last_desired_value() {
+        let cache = MidiFeedbackCache::default();
+        let messages = vec![vec![0xb0, 7, 12], vec![0x90, 20, 127], vec![0xb0, 7, 99]];
+
+        assert_eq!(
+            cache.pending_messages(&messages, false),
+            vec![vec![0x90, 20, 127], vec![0xb0, 7, 99]],
+        );
+    }
+
+    #[test]
+    fn feedback_cache_resends_a_slot_when_custom_states_use_different_addresses() {
+        let mut cache = MidiFeedbackCache::default();
+        let off = vec![Some(vec![0xb0, 7, 0])];
+        let on = vec![Some(vec![0xb1, 7, 127])];
+
+        let first = cache.pending_slots(&off, false);
+        assert_eq!(first, vec![(0, vec![0xb0, 7, 0])]);
+        cache.record_sent(first[0].0, &first[0].1);
+        let second = cache.pending_slots(&on, false);
+        assert_eq!(second, vec![(0, vec![0xb1, 7, 127])]);
+        cache.record_sent(second[0].0, &second[0].1);
+
+        assert_eq!(
+            cache.pending_slots(&off, false),
+            vec![(0, vec![0xb0, 7, 0])],
+        );
+    }
+
     fn fixture_cc_mapping() -> MidiControlMapping {
         MidiControlMapping {
             channel: Some(0),
@@ -1471,6 +1629,45 @@ mod tests {
             }]
         );
         assert!(build_feedback_messages(&EngineSnapshot::default(), &[mapping]).is_empty());
+    }
+
+    #[test]
+    fn feedback_slots_preserve_mapping_identity_when_a_middle_state_is_unavailable() {
+        let mut first = fixture_cc_mapping();
+        first.number = 7;
+        let mut unavailable = fixture_cc_mapping();
+        unavailable.action = MidiControlAction::SelectedFeatureFader;
+        unavailable.fixture_id = None;
+        unavailable.attribute = None;
+        unavailable.cue_point_index = Some(0);
+        unavailable.number = 8;
+        let mut third = fixture_cc_mapping();
+        third.action = MidiControlAction::LightingMaster;
+        third.fixture_id = None;
+        third.attribute = None;
+        third.number = 9;
+        third.low = 0.0;
+        third.high = 1.0;
+        let mut fixture = flagged_fixture(3, &[], false, false, false);
+        fixture.attribute_values = vec![protocol::AttributeValueSummary {
+            attribute: "Dimmer".to_string(),
+            value: 32_768,
+        }];
+        let snapshot = EngineSnapshot {
+            fixtures: vec![fixture],
+            lighting_master: 0.75,
+            ..EngineSnapshot::default()
+        };
+
+        let slots = build_feedback_message_slots_with_operator_selection(
+            &snapshot,
+            &[first, unavailable, third],
+            None,
+        );
+        assert_eq!(slots.len(), 3);
+        assert_eq!(slots[0], Some(vec![0xb0, 7, 64]));
+        assert_eq!(slots[1], None);
+        assert_eq!(slots[2], Some(vec![0xb0, 9, 95]));
     }
 
     #[test]

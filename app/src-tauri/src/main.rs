@@ -147,6 +147,8 @@ const STANDBY_SYNC_INTERVAL_MS: u64 = 2_000;
 const STANDBY_SYNC_POLL_MS: u64 = 500;
 const STANDBY_SYNC_STALE_MS: u64 = 5_000;
 const STANDBY_SYNC_RETENTION: usize = 5;
+const MIDI_FEEDBACK_REFRESH_INTERVAL: Duration =
+    Duration::from_micros(1_000_000 / TELEMETRY_DMX_TARGET_FRAME_RATE_HZ as u64);
 static RDM_TRANSACTION_NUMBER: AtomicU8 = AtomicU8::new(1);
 static LIVE_VIDEO_MONITOR_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
@@ -190,7 +192,9 @@ struct AppState {
     visualizer_model_assets: Mutex<HashMap<String, VisualizerModelAssetCacheEntry>>,
     midi_clock: Mutex<Option<MidiClockInput>>,
     midi_control: Mutex<Option<MidiControlInput>>,
-    midi_feedback: Mutex<Option<MidiFeedbackOutput>>,
+    midi_feedback: Arc<Mutex<Option<MidiFeedbackOutput>>>,
+    midi_feedback_runtime: Mutex<Option<MidiFeedbackRuntime>>,
+    midi_feedback_last_error: Arc<Mutex<Option<String>>>,
     osc_input: Mutex<Option<OscInput>>,
     remote_control: Mutex<Option<RemoteWsServer>>,
     dmx_input: Mutex<Option<io::dmx_input::DmxInput>>,
@@ -203,6 +207,115 @@ struct AppState {
     standby_sync: Mutex<StandbySyncRuntime>,
     native_video_output_metrics:
         Mutex<HashMap<VideoOutputId, Arc<Mutex<NativeVideoOutputMetrics>>>>,
+}
+
+struct MidiFeedbackRuntime {
+    stop: Arc<AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl MidiFeedbackRuntime {
+    fn start(
+        engine: EngineHandle,
+        output: Arc<Mutex<Option<MidiFeedbackOutput>>>,
+        operator_selection: Arc<Mutex<OperatorSelectionContext>>,
+        mappings: Vec<MidiControlMapping>,
+        last_error: Arc<Mutex<Option<String>>>,
+    ) -> Result<Self, String> {
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let worker = std::thread::Builder::new()
+            .name("syndocal-midi-feedback".to_string())
+            .spawn(move || {
+                let mut force = true;
+                let mut next_refresh = Instant::now();
+                while !worker_stop.load(Ordering::Acquire) {
+                    let selection = match operator_selection.lock() {
+                        Ok(selection) => selection.clone(),
+                        Err(_) => {
+                            if let Ok(mut error) = last_error.lock() {
+                                *error = Some(
+                                    "MIDI feedback stopped because operator selection state was unavailable"
+                                        .to_string(),
+                                );
+                            }
+                            break;
+                        }
+                    };
+                    let message_slots = match engine.inspect_snapshot(|snapshot| {
+                        io::midi::build_feedback_message_slots_with_operator_selection(
+                            snapshot,
+                            &mappings,
+                            Some(&selection),
+                        )
+                    }) {
+                        Ok(message_slots) => message_slots,
+                        Err(error) => {
+                            if let Ok(mut last_error) = last_error.lock() {
+                                *last_error = Some(error);
+                            }
+                            break;
+                        }
+                    };
+                    let send_result = output
+                        .lock()
+                        .map_err(|_| "MIDI feedback output state lock was poisoned".to_string())
+                        .and_then(|mut output| {
+                            let output = output.as_mut().ok_or_else(|| {
+                                "MIDI feedback output is not connected".to_string()
+                            })?;
+                            if force {
+                                output.send_feedback_slots(&message_slots)
+                            } else {
+                                output.send_changed_feedback_slots(&message_slots)
+                            }
+                            .map_err(|error| error.to_string())
+                        });
+                    match send_result {
+                        Ok(_) => force = false,
+                        Err(error) => {
+                            if let Ok(mut last_error) = last_error.lock() {
+                                *last_error = Some(error);
+                            }
+                            break;
+                        }
+                    }
+                    next_refresh += MIDI_FEEDBACK_REFRESH_INTERVAL;
+                    let now = Instant::now();
+                    if next_refresh <= now {
+                        next_refresh = now + MIDI_FEEDBACK_REFRESH_INTERVAL;
+                    }
+                    std::thread::park_timeout(next_refresh.saturating_duration_since(now));
+                }
+            })
+            .map_err(|error| format!("failed to start MIDI feedback worker: {error}"))?;
+        Ok(Self {
+            stop,
+            worker: Some(worker),
+        })
+    }
+
+    fn is_running(&self) -> bool {
+        self.worker
+            .as_ref()
+            .is_some_and(|worker| !worker.is_finished())
+    }
+}
+
+impl Drop for MidiFeedbackRuntime {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(worker) = self.worker.take() {
+            worker.thread().unpark();
+            let _ = worker.join();
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct MidiFeedbackRuntimeStatus {
+    enabled: bool,
+    last_error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -5668,6 +5781,11 @@ fn disconnect_midi_control(state: State<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 fn connect_midi_feedback(state: State<'_, AppState>, output_index: usize) -> Result<(), String> {
+    let mut runtime = state
+        .midi_feedback_runtime
+        .lock()
+        .map_err(|_| "MIDI feedback runtime lock was poisoned".to_string())?;
+    runtime.take();
     let connection =
         io::midi::connect_midi_feedback_output(output_index).map_err(|error| error.to_string())?;
     let mut guard = state
@@ -5675,23 +5793,102 @@ fn connect_midi_feedback(state: State<'_, AppState>, output_index: usize) -> Res
         .lock()
         .map_err(|_| "MIDI feedback state lock was poisoned".to_string())?;
     *guard = Some(connection);
+    *state
+        .midi_feedback_last_error
+        .lock()
+        .map_err(|_| "MIDI feedback error state lock was poisoned".to_string())? = None;
     Ok(())
 }
 
 #[tauri::command]
 fn disconnect_midi_feedback(state: State<'_, AppState>) -> Result<(), String> {
+    let mut runtime = state
+        .midi_feedback_runtime
+        .lock()
+        .map_err(|_| "MIDI feedback runtime lock was poisoned".to_string())?;
+    runtime.take();
     let mut guard = state
         .midi_feedback
         .lock()
         .map_err(|_| "MIDI feedback state lock was poisoned".to_string())?;
     *guard = None;
+    *state
+        .midi_feedback_last_error
+        .lock()
+        .map_err(|_| "MIDI feedback error state lock was poisoned".to_string())? = None;
     Ok(())
+}
+
+#[tauri::command]
+fn set_midi_feedback_auto(
+    state: State<'_, AppState>,
+    enabled: bool,
+    mappings: Vec<MidiControlMapping>,
+) -> Result<MidiFeedbackRuntimeStatus, String> {
+    let mappings = validate_midi_control_mappings(mappings)?;
+    let mut runtime = state
+        .midi_feedback_runtime
+        .lock()
+        .map_err(|_| "MIDI feedback runtime lock was poisoned".to_string())?;
+    runtime.take();
+    *state
+        .midi_feedback_last_error
+        .lock()
+        .map_err(|_| "MIDI feedback error state lock was poisoned".to_string())? = None;
+
+    if enabled {
+        if mappings.is_empty() {
+            return Err("At least one MIDI mapping is required for auto feedback".to_string());
+        }
+        if state
+            .midi_feedback
+            .lock()
+            .map_err(|_| "MIDI feedback state lock was poisoned".to_string())?
+            .is_none()
+        {
+            return Err("MIDI feedback output is not connected".to_string());
+        }
+        *runtime = Some(MidiFeedbackRuntime::start(
+            state.engine.clone(),
+            Arc::clone(&state.midi_feedback),
+            Arc::clone(&state.operator_selection),
+            mappings,
+            Arc::clone(&state.midi_feedback_last_error),
+        )?);
+    }
+
+    Ok(MidiFeedbackRuntimeStatus {
+        enabled: runtime
+            .as_ref()
+            .is_some_and(MidiFeedbackRuntime::is_running),
+        last_error: None,
+    })
+}
+
+#[tauri::command]
+fn midi_feedback_status(state: State<'_, AppState>) -> Result<MidiFeedbackRuntimeStatus, String> {
+    let enabled = state
+        .midi_feedback_runtime
+        .lock()
+        .map_err(|_| "MIDI feedback runtime lock was poisoned".to_string())?
+        .as_ref()
+        .is_some_and(MidiFeedbackRuntime::is_running);
+    let last_error = state
+        .midi_feedback_last_error
+        .lock()
+        .map_err(|_| "MIDI feedback error state lock was poisoned".to_string())?
+        .clone();
+    Ok(MidiFeedbackRuntimeStatus {
+        enabled,
+        last_error,
+    })
 }
 
 #[tauri::command]
 fn send_midi_feedback(
     state: State<'_, AppState>,
     mappings: Vec<MidiControlMapping>,
+    force: Option<bool>,
 ) -> Result<usize, String> {
     let mappings = validate_midi_control_mappings(mappings)?;
     let snapshot = state.engine.snapshot();
@@ -5713,7 +5910,7 @@ fn send_midi_feedback(
         .as_mut()
         .ok_or_else(|| "MIDI feedback output is not connected".to_string())?;
     output
-        .send_feedback_messages(&messages)
+        .send_feedback_messages_with_force(&messages, force.unwrap_or(true))
         .map_err(|error| error.to_string())
 }
 
@@ -43474,7 +43671,9 @@ fn main() {
             visualizer_model_assets: Mutex::new(HashMap::new()),
             midi_clock: Mutex::new(None),
             midi_control: Mutex::new(None),
-            midi_feedback: Mutex::new(None),
+            midi_feedback: Arc::new(Mutex::new(None)),
+            midi_feedback_runtime: Mutex::new(None),
+            midi_feedback_last_error: Arc::new(Mutex::new(None)),
             osc_input: Mutex::new(None),
             remote_control: Mutex::new(None),
             dmx_input: Mutex::new(None),
@@ -43600,6 +43799,8 @@ fn main() {
             disconnect_midi_control,
             connect_midi_feedback,
             disconnect_midi_feedback,
+            set_midi_feedback_auto,
+            midi_feedback_status,
             send_midi_feedback,
             learn_midi_control,
             save_midi_mappings,

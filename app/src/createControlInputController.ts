@@ -1,4 +1,4 @@
-import { onCleanup, type Accessor, type Setter } from "solid-js";
+import { createEffect, onCleanup, type Accessor, type Setter } from "solid-js";
 import {
   isFixtureFlagMappingAction,
   isGroupFlagMappingAction,
@@ -29,6 +29,11 @@ import {
 } from "./controlMappingLearn";
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+
+interface MidiFeedbackRuntimeStatus {
+  enabled: boolean;
+  last_error: string | null;
+}
 
 interface ControlInputControllerOptions {
   invoke: Invoke;
@@ -345,19 +350,62 @@ export function createControlInputController(options: ControlInputControllerOpti
       return;
     }
     try {
-      const sent = await options.invoke<number>("send_midi_feedback", { mappings: options.midiMappings() });
+      const sent = await options.invoke<number>("send_midi_feedback", {
+        mappings: options.midiMappings(),
+        force: true,
+      });
       if (report) options.setMessage(`Sent ${sent} MIDI feedback message(s).`);
     } catch (error) {
       options.setMidiFeedbackEnabled(false);
       options.setMessage(String(error));
     }
   };
-  const midiFeedbackTimer = window.setInterval(() => {
-    if (options.midiFeedbackEnabled() && options.midiFeedbackConnected() && options.midiMappings().length > 0) {
-      void sendMidiFeedback(false);
+  let midiFeedbackConfigurationGeneration = 0;
+  let midiFeedbackConfigurationQueue = Promise.resolve();
+  createEffect(() => {
+    const connected = options.midiFeedbackConnected();
+    const enabled = options.midiFeedbackEnabled();
+    const mappings = options.midiMappings();
+    if (!connected) return;
+    if (enabled && mappings.length === 0) {
+      options.setMidiFeedbackEnabled(false);
+      options.setMessage("Add at least one MIDI mapping before enabling auto feedback.");
+      return;
     }
-  }, 500);
-  onCleanup(() => window.clearInterval(midiFeedbackTimer));
+    const generation = ++midiFeedbackConfigurationGeneration;
+    midiFeedbackConfigurationQueue = midiFeedbackConfigurationQueue.then(async () => {
+      try {
+        await options.invoke<MidiFeedbackRuntimeStatus>("set_midi_feedback_auto", {
+          enabled,
+          mappings,
+        });
+      } catch (error) {
+        if (generation !== midiFeedbackConfigurationGeneration) return;
+        options.setMidiFeedbackEnabled(false);
+        options.setMessage(String(error));
+      }
+    });
+  });
+  createEffect(() => {
+    if (!options.midiFeedbackEnabled() || !options.midiFeedbackConnected()) return;
+    let disposed = false;
+    const statusTimer = window.setInterval(async () => {
+      try {
+        const status = await options.invoke<MidiFeedbackRuntimeStatus>("midi_feedback_status");
+        if (disposed || status.enabled) return;
+        options.setMidiFeedbackEnabled(false);
+        options.setMessage(status.last_error ?? "MIDI auto feedback stopped unexpectedly.");
+      } catch (error) {
+        if (disposed) return;
+        options.setMidiFeedbackEnabled(false);
+        options.setMessage(String(error));
+      }
+    }, 1_000);
+    onCleanup(() => {
+      disposed = true;
+      window.clearInterval(statusTimer);
+    });
+  });
 
   const addOscMapping = () => {
     const action = options.oscMapAction();

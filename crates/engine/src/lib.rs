@@ -2613,6 +2613,16 @@ impl EngineHandle {
             .unwrap_or_default()
     }
 
+    pub fn inspect_snapshot<T>(
+        &self,
+        inspect: impl FnOnce(&EngineSnapshot) -> T,
+    ) -> Result<T, String> {
+        self.snapshot
+            .read()
+            .map(|snapshot| inspect(&snapshot))
+            .map_err(|_| "Engine snapshot lock was poisoned".to_string())
+    }
+
     /// Returns an on-demand persistence view containing unmodulated authored video state.
     /// The normal 44 Hz published snapshot intentionally omits that duplicate payload.
     pub fn persistence_snapshot(&self) -> Result<EngineSnapshot, String> {
