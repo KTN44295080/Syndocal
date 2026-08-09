@@ -98,8 +98,11 @@ VALUE Sweepについては、同実行ファイルのRTTI `CSweepEffect`、vtabl
 evaluator `0x1403665A0`、constructor `0x140355D30`を追加解析した。constructorは
 `Direction Change`（ID10、default false）を1個追加し、evaluatorはpalette transitionごとに
 `trunc(progress * width)`のhard boundaryでcurrent/next色を塗り分ける。1-rowではDirection Change ON時に
-transitionごとに0/180度を交互に使用する。SyndocalのVALUE生成・編集・runtimeはこの1D式を実装するが、
-実保存されたID625 DVCがないためimporterは有効化しない。2D MAPPINGS Sweepの90/270度向きも別残件とする。
+transitionごとに0/180度を交互に使用する。さらに共通constructor `0x140350BE0` とserializer
+`0x140347160` / property serializer `0x14034E440`を追跡し、ID625がTYPE4/ID1 palette、TYPE6/ID3
+Transform、TYPE2/ID10 Direction Changeの3 PARAMを保存することを静的に確定した。Syndocal importerは
+この型・ID列だけを受理し、Direction Change 0/1を変換する。未証明のTransform=1とschema driftは
+fail-closedのままにする。実保存ID625 goldenと2D MAPPINGS Sweepの90/270度向きは別残件とする。
 詳細は`qa/DVC_SWEEP_SOURCE_PARITY.md`を正本とする。
 
 さらに `C:\Users\kouty\Desktop\Shinkan-Left\Codex-Chaser322-Probe.dvc` に、VALUE FX Rainbow

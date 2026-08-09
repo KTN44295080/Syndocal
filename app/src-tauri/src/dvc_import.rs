@@ -2127,6 +2127,7 @@ fn parse_scene_effects(
                 (Some(2), Some(2), Some(131)) => Some("Random fill"),
                 (Some(2), Some(2), Some(133)) => Some("Sparkle"),
                 (Some(7), Some(7), Some(621)) => Some("Rainbow"),
+                (Some(7), Some(7), Some(625)) => Some("Sweep"),
                 (Some(6), Some(8), Some(521)) => Some("Rainbow"),
                 (Some(6), Some(8), Some(530)) => Some("Perlin"),
                 _ => None,
@@ -2272,11 +2273,12 @@ fn convert_dvc_effect(
             effect_id,
             fixture_refs,
         ),
-        (7, 7, 621) => convert_dvc_value_effect(
+        (7, 7, generator_id @ (621 | 625)) => convert_dvc_value_effect(
             scene,
             scene_name,
             rack,
             effect,
+            generator_id,
             effect_id,
             profiles,
             fixture_refs,
@@ -2303,29 +2305,66 @@ fn convert_dvc_value_effect(
     scene_name: &str,
     rack: Node<'_, '_>,
     effect: Node<'_, '_>,
+    generator_id: u16,
     effect_id: u64,
     profiles: &[ParsedProfile],
     fixture_refs: &HashMap<String, FixtureImportRef>,
 ) -> Result<ConvertedDvcEffect, String> {
     let (params, palette) = dvc_color_palette_and_params(effect)?;
-    require_exact_dvc_params(&params, &[3, 10, 11, 12])?;
-    for (id, label) in [
-        (3, "VALUE FX field"),
-        (10, "VALUE FX field"),
-        (11, "VALUE FX field"),
-        (12, "VALUE FX field"),
-    ] {
-        let _ = dvc_finite_param(&params, id, label)?;
-    }
+    let (generator, expected_ids, expected_types) = match generator_id {
+        621 => (
+            "Rainbow",
+            &[3, 10, 11, 12][..],
+            &[(1, 4), (3, 6), (10, 1), (11, 0), (12, 1)][..],
+        ),
+        625 => ("Sweep", &[3, 10][..], &[(1, 4), (3, 6), (10, 2)][..]),
+        _ => {
+            return Err(format!(
+                "VALUE FX generator {generator_id} is not confirmed"
+            ))
+        }
+    };
+    require_exact_dvc_params(&params, expected_ids)?;
+    require_exact_dvc_param_types(effect, expected_types)?;
+    let recipe = match generator_id {
+        621 => {
+            let transform = dvc_param(&params, 3, "VALUE FX Rainbow Transform")?;
+            if !matches!(transform, 0.0 | 1.0) {
+                return Err(format!(
+                    "VALUE FX Rainbow Transform PARAM 3 must be None(0) or Vertical symmetry(1), found {transform}"
+                ));
+            }
+            let angle_degrees = dvc_finite_param(&params, 11, "VALUE FX Rainbow Angle")?;
+            if angle_degrees.fract().abs() > f32::EPSILON {
+                return Err(format!(
+                    "VALUE FX Rainbow Angle PARAM 11 must be an integer, found {angle_degrees}"
+                ));
+            }
+            ColorEffectSpatialRecipe::ColorRainbow {
+                grayscale: false,
+                vertical_symmetry: transform == 1.0,
+                color_width: dvc_finite_param(&params, 10, "VALUE FX Color Width")?,
+                angle_degrees,
+                gradient: dvc_unit_param(&params, 12, "VALUE FX Gradient")? * 100.0,
+            }
+        }
+        625 => {
+            require_zero_dvc_param(&params, 3, "VALUE FX Sweep Transform")?;
+            ColorEffectSpatialRecipe::Sweep {
+                direction_change: dvc_binary_param(&params, 10, "VALUE FX Sweep Direction Change")?,
+            }
+        }
+        _ => unreachable!(),
+    };
 
     let targets = dvc_rack_targets(rack, fixture_refs)?;
     if targets.beam_targets.is_empty() {
         return Ok(ConvertedDvcEffect {
             target: None,
-            generator: "Rainbow",
+            generator,
             note: format!(
-                "source_family=Value FX; source no-op preserved: Daslight BEAMS contains zero targets; palette_colors={}; PARAM IDs [3, 10, 11, 12] validated; no runtime effect was created",
-                palette.len()
+                "source_family=Value FX; source no-op preserved: Daslight BEAMS contains zero targets; palette_colors={}; PARAM IDs {expected_ids:?} and TYPEs validated; no runtime effect was created",
+                palette.len(),
             ),
             approximations: Vec::new(),
             warnings: Vec::new(),
@@ -2392,25 +2431,6 @@ fn convert_dvc_value_effect(
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let transform = dvc_param(&params, 3, "VALUE FX Rainbow Transform")?;
-    if !matches!(transform, 0.0 | 1.0) {
-        return Err(format!(
-            "VALUE FX Rainbow Transform PARAM 3 must be None(0) or Vertical symmetry(1), found {transform}"
-        ));
-    }
-    let angle_degrees = dvc_finite_param(&params, 11, "VALUE FX Rainbow Angle")?;
-    if angle_degrees.fract().abs() > f32::EPSILON {
-        return Err(format!(
-            "VALUE FX Rainbow Angle PARAM 11 must be an integer, found {angle_degrees}"
-        ));
-    }
-    let recipe = ColorEffectSpatialRecipe::ColorRainbow {
-        grayscale: false,
-        vertical_symmetry: transform == 1.0,
-        color_width: dvc_finite_param(&params, 10, "VALUE FX Color Width")?,
-        angle_degrees,
-        gradient: dvc_unit_param(&params, 12, "VALUE FX Gradient")? * 100.0,
-    };
     let mut approximations = Vec::new();
     if omitted_feature_targets > 0 {
         approximations.push(format!(
@@ -2418,8 +2438,12 @@ fn convert_dvc_value_effect(
             feature_spec.preset_type
         ));
     }
-    let (period_ms, period_note) =
-        dvc_move_period(effect, scene, "VALUE FX Rainbow", &mut approximations)?;
+    let (period_ms, period_note) = dvc_move_period(
+        effect,
+        scene,
+        &format!("VALUE FX {generator}"),
+        &mut approximations,
+    )?;
     let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
     if let Some(clock_warning) = clock_warning {
         approximations.push(clock_warning);
@@ -2439,7 +2463,7 @@ fn convert_dvc_value_effect(
     let primary_low = primary.low;
     let primary_high = primary.high;
     let request = ValueEffectRequest {
-        label: format!("{scene_name} (Rainbow)"),
+        label: format!("{scene_name} ({generator})"),
         fixture_ids,
         target_group_ids: Vec::new(),
         attribute: primary_attribute,
@@ -2461,7 +2485,7 @@ fn convert_dvc_value_effect(
         blend_mode: EffectBlendMode::Override,
     };
     engine::validate_value_effect_request(&request).map_err(|error| {
-        format!("confirmed VALUE FX Rainbow parameters are not representable: {error}")
+        format!("confirmed VALUE FX {generator} parameters are not representable: {error}")
     })?;
     Ok(ConvertedDvcEffect {
         target: Some(CueEffectTarget {
@@ -2470,7 +2494,7 @@ fn convert_dvc_value_effect(
             params: Some(EffectParamsSnapshot::Value(request)),
             transition_ms: None,
         }),
-        generator: "Rainbow",
+        generator,
         note: format!(
             "source_family=Value FX; value_palette={}; preset_type={}; preset_range={}..{}; preset_source={}; beams={}; selections={}; {period_note}; {clock_note}",
             palette.len(),
@@ -3767,6 +3791,37 @@ fn require_exact_dvc_params(params: &HashMap<u16, f64>, expected: &[u16]) -> Res
         return Err(format!(
             "confirmed generator expected PARAM IDs {expected:?}, found {actual:?}"
         ));
+    }
+    Ok(())
+}
+
+fn require_exact_dvc_param_types(
+    effect: Node<'_, '_>,
+    expected: &[(u16, u16)],
+) -> Result<(), String> {
+    let params_node = direct_child(effect, "PARAMS")
+        .ok_or_else(|| "confirmed generator is missing PARAMS".to_string())?;
+    let params = element_children(params_node)
+        .filter(|node| node.has_tag_name("PARAM"))
+        .collect::<Vec<_>>();
+    for (id, expected_type) in expected {
+        let param = params
+            .iter()
+            .find(|param| {
+                param
+                    .attribute("ID")
+                    .and_then(|value| value.parse::<u16>().ok())
+                    == Some(*id)
+            })
+            .ok_or_else(|| format!("confirmed generator is missing PARAM {id}"))?;
+        let actual_type = required_attribute(*param, "TYPE", "PARAM")?
+            .parse::<u16>()
+            .map_err(|error| format!("PARAM {id} TYPE is invalid: {error}"))?;
+        if actual_type != *expected_type {
+            return Err(format!(
+                "confirmed generator expected PARAM {id} TYPE={expected_type}, found TYPE={actual_type}"
+            ));
+        }
     }
     Ok(())
 }
@@ -6833,6 +6888,122 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("BEAMS declares 1 entries but contains 0"));
+    }
+
+    #[test]
+    fn dvc_value_625_imports_static_serializer_shape_and_fails_closed_on_drift() {
+        let source = r#"<DLMFILE DASBUILD="25.0905.165.111" VERSIONFILE="2"><SCENE NAME="Sweep" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="8"><RACKS><RACK TYPE="7"><EFFECT TYPE="7" ID="625" DURATION="3000"><PARAMS NB="3"><PARAM TYPE="4" ID="1"><COLORS NB="3"><COLOR VAL="1/1/1/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.5/0.5/0.5/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/></COLORS></PARAM><PARAM TYPE="6" ID="3" VAL="0"/><PARAM TYPE="2" ID="10" VAL="1"/></PARAMS></EFFECT><PRESETS><PRESET SSLFIXTURE="" SSLCHANNEL="-1" SSLPRESET="4" MIN="0" MAX="1"><BEAMS/></PRESET></PRESETS><BEAMS NB="0"/></RACK></RACKS></SCENE></DLMFILE>"#;
+        let document = Document::parse(source).unwrap();
+        let scene = document
+            .descendants()
+            .find(|node| node.has_tag_name("SCENE"))
+            .unwrap();
+        let mut report = DvcImportReport::new("value-625-noop.dvc", document.root_element());
+        let mut next_effect_id = 1;
+        let parsed = parse_scene_effects(
+            scene,
+            "Sweep",
+            &effect_test_profiles(),
+            &effect_test_fixture_refs(),
+            &mut next_effect_id,
+            &mut report,
+        );
+        assert!(parsed.targets.is_empty());
+        assert_eq!(report.summary.effects_converted, 1);
+        assert_eq!(report.summary.effects_skipped, 0);
+        assert!(report.converted.details.iter().any(|detail| {
+            detail.item == "Effect: Sweep (Sweep)"
+                && detail.message.contains("PARAM IDs [3, 10]")
+                && detail.message.contains("TYPEs validated")
+        }));
+
+        let convert_targeted = |xml: &str| {
+            let document = Document::parse(xml).unwrap();
+            let scene = document
+                .descendants()
+                .find(|node| node.has_tag_name("SCENE"))
+                .unwrap();
+            let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+            let effect = direct_child(rack, "EFFECT").unwrap();
+            convert_dvc_effect(
+                scene,
+                "Targeted Sweep",
+                rack,
+                effect,
+                7,
+                7,
+                625,
+                1,
+                &effect_test_profiles(),
+                &effect_test_fixture_refs(),
+            )
+        };
+        let targeted = source.replacen(
+            r#"<BEAMS NB="0"/>"#,
+            r#"<BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS>"#,
+            1,
+        );
+        let converted = convert_targeted(&targeted).unwrap();
+        assert_eq!(converted.generator, "Sweep");
+        assert!(converted.approximations.is_empty());
+        let EffectParamsSnapshot::Value(value) = converted.target.unwrap().params.unwrap() else {
+            panic!("targeted VALUE Sweep must retain its Value body");
+        };
+        assert_eq!(value.label, "Targeted Sweep (Sweep)");
+        assert_eq!(value.points.len(), 3);
+        let pattern = value.spatial_pattern.expect("Sweep spatial pattern");
+        assert!(matches!(
+            pattern.recipe,
+            ColorEffectSpatialRecipe::Sweep {
+                direction_change: true
+            }
+        ));
+        assert_eq!(pattern.beam_targets.len(), 1);
+
+        let fixed_direction = targeted.replacen(
+            r#"<PARAM TYPE="2" ID="10" VAL="1"/>"#,
+            r#"<PARAM TYPE="2" ID="10" VAL="0"/>"#,
+            1,
+        );
+        let converted = convert_targeted(&fixed_direction).unwrap();
+        let EffectParamsSnapshot::Value(value) = converted.target.unwrap().params.unwrap() else {
+            panic!("fixed-direction Sweep must retain its Value body");
+        };
+        assert!(matches!(
+            value.spatial_pattern.unwrap().recipe,
+            ColorEffectSpatialRecipe::Sweep {
+                direction_change: false
+            }
+        ));
+
+        let wrong_type = targeted.replacen(
+            r#"<PARAM TYPE="2" ID="10" VAL="1"/>"#,
+            r#"<PARAM TYPE="1" ID="10" VAL="1"/>"#,
+            1,
+        );
+        assert!(convert_targeted(&wrong_type)
+            .unwrap_err()
+            .contains("expected PARAM 10 TYPE=2, found TYPE=1"));
+
+        let unproven_transform = targeted.replacen(
+            r#"<PARAM TYPE="6" ID="3" VAL="0"/>"#,
+            r#"<PARAM TYPE="6" ID="3" VAL="1"/>"#,
+            1,
+        );
+        assert!(convert_targeted(&unproven_transform)
+            .unwrap_err()
+            .contains("VALUE FX Sweep Transform PARAM 3 must be 0"));
+
+        let extra_param = targeted
+            .replacen(r#"<PARAMS NB="3">"#, r#"<PARAMS NB="4">"#, 1)
+            .replacen(
+                "</PARAMS>",
+                r#"<PARAM TYPE="2" ID="11" VAL="0"/></PARAMS>"#,
+                1,
+            );
+        assert!(convert_targeted(&extra_param)
+            .unwrap_err()
+            .contains("expected PARAM IDs [3, 10], found [3, 10, 11]"));
     }
 
     #[test]
