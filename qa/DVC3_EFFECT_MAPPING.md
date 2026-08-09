@@ -98,8 +98,11 @@ Rainbow/Burst/Plasma/Knight Rider/Sparkleは
 （`RACK=7 / EFFECT TYPE=7 / ID=621`、3色grayscale palette、PARAM IDs 3/10/11/12）の実保存検体を発見した。
 この検体はrack `BEAMS NB=0`かつPRESET内も`BEAMS`空であり、Daslight上の出力対象を持たない。
 Syndocal importerはこの実形をSkippedではなくsource no-opとして変換し、保存往復後もruntime Effectを生成せず
-DMXへ影響しないことを回帰試験で固定する。対象ありVALUE FXのtarget/feature対応は実保存検体がないため、
-同じfactoryという間接証拠だけで推測変換せずSkippedを維持する。COLOR MAPPINGSの実保存検体もまだない。
+DMXへ影響しないことを回帰試験で固定する。対象ありVALUE FXについては、PRESET selector/range、
+RACK beam/selection順、grayscale palette、PARAM 3/10/11/12を厳密検証して共通spatial generatorへ渡す経路を
+合成DVCで固定した。具体的segment featureはその1属性だけ、generic Dimmerは選択RGB segmentだけを同率で
+スケールし、global Dimmerや隣接segmentへ漏らさない。実際にDaslightが保存した対象ありVALUE検体はまだないため、
+これは保存形の製品間照合完了とは数えず、実検体が現行schemaと一致するかを残件とする。COLOR MAPPINGSの実保存検体もまだない。
 
 Syndocalの現行Scene Settingsでは、作成時のMAPPINGS / COLOR MAPPINGSを
 `2D MAPPING`の1入口へ統合し、既定の新規作成を`ColorMapping`とする。これは
@@ -130,8 +133,8 @@ Syndocalの現行Scene Settingsでは、作成時のMAPPINGS / COLOR MAPPINGSを
    金標準テスト含む）、engine 370/370、マトリクス232全緑。同条件A/Bベンチ +3.8%（誤差内）で既存スタック非劣化。
    絶対値2ms予算は環境負荷40%のため未計測 — クリーン環境での再計測が残件。
 3. **DVC-3c（照合完了）**: MOVE FX / TYPE=8、ID 322・129・130・CURVE波形10を照合済み。
-   VALUE FX ID621の対象ゼロ実保存形は忠実なno-opとして変換済み。対象ありVALUE FXとCOLOR MAPPINGSは
-   実保存検体がないため、既存のネイティブ実装を維持し、未証明のDVC逆変換はfail closedする。
+   VALUE FX ID621の対象ゼロ実保存形は忠実なno-opとして変換済み。対象ありVALUE FXは厳密schemaの
+   合成検体まで実装済み、COLOR MAPPINGSは実保存検体なし。どちらも実保存形との照合完了には数えない。
 
 4. **DVC-3d（2026-08-08、ビーム選択の厳密保持）**: CURVE FXのSinus / Inverse Ramp / Strobeと
    CHASER FX 321 / 322 / 325は、`BEAM@FIXTURE`、`BEAMID`、最初に現れた`IDSELECTION`順を

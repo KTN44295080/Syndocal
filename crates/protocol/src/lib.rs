@@ -2620,6 +2620,12 @@ pub struct ValueEffectRequest {
     pub features: Vec<ChaserFeature>,
     /// Operator-drawn value envelope points, 2..32, strictly increasing positions.
     pub points: Vec<ValueEffectPoint>,
+    /// Optional Daslight-compatible generator mode. When present, the scalar
+    /// points above are the Black(0)..White(100) value palette and the shared
+    /// colour-spatial recipe is evaluated against the authored beam order.
+    /// Absence preserves Syndocal's more general custom-envelope mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spatial_pattern: Option<ColorEffectSpatialPattern>,
     pub interpolation: ValueEffectInterpolation,
     pub mode: ValueEffectMode,
     pub direction: ValueEffectDirection,
@@ -4970,6 +4976,53 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn value_effect_spatial_pattern_roundtrips_and_legacy_defaults_to_none() {
+        let legacy = serde_json::json!({
+            "label": "Legacy value",
+            "fixture_ids": [1],
+            "target_group_ids": [],
+            "attribute": "Dimmer",
+            "points": [
+                {"position": 0.0, "value": 0.0},
+                {"position": 1.0, "value": 1.0}
+            ],
+            "interpolation": "Line",
+            "mode": "Absolute",
+            "direction": "Forward",
+            "period_ms": 1000,
+            "low": 0,
+            "high": 65535,
+            "phase": 0.0,
+            "fixture_spread": 0.0,
+            "blend_mode": "Override"
+        });
+        let mut parsed: super::ValueEffectRequest = serde_json::from_value(legacy).unwrap();
+        assert!(parsed.spatial_pattern.is_none());
+        assert!(!serde_json::to_string(&parsed)
+            .unwrap()
+            .contains("spatial_pattern"));
+
+        parsed.spatial_pattern = Some(super::ColorEffectSpatialPattern {
+            recipe: super::ColorEffectSpatialRecipe::ColorRainbow {
+                grayscale: false,
+                vertical_symmetry: true,
+                color_width: 0.25,
+                angle_degrees: 90.0,
+                gradient: 75.0,
+            },
+            beam_targets: vec![super::ColorEffectBeamTarget {
+                fixture_id: 1,
+                beam_index: 3,
+                selection_index: 8,
+                feature_attribute: Some("ColorRed 4".to_string()),
+            }],
+        });
+        let json = serde_json::to_string(&parsed).unwrap();
+        let roundtrip: super::ValueEffectRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtrip, parsed);
     }
 
     #[test]

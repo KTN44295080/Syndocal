@@ -20627,6 +20627,12 @@ fn apply_value_effect_target_override(
     request.fixture_ids = target_override.fixture_ids.clone();
     request.target_group_ids = target_override.target_group_ids.clone();
     request.attribute = overridden_light_attribute(target_override);
+    if request.features.len() == 1 {
+        request.features[0].attribute = request.attribute.clone();
+    }
+    if let Some(pattern) = &mut request.spatial_pattern {
+        pattern.beam_targets.clear();
+    }
     request
 }
 
@@ -38528,6 +38534,7 @@ f 1 2 3
                     value: 0.2,
                 },
             ],
+            spatial_pattern: None,
             interpolation: protocol::ValueEffectInterpolation::Smooth,
             mode: protocol::ValueEffectMode::Relative,
             direction: protocol::ValueEffectDirection::Bounce,

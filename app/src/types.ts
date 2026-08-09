@@ -2038,6 +2038,7 @@ export interface ValueEffectRequest {
   attribute: string;
   features?: ChaserFeature[];
   points: ValueEffectPoint[];
+  spatial_pattern?: ColorEffectSpatialPattern | null;
   interpolation: ValueEffectInterpolation;
   mode: ValueEffectMode;
   direction: ValueEffectDirection;

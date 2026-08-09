@@ -21,7 +21,8 @@ use protocol::{
     PatchedFixtureSummary, ProjectFile, Rotation3, StageMapConfig, TimelineAudioClipSummary,
     TimelineCueEventSummary, TimelineLayerKind, TimelineLayerSummary, TimelineTrackKind,
     TouchControlBinding, TouchControlKind, TouchControlSummary, TouchFeaturePresetTarget,
-    TouchPageSummary, TouchSurfaceSummary, Vec3,
+    TouchPageSummary, TouchSurfaceSummary, ValueEffectDirection, ValueEffectInterpolation,
+    ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3,
 };
 use roxmltree::{Document, Node};
 use serde::Serialize;
@@ -2271,7 +2272,15 @@ fn convert_dvc_effect(
             effect_id,
             fixture_refs,
         ),
-        (7, 7, 621) => convert_dvc_value_effect(rack, effect, fixture_refs),
+        (7, 7, 621) => convert_dvc_value_effect(
+            scene,
+            scene_name,
+            rack,
+            effect,
+            effect_id,
+            profiles,
+            fixture_refs,
+        ),
         (2, 2, 121 | 127 | 129 | 130 | 131 | 133) | (6, 8, 521 | 530) => {
             convert_dvc_color_spatial_effect(
                 scene,
@@ -2290,8 +2299,12 @@ fn convert_dvc_effect(
 }
 
 fn convert_dvc_value_effect(
+    scene: Node<'_, '_>,
+    scene_name: &str,
     rack: Node<'_, '_>,
     effect: Node<'_, '_>,
+    effect_id: u64,
+    profiles: &[ParsedProfile],
     fixture_refs: &HashMap<String, FixtureImportRef>,
 ) -> Result<ConvertedDvcEffect, String> {
     let (params, palette) = dvc_color_palette_and_params(effect)?;
@@ -2306,21 +2319,169 @@ fn convert_dvc_value_effect(
     }
 
     let targets = dvc_rack_targets(rack, fixture_refs)?;
-    if !targets.beam_targets.is_empty() {
-        return Err(
-            "targeted VALUE FX Rainbow is not confirmed by the available saved DVC specimen"
-                .to_string(),
-        );
+    if targets.beam_targets.is_empty() {
+        return Ok(ConvertedDvcEffect {
+            target: None,
+            generator: "Rainbow",
+            note: format!(
+                "source_family=Value FX; source no-op preserved: Daslight BEAMS contains zero targets; palette_colors={}; PARAM IDs [3, 10, 11, 12] validated; no runtime effect was created",
+                palette.len()
+            ),
+            approximations: Vec::new(),
+            warnings: Vec::new(),
+        });
     }
 
+    let feature_spec = dvc_rack_feature_spec(rack, profiles)?;
+    let mut beam_targets = Vec::new();
+    let mut fixture_ids = Vec::new();
+    let mut seen_fixture_ids = HashSet::new();
+    let mut feature_attributes = Vec::new();
+    let mut seen_features = HashSet::new();
+    let mut omitted_feature_targets = 0_usize;
+    for target in &targets.beam_targets {
+        let Some(feature_attribute) =
+            dvc_beam_feature_attribute(target, &feature_spec, profiles, fixture_refs)
+        else {
+            omitted_feature_targets = omitted_feature_targets.saturating_add(1);
+            continue;
+        };
+        if seen_fixture_ids.insert(target.fixture_id) {
+            fixture_ids.push(target.fixture_id);
+        }
+        if seen_features.insert(normalize_dvc_attribute(&feature_attribute)) {
+            feature_attributes.push(feature_attribute.clone());
+        }
+        beam_targets.push(ColorEffectBeamTarget {
+            fixture_id: target.fixture_id,
+            beam_index: target.beam_index,
+            selection_index: target.selection_index,
+            feature_attribute: Some(feature_attribute),
+        });
+    }
+    if beam_targets.is_empty() {
+        return Err(format!(
+            "BEAMS resolved to no VALUE FX targets exposing PRESET type {}",
+            feature_spec.preset_type
+        ));
+    }
+
+    if !(2..=32).contains(&palette.len()) {
+        return Err(format!(
+            "VALUE FX value palette requires 2..32 stops, found {}",
+            palette.len()
+        ));
+    }
+    let points = palette
+        .iter()
+        .enumerate()
+        .map(|(index, stop)| {
+            let color = stop.color;
+            if color.red != color.green || color.red != color.blue {
+                return Err(format!(
+                    "VALUE FX palette stop {} is not a Black..White value: {}/{}/{}",
+                    index + 1,
+                    color.red,
+                    color.green,
+                    color.blue
+                ));
+            }
+            Ok(ValueEffectPoint {
+                position: stop.position,
+                value: color.red as f32 / u16::MAX as f32,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let transform = dvc_param(&params, 3, "VALUE FX Rainbow Transform")?;
+    if !matches!(transform, 0.0 | 1.0) {
+        return Err(format!(
+            "VALUE FX Rainbow Transform PARAM 3 must be None(0) or Vertical symmetry(1), found {transform}"
+        ));
+    }
+    let angle_degrees = dvc_finite_param(&params, 11, "VALUE FX Rainbow Angle")?;
+    if angle_degrees.fract().abs() > f32::EPSILON {
+        return Err(format!(
+            "VALUE FX Rainbow Angle PARAM 11 must be an integer, found {angle_degrees}"
+        ));
+    }
+    let recipe = ColorEffectSpatialRecipe::ColorRainbow {
+        grayscale: false,
+        vertical_symmetry: transform == 1.0,
+        color_width: dvc_finite_param(&params, 10, "VALUE FX Color Width")?,
+        angle_degrees,
+        gradient: dvc_unit_param(&params, 12, "VALUE FX Gradient")? * 100.0,
+    };
+    let mut approximations = Vec::new();
+    if omitted_feature_targets > 0 {
+        approximations.push(format!(
+            "{omitted_feature_targets} beam target(s) without PRESET type {} were omitted",
+            feature_spec.preset_type
+        ));
+    }
+    let (period_ms, period_note) =
+        dvc_move_period(effect, scene, "VALUE FX Rainbow", &mut approximations)?;
+    let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
+    if let Some(clock_warning) = clock_warning {
+        approximations.push(clock_warning);
+    }
+    let features = feature_attributes
+        .iter()
+        .map(|attribute| ChaserFeature {
+            attribute: attribute.clone(),
+            low: feature_spec.low,
+            high: feature_spec.high,
+        })
+        .collect::<Vec<_>>();
+    let primary = features
+        .first()
+        .ok_or_else(|| "VALUE FX resolved no feature attributes".to_string())?;
+    let primary_attribute = primary.attribute.clone();
+    let primary_low = primary.low;
+    let primary_high = primary.high;
+    let request = ValueEffectRequest {
+        label: format!("{scene_name} (Rainbow)"),
+        fixture_ids,
+        target_group_ids: Vec::new(),
+        attribute: primary_attribute,
+        features,
+        points,
+        spatial_pattern: Some(ColorEffectSpatialPattern {
+            recipe,
+            beam_targets,
+        }),
+        interpolation: ValueEffectInterpolation::Line,
+        mode: ValueEffectMode::Absolute,
+        direction: ValueEffectDirection::Forward,
+        period_ms,
+        clock_sync,
+        low: primary_low,
+        high: primary_high,
+        phase: 0.0,
+        fixture_spread: 0.0,
+        blend_mode: EffectBlendMode::Override,
+    };
+    engine::validate_value_effect_request(&request).map_err(|error| {
+        format!("confirmed VALUE FX Rainbow parameters are not representable: {error}")
+    })?;
     Ok(ConvertedDvcEffect {
-        target: None,
+        target: Some(CueEffectTarget {
+            effect_id,
+            enabled: true,
+            params: Some(EffectParamsSnapshot::Value(request)),
+            transition_ms: None,
+        }),
         generator: "Rainbow",
         note: format!(
-            "source_family=Value FX; source no-op preserved: Daslight BEAMS contains zero targets; palette_colors={}; PARAM IDs [3, 10, 11, 12] validated; no runtime effect was created",
-            palette.len()
+            "source_family=Value FX; value_palette={}; preset_type={}; preset_range={}..{}; preset_source={}; beams={}; selections={}; {period_note}; {clock_note}",
+            palette.len(),
+            feature_spec.preset_type,
+            feature_spec.low,
+            feature_spec.high,
+            feature_spec.source,
+            targets.beam_targets.len(),
+            targets.ordered_steps.len(),
         ),
-        approximations: Vec::new(),
+        approximations,
         warnings: Vec::new(),
     })
 }
@@ -3796,6 +3957,13 @@ fn dvc_beam_feature_attribute(
     let fixture_ref = fixture_refs
         .values()
         .find(|fixture_ref| fixture_ref.fixture_id == target.fixture_id)?;
+    // Daslight's generic PRESET type 4 is a virtual beam Dimmer even when a
+    // segmented RGB/RGBA profile has no physical per-cell dimmer channel. The
+    // engine resolves this authored feature against the exact BEAMID and scales
+    // only that segment's current colour.
+    if feature.preset_type == 4 && target.beam_index < fixture_ref.color_beam_count {
+        return Some("Dimmer".to_string());
+    }
     let profile = profiles.get(fixture_ref.profile_index)?;
     let bindings = profile
         .bindings
@@ -6552,7 +6720,7 @@ mod tests {
     }
 
     #[test]
-    fn dvc_value_621_preserves_verified_empty_noop_and_rejects_unproven_targets() {
+    fn dvc_value_621_preserves_empty_noop_and_restores_targeted_feature_generator() {
         let source = r#"<DLMFILE DASBUILD="25.0905.165.111" VERSIONFILE="2"><SCENE NAME="SS-Blue" SPEED="0.5" PLAY_TRIGGER="0" PLAY_DIVISION="8"><RACKS><RACK TYPE="7"><EFFECT TYPE="7" ID="621" DURATION="5000"><PARAMS NB="5"><PARAM TYPE="4" ID="1"><COLORS NB="3"><COLOR VAL="1/1/1/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.498039/0.498039/0.498039/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/></COLORS></PARAM><PARAM TYPE="6" ID="3" VAL="0"/><PARAM TYPE="1" ID="10" VAL="0"/><PARAM TYPE="0" ID="11" VAL="0"/><PARAM TYPE="1" ID="12" VAL="1"/></PARAMS></EFFECT><PRESETS><PRESET SSLFIXTURE="" SSLCHANNEL="-1" SSLPRESET="4" MIN="0" MAX="1"><BEAMS/></PRESET></PRESETS><BEAMS NB="0"/></RACK></RACKS></SCENE></DLMFILE>"#;
         let document = Document::parse(source).unwrap();
         let scene = document
@@ -6593,7 +6761,7 @@ mod tests {
             .unwrap();
         let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
         let effect = direct_child(rack, "EFFECT").unwrap();
-        let error = convert_dvc_effect(
+        let converted = convert_dvc_effect(
             scene,
             "Targeted VALUE FX",
             rack,
@@ -6605,8 +6773,40 @@ mod tests {
             &effect_test_profiles(),
             &effect_test_fixture_refs(),
         )
-        .unwrap_err();
-        assert!(error.contains("targeted VALUE FX Rainbow is not confirmed"));
+        .unwrap();
+        let EffectParamsSnapshot::Value(value) = converted.target.unwrap().params.unwrap() else {
+            panic!("targeted VALUE FX must retain its Value body");
+        };
+        assert_eq!(value.fixture_ids, vec![1]);
+        assert_eq!(value.attribute, "Dimmer");
+        assert_eq!(value.features.len(), 1);
+        assert_eq!(value.features[0].low, 0);
+        assert_eq!(value.features[0].high, u16::MAX);
+        assert_eq!(value.points.len(), 3);
+        assert_eq!(value.points[0].value, 1.0);
+        assert_eq!(value.points[2].value, 0.0);
+        let pattern = value.spatial_pattern.unwrap();
+        assert!(matches!(
+            pattern.recipe,
+            ColorEffectSpatialRecipe::ColorRainbow {
+                grayscale: false,
+                vertical_symmetry: false,
+                color_width: 0.0,
+                angle_degrees: 0.0,
+                gradient: 100.0,
+            }
+        ));
+        assert_eq!(pattern.beam_targets.len(), 1);
+        assert_eq!(pattern.beam_targets[0].fixture_id, 1);
+        assert_eq!(pattern.beam_targets[0].beam_index, 0);
+        assert_eq!(pattern.beam_targets[0].selection_index, 0);
+        assert_eq!(
+            pattern.beam_targets[0].feature_attribute.as_deref(),
+            Some("Dimmer")
+        );
+        assert!(converted.approximations.is_empty());
+        assert!(converted.note.contains("source_family=Value FX"));
+        assert!(converted.note.contains("preset_type=4"));
 
         let malformed_source = source.replacen(r#"<BEAMS NB="0"/>"#, r#"<BEAMS NB="1"/>"#, 1);
         let malformed = Document::parse(&malformed_source).unwrap();

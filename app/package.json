@@ -38,6 +38,7 @@
     "check:color-wheel": "node scripts/check-viewport-containment.mjs --color-wheel-only",
     "check:cue-store-form": "node scripts/check-viewport-containment.mjs --cue-recall-only",
     "check:effect-draft": "node scripts/check-effect-draft-helpers.mjs",
+    "check:value-generator": "node scripts/check-value-effect-generator.mjs",
     "check:fx-visual": "node scripts/check-effect-visualization.mjs",
     "check:fx-palettes": "node scripts/check-fx-color-palettes.mjs",
     "check:fx-visual-viewport": "node scripts/check-viewport-containment.mjs --fx-visual-only",

@@ -30,7 +30,7 @@ use protocol::{
     ChaserFeature, ChildTimelineSummary, ChildTimelineTransportPathSegment,
     ChildTimelineTransportRootSummary, ChildTimelineTransportRuntimeSummary, ClockSnapshot,
     ClockSource, ColorEffectAlgorithm, ColorEffectColor, ColorEffectInterpolation,
-    ColorEffectRequest, ColorEffectSpatialRecipe, ColorMappingCellTarget,
+    ColorEffectRequest, ColorEffectSpatialRecipe, ColorEffectStop, ColorMappingCellTarget,
     ColorMappingEffectRequest, ColorMappingPlaybackDirection, ColorMappingSampling,
     ColorMappingWrapMode, CompositionId, CompositionSummary, CueEffectTarget, CueFixtureTarget,
     CueId, CueIfcbTiming, CueListId, CueListSummary, CueLiveDirection, CueLiveModifierSettings,
@@ -3196,11 +3196,7 @@ enum RuntimeEffectKind {
 
 fn clear_runtime_effect_caches(kind: &RuntimeEffectKind) {
     match kind {
-        RuntimeEffectKind::Color(runtime) => {
-            for target in &runtime.targets {
-                target.cached.set(None);
-            }
-        }
+        RuntimeEffectKind::Color(runtime) => clear_runtime_color_effect_caches(runtime),
         RuntimeEffectKind::Chaser(runtime) => {
             for cache in runtime.target_level_cache.values() {
                 cache.set(None);
@@ -3217,6 +3213,9 @@ fn clear_runtime_effect_caches(kind: &RuntimeEffectKind) {
         RuntimeEffectKind::Value(runtime) => {
             for target in &runtime.targets {
                 target.cached.set(None);
+            }
+            if let Some(spatial) = runtime.spatial.as_deref() {
+                clear_runtime_color_effect_caches(spatial);
             }
         }
         RuntimeEffectKind::Curve(runtime) => {
@@ -3235,6 +3234,17 @@ fn clear_runtime_effect_caches(kind: &RuntimeEffectKind) {
             }
         }
         RuntimeEffectKind::Lfo(_) | RuntimeEffectKind::PositionWave(_) => {}
+    }
+}
+
+fn clear_runtime_color_effect_caches(runtime: &RuntimeColorEffect) {
+    for target in &runtime.targets {
+        target.cached.set(None);
+    }
+    if let Some(spatial) = runtime.spatial.as_deref() {
+        for target in &spatial.targets {
+            target.cached.set(None);
+        }
     }
 }
 
@@ -3259,12 +3269,23 @@ struct RuntimeLfoBeamTarget {
     virtual_intensity: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct RuntimeValueEffect {
     request: ValueEffectRequest,
     envelope: CompiledValueEnvelope,
     targets: Vec<RuntimeValueTarget>,
     target_indices: HashMap<FixtureId, usize>,
+    /// Daslight-compatible VALUE FX generator runtime. `None` keeps the
+    /// Syndocal custom-envelope path byte-for-byte compatible.
+    spatial: Option<Box<RuntimeColorEffect>>,
+    spatial_bindings: HashMap<FixtureId, HashMap<String, RuntimeValueSpatialBinding>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RuntimeValueSpatialBinding {
+    low: u16,
+    high: u16,
+    virtual_intensity: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -23830,6 +23851,7 @@ fn apply_runtime_effect_to_attribute(
             fixture.id,
             attribute,
             base_value,
+            effect.id,
             effect.created_at,
             now,
             clock,
@@ -25009,6 +25031,8 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
                 envelope,
                 targets: Vec::new(),
                 target_indices: HashMap::new(),
+                spatial: None,
+                spatial_bindings: HashMap::new(),
             })
         }
         EffectKind::Curve => {
@@ -25312,10 +25336,18 @@ fn validate_runtime_color_effect_request(request: &ColorEffectRequest) -> Result
                     target.fixture_id
                 ));
             }
-            if !beam_targets.insert((target.fixture_id, target.beam_index)) {
+            let feature = target
+                .feature_attribute
+                .as_deref()
+                .map(normalize_chaser_attribute)
+                .unwrap_or_default();
+            if target.feature_attribute.is_some() && feature.is_empty() {
+                return Err("Color beam target feature attributes must not be empty".to_string());
+            }
+            if !beam_targets.insert((target.fixture_id, target.beam_index, feature)) {
                 return Err(format!(
-                    "Color beam target fixture {} beam {} is duplicated",
-                    target.fixture_id, target.beam_index
+                    "Color beam target fixture {} beam {} feature {:?} is duplicated",
+                    target.fixture_id, target.beam_index, target.feature_attribute
                 ));
             }
         }
@@ -25822,6 +25854,36 @@ pub fn validate_value_effect_request(request: &ValueEffectRequest) -> Result<(),
     if !(0.0..=1.0).contains(&request.fixture_spread) {
         return Err("Value effect fixture spread must be within 0..1".to_string());
     }
+    if let Some(pattern) = &request.spatial_pattern {
+        validate_color_spatial_recipe(&pattern.recipe)?;
+        let feature_attributes = if request.features.is_empty() {
+            HashSet::from([normalize_chaser_attribute(&request.attribute)])
+        } else {
+            request
+                .features
+                .iter()
+                .map(|feature| normalize_chaser_attribute(&feature.attribute))
+                .collect::<HashSet<_>>()
+        };
+        let mut targets = HashSet::new();
+        for target in &pattern.beam_targets {
+            let Some(feature_attribute) = target.feature_attribute.as_deref() else {
+                return Err("Value generator beam targets require a feature attribute".to_string());
+            };
+            let feature = normalize_chaser_attribute(feature_attribute);
+            if feature.is_empty() || !feature_attributes.contains(&feature) {
+                return Err(format!(
+                    "Value generator beam feature '{feature_attribute}' is not present in the Value Features list"
+                ));
+            }
+            if !targets.insert((target.fixture_id, target.beam_index, feature)) {
+                return Err(format!(
+                    "Value generator fixture {} beam {} targets feature '{}' more than once",
+                    target.fixture_id, target.beam_index, feature_attribute
+                ));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -25858,7 +25920,8 @@ fn runtime_value_effect_from_request(
 
     let count = fixture_ids.len().max(1) as f32;
     let targets = fixture_ids
-        .into_iter()
+        .iter()
+        .copied()
         .enumerate()
         .map(|(index, fixture_id)| RuntimeValueTarget {
             fixture_id,
@@ -25871,12 +25934,151 @@ fn runtime_value_effect_from_request(
         .enumerate()
         .map(|(index, target)| (target.fixture_id, index))
         .collect();
+    let (spatial, spatial_bindings) = if request.spatial_pattern.is_some()
+        && !fixture_ids.is_empty()
+    {
+        let (spatial, bindings) = runtime_value_spatial_effect(&request, &fixture_ids, fixtures)?;
+        (Some(Box::new(spatial)), bindings)
+    } else {
+        (None, HashMap::new())
+    };
     Ok(RuntimeValueEffect {
         request,
         envelope,
         targets,
         target_indices,
+        spatial,
+        spatial_bindings,
     })
+}
+
+fn runtime_value_spatial_effect(
+    request: &ValueEffectRequest,
+    fixture_ids: &[FixtureId],
+    fixtures: &[RuntimeFixture],
+) -> Result<
+    (
+        RuntimeColorEffect,
+        HashMap<FixtureId, HashMap<String, RuntimeValueSpatialBinding>>,
+    ),
+    String,
+> {
+    let mut pattern = request
+        .spatial_pattern
+        .clone()
+        .ok_or_else(|| "Value generator spatial pattern is missing".to_string())?;
+    if pattern.beam_targets.is_empty() {
+        let features = if request.features.is_empty() {
+            vec![ChaserFeature {
+                attribute: request.attribute.clone(),
+                low: request.low,
+                high: request.high,
+            }]
+        } else {
+            request.features.clone()
+        };
+        pattern.beam_targets = fixture_ids
+            .iter()
+            .enumerate()
+            .flat_map(|(selection_index, fixture_id)| {
+                features
+                    .iter()
+                    .map(move |feature| protocol::ColorEffectBeamTarget {
+                        fixture_id: *fixture_id,
+                        beam_index: 0,
+                        selection_index: selection_index as u32,
+                        feature_attribute: Some(feature.attribute.clone()),
+                    })
+            })
+            .collect();
+    }
+
+    let stops = request
+        .points
+        .iter()
+        .map(|point| {
+            let value = (point.value.clamp(0.0, 1.0) * u16::MAX as f32).round() as u16;
+            ColorEffectStop {
+                position: point.position,
+                color: ColorEffectColor {
+                    red: value,
+                    green: value,
+                    blue: value,
+                },
+            }
+        })
+        .collect::<Vec<_>>();
+    let color_request = ColorEffectRequest {
+        label: request.label.clone(),
+        fixture_ids: fixture_ids.to_vec(),
+        target_group_ids: Vec::new(),
+        stops,
+        algorithm: ColorEffectAlgorithm::Cycle,
+        interpolation: ColorEffectInterpolation::Rgb,
+        period_ms: request.period_ms,
+        clock_sync: request.clock_sync,
+        phase: request.phase,
+        fixture_spread: request.fixture_spread,
+        blend_mode: EffectBlendMode::Override,
+        spatial_pattern: Some(Box::new(pattern.clone())),
+    };
+
+    let mut bindings = HashMap::<FixtureId, HashMap<String, RuntimeValueSpatialBinding>>::new();
+    for target in &pattern.beam_targets {
+        let feature_attribute = target
+            .feature_attribute
+            .as_deref()
+            .ok_or_else(|| "Value generator beam target is missing its feature".to_string())?;
+        let (low, high) = scalar_effect_feature_range(
+            feature_attribute,
+            &request.attribute,
+            request.low,
+            request.high,
+            &request.features,
+        )
+        .ok_or_else(|| {
+            format!("Value generator feature '{feature_attribute}' is missing its output range")
+        })?;
+        let fixture = fixtures
+            .iter()
+            .find(|fixture| fixture.id == target.fixture_id)
+            .ok_or_else(|| {
+                format!(
+                    "Value generator beam target fixture {} was not found",
+                    target.fixture_id
+                )
+            })?;
+        let effect_target = EffectBeamTarget {
+            fixture_id: target.fixture_id,
+            beam_index: target.beam_index,
+            selection_index: target.selection_index,
+            feature_attribute: feature_attribute.to_string(),
+        };
+        let (attributes, virtual_intensity) =
+            runtime_effect_beam_intensity_attributes(fixture, &effect_target)?;
+        for attribute in attributes {
+            if bindings
+                .entry(target.fixture_id)
+                .or_default()
+                .insert(
+                    attribute.clone(),
+                    RuntimeValueSpatialBinding {
+                        low,
+                        high,
+                        virtual_intensity,
+                    },
+                )
+                .is_some()
+            {
+                return Err(format!(
+                    "Value generator fixture {} maps attribute '{}' more than once",
+                    target.fixture_id, attribute
+                ));
+            }
+        }
+    }
+    let spatial = runtime_color_effect_from_request(color_request, fixtures)?;
+    Ok((spatial, bindings))
 }
 
 #[cfg(test)]
@@ -25891,7 +26093,7 @@ fn evaluate_runtime_value_attribute(
     clock: &ClockSnapshot,
 ) -> Option<u16> {
     evaluate_runtime_value_attribute_at_rate(
-        runtime, fixture_id, attribute, base_value, created_at, now, clock, 1.0,
+        runtime, fixture_id, attribute, base_value, 0, created_at, now, clock, 1.0,
     )
 }
 
@@ -25901,11 +26103,35 @@ fn evaluate_runtime_value_attribute_at_rate(
     fixture_id: FixtureId,
     attribute: &str,
     base_value: u16,
+    effect_id: EffectId,
     created_at: Instant,
     now: Instant,
     clock: &ClockSnapshot,
     rate: f32,
 ) -> Option<u16> {
+    if let Some(spatial) = runtime.spatial.as_deref() {
+        // A Daslight-compatible VALUE generator owns an explicit beam/feature
+        // target list. Never fall through to the legacy whole-fixture envelope
+        // for an attribute absent from that list: otherwise a segment Dimmer
+        // target would also overwrite the fixture's global Dimmer.
+        let binding = runtime
+            .spatial_bindings
+            .get(&fixture_id)
+            .and_then(|attributes| attributes.get(attribute))?;
+        let generated = evaluate_runtime_color_spatial_attribute_at_rate(
+            spatial, fixture_id, attribute, 0, effect_id, created_at, now, clock, rate,
+        )?;
+        let ranged = scale_effect_u16(
+            binding.low,
+            binding.high,
+            generated as f32 / u16::MAX as f32,
+        );
+        return Some(if binding.virtual_intensity {
+            scale_u16(base_value, ranged as f32 / u16::MAX as f32)
+        } else {
+            ranged
+        });
+    }
     let (low, high) = scalar_effect_feature_range(
         attribute,
         &runtime.request.attribute,
@@ -27444,7 +27670,16 @@ fn runtime_color_spatial_targets(
                         )]))
                     })
             });
-            let binding = if target.feature_attribute.is_some() && bindings.len() <= 1 {
+            let is_generic_dimmer = target
+                .feature_attribute
+                .as_deref()
+                .is_some_and(|feature| normalize_chaser_attribute(feature) == "dimmer");
+            let binding = if target.feature_attribute.is_some() && !is_generic_dimmer {
+                // A concrete VALUE FX feature (for example ColorRed 2 or
+                // ColorAmber 8) is authoritative. Do not widen it back to the
+                // entire RGB/RGBA beam merely because that segment exists.
+                feature_binding
+            } else if target.feature_attribute.is_some() && bindings.len() <= 1 {
                 feature_binding.or_else(|| bindings.into_iter().nth(target.beam_index as usize))
             } else {
                 bindings
@@ -55417,6 +55652,7 @@ mod tests {
                     value: 1.0,
                 },
             ],
+            spatial_pattern: None,
             interpolation: ValueEffectInterpolation::Line,
             mode: ValueEffectMode::Absolute,
             direction: ValueEffectDirection::Forward,
@@ -55485,6 +55721,153 @@ mod tests {
         assert!(validate_value_effect_request(&bad_spread)
             .unwrap_err()
             .contains("within 0..1"));
+    }
+
+    #[test]
+    fn value_generator_targets_only_the_authored_concrete_segment_feature() {
+        let controls = vec![
+            test_color_control("Dimmer", 1),
+            test_color_control("ColorRed", 2),
+            test_color_control("ColorGreen", 3),
+            test_color_control("ColorBlue", 4),
+            test_color_control("ColorRed 2", 5),
+            test_color_control("ColorGreen 2", 6),
+            test_color_control("ColorBlue 2", 7),
+        ];
+        let fixtures = vec![test_runtime_color_fixture(1, Vec::new(), controls)];
+        let mut request = test_value_request(&[1]);
+        request.attribute = "ColorRed 2".to_string();
+        request.features = vec![ChaserFeature {
+            attribute: "ColorRed 2".to_string(),
+            low: 1_000,
+            high: 5_000,
+        }];
+        request.low = 1_000;
+        request.high = 5_000;
+        request.spatial_pattern = Some(protocol::ColorEffectSpatialPattern {
+            recipe: ColorEffectSpatialRecipe::ColorRainbow {
+                grayscale: false,
+                vertical_symmetry: false,
+                color_width: 0.0,
+                angle_degrees: 0.0,
+                gradient: 100.0,
+            },
+            beam_targets: vec![protocol::ColorEffectBeamTarget {
+                fixture_id: 1,
+                beam_index: 1,
+                selection_index: 0,
+                feature_attribute: Some("ColorRed 2".to_string()),
+            }],
+        });
+
+        let runtime = runtime_value_effect_from_request(request, &fixtures, true).unwrap();
+        assert_eq!(
+            runtime
+                .spatial_bindings
+                .get(&1)
+                .expect("fixture binding")
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec!["ColorRed 2".to_string()]
+        );
+        let created_at = Instant::now();
+        let clock = ClockSnapshot::default();
+        assert_eq!(
+            evaluate_runtime_value_attribute(
+                &runtime,
+                1,
+                "ColorRed 2",
+                45_000,
+                created_at,
+                created_at,
+                &clock,
+            ),
+            Some(3_000)
+        );
+        for attribute in [
+            "Dimmer",
+            "ColorRed",
+            "ColorGreen",
+            "ColorBlue",
+            "ColorGreen 2",
+            "ColorBlue 2",
+        ] {
+            assert_eq!(
+                evaluate_runtime_value_attribute(
+                    &runtime, 1, attribute, 45_000, created_at, created_at, &clock,
+                ),
+                None,
+                "VALUE generator leaked into {attribute}"
+            );
+        }
+    }
+
+    #[test]
+    fn value_generator_generic_dimmer_scales_only_the_selected_rgb_segment() {
+        let controls = vec![
+            test_color_control("Dimmer", 1),
+            test_color_control("ColorRed", 2),
+            test_color_control("ColorGreen", 3),
+            test_color_control("ColorBlue", 4),
+            test_color_control("ColorRed 2", 5),
+            test_color_control("ColorGreen 2", 6),
+            test_color_control("ColorBlue 2", 7),
+        ];
+        let fixtures = vec![test_runtime_color_fixture(1, Vec::new(), controls)];
+        let mut request = test_value_request(&[1]);
+        request.spatial_pattern = Some(protocol::ColorEffectSpatialPattern {
+            recipe: ColorEffectSpatialRecipe::ColorRainbow {
+                grayscale: false,
+                vertical_symmetry: false,
+                color_width: 0.0,
+                angle_degrees: 0.0,
+                gradient: 100.0,
+            },
+            beam_targets: vec![protocol::ColorEffectBeamTarget {
+                fixture_id: 1,
+                beam_index: 1,
+                selection_index: 0,
+                feature_attribute: Some("Dimmer".to_string()),
+            }],
+        });
+
+        let runtime = runtime_value_effect_from_request(request, &fixtures, true).unwrap();
+        let bindings = runtime.spatial_bindings.get(&1).expect("fixture binding");
+        let mut attributes = bindings.keys().cloned().collect::<Vec<_>>();
+        attributes.sort();
+        assert_eq!(
+            attributes,
+            vec![
+                "ColorBlue 2".to_string(),
+                "ColorGreen 2".to_string(),
+                "ColorRed 2".to_string(),
+            ]
+        );
+        assert!(bindings.values().all(|binding| binding.virtual_intensity));
+
+        let created_at = Instant::now();
+        let clock = ClockSnapshot::default();
+        for (attribute, base) in [
+            ("ColorRed 2", 40_000),
+            ("ColorGreen 2", 20_000),
+            ("ColorBlue 2", 10_000),
+        ] {
+            let value = evaluate_runtime_value_attribute(
+                &runtime, 1, attribute, base, created_at, created_at, &clock,
+            )
+            .expect("selected segment value");
+            assert!((value as i32 - (base / 2) as i32).abs() <= 1);
+        }
+        for attribute in ["Dimmer", "ColorRed", "ColorGreen", "ColorBlue"] {
+            assert_eq!(
+                evaluate_runtime_value_attribute(
+                    &runtime, 1, attribute, 40_000, created_at, created_at, &clock,
+                ),
+                None,
+                "VALUE generator leaked into {attribute}"
+            );
+        }
     }
 
     #[test]

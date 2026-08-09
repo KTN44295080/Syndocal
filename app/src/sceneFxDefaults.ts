@@ -150,19 +150,38 @@ export const defaultSceneFxParams = (
   }
   if (family === "VALUE FX") {
     return {
-      Lfo: {
-        label: "Dimmer Pulse",
+      Value: {
+        label: "Dimmer Rainbow",
         fixture_ids: fixtureIds,
         target_group_ids: [],
         attribute,
-        video_targets: [],
-        shape: "Square",
+        features: [{ attribute, low: 0, high: 65_535 }],
+        points: [
+          { position: 0, value: 0 },
+          { position: 0.5, value: 1 },
+          { position: 1, value: 0 },
+        ],
+        spatial_pattern: {
+          recipe: {
+            ColorRainbow: {
+              grayscale: false,
+              vertical_symmetry: false,
+              color_width: 0,
+              angle_degrees: 0,
+              gradient: 100,
+            },
+          },
+          beam_targets: [],
+        },
+        interpolation: "Line",
+        mode: "Absolute",
+        direction: "Forward",
         period_ms: 1_000,
         clock_sync: null,
         low: 0,
         high: 65_535,
         phase: 0,
-        fixture_spread: fixtureIds.length > 1 ? 1 : 0,
+        fixture_spread: 0,
         blend_mode: "Override",
       },
     };

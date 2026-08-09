@@ -1893,6 +1893,8 @@ export default function App() {
   const [valueMode, setValueMode] = createSignal<ValueEffectMode>("Absolute");
   const [valueDirection, setValueDirection] = createSignal<ValueEffectDirection>("Forward");
   const [valueFixtureSpread, setValueFixtureSpread] = createSignal(0);
+  const [valueSpatialPattern, setValueSpatialPattern] =
+    createSignal<ColorEffectSpatialPattern | null>(null);
   const [curvePoints, setCurvePoints] = createSignal<CurveEffectPoint[]>([
     { position: 0, value: 0, in_tangent: 0, out_tangent: 1 },
     { position: 1, value: 1, in_tangent: 1, out_tangent: 0 },
@@ -16209,9 +16211,10 @@ export default function App() {
           attribute: primary.attribute,
           features,
           points: valuePoints().map((point) => ({ ...point })),
-          interpolation: valueInterpolation(),
-          mode: valueMode(),
-          direction: valueDirection(),
+          spatial_pattern: valueSpatialPattern(),
+          interpolation: valueSpatialPattern() ? "Line" : valueInterpolation(),
+          mode: valueSpatialPattern() ? "Absolute" : valueMode(),
+          direction: valueSpatialPattern() ? "Forward" : valueDirection(),
           period_ms: Math.round(effectPeriod()),
           clock_sync: requestBase.clock_sync,
           low: primary.low,
@@ -16568,6 +16571,7 @@ export default function App() {
       setValueMode(value.mode);
       setValueDirection(value.direction);
       setValueFixtureSpread(value.fixture_spread);
+      setValueSpatialPattern(value.spatial_pattern ?? null);
       setScalarEffectFeatures((value.features?.length ? value.features : [{
         attribute: value.attribute,
         low: value.low,
@@ -17213,6 +17217,7 @@ export default function App() {
       clockSyncBeats: effectClockSyncBeats(),
       phase: effectPhase(),
       spread: valueFixtureSpread(),
+      spatialPattern: valueSpatialPattern(),
       onPoints: setValuePoints,
       onInterpolation: setValueInterpolation,
       onMode: setValueMode,
@@ -17221,6 +17226,7 @@ export default function App() {
       onClockSyncBeats: setEffectClockSyncPreset,
       onPhase: setEffectPhase,
       onSpread: setValueFixtureSpread,
+      onSpatialPattern: setValueSpatialPattern,
     },
     curve: {
       points: curvePoints(),

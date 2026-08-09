@@ -1,5 +1,7 @@
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import type {
+  ColorEffectSpatialPattern,
+  ColorEffectSpatialRecipe,
   ValueEffectDirection,
   ValueEffectInterpolation,
   ValueEffectMode,
@@ -21,6 +23,8 @@ export interface ValueEffectEditorPanelProps {
   phase: number;
   /** Normalized 0..1 fixture phase spread. */
   spread: number;
+  /** Null keeps Syndocal's custom envelope; a pattern enables Daslight-style VALUE FX. */
+  spatialPattern: ColorEffectSpatialPattern | null;
   onPoints: (points: ValueEffectPoint[]) => void;
   onInterpolation: (interpolation: ValueEffectInterpolation) => void;
   onMode: (mode: ValueEffectMode) => void;
@@ -29,6 +33,7 @@ export interface ValueEffectEditorPanelProps {
   onClockSyncBeats: (beats: number | null) => void;
   onPhase: (phase: number) => void;
   onSpread: (spread: number) => void;
+  onSpatialPattern: (pattern: ColorEffectSpatialPattern | null) => void;
 }
 
 const interpolationModes: ValueEffectInterpolation[] = ["Step", "Line", "Smooth"];
@@ -42,6 +47,37 @@ const clockPresets = [
   { label: "2", beats: 2 },
   { label: "4", beats: 4 },
 ] as const;
+
+type ValueGeneratorKind =
+  | "CustomEnvelope"
+  | "ColorRainbow"
+  | "Burst"
+  | "Plasma"
+  | "KnightRider"
+  | "Sparkle"
+  | "RandomFill"
+  | "Perlin";
+
+const defaultValueGeneratorRecipe = (
+  kind: Exclude<ValueGeneratorKind, "CustomEnvelope">,
+): ColorEffectSpatialRecipe => {
+  switch (kind) {
+    case "ColorRainbow":
+      return { ColorRainbow: { grayscale: false, vertical_symmetry: false, color_width: 0, angle_degrees: 0, gradient: 100 } };
+    case "Burst":
+      return { Burst: { color_width: 50, gradient: 100 } };
+    case "Plasma":
+      return { Plasma: { grayscale: false, vertical_symmetry: false, size_x: 1, param_x: 2, size_y: 1, param_y: 2, speed_x: -1, param_sx: 2, speed_y: 1, param_sy: -1 } };
+    case "KnightRider":
+      return { KnightRider: { size: 8, one_way: false, fading: true, go_outside: false, gradient: 50 } };
+    case "Sparkle":
+      return { Sparkle: { number: 5, lifespan: 25, width: 1 } };
+    case "RandomFill":
+      return { RandomFill: { point_width: 1 } };
+    case "Perlin":
+      return { Perlin: { octaves: 5, zoom: 20, direction_degrees: 0, speed: 1, amplitude: 100 } };
+  }
+};
 
 const clamp = (value: number, minimum: number, maximum: number) =>
   Math.min(maximum, Math.max(minimum, Number.isFinite(value) ? value : minimum));
@@ -139,6 +175,41 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
       ? `${normalizedPeriodMs()} ms free`
       : `${props.clockSyncBeats} beat / ${beatPeriodMs(props.clockSyncBeats)} ms`,
   );
+  const generatorKind = createMemo<ValueGeneratorKind>(() => {
+    const recipe = props.spatialPattern?.recipe;
+    if (!recipe) return "CustomEnvelope";
+    return Object.keys(recipe)[0] as Exclude<ValueGeneratorKind, "CustomEnvelope">;
+  });
+  const generatorValues = createMemo<Record<string, number | boolean>>(() => {
+    const recipe = props.spatialPattern?.recipe;
+    if (!recipe) return {};
+    return Object.values(recipe)[0] as Record<string, number | boolean>;
+  });
+  const generatorNumber = (key: string, fallback = 0) => {
+    const value = generatorValues()[key];
+    return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  };
+  const generatorBoolean = (key: string) => generatorValues()[key] === true;
+  const generatorTransform = () => generatorBoolean("vertical_symmetry") ? "vertical" : "none";
+  const selectGeneratorKind = (kind: ValueGeneratorKind) => {
+    if (kind === "CustomEnvelope") {
+      props.onSpatialPattern(null);
+      return;
+    }
+    props.onSpatialPattern({
+      recipe: defaultValueGeneratorRecipe(kind),
+      beam_targets: props.spatialPattern?.beam_targets ?? [],
+    });
+  };
+  const patchGeneratorValues = (patch: Record<string, number | boolean>) => {
+    const pattern = props.spatialPattern;
+    const kind = generatorKind();
+    if (!pattern || kind === "CustomEnvelope") return;
+    props.onSpatialPattern({
+      ...pattern,
+      recipe: { [kind]: { ...generatorValues(), ...patch } } as ColorEffectSpatialRecipe,
+    });
+  };
 
   const pointToCanvas = (point: ValueEffectPoint): CanvasPoint => ({
     x: clampUnit(point.position) * canvasWidth(),
@@ -154,12 +225,16 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
     for (let step = 0; step <= 64; step += 1) {
       const readProgress = step / 64;
       let progress = readProgress;
-      if (props.direction === "Reverse") progress = 1 - readProgress;
-      else if (props.direction === "Bounce") {
+      if (generatorKind() === "CustomEnvelope" && props.direction === "Reverse") progress = 1 - readProgress;
+      else if (generatorKind() === "CustomEnvelope" && props.direction === "Bounce") {
         const doubled = readProgress * 2;
         progress = doubled <= 1 ? doubled : 2 - doubled;
       }
-      const value = sampleEnvelope(props.points, props.interpolation, progress);
+      const value = sampleEnvelope(
+        props.points,
+        generatorKind() === "CustomEnvelope" ? props.interpolation : "Line",
+        progress,
+      );
       const x = pathNumber(readProgress * width);
       const y = pathNumber((1 - value) * height);
       samples.push(`${step === 0 ? "M" : "L"} ${x} ${y}`);
@@ -285,7 +360,9 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
         <div>
           <strong class="textBalance">Value FX</strong>
           <span>
-            {props.points.length} points / {props.interpolation} / {props.mode}
+            {generatorKind() === "CustomEnvelope"
+              ? `${props.points.length} points / ${props.interpolation} / ${props.mode}`
+              : `${generatorKind()} / ${props.points.length} values`}
           </span>
         </div>
         <div class="valueEffectStatusStrip">
@@ -294,8 +371,8 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
             <strong class="tabularNums">{clockSummary()}</strong>
           </span>
           <span>
-            <small>Direction</small>
-            <strong>{props.direction}</strong>
+            <small>{generatorKind() === "CustomEnvelope" ? "Direction" : "Generator"}</small>
+            <strong>{generatorKind() === "CustomEnvelope" ? props.direction : generatorKind()}</strong>
           </span>
           <span>
             <small>Phase / Spread</small>
@@ -306,9 +383,97 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
         </div>
       </header>
 
+      <fieldset class="colorEffectMotionPanel valueEffectGeneratorPanel" data-value-generator={generatorKind()}>
+        <legend>Value generator</legend>
+        <div class="colorEffectModeGrid">
+          <label>
+            Generator
+            <select
+              value={generatorKind()}
+              data-value-generator-select
+              aria-label="Value generator"
+              onInput={(event) => selectGeneratorKind(event.currentTarget.value as ValueGeneratorKind)}
+            >
+              <option value="CustomEnvelope">Custom envelope</option>
+              <option value="ColorRainbow">Rainbow</option>
+              <option value="Burst">Burst</option>
+              <option value="Plasma">Plasma</option>
+              <option value="KnightRider">Knight Rider</option>
+              <option value="Sparkle">Sparkle</option>
+              <option value="RandomFill">Random fill</option>
+              <option value="Perlin">Perlin</option>
+            </select>
+          </label>
+          <Show when={props.spatialPattern}>
+            <div class="effectFormHint textPretty">
+              {props.spatialPattern?.beam_targets?.length
+                ? `${props.spatialPattern.beam_targets.length} imported beam targets`
+                : "Beam targets follow selected fixture profile order."}
+            </div>
+          </Show>
+        </div>
+        <Show when={generatorKind() === "KnightRider"}>
+          <div class="colorEffectModeGrid">
+            <label>Size<input type="number" min="1" max="100" step="1" value={generatorNumber("size", 8)} onInput={(event) => patchGeneratorValues({ size: clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 100) })} /></label>
+            <label>Gradient %<input type="number" min="0" max="100" step="1" value={generatorNumber("gradient", 50)} onInput={(event) => patchGeneratorValues({ gradient: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
+            <label><input type="checkbox" checked={generatorBoolean("one_way")} onInput={(event) => patchGeneratorValues({ one_way: event.currentTarget.checked })} /> One way only</label>
+            <label><input type="checkbox" checked={generatorBoolean("fading")} onInput={(event) => patchGeneratorValues({ fading: event.currentTarget.checked })} /> Fading</label>
+            <label><input type="checkbox" checked={generatorBoolean("go_outside")} onInput={(event) => patchGeneratorValues({ go_outside: event.currentTarget.checked })} /> Go outside</label>
+          </div>
+        </Show>
+        <Show when={generatorKind() === "Burst"}>
+          <div class="colorEffectModeGrid">
+            <label>Color width %<input type="number" min="0" max="100" step="1" value={generatorNumber("color_width", 50)} onInput={(event) => patchGeneratorValues({ color_width: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
+            <label>Gradient %<input type="number" min="0" max="100" step="1" value={generatorNumber("gradient", 100)} onInput={(event) => patchGeneratorValues({ gradient: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
+          </div>
+        </Show>
+        <Show when={generatorKind() === "RandomFill"}>
+          <div class="colorEffectModeGrid">
+            <label>Point width<input type="number" min="1" step="1" value={generatorNumber("point_width", 1)} onInput={(event) => patchGeneratorValues({ point_width: Math.max(1, Math.round(Number(event.currentTarget.value) || 1)) })} /></label>
+          </div>
+        </Show>
+        <Show when={generatorKind() === "Sparkle"}>
+          <div class="colorEffectModeGrid">
+            <label>Sparkle number<input type="number" min="1" step="1" value={generatorNumber("number", 5)} onInput={(event) => patchGeneratorValues({ number: Math.max(1, Math.round(Number(event.currentTarget.value) || 1)) })} /></label>
+            <label>Life span %<input type="number" min="0" max="100" step="1" value={generatorNumber("lifespan", 25)} onInput={(event) => patchGeneratorValues({ lifespan: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
+            <label>Sparkle width<input type="number" min="1" step="1" value={generatorNumber("width", 1)} onInput={(event) => patchGeneratorValues({ width: Math.max(1, Math.round(Number(event.currentTarget.value) || 1)) })} /></label>
+          </div>
+        </Show>
+        <Show when={generatorKind() === "Plasma"}>
+          <div class="colorEffectModeGrid">
+            <label>Transform<select value={generatorTransform()} onInput={(event) => patchGeneratorValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
+            <label>Size X<input type="number" min="0" max="20" step="1" value={generatorNumber("size_x", 1)} onInput={(event) => patchGeneratorValues({ size_x: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 20) })} /></label>
+            <label>Param X<input type="number" min="0" max="20" step="1" value={generatorNumber("param_x", 2)} onInput={(event) => patchGeneratorValues({ param_x: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 20) })} /></label>
+            <label>Size Y<input type="number" min="0" max="20" step="1" value={generatorNumber("size_y", 1)} onInput={(event) => patchGeneratorValues({ size_y: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 20) })} /></label>
+            <label>Param Y<input type="number" min="0" max="20" step="1" value={generatorNumber("param_y", 2)} onInput={(event) => patchGeneratorValues({ param_y: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 20) })} /></label>
+            <label>Speed X<input type="number" min="-5" max="5" step="1" value={generatorNumber("speed_x", -1)} onInput={(event) => patchGeneratorValues({ speed_x: clamp(Math.round(Number(event.currentTarget.value) || 0), -5, 5) })} /></label>
+            <label>Param SX<input type="number" min="-5" max="5" step="1" value={generatorNumber("param_sx", 2)} onInput={(event) => patchGeneratorValues({ param_sx: clamp(Math.round(Number(event.currentTarget.value) || 0), -5, 5) })} /></label>
+            <label>Speed Y<input type="number" min="-5" max="5" step="1" value={generatorNumber("speed_y", 1)} onInput={(event) => patchGeneratorValues({ speed_y: clamp(Math.round(Number(event.currentTarget.value) || 0), -5, 5) })} /></label>
+            <label>Param SY<input type="number" min="-5" max="5" step="1" value={generatorNumber("param_sy", -1)} onInput={(event) => patchGeneratorValues({ param_sy: clamp(Math.round(Number(event.currentTarget.value) || 0), -5, 5) })} /></label>
+          </div>
+        </Show>
+        <Show when={generatorKind() === "ColorRainbow"}>
+          <div class="colorEffectModeGrid">
+            <label>Transform<select value={generatorTransform()} onInput={(event) => patchGeneratorValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
+            <label>Color width<input type="number" min="0" max="1" step="0.01" value={generatorNumber("color_width")} onInput={(event) => patchGeneratorValues({ color_width: clamp(Number(event.currentTarget.value), 0, 1) })} /></label>
+            <label>Angle °<input type="number" min="0" max="360" step="1" value={generatorNumber("angle_degrees")} onInput={(event) => patchGeneratorValues({ angle_degrees: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 360) })} /></label>
+            <label>Gradient %<input type="number" min="0" max="100" step="1" value={generatorNumber("gradient", 100)} onInput={(event) => patchGeneratorValues({ gradient: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
+          </div>
+        </Show>
+        <Show when={generatorKind() === "Perlin"}>
+          <div class="colorEffectModeGrid">
+            <label>Octaves<input type="number" min="1" max="16" step="1" value={generatorNumber("octaves", 5)} onInput={(event) => patchGeneratorValues({ octaves: clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 16) })} /></label>
+            <label>Zoom<input type="number" min="0.01" step="0.1" value={generatorNumber("zoom", 20)} onInput={(event) => patchGeneratorValues({ zoom: Math.max(0.01, Number(event.currentTarget.value) || 0.01) })} /></label>
+            <label>Direction °<input type="number" step="1" value={generatorNumber("direction_degrees")} onInput={(event) => patchGeneratorValues({ direction_degrees: Number(event.currentTarget.value) || 0 })} /></label>
+            <label>Speed<input type="number" step="0.1" value={generatorNumber("speed", 1)} onInput={(event) => patchGeneratorValues({ speed: Number(event.currentTarget.value) || 0 })} /></label>
+            <label>Amplitude %<input type="number" min="0" max="100" step="1" value={generatorNumber("amplitude", 100)} onInput={(event) => patchGeneratorValues({ amplitude: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
+          </div>
+        </Show>
+      </fieldset>
+
       <div class="valueEffectCanvasWrap">
         <div class="valueEffectCanvasToolbar">
-          <strong>Envelope</strong>
+          <strong>{generatorKind() === "CustomEnvelope" ? "Envelope" : "Value palette"}</strong>
           <span class="tabularNums">
             {props.points.length} / {valueEffectMaximumPoints}
           </span>
@@ -336,7 +501,7 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
           viewBox={`0 0 ${pathNumber(canvasWidth())} ${pathNumber(canvasHeight())}`}
           preserveAspectRatio="none"
           role="group"
-          aria-label={`${props.mode} ${props.interpolation} value envelope with ${props.points.length} points. Double-click to add. Focus a point and use Arrow keys to nudge, Shift coarse, Alt fine, Delete to remove.`}
+          aria-label={`${generatorKind() === "CustomEnvelope" ? `${props.mode} ${props.interpolation} value envelope` : `${generatorKind()} Black 0 White 100 value palette`} with ${props.points.length} points. Double-click to add. Focus a point and use Arrow keys to nudge, Shift coarse, Alt fine, Delete to remove.`}
           onDblClick={(event) => addPoint(pointFromClient(event.currentTarget, event.clientX, event.clientY))}
           onPointerMove={continuePointDrag}
           onPointerUp={endPointDrag}
@@ -375,59 +540,63 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
         </div>
       </div>
 
-      <div class="valueEffectModeRow">
-        <div class="valueEffectModeGroup">
-          <span>Mode</span>
-          <div class="moveEffectSegmented" aria-label="Value mode">
-            <For each={modeOptions}>
-              {(mode) => (
-                <button
-                  type="button"
-                  class={props.mode === mode ? "active" : ""}
-                  aria-pressed={props.mode === mode}
-                  title={mode === "Absolute" ? "Envelope maps into low..high" : "Bipolar offset around the incoming value (0.5 = no change)"}
-                  onClick={() => props.onMode(mode)}
-                >
-                  {mode}
-                </button>
-              )}
-            </For>
+      <Show when={generatorKind() === "CustomEnvelope"}>
+        <div class="valueEffectModeRow">
+          <div class="valueEffectModeGroup">
+            <span>Mode</span>
+            <div class="moveEffectSegmented" aria-label="Value mode">
+              <For each={modeOptions}>
+                {(mode) => (
+                  <button
+                    type="button"
+                    class={props.mode === mode ? "active" : ""}
+                    aria-pressed={props.mode === mode}
+                    title={mode === "Absolute" ? "Envelope maps into low..high" : "Bipolar offset around the incoming value (0.5 = no change)"}
+                    onClick={() => props.onMode(mode)}
+                  >
+                    {mode}
+                  </button>
+                )}
+              </For>
+            </div>
+          </div>
+          <div class="valueEffectModeGroup">
+            <span>Interpolation</span>
+            <div class="moveEffectSegmented valueEffectInterpSegmented" aria-label="Value interpolation">
+              <For each={interpolationModes}>
+                {(interpolation) => (
+                  <button
+                    type="button"
+                    class={props.interpolation === interpolation ? "active" : ""}
+                    aria-pressed={props.interpolation === interpolation}
+                    onClick={() => props.onInterpolation(interpolation)}
+                  >
+                    {interpolation}
+                  </button>
+                )}
+              </For>
+            </div>
           </div>
         </div>
-        <div class="valueEffectModeGroup">
-          <span>Interpolation</span>
-          <div class="moveEffectSegmented valueEffectInterpSegmented" aria-label="Value interpolation">
-            <For each={interpolationModes}>
-              {(interpolation) => (
-                <button
-                  type="button"
-                  class={props.interpolation === interpolation ? "active" : ""}
-                  aria-pressed={props.interpolation === interpolation}
-                  onClick={() => props.onInterpolation(interpolation)}
-                >
-                  {interpolation}
-                </button>
-              )}
-            </For>
-          </div>
-        </div>
-      </div>
+      </Show>
 
       <div class="valueEffectTransportRow">
-        <div class="moveEffectDirectionGrid" aria-label="Value direction">
-          <For each={directionModes}>
-            {(direction) => (
-              <button
-                type="button"
-                class={props.direction === direction ? "active" : ""}
-                aria-pressed={props.direction === direction}
-                onClick={() => props.onDirection(direction)}
-              >
-                {direction}
-              </button>
-            )}
-          </For>
-        </div>
+        <Show when={generatorKind() === "CustomEnvelope"}>
+          <div class="moveEffectDirectionGrid" aria-label="Value direction">
+            <For each={directionModes}>
+              {(direction) => (
+                <button
+                  type="button"
+                  class={props.direction === direction ? "active" : ""}
+                  aria-pressed={props.direction === direction}
+                  onClick={() => props.onDirection(direction)}
+                >
+                  {direction}
+                </button>
+              )}
+            </For>
+          </div>
+        </Show>
         <label class="valueEffectPeriodField">
           Period ms
           <input

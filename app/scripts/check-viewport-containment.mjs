@@ -19138,6 +19138,78 @@ async function runSceneSettingsViewport(client, viewport) {
     return input instanceof HTMLInputElement ? input.value : "";
   });
 
+  // VALUE FX keeps Syndocal's custom envelope as an additional mode while
+  // exposing Daslight's verified Black..White generator model in the same
+  // Scene Settings editor. Exercise the real Solid signal/input path without
+  // opening a native desktop window.
+  const valueSurfaceClicked = await clickSceneSettingsTarget(
+    client,
+    '[data-scene-settings-surface-control="fx"]',
+  );
+  await sleep(80);
+  const valueCreateClicked = await clickSceneSettingsTarget(
+    client,
+    '[data-scene-fx-chooser] [data-effect-family="VALUE FX"]',
+  );
+  await waitForClientCondition(
+    client,
+    'document.querySelector("[data-scene-settings-effect-editor=\\"Value\\"] [data-value-generator-select]") !== null',
+    `T32 VALUE generator editor ${viewport.width}x${viewport.height}`,
+  );
+  const valueGeneratorSelected = await evaluatePageFunction(client, () => {
+    const select = document.querySelector('[data-value-generator-select]');
+    if (!(select instanceof HTMLSelectElement)) return false;
+    select.value = "ColorRainbow";
+    select.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  });
+  await waitForClientCondition(
+    client,
+    'document.querySelector("[data-value-generator=\\"ColorRainbow\\"]") !== null',
+    `T32 VALUE Rainbow selection ${viewport.width}x${viewport.height}`,
+  );
+  const valueGeneratorState = await evaluatePageFunction(client, () => {
+    const editor = document.querySelector('[data-scene-settings-effect-editor="Value"]');
+    const select = editor?.querySelector('[data-value-generator-select]');
+    const optionValues = select instanceof HTMLSelectElement
+      ? [...select.options].map((option) => option.value)
+      : [];
+    const canvas = editor?.querySelector('.valueEffectCanvas');
+    const pane = editor?.closest('[data-scene-settings]');
+    const paneRect = pane?.getBoundingClientRect();
+    return {
+      optionValues,
+      selected: select instanceof HTMLSelectElement ? select.value : "",
+      generatorKind: editor?.querySelector('[data-value-generator]')
+        ?.getAttribute('data-value-generator') ?? "",
+      paletteAria: canvas?.getAttribute('aria-label') ?? "",
+      customModeCount: editor?.querySelectorAll('[aria-label="Value mode"]').length ?? 0,
+      customDirectionCount: editor?.querySelectorAll('[aria-label="Value direction"]').length ?? 0,
+      hint: editor?.querySelector('.valueEffectGeneratorPanel .effectFormHint')?.textContent?.trim() ?? "",
+      horizontalOverflowPx: paneRect
+        ? Math.max(0, (pane?.scrollWidth ?? 0) - paneRect.width)
+        : Number.POSITIVE_INFINITY,
+    };
+  });
+  const valueCustomSelected = await evaluatePageFunction(client, () => {
+    const select = document.querySelector('[data-value-generator-select]');
+    if (!(select instanceof HTMLSelectElement)) return false;
+    select.value = "CustomEnvelope";
+    select.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  });
+  await waitForClientCondition(
+    client,
+    'document.querySelector("[data-value-generator=\\"CustomEnvelope\\"]") !== null && document.querySelector("[data-scene-settings-effect-editor=\\"Value\\"] [aria-label=\\"Value mode\\"]") !== null',
+    `T32 VALUE Custom Envelope restore ${viewport.width}x${viewport.height}`,
+  );
+  const valueCustomState = await evaluatePageFunction(client, () => ({
+    generatorKind: document.querySelector('[data-value-generator]')
+      ?.getAttribute('data-value-generator') ?? "",
+    modeCount: document.querySelectorAll('[data-value-generator="CustomEnvelope"] ~ .valueEffectModeRow [aria-label="Value mode"], [data-scene-settings-effect-editor="Value"] [aria-label="Value mode"]').length,
+    directionCount: document.querySelectorAll('[data-scene-settings-effect-editor="Value"] [aria-label="Value direction"]').length,
+  }));
+
   // T31: reset the deterministic fixture so the EDIT-scene path begins at
   // zero owned FX. Selecting the scene and entering EDIT establishes context;
   // the measured operation is the single synthetic click on COLOR FX.
@@ -19579,6 +19651,24 @@ async function runSceneSettingsViewport(client, viewport) {
       && oneClickAdded.chooserMinimumHitSize >= 40
       && oneClickAdded.ownedFxToggleCount === 1
       && oneClickAdded.ownedFxRemoveCount === 1],
+    ["valueGeneratorUsesOneEditorAndPreservesCustomEnvelope", () =>
+      valueSurfaceClicked
+      && valueCreateClicked
+      && valueGeneratorSelected
+      && JSON.stringify(valueGeneratorState.optionValues) === JSON.stringify([
+        "CustomEnvelope", "ColorRainbow", "Burst", "Plasma", "KnightRider", "Sparkle", "RandomFill", "Perlin",
+      ])
+      && valueGeneratorState.selected === "ColorRainbow"
+      && valueGeneratorState.generatorKind === "ColorRainbow"
+      && valueGeneratorState.paletteAria.includes("ColorRainbow Black 0 White 100 value palette")
+      && valueGeneratorState.customModeCount === 0
+      && valueGeneratorState.customDirectionCount === 0
+      && valueGeneratorState.hint === "Beam targets follow selected fixture profile order."
+      && valueGeneratorState.horizontalOverflowPx <= 1
+      && valueCustomSelected
+      && valueCustomState.generatorKind === "CustomEnvelope"
+      && valueCustomState.modeCount === 1
+      && valueCustomState.directionCount === 1],
   ];
   const checks = Object.fromEntries(conditions.map(([name, check]) => {
     try {
@@ -19613,6 +19703,8 @@ async function runSceneSettingsViewport(client, viewport) {
     advancedSurface,
     fxSurface,
     createdFx,
+    valueGeneratorState,
+    valueCustomState,
     createdFxContents,
     editSourceRoute,
     cueEditAuthoredBeats,

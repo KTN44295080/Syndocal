@@ -237,7 +237,7 @@ const japaneseText: Record<string, string> = {
   "Add FX": "FXを追加",
   "Default Rainbow": "デフォルトRainbow",
   "Dimmer chaser": "Dimmerチェイサー",
-  "Dimmer pulse": "Dimmerパルス",
+  "Black / White generator": "黒／白ジェネレーター",
   "Pan/Tilt circle": "Pan/Tiltサークル",
   "Requires a Pan/Tilt fixture": "Pan/Tilt灯体が必要です",
   "MOVE FX requires a scene fixture with paired Pan/Tilt controls.":
@@ -1506,6 +1506,10 @@ const japaneseText: Record<string, string> = {
   "/ 16 stops": "/ 16ストップ",
   spread: "スプレッド",
   "Color flow": "Colorフロー",
+  "Value generator": "Valueジェネレーター",
+  Generator: "ジェネレーター",
+  "Custom envelope": "カスタムエンベロープ",
+  "Value palette": "値パレット",
   "Beam-space pattern": "Beam空間パターン",
   "Color beam-space pattern": "ColorのBeam空間パターン",
   "Palette flow": "パレットフロー",
@@ -1515,10 +1519,13 @@ const japaneseText: Record<string, string> = {
   Sparkle: "スパークル",
   Plasma: "プラズマ",
   "Rainbow strip": "Rainbowストリップ",
+  Rainbow: "Rainbow",
   "Rainbow mapping": "レインボーマッピング",
   "Perlin mapping": "Perlinマッピング",
   "Beam targets follow fixture profile channel order.":
     "ビームターゲットは灯体プロファイルのチャンネル順に従います。",
+  "Beam targets follow selected fixture profile order.":
+    "ビームターゲットは選択した灯体プロファイルの順序に従います。",
   "Gradient %": "グラデーション（%）",
   "Go outside": "範囲外へ移動",
   "Color width %": "Color幅（%）",
@@ -2653,6 +2660,19 @@ const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
           ? "線"
           : "スムーズ";
       return `${localizedMode}・${localizedInterpolation}のバリューエンベロープ、${count}ポイント。ダブルクリックで追加。ポイントにフォーカスし、矢印キーで微調整、Shiftで粗く、Altで細かく、Deleteで削除。`;
+    },
+  ],
+  [
+    /^(ColorRainbow|Burst|Plasma|KnightRider|Sparkle|RandomFill|Perlin) Black 0 White 100 value palette with (\d+) points\. Double-click to add\. Focus a point and use Arrow keys to nudge, Shift coarse, Alt fine, Delete to remove\.$/,
+    (generator, count) => {
+      const localizedGenerator = generator === "ColorRainbow"
+        ? "Rainbow"
+        : generator === "KnightRider"
+          ? "ナイトライダー"
+          : generator === "RandomFill"
+            ? "Randomフィル"
+            : japaneseText[generator] ?? generator;
+      return `${localizedGenerator}・Black 0 / White 100の値パレット、${count}ポイント。ダブルクリックで追加。ポイントにフォーカスし、矢印キーで微調整、Shiftで粗く、Altで細かく、Deleteで削除。`;
     },
   ],
   [

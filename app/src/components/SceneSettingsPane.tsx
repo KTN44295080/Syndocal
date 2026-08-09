@@ -332,7 +332,7 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
                 descriptions={{
                   "COLOR FX": "Default Rainbow",
                   "CHASER FX": "Dimmer chaser",
-                  "VALUE FX": "Dimmer pulse",
+                  "VALUE FX": "Black / White generator",
                   "MOVE FX": props.moveFxEnabled ? "Pan/Tilt circle" : "Requires a Pan/Tilt fixture",
                   "2D MAPPING": "Raster to lighting",
                 }}

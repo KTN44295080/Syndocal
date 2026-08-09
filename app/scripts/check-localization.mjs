@@ -319,10 +319,20 @@ assert.equal(localization.translateUiText("Select envelope point 2", "ja"), "エ
 assert.equal(localization.translateUiText("Position for envelope point 2", "ja"), "エンベロープポイント2の位置");
 assert.equal(localization.translateUiText("Value for envelope point 2", "ja"), "エンベロープポイント2の値");
 assert.equal(localization.translateUiText("Remove envelope point 2", "ja"), "エンベロープポイント2を削除");
-assert.match(
-  valueEffectEditorSource,
-  /aria-label=\{`\$\{props\.mode\} \$\{props\.interpolation\} value envelope with \$\{props\.points\.length\} points\./,
-  "Value FX canvas aria-label must use the localized dynamic envelope contract",
+assert.equal(
+  localization.translateUiText(
+    "ColorRainbow Black 0 White 100 value palette with 3 points. Double-click to add. Focus a point and use Arrow keys to nudge, Shift coarse, Alt fine, Delete to remove.",
+    "ja",
+  ),
+  "Rainbow・Black 0 / White 100の値パレット、3ポイント。ダブルクリックで追加。ポイントにフォーカスし、矢印キーで微調整、Shiftで粗く、Altで細かく、Deleteで削除。",
+);
+assert.ok(
+  valueEffectEditorSource.includes('generatorKind() === "CustomEnvelope" ? `${props.mode} ${props.interpolation} value envelope`'),
+  "Value FX canvas must retain the localized custom-envelope aria contract",
+);
+assert.ok(
+  valueEffectEditorSource.includes('`${generatorKind()} Black 0 White 100 value palette`'),
+  "Value FX canvas must expose the localized Daslight-generator palette aria contract",
 );
 for (const dynamicAriaPrefix of [
   "Envelope point ",
@@ -561,7 +571,7 @@ const localeInvariantText = new Set([
   "Syndocal", "DMX", "MIDI", "OSC", "RDM", "ISF", "NDI", "Spout", "Syphon", "HAP", "FFmpeg",
   "GO", "SET", "FLASH", "EDIT", "EDIT:", "LIVE", "BLIND", "HTP", "LTP", "RGB", "BPM", "PULSE", "PATCH", "A", "B", "R", "G", "X", "Y", "Z", "Pan", "Tilt",
   "Dimmer", "Color", "Position", "Beam", "Speed", "Size", "Phase",
-  "Sine", "Cosine", "Triangle", "Saw", "Square", "Random", "Perlin",
+  "Sine", "Cosine", "Triangle", "Saw", "Square", "Random", "Perlin", "Rainbow",
   "STEPS", "COLOR FX", "CHASER FX", "MOVE FX", "VALUE FX", "CURVE FX", "2D MAPPING",
   "Phase %", "Position ms",
   "Art-Net", "sACN", "sACN / E1.31", "sACN E1.31", "Enttec USB PRO", "Syphon Server", "Spout Sender",
