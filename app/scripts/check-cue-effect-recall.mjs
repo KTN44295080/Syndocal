@@ -59,6 +59,21 @@ assert.match(
   /const setEffectEnabled = async[\s\S]*?setCueEffectCaptureTargets[\s\S]*?await invoke\("set_effect_enabled"/,
   "Effect toggles must update non-overridden Store Recall state before awaiting the backend",
 );
+assert.match(
+  appSource,
+  /const cueOwnedEffectSummary[\s\S]*?if \("Lfo" in params\)[\s\S]*?lfo: request/,
+  "Cue-owned LFO summaries must retain their complete source request",
+);
+assert.match(
+  appSource,
+  /const useEffectAsDraft[\s\S]*?setLfoDaslightCurveSource\([\s\S]*?effect\.lfo\?\.daslight_curve \?\? null/,
+  "Scene Settings must load the hidden Daslight Curve source profile into its edit draft",
+);
+assert.match(
+  appSource,
+  /period_ms: effectPeriod\(\),[\s\S]*?daslight_curve: lfoDaslightCurveSource\(\) \?\? undefined/,
+  "Saving a Scene Settings LFO draft must preserve the imported Daslight Curve source profile",
+);
 
 const videoTarget = { layer_ids: [10], param: "Opacity", low: 0, high: 1, position: null };
 const effects = [

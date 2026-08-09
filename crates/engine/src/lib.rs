@@ -34,11 +34,11 @@ use protocol::{
     CueFixtureTarget, CueId, CueIfcbTiming, CueListId, CueListSummary, CueLiveDirection,
     CueLiveModifierSettings, CueLiveModifierState, CueNodeGraphTarget, CuePaletteTarget,
     CuePartSummary, CueStepSummary, CueSummary, CurveEffectPoint, CurveEffectRequest,
-    DirectChildTimelineTransportSummary, DmxMergeMode, DmxModeSummary, DmxOutputConfig,
-    DmxOutputProtocol, DmxOutputRouteTelemetry, DmxUniversePreview, EffectBeamTarget,
-    EffectBlendMode, EffectClockSync, EffectId, EffectKind, EffectParamsSnapshot, EffectSummary,
-    EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId, FixtureId,
-    FixtureLimits, FixtureProfileSummary, LfoEffectRequest, LfoShape, LiveAudioFrame,
+    DaslightCurveSource, DirectChildTimelineTransportSummary, DmxMergeMode, DmxModeSummary,
+    DmxOutputConfig, DmxOutputProtocol, DmxOutputRouteTelemetry, DmxUniversePreview,
+    EffectBeamTarget, EffectBlendMode, EffectClockSync, EffectId, EffectKind, EffectParamsSnapshot,
+    EffectSummary, EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId,
+    FixtureId, FixtureLimits, FixtureProfileSummary, LfoEffectRequest, LfoShape, LiveAudioFrame,
     LiveAudioReactiveFeatures, MappingEffectDirection, MappingEffectRequest, MoveCoordinateMode,
     MoveDirection, MoveEffectRequest, MovePathPoint, NodeGraphAudioRuntimeStatus, NodeGraphId,
     NodeGraphNodeKind, NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId,
@@ -24409,6 +24409,7 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
                     fixture_spread: effect.fixture_spread,
                     beam_targets: Vec::new(),
                     blend_mode: effect.blend_mode.clone(),
+                    daslight_curve: None,
                 }
             };
             RuntimeEffectKind::Lfo(RuntimeLfoEffect {
@@ -24528,6 +24529,43 @@ fn validate_lfo_effect_request(request: &LfoEffectRequest) -> Result<(), String>
     }
     if !(0.0..=1.0).contains(&request.fixture_spread) {
         return Err("LFO effect fixture spread must be within 0..1".to_string());
+    }
+    if let Some(source) = &request.daslight_curve {
+        if !matches!(
+            request.shape,
+            LfoShape::Sine | LfoShape::Saw | LfoShape::Strobe
+        ) {
+            return Err(
+                "Daslight Curve source is only valid for Sine, Saw, or Strobe shapes".to_string(),
+            );
+        }
+        if !(0.0..=1.0).contains(&request.phase) {
+            return Err("Daslight Curve source phase must be within 0..1".to_string());
+        }
+        if !source.rate.is_finite() || source.rate <= 0.0 {
+            return Err("Daslight Curve source rate must be finite and greater than 0".to_string());
+        }
+        if !source.size.is_finite() || source.size < 0.0 || !source.offset.is_finite() {
+            return Err(
+                "Daslight Curve source size must be finite and non-negative and offset must be finite"
+                    .to_string(),
+            );
+        }
+        if source.sample_ms == 0 {
+            return Err("Daslight Curve source sample interval must be at least 1 ms".to_string());
+        }
+        if request.period_ms < u64::from(source.sample_ms) {
+            return Err(format!(
+                "Daslight Curve source buffer must contain at least one {} ms sample",
+                source.sample_ms
+            ));
+        }
+        let samples_per_second = 1_000.0 / f32::from(source.sample_ms);
+        if request.shape == LfoShape::Strobe && source.rate > samples_per_second {
+            return Err(format!(
+                "Daslight Strobe rate must not exceed its {samples_per_second:.3} Hz sample grid"
+            ));
+        }
     }
     if request.beam_targets.len() > 4_096 {
         return Err("LFO effect cannot target more than 4096 beams".to_string());
@@ -28791,6 +28829,17 @@ fn evaluate_lfo_effect_normalized_with_offset(
     rate: f32,
 ) -> f32 {
     let rate = valid_effect_rate(rate);
+    if let Some(source) = &request.daslight_curve {
+        return evaluate_daslight_curve_normalized_with_offset(
+            request,
+            source,
+            fixture_phase_offset,
+            created_at,
+            now,
+            clock,
+            rate,
+        );
+    }
     if let Some(clock_sync) = request.clock_sync {
         let beats = clock_sync.beats.max(0.000_1);
         let beat_position = clock.beat_counter as f32 + clock.beat_phase;
@@ -28802,6 +28851,71 @@ fn evaluate_lfo_effect_normalized_with_offset(
     let elapsed = now.saturating_duration_since(created_at).as_secs_f32();
     let phase = (elapsed * rate / period + request.phase + fixture_phase_offset).rem_euclid(1.0);
     evaluate_lfo_shape(&request.shape, phase)
+}
+
+fn evaluate_daslight_curve_normalized_with_offset(
+    request: &LfoEffectRequest,
+    source: &DaslightCurveSource,
+    fixture_phase_offset: f32,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> f32 {
+    let outer_phase = if let Some(clock_sync) = request.clock_sync {
+        let beats = clock_sync.beats.max(0.000_1);
+        let beat_position = clock.beat_counter as f32 + clock.beat_phase;
+        (beat_position / beats * rate).rem_euclid(1.0)
+    } else {
+        let duration_seconds = request.period_ms.max(10) as f32 / 1_000.0;
+        let elapsed = now.saturating_duration_since(created_at).as_secs_f32();
+        (elapsed * rate / duration_seconds).rem_euclid(1.0)
+    };
+    let sample_ms = u64::from(source.sample_ms.max(1));
+    let sample_count = (request.period_ms.max(sample_ms) / sample_ms).max(1);
+    let shifted_outer_phase = (outer_phase + fixture_phase_offset).rem_euclid(1.0);
+    let sample_index = ((shifted_outer_phase * sample_count as f32).floor() as u64)
+        .min(sample_count.saturating_sub(1));
+
+    let source_value = match &request.shape {
+        LfoShape::Sine => {
+            let source_position = sample_index as f32 / sample_count as f32;
+            let phase = source_position * source.rate * 0.5 - request.phase;
+            ((phase * std::f32::consts::TAU).sin() * source.size * 0.5
+                + source.offset
+                + source.size * 0.5)
+                .clamp(0.0, 1.0)
+        }
+        LfoShape::Saw => {
+            let source_position = sample_index as f32 / sample_count as f32;
+            let source_phase = source_position * source.rate * 0.5 - request.phase;
+            let centered = source_phase - (source_phase + 0.5).floor();
+            (source.offset - centered * source.size + source.size - 0.5).clamp(0.0, 1.0)
+        }
+        LfoShape::Strobe => {
+            let samples_per_second = 1_000.0 / f32::from(source.sample_ms.max(1));
+            let interval_samples = (samples_per_second / source.rate).floor().max(1.0) as u64;
+            let interval_position = sample_index % interval_samples;
+            let extended_high_samples = interval_samples as f32 * request.phase * 0.5;
+            if interval_position == 0 || (interval_position as f32) < extended_high_samples {
+                (source.offset + source.size * 0.5).clamp(0.0, 1.0)
+            } else {
+                source.offset.clamp(0.0, 1.0)
+            }
+        }
+        _ => {
+            let phase = shifted_outer_phase + request.phase;
+            evaluate_lfo_shape(&request.shape, phase)
+        }
+    };
+    let low = f32::from(request.low) / f32::from(u16::MAX);
+    let high = f32::from(request.high) / f32::from(u16::MAX);
+    let span = high - low;
+    if span.abs() <= f32::EPSILON {
+        0.0
+    } else {
+        ((source_value - low) / span).clamp(0.0, 1.0)
+    }
 }
 
 #[cfg(test)]
@@ -32011,6 +32125,7 @@ mod tests {
                     fixture_spread: 0.0,
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
+                    daslight_curve: None,
                 },
             });
             runtime.apply_command(EngineCommand::SetEffectEnabled {
@@ -32357,6 +32472,7 @@ mod tests {
             fixture_spread: 0.0,
             beam_targets: Vec::new(),
             blend_mode,
+            daslight_curve: None,
         }
     }
 
@@ -36857,6 +36973,7 @@ mod tests {
                     fixture_spread: 0.0,
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
+                    daslight_curve: None,
                 },
             })
             .unwrap();
@@ -37302,6 +37419,7 @@ mod tests {
                     fixture_spread: 0.0,
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
+                    daslight_curve: None,
                 },
             })
             .unwrap();
@@ -47216,6 +47334,7 @@ mod tests {
                     fixture_spread: 0.0,
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
+                    daslight_curve: None,
                 },
             })
             .unwrap();
@@ -47529,6 +47648,7 @@ mod tests {
                     fixture_spread: 0.0,
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
+                    daslight_curve: None,
                 },
             })
             .unwrap();
@@ -48072,6 +48192,7 @@ mod tests {
                     fixture_spread: 0.0,
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
+                    daslight_curve: None,
                 },
             })
             .unwrap();
@@ -48113,6 +48234,7 @@ mod tests {
                     fixture_spread: 0.0,
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
+                    daslight_curve: None,
                 },
             })
             .unwrap();
@@ -48179,6 +48301,7 @@ mod tests {
                     fixture_spread: 0.0,
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
+                    daslight_curve: None,
                 },
             })
             .unwrap();
@@ -48217,6 +48340,7 @@ mod tests {
                     fixture_spread: 0.0,
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
+                    daslight_curve: None,
                 },
             })
             .unwrap();
@@ -48254,6 +48378,7 @@ mod tests {
                     fixture_spread: 0.0,
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
+                    daslight_curve: None,
                 },
             })
             .unwrap();
@@ -48320,6 +48445,7 @@ mod tests {
                     fixture_spread: 0.0,
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
+                    daslight_curve: None,
                 },
             })
             .unwrap();
@@ -48363,6 +48489,7 @@ mod tests {
                     fixture_spread: 0.0,
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
+                    daslight_curve: None,
                 },
             })
             .unwrap();
@@ -48494,6 +48621,7 @@ mod tests {
                     fixture_spread: 0.0,
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
+                    daslight_curve: None,
                 },
             })
             .unwrap();
@@ -48584,6 +48712,7 @@ mod tests {
                     fixture_spread: 0.0,
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
+                    daslight_curve: None,
                 },
             })
             .unwrap();
@@ -48667,6 +48796,7 @@ mod tests {
                     fixture_spread: 0.0,
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
+                    daslight_curve: None,
                 },
             })
             .unwrap();
@@ -48740,6 +48870,7 @@ mod tests {
                     fixture_spread: 0.0,
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
+                    daslight_curve: None,
                 },
             })
             .unwrap();
@@ -49134,6 +49265,7 @@ mod tests {
                     fixture_spread: 0.0,
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
+                    daslight_curve: None,
                 },
             })
             .unwrap();
@@ -49223,6 +49355,7 @@ mod tests {
                     fixture_spread: 0.0,
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
+                    daslight_curve: None,
                 },
             })
             .unwrap();
@@ -49294,6 +49427,7 @@ mod tests {
                     fixture_spread: 0.0,
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
+                    daslight_curve: None,
                 },
             })
             .unwrap();
@@ -49379,6 +49513,7 @@ mod tests {
                         fixture_spread: 0.0,
                         beam_targets: Vec::new(),
                         blend_mode: EffectBlendMode::Override,
+                        daslight_curve: None,
                     },
                 })
                 .unwrap();
@@ -49422,6 +49557,7 @@ mod tests {
                     fixture_spread: 0.0,
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Add,
+                    daslight_curve: None,
                 },
             })
             .unwrap();
@@ -49645,6 +49781,7 @@ mod tests {
                         fixture_spread: 0.0,
                         beam_targets: Vec::new(),
                         blend_mode,
+                        daslight_curve: None,
                     },
                 })
                 .unwrap();
@@ -49740,6 +49877,7 @@ mod tests {
                     fixture_spread: 0.0,
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
+                    daslight_curve: None,
                 },
             })
             .unwrap();
@@ -50005,10 +50143,201 @@ mod tests {
     }
 
     #[test]
-    fn strobe_lfo_owned_cue_recall_flashes_dimmer_low_and_high() {
+    fn daslight_strobe_uses_the_native_40ms_rate_quantization() {
+        let mut request = test_lfo_request(
+            "Imported Strobe",
+            LfoShape::Strobe,
+            5_000,
+            0.0,
+            EffectBlendMode::Override,
+            0,
+            u16::MAX,
+        );
+        request.daslight_curve = Some(DaslightCurveSource {
+            rate: 2.0,
+            size: 2.0,
+            offset: 0.0,
+            sample_ms: 40,
+        });
+        let started = Instant::now();
+        let clock = ClockSnapshot::default();
+        let samples = [0, 39, 41, 479, 481, 519, 521, 961].map(|elapsed_ms| {
+            evaluate_lfo_effect(
+                &request,
+                started,
+                started + Duration::from_millis(elapsed_ms),
+                &clock,
+            )
+        });
+        assert_eq!(
+            samples,
+            [u16::MAX, u16::MAX, 0, 0, u16::MAX, u16::MAX, 0, u16::MAX]
+        );
+
+        request.phase = 0.4;
+        let extended = [0, 41, 81, 121].map(|elapsed_ms| {
+            evaluate_lfo_effect(
+                &request,
+                started,
+                started + Duration::from_millis(elapsed_ms),
+                &clock,
+            )
+        });
+        assert_eq!(extended, [u16::MAX, u16::MAX, u16::MAX, 0]);
+    }
+
+    #[test]
+    fn daslight_sinus_preserves_source_phase_and_sample_grid() {
+        let mut request = test_lfo_request(
+            "Imported Sinus",
+            LfoShape::Sine,
+            1_000,
+            0.0,
+            EffectBlendMode::Override,
+            0,
+            u16::MAX,
+        );
+        request.daslight_curve = Some(DaslightCurveSource {
+            rate: 2.0,
+            size: 1.0,
+            offset: 0.0,
+            sample_ms: 40,
+        });
+        let started = Instant::now();
+        let clock = ClockSnapshot::default();
+        let at_zero = evaluate_lfo_effect(&request, started, started, &clock);
+        let before_next_sample = evaluate_lfo_effect(
+            &request,
+            started,
+            started + Duration::from_millis(39),
+            &clock,
+        );
+        let after_next_sample = evaluate_lfo_effect(
+            &request,
+            started,
+            started + Duration::from_millis(41),
+            &clock,
+        );
+        let near_peak = evaluate_lfo_effect(
+            &request,
+            started,
+            started + Duration::from_millis(241),
+            &clock,
+        );
+        assert_eq!(at_zero, 32_768);
+        assert_eq!(before_next_sample, at_zero);
+        assert!((40_000..=42_000).contains(&after_next_sample));
+        assert!(near_peak > 65_000);
+
+        request.phase = 0.25;
+        assert_eq!(evaluate_lfo_effect(&request, started, started, &clock), 0);
+    }
+
+    #[test]
+    fn daslight_sinus_clamps_each_sample_instead_of_only_its_endpoints() {
+        let mut request = test_lfo_request(
+            "Clipped Sinus",
+            LfoShape::Sine,
+            1_000,
+            0.0,
+            EffectBlendMode::Override,
+            0,
+            49_151,
+        );
+        request.daslight_curve = Some(DaslightCurveSource {
+            rate: 2.0,
+            size: 1.0,
+            offset: -0.25,
+            sample_ms: 40,
+        });
+        let started = Instant::now();
+        let clock = ClockSnapshot::default();
+        let at_zero = evaluate_lfo_effect(&request, started, started, &clock);
+        let clamped_trough = [640, 680, 720, 760, 800, 840].map(|elapsed_ms| {
+            evaluate_lfo_effect(
+                &request,
+                started,
+                started + Duration::from_millis(elapsed_ms),
+                &clock,
+            )
+        });
+
+        assert!((16_300..=16_500).contains(&at_zero), "t=0 {at_zero}");
+        assert_eq!(clamped_trough, [0; 6]);
+    }
+
+    #[test]
+    fn daslight_curve_profile_rejects_unrepresentable_source_parameters() {
+        let mut request = test_lfo_request(
+            "Imported Curve",
+            LfoShape::Triangle,
+            1_000,
+            0.0,
+            EffectBlendMode::Override,
+            0,
+            u16::MAX,
+        );
+        request.daslight_curve = Some(DaslightCurveSource {
+            rate: 2.0,
+            size: 1.0,
+            offset: 0.0,
+            sample_ms: 40,
+        });
+        assert!(validate_lfo_effect_request(&request)
+            .unwrap_err()
+            .contains("only valid for Sine, Saw, or Strobe"));
+
+        request.shape = LfoShape::Sine;
+        request.daslight_curve.as_mut().unwrap().size = -0.01;
+        assert!(validate_lfo_effect_request(&request)
+            .unwrap_err()
+            .contains("size must be finite and non-negative"));
+
+        request.daslight_curve.as_mut().unwrap().size = 1.0;
+        request.period_ms = 39;
+        assert!(validate_lfo_effect_request(&request)
+            .unwrap_err()
+            .contains("at least one 40 ms sample"));
+    }
+
+    #[test]
+    fn daslight_inverse_ramp_matches_homecoming_source_range_and_phase() {
+        let mut request = test_lfo_request(
+            "all_rampFlash",
+            LfoShape::Saw,
+            5_000,
+            0.495,
+            EffectBlendMode::Override,
+            65_207,
+            0,
+        );
+        request.daslight_curve = Some(DaslightCurveSource {
+            rate: 2.0,
+            size: 1.562,
+            offset: -0.848,
+            sample_ms: 40,
+        });
+        let started = Instant::now();
+        let clock = ClockSnapshot::default();
+        let values = [0, 2_481, 4_961, 5_001].map(|elapsed_ms| {
+            evaluate_lfo_effect(
+                &request,
+                started,
+                started + Duration::from_millis(elapsed_ms),
+                &clock,
+            )
+        });
+        assert!(values[0] > 64_000, "start={}", values[0]);
+        assert!((13_000..=15_000).contains(&values[1]), "mid={}", values[1]);
+        assert_eq!(values[2], 0, "clamped plateau={}", values[2]);
+        assert!(values[3] > 64_000, "wrapped={}", values[3]);
+    }
+
+    #[test]
+    fn native_strobe_lfo_owned_cue_recall_flashes_dimmer_low_and_high() {
         let mut runtime = runtime_with_lfo_effects(&[]);
         let request = test_lfo_request(
-            "Fl-Strobe",
+            "Native Strobe",
             LfoShape::Strobe,
             2_500,
             0.0,
@@ -50028,12 +50357,12 @@ mod tests {
         let second_flash =
             runtime.render_dmx_frame_for_universe(0, recalled_at + Duration::from_millis(250))[0];
         println!(
-            "Fl-Strobe recall samples: t=0ms {first_flash}, t=125ms {mid_gap}, t=250ms {second_flash}"
+            "Native Strobe recall samples: t=0ms {first_flash}, t=125ms {mid_gap}, t=250ms {second_flash}"
         );
         assert_eq!(
             [first_flash, mid_gap, second_flash],
             [255, 0, 255],
-            "Fl-Strobe-like recall must flash Dimmer at 0/250 ms and return low at 125 ms"
+            "Native Strobe recall must flash Dimmer at 0/250 ms and return low at 125 ms"
         );
     }
 
@@ -50177,6 +50506,7 @@ mod tests {
             fixture_spread: 0.0,
             beam_targets: Vec::new(),
             blend_mode: EffectBlendMode::Override,
+            daslight_curve: None,
         };
         let clock = ClockSnapshot {
             bpm: 120.0,
@@ -50234,6 +50564,7 @@ mod tests {
                 fixture_spread: 0.75,
                 beam_targets: Vec::new(),
                 blend_mode: EffectBlendMode::Override,
+                daslight_curve: None,
             },
         });
         assert_eq!(runtime.last_error, None);
@@ -51080,6 +51411,7 @@ mod tests {
                 feature_attribute: "Dimmer".to_string(),
             }],
             blend_mode: EffectBlendMode::Override,
+            daslight_curve: None,
         };
         let now = Instant::now();
         let effect = RuntimeEffect {
@@ -53863,6 +54195,7 @@ mod tests {
                         fixture_spread: 0.0,
                         beam_targets: Vec::new(),
                         blend_mode: EffectBlendMode::Override,
+                        daslight_curve: None,
                     },
                     &runtime.fixtures,
                 )

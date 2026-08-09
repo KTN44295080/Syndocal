@@ -1863,6 +1863,13 @@ export interface TimelineSnapshot {
   duration_ms: number;
 }
 
+export interface DaslightCurveSource {
+  rate: number;
+  size: number;
+  offset: number;
+  sample_ms: number;
+}
+
 export interface LfoEffectRequest {
   label: string;
   fixture_ids: number[];
@@ -1878,6 +1885,7 @@ export interface LfoEffectRequest {
   fixture_spread?: number;
   beam_targets?: EffectBeamTarget[];
   blend_mode: EffectBlendMode;
+  daslight_curve?: DaslightCurveSource | null;
 }
 
 export interface EffectClockSync {

@@ -2313,6 +2313,23 @@ pub struct ColorEffectRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DaslightCurveSource {
+    /// The Curve FX Rate value stored in the Daslight DVC generator.
+    pub rate: f32,
+    /// The generator Size value, before Daslight applies its native 0..1 clamp.
+    pub size: f32,
+    /// The generator Offset value, before Daslight applies its native 0..1 clamp.
+    pub offset: f32,
+    /// Daslight 5.0.6.2 precomputes Curve FX on a 40 ms sample grid.
+    #[serde(default = "default_daslight_curve_sample_ms")]
+    pub sample_ms: u16,
+}
+
+fn default_daslight_curve_sample_ms() -> u16 {
+    40
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LfoEffectRequest {
     pub label: String,
     pub fixture_ids: Vec<FixtureId>,
@@ -2335,6 +2352,10 @@ pub struct LfoEffectRequest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub beam_targets: Vec<EffectBeamTarget>,
     pub blend_mode: EffectBlendMode,
+    /// Preserves the sampled source-buffer semantics of a DVC Curve FX.
+    /// Native Syndocal LFOs leave this absent and retain their existing behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daslight_curve: Option<DaslightCurveSource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -4257,6 +4278,7 @@ mod tests {
                     feature_attribute: "Dimmer".to_string(),
                 }],
                 blend_mode: super::EffectBlendMode::Override,
+                daslight_curve: None,
             })),
             transition_ms: Some(900),
         };
@@ -4275,6 +4297,32 @@ mod tests {
             0.5
         );
         assert_eq!(decoded.transition_ms, Some(900));
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&encoded).unwrap()["params"]["Lfo"]
+                .get("daslight_curve")
+                .is_none()
+        );
+
+        let mut imported = target.clone();
+        let Some(super::EffectParamsSnapshot::Lfo(imported_request)) = imported.params.as_mut()
+        else {
+            panic!("imported target must contain LFO params");
+        };
+        imported_request.daslight_curve = Some(super::DaslightCurveSource {
+            rate: 2.0,
+            size: 1.562,
+            offset: -0.848,
+            sample_ms: 40,
+        });
+        let imported_encoded = serde_json::to_string(&imported).unwrap();
+        let imported_decoded: super::CueEffectTarget =
+            serde_json::from_str(&imported_encoded).unwrap();
+        assert_eq!(imported_decoded, imported);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&imported_encoded).unwrap()["params"]["Lfo"]
+                ["daslight_curve"]["sample_ms"],
+            40
+        );
 
         let mut legacy_owned_value = serde_json::to_value(&target).unwrap();
         legacy_owned_value["params"]["Lfo"]
@@ -4285,6 +4333,10 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("beam_targets");
+        legacy_owned_value["params"]["Lfo"]
+            .as_object_mut()
+            .unwrap()
+            .remove("daslight_curve");
         let legacy_owned: super::CueEffectTarget =
             serde_json::from_value(legacy_owned_value).unwrap();
         let Some(super::EffectParamsSnapshot::Lfo(legacy_request)) = legacy_owned.params else {
@@ -4292,6 +4344,7 @@ mod tests {
         };
         assert_eq!(legacy_request.fixture_spread, 0.0);
         assert!(legacy_request.beam_targets.is_empty());
+        assert!(legacy_request.daslight_curve.is_none());
         assert!(serde_json::to_value(legacy_request)
             .unwrap()
             .get("fixture_spread")

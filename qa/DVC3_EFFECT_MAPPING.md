@@ -27,9 +27,9 @@
 |---|---|---|
 | 7 | **Sinus** | **1=Rate**(10✓×2 / 2✓), **2=Size**(1⇔1.0✓), **3=Phase**(0.25⇔25.0✓ / 0.748⇔74.8✓ — 0..1正規化), **4=Offset**(0✓), **5=Phasing**(0✓) — **全一致・3検体** |
 | 3 | **Inverse Ramp**（2026-07-19 homecomingで照合） | all_rampFlash: Rate=2⇔1=2✓, Size=1.56⇔2=1.562✓, Phase=49.5⇔3=0.495✓, Offset=-84.8⇔4=-0.848✓ — **全一致** |
-| 10 | 波形未照合（Documents版Fl-Strobe） | 保留 |
+| 10 | **Strobe** | Documents版Fl-StrobeのUI名に加え、Daslight 5.0.6.2バイナリの `CStrobeEffect` 評価関数で40msサンプル列・Rate間隔・Phaseパルス幅を確定 |
 
-時間換算: `EFFECT DURATION=5000` × Rate=N → 周期 = 5000/N ms（Sinus Rate=10 → 500ms周期）。
+時間換算（2026-08-09訂正）: `EFFECT DURATION` はCurveの外側サンプルバッファ長であり、Rateで割った値は周期ではない。Sinus / Ramp系はバッファ全体に `Rate/2` 周期を描き、全Curveを40ms刻みで評価する。したがって `DURATION=5000, Rate=10` は500ms周期ではなく、5秒バッファ内に5周期（実効1秒周期）。DVC由来LFOは `daslight_curve={rate,size,offset,sample_ms:40}` を保持し、通常のSyndocal LFOとは別に原サンプル列を再生する。Size/Offsetを端点だけへ畳み込まず各サンプルで0..1 clampするため、`all_rampFlash`の負側がDMX 0へ張り付く区間も保持する。
 Phasing = 選択ビーム順の位相分散。2026-08-08 に Syndocal LFO の `fixture_spread` へ 0..1 の正規化値を無変換で保存し、`phase_i = global_phase + i / target_count * Phasing` として command-time に灯体順をコンパイルする実装へ更新した。直接指定灯体の後に group を patch 順で展開し、group membership 変更時も再コンパイルする。Sinus / Inverse Ramp / Strobe の非ゼロ値 0.2 / 0.6 / 0.4 と、3灯体の DMX8 出力 `[64, 0, 128]`（authored order `[2,1,3]`, Saw, spread=0.75, t=0）を回帰試験で固定。旧 `.sdc` は欠落時 0、0 は従来どおり非出力。Attribute value=Absolute。
 
 ### COLOR FX（RACK=2, EFFECT TYPE=2）→ Syndocal Color エンジン + 新規パターンレシピ
@@ -158,11 +158,12 @@ Syndocalの現行Scene Settingsでは、作成時のMAPPINGS / COLOR MAPPINGSを
 | Pulse | 4 | | Custom | 13 |
 | Square | 9 | | | |
 
-- グラフ窓の表示規則: **窓 = Rate/2 周期**（Rate=1で半周期、Rate=2で1周期、Rate=10で5周期を実測確認）。
-- **Strobe波形の実測**: 周期あたり**10本の等間隔パルス**（Rate=2窓で両端含む11エッジ、Rate=1半周期窓で5本）。
-  パルス幅は極細（周期の1〜2%程度、描画線幅レベル）。ベースは下限、ピークはSize=1.0でゼロ軸（半振幅）。
-  → **Size=2でフルレンジフラッシュ**。Documents版Fl-Strobeは Rate=2/Size=2/Phase=0/Offset=0/Phasing=0/
-  DURATION=5000 = 周期2500ms・250ms間隔のフルフラッシュ×10。
+- グラフ窓の表示規則: **窓 = Rate/2 周期**（Rate=1で半周期、Rate=2で1周期、Rate=10で5周期を実測確認）。以前はこの窓を1周期と誤読して `DURATION/Rate` としていたが、下記バイナリ解析で訂正した。
+- **2026-08-09 Daslight 5.0.6.2静的解析**: `C:\Daslight 5\Daslight 5\Daslight 5.exe`（FileVersion `25.0905.165.111`, SHA-256 `325D83EC54D41305D60B466B486EFE413B8F3E2656B45A544277C0CE9B87AE2A`）のRTTI/vtableから `CSinusEffect=0x140370250`, `CInverseRampEffect=0x14036fcb0`, `CStrobeEffect=0x1403705b0` を特定した。共通サンプル間隔は40ms。
+  - Sinus: `t=sample_index/sample_count`; `clamp(sin(2π*(Rate/2*t-Phase))*Size/2 + Offset + Size/2, 0, 1)`。
+  - Inverse Ramp: `x=Rate/2*t-Phase`; `centered=x-floor(x+0.5)`; `clamp(Offset-centered*Size+Size-0.5, 0, 1)`。
+  - Strobe: `interval_samples=floor(25/Rate)`; `remainder=sample_index%interval_samples`; `remainder==0` または `remainder<interval_samples*Phase/2` のサンプルだけHigh。Low=`Offset`, High=`Offset+Size/2`（各0..1 clamp）。
+- したがってDocuments版Fl-Strobe（Rate=2/Size=2/Phase=0/Offset=0/Phasing=0/DURATION=5000）は、5秒バッファ、12サンプル=480ms間隔、1サンプル=40ms幅のフルフラッシュである。旧実装の250ms間隔・2%幅は撤回した。
 - Pulse(4)は矩形ではなく減衰振動波、Square(9)は50%デューティ矩形（キャプチャ有）。波形切替でRate等は既定値へ戻る。
 
 ### COLOR FX ID=129 = Plasma（B-WineRed (2) 実UI照合・全11パラメータ一致）

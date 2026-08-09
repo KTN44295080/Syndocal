@@ -236,6 +236,7 @@ import type {
   DmxOutputConfig,
   DvcImportReport,
   DmxControlMapping,
+  DaslightCurveSource,
   DmxInputConfig,
   DmxInputStatus,
   EffectBlendMode,
@@ -1110,6 +1111,7 @@ const cueOwnedEffectSummary = (
       video_targets: request.video_targets,
       shape: request.shape,
       fixture_spread: request.fixture_spread ?? 0,
+      lfo: request,
     };
   }
   if ("PositionWave" in params) {
@@ -1842,6 +1844,8 @@ export default function App() {
   const [effectPeriod, setEffectPeriod] = createSignal(1000);
   const [effectClockSyncBeats, setEffectClockSyncBeats] = createSignal<number | null>(null);
   const [lfoFixtureSpread, setLfoFixtureSpread] = createSignal(0);
+  const [lfoDaslightCurveSource, setLfoDaslightCurveSource] =
+    createSignal<DaslightCurveSource | null>(null);
   const [colorEffectStops, setColorEffectStops] = createSignal<ColorEffectStop[]>(
     defaultColorEffectStops.map((stop) => ({ ...stop, color: { ...stop.color } })),
   );
@@ -5066,6 +5070,9 @@ export default function App() {
       setMessage(`Effect ${sourceEffectId} remains unchanged; Type change starts a new ${nextType} effect.`);
     }
     setEffectType(nextType);
+    if (nextType !== previousType) {
+      setLfoDaslightCurveSource(null);
+    }
     if (!preserveChooserFamily) {
       const family = chooserFamilyForEffectType(nextType);
       setEffectChooserFamily(family);
@@ -16350,6 +16357,7 @@ export default function App() {
           ...requestBase,
           period_ms: effectPeriod(),
           fixture_spread: lfoFixtureSpread(),
+          daslight_curve: lfoDaslightCurveSource() ?? undefined,
         },
       };
     }
@@ -16472,6 +16480,9 @@ export default function App() {
     const targetPlan = effectDraftTargetPlan(effect, snapshot().fixtures);
     setEditingEffectId(effect.id);
     setEffectType(effect.effect_type);
+    setLfoDaslightCurveSource(
+      effect.effect_type === "Lfo" ? effect.lfo?.daslight_curve ?? null : null,
+    );
     const effectFamily = chooserFamilyForEffectType(effect.effect_type);
     setEffectChooserFamily(effectFamily);
     if (effect.effect_type === "Chaser") {
@@ -16768,6 +16779,7 @@ export default function App() {
         ?.controls[0]?.attribute
       ?? "";
     setEditingEffectId(null);
+    setLfoDaslightCurveSource(null);
     setEffectVideoTargetLinked(false);
     setSelectedMappingFixtureIds(fixtureIds);
     if (fixtureIds.length > 0) {

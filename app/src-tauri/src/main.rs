@@ -20080,6 +20080,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                     fixture_spread: effect.fixture_spread,
                     beam_targets: Vec::new(),
                     blend_mode: effect.blend_mode.clone(),
+                    daslight_curve: None,
                 }
             };
             Ok(EffectPreset {
@@ -33324,7 +33325,15 @@ f 1 2 3
     #[test]
     fn scene_owned_fx_command_matches_imported_shape_roundtrips_and_removes() {
         let cue_id = 17;
-        let params = EffectParamsSnapshot::Lfo(sample_lfo_request());
+        let mut source_request = sample_lfo_request();
+        source_request.label = "Imported Sinus".to_string();
+        source_request.daslight_curve = Some(protocol::DaslightCurveSource {
+            rate: 10.0,
+            size: 0.5,
+            offset: 0.1,
+            sample_ms: 40,
+        });
+        let params = EffectParamsSnapshot::Lfo(source_request);
         let snapshot = EngineSnapshot {
             fixtures: vec![project_fixture(1, "Scene fixture", 0, 1)],
             cues: vec![protocol::CueSummary {
@@ -33372,6 +33381,20 @@ f 1 2 3
         assert_eq!(
             roundtrip.snapshot.cues[0].effect_targets,
             vec![imported_shape]
+        );
+        let Some(EffectParamsSnapshot::Lfo(roundtripped_request)) =
+            roundtrip.snapshot.cues[0].effect_targets[0].params.as_ref()
+        else {
+            panic!("expected a round-tripped imported LFO request");
+        };
+        assert_eq!(
+            roundtripped_request.daslight_curve,
+            Some(protocol::DaslightCurveSource {
+                rate: 10.0,
+                size: 0.5,
+                offset: 0.1,
+                sample_ms: 40,
+            })
         );
         assert!(roundtrip.snapshot.effects.is_empty());
 
@@ -37725,6 +37748,7 @@ f 1 2 3
             fixture_spread: 0.0,
             beam_targets: Vec::new(),
             blend_mode: protocol::EffectBlendMode::Override,
+            daslight_curve: None,
         }
     }
 
@@ -38166,6 +38190,7 @@ f 1 2 3
                     feature_attribute: "Dimmer".to_string(),
                 }],
                 blend_mode: protocol::EffectBlendMode::Override,
+                daslight_curve: None,
             }),
             color: None,
             chaser: None,
@@ -40095,6 +40120,7 @@ f 1 2 3
                     fixture_spread: 0.0,
                     beam_targets: Vec::new(),
                     blend_mode: protocol::EffectBlendMode::Add,
+                    daslight_curve: None,
                 }),
                 position_wave: None,
                 color: None,

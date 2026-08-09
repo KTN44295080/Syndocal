@@ -12,16 +12,16 @@ use protocol::{
     ChaserDirection, ChaserEffectRequest, ChaserFeature, ChaserStep, ChildTimelineSummary,
     ColorEffectAlgorithm, ColorEffectBeamTarget, ColorEffectColor, ColorEffectInterpolation,
     ColorEffectRequest, ColorEffectSpatialPattern, ColorEffectSpatialRecipe, ColorEffectStop,
-    CueEffectTarget, CueFixtureTarget, CueListSummary, CueSummary, DmxControlAction,
-    DmxControlMapping, DmxModeSummary, DmxOutputConfig, DmxUniversePreview, EffectBeamTarget,
-    EffectBlendMode, EffectClockSync, EffectParamsSnapshot, EngineSnapshot, FixtureProfileSummary,
-    GeometrySummary, LfoEffectRequest, LfoShape, MidiControlAction, MidiControlFeedback,
-    MidiControlMapping, MidiControlMessage, MidiFeedbackMessage, MoveCoordinateMode, MoveDirection,
-    MoveEffectRequest, MoveInterpolation, MovePathPoint, PatchedFixtureSummary, ProjectFile,
-    Rotation3, StageMapConfig, TimelineAudioClipSummary, TimelineCueEventSummary,
-    TimelineLayerKind, TimelineLayerSummary, TimelineTrackKind, TouchControlBinding,
-    TouchControlKind, TouchControlSummary, TouchFeaturePresetTarget, TouchPageSummary,
-    TouchSurfaceSummary, Vec3,
+    CueEffectTarget, CueFixtureTarget, CueListSummary, CueSummary, DaslightCurveSource,
+    DmxControlAction, DmxControlMapping, DmxModeSummary, DmxOutputConfig, DmxUniversePreview,
+    EffectBeamTarget, EffectBlendMode, EffectClockSync, EffectParamsSnapshot, EngineSnapshot,
+    FixtureProfileSummary, GeometrySummary, LfoEffectRequest, LfoShape, MidiControlAction,
+    MidiControlFeedback, MidiControlMapping, MidiControlMessage, MidiFeedbackMessage,
+    MoveCoordinateMode, MoveDirection, MoveEffectRequest, MoveInterpolation, MovePathPoint,
+    PatchedFixtureSummary, ProjectFile, Rotation3, StageMapConfig, TimelineAudioClipSummary,
+    TimelineCueEventSummary, TimelineLayerKind, TimelineLayerSummary, TimelineTrackKind,
+    TouchControlBinding, TouchControlKind, TouchControlSummary, TouchFeaturePresetTarget,
+    TouchPageSummary, TouchSurfaceSummary, Vec3,
 };
 use roxmltree::{Document, Node};
 use serde::Serialize;
@@ -33,6 +33,7 @@ const DVC_FIXTURE_RECORD_BYTES: usize = 27;
 const DVC_BEAM_FEATURE_SLOTS: usize = 13;
 const DVC_BEAM_MISMATCH_WARNING_LIMIT: usize = 16;
 const DVC_REPORT_DETAIL_LIMIT: usize = 256;
+const DASLIGHT_CURVE_SAMPLE_MS: u16 = 40;
 // Keep this paired with app/src/fixtureVisuals.ts::mappingFixtureGridUnit,
 // the nominal par/point cell used by mappingFixtureStageSize.
 const SYNDOCAL_STANDARD_FIXTURE_GLYPH_WORLD_SIZE: f32 = 5.0;
@@ -2923,17 +2924,19 @@ fn convert_dvc_inverse_ramp_effect(
         .ok_or_else(|| "Inverse Ramp EFFECT is missing DURATION".to_string())?
         .parse::<f64>()
         .map_err(|error| format!("Inverse Ramp DURATION is invalid: {error}"))?;
-    let period = duration_ms / rate;
-    if !period.is_finite() || period < 10.0 || period > u64::MAX as f64 {
+    if !duration_ms.is_finite()
+        || duration_ms < f64::from(DASLIGHT_CURVE_SAMPLE_MS)
+        || duration_ms > u64::MAX as f64
+    {
         return Err(format!(
-            "DURATION / Rate must produce an LFO period of at least 10 ms, found {period}"
+            "DURATION must be a finite Curve source buffer of at least {DASLIGHT_CURVE_SAMPLE_MS} ms, found {duration_ms}"
         ));
     }
-    let period_ms = period.round() as u64;
-    let center = 0.5 + offset;
-    let half_span = size * 0.5;
-    let raw_low = center - half_span;
-    let raw_high = center + half_span;
+    let period_ms = duration_ms.round() as u64;
+    // Daslight 5.0.6.2 CInverseRampEffect evaluates a centered saw and then
+    // applies `Offset - centered * Size + Size - 0.5`, clamped to 0..1.
+    let raw_low = offset + size * 0.5 - 0.5;
+    let raw_high = offset + size * 1.5 - 0.5;
     let low = normalized_dmx(raw_high);
     let high = normalized_dmx(raw_low);
     let mut targets = dvc_rack_targets(rack, fixture_refs)?;
@@ -2946,11 +2949,6 @@ fn convert_dvc_inverse_ramp_effect(
     if incompatible_dimmer_targets > 0 {
         approximations.push(format!(
             "{incompatible_dimmer_targets} fixture target(s) without a Dimmer attribute or addressable color beam were omitted"
-        ));
-    }
-    if raw_low < 0.0 || raw_high > 1.0 {
-        approximations.push(format!(
-            "Size={size} and Offset={offset} produced raw range {raw_low:.3}..{raw_high:.3}; endpoints were clamped to DMX16"
         ));
     }
     let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
@@ -2974,9 +2972,15 @@ fn convert_dvc_inverse_ramp_effect(
         fixture_spread: phasing as f32,
         beam_targets,
         blend_mode: EffectBlendMode::Override,
+        daslight_curve: Some(DaslightCurveSource {
+            rate: rate as f32,
+            size: size as f32,
+            offset: offset as f32,
+            sample_ms: DASLIGHT_CURVE_SAMPLE_MS,
+        }),
     };
     let note = format!(
-        "feature=Dimmer; period_ms=round(DURATION/Rate)={period_ms}; descending_ramp=Saw directed from low-field {low} to high-field {high}: output_i(t)={low}+({high}-{low})*fract(t/period+Phase+i/target_count*Phasing); phase={phase}; fixture_spread={phasing}; size={size}; offset={offset}; {clock_note}"
+        "feature=Dimmer; Daslight sampled Curve buffer duration_ms={period_ms}; sample_ms={DASLIGHT_CURVE_SAMPLE_MS}; rate={rate}; descending_ramp=Saw directed from low-field {low} to high-field {high}; source_range={raw_low:.3}..{raw_high:.3} with native 0..1 clamp; source_phase={phase}; fixture_spread={phasing}; size={size}; offset={offset}; {clock_note}"
     );
     Ok(ConvertedDvcEffect {
         target: Some(CueEffectTarget {
@@ -3029,17 +3033,21 @@ fn convert_dvc_sinus_effect(
         .ok_or_else(|| "Sinus EFFECT is missing DURATION".to_string())?
         .parse::<f64>()
         .map_err(|error| format!("Sinus DURATION is invalid: {error}"))?;
-    let period = duration_ms / rate;
-    if !period.is_finite() || period < 10.0 || period > u64::MAX as f64 {
+    if !duration_ms.is_finite()
+        || duration_ms < f64::from(DASLIGHT_CURVE_SAMPLE_MS)
+        || duration_ms > u64::MAX as f64
+    {
         return Err(format!(
-            "DURATION / Rate must produce an LFO period of at least 10 ms, found {period}"
+            "DURATION must be a finite Curve source buffer of at least {DASLIGHT_CURVE_SAMPLE_MS} ms, found {duration_ms}"
         ));
     }
-    let period_ms = period.round() as u64;
-    let center = 0.5 + offset;
-    let half_span = size * 0.5;
-    let low = normalized_dmx(center - half_span);
-    let high = normalized_dmx(center + half_span);
+    let period_ms = duration_ms.round() as u64;
+    // Daslight 5.0.6.2 CSinusEffect evaluates
+    // `sin(Rate*pi*t - Phase*2*pi) * Size/2 + Offset + Size/2`.
+    let raw_low = offset;
+    let raw_high = offset + size;
+    let low = normalized_dmx(raw_low);
+    let high = normalized_dmx(raw_high);
     let mut targets = dvc_rack_targets(rack, fixture_refs)?;
     let incompatible_dimmer_targets = retain_dvc_dimmer_targets(&mut targets, fixture_refs);
     if targets.fixture_ids.is_empty() {
@@ -3072,9 +3080,15 @@ fn convert_dvc_sinus_effect(
         fixture_spread: phasing as f32,
         beam_targets,
         blend_mode: EffectBlendMode::Override,
+        daslight_curve: Some(DaslightCurveSource {
+            rate: rate as f32,
+            size: size as f32,
+            offset: offset as f32,
+            sample_ms: DASLIGHT_CURVE_SAMPLE_MS,
+        }),
     };
     let note = format!(
-        "feature=Dimmer; period_ms=round(DURATION/Rate)={period_ms}; low={low}; high={high}; phase={phase}; fixture_spread={phasing}; output_i(t)=sine(t/period+Phase+i/target_count*Phasing); offset={offset}; {clock_note}"
+        "feature=Dimmer; Daslight sampled Curve buffer duration_ms={period_ms}; sample_ms={DASLIGHT_CURVE_SAMPLE_MS}; rate={rate}; low={low}; high={high}; source_range={raw_low:.3}..{raw_high:.3} with native 0..1 clamp; source_phase={phase}; fixture_spread={phasing}; offset={offset}; {clock_note}"
     );
     Ok(ConvertedDvcEffect {
         target: Some(CueEffectTarget {
@@ -3110,6 +3124,12 @@ fn convert_dvc_strobe_effect(
             "Rate must be finite and greater than 0, found {rate}"
         ));
     }
+    let samples_per_second = 1_000.0 / f64::from(DASLIGHT_CURVE_SAMPLE_MS);
+    if rate > samples_per_second {
+        return Err(format!(
+            "Strobe Rate must not exceed the {samples_per_second:.3} Hz Daslight Curve sample grid, found {rate}"
+        ));
+    }
     if !size.is_finite() || size < 0.0 {
         return Err(format!(
             "Size must be finite and greater than or equal to 0, found {size}"
@@ -3129,13 +3149,15 @@ fn convert_dvc_strobe_effect(
         .ok_or_else(|| "Strobe EFFECT is missing DURATION".to_string())?
         .parse::<f64>()
         .map_err(|error| format!("Strobe DURATION is invalid: {error}"))?;
-    let period = duration_ms / rate;
-    if !period.is_finite() || period < 10.0 || period > u64::MAX as f64 {
+    if !duration_ms.is_finite()
+        || duration_ms < f64::from(DASLIGHT_CURVE_SAMPLE_MS)
+        || duration_ms > u64::MAX as f64
+    {
         return Err(format!(
-            "DURATION / Rate must produce an LFO period of at least 10 ms, found {period}"
+            "DURATION must be a finite Curve source buffer of at least {DASLIGHT_CURVE_SAMPLE_MS} ms, found {duration_ms}"
         ));
     }
-    let period_ms = period.round() as u64;
+    let period_ms = duration_ms.round() as u64;
     // Daslight Strobe is one-sided: Size scales the peak by half range while
     // Offset moves the low/base. Thus Size=1 reaches half range and Size=2
     // reaches full range for the verified Offset=0 specimen.
@@ -3149,17 +3171,10 @@ fn convert_dvc_strobe_effect(
         return Err("BEAMS resolved to no Strobe fixture targets".to_string());
     }
 
-    let mut approximations = vec![
-        "Strobe pulse width approximated to 2% of the period from the Daslight graph".to_string(),
-    ];
+    let mut approximations = Vec::new();
     if incompatible_dimmer_targets > 0 {
         approximations.push(format!(
             "{incompatible_dimmer_targets} fixture target(s) without a Dimmer attribute or addressable color beam were omitted"
-        ));
-    }
-    if raw_low < 0.0 || raw_high > 1.0 {
-        approximations.push(format!(
-            "Size={size} and Offset={offset} produced raw range {raw_low:.3}..{raw_high:.3}; endpoints were clamped to DMX16"
         ));
     }
     let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
@@ -3183,9 +3198,17 @@ fn convert_dvc_strobe_effect(
         fixture_spread: phasing as f32,
         beam_targets,
         blend_mode: EffectBlendMode::Override,
+        daslight_curve: Some(DaslightCurveSource {
+            rate: rate as f32,
+            size: size as f32,
+            offset: offset as f32,
+            sample_ms: DASLIGHT_CURVE_SAMPLE_MS,
+        }),
     };
+    let interval_samples = (samples_per_second / rate).floor() as u64;
+    let interval_ms = interval_samples * u64::from(DASLIGHT_CURVE_SAMPLE_MS);
     let note = format!(
-        "feature=Dimmer; shape=Strobe; pulses_per_period=10; pulse_width=2% graph-derived approximation; period_ms=round(DURATION/Rate)={period_ms}; low={low}; high={high}; phase={phase}; fixture_spread={phasing}; size={size}; offset={offset}; {clock_note}"
+        "feature=Dimmer; shape=Strobe; Daslight sampled Curve buffer duration_ms={period_ms}; sample_ms={DASLIGHT_CURVE_SAMPLE_MS}; rate={rate}; pulse_interval_samples=floor(25/Rate)={interval_samples}; pulse_interval_ms={interval_ms}; pulse_high_samples=1 plus samples with remainder < interval*Phase/2; low={low}; high={high}; source_phase={phase}; fixture_spread={phasing}; size={size}; offset={offset}; {clock_note}"
     );
     Ok(ConvertedDvcEffect {
         target: Some(CueEffectTarget {
@@ -5390,11 +5413,20 @@ mod tests {
             panic!("CURVE 7 must be stored as cue-owned LFO params");
         };
         assert_eq!(sinus.shape, LfoShape::Sine);
-        assert_eq!(sinus.period_ms, 500);
-        assert_eq!(sinus.low, 22_937);
-        assert_eq!(sinus.high, 55_705);
+        assert_eq!(sinus.period_ms, 5_000);
+        assert_eq!(sinus.low, 6_554);
+        assert_eq!(sinus.high, 39_321);
         assert_eq!(sinus.phase, 0.25);
         assert_eq!(sinus.attribute, "Dimmer");
+        assert_eq!(
+            sinus.daslight_curve,
+            Some(DaslightCurveSource {
+                rate: 10.0,
+                size: 0.5,
+                offset: 0.1,
+                sample_ms: 40,
+            })
+        );
 
         let random = &outcome.project.snapshot.cues[2].effect_targets[0];
         let Some(EffectParamsSnapshot::Chaser(random)) = &random.params else {
@@ -5461,15 +5493,24 @@ mod tests {
             panic!("CURVE 3 must be stored as cue-owned LFO params");
         };
         assert_eq!(ramp.shape, LfoShape::Saw);
-        assert_eq!(ramp.period_ms, 2_500);
-        assert_eq!(ramp.low, 28_377);
+        assert_eq!(ramp.period_ms, 5_000);
+        assert_eq!(ramp.low, 65_207);
         assert_eq!(ramp.high, 0);
         assert_eq!(ramp.phase, 0.495);
+        assert_eq!(
+            ramp.daslight_curve,
+            Some(DaslightCurveSource {
+                rate: 2.0,
+                size: 1.562,
+                offset: -0.848,
+                sample_ms: 40,
+            })
+        );
         assert!(outcome.report.converted.details.iter().any(|detail| {
             detail.item.contains("Inverse Ramp")
                 && detail.message.contains("descending_ramp=Saw directed")
         }));
-        assert!(outcome.report.approximate.details.iter().any(|detail| {
+        assert!(!outcome.report.approximate.details.iter().any(|detail| {
             detail.item.contains("Inverse Ramp")
                 && detail.message.contains("endpoints were clamped")
         }));
@@ -5761,6 +5802,9 @@ mod tests {
             panic!("CURVE 7 must convert to LFO params");
         };
         assert_eq!(request.clock_sync.unwrap().beats, 0.25);
+        assert_eq!(request.period_ms, 5_000);
+        assert_eq!(request.daslight_curve.as_ref().unwrap().rate, 10.0);
+        assert_eq!(request.daslight_curve.as_ref().unwrap().sample_ms, 40);
         assert!((request.fixture_spread - 0.2).abs() < f32::EPSILON);
         assert_eq!(request.beam_targets.len(), 2);
         assert_eq!(request.beam_targets[0].beam_index, 1);
@@ -5775,7 +5819,7 @@ mod tests {
     }
 
     #[test]
-    fn dvc_strobe_conversion_scales_size_and_reports_graph_approximation() {
+    fn dvc_strobe_conversion_scales_size_and_preserves_sampled_source() {
         for (size, expected_high) in [(1.0, 32_768), (2.0, 65_535)] {
             let xml = format!(
                 r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="8"><EFFECT TYPE="5" ID="10" DURATION="5000"><PARAMS NB="5"><PARAM ID="1" VAL="2"/><PARAM ID="2" VAL="{size}"/><PARAM ID="3" VAL="0"/><PARAM ID="4" VAL="0"/><PARAM ID="5" VAL="0.4"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#
@@ -5802,16 +5846,28 @@ mod tests {
                 panic!("CURVE 10 must convert to cue-owned LFO params");
             };
             assert_eq!(request.shape, LfoShape::Strobe);
-            assert_eq!(request.period_ms, 2_500);
+            assert_eq!(request.period_ms, 5_000);
             assert_eq!(request.low, 0);
             assert_eq!(request.high, expected_high);
             assert_eq!(request.phase, 0.0);
             assert!((request.fixture_spread - 0.4).abs() < f32::EPSILON);
-            assert!(converted
+            assert_eq!(
+                request.daslight_curve,
+                Some(DaslightCurveSource {
+                    rate: 2.0,
+                    size: size as f32,
+                    offset: 0.0,
+                    sample_ms: 40,
+                })
+            );
+            assert!(!converted
                 .approximations
                 .iter()
                 .any(|note| note.contains("2% of the period")));
-            assert!(converted.note.contains("pulses_per_period=10"));
+            assert!(converted
+                .note
+                .contains("pulse_interval_samples=floor(25/Rate)=12"));
+            assert!(converted.note.contains("pulse_interval_ms=480"));
             assert!(converted.note.contains("fixture_spread=0.4"));
         }
     }
@@ -6912,10 +6968,12 @@ mod tests {
             })
             .expect("Documents golden must convert Fl-Strobe to an owned LFO");
         assert_eq!(strobe.shape, LfoShape::Strobe);
-        assert_eq!(strobe.period_ms, 2_500);
+        assert_eq!(strobe.period_ms, 5_000);
         assert_eq!(strobe.low, 0);
         assert_eq!(strobe.high, u16::MAX);
-        assert!(outcome.report.approximate.details.iter().any(|detail| {
+        assert_eq!(strobe.daslight_curve.as_ref().unwrap().rate, 2.0);
+        assert_eq!(strobe.daslight_curve.as_ref().unwrap().sample_ms, 40);
+        assert!(!outcome.report.approximate.details.iter().any(|detail| {
             detail.item == "Effect: Fl-Strobe (Strobe)"
                 && detail.message.contains("2% of the period")
         }));
@@ -7964,14 +8022,16 @@ mod tests {
         };
         assert_eq!(converted.generator, "Inverse Ramp");
         assert!(converted.note.contains("descending_ramp=Saw directed"));
-        assert!(converted
+        assert!(!converted
             .approximations
             .iter()
             .any(|note| note.contains("endpoints were clamped")));
         assert_eq!(ramp.shape, LfoShape::Saw);
-        assert_eq!(ramp.period_ms, 2_500);
-        assert_eq!(ramp.low, 28_377);
+        assert_eq!(ramp.period_ms, 5_000);
+        assert_eq!(ramp.low, 65_207);
         assert_eq!(ramp.high, 0);
         assert_eq!(ramp.phase, 0.495);
+        assert_eq!(ramp.daslight_curve.as_ref().unwrap().rate, 2.0);
+        assert_eq!(ramp.daslight_curve.as_ref().unwrap().sample_ms, 40);
     }
 }
