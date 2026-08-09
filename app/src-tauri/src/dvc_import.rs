@@ -2103,6 +2103,7 @@ fn parse_scene_effects(
                 (Some(2), Some(2), Some(130)) => Some("Rainbow"),
                 (Some(2), Some(2), Some(131)) => Some("Random fill"),
                 (Some(2), Some(2), Some(133)) => Some("Sparkle"),
+                (Some(7), Some(7), Some(621)) => Some("Rainbow"),
                 (Some(6), Some(8), Some(521)) => Some("Rainbow"),
                 (Some(6), Some(8), Some(530)) => Some("Perlin"),
                 _ => None,
@@ -2245,6 +2246,7 @@ fn convert_dvc_effect(
             effect_id,
             fixture_refs,
         ),
+        (7, 7, 621) => convert_dvc_value_effect(rack, effect, fixture_refs),
         (2, 2, 121 | 127 | 129 | 130 | 131 | 133) | (6, 8, 521 | 530) => {
             convert_dvc_color_spatial_effect(
                 scene,
@@ -2260,6 +2262,42 @@ fn convert_dvc_effect(
             "RACK TYPE={rack_type} EFFECT TYPE={effect_type} ID={generator_id} is not confirmed for DVC-3b"
         )),
     }
+}
+
+fn convert_dvc_value_effect(
+    rack: Node<'_, '_>,
+    effect: Node<'_, '_>,
+    fixture_refs: &HashMap<String, FixtureImportRef>,
+) -> Result<ConvertedDvcEffect, String> {
+    let (params, palette) = dvc_color_palette_and_params(effect)?;
+    require_exact_dvc_params(&params, &[3, 10, 11, 12])?;
+    for (id, label) in [
+        (3, "VALUE FX field"),
+        (10, "VALUE FX field"),
+        (11, "VALUE FX field"),
+        (12, "VALUE FX field"),
+    ] {
+        let _ = dvc_finite_param(&params, id, label)?;
+    }
+
+    let targets = dvc_rack_targets(rack, fixture_refs)?;
+    if !targets.beam_targets.is_empty() {
+        return Err(
+            "targeted VALUE FX Rainbow is not confirmed by the available saved DVC specimen"
+                .to_string(),
+        );
+    }
+
+    Ok(ConvertedDvcEffect {
+        target: None,
+        generator: "Rainbow",
+        note: format!(
+            "source_family=Value FX; source no-op preserved: Daslight BEAMS contains zero targets; palette_colors={}; PARAM IDs [3, 10, 11, 12] validated; no runtime effect was created",
+            palette.len()
+        ),
+        approximations: Vec::new(),
+        warnings: Vec::new(),
+    })
 }
 
 fn convert_dvc_color_spatial_effect(
@@ -2529,7 +2567,7 @@ fn convert_dvc_color_spatial_effect(
     let source_family = if mapping_recipe {
         "Mappings"
     } else {
-        "Colour Mappings"
+        "Colour FX"
     };
     let request = ColorEffectRequest {
         label: format!("{scene_name} ({generator})"),
@@ -3261,7 +3299,7 @@ fn dvc_color_palette_and_params(
     effect: Node<'_, '_>,
 ) -> Result<(HashMap<u16, f64>, Vec<ColorEffectStop>), String> {
     let params_node = direct_child(effect, "PARAMS")
-        .ok_or_else(|| "confirmed COLOR/MAPPINGS generator is missing PARAMS".to_string())?;
+        .ok_or_else(|| "confirmed palette generator is missing PARAMS".to_string())?;
     let param_nodes = element_children(params_node)
         .filter(|node| node.has_tag_name("PARAM"))
         .collect::<Vec<_>>();
@@ -3607,6 +3645,17 @@ fn dvc_rack_targets(
     let beam_nodes = element_children(beams)
         .filter(|node| node.has_tag_name("BEAM"))
         .collect::<Vec<_>>();
+    if let Some(raw_declared) = beams.attribute("NB") {
+        let declared = raw_declared
+            .parse::<usize>()
+            .map_err(|error| format!("BEAMS NB is invalid: {error}"))?;
+        if declared != beam_nodes.len() {
+            return Err(format!(
+                "BEAMS declares {declared} entries but contains {}",
+                beam_nodes.len()
+            ));
+        }
+    }
 
     let mut selection_indices = HashMap::<String, usize>::new();
     let mut ordered_steps = Vec::<Vec<u64>>::new();
@@ -5682,7 +5731,7 @@ mod tests {
                 .converted
                 .details
                 .iter()
-                .filter(|detail| detail.message.contains("source_family=Colour Mappings;"))
+                .filter(|detail| detail.message.contains("source_family=Colour FX;"))
                 .count(),
             4
         );
@@ -6211,6 +6260,84 @@ mod tests {
         assert_eq!(chaser.steps[1].beam_targets[0].selection_index, 1);
         assert!(converted.approximations.is_empty());
         assert!(converted.note.contains("build-up then source-order clear"));
+    }
+
+    #[test]
+    fn dvc_value_621_preserves_verified_empty_noop_and_rejects_unproven_targets() {
+        let source = r#"<DLMFILE DASBUILD="25.0905.165.111" VERSIONFILE="2"><SCENE NAME="SS-Blue" SPEED="0.5" PLAY_TRIGGER="0" PLAY_DIVISION="8"><RACKS><RACK TYPE="7"><EFFECT TYPE="7" ID="621" DURATION="5000"><PARAMS NB="5"><PARAM TYPE="4" ID="1"><COLORS NB="3"><COLOR VAL="1/1/1/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.498039/0.498039/0.498039/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/></COLORS></PARAM><PARAM TYPE="6" ID="3" VAL="0"/><PARAM TYPE="1" ID="10" VAL="0"/><PARAM TYPE="0" ID="11" VAL="0"/><PARAM TYPE="1" ID="12" VAL="1"/></PARAMS></EFFECT><PRESETS><PRESET SSLFIXTURE="" SSLCHANNEL="-1" SSLPRESET="4" MIN="0" MAX="1"><BEAMS/></PRESET></PRESETS><BEAMS NB="0"/></RACK></RACKS></SCENE></DLMFILE>"#;
+        let document = Document::parse(source).unwrap();
+        let scene = document
+            .descendants()
+            .find(|node| node.has_tag_name("SCENE"))
+            .unwrap();
+        let mut report = DvcImportReport::new("value-621-noop.dvc", document.root_element());
+        let mut next_effect_id = 1;
+        let parsed = parse_scene_effects(
+            scene,
+            "SS-Blue",
+            &effect_test_fixture_refs(),
+            &mut next_effect_id,
+            &mut report,
+        );
+
+        assert!(parsed.targets.is_empty());
+        assert_eq!(report.summary.effects_converted, 1);
+        assert_eq!(report.summary.effects_skipped, 0);
+        assert_eq!(next_effect_id, 1);
+        assert!(report.converted.details.iter().any(|detail| {
+            detail.item == "Effect: SS-Blue (Rainbow)"
+                && detail.message.contains("source_family=Value FX")
+                && detail.message.contains("source no-op preserved")
+                && detail.message.contains("palette_colors=3")
+        }));
+
+        let targeted = source.replacen(
+            r#"<BEAMS NB="0"/>"#,
+            r#"<BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS>"#,
+            1,
+        );
+        let targeted = Document::parse(&targeted).unwrap();
+        let scene = targeted
+            .descendants()
+            .find(|node| node.has_tag_name("SCENE"))
+            .unwrap();
+        let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+        let effect = direct_child(rack, "EFFECT").unwrap();
+        let error = convert_dvc_effect(
+            scene,
+            "Targeted VALUE FX",
+            rack,
+            effect,
+            7,
+            7,
+            621,
+            1,
+            &effect_test_fixture_refs(),
+        )
+        .unwrap_err();
+        assert!(error.contains("targeted VALUE FX Rainbow is not confirmed"));
+
+        let malformed_source = source.replacen(r#"<BEAMS NB="0"/>"#, r#"<BEAMS NB="1"/>"#, 1);
+        let malformed = Document::parse(&malformed_source).unwrap();
+        let scene = malformed
+            .descendants()
+            .find(|node| node.has_tag_name("SCENE"))
+            .unwrap();
+        let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+        let effect = direct_child(rack, "EFFECT").unwrap();
+        let error = convert_dvc_effect(
+            scene,
+            "Malformed VALUE FX",
+            rack,
+            effect,
+            7,
+            7,
+            621,
+            1,
+            &effect_test_fixture_refs(),
+        )
+        .unwrap_err();
+        assert!(error.contains("BEAMS declares 1 entries but contains 0"));
     }
 
     #[test]
@@ -8087,6 +8214,47 @@ mod tests {
             .details
             .iter()
             .any(|detail| detail.message.contains("Daslight MIDI action type 229")));
+    }
+
+    #[test]
+    fn dvc_local_value_fx_noop_specimen_roundtrips_without_runtime_output_when_present() {
+        let path = Path::new(r"C:\Users\kouty\Desktop\Shinkan-Left\Codex-Chaser322-Probe.dvc");
+        if !path.is_file() {
+            eprintln!(
+                "Skipping local VALUE FX DVC golden: {} is unavailable",
+                path.display()
+            );
+            return;
+        }
+
+        let outcome = import_path(path).unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+        assert!(outcome.report.converted.details.iter().any(|detail| {
+            detail.item == "Effect: SS-Blue (Rainbow)"
+                && detail.message.contains("source_family=Value FX")
+                && detail.message.contains("source no-op preserved")
+                && detail.message.contains("palette_colors=3")
+        }));
+        assert!(!outcome
+            .report
+            .skipped
+            .details
+            .iter()
+            .any(|detail| { detail.message.contains("RACK TYPE=7 EFFECT TYPE=7 ID=621") }));
+        assert!(!outcome.project.snapshot.cues.iter().any(|cue| {
+            cue.effect_targets.iter().any(|target| {
+                matches!(target.params.as_ref(), Some(EffectParamsSnapshot::Value(_)))
+            })
+        }));
+
+        let json = serde_json::to_string(&outcome.project).unwrap();
+        let roundtrip: ProjectFile = serde_json::from_str(&json).unwrap();
+        crate::validate_project_file(&roundtrip).unwrap();
+        assert!(!roundtrip.snapshot.cues.iter().any(|cue| {
+            cue.effect_targets.iter().any(|target| {
+                matches!(target.params.as_ref(), Some(EffectParamsSnapshot::Value(_)))
+            })
+        }));
     }
 
     #[test]

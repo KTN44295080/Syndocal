@@ -81,7 +81,25 @@ Stage previewに実装し、legacy bodyは`false`へdefaultする。証跡は
 ### FXファミリー全カタログ（2026-07-19 実機のFX追加チューザーで観測）
 
 STEPS / COLOR FX / CHASER FX / MOVE FX / VALUE FX / CURVE FX / MAPPINGS / COLOR MAPPINGS / SUPER SCENE の9種。
-VALUE FX と COLOR MAPPINGS はユーザーの全ショーに検体なし（実装優先度低・将来検体待ち）。
+
+2026-08-09、Daslight 5.0.6.2実行ファイル（FileVersion `25.0905.165.111`、SHA-256
+`325D83EC54D41305D60B466B486EFE413B8F3E2656B45A544277C0CE9B87AE2A`）のFX追加slotを静的解析し、
+VALUE FX=`RACK TYPE=7 / EFFECT TYPE=7`、MAPPINGS=`6 / 8`、COLOR MAPPINGS=`5 / 3`を確定した。
+同じカタログ登録列から、VALUE FXは621 Rainbow / 622 Burst / 623 Plasma / 624 Knight Rider /
+625 Sweep / 626 Sparkle / 627 Random fill / 628 Perlin、MAPPINGSは521 Rainbow / 522 Spiral /
+523 Burst / 524 Butterfly / 525 Plasma / 526 Media / 527 Knight Rider / 528 Sweep / 529 Sparkle /
+530 Perlin、COLOR MAPPINGSは21 Bounce / 22 Burst / 23 Butterfly / 29 Fire / 30 Knight Rider /
+31 Lines / 32 Perlin / 33 Media / 34 Plasma / 35 Rain / 36 Rainbow / 37 Random fill / 40 Sparkle /
+41 Tube / 42 Spiral / 44 Sweep / 45 Text / 47 Explosion / 48 Starfield / 49 Graph / 50 Gridを復元した。
+Rainbow/Burst/Plasma/Knight Rider/Sparkleは
+各ファミリーの登録entryが同じfactory addressを参照しており、名前が同じgenerator本体は共通実装である。
+
+さらに `C:\Users\kouty\Desktop\Shinkan-Left\Codex-Chaser322-Probe.dvc` に、VALUE FX Rainbow
+（`RACK=7 / EFFECT TYPE=7 / ID=621`、3色grayscale palette、PARAM IDs 3/10/11/12）の実保存検体を発見した。
+この検体はrack `BEAMS NB=0`かつPRESET内も`BEAMS`空であり、Daslight上の出力対象を持たない。
+Syndocal importerはこの実形をSkippedではなくsource no-opとして変換し、保存往復後もruntime Effectを生成せず
+DMXへ影響しないことを回帰試験で固定する。対象ありVALUE FXのtarget/feature対応は実保存検体がないため、
+同じfactoryという間接証拠だけで推測変換せずSkippedを維持する。COLOR MAPPINGSの実保存検体もまだない。
 
 Syndocalの現行Scene Settingsでは、作成時のMAPPINGS / COLOR MAPPINGSを
 `2D MAPPING`の1入口へ統合し、既定の新規作成を`ColorMapping`とする。これは
@@ -112,7 +130,8 @@ Syndocalの現行Scene Settingsでは、作成時のMAPPINGS / COLOR MAPPINGSを
    金標準テスト含む）、engine 370/370、マトリクス232全緑。同条件A/Bベンチ +3.8%（誤差内）で既存スタック非劣化。
    絶対値2ms予算は環境負荷40%のため未計測 — クリーン環境での再計測が残件。
 3. **DVC-3c（照合完了）**: MOVE FX / TYPE=8、ID 322・129・130・CURVE波形10を照合済み。
-   VALUE FX / COLOR MAPPINGS はユーザーのDVCに検体がないため、既存のネイティブ実装を維持しDVC逆変換の対象外とする。
+   VALUE FX ID621の対象ゼロ実保存形は忠実なno-opとして変換済み。対象ありVALUE FXとCOLOR MAPPINGSは
+   実保存検体がないため、既存のネイティブ実装を維持し、未証明のDVC逆変換はfail closedする。
 
 4. **DVC-3d（2026-08-08、ビーム選択の厳密保持）**: CURVE FXのSinus / Inverse Ramp / Strobeと
    CHASER FX 321 / 322 / 325は、`BEAM@FIXTURE`、`BEAMID`、最初に現れた`IDSELECTION`順を
