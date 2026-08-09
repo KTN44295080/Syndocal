@@ -2115,8 +2115,10 @@ fn parse_scene_effects(
                 (Some(3), Some(6), Some(321)) => Some("Chaser #1"),
                 (Some(3), Some(6), Some(322)) => Some("Chaser #2"),
                 (Some(3), Some(6), Some(325)) => Some("Chaser random"),
+                (Some(4), Some(4), Some(221)) => Some("Circle"),
                 (Some(4), Some(4), Some(223)) => Some("Line"),
                 (Some(4), Some(4), Some(224)) => Some("Polygon"),
+                (Some(5), Some(3), Some(36)) => Some("Rainbow"),
                 (Some(8), Some(5), Some(3)) => Some("Inverse Ramp"),
                 (Some(8), Some(5), Some(7)) => Some("Sinus"),
                 (Some(8), Some(5), Some(10)) => Some("Strobe"),
@@ -2236,6 +2238,7 @@ fn convert_dvc_effect(
     fixture_refs: &HashMap<String, FixtureImportRef>,
 ) -> Result<ConvertedDvcEffect, String> {
     match (rack_type, effect_type, generator_id) {
+        (4, 4, 221) => reject_dvc_move_circle_effect(rack, effect, fixture_refs),
         (3, 6, 321 | 322 | 325) => convert_dvc_chaser_effect(
             scene,
             scene_name,
@@ -2289,6 +2292,7 @@ fn convert_dvc_effect(
             profiles,
             fixture_refs,
         ),
+        (5, 3, 36) => reject_dvc_color_mappings_rainbow_effect(rack, effect, fixture_refs),
         (2, 2, 121 | 127 | 129 | 130 | 131 | 133) | (6, 8, 521 | 530) => {
             convert_dvc_color_spatial_effect(
                 scene,
@@ -2304,6 +2308,164 @@ fn convert_dvc_effect(
             "RACK TYPE={rack_type} EFFECT TYPE={effect_type} ID={generator_id} is not confirmed for DVC-3b"
         )),
     }
+}
+
+fn reject_dvc_color_mappings_rainbow_effect(
+    rack: Node<'_, '_>,
+    effect: Node<'_, '_>,
+    fixture_refs: &HashMap<String, FixtureImportRef>,
+) -> Result<ConvertedDvcEffect, String> {
+    let params_node = direct_child(effect, "PARAMS")
+        .ok_or_else(|| "COLOR MAPPINGS Rainbow ID=36 is missing PARAMS".to_string())?;
+    if params_node.attribute("NB") != Some("7") {
+        return Err(format!(
+            "COLOR MAPPINGS Rainbow ID=36 expected PARAMS NB=7, found {}",
+            params_node.attribute("NB").unwrap_or("missing")
+        ));
+    }
+    let (params, palette) = dvc_color_palette_and_params(effect)?;
+    require_exact_dvc_params(&params, &[2, 3, 4, 10, 11, 12])?;
+    require_exact_dvc_param_types(
+        effect,
+        &[(1, 4), (2, 2), (3, 6), (4, 0), (10, 1), (11, 0), (12, 1)],
+    )?;
+    if palette.len() != 8 {
+        return Err(format!(
+            "confirmed COLOR MAPPINGS Rainbow ID=36 expected 8 palette colors, found {}",
+            palette.len()
+        ));
+    }
+    let _grayscale = dvc_binary_param(&params, 2, "COLOR MAPPINGS Rainbow Grayscale")?;
+    let transform = dvc_param(&params, 3, "COLOR MAPPINGS Rainbow Transform")?;
+    if !matches!(transform, 0.0 | 1.0 | 2.0) {
+        return Err(format!(
+            "COLOR MAPPINGS Rainbow Transform PARAM 3 must be None(0), Vertical symmetry(1), or Horizontal symmetry(2), found {transform}"
+        ));
+    }
+    let _rotation = dvc_integer_range_param(&params, 4, "COLOR MAPPINGS Rainbow Rotation", 0, 360)?;
+    let _color_width = dvc_unit_param(&params, 10, "COLOR MAPPINGS Rainbow Color Width")?;
+    let _angle = dvc_integer_range_param(&params, 11, "COLOR MAPPINGS Rainbow Angle", 0, 360)?;
+    let _gradient = dvc_unit_param(&params, 12, "COLOR MAPPINGS Rainbow Gradient")?;
+
+    let mappings = element_children(rack)
+        .filter(|node| node.has_tag_name("MAPPING"))
+        .collect::<Vec<_>>();
+    if mappings.len() != 1 {
+        return Err(format!(
+            "COLOR MAPPINGS Rainbow ID=36 expected exactly one MAPPING, found {}",
+            mappings.len()
+        ));
+    }
+    let mapping = mappings[0];
+    let mut actual_attributes = mapping
+        .attributes()
+        .map(|attribute| attribute.name())
+        .collect::<Vec<_>>();
+    actual_attributes.sort_unstable();
+    let mut expected_attributes = vec![
+        "ANGLE", "DASUID", "LOCKED", "NAME", "SX", "SY", "TYPE", "X", "Y",
+    ];
+    expected_attributes.sort_unstable();
+    if actual_attributes != expected_attributes {
+        return Err(format!(
+            "COLOR MAPPINGS Rainbow ID=36 expected Rectangle attributes {expected_attributes:?}, found {actual_attributes:?}"
+        ));
+    }
+    if required_attribute(mapping, "NAME", "COLOR MAPPINGS MAPPING")? != "Rectangle" {
+        return Err(format!(
+            "COLOR MAPPINGS Rainbow ID=36 expected MAPPING NAME=Rectangle, found {}",
+            mapping.attribute("NAME").unwrap_or("missing")
+        ));
+    }
+    let dasuid = required_attribute(mapping, "DASUID", "COLOR MAPPINGS Rectangle")?;
+    if dasuid.trim().is_empty() {
+        return Err("COLOR MAPPINGS Rectangle DASUID must not be empty".to_string());
+    }
+    if required_attribute(mapping, "TYPE", "COLOR MAPPINGS Rectangle")? != "0" {
+        return Err(format!(
+            "COLOR MAPPINGS Rainbow ID=36 expected Rectangle TYPE=0, found {}",
+            mapping.attribute("TYPE").unwrap_or("missing")
+        ));
+    }
+    let parse_mapping_integer = |attribute: &str| -> Result<i64, String> {
+        required_attribute(mapping, attribute, "COLOR MAPPINGS Rectangle")?
+            .parse::<i64>()
+            .map_err(|error| format!("COLOR MAPPINGS Rectangle {attribute} is invalid: {error}"))
+    };
+    let _x = parse_mapping_integer("X")?;
+    let _y = parse_mapping_integer("Y")?;
+    let sx = parse_mapping_integer("SX")?;
+    let sy = parse_mapping_integer("SY")?;
+    if sx <= 0 || sy <= 0 {
+        return Err(format!(
+            "COLOR MAPPINGS Rectangle SX and SY must be positive, found {sx} and {sy}"
+        ));
+    }
+    let angle = required_attribute(mapping, "ANGLE", "COLOR MAPPINGS Rectangle")?
+        .parse::<f32>()
+        .map_err(|error| format!("COLOR MAPPINGS Rectangle ANGLE is invalid: {error}"))?;
+    if !angle.is_finite() {
+        return Err(format!(
+            "COLOR MAPPINGS Rectangle ANGLE must be finite, found {angle}"
+        ));
+    }
+    match required_attribute(mapping, "LOCKED", "COLOR MAPPINGS Rectangle")? {
+        "0" | "1" => {}
+        value => {
+            return Err(format!(
+                "COLOR MAPPINGS Rectangle LOCKED must be 0 or 1, found {value}"
+            ))
+        }
+    }
+
+    let beams = direct_child(rack, "BEAMS")
+        .ok_or_else(|| "COLOR MAPPINGS Rainbow ID=36 is missing BEAMS".to_string())?;
+    if beams.attribute("NB") != Some("0") {
+        return Err(format!(
+            "COLOR MAPPINGS Rainbow ID=36 expected BEAMS NB=0, found {}",
+            beams.attribute("NB").unwrap_or("missing")
+        ));
+    }
+    let targets = dvc_rack_targets(rack, fixture_refs)?;
+    if !targets.beam_targets.is_empty() {
+        return Err(format!(
+            "COLOR MAPPINGS Rainbow ID=36 expected saved BEAMS NB=0, found {} targets",
+            targets.beam_targets.len()
+        ));
+    }
+    let selections = element_children(rack)
+        .filter(|node| node.has_tag_name("SELECTIONS"))
+        .count();
+    if selections != 0 {
+        return Err(format!(
+            "COLOR MAPPINGS Rainbow ID=36 expected no SELECTIONS, found {selections}"
+        ));
+    }
+    Err("COLOR MAPPINGS Rainbow ID=36 remains fail-closed: source BEAMS NB=0 owns no runtime targets; ColorEffectSpatialRecipe::Rainbow has no Grayscale field, and ColorEffectSpatialPattern has no MAPPING Rectangle window or per-target Patch X/Y coordinates".to_string())
+}
+
+fn reject_dvc_move_circle_effect(
+    rack: Node<'_, '_>,
+    effect: Node<'_, '_>,
+    fixture_refs: &HashMap<String, FixtureImportRef>,
+) -> Result<ConvertedDvcEffect, String> {
+    let params_node = direct_child(effect, "PARAMS")
+        .ok_or_else(|| "Move Circle ID=221 is missing PARAMS".to_string())?;
+    if params_node.attribute("NB") != Some("3") {
+        return Err(format!(
+            "Move Circle ID=221 expected PARAMS NB=3, found {}",
+            params_node.attribute("NB").unwrap_or("missing")
+        ));
+    }
+    let (_points, _phasing, _symmetry) = dvc_move_effect_params(effect, "Circle")?;
+    let targets = dvc_rack_targets(rack, fixture_refs)?;
+    if targets.beam_targets.is_empty() {
+        return Err("Move Circle ID=221 BEAMS resolved to no targets".to_string());
+    }
+    if !targets.has_multi_beam_selection {
+        return Err("Move Circle ID=221 remains fail-closed: Daslight analytic circular arcs are not equivalent to the existing Line or centripetal Catmull-Rom Move paths".to_string());
+    }
+    Err("Move Circle ID=221 remains fail-closed: Daslight analytic circular arcs are not equivalent to Line or centripetal Catmull-Rom, and fixture-only MoveEffectRequest targets cannot preserve this specimen's BEAMID 1..6 / IDSELECTION 1..6".to_string())
 }
 
 fn convert_dvc_value_effect(
@@ -3863,16 +4025,16 @@ fn dvc_move_effect_params(
     }
 
     let points = points.unwrap_or_default();
-    let valid_point_count = if generator == "Line" {
-        points.len() == 2
-    } else {
-        (3..=256).contains(&points.len())
+    let valid_point_count = match generator {
+        "Line" => points.len() == 2,
+        "Circle" => (2..=255).contains(&points.len()),
+        _ => (3..=256).contains(&points.len()),
     };
     if !valid_point_count {
-        let expected = if generator == "Line" {
-            "exactly 2"
-        } else {
-            "between 3 and 256"
+        let expected = match generator {
+            "Line" => "exactly 2",
+            "Circle" => "between 2 and 255",
+            _ => "between 3 and 256",
         };
         return Err(format!(
             "{generator} POINTS must contain {expected} vertices, found {}",
@@ -9060,6 +9222,242 @@ mod tests {
                     && *param_sy == -1.0
             )),
             "saved VALUE Plasma specimen (ID623) must import with Daslight default fields; found {recipes:?}"
+        );
+    }
+
+    #[test]
+    fn dvc_local_golden_color_mappings_and_move_circle_fail_closed_from_saved_specimen() {
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../qa/specimens/ValueCatalog-Sweep-Plasma.dvc"
+        ));
+        assert!(
+            path.is_file(),
+            "repo-portable Daslight specimen must exist at {}",
+            path.display()
+        );
+
+        let source = fs::read_to_string(path).unwrap();
+        let document = Document::parse(&source).unwrap();
+        let color_rack = document
+            .descendants()
+            .find(|node| {
+                node.has_tag_name("RACK")
+                    && node.attribute("TYPE") == Some("5")
+                    && direct_child(*node, "EFFECT").is_some_and(|effect| {
+                        effect.attribute("TYPE") == Some("3")
+                            && effect.attribute("ID") == Some("36")
+                    })
+            })
+            .expect("saved specimen must contain COLOR MAPPINGS 5/3/36");
+        let color_effect =
+            direct_child(color_rack, "EFFECT").expect("COLOR MAPPINGS 5/3/36 must contain EFFECT");
+        let color_params = direct_child(color_effect, "PARAMS")
+            .expect("COLOR MAPPINGS 5/3/36 must contain PARAMS");
+        assert_eq!(color_params.attribute("NB"), Some("7"));
+        assert_eq!(
+            element_children(color_params)
+                .filter(|param| param.has_tag_name("PARAM"))
+                .map(|param| {
+                    (
+                        param.attribute("ID").unwrap(),
+                        param.attribute("TYPE").unwrap(),
+                        param.attribute("VAL"),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                ("1", "4", None),
+                ("2", "2", Some("0")),
+                ("3", "6", Some("0")),
+                ("4", "0", Some("0")),
+                ("10", "1", Some("0")),
+                ("11", "0", Some("0")),
+                ("12", "1", Some("1")),
+            ],
+            "saved COLOR MAPPINGS Rainbow must retain its exact seven PARAM types and values"
+        );
+        let palette_param = element_children(color_params)
+            .find(|param| param.has_tag_name("PARAM") && param.attribute("ID") == Some("1"))
+            .expect("COLOR MAPPINGS 5/3/36 must contain palette PARAM 1");
+        let palette = direct_child(palette_param, "COLORS")
+            .expect("COLOR MAPPINGS palette PARAM 1 must contain COLORS");
+        assert_eq!(palette.attribute("NB"), Some("8"));
+        assert_eq!(
+            element_children(palette)
+                .filter(|color| color.has_tag_name("COLOR"))
+                .count(),
+            8
+        );
+        let mapping = direct_child(color_rack, "MAPPING")
+            .expect("COLOR MAPPINGS 5/3/36 must contain its Rectangle");
+        assert_eq!(mapping.attribute("NAME"), Some("Rectangle"));
+        assert_eq!(mapping.attribute("TYPE"), Some("0"));
+        assert_eq!(mapping.attribute("X"), Some("1994"));
+        assert_eq!(mapping.attribute("Y"), Some("166"));
+        assert_eq!(mapping.attribute("SX"), Some("513"));
+        assert_eq!(mapping.attribute("SY"), Some("52"));
+        assert_eq!(mapping.attribute("ANGLE"), Some("0"));
+        assert_eq!(mapping.attribute("LOCKED"), Some("0"));
+        let color_beams =
+            direct_child(color_rack, "BEAMS").expect("COLOR MAPPINGS 5/3/36 must contain BEAMS");
+        assert_eq!(color_beams.attribute("NB"), Some("0"));
+        assert_eq!(
+            element_children(color_beams)
+                .filter(|node| node.has_tag_name("BEAM"))
+                .count(),
+            0,
+            "saved family 5 body must retain empty rack BEAMS; Rectangle overlap does not create runtime-owned targets"
+        );
+        assert_eq!(
+            element_children(color_rack)
+                .filter(|node| node.has_tag_name("SELECTIONS"))
+                .count(),
+            0,
+            "saved family 5 body has no external SELECTIONS target list"
+        );
+
+        let move_rack = document
+            .descendants()
+            .find(|node| {
+                node.has_tag_name("RACK")
+                    && node.attribute("TYPE") == Some("4")
+                    && direct_child(*node, "EFFECT").is_some_and(|effect| {
+                        effect.attribute("TYPE") == Some("4")
+                            && effect.attribute("ID") == Some("221")
+                    })
+            })
+            .expect("saved specimen must contain Move 4/4/221");
+        let move_effect =
+            direct_child(move_rack, "EFFECT").expect("Move 4/4/221 must contain EFFECT");
+        let move_params =
+            direct_child(move_effect, "PARAMS").expect("Move 4/4/221 must contain PARAMS");
+        assert_eq!(move_params.attribute("NB"), Some("3"));
+        assert_eq!(
+            element_children(move_params)
+                .filter(|param| param.has_tag_name("PARAM"))
+                .map(|param| {
+                    (
+                        param.attribute("ID").unwrap(),
+                        param.attribute("TYPE").unwrap(),
+                        param.attribute("VAL"),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                ("1", "5", None),
+                ("2", "1", Some("0")),
+                ("3", "2", Some("0"))
+            ],
+            "saved Move Circle must retain TYPE5/ID1, TYPE1/ID2=0, and TYPE2/ID3=0"
+        );
+        let path_param = element_children(move_params)
+            .find(|param| param.has_tag_name("PARAM") && param.attribute("ID") == Some("1"))
+            .expect("Move 4/4/221 must contain Path PARAM 1");
+        assert_eq!(path_param.attribute("TYPE"), Some("5"));
+        let points = direct_child(path_param, "POINTS")
+            .expect("Move Circle Path PARAM 1 must contain POINTS");
+        assert_eq!(points.attribute("NB"), Some("4"));
+        assert_eq!(
+            element_children(points)
+                .filter(|point| point.has_tag_name("POINT"))
+                .map(|point| {
+                    (
+                        point.attribute("X").unwrap().parse::<f32>().unwrap(),
+                        point.attribute("Y").unwrap().parse::<f32>().unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![(0.25, 0.5), (0.5, 0.75), (0.75, 0.5), (0.5, 0.25)],
+            "saved Move Circle must retain its four confirmed cardinal POINTS"
+        );
+        let move_beams = direct_child(move_rack, "BEAMS").expect("Move 4/4/221 must contain BEAMS");
+        assert_eq!(move_beams.attribute("NB"), Some("6"));
+        let fixture_uid = "3adf563d-e44a-4ee8-aac5-248b91469fa1";
+        let raw_order = element_children(move_beams)
+            .filter(|node| node.has_tag_name("BEAM"))
+            .map(|beam| {
+                (
+                    beam.attribute("FIXTURE").unwrap().to_string(),
+                    beam.attribute("BEAMID").unwrap().parse::<u16>().unwrap(),
+                    beam.attribute("IDSELECTION")
+                        .unwrap()
+                        .parse::<u16>()
+                        .unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            raw_order,
+            (1_u16..=6)
+                .map(|index| (fixture_uid.to_string(), index, index))
+                .collect::<Vec<_>>(),
+            "saved Move Circle BEAMID/IDSELECTION order must remain byte-semantic"
+        );
+
+        let fixture_refs = HashMap::from([(
+            fixture_uid.to_string(),
+            FixtureImportRef {
+                fixture_id: 42,
+                fixture_index: 0,
+                profile_index: 0,
+                supports_dimmer: false,
+                color_beam_count: 8,
+            },
+        )]);
+        let targets = dvc_rack_targets(move_rack, &fixture_refs).unwrap();
+        assert_eq!(targets.fixture_ids, vec![42]);
+        assert!(targets.has_multi_beam_selection);
+        assert_eq!(targets.ordered_steps, vec![vec![42]; 6]);
+        assert_eq!(
+            targets
+                .beam_targets
+                .iter()
+                .map(|target| {
+                    (
+                        target.fixture_id,
+                        target.beam_index,
+                        target.selection_index,
+                        target.feature_attribute.as_deref(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                (42, 1, 0, None),
+                (42, 2, 1, None),
+                (42, 3, 2, None),
+                (42, 4, 3, None),
+                (42, 5, 4, None),
+                (42, 6, 5, None),
+            ],
+            "dvc_rack_targets must retain BEAMID order and normalize IDSELECTION by first occurrence"
+        );
+
+        let outcome = import_path(path).unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+        let expected_color_error = "RACK TYPE=5 EFFECT TYPE=3 ID=36: COLOR MAPPINGS Rainbow ID=36 remains fail-closed: source BEAMS NB=0 owns no runtime targets; ColorEffectSpatialRecipe::Rainbow has no Grayscale field, and ColorEffectSpatialPattern has no MAPPING Rectangle window or per-target Patch X/Y coordinates";
+        let expected_move_error = "RACK TYPE=4 EFFECT TYPE=4 ID=221: Move Circle ID=221 remains fail-closed: Daslight analytic circular arcs are not equivalent to Line or centripetal Catmull-Rom, and fixture-only MoveEffectRequest targets cannot preserve this specimen's BEAMID 1..6 / IDSELECTION 1..6";
+        assert_eq!(
+            outcome
+                .report
+                .skipped
+                .details
+                .iter()
+                .filter(|detail| detail.message == expected_color_error)
+                .count(),
+            1,
+            "saved COLOR MAPPINGS rack must reach the precise placement-model rejection"
+        );
+        assert_eq!(
+            outcome
+                .report
+                .skipped
+                .details
+                .iter()
+                .filter(|detail| detail.message == expected_move_error)
+                .count(),
+            1,
+            "saved Move Circle rack must reach the precise beam-target rejection"
         );
     }
 
