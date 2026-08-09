@@ -27,7 +27,7 @@ export interface ColorEffectEditorPanelProps {
   onSpatialPattern: (pattern: ColorEffectSpatialPattern | null) => void;
 }
 
-type ColorSpatialKind = "PaletteFlow" | "KnightRider" | "Burst" | "RandomFill" | "Sparkle" | "Rainbow" | "Perlin";
+type ColorSpatialKind = "PaletteFlow" | "KnightRider" | "Burst" | "RandomFill" | "Sparkle" | "Plasma" | "ColorRainbow" | "Rainbow" | "Perlin";
 
 const defaultSpatialRecipe = (kind: Exclude<ColorSpatialKind, "PaletteFlow">): ColorEffectSpatialRecipe => {
   switch (kind) {
@@ -39,6 +39,10 @@ const defaultSpatialRecipe = (kind: Exclude<ColorSpatialKind, "PaletteFlow">): C
       return { RandomFill: { point_width: 1 } };
     case "Sparkle":
       return { Sparkle: { number: 5, lifespan: 25, width: 1 } };
+    case "Plasma":
+      return { Plasma: { size_x: 1, param_x: 2, size_y: 1, param_y: 2, speed_x: -1, param_sx: 2, speed_y: 1, param_sy: -1 } };
+    case "ColorRainbow":
+      return { ColorRainbow: { color_width: 0, angle_degrees: 0, gradient: 100 } };
     case "Rainbow":
       return { Rainbow: { vertical_symmetry: false, rotation_degrees: 0, color_width: 0, angle_degrees: 0, gradient: 100 } };
     case "Perlin":
@@ -403,6 +407,8 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
               <option value="Burst">Burst</option>
               <option value="RandomFill">Random fill</option>
               <option value="Sparkle">Sparkle</option>
+              <option value="Plasma">Plasma</option>
+              <option value="ColorRainbow">Rainbow strip</option>
               <option value="Rainbow">Rainbow mapping</option>
               <option value="Perlin">Perlin mapping</option>
             </select>
@@ -442,10 +448,29 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
             <label>Sparkle width<input type="number" min="1" step="1" value={spatialNumber("width", 1)} onInput={(event) => patchSpatialValues({ width: Math.max(1, Math.round(Number(event.currentTarget.value) || 1)) })} /></label>
           </div>
         </Show>
+        <Show when={spatialKind() === "Plasma"}>
+          <div class="colorEffectModeGrid">
+            <label>Size X<input type="number" min="0" max="20" step="1" value={spatialNumber("size_x", 1)} onInput={(event) => patchSpatialValues({ size_x: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 20) })} /></label>
+            <label>Param X<input type="number" min="0" max="20" step="1" value={spatialNumber("param_x", 2)} onInput={(event) => patchSpatialValues({ param_x: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 20) })} /></label>
+            <label>Size Y<input type="number" min="0" max="20" step="1" value={spatialNumber("size_y", 1)} onInput={(event) => patchSpatialValues({ size_y: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 20) })} /></label>
+            <label>Param Y<input type="number" min="0" max="20" step="1" value={spatialNumber("param_y", 2)} onInput={(event) => patchSpatialValues({ param_y: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 20) })} /></label>
+            <label>Speed X<input type="number" min="-5" max="5" step="1" value={spatialNumber("speed_x", -1)} onInput={(event) => patchSpatialValues({ speed_x: clamp(Math.round(Number(event.currentTarget.value) || 0), -5, 5) })} /></label>
+            <label>Param SX<input type="number" min="-5" max="5" step="1" value={spatialNumber("param_sx", 2)} onInput={(event) => patchSpatialValues({ param_sx: clamp(Math.round(Number(event.currentTarget.value) || 0), -5, 5) })} /></label>
+            <label>Speed Y<input type="number" min="-5" max="5" step="1" value={spatialNumber("speed_y", 1)} onInput={(event) => patchSpatialValues({ speed_y: clamp(Math.round(Number(event.currentTarget.value) || 0), -5, 5) })} /></label>
+            <label>Param SY<input type="number" min="-5" max="5" step="1" value={spatialNumber("param_sy", -1)} onInput={(event) => patchSpatialValues({ param_sy: clamp(Math.round(Number(event.currentTarget.value) || 0), -5, 5) })} /></label>
+          </div>
+        </Show>
+        <Show when={spatialKind() === "ColorRainbow"}>
+          <div class="colorEffectModeGrid">
+            <label>Color width<input type="number" min="0" max="1" step="0.01" value={spatialNumber("color_width")} onInput={(event) => patchSpatialValues({ color_width: clamp(Number(event.currentTarget.value), 0, 1) })} /></label>
+            <label>Angle °<input type="number" min="0" max="360" step="1" value={spatialNumber("angle_degrees")} onInput={(event) => patchSpatialValues({ angle_degrees: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 360) })} /></label>
+            <label>Gradient %<input type="number" min="0" max="100" step="1" value={spatialNumber("gradient", 100)} onInput={(event) => patchSpatialValues({ gradient: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
+          </div>
+        </Show>
         <Show when={spatialKind() === "Rainbow"}>
           <div class="colorEffectModeGrid">
             <label>Rotation °<input type="number" step="1" value={spatialNumber("rotation_degrees")} onInput={(event) => patchSpatialValues({ rotation_degrees: Number(event.currentTarget.value) || 0 })} /></label>
-            <label>Angle °<input type="number" step="1" value={spatialNumber("angle_degrees")} onInput={(event) => patchSpatialValues({ angle_degrees: Number(event.currentTarget.value) || 0 })} /></label>
+            <label>Angle °<input type="number" min="0" max="360" step="1" value={spatialNumber("angle_degrees")} onInput={(event) => patchSpatialValues({ angle_degrees: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 360) })} /></label>
             <label>Color width %<input type="number" min="0" max="100" step="1" value={spatialNumber("color_width")} onInput={(event) => patchSpatialValues({ color_width: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
             <label>Gradient %<input type="number" min="0" max="100" step="1" value={spatialNumber("gradient", 100)} onInput={(event) => patchSpatialValues({ gradient: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
             <label><input type="checkbox" checked={spatialBoolean("vertical_symmetry")} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.checked })} /> Vertical symmetry</label>

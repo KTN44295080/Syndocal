@@ -52,9 +52,10 @@ try {
   assert.equal(frame.pixels.length, custom[0].stops.length);
   assert.ok(frame.pixels.every(Number.isSafeInteger));
 
-  const [appSource, paneSource, protocolSource, tauriSource, engineSource] = await Promise.all([
+  const [appSource, paneSource, editorSource, protocolSource, tauriSource, engineSource] = await Promise.all([
     readFile(resolve(appRoot, "src/App.tsx"), "utf8"),
     readFile(resolve(appRoot, "src/components/SceneSettingsPane.tsx"), "utf8"),
+    readFile(resolve(appRoot, "src/components/ColorEffectEditorPanel.tsx"), "utf8"),
     readFile(resolve(workspaceRoot, "crates/protocol/src/lib.rs"), "utf8"),
     readFile(resolve(appRoot, "src-tauri/src/main.rs"), "utf8"),
     readFile(resolve(workspaceRoot, "crates/engine/src/lib.rs"), "utf8"),
@@ -63,6 +64,11 @@ try {
   assert.match(appSource, /effectType: effectType\(\),\s*palettes: snapshot\(\)\.palettes,/);
   assert.match(appSource, /Added \$\{palette\.label\} as a synchronized Colour layer beside/);
   assert.match(appSource, /fxPaletteStopsToColorMappingFrame\(palette\.stops\)/);
+  assert.match(editorSource, /<option value="Plasma">Plasma<\/option>/);
+  assert.match(editorSource, /<option value="ColorRainbow">Rainbow strip<\/option>/);
+  assert.match(editorSource, /min="0" max="20" step="1" value=\{spatialNumber\("size_x", 1\)\}/);
+  assert.match(editorSource, /min="-5" max="5" step="1" value=\{spatialNumber\("speed_x", -1\)\}/);
+  assert.match(editorSource, /min="0" max="1" step="0\.01" value=\{spatialNumber\("color_width"\)\}/);
   assert.match(protocolSource, /serde\(default, skip_serializing_if = "Vec::is_empty"\)[\s\S]*pub color_stops: Vec<ColorEffectStop>/);
   assert.match(tauriSource, /fn validate_fx_palette_stops[\s\S]*2\.\.=16/);
   assert.match(engineSource, /fn validate_and_sanitize_palette[\s\S]*palette\.color_stops/);
@@ -70,7 +76,7 @@ try {
   console.log(
     `pass FX color palettes builtIn=${builtinFxColorPalettes.length} ` +
       `custom=${custom.length} maxStops=16 colorMappingPixels=${frame.pixels.length} ` +
-      "allSceneFx=true persistence=backward-compatible",
+      "allSceneFx=true plasmaRainbowEditable=true persistence=backward-compatible",
   );
 } finally {
   await server.close();

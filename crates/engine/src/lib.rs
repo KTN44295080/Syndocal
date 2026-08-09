@@ -24794,6 +24794,18 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
             ))
         }
     };
+    let integer_range = |label: &str, value: f32, minimum: f32, maximum: f32| {
+        if value.is_finite()
+            && value.fract().abs() <= f32::EPSILON
+            && (minimum..=maximum).contains(&value)
+        {
+            Ok(())
+        } else {
+            Err(format!(
+                "Color spatial {label} must be an integer within {minimum}..{maximum}"
+            ))
+        }
+    };
     match recipe {
         ColorEffectSpatialRecipe::KnightRider { size, gradient, .. } => {
             if !(1..=100).contains(size) {
@@ -24835,25 +24847,33 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
             speed_y,
             param_sy,
         } => {
-            if [
-                *size_x, *param_x, *size_y, *param_y, *speed_x, *param_sx, *speed_y, *param_sy,
-            ]
-            .into_iter()
-            .all(f32::is_finite)
-            {
-                Ok(())
-            } else {
-                Err("Plasma parameters must be finite".to_string())
+            for (label, value) in [
+                ("Plasma Size X", *size_x),
+                ("Plasma Param X", *param_x),
+                ("Plasma Size Y", *size_y),
+                ("Plasma Param Y", *param_y),
+            ] {
+                integer_range(label, value, 0.0, 20.0)?;
             }
+            for (label, value) in [
+                ("Plasma Speed X", *speed_x),
+                ("Plasma Param SX", *param_sx),
+                ("Plasma Speed Y", *speed_y),
+                ("Plasma Param SY", *param_sy),
+            ] {
+                integer_range(label, value, -5.0, 5.0)?;
+            }
+            Ok(())
         }
         ColorEffectSpatialRecipe::ColorRainbow {
             color_width,
             angle_degrees,
             gradient,
         } => {
-            if !color_width.is_finite() || !angle_degrees.is_finite() {
-                return Err("Color Rainbow width and angle must be finite".to_string());
+            if !color_width.is_finite() || !(0.0..=1.0).contains(color_width) {
+                return Err("Color Rainbow width must be finite and within 0..1".to_string());
             }
+            integer_range("Color Rainbow angle", *angle_degrees, 0.0, 360.0)?;
             percent("gradient", *gradient)
         }
         ColorEffectSpatialRecipe::Rainbow {
@@ -24866,6 +24886,7 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
             if !rotation_degrees.is_finite() || !angle_degrees.is_finite() {
                 return Err("Rainbow rotation and angle must be finite".to_string());
             }
+            integer_range("Rainbow angle", *angle_degrees, 0.0, 360.0)?;
             percent("color width", *color_width)?;
             percent("gradient", *gradient)
         }
@@ -28276,27 +28297,40 @@ fn evaluate_color_spatial_sample_at_rate(
             speed_y,
             param_sy,
         } => {
-            let time = time_phase as f32;
-            let opposite = 1.0 - strip_position;
-            let x = strip_position * *size_x + time * *speed_x;
-            let y = opposite * *size_y + time * *speed_y;
-            let wave_x = (std::f32::consts::TAU * x * *param_x).sin();
-            let wave_y = (std::f32::consts::TAU * y * *param_y).sin();
-            let wave_sx =
-                (std::f32::consts::TAU * (strip_position * *size_x + time * *param_sx)).sin();
-            let wave_sy = (std::f32::consts::TAU * (opposite * *size_y + time * *param_sy)).sin();
-            let value = (0.5 + (wave_x + wave_y + wave_sx + wave_sy) * 0.125).clamp(0.0, 1.0);
-            spatial_palette_color(request, value, 100.0)
+            let phase = (time_phase.rem_euclid(1.0) * 128.0).trunc() as u8;
+            // COLOR FX is a profile-order strip in every imported DVC sample.
+            // Daslight's evaluator still runs its two-dimensional byte formula;
+            // the unrepresented Y axis is therefore zero, not a mirrored X.
+            let x = target.strip_index as u8;
+            let y = 0_u8;
+            let value = daslight_plasma_palette_byte(
+                phase,
+                x,
+                y,
+                *size_x as i32,
+                *param_x as i32,
+                *size_y as i32,
+                *param_y as i32,
+                *speed_x as i32,
+                *param_sx as i32,
+                *speed_y as i32,
+                *param_sy as i32,
+            );
+            spatial_palette_color(request, f32::from(value) / 255.0, 100.0)
         }
         ColorEffectSpatialRecipe::ColorRainbow {
             color_width,
             angle_degrees,
             gradient,
         } => {
-            let angle = angle_degrees.to_radians();
-            let projected = strip_position * angle.cos() + (1.0 - strip_position) * angle.sin();
-            let width_scale = 1.0 + color_width.abs();
-            let position = (projected * width_scale + time_phase as f32).rem_euclid(1.0);
+            let angle = f64::from(*angle_degrees).to_radians();
+            let projected = (f64::from(strip_position) * angle.cos()) as f32;
+            let position = daslight_rainbow_palette_position(
+                projected,
+                time_phase as f32,
+                *color_width,
+                request.stops.len(),
+            );
             spatial_palette_color(request, position, *gradient)
         }
         ColorEffectSpatialRecipe::Rainbow {
@@ -28312,10 +28346,14 @@ fn evaluate_color_spatial_sample_at_rate(
                 target.x
             } - 0.5;
             let z = target.z - 0.5;
-            let angle = (*rotation_degrees + *angle_degrees).to_radians();
-            let projected = x * angle.cos() + z * angle.sin();
-            let width_scale = 1.0 + *color_width / 100.0 * 7.0;
-            let position = (projected * width_scale + time_phase as f32).rem_euclid(1.0);
+            let angle = f64::from(*rotation_degrees + *angle_degrees).to_radians();
+            let projected = (f64::from(x) * angle.cos() + f64::from(z) * angle.sin()) as f32;
+            let position = daslight_rainbow_palette_position(
+                projected,
+                time_phase as f32,
+                (*color_width / 100.0).clamp(0.0, 1.0),
+                request.stops.len(),
+            );
             spatial_palette_color(request, position, *gradient)
         }
         ColorEffectSpatialRecipe::Perlin {
@@ -28356,6 +28394,46 @@ fn scale_color(color: ColorEffectColor, amount: f32) -> ColorEffectColor {
         green: (color.green as f32 * amount).round() as u16,
         blue: (color.blue as f32 * amount).round() as u16,
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn daslight_plasma_palette_byte(
+    phase: u8,
+    x: u8,
+    y: u8,
+    size_x: i32,
+    param_x: i32,
+    size_y: i32,
+    param_y: i32,
+    speed_x: i32,
+    param_sx: i32,
+    speed_y: i32,
+    param_sy: i32,
+) -> u8 {
+    let index = |phase_param: i32, coordinate: u8, coordinate_param: i32| {
+        (i32::from(phase) * phase_param + i32::from(coordinate) * coordinate_param) as u8
+    };
+    let wave = |index: u8| {
+        // Literal recovered from CPlasmaEffect's table builder. Keeping the
+        // double-precision multiply matters at integer-truncation boundaries.
+        let radians = f64::from(index) * 0.049_087_343_75_f64;
+        (radians.sin() * 30.0).trunc() as i32 as u8
+    };
+    wave(index(param_sy, y, param_y))
+        .wrapping_add(wave(index(speed_x, y, size_y)))
+        .wrapping_add(wave(index(param_sx, x, param_x)))
+        .wrapping_add(wave(index(speed_y, x, size_x)))
+}
+
+fn daslight_rainbow_palette_position(
+    projected_coordinate: f32,
+    time_phase: f32,
+    color_width: f32,
+    palette_count: usize,
+) -> f32 {
+    let palette_count = palette_count.max(2) as f32;
+    let gradient_length = 1.0 + (palette_count - 1.0) * color_width.clamp(0.0, 1.0);
+    (projected_coordinate / gradient_length - time_phase).rem_euclid(1.0)
 }
 
 fn spatial_palette_color(
@@ -51271,7 +51349,7 @@ mod tests {
     }
 
     #[test]
-    fn color_spatial_plasma_is_smooth_deterministic_and_parameter_driven() {
+    fn color_spatial_plasma_matches_daslight_byte_table_and_wrapping() {
         let request = test_spatial_color_request(ColorEffectSpatialRecipe::Plasma {
             size_x: 1.0,
             param_x: 2.0,
@@ -51282,12 +51360,20 @@ mod tests {
             speed_y: 1.0,
             param_sy: -1.0,
         });
-        let target = test_spatial_color_target(2, 5, 0.5, 0.5);
-        let first = evaluate_test_spatial_color(&request, &target, 250);
-        let repeated = evaluate_test_spatial_color(&request, &target, 250);
-        let moved = evaluate_test_spatial_color(&request, &target, 375);
-        assert_eq!(first, repeated);
-        assert_ne!(first, moved);
+        let first =
+            evaluate_test_spatial_color(&request, &test_spatial_color_target(0, 5, 0.0, 0.5), 0);
+        let second =
+            evaluate_test_spatial_color(&request, &test_spatial_color_target(1, 5, 0.25, 0.5), 0);
+        assert_eq!(first, test_color(0, 0, 0));
+        assert_eq!(second, test_color(771, 771, 771));
+        assert_eq!(
+            daslight_plasma_palette_byte(0, 1, 0, 1, 2, 1, 2, -1, 2, 1, -1),
+            3
+        );
+        assert_ne!(
+            evaluate_test_spatial_color(&request, &test_spatial_color_target(2, 5, 0.5, 0.5), 250,),
+            evaluate_test_spatial_color(&request, &test_spatial_color_target(2, 5, 0.5, 0.5), 375,)
+        );
     }
 
     #[test]
@@ -51305,6 +51391,81 @@ mod tests {
         let center =
             evaluate_test_spatial_color(&request, &test_spatial_color_target(1, 3, 0.5, 0.5), 250);
         assert_ne!(left, center);
+    }
+
+    #[test]
+    fn color_spatial_color_rainbow_uses_palette_count_width_and_true_angle() {
+        let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::ColorRainbow {
+            color_width: 1.0,
+            angle_degrees: 0.0,
+            gradient: 100.0,
+        });
+        request.stops.insert(
+            1,
+            protocol::ColorEffectStop {
+                position: 0.5,
+                color: test_color(32_768, 32_768, 32_768),
+            },
+        );
+        let end =
+            evaluate_test_spatial_color(&request, &test_spatial_color_target(2, 3, 1.0, 0.5), 0);
+        assert_eq!(end, test_color(21_845, 21_845, 21_845));
+
+        let vertical = test_spatial_color_request(ColorEffectSpatialRecipe::ColorRainbow {
+            color_width: 0.0,
+            angle_degrees: 90.0,
+            gradient: 100.0,
+        });
+        let colors = (0..5)
+            .map(|index| {
+                evaluate_test_spatial_color(
+                    &vertical,
+                    &test_spatial_color_target(index, 5, index as f32 / 4.0, 0.5),
+                    250,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(colors.windows(2).all(|pair| pair[0] == pair[1]));
+    }
+
+    #[test]
+    fn color_spatial_exact_daslight_ranges_reject_fractional_or_out_of_range_values() {
+        for recipe in [
+            ColorEffectSpatialRecipe::Plasma {
+                size_x: 1.5,
+                param_x: 2.0,
+                size_y: 1.0,
+                param_y: 2.0,
+                speed_x: -1.0,
+                param_sx: 2.0,
+                speed_y: 1.0,
+                param_sy: -1.0,
+            },
+            ColorEffectSpatialRecipe::Plasma {
+                size_x: 1.0,
+                param_x: 2.0,
+                size_y: 1.0,
+                param_y: 2.0,
+                speed_x: -6.0,
+                param_sx: 2.0,
+                speed_y: 1.0,
+                param_sy: -1.0,
+            },
+            ColorEffectSpatialRecipe::ColorRainbow {
+                color_width: 1.01,
+                angle_degrees: 0.0,
+                gradient: 100.0,
+            },
+            ColorEffectSpatialRecipe::ColorRainbow {
+                color_width: 0.0,
+                angle_degrees: 45.5,
+                gradient: 100.0,
+            },
+        ] {
+            assert!(
+                validate_runtime_color_effect_request(&test_spatial_color_request(recipe)).is_err()
+            );
+        }
     }
 
     #[test]

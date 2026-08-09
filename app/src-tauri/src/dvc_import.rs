@@ -2343,8 +2343,6 @@ fn convert_dvc_color_spatial_effect(
                     "Plasma Transform={transform} is not reproduced on the profile-order beam strip"
                 ));
             }
-            generator_approximations
-                .push("Plasma pattern approximated from generator parameters".to_string());
             ColorEffectSpatialRecipe::Plasma {
                 size_x: dvc_finite_param(&params, 10, "Size X")?,
                 param_x: dvc_finite_param(&params, 11, "Param X")?,
@@ -2371,10 +2369,6 @@ fn convert_dvc_color_spatial_effect(
                     "Rainbow Transform={transform} is not reproduced on the profile-order beam strip"
                 ));
             }
-            generator_approximations.push(
-                "Rainbow sweep timing approximated from EFFECT DURATION and SCENE SPEED"
-                    .to_string(),
-            );
             let angle_degrees = dvc_finite_param(&params, 11, "Angle")?;
             if angle_degrees.fract().abs() > f32::EPSILON {
                 return Err(format!(
@@ -5957,10 +5951,7 @@ mod tests {
                 param_sy: -1.0,
             })
         ));
-        assert!(converted
-            .approximations
-            .iter()
-            .any(|note| note == "Plasma pattern approximated from generator parameters"));
+        assert!(converted.approximations.is_empty());
     }
 
     #[test]
@@ -6000,10 +5991,7 @@ mod tests {
                 gradient: 75.0,
             })
         ));
-        assert!(converted
-            .approximations
-            .iter()
-            .any(|note| note.contains("sweep timing approximated")));
+        assert!(converted.approximations.is_empty());
     }
 
     #[test]
