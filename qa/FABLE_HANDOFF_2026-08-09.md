@@ -64,3 +64,30 @@ These are intentionally not claimed complete by this checkpoint:
 The larger persistent goal remains active. This is a clean implementation boundary for
 Fable to turn the remaining evidence list into the next ordered plan; it is not a claim
 that every physical or cross-platform acceptance item is complete.
+
+## Fable disposition — 2026-08-09
+
+1. Items 1-3 (real saved specimens) cannot be produced by an agent: saving inside the
+   competitor app is prohibited by the supervision rules. They are converted into the
+   user-executable capture sheet `qa/DVC_SPECIMEN_REQUESTS.md`. Until specimens exist,
+   every dependent variant stays `Skipped`/fail-closed.
+2. Item 4 decision: ID625 `Transform=1` and arbitrary 2D MAPPINGS Sweep orientation do
+   **not** get a runtime tranche now. Grounds: an XML sweep of all three real projects
+   (`Sin.dvc`, `Panel.dvc`, `Shinkan2026.dvc`) found no ID625 at all (only 321/223/10),
+   so there is no real-world driver; fail-closed is exact and explicit. A bounded static
+   check of the already-recovered common Transform post-process on the one-row raster is
+   folded into DVC-V3 below; a real Transform=1 specimen (capture sheet, specimen 2)
+   reopens the question with product evidence.
+3. Next ordered tranche **DVC-V3 (Codex): VALUE FX catalog completion by static proof.**
+   RTTI enumeration of the audited binary confirms classes for all remaining VALUE
+   generators (`CBurstEffect`, `CPlasmaEffect`, `CKnightRiderEffect`, `CSparklesEffect`,
+   `CRandomFillEffect`, `CPerlinEffect`), and `crates/protocol` already carries all eight
+   runtime recipes. The tranche recovers factory ID mapping, property registration and
+   evaluator parity per generator with the same method that proved ID625, then extends
+   the `(7,7,ID)` importer arms for proven generators only. Anything unproven stays
+   fail-closed; partial landing is acceptable.
+4. Parallel Fable lane: F8 (Scene Matrix column density) re-measurement. T27-B fixed
+   columns at 156px, which likely closes the audited ~1.7x deficit; measure live, then
+   either document closure with numbers or implement compaction in the worktree lane.
+5. T25-D was implemented on 2026-07-29 (`7f73533`) but the plan document was never
+   marked; corrected in this checkpoint. No unimplemented T-series items remain.
