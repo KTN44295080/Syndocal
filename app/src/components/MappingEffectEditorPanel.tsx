@@ -33,6 +33,21 @@ export interface MappingEffectEditorPanelProps {
 const shapes: LfoShape[] = ["Sine", "Cosine", "Triangle", "Saw", "Square", "Random", "Perlin"];
 const modes: ValueEffectMode[] = ["Absolute", "Relative"];
 const directions: MappingEffectDirection[] = ["Forward", "Reverse", "Bounce", "Static"];
+
+// P-EXP quick looks: named one-click fixture-order mapping bundles
+// (qa/PRESET_EXPANSION_PLAN.md). Fixture order stays authored.
+interface MappingQuickLook {
+  label: string;
+  shape: LfoShape;
+  direction: MappingEffectDirection;
+  repetitions: number;
+  beats: number | null;
+}
+const mappingQuickLooks: MappingQuickLook[] = [
+  { label: "Wave Sweep", shape: "Sine", direction: "Forward", repetitions: 1, beats: 2 },
+  { label: "Zigzag", shape: "Triangle", direction: "Bounce", repetitions: 2, beats: 1 },
+  { label: "Step March", shape: "Square", direction: "Forward", repetitions: 4, beats: 0.5 },
+];
 const clocks = [
   { label: "Free", beats: null },
   { label: "1/4", beats: 0.25 },
@@ -128,6 +143,26 @@ export function MappingEffectEditorPanel(props: MappingEffectEditorPanelProps) {
       <div class="valueEffectTransportRow mappingEffectTransportRow">
         <label class="valueEffectPeriodField">Period ms<input class="tabularNums" type="number" min="10" step="10" value={periodMs()} onInput={(event) => props.onPeriodMs(Math.max(10, Math.round(Number(event.currentTarget.value) || 10)))} /></label>
         <div class="moveEffectClockPresets" aria-label="Mapping clock sync presets"><For each={clocks}>{(clock) => <button type="button" class={nearlyEqual(props.clockSyncBeats, clock.beats) ? "active" : ""} aria-pressed={nearlyEqual(props.clockSyncBeats, clock.beats)} title={clock.beats === null ? `${periodMs()} ms free` : `${Math.max(10, Math.round((60_000 / bpm()) * clock.beats))} ms at ${bpm()} BPM`} onClick={() => props.onClockSyncBeats(clock.beats)}><Show when={clock.beats !== null} fallback="Free"><span data-no-localize>{clock.label}</span></Show></button>}</For></div>
+      </div>
+
+      <div class="moveEffectClockPresets" aria-label="Mapping quick looks" data-mapping-quick-looks>
+        <For each={mappingQuickLooks}>
+          {(look) => (
+            <button
+              type="button"
+              data-mapping-quick-look={look.label}
+              title={`${look.label}: ${look.shape} ${look.direction}, x${look.repetitions}${look.beats === null ? "" : `, ${look.beats} beat${look.beats === 1 ? "" : "s"}`}`}
+              onClick={() => {
+                props.onShape(look.shape);
+                props.onDirection(look.direction);
+                props.onRepetitions(look.repetitions);
+                props.onClockSyncBeats(look.beats);
+              }}
+            >
+              {look.label}
+            </button>
+          )}
+        </For>
       </div>
 
       <div class="valueEffectPhaseGrid mappingEffectPhaseGrid">

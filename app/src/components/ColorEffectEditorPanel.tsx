@@ -65,6 +65,93 @@ const clockSyncBeatPresets = [
   { label: "4", beats: 4 },
 ] as const;
 
+// P-EXP quick looks: named one-click colour looks bundling a stop palette,
+// algorithm/interpolation, a spatial recipe and clock sync
+// (qa/PRESET_EXPANSION_PLAN.md). Recipe replacement preserves the pattern's
+// beam targets and imported placement like patchSpatialValues does.
+interface ColorQuickLook {
+  label: string;
+  stops: ColorEffectStop[];
+  algorithm: ColorEffectAlgorithm;
+  interpolation: ColorEffectInterpolation;
+  recipe: ColorEffectSpatialRecipe | null;
+  beats: number | null;
+}
+const rgb = (red: number, green: number, blue: number): ColorEffectColor => ({ red, green, blue });
+const colorQuickLooks: ColorQuickLook[] = [
+  {
+    label: "Rainbow Flow",
+    stops: [
+      { position: 0, color: rgb(65_535, 0, 0) },
+      { position: 0.1667, color: rgb(65_535, 65_535, 0) },
+      { position: 0.3333, color: rgb(0, 65_535, 0) },
+      { position: 0.5, color: rgb(0, 65_535, 65_535) },
+      { position: 0.6667, color: rgb(0, 0, 65_535) },
+      { position: 0.8333, color: rgb(65_535, 0, 65_535) },
+      { position: 1, color: rgb(65_535, 0, 0) },
+    ],
+    algorithm: "Cycle",
+    interpolation: "HsvShortest",
+    recipe: {
+      ColorRainbow: { grayscale: false, vertical_symmetry: false, color_width: 0.5, angle_degrees: 0, gradient: 100 },
+    },
+    beats: 4,
+  },
+  {
+    label: "Fire Flicker",
+    stops: [
+      { position: 0, color: rgb(65_535, 0, 0) },
+      { position: 0.4, color: rgb(65_535, 24_576, 0) },
+      { position: 0.7, color: rgb(65_535, 49_151, 0) },
+      { position: 1, color: rgb(65_535, 65_535, 0) },
+    ],
+    algorithm: "Cycle",
+    interpolation: "Rgb",
+    recipe: {
+      Plasma: { grayscale: false, vertical_symmetry: false, size_x: 1, param_x: 2, size_y: 1, param_y: 2, speed_x: -1, param_sx: 2, speed_y: 1, param_sy: -1 },
+    },
+    beats: 2,
+  },
+  {
+    label: "Ocean Drift",
+    stops: [
+      { position: 0, color: rgb(0, 0, 32_768) },
+      { position: 0.5, color: rgb(0, 16_384, 65_535) },
+      { position: 1, color: rgb(0, 65_535, 65_535) },
+    ],
+    algorithm: "Bounce",
+    interpolation: "HsvShortest",
+    recipe: { Perlin: { octaves: 5, zoom: 20, direction_degrees: 0, speed: 1, amplitude: 100 } },
+    beats: 8,
+  },
+  {
+    label: "Police Sweep",
+    stops: [
+      { position: 0, color: rgb(65_535, 0, 0) },
+      { position: 0.49, color: rgb(65_535, 0, 0) },
+      { position: 0.51, color: rgb(0, 0, 65_535) },
+      { position: 1, color: rgb(0, 0, 65_535) },
+    ],
+    algorithm: "Cycle",
+    interpolation: "Rgb",
+    recipe: {
+      KnightRider: { size: 4, one_way: false, fading: false, go_outside: false, gradient: 0 },
+    },
+    beats: 1,
+  },
+  {
+    label: "White Sparkle",
+    stops: [
+      { position: 0, color: rgb(65_535, 65_535, 65_535) },
+      { position: 1, color: rgb(0, 0, 0) },
+    ],
+    algorithm: "Cycle",
+    interpolation: "Rgb",
+    recipe: { Sparkle: { number: 8, lifespan: 25, width: 1 } },
+    beats: 0.5,
+  },
+];
+
 const clamp = (value: number, minimum: number, maximum: number) =>
   Math.min(maximum, Math.max(minimum, Number.isFinite(value) ? value : minimum));
 
@@ -144,6 +231,19 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
       recipe: defaultSpatialRecipe(kind),
       beam_targets: props.spatialPattern?.beam_targets ?? [],
     });
+  };
+  const applyQuickLook = (look: ColorQuickLook) => {
+    props.onStops(look.stops.map((stop) => ({ ...stop, color: { ...stop.color } })));
+    props.onAlgorithm(look.algorithm);
+    props.onInterpolation(look.interpolation);
+    if (look.recipe === null) {
+      props.onSpatialPattern(null);
+    } else {
+      const pattern = props.spatialPattern;
+      const recipe = structuredClone(look.recipe);
+      props.onSpatialPattern(pattern ? { ...pattern, recipe } : { recipe, beam_targets: [] });
+    }
+    props.onClockSyncBeats(look.beats);
   };
   const patchSpatialValues = (patch: Record<string, number | boolean>) => {
     const pattern = props.spatialPattern;
@@ -546,6 +646,20 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
               >
                 <strong>{preset.label}</strong>
                 <span class="tabularNums">{preset.beats === null ? "manual" : `${beatPeriodMs(preset.beats)} ms`}</span>
+              </button>
+            )}
+          </For>
+        </div>
+        <div class="moveEffectClockPresets" aria-label="Color quick looks" data-color-quick-looks>
+          <For each={colorQuickLooks}>
+            {(look) => (
+              <button
+                type="button"
+                data-color-quick-look={look.label}
+                title={look.beats === null ? `${look.label}: free-running` : `${look.label}: ${look.beats} beat${look.beats === 1 ? "" : "s"}`}
+                onClick={() => applyQuickLook(look)}
+              >
+                {look.label}
               </button>
             )}
           </For>
