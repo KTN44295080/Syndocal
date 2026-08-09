@@ -31816,7 +31816,9 @@ h3 {
   gap: 3px;
   height: 100%;
   min-height: 0;
-  padding: 3px;
+  /* No top padding: the bank-jump strip must hug the column headers within the
+     matrixBankChipRowEndsWithinThirtySixPixelsOfColumnHeaders density budget. */
+  padding: 0 3px 3px;
 }
 
 .sceneMatrixColumn {
@@ -31834,9 +31836,9 @@ h3 {
 
 .sceneMatrixBankStrip {
   display: block;
-  flex: 0 0 4px;
+  flex: 0 0 3px;
   width: 100%;
-  min-height: 4px;
+  min-height: 3px;
   background: var(--group-identity);
 }
 
