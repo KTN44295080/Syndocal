@@ -1507,6 +1507,7 @@ const japaneseText: Record<string, string> = {
   spread: "スプレッド",
   "Color flow": "Colorフロー",
   "Value generator": "Valueジェネレーター",
+  "Value quick looks": "Valueクイックルック",
   Generator: "ジェネレーター",
   "Custom envelope": "カスタムエンベロープ",
   "Value palette": "値パレット",
