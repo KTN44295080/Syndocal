@@ -1920,12 +1920,38 @@ export type ColorEffectSpatialRecipe =
   | { Sparkle: { number: number; lifespan: number; width: number } }
   | { Plasma: { grayscale: boolean; vertical_symmetry: boolean; size_x: number; param_x: number; size_y: number; param_y: number; speed_x: number; param_sx: number; speed_y: number; param_sy: number } }
   | { ColorRainbow: { grayscale: boolean; vertical_symmetry: boolean; color_width: number; angle_degrees: number; gradient: number } }
-  | { Rainbow: { vertical_symmetry: boolean; horizontal_symmetry: boolean; rotation_degrees: number; color_width: number; angle_degrees: number; gradient: number } }
+  | { Rainbow: { grayscale: boolean; vertical_symmetry: boolean; horizontal_symmetry: boolean; rotation_degrees: number; color_width: number; angle_degrees: number; gradient: number } }
   | { Perlin: { octaves: number; zoom: number; direction_degrees: number; speed: number; amplitude: number } };
+
+export type ColorEffectSpatialCoordinateFrame = "DaslightPatchCanvas";
+
+export type ColorEffectSpatialMappingShape = "Rectangle";
+
+export type ColorEffectSpatialSamplingRule = "RotatedInclusionMaskAxisAlignedRaster";
+
+export interface ColorEffectSpatialPlacementTarget {
+  fixture_id: number;
+  beam_index: number;
+  patch_x: number;
+  patch_y: number;
+}
+
+export interface ColorEffectSpatialPlacement {
+  source_coordinate_frame: ColorEffectSpatialCoordinateFrame;
+  mapping_shape: ColorEffectSpatialMappingShape;
+  x: number;
+  y: number;
+  sx: number;
+  sy: number;
+  mapping_angle_degrees: number;
+  sampling_rule: ColorEffectSpatialSamplingRule;
+  target_coordinates?: ColorEffectSpatialPlacementTarget[];
+}
 
 export interface ColorEffectSpatialPattern {
   recipe: ColorEffectSpatialRecipe;
   beam_targets?: ColorEffectBeamTarget[];
+  placement?: ColorEffectSpatialPlacement;
 }
 
 export interface ColorEffectRequest {

@@ -22,11 +22,13 @@ evidence for that build, not a compatibility promise for another Daslight versio
 
 | Source | Disposition | Exactness boundary |
 |---|---|---|
-| `RACK TYPE=5 / EFFECT TYPE=3 / ID=36` Rainbow | **Skipped with a dedicated fail-closed error** | The generator class and all seven properties are proven, but the existing protocol has neither the Patch-canvas `MAPPING` window/per-beam coordinates nor family-3 Grayscale on its `Rainbow` recipe. The committed body also owns no runtime targets. |
+| `RACK TYPE=5 / EFFECT TYPE=3 / ID=36` Rainbow | **Implemented exactly in DVC-V5a** | The approved additive Rainbow/placement protocol represents all seven properties and the Patch-canvas Rectangle sampler. The committed body has no runtime targets, so it is validated and reported as a converted source no-op without fabricating a cue effect target. |
 | `RACK TYPE=4 / EFFECT TYPE=4 / ID=221` Circle | **Skipped with a dedicated fail-closed error** | Daslight evaluates analytical circular arcs, not Syndocal Line or centripetal Catmull-Rom Smooth. `MoveEffectRequest` is fixture-only and cannot retain the saved six `BEAMID` targets. |
 
-No protocol, engine, frontend, or `.sdc` schema was changed. Both new dispatch arms
-validate the recovered serializer shape before returning their semantic rejection.
+DVC-V5a implements only the approved COLOR proposal and the related MAPPINGS ID521
+Rectangle-preservation fix. It adds the protocol representation, importer population,
+engine command/rebuild-time compilation, and minimal Rainbow Grayscale editor exposure.
+Move ID221 is deliberately unchanged and remains the separately scoped DVC-V5b work.
 
 ## Saved-specimen cross-check and corrected target fact
 
@@ -116,51 +118,66 @@ placement model. Its sampler at `0x14001C260` builds and hit-tests the shape at
 `0x14001C393..0x14001C3B3`, and scales into the raster at
 `0x14001C3B7..0x14001C445`.
 
-The current Syndocal 521 importer instead normalizes fixture stage X/Z across the
-resolved target set. The engine gives all selected sub-beams the fixture position and
-does not retain the Rectangle. In the committed ID521 body, Rectangle
-`(2630,-140,140,50)` places fixture origin `(2640,-130)` at
-`(0.071429,0.2)` / raster `(7,20)`, while a single-fixture Syndocal normalization
-produces `(0.5,0.5)` for all four BEAMIDs. Therefore the existing 521 conversion is
-not an exact-placement precedent for ID36. Correcting 521 is an existing out-of-scope
-boundary for a separately approved tranche.
+Before DVC-V5a, Syndocal normalized fixture stage X/Z across the resolved target set,
+gave selected sub-beams the fixture position, and discarded the Rectangle. In the
+committed ID521 body, Rectangle `(2630,-140,140,50)` places Patch point
+`(2640,-130)` at `(0.071429,0.2)` / raster `(7,20)`, while the old single-fixture
+normalization produced `(0.5,0.5)` for all four BEAMIDs.
 
-### Why ID36 remains fail-closed
+DVC-V5a corrects ID521 through the same optional placement body used by family-5
+Rainbow. The importer retains the raw signed Rectangle and exact Patch-canvas point
+for each fixture/beam identity. The engine compiles the rotated inclusion geometry and
+raw axis-aligned raster cell before the 44 Hz evaluator runs. Therefore the comparison
+above now resolves to cell `(7,20)` instead of the old normalized centre. PARAM ID4
+Rotation remains generator-raster rotation; `MAPPING@ANGLE` remains inclusion-mask
+rotation only.
 
-`ColorEffectSpatialRecipe::Rainbow` carries Vertical/Horizontal symmetry, generator
-Rotation, Color Width, Angle, and Gradient, but no Grayscale. The alternative
-`ColorRainbow` has Grayscale but lacks Horizontal symmetry and generator Rotation.
-`ColorEffectSpatialPattern` targets carry fixture/beam/selection identity only; they
-have no Patch-canvas coordinate or `MAPPING` window. Runtime stage-position
-normalization also discards Rectangle bounds, Patch layout scale, sub-beam offsets,
-and the separate inclusion-mask angle.
+### Why ID36 is now exactly representable
 
-Even though every saved scalar happens to be a representable default, there is no
-single existing recipe that represents the verified family contract, and there is no
-exact placement representation. Importing it would silently change the show.
+DVC-V5a extends `ColorEffectSpatialRecipe::Rainbow` instead of adding a parallel
+family-3 recipe. This is the narrower representation because IDs 36, 130, and 521 use
+the same `CRainbowEffect`, while the existing Rainbow recipe already owns both
+symmetries and generator Rotation. Its additive Grayscale field closes the remaining
+recipe gap.
 
-### Protocol-change proposal — approval required, not implemented
+`ColorEffectSpatialPattern` now optionally carries the source Rectangle and a
+fixture/beam-keyed Patch coordinate table. Runtime placement no longer depends on
+stage X/Z normalization. For the committed ID36 rack, the same exact representation
+also proves that an empty BEAMS container with no SELECTIONS is a source no-op: the
+importer records a converted result but emits no runtime effect target.
 
-An additive design would need:
+### Approved COLOR protocol-change disposition — implemented in DVC-V5a
 
-1. A `#[serde(default)]` Grayscale field on `Rainbow`, or a distinct family-3 recipe
-   that still carries both symmetries and generator Rotation.
-2. An optional, serde-defaulted placement body on `ColorEffectSpatialPattern` with:
-   source coordinate frame `DaslightPatchCanvas`, mapping shape/type, raw
-   `x/y/sx/sy`, `mapping_angle_degrees`, and an explicit
-   `RotatedInclusionMaskAxisAlignedRaster` sampling rule.
-3. Per-target Patch-canvas X/Y, or an additive placement table keyed by
-   fixture/beam identity, so fixture origins, beam-local offsets, and fixture angle are
-   preserved without reusing scaled stage positions.
-4. Runtime evaluation that builds the recovered mask and uses raw axis-aligned sample
-   coordinates without inverse mapping-angle rotation.
-5. A proven source-target mode before representing external `SELECTIONS`; the current
-   specimen proves only empty BEAMS/no SELECTIONS, not the request note's claimed two
-   targets.
+The 2026-08-10 approval was implemented with this additive shape:
 
-`LOCKED` is editor state; `DASUID` and NAME can remain import provenance unless exact
-round-trip editing is later required. Missing optional bodies would retain the current
-`.sdc` behavior.
+1. `ColorEffectSpatialRecipe::Rainbow` now contains `grayscale`,
+   `vertical_symmetry`, `horizontal_symmetry`, `rotation_degrees`, `color_width`,
+   `angle_degrees`, and `gradient`. `grayscale=false` is the serde default and is
+   omitted on serialization.
+2. `ColorEffectSpatialPattern` now contains optional `placement` in addition to
+   `recipe` and `beam_targets`. `placement=None` is the serde default and is omitted.
+3. `ColorEffectSpatialPlacement` contains coordinate frame
+   `DaslightPatchCanvas`, shape `Rectangle`, raw signed `x/y/sx/sy`,
+   `mapping_angle_degrees`, sampling rule
+   `RotatedInclusionMaskAxisAlignedRaster`, and `target_coordinates`.
+4. Each placement target contains `fixture_id`, `beam_index`, and raw signed
+   `patch_x/patch_y`; this joins placement to authored target identity without stage
+   coordinate reuse.
+5. The engine compiles Rectangle centre/extents, mapping-angle sine/cosine, inclusion,
+   signed truncating raster cells, and Rainbow projection while rebuilding runtime
+   targets. The tick reads fixed per-target coordinates/projection; it performs no
+   placement allocation, trigonometry, identity search, or Patch-coordinate lookup.
+
+Legacy Rainbow JSON with no Grayscale and legacy patterns with no placement deserialize
+to their defaults and serialize back without adding either field. New populated bodies
+round-trip with the explicit placement contract. `LOCKED` remains editor state;
+`DASUID` and NAME remain import provenance. The Scene Settings editor exposes Rainbow
+Grayscale using the existing localized Grayscale label; the imported placement body is
+not an authoring surface.
+
+External `SELECTIONS` remain deliberately fail-closed for ID36. The saved specimen
+proves only empty owned BEAMS/no SELECTIONS, so DVC-V5a does not infer how a populated
+external selection source should be persisted or resolved.
 
 ## Move `(4,4,221)` Circle
 
@@ -269,23 +286,56 @@ need an editor surface and localized labels.
 The repo-portable golden test consumes the committed specimen and pins:
 
 - exact ID36 NB=7 parameter types/defaults, eight palette entries, Rectangle values,
-  empty BEAMS/no SELECTIONS, and its literal fail-closed report message;
+  and empty BEAMS/no SELECTIONS;
+- ID36 is reported once as a converted `source no-op preserved`, is absent from the
+  skipped report, and creates no cue-owned runtime effect target;
 - exact ID221 NB=3 parameter types/defaults and four saved points;
 - raw fixture UUID plus XML `BEAMID=1..6` / `IDSELECTION=1..6` order;
 - importer target parsing as raw beam IDs `1..6`, first-seen selection indices
   `0..5`, one deduplicated fixture, and six ordered steps;
 - the literal Move fail-closed report message.
 
-Existing assertions are unchanged. The only shared validator delta is additive:
-Circle accepts the recovered TYPE5 point-count domain `2..=255`; existing Line and
-Polygon validation branches retain their prior rules.
+The saved ID36 outcome is exact because Daslight's recovered enumeration chooses the
+external SELECTIONS container when present and otherwise the owned BEAMS container.
+This body has neither; Rectangle overlap is only a geometric filter over an existing
+target list and cannot create membership. A converted no-op is therefore more faithful
+than either a synthetic target or a semantic rejection.
+
+The complete existing-521 assertion disposition is:
+
+| Test contract | Old assertion | DVC-V5a assertion | Reason |
+|---|---|---|---|
+| synthetic DVC-3b import summary and recipe | six converted / zero skipped; two Mappings; four beam targets in selection order; Rainbow Vertical symmetry and Rotation 171 | all values retained; Rainbow also pins additive `grayscale=false`; an additional equality pins Rectangle `(-10,-10,160,70,17.5)` and Patch rows `(1,0,0,0)`, `(1,1,30,0)`, `(2,0,100,50)`, `(2,1,130,50)` | Existing recipe/count behavior is unchanged; the fixture now supplies the source data that the corrected importer must preserve. |
+| focused transform import | Horizontal symmetry imports for 521 | same Horizontal symmetry result, additive `grayscale=false`, plus placement `(0,0,100,100,0)` and target `(fixture 1, beam 0, 10,20)` | The prior XML omitted a Rectangle and could only exercise recipe fields; the approved exact path requires and asserts the placement contract. |
+| local homecoming recipe count | one Rainbow recipe | unchanged | Placement preservation does not change generator count. |
+| Shinkan golden recipe classification | `Rainbow => 521` | unchanged | The protocol addition does not reclassify the generator. |
+| repo-portable saved-specimen golden | no 521 source/import assertion | adds raw Rectangle `(2630,-140,140,50,0)`, raw BEAMID `0..3` / IDSELECTION `1..4`, imported recipe defaults including `grayscale=false`, retained beam/selection/Dimmer order, and Patch points `(2640,-130)`, `(2670,-130)`, `(2700,-130)`, `(2730,-130)` | This is additive real-source coverage for the window-preservation fix, not a replacement of an old expected value. |
+
+No prior 521 expected value is deleted, relaxed, or changed to a different number or
+meaning. The old stage-normalized centre was not serialized or asserted; DVC-V5a adds
+the missing raw Patch-window/coordinate assertions, while focused engine coverage pins
+the resulting raster cells and signed integer truncation boundaries.
+
+The shared Move validator change from the evidence tranche remains additive: Circle
+accepts the recovered TYPE5 point-count domain `2..=255`; existing Line and Polygon
+validation branches retain their prior rules.
 
 ## Deliberate boundaries
 
-- No `crates/protocol`, `crates/engine`, frontend, or `.sdc` change was made.
-- No inferred rectangle targets were fabricated from Patch overlap.
-- No existing ID521 behavior was altered, even though the same static analysis shows
-  its current placement conversion is not exact.
+- Protocol changes are additive only. Default-off Grayscale and absent placement keep
+  the legacy `.sdc v1` serialized shape.
+- No Rectangle overlap is promoted into target membership. The empty committed ID36
+  rack stays an exact converted no-op.
+- Family-5 generators other than the confirmed `(5,3,36)` contract remain unknown and
+  fail-closed. ID36 bodies using external `SELECTIONS` also remain fail-closed until
+  that source-target mode is proven.
+- DVC-V5a corrects MAPPINGS Rainbow ID521 only. It does not broaden the placement claim
+  to MAPPINGS Perlin ID530 or another generator family.
+- Move ID221 remains fail-closed. Its implementation and the intact Move protocol-change
+  proposal above are reserved for DVC-V5b.
+- The Rectangle placement body is importer provenance/runtime input, not a new Scene
+  Settings placement authoring workflow. Only the newly representable Rainbow
+  Grayscale parameter is minimally exposed, reusing its existing localized label.
 - No claim is made for nonzero Move Phasing composition until its last call-chain
   mapping is recovered.
 - No claim is made about physical fixture optics, mechanical Pan/Tilt calibration,

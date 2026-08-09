@@ -44,7 +44,7 @@ const defaultSpatialRecipe = (kind: Exclude<ColorSpatialKind, "PaletteFlow">): C
     case "ColorRainbow":
       return { ColorRainbow: { grayscale: false, vertical_symmetry: false, color_width: 0, angle_degrees: 0, gradient: 100 } };
     case "Rainbow":
-      return { Rainbow: { vertical_symmetry: false, horizontal_symmetry: false, rotation_degrees: 0, color_width: 0, angle_degrees: 0, gradient: 100 } };
+      return { Rainbow: { grayscale: false, vertical_symmetry: false, horizontal_symmetry: false, rotation_degrees: 0, color_width: 0, angle_degrees: 0, gradient: 100 } };
     case "Perlin":
       return { Perlin: { octaves: 5, zoom: 20, direction_degrees: 0, speed: 1, amplitude: 100 } };
   }
@@ -478,6 +478,7 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
         </Show>
         <Show when={spatialKind() === "Rainbow"}>
           <div class="colorEffectModeGrid">
+            <label><input type="checkbox" checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
             <label>Rotation °<input type="number" step="1" value={spatialNumber("rotation_degrees")} onInput={(event) => patchSpatialValues({ rotation_degrees: Number(event.currentTarget.value) || 0 })} /></label>
             <label>Angle °<input type="number" min="0" max="360" step="1" value={spatialNumber("angle_degrees")} onInput={(event) => patchSpatialValues({ angle_degrees: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 360) })} /></label>
             <label>Color width %<input type="number" min="0" max="100" step="1" value={spatialNumber("color_width")} onInput={(event) => patchSpatialValues({ color_width: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>

@@ -71,10 +71,18 @@ try {
   assert.match(editorSource, /min="-5" max="5" step="1" value=\{spatialNumber\("speed_x", -1\)\}/);
   assert.match(editorSource, /min="0" max="1" step="0\.01" value=\{spatialNumber\("color_width"\)\}/);
   assert.match(editorSource, /checked=\{spatialBoolean\("grayscale"\)\}/);
+  assert.match(
+    editorSource,
+    /<Show when=\{spatialKind\(\) === "Rainbow"\}>[\s\S]*?checked=\{spatialBoolean\("grayscale"\)\}[\s\S]*?<label>Rotation °/,
+    "MAPPINGS Rainbow must expose its verified Grayscale field before the existing rotation controls",
+  );
   assert.match(editorSource, /<option value="vertical">Vertical symmetry<\/option>/);
   assert.match(editorSource, /<option value="horizontal">Horizontal symmetry<\/option>/);
   assert.match(protocolSource, /Plasma \{[\s\S]*?serde\(default\)[\s\S]*?grayscale: bool,[\s\S]*?vertical_symmetry: bool/);
-  assert.match(protocolSource, /Rainbow \{[\s\S]*?horizontal_symmetry: bool/);
+  assert.match(
+    protocolSource,
+    /(?:^|\r?\n)    Rainbow \{[\s\S]*?grayscale: bool,[\s\S]*?horizontal_symmetry: bool/,
+  );
   assert.match(protocolSource, /serde\(default, skip_serializing_if = "Vec::is_empty"\)[\s\S]*pub color_stops: Vec<ColorEffectStop>/);
   assert.match(tauriSource, /fn validate_fx_palette_stops[\s\S]*2\.\.=16/);
   assert.match(engineSource, /fn validate_and_sanitize_palette[\s\S]*palette\.color_stops/);

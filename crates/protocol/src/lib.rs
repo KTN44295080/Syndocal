@@ -2329,6 +2329,8 @@ pub enum ColorEffectSpatialRecipe {
         gradient: f32,
     },
     Rainbow {
+        #[serde(default, skip_serializing_if = "is_false")]
+        grayscale: bool,
         #[serde(default)]
         vertical_symmetry: bool,
         #[serde(default)]
@@ -2347,12 +2349,66 @@ pub enum ColorEffectSpatialRecipe {
     },
 }
 
+/// Coordinate frame used by an imported spatial generator placement.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ColorEffectSpatialCoordinateFrame {
+    DaslightPatchCanvas,
+}
+
+/// Daslight mapping primitive used as the spatial generator's inclusion mask.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ColorEffectSpatialMappingShape {
+    /// Daslight `MAPPING TYPE=0`.
+    Rectangle,
+}
+
+/// Defines how a mapping mask and generator raster are combined.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ColorEffectSpatialSamplingRule {
+    /// Rotate the mapping primitive for inclusion testing, but derive raster
+    /// coordinates from the raw, axis-aligned `x/y/sx/sy` window without an
+    /// inverse mapping-angle transform.
+    RotatedInclusionMaskAxisAlignedRaster,
+}
+
+/// Patch-canvas coordinates for one authored beam target. The fixture/beam
+/// pair is the stable identity used to join this table to `beam_targets`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ColorEffectSpatialPlacementTarget {
+    pub fixture_id: FixtureId,
+    pub beam_index: u16,
+    pub patch_x: i64,
+    pub patch_y: i64,
+}
+
+/// Optional source-placement contract for imported spatial generators.
+///
+/// Raw signed values preserve the authored Daslight Patch-canvas window. The
+/// importer validates positive extents before constructing this body.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ColorEffectSpatialPlacement {
+    pub source_coordinate_frame: ColorEffectSpatialCoordinateFrame,
+    pub mapping_shape: ColorEffectSpatialMappingShape,
+    pub x: i64,
+    pub y: i64,
+    pub sx: i64,
+    pub sy: i64,
+    pub mapping_angle_degrees: f32,
+    pub sampling_rule: ColorEffectSpatialSamplingRule,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_coordinates: Vec<ColorEffectSpatialPlacementTarget>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ColorEffectSpatialPattern {
     pub recipe: ColorEffectSpatialRecipe,
     /// Empty for native effects; the engine derives one beam from each target fixture.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub beam_targets: Vec<ColorEffectBeamTarget>,
+    /// Imported source placement. Its absence preserves the original
+    /// stage-normalized spatial evaluator and the legacy `.sdc v1` byte shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<ColorEffectSpatialPlacement>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -4933,6 +4989,7 @@ mod tests {
                 selection_index: 12,
                 feature_attribute: Some("Dimmer".to_string()),
             }],
+            placement: None,
         }));
         let json = serde_json::to_string(&spatial).unwrap();
         let roundtrip: super::ColorEffectRequest = serde_json::from_str(&json).unwrap();
@@ -4961,25 +5018,76 @@ mod tests {
             }
         ));
 
+        let legacy_mapping_rainbow_json = r#"{"Rainbow":{"vertical_symmetry":true,"horizontal_symmetry":false,"rotation_degrees":0.0,"color_width":50.0,"angle_degrees":90.0,"gradient":100.0}}"#;
         let legacy_mapping_rainbow: super::ColorEffectSpatialRecipe =
-            serde_json::from_value(serde_json::json!({
-                "Rainbow": {
-                    "vertical_symmetry": true,
-                    "rotation_degrees": 0.0,
-                    "color_width": 50.0,
-                    "angle_degrees": 90.0,
-                    "gradient": 100.0
-                }
-            }))
-            .unwrap();
+            serde_json::from_str(legacy_mapping_rainbow_json).unwrap();
         assert!(matches!(
-            legacy_mapping_rainbow,
+            &legacy_mapping_rainbow,
             super::ColorEffectSpatialRecipe::Rainbow {
+                grayscale: false,
                 vertical_symmetry: true,
                 horizontal_symmetry: false,
                 ..
             }
         ));
+        assert_eq!(
+            serde_json::to_string(&legacy_mapping_rainbow).unwrap(),
+            legacy_mapping_rainbow_json,
+            "default Grayscale must not change an existing Rainbow byte shape"
+        );
+
+        let placed_rainbow = super::ColorEffectSpatialPattern {
+            recipe: super::ColorEffectSpatialRecipe::Rainbow {
+                grayscale: true,
+                vertical_symmetry: false,
+                horizontal_symmetry: true,
+                rotation_degrees: 45.0,
+                color_width: 0.25,
+                angle_degrees: 90.0,
+                gradient: 0.75,
+            },
+            beam_targets: vec![super::ColorEffectBeamTarget {
+                fixture_id: 8,
+                beam_index: 3,
+                selection_index: 2,
+                feature_attribute: None,
+            }],
+            placement: Some(super::ColorEffectSpatialPlacement {
+                source_coordinate_frame:
+                    super::ColorEffectSpatialCoordinateFrame::DaslightPatchCanvas,
+                mapping_shape: super::ColorEffectSpatialMappingShape::Rectangle,
+                x: 2_630,
+                y: -140,
+                sx: 140,
+                sy: 50,
+                mapping_angle_degrees: 17.5,
+                sampling_rule:
+                    super::ColorEffectSpatialSamplingRule::RotatedInclusionMaskAxisAlignedRaster,
+                target_coordinates: vec![super::ColorEffectSpatialPlacementTarget {
+                    fixture_id: 8,
+                    beam_index: 3,
+                    patch_x: 2_640,
+                    patch_y: -130,
+                }],
+            }),
+        };
+        let placed_json = serde_json::to_string(&placed_rainbow).unwrap();
+        assert!(placed_json.contains(r#""grayscale":true"#));
+        assert!(placed_json.contains(r#""placement""#));
+        assert_eq!(
+            serde_json::from_str::<super::ColorEffectSpatialPattern>(&placed_json).unwrap(),
+            placed_rainbow
+        );
+
+        let legacy_pattern_json = r#"{"recipe":{"Perlin":{"octaves":5,"zoom":20.0,"direction_degrees":1.0,"speed":1.0,"amplitude":100.0}}}"#;
+        let legacy_pattern: super::ColorEffectSpatialPattern =
+            serde_json::from_str(legacy_pattern_json).unwrap();
+        assert!(legacy_pattern.placement.is_none());
+        assert_eq!(
+            serde_json::to_string(&legacy_pattern).unwrap(),
+            legacy_pattern_json,
+            "a missing placement stays omitted and preserves the legacy byte shape"
+        );
     }
 
     #[test]
@@ -5023,6 +5131,7 @@ mod tests {
                 selection_index: 8,
                 feature_attribute: Some("ColorRed 4".to_string()),
             }],
+            placement: None,
         });
         let json = serde_json::to_string(&parsed).unwrap();
         let roundtrip: super::ValueEffectRequest = serde_json::from_str(&json).unwrap();
@@ -5038,6 +5147,7 @@ mod tests {
                 selection_index: 8,
                 feature_attribute: Some("ColorRed 4".to_string()),
             }],
+            placement: None,
         });
         let json = serde_json::to_string(&parsed).unwrap();
         let roundtrip: super::ValueEffectRequest = serde_json::from_str(&json).unwrap();

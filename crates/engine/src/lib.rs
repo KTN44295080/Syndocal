@@ -30,17 +30,18 @@ use protocol::{
     ChaserFeature, ChildTimelineSummary, ChildTimelineTransportPathSegment,
     ChildTimelineTransportRootSummary, ChildTimelineTransportRuntimeSummary, ClockSnapshot,
     ClockSource, ColorEffectAlgorithm, ColorEffectColor, ColorEffectInterpolation,
-    ColorEffectRequest, ColorEffectSpatialRecipe, ColorEffectStop, ColorMappingCellTarget,
-    ColorMappingEffectRequest, ColorMappingPlaybackDirection, ColorMappingSampling,
-    ColorMappingWrapMode, CompositionId, CompositionSummary, CueEffectTarget, CueFixtureTarget,
-    CueId, CueIfcbTiming, CueListId, CueListSummary, CueLiveDirection, CueLiveModifierSettings,
-    CueLiveModifierState, CueNodeGraphTarget, CuePaletteTarget, CuePartSummary, CueStepSummary,
-    CueSummary, CurveEffectPoint, CurveEffectRequest, DaslightCurveSource,
-    DirectChildTimelineTransportSummary, DmxMergeMode, DmxModeSummary, DmxOutputConfig,
-    DmxOutputProtocol, DmxOutputRouteTelemetry, DmxUniversePreview, EffectBeamTarget,
-    EffectBlendMode, EffectClockSync, EffectId, EffectKind, EffectParamsSnapshot, EffectSummary,
-    EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId, FixtureId,
-    FixtureLimits, FixtureProfileSummary, LfoEffectRequest, LfoShape, LiveAudioFrame,
+    ColorEffectRequest, ColorEffectSpatialCoordinateFrame, ColorEffectSpatialMappingShape,
+    ColorEffectSpatialRecipe, ColorEffectSpatialSamplingRule, ColorEffectStop,
+    ColorMappingCellTarget, ColorMappingEffectRequest, ColorMappingPlaybackDirection,
+    ColorMappingSampling, ColorMappingWrapMode, CompositionId, CompositionSummary, CueEffectTarget,
+    CueFixtureTarget, CueId, CueIfcbTiming, CueListId, CueListSummary, CueLiveDirection,
+    CueLiveModifierSettings, CueLiveModifierState, CueNodeGraphTarget, CuePaletteTarget,
+    CuePartSummary, CueStepSummary, CueSummary, CurveEffectPoint, CurveEffectRequest,
+    DaslightCurveSource, DirectChildTimelineTransportSummary, DmxMergeMode, DmxModeSummary,
+    DmxOutputConfig, DmxOutputProtocol, DmxOutputRouteTelemetry, DmxUniversePreview,
+    EffectBeamTarget, EffectBlendMode, EffectClockSync, EffectId, EffectKind, EffectParamsSnapshot,
+    EffectSummary, EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId,
+    FixtureId, FixtureLimits, FixtureProfileSummary, LfoEffectRequest, LfoShape, LiveAudioFrame,
     LiveAudioReactiveFeatures, MappingEffectDirection, MappingEffectRequest, MoveCoordinateMode,
     MoveDirection, MoveEffectRequest, MovePathPoint, NodeGraphAudioRuntimeStatus, NodeGraphId,
     NodeGraphNodeKind, NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId,
@@ -3589,6 +3590,10 @@ struct RuntimeColorSpatialTarget {
     strip_count: usize,
     x: f32,
     z: f32,
+    /// Fixed spatial projection for the Daslight MAPPINGS Rainbow raster.
+    /// Built with the target coordinates so the 44 Hz evaluator performs no
+    /// placement lookup or trigonometry.
+    rainbow_projected_coordinate: Option<f32>,
     binding: RuntimeColorBinding,
     cached: Cell<Option<RuntimeColorSpatialEvaluation>>,
 }
@@ -3612,6 +3617,152 @@ struct RuntimeColorSpatialEvaluation {
 struct RuntimeColorSpatialSample {
     color: ColorEffectColor,
     opacity: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CompiledColorSpatialPlacementSample {
+    raster_x: i128,
+    raster_y: i128,
+}
+
+impl CompiledColorSpatialPlacementSample {
+    fn normalized(self) -> (f32, f32) {
+        (
+            (self.raster_x as f64 / 100.0) as f32,
+            (self.raster_y as f64 / 100.0) as f32,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CompiledColorSpatialPlacement {
+    x: i64,
+    y: i64,
+    sx: i64,
+    sy: i64,
+    mask_center_x: f64,
+    mask_center_y: f64,
+    mask_half_width: f64,
+    mask_half_height: f64,
+    mask_cosine: f64,
+    mask_sine: f64,
+}
+
+impl CompiledColorSpatialPlacement {
+    fn compile(placement: &protocol::ColorEffectSpatialPlacement) -> Result<Self, String> {
+        if placement.source_coordinate_frame
+            != ColorEffectSpatialCoordinateFrame::DaslightPatchCanvas
+        {
+            return Err("Color spatial placement coordinate frame is unsupported".to_string());
+        }
+        if placement.mapping_shape != ColorEffectSpatialMappingShape::Rectangle {
+            return Err("Color spatial placement mapping shape is unsupported".to_string());
+        }
+        if placement.sampling_rule
+            != ColorEffectSpatialSamplingRule::RotatedInclusionMaskAxisAlignedRaster
+        {
+            return Err("Color spatial placement sampling rule is unsupported".to_string());
+        }
+        if placement.sx <= 0 || placement.sy <= 0 {
+            return Err("Color spatial placement extents must be greater than zero".to_string());
+        }
+        if !placement.mapping_angle_degrees.is_finite() {
+            return Err("Color spatial placement angle must be finite".to_string());
+        }
+
+        let mask_half_width = placement.sx as f64 * 0.5;
+        let mask_half_height = placement.sy as f64 * 0.5;
+        let radians = f64::from(placement.mapping_angle_degrees).to_radians();
+        let mask_cosine = radians.cos();
+        let mask_sine = radians.sin();
+        // Daslight rotates the scaled Rectangle about its centre, then moves
+        // the rotated AABB's top-left back to the authored raw X/Y.
+        let rotated_aabb_width =
+            placement.sx as f64 * mask_cosine.abs() + placement.sy as f64 * mask_sine.abs();
+        let rotated_aabb_height =
+            placement.sx as f64 * mask_sine.abs() + placement.sy as f64 * mask_cosine.abs();
+
+        Ok(Self {
+            x: placement.x,
+            y: placement.y,
+            sx: placement.sx,
+            sy: placement.sy,
+            mask_center_x: placement.x as f64 + rotated_aabb_width * 0.5,
+            mask_center_y: placement.y as f64 + rotated_aabb_height * 0.5,
+            mask_half_width,
+            mask_half_height,
+            mask_cosine,
+            mask_sine,
+        })
+    }
+
+    fn sample(self, patch_x: i64, patch_y: i64) -> Option<CompiledColorSpatialPlacementSample> {
+        let delta_x = patch_x as f64 - self.mask_center_x;
+        let delta_y = patch_y as f64 - self.mask_center_y;
+        // Invert the mapping-angle rotation for inclusion only. Raster lookup
+        // deliberately continues to use the unrotated raw X/Y window below.
+        let mask_x = delta_x * self.mask_cosine + delta_y * self.mask_sine;
+        let mask_y = -delta_x * self.mask_sine + delta_y * self.mask_cosine;
+        if mask_x.abs() > self.mask_half_width || mask_y.abs() > self.mask_half_height {
+            return None;
+        }
+
+        Some(CompiledColorSpatialPlacementSample {
+            raster_x: daslight_axis_aligned_raster_cell(patch_x, self.x, self.sx),
+            raster_y: daslight_axis_aligned_raster_cell(patch_y, self.y, self.sy),
+        })
+    }
+}
+
+fn daslight_axis_aligned_raster_cell(point: i64, origin: i64, extent: i64) -> i128 {
+    // i128 preserves the exact signed difference and multiplication even at
+    // the i64 extremes. Rust integer division truncates toward zero, matching
+    // the recovered Daslight cast semantics.
+    (i128::from(point) - i128::from(origin)) * 100 / i128::from(extent)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CompiledRainbowProjection {
+    vertical_symmetry: bool,
+    horizontal_symmetry: bool,
+    cosine: f64,
+    sine: f64,
+}
+
+impl CompiledRainbowProjection {
+    fn compile(recipe: &ColorEffectSpatialRecipe) -> Option<Self> {
+        let ColorEffectSpatialRecipe::Rainbow {
+            vertical_symmetry,
+            horizontal_symmetry,
+            rotation_degrees,
+            angle_degrees,
+            ..
+        } = recipe
+        else {
+            return None;
+        };
+        let radians = f64::from(*rotation_degrees + *angle_degrees).to_radians();
+        Some(Self {
+            vertical_symmetry: *vertical_symmetry,
+            horizontal_symmetry: *horizontal_symmetry,
+            cosine: radians.cos(),
+            sine: radians.sin(),
+        })
+    }
+
+    fn project(self, x: f32, z: f32) -> f32 {
+        let x = if self.vertical_symmetry {
+            daslight_symmetry_coordinate(x)
+        } else {
+            x
+        } - 0.5;
+        let z = if self.horizontal_symmetry {
+            daslight_symmetry_coordinate(z)
+        } else {
+            z
+        } - 0.5;
+        (f64::from(x) * self.cosine + f64::from(z) * self.sine) as f32
+    }
 }
 
 #[derive(Clone)]
@@ -25351,6 +25502,7 @@ fn validate_runtime_color_effect_request(request: &ColorEffectRequest) -> Result
                 ));
             }
         }
+        validate_color_spatial_placement(pattern)?;
     }
     Ok(())
 }
@@ -25461,6 +25613,7 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
             color_width,
             angle_degrees,
             gradient,
+            ..
         } => {
             if *vertical_symmetry && *horizontal_symmetry {
                 return Err("Rainbow transform must select at most one symmetry axis".to_string());
@@ -25491,6 +25644,43 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
             percent("amplitude", *amplitude)
         }
     }
+}
+
+fn validate_color_spatial_placement(
+    pattern: &protocol::ColorEffectSpatialPattern,
+) -> Result<(), String> {
+    let Some(placement) = pattern.placement.as_ref() else {
+        return Ok(());
+    };
+    CompiledColorSpatialPlacement::compile(placement)?;
+    if pattern.beam_targets.is_empty() || placement.target_coordinates.is_empty() {
+        return Err(
+            "Color spatial placement requires explicit non-empty beam targets and coordinates"
+                .to_string(),
+        );
+    }
+
+    let expected_targets = pattern
+        .beam_targets
+        .iter()
+        .map(|target| (target.fixture_id, target.beam_index))
+        .collect::<HashSet<_>>();
+    let mut placement_targets = HashSet::with_capacity(placement.target_coordinates.len());
+    for target in &placement.target_coordinates {
+        if !placement_targets.insert((target.fixture_id, target.beam_index)) {
+            return Err(format!(
+                "Color spatial placement target fixture {} beam {} is duplicated",
+                target.fixture_id, target.beam_index
+            ));
+        }
+    }
+    if placement_targets != expected_targets {
+        return Err(
+            "Color spatial placement coordinates must exactly match the authored beam targets"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 pub fn validate_move_effect_request(request: &MoveEffectRequest) -> Result<(), String> {
@@ -25884,6 +26074,7 @@ pub fn validate_value_effect_request(request: &ValueEffectRequest) -> Result<(),
                 ));
             }
         }
+        validate_color_spatial_placement(pattern)?;
     }
     Ok(())
 }
@@ -27588,6 +27779,23 @@ fn runtime_color_spatial_targets(
         .spatial_pattern
         .as_ref()
         .ok_or_else(|| "Color spatial pattern is missing".to_string())?;
+    let compiled_placement = pattern
+        .placement
+        .as_ref()
+        .map(CompiledColorSpatialPlacement::compile)
+        .transpose()?;
+    let placement_coordinates = pattern
+        .placement
+        .as_ref()
+        .map(|placement| {
+            placement
+                .target_coordinates
+                .iter()
+                .map(|target| ((target.fixture_id, target.beam_index), target))
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let compiled_rainbow_projection = CompiledRainbowProjection::compile(&pattern.recipe);
     let mut allowed_fixture_ids = request.fixture_ids.iter().copied().collect::<HashSet<_>>();
     for group_id in &request.target_group_ids {
         allowed_fixture_ids.extend(fixtures.iter().filter_map(|fixture| {
@@ -27709,12 +27917,6 @@ fn runtime_color_spatial_targets(
     if pending.is_empty() {
         return Err("Color spatial pattern resolved to no beam targets".to_string());
     }
-    let mut selections = pending
-        .iter()
-        .map(|(_, _, selection, _, _, _)| *selection)
-        .collect::<Vec<_>>();
-    selections.sort_unstable();
-    selections.dedup();
     let min_x = pending
         .iter()
         .map(|(_, _, _, _, x, _)| *x)
@@ -27739,10 +27941,52 @@ fn runtime_color_spatial_targets(
             ((value - minimum) / span).clamp(0.0, 1.0)
         }
     };
+    let mut resolved = Vec::with_capacity(pending.len());
+    for (fixture_id, beam_index, selection, binding, stage_x, stage_z) in pending {
+        let (x, z) = if let Some(compiled_placement) = compiled_placement {
+            let coordinates = placement_coordinates
+                .get(&(fixture_id, beam_index))
+                .ok_or_else(|| {
+                    format!(
+                        "Color spatial placement has no coordinates for fixture {fixture_id} beam {beam_index}"
+                    )
+                })?;
+            let Some(sample) = compiled_placement.sample(coordinates.patch_x, coordinates.patch_y)
+            else {
+                // The authored target remains part of the source selection,
+                // but Daslight's rotated Rectangle mask excludes it.
+                continue;
+            };
+            sample.normalized()
+        } else {
+            (
+                normalize(stage_x, min_x, max_x),
+                normalize(stage_z, min_z, max_z),
+            )
+        };
+        let rainbow_projected_coordinate =
+            compiled_rainbow_projection.map(|projection| projection.project(x, z));
+        resolved.push((
+            fixture_id,
+            beam_index,
+            selection,
+            binding,
+            x,
+            z,
+            rainbow_projected_coordinate,
+        ));
+    }
+    let mut selections = resolved
+        .iter()
+        .map(|(_, _, selection, _, _, _, _)| *selection)
+        .collect::<Vec<_>>();
+    selections.sort_unstable();
+    selections.dedup();
     let strip_count = selections.len().max(1);
-    let mut targets = Vec::with_capacity(pending.len());
+    let mut targets = Vec::with_capacity(resolved.len());
     let mut attribute_indices = HashMap::<FixtureId, HashMap<String, usize>>::new();
-    for (fixture_id, beam_index, selection, binding, x, z) in pending {
+    for (fixture_id, beam_index, selection, binding, x, z, rainbow_projected_coordinate) in resolved
+    {
         let strip_index = selections.binary_search(&selection).unwrap_or_default();
         let target_index = targets.len();
         for attribute in binding.outputs.keys() {
@@ -27762,8 +28006,9 @@ fn runtime_color_spatial_targets(
             beam_index,
             strip_index,
             strip_count,
-            x: normalize(x, min_x, max_x),
-            z: normalize(z, min_z, max_z),
+            x,
+            z,
+            rainbow_projected_coordinate,
             binding,
             cached: Cell::new(None),
         });
@@ -29165,32 +29410,24 @@ fn evaluate_color_spatial_sample_at_rate(
             }
         }
         ColorEffectSpatialRecipe::Rainbow {
-            vertical_symmetry,
-            horizontal_symmetry,
-            rotation_degrees,
+            grayscale,
             color_width,
-            angle_degrees,
             gradient,
+            ..
         } => {
-            let x = if *vertical_symmetry {
-                daslight_symmetry_coordinate(target.x)
-            } else {
-                target.x
-            } - 0.5;
-            let z = if *horizontal_symmetry {
-                daslight_symmetry_coordinate(target.z)
-            } else {
-                target.z
-            } - 0.5;
-            let angle = f64::from(*rotation_degrees + *angle_degrees).to_radians();
-            let projected = (f64::from(x) * angle.cos() + f64::from(z) * angle.sin()) as f32;
+            let projected = target.rainbow_projected_coordinate.unwrap_or_default();
             let position = daslight_rainbow_palette_position(
                 projected,
                 time_phase as f32,
                 (*color_width / 100.0).clamp(0.0, 1.0),
                 request.stops.len(),
             );
-            spatial_palette_color(request, position, *gradient)
+            let color = spatial_palette_color(request, position, *gradient);
+            if *grayscale {
+                daslight_grayscale_color(color)
+            } else {
+                color
+            }
         }
         ColorEffectSpatialRecipe::Perlin {
             octaves,
@@ -51841,6 +52078,7 @@ mod tests {
         request.spatial_pattern = Some(Box::new(protocol::ColorEffectSpatialPattern {
             recipe,
             beam_targets: Vec::new(),
+            placement: None,
         }));
         request
     }
@@ -51858,8 +52096,31 @@ mod tests {
             strip_count,
             x,
             z,
+            rainbow_projected_coordinate: None,
             binding: RuntimeColorBinding::new(HashMap::new()),
             cached: Cell::new(None),
+        }
+    }
+
+    fn test_patch_canvas_placement(
+        x: i64,
+        y: i64,
+        sx: i64,
+        sy: i64,
+        mapping_angle_degrees: f32,
+    ) -> protocol::ColorEffectSpatialPlacement {
+        protocol::ColorEffectSpatialPlacement {
+            source_coordinate_frame:
+                protocol::ColorEffectSpatialCoordinateFrame::DaslightPatchCanvas,
+            mapping_shape: protocol::ColorEffectSpatialMappingShape::Rectangle,
+            x,
+            y,
+            sx,
+            sy,
+            mapping_angle_degrees,
+            sampling_rule:
+                protocol::ColorEffectSpatialSamplingRule::RotatedInclusionMaskAxisAlignedRaster,
+            target_coordinates: Vec::new(),
         }
     }
 
@@ -51877,9 +52138,15 @@ mod tests {
         elapsed_ms: u64,
     ) -> RuntimeColorSpatialSample {
         let created_at = Instant::now();
+        let mut target = target.clone();
+        target.rainbow_projected_coordinate = request
+            .spatial_pattern
+            .as_ref()
+            .and_then(|pattern| CompiledRainbowProjection::compile(&pattern.recipe))
+            .map(|projection| projection.project(target.x, target.z));
         evaluate_color_spatial_sample_at_rate(
             request,
-            target,
+            &target,
             97,
             created_at,
             created_at + Duration::from_millis(elapsed_ms),
@@ -52032,6 +52299,223 @@ mod tests {
                 .unwrap_err()
                 .contains("within 0..1"));
         }
+    }
+
+    #[test]
+    fn color_spatial_patch_canvas_rectangle_locks_recovered_raster_cells() {
+        let id_521 = CompiledColorSpatialPlacement::compile(&test_patch_canvas_placement(
+            2_630, -140, 140, 50, 0.0,
+        ))
+        .unwrap();
+        for (patch_x, expected_raster_x) in [(2_640, 7), (2_670, 28), (2_700, 50), (2_730, 71)] {
+            assert_eq!(
+                id_521.sample(patch_x, -130),
+                Some(CompiledColorSpatialPlacementSample {
+                    raster_x: expected_raster_x,
+                    raster_y: 20,
+                })
+            );
+        }
+
+        let id_36 = CompiledColorSpatialPlacement::compile(&test_patch_canvas_placement(
+            1_994, 166, 513, 52, 0.0,
+        ))
+        .unwrap();
+        assert_eq!(
+            id_36.sample(2_004, 176),
+            Some(CompiledColorSpatialPlacementSample {
+                raster_x: 1,
+                raster_y: 19,
+            })
+        );
+        assert_eq!(
+            id_36.sample(2_467, 178),
+            Some(CompiledColorSpatialPlacementSample {
+                raster_x: 92,
+                raster_y: 23,
+            })
+        );
+    }
+
+    #[test]
+    fn color_spatial_patch_canvas_521_runtime_rebuild_uses_all_saved_cells() {
+        let mut controls = Vec::new();
+        let mut offset = 1_u16;
+        for segment in 0..4 {
+            let suffix = if segment == 0 {
+                String::new()
+            } else {
+                format!(" {}", segment + 1)
+            };
+            for component in ["Red", "Green", "Blue"] {
+                controls.push(test_color_control(
+                    &format!("Color{component}{suffix}"),
+                    offset,
+                ));
+                offset += 1;
+            }
+        }
+        let fixtures = vec![test_runtime_color_fixture(1, Vec::new(), controls)];
+        let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::Rainbow {
+            grayscale: false,
+            vertical_symmetry: false,
+            horizontal_symmetry: false,
+            rotation_degrees: 0.0,
+            color_width: 0.0,
+            angle_degrees: 0.0,
+            gradient: 100.0,
+        });
+        let pattern = request.spatial_pattern.as_mut().unwrap();
+        pattern.beam_targets = (0_u16..4)
+            .map(|beam_index| protocol::ColorEffectBeamTarget {
+                fixture_id: 1,
+                beam_index,
+                selection_index: u32::from(beam_index),
+                feature_attribute: Some("Dimmer".to_string()),
+            })
+            .collect();
+        let mut placement = test_patch_canvas_placement(2_630, -140, 140, 50, 0.0);
+        placement.target_coordinates = [2_640, 2_670, 2_700, 2_730]
+            .into_iter()
+            .enumerate()
+            .map(
+                |(beam_index, patch_x)| protocol::ColorEffectSpatialPlacementTarget {
+                    fixture_id: 1,
+                    beam_index: beam_index as u16,
+                    patch_x,
+                    patch_y: -130,
+                },
+            )
+            .collect();
+        pattern.placement = Some(placement);
+
+        let runtime = runtime_color_effect_from_request(request, &fixtures).unwrap();
+        let targets = &runtime.spatial.as_ref().unwrap().targets;
+        assert_eq!(targets.len(), 4);
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| (
+                    target.beam_index,
+                    (target.x * 100.0).round() as i32,
+                    (target.z * 100.0).round() as i32,
+                ))
+                .collect::<Vec<_>>(),
+            vec![(0, 7, 20), (1, 28, 20), (2, 50, 20), (3, 71, 20)]
+        );
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| {
+                    ((target.rainbow_projected_coordinate.unwrap() + 0.5) * 100.0).round()
+                        as i32
+                })
+                .collect::<Vec<_>>(),
+            vec![7, 28, 50, 71],
+            "runtime Rainbow projection must be compiled from Patch raster cells, not stage normalization"
+        );
+    }
+
+    #[test]
+    fn color_spatial_patch_canvas_raster_cells_truncate_toward_zero_at_boundaries() {
+        assert_eq!(daslight_axis_aligned_raster_cell(9, 0, 1_000), 0);
+        assert_eq!(daslight_axis_aligned_raster_cell(10, 0, 1_000), 1);
+        assert_eq!(daslight_axis_aligned_raster_cell(-9, 0, 1_000), 0);
+        assert_eq!(daslight_axis_aligned_raster_cell(-10, 0, 1_000), -1);
+        assert_eq!(daslight_axis_aligned_raster_cell(1_999, 1_994, 513), 0);
+        assert_eq!(daslight_axis_aligned_raster_cell(2_000, 1_994, 513), 1);
+    }
+
+    #[test]
+    fn color_spatial_patch_canvas_angle_rotates_only_reanchored_inclusion_mask() {
+        let placement = CompiledColorSpatialPlacement::compile(&test_patch_canvas_placement(
+            100, 200, 40, 20, 90.0,
+        ))
+        .unwrap();
+
+        // The 40x20 Rectangle becomes a 20x40 vertical mask whose rotated
+        // AABB is re-anchored at (100,200). Sampling still subtracts the raw
+        // origin and divides by the unrotated 40x20 extents.
+        assert_eq!(
+            placement.sample(110, 230),
+            Some(CompiledColorSpatialPlacementSample {
+                raster_x: 25,
+                raster_y: 150,
+            })
+        );
+        assert!(placement.sample(130, 210).is_none());
+        assert!(placement.sample(121, 220).is_none());
+    }
+
+    #[test]
+    fn color_spatial_placement_validation_requires_an_exact_unique_target_join() {
+        let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::Rainbow {
+            grayscale: false,
+            vertical_symmetry: false,
+            horizontal_symmetry: false,
+            rotation_degrees: 0.0,
+            color_width: 0.0,
+            angle_degrees: 0.0,
+            gradient: 100.0,
+        });
+        let pattern = request.spatial_pattern.as_mut().unwrap();
+        pattern.beam_targets = vec![protocol::ColorEffectBeamTarget {
+            fixture_id: 1,
+            beam_index: 0,
+            selection_index: 0,
+            feature_attribute: None,
+        }];
+        let mut placement = test_patch_canvas_placement(0, 0, 100, 100, 0.0);
+        placement.target_coordinates = vec![protocol::ColorEffectSpatialPlacementTarget {
+            fixture_id: 1,
+            beam_index: 0,
+            patch_x: 10,
+            patch_y: 20,
+        }];
+        pattern.placement = Some(placement);
+        assert!(validate_runtime_color_effect_request(&request).is_ok());
+
+        let mut duplicate = request.clone();
+        let placement = duplicate
+            .spatial_pattern
+            .as_mut()
+            .unwrap()
+            .placement
+            .as_mut()
+            .unwrap();
+        placement
+            .target_coordinates
+            .push(placement.target_coordinates[0].clone());
+        assert!(validate_runtime_color_effect_request(&duplicate)
+            .unwrap_err()
+            .contains("duplicated"));
+
+        let mut missing = request.clone();
+        missing
+            .spatial_pattern
+            .as_mut()
+            .unwrap()
+            .placement
+            .as_mut()
+            .unwrap()
+            .target_coordinates[0]
+            .beam_index = 1;
+        assert!(validate_runtime_color_effect_request(&missing)
+            .unwrap_err()
+            .contains("exactly match"));
+
+        let mut zero_extent = request;
+        zero_extent
+            .spatial_pattern
+            .as_mut()
+            .unwrap()
+            .placement
+            .as_mut()
+            .unwrap()
+            .sx = 0;
+        assert!(validate_runtime_color_effect_request(&zero_extent)
+            .unwrap_err()
+            .contains("greater than zero"));
     }
 
     #[test]
@@ -52384,6 +52868,23 @@ mod tests {
             evaluate_test_spatial_color(&request, &test_spatial_color_target(0, 1, 0.5, 0.5), 0,),
             test_color(87 * 257, 87 * 257, 87 * 257)
         );
+
+        let mut mapping = test_spatial_color_request(ColorEffectSpatialRecipe::Rainbow {
+            grayscale: true,
+            vertical_symmetry: false,
+            horizontal_symmetry: false,
+            rotation_degrees: 0.0,
+            color_width: 0.0,
+            angle_degrees: 0.0,
+            gradient: 100.0,
+        });
+        mapping.stops.iter_mut().for_each(|stop| {
+            stop.color = test_color(u16::MAX, 0, 0);
+        });
+        assert_eq!(
+            evaluate_test_spatial_color(&mapping, &test_spatial_color_target(0, 1, 0.5, 0.5), 0,),
+            test_color(87 * 257, 87 * 257, 87 * 257)
+        );
     }
 
     #[test]
@@ -52481,6 +52982,7 @@ mod tests {
     #[test]
     fn color_spatial_rainbow_vertical_symmetry_mirrors_mapping_coordinates() {
         let request = test_spatial_color_request(ColorEffectSpatialRecipe::Rainbow {
+            grayscale: false,
             vertical_symmetry: true,
             horizontal_symmetry: false,
             rotation_degrees: 171.0,
@@ -52498,6 +53000,7 @@ mod tests {
     #[test]
     fn color_spatial_rainbow_horizontal_symmetry_mirrors_mapping_coordinates() {
         let request = test_spatial_color_request(ColorEffectSpatialRecipe::Rainbow {
+            grayscale: false,
             vertical_symmetry: false,
             horizontal_symmetry: true,
             rotation_degrees: 90.0,
@@ -52515,6 +53018,7 @@ mod tests {
     #[test]
     fn color_spatial_rainbow_rejects_two_transform_axes_at_once() {
         let request = test_spatial_color_request(ColorEffectSpatialRecipe::Rainbow {
+            grayscale: false,
             vertical_symmetry: true,
             horizontal_symmetry: true,
             rotation_degrees: 0.0,
@@ -55839,6 +56343,7 @@ mod tests {
                 selection_index: 0,
                 feature_attribute: Some("ColorRed 2".to_string()),
             }],
+            placement: None,
         });
 
         let runtime = runtime_value_effect_from_request(request, &fixtures, true).unwrap();
@@ -55911,6 +56416,7 @@ mod tests {
                 selection_index: 0,
                 feature_attribute: Some("Dimmer".to_string()),
             }],
+            placement: None,
         });
 
         let runtime = runtime_value_effect_from_request(request, &fixtures, true).unwrap();
@@ -56788,6 +57294,58 @@ mod tests {
                     request.interpolation = ColorEffectInterpolation::HsvShortest;
                     request.fixture_spread = 1.0;
                     request.phase = phase;
+                    if index == 0 {
+                        let beam_targets = fixture_ids
+                            .iter()
+                            .enumerate()
+                            .map(
+                                |(target_index, fixture_id)| protocol::ColorEffectBeamTarget {
+                                    fixture_id: *fixture_id,
+                                    beam_index: 0,
+                                    selection_index: target_index as u32,
+                                    feature_attribute: None,
+                                },
+                            )
+                            .collect::<Vec<_>>();
+                        let target_coordinates = fixture_ids
+                            .iter()
+                            .enumerate()
+                            .map(|(target_index, fixture_id)| {
+                                protocol::ColorEffectSpatialPlacementTarget {
+                                    fixture_id: *fixture_id,
+                                    beam_index: 0,
+                                    patch_x: target_index as i64,
+                                    patch_y: 0,
+                                }
+                            })
+                            .collect::<Vec<_>>();
+                        request.spatial_pattern = Some(Box::new(
+                            protocol::ColorEffectSpatialPattern {
+                            recipe: ColorEffectSpatialRecipe::Rainbow {
+                                grayscale: true,
+                                vertical_symmetry: false,
+                                horizontal_symmetry: false,
+                                rotation_degrees: 31.0,
+                                color_width: 50.0,
+                                angle_degrees: 17.0,
+                                gradient: 100.0,
+                            },
+                            beam_targets,
+                            placement: Some(protocol::ColorEffectSpatialPlacement {
+                                source_coordinate_frame:
+                                    ColorEffectSpatialCoordinateFrame::DaslightPatchCanvas,
+                                mapping_shape: ColorEffectSpatialMappingShape::Rectangle,
+                                x: 0,
+                                y: 0,
+                                sx: fixture_ids.len() as i64,
+                                sy: 1,
+                                mapping_angle_degrees: 0.0,
+                                sampling_rule: ColorEffectSpatialSamplingRule::RotatedInclusionMaskAxisAlignedRaster,
+                                target_coordinates,
+                            }),
+                            },
+                        ));
+                    }
                     RuntimeEffectKind::Color(runtime.resolve_color_effect_request(request).unwrap())
                 }
                 1 => {
