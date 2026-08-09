@@ -31,33 +31,34 @@ use io::osc::{OscInput, OscInputEvent};
 use io::remote_ws::{RemoteInputEvent, RemoteWsServer};
 use io::sacn::is_sacn_multicast_target;
 use minisign_verify::PublicKey;
+#[cfg(test)]
+use protocol::DmxControlAction;
 use protocol::{
     canonical_video_output_mapping_field, AttributeControl, AttributeResolution,
     AudioAnalysisSummary, AutoVjConfig, AutomationId, AutomationKeyframeSummary,
     ChaserEffectRequest, ChaserStep, ChildTimelineSummary, ClockSnapshot, ColorEffectRequest,
     ColorMappingEffectRequest, CompositionId, CompositionSummary, CueEffectTarget,
     CueFixtureTarget, CueId, CueNodeGraphTarget, CurveEffectRequest, CustomFixtureProfileFile,
-    CustomFixtureProfileRequest, DmxControlAction, DmxControlMapping, DmxInputConfig,
-    DmxInputProtocol, DmxInputStatus, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol,
-    EffectBeamTarget, EffectId, EffectKind, EffectParamsSnapshot, EffectPreset, EffectSummary,
-    EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, FixtureGroupSummary, FixtureId,
-    FixtureLimits, FixturePreset, FixtureProfileSummary, GeometrySummary, LearnedDmxControl,
-    LearnedMidiControl, LearnedOscControl, LfoEffectRequest, MappingEffectRequest,
-    MidiControlAction, MidiControlMapping, MidiFeedbackMessage, MidiInputSummary,
-    MidiOutputSummary, MoveEffectRequest, NodeGraphId, NodeGraphNodeKind, NodeGraphPresetFile,
-    NodeGraphSummary, NodeGraphTransformOp, OperatorFeatureFaderResult, OperatorPolicy,
-    OperatorSelectionContext, OscControlAction, OscControlMapping, OscInputConfig,
-    PatchFixtureRequest, PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RecallMode,
-    RemoteControlConfig, RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig,
-    StageMapPresetFile, StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary,
-    TimelineAudioClipId, TimelineAudioClipSummary, TimelineEventId, TimelineLayerKind,
-    TimelineSnapRequest, TimelineTrackKind, TouchControlBinding, TouchFeaturePresetTarget,
-    TouchSurfaceSummary, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
-    VideoBackendState, VideoBlendMode, VideoEffectTarget, VideoIsfEffectStageSummary,
-    VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerTarget, VideoOutputId,
-    VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetFile,
-    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
-    VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
+    CustomFixtureProfileRequest, DmxControlMapping, DmxInputConfig, DmxInputProtocol,
+    DmxInputStatus, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, EffectBeamTarget, EffectId,
+    EffectKind, EffectParamsSnapshot, EffectPreset, EffectSummary, EngineSnapshot, EngineTelemetry,
+    ExclusiveVideoTakeRequest, FixtureGroupSummary, FixtureId, FixtureLimits, FixturePreset,
+    FixtureProfileSummary, GeometrySummary, LearnedDmxControl, LearnedMidiControl,
+    LearnedOscControl, LfoEffectRequest, MappingEffectRequest, MidiControlAction,
+    MidiControlMapping, MidiFeedbackMessage, MidiInputSummary, MidiOutputSummary,
+    MoveEffectRequest, NodeGraphId, NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary,
+    NodeGraphTransformOp, OperatorFeatureFaderResult, OperatorPolicy, OperatorSelectionContext,
+    OscControlAction, OscControlMapping, OscInputConfig, PatchFixtureRequest,
+    PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RecallMode, RemoteControlConfig,
+    RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile,
+    StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary, TimelineAudioClipId,
+    TimelineAudioClipSummary, TimelineEventId, TimelineLayerKind, TimelineSnapRequest,
+    TimelineTrackKind, TouchControlBinding, TouchFeaturePresetTarget, TouchSurfaceSummary,
+    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode,
+    VideoEffectTarget, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId,
+    VideoLayerState, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
+    VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary, VideoOutputSummary,
+    VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -37842,6 +37843,7 @@ f 1 2 3
             phase: 0.125,
             fixture_spread: 0.5,
             random_seed: 9_876,
+            random_cycle_count: 1,
             blend_mode: protocol::EffectBlendMode::Add,
         }
     }
@@ -38782,6 +38784,10 @@ f 1 2 3
         assert_eq!(relabeled_request.features, request.features);
         assert_eq!(relabeled_request.direction, request.direction);
         assert_eq!(relabeled_request.random_seed, request.random_seed);
+        assert_eq!(
+            relabeled_request.random_cycle_count,
+            request.random_cycle_count
+        );
     }
 
     #[test]
@@ -39985,6 +39991,7 @@ f 1 2 3
 
         source_request.direction = protocol::ChaserDirection::Random;
         source_request.random_seed = 77;
+        source_request.random_cycle_count = 4;
         engine
             .update_chaser_effect(source_id, source_request.clone())
             .unwrap();
@@ -40014,6 +40021,10 @@ f 1 2 3
             source_request.active_step_count
         );
         assert_eq!(duplicate_request.random_seed, source_request.random_seed);
+        assert_eq!(
+            duplicate_request.random_cycle_count,
+            source_request.random_cycle_count
+        );
     }
 
     #[test]

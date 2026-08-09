@@ -2656,7 +2656,9 @@ fn convert_dvc_chaser_effect(
     }
 
     let fading = dvc_binary_param(&params, if generator_id == 322 { 10 } else { 11 }, "Fading")?;
-    let (direction, duty_cycle, generator_note) = if generator_id == 321 {
+    let (direction, duty_cycle, generator_note, random_seed, random_cycle_count) = if generator_id
+        == 321
+    {
         let one_way = dvc_binary_param(&params, 10, "One Way Only")?;
         (
             if one_way {
@@ -2670,6 +2672,8 @@ fn convert_dvc_chaser_effect(
                 u8::from(one_way),
                 u8::from(fading)
             ),
+            (effect_id % u32::MAX as u64).max(1),
+            1,
         )
     } else if generator_id == 322 {
         (
@@ -2679,6 +2683,8 @@ fn convert_dvc_chaser_effect(
                 "param10=Fading({}); build-up then source-order clear cycle confirmed from Daslight LIVE DMX Levels",
                 u8::from(fading)
             ),
+            (effect_id % u32::MAX as u64).max(1),
+            1,
         )
     } else {
         let flash_percent = dvc_param(&params, 13, "Flash")?;
@@ -2687,35 +2693,44 @@ fn convert_dvc_chaser_effect(
                 "Flash must be within 0..100, found {flash_percent}"
             ));
         }
-        let random_sequence = dvc_binary_param(&params, 14, "Random sequence")?;
+        let random_sequence = dvc_param(&params, 14, "Random sequence")?;
+        if !random_sequence.is_finite()
+            || !(0.0..=255.0).contains(&random_sequence)
+            || random_sequence.fract().abs() > f64::EPSILON
+        {
+            return Err(format!(
+                "Random sequence PARAM 14 must be an integer from 0 to 255, found {random_sequence}"
+            ));
+        }
         let cycles = dvc_positive_integer_param(&params, 15, "Nb cycles")?;
+        if cycles > u8::MAX as u64 {
+            return Err(format!(
+                "Nb cycles PARAM 15 must be an integer from 1 to 255, found {cycles}"
+            ));
+        }
         let mut duty_cycle = (flash_percent / 100.0) as f32;
         if duty_cycle <= 0.0 {
             duty_cycle = 0.001;
             approximations
                 .push("Flash 0% was raised to the minimum non-zero Chaser duty cycle".to_string());
         }
-        if !random_sequence {
-            approximations.push(
-                "RandomSeq=0 submode is represented by the Chaser engine's seeded Random order"
-                    .to_string(),
-            );
-        }
-        approximations.push(format!(
-            "NbCycles={cycles} is not reproduced by the continuously looping Chaser engine"
-        ));
         (
             ChaserDirection::Random,
             duty_cycle,
             format!(
-                "random_sequence={}; flash_percent={flash_percent}; cycles={cycles}",
-                u8::from(random_sequence)
+                "random_sequence={random_sequence:.0}; flash_percent={flash_percent}; cycles={cycles}; deterministic reload-stable permutation series"
             ),
+            random_sequence as u64,
+            cycles as u8,
         )
     };
 
     let generator_slots = if generator_id == 322 {
         ordered_steps.len().saturating_mul(2)
+    } else if generator_id == 325 {
+        ordered_steps
+            .len()
+            .saturating_mul(random_cycle_count as usize)
     } else {
         ordered_steps.len()
     };
@@ -2757,7 +2772,8 @@ fn convert_dvc_chaser_effect(
         overlap: if fading { 1.0 } else { 0.0 },
         phase: 0.0,
         fixture_spread: 0.0,
-        random_seed: (effect_id % u32::MAX as u64).max(1),
+        random_seed,
+        random_cycle_count,
         blend_mode: EffectBlendMode::Override,
     };
     engine::validate_chaser_effect_request(&request)
@@ -4801,7 +4817,7 @@ mod tests {
     fn synthetic_fx_dvc() -> String {
         let patch = r#"<PATCH NBFIXTURE="3"><FIXTURES><SSLLIBRARY SSLFIXUID="profile-1" SSLNAME="Test/Dimmer.ssl2"><SSLPROPERTIES SSLBEAMOPENING="20"/><SSLMODES SSLNBMODE="1"><SSLMODE SSLMODEINDEX="0" SSLNBCHANNEL="1"><SSLCHANNEL SSLCHANNELTYPE="7" SSLCHANNELNAME="Dimmer" SSLCHANNELMSB="0" SSLCHANNELLSB="0"><SSLPRESETS><SSLPRESET SSLPRESETNAME="Dimmer" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL></SSLMODE></SSLMODES></SSLLIBRARY><FIXTURE DASUID="fixture-1" NAME="Dimmer 1" ADDRESS="1" UNIVERS="1" POSX="0" POSY="0" ANGLE="0"/><FIXTURE DASUID="fixture-2" NAME="Dimmer 2" ADDRESS="2" UNIVERS="1" POSX="1" POSY="0" ANGLE="0"/><FIXTURE DASUID="fixture-3" NAME="Dimmer 3" ADDRESS="3" UNIVERS="1" POSX="2" POSY="0" ANGLE="0"/></FIXTURES></PATCH>"#;
         format!(
-            r##"<DLMFILE TYPE="Daslight" VERSION="5" DASBUILD="test-fx" VERSIONFILE="2"><PATCHS DATA="{}"/><FIXTUREGROUPS/><SCENES><BANK DASUID="bank-1" NAME="FX" COLOR="#ff112233"><SCENE DASUID="scene-chaser" NAME="Chaser 321" COLOR="#ff112233" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="0.5" PLAY_TRIGGER="0" PLAY_DIVISION="8"><FIXTUREDATAS NB="0"/><RACKS><RACK TYPE="3"><EFFECT TYPE="6" ID="321" DURATION="5000"><PARAMS NB="3"><PARAM TYPE="2" ID="10" VAL="1"/><PARAM TYPE="2" ID="11" VAL="1"/><PARAM TYPE="0" ID="12" VAL="2"/></PARAMS></EFFECT><BEAMS NB="3"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/><BEAM FIXTURE="fixture-3" BEAMID="0" IDSELECTION="3"/></BEAMS></RACK></RACKS></SCENE><SCENE DASUID="scene-curve" NAME="Curve 7" COLOR="#ff112233" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="8"><FIXTUREDATAS NB="0"/><RACKS><RACK TYPE="8"><EFFECT TYPE="5" ID="7" DURATION="5000"><PARAMS NB="5"><PARAM TYPE="0" ID="1" VAL="10"/><PARAM TYPE="1" ID="2" VAL="0.5"/><PARAM TYPE="1" ID="3" VAL="0.25"/><PARAM TYPE="1" ID="4" VAL="0.1"/><PARAM TYPE="1" ID="5" VAL="0"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE><SCENE DASUID="scene-random" NAME="Chaser 325" COLOR="#ff112233" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="8"><FIXTUREDATAS NB="0"/><RACKS><RACK TYPE="3"><EFFECT TYPE="6" ID="325" DURATION="1200"><PARAMS NB="5"><PARAM TYPE="2" ID="11" VAL="0"/><PARAM TYPE="0" ID="12" VAL="1"/><PARAM TYPE="1" ID="13" VAL="50"/><PARAM TYPE="2" ID="14" VAL="1"/><PARAM TYPE="0" ID="15" VAL="2"/></PARAMS></EFFECT><BEAMS NB="3"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/><BEAM FIXTURE="fixture-3" BEAMID="0" IDSELECTION="3"/></BEAMS></RACK></RACKS></SCENE><SCENE DASUID="scene-skipped" NAME="Unconfirmed" COLOR="#ff112233" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="8"><FIXTUREDATAS NB="0"/><RACKS><RACK TYPE="2"><EFFECT TYPE="2" ID="133" DURATION="5000"><PARAMS NB="0"/></EFFECT></RACK><RACK TYPE="8"><EFFECT TYPE="5" ID="10" DURATION="5000"><PARAMS NB="0"/></EFFECT></RACK></RACKS></SCENE></BANK></SCENES><SHORTCUTS/><TOUCH/><DEVICES/></DLMFILE>"##,
+            r##"<DLMFILE TYPE="Daslight" VERSION="5" DASBUILD="test-fx" VERSIONFILE="2"><PATCHS DATA="{}"/><FIXTUREGROUPS/><SCENES><BANK DASUID="bank-1" NAME="FX" COLOR="#ff112233"><SCENE DASUID="scene-chaser" NAME="Chaser 321" COLOR="#ff112233" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="0.5" PLAY_TRIGGER="0" PLAY_DIVISION="8"><FIXTUREDATAS NB="0"/><RACKS><RACK TYPE="3"><EFFECT TYPE="6" ID="321" DURATION="5000"><PARAMS NB="3"><PARAM TYPE="2" ID="10" VAL="1"/><PARAM TYPE="2" ID="11" VAL="1"/><PARAM TYPE="0" ID="12" VAL="2"/></PARAMS></EFFECT><BEAMS NB="3"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/><BEAM FIXTURE="fixture-3" BEAMID="0" IDSELECTION="3"/></BEAMS></RACK></RACKS></SCENE><SCENE DASUID="scene-curve" NAME="Curve 7" COLOR="#ff112233" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="8"><FIXTUREDATAS NB="0"/><RACKS><RACK TYPE="8"><EFFECT TYPE="5" ID="7" DURATION="5000"><PARAMS NB="5"><PARAM TYPE="0" ID="1" VAL="10"/><PARAM TYPE="1" ID="2" VAL="0.5"/><PARAM TYPE="1" ID="3" VAL="0.25"/><PARAM TYPE="1" ID="4" VAL="0.1"/><PARAM TYPE="1" ID="5" VAL="0"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE><SCENE DASUID="scene-random" NAME="Chaser 325" COLOR="#ff112233" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="8"><FIXTUREDATAS NB="0"/><RACKS><RACK TYPE="3"><EFFECT TYPE="6" ID="325" DURATION="1200"><PARAMS NB="5"><PARAM TYPE="2" ID="11" VAL="0"/><PARAM TYPE="0" ID="12" VAL="1"/><PARAM TYPE="1" ID="13" VAL="50"/><PARAM TYPE="0" ID="14" VAL="1"/><PARAM TYPE="0" ID="15" VAL="2"/></PARAMS></EFFECT><BEAMS NB="3"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/><BEAM FIXTURE="fixture-3" BEAMID="0" IDSELECTION="3"/></BEAMS></RACK></RACKS></SCENE><SCENE DASUID="scene-skipped" NAME="Unconfirmed" COLOR="#ff112233" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="8"><FIXTUREDATAS NB="0"/><RACKS><RACK TYPE="2"><EFFECT TYPE="2" ID="133" DURATION="5000"><PARAMS NB="0"/></EFFECT></RACK><RACK TYPE="8"><EFFECT TYPE="5" ID="10" DURATION="5000"><PARAMS NB="0"/></EFFECT></RACK></RACKS></SCENE></BANK></SCENES><SHORTCUTS/><TOUCH/><DEVICES/></DLMFILE>"##,
             qcompress(patch.as_bytes())
         )
     }
@@ -5385,11 +5401,13 @@ mod tests {
             panic!("CHASER 325 must be stored as cue-owned Chaser params");
         };
         assert_eq!(random.direction, ChaserDirection::Random);
-        assert_eq!(random.step_duration_ms, 400);
+        assert_eq!(random.step_duration_ms, 200);
         assert_eq!(random.duty_cycle, 0.5);
         assert_eq!(random.overlap, 0.0);
-        assert!(outcome.report.approximate.details.iter().any(|detail| {
-            detail.item.contains("Chaser 325") && detail.message.contains("NbCycles=2")
+        assert_eq!(random.random_seed, 1);
+        assert_eq!(random.random_cycle_count, 2);
+        assert!(!outcome.report.approximate.details.iter().any(|detail| {
+            detail.item.contains("Chaser 325") && detail.message.contains("NbCycles")
         }));
 
         assert!(outcome.project.snapshot.cues[3].effect_targets.is_empty());
@@ -5405,6 +5423,30 @@ mod tests {
             .details
             .iter()
             .any(|detail| detail.message.contains("ID=10")));
+    }
+
+    #[test]
+    fn dvc_random_chaser_rejects_out_of_range_sequence_and_cycle_values() {
+        for (source, expected) in [
+            (
+                synthetic_fx_dvc().replacen(r#"ID="14" VAL="1""#, r#"ID="14" VAL="256""#, 1),
+                "Random sequence PARAM 14 must be an integer from 0 to 255",
+            ),
+            (
+                synthetic_fx_dvc().replacen(r#"ID="15" VAL="2""#, r#"ID="15" VAL="256""#, 1),
+                "Nb cycles PARAM 15 must be an integer from 1 to 255",
+            ),
+        ] {
+            let outcome = import_bytes(source.as_bytes(), "synthetic-random-range.dvc").unwrap();
+            assert_eq!(outcome.report.summary.effects_converted, 2);
+            assert_eq!(outcome.report.summary.effects_skipped, 3);
+            assert!(outcome
+                .report
+                .skipped
+                .details
+                .iter()
+                .any(|detail| detail.message.contains(expected)));
+        }
     }
 
     #[test]
@@ -7148,6 +7190,43 @@ mod tests {
         assert!(!center_div.closed);
         assert_eq!(center_div.direction, MoveDirection::Bounce);
         assert!((center_div.fixture_spread - 0.176).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn dvc_local_full_shinkan_random_chaser_preserves_sequence_and_cycles_when_present() {
+        let path = Path::new(r"C:\Users\kouty\Desktop\Shinkan-Left\Shinkan2026.dvc");
+        if !path.is_file() {
+            eprintln!(
+                "Skipping local full Daslight golden: {} is unavailable",
+                path.display()
+            );
+            return;
+        }
+        let outcome = import_path(path).unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+        let random_chasers = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .flat_map(|cue| cue.effect_targets.iter())
+            .filter_map(|target| match target.params.as_ref() {
+                Some(EffectParamsSnapshot::Chaser(request))
+                    if request.direction == ChaserDirection::Random =>
+                {
+                    Some(request)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(!random_chasers.is_empty());
+        assert!(random_chasers
+            .iter()
+            .all(|request| request.random_seed == 0 && request.random_cycle_count == 1));
+        assert!(!outcome.report.approximate.details.iter().any(|detail| {
+            detail.item.contains("Chaser random")
+                && (detail.message.contains("RandomSeq") || detail.message.contains("NbCycles"))
+        }));
     }
 
     #[test]

@@ -5,6 +5,7 @@ import {
   chaserActivePreviewIndices,
   chaserPreviewOrder,
   clampChaserLevel,
+  clampChaserRandomCycleCount,
   clampChaserSeed,
   clampChaserUnit,
   clampChaserWings,
@@ -53,6 +54,7 @@ interface ChaserEffectEditorPanelProps {
   phase: number;
   fixtureSpread: number;
   randomSeed: number;
+  randomCycleCount: number;
   error: string;
   onSteps: (steps: ChaserStep[]) => void;
   onFeatures: (features: ChaserFeature[]) => void;
@@ -65,6 +67,7 @@ interface ChaserEffectEditorPanelProps {
   onOverlap: (overlap: number) => void;
   onFixtureSpread: (fixtureSpread: number) => void;
   onRandomSeed: (randomSeed: number) => void;
+  onRandomCycleCount: (randomCycleCount: number) => void;
 }
 
 const nearlyEqual = (first: number | null, second: number | null) =>
@@ -82,7 +85,12 @@ export function ChaserEffectEditorPanel(props: ChaserEffectEditorPanelProps) {
   const directionLabel = createMemo(() =>
     directionOptions.find((option) => option.value === props.direction)?.label ?? props.direction,
   );
-  const directionOrder = createMemo(() => chaserPreviewOrder(props.steps.length, props.direction, props.randomSeed));
+  const directionOrder = createMemo(() => chaserPreviewOrder(
+    props.steps.length,
+    props.direction,
+    props.randomSeed,
+    props.randomCycleCount,
+  ));
   const activeOrderPosition = createMemo(() => {
     const order = directionOrder();
     if (order.length === 0) return 0;
@@ -100,6 +108,20 @@ export function ChaserEffectEditorPanel(props: ChaserEffectEditorPanelProps) {
   const activePixels = createMemo(() => {
     const order = directionOrder();
     return new Set(chaserActivePreviewIndices(order, activeOrderPosition(), props.activeStepCount, props.direction));
+  });
+  const activeOrderPositions = createMemo(() => {
+    const order = directionOrder();
+    const positions = new Set<number>();
+    const steps = new Set<number>();
+    const targetCount = Math.min(Math.max(0, Math.round(props.activeStepCount)), new Set(order).size);
+    for (let offset = 0; offset < order.length && steps.size < targetCount; offset += 1) {
+      const position = (activeOrderPosition() - offset + order.length) % order.length;
+      const stepIndex = order[position];
+      if (steps.has(stepIndex)) continue;
+      steps.add(stepIndex);
+      positions.add(position);
+    }
+    return positions;
   });
   const clockSummary = createMemo(() =>
     props.clockSyncBeats === null
@@ -214,7 +236,9 @@ export function ChaserEffectEditorPanel(props: ChaserEffectEditorPanelProps) {
             <For each={previewEntries()}>
               {(entry) => {
                 const step = () => props.steps[entry.stepIndex];
-                const active = () => activePixels().has(entry.stepIndex);
+                const active = () => props.direction === "BuildUpDown"
+                  ? activePixels().has(entry.stepIndex)
+                  : activeOrderPositions().has(entry.orderPosition);
                 return (
                   <span
                     class={active() ? "chaserPreviewCell active" : "chaserPreviewCell"}
@@ -235,7 +259,7 @@ export function ChaserEffectEditorPanel(props: ChaserEffectEditorPanelProps) {
           </Show>
         </div>
         <small class="chaserPreviewWindow tabularNums">
-          {Math.min(previewEntries().length, props.steps.length)} visible / {props.steps.length} steps
+          {previewEntries().length} visible / {directionOrder().length} sequence slots · {props.steps.length} steps
         </small>
       </fieldset>
 
@@ -342,11 +366,25 @@ export function ChaserEffectEditorPanel(props: ChaserEffectEditorPanelProps) {
             <input
               class="tabularNums"
               type="number"
-              min="1"
+              min="0"
               max="4294967295"
               step="1"
               value={props.randomSeed}
               onChange={(event) => props.onRandomSeed(clampChaserSeed(Number(event.currentTarget.value)))}
+            />
+          </label>
+          <label>
+            Random cycles
+            <input
+              class="tabularNums"
+              type="number"
+              min="1"
+              max="255"
+              step="1"
+              value={props.randomCycleCount}
+              onChange={(event) => props.onRandomCycleCount(
+                clampChaserRandomCycleCount(Number(event.currentTarget.value)),
+              )}
             />
           </label>
         </Show>

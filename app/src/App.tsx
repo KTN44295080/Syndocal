@@ -407,6 +407,7 @@ import {
   chaserDefaultSeed,
   chaserDraftError,
   chaserStepsFromTargets,
+  clampChaserRandomCycleCount,
   clampChaserUnit,
   clampChaserWings,
 } from "./chaserDraft";
@@ -998,7 +999,9 @@ const chaserTraversalStepCount = (effect: EffectSummary) => {
   if (!chaser) return 0;
   const stepCount = chaser.steps.length;
   if (stepCount <= 1) return Math.max(1, stepCount);
-  return chaser.direction === "Bounce" ? stepCount * 2 - 2 : stepCount;
+  if (chaser.direction === "Bounce") return stepCount * 2 - 2;
+  if (chaser.direction === "Random") return stepCount * (chaser.random_cycle_count ?? 1);
+  return stepCount;
 };
 
 const authoredBeatsForEffectClock = (effect: EffectSummary) => {
@@ -1863,6 +1866,7 @@ export default function App() {
   const [chaserOverlap, setChaserOverlap] = createSignal(0);
   const [chaserFixtureSpread, setChaserFixtureSpread] = createSignal(0);
   const [chaserRandomSeed, setChaserRandomSeed] = createSignal(chaserDefaultSeed);
+  const [chaserRandomCycleCount, setChaserRandomCycleCount] = createSignal(1);
   const [movePathPoints, setMovePathPoints] = createSignal<MovePathPoint[]>(defaultMovePathPoints());
   const [movePathClosed, setMovePathClosed] = createSignal(true);
   const [moveInterpolation, setMoveInterpolation] = createSignal<MoveInterpolation>("Smooth");
@@ -15891,6 +15895,7 @@ export default function App() {
     phase: effectPhase(),
     fixtureSpread: chaserFixtureSpread(),
     randomSeed: chaserRandomSeed(),
+    randomCycleCount: chaserRandomCycleCount(),
   }));
   const moveDraftFixtureIds = () => {
     if (effectTargetMode() === "selection") {
@@ -16117,6 +16122,7 @@ export default function App() {
           phase: clampChaserUnit(effectPhase()),
           fixture_spread: clampChaserUnit(chaserFixtureSpread()),
           random_seed: Math.round(chaserRandomSeed()),
+          random_cycle_count: clampChaserRandomCycleCount(chaserRandomCycleCount()),
           blend_mode: effectBlendMode(),
         },
       };
@@ -16491,6 +16497,7 @@ export default function App() {
       setEffectPhase(chaser.phase);
       setChaserFixtureSpread(chaser.fixture_spread);
       setChaserRandomSeed(chaser.random_seed);
+      setChaserRandomCycleCount(chaser.random_cycle_count ?? 1);
       setEffectBlendMode(chaser.blend_mode);
       setEffectVideoTargetLinked(false);
     }
@@ -17128,6 +17135,7 @@ export default function App() {
       phase: effectPhase(),
       fixtureSpread: chaserFixtureSpread(),
       randomSeed: chaserRandomSeed(),
+      randomCycleCount: chaserRandomCycleCount(),
       error: currentChaserDraftError(),
       onSteps: setChaserSteps,
       onFeatures: setChaserFeatures,
@@ -17140,6 +17148,7 @@ export default function App() {
       onOverlap: setChaserOverlap,
       onFixtureSpread: setChaserFixtureSpread,
       onRandomSeed: setChaserRandomSeed,
+      onRandomCycleCount: setChaserRandomCycleCount,
     },
     move: {
       points: movePathPoints(),

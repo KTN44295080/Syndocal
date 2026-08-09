@@ -55,6 +55,7 @@ const validDraft = {
   phase: 0.5,
   fixtureSpread: 0,
   randomSeed: 1_337,
+  randomCycleCount: 1,
 };
 assert.equal(helpers.chaserDraftError(validDraft), "");
 assert.match(helpers.chaserDraftError({ ...validDraft, activeStepCount: 4 }), /Pixels on/);
@@ -119,6 +120,17 @@ assert.notDeepEqual(
   helpers.chaserPreviewOrder(8, "Random", 1_337),
   helpers.chaserPreviewOrder(8, "Random", 1_338),
 );
+const threeCycleRandom = helpers.chaserPreviewOrder(8, "Random", 0, 3);
+assert.equal(threeCycleRandom.length, 24);
+for (let offset = 0; offset < threeCycleRandom.length; offset += 8) {
+  assert.deepEqual(
+    [...threeCycleRandom.slice(offset, offset + 8)].sort((left, right) => left - right),
+    [0, 1, 2, 3, 4, 5, 6, 7],
+    "every Random cycle must contain each step exactly once",
+  );
+}
+assert.equal(helpers.chaserDraftError({ ...validDraft, direction: "Random", randomSeed: 0 }), "");
+assert.match(helpers.chaserDraftError({ ...validDraft, randomCycleCount: 0 }), /cycle count/);
 assert.equal(helpers.chaserPreviewIndex(4, "Forward", 1_337, 0.5), 2);
 assert.deepEqual(
   helpers.chaserActivePreviewIndices(helpers.chaserPreviewOrder(4, "Bounce", 1_337), 4, 4),
@@ -141,6 +153,9 @@ assert.match(componentSource, /data-active-step-count=\{props\.activeStepCount\}
 assert.match(componentSource, /Pixels on\s*<input/);
 assert.match(componentSource, /disabled=\{props\.direction === "BuildUpDown"\}/);
 assert.match(componentSource, /Fading\s*<\/label>/);
+assert.match(componentSource, /Random cycles\s*<input/);
+assert.match(componentSource, /max="255"/);
+assert.match(componentSource, /activeOrderPositions\(\)\.has\(entry\.orderPosition\)/);
 assert.match(componentSource, />Features<\/legend>/);
 assert.match(componentSource, /props\.onWings\(Math\.min\(/);
 assert.match(componentSource, /max=\{wingMaximum\(\)\}/);

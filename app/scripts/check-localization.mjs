@@ -383,6 +383,8 @@ for (const [sourceText, expectedJapaneseDisplay] of [
   ["Phase / Spread", "Phase / 分散"],
   ["Chaser size percent", "チェイサーのSize（パーセント）"],
   ["Random seed", "Randomシード"],
+  ["Random cycles", "Randomサイクル数"],
+  ["sequence slots ·", "系列スロット・"],
   ["Beam order", "Beam順序"],
   ["Chaser beam steps", "チェイサーのBeamステップ"],
   ["phase", "Phase"],

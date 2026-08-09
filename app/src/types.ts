@@ -1984,6 +1984,7 @@ export interface ChaserEffectRequest {
   phase: number;
   fixture_spread: number;
   random_seed: number;
+  random_cycle_count?: number;
   blend_mode: EffectBlendMode;
 }
 

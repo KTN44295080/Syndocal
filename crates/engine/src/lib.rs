@@ -21583,10 +21583,14 @@ fn effect_params_snapshot_free_run_period_ms(params: &EffectParamsSnapshot) -> O
         }
         EffectParamsSnapshot::Color(request) => request.period_ms as f64,
         EffectParamsSnapshot::Chaser(request) => {
-            let path_len =
-                chaser_step_order(request.direction, request.steps.len(), request.random_seed)
-                    .len()
-                    .max(1);
+            let path_len = chaser_step_order_with_cycles(
+                request.direction,
+                request.steps.len(),
+                request.random_seed,
+                request.random_cycle_count,
+            )
+            .len()
+            .max(1);
             request.step_duration_ms as f64 * path_len as f64
         }
         EffectParamsSnapshot::Move(request) => request.period_ms as f64,
@@ -26473,8 +26477,11 @@ pub fn validate_chaser_effect_request(request: &ChaserEffectRequest) -> Result<(
     if !request.fixture_spread.is_finite() || !(0.0..=1.0).contains(&request.fixture_spread) {
         return Err("Chaser effect fixture spread must be within 0..1".to_string());
     }
-    if request.random_seed == 0 || request.random_seed > u32::MAX as u64 {
-        return Err("Chaser effect random seed must be between 1 and 4294967295".to_string());
+    if request.random_seed > u32::MAX as u64 {
+        return Err("Chaser effect random seed must be between 0 and 4294967295".to_string());
+    }
+    if request.random_cycle_count == 0 {
+        return Err("Chaser effect random cycle count must be between 1 and 255".to_string());
     }
     Ok(())
 }
@@ -26532,7 +26539,12 @@ fn runtime_chaser_effect_from_request(
     if require_resolved_target && target_order.is_empty() && !has_beam_targets {
         return Err("Chaser effect targets resolve to no fixtures".to_string());
     }
-    let step_order = chaser_step_order(request.direction, request.steps.len(), request.random_seed);
+    let step_order = chaser_step_order_with_cycles(
+        request.direction,
+        request.steps.len(),
+        request.random_seed,
+        request.random_cycle_count,
+    );
     let path_len = chaser_cycle_len(request.direction, step_order.len()) as f32;
     let target_denominator = target_order.len().max(1) as f32;
     let mut target_step_levels = target_order
@@ -28908,10 +28920,20 @@ fn chaser_path_len(direction: ChaserDirection, step_count: usize) -> usize {
     }
 }
 
+#[cfg(test)]
 fn chaser_step_order(
     direction: ChaserDirection,
     step_count: usize,
     random_seed: u64,
+) -> Vec<usize> {
+    chaser_step_order_with_cycles(direction, step_count, random_seed, 1)
+}
+
+fn chaser_step_order_with_cycles(
+    direction: ChaserDirection,
+    step_count: usize,
+    random_seed: u64,
+    random_cycle_count: u8,
 ) -> Vec<usize> {
     let step_count = step_count.max(1);
     match direction {
@@ -28923,14 +28945,19 @@ fn chaser_step_order(
         ChaserDirection::Bounce => vec![0],
         ChaserDirection::BuildUpDown => (0..step_count).collect(),
         ChaserDirection::Random => {
-            let mut order = (0..step_count).collect::<Vec<_>>();
             let mut state = (random_seed ^ (random_seed >> 32)) as u32;
-            for index in (1..order.len()).rev() {
-                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-                let target = state as usize % (index + 1);
-                order.swap(index, target);
+            let mut sequence =
+                Vec::with_capacity(step_count.saturating_mul(random_cycle_count.max(1) as usize));
+            for _ in 0..random_cycle_count.max(1) {
+                let mut cycle = (0..step_count).collect::<Vec<_>>();
+                for index in (1..cycle.len()).rev() {
+                    state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    let target = state as usize % (index + 1);
+                    cycle.swap(index, target);
+                }
+                sequence.extend(cycle);
             }
-            order
+            sequence
         }
     }
 }
@@ -51142,6 +51169,7 @@ mod tests {
             phase: 0.0,
             fixture_spread: 0.0,
             random_seed: 97,
+            random_cycle_count: 1,
             blend_mode: EffectBlendMode::Override,
         };
         let runtime =
@@ -53099,6 +53127,7 @@ mod tests {
             phase: 0.0,
             fixture_spread: 0.0,
             random_seed: 0x5eed_cafe,
+            random_cycle_count: 1,
             blend_mode: EffectBlendMode::Override,
         }
     }
@@ -53199,13 +53228,78 @@ mod tests {
             invalid.duty_cycle = invalid_value;
             assert!(validate_chaser_effect_request(&invalid).is_err());
         }
-        for invalid_seed in [0, u32::MAX as u64 + 1] {
-            let mut invalid = valid.clone();
-            invalid.random_seed = invalid_seed;
-            assert!(validate_chaser_effect_request(&invalid)
-                .unwrap_err()
-                .contains("random seed"));
+        let mut zero_seed = valid.clone();
+        zero_seed.random_seed = 0;
+        validate_chaser_effect_request(&zero_seed).unwrap();
+
+        let mut invalid_seed = valid.clone();
+        invalid_seed.random_seed = u32::MAX as u64 + 1;
+        assert!(validate_chaser_effect_request(&invalid_seed)
+            .unwrap_err()
+            .contains("random seed"));
+
+        let mut invalid_cycles = valid;
+        invalid_cycles.random_cycle_count = 0;
+        assert!(validate_chaser_effect_request(&invalid_cycles)
+            .unwrap_err()
+            .contains("random cycle count"));
+    }
+
+    #[test]
+    fn random_chaser_cycles_form_fair_permutations_before_repeating() {
+        let order = chaser_step_order_with_cycles(ChaserDirection::Random, 4, 0, 3);
+        assert_eq!(order.len(), 12);
+        for cycle in order.chunks_exact(4) {
+            let mut sorted = cycle.to_vec();
+            sorted.sort_unstable();
+            assert_eq!(sorted, vec![0, 1, 2, 3]);
         }
+        assert_ne!(&order[0..4], &order[4..8]);
+
+        let mut request = test_chaser_request(&[1, 2, 3, 4]);
+        request.direction = ChaserDirection::Random;
+        request.random_seed = 0;
+        request.random_cycle_count = 3;
+        assert_eq!(
+            effect_params_snapshot_free_run_period_ms(&EffectParamsSnapshot::Chaser(request)),
+            Some(1_200.0)
+        );
+    }
+
+    #[test]
+    fn random_chaser_cycle_count_drives_fixture_time_series_and_exact_repeat() {
+        let runtime = runtime_with_chaser_fixtures(4);
+        let created_at = Instant::now();
+        let clock = ClockSnapshot::default();
+        let mut request = test_chaser_request(&[1, 2, 3, 4]);
+        request.direction = ChaserDirection::Random;
+        request.random_seed = 0;
+        request.random_cycle_count = 3;
+        let expected_order = chaser_step_order_with_cycles(ChaserDirection::Random, 4, 0, 3);
+        let chaser = runtime.resolve_chaser_effect_request(request).unwrap();
+        let active_fixture_at = |elapsed_ms| {
+            (1..=4)
+                .filter(|fixture_id| {
+                    evaluate_chaser_effect(
+                        &chaser,
+                        0,
+                        *fixture_id,
+                        created_at,
+                        created_at + Duration::from_millis(elapsed_ms),
+                        &clock,
+                    ) == u16::MAX
+                })
+                .collect::<Vec<_>>()
+        };
+        for (slot, step_index) in expected_order.iter().copied().enumerate() {
+            assert_eq!(
+                active_fixture_at(slot as u64 * 100),
+                vec![step_index as u64 + 1],
+                "Random Chaser slot {slot} must activate the saved deterministic step"
+            );
+        }
+        assert_eq!(active_fixture_at(1_200), active_fixture_at(0));
+        assert_eq!(active_fixture_at(1_300), active_fixture_at(100));
     }
 
     #[test]

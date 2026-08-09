@@ -8778,6 +8778,10 @@ async function measure(client, label) {
       chaserSizePercent: Number(document.querySelector('.chaserPreviewStrip')?.dataset.sizePercent ?? -1),
       chaserPhasePercent: Number(document.querySelector('.chaserPreviewStrip')?.dataset.phasePercent ?? -1),
       chaserFadingEnabled: Boolean(document.querySelector('.chaserFadingToggle input')?.checked),
+      visibleChaserRandomSeedInputCount: visibleCount('.chaserEffectEditor input[type="number"][min="0"][max="4294967295"]'),
+      visibleChaserRandomCycleInputCount: visibleCount('.chaserEffectEditor input[type="number"][min="1"][max="255"]'),
+      chaserRandomSeedValue: Number(document.querySelector('.chaserEffectEditor input[type="number"][min="0"][max="4294967295"]')?.value ?? -1),
+      chaserRandomCycleValue: Number(document.querySelector('.chaserEffectEditor input[type="number"][min="1"][max="255"]')?.value ?? -1),
       chaserDisabledVideoOptionCount: [...document.querySelectorAll('.effectEditor select')]
         .filter((select) => [...select.options].some((option) => option.value === 'selection'))
         .flatMap((select) => [...select.options])
@@ -9750,15 +9754,19 @@ function hasExpectedControlModeSurface(result) {
         result.visibleChaserEditorCount === 1 &&
         result.visibleChaserStepCount === 3 &&
         result.visibleChaserFeatureCount === 2 &&
-        result.visibleChaserPreviewCellCount === 3 &&
+        result.visibleChaserPreviewCellCount === 9 &&
         result.visibleActiveChaserPreviewCellCount === 2 &&
         result.visibleChaserDirectionButtonCount === 5 &&
         result.visibleChaserReplaceButtonCount === 3 &&
-        result.chaserDirectionValue === "Reverse" &&
+        result.chaserDirectionValue === "Random" &&
         result.chaserActiveStepCount === 2 &&
         result.chaserSizePercent === 37 &&
         result.chaserPhasePercent === 50 &&
         result.chaserFadingEnabled &&
+        result.visibleChaserRandomSeedInputCount === 1 &&
+        result.visibleChaserRandomCycleInputCount === 1 &&
+        result.chaserRandomSeedValue === 0 &&
+        result.chaserRandomCycleValue === 3 &&
         result.chaserHorizontalOverflowPx <= 1 &&
         result.chaserEditorContained
       );
@@ -12736,7 +12744,7 @@ async function runViewport(client, viewport) {
         'document.querySelector("[data-scene-settings-effect-editor=\\"Chaser\\"]") !== null',
         `Scene Chaser FX editor ${viewport.width}x${viewport.height}`,
       );
-      await clickVisibleByText(client, ".chaserDirectionGrid button", "Reverse");
+      await clickVisibleByText(client, ".chaserDirectionGrid button", "Random");
       await client.evaluate(`(() => {
         const setInput = (input, value) => {
           if (!input) return false;
@@ -12750,8 +12758,10 @@ async function runViewport(client, viewport) {
         const pixels = labels.find((label) => (label.textContent || '').trim().startsWith('Pixels on'))?.querySelector('input');
         const size = labels.find((label) => (label.textContent || '').trim().startsWith('Size'))?.querySelector('input[type="range"]');
         const phase = labels.find((label) => (label.textContent || '').trim().startsWith('Phase'))?.querySelector('input');
+        const randomSeed = labels.find((label) => (label.textContent || '').trim().startsWith('Random seed'))?.querySelector('input');
+        const randomCycles = labels.find((label) => (label.textContent || '').trim().startsWith('Random cycles'))?.querySelector('input');
         const fading = editor?.querySelector('.chaserFadingToggle input');
-        [setInput(pixels, 2), setInput(size, 37), setInput(phase, 0.5)].forEach((result) => {
+        [setInput(pixels, 2), setInput(size, 37), setInput(phase, 0.5), setInput(randomSeed, 0), setInput(randomCycles, 3)].forEach((result) => {
           if (!result) throw new Error('Could not update Scene Chaser controls');
         });
         if (fading && !fading.checked) fading.click();
@@ -28041,6 +28051,10 @@ async function main() {
                       size: result.chaserSizePercent,
                       phase: result.chaserPhasePercent,
                       fading: result.chaserFadingEnabled,
+                      randomSeedInputs: result.visibleChaserRandomSeedInputCount,
+                      randomCycleInputs: result.visibleChaserRandomCycleInputCount,
+                      randomSeed: result.chaserRandomSeedValue,
+                      randomCycles: result.chaserRandomCycleValue,
                       overflow: result.chaserHorizontalOverflowPx,
                       contained: result.chaserEditorContained,
                       bounds: result.chaserEditorBounds,

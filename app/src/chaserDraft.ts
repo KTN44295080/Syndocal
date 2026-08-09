@@ -11,7 +11,8 @@ const clamp = (value: number, minimum: number, maximum: number) =>
 export const clampChaserLevel = (value: number) => Math.round(clamp(value, 0, 65_535));
 export const clampChaserUnit = (value: number) => clamp(value, 0, 1);
 export const clampChaserWings = (value: number) => Math.round(clamp(value, 1, 16));
-export const clampChaserSeed = (value: number) => Math.round(clamp(value, 1, 0xffff_ffff));
+export const clampChaserSeed = (value: number) => Math.round(clamp(value, 0, 0xffff_ffff));
+export const clampChaserRandomCycleCount = (value: number) => Math.round(clamp(value, 1, 255));
 
 const uniqueFixtureIds = (fixtureIds: number[]) =>
   [...new Set(fixtureIds.filter((fixtureId) => Number.isInteger(fixtureId) && fixtureId > 0))];
@@ -72,6 +73,7 @@ export interface ChaserDraftValidationInput {
   phase: number;
   fixtureSpread: number;
   randomSeed: number;
+  randomCycleCount: number;
 }
 
 export const chaserDraftError = (input: ChaserDraftValidationInput) => {
@@ -137,30 +139,42 @@ export const chaserDraftError = (input: ChaserDraftValidationInput) => {
   if (!Number.isFinite(input.fixtureSpread) || input.fixtureSpread < 0 || input.fixtureSpread > 1) {
     return "Chaser fixture spread must be within 0% to 100%.";
   }
-  if (!Number.isSafeInteger(input.randomSeed) || input.randomSeed < 1 || input.randomSeed > 0xffff_ffff) {
-    return "Chaser random seed must be an integer from 1 to 4294967295.";
+  if (!Number.isSafeInteger(input.randomSeed) || input.randomSeed < 0 || input.randomSeed > 0xffff_ffff) {
+    return "Chaser random seed must be an integer from 0 to 4294967295.";
+  }
+  if (!Number.isSafeInteger(input.randomCycleCount) || input.randomCycleCount < 1 || input.randomCycleCount > 255) {
+    return "Chaser random cycle count must be an integer from 1 to 255.";
   }
   return "";
 };
 
-const seededStepOrder = (stepCount: number, seed: number) => {
-  const order = Array.from({ length: stepCount }, (_, index) => index);
+const seededStepOrder = (stepCount: number, seed: number, cycleCount: number) => {
+  const sequence: number[] = [];
   let state = clampChaserSeed(seed) >>> 0;
-  for (let index = order.length - 1; index > 0; index -= 1) {
-    state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
-    const target = state % (index + 1);
-    [order[index], order[target]] = [order[target], order[index]];
+  for (let cycle = 0; cycle < clampChaserRandomCycleCount(cycleCount); cycle += 1) {
+    const order = Array.from({ length: stepCount }, (_, index) => index);
+    for (let index = order.length - 1; index > 0; index -= 1) {
+      state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+      const target = state % (index + 1);
+      [order[index], order[target]] = [order[target], order[index]];
+    }
+    sequence.push(...order);
   }
-  return order;
+  return sequence;
 };
 
-export const chaserPreviewOrder = (stepCount: number, direction: ChaserDirection, randomSeed: number) => {
+export const chaserPreviewOrder = (
+  stepCount: number,
+  direction: ChaserDirection,
+  randomSeed: number,
+  randomCycleCount = 1,
+) => {
   const forward = Array.from({ length: Math.max(0, stepCount) }, (_, index) => index);
   if (direction === "Reverse") return forward.reverse();
   if (direction === "Bounce" && forward.length > 1) {
     return [...forward, ...forward.slice(1, -1).reverse()];
   }
-  if (direction === "Random") return seededStepOrder(forward.length, randomSeed);
+  if (direction === "Random") return seededStepOrder(forward.length, randomSeed, randomCycleCount);
   if (direction === "BuildUpDown") return [...forward, ...forward];
   return forward;
 };

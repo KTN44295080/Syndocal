@@ -308,6 +308,7 @@ fn add_mixed_lighting_effects(engine: &EngineHandle) -> Result<(), String> {
         phase: 0.0,
         fixture_spread: 0.0,
         random_seed: 0x5eed_cafe,
+        random_cycle_count: 1,
         blend_mode: EffectBlendMode::Override,
     };
     engine.add_chaser_effect(engine.allocate_effect_id(), chaser_request, true)?;

@@ -2411,8 +2411,25 @@ pub struct ChaserEffectRequest {
     pub phase: f32,
     /// Distributes stable target-order offsets across a fraction of the traversal path.
     pub fixture_spread: f32,
+    /// Stable random-series selector. Daslight DVC `Random sequence` values use 0..=255;
+    /// Syndocal-authored Chasers may use the full u32 range.
     pub random_seed: u64,
+    /// Number of complete random permutations generated before the sequence repeats.
+    /// Defaults to one for projects saved before this field was introduced.
+    #[serde(
+        default = "default_chaser_random_cycle_count",
+        skip_serializing_if = "chaser_random_cycle_count_is_one"
+    )]
+    pub random_cycle_count: u8,
     pub blend_mode: EffectBlendMode,
+}
+
+fn default_chaser_random_cycle_count() -> u8 {
+    1
+}
+
+fn chaser_random_cycle_count_is_one(value: &u8) -> bool {
+    *value == 1
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -4823,6 +4840,7 @@ mod tests {
             phase: 0.125,
             fixture_spread: 0.5,
             random_seed: 0x5eed,
+            random_cycle_count: 3,
             blend_mode: super::EffectBlendMode::Override,
         };
         let preset = super::EffectPreset {
@@ -4852,6 +4870,14 @@ mod tests {
             .remove("beam_targets");
         let legacy: super::EffectPreset = serde_json::from_value(legacy_json).unwrap();
         assert!(legacy.chaser.unwrap().steps[0].beam_targets.is_empty());
+
+        let mut legacy_json = serde_json::to_value(&preset).unwrap();
+        legacy_json["chaser"]
+            .as_object_mut()
+            .unwrap()
+            .remove("random_cycle_count");
+        let legacy: super::EffectPreset = serde_json::from_value(legacy_json).unwrap();
+        assert_eq!(legacy.chaser.unwrap().random_cycle_count, 1);
     }
 
     #[test]

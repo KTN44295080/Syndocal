@@ -16,7 +16,7 @@
 | ID | ジェネレータ | パラメータ対応（実測） |
 |---|---|---|
 | 321 | **Chaser #1** | 10=One Way Only(1/0)※, 11=Fading(1/0)※, **12=Nb pixels on**（Moving Chaser2で12=2⇔UI 2を確認。Documents版BackBar-Amberの12=18=18chバー全点灯とも整合） |
-| 325 | **Chaser random** | 11=Fading(0⇔off✓), 12=Nb pixels on(1✓), 13=Flash(100⇔100.0✓), 14=Random sequence(0✓), 15=Nb cycles(1✓) — **全一致** |
+| 325 | **Chaser random** | 11=Fading、12=Nb pixels on、13=Flash、**14=Random sequence（boolではなく整数0..255）**、**15=Nb cycles（停止回数ではなく、対象数×cycle数の全系列長）**。DVC値・周期・分布は保持し、Syndocalはロード間でも同じ並びになる決定論的系列を生成。詳細は `qa/DVC_RANDOM_CHASER.md`。 |
 | 322 | **Chaser #2** | **10=Fading**(1⇔ON✓)。選択順に1灯ずつ積み上げ、全点灯後に同じ順で1灯ずつ消す build/clear 周期 — LIVEのDMX Levelsで確定 |
 
 ※ 10/11は両方1の検体しかなくOneWay/Fadingの順序は未分離（UI表示順から10=OneWay仮）。Feature（対象属性）はラックの Features 行（実測は全てDimmer）。対象ビームは `BEAMS` 要素。
@@ -93,8 +93,10 @@ Syndocalの現行Scene Settingsでは、作成時のMAPPINGS / COLOR MAPPINGSを
 1. **DVC-3a（確定分の変換）**: CHASER FX 321/325 → Chaserエフェクト、CURVE FX（ID=波形）→ LFO/Valueエフェクト。
    インポート時にcue所有FX（F4）として生成し、cueリコールで発動。レポートの「Skipped」から「Converted(effect)」へ。
    **→ 2026-07-19 完了**（Codex実装 × Fable検証）: 厳密パラメータ検証つき変換、近似は明示計上（セグメント選択→fixture化、
-   pixelsクランプ、Flash 0%床上げ等）。ステップ周期式 = round(EFFECT DURATION / SCENE SPEED / selection_steps)。
-   protocol/engine差分なし。検証: `cargo test -p syndocal dvc` 14/14 — 金標準で effects_converted=5 / skipped=2
+   pixelsクランプ、Flash 0%床上げ等）。通常ステップ周期式 = round(EFFECT DURATION / SCENE SPEED / selection_steps)。
+   **2026-08-09追補**: Random Chaserは `selection_steps × Nb cycles` で除算し、`Random sequence=0..255` と
+   `Nb cycles=1..255` をprotocol/engine/UIへ加算互換で保存する。旧 `.sdc` はcycles=1。
+   初回検証: `cargo test -p syndocal dvc` 14/14 — 金標準で effects_converted=5 / skipped=2
    （Fl-Strobe ID=10 は未照合波形として正直にSkipped）、合成のリコール発動/リリース停止テスト、
    **GO実経路（TriggerCueListNext）での金標準チェイサー実動テスト**（ステップ境界でDMX変化を断言）。
    ネイティブ実機でもインポートレポートに Effects converted 5 と変換式の明示を確認。
