@@ -24,6 +24,44 @@ export interface CurveEffectEditorPanelProps {
 
 const modes: ValueEffectMode[] = ["Absolute", "Relative"];
 const directions: ValueEffectDirection[] = ["Forward", "Reverse", "Bounce"];
+
+// P-EXP quick looks: named one-click starter curves (qa/PRESET_EXPANSION_PLAN.md).
+// Tangent convention follows the existing Saw sample: slope values at each point.
+interface CurveQuickLook {
+  label: string;
+  points: CurveEffectPoint[];
+  beats: number | null;
+}
+const curveQuickLooks: CurveQuickLook[] = [
+  {
+    label: "Ramp Up",
+    points: [
+      { position: 0, value: 0, in_tangent: 0, out_tangent: 1 },
+      { position: 1, value: 1, in_tangent: 1, out_tangent: 0 },
+    ],
+    beats: 2,
+  },
+  {
+    label: "Strobe Snap",
+    points: [
+      { position: 0, value: 0, in_tangent: 0, out_tangent: 0 },
+      { position: 0.05, value: 1, in_tangent: 0, out_tangent: 0 },
+      { position: 0.5, value: 1, in_tangent: 0, out_tangent: 0 },
+      { position: 0.55, value: 0, in_tangent: 0, out_tangent: 0 },
+      { position: 1, value: 0, in_tangent: 0, out_tangent: 0 },
+    ],
+    beats: 0.5,
+  },
+  {
+    label: "Soft Breathe",
+    points: [
+      { position: 0, value: 0, in_tangent: 0, out_tangent: 0 },
+      { position: 0.5, value: 1, in_tangent: 0, out_tangent: 0 },
+      { position: 1, value: 0, in_tangent: 0, out_tangent: 0 },
+    ],
+    beats: 4,
+  },
+];
 const clocks = [
   { label: "Free", beats: null },
   { label: "1/4", beats: 0.25 },
@@ -207,6 +245,24 @@ export function CurveEffectEditorPanel(props: CurveEffectEditorPanelProps) {
       <div class="valueEffectTransportRow">
         <label class="valueEffectPeriodField">Period ms<input class="tabularNums" type="number" min="10" step="10" value={periodMs()} onInput={(event) => props.onPeriodMs(Math.max(10, Math.round(Number(event.currentTarget.value) || 10)))} /></label>
         <div class="moveEffectClockPresets" aria-label="Curve clock sync presets"><For each={clocks}>{(clock) => <button type="button" class={nearlyEqual(props.clockSyncBeats, clock.beats) ? "active" : ""} aria-pressed={nearlyEqual(props.clockSyncBeats, clock.beats)} title={clock.beats === null ? `${periodMs()} ms free` : `${beatPeriodMs(clock.beats)} ms at ${bpm()} BPM`} onClick={() => props.onClockSyncBeats(clock.beats)}><Show when={clock.beats !== null} fallback="Free"><span data-no-localize>{clock.label}</span></Show></button>}</For></div>
+      </div>
+
+      <div class="moveEffectClockPresets" aria-label="Curve quick looks" data-curve-quick-looks>
+        <For each={curveQuickLooks}>
+          {(look) => (
+            <button
+              type="button"
+              data-curve-quick-look={look.label}
+              title={look.beats === null ? `${look.label}: free-running` : `${look.label}: ${look.beats} beat${look.beats === 1 ? "" : "s"}`}
+              onClick={() => {
+                props.onPoints(look.points.map((point) => ({ ...point })));
+                props.onClockSyncBeats(look.beats);
+              }}
+            >
+              {look.label}
+            </button>
+          )}
+        </For>
       </div>
 
       <div class="valueEffectPhaseGrid">

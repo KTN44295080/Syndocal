@@ -82,6 +82,80 @@ const defaultValueGeneratorRecipe = (
   }
 };
 
+// P-EXP quick looks: named one-click starter configurations per proven VALUE
+// generator. Parameter values follow qa/PRESET_EXPANSION_PLAN.md — Plasma uses
+// the statically recovered Daslight constructor defaults; the rest use curated
+// practical values within the validated recipe domains. Labels stay in the
+// T25-G English-invariant FX vocabulary class.
+const quickLookRampPoints: ValueEffectPoint[] = [
+  { position: 0, value: 1 },
+  { position: 1, value: 0 },
+];
+const quickLookGrayscalePoints: ValueEffectPoint[] = [
+  { position: 0, value: 1 },
+  { position: 0.5, value: 0.5 },
+  { position: 1, value: 0 },
+];
+interface ValueQuickLook {
+  label: string;
+  recipe: ColorEffectSpatialRecipe;
+  points: ValueEffectPoint[];
+  beats: number | null;
+}
+const valueQuickLooks: ValueQuickLook[] = [
+  {
+    label: "Sweep Bounce",
+    recipe: { Sweep: { direction_change: true } },
+    points: quickLookGrayscalePoints,
+    beats: 2,
+  },
+  {
+    label: "Plasma Drift",
+    recipe: {
+      Plasma: {
+        grayscale: false,
+        vertical_symmetry: false,
+        size_x: 1,
+        param_x: 2,
+        size_y: 1,
+        param_y: 2,
+        speed_x: -1,
+        param_sx: 2,
+        speed_y: 1,
+        param_sy: -1,
+      },
+    },
+    points: quickLookGrayscalePoints,
+    beats: 8,
+  },
+  {
+    label: "Knight Rider Scan",
+    recipe: {
+      KnightRider: { size: 2, one_way: false, fading: true, go_outside: false, gradient: 50 },
+    },
+    points: quickLookRampPoints,
+    beats: 1,
+  },
+  {
+    label: "Sparkle Rain",
+    recipe: { Sparkle: { number: 6, lifespan: 40, width: 1 } },
+    points: quickLookRampPoints,
+    beats: 1,
+  },
+  {
+    label: "Burst Pulse",
+    recipe: { Burst: { color_width: 50, gradient: 100 } },
+    points: quickLookRampPoints,
+    beats: 4,
+  },
+  {
+    label: "Random Fill Steps",
+    recipe: { RandomFill: { point_width: 2 } },
+    points: quickLookRampPoints,
+    beats: 2,
+  },
+];
+
 const clamp = (value: number, minimum: number, maximum: number) =>
   Math.min(maximum, Math.max(minimum, Number.isFinite(value) ? value : minimum));
 const clampUnit = (value: number) => clamp(value, 0, 1);
@@ -212,6 +286,14 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
       ...pattern,
       recipe: { [kind]: { ...generatorValues(), ...patch } } as ColorEffectSpatialRecipe,
     });
+  };
+  const applyQuickLook = (look: ValueQuickLook) => {
+    props.onPoints(look.points.map((point) => ({ ...point })));
+    props.onSpatialPattern({
+      recipe: structuredClone(look.recipe),
+      beam_targets: props.spatialPattern?.beam_targets ?? [],
+    });
+    props.onClockSyncBeats(look.beats);
   };
 
   const pointToCanvas = (point: ValueEffectPoint): CanvasPoint => ({
@@ -415,6 +497,28 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
                 : "Beam targets follow selected fixture profile order."}
             </div>
           </Show>
+        </div>
+        <div
+          class="moveEffectClockPresets"
+          aria-label="Value quick looks"
+          data-value-quick-looks
+        >
+          <For each={valueQuickLooks}>
+            {(look) => (
+              <button
+                type="button"
+                data-value-quick-look={look.label}
+                title={
+                  look.beats === null
+                    ? `${look.label}: free-running`
+                    : `${look.label}: ${look.beats} beat${look.beats === 1 ? "" : "s"}`
+                }
+                onClick={() => applyQuickLook(look)}
+              >
+                {look.label}
+              </button>
+            )}
+          </For>
         </div>
         <Show when={generatorKind() === "KnightRider"}>
           <div class="colorEffectModeGrid">

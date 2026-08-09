@@ -19206,6 +19206,49 @@ async function runSceneSettingsViewport(client, viewport) {
     control.dispatchEvent(new Event("input", { bubbles: true }));
     return { present: true, toggled: startedOff && control.checked };
   });
+  // P-EXP: the VALUE quick-look row applies a named recipe + palette + clock
+  // from one real click. Plasma Drift first (destroys any leftover Sweep
+  // state), then Sweep Bounce, so the final Sweep/direction-change assertion
+  // is decisively produced by the quick look and not residue.
+  const valueQuickLookState = await evaluatePageFunction(client, () => {
+    const row = document.querySelector('[data-value-quick-looks]');
+    const buttons = [...(row?.querySelectorAll('button') ?? [])];
+    const labels = buttons.map((button) => button.getAttribute('data-value-quick-look') ?? '');
+    const plasma = buttons.find(
+      (button) => button.getAttribute('data-value-quick-look') === 'Plasma Drift',
+    );
+    if (!(plasma instanceof HTMLButtonElement)) return { present: false, count: buttons.length, labels };
+    plasma.click();
+    return { present: true, count: buttons.length, labels };
+  });
+  await waitForClientCondition(
+    client,
+    'document.querySelector("[data-value-generator=\\"Plasma\\"]") !== null',
+    `P-EXP VALUE quick look Plasma Drift ${viewport.width}x${viewport.height}`,
+  );
+  const valueQuickLookPlasma = await evaluatePageFunction(client, () => ({
+    generatorKind: document.querySelector('[data-value-generator]')
+      ?.getAttribute('data-value-generator') ?? '',
+  }));
+  const valueQuickLookBounceClicked = await evaluatePageFunction(client, () => {
+    const bounce = document.querySelector('[data-value-quick-look="Sweep Bounce"]');
+    if (!(bounce instanceof HTMLButtonElement)) return false;
+    bounce.click();
+    return true;
+  });
+  await waitForClientCondition(
+    client,
+    'document.querySelector("[data-value-generator=\\"Sweep\\"] [data-value-sweep-direction-change]") !== null',
+    `P-EXP VALUE quick look Sweep Bounce ${viewport.width}x${viewport.height}`,
+  );
+  const valueQuickLookApplied = await evaluatePageFunction(client, () => {
+    const control = document.querySelector('[data-value-sweep-direction-change]');
+    return {
+      generatorKind: document.querySelector('[data-value-generator]')
+        ?.getAttribute('data-value-generator') ?? '',
+      directionChangeOn: control instanceof HTMLInputElement && control.checked,
+    };
+  });
   const valueCustomSelected = await evaluatePageFunction(client, () => {
     const select = document.querySelector('[data-value-generator-select]');
     if (!(select instanceof HTMLSelectElement)) return false;
@@ -19687,6 +19730,16 @@ async function runSceneSettingsViewport(client, viewport) {
       && valueCustomState.generatorKind === "CustomEnvelope"
       && valueCustomState.modeCount === 1
       && valueCustomState.directionCount === 1],
+    ["valueQuickLooksApplyNamedRecipesFromOneClick", () =>
+      valueQuickLookState.present
+      && valueQuickLookState.count === 6
+      && JSON.stringify(valueQuickLookState.labels) === JSON.stringify([
+        "Sweep Bounce", "Plasma Drift", "Knight Rider Scan", "Sparkle Rain", "Burst Pulse", "Random Fill Steps",
+      ])
+      && valueQuickLookPlasma.generatorKind === "Plasma"
+      && valueQuickLookBounceClicked
+      && valueQuickLookApplied.generatorKind === "Sweep"
+      && valueQuickLookApplied.directionChangeOn],
   ];
   const checks = Object.fromEntries(conditions.map(([name, check]) => {
     try {
@@ -19723,6 +19776,9 @@ async function runSceneSettingsViewport(client, viewport) {
     createdFx,
     valueGeneratorState,
     valueCustomState,
+    valueQuickLookState,
+    valueQuickLookPlasma,
+    valueQuickLookApplied,
     createdFxContents,
     editSourceRoute,
     cueEditAuthoredBeats,
