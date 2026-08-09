@@ -73,7 +73,7 @@
                 <RACKS/>
             </SCENE>
         </BANK>
-        <BANK DASUID="b81a06db-9adb-4e73-9892-d1fe8123c25e" NAME="Laser-Color" COLOR="#ffd7549f" COLLAPSED="0" PAUSED="0" HIDDEN="0" NBSCENE="10">
+        <BANK DASUID="b81a06db-9adb-4e73-9892-d1fe8123c25e" NAME="Laser-Color" COLOR="#ffd7549f" COLLAPSED="0" PAUSED="0" HIDDEN="0" NBSCENE="12">
             <SCENE DASUID="95234d79-4590-49c6-8241-32a540c167c0" NAME="Red" COLOR="#ffd7549f" ENABLE="1" VISIBLE="1" LOOP_MODE="0" LOOP="0" PLAY_DIRECTION="1" PLAY_MODE="0" FLASH="0" BOUNCE_MODE="0" PLAY_TRIGGER="0" PLAY_DIVISION="8" DIMMER="1" D_FEATURE="1" SPEED="0.5" PHASE="0" SIZE="1" PHASE_IN="0" PHASE_OUT="0" AUTO_RELEASE_END="1" JUMP_MODE="-1" RELEASE_MODE="2" RELEASE_PROTECT_MODE="0" FADE_IN="0" FADE_OUT="0" ATTRIBUTEVALUE_MODE="0" LTPPRIORITY="2" PAUSE="0" SAIMAGEPATH="">
                 <FIXTUREDATAS NB="2">
                     <FIXTUREDATA FIXTURE="6dfdc081-800e-4b09-a02e-afd1fcd102c8" DATA="eJxi4GX4jwswMDCw7GHABXFKkC0FAAAA//8="/>
@@ -254,6 +254,13 @@
                                 <PARAM TYPE="2" ID="10" VAL="1"/>
                             </PARAMS>
                         </EFFECT>
+                        <PRESETS>
+                            <PRESET SSLFIXTURE="" SSLCHANNEL="-1" SSLPRESET="4" MIN="0" MAX="1">
+                                <BEAMS>
+                                    <BEAM FIXTURE="4e57b8d0-666a-4165-bc91-e34f12d061e7" BEAMID="0"/>
+                                </BEAMS>
+                            </PRESET>
+                        </PRESETS>
                         <BEAMS NB="1">
                             <BEAM FIXTURE="4e57b8d0-666a-4165-bc91-e34f12d061e7" BEAMID="0" IDSELECTION="1"/>
                         </BEAMS>
@@ -286,15 +293,93 @@
                                 <PARAM TYPE="0" ID="17" VAL="-1"/>
                             </PARAMS>
                         </EFFECT>
+                        <PRESETS>
+                            <PRESET SSLFIXTURE="" SSLCHANNEL="-1" SSLPRESET="4" MIN="0" MAX="1">
+                                <BEAMS>
+                                    <BEAM FIXTURE="4e57b8d0-666a-4165-bc91-e34f12d061e7" BEAMID="0"/>
+                                </BEAMS>
+                            </PRESET>
+                        </PRESETS>
                         <BEAMS NB="1">
                             <BEAM FIXTURE="4e57b8d0-666a-4165-bc91-e34f12d061e7" BEAMID="0" IDSELECTION="1"/>
                         </BEAMS>
                     </RACK>
                 </RACKS>
             </SCENE>
+            <SCENE DASUID="5c7eede2-24df-4e5b-acd6-9168ffca7434" NAME="New Scene" COLOR="#ffd7549f" ENABLE="1" VISIBLE="1" LOOP_MODE="0" LOOP="0" PLAY_DIRECTION="1" PLAY_MODE="0" FLASH="0" BOUNCE_MODE="0" PLAY_TRIGGER="0" PLAY_DIVISION="8" DIMMER="1" D_FEATURE="1" SPEED="0.5" PHASE="0" SIZE="1" PHASE_IN="0" PHASE_OUT="0" AUTO_RELEASE_END="1" JUMP_MODE="-1" RELEASE_MODE="2" RELEASE_PROTECT_MODE="0" FADE_IN="0" FADE_OUT="0" ATTRIBUTEVALUE_MODE="0" LTPPRIORITY="2" PAUSE="0" SAIMAGEPATH="">
+                <FIXTUREDATAS NB="0"/>
+                <RACKS>
+                    <RACK EXPAND_RACK="1" TYPE="7">
+                        <EFFECT TYPE="7" ID="625" DURATION="5000">
+                            <PARAMS NB="3">
+                                <PARAM TYPE="4" ID="1">
+                                    <COLORS NB="3">
+                                        <COLOR VAL="1/1/1/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>
+                                        <COLOR VAL="0.498039/0.498039/0.498039/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>
+                                        <COLOR VAL="0/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>
+                                    </COLORS>
+                                </PARAM>
+                                <PARAM TYPE="6" ID="3" VAL="0"/>
+                                <PARAM TYPE="2" ID="10" VAL="1"/>
+                            </PARAMS>
+                        </EFFECT>
+                        <PRESETS>
+                            <PRESET SSLFIXTURE="" SSLCHANNEL="-1" SSLPRESET="4" MIN="0" MAX="1">
+                                <BEAMS>
+                                    <BEAM FIXTURE="6839dab7-416a-4f16-a850-d52e8a5b8e58" BEAMID="0"/>
+                                    <BEAM FIXTURE="98c9f711-7df2-4a58-9f93-ef2f838b2f04" BEAMID="0"/>
+                                </BEAMS>
+                            </PRESET>
+                        </PRESETS>
+                        <BEAMS NB="2">
+                            <BEAM FIXTURE="98c9f711-7df2-4a58-9f93-ef2f838b2f04" BEAMID="0" IDSELECTION="1"/>
+                            <BEAM FIXTURE="6839dab7-416a-4f16-a850-d52e8a5b8e58" BEAMID="0" IDSELECTION="2"/>
+                        </BEAMS>
+                    </RACK>
+                </RACKS>
+            </SCENE>
+            <SCENE DASUID="12d11eb1-7bb6-499a-9ef9-c90e068b43e2" NAME="New Scene" COLOR="#ffd7549f" ENABLE="1" VISIBLE="1" LOOP_MODE="0" LOOP="0" PLAY_DIRECTION="1" PLAY_MODE="0" FLASH="0" BOUNCE_MODE="0" PLAY_TRIGGER="0" PLAY_DIVISION="8" DIMMER="1" D_FEATURE="1" SPEED="0.5" PHASE="0" SIZE="1" PHASE_IN="0" PHASE_OUT="0" AUTO_RELEASE_END="1" JUMP_MODE="-1" RELEASE_MODE="2" RELEASE_PROTECT_MODE="0" FADE_IN="0" FADE_OUT="0" ATTRIBUTEVALUE_MODE="0" LTPPRIORITY="2" PAUSE="0" SAIMAGEPATH="">
+                <FIXTUREDATAS NB="0"/>
+                <RACKS>
+                    <RACK EXPAND_RACK="1" TYPE="7">
+                        <EFFECT TYPE="7" ID="623" DURATION="5000">
+                            <PARAMS NB="10">
+                                <PARAM TYPE="4" ID="1">
+                                    <COLORS NB="3">
+                                        <COLOR VAL="1/1/1/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>
+                                        <COLOR VAL="0.498039/0.498039/0.498039/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>
+                                        <COLOR VAL="0/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>
+                                    </COLORS>
+                                </PARAM>
+                                <PARAM TYPE="6" ID="3" VAL="0"/>
+                                <PARAM TYPE="0" ID="10" VAL="1"/>
+                                <PARAM TYPE="0" ID="11" VAL="2"/>
+                                <PARAM TYPE="0" ID="12" VAL="1"/>
+                                <PARAM TYPE="0" ID="13" VAL="2"/>
+                                <PARAM TYPE="0" ID="14" VAL="-1"/>
+                                <PARAM TYPE="0" ID="15" VAL="2"/>
+                                <PARAM TYPE="0" ID="16" VAL="1"/>
+                                <PARAM TYPE="0" ID="17" VAL="-1"/>
+                            </PARAMS>
+                        </EFFECT>
+                        <PRESETS>
+                            <PRESET SSLFIXTURE="" SSLCHANNEL="-1" SSLPRESET="4" MIN="0" MAX="1">
+                                <BEAMS>
+                                    <BEAM FIXTURE="6839dab7-416a-4f16-a850-d52e8a5b8e58" BEAMID="0"/>
+                                    <BEAM FIXTURE="98c9f711-7df2-4a58-9f93-ef2f838b2f04" BEAMID="0"/>
+                                </BEAMS>
+                            </PRESET>
+                        </PRESETS>
+                        <BEAMS NB="2">
+                            <BEAM FIXTURE="98c9f711-7df2-4a58-9f93-ef2f838b2f04" BEAMID="0" IDSELECTION="1"/>
+                            <BEAM FIXTURE="6839dab7-416a-4f16-a850-d52e8a5b8e58" BEAMID="0" IDSELECTION="2"/>
+                        </BEAMS>
+                    </RACK>
+                </RACKS>
+            </SCENE>
         </BANK>
         <DAS_SELECTIONS SELECTED_LIVE_BANK="0">
-            <SELECTED_LIVE_SCENES DASUID="7d4d8d19-22eb-4c11-be48-607476b9379d"/>
+            <SELECTED_LIVE_SCENES DASUID="12d11eb1-7bb6-499a-9ef9-c90e068b43e2"/>
         </DAS_SELECTIONS>
     </SCENES>
     <SHORTCUTS>

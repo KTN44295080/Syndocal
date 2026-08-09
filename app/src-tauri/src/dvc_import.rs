@@ -8968,6 +8968,101 @@ mod tests {
         );
     }
 
+    // Real saved Daslight specimen authored on 2026-08-10 (Fable, elevated
+    // permissions) to turn the DVC-V3 static proof into a product-to-product
+    // golden: a scratch project holding a targeted VALUE Sweep (ID625,
+    // Direction Change ON) and a VALUE Plasma (ID623) at Daslight constructor
+    // defaults, each with a Dimmer feature bound through the real UI (saved as
+    // a PRESETS block with SSLPRESET=4 / SSLCHANNEL=-1 / MIN=0 / MAX=1). The
+    // repo copy under qa/specimens is the durable golden; this test prefers it
+    // and therefore runs on any checkout of this repository.
+    #[test]
+    fn dvc_local_golden_value_sweep_and_plasma_import_from_saved_specimen() {
+        let repo_specimen = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../qa/specimens/ValueCatalog-Sweep-Plasma.dvc"
+        ));
+        let machine_specimen = Path::new(
+            r"C:\Users\kouty\Documents\Daslight 5\Projects\specimens\ValueCatalog-Sweep-Plasma.dvc",
+        );
+        let path = if repo_specimen.is_file() {
+            repo_specimen
+        } else if machine_specimen.is_file() {
+            machine_specimen
+        } else {
+            eprintln!("Skipping VALUE catalog Daslight golden: no specimen available");
+            return;
+        };
+        let outcome = import_path(path).unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+        // The specimen also carries two laser-targeted VALUE scenes whose
+        // f3200a profile exposes no PRESET type 4; they must stay skipped
+        // (real-file coverage of the fail-closed feature-resolution path).
+        assert_eq!(
+            outcome
+                .report
+                .skipped
+                .details
+                .iter()
+                .filter(|detail| detail
+                    .message
+                    .contains("no VALUE FX targets exposing PRESET type 4"))
+                .count(),
+            2,
+            "laser-targeted VALUE scenes without a Dimmer preset must stay fail-closed"
+        );
+        let recipes = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .flat_map(|cue| &cue.effect_targets)
+            .filter_map(|target| match target.params.as_ref() {
+                // VALUE FX serializes as EffectParamsSnapshot::Value; the
+                // generator recipe lives on its spatial_pattern.
+                Some(EffectParamsSnapshot::Value(request)) => request
+                    .spatial_pattern
+                    .as_ref()
+                    .map(|pattern| &pattern.recipe),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            recipes.iter().any(|recipe| matches!(
+                recipe,
+                ColorEffectSpatialRecipe::Sweep {
+                    direction_change: true
+                }
+            )),
+            "saved VALUE Sweep specimen (ID625) must import as Sweep with direction_change=true; found {recipes:?}"
+        );
+        assert!(
+            recipes.iter().any(|recipe| matches!(
+                recipe,
+                ColorEffectSpatialRecipe::Plasma {
+                    grayscale: false,
+                    vertical_symmetry: false,
+                    size_x,
+                    param_x,
+                    size_y,
+                    param_y,
+                    speed_x,
+                    param_sx,
+                    speed_y,
+                    param_sy,
+                } if *size_x == 1.0
+                    && *param_x == 2.0
+                    && *size_y == 1.0
+                    && *param_y == 2.0
+                    && *speed_x == -1.0
+                    && *param_sx == 2.0
+                    && *speed_y == 1.0
+                    && *param_sy == -1.0
+            )),
+            "saved VALUE Plasma specimen (ID623) must import with Daslight default fields; found {recipes:?}"
+        );
+    }
+
     #[test]
     fn dvc_local_homecoming_chaser_presets_restore_rgb_features_when_present() {
         let path = Path::new(r"C:\Users\kouty\Desktop\homecoming2026\homecoming2606.dvc");
