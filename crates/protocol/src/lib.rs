@@ -2289,6 +2289,10 @@ pub enum ColorEffectSpatialRecipe {
         go_outside: bool,
         gradient: f32,
     },
+    Sweep {
+        /// Alternate the sweep direction after each palette transition.
+        direction_change: bool,
+    },
     Burst {
         color_width: f32,
         gradient: f32,
@@ -5012,6 +5016,21 @@ mod tests {
                 color_width: 0.25,
                 angle_degrees: 90.0,
                 gradient: 75.0,
+            },
+            beam_targets: vec![super::ColorEffectBeamTarget {
+                fixture_id: 1,
+                beam_index: 3,
+                selection_index: 8,
+                feature_attribute: Some("ColorRed 4".to_string()),
+            }],
+        });
+        let json = serde_json::to_string(&parsed).unwrap();
+        let roundtrip: super::ValueEffectRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtrip, parsed);
+
+        parsed.spatial_pattern = Some(super::ColorEffectSpatialPattern {
+            recipe: super::ColorEffectSpatialRecipe::Sweep {
+                direction_change: true,
             },
             beam_targets: vec![super::ColorEffectBeamTarget {
                 fixture_id: 1,

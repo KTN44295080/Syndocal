@@ -35,6 +35,7 @@ for (const generator of [
   "Burst",
   "Plasma",
   "KnightRider",
+  "Sweep",
   "Sparkle",
   "RandomFill",
   "Perlin",
@@ -48,6 +49,10 @@ for (const generator of [
     `VALUE generator ${generator} must have an authored default recipe`,
   );
 }
+assert.ok(
+  editorSource.includes("data-value-sweep-direction-change"),
+  "VALUE Sweep must expose Daslight's Direction Change switch",
+);
 assert.ok(
   editorSource.includes('<option value="CustomEnvelope">Custom envelope</option>'),
   "Syndocal's richer Custom Envelope mode must remain available",

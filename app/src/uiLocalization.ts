@@ -1514,6 +1514,8 @@ const japaneseText: Record<string, string> = {
   "Color beam-space pattern": "ColorのBeam空間パターン",
   "Palette flow": "パレットフロー",
   "Knight Rider": "ナイトライダー",
+  Sweep: "スイープ",
+  "Direction change": "方向を交互に変更",
   Burst: "バースト",
   "Random fill": "Randomフィル",
   Sparkle: "スパークル",

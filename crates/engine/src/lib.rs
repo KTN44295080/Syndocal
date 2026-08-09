@@ -25388,6 +25388,7 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
             }
             percent("gradient", *gradient)
         }
+        ColorEffectSpatialRecipe::Sweep { .. } => Ok(()),
         ColorEffectSpatialRecipe::Burst {
             color_width,
             gradient,
@@ -29014,6 +29015,28 @@ fn evaluate_color_spatial_sample_at_rate(
                 color: spatial_palette_color(request, level, if *fading { *gradient } else { 0.0 }),
                 opacity: 1.0,
             };
+        }
+        ColorEffectSpatialRecipe::Sweep { direction_change } => {
+            // Daslight 5.0.6.2 CSweepEffect evaluator 0x1403665A0 renders
+            // the next palette colour across the full raster and overlays the
+            // current colour from floor(progress * width) to the right edge.
+            // For a one-row VALUE strip, Direction Change rotates alternate
+            // palette transitions by 180 degrees (0x140366847..0x1403668D4).
+            let palette_count = request.stops.len();
+            let scaled = time_phase.rem_euclid(1.0) as f32 * palette_count as f32;
+            let transition_index = scaled.floor() as usize % palette_count;
+            let progress = scaled.fract();
+            let swept_cells = (progress * strip_count as f32).trunc() as usize;
+            let uses_next = if *direction_change && transition_index % 2 == 1 {
+                target.strip_index >= strip_count.saturating_sub(swept_cells)
+            } else {
+                target.strip_index < swept_cells
+            };
+            if uses_next {
+                request.stops[(transition_index + 1) % palette_count].color
+            } else {
+                request.stops[transition_index].color
+            }
         }
         ColorEffectSpatialRecipe::Burst {
             color_width,
@@ -52036,6 +52059,64 @@ mod tests {
         assert_eq!(samples[4].opacity, 1.0);
         assert_eq!(samples[0].color, test_color(0, 0, 0));
         assert_eq!(samples[2].color, test_color(u16::MAX, u16::MAX, u16::MAX));
+    }
+
+    #[test]
+    fn color_spatial_sweep_matches_daslight_one_row_palette_boundary_and_direction_change() {
+        let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::Sweep {
+            direction_change: true,
+        });
+        let red = test_color(u16::MAX, 0, 0);
+        let green = test_color(0, u16::MAX, 0);
+        let blue = test_color(0, 0, u16::MAX);
+        request.stops = vec![
+            protocol::ColorEffectStop {
+                position: 0.0,
+                color: red,
+            },
+            protocol::ColorEffectStop {
+                position: 0.5,
+                color: green,
+            },
+            protocol::ColorEffectStop {
+                position: 1.0,
+                color: blue,
+            },
+        ];
+        let targets = (0..5)
+            .map(|index| test_spatial_color_target(index, 5, index as f32 / 4.0, 0.5))
+            .collect::<Vec<_>>();
+
+        let at_start = targets
+            .iter()
+            .map(|target| evaluate_test_spatial_color(&request, target, 0))
+            .collect::<Vec<_>>();
+        assert_eq!(at_start, vec![red; 5]);
+
+        // 100 ms => palette phase 0.3. Daslight truncates 0.3 * 5 to a
+        // one-cell boundary, with no gradient at the boundary.
+        let first_transition = targets
+            .iter()
+            .map(|target| evaluate_test_spatial_color(&request, target, 100))
+            .collect::<Vec<_>>();
+        assert_eq!(first_transition, vec![green, red, red, red, red]);
+
+        // 400 ms => transition 1, progress 0.2. Direction Change reverses the
+        // one-row raster, so the next colour now enters from the right edge.
+        let reversed_transition = targets
+            .iter()
+            .map(|target| evaluate_test_spatial_color(&request, target, 400))
+            .collect::<Vec<_>>();
+        assert_eq!(reversed_transition, vec![green, green, green, green, blue]);
+
+        request.spatial_pattern.as_mut().unwrap().recipe = ColorEffectSpatialRecipe::Sweep {
+            direction_change: false,
+        };
+        let fixed_direction = targets
+            .iter()
+            .map(|target| evaluate_test_spatial_color(&request, target, 400))
+            .collect::<Vec<_>>();
+        assert_eq!(fixed_direction, vec![blue, green, green, green, green]);
     }
 
     #[test]

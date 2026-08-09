@@ -2683,6 +2683,9 @@ fn convert_dvc_color_spatial_effect(
             u8::from(*fading),
             u8::from(*go_outside)
         ),
+        ColorEffectSpatialRecipe::Sweep { direction_change } => {
+            format!("DirectionChange={}", u8::from(*direction_change))
+        }
         ColorEffectSpatialRecipe::Burst {
             color_width,
             gradient,
@@ -7946,6 +7949,7 @@ mod tests {
                         .as_ref()
                         .map(|pattern| match &pattern.recipe {
                             ColorEffectSpatialRecipe::KnightRider { .. } => 127,
+                            ColorEffectSpatialRecipe::Sweep { .. } => 625,
                             ColorEffectSpatialRecipe::Burst { .. } => 121,
                             ColorEffectSpatialRecipe::RandomFill { .. } => 131,
                             ColorEffectSpatialRecipe::Sparkle { .. } => 133,

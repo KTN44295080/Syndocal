@@ -54,6 +54,7 @@ type ValueGeneratorKind =
   | "Burst"
   | "Plasma"
   | "KnightRider"
+  | "Sweep"
   | "Sparkle"
   | "RandomFill"
   | "Perlin";
@@ -70,6 +71,8 @@ const defaultValueGeneratorRecipe = (
       return { Plasma: { grayscale: false, vertical_symmetry: false, size_x: 1, param_x: 2, size_y: 1, param_y: 2, speed_x: -1, param_sx: 2, speed_y: 1, param_sy: -1 } };
     case "KnightRider":
       return { KnightRider: { size: 8, one_way: false, fading: true, go_outside: false, gradient: 50 } };
+    case "Sweep":
+      return { Sweep: { direction_change: false } };
     case "Sparkle":
       return { Sparkle: { number: 5, lifespan: 25, width: 1 } };
     case "RandomFill":
@@ -399,6 +402,7 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
               <option value="Burst">Burst</option>
               <option value="Plasma">Plasma</option>
               <option value="KnightRider">Knight Rider</option>
+              <option value="Sweep">Sweep</option>
               <option value="Sparkle">Sparkle</option>
               <option value="RandomFill">Random fill</option>
               <option value="Perlin">Perlin</option>
@@ -419,6 +423,11 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
             <label><input type="checkbox" checked={generatorBoolean("one_way")} onInput={(event) => patchGeneratorValues({ one_way: event.currentTarget.checked })} /> One way only</label>
             <label><input type="checkbox" checked={generatorBoolean("fading")} onInput={(event) => patchGeneratorValues({ fading: event.currentTarget.checked })} /> Fading</label>
             <label><input type="checkbox" checked={generatorBoolean("go_outside")} onInput={(event) => patchGeneratorValues({ go_outside: event.currentTarget.checked })} /> Go outside</label>
+          </div>
+        </Show>
+        <Show when={generatorKind() === "Sweep"}>
+          <div class="colorEffectModeGrid">
+            <label><input type="checkbox" data-value-sweep-direction-change checked={generatorBoolean("direction_change")} onInput={(event) => patchGeneratorValues({ direction_change: event.currentTarget.checked })} /> Direction change</label>
           </div>
         </Show>
         <Show when={generatorKind() === "Burst"}>

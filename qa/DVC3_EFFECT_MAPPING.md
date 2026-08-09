@@ -94,6 +94,14 @@ VALUE FX=`RACK TYPE=7 / EFFECT TYPE=7`、MAPPINGS=`6 / 8`、COLOR MAPPINGS=`5 / 
 Rainbow/Burst/Plasma/Knight Rider/Sparkleは
 各ファミリーの登録entryが同じfactory addressを参照しており、名前が同じgenerator本体は共通実装である。
 
+VALUE Sweepについては、同実行ファイルのRTTI `CSweepEffect`、vtable `0x140696440`、
+evaluator `0x1403665A0`、constructor `0x140355D30`を追加解析した。constructorは
+`Direction Change`（ID10、default false）を1個追加し、evaluatorはpalette transitionごとに
+`trunc(progress * width)`のhard boundaryでcurrent/next色を塗り分ける。1-rowではDirection Change ON時に
+transitionごとに0/180度を交互に使用する。SyndocalのVALUE生成・編集・runtimeはこの1D式を実装するが、
+実保存されたID625 DVCがないためimporterは有効化しない。2D MAPPINGS Sweepの90/270度向きも別残件とする。
+詳細は`qa/DVC_SWEEP_SOURCE_PARITY.md`を正本とする。
+
 さらに `C:\Users\kouty\Desktop\Shinkan-Left\Codex-Chaser322-Probe.dvc` に、VALUE FX Rainbow
 （`RACK=7 / EFFECT TYPE=7 / ID=621`、3色grayscale palette、PARAM IDs 3/10/11/12）の実保存検体を発見した。
 この検体はrack `BEAMS NB=0`かつPRESET内も`BEAMS`空であり、Daslight上の出力対象を持たない。

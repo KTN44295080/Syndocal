@@ -419,6 +419,8 @@ for (const [sourceText, expectedJapaneseDisplay] of [
   ["Beam-space pattern", "Beam空間パターン"],
   ["Color beam-space pattern", "ColorのBeam空間パターン"],
   ["Random fill", "Randomフィル"],
+  ["Sweep", "スイープ"],
+  ["Direction change", "方向を交互に変更"],
   ["Plasma", "プラズマ"],
   ["Rainbow strip", "Rainbowストリップ"],
   ["Perlin mapping", "Perlinマッピング"],

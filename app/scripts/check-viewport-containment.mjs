@@ -19191,6 +19191,26 @@ async function runSceneSettingsViewport(client, viewport) {
         : Number.POSITIVE_INFINITY,
     };
   });
+  const valueSweepSelected = await evaluatePageFunction(client, () => {
+    const select = document.querySelector('[data-value-generator-select]');
+    if (!(select instanceof HTMLSelectElement)) return false;
+    select.value = "Sweep";
+    select.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  });
+  await waitForClientCondition(
+    client,
+    'document.querySelector("[data-value-generator=\\"Sweep\\"] [data-value-sweep-direction-change]") !== null',
+    `T32 VALUE Sweep selection ${viewport.width}x${viewport.height}`,
+  );
+  const valueSweepState = await evaluatePageFunction(client, () => {
+    const control = document.querySelector('[data-value-sweep-direction-change]');
+    if (!(control instanceof HTMLInputElement)) return { present: false, toggled: false };
+    const startedOff = !control.checked;
+    control.checked = true;
+    control.dispatchEvent(new Event("input", { bubbles: true }));
+    return { present: true, toggled: startedOff && control.checked };
+  });
   const valueCustomSelected = await evaluatePageFunction(client, () => {
     const select = document.querySelector('[data-value-generator-select]');
     if (!(select instanceof HTMLSelectElement)) return false;
@@ -19656,7 +19676,7 @@ async function runSceneSettingsViewport(client, viewport) {
       && valueCreateClicked
       && valueGeneratorSelected
       && JSON.stringify(valueGeneratorState.optionValues) === JSON.stringify([
-        "CustomEnvelope", "ColorRainbow", "Burst", "Plasma", "KnightRider", "Sparkle", "RandomFill", "Perlin",
+        "CustomEnvelope", "ColorRainbow", "Burst", "Plasma", "KnightRider", "Sweep", "Sparkle", "RandomFill", "Perlin",
       ])
       && valueGeneratorState.selected === "ColorRainbow"
       && valueGeneratorState.generatorKind === "ColorRainbow"
@@ -19665,6 +19685,9 @@ async function runSceneSettingsViewport(client, viewport) {
       && valueGeneratorState.customDirectionCount === 0
       && valueGeneratorState.hint === "Beam targets follow selected fixture profile order."
       && valueGeneratorState.horizontalOverflowPx <= 1
+      && valueSweepSelected
+      && valueSweepState.present
+      && valueSweepState.toggled
       && valueCustomSelected
       && valueCustomState.generatorKind === "CustomEnvelope"
       && valueCustomState.modeCount === 1
