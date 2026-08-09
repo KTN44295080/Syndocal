@@ -4189,21 +4189,6 @@ fn parse_super_scenes(
                             .unwrap_or(1.0);
                         let conform = parse_bool_attribute(block, "CONFORM_TO_TEMPO");
                         let allow_loop = parse_bool_attribute(block, "ALLOWLOOP");
-                        let source_has_time_varying_content = !cues[source_index].steps.is_empty()
-                            || cues[source_index]
-                                .effect_targets
-                                .iter()
-                                .any(|target| target.enabled);
-                        if !allow_loop && source_has_time_varying_content {
-                            report.approximate.add(
-                                1,
-                                format!(
-                                    "Scene block: {}",
-                                    block.attribute("NAME").unwrap_or("Untitled")
-                                ),
-                                "Loop is disabled in Daslight, so stretched content should hold its final source frame; the imported effect remains live through the block window",
-                            );
-                        }
                         let fade_in = parse_u64_attribute(block, "FADEIN")
                             .unwrap_or(0)
                             .min(block_duration);
@@ -4222,7 +4207,7 @@ fn parse_super_scenes(
                             duration_ms: block_duration,
                             duration_beats: None,
                             conform_to_tempo: conform && tempo_driven,
-                            loop_fill: false,
+                            loop_fill: allow_loop,
                             source_offset_ms,
                             rate: Some(speed),
                             fade_in_ms: fade_in,
@@ -5071,7 +5056,7 @@ mod tests {
         assert_eq!(child.audio_clips.len(), 1);
         assert_eq!(child.events.len(), 1);
         assert!(!child.events[0].conform_to_tempo);
-        assert!(!child.events[0].loop_fill);
+        assert!(child.events[0].loop_fill);
         assert_eq!(child.events[0].rate, Some(1.0));
         assert_eq!(child.events[0].source_offset_ms, 0);
         assert_eq!(outcome.project.snapshot.clock.bpm, 96.0);
@@ -5204,6 +5189,22 @@ mod tests {
                 && detail
                     .message
                     .contains("no supported positive PLAY_DIVISION")
+        }));
+    }
+
+    #[test]
+    fn dvc_super_scene_loop_off_preserves_final_frame_hold_semantics() {
+        let source = synthetic_dvc().replacen("ALLOWLOOP=\"1\"", "ALLOWLOOP=\"0\"", 1);
+        let outcome = import_bytes(source.as_bytes(), "synthetic-loop-off-super.dvc").unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+
+        let child = outcome.project.snapshot.cues[1]
+            .child_timeline
+            .as_ref()
+            .unwrap();
+        assert!(!child.events[0].loop_fill);
+        assert!(!outcome.report.approximate.details.iter().any(|detail| {
+            detail.item == "Scene block: Static" && detail.message.contains("final source frame")
         }));
     }
 
@@ -7168,7 +7169,7 @@ mod tests {
         assert_eq!(child_events.len(), 229);
         assert!(child_events
             .iter()
-            .all(|event| !event.conform_to_tempo && !event.loop_fill));
+            .all(|event| !event.conform_to_tempo && event.loop_fill));
         assert!(!outcome
             .report
             .approximate

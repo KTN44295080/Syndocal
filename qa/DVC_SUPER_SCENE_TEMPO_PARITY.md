@@ -48,8 +48,14 @@ authored phase of a conforming source while changing its future rate.
 
 Invalid or unsupported `PLAY_DIVISION` values fail closed to the fixed-time child path,
 disable the otherwise unusable conform bit, and emit one explicit approximation.
-`ALLOWLOOP=0` remains separately reported for time-varying sources because Daslight holds
-the final frame while Syndocal currently leaves the effect live for the block window.
+
+`ALLOWLOOP` is preserved on the child Scene Block's existing `loop_fill` field. Loop On
+keeps the source oscillator or Cue Step sequence wrapping for the block window. Loop Off
+clamps every owned FX evaluation clock to the last millisecond of that FX's authored free-run
+period; Cue Steps clamp at sequence end. The block remains active for its full placement and
+fade window, so the held value participates in normal DMX/video blending until block release.
+The resolved Loop On/Off state is copied into each runtime activation when the block starts;
+the 44 Hz fixture/video evaluation path does not search child transports or authored events.
 
 ## Static implementation evidence
 
@@ -81,10 +87,14 @@ approximation. A second invalid-division fixture proves the fixed-time fallback.
 ## Verification
 
 - `cargo fmt --all -- --check`
-- `cargo test -p engine`: 463 passed, 2 ignored
-- `cargo test -p syndocal dvc_ -- --nocapture`: 49 passed
+- `cargo test -p engine`: 465 passed, 2 ignored
+- `cargo test -p syndocal dvc_ -- --nocapture`: 50 passed
 - `cargo test -p engine direct_tempo_driven_child_ -- --nocapture`
 - `timeline_owned_tempo_child_reanchors_without_position_jump_after_bpm_change`
+- `direct_child_loop_off_holds_final_fx_frame_while_loop_on_wraps`
+- `direct_child_loop_off_holds_final_step_while_loop_on_wraps`
+- `cargo test -p engine --release child_timeline_budget_16_by_200_uses_preallocated_tick_buffers -- --nocapture`:
+  16 timeline transports × 200 child events, 0 transport-tick reallocations
 - `dvc_local_full_shinkan_super_scene_grid_and_dormant_conform_are_exact_when_present`
 - `dvc_bpm_driven_super_scene_preserves_dynamic_conform_semantics`
 - `dvc_bpm_driven_super_scene_with_invalid_division_falls_back_consistently`

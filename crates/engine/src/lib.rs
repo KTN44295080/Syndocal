@@ -3028,6 +3028,7 @@ struct RuntimeEffectActivation {
     effect: RuntimeEffect,
     key: Option<RuntimeEffectActivationKey>,
     rate: f32,
+    source_loop_fill: Option<bool>,
     transition_ms: Option<u64>,
     transition: Option<RuntimeEffectTransition>,
 }
@@ -3106,6 +3107,7 @@ struct RuntimeCueStepActivation {
     sequence: RuntimeCueStepSequence,
     key: Option<RuntimeEffectActivationKey>,
     rate: f32,
+    source_loop_fill: Option<bool>,
     clock: RuntimeCueStepClock,
 }
 
@@ -3773,6 +3775,7 @@ struct PendingTimelineEffectActivation {
     step_range: RuntimeCueStepActivationRange,
     rate: f32,
     step_rate: f32,
+    source_loop_fill: Option<bool>,
     created_at: Instant,
     step_clock: RuntimeCueStepClock,
 }
@@ -13177,6 +13180,7 @@ impl EngineRuntime {
                             effect,
                             key: None,
                             rate: 1.0,
+                            source_loop_fill: None,
                             transition_ms,
                             transition: None,
                         }),
@@ -13327,6 +13331,7 @@ impl EngineRuntime {
                         effect,
                         key: None,
                         rate: 1.0,
+                        source_loop_fill: None,
                         transition_ms,
                         transition: None,
                     }),
@@ -13364,6 +13369,7 @@ impl EngineRuntime {
                             effect,
                             key: None,
                             rate: 1.0,
+                            source_loop_fill: None,
                             transition_ms,
                             transition: None,
                         }),
@@ -13418,7 +13424,7 @@ impl EngineRuntime {
                 .find(|(candidate, _, _)| *candidate == key)
                 .map(|(_, created_at, _)| *created_at)
                 .unwrap_or(now);
-            self.activate_effect_range(range, key, created_at, 1.0);
+            self.activate_effect_range(range, key, created_at, 1.0, None);
         }
 
         for &(key, saved_created_at, _) in &previously_active {
@@ -13473,6 +13479,7 @@ impl EngineRuntime {
                 key,
                 created_at,
                 valid_effect_rate(event.rate.unwrap_or(1.0)),
+                None,
             );
         }
 
@@ -13709,6 +13716,7 @@ impl EngineRuntime {
                     sequence: self.cues[cue_index].step_sequence.clone(),
                     key: None,
                     rate: 1.0,
+                    source_loop_fill: None,
                     clock: RuntimeCueStepClock::ChildTimeline {
                         transport_id,
                         starts_at_ms: 0,
@@ -13760,6 +13768,7 @@ impl EngineRuntime {
                     sequence: live_sequence,
                     key: None,
                     rate: 1.0,
+                    source_loop_fill: None,
                     clock: RuntimeCueStepClock::Realtime {
                         started_at: now,
                         position_offset_ms,
@@ -13784,6 +13793,7 @@ impl EngineRuntime {
                     sequence: self.cues[cue_index].step_sequence.clone(),
                     key: None,
                     rate: 1.0,
+                    source_loop_fill: None,
                     clock: RuntimeCueStepClock::Timeline {
                         starts_at_ms: 0,
                         source_offset_ms: 0,
@@ -13841,7 +13851,7 @@ impl EngineRuntime {
                         1.0,
                     )
                 });
-            self.activate_step_range(cue.step_activation_range, key, clock, rate);
+            self.activate_step_range(cue.step_activation_range, key, clock, rate, None);
         }
 
         for event_index in 0..self.timeline_events.len() {
@@ -13874,6 +13884,7 @@ impl EngineRuntime {
                     source_offset_ms: event.source_offset_ms,
                 },
                 rate,
+                None,
             );
         }
     }
@@ -13884,6 +13895,7 @@ impl EngineRuntime {
         key: RuntimeEffectActivationKey,
         clock: RuntimeCueStepClock,
         rate: f32,
+        source_loop_fill: Option<bool>,
     ) {
         let end = range.end().min(self.step_activations.len());
         for index in range.start.min(end)..end {
@@ -13892,6 +13904,7 @@ impl EngineRuntime {
             activation.key = Some(key);
             activation.clock = clock;
             activation.rate = valid_effect_rate(rate);
+            activation.source_loop_fill = source_loop_fill;
             if was_inactive {
                 self.active_step_activation_indices.push(index);
             } else {
@@ -13947,11 +13960,25 @@ impl EngineRuntime {
                 )
             }
         };
-        Some(
-            ((elapsed_ms as f64) * f64::from(activation.rate))
-                .floor()
-                .clamp(0.0, u64::MAX as f64) as u64,
-        )
+        let mut position_ms = ((elapsed_ms as f64) * f64::from(activation.rate))
+            .floor()
+            .clamp(0.0, u64::MAX as f64) as u64;
+        if let Some(loop_fill) = activation.source_loop_fill {
+            let duration_ms = activation
+                .sequence
+                .steps
+                .last()
+                .map(|step| step.ends_at_ms)
+                .unwrap_or(0);
+            if duration_ms > 0 {
+                position_ms = if loop_fill {
+                    position_ms % duration_ms
+                } else {
+                    position_ms.min(duration_ms)
+                };
+            }
+        }
+        Some(position_ms)
     }
 
     fn apply_cue_step_activations(
@@ -13986,6 +14013,7 @@ impl EngineRuntime {
         key: RuntimeEffectActivationKey,
         created_at: Instant,
         rate: f32,
+        source_loop_fill: Option<bool>,
     ) {
         let end = range.end().min(self.effect_activations.len());
         for index in range.start.min(end)..end {
@@ -13994,6 +14022,7 @@ impl EngineRuntime {
             activation.key = Some(key);
             activation.effect.created_at = created_at;
             activation.rate = valid_effect_rate(rate);
+            activation.source_loop_fill = source_loop_fill;
             activation.transition = None;
             clear_runtime_effect_caches(&activation.effect.kind);
             if was_inactive {
@@ -14036,6 +14065,7 @@ impl EngineRuntime {
             activation.key = Some(key);
             activation.effect.created_at = created_at;
             activation.rate = 1.0;
+            activation.source_loop_fill = None;
             activation.transition = activation
                 .transition_ms
                 .filter(|duration_ms| *duration_ms > 0)
@@ -16567,7 +16597,13 @@ impl EngineRuntime {
             .filter_map(|index| self.effect_activations.get(*index))
             .filter(|activation| activation.key.is_some())
         {
-            let evaluation_now = self.effect_evaluation_now(activation.key, now);
+            let transport_now = self.effect_evaluation_now(activation.key, now);
+            let evaluation_now = self.source_effect_evaluation_now(
+                &activation.effect,
+                transport_now,
+                activation.rate,
+                activation.source_loop_fill,
+            );
             let input = value;
             let activation_clock = effect_activation_clock_snapshot(
                 activation.key,
@@ -16585,10 +16621,16 @@ impl EngineRuntime {
                 activation.rate,
             );
             value = if let Some(transition) = &activation.transition {
+                let previous_evaluation_now = self.source_effect_evaluation_now(
+                    &transition.from,
+                    transport_now,
+                    transition.from_rate,
+                    activation.source_loop_fill,
+                );
                 let previous_clock = effect_activation_clock_snapshot(
                     activation.key,
                     &transition.from,
-                    evaluation_now,
+                    previous_evaluation_now,
                     &clock,
                 );
                 let previous = apply_runtime_effect_to_attribute(
@@ -16596,11 +16638,11 @@ impl EngineRuntime {
                     fixture,
                     attribute,
                     input,
-                    evaluation_now,
+                    previous_evaluation_now,
                     &previous_clock,
                     transition.from_rate,
                 );
-                let progress = runtime_effect_transition_progress(transition, evaluation_now);
+                let progress = runtime_effect_transition_progress(transition, transport_now);
                 transition_effect_value(previous, next, progress, discrete)
             } else {
                 next
@@ -16716,6 +16758,7 @@ impl EngineRuntime {
             step_range,
             rate,
             step_rate: rate,
+            source_loop_fill: None,
             created_at: instant_at_timeline_source_position(
                 if dispatch.pre_wait_ms == 0 {
                     now
@@ -17036,12 +17079,14 @@ impl EngineRuntime {
                 key,
                 activation.created_at,
                 activation.rate,
+                activation.source_loop_fill,
             );
             self.activate_step_range(
                 activation.step_range,
                 key,
                 activation.step_clock,
                 activation.step_rate,
+                activation.source_loop_fill,
             );
         } else {
             self.cue_list_effect_activation_cues
@@ -17070,7 +17115,7 @@ impl EngineRuntime {
                 &transition_sources,
             );
             let step_clock = self.cue_live_realtime_step_clock(cue_index, now);
-            self.activate_step_range(cue.step_activation_range, key, step_clock, 1.0);
+            self.activate_step_range(cue.step_activation_range, key, step_clock, 1.0, None);
         }
         let mut target_values = if cue.tracking {
             HashMap::new()
@@ -18476,6 +18521,30 @@ impl EngineRuntime {
         }
     }
 
+    fn source_effect_evaluation_now(
+        &self,
+        effect: &RuntimeEffect,
+        evaluation_now: Instant,
+        rate: f32,
+        source_loop_fill: Option<bool>,
+    ) -> Instant {
+        if source_loop_fill != Some(false) {
+            return evaluation_now;
+        }
+        let Some(period_ms) = runtime_effect_free_run_period_ms(&effect.kind) else {
+            return evaluation_now;
+        };
+        let final_source_ms = period_ms.ceil().clamp(1.0, u64::MAX as f64) as u64 - 1;
+        let hold_after_ms = ((final_source_ms as f64) / f64::from(valid_effect_rate(rate)))
+            .floor()
+            .clamp(0.0, u64::MAX as f64) as u64;
+        effect
+            .created_at
+            .checked_add(Duration::from_millis(hold_after_ms))
+            .map(|hold_at| evaluation_now.min(hold_at))
+            .unwrap_or(evaluation_now)
+    }
+
     fn seek_direct_child_timeline(&mut self, cue_id: CueId, position_ms: u64, now: Instant) {
         let Some(cue_index) = self.cues.iter().position(|cue| cue.id == cue_id) else {
             self.last_error = Some(format!("Cue {cue_id} was not found"));
@@ -18732,6 +18801,7 @@ impl EngineRuntime {
                     // therefore intentionally independent from the parent block rate.
                     rate: effect_rate,
                     step_rate,
+                    source_loop_fill: Some(event.loop_fill),
                     created_at: instant_at_timeline_source_position(
                         activation_at,
                         activation_parent_position_ms,
@@ -19164,6 +19234,7 @@ impl EngineRuntime {
                         step_range,
                         rate: valid_effect_rate(event.rate.unwrap_or(1.0)),
                         step_rate: valid_effect_rate(event.rate.unwrap_or(1.0)),
+                        source_loop_fill: None,
                         created_at,
                         step_clock: RuntimeCueStepClock::Timeline {
                             starts_at_ms: occurrence.time_ms,
@@ -19757,14 +19828,26 @@ impl EngineRuntime {
             .filter_map(|index| self.effect_activations.get(*index))
             .filter(|activation| activation.key.is_some())
         {
-            let evaluation_now = self.effect_evaluation_now(activation.key, now);
+            let transport_now = self.effect_evaluation_now(activation.key, now);
+            let evaluation_now = self.source_effect_evaluation_now(
+                &activation.effect,
+                transport_now,
+                activation.rate,
+                activation.source_loop_fill,
+            );
             if let Some(transition) = &activation.transition {
                 let mut previous = effect_state;
                 let mut next = effect_state;
+                let previous_evaluation_now = self.source_effect_evaluation_now(
+                    &transition.from,
+                    transport_now,
+                    transition.from_rate,
+                    activation.source_loop_fill,
+                );
                 let previous_clock = effect_activation_clock_snapshot(
                     activation.key,
                     &transition.from,
-                    evaluation_now,
+                    previous_evaluation_now,
                     &clock,
                 );
                 let activation_clock = effect_activation_clock_snapshot(
@@ -19778,7 +19861,7 @@ impl EngineRuntime {
                     transition.from_rate,
                     layer,
                     &mut previous,
-                    evaluation_now,
+                    previous_evaluation_now,
                     &previous_clock,
                     &include_param,
                 );
@@ -19794,7 +19877,7 @@ impl EngineRuntime {
                 effect_state = interpolate_runtime_video_effect_state(
                     previous,
                     next,
-                    runtime_effect_transition_progress(transition, evaluation_now),
+                    runtime_effect_transition_progress(transition, transport_now),
                 );
             } else {
                 let activation_clock = effect_activation_clock_snapshot(
@@ -56016,6 +56099,7 @@ mod tests {
                     cue_id: 1,
                 }),
                 rate: 1.0,
+                source_loop_fill: None,
                 transition_ms: Some(60_000),
             })
             .collect();
@@ -56110,6 +56194,7 @@ mod tests {
                     cue_id: activation_index as CueId + 1,
                 }),
                 rate: 1.0,
+                source_loop_fill: None,
                 clock: RuntimeCueStepClock::Realtime {
                     started_at,
                     position_offset_ms: 2_000,
@@ -56334,6 +56419,7 @@ mod tests {
                     cue_id: 1,
                 }),
                 rate: 1.0,
+                source_loop_fill: None,
                 transition_ms: Some(60_000),
             })
             .collect();
@@ -62032,6 +62118,82 @@ mod tests {
         runtime.rebuild_effect_activations(now);
     }
 
+    fn direct_child_lfo_loop_test_runtime(loop_fill: bool, started_at: Instant) -> EngineRuntime {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        create_effect_only_cue(
+            &mut runtime,
+            2,
+            vec![owned_lfo_target(
+                901,
+                test_lfo_request(
+                    "Loop source",
+                    LfoShape::Saw,
+                    100,
+                    0.0,
+                    EffectBlendMode::Override,
+                    0,
+                    u16::MAX,
+                ),
+            )],
+        );
+        runtime.apply_command(EngineCommand::CreateCue {
+            cue_id: 1,
+            label: "Loop Super Scene".to_string(),
+            fade_ms: 0,
+            authored_beats: None,
+            targets: Vec::new(),
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: Vec::new(),
+        });
+        let mut event = direct_child_static_event(201, 2, 0, 300);
+        event.loop_fill = loop_fill;
+        runtime
+            .set_cue_child_timeline_state(
+                1,
+                Some(ChildTimelineSummary {
+                    events: vec![event],
+                    duration_ms: 300,
+                    ..ChildTimelineSummary::default()
+                }),
+            )
+            .unwrap();
+        runtime.rebuild_effect_activations(started_at);
+        runtime.start_cue(1, started_at, PendingCueTriggerSource::Manual);
+        runtime
+    }
+
+    fn direct_child_step_loop_test_runtime(loop_fill: bool, started_at: Instant) -> EngineRuntime {
+        let mut runtime = cue_step_test_runtime();
+        runtime.apply_command(EngineCommand::CreateCue {
+            cue_id: 2,
+            label: "Step Loop Super Scene".to_string(),
+            fade_ms: 0,
+            authored_beats: None,
+            targets: Vec::new(),
+            video_targets: Vec::new(),
+            video_output_targets: Vec::new(),
+            node_graph_targets: Vec::new(),
+            effect_targets: Vec::new(),
+        });
+        let mut event = direct_child_static_event(201, 1, 0, 1_200);
+        event.loop_fill = loop_fill;
+        runtime
+            .set_cue_child_timeline_state(
+                2,
+                Some(ChildTimelineSummary {
+                    events: vec![event],
+                    duration_ms: 1_200,
+                    ..ChildTimelineSummary::default()
+                }),
+            )
+            .unwrap();
+        runtime.rebuild_effect_activations(started_at);
+        runtime.start_cue(2, started_at, PendingCueTriggerSource::Manual);
+        runtime
+    }
+
     fn direct_child_static_event(
         id: TimelineEventId,
         cue_id: CueId,
@@ -62251,6 +62413,41 @@ mod tests {
             .as_secs_f64()
             * f64::from(conform_after.1);
         assert!((conform_phase_before - conform_phase_after).abs() < 0.001);
+    }
+
+    #[test]
+    fn direct_child_loop_off_holds_final_fx_frame_while_loop_on_wraps() {
+        let started_at = Instant::now();
+        let mut held = direct_child_lfo_loop_test_runtime(false, started_at);
+        let mut looping = direct_child_lfo_loop_test_runtime(true, started_at);
+        let sampled_at = started_at + Duration::from_millis(150);
+        held.advance_child_transports(sampled_at);
+        looping.advance_child_transports(sampled_at);
+
+        let held_value = held.render_dmx_frame_for_universe(0, sampled_at)[0];
+        let looping_value = looping.render_dmx_frame_for_universe(0, sampled_at)[0];
+        assert!(held_value > 240, "held final frame was {held_value}");
+        assert!(
+            (120..=136).contains(&looping_value),
+            "looped midpoint frame was {looping_value}"
+        );
+
+        let later = started_at + Duration::from_millis(250);
+        held.advance_child_transports(later);
+        assert_eq!(held.render_dmx_frame_for_universe(0, later)[0], held_value);
+    }
+
+    #[test]
+    fn direct_child_loop_off_holds_final_step_while_loop_on_wraps() {
+        let started_at = Instant::now();
+        let mut held = direct_child_step_loop_test_runtime(false, started_at);
+        let mut looping = direct_child_step_loop_test_runtime(true, started_at);
+        let sampled_at = started_at + Duration::from_millis(650);
+        held.advance_child_transports(sampled_at);
+        looping.advance_child_transports(sampled_at);
+
+        assert_eq!(cue_step_test_dimmer(&held, sampled_at), 50_000);
+        assert_eq!(cue_step_test_dimmer(&looping, sampled_at), 5_000);
     }
 
     #[test]
