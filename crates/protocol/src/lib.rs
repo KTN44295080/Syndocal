@@ -1880,6 +1880,11 @@ pub struct TimelineSnapshot {
     pub count_in_remaining_ms: u64,
     #[serde(default, skip_serializing)]
     pub audio_transport_revision: u64,
+    /// Runtime-only positions for every active child Timeline transport,
+    /// including recursively nested Scene Blocks. This is published to the
+    /// native audio worker and is never written to `.sdc` or sent to the UI.
+    #[serde(default, skip_serializing)]
+    pub active_child_transports: Vec<ChildTimelineTransportRuntimeSummary>,
     pub playing: bool,
     pub position_ms: u64,
     pub duration_ms: u64,
@@ -1900,11 +1905,45 @@ impl Default for TimelineSnapshot {
             count_in_beats: default_timeline_count_in_beats(),
             count_in_remaining_ms: 0,
             audio_transport_revision: 0,
+            active_child_transports: Vec::new(),
             playing: false,
             position_ms: 0,
             duration_ms: 0,
         }
     }
+}
+
+/// Collision-free identity for the root activation that owns a child
+/// Timeline transport tree.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum ChildTimelineTransportRootSummary {
+    Timeline {
+        parent_event_id: TimelineEventId,
+        parent_iteration: u64,
+    },
+    Direct {
+        parent_cue_id: CueId,
+        generation: u64,
+    },
+}
+
+/// One recursively nested Scene Block placement in an active transport path.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct ChildTimelineTransportPathSegment {
+    pub event_id: TimelineEventId,
+    pub iteration: u64,
+}
+
+/// Runtime-only, exact transport position used by media playback. The path is
+/// empty for a root child Timeline and contains every nested Scene Block for a
+/// descendant, so identical clip ids in separate branches remain independent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChildTimelineTransportRuntimeSummary {
+    pub owner_cue_id: CueId,
+    pub root: ChildTimelineTransportRootSummary,
+    #[serde(default)]
+    pub path: Vec<ChildTimelineTransportPathSegment>,
+    pub position_ms: u64,
 }
 
 /// Authored timeline content owned by a Cue. Transport state deliberately remains on the
@@ -4093,6 +4132,29 @@ mod tests {
         assert_eq!(snapshot.count_in_beats, 4);
         assert_eq!(snapshot.count_in_remaining_ms, 0);
         assert_eq!(snapshot.audio_transport_revision, 0);
+        assert!(snapshot.active_child_transports.is_empty());
+    }
+
+    #[test]
+    fn active_child_transport_runtime_is_never_serialized() {
+        let mut snapshot = super::TimelineSnapshot::default();
+        snapshot.active_child_transports = vec![super::ChildTimelineTransportRuntimeSummary {
+            owner_cue_id: 7,
+            root: super::ChildTimelineTransportRootSummary::Timeline {
+                parent_event_id: 100,
+                parent_iteration: 2,
+            },
+            path: vec![super::ChildTimelineTransportPathSegment {
+                event_id: 200,
+                iteration: 3,
+            }],
+            position_ms: 450,
+        }];
+
+        let encoded = serde_json::to_string(&snapshot).unwrap();
+        assert!(!encoded.contains("active_child_transports"));
+        let decoded: super::TimelineSnapshot = serde_json::from_str(&encoded).unwrap();
+        assert!(decoded.active_child_transports.is_empty());
     }
 
     #[test]

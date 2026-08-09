@@ -3931,16 +3931,6 @@ fn parse_super_scenes(
     let Some(scenes_section) = direct_child(root, "SCENES") else {
         return Ok(());
     };
-    let super_scene_uids = scenes_section
-        .descendants()
-        .filter(|node| node.has_tag_name("SCENE"))
-        .filter(|scene| {
-            scene
-                .descendants()
-                .any(|node| node.has_tag_name("TIMELINES"))
-        })
-        .filter_map(|scene| scene.attribute("DASUID"))
-        .collect::<HashSet<_>>();
     let mut next_layer_id = 1_u32;
     let mut next_event_id = 1_u64;
     let mut next_audio_clip_id = 1_u64;
@@ -4151,17 +4141,6 @@ fn parse_super_scenes(
                             );
                             continue;
                         };
-                        if super_scene_uids.contains(source_uid) {
-                            report.skipped.add(
-                                1,
-                                format!(
-                                    "Scene block: {}",
-                                    block.attribute("NAME").unwrap_or("Untitled")
-                                ),
-                                "Nested Timeline reference was skipped (depth-1 model)",
-                            );
-                            continue;
-                        }
                         let Some(&source_index) = scene_indices.get(source_uid) else {
                             report.skipped.add(
                                 1,
@@ -4788,6 +4767,11 @@ mod tests {
 
     fn synthetic_dvc() -> String {
         synthetic_dvc_with(255, 0x3C00)
+    }
+
+    fn synthetic_nested_dvc() -> String {
+        let nested = r##"<SCENE DASUID="scene-3" NAME="Nested Super" COLOR="#ff778899" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><FIXTUREDATAS NB="0"/><RACKS><RACK GRID_BPM="96"><TIMELINES><TIMELINE DASUID="lane-nested" NAME="Nested Lighting" INDEX="0" DASTLLOCKED="0" DASTLMUTED="0" DASTLFOLDED="0"><BLOCKS><BLOCK TYPE="1" NAME="Super" START="0" END="1000" POSITION="0" FADEIN="0" FADEOUT="0" SPEED="1" ALLOWLOOP="0" CONFORM_TO_TEMPO="0" SCENEUUID="scene-2"/></BLOCKS></TIMELINE></TIMELINES></RACK></RACKS></SCENE>"##;
+        synthetic_dvc().replace("</BANK></SCENES>", &format!("{nested}</BANK></SCENES>"))
     }
 
     fn synthetic_dvc_with(dimmer_byte: u16, dimmer_feature_bits: u16) -> String {
@@ -6376,6 +6360,67 @@ mod tests {
         assert_eq!(
             rendered.active_group_cue_ids.get(&parent_group_id),
             Some(&parent_cue_id)
+        );
+    }
+
+    #[test]
+    fn dvc_nested_super_scene_reference_imports_and_reaches_leaf_dmx() {
+        let outcome = import_bytes(
+            synthetic_nested_dvc().as_bytes(),
+            "synthetic-nested-super.dvc",
+        )
+        .expect("nested Daslight Super Scene must import");
+        crate::validate_project_file(&outcome.project).unwrap();
+        assert!(!outcome
+            .report
+            .skipped
+            .details
+            .iter()
+            .any(|detail| detail.message.contains("Nested Timeline reference")));
+
+        let mut snapshot = outcome.project.snapshot;
+        let nested = snapshot
+            .cues
+            .iter()
+            .find(|cue| cue.label == "Nested Super")
+            .expect("nested owner cue");
+        let nested_cue_id = nested.id;
+        let referenced_cue_id = nested
+            .child_timeline
+            .as_ref()
+            .and_then(|child| child.events.first())
+            .map(|event| event.cue_id)
+            .expect("nested owner block");
+        assert!(snapshot
+            .cues
+            .iter()
+            .find(|cue| cue.id == referenced_cue_id)
+            .and_then(|cue| cue.child_timeline.as_ref())
+            .is_some());
+
+        snapshot.output.enabled = false;
+        for output in &mut snapshot.dmx_outputs {
+            output.enabled = false;
+        }
+        let engine = engine::EngineHandle::start(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine.load_project_snapshot(snapshot).unwrap();
+        engine
+            .send(engine::EngineCommand::TriggerCue(nested_cue_id))
+            .unwrap();
+        let mut rendered_leaf = false;
+        for _ in 0..50 {
+            if engine.snapshot().dmx_preview[0] == u8::MAX {
+                rendered_leaf = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            rendered_leaf,
+            "nested Super Scene leaf must render full DMX"
         );
     }
 

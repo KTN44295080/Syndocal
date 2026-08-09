@@ -36,29 +36,30 @@ use protocol::DmxControlAction;
 use protocol::{
     canonical_video_output_mapping_field, AttributeControl, AttributeResolution,
     AudioAnalysisSummary, AutoVjConfig, AutomationId, AutomationKeyframeSummary,
-    ChaserEffectRequest, ChaserStep, ChildTimelineSummary, ClockSnapshot, ColorEffectRequest,
-    ColorMappingEffectRequest, CompositionId, CompositionSummary, CueEffectTarget,
-    CueFixtureTarget, CueId, CueNodeGraphTarget, CurveEffectRequest, CustomFixtureProfileFile,
-    CustomFixtureProfileRequest, DmxControlMapping, DmxInputConfig, DmxInputProtocol,
-    DmxInputStatus, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, EffectBeamTarget, EffectId,
-    EffectKind, EffectParamsSnapshot, EffectPreset, EffectSummary, EngineSnapshot, EngineTelemetry,
-    ExclusiveVideoTakeRequest, FixtureGroupSummary, FixtureId, FixtureLimits, FixturePreset,
-    FixtureProfileSummary, GeometrySummary, LearnedDmxControl, LearnedMidiControl,
-    LearnedOscControl, LfoEffectRequest, MappingEffectRequest, MidiControlAction,
-    MidiControlMapping, MidiFeedbackMessage, MidiInputSummary, MidiOutputSummary,
-    MoveEffectRequest, NodeGraphId, NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary,
-    NodeGraphTransformOp, OperatorFeatureFaderResult, OperatorPolicy, OperatorSelectionContext,
-    OscControlAction, OscControlMapping, OscInputConfig, PatchFixtureRequest,
-    PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RecallMode, RemoteControlConfig,
-    RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile,
-    StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary, TimelineAudioClipId,
-    TimelineAudioClipSummary, TimelineEventId, TimelineLayerKind, TimelineSnapRequest,
-    TimelineTrackKind, TouchControlBinding, TouchFeaturePresetTarget, TouchSurfaceSummary,
-    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode,
-    VideoEffectTarget, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId,
-    VideoLayerState, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
-    VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary, VideoOutputSummary,
-    VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
+    ChaserEffectRequest, ChaserStep, ChildTimelineSummary, ChildTimelineTransportPathSegment,
+    ClockSnapshot, ColorEffectRequest, ColorMappingEffectRequest, CompositionId,
+    CompositionSummary, CueEffectTarget, CueFixtureTarget, CueId, CueNodeGraphTarget,
+    CurveEffectRequest, CustomFixtureProfileFile, CustomFixtureProfileRequest, DmxControlMapping,
+    DmxInputConfig, DmxInputProtocol, DmxInputStatus, DmxModeSummary, DmxOutputConfig,
+    DmxOutputProtocol, EffectBeamTarget, EffectId, EffectKind, EffectParamsSnapshot, EffectPreset,
+    EffectSummary, EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, FixtureGroupSummary,
+    FixtureId, FixtureLimits, FixturePreset, FixtureProfileSummary, GeometrySummary,
+    LearnedDmxControl, LearnedMidiControl, LearnedOscControl, LfoEffectRequest,
+    MappingEffectRequest, MidiControlAction, MidiControlMapping, MidiFeedbackMessage,
+    MidiInputSummary, MidiOutputSummary, MoveEffectRequest, NodeGraphId, NodeGraphNodeKind,
+    NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp, OperatorFeatureFaderResult,
+    OperatorPolicy, OperatorSelectionContext, OscControlAction, OscControlMapping, OscInputConfig,
+    PatchFixtureRequest, PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RecallMode,
+    RemoteControlConfig, RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig,
+    StageMapPresetFile, StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary,
+    TimelineAudioClipId, TimelineAudioClipSummary, TimelineEventId, TimelineLayerKind,
+    TimelineSnapRequest, TimelineTrackKind, TouchControlBinding, TouchFeaturePresetTarget,
+    TouchSurfaceSummary, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
+    VideoBackendState, VideoBlendMode, VideoEffectTarget, VideoIsfEffectStageSummary,
+    VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerTarget, VideoOutputId,
+    VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetFile,
+    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
+    VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -863,20 +864,22 @@ fn timeline_metronome_click_action(
     Some(beat_index % 4 == 0)
 }
 
-/// Root clips retain their historic id domain. Child clips are isolated by the activation of the
-/// parent Scene Block and their source clip id, so two placements of the same Super Scene never
-/// steal or stop one another's sink.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Root clips retain their historic id domain. Child clips are isolated by the root activation,
+/// the full nested Scene Block path, and source clip id, so parallel placements at any supported
+/// nesting depth never steal or stop one another's sink.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum TimelineAudioSinkKey {
     Root(TimelineAudioClipId),
     Child {
         parent_event_id: TimelineEventId,
         parent_iteration: u64,
+        path: Arc<[ChildTimelineTransportPathSegment]>,
         clip_id: TimelineAudioClipId,
     },
     DirectChild {
         parent_cue_id: CueId,
         generation: u64,
+        path: Arc<[ChildTimelineTransportPathSegment]>,
         clip_id: TimelineAudioClipId,
     },
 }
@@ -2559,9 +2562,9 @@ impl MediaAudioPlayback {
                 .map_err(|error| format!("Timeline audio clip {} seek failed: {error}", clip.id))?;
         }
         sink.play();
-        self.timeline_sinks.insert(key, sink);
+        self.timeline_sinks.insert(key.clone(), sink);
         self.timeline_sources.insert(
-            key,
+            key.clone(),
             TimelineAudioSourceConfig {
                 path: PathBuf::from(&clip.path),
                 gain: clip.gain.clamp(0.0, 2.0),
@@ -2582,7 +2585,7 @@ impl MediaAudioPlayback {
     }
 
     fn stop_all_timeline(&mut self) {
-        let keys = self.timeline_sinks.keys().copied().collect::<Vec<_>>();
+        let keys = self.timeline_sinks.keys().cloned().collect::<Vec<_>>();
         for key in keys {
             self.stop_timeline_clip(key);
         }
@@ -2646,23 +2649,25 @@ impl MediaAudioPlayback {
                 .map(|parent_cue_id| TimelineAudioSinkKey::DirectChild {
                     parent_cue_id,
                     generation: child.direct_generation,
+                    path: Arc::clone(&child.path),
                     clip_id: child.clip.id,
                 })
                 .unwrap_or(TimelineAudioSinkKey::Child {
                     parent_event_id: child.parent_event_id,
                     parent_iteration: child.parent_iteration,
+                    path: Arc::clone(&child.path),
                     clip_id: child.clip.id,
                 });
             (key, &child.clip, child.position_ms)
         }));
         let active_ids = active_clips
             .iter()
-            .map(|(key, _, _)| *key)
+            .map(|(key, _, _)| key.clone())
             .collect::<HashSet<_>>();
         let stale_ids = self
             .timeline_sinks
             .keys()
-            .copied()
+            .cloned()
             .filter(|key| !active_ids.contains(key))
             .collect::<Vec<_>>();
         for key in stale_ids {
@@ -2686,7 +2691,7 @@ impl MediaAudioPlayback {
                 source.path.as_path() != Path::new(&clip.path) || source.offset_ms != clip.offset_ms
             });
             if source_changed {
-                self.stop_timeline_clip(key);
+                self.stop_timeline_clip(key.clone());
             }
             if !self.timeline_sinks.contains_key(&key) {
                 if let Some(failure) = self.timeline_failures.get(&key) {
@@ -2698,10 +2703,12 @@ impl MediaAudioPlayback {
                     }
                 }
                 self.timeline_failures.remove(&key);
-                if let Err(error) = self.play_timeline_clip(key, clip, source_position_ms, volume) {
-                    self.stop_timeline_clip(key);
+                if let Err(error) =
+                    self.play_timeline_clip(key.clone(), clip, source_position_ms, volume)
+                {
+                    self.stop_timeline_clip(key.clone());
                     self.timeline_failures.insert(
-                        key,
+                        key.clone(),
                         TimelineAudioPlaybackFailure {
                             source: source_config,
                             error: error.clone(),
@@ -40698,30 +40705,55 @@ mod media_audio_playback_tests {
 
     #[test]
     fn child_timeline_audio_sink_keys_isolate_parent_activation_and_clip_id() {
+        let root_path = Arc::from([]);
+        let nested_left = Arc::from([ChildTimelineTransportPathSegment {
+            event_id: 200,
+            iteration: 0,
+        }]);
+        let nested_right = Arc::from([ChildTimelineTransportPathSegment {
+            event_id: 201,
+            iteration: 0,
+        }]);
         let keys = HashSet::from([
             TimelineAudioSinkKey::Root(7),
             TimelineAudioSinkKey::Child {
                 parent_event_id: 100,
                 parent_iteration: 0,
+                path: Arc::clone(&root_path),
                 clip_id: 7,
             },
             TimelineAudioSinkKey::Child {
                 parent_event_id: 101,
                 parent_iteration: 0,
+                path: Arc::clone(&root_path),
                 clip_id: 7,
             },
             TimelineAudioSinkKey::Child {
                 parent_event_id: 100,
                 parent_iteration: 1,
+                path: Arc::clone(&root_path),
+                clip_id: 7,
+            },
+            TimelineAudioSinkKey::Child {
+                parent_event_id: 100,
+                parent_iteration: 0,
+                path: nested_left,
+                clip_id: 7,
+            },
+            TimelineAudioSinkKey::Child {
+                parent_event_id: 100,
+                parent_iteration: 0,
+                path: nested_right,
                 clip_id: 7,
             },
             TimelineAudioSinkKey::DirectChild {
                 parent_cue_id: 12,
                 generation: 3,
+                path: root_path,
                 clip_id: 7,
             },
         ]);
-        assert_eq!(keys.len(), 5);
+        assert_eq!(keys.len(), 7);
     }
 
     #[test]

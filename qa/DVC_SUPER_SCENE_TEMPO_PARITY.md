@@ -57,6 +57,26 @@ fade window, so the held value participates in normal DMX/video blending until b
 The resolved Loop On/Off state is copied into each runtime activation when the block starts;
 the 44 Hz fixture/video evaluation path does not search child transports or authored events.
 
+## Recursive nested Timeline rule
+
+A DVC Scene Block may reference another Super Scene. Syndocal imports that reference as the
+same typed child-Timeline event instead of dropping it at depth 1. At project validation and
+runtime rebuild, the complete Cue graph is walked recursively: acyclic descendants are accepted,
+while self references, cycles, and missing Cue references still fail closed.
+
+Every descendant reuses the existing child-transport lifecycle. Parent source position,
+signed source offset, `SPEED`, BPM parent rate, Conform behavior, Loop On/Off, fade boundaries,
+FX, Cue Steps, lighting/video automation, pause/resume, seek, and release are therefore composed
+through one transport tree rather than a parallel playback path. Direct Scene Matrix playback
+propagates the root Cue generation to every descendant; root release recursively tears down the
+subtree and restores values only when no other direct tree still owns the Cue.
+
+Child audio no longer reconstructs position from the authored summary. The engine publishes the
+exact position of every active child transport plus a collision-free identity consisting of its
+root activation and complete nested Scene Block path. The native audio worker includes that path
+in its sink key, so equal audio clip ids in sibling or repeated nested branches cannot stop or
+steal one another's playback. This runtime-only identity is excluded from `.sdc` and UI JSON.
+
 ## Static implementation evidence
 
 Daslight 5.0.6.2 (`Daslight 5.exe`) was inspected without UI automation. The
@@ -84,18 +104,35 @@ Synthetic coverage fixes the opposite boundary: a `PLAY_TRIGGER=2` Super Scene w
 tempo-driven parent, and retain the block's active conform semantics without an
 approximation. A second invalid-division fixture proves the fixed-time fallback.
 
+The available Shinkan golden contains no nested Super Scene reference, so it cannot prove this
+structure from real content. A synthetic DVC therefore adds a Super Scene that references another
+Super Scene and requires import, project validation, direct trigger, recursive transport dispatch,
+and leaf DMX rendering to succeed without a nested-reference skip. Engine tests independently
+cover root/direct nested source offsets, direct-generation propagation, recursive release,
+pause/resume FX continuity, Step Loop On/Off, exact child-audio position/path, and audio sink-key
+separation.
+
 ## Verification
 
 - `cargo fmt --all -- --check`
-- `cargo test -p engine`: 465 passed, 2 ignored
-- `cargo test -p syndocal dvc_ -- --nocapture`: 50 passed
+- `cargo test -p engine`: 470 passed, 2 ignored
+- `cargo test -p protocol`: 44 passed
+- `cargo test -p syndocal`: 377 passed, 9 ignored
+- `cargo test -p syndocal dvc_ -- --nocapture`: 51 passed
 - `cargo test -p engine direct_tempo_driven_child_ -- --nocapture`
 - `timeline_owned_tempo_child_reanchors_without_position_jump_after_bpm_change`
 - `direct_child_loop_off_holds_final_fx_frame_while_loop_on_wraps`
 - `direct_child_loop_off_holds_final_step_while_loop_on_wraps`
+- `direct_nested_child_transport_reaches_leaf_and_parent_release_tears_down_subtree`
+- `timeline_nested_child_transport_composes_parent_source_offset_to_leaf`
+- `direct_nested_owned_fx_uses_root_generation_and_freezes_across_pause`
+- `direct_nested_step_loop_off_holds_and_loop_on_wraps`
+- `nested_child_audio_uses_exact_runtime_path_position_and_direct_generation`
+- `child_timeline_audio_sink_keys_isolate_parent_activation_and_clip_id`
 - `cargo test -p engine --release child_timeline_budget_16_by_200_uses_preallocated_tick_buffers -- --nocapture`:
   16 timeline transports × 200 child events, 0 transport-tick reallocations
 - `dvc_local_full_shinkan_super_scene_grid_and_dormant_conform_are_exact_when_present`
 - `dvc_bpm_driven_super_scene_preserves_dynamic_conform_semantics`
 - `dvc_bpm_driven_super_scene_with_invalid_division_falls_back_consistently`
 - `dvc_synthetic_project_imports_patch_group_cues_and_super_scene`
+- `dvc_nested_super_scene_reference_imports_and_reaches_leaf_dmx`
