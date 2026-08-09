@@ -19,7 +19,7 @@
 | 325 | **Chaser random** | 11=Fading、12=Nb pixels on、13=Flash、**14=Random sequence（boolではなく整数0..255）**、**15=Nb cycles（停止回数ではなく、対象数×cycle数の全系列長）**。DVC値・周期・分布は保持し、Syndocalはロード間でも同じ並びになる決定論的系列を生成。詳細は `qa/DVC_RANDOM_CHASER.md`。 |
 | 322 | **Chaser #2** | **10=Fading**(1⇔ON✓)。選択順に1灯ずつ積み上げ、全点灯後に同じ順で1灯ずつ消す build/clear 周期 — LIVEのDMX Levelsで確定 |
 
-※ 10/11は両方1の検体しかなくOneWay/Fadingの順序は未分離（UI表示順から10=OneWay仮）。Feature（対象属性）はラックの Features 行（実測は全てDimmer）。対象ビームは `BEAMS` 要素。
+※ 10/11は両方1の検体しかなくOneWay/Fadingの順序は未分離（UI表示順から10=OneWay仮）。対象ビームとselection順は `RACK/BEAMS` が正本。Feature（対象属性）は `RACK/PRESETS/PRESET` から復元し、generic `SSLPRESET=4/65/66/67` は埋め込みprofileの `SSLPRESETTYPE` でDimmer/Red/Green/Blueへ、profile指定 `SSLFIXTURE:SSLCHANNEL:SSLPRESET` は該当presetのtypeへ解決する。
 
 ### CURVE FX（RACK=8, EFFECT TYPE=5）→ Syndocal LFO/Value エンジン
 
@@ -144,6 +144,20 @@ Syndocalの現行Scene Settingsでは、作成時のMAPPINGS / COLOR MAPPINGSを
    48 selectionを保持し、`Bar-Side / New Scene` Chaserが16 step / 16 beam、BEAMID 0..7を保持すること。
    これらについてインポートレポートの`segment selection approximated to fixture`は消えた。Move FXは
    Pan/Tiltが灯体単位のため、将来BEAMID>0のMove検体が現れた場合だけ従来の近似報告を残す。
+
+5. **DVC-3e（2026-08-09、Chaser Feature/PRESETの厳密復元）**: profile bindingは各
+   `SSLPRESETTYPE`を保持し、Chaserの`PRESET`を変調featureと0..1 rangeへ解決する。Homecoming実ファイルの
+   `saber_chase-red/green/blue`と`strobe_wave-red`はtype 65/66/67からColorRed/Green/Blueへ復元する。
+   Documents版`BackBar-Amber`はprofile UID + channel 31 + preset 0を、埋め込みMega Bar profileの
+   `Amber8 / SSLPRESETTYPE=81`へ逆引きし、BEAMID 0..7を`ColorAmber`〜`ColorAmber 8`へ割り当てる。
+   保存上は51 beam / 48 selectionで、そのうちMega Barの48 beamがAmberを持つ。Mega Flash 3 beamは
+   Amberを持たないため同じselection順を残したままfail-closedで除外し、明示的Approximateを記録する。
+
+   `PRESET/BEAMS`は効果targetの正本にはしない。Homecoming `strobe_wave-red`ではここに過去のStrongpoint
+   2灯が残る一方、実Chaser targetは`RACK/BEAMS`のSaber Spot 4灯だからである。engineは具体的な
+   `ColorRed 2`/`ColorAmber 8`をその1 channelだけへ適用し、同じsegmentのGreen/Blueや全体Dimmerへ
+   拡張しない。generic Dimmerだけは従来どおり選択segmentの現在色を仮想intensityとしてスケールする。
+   portable合成検体、Homecoming/BackBar実DVC golden、engine色漏れテストで固定した。
 
 ## 実機操作の記録（正直な状態申告）
 

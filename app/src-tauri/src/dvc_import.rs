@@ -140,13 +140,19 @@ impl DvcImportReport {
 }
 
 #[derive(Debug, Clone)]
+struct DvcPresetBinding {
+    name: String,
+    preset_type: Option<u16>,
+}
+
+#[derive(Debug, Clone)]
 struct DvcChannelBinding {
     attribute: String,
     raw_offsets: Vec<usize>,
     resolution: AttributeResolution,
     raw_channel_index: usize,
     channel_type: u16,
-    preset_names: Vec<String>,
+    presets: Vec<DvcPresetBinding>,
 }
 
 #[derive(Debug, Clone)]
@@ -186,6 +192,14 @@ struct DvcRackTargets {
     fixture_ids: Vec<u64>,
     has_multi_beam_selection: bool,
     beam_targets: Vec<ColorEffectBeamTarget>,
+}
+
+#[derive(Debug, Clone)]
+struct DvcRackFeatureSpec {
+    preset_type: u16,
+    low: u16,
+    high: u16,
+    source: String,
 }
 
 #[derive(Debug)]
@@ -627,9 +641,15 @@ fn parse_profile(
         };
         let attribute = unique_attribute(attribute_base, &mut attribute_counts);
         let functions = parse_channel_functions(channel, &attribute, &resolution);
-        let preset_names = functions
-            .iter()
-            .map(|function| function.name.clone())
+        let presets = channel
+            .descendants()
+            .filter(|node| node.has_tag_name("SSLPRESET"))
+            .map(|preset| DvcPresetBinding {
+                name: non_empty_label(preset.attribute("SSLPRESETNAME"), &attribute),
+                preset_type: preset
+                    .attribute("SSLPRESETTYPE")
+                    .and_then(|value| value.parse::<u16>().ok()),
+            })
             .collect();
         // Daslight LIVE has a blackout baseline when no scene is active. The
         // profile's SSLPRESETDMXDEFAULT is an editor reference value, so it is
@@ -653,7 +673,7 @@ fn parse_profile(
             resolution,
             raw_channel_index: channel_index,
             channel_type,
-            preset_names,
+            presets,
         });
     }
 
@@ -901,9 +921,9 @@ fn parse_touch_feature_preset_binding(
                 .filter(|binding| {
                     binding.channel_type == 7
                         && binding
-                            .preset_names
+                            .presets
                             .iter()
-                            .any(|name| name.eq_ignore_ascii_case("Dimmer"))
+                            .any(|preset| preset.name.eq_ignore_ascii_case("Dimmer"))
                 })
                 .collect::<Vec<_>>();
             match candidates.as_slice() {
@@ -923,7 +943,7 @@ fn parse_touch_feature_preset_binding(
             } else {
                 profile.bindings.iter().find(|binding| {
                     binding.raw_channel_index == channel_index
-                        && binding.preset_names.get(preset_index).is_some()
+                        && binding.presets.get(preset_index).is_some()
                 })
             }
         };
@@ -1884,6 +1904,7 @@ fn parse_scenes(
             let parsed_effects = parse_scene_effects(
                 scene,
                 &scene_name,
+                profiles,
                 fixture_refs,
                 &mut next_effect_id,
                 report,
@@ -2068,6 +2089,7 @@ fn parse_scenes(
 fn parse_scene_effects(
     scene: Node<'_, '_>,
     scene_name: &str,
+    profiles: &[ParsedProfile],
     fixture_refs: &HashMap<String, FixtureImportRef>,
     next_effect_id: &mut u64,
     report: &mut DvcImportReport,
@@ -2124,6 +2146,7 @@ fn parse_scene_effects(
                         effect_type,
                         generator_id,
                         *next_effect_id,
+                        profiles,
                         fixture_refs,
                     )
                     .map_err(|error| {
@@ -2201,6 +2224,7 @@ fn convert_dvc_effect(
     effect_type: u16,
     generator_id: u16,
     effect_id: u64,
+    profiles: &[ParsedProfile],
     fixture_refs: &HashMap<String, FixtureImportRef>,
 ) -> Result<ConvertedDvcEffect, String> {
     match (rack_type, effect_type, generator_id) {
@@ -2211,6 +2235,7 @@ fn convert_dvc_effect(
             effect,
             generator_id,
             effect_id,
+            profiles,
             fixture_refs,
         ),
         (4, 4, 223 | 224) => convert_dvc_move_effect(
@@ -2618,6 +2643,7 @@ fn convert_dvc_chaser_effect(
     effect: Node<'_, '_>,
     generator_id: u16,
     effect_id: u64,
+    profiles: &[ParsedProfile],
     fixture_refs: &HashMap<String, FixtureImportRef>,
 ) -> Result<ConvertedDvcEffect, String> {
     let targets = dvc_rack_targets(rack, fixture_refs)?;
@@ -2649,31 +2675,49 @@ fn convert_dvc_chaser_effect(
     };
     require_exact_dvc_params(&params, expected_params)?;
 
-    let mut targets = targets;
-    let incompatible_dimmer_targets = retain_dvc_dimmer_targets(&mut targets, fixture_refs);
+    let feature_spec = dvc_rack_feature_spec(rack, profiles)?;
     let original_step_count = targets.ordered_steps.len();
     if original_step_count == 0 {
         return Err("BEAMS resolved to no Chaser steps".to_string());
     }
 
     let mut approximations = Vec::new();
-    if incompatible_dimmer_targets > 0 {
-        approximations.push(format!(
-            "{incompatible_dimmer_targets} fixture target(s) without a Dimmer attribute or addressable color beam were omitted"
-        ));
-    }
-    let mut warnings = Vec::new();
     let mut ordered_steps = targets.ordered_steps;
     let mut ordered_beam_steps = vec![Vec::new(); ordered_steps.len()];
+    let mut feature_attributes = Vec::<String>::new();
+    let mut seen_feature_attributes = HashSet::<String>::new();
+    let mut omitted_feature_targets = 0_usize;
     for target in &targets.beam_targets {
+        let Some(feature_attribute) =
+            dvc_beam_feature_attribute(target, &feature_spec, profiles, fixture_refs)
+        else {
+            omitted_feature_targets = omitted_feature_targets.saturating_add(1);
+            continue;
+        };
+        let normalized_feature = normalize_dvc_attribute(&feature_attribute);
+        if seen_feature_attributes.insert(normalized_feature) {
+            feature_attributes.push(feature_attribute.clone());
+        }
         if let Some(step) = ordered_beam_steps.get_mut(target.selection_index as usize) {
             step.push(EffectBeamTarget {
                 fixture_id: target.fixture_id,
                 beam_index: target.beam_index,
                 selection_index: target.selection_index,
-                feature_attribute: "Dimmer".to_string(),
+                feature_attribute,
             });
         }
+    }
+    if feature_attributes.is_empty() {
+        return Err(format!(
+            "BEAMS resolved to no Chaser targets exposing PRESET type {}",
+            feature_spec.preset_type
+        ));
+    }
+    if omitted_feature_targets > 0 {
+        approximations.push(format!(
+            "{omitted_feature_targets} beam target(s) without PRESET type {} were omitted",
+            feature_spec.preset_type
+        ));
     }
     if ordered_steps.len() == 1 && generator_id != 322 {
         ordered_steps.push(Vec::new());
@@ -2785,25 +2829,25 @@ fn convert_dvc_chaser_effect(
     let steps = ordered_steps
         .into_iter()
         .zip(ordered_beam_steps)
-        .map(|(fixture_ids, beam_targets)| ChaserStep {
-            fixture_ids: if beam_targets.is_empty() {
-                fixture_ids
-            } else {
-                Vec::new()
-            },
+        .map(|(_fixture_ids, beam_targets)| ChaserStep {
+            fixture_ids: Vec::new(),
             target_group_ids: Vec::new(),
             beam_targets,
             level: u16::MAX,
         })
         .collect::<Vec<_>>();
+    let features = feature_attributes
+        .iter()
+        .map(|attribute| ChaserFeature {
+            attribute: attribute.clone(),
+            low: feature_spec.low,
+            high: feature_spec.high,
+        })
+        .collect::<Vec<_>>();
     let request = ChaserEffectRequest {
         label: format!("{scene_name} ({generator})"),
         steps,
-        features: vec![ChaserFeature {
-            attribute: "Dimmer".to_string(),
-            low: 0,
-            high: u16::MAX,
-        }],
+        features,
         step_duration_ms,
         clock_sync,
         direction,
@@ -2820,11 +2864,13 @@ fn convert_dvc_chaser_effect(
     engine::validate_chaser_effect_request(&request)
         .map_err(|error| format!("confirmed Chaser parameters are not representable: {error}"))?;
 
-    if targets.fixture_ids.is_empty() {
-        warnings.push("resolved fixture target list was unexpectedly empty".to_string());
-    }
+    let feature_note = feature_attributes.join(",");
     let note = format!(
-        "feature=Dimmer; selections={original_step_count}; pixels_on={pixels_on}; {free_run_note}; {clock_note}; {generator_note}"
+        "features={feature_note}; preset_type={}; preset_range={}..{}; preset_source={}; selections={original_step_count}; pixels_on={pixels_on}; {free_run_note}; {clock_note}; {generator_note}",
+        feature_spec.preset_type,
+        feature_spec.low,
+        feature_spec.high,
+        feature_spec.source,
     );
     Ok(ConvertedDvcEffect {
         target: Some(CueEffectTarget {
@@ -2836,7 +2882,7 @@ fn convert_dvc_chaser_effect(
         generator,
         note,
         approximations,
-        warnings,
+        warnings: Vec::new(),
     })
 }
 
@@ -3634,6 +3680,159 @@ fn dvc_positive_integer_param(
         ));
     }
     Ok(value as u64)
+}
+
+fn dvc_rack_feature_spec(
+    rack: Node<'_, '_>,
+    profiles: &[ParsedProfile],
+) -> Result<DvcRackFeatureSpec, String> {
+    let preset_nodes = direct_child(rack, "PRESETS")
+        .into_iter()
+        .flat_map(element_children)
+        .filter(|node| node.has_tag_name("PRESET"))
+        .collect::<Vec<_>>();
+    let preset = match preset_nodes.as_slice() {
+        [] => {
+            return Ok(DvcRackFeatureSpec {
+                preset_type: 4,
+                low: 0,
+                high: u16::MAX,
+                source: "implicit/default PRESET type 4 (Dimmer)".to_string(),
+            })
+        }
+        [preset] => *preset,
+        _ => {
+            return Err(format!(
+                "confirmed scalar FX rack must contain at most one PRESET, found {}",
+                preset_nodes.len()
+            ))
+        }
+    };
+
+    let fixture_uid = preset.attribute("SSLFIXTURE").unwrap_or_default().trim();
+    let raw_channel = preset.attribute("SSLCHANNEL").unwrap_or_default().trim();
+    let raw_preset = preset.attribute("SSLPRESET").unwrap_or_default().trim();
+    if fixture_uid.is_empty() && raw_channel.is_empty() && raw_preset.is_empty() {
+        return Ok(DvcRackFeatureSpec {
+            preset_type: 4,
+            low: 0,
+            high: u16::MAX,
+            source: "empty PRESET placeholder; verified Daslight default type 4 (Dimmer)"
+                .to_string(),
+        });
+    }
+
+    let parse_boundary = |attribute: &str| -> Result<u16, String> {
+        let value = required_attribute(preset, attribute, "PRESET")?
+            .parse::<f64>()
+            .map_err(|error| format!("PRESET {attribute} is invalid: {error}"))?;
+        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+            return Err(format!(
+                "PRESET {attribute} must be finite and within 0..1, found {value}"
+            ));
+        }
+        Ok(normalized_dmx(value))
+    };
+    let low = parse_boundary("MIN")?;
+    let high = parse_boundary("MAX")?;
+
+    let (preset_type, source) = if fixture_uid.is_empty() && raw_channel == "-1" {
+        let preset_type = raw_preset
+            .parse::<u16>()
+            .map_err(|error| format!("generic PRESET type is invalid: {error}"))?;
+        (preset_type, format!("generic PRESET type {preset_type}"))
+    } else if !fixture_uid.is_empty() {
+        let channel_index = raw_channel
+            .parse::<usize>()
+            .map_err(|error| format!("profile PRESET SSLCHANNEL is invalid: {error}"))?;
+        let preset_index = raw_preset
+            .parse::<usize>()
+            .map_err(|error| format!("profile PRESET SSLPRESET is invalid: {error}"))?;
+        let mut preset_types = profiles
+            .iter()
+            .filter(|profile| profile.summary.fixture_type_id.as_deref() == Some(fixture_uid))
+            .filter_map(|profile| {
+                profile
+                    .bindings
+                    .iter()
+                    .find(|binding| binding.raw_channel_index == channel_index)
+                    .and_then(|binding| binding.presets.get(preset_index))
+                    .and_then(|preset| preset.preset_type)
+            })
+            .collect::<Vec<_>>();
+        preset_types.sort_unstable();
+        preset_types.dedup();
+        let [preset_type] = preset_types.as_slice() else {
+            return Err(format!(
+                "profile PRESET {fixture_uid}:{channel_index}:{preset_index} did not resolve to one SSLPRESETTYPE"
+            ));
+        };
+        (
+            *preset_type,
+            format!(
+                "profile PRESET {fixture_uid}:{channel_index}:{preset_index} -> type {preset_type}"
+            ),
+        )
+    } else {
+        return Err(format!(
+            "PRESET selector SSLFIXTURE='{fixture_uid}' SSLCHANNEL='{raw_channel}' SSLPRESET='{raw_preset}' has an unsupported shape"
+        ));
+    };
+
+    Ok(DvcRackFeatureSpec {
+        preset_type,
+        low,
+        high,
+        source,
+    })
+}
+
+fn dvc_beam_feature_attribute(
+    target: &ColorEffectBeamTarget,
+    feature: &DvcRackFeatureSpec,
+    profiles: &[ParsedProfile],
+    fixture_refs: &HashMap<String, FixtureImportRef>,
+) -> Option<String> {
+    let fixture_ref = fixture_refs
+        .values()
+        .find(|fixture_ref| fixture_ref.fixture_id == target.fixture_id)?;
+    let profile = profiles.get(fixture_ref.profile_index)?;
+    let bindings = profile
+        .bindings
+        .iter()
+        .filter(|binding| {
+            binding
+                .presets
+                .iter()
+                .any(|preset| preset.preset_type == Some(feature.preset_type))
+                || (binding
+                    .presets
+                    .iter()
+                    .all(|preset| preset.preset_type.is_none())
+                    && dvc_known_channel_type_for_preset_type(feature.preset_type)
+                        == Some(binding.channel_type))
+        })
+        .collect::<Vec<_>>();
+    match bindings.as_slice() {
+        [] => None,
+        [binding] => (target.beam_index == 0
+            || (feature.preset_type == 4 && fixture_ref.supports_dimmer))
+            .then(|| binding.attribute.clone()),
+        _ => bindings
+            .get(target.beam_index as usize)
+            .map(|binding| binding.attribute.clone()),
+    }
+}
+
+fn dvc_known_channel_type_for_preset_type(preset_type: u16) -> Option<u16> {
+    match preset_type {
+        4 => Some(7),
+        65 => Some(25),
+        66 => Some(26),
+        67 => Some(27),
+        81 => Some(45),
+        _ => None,
+    }
 }
 
 fn dvc_rack_targets(
@@ -5000,6 +5199,38 @@ mod tests {
         ])
     }
 
+    fn effect_test_profiles() -> Vec<ParsedProfile> {
+        let document = Document::parse(
+            r#"<SSLLIBRARY SSLFIXUID="profile-1" SSLNAME="Test/Dimmer.ssl2"><SSLPROPERTIES SSLBEAMOPENING="20"/><SSLMODES SSLNBMODE="1"><SSLMODE SSLMODEINDEX="0" SSLNBCHANNEL="1"><SSLCHANNEL SSLCHANNELTYPE="7" SSLCHANNELNAME="Dimmer" SSLCHANNELMSB="0" SSLCHANNELLSB="0"><SSLPRESETS><SSLPRESET SSLPRESETTYPE="4" SSLPRESETNAME="Dimmer" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL></SSLMODE></SSLMODES></SSLLIBRARY>"#,
+        )
+        .unwrap();
+        let mut report = DvcImportReport::new("effect-test-profile.ssl2", document.root_element());
+        vec![parse_profile(document.root_element(), 0, &mut report).unwrap()]
+    }
+
+    fn segmented_red_effect_test_profiles() -> Vec<ParsedProfile> {
+        let document = Document::parse(
+            r#"<SSLLIBRARY SSLFIXUID="profile-red" SSLNAME="Test/Two Segment Red.ssl2"><SSLPROPERTIES SSLBEAMOPENING="20"/><SSLMODES SSLNBMODE="1"><SSLMODE SSLMODEINDEX="0" SSLNBCHANNEL="2"><SSLCHANNEL SSLCHANNELTYPE="25" SSLCHANNELNAME="Red1"><SSLPRESETS><SSLPRESET SSLPRESETTYPE="65" SSLPRESETNAME="Red1" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL><SSLCHANNEL SSLCHANNELTYPE="25" SSLCHANNELNAME="Red2"><SSLPRESETS><SSLPRESET SSLPRESETTYPE="65" SSLPRESETNAME="Red2" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL></SSLMODE></SSLMODES></SSLLIBRARY>"#,
+        )
+        .unwrap();
+        let mut report =
+            DvcImportReport::new("segmented-red-test-profile.ssl2", document.root_element());
+        vec![parse_profile(document.root_element(), 0, &mut report).unwrap()]
+    }
+
+    fn segmented_red_effect_test_fixture_refs() -> HashMap<String, FixtureImportRef> {
+        HashMap::from([(
+            "fixture-red".to_string(),
+            FixtureImportRef {
+                fixture_id: 1,
+                fixture_index: 0,
+                profile_index: 0,
+                supports_dimmer: false,
+                color_beam_count: 2,
+            },
+        )])
+    }
+
     #[test]
     fn dvc_qcompress_decoder_roundtrips_and_checks_length() {
         let source = b"<PATCH NBFIXTURE=\"0\"/>";
@@ -5847,6 +6078,7 @@ mod tests {
             4,
             224,
             1,
+            &effect_test_profiles(),
             &effect_test_fixture_refs(),
         )
         .unwrap_err();
@@ -5868,6 +6100,7 @@ mod tests {
             4,
             223,
             1,
+            &effect_test_profiles(),
             &effect_test_fixture_refs(),
         )
         .unwrap_err();
@@ -5892,10 +6125,59 @@ mod tests {
             6,
             321,
             1,
+            &effect_test_profiles(),
             &effect_test_fixture_refs(),
         )
         .unwrap_err();
         assert!(error.contains("must be 0 or 1"));
+    }
+
+    #[test]
+    fn dvc_chaser_generic_preset_type_restores_segment_features_and_range() {
+        let document = Document::parse(
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="8"><RACKS><RACK TYPE="3"><EFFECT TYPE="6" ID="321" DURATION="1000"><PARAMS NB="3"><PARAM ID="10" VAL="1"/><PARAM ID="11" VAL="0"/><PARAM ID="12" VAL="1"/></PARAMS></EFFECT><PRESETS><PRESET SSLFIXTURE="" SSLCHANNEL="-1" SSLPRESET="65" MIN="0.25" MAX="0.75"><BEAMS/></PRESET></PRESETS><BEAMS NB="2"><BEAM FIXTURE="fixture-red" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-red" BEAMID="1" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
+        )
+        .unwrap();
+        let scene = document.root_element();
+        let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+        let effect = direct_child(rack, "EFFECT").unwrap();
+        let converted = convert_dvc_effect(
+            scene,
+            "Segment Red",
+            rack,
+            effect,
+            3,
+            6,
+            321,
+            1,
+            &segmented_red_effect_test_profiles(),
+            &segmented_red_effect_test_fixture_refs(),
+        )
+        .unwrap();
+        let Some(EffectParamsSnapshot::Chaser(request)) = converted.target.unwrap().params else {
+            panic!("generic PRESET type 65 must convert to Chaser params");
+        };
+        assert_eq!(
+            request
+                .features
+                .iter()
+                .map(|feature| (feature.attribute.as_str(), feature.low, feature.high))
+                .collect::<Vec<_>>(),
+            vec![("ColorRed", 16_384, 49_151), ("ColorRed 2", 16_384, 49_151),]
+        );
+        assert_eq!(request.steps.len(), 2);
+        assert_eq!(
+            request.steps[0].beam_targets[0].feature_attribute,
+            "ColorRed"
+        );
+        assert_eq!(
+            request.steps[1].beam_targets[0].feature_attribute,
+            "ColorRed 2"
+        );
+        assert!(request.steps.iter().all(|step| step.fixture_ids.is_empty()));
+        assert!(converted.note.contains("preset_type=65"));
+        assert!(converted.note.contains("preset_range=16384..49151"));
+        assert!(converted.approximations.is_empty());
     }
 
     #[test]
@@ -5916,6 +6198,7 @@ mod tests {
             5,
             7,
             1,
+            &effect_test_profiles(),
             &effect_test_fixture_refs(),
         )
         .unwrap();
@@ -5960,6 +6243,7 @@ mod tests {
                 5,
                 10,
                 1,
+                &effect_test_profiles(),
                 &effect_test_fixture_refs(),
             )
             .unwrap();
@@ -6013,6 +6297,7 @@ mod tests {
             5,
             3,
             1,
+            &effect_test_profiles(),
             &effect_test_fixture_refs(),
         )
         .unwrap();
@@ -6047,6 +6332,7 @@ mod tests {
             2,
             129,
             1,
+            &effect_test_profiles(),
             &effect_test_fixture_refs(),
         )
         .unwrap();
@@ -6103,6 +6389,7 @@ mod tests {
             2,
             130,
             1,
+            &effect_test_profiles(),
             &effect_test_fixture_refs(),
         )
         .unwrap();
@@ -6208,6 +6495,7 @@ mod tests {
         let parsed = parse_scene_effects(
             scene,
             "SS-Blue",
+            &effect_test_profiles(),
             &effect_test_fixture_refs(),
             &mut next_effect_id,
             &mut report,
@@ -6241,6 +6529,7 @@ mod tests {
             6,
             322,
             1,
+            &effect_test_profiles(),
             &effect_test_fixture_refs(),
         )
         .unwrap();
@@ -6275,6 +6564,7 @@ mod tests {
         let parsed = parse_scene_effects(
             scene,
             "SS-Blue",
+            &effect_test_profiles(),
             &effect_test_fixture_refs(),
             &mut next_effect_id,
             &mut report,
@@ -6312,6 +6602,7 @@ mod tests {
             7,
             621,
             1,
+            &effect_test_profiles(),
             &effect_test_fixture_refs(),
         )
         .unwrap_err();
@@ -6334,6 +6625,7 @@ mod tests {
             7,
             621,
             1,
+            &effect_test_profiles(),
             &effect_test_fixture_refs(),
         )
         .unwrap_err();
@@ -7901,6 +8193,151 @@ mod tests {
     }
 
     #[test]
+    fn dvc_local_homecoming_chaser_presets_restore_rgb_features_when_present() {
+        let path = Path::new(r"C:\Users\kouty\Desktop\homecoming2026\homecoming2606.dvc");
+        if !path.is_file() {
+            eprintln!(
+                "Skipping local homecoming Chaser feature golden: {} is unavailable",
+                path.display()
+            );
+            return;
+        }
+        let outcome = import_path(path).unwrap();
+        for (label, expected_attribute, expected_type) in [
+            ("saber_chase-red", "ColorRed", 65_u16),
+            ("saber_chase-green", "ColorGreen", 66_u16),
+            ("saber_chase-blue", "ColorBlue", 67_u16),
+            // This saved scene intentionally has stale PRESET/BEAMS from two
+            // Strongpoint fixtures. RACK/BEAMS still names four Saber targets,
+            // proving PRESET selects the feature type rather than replacing
+            // the effect target list.
+            ("strobe_wave-red", "ColorRed", 65_u16),
+        ] {
+            let request = outcome
+                .project
+                .snapshot
+                .cues
+                .iter()
+                .find(|cue| cue.label == label)
+                .and_then(|cue| {
+                    cue.effect_targets
+                        .iter()
+                        .find_map(|target| match target.params.as_ref() {
+                            Some(EffectParamsSnapshot::Chaser(request)) => Some(request),
+                            _ => None,
+                        })
+                })
+                .unwrap_or_else(|| panic!("homecoming must preserve {label} Chaser"));
+            assert_eq!(
+                request
+                    .features
+                    .iter()
+                    .map(|feature| feature.attribute.as_str())
+                    .collect::<Vec<_>>(),
+                vec![expected_attribute]
+            );
+            assert!(request
+                .features
+                .iter()
+                .all(|feature| { feature.low == 0 && feature.high == u16::MAX }));
+            assert_eq!(
+                request
+                    .steps
+                    .iter()
+                    .flat_map(|step| &step.beam_targets)
+                    .count(),
+                4
+            );
+            assert!(request
+                .steps
+                .iter()
+                .flat_map(|step| &step.beam_targets)
+                .all(|target| target.feature_attribute == expected_attribute));
+            assert!(outcome.report.converted.details.iter().any(|detail| {
+                detail.item == format!("Effect: {label} (Chaser #1)")
+                    && detail
+                        .message
+                        .contains(&format!("preset_type={expected_type}"))
+            }));
+        }
+    }
+
+    #[test]
+    fn dvc_local_documents_backbar_chaser_restores_segment_amber_when_present() {
+        let path = Path::new(r"C:\Users\kouty\Documents\Daslight 5\Projects\Shinkan2026.dvc");
+        if !path.is_file() {
+            eprintln!(
+                "Skipping local BackBar Amber Chaser golden: {} is unavailable",
+                path.display()
+            );
+            return;
+        }
+        let outcome = import_path(path).unwrap();
+        let request = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .find(|cue| cue.label == "BackBar-Amber")
+            .and_then(|cue| {
+                cue.effect_targets
+                    .iter()
+                    .find_map(|target| match target.params.as_ref() {
+                        Some(EffectParamsSnapshot::Chaser(request)) => Some(request),
+                        _ => None,
+                    })
+            })
+            .expect("Documents Shinkan must preserve BackBar-Amber Chaser");
+        assert_eq!(
+            request
+                .features
+                .iter()
+                .map(|feature| feature.attribute.clone())
+                .collect::<HashSet<_>>(),
+            HashSet::from([
+                "ColorAmber".to_string(),
+                "ColorAmber 2".to_string(),
+                "ColorAmber 3".to_string(),
+                "ColorAmber 4".to_string(),
+                "ColorAmber 5".to_string(),
+                "ColorAmber 6".to_string(),
+                "ColorAmber 7".to_string(),
+                "ColorAmber 8".to_string(),
+            ])
+        );
+        let beam_targets = request
+            .steps
+            .iter()
+            .flat_map(|step| &step.beam_targets)
+            .collect::<Vec<_>>();
+        assert_eq!(request.steps.len(), 48);
+        assert_eq!(beam_targets.len(), 48);
+        assert!(request
+            .steps
+            .iter()
+            .all(|step| !step.beam_targets.is_empty()));
+        assert!(beam_targets.iter().all(|target| {
+            let expected = if target.beam_index == 0 {
+                "ColorAmber".to_string()
+            } else {
+                format!("ColorAmber {}", target.beam_index + 1)
+            };
+            target.feature_attribute == expected
+        }));
+        assert!(outcome.report.converted.details.iter().any(|detail| {
+            detail.item == "Effect: BackBar-Amber (Chaser #1)"
+                && detail.message.contains("preset_type=81")
+                && detail.message.contains("profile PRESET")
+        }));
+        assert!(outcome.report.approximate.details.iter().any(|detail| {
+            detail.item == "Effect: BackBar-Amber (Chaser #1)"
+                && detail
+                    .message
+                    .contains("3 beam target(s) without PRESET type 81 were omitted")
+        }));
+    }
+
+    #[test]
     fn dvc_local_homecoming_touch_tap_tempo_is_bound_when_present() {
         let path = Path::new(r"C:\Users\kouty\Desktop\homecoming2026\homecoming2606.dvc");
         if !path.is_file() {
@@ -8430,6 +8867,7 @@ mod tests {
             5,
             3,
             1,
+            &effect_test_profiles(),
             &fixture_refs,
         )
         .unwrap();

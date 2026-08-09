@@ -25240,7 +25240,16 @@ fn runtime_effect_beam_intensity_attributes(
         })
         .map(|binding| binding.outputs.keys().cloned().collect::<Vec<_>>())
         .filter(|attributes| !attributes.is_empty());
-    let resolved = if segment_bindings.len() <= 1 {
+    // A DVC PRESET can select a concrete per-segment feature such as
+    // ColorRed 2 or ColorAmber 8. Preserve that single channel instead of
+    // treating every feature on a multi-emitter segment as virtual intensity.
+    // Generic Dimmer remains the deliberate exception: Daslight uses it to
+    // scale the selected segment's current colour when no segment dimmer
+    // channel exists.
+    let is_generic_dimmer = normalize_chaser_attribute(&target.feature_attribute) == "dimmer";
+    let resolved = if feature_attribute.is_some() && !is_generic_dimmer {
+        feature_attribute.map(|attribute| (vec![attribute], false))
+    } else if segment_bindings.len() <= 1 {
         feature_attribute
             .map(|attribute| (vec![attribute], false))
             .or_else(|| segment_attributes.map(|attributes| (attributes, true)))
@@ -52435,6 +52444,97 @@ mod tests {
         assert_eq!(evaluate("ColorRed 2", 0), 0);
         assert_eq!(evaluate("ColorRed", 100), 0);
         assert_eq!(evaluate("ColorRed 2", 100), u16::MAX);
+    }
+
+    #[test]
+    fn chaser_concrete_segment_feature_does_not_expand_to_the_whole_rgb_segment() {
+        let controls = vec![
+            test_color_control("Dimmer", 1),
+            test_color_control("ColorRed", 2),
+            test_color_control("ColorGreen", 3),
+            test_color_control("ColorBlue", 4),
+            test_color_control("ColorRed 2", 5),
+            test_color_control("ColorGreen 2", 6),
+            test_color_control("ColorBlue 2", 7),
+        ];
+        let fixture = test_runtime_color_fixture(1, Vec::new(), controls);
+        let request = ChaserEffectRequest {
+            label: "Daslight red-only segment Chaser".to_string(),
+            steps: vec![
+                protocol::ChaserStep {
+                    fixture_ids: Vec::new(),
+                    target_group_ids: Vec::new(),
+                    beam_targets: vec![EffectBeamTarget {
+                        fixture_id: 1,
+                        beam_index: 1,
+                        selection_index: 0,
+                        feature_attribute: "ColorRed 2".to_string(),
+                    }],
+                    level: u16::MAX,
+                },
+                protocol::ChaserStep {
+                    fixture_ids: Vec::new(),
+                    target_group_ids: Vec::new(),
+                    beam_targets: Vec::new(),
+                    level: u16::MAX,
+                },
+            ],
+            features: vec![protocol::ChaserFeature {
+                attribute: "ColorRed 2".to_string(),
+                low: 0,
+                high: u16::MAX,
+            }],
+            step_duration_ms: 100,
+            clock_sync: None,
+            direction: ChaserDirection::Forward,
+            wings: 1,
+            active_step_count: 1,
+            duty_cycle: 1.0,
+            overlap: 0.0,
+            phase: 0.0,
+            fixture_spread: 0.0,
+            random_seed: 98,
+            random_cycle_count: 1,
+            blend_mode: EffectBlendMode::Override,
+        };
+        let runtime =
+            runtime_chaser_effect_from_request(request, std::slice::from_ref(&fixture), true)
+                .unwrap();
+        assert_eq!(runtime.beam_targets.len(), 1);
+        assert!(!runtime.beam_targets[0].virtual_intensity);
+        assert_eq!(
+            runtime
+                .beam_attribute_indices
+                .get(&1)
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<HashSet<_>>(),
+            HashSet::from(["ColorRed 2".to_string()])
+        );
+        let now = Instant::now();
+        let effect = RuntimeEffect {
+            id: 99,
+            kind: RuntimeEffectKind::Chaser(runtime),
+            enabled: true,
+            created_at: now,
+        };
+        let evaluate = |attribute, elapsed_ms| {
+            apply_runtime_effect_to_attribute(
+                &effect,
+                &fixture,
+                attribute,
+                40_000,
+                now + Duration::from_millis(elapsed_ms),
+                &ClockSnapshot::default(),
+                1.0,
+            )
+        };
+        assert_eq!(evaluate("ColorRed", 0), 40_000);
+        assert_eq!(evaluate("ColorGreen 2", 0), 40_000);
+        assert_eq!(evaluate("ColorBlue 2", 0), 40_000);
+        assert_eq!(evaluate("ColorRed 2", 0), u16::MAX);
+        assert_eq!(evaluate("ColorRed 2", 100), 0);
     }
 
     #[test]
