@@ -62,3 +62,22 @@
 
 - V5a（COLOR MAPPINGS protocol）着地後にCodexへ委任（同一ツリー順次原則）。
 - MAPPINGSの2件はV5aの結果（placement bodyの形）を見て最終化。
+
+## 実装転換と進捗（2026-08-10、Fableレーン fable/preset-expansion）
+
+**面の転換**: 調査の結果、`samples/*.effect`＋`load_sample_effect_preset`経路はT26/T27
+再設計以降フロントエンド呼び出しゼロの孤立コードと判明。プリセット拡充は生きている面
+＝**Scene Settingsの各ファミリーエディタへの「クイックルック」行**（1クリックで
+名前付きレシピ+パレット+クロック適用、`moveEffectClockPresets`様式再利用で
+styles.css不変）として実装する。.effectファイル追加は行わない。
+
+- **スライス1（45f29c4）**: VALUEクイックルック6種（Sweep Bounce / Plasma Drift＝
+  Daslight実既定値 / Knight Rider Scan / Sparkle Rain / Burst Pulse / Random Fill Steps）。
+  ハーネスへ実クリック断言 `valueQuickLooksApplyNamedRecipesFromOneClick` 追加。
+- **スライス2（29b14d9）**: CURVEクイックルック3種（Ramp Up / Strobe Snap / Soft Breathe）。
+- **スライス3（d410a7d）**: CHASERクイックルック3種（Pixel March / Wing Bounce /
+  Random Sparkle——ステップは対象由来のまま再生パラメータのみ適用）。
+- 計12ルック着地。残り（COLOR / MOVE / MAPPINGS / COLOR MAPPINGSのクイックルック）は
+  V5a/V5bが同エディタ群を編集中のため、着地後の続きスライスとする。
+- 各スライスのゲート: tsc / vite build / check:localization 100% /
+  焦点viewport（scene-settings・scene-fx-block）5/5。マージはV5a後に合議。
