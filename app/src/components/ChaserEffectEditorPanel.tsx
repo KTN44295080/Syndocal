@@ -73,6 +73,24 @@ interface ChaserEffectEditorPanelProps {
 const nearlyEqual = (first: number | null, second: number | null) =>
   first === null || second === null ? first === second : Math.abs(first - second) < 0.001;
 
+// P-EXP quick looks: named one-click playback bundles (qa/PRESET_EXPANSION_PLAN.md).
+// Steps stay authored by the current target; a quick look only sets the
+// playback parameters, so wings/pixel counts are clamped by the existing
+// App-side handlers when the target is smaller.
+interface ChaserQuickLook {
+  label: string;
+  direction: ChaserDirection;
+  activeStepCount: number;
+  wings: number;
+  dutyCycle: number;
+  beats: number | null;
+}
+const chaserQuickLooks: ChaserQuickLook[] = [
+  { label: "Pixel March", direction: "Forward", activeStepCount: 2, wings: 1, dutyCycle: 0.5, beats: 1 },
+  { label: "Wing Bounce", direction: "Bounce", activeStepCount: 1, wings: 2, dutyCycle: 0.75, beats: 0.5 },
+  { label: "Random Sparkle", direction: "Random", activeStepCount: 1, wings: 1, dutyCycle: 0.35, beats: 0.25 },
+];
+
 export function ChaserEffectEditorPanel(props: ChaserEffectEditorPanelProps) {
   const [page, setPage] = createSignal(0);
   const fixtureLabels = createMemo(() => new Map(props.fixtureOptions.map((fixture) => [fixture.id, fixture.label])));
@@ -414,6 +432,26 @@ export function ChaserEffectEditorPanel(props: ChaserEffectEditorPanelProps) {
               >
                 <strong>{preset.label}</strong>
                 <span class="tabularNums">{preset.beats === null ? "manual" : `${beatPeriodMs(preset.beats)} ms`}</span>
+              </button>
+            )}
+          </For>
+        </div>
+        <div class="moveEffectClockPresets" aria-label="Chaser quick looks" data-chaser-quick-looks>
+          <For each={chaserQuickLooks}>
+            {(look) => (
+              <button
+                type="button"
+                data-chaser-quick-look={look.label}
+                title={`${look.label}: ${look.direction}, ${Math.round(look.dutyCycle * 100)}% size${look.beats === null ? "" : `, ${look.beats} beat${look.beats === 1 ? "" : "s"}/step`}`}
+                onClick={() => {
+                  props.onDirection(look.direction);
+                  props.onActiveStepCount(look.activeStepCount);
+                  props.onWings(look.wings);
+                  props.onDutyCycle(look.dutyCycle);
+                  props.onClockSyncBeats(look.beats);
+                }}
+              >
+                {look.label}
               </button>
             )}
           </For>

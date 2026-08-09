@@ -1509,6 +1509,7 @@ const japaneseText: Record<string, string> = {
   "Value generator": "Valueジェネレーター",
   "Value quick looks": "Valueクイックルック",
   "Curve quick looks": "Curveクイックルック",
+  "Chaser quick looks": "Chaserクイックルック",
   Generator: "ジェネレーター",
   "Custom envelope": "カスタムエンベロープ",
   "Value palette": "値パレット",
