@@ -353,3 +353,39 @@ The importer tests cover:
 - both allowed Transform values for every blocked generator, wrong TYPE, extra PARAM, and
   at least one constructor-domain failure per blocked generator;
 - unchanged ID625 Transform=1 rejection and strict TYPE/extra-PARAM tests.
+
+## Real saved specimen confirmation (2026-08-10, Fable, elevated permissions)
+
+The static factory/serializer proof above was cross-checked against a real Daslight-saved
+project. Working only in a throwaway scratch project (never the user's Shinkan2026 show),
+two VALUE FX scenes were authored through the maximized Daslight UI and saved via File ->
+Save As to `qa/specimens/ValueCatalog-Sweep-Plasma.dvc` (committed as a golden asset).
+
+Product-to-product confirmations:
+
+1. **Generator catalog completeness.** The VALUE FX generator dropdown exposes exactly
+   `{Rainbow, Burst, Plasma, Knight Rider, Sweep, Sparkle, Random fill, Perlin}` — the same
+   eight generators mapped to IDs 621-628. None is missing or extra.
+2. **VALUE FX family chooser.** Creating a scene shows the nine-family chooser (STEPS /
+   COLOR FX / CHASER FX / MOVE FX / VALUE FX / CURVE FX / MAPPINGS / COLOR MAPPINGS /
+   SUPER SCENE), matching the documented model.
+3. **ID625 Sweep serialized schema — exact byte match.** The saved
+   `EFFECT TYPE="7" ID="625"` has `PARAMS NB="3"`: `PARAM TYPE="4" ID="1"` (grayscale
+   `COLORS` palette), `PARAM TYPE="6" ID="3" VAL="0"` (Transform None),
+   `PARAM TYPE="2" ID="10" VAL="1"` (Direction Change ON). This is exactly the recovered
+   `TYPE4/ID1, TYPE6/ID3, TYPE2/ID10` schema, and the `VAL="1"` confirms the direction-
+   change serialization. `BEAMS NB="1"` with `FIXTURE=... BEAMID="0" IDSELECTION="1"`
+   confirms non-empty targeted beam serialization.
+4. **ID623 Plasma serialized schema and defaults — exact byte match.** The saved
+   `ID="623"` has `PARAMS NB="10"`: `TYPE4/ID1`, `TYPE6/ID3 VAL=0`, then `TYPE0/ID10..17`
+   with values `1, 2, 1, 2, -1, 2, 1, -1` — the exact eight-field schema *and* the exact
+   constructor defaults (Size X=1, Param X=2, Size Y=1, Param Y=2, Speed X=-1, Param SX=2,
+   Speed Y=1, Param SY=-1) recovered by disassembly.
+
+Scope of this specimen: it validates the serialized schema (the primary open evidence
+item). It is a schema golden, not a full-render fixture — the two scenes were authored
+without a bound VALUE feature attribute, so Syndocal's importer correctly *skips* them
+(a featureless VALUE FX resolves no feature and is rejected at
+`convert_dvc_value_effect`). Authoring a feature-complete, importable VALUE specimen (and
+COLOR MAPPINGS / Move `BEAMID>0` specimens) remains follow-up capture work; see
+`qa/DVC_SPECIMEN_REQUESTS.md`.

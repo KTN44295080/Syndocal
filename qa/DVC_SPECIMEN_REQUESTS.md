@@ -8,6 +8,24 @@
   `C:\Users\kouty\Documents\Daslight 5\Projects\specimens\` （無ければ任意の場所）へ保存。
   完了後、ファイルパスをFableセッションへ伝えるだけでよい（以後の解析・golden化はこちらで行う）。
 
+## 進捗（2026-08-10、Fable・権限昇格後に自ら採取）
+
+ユーザーの権限昇格を受け、確立済みネイティブ経路（capture-window + click-window-point +
+物理クリック/貼り付け）で使い捨てscratchプロジェクト（Shinkan2026は不使用）に
+VALUE FX 2種を作成し `qa/specimens/ValueCatalog-Sweep-Plasma.dvc` へ保存した。
+
+- **標本#2（VALUE Sweep 625 golden）＝スキーマ取得済み**: 実保存XMLが
+  `PARAMS NB=3`（TYPE4/ID1・TYPE6/ID3=0・TYPE2/ID10=1）でCodex静的証明とバイト一致。
+  Direction change=1の直列化も確認。詳細は `qa/DVC_VALUE_CATALOG_PARITY.md` 末尾。
+- **標本#1（対象ありVALUE FX）＝BEAMS取得済み**: `BEAMS NB=1`＋
+  `FIXTURE=... BEAMID=0 IDSELECTION=1` の非空ターゲット直列化を確認。
+- **追加でID623 Plasma golden**: `PARAMS NB=10`（TYPE0/ID10..17 = 1,2,1,2,-1,2,1,-1）が
+  Codexの新規importスキーマ＋逆アセンブル既定値と完全一致。Plasmaライブエディタの
+  既定値も逆アセンブル値と一致を目視確認。
+- **残**: 上記2シーンはVALUE feature未束縛のためimporterは正しくskipする（＝実レンダ用
+  fixtureではなくスキーマgolden）。feature束縛済みの完全importable標本、および下記
+  標本#3（COLOR MAPPINGS）・#4（Move BEAMID>0）は次サイクルで採取する。
+
 ## 標本1: 対象ありVALUE FX（`ValueTargeted.dvc`）
 
 1. 新規プロジェクトに適当な灯体（できればマルチビームのBar系）を1〜2台パッチ。
