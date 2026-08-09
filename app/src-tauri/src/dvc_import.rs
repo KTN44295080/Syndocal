@@ -2127,7 +2127,13 @@ fn parse_scene_effects(
                 (Some(2), Some(2), Some(131)) => Some("Random fill"),
                 (Some(2), Some(2), Some(133)) => Some("Sparkle"),
                 (Some(7), Some(7), Some(621)) => Some("Rainbow"),
+                (Some(7), Some(7), Some(622)) => Some("Burst"),
+                (Some(7), Some(7), Some(623)) => Some("Plasma"),
+                (Some(7), Some(7), Some(624)) => Some("Knight Rider"),
                 (Some(7), Some(7), Some(625)) => Some("Sweep"),
+                (Some(7), Some(7), Some(626)) => Some("Sparkles"),
+                (Some(7), Some(7), Some(627)) => Some("Random fill"),
+                (Some(7), Some(7), Some(628)) => Some("Perlin"),
                 (Some(6), Some(8), Some(521)) => Some("Rainbow"),
                 (Some(6), Some(8), Some(530)) => Some("Perlin"),
                 _ => None,
@@ -2273,7 +2279,7 @@ fn convert_dvc_effect(
             effect_id,
             fixture_refs,
         ),
-        (7, 7, generator_id @ (621 | 625)) => convert_dvc_value_effect(
+        (7, 7, generator_id @ 621..=628) => convert_dvc_value_effect(
             scene,
             scene_name,
             rack,
@@ -2317,7 +2323,48 @@ fn convert_dvc_value_effect(
             &[3, 10, 11, 12][..],
             &[(1, 4), (3, 6), (10, 1), (11, 0), (12, 1)][..],
         ),
+        622 => (
+            "Burst",
+            &[3, 10, 11][..],
+            &[(1, 4), (3, 6), (10, 0), (11, 1)][..],
+        ),
+        623 => (
+            "Plasma",
+            &[3, 10, 11, 12, 13, 14, 15, 16, 17][..],
+            &[
+                (1, 4),
+                (3, 6),
+                (10, 0),
+                (11, 0),
+                (12, 0),
+                (13, 0),
+                (14, 0),
+                (15, 0),
+                (16, 0),
+                (17, 0),
+            ][..],
+        ),
+        624 => (
+            "Knight Rider",
+            &[3, 10, 11, 12, 13, 14][..],
+            &[(1, 4), (3, 6), (10, 0), (11, 2), (12, 2), (13, 2), (14, 0)][..],
+        ),
         625 => ("Sweep", &[3, 10][..], &[(1, 4), (3, 6), (10, 2)][..]),
+        626 => (
+            "Sparkles",
+            &[3, 10, 11, 12][..],
+            &[(1, 4), (3, 6), (10, 0), (11, 1), (12, 0)][..],
+        ),
+        627 => (
+            "Random fill",
+            &[3, 10, 11][..],
+            &[(1, 4), (3, 6), (10, 0), (11, 0)][..],
+        ),
+        628 => (
+            "Perlin",
+            &[3, 10, 11, 12, 13, 14][..],
+            &[(1, 4), (3, 6), (10, 0), (11, 0), (12, 0), (13, 0), (14, 0)][..],
+        ),
         _ => {
             return Err(format!(
                 "VALUE FX generator {generator_id} is not confirmed"
@@ -2348,11 +2395,68 @@ fn convert_dvc_value_effect(
                 gradient: dvc_unit_param(&params, 12, "VALUE FX Gradient")? * 100.0,
             }
         }
+        622 => {
+            let _transform = dvc_binary_param(&params, 3, "VALUE FX Burst Transform")?;
+            let _color_width =
+                dvc_integer_range_param(&params, 10, "VALUE FX Burst Color Width", 10, 900)?;
+            let _gradient =
+                dvc_finite_range_param(&params, 11, "VALUE FX Burst Gradient", 0.0, 1.0)?;
+            return Err("VALUE FX Burst ID=622 remains fail-closed: Daslight uses a radial cyclic sawtooth with raw radius 10..900, while the existing Burst recipe uses a normalized finite expanding band".to_string());
+        }
+        623 => ColorEffectSpatialRecipe::Plasma {
+            grayscale: false,
+            vertical_symmetry: dvc_binary_param(&params, 3, "VALUE FX Plasma Transform")?,
+            size_x: dvc_integer_range_param(&params, 10, "VALUE FX Plasma Size X", 0, 20)?,
+            param_x: dvc_integer_range_param(&params, 11, "VALUE FX Plasma Param X", 0, 20)?,
+            size_y: dvc_integer_range_param(&params, 12, "VALUE FX Plasma Size Y", 0, 20)?,
+            param_y: dvc_integer_range_param(&params, 13, "VALUE FX Plasma Param Y", 0, 20)?,
+            speed_x: dvc_integer_range_param(&params, 14, "VALUE FX Plasma Speed X", -5, 5)?,
+            param_sx: dvc_integer_range_param(&params, 15, "VALUE FX Plasma Param SX", -5, 5)?,
+            speed_y: dvc_integer_range_param(&params, 16, "VALUE FX Plasma Speed Y", -5, 5)?,
+            param_sy: dvc_integer_range_param(&params, 17, "VALUE FX Plasma Param SY", -5, 5)?,
+        },
+        624 => {
+            let _transform = dvc_binary_param(&params, 3, "VALUE FX Knight Rider Transform")?;
+            let _size = dvc_integer_range_param(&params, 10, "VALUE FX Knight Rider Size", 1, 100)?;
+            let _one_way = dvc_binary_param(&params, 11, "VALUE FX Knight Rider One Way Only")?;
+            let _fading = dvc_binary_param(&params, 12, "VALUE FX Knight Rider Fading")?;
+            let _go_outside = dvc_binary_param(&params, 13, "VALUE FX Knight Rider Go Outside")?;
+            let _gradient =
+                dvc_integer_range_param(&params, 14, "VALUE FX Knight Rider Gradient", 0, 100)?;
+            return Err("VALUE FX Knight Rider ID=624 remains fail-closed: Daslight builds a discrete integer profile with distinct one-way/bounce and inside/outside branches that is not equivalent to the existing continuous KnightRider recipe".to_string());
+        }
         625 => {
             require_zero_dvc_param(&params, 3, "VALUE FX Sweep Transform")?;
             ColorEffectSpatialRecipe::Sweep {
                 direction_change: dvc_binary_param(&params, 10, "VALUE FX Sweep Direction Change")?,
             }
+        }
+        626 => {
+            let _transform = dvc_binary_param(&params, 3, "VALUE FX Sparkles Transform")?;
+            let _number = dvc_integer_range_param(&params, 10, "VALUE FX Sparkles Number", 1, 10)?;
+            let _lifespan =
+                dvc_finite_range_param(&params, 11, "VALUE FX Sparkles LifeSpan", 0.0, 0.9)?;
+            let _width = dvc_integer_range_param(&params, 12, "VALUE FX Sparkles Width", 1, 90)?;
+            return Err("VALUE FX Sparkles ID=626 remains fail-closed: Daslight spawns and advances persistent particles with decrement (1-L)*0.4, while the existing Sparkle recipe uses bounded epoch-seeded strip cells and percent lifespan".to_string());
+        }
+        627 => {
+            let _transform = dvc_binary_param(&params, 3, "VALUE FX Random fill Transform")?;
+            let _point_width =
+                dvc_integer_range_param(&params, 10, "VALUE FX Random fill Point Width", 1, 10)?;
+            let _point_height =
+                dvc_integer_range_param(&params, 11, "VALUE FX Random fill Point Height", 1, 10)?;
+            return Err("VALUE FX Random fill ID=627 remains fail-closed: Point Height PARAM 11 and Daslight's qrand no-replacement palette transition are not representable by the existing RandomFill recipe".to_string());
+        }
+        628 => {
+            let _transform = dvc_binary_param(&params, 3, "VALUE FX Perlin Transform")?;
+            let _octaves = dvc_integer_range_param(&params, 10, "VALUE FX Perlin Octaves", 2, 10)?;
+            let _zoom = dvc_integer_range_param(&params, 11, "VALUE FX Perlin Zoom", 1, 100)?;
+            let _direction =
+                dvc_integer_range_param(&params, 12, "VALUE FX Perlin Direction", 1, 100)?;
+            let _speed = dvc_integer_range_param(&params, 13, "VALUE FX Perlin Speed", 1, 10)?;
+            let _amplitude =
+                dvc_integer_range_param(&params, 14, "VALUE FX Perlin Amplitude", 5, 100)?;
+            return Err("VALUE FX Perlin ID=628 remains fail-closed: Daslight's degree-quantized sine-gradient evaluator ignores Direction PARAM 12 and does not match the existing seeded smooth-value-noise Perlin recipe".to_string());
         }
         _ => unreachable!(),
     };
@@ -3837,6 +3941,38 @@ fn dvc_finite_param(params: &HashMap<u16, f64>, id: u16, label: &str) -> Result<
     let value = dvc_param(params, id, label)?;
     if !value.is_finite() || value < f32::MIN as f64 || value > f32::MAX as f64 {
         return Err(format!("{label} PARAM {id} must be finite, found {value}"));
+    }
+    Ok(value as f32)
+}
+
+fn dvc_finite_range_param(
+    params: &HashMap<u16, f64>,
+    id: u16,
+    label: &str,
+    min: f64,
+    max: f64,
+) -> Result<f32, String> {
+    let value = dvc_param(params, id, label)?;
+    if !value.is_finite() || !(min..=max).contains(&value) {
+        return Err(format!(
+            "{label} PARAM {id} must be within {min}..{max}, found {value}"
+        ));
+    }
+    Ok(value as f32)
+}
+
+fn dvc_integer_range_param(
+    params: &HashMap<u16, f64>,
+    id: u16,
+    label: &str,
+    min: i64,
+    max: i64,
+) -> Result<f32, String> {
+    let value = dvc_param(params, id, label)?;
+    if !value.is_finite() || value.fract() != 0.0 || value < min as f64 || value > max as f64 {
+        return Err(format!(
+            "{label} PARAM {id} must be an integer within {min}..{max}, found {value}"
+        ));
     }
     Ok(value as f32)
 }
@@ -5434,6 +5570,48 @@ mod tests {
         vec![parse_profile(document.root_element(), 0, &mut report).unwrap()]
     }
 
+    fn value_fx_test_source(
+        generator_id: u16,
+        transform: u8,
+        declared_params: usize,
+        class_params: &str,
+        targeted: bool,
+    ) -> String {
+        let beams = if targeted {
+            r#"<BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS>"#
+        } else {
+            r#"<BEAMS NB="0"/>"#
+        };
+        format!(
+            r#"<DLMFILE DASBUILD="25.0905.165.111" VERSIONFILE="2"><SCENE NAME="VALUE catalog" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="8"><RACKS><RACK TYPE="7"><EFFECT TYPE="7" ID="{generator_id}" DURATION="3000"><PARAMS NB="{declared_params}"><PARAM TYPE="4" ID="1"><COLORS NB="2"><COLOR VAL="1/1/1/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/></COLORS></PARAM><PARAM TYPE="6" ID="3" VAL="{transform}"/>{class_params}</PARAMS></EFFECT><PRESETS><PRESET SSLFIXTURE="" SSLCHANNEL="-1" SSLPRESET="4" MIN="0" MAX="1"><BEAMS/></PRESET></PRESETS>{beams}</RACK></RACKS></SCENE></DLMFILE>"#
+        )
+    }
+
+    fn convert_value_fx_test_source(
+        source: &str,
+        generator_id: u16,
+    ) -> Result<ConvertedDvcEffect, String> {
+        let document = Document::parse(source).unwrap();
+        let scene = document
+            .descendants()
+            .find(|node| node.has_tag_name("SCENE"))
+            .unwrap();
+        let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+        let effect = direct_child(rack, "EFFECT").unwrap();
+        convert_dvc_effect(
+            scene,
+            "VALUE catalog",
+            rack,
+            effect,
+            7,
+            7,
+            generator_id,
+            1,
+            &effect_test_profiles(),
+            &effect_test_fixture_refs(),
+        )
+    }
+
     fn segmented_red_effect_test_profiles() -> Vec<ParsedProfile> {
         let document = Document::parse(
             r#"<SSLLIBRARY SSLFIXUID="profile-red" SSLNAME="Test/Two Segment Red.ssl2"><SSLPROPERTIES SSLBEAMOPENING="20"/><SSLMODES SSLNBMODE="1"><SSLMODE SSLMODEINDEX="0" SSLNBCHANNEL="2"><SSLCHANNEL SSLCHANNELTYPE="25" SSLCHANNELNAME="Red1"><SSLPRESETS><SSLPRESET SSLPRESETTYPE="65" SSLPRESETNAME="Red1" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL><SSLCHANNEL SSLCHANNELTYPE="25" SSLCHANNELNAME="Red2"><SSLPRESETS><SSLPRESET SSLPRESETTYPE="65" SSLPRESETNAME="Red2" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL></SSLMODE></SSLMODES></SSLLIBRARY>"#,
@@ -7004,6 +7182,229 @@ mod tests {
         assert!(convert_targeted(&extra_param)
             .unwrap_err()
             .contains("expected PARAM IDs [3, 10], found [3, 10, 11]"));
+    }
+
+    #[test]
+    fn dvc_value_623_plasma_imports_exact_schema_domains_and_one_row_transform() {
+        let class_params = r#"<PARAM TYPE="0" ID="10" VAL="1"/><PARAM TYPE="0" ID="11" VAL="2"/><PARAM TYPE="0" ID="12" VAL="1"/><PARAM TYPE="0" ID="13" VAL="2"/><PARAM TYPE="0" ID="14" VAL="-1"/><PARAM TYPE="0" ID="15" VAL="2"/><PARAM TYPE="0" ID="16" VAL="1"/><PARAM TYPE="0" ID="17" VAL="-1"/>"#;
+
+        for (transform, expected_symmetry) in [(0, false), (1, true)] {
+            let source = value_fx_test_source(623, transform, 10, class_params, true);
+            let converted = convert_value_fx_test_source(&source, 623).unwrap();
+            assert_eq!(converted.generator, "Plasma");
+            assert!(converted.approximations.is_empty());
+            let EffectParamsSnapshot::Value(value) = converted.target.unwrap().params.unwrap()
+            else {
+                panic!("VALUE Plasma must retain its Value body");
+            };
+            let ColorEffectSpatialRecipe::Plasma {
+                grayscale,
+                vertical_symmetry,
+                size_x,
+                param_x,
+                size_y,
+                param_y,
+                speed_x,
+                param_sx,
+                speed_y,
+                param_sy,
+            } = value.spatial_pattern.unwrap().recipe
+            else {
+                panic!("VALUE Plasma must use the Plasma recipe");
+            };
+            assert!(!grayscale);
+            assert_eq!(vertical_symmetry, expected_symmetry);
+            assert_eq!(
+                (size_x, param_x, size_y, param_y, speed_x, param_sx, speed_y, param_sy,),
+                (1.0, 2.0, 1.0, 2.0, -1.0, 2.0, 1.0, -1.0)
+            );
+        }
+
+        let no_op = value_fx_test_source(623, 0, 10, class_params, false);
+        let converted = convert_value_fx_test_source(&no_op, 623).unwrap();
+        assert!(converted.target.is_none());
+        assert!(converted.note.contains("source no-op preserved"));
+
+        let targeted = value_fx_test_source(623, 0, 10, class_params, true);
+        let wrong_type = targeted.replacen(
+            r#"<PARAM TYPE="0" ID="17" VAL="-1"/>"#,
+            r#"<PARAM TYPE="1" ID="17" VAL="-1"/>"#,
+            1,
+        );
+        assert!(convert_value_fx_test_source(&wrong_type, 623)
+            .unwrap_err()
+            .contains("expected PARAM 17 TYPE=0, found TYPE=1"));
+
+        let extra_param = targeted
+            .replacen(r#"<PARAMS NB="10">"#, r#"<PARAMS NB="11">"#, 1)
+            .replacen(
+                "</PARAMS>",
+                r#"<PARAM TYPE="0" ID="18" VAL="0"/></PARAMS>"#,
+                1,
+            );
+        assert!(convert_value_fx_test_source(&extra_param, 623)
+            .unwrap_err()
+            .contains("expected PARAM IDs [3, 10, 11, 12, 13, 14, 15, 16, 17], found [3, 10, 11, 12, 13, 14, 15, 16, 17, 18]"));
+
+        let out_of_range = targeted.replacen(
+            r#"<PARAM TYPE="0" ID="14" VAL="-1"/>"#,
+            r#"<PARAM TYPE="0" ID="14" VAL="-6"/>"#,
+            1,
+        );
+        assert!(convert_value_fx_test_source(&out_of_range, 623)
+            .unwrap_err()
+            .contains(
+                "VALUE FX Plasma Speed X PARAM 14 must be an integer within -5..5, found -6"
+            ));
+
+        let fractional = targeted.replacen(
+            r#"<PARAM TYPE="0" ID="10" VAL="1"/>"#,
+            r#"<PARAM TYPE="0" ID="10" VAL="1.5"/>"#,
+            1,
+        );
+        assert!(convert_value_fx_test_source(&fractional, 623)
+            .unwrap_err()
+            .contains(
+                "VALUE FX Plasma Size X PARAM 10 must be an integer within 0..20, found 1.5"
+            ));
+
+        let one_ulp_fractional = targeted.replacen(
+            r#"<PARAM TYPE="0" ID="10" VAL="1"/>"#,
+            r#"<PARAM TYPE="0" ID="10" VAL="1.0000000000000002"/>"#,
+            1,
+        );
+        assert!(convert_value_fx_test_source(&one_ulp_fractional, 623)
+            .unwrap_err()
+            .contains("VALUE FX Plasma Size X PARAM 10 must be an integer within 0..20, found 1.0000000000000002"));
+
+        let invalid_transform = value_fx_test_source(623, 2, 10, class_params, true);
+        assert!(convert_value_fx_test_source(&invalid_transform, 623)
+            .unwrap_err()
+            .contains("VALUE FX Plasma Transform PARAM 3 must be 0 or 1, found 2"));
+    }
+
+    #[test]
+    fn dvc_value_catalog_validates_exact_blocked_schemas_before_semantic_rejection() {
+        let cases = [
+            (
+                622,
+                4,
+                r#"<PARAM TYPE="0" ID="10" VAL="50"/><PARAM TYPE="1" ID="11" VAL="1"/>"#,
+                "VALUE FX Burst ID=622 remains fail-closed",
+                r#"<PARAM TYPE="0" ID="10" VAL="50"/>"#,
+                r#"<PARAM TYPE="0" ID="10" VAL="901"/>"#,
+                "VALUE FX Burst Color Width PARAM 10 must be an integer within 10..900, found 901",
+            ),
+            (
+                624,
+                7,
+                r#"<PARAM TYPE="0" ID="10" VAL="1"/><PARAM TYPE="2" ID="11" VAL="0"/><PARAM TYPE="2" ID="12" VAL="1"/><PARAM TYPE="2" ID="13" VAL="0"/><PARAM TYPE="0" ID="14" VAL="50"/>"#,
+                "VALUE FX Knight Rider ID=624 remains fail-closed",
+                r#"<PARAM TYPE="0" ID="10" VAL="1"/>"#,
+                r#"<PARAM TYPE="0" ID="10" VAL="101"/>"#,
+                "VALUE FX Knight Rider Size PARAM 10 must be an integer within 1..100, found 101",
+            ),
+            (
+                626,
+                5,
+                r#"<PARAM TYPE="0" ID="10" VAL="5"/><PARAM TYPE="1" ID="11" VAL="0"/><PARAM TYPE="0" ID="12" VAL="1"/>"#,
+                "VALUE FX Sparkles ID=626 remains fail-closed",
+                r#"<PARAM TYPE="1" ID="11" VAL="0"/>"#,
+                r#"<PARAM TYPE="1" ID="11" VAL="1"/>"#,
+                "VALUE FX Sparkles LifeSpan PARAM 11 must be within 0..0.9, found 1",
+            ),
+            (
+                627,
+                4,
+                r#"<PARAM TYPE="0" ID="10" VAL="1"/><PARAM TYPE="0" ID="11" VAL="1"/>"#,
+                "VALUE FX Random fill ID=627 remains fail-closed",
+                r#"<PARAM TYPE="0" ID="11" VAL="1"/>"#,
+                r#"<PARAM TYPE="0" ID="11" VAL="11"/>"#,
+                "VALUE FX Random fill Point Height PARAM 11 must be an integer within 1..10, found 11",
+            ),
+            (
+                628,
+                7,
+                r#"<PARAM TYPE="0" ID="10" VAL="4"/><PARAM TYPE="0" ID="11" VAL="75"/><PARAM TYPE="0" ID="12" VAL="2"/><PARAM TYPE="0" ID="13" VAL="1"/><PARAM TYPE="0" ID="14" VAL="70"/>"#,
+                "VALUE FX Perlin ID=628 remains fail-closed",
+                r#"<PARAM TYPE="0" ID="14" VAL="70"/>"#,
+                r#"<PARAM TYPE="0" ID="14" VAL="101"/>"#,
+                "VALUE FX Perlin Amplitude PARAM 14 must be an integer within 5..100, found 101",
+            ),
+        ];
+
+        for (
+            generator_id,
+            declared_params,
+            class_params,
+            semantic_error,
+            valid_range_param,
+            invalid_range_param,
+            range_error,
+        ) in cases
+        {
+            for transform in [0, 1] {
+                let source = value_fx_test_source(
+                    generator_id,
+                    transform,
+                    declared_params,
+                    class_params,
+                    false,
+                );
+                assert!(convert_value_fx_test_source(&source, generator_id)
+                    .unwrap_err()
+                    .contains(semantic_error));
+            }
+
+            let generator = match generator_id {
+                622 => "Burst",
+                624 => "Knight Rider",
+                626 => "Sparkles",
+                627 => "Random fill",
+                628 => "Perlin",
+                _ => unreachable!(),
+            };
+            let invalid_transform =
+                value_fx_test_source(generator_id, 2, declared_params, class_params, false);
+            assert!(
+                convert_value_fx_test_source(&invalid_transform, generator_id)
+                    .unwrap_err()
+                    .contains(&format!(
+                        "VALUE FX {generator} Transform PARAM 3 must be 0 or 1, found 2"
+                    ))
+            );
+
+            let source =
+                value_fx_test_source(generator_id, 0, declared_params, class_params, false);
+            let wrong_type = source.replacen(
+                r#"<PARAM TYPE="0" ID="10""#,
+                r#"<PARAM TYPE="1" ID="10""#,
+                1,
+            );
+            assert!(convert_value_fx_test_source(&wrong_type, generator_id)
+                .unwrap_err()
+                .contains("expected PARAM 10 TYPE=0, found TYPE=1"));
+
+            let extra_param = source
+                .replacen(
+                    &format!(r#"<PARAMS NB="{declared_params}">"#),
+                    &format!(r#"<PARAMS NB="{}">"#, declared_params + 1),
+                    1,
+                )
+                .replacen(
+                    "</PARAMS>",
+                    r#"<PARAM TYPE="0" ID="99" VAL="0"/></PARAMS>"#,
+                    1,
+                );
+            let extra_error = convert_value_fx_test_source(&extra_param, generator_id).unwrap_err();
+            assert!(extra_error.contains("expected PARAM IDs"));
+            assert!(extra_error.contains("99"));
+
+            let out_of_range = source.replacen(valid_range_param, invalid_range_param, 1);
+            assert!(convert_value_fx_test_source(&out_of_range, generator_id)
+                .unwrap_err()
+                .contains(range_error));
+        }
     }
 
     #[test]
