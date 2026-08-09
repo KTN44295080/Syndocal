@@ -382,10 +382,14 @@ Product-to-product confirmations:
    constructor defaults (Size X=1, Param X=2, Size Y=1, Param Y=2, Speed X=-1, Param SX=2,
    Speed Y=1, Param SY=-1) recovered by disassembly.
 
-Scope of this specimen: it validates the serialized schema (the primary open evidence
-item). It is a schema golden, not a full-render fixture — the two scenes were authored
-without a bound VALUE feature attribute, so Syndocal's importer correctly *skips* them
-(a featureless VALUE FX resolves no feature and is rejected at
-`convert_dvc_value_effect`). Authoring a feature-complete, importable VALUE specimen (and
-COLOR MAPPINGS / Move `BEAMID>0` specimens) remains follow-up capture work; see
-`qa/DVC_SPECIMEN_REQUESTS.md`.
+Scope update (same day, second cycle): the specimen is now feature-complete. Two
+additional strongpoint-targeted Sweep/Plasma scenes carry a bound Dimmer feature
+(serialized as `PRESET SSLPRESET="4" SSLCHANNEL="-1" MIN="0" MAX="1"`), and the
+repo-portable golden `dvc_local_golden_value_sweep_and_plasma_import_from_saved_specimen`
+asserts they import as `Sweep { direction_change: true }` and `Plasma` with the exact
+constructor defaults. The two original laser-targeted scenes stay in the file as real
+coverage of the fail-closed path (their f3200a profile exposes no PRESET type 4; the
+golden asserts exactly two such skips). The same file now also carries the first real
+COLOR MAPPINGS `5/3` body (generator ID 36 with a `<MAPPING>` placement rectangle) and a
+Move `4/4` ID 221 rack with `BEAMID` 1..6 — see `qa/DVC_SPECIMEN_REQUESTS.md` for the
+full capture record; both feed the next import tranche.

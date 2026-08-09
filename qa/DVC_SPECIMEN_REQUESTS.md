@@ -26,6 +26,36 @@ VALUE FX 2種を作成し `qa/specimens/ValueCatalog-Sweep-Plasma.dvc` へ保存
   fixtureではなくスキーマgolden）。feature束縛済みの完全importable標本、および下記
   標本#3（COLOR MAPPINGS）・#4（Move BEAMID>0）は次サイクルで採取する。
 
+## 完遂（2026-08-10 同日第2サイクル、全4標本クローズ）
+
+feature束縛UXを解明（**フェーダーチャンネルアイコン右上の小FXバッジ**が属性のfeature束縛。
+アイコン本体クリックは値トグル）。同一標本ファイルに追記して全項目を実データ化した:
+
+- **標本#1完遂**: strongpoint 2灯対象のVALUE Sweep/Plasmaシーンを追加し、Dimmer featureを
+  束縛（`PRESET SSLPRESET="4" SSLCHANNEL="-1" MIN="0" MAX="1"`として直列化）。importerが
+  実際にSweep{direction_change:true}/Plasma{既定8値}へ変換することをrepo可搬goldenテスト
+  `dvc_local_golden_value_sweep_and_plasma_import_from_saved_specimen`で固定（80c82be）。
+  f3200aレーザー対象の2シーンは「profileがPRESET type 4非搭載」でfail-closedのまま残し、
+  実ファイルでの失敗経路カバレッジとして断言化した。
+- **標本#3完遂（COLOR MAPPINGS family 5/3 初の実保存body）**: `RACK TYPE=5 EFFECT TYPE=3
+  ID=36`（Rainbow）。PARAMS NB=7 = TYPE4/ID1（8色パレット）+ **TYPE2/ID2 Grayscale
+  （family 3は直列化する——family 7の非直列化ガードと対照、静的解析と整合）** +
+  TYPE6/ID3 Transform + TYPE0/ID4 Rotation + TYPE1/ID10 Color Width + TYPE0/ID11 Angle +
+  TYPE1/ID12 Gradient。**`<MAPPING NAME="Rectangle" DASUID=... TYPE="0" X/Y/SX/SY/ANGLE
+  /LOCKED>`が2D配置の正体**——「任意2D配置」検証を阻んでいたper-beam X/Yレイアウト
+  メタデータの実物。BEAMS NB=2（strongpoint×2、IDSELECTION順序付き）。
+  ジェネレータカタログ（UI実測・部分）: Rainbow/Spiral/Burst/Butterfly/Plasma/Bounce/
+  Fire/Media/Knight Rider/…（RTTIのCSpiral/CButterfly/CFire/CMedia等と整合）。
+- **標本#4完遂（Move BEAMID>0）**: メガバー1本のセル3〜7をマーキー部分選択し
+  MOVE FX Circleを作成。`RACK TYPE=4 EFFECT TYPE=4 ID=221`、**BEAMS NB=6で
+  BEAMID=1..6（全て>0）**＋IDSELECTION 1..6の順序保存。副産物: Move Circle=ID221は
+  現行importer（223/224のみ）の未対応ジェネレータで、PARAM TYPE5/ID1=POINTS
+  （4点パス: (0.25,0.5)(0.5,0.75)(0.75,0.5)(0.5,0.25)）+ TYPE1/ID2 + TYPE2/ID3という
+  未知のbodyも同時取得。
+- 全標本は単一ファイル `qa/specimens/ValueCatalog-Sweep-Plasma.dvc` に集約
+  （`.gitattributes`で`-text`バイト厳密）。次トランシェ（DVC-V4）はこの実bodyを
+  出発点にCOLOR MAPPINGS 5/3とMove ID221のインポートを静的証明と併走で進める。
+
 ## 標本1: 対象ありVALUE FX（`ValueTargeted.dvc`）
 
 1. 新規プロジェクトに適当な灯体（できればマルチビームのBar系）を1〜2台パッチ。

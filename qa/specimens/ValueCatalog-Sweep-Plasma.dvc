@@ -73,7 +73,7 @@
                 <RACKS/>
             </SCENE>
         </BANK>
-        <BANK DASUID="b81a06db-9adb-4e73-9892-d1fe8123c25e" NAME="Laser-Color" COLOR="#ffd7549f" COLLAPSED="0" PAUSED="0" HIDDEN="0" NBSCENE="12">
+        <BANK DASUID="b81a06db-9adb-4e73-9892-d1fe8123c25e" NAME="Laser-Color" COLOR="#ffd7549f" COLLAPSED="0" PAUSED="0" HIDDEN="0" NBSCENE="14">
             <SCENE DASUID="95234d79-4590-49c6-8241-32a540c167c0" NAME="Red" COLOR="#ffd7549f" ENABLE="1" VISIBLE="1" LOOP_MODE="0" LOOP="0" PLAY_DIRECTION="1" PLAY_MODE="0" FLASH="0" BOUNCE_MODE="0" PLAY_TRIGGER="0" PLAY_DIVISION="8" DIMMER="1" D_FEATURE="1" SPEED="0.5" PHASE="0" SIZE="1" PHASE_IN="0" PHASE_OUT="0" AUTO_RELEASE_END="1" JUMP_MODE="-1" RELEASE_MODE="2" RELEASE_PROTECT_MODE="0" FADE_IN="0" FADE_OUT="0" ATTRIBUTEVALUE_MODE="0" LTPPRIORITY="2" PAUSE="0" SAIMAGEPATH="">
                 <FIXTUREDATAS NB="2">
                     <FIXTUREDATA FIXTURE="6dfdc081-800e-4b09-a02e-afd1fcd102c8" DATA="eJxi4GX4jwswMDCw7GHABXFKkC0FAAAA//8="/>
@@ -377,9 +377,69 @@
                     </RACK>
                 </RACKS>
             </SCENE>
+            <SCENE DASUID="94e0a300-8773-4c03-b4c9-76954eaf057f" NAME="New Scene" COLOR="#ffd7549f" ENABLE="1" VISIBLE="1" LOOP_MODE="0" LOOP="0" PLAY_DIRECTION="1" PLAY_MODE="0" FLASH="0" BOUNCE_MODE="0" PLAY_TRIGGER="0" PLAY_DIVISION="8" DIMMER="1" D_FEATURE="1" SPEED="0.5" PHASE="0" SIZE="1" PHASE_IN="0" PHASE_OUT="0" AUTO_RELEASE_END="1" JUMP_MODE="-1" RELEASE_MODE="2" RELEASE_PROTECT_MODE="0" FADE_IN="0" FADE_OUT="0" ATTRIBUTEVALUE_MODE="0" LTPPRIORITY="2" PAUSE="0" SAIMAGEPATH="">
+                <FIXTUREDATAS NB="0"/>
+                <RACKS>
+                    <RACK EXPAND_RACK="1" TYPE="5">
+                        <EFFECT TYPE="3" ID="36" DURATION="5000">
+                            <PARAMS NB="7">
+                                <PARAM TYPE="4" ID="1">
+                                    <COLORS NB="8">
+                                        <COLOR VAL="1/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>
+                                        <COLOR VAL="1/0.498039/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>
+                                        <COLOR VAL="1/1/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>
+                                        <COLOR VAL="0/1/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>
+                                        <COLOR VAL="0/1/1/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>
+                                        <COLOR VAL="0/0/1/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>
+                                        <COLOR VAL="0.545098/0/1/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>
+                                        <COLOR VAL="1/0/1/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>
+                                    </COLORS>
+                                </PARAM>
+                                <PARAM TYPE="2" ID="2" VAL="0"/>
+                                <PARAM TYPE="6" ID="3" VAL="0"/>
+                                <PARAM TYPE="0" ID="4" VAL="0"/>
+                                <PARAM TYPE="1" ID="10" VAL="0"/>
+                                <PARAM TYPE="0" ID="11" VAL="0"/>
+                                <PARAM TYPE="1" ID="12" VAL="1"/>
+                            </PARAMS>
+                        </EFFECT>
+                        <MAPPING NAME="Rectangle" DASUID="d7c0c950-ecb5-4ffc-a125-22d76c00988c" TYPE="0" X="1994" Y="166" SX="513" SY="52" ANGLE="0" LOCKED="0"/>
+                        <BEAMS NB="0"/>
+                    </RACK>
+                </RACKS>
+            </SCENE>
+            <SCENE DASUID="5007c9c6-9e4a-4f1b-8384-c4ae43609776" NAME="New Scene" COLOR="#ffd7549f" ENABLE="1" VISIBLE="1" LOOP_MODE="0" LOOP="0" PLAY_DIRECTION="1" PLAY_MODE="0" FLASH="0" BOUNCE_MODE="0" PLAY_TRIGGER="0" PLAY_DIVISION="8" DIMMER="1" D_FEATURE="1" SPEED="0.5" PHASE="0" SIZE="1" PHASE_IN="0" PHASE_OUT="0" AUTO_RELEASE_END="1" JUMP_MODE="-1" RELEASE_MODE="2" RELEASE_PROTECT_MODE="0" FADE_IN="0" FADE_OUT="0" ATTRIBUTEVALUE_MODE="0" LTPPRIORITY="2" PAUSE="0" SAIMAGEPATH="">
+                <FIXTUREDATAS NB="0"/>
+                <RACKS>
+                    <RACK EXPAND_RACK="1" TYPE="4">
+                        <EFFECT TYPE="4" ID="221" DURATION="5000">
+                            <PARAMS NB="3">
+                                <PARAM TYPE="5" ID="1">
+                                    <POINTS NB="4">
+                                        <POINT X="0.25" Y="0.5"/>
+                                        <POINT X="0.5" Y="0.75"/>
+                                        <POINT X="0.75" Y="0.5"/>
+                                        <POINT X="0.5" Y="0.25"/>
+                                    </POINTS>
+                                </PARAM>
+                                <PARAM TYPE="1" ID="2" VAL="0"/>
+                                <PARAM TYPE="2" ID="3" VAL="0"/>
+                            </PARAMS>
+                        </EFFECT>
+                        <BEAMS NB="6">
+                            <BEAM FIXTURE="3adf563d-e44a-4ee8-aac5-248b91469fa1" BEAMID="1" IDSELECTION="1"/>
+                            <BEAM FIXTURE="3adf563d-e44a-4ee8-aac5-248b91469fa1" BEAMID="2" IDSELECTION="2"/>
+                            <BEAM FIXTURE="3adf563d-e44a-4ee8-aac5-248b91469fa1" BEAMID="3" IDSELECTION="3"/>
+                            <BEAM FIXTURE="3adf563d-e44a-4ee8-aac5-248b91469fa1" BEAMID="4" IDSELECTION="4"/>
+                            <BEAM FIXTURE="3adf563d-e44a-4ee8-aac5-248b91469fa1" BEAMID="5" IDSELECTION="5"/>
+                            <BEAM FIXTURE="3adf563d-e44a-4ee8-aac5-248b91469fa1" BEAMID="6" IDSELECTION="6"/>
+                        </BEAMS>
+                    </RACK>
+                </RACKS>
+            </SCENE>
         </BANK>
         <DAS_SELECTIONS SELECTED_LIVE_BANK="0">
-            <SELECTED_LIVE_SCENES DASUID="12d11eb1-7bb6-499a-9ef9-c90e068b43e2"/>
+            <SELECTED_LIVE_SCENES DASUID="5007c9c6-9e4a-4f1b-8384-c4ae43609776"/>
         </DAS_SELECTIONS>
     </SCENES>
     <SHORTCUTS>
