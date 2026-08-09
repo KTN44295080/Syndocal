@@ -2816,6 +2816,8 @@ pub struct DmxInputConfig {
     pub bind_ip: String,
     pub port: u16,
     pub universe: u16,
+    #[serde(default = "default_true")]
+    pub merge_enabled: bool,
     pub merge_mode: DmxMergeMode,
     pub timeout_ms: u64,
 }
@@ -2827,10 +2829,15 @@ impl Default for DmxInputConfig {
             bind_ip: "0.0.0.0".to_string(),
             port: 6454,
             universe: 0,
+            merge_enabled: true,
             merge_mode: DmxMergeMode::Htp,
             timeout_ms: 2_500,
         }
     }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -2993,6 +3000,41 @@ pub struct OscControlMapping {
     pub duration_ms: Option<u64>,
     pub low: f32,
     pub high: f32,
+}
+
+pub type DmxControlAction = OscControlAction;
+
+/// Maps one 1-based DMX input channel in an internal 0-based universe to a
+/// backend-callable control. Keeping this typed (instead of encoding
+/// `/dmx/...` as an OSC address) prevents the transports from triggering each
+/// other's assignments. It shares the OSC action enum, so future backend
+/// actions inherit the same typed persistence contract.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DmxControlMapping {
+    pub universe: u16,
+    pub channel: u16,
+    pub action: DmxControlAction,
+    pub fixture_id: Option<FixtureId>,
+    pub attribute: Option<String>,
+    #[serde(default)]
+    pub group_id: Option<String>,
+    pub cue_id: Option<CueId>,
+    pub layer_id: Option<VideoLayerId>,
+    #[serde(default)]
+    pub output_id: Option<VideoOutputId>,
+    pub video_param: Option<VideoParam>,
+    pub cue_point_index: Option<usize>,
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+    pub low: f32,
+    pub high: f32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LearnedDmxControl {
+    pub universe: u16,
+    pub channel: u16,
+    pub value: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

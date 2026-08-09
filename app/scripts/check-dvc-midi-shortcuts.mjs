@@ -44,8 +44,8 @@ const checks = [
   [backend.includes("validate_midi_feedback") && backend.includes("MIDI feedback requires at least one state"), "custom MIDI feedback is validated at every persistence and connection boundary"],
   [remote.includes("SetOperatorSelection(OperatorSelectionContext)") && remote.includes("SetOperatorFeatureFader"), "Remote and future AI callers have typed operator-selection commands"],
   [app.includes("selectedControlTargetFixtures().map((fixture) => fixture.id)") && app.includes("visibleControls().map((control) => control.attribute)"), "frontend publishes the exact selected fixtures and visible fader order"],
-  [app.includes("replaceProjectControlMappings(report.midi_mappings ?? [], [])"), "DVC import installs mappings instead of clearing them"],
-  [app.includes("report.midi_mappings?.length ?? 0} MIDI mappings"), "operator import status reports the restored mapping count"],
+  [app.includes("replaceProjectControlMappings(report.midi_mappings ?? [], [], report.dmx_mappings ?? [])"), "DVC import installs MIDI and DMX mappings instead of clearing them"],
+  [app.includes("report.midi_mappings?.length ?? 0} MIDI and ${report.dmx_mappings?.length ?? 0} DMX mappings"), "operator import status reports the restored MIDI and DMX mapping counts"],
   [controlController.includes("const updateMidiMapping") && app.includes("onUpdateMapping={updateMidiMapping}"), "operator can update feedback without replacing the mapping route"],
   [midiPanel.includes("Create Off / On feedback") && midiPanel.includes("Unknown / mixed") && midiPanel.includes("Clear feedback"), "normal MIDI mapping editor exposes all feedback states"],
 ];

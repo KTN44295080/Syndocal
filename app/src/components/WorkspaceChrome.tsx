@@ -289,7 +289,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               </button>
               <button role="menuitem" onClick={() => runProjectMenuAction(props.onSaveUserTemplate)}>
                 <span>Save as Template</span>
-                <small>Includes MIDI / OSC mappings</small>
+                <small>Includes MIDI / OSC / DMX mappings</small>
               </button>
               <button
                 role="menuitem"
@@ -654,6 +654,20 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
                 <circle cx="15" cy="5" r="2" />
                 <circle cx="15" cy="15" r="2" />
                 <path d="M7 9l6-3M7 11l6 3" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="topbarIconButton topbarLearnButton"
+              classList={{ active: props.controlLearnMode === "dmx", waiting: props.controlLearnMode === "dmx" && props.controlLearnBusy }}
+              data-control-learn-toggle="dmx"
+              title={props.controlLearnMode === "dmx" ? "Exit DMX Learn" : "DMX Learn"}
+              aria-label={props.controlLearnMode === "dmx" ? "Exit DMX Learn" : "DMX Learn"}
+              aria-pressed={props.controlLearnMode === "dmx"}
+              onClick={() => props.onControlLearnMode(props.controlLearnMode === "dmx" ? null : "dmx")}
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M3 4h14v12H3zM6 7h2v6H6zM9 9h2v4H9zM12 6h2v7h-2z" />
               </svg>
             </button>
           </div>

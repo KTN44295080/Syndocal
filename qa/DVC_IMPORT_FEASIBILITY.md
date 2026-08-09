@@ -103,7 +103,8 @@
 | TIMELINE + BLOCK TYPE=1（シーン） | タイムラインシーンブロック（F2、conform=F3） | **正確** |
 | TOUCH | T11 touch_surface | **部分**（レイアウト対応表しだい） |
 | DEVICES（DVC GOLD等） | DMX出力ルート設定の初期値 | **参考情報**（ハード非互換のため案内表示） |
-| SHORTCUTS | MIDI/キー割当 | **部分・安全復元**（TYPE=1の107 Scene Play / 55 Tap Tempo / 108-110方向付きPlay / 113 Bank Next / 229 選択中Feature Fader / FLASH holdを復元。入力device affinityとDaslight固有feedback色はApproximate） |
+| SHORTCUTS TYPE=1 | MIDI/キー割当 | **部分・安全復元**（107 Scene Play / 55 Tap Tempo / 108-110方向付きPlay / 113 Bank Next / 229 選択中Feature Fader / FLASH holdを復元。入力device affinityと物理feedbackは外部受入） |
+| SHORTCUTS TYPE=3 | DMX Control Mapping | **検体範囲で正確**（Panel.dvcのaction 210 Feature mapping 9/9。未確認selector/action/settings/beamはSkipped/Unsupported） |
 
 ## 3. 実装計画案（トランシェ1本 + 検証資産）
 
@@ -145,6 +146,14 @@ DVC-1 で「解釈保留」だった 27 バイト行を Fable 直接実装で解
 - `SETTINGS OUT` / `OUT1` / `OUT2`はそれぞれOFF / ON / Unknown（混在・不定）feedbackとして、message種別・出力channel・number・velocity/valueを丸めず保存する。連続controlではOFF/ON端点間を補間し、離散controlではlive stateに応じた厳密messageを送る。複数Cue List / groupで並列起動中のCueもactive判定へ含める。通常mappingにも同じ3状態editorを設け、`.midimap` / `.sdc` / Recovery / backupで往復する。
 - 入出力device affinityだけはプロジェクト固有名へ自動bindingせず、Setup > I/Oで対象portを選ぶ外部境界としてApproximateに明記する。
 - DVC import UIは旧showのmappingを消去した後、report内の復元mappingを本番stateへ設置する。その後の通常`.sdc` Save/Recovery/backupで保持される。
+
+## 実装記録（2026-08-09 DVC DMX Control Mapping）
+
+- 実`Panel.dvc`の`SHORTCUT TYPE="3"` 9件を全数監査した。`EVENT /dmx/1/<channel>:5`、action 210、profile UID + raw feature index、primary beam、検証済みSETTINGSが揃う場合だけ型付き`DmxControlMapping`へ変換する。
+- U1 Ch25-27、36-38、47-49を埋め込みprofileの実順序どおり3灯体のRed/Green/Blueへ9/9復元し、Skipped 0 / Unsupported 0をローカルgoldenで固定した。第三灯体のBlue/Red/Green順も推測で並べ替えない。
+- selector 4、action 211、SMODE 2を混ぜた合成検体で、証拠外のvariantが変換されず報告へ残ることを固定した。
+- RuntimeはArt-Net/sACN inputから変化したchannelだけを共通action dispatcherへ渡す。同一ストリーム値によるCue再トリガーを防ぎ、信号断で履歴を解除する。mapping保存値は0始まりに統一し、sACNのwire上の1始まりUniverseだけをLearn/Control Mapping時に正規化する。Raw MergeとControl Mappingは排他で、Raw Mergeの既存protocol-native Universeは変更しない。
+- MIDI/OSCと同じtopbar visual LearnをDMXへ拡張した。通常`.sdc`、Recovery、desktop/pre-update backup、user templateへ保存し、旧ファイルは空defaultで互換。詳細証拠は`qa/DVC_DMX_CONTROL_MAPPING.md`。
 
 ## 4. リスクと限界（正直な列挙）
 

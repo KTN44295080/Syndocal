@@ -3204,6 +3204,13 @@ async function runLiveDeskHeaderViewport(client, viewport) {
           return { address: '/learn/cue', value: 1, argument_count: 1 };
         }
         if (command === 'start_osc_input' || command === 'stop_osc_input') return null;
+        if (command === 'start_dmx_input' || command === 'stop_dmx_input') return null;
+        if (command === 'dmx_input_status') {
+          return { running: true, signal_present: true, packets_received: 1, invalid_packets: 0, last_packet_unix_ms: 1, source_address: '127.0.0.1:6454' };
+        }
+        if (command === 'learn_dmx_control') {
+          return { universe: 0, channel: 25, value: 200 };
+        }
         throw new Error('Unexpected control-learn invoke: ' + command);
       },
     };
@@ -3223,6 +3230,13 @@ async function runLiveDeskHeaderViewport(client, viewport) {
   const oscTargetSelected = await clickWorkspaceSelector(client, '.sceneMatrixTrigger[data-control-map-target]');
   await sleep(120);
   const oscSelected = await measureLiveDeskHeaderState(client);
+  await pressKey(client, 'Escape', 'Escape', 0);
+  await sleep(80);
+  const dmxLearnOpened = await clickWorkspaceSelector(client, '[data-control-learn-toggle="dmx"]');
+  await sleep(80);
+  const dmxTargetSelected = await clickWorkspaceSelector(client, '.sceneMatrixTrigger[data-control-map-target]');
+  await sleep(160);
+  const dmxSelected = await measureLiveDeskHeaderState(client);
   await pressKey(client, 'Escape', 'Escape', 0);
   await sleep(80);
   const statusOpened = await clickWorkspaceSelector(client, '[data-live-status-toggle]');
@@ -3253,9 +3267,9 @@ async function runLiveDeskHeaderViewport(client, viewport) {
     globalTopbarOwnsEightTransportActions:
       matrix.toolbarCount === 1 &&
       matrix.directTransportButtonCount === 8,
-    globalTopbarOwnsMidiAndOscLearnWithoutShrinking:
-      matrix.learnButtonCount === 2 &&
-      JSON.stringify(matrix.learnButtonMetrics.map((metric) => metric.action)) === JSON.stringify(['midi', 'osc']) &&
+    globalTopbarOwnsMidiOscAndDmxLearnWithoutShrinking:
+      matrix.learnButtonCount === 3 &&
+      JSON.stringify(matrix.learnButtonMetrics.map((metric) => metric.action)) === JSON.stringify(['midi', 'osc', 'dmx']) &&
       matrix.learnButtonMetrics.every((metric) => metric.width === 32 && metric.height === 40 && metric.svgCount === 1) &&
       matrix.learnClusterRect?.height === 40,
     midiLearnArmsEveryVisibleMappingTarget:
@@ -3292,6 +3306,19 @@ async function runLiveDeskHeaderViewport(client, viewport) {
         call.args?.config?.port === 9000 &&
         call.args?.mappings?.some((mapping) =>
           mapping.address === '/learn/cue' &&
+          mapping.action === 'TriggerCue' &&
+          Number.isInteger(mapping.cue_id) &&
+          mapping.cue_id > 0)),
+    nextDmxInputCreatesAndRestartsTheSelectedMapping:
+      dmxLearnOpened &&
+      dmxTargetSelected &&
+      dmxSelected.controlLearnMockCalls.some((call) => call.command === 'learn_dmx_control') &&
+      dmxSelected.controlLearnMockCalls.some((call) =>
+        call.command === 'start_dmx_input' &&
+        call.args?.config?.merge_enabled === false &&
+        call.args?.mappings?.some((mapping) =>
+          mapping.universe === 0 &&
+          mapping.channel === 25 &&
           mapping.action === 'TriggerCue' &&
           Number.isInteger(mapping.cue_id) &&
           mapping.cue_id > 0)),

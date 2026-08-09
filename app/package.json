@@ -17,6 +17,7 @@
     "check:topbar-pulse": "node scripts/check-viewport-containment.mjs --topbar-pulse-only",
     "check:touch": "node scripts/check-dvc-touch-feature-preset.mjs && node scripts/check-viewport-containment.mjs --touch-only",
     "check:dvc-midi-shortcuts": "node scripts/check-dvc-midi-shortcuts.mjs",
+    "check:dvc-dmx-shortcuts": "node scripts/check-dvc-dmx-shortcuts.mjs",
     "check:backend-operator-contract": "node scripts/check-backend-operator-contract.mjs",
     "check:native-window": "node scripts/run-native-window-acceptance.mjs",
     "check:empty-states": "node scripts/check-empty-state-guidance.mjs",

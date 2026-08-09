@@ -1,11 +1,14 @@
-import type { DmxInputConfig, DmxInputStatus } from "../types";
+import type { DmxControlMapping, DmxInputConfig, DmxInputStatus } from "../types";
+import { controlMappingTargetLabel } from "../controlMappingLabels";
 
 interface DmxInputPanelProps {
   config: DmxInputConfig;
   status: DmxInputStatus;
+  mappings: DmxControlMapping[];
   onConfig: (config: DmxInputConfig) => void;
   onStart: () => void | Promise<void>;
   onStop: () => void | Promise<void>;
+  onRemoveMapping: (index: number) => void;
 }
 
 export function DmxInputPanel(props: DmxInputPanelProps) {
@@ -48,8 +51,25 @@ export function DmxInputPanel(props: DmxInputPanelProps) {
           <input type="number" min={props.config.protocol === "Sacn" ? 1 : 0} max="63999" value={props.config.universe} disabled={props.status.running} onInput={(event) => setConfig({ universe: Number(event.currentTarget.value) })} />
         </label>
         <label>
-          Merge
-          <select value={props.config.merge_mode} disabled={props.status.running} onInput={(event) => setConfig({ merge_mode: event.currentTarget.value as DmxInputConfig["merge_mode"] })}>
+          Input use
+          <select
+            data-io-control="dmx-input-use"
+            value={props.config.merge_enabled ? "merge" : "control"}
+            disabled={props.status.running}
+            onInput={(event) => setConfig({ merge_enabled: event.currentTarget.value === "merge" })}
+          >
+            <option value="merge">Merge raw DMX</option>
+            <option value="control">Control mappings</option>
+          </select>
+        </label>
+        <label>
+          Merge rule
+          <select
+            data-io-control="dmx-input-merge-rule"
+            value={props.config.merge_mode}
+            disabled={props.status.running || !props.config.merge_enabled}
+            onInput={(event) => setConfig({ merge_mode: event.currentTarget.value as DmxInputConfig["merge_mode"] })}
+          >
             <option value="Htp">HTP (highest wins)</option>
             <option value="Ltp">LTP (input wins)</option>
           </select>
@@ -64,6 +84,26 @@ export function DmxInputPanel(props: DmxInputPanelProps) {
         <button disabled={!props.status.running} onClick={() => void props.onStop()}>Stop</button>
         <span>{props.status.packets_received} packet(s) · {props.status.invalid_packets} invalid</span>
         <span title={props.status.source_address ?? ""}>{props.status.source_address ?? "No source"}</span>
+      </div>
+      <div class="dmxControlMappings" data-dmx-control-mappings>
+        <div class="panelHeader">
+          <h4>DMX control mappings</h4>
+          <span class="pill">{props.mappings.length}</span>
+        </div>
+        {props.mappings.length === 0 ? (
+          <p class="muted">No DMX controls are mapped. Raw merge remains available above.</p>
+        ) : (
+          <div class="mappingList">
+            {props.mappings.map((mapping, index) => (
+              <div class="mappingRow" data-dmx-mapping-index={index}>
+                <span>U{mapping.universe + 1} Ch {mapping.channel}</span>
+                <span>{controlMappingTargetLabel(mapping)}</span>
+                <span>{Math.round(mapping.low)}–{Math.round(mapping.high)}</span>
+                <button disabled={props.status.running} onClick={() => props.onRemoveMapping(index)}>Remove</button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

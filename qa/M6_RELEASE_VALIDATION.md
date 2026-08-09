@@ -90,12 +90,17 @@ release.
 ## User template portability (v1.1)
 
 Project menu export/import uses `.sdctemplate` v1 to carry the validated
-Syndocal project, embedded fixture profiles, and MIDI/OSC control mappings.
+Syndocal project, embedded fixture profiles, and MIDI/OSC/DMX control mappings.
 Imports are bounded to 64 MiB, reject the wrong application/version or invalid
 project references and mappings, and create an unsaved project. Every legacy
 and routed DMX output plus every video output is disabled, with lighting and
 video blackout enabled, before the template reaches the engine. Existing
 `.midimap` and `.oscmap` sharing remains available independently.
+
+DMX mappings use the same validated action surface but retain a typed
+universe/channel source. Imported or learned mappings round-trip through the
+template and open with every output disarmed. Input listener configuration and
+physical device selection remain machine-local Setup > I/O state.
 
 Rust tests cover round-trip mappings, omitted legacy mapping fields, identity
 and extension rejection, and complete output disarming. The project menu and

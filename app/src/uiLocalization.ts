@@ -7,8 +7,17 @@ const japaneseText: Record<string, string> = {
   "Control mapping learn": "コントロールマッピングLearn",
   "MIDI Learn": "MIDI Learn",
   "OSC Learn": "OSC Learn",
+  "DMX Learn": "DMX Learn",
   "Exit MIDI Learn": "MIDI Learnを終了",
   "Exit OSC Learn": "OSC Learnを終了",
+  "Exit DMX Learn": "DMX Learnを終了",
+  "Control mappings": "制御マッピング",
+  "DMX control mappings": "DMX制御マッピング",
+  "Input use": "入力用途",
+  "Merge raw DMX": "生DMXをマージ",
+  "Merge rule": "マージ規則",
+  "No DMX controls are mapped. Raw merge remains available above.":
+    "DMX制御マッピングはありません。上の生DMXマージは引き続き利用できます。",
   "Global show controls": "ショー共通操作",
   "Esc": "Escキー",
   "VID": "映像",
@@ -89,7 +98,7 @@ const japaneseText: Record<string, string> = {
   "New from Template": "テンプレートから新規作成",
   "Outputs open disabled": "出力は無効で開きます",
   "Save as Template": "テンプレートとして保存",
-  "Includes MIDI / OSC mappings": "MIDI / OSCマッピングを含む",
+  "Includes MIDI / OSC / DMX mappings": "MIDI / OSC / DMXマッピングを含む",
   Undo: "元に戻す",
   Redo: "やり直す",
   Recovery: "復旧",
@@ -3025,9 +3034,14 @@ const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
   [/^Template save failed: (.+)$/, (detail) => `テンプレート保存に失敗しました: ${detail}`],
   [/^Template load failed: (.+)$/, (detail) => `テンプレート読込に失敗しました: ${detail}`],
   [
-    /^Created an unsaved project from (.+) \((\d+) embedded profiles?, (\d+) MIDI, (\d+) OSC mappings\)\. All DMX and video outputs are disabled and blacked out\.$/,
-    (label, profiles, midi, osc) =>
-      `${label}から未保存プロジェクトを作成しました（埋め込みプロファイル ${profiles}、MIDI ${midi}、OSC ${osc}）。DMXと映像出力はすべて無効・ブラックアウトです。`,
+    /^Imported Daslight Project \(\.dvc\): (\d+) fixtures, (\d+) cues, (\d+) MIDI and (\d+) DMX mappings\. Save As to create a Syndocal Project \(\.sdc\)\.$/,
+    (fixtures, cues, midi, dmx) =>
+      `Daslightプロジェクト（.dvc）をインポートしました: 灯体 ${fixtures}、キュー ${cues}、MIDIマッピング ${midi}、DMXマッピング ${dmx}。Syndocalプロジェクト（.sdc）を作成するには名前を付けて保存してください。`,
+  ],
+  [
+    /^Created an unsaved project from (.+) \((\d+) embedded profiles?, (\d+) MIDI, (\d+) OSC, (\d+) DMX mappings\)\. All DMX and video outputs are disabled and blacked out\.$/,
+    (label, profiles, midi, osc, dmx) =>
+      `${label}から未保存プロジェクトを作成しました（埋め込みプロファイル ${profiles}、MIDI ${midi}、OSC ${osc}、DMX ${dmx}）。DMXと映像出力はすべて無効・ブラックアウトです。`,
   ],
   [
     /^Recovered (.+) from (.+) \((\d+) embedded profiles?\)\. Save to keep it\.$/,

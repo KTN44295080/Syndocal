@@ -37,26 +37,27 @@ use protocol::{
     ChaserEffectRequest, ChaserStep, ChildTimelineSummary, ClockSnapshot, ColorEffectRequest,
     ColorMappingEffectRequest, CompositionId, CompositionSummary, CueEffectTarget,
     CueFixtureTarget, CueId, CueNodeGraphTarget, CurveEffectRequest, CustomFixtureProfileFile,
-    CustomFixtureProfileRequest, DmxInputConfig, DmxInputProtocol, DmxInputStatus, DmxModeSummary,
-    DmxOutputConfig, DmxOutputProtocol, EffectBeamTarget, EffectId, EffectKind,
-    EffectParamsSnapshot, EffectPreset, EffectSummary, EngineSnapshot, EngineTelemetry,
-    ExclusiveVideoTakeRequest, FixtureGroupSummary, FixtureId, FixtureLimits, FixturePreset,
-    FixtureProfileSummary, GeometrySummary, LearnedMidiControl, LearnedOscControl,
-    LfoEffectRequest, MappingEffectRequest, MidiControlAction, MidiControlMapping,
-    MidiFeedbackMessage, MidiInputSummary, MidiOutputSummary, MoveEffectRequest, NodeGraphId,
-    NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp,
-    OperatorFeatureFaderResult, OperatorPolicy, OperatorSelectionContext, OscControlAction,
-    OscControlMapping, OscInputConfig, PatchFixtureRequest, PatchedFixtureSummary,
-    PositionWaveEffectRequest, ProjectFile, RecallMode, RemoteControlConfig, RemoteControlStatus,
-    Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile, StageMapPresetSummary,
-    StageObjectId, StageObjectKind, StageObjectSummary, TimelineAudioClipId,
-    TimelineAudioClipSummary, TimelineEventId, TimelineLayerKind, TimelineSnapRequest,
-    TimelineTrackKind, TouchControlBinding, TouchFeaturePresetTarget, TouchSurfaceSummary,
-    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode,
-    VideoEffectTarget, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId,
-    VideoLayerState, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
-    VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary, VideoOutputSummary,
-    VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
+    CustomFixtureProfileRequest, DmxControlAction, DmxControlMapping, DmxInputConfig,
+    DmxInputProtocol, DmxInputStatus, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol,
+    EffectBeamTarget, EffectId, EffectKind, EffectParamsSnapshot, EffectPreset, EffectSummary,
+    EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, FixtureGroupSummary, FixtureId,
+    FixtureLimits, FixturePreset, FixtureProfileSummary, GeometrySummary, LearnedDmxControl,
+    LearnedMidiControl, LearnedOscControl, LfoEffectRequest, MappingEffectRequest,
+    MidiControlAction, MidiControlMapping, MidiFeedbackMessage, MidiInputSummary,
+    MidiOutputSummary, MoveEffectRequest, NodeGraphId, NodeGraphNodeKind, NodeGraphPresetFile,
+    NodeGraphSummary, NodeGraphTransformOp, OperatorFeatureFaderResult, OperatorPolicy,
+    OperatorSelectionContext, OscControlAction, OscControlMapping, OscInputConfig,
+    PatchFixtureRequest, PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RecallMode,
+    RemoteControlConfig, RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig,
+    StageMapPresetFile, StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary,
+    TimelineAudioClipId, TimelineAudioClipSummary, TimelineEventId, TimelineLayerKind,
+    TimelineSnapRequest, TimelineTrackKind, TouchControlBinding, TouchFeaturePresetTarget,
+    TouchSurfaceSummary, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
+    VideoBackendState, VideoBlendMode, VideoEffectTarget, VideoIsfEffectStageSummary,
+    VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerTarget, VideoOutputId,
+    VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetFile,
+    VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget, VideoParam,
+    VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -3073,6 +3074,7 @@ struct ProjectLoadResult {
     profiles: Vec<FixtureProfileSummary>,
     midi_mappings: Vec<MidiControlMapping>,
     osc_mappings: Vec<OscControlMapping>,
+    dmx_mappings: Vec<DmxControlMapping>,
     warnings: Vec<String>,
 }
 
@@ -3082,6 +3084,8 @@ struct ProjectControlMappings {
     midi_mappings: Vec<MidiControlMapping>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     osc_mappings: Vec<OscControlMapping>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dmx_mappings: Vec<DmxControlMapping>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3091,6 +3095,7 @@ struct UserTemplateLoadResult {
     profiles: Vec<FixtureProfileSummary>,
     midi_mappings: Vec<MidiControlMapping>,
     osc_mappings: Vec<OscControlMapping>,
+    dmx_mappings: Vec<DmxControlMapping>,
     warnings: Vec<String>,
 }
 
@@ -3107,6 +3112,8 @@ struct ProjectBackupEnvelope {
     midi_mappings: Vec<MidiControlMapping>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     osc_mappings: Vec<OscControlMapping>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dmx_mappings: Vec<DmxControlMapping>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -3580,6 +3587,8 @@ struct UserTemplateFile {
     midi_mappings: Vec<MidiControlMapping>,
     #[serde(default)]
     osc_mappings: Vec<OscControlMapping>,
+    #[serde(default)]
+    dmx_mappings: Vec<DmxControlMapping>,
 }
 
 const VIDEO_FILE_EXTENSIONS: &[&str] = &["mp4", "m4v", "mov", "mkv", "avi", "webm", "hap", "hapq"];
@@ -5975,6 +5984,46 @@ fn validate_osc_control_mapping(
     Ok(mapping)
 }
 
+fn validate_dmx_control_mappings(
+    mappings: Vec<DmxControlMapping>,
+) -> Result<Vec<DmxControlMapping>, String> {
+    mappings
+        .into_iter()
+        .enumerate()
+        .map(|(index, mapping)| validate_dmx_control_mapping(index + 1, mapping))
+        .collect()
+}
+
+fn validate_dmx_control_mapping(
+    index: usize,
+    mut mapping: DmxControlMapping,
+) -> Result<DmxControlMapping, String> {
+    let owner = format!("DMX mapping {index}");
+    if !(1..=512).contains(&mapping.channel) {
+        return Err(format!("{owner} channel must be 1-512"));
+    }
+    validate_mapping_range(&owner, mapping.low, mapping.high)?;
+    let mut shared = OscControlMapping {
+        address: "/dmx-input".to_string(),
+        action: mapping.action.clone(),
+        fixture_id: mapping.fixture_id,
+        attribute: mapping.attribute.clone(),
+        group_id: mapping.group_id.clone(),
+        cue_id: mapping.cue_id,
+        layer_id: mapping.layer_id,
+        output_id: mapping.output_id,
+        video_param: mapping.video_param.clone(),
+        cue_point_index: mapping.cue_point_index,
+        duration_ms: mapping.duration_ms,
+        low: mapping.low,
+        high: mapping.high,
+    };
+    validate_mapping_required_fields_for_osc(&owner, &mut shared)?;
+    mapping.attribute = shared.attribute;
+    mapping.group_id = shared.group_id;
+    Ok(mapping)
+}
+
 fn validate_mapping_required_fields_for_osc(
     owner: &str,
     mapping: &mut OscControlMapping,
@@ -6183,6 +6232,224 @@ fn normalize_control_mapping_osc_address(address: &str) -> Result<String, String
 #[tauri::command]
 fn learn_osc_control(config: OscInputConfig) -> Result<Option<LearnedOscControl>, String> {
     io::osc::learn_osc_control(config, Duration::from_secs(10)).map_err(|error| error.to_string())
+}
+
+fn dispatch_external_control_event(
+    engine: &EngineHandle,
+    operator_selection: &Arc<Mutex<OperatorSelectionContext>>,
+    event: OscInputEvent,
+    source: &str,
+) {
+    let command = match event {
+        OscInputEvent::SetAttribute {
+            fixture_id,
+            attribute,
+            value,
+        } => EngineCommand::SetAttribute {
+            fixture_id,
+            attribute,
+            value,
+        },
+        OscInputEvent::SetSelectedFeatureFader {
+            target_index,
+            value,
+        } => {
+            match operator_feature_fader_command(engine, operator_selection, target_index, value) {
+                Ok((command, _)) => command,
+                Err(error) => {
+                    eprintln!("Ignoring {source} selected feature fader: {error}");
+                    return;
+                }
+            }
+        }
+        OscInputEvent::SetFixtureHighlight {
+            fixture_id,
+            enabled,
+        } => EngineCommand::SetFixtureHighlight {
+            fixture_id,
+            enabled,
+        },
+        OscInputEvent::SetFixtureSolo {
+            fixture_id,
+            enabled,
+        } => EngineCommand::SetFixtureSolo {
+            fixture_id,
+            enabled,
+        },
+        OscInputEvent::SetFixturePark {
+            fixture_id,
+            enabled,
+        } => EngineCommand::SetFixturePark {
+            fixture_id,
+            enabled,
+        },
+        OscInputEvent::SetGroupHighlight { group_id, enabled } => {
+            EngineCommand::SetGroupHighlight { group_id, enabled }
+        }
+        OscInputEvent::SetGroupSolo { group_id, enabled } => {
+            EngineCommand::SetGroupSolo { group_id, enabled }
+        }
+        OscInputEvent::SetGroupPark { group_id, enabled } => {
+            EngineCommand::SetGroupPark { group_id, enabled }
+        }
+        OscInputEvent::Blackout(enabled) => EngineCommand::Blackout(enabled),
+        OscInputEvent::AllBlackout(enabled) => EngineCommand::SetAllBlackout(enabled),
+        OscInputEvent::ClearFixtureFlags { kind } => match parse_fixture_flag_clear_kind(&kind) {
+            Ok(kind) => EngineCommand::ClearFixtureFlags(kind),
+            Err(error) => {
+                eprintln!("Ignoring {source} clear fixture flags command: {error}");
+                return;
+            }
+        },
+        OscInputEvent::TriggerCue(cue_id) => EngineCommand::TriggerCue(cue_id),
+        OscInputEvent::TriggerNextCue => EngineCommand::TriggerNextCue,
+        OscInputEvent::TriggerPreviousCue => EngineCommand::TriggerPreviousCue,
+        OscInputEvent::SetEffectEnabled { effect_id, enabled } => {
+            EngineCommand::SetEffectEnabled { effect_id, enabled }
+        }
+        OscInputEvent::SetNodeGraphEnabled { graph_id, enabled } => {
+            EngineCommand::SetNodeGraphEnabled { graph_id, enabled }
+        }
+        OscInputEvent::SetCueFadePaused(paused) => EngineCommand::SetCueFadePaused(paused),
+        OscInputEvent::SetTimelinePlaying(playing) => EngineCommand::SetTimelinePlaying(playing),
+        OscInputEvent::SeekTimeline { position_ms } => EngineCommand::SeekTimeline(position_ms),
+        OscInputEvent::SeekTimelineBeat { direction } => {
+            EngineCommand::SeekTimelineBeat { direction }
+        }
+        OscInputEvent::SyncTimelineTimecode {
+            position_ms,
+            source,
+        } => EngineCommand::SyncTimelineTimecode {
+            position_ms,
+            source,
+        },
+        OscInputEvent::SetVideoParam {
+            layer_id,
+            param,
+            value,
+        } => EngineCommand::SetVideoLayerParam {
+            layer_id,
+            param,
+            value,
+        },
+        OscInputEvent::SetVideoPlaying { layer_id, playing } => {
+            EngineCommand::SetVideoLayerPlaying { layer_id, playing }
+        }
+        OscInputEvent::SetVideoLoop {
+            layer_id,
+            enabled,
+            loop_start_ms,
+            loop_end_ms,
+        } => EngineCommand::SetVideoLayerLoop {
+            layer_id,
+            enabled,
+            loop_start_ms,
+            loop_end_ms,
+        },
+        OscInputEvent::FadeVideoLayerOpacity {
+            layer_id,
+            opacity,
+            duration_ms,
+        } => EngineCommand::FadeVideoLayerOpacity {
+            layer_id,
+            opacity,
+            duration_ms,
+        },
+        OscInputEvent::SetVideoLayerEnabled { layer_id, enabled } => {
+            EngineCommand::SetVideoLayerEnabled { layer_id, enabled }
+        }
+        OscInputEvent::SetVideoLayerSolo { layer_id, solo } => {
+            EngineCommand::SetVideoLayerSolo { layer_id, solo }
+        }
+        OscInputEvent::SeekVideoLayer {
+            layer_id,
+            position_ms,
+        } => EngineCommand::SetVideoLayerParam {
+            layer_id,
+            param: VideoParam::PositionMs,
+            value: position_ms as f32,
+        },
+        OscInputEvent::AddVideoCuePoint {
+            layer_id,
+            position_ms,
+        } => EngineCommand::AddVideoCuePoint {
+            layer_id,
+            position_ms,
+        },
+        OscInputEvent::RemoveVideoCuePoint {
+            layer_id,
+            position_ms,
+        } => EngineCommand::RemoveVideoCuePoint {
+            layer_id,
+            position_ms,
+        },
+        OscInputEvent::JumpVideoCuePoint {
+            layer_id,
+            cue_point_index,
+        } => EngineCommand::JumpVideoCuePoint {
+            layer_id,
+            cue_point_index,
+        },
+        OscInputEvent::JumpVideoCuePointRelative {
+            layer_id,
+            direction,
+        } => EngineCommand::JumpVideoCuePointRelative {
+            layer_id,
+            direction,
+        },
+        OscInputEvent::SetVideoOutputEnabled { output_id, enabled } => {
+            EngineCommand::SetVideoOutputEnabled { output_id, enabled }
+        }
+        OscInputEvent::SetVideoOutputOpacity { output_id, opacity } => {
+            EngineCommand::SetVideoOutputOpacity { output_id, opacity }
+        }
+        OscInputEvent::FadeVideoOutputOpacity {
+            output_id,
+            opacity,
+            duration_ms,
+        } => EngineCommand::FadeVideoOutputOpacity {
+            output_id,
+            opacity,
+            duration_ms,
+        },
+        OscInputEvent::SetVideoOutputMappingField {
+            output_id,
+            field,
+            value,
+        } => EngineCommand::SetVideoOutputMappingField {
+            output_id,
+            field,
+            value,
+        },
+        OscInputEvent::ApplyVideoOutputMappingPreset { output_id, label } => {
+            EngineCommand::ApplyVideoOutputMappingPreset { output_id, label }
+        }
+        OscInputEvent::SetVideoOutputBlackout {
+            output_id,
+            blackout,
+        } => EngineCommand::SetVideoOutputBlackout {
+            output_id,
+            blackout,
+        },
+        OscInputEvent::VideoMasterOpacity(opacity) => EngineCommand::SetVideoMasterOpacity(opacity),
+        OscInputEvent::VideoBlackout(enabled) => EngineCommand::SetVideoBlackout(enabled),
+        OscInputEvent::LightingMaster(master) => EngineCommand::SetLightingMaster(master),
+        OscInputEvent::SetGroupSubmaster { group_id, level } => {
+            EngineCommand::SetGroupSubmaster { group_id, level }
+        }
+        OscInputEvent::SetBpm(bpm) => EngineCommand::SetBpm(bpm),
+        OscInputEvent::TapBpm => EngineCommand::TapBpm,
+        OscInputEvent::SyncExternalClock {
+            bpm,
+            beat_phase,
+            source,
+        } => EngineCommand::SyncExternalClock {
+            bpm,
+            beat_phase,
+            source,
+        },
+    };
+    let _ = engine.send(command);
 }
 
 #[tauri::command]
@@ -6918,23 +7185,54 @@ fn validate_dmx_input_config(config: &DmxInputConfig) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn start_dmx_input(state: State<'_, AppState>, config: DmxInputConfig) -> Result<(), String> {
+fn start_dmx_input(
+    state: State<'_, AppState>,
+    config: DmxInputConfig,
+    mappings: Option<Vec<DmxControlMapping>>,
+) -> Result<(), String> {
     validate_dmx_input_config(&config)?;
+    let mappings = validate_dmx_control_mappings(mappings.unwrap_or_default())?;
+    let control_mapping_universe =
+        io::dmx_input::control_mapping_universe(config.protocol, config.universe)
+            .ok_or_else(|| "DMX control mapping universe could not be normalized".to_string())?;
     let engine = state.engine.clone();
+    let operator_selection = Arc::clone(&state.operator_selection);
+    let previous_control_frames = Arc::new(Mutex::new(HashMap::<u16, Box<[u8; 512]>>::new()));
+    let merge_enabled = config.merge_enabled;
     let input = io::dmx_input::DmxInput::start(config, move |event| match event {
         io::dmx_input::DmxInputEvent::Frame {
             universe,
             values,
             merge_mode,
         } => {
-            let _ = engine.send(EngineCommand::SetDmxInputFrame {
-                universe,
-                values,
-                merge_mode,
-            });
+            if merge_enabled {
+                let _ = engine.send(EngineCommand::SetDmxInputFrame {
+                    universe,
+                    values,
+                    merge_mode,
+                });
+            } else {
+                let previous = previous_control_frames
+                    .lock()
+                    .ok()
+                    .and_then(|mut frames| frames.insert(control_mapping_universe, values.clone()));
+                for event in io::dmx_input::control_events_from_changed_frame(
+                    control_mapping_universe,
+                    &values,
+                    previous.as_deref(),
+                    &mappings,
+                ) {
+                    dispatch_external_control_event(&engine, &operator_selection, event, "DMX");
+                }
+            }
         }
         io::dmx_input::DmxInputEvent::SignalLost { universe } => {
-            let _ = engine.send(EngineCommand::ClearDmxInput(universe));
+            if let Ok(mut frames) = previous_control_frames.lock() {
+                frames.remove(&control_mapping_universe);
+            }
+            if merge_enabled {
+                let _ = engine.send(EngineCommand::ClearDmxInput(universe));
+            }
         }
     })
     .map_err(|error| error.to_string())?;
@@ -6944,6 +7242,18 @@ fn start_dmx_input(state: State<'_, AppState>, config: DmxInputConfig) -> Result
         .map_err(|_| "DMX input state lock was poisoned".to_string())?;
     *active = Some(input);
     Ok(())
+}
+
+#[tauri::command]
+fn learn_dmx_control(state: State<'_, AppState>) -> Result<Option<LearnedDmxControl>, String> {
+    let active = state
+        .dmx_input
+        .lock()
+        .map_err(|_| "DMX input state lock was poisoned".to_string())?;
+    let input = active
+        .as_ref()
+        .ok_or_else(|| "Start DMX input before using DMX Learn".to_string())?;
+    Ok(input.learn_control(Duration::from_secs(10)))
 }
 
 #[tauri::command]
@@ -14373,6 +14683,7 @@ fn save_user_template(
     state: State<'_, AppState>,
     midi_mappings: Vec<MidiControlMapping>,
     osc_mappings: Vec<OscControlMapping>,
+    dmx_mappings: Vec<DmxControlMapping>,
 ) -> Result<Option<String>, String> {
     let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal User Template", &["sdctemplate"])
@@ -14397,6 +14708,7 @@ fn save_user_template(
         project: project_file_for_save(&state)?,
         midi_mappings,
         osc_mappings,
+        dmx_mappings,
     })?;
     let bytes = serde_json::to_vec_pretty(&template).map_err(|error| error.to_string())?;
     if bytes.len() as u64 > USER_TEMPLATE_MAX_BYTES {
@@ -14437,6 +14749,7 @@ fn load_user_template(
         project,
         midi_mappings,
         osc_mappings,
+        dmx_mappings,
         ..
     } = template;
     let loaded = load_project_from_file(
@@ -14451,6 +14764,7 @@ fn load_user_template(
         profiles: loaded.profiles,
         midi_mappings,
         osc_mappings,
+        dmx_mappings,
         warnings: loaded.warnings,
     }))
 }
@@ -14461,6 +14775,7 @@ fn save_project(
     state: State<'_, AppState>,
     midi_mappings: Vec<MidiControlMapping>,
     osc_mappings: Vec<OscControlMapping>,
+    dmx_mappings: Vec<DmxControlMapping>,
 ) -> Result<Option<String>, String> {
     let current_path = state
         .current_project_path
@@ -14468,10 +14783,10 @@ fn save_project(
         .map_err(|_| "Current project path lock was poisoned".to_string())?
         .clone();
     if let Some(path) = current_path {
-        write_project_file(&state, &path, midi_mappings, osc_mappings)?;
+        write_project_file(&state, &path, midi_mappings, osc_mappings, dmx_mappings)?;
         return Ok(Some(path.to_string_lossy().to_string()));
     }
-    save_project_with_dialog(&window, &state, midi_mappings, osc_mappings)
+    save_project_with_dialog(&window, &state, midi_mappings, osc_mappings, dmx_mappings)
 }
 
 #[tauri::command]
@@ -14480,8 +14795,9 @@ fn save_project_as(
     state: State<'_, AppState>,
     midi_mappings: Vec<MidiControlMapping>,
     osc_mappings: Vec<OscControlMapping>,
+    dmx_mappings: Vec<DmxControlMapping>,
 ) -> Result<Option<String>, String> {
-    save_project_with_dialog(&window, &state, midi_mappings, osc_mappings)
+    save_project_with_dialog(&window, &state, midi_mappings, osc_mappings, dmx_mappings)
 }
 
 fn save_project_with_dialog(
@@ -14489,6 +14805,7 @@ fn save_project_with_dialog(
     state: &State<'_, AppState>,
     midi_mappings: Vec<MidiControlMapping>,
     osc_mappings: Vec<OscControlMapping>,
+    dmx_mappings: Vec<DmxControlMapping>,
 ) -> Result<Option<String>, String> {
     let Some(path) = parented_file_dialog(window)
         .add_filter("Syndocal Project", &["sdc"])
@@ -14498,7 +14815,7 @@ fn save_project_with_dialog(
         return Ok(None);
     };
     let path = normalize_project_save_path(path)?;
-    write_project_file(state, &path, midi_mappings, osc_mappings)?;
+    write_project_file(state, &path, midi_mappings, osc_mappings, dmx_mappings)?;
     set_current_project_path(state, &path)?;
     Ok(Some(path.to_string_lossy().to_string()))
 }
@@ -14508,26 +14825,34 @@ fn write_project_file(
     path: &Path,
     midi_mappings: Vec<MidiControlMapping>,
     osc_mappings: Vec<OscControlMapping>,
+    dmx_mappings: Vec<DmxControlMapping>,
 ) -> Result<(), String> {
     let project = project_file_for_save(state)?;
-    let json = project_json_for_write_with_control_mappings(&project, midi_mappings, osc_mappings)?;
+    let json = project_json_for_write_with_control_mappings(
+        &project,
+        midi_mappings,
+        osc_mappings,
+        dmx_mappings,
+    )?;
     fs::write(path, json).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
 fn project_json_for_write(project: &ProjectFile) -> Result<String, String> {
-    project_json_for_write_with_control_mappings(project, Vec::new(), Vec::new())
+    project_json_for_write_with_control_mappings(project, Vec::new(), Vec::new(), Vec::new())
 }
 
 fn project_json_for_write_with_control_mappings(
     project: &ProjectFile,
     midi_mappings: Vec<MidiControlMapping>,
     osc_mappings: Vec<OscControlMapping>,
+    dmx_mappings: Vec<DmxControlMapping>,
 ) -> Result<String, String> {
     validate_project_file(project)?;
     let mappings = ProjectControlMappings {
         midi_mappings: validate_midi_control_mappings(midi_mappings)?,
         osc_mappings: validate_osc_control_mappings(osc_mappings)?,
+        dmx_mappings: validate_dmx_control_mappings(dmx_mappings)?,
     };
     let mut value = serde_json::to_value(project).map_err(|error| error.to_string())?;
     let root = value
@@ -14543,6 +14868,12 @@ fn project_json_for_write_with_control_mappings(
         root.insert(
             "osc_mappings".to_string(),
             serde_json::to_value(&mappings.osc_mappings).map_err(|error| error.to_string())?,
+        );
+    }
+    if !mappings.dmx_mappings.is_empty() {
+        root.insert(
+            "dmx_mappings".to_string(),
+            serde_json::to_value(&mappings.dmx_mappings).map_err(|error| error.to_string())?,
         );
     }
     let json = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
@@ -14592,9 +14923,15 @@ fn get_project_checkpoint(
     state: State<'_, AppState>,
     midi_mappings: Vec<MidiControlMapping>,
     osc_mappings: Vec<OscControlMapping>,
+    dmx_mappings: Vec<DmxControlMapping>,
 ) -> Result<Value, String> {
     let project = project_file_for_save(&state)?;
-    let json = project_json_for_write_with_control_mappings(&project, midi_mappings, osc_mappings)?;
+    let json = project_json_for_write_with_control_mappings(
+        &project,
+        midi_mappings,
+        osc_mappings,
+        dmx_mappings,
+    )?;
     serde_json::from_str(&json).map_err(|error| error.to_string())
 }
 
@@ -14974,6 +15311,7 @@ async fn install_application_update(
     expected_version: String,
     midi_mappings: Vec<MidiControlMapping>,
     osc_mappings: Vec<OscControlMapping>,
+    dmx_mappings: Vec<DmxControlMapping>,
 ) -> Result<ProjectBackupSummary, String> {
     let expected_version = expected_version.trim();
     if expected_version.is_empty() || expected_version.chars().count() > 64 {
@@ -15009,6 +15347,7 @@ async fn install_application_update(
             ProjectControlMappings {
                 midi_mappings,
                 osc_mappings,
+                dmx_mappings,
             },
         )?
     };
@@ -15117,6 +15456,7 @@ fn write_project_backup_in(
     let mappings = ProjectControlMappings {
         midi_mappings: validate_midi_control_mappings(mappings.midi_mappings)?,
         osc_mappings: validate_osc_control_mappings(mappings.osc_mappings)?,
+        dmx_mappings: validate_dmx_control_mappings(mappings.dmx_mappings)?,
     };
     let envelope = ProjectBackupEnvelope {
         version: PROJECT_BACKUP_VERSION,
@@ -15128,6 +15468,7 @@ fn write_project_backup_in(
         project,
         midi_mappings: mappings.midi_mappings,
         osc_mappings: mappings.osc_mappings,
+        dmx_mappings: mappings.dmx_mappings,
     };
     let bytes = serde_json::to_vec_pretty(&envelope).map_err(|error| error.to_string())?;
     let path = project_backup_path(directory, id);
@@ -15163,6 +15504,7 @@ fn save_project_backup(
     reason: String,
     midi_mappings: Vec<MidiControlMapping>,
     osc_mappings: Vec<OscControlMapping>,
+    dmx_mappings: Vec<DmxControlMapping>,
 ) -> Result<ProjectBackupSummary, String> {
     if let Some(path) = source_path.as_deref() {
         if !is_syndocal_project_path(Path::new(path)) {
@@ -15178,6 +15520,7 @@ fn save_project_backup(
         ProjectControlMappings {
             midi_mappings,
             osc_mappings,
+            dmx_mappings,
         },
     )
 }
@@ -15207,6 +15550,7 @@ fn load_project_backup(
         ProjectControlMappings {
             midi_mappings: backup.midi_mappings,
             osc_mappings: backup.osc_mappings,
+            dmx_mappings: backup.dmx_mappings,
         },
         format!("Backup {}", backup.created_at_unix_ms),
         current_path,
@@ -16390,6 +16734,7 @@ fn project_and_control_mappings_from_value(
         ProjectControlMappings {
             midi_mappings: validate_midi_control_mappings(mappings.midi_mappings)?,
             osc_mappings: validate_osc_control_mappings(mappings.osc_mappings)?,
+            dmx_mappings: validate_dmx_control_mappings(mappings.dmx_mappings)?,
         },
     ))
 }
@@ -16419,6 +16764,7 @@ fn load_project_from_file_with_control_mappings(
     let mappings = ProjectControlMappings {
         midi_mappings: validate_midi_control_mappings(mappings.midi_mappings)?,
         osc_mappings: validate_osc_control_mappings(mappings.osc_mappings)?,
+        dmx_mappings: validate_dmx_control_mappings(mappings.dmx_mappings)?,
     };
     use_authored_video_snapshot(&mut project.snapshot);
     normalize_project_timeline_layers(&mut project.snapshot);
@@ -16466,6 +16812,7 @@ fn load_project_from_file_with_control_mappings(
         profiles,
         midi_mappings: mappings.midi_mappings,
         osc_mappings: mappings.osc_mappings,
+        dmx_mappings: mappings.dmx_mappings,
         warnings,
     })
 }
@@ -16721,6 +17068,7 @@ fn normalize_user_template_file(
     validate_project_file(&template.project)?;
     template.midi_mappings = validate_midi_control_mappings(template.midi_mappings)?;
     template.osc_mappings = validate_osc_control_mappings(template.osc_mappings)?;
+    template.dmx_mappings = validate_dmx_control_mappings(template.dmx_mappings)?;
     Ok(template)
 }
 
@@ -27982,6 +28330,22 @@ mod tests {
             low: 0.0,
             high: 1.0,
         };
+        let dmx_mapping = DmxControlMapping {
+            universe: 0,
+            channel: 25,
+            action: DmxControlAction::FixtureAttribute,
+            fixture_id: Some(1),
+            attribute: Some("ColorRed".to_string()),
+            group_id: None,
+            cue_id: None,
+            layer_id: None,
+            output_id: None,
+            video_param: None,
+            cue_point_index: None,
+            duration_ms: None,
+            low: 0.0,
+            high: 65_535.0,
+        };
         let summary = write_project_backup_in(
             &directory,
             empty_project_file(),
@@ -27990,12 +28354,14 @@ mod tests {
             ProjectControlMappings {
                 midi_mappings: vec![midi_mapping.clone()],
                 osc_mappings: vec![osc_mapping.clone()],
+                dmx_mappings: vec![dmx_mapping.clone()],
             },
         )
         .unwrap();
         let loaded = read_project_backup(&project_backup_path(&directory, summary.id)).unwrap();
         assert_eq!(loaded.midi_mappings, vec![midi_mapping]);
         assert_eq!(loaded.osc_mappings, vec![osc_mapping]);
+        assert_eq!(loaded.dmx_mappings, vec![dmx_mapping]);
 
         fs::remove_dir_all(directory).unwrap();
     }
@@ -29739,6 +30105,22 @@ f 1 2 3
                 low: 0.0,
                 high: 1.0,
             }],
+            dmx_mappings: vec![DmxControlMapping {
+                universe: 0,
+                channel: 25,
+                action: DmxControlAction::FixtureAttribute,
+                fixture_id: Some(1),
+                attribute: Some("ColorRed".to_string()),
+                group_id: None,
+                cue_id: None,
+                layer_id: None,
+                output_id: None,
+                video_param: None,
+                cue_point_index: None,
+                duration_ms: None,
+                low: 0.0,
+                high: 65_535.0,
+            }],
         };
 
         let json = serde_json::to_string_pretty(&template).unwrap();
@@ -29748,6 +30130,7 @@ f 1 2 3
         assert!(normalized.project.operator_policy.is_none());
         assert_eq!(normalized.midi_mappings.len(), 1);
         assert_eq!(normalized.osc_mappings.len(), 1);
+        assert_eq!(normalized.dmx_mappings.len(), 1);
         assert_eq!(
             normalized.project.snapshot.cues[0].effect_targets,
             vec![CueEffectTarget {
@@ -29786,9 +30169,11 @@ f 1 2 3
         let mut legacy = serde_json::to_value(&template).unwrap();
         legacy.as_object_mut().unwrap().remove("midi_mappings");
         legacy.as_object_mut().unwrap().remove("osc_mappings");
+        legacy.as_object_mut().unwrap().remove("dmx_mappings");
         let legacy: UserTemplateFile = serde_json::from_value(legacy).unwrap();
         assert!(legacy.midi_mappings.is_empty());
         assert!(legacy.osc_mappings.is_empty());
+        assert!(legacy.dmx_mappings.is_empty());
     }
 
     #[test]
@@ -29800,6 +30185,7 @@ f 1 2 3
             project: empty_project_file(),
             midi_mappings: Vec::new(),
             osc_mappings: Vec::new(),
+            dmx_mappings: Vec::new(),
         };
         let mut wrong_version = valid.clone();
         wrong_version.version += 1;
@@ -32137,6 +32523,7 @@ f 1 2 3
         let legacy_json = project_json_for_write(&project).unwrap();
         assert!(!legacy_json.contains("midi_mappings"));
         assert!(!legacy_json.contains("osc_mappings"));
+        assert!(!legacy_json.contains("dmx_mappings"));
         let (_, legacy_mappings) =
             project_and_control_mappings_from_value(serde_json::from_str(&legacy_json).unwrap())
                 .unwrap();
@@ -32189,10 +32576,27 @@ f 1 2 3
             low: 0.0,
             high: 1.0,
         };
+        let dmx_mapping = DmxControlMapping {
+            universe: 0,
+            channel: 25,
+            action: DmxControlAction::FixtureAttribute,
+            fixture_id: Some(1),
+            attribute: Some("ColorRed".to_string()),
+            group_id: None,
+            cue_id: None,
+            layer_id: None,
+            output_id: None,
+            video_param: None,
+            cue_point_index: None,
+            duration_ms: None,
+            low: 0.0,
+            high: 65_535.0,
+        };
         let json = project_json_for_write_with_control_mappings(
             &project,
             vec![midi_mapping.clone()],
             vec![osc_mapping.clone()],
+            vec![dmx_mapping.clone()],
         )
         .unwrap();
         let (roundtrip, mappings) =
@@ -32201,6 +32605,7 @@ f 1 2 3
         assert_eq!(roundtrip, project);
         assert_eq!(mappings.midi_mappings, vec![midi_mapping]);
         assert_eq!(mappings.osc_mappings, vec![osc_mapping]);
+        assert_eq!(mappings.dmx_mappings, vec![dmx_mapping]);
     }
 
     #[test]
@@ -43173,6 +43578,7 @@ fn main() {
             disconnect_remote_client,
             stop_remote_control,
             start_dmx_input,
+            learn_dmx_control,
             dmx_input_status,
             stop_dmx_input,
             send_art_rdm_request,

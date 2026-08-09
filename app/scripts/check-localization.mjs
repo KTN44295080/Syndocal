@@ -253,10 +253,10 @@ assert.equal(
 );
 assert.equal(
   localization.translateUiText(
-    "Created an unsaved project from Festival Base (2 embedded profiles, 4 MIDI, 1 OSC mappings). All DMX and video outputs are disabled and blacked out.",
+    "Created an unsaved project from Festival Base (2 embedded profiles, 4 MIDI, 1 OSC, 3 DMX mappings). All DMX and video outputs are disabled and blacked out.",
     "ja",
   ),
-  "Festival Baseから未保存プロジェクトを作成しました（埋め込みプロファイル 2、MIDI 4、OSC 1）。DMXと映像出力はすべて無効・ブラックアウトです。",
+  "Festival Baseから未保存プロジェクトを作成しました（埋め込みプロファイル 2、MIDI 4、OSC 1、DMX 3）。DMXと映像出力はすべて無効・ブラックアウトです。",
 );
 assert.equal(
   localization.translateUiText(

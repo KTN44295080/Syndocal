@@ -1,7 +1,7 @@
 import { normalizeFixtureFlagClearKind } from "./controlMappingActions";
-import type { MidiControlMapping, OscControlMapping } from "./types";
+import type { DmxControlMapping, MidiControlMapping, OscControlMapping } from "./types";
 
-export const controlMappingTargetLabel = (mapping: MidiControlMapping | OscControlMapping) => {
+export const controlMappingTargetLabel = (mapping: DmxControlMapping | MidiControlMapping | OscControlMapping) => {
   switch (mapping.action) {
     case "FixtureAttribute": return `Fixture ${mapping.fixture_id} ${mapping.attribute}`;
     case "SelectedFeatureFader": return `Selected feature fader ${(mapping.cue_point_index ?? 0) + 1}`;

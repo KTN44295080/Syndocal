@@ -235,6 +235,7 @@ import type {
   PlaybackExecutorSummary,
   DmxOutputConfig,
   DvcImportReport,
+  DmxControlMapping,
   DmxInputConfig,
   DmxInputStatus,
   EffectBlendMode,
@@ -253,6 +254,7 @@ import type {
   FixturePresetGroupLoadResult,
   FixtureProfileSummary,
   GeometrySummary,
+  LearnedDmxControl,
   LearnedMidiControl,
   LearnedOscControl,
   LfoShape,
@@ -625,7 +627,10 @@ import { controlMappingTargetLabel } from "./controlMappingLabels";
 import { createControlInputController } from "./createControlInputController";
 import {
   controlMappingTargetsFromElement,
+  dmxMappingsFromLearnedControl,
+  sameDmxSource,
   type ControlLearnMode,
+  type ControlMappingTarget,
 } from "./controlMappingLearn";
 import {
   installUiLocalization,
@@ -1500,11 +1505,13 @@ export default function App() {
   const [midiMapLow, setMidiMapLow] = createSignal(0);
   const [midiMapHigh, setMidiMapHigh] = createSignal(65535);
   const [serialPorts, setSerialPorts] = createSignal<SerialPortSummary[]>([]);
+  const [dmxMappings, setDmxMappings] = createSignal<DmxControlMapping[]>([]);
   const [dmxInputConfig, setDmxInputConfig] = createSignal<DmxInputConfig>({
     protocol: "ArtNet",
     bind_ip: "0.0.0.0",
     port: 6454,
     universe: 0,
+    merge_enabled: true,
     merge_mode: "Htp",
     timeout_ms: 2500,
   });
@@ -3417,7 +3424,7 @@ export default function App() {
   };
   const startDmxInput = async () => {
     try {
-      await invoke("start_dmx_input", { config: dmxInputConfig() });
+      await invoke("start_dmx_input", { config: dmxInputConfig(), mappings: dmxMappings() });
       await refreshDmxInputStatus();
       setMessage("DMX input started.");
     } catch (error) {
@@ -8613,7 +8620,7 @@ export default function App() {
 
   const projectStateSignature = (nextSnapshot = snapshot()) =>
     `${projectSnapshotSignature(nextSnapshot)}|operator:${JSON.stringify(operatorPolicy())}`
-    + `|control-mappings:${JSON.stringify({ midi: midiMappings(), osc: oscMappings() })}`;
+    + `|control-mappings:${JSON.stringify({ midi: midiMappings(), osc: oscMappings(), dmx: dmxMappings() })}`;
   const markProjectClean = (nextSnapshot = snapshot()) => {
     setCleanProjectSignature(projectStateSignature(nextSnapshot));
     setProjectDirty(false);
@@ -8701,6 +8708,7 @@ export default function App() {
         expectedVersion: update.version,
         midiMappings: midiMappings(),
         oscMappings: oscMappings(),
+        dmxMappings: dmxMappings(),
       });
       await refreshProjectBackups();
       setMessage(`Syndocal ${update.version} was verified and handed to the platform installer.`);
@@ -8865,6 +8873,7 @@ export default function App() {
         const project = await invoke<ProjectFile>("get_project_checkpoint", {
           midiMappings: midiMappings(),
           oscMappings: oscMappings(),
+          dmxMappings: dmxMappings(),
         });
         const checkpoint = createProjectRecoveryCheckpoint(
           project,
@@ -8885,6 +8894,7 @@ export default function App() {
           reason: "autosave",
           midiMappings: midiMappings(),
           oscMappings: oscMappings(),
+          dmxMappings: dmxMappings(),
         });
         lastDesktopBackupSignature = signature;
         lastDesktopBackupAt = now;
@@ -10961,6 +10971,7 @@ export default function App() {
   const replaceProjectControlMappings = async (
     nextMidiMappings: MidiControlMapping[],
     nextOscMappings: OscControlMapping[],
+    nextDmxMappings: DmxControlMapping[],
   ) => {
     if (midiControlConnected()) {
       try {
@@ -10976,10 +10987,21 @@ export default function App() {
         // The newly loaded project's mappings must still replace the old set.
       }
     }
+    if (dmxInputStatus().running) {
+      try {
+        await invoke("stop_dmx_input");
+      } catch {
+        // Project replacement still owns the frontend mapping state.
+      }
+    }
     setMidiControlConnected(false);
     setOscRunning(false);
     setMidiMappings(nextMidiMappings);
     setOscMappings(nextOscMappings);
+    setDmxMappings(nextDmxMappings);
+    if (nextDmxMappings.length > 0) {
+      setDmxInputConfig((current) => ({ ...current, merge_enabled: false }));
+    }
   };
 
   const applySelectedFixtureLimits = () => {
@@ -10998,7 +11020,7 @@ export default function App() {
     }
     try {
       await invoke("new_project");
-      await replaceProjectControlMappings([], []);
+      await replaceProjectControlMappings([], [], []);
       await resetProjectHistory();
       setCurrentProjectPath(null);
       setWorkspaceTab("setup");
@@ -11019,6 +11041,7 @@ export default function App() {
       const path = await invoke<string | null>("save_user_template", {
         midiMappings: midiMappings(),
         oscMappings: oscMappings(),
+        dmxMappings: dmxMappings(),
       });
       setMessage(path ? `Saved user template ${path}` : "Template save canceled.");
     } catch (error) {
@@ -11037,7 +11060,11 @@ export default function App() {
         setMessage("Template load canceled.");
         return;
       }
-      await replaceProjectControlMappings(result.midi_mappings, result.osc_mappings);
+      await replaceProjectControlMappings(
+        result.midi_mappings,
+        result.osc_mappings,
+        result.dmx_mappings,
+      );
       await resetProjectHistory();
       setCurrentProjectPath(null);
       setWorkspaceTab("setup");
@@ -11049,7 +11076,7 @@ export default function App() {
       }
       clearProjectRecovery();
       setMessage(
-        `Created an unsaved project from ${result.label} (${result.profiles.length} embedded profiles, ${result.midi_mappings.length} MIDI, ${result.osc_mappings.length} OSC mappings). All DMX and video outputs are disabled and blacked out.`,
+        `Created an unsaved project from ${result.label} (${result.profiles.length} embedded profiles, ${result.midi_mappings.length} MIDI, ${result.osc_mappings.length} OSC, ${result.dmx_mappings.length} DMX mappings). All DMX and video outputs are disabled and blacked out.`,
       );
     } catch (error) {
       setMessage(`Template load failed: ${String(error)}`);
@@ -11065,6 +11092,7 @@ export default function App() {
       const path = await invoke<string | null>("save_project", {
         midiMappings: midiMappings(),
         oscMappings: oscMappings(),
+        dmxMappings: dmxMappings(),
       });
       if (path) {
         setCurrentProjectPath(path);
@@ -11090,6 +11118,7 @@ export default function App() {
       const path = await invoke<string | null>("save_project_as", {
         midiMappings: midiMappings(),
         oscMappings: oscMappings(),
+        dmxMappings: dmxMappings(),
       });
       if (path) {
         setCurrentProjectPath(path);
@@ -11108,7 +11137,7 @@ export default function App() {
 
   const loadedProjectMessage = (result: ProjectLoadResult) => {
     const profileLabel = result.profiles.length === 1 ? "1 embedded profile" : `${result.profiles.length} embedded profiles`;
-    const mappingLabel = `${result.midi_mappings?.length ?? 0} MIDI / ${result.osc_mappings?.length ?? 0} OSC mappings`;
+    const mappingLabel = `${result.midi_mappings?.length ?? 0} MIDI / ${result.osc_mappings?.length ?? 0} OSC / ${result.dmx_mappings?.length ?? 0} DMX mappings`;
     const warnings = result.warnings ?? [];
     const warningLabel = warnings.length === 1 ? "1 validation warning" : `${warnings.length} validation warnings`;
     return warnings.length > 0
@@ -11117,7 +11146,11 @@ export default function App() {
   };
 
   const applyLoadedProjectResult = async (result: ProjectLoadResult, currentPath: string | null) => {
-    await replaceProjectControlMappings(result.midi_mappings ?? [], result.osc_mappings ?? []);
+    await replaceProjectControlMappings(
+      result.midi_mappings ?? [],
+      result.osc_mappings ?? [],
+      result.dmx_mappings ?? [],
+    );
     await resetProjectHistory();
     setCurrentProjectPath(currentPath);
     rememberRecentProjectPath(currentPath);
@@ -11162,7 +11195,7 @@ export default function App() {
         setMessage("Daslight Project import canceled.");
         return;
       }
-      await replaceProjectControlMappings(report.midi_mappings ?? [], []);
+      await replaceProjectControlMappings(report.midi_mappings ?? [], [], report.dmx_mappings ?? []);
       await resetProjectHistory();
       setCurrentProjectPath(null);
       setWorkspaceTab("setup");
@@ -11175,7 +11208,7 @@ export default function App() {
       clearProjectRecovery();
       setDvcImportReport(report);
       setMessage(
-        `Imported Daslight Project (.dvc): ${report.summary.fixtures} fixtures, ${report.summary.cues} cues, ${report.midi_mappings?.length ?? 0} MIDI mappings. Save As to create a Syndocal Project (.sdc).`,
+        `Imported Daslight Project (.dvc): ${report.summary.fixtures} fixtures, ${report.summary.cues} cues, ${report.midi_mappings?.length ?? 0} MIDI and ${report.dmx_mappings?.length ?? 0} DMX mappings. Save As to create a Syndocal Project (.sdc).`,
       );
     } catch (error) {
       setMessage(`Daslight Project import failed: ${String(error)}`);
@@ -11217,7 +11250,11 @@ export default function App() {
         label: `Recovery ${checkpoint.saved_at}`,
         currentPath: checkpoint.source_path,
       });
-      await replaceProjectControlMappings(result.midi_mappings ?? [], result.osc_mappings ?? []);
+      await replaceProjectControlMappings(
+        result.midi_mappings ?? [],
+        result.osc_mappings ?? [],
+        result.dmx_mappings ?? [],
+      );
       await resetProjectHistory();
       setCurrentProjectPath(checkpoint.source_path);
       setMessage(
@@ -11248,7 +11285,11 @@ export default function App() {
     }
     try {
       const result = await invoke<ProjectLoadResult>("load_project_backup", { backupId: backup.id });
-      await replaceProjectControlMappings(result.midi_mappings ?? [], result.osc_mappings ?? []);
+      await replaceProjectControlMappings(
+        result.midi_mappings ?? [],
+        result.osc_mappings ?? [],
+        result.dmx_mappings ?? [],
+      );
       await resetProjectHistory();
       setCurrentProjectPath(backup.source_path ?? null);
       setMessage(
@@ -11322,7 +11363,11 @@ export default function App() {
     }
     try {
       const result = await invoke<ProjectLoadResult>("load_phase1_sample_project");
-      await replaceProjectControlMappings(result.midi_mappings ?? [], result.osc_mappings ?? []);
+      await replaceProjectControlMappings(
+        result.midi_mappings ?? [],
+        result.osc_mappings ?? [],
+        result.dmx_mappings ?? [],
+      );
       await resetProjectHistory();
       setPhase1SmokeReport(null);
       setCurrentProjectPath(null);
@@ -11342,7 +11387,7 @@ export default function App() {
   const runPhase1Smoke = async () => {
     try {
       const report = await invoke<Phase1SmokeReport>("run_phase1_smoke");
-      await replaceProjectControlMappings([], []);
+      await replaceProjectControlMappings([], [], []);
       await resetProjectHistory();
       setPhase1SmokeReport(report);
       setCurrentProjectPath(null);
@@ -12820,6 +12865,49 @@ export default function App() {
     }
     setControlLearnTargetLabel(element.dataset.controlMapLabel ?? "Selected control");
   };
+  const learnDmxControlForTargets = async (targets: readonly ControlMappingTarget[]) => {
+    if (targets.length === 0) {
+      setMessage("This control cannot be mapped to DMX input.");
+      return;
+    }
+    if (!dmxInputStatus().running) {
+      try {
+        await invoke("start_dmx_input", { config: dmxInputConfig(), mappings: dmxMappings() });
+        const status = await invoke<DmxInputStatus>("dmx_input_status");
+        setDmxInputStatus(status);
+        if (!status.running) {
+          setMessage("DMX Learn could not start the configured DMX input.");
+          return;
+        }
+      } catch (error) {
+        setMessage(`DMX Learn could not start input: ${String(error)}`);
+        return;
+      }
+    }
+    try {
+      const learned = await invoke<LearnedDmxControl | null>("learn_dmx_control");
+      if (!learned) {
+        setMessage("DMX Learn timed out. Move the hardware control after learning starts.");
+        return;
+      }
+      const learnedMappings = dmxMappingsFromLearnedControl(targets, learned);
+      const nextMappings = [
+        ...dmxMappings().filter((mapping) => !sameDmxSource(mapping, learned)),
+        ...learnedMappings,
+      ];
+      setDmxMappings(nextMappings);
+      const controlConfig = { ...dmxInputConfig(), merge_enabled: false };
+      setDmxInputConfig(controlConfig);
+      await invoke("stop_dmx_input");
+      await invoke("start_dmx_input", { config: controlConfig, mappings: nextMappings });
+      setDmxInputStatus(await invoke<DmxInputStatus>("dmx_input_status"));
+      setMessage(
+        `Mapped U${learned.universe + 1} Ch ${learned.channel} to ${learnedMappings.length} control(s). DMX input is active in Control mappings mode.`,
+      );
+    } catch (error) {
+      setMessage(`DMX Learn failed: ${String(error)}`);
+    }
+  };
   const setControlLearnMode = (mode: ControlLearnMode | null) => {
     if (controlLearnBusy()) return;
     clearControlLearnSelection();
@@ -12829,6 +12917,8 @@ export default function App() {
       if (midiInputs().length === 0) void refreshMidiInputs();
     } else if (mode === "osc") {
       setMessage("OSC Learn: select a pink control, then send its OSC message.");
+    } else if (mode === "dmx") {
+      setMessage("DMX Learn: select a pink control, then move its DMX input channel.");
     } else {
       setMessage("Control Learn closed. Existing mappings remain active.");
     }
@@ -12844,14 +12934,16 @@ export default function App() {
     if (controlLearnBusy()) return;
     const targets = controlMappingTargetsFromElement(element);
     if (targets.length === 0) {
-      setMessage("This control cannot be mapped with the current MIDI/OSC action model.");
+      setMessage("This control cannot be mapped with the current control action model.");
       return;
     }
     selectControlLearnElement(element);
     setControlLearnBusy(true);
     void (mode === "midi"
       ? learnMidiControlForTargets(targets)
-      : learnOscControlForTargets(targets))
+      : mode === "osc"
+        ? learnOscControlForTargets(targets)
+        : learnDmxControlForTargets(targets))
       .finally(() => setControlLearnBusy(false));
   };
   document.addEventListener("click", handleControlLearnClick, true);
@@ -19906,9 +19998,11 @@ export default function App() {
           <DmxInputPanel
             config={dmxInputConfig()}
             status={dmxInputStatus()}
+            mappings={dmxMappings()}
             onConfig={setDmxInputConfig}
             onStart={startDmxInput}
             onStop={stopDmxInput}
+            onRemoveMapping={(index) => setDmxMappings((current) => current.filter((_, itemIndex) => itemIndex !== index))}
           />
           </div>
           </details>

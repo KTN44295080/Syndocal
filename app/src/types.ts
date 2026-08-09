@@ -222,6 +222,31 @@ export interface OscControlMapping {
   high: number;
 }
 
+export type DmxControlAction = OscControlAction;
+
+export interface DmxControlMapping {
+  universe: number;
+  channel: number;
+  action: DmxControlAction;
+  fixture_id?: number | null;
+  attribute?: string | null;
+  group_id?: string | null;
+  cue_id?: number | null;
+  layer_id?: number | null;
+  output_id?: number | null;
+  video_param?: VideoParam | null;
+  cue_point_index?: number | null;
+  duration_ms?: number | null;
+  low: number;
+  high: number;
+}
+
+export interface LearnedDmxControl {
+  universe: number;
+  channel: number;
+  value: number;
+}
+
 export interface LearnedOscControl {
   address: string;
   value?: number | null;
@@ -741,6 +766,7 @@ export interface ProjectFile {
   fixture_groups?: FixtureGroupSummary[];
   midi_mappings?: MidiControlMapping[];
   osc_mappings?: OscControlMapping[];
+  dmx_mappings?: DmxControlMapping[];
   snapshot: EngineSnapshot;
 }
 
@@ -749,6 +775,7 @@ export interface ProjectLoadResult {
   profiles: FixtureProfileSummary[];
   midi_mappings: MidiControlMapping[];
   osc_mappings: OscControlMapping[];
+  dmx_mappings: DmxControlMapping[];
   warnings: string[];
 }
 
@@ -792,12 +819,14 @@ export interface DvcImportReport {
   unsupported: DvcImportCategory;
   warnings: string[];
   midi_mappings: MidiControlMapping[];
+  dmx_mappings: DmxControlMapping[];
 }
 
 export interface UserTemplateLoadResult extends ProjectLoadResult {
   label: string;
   midi_mappings: MidiControlMapping[];
   osc_mappings: OscControlMapping[];
+  dmx_mappings: DmxControlMapping[];
 }
 
 export interface NodeGraphAudioNode {
@@ -2243,6 +2272,7 @@ export interface DmxInputConfig {
   bind_ip: string;
   port: number;
   universe: number;
+  merge_enabled: boolean;
   merge_mode: DmxMergeMode;
   timeout_ms: number;
 }

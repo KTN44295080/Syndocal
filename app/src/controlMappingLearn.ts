@@ -1,4 +1,6 @@
 import type {
+  DmxControlMapping,
+  LearnedDmxControl,
   LearnedMidiControl,
   LearnedOscControl,
   MidiControlAction,
@@ -9,7 +11,7 @@ import type {
   VideoParam,
 } from "./types";
 
-export type ControlLearnMode = "midi" | "osc";
+export type ControlLearnMode = "midi" | "osc" | "dmx";
 
 export interface ControlMappingTarget {
   action: MidiControlAction & OscControlAction;
@@ -131,6 +133,16 @@ export const oscMappingsFromLearnedControl = (
   ...mappingFieldsForTarget(normalizedTarget(target)),
 }));
 
+export const dmxMappingsFromLearnedControl = (
+  targets: readonly ControlMappingTarget[],
+  learned: LearnedDmxControl,
+): DmxControlMapping[] => targets
+  .map((target) => ({
+    universe: learned.universe,
+    channel: learned.channel,
+    ...mappingFieldsForTarget(normalizedTarget(target)),
+  }));
+
 export const sameMidiSource = (mapping: MidiControlMapping, learned: LearnedMidiControl) =>
   mapping.message === learned.message
   && mapping.number === learned.number
@@ -138,6 +150,9 @@ export const sameMidiSource = (mapping: MidiControlMapping, learned: LearnedMidi
 
 export const sameOscSource = (mapping: OscControlMapping, learned: LearnedOscControl) =>
   mapping.address.replace(/\/+$/g, "") === learned.address.replace(/\/+$/g, "");
+
+export const sameDmxSource = (mapping: DmxControlMapping, learned: LearnedDmxControl) =>
+  mapping.universe === learned.universe && mapping.channel === learned.channel;
 
 export const controlMappingTargetsForTouchBinding = (
   binding: TouchControlBinding | null | undefined,

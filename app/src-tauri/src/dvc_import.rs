@@ -12,15 +12,16 @@ use protocol::{
     ChaserDirection, ChaserEffectRequest, ChaserFeature, ChaserStep, ChildTimelineSummary,
     ColorEffectAlgorithm, ColorEffectBeamTarget, ColorEffectColor, ColorEffectInterpolation,
     ColorEffectRequest, ColorEffectSpatialPattern, ColorEffectSpatialRecipe, ColorEffectStop,
-    CueEffectTarget, CueFixtureTarget, CueListSummary, CueSummary, DmxModeSummary, DmxOutputConfig,
-    DmxUniversePreview, EffectBeamTarget, EffectBlendMode, EffectClockSync, EffectParamsSnapshot,
-    EngineSnapshot, FixtureProfileSummary, GeometrySummary, LfoEffectRequest, LfoShape,
-    MidiControlAction, MidiControlFeedback, MidiControlMapping, MidiControlMessage,
-    MidiFeedbackMessage, MoveCoordinateMode, MoveDirection, MoveEffectRequest, MoveInterpolation,
-    MovePathPoint, PatchedFixtureSummary, ProjectFile, Rotation3, StageMapConfig,
-    TimelineAudioClipSummary, TimelineCueEventSummary, TimelineLayerKind, TimelineLayerSummary,
-    TimelineTrackKind, TouchControlBinding, TouchControlKind, TouchControlSummary,
-    TouchFeaturePresetTarget, TouchPageSummary, TouchSurfaceSummary, Vec3,
+    CueEffectTarget, CueFixtureTarget, CueListSummary, CueSummary, DmxControlAction,
+    DmxControlMapping, DmxModeSummary, DmxOutputConfig, DmxUniversePreview, EffectBeamTarget,
+    EffectBlendMode, EffectClockSync, EffectParamsSnapshot, EngineSnapshot, FixtureProfileSummary,
+    GeometrySummary, LfoEffectRequest, LfoShape, MidiControlAction, MidiControlFeedback,
+    MidiControlMapping, MidiControlMessage, MidiFeedbackMessage, MoveCoordinateMode, MoveDirection,
+    MoveEffectRequest, MoveInterpolation, MovePathPoint, PatchedFixtureSummary, ProjectFile,
+    Rotation3, StageMapConfig, TimelineAudioClipSummary, TimelineCueEventSummary,
+    TimelineLayerKind, TimelineLayerSummary, TimelineTrackKind, TouchControlBinding,
+    TouchControlKind, TouchControlSummary, TouchFeaturePresetTarget, TouchPageSummary,
+    TouchSurfaceSummary, Vec3,
 };
 use roxmltree::{Document, Node};
 use serde::Serialize;
@@ -113,6 +114,7 @@ pub(crate) struct DvcImportReport {
     pub(crate) unsupported: DvcImportCategory,
     pub(crate) warnings: Vec<String>,
     pub(crate) midi_mappings: Vec<MidiControlMapping>,
+    pub(crate) dmx_mappings: Vec<DmxControlMapping>,
 }
 
 impl DvcImportReport {
@@ -131,6 +133,7 @@ impl DvcImportReport {
             unsupported: DvcImportCategory::default(),
             warnings: Vec::new(),
             midi_mappings: Vec::new(),
+            dmx_mappings: Vec::new(),
         }
     }
 }
@@ -289,6 +292,7 @@ fn import_bytes(bytes: &[u8], path_label: &str) -> Result<DvcImportOutcome, Stri
     );
     let midi_mappings = parse_midi_shortcuts(root, &scene_indices, &snapshot.cues, &mut report);
     report.midi_mappings = midi_mappings;
+    report.dmx_mappings = parse_dmx_shortcuts(root, &profiles, &fixture_refs, &mut report);
     configure_disabled_dmx_routes(&mut snapshot);
 
     let fixture_group_count = direct_child(root, "FIXTUREGROUPS")
@@ -1088,6 +1092,250 @@ fn dvc_midi_selected_feature_fader_mapping(
     mapping
 }
 
+fn parse_dvc_dmx_event(data: &str) -> Result<(u16, u16), String> {
+    let (path, scalar_selector) = data
+        .trim()
+        .rsplit_once(':')
+        .ok_or_else(|| format!("DMX mapping EVENT DATA '{data}' was malformed"))?;
+    if scalar_selector != "5" {
+        return Err(format!(
+            "DMX mapping EVENT DATA '{data}' uses unverified scalar selector {scalar_selector}"
+        ));
+    }
+    let segments = path.trim_matches('/').split('/').collect::<Vec<_>>();
+    if segments.len() != 3 || !segments[0].eq_ignore_ascii_case("dmx") {
+        return Err(format!("DMX mapping EVENT DATA '{data}' was malformed"));
+    }
+    let daslight_universe = segments[1]
+        .parse::<u16>()
+        .ok()
+        .filter(|universe| *universe > 0)
+        .ok_or_else(|| format!("DMX mapping EVENT DATA '{data}' has an invalid universe"))?;
+    let channel = segments[2]
+        .parse::<u16>()
+        .ok()
+        .filter(|channel| (1..=512).contains(channel))
+        .ok_or_else(|| format!("DMX mapping EVENT DATA '{data}' has an invalid channel"))?;
+    Ok((daslight_universe - 1, channel))
+}
+
+fn parse_dvc_dmx_range(settings: Node<'_, '_>) -> Result<(f32, f32), String> {
+    for (field, expected) in [
+        ("SMODE", "1"),
+        ("CMODE", "1"),
+        ("TMODE", "0"),
+        ("LOOP", "0"),
+        ("FLASH", "0"),
+    ] {
+        if settings.attribute(field) != Some(expected) {
+            return Err(format!(
+                "DMX mapping setting {field}={} is not verified",
+                settings.attribute(field).unwrap_or("missing")
+            ));
+        }
+    }
+    let increment = settings
+        .attribute("INC")
+        .and_then(|value| value.parse::<f32>().ok())
+        .filter(|value| value.is_finite());
+    if !increment.is_some_and(|value| (value - 0.001).abs() <= f32::EPSILON) {
+        return Err(format!(
+            "DMX mapping setting INC={} is not verified",
+            settings.attribute("INC").unwrap_or("missing")
+        ));
+    }
+    let parse_level = |field: &str| {
+        settings
+            .attribute(field)
+            .and_then(|value| value.parse::<f32>().ok())
+            .filter(|value| value.is_finite() && (0.0..=1.0).contains(value))
+            .ok_or_else(|| format!("DMX mapping {field} must be a finite value from 0 to 1"))
+    };
+    let mut low = parse_level("MIN")? * 65_535.0;
+    let mut high = parse_level("MAX")? * 65_535.0;
+    match settings.attribute("INV").unwrap_or("0") {
+        "0" => {}
+        "1" => std::mem::swap(&mut low, &mut high),
+        value => return Err(format!("DMX mapping INV={value} is not verified")),
+    }
+    Ok((low, high))
+}
+
+fn parse_dmx_shortcuts(
+    root: Node<'_, '_>,
+    profiles: &[ParsedProfile],
+    fixture_refs: &HashMap<String, FixtureImportRef>,
+    report: &mut DvcImportReport,
+) -> Vec<DmxControlMapping> {
+    let Some(shortcuts) = direct_child(root, "SHORTCUTS") else {
+        return Vec::new();
+    };
+    let mut mappings = Vec::new();
+    for (shortcut_index, shortcut) in element_children(shortcuts)
+        .filter(|node| node.has_tag_name("SHORTCUT"))
+        .enumerate()
+    {
+        if shortcut.attribute("TYPE") != Some("3") {
+            continue;
+        }
+        let item = format!("Shortcut {}", shortcut_index + 1);
+        let Some(event_data) =
+            direct_child(shortcut, "EVENT").and_then(|event| event.attribute("DATA"))
+        else {
+            report
+                .skipped
+                .add(1, item, "DMX mapping EVENT DATA was missing");
+            continue;
+        };
+        let (universe, channel) = match parse_dvc_dmx_event(event_data) {
+            Ok(source) => source,
+            Err(message) => {
+                report.skipped.add(1, item, message);
+                continue;
+            }
+        };
+        let Some(action) = direct_child(shortcut, "ACTION") else {
+            report
+                .skipped
+                .add(1, item, "DMX mapping ACTION was missing");
+            continue;
+        };
+        if action.attribute("TYPE") != Some("210") {
+            report.unsupported.add(
+                1,
+                item,
+                format!(
+                    "Daslight DMX action type {} is not yet mapped",
+                    action.attribute("TYPE").unwrap_or("missing")
+                ),
+            );
+            continue;
+        }
+        let Some((target_profile_uid, raw_channel_index)) = action
+            .attribute("TARGET")
+            .and_then(|target| target.rsplit_once(':'))
+            .and_then(|(profile_uid, index)| {
+                index
+                    .parse::<usize>()
+                    .ok()
+                    .map(|index| (profile_uid, index))
+            })
+        else {
+            report
+                .skipped
+                .add(1, item, "DMX Feature mapping TARGET was malformed");
+            continue;
+        };
+        let Some(settings) = direct_child(shortcut, "SETTINGS") else {
+            report
+                .skipped
+                .add(1, item, "DMX mapping SETTINGS were missing");
+            continue;
+        };
+        let (low, high) = match parse_dvc_dmx_range(settings) {
+            Ok(range) => range,
+            Err(message) => {
+                report.skipped.add(1, item, message);
+                continue;
+            }
+        };
+        let Some(beams) = direct_child(action, "BEAMS") else {
+            report
+                .skipped
+                .add(1, item, "DMX Feature mapping BEAMS were missing");
+            continue;
+        };
+        let mut target_count = 0_usize;
+        for (beam_index, beam) in element_children(beams)
+            .filter(|node| node.has_tag_name("BEAM"))
+            .enumerate()
+        {
+            let target_item = format!("{item} target {}", beam_index + 1);
+            if beam.attribute("BEAMID") != Some("0") {
+                report.skipped.add(
+                    1,
+                    target_item,
+                    "DMX Feature mapping for a non-primary beam is not yet proven",
+                );
+                continue;
+            }
+            let Some(fixture_ref) = beam
+                .attribute("FIXTURE")
+                .and_then(|fixture_uid| fixture_refs.get(fixture_uid))
+            else {
+                report.skipped.add(
+                    1,
+                    target_item,
+                    "DMX Feature mapping referenced a missing imported fixture",
+                );
+                continue;
+            };
+            let Some(profile) = profiles.get(fixture_ref.profile_index) else {
+                report
+                    .skipped
+                    .add(1, target_item, "DMX Feature mapping profile was missing");
+                continue;
+            };
+            let expected_profile_fragment = format!("/{target_profile_uid}/");
+            if !profile
+                .summary
+                .source_path
+                .contains(&expected_profile_fragment)
+            {
+                report.skipped.add(
+                    1,
+                    target_item,
+                    "DMX Feature mapping TARGET profile did not match its fixture profile",
+                );
+                continue;
+            }
+            let Some(binding) = profile
+                .bindings
+                .iter()
+                .find(|binding| binding.raw_channel_index == raw_channel_index)
+            else {
+                report.skipped.add(
+                    1,
+                    target_item,
+                    format!("DMX Feature mapping channel index {raw_channel_index} was missing"),
+                );
+                continue;
+            };
+            mappings.push(DmxControlMapping {
+                universe,
+                channel,
+                action: DmxControlAction::FixtureAttribute,
+                fixture_id: Some(fixture_ref.fixture_id),
+                attribute: Some(binding.attribute.clone()),
+                group_id: None,
+                cue_id: None,
+                layer_id: None,
+                output_id: None,
+                video_param: None,
+                cue_point_index: None,
+                duration_ms: None,
+                low,
+                high,
+            });
+            target_count = target_count.saturating_add(1);
+        }
+        if target_count == 0 {
+            report
+                .skipped
+                .add(1, item, "DMX Feature mapping had no proven targets");
+        }
+    }
+    report.converted.add(
+        mappings.len(),
+        "DMX control mappings",
+        format!(
+            "{} verified Daslight DMX Feature mapping target(s), with 1-based source universes normalized to internal universes",
+            mappings.len()
+        ),
+    );
+    mappings
+}
+
 fn parse_midi_shortcuts(
     root: Node<'_, '_>,
     scene_indices: &HashMap<String, usize>,
@@ -1107,7 +1355,7 @@ fn parse_midi_shortcuts(
     {
         let item = format!("Shortcut {}", shortcut_index + 1);
         let shortcut_type = shortcut.attribute("TYPE").unwrap_or_default();
-        if shortcut_type == "2" {
+        if shortcut_type == "2" || shortcut_type == "3" {
             continue;
         }
         if shortcut_type != "1" {
@@ -4534,6 +4782,14 @@ mod tests {
         )
     }
 
+    fn synthetic_dmx_shortcuts_dvc() -> String {
+        synthetic_dvc().replacen(
+            "<SHORTCUTS>",
+            r#"<SHORTCUTS><SHORTCUT TYPE="3"><EVENT DATA="/dmx/2/25:5"/><ACTION TYPE="210" TARGET="profile-1:0"><BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0"/></BEAMS></ACTION><SETTINGS SMODE="1" CMODE="1" TMODE="0" MIN="0.25" MAX="0.75" INC="0.001" LOOP="0" FLASH="0" INV="0"/></SHORTCUT><SHORTCUT TYPE="3"><EVENT DATA="/dmx/1/1:4"/><ACTION TYPE="210" TARGET="profile-1:0"><BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0"/></BEAMS></ACTION><SETTINGS SMODE="1" CMODE="1" TMODE="0" MIN="0" MAX="1" INC="0.001" LOOP="0" FLASH="0" INV="0"/></SHORTCUT><SHORTCUT TYPE="3"><EVENT DATA="/dmx/1/2:5"/><ACTION TYPE="211" TARGET="profile-1:0"><BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0"/></BEAMS></ACTION><SETTINGS SMODE="1" CMODE="1" TMODE="0" MIN="0" MAX="1" INC="0.001" LOOP="0" FLASH="0" INV="0"/></SHORTCUT><SHORTCUT TYPE="3"><EVENT DATA="/dmx/1/3:5"/><ACTION TYPE="210" TARGET="profile-1:0"><BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0"/></BEAMS></ACTION><SETTINGS SMODE="2" CMODE="1" TMODE="0" MIN="0" MAX="1" INC="0.001" LOOP="0" FLASH="0" INV="0"/></SHORTCUT><SHORTCUT TYPE="3"><EVENT DATA="/dmx/1/4:5"/><ACTION TYPE="210" TARGET="profile-1:0"><BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0"/></BEAMS></ACTION><SETTINGS SMODE="1" CMODE="1" TMODE="0" MIN="0" MAX="1" INC="0.01" LOOP="0" FLASH="0" INV="0"/></SHORTCUT>"#,
+            1,
+        )
+    }
+
     fn synthetic_layout_dvc() -> String {
         let patch = r#"<PATCH NBFIXTURE="3"><FIXTURES><SSLLIBRARY SSLFIXUID="profile-layout" SSLNAME="Test/Layout.ssl2"><SSLPROPERTIES SSLBEAMOPENING="20"/><SSLMODES SSLNBMODE="1"><SSLMODE SSLMODEINDEX="0" SSLNBCHANNEL="1"><SSLCHANNEL SSLCHANNELTYPE="7" SSLCHANNELNAME="Dimmer" SSLCHANNELMSB="0" SSLCHANNELLSB="0"><SSLPRESETS><SSLPRESET SSLPRESETNAME="Dimmer" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL></SSLMODE></SSLMODES></SSLLIBRARY><FIXTURE DASUID="layout-1" NAME="Layout 1" ADDRESS="1" UNIVERS="1" SIZE="20" POSX="100" POSY="20" ANGLE="15"/><FIXTURE DASUID="layout-2" NAME="Layout 2" ADDRESS="2" UNIVERS="1" SIZE="30" POSX="220" POSY="-40" ANGLE="75"/><FIXTURE DASUID="layout-3" NAME="Layout 3" ADDRESS="3" UNIVERS="1" SIZE="40" POSX="400" POSY="80" ANGLE="195"/></FIXTURES></PATCH>"#;
         format!(
@@ -4966,6 +5222,57 @@ mod tests {
         assert!(outcome.report.approximate.details.iter().any(|detail| {
             detail.item == "MIDI feedback output device affinity"
                 && detail.message.contains("select the intended MIDI output")
+        }));
+    }
+
+    #[test]
+    fn dvc_dmx_shortcuts_import_verified_feature_mapping_and_skip_unproven_variants() {
+        let outcome = import_bytes(
+            synthetic_dmx_shortcuts_dvc().as_bytes(),
+            "synthetic-dmx-shortcuts.dvc",
+        )
+        .unwrap();
+        assert_eq!(
+            outcome.report.dmx_mappings,
+            vec![DmxControlMapping {
+                universe: 1,
+                channel: 25,
+                action: DmxControlAction::FixtureAttribute,
+                fixture_id: Some(1),
+                attribute: Some("Dimmer".to_string()),
+                group_id: None,
+                cue_id: None,
+                layer_id: None,
+                output_id: None,
+                video_param: None,
+                cue_point_index: None,
+                duration_ms: None,
+                low: 16_383.75,
+                high: 49_151.25,
+            }]
+        );
+        assert!(outcome.report.skipped.details.iter().any(|detail| {
+            detail.item == "Shortcut 2" && detail.message.contains("unverified scalar selector 4")
+        }));
+        assert!(outcome.report.unsupported.details.iter().any(|detail| {
+            detail.item == "Shortcut 3" && detail.message.contains("DMX action type 211")
+        }));
+        assert!(outcome.report.skipped.details.iter().any(|detail| {
+            detail.item == "Shortcut 4"
+                && detail
+                    .message
+                    .contains("DMX mapping setting SMODE=2 is not verified")
+        }));
+        assert!(outcome.report.skipped.details.iter().any(|detail| {
+            detail.item == "Shortcut 5"
+                && detail
+                    .message
+                    .contains("DMX mapping setting INC=0.01 is not verified")
+        }));
+        assert!(outcome.report.converted.details.iter().any(|detail| {
+            detail.item == "DMX control mappings"
+                && detail.message
+                    == "1 verified Daslight DMX Feature mapping target(s), with 1-based source universes normalized to internal universes"
         }));
     }
 
@@ -7461,6 +7768,50 @@ mod tests {
         if audited == 0 {
             eprintln!("Skipping local DVC inventory: no known project files are available");
         }
+    }
+
+    #[test]
+    fn dvc_local_panel_restores_verified_dmx_rgb_mappings_when_present() {
+        let path = Path::new(r"C:\Users\kouty\Documents\Daslight 5\Projects\Panel.dvc");
+        if !path.is_file() {
+            eprintln!(
+                "Skipping local Panel DVC mapping audit: {} is unavailable",
+                path.display()
+            );
+            return;
+        }
+        let outcome = import_path(path).unwrap();
+        let restored = outcome
+            .report
+            .dmx_mappings
+            .iter()
+            .map(|mapping| {
+                (
+                    mapping.universe,
+                    mapping.channel,
+                    mapping.fixture_id,
+                    mapping.attribute.as_deref(),
+                    mapping.low,
+                    mapping.high,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            restored,
+            vec![
+                (0, 25, Some(1), Some("ColorRed"), 0.0, 65_535.0),
+                (0, 26, Some(1), Some("ColorGreen"), 0.0, 65_535.0),
+                (0, 27, Some(1), Some("ColorBlue"), 0.0, 65_535.0),
+                (0, 36, Some(2), Some("ColorRed"), 0.0, 65_535.0),
+                (0, 37, Some(2), Some("ColorGreen"), 0.0, 65_535.0),
+                (0, 38, Some(2), Some("ColorBlue"), 0.0, 65_535.0),
+                (0, 47, Some(3), Some("ColorBlue"), 0.0, 65_535.0),
+                (0, 48, Some(3), Some("ColorRed"), 0.0, 65_535.0),
+                (0, 49, Some(3), Some("ColorGreen"), 0.0, 65_535.0),
+            ]
+        );
+        assert_eq!(outcome.report.unsupported.count, 0);
+        assert_eq!(outcome.report.skipped.count, 0);
     }
 
     #[test]

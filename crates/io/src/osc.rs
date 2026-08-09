@@ -802,6 +802,19 @@ fn events_from_mapped_message(
         .collect()
 }
 
+pub(crate) fn event_from_control_value(
+    value: f32,
+    mapping: &OscControlMapping,
+) -> Option<OscInputEvent> {
+    event_from_mapping(
+        &OscMessage {
+            addr: "/external-control".to_string(),
+            args: vec![OscType::Float(value)],
+        },
+        mapping,
+    )
+}
+
 fn event_from_mapping(message: &OscMessage, mapping: &OscControlMapping) -> Option<OscInputEvent> {
     let first_arg = message.args.first();
     let float_value = first_arg.and_then(osc_value_to_f32).unwrap_or(1.0);
