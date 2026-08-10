@@ -2285,6 +2285,9 @@ pub enum ColorEffectSpatialRecipe {
         /// Use the recovered Daslight VALUE-family integer evaluator.
         #[serde(default, skip_serializing_if = "is_false")]
         daslight_exact: bool,
+        /// Apply Daslight's common Grayscale post-process after source-over composition.
+        #[serde(default, skip_serializing_if = "is_false")]
+        grayscale: bool,
         /// Apply Daslight Transform=1 after rendering the source strip.
         #[serde(default, skip_serializing_if = "is_false")]
         vertical_symmetry: bool,
@@ -5120,6 +5123,7 @@ mod tests {
         let legacy: super::ColorEffectSpatialRecipe = serde_json::from_str(legacy_json).unwrap();
         let super::ColorEffectSpatialRecipe::KnightRider {
             daslight_exact,
+            grayscale,
             vertical_symmetry,
             ..
         } = &legacy
@@ -5127,11 +5131,13 @@ mod tests {
             unreachable!()
         };
         assert!(!daslight_exact);
+        assert!(!grayscale);
         assert!(!vertical_symmetry);
         assert_eq!(serde_json::to_string(&legacy).unwrap(), legacy_json);
 
         let exact = super::ColorEffectSpatialRecipe::KnightRider {
             daslight_exact: true,
+            grayscale: true,
             vertical_symmetry: true,
             size: 8,
             one_way: false,
@@ -5141,6 +5147,7 @@ mod tests {
         };
         let json = serde_json::to_string(&exact).unwrap();
         assert!(json.contains(r#""daslight_exact":true"#));
+        assert!(json.contains(r#""grayscale":true"#));
         assert!(json.contains(r#""vertical_symmetry":true"#));
         assert_eq!(
             serde_json::from_str::<super::ColorEffectSpatialRecipe>(&json).unwrap(),

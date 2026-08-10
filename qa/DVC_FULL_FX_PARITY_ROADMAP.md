@@ -19,14 +19,14 @@ Daslight 5.0.6.2 / FileVersion `25.0905.165.111`の実機dropdown全項目とfac
 | ファミリー | 完全factory集合 | 現行converter route | precise fail-closed / 未route |
 |---|---|---|---|
 | VALUE 7/7 | 621–628（8種） | 621 Rainbow, 623 Plasma, 624 Knight Rider, 625 Sweep | 622/628: non-serialized palette-wrap state、626/627: non-serialized per-thread RNG state/history |
-| COLOR FX 2/2 | 121,127,128,129,130,131,133,**134** | 121,127,129,130,131,133 | 128 Perlin / 134 Sweepは未route。Sweep=132という旧推定は撤回 |
+| COLOR FX 2/2 | 121,127,128,129,130,131,133,**134** | 127,129,130 | 121/131/133 precise fail-closed。128 Perlin / 134 Sweepは未route。Sweep=132という旧推定は撤回 |
 | MOVE 4/4 | 221 Circle, 222 Curve, 223 Line, 224 Polygon, 225 Points | 221,223,224 | 222,225未route |
 | CHASER 3/6 | 321 #1, 322 #2, 323 #3, 324 #4, 325 random | 321,322,325 | 323,324未route。distinct evaluatorの演出意味が未証明 |
 | CURVE 8/5 | 3–13（11種） | 3 Inverse Ramp, 7 Sinus, 10 Strobe | 4,5,6,8,9,11,12,13未route。Custom 13だけ別schema |
-| MAPPINGS 6/8 | 521–530（10種） | 521 Rainbow, 530 Perlin | 522–529未route |
+| MAPPINGS 6/8 | 521–530（10種） | 521 Rainbow | 530 precise fail-closed。522–529未route |
 | COLOR MAPPINGS 5/3 | 21,22,23,29–37,40–42,44,45,47–50（21種） | 36 Rainbow | 残20種未route |
 
-現行converter routeは22/68 ID。これはID単位の入口coverageであり、共有raster classの再利用度や
+現行runtime converter routeは18/68 ID、precise fail-closedは8、未routeは42。これはID単位の入口coverageであり、共有raster classの再利用度や
 STEPS/SUPER SCENEなど非generator構造を含む「製品完成率」ではない。未routeをUI名だけで近似せず、
 各evaluatorの意味論を回収したトランシェだけを増やす。
 
@@ -76,11 +76,16 @@ strict-core数を製品全域のexact完成数とは呼ばない。
    ただし上記palette上限など横断表現域は残るため、13をfull-domain完成数にはしない。
    ゲートはDVC focused 71/71、Syndocal全体397 pass / 0 fail / 9 ignored、
    `pnpm --dir app tauri build --no-bundle`成功、exact checkout exe 1件のresponsive native windowで固定した。
-   **C0b次**: COLOR 121/131/133とMAPPINGS 530は、非等価generic/RNG/palette state/Rectangle欠落を
+   **C0b完了**: COLOR 121/131/133とMAPPINGS 530は、非等価generic/RNG/palette state/Rectangle欠落を
    class固有理由付きprecise fail-closedへ戻す。COLOR 127はVALUE 624と共有する回収済み評価器で
    exact化する。MOVE 223/224とCHASER 321/325は既存show互換を維持しつつ常時Approximateを明示する。
    `.dvc`だけではexact replay不能なqrand/palette-wrap/generic置換routeは、近似成功扱いを撤回して
    class固有理由付きprecise fail-closedへ戻す。
+   COLOR 127は40ms floor、合成後qGray、Transform foldまで固定し、条件付きexact-coreは14へ増加。
+   C0b分類はruntime-convert 18 / precise fail-closed 8 / 未route 42 / 明示compatibility 4。
+   ゲートはDVC focused 71/71、workspace全体397 pass / 0 fail / 9 ignored、frontend build、
+   localization 3045/3045、Value/FX可視化契約、`tauri build --no-bundle`を通過。exact checkoutの
+   release exeをPID 73200で再起動し、`Syndocal` responsive windowが1件であることを確認した。
 6. **新規IDトランシェ**: correctness着地後、(a)既存Sweep evaluatorを再利用できるCOLOR FX 134
    → (b)Move残（222 Curve / 225 Points）→ (c)CURVE残 → (d)CHASER 323/324
    → (e)MAPPINGS/COLOR MAPPINGS 2D群

@@ -170,6 +170,12 @@ Syndocalの現行Scene Settingsでは、作成時のMAPPINGS / COLOR MAPPINGSを
    Daslight exact parityの完了ではない。DVC-ENUM factory schemaとの逆照合で、121/127/131/133/530は
    compatibility/近似、521はID10 scale不一致と判明した。現行分類は
    `qa/DVC_FULL_FX_CATALOG_PARITY.md`を優先する。
+   **2026-08-10 C0b訂正**: 127は共有`CKnightRiderEffect / 0x140363FE0`の40ms整数評価器、
+   Transform fold、合成後qGrayへ移してexact化した。121 (`0x140362B70`)はgeneric radial Burst非等価、
+   131 (`0x140365C70`) / 133 (`0x1403660F0`)は非serialize qrand state/history、530
+   (`0x140365090`)はRectangleを捨てるgeneric noise非等価のため、全TYPE/domain検証後にprecise
+   fail-closedへ変更した。synthetic断言は旧6 converted / 0 skippedから2 / 4へ、full Shinkanは
+   30 / 0から27 / 3へ、homecomingは13 / 0から9 / 4へ再交渉した。
 3. **DVC-3c（照合完了）**: MOVE FX / TYPE=8、ID 322・129・130・CURVE波形10を照合済み。
    VALUE FX ID621の対象ゼロ実保存形は忠実なno-opとして変換済み。対象ありVALUE FXは厳密schemaの
    合成検体まで実装済み、COLOR MAPPINGSは実保存検体なし。どちらも実保存形との照合完了には数えない。

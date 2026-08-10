@@ -3641,6 +3641,16 @@ impl CompiledDaslightKnightRider {
         gradient: f32,
         vertical_symmetry: bool,
     ) -> Result<Self, String> {
+        let grayscale = matches!(
+            request
+                .spatial_pattern
+                .as_ref()
+                .map(|pattern| &pattern.recipe),
+            Some(ColorEffectSpatialRecipe::KnightRider {
+                grayscale: true,
+                ..
+            })
+        );
         if !(2..=32).contains(&request.stops.len()) {
             return Err(
                 "Daslight-exact Knight Rider requires between 2 and 32 VALUE points".to_string(),
@@ -3859,10 +3869,20 @@ impl CompiledDaslightKnightRider {
         })?;
         for frame_index in 0..table_frame_count {
             for destination_index in 0..strip_count {
-                frames.push(compiled.compose_frame(frame_index, destination_index));
+                let composed = compiled.compose_frame(frame_index, destination_index);
+                frames.push(if grayscale {
+                    DaslightKnightColor::from_color(daslight_grayscale_color(composed.into_color()))
+                } else {
+                    composed
+                });
             }
         }
         compiled.frames = Arc::new(frames);
+        if grayscale {
+            compiled.background = DaslightKnightColor::from_color(daslight_grayscale_color(
+                compiled.background.into_color(),
+            ));
+        }
         Ok(compiled)
     }
 
@@ -4013,6 +4033,7 @@ fn compile_daslight_value_spatial(
     match &pattern.recipe {
         ColorEffectSpatialRecipe::KnightRider {
             daslight_exact: true,
+            grayscale: _,
             vertical_symmetry,
             size,
             one_way,
@@ -30124,6 +30145,7 @@ fn evaluate_color_spatial_sample_at_rate(
 
     let color = match &pattern.recipe {
         ColorEffectSpatialRecipe::KnightRider {
+            grayscale,
             size,
             one_way,
             fading,
@@ -30178,11 +30200,17 @@ fn evaluate_color_spatial_sample_at_rate(
                 origin + (phase - 0.5) * travel_span
             };
             let level = level_at_center(center);
+            let color =
+                spatial_palette_color(request, level, if *fading { *gradient } else { 0.0 });
             return RuntimeColorSpatialSample {
                 // Fading changes interpolation inside the palette. With it
                 // disabled Daslight lands on discrete palette stops; it does
                 // not make the mapping transparent.
-                color: spatial_palette_color(request, level, if *fading { *gradient } else { 0.0 }),
+                color: if *grayscale {
+                    daslight_grayscale_color(color)
+                } else {
+                    color
+                },
                 opacity: 1.0,
             };
         }
@@ -53061,6 +53089,7 @@ mod tests {
         assert!((2..=32).contains(&palette_red.len()));
         let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
             daslight_exact: true,
+            grayscale: false,
             vertical_symmetry,
             size,
             one_way,
@@ -53935,6 +53964,60 @@ mod tests {
     }
 
     #[test]
+    fn daslight_exact_knight_rider_grayscale_is_applied_after_completed_frame_composition() {
+        let mut color_request =
+            test_daslight_knight_request(1_000, 3, true, true, true, 50.0, false, &[0, 1, 2]);
+        color_request.stops[0].color = test_color(12_000, 4_000, 40_000);
+        color_request.stops[1].color = test_color(60_000, 2_000, 8_000);
+        color_request.stops[2].color = test_color(1_000, 55_000, 20_000);
+        let mut grayscale_request = color_request.clone();
+        let ColorEffectSpatialRecipe::KnightRider { grayscale, .. } =
+            &mut grayscale_request.spatial_pattern.as_mut().unwrap().recipe
+        else {
+            unreachable!()
+        };
+        *grayscale = true;
+
+        let color = CompiledDaslightKnightRider::compile(
+            &color_request,
+            5,
+            3,
+            true,
+            true,
+            true,
+            50.0,
+            false,
+        )
+        .unwrap();
+        let grayscale = CompiledDaslightKnightRider::compile(
+            &grayscale_request,
+            5,
+            3,
+            true,
+            true,
+            true,
+            50.0,
+            false,
+        )
+        .unwrap();
+
+        for frame in 0..color.table_frame_count {
+            for destination in 0..color.strip_count {
+                let expected = DaslightKnightColor::from_color(daslight_grayscale_color(
+                    color.sample_frame(frame, destination).into_color(),
+                ));
+                assert_eq!(grayscale.sample_frame(frame, destination), expected);
+            }
+        }
+        assert_eq!(
+            grayscale.background,
+            DaslightKnightColor::from_color(daslight_grayscale_color(
+                color.background.into_color(),
+            ))
+        );
+    }
+
+    #[test]
     fn daslight_exact_knight_rider_validation_is_additive_to_native_recipe() {
         let exact_fractional =
             test_daslight_knight_request(1_000, 3, true, true, false, 50.5, false, &[0, u16::MAX]);
@@ -53946,6 +54029,7 @@ mod tests {
         native_fractional.spatial_pattern.as_mut().unwrap().recipe =
             ColorEffectSpatialRecipe::KnightRider {
                 daslight_exact: false,
+                grayscale: false,
                 vertical_symmetry: false,
                 size: 3,
                 one_way: true,
@@ -53962,6 +54046,7 @@ mod tests {
             .unwrap()
             .recipe = ColorEffectSpatialRecipe::KnightRider {
             daslight_exact: false,
+            grayscale: false,
             vertical_symmetry: true,
             size: 3,
             one_way: true,
@@ -53980,6 +54065,7 @@ mod tests {
     fn color_spatial_knight_rider_sweeps_an_absolute_palette_window() {
         let request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
             daslight_exact: false,
+            grayscale: false,
             vertical_symmetry: false,
             size: 3,
             one_way: true,
@@ -54067,6 +54153,7 @@ mod tests {
     fn color_spatial_knight_rider_size_is_absolute_beam_cells() {
         let request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
             daslight_exact: false,
+            grayscale: false,
             vertical_symmetry: false,
             size: 32,
             one_way: true,
@@ -54092,6 +54179,7 @@ mod tests {
     fn color_spatial_knight_rider_bidirectional_sweep_starts_at_strip_center() {
         let request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
             daslight_exact: false,
+            grayscale: false,
             vertical_symmetry: false,
             size: 3,
             one_way: false,
@@ -54126,6 +54214,7 @@ mod tests {
     fn color_spatial_knight_rider_fading_selects_palette_interpolation() {
         let fading = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
             daslight_exact: false,
+            grayscale: false,
             vertical_symmetry: false,
             size: 4,
             one_way: true,
@@ -54135,6 +54224,7 @@ mod tests {
         });
         let stepped = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
             daslight_exact: false,
+            grayscale: false,
             vertical_symmetry: false,
             size: 4,
             one_way: true,
@@ -58466,6 +58556,7 @@ mod tests {
         request.spatial_pattern = Some(protocol::ColorEffectSpatialPattern {
             recipe: ColorEffectSpatialRecipe::KnightRider {
                 daslight_exact: true,
+                grayscale: false,
                 vertical_symmetry: false,
                 size: 3,
                 one_way: true,
@@ -59497,6 +59588,7 @@ mod tests {
             request.spatial_pattern = Some(protocol::ColorEffectSpatialPattern {
                 recipe: ColorEffectSpatialRecipe::KnightRider {
                     daslight_exact: true,
+                    grayscale: false,
                     vertical_symmetry: index % 2 == 1,
                     size: 100,
                     one_way,

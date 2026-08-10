@@ -2727,6 +2727,7 @@ fn convert_dvc_value_effect(
                 dvc_binary_param(&params, 3, "VALUE FX Knight Rider Transform")?;
             ColorEffectSpatialRecipe::KnightRider {
                 daslight_exact: true,
+                grayscale: false,
                 vertical_symmetry,
                 size: dvc_integer_range_param(&params, 10, "VALUE FX Knight Rider Size", 1, 100)?
                     as u16,
@@ -2863,7 +2864,7 @@ fn convert_dvc_value_effect(
         ));
     }
     let (period_ms, period_note) = if generator_id == 624 {
-        dvc_exact_value_period(effect, generator)?
+        dvc_exact_generator_period(effect, "VALUE FX", generator)?
     } else {
         dvc_move_period(
             effect,
@@ -3023,44 +3024,78 @@ fn convert_dvc_color_spatial_effect(
         }
         127 => {
             require_exact_dvc_params(&params, &[2, 3, 10, 11, 12, 13, 14])?;
-            require_zero_dvc_param(&params, 2, "Knight Rider header")?;
-            require_zero_dvc_param(&params, 3, "Knight Rider transform")?;
+            require_exact_dvc_param_types(
+                effect,
+                &[
+                    (1, 4),
+                    (2, 2),
+                    (3, 6),
+                    (10, 0),
+                    (11, 2),
+                    (12, 2),
+                    (13, 2),
+                    (14, 0),
+                ],
+            )?;
+            let grayscale = dvc_binary_param(&params, 2, "COLOR FX Knight Rider Grayscale")?;
+            let transform = dvc_param(&params, 3, "COLOR FX Knight Rider Transform")?;
+            if !matches!(transform, 0.0 | 1.0) {
+                return Err(format!(
+                    "COLOR FX Knight Rider Transform PARAM 3 must be None(0) or Vertical symmetry(1), found {transform}"
+                ));
+            }
             ColorEffectSpatialRecipe::KnightRider {
-                daslight_exact: false,
-                vertical_symmetry: false,
-                size: dvc_u16_param(&params, 10, "Size")?,
-                one_way: dvc_binary_param(&params, 11, "One Way Only")?,
-                fading: dvc_binary_param(&params, 12, "Fading")?,
-                go_outside: dvc_binary_param(&params, 13, "Go Outside")?,
-                gradient: dvc_percent_param(&params, 14, "Gradient")?,
+                daslight_exact: true,
+                grayscale,
+                vertical_symmetry: transform == 1.0,
+                size: dvc_integer_range_param(&params, 10, "COLOR FX Knight Rider Size", 1, 100)?
+                    as u16,
+                one_way: dvc_binary_param(&params, 11, "COLOR FX Knight Rider One Way Only")?,
+                fading: dvc_binary_param(&params, 12, "COLOR FX Knight Rider Fading")?,
+                go_outside: dvc_binary_param(&params, 13, "COLOR FX Knight Rider Go Outside")?,
+                gradient: dvc_integer_range_param(
+                    &params,
+                    14,
+                    "COLOR FX Knight Rider Gradient",
+                    0,
+                    100,
+                )? as f32,
             }
         }
         121 => {
             require_exact_dvc_params(&params, &[2, 3, 10, 11])?;
-            require_zero_dvc_param(&params, 2, "Burst header")?;
-            require_zero_dvc_param(&params, 3, "Burst transform")?;
-            ColorEffectSpatialRecipe::Burst {
-                color_width: dvc_percent_param(&params, 10, "Color Width")?,
-                gradient: dvc_unit_param(&params, 11, "Gradient")? * 100.0,
-            }
+            require_exact_dvc_param_types(effect, &[(1, 4), (2, 2), (3, 6), (10, 0), (11, 1)])?;
+            dvc_binary_param(&params, 2, "COLOR FX Burst Grayscale")?;
+            dvc_binary_param(&params, 3, "COLOR FX Burst Transform")?;
+            dvc_integer_range_param(&params, 10, "COLOR FX Burst Width", 10, 900)?;
+            dvc_unit_param(&params, 11, "COLOR FX Burst Gradient")?;
+            return Err("COLOR FX Burst ID=121 remains fail-closed after exact schema validation: recovered CBurstEffect evaluator 0x140362B70 is not represented by Syndocal's generic radial Burst evaluator, and family-2 palette-cache/wrap topology has not been proven from constructor or serialized state; no equivalent runtime target was created".to_string());
         }
         131 => {
             require_exact_dvc_params(&params, &[2, 3, 10])?;
-            require_zero_dvc_param(&params, 2, "Random fill header")?;
-            require_zero_dvc_param(&params, 3, "Random fill transform")?;
-            ColorEffectSpatialRecipe::RandomFill {
-                point_width: dvc_u16_param(&params, 10, "Point Width")?,
-            }
+            require_exact_dvc_param_types(effect, &[(1, 4), (2, 2), (3, 6), (10, 0)])?;
+            dvc_binary_param(&params, 2, "COLOR FX Random fill Grayscale")?;
+            dvc_binary_param(&params, 3, "COLOR FX Random fill Transform")?;
+            dvc_integer_range_param(&params, 10, "COLOR FX Random fill Point Width", 1, 10)?;
+            return Err("COLOR FX Random fill ID=131 remains fail-closed after exact schema validation: recovered CRandomFillEffect evaluator 0x140365C70 consumes Qt per-thread qrand state and prior draw history that are not serialized in the .dvc; Syndocal's effect-id-derived deterministic seed is not frame-equivalent, so no runtime target was created".to_string());
         }
         133 => {
             require_exact_dvc_params(&params, &[2, 3, 10, 11, 12])?;
-            require_zero_dvc_param(&params, 2, "Sparkle header")?;
-            require_zero_dvc_param(&params, 3, "Sparkle transform")?;
-            ColorEffectSpatialRecipe::Sparkle {
-                number: dvc_u16_param(&params, 10, "Sparkle Number")?,
-                lifespan: dvc_percent_param(&params, 11, "Sparkle LifeSpan")?,
-                width: dvc_u16_param(&params, 12, "Sparkle Width")?,
+            require_exact_dvc_param_types(
+                effect,
+                &[(1, 4), (2, 2), (3, 6), (10, 0), (11, 1), (12, 0)],
+            )?;
+            dvc_binary_param(&params, 2, "COLOR FX Sparkle Grayscale")?;
+            dvc_binary_param(&params, 3, "COLOR FX Sparkle Transform")?;
+            dvc_integer_range_param(&params, 10, "COLOR FX Sparkle Number", 1, 10)?;
+            let lifespan = dvc_param(&params, 11, "COLOR FX Sparkle LifeSpan")?;
+            if !lifespan.is_finite() || !(0.0..=0.9).contains(&lifespan) {
+                return Err(format!(
+                    "COLOR FX Sparkle LifeSpan PARAM 11 must be within 0..0.9, found {lifespan}"
+                ));
             }
+            dvc_integer_range_param(&params, 12, "COLOR FX Sparkle Width", 1, 90)?;
+            return Err("COLOR FX Sparkle ID=133 remains fail-closed after exact schema validation: recovered CSparklesEffect evaluator 0x1403660F0 consumes Qt per-thread qrand state and prior draw history that are not serialized in the .dvc, and the prior percent-scaled lifespan route is not evaluator-equivalent; no runtime target was created".to_string());
         }
         129 => {
             require_exact_dvc_params(&params, &[2, 3, 10, 11, 12, 13, 14, 15, 16, 17])?;
@@ -3157,25 +3192,33 @@ fn convert_dvc_color_spatial_effect(
         }
         530 => {
             require_exact_dvc_params(&params, &[3, 4, 10, 11, 12, 13, 14])?;
-            require_zero_dvc_param(&params, 3, "Perlin transform")?;
-            require_zero_dvc_param(&params, 4, "Perlin rotation")?;
-            let octaves = dvc_u16_param(&params, 10, "Octaves")?;
-            if octaves > 16 {
+            require_exact_dvc_param_types(
+                effect,
+                &[
+                    (1, 4),
+                    (3, 6),
+                    (4, 0),
+                    (10, 0),
+                    (11, 0),
+                    (12, 0),
+                    (13, 0),
+                    (14, 0),
+                ],
+            )?;
+            let transform = dvc_param(&params, 3, "MAPPINGS Perlin Transform")?;
+            if !matches!(transform, 0.0 | 1.0 | 2.0) {
                 return Err(format!(
-                    "Perlin Octaves must be within 1..16, found {octaves}"
+                    "MAPPINGS Perlin Transform PARAM 3 must be None(0), Vertical symmetry(1), or Horizontal symmetry(2), found {transform}"
                 ));
             }
-            let zoom = dvc_finite_param(&params, 11, "Zoom")?;
-            if zoom <= 0.0 {
-                return Err(format!("Perlin Zoom must be greater than 0, found {zoom}"));
-            }
-            ColorEffectSpatialRecipe::Perlin {
-                octaves: octaves as u8,
-                zoom,
-                direction_degrees: dvc_finite_param(&params, 12, "Direction")?,
-                speed: dvc_finite_param(&params, 13, "Speed")?,
-                amplitude: dvc_percent_param(&params, 14, "Amplitude")?,
-            }
+            dvc_integer_range_param(&params, 4, "MAPPINGS Perlin Rotation", 0, 360)?;
+            dvc_integer_range_param(&params, 10, "MAPPINGS Perlin Octaves", 2, 10)?;
+            dvc_integer_range_param(&params, 11, "MAPPINGS Perlin Zoom", 1, 100)?;
+            dvc_integer_range_param(&params, 12, "MAPPINGS Perlin Direction", 1, 100)?;
+            dvc_integer_range_param(&params, 13, "MAPPINGS Perlin Speed", 1, 10)?;
+            dvc_integer_range_param(&params, 14, "MAPPINGS Perlin Amplitude", 5, 100)?;
+            dvc_mapping_rectangle(rack, "MAPPINGS Perlin ID=530", true)?;
+            return Err("MAPPINGS Perlin ID=530 remains fail-closed after exact schema and Rectangle validation: recovered CPerlinEffect evaluator 0x140365090 evaluates the authored Rectangle, while Syndocal's generic stage-space fractal noise discards that placement, and the Daslight palette-wrap state is not yet represented; no equivalent runtime target was created".to_string());
         }
         _ => unreachable!(),
     };
@@ -3237,7 +3280,11 @@ fn convert_dvc_color_spatial_effect(
             "{omitted_spatial_targets} beam target(s) without a verified color segment or Dimmer attribute were omitted"
         ));
     }
-    let (period_ms, period_note) = dvc_move_period(effect, scene, generator, &mut approximations)?;
+    let (period_ms, period_note) = if generator_id == 127 {
+        dvc_exact_generator_period(effect, "COLOR FX", generator)?
+    } else {
+        dvc_move_period(effect, scene, generator, &mut approximations)?
+    };
     let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
     if let Some(clock_warning) = clock_warning {
         approximations.push(clock_warning);
@@ -3507,6 +3554,17 @@ fn convert_dvc_chaser_effect(
     }
 
     let mut approximations = Vec::new();
+    match generator_id {
+        321 => approximations.push(
+            "Daslight Chaser #1 evaluator 0x140376540 is not frame-equivalent to Syndocal's Forward/Bounce/overlap compatibility route"
+                .to_string(),
+        ),
+        325 => approximations.push(
+            "Daslight Chaser random evaluator 0x1403791F0 uses Qt per-thread random allocation order; Syndocal's reload-stable permutation intentionally differs"
+                .to_string(),
+        ),
+        _ => {}
+    }
     let mut ordered_steps = targets.ordered_steps;
     let mut ordered_beam_steps = vec![Vec::new(); ordered_steps.len()];
     let mut feature_attributes = Vec::<String>::new();
@@ -3705,6 +3763,13 @@ fn convert_dvc_move_effect(
     }
 
     let mut approximations = Vec::new();
+    approximations.push(if generator_id == 223 {
+        "Daslight Line evaluator 0x14034A460 is not frame-equivalent to Syndocal's open-Line/Bounce compatibility route; serialized BEAM selections are flattened to fixture targets because this request carries no beam_targets"
+            .to_string()
+    } else {
+        "Daslight Polygon evaluator 0x14034A8F0 is not frame-equivalent to Syndocal's closed-Line/Forward compatibility route; serialized BEAM selections are flattened to fixture targets because this request carries no beam_targets"
+            .to_string()
+    });
     if targets.has_multi_beam_selection {
         approximations.push("segment selection approximated to fixture".to_string());
     }
@@ -4436,16 +4501,6 @@ fn dvc_integer_range_param(
     Ok(value as f32)
 }
 
-fn dvc_percent_param(params: &HashMap<u16, f64>, id: u16, label: &str) -> Result<f32, String> {
-    let value = dvc_finite_param(params, id, label)?;
-    if !(0.0..=100.0).contains(&value) {
-        return Err(format!(
-            "{label} PARAM {id} must be within 0..100, found {value}"
-        ));
-    }
-    Ok(value)
-}
-
 fn dvc_unit_param(params: &HashMap<u16, f64>, id: u16, label: &str) -> Result<f32, String> {
     let value = dvc_finite_param(params, id, label)?;
     if !(0.0..=1.0).contains(&value) {
@@ -4454,11 +4509,6 @@ fn dvc_unit_param(params: &HashMap<u16, f64>, id: u16, label: &str) -> Result<f3
         ));
     }
     Ok(value)
-}
-
-fn dvc_u16_param(params: &HashMap<u16, f64>, id: u16, label: &str) -> Result<u16, String> {
-    let value = dvc_positive_integer_param(params, id, label)?;
-    u16::try_from(value).map_err(|_| format!("{label} PARAM {id} exceeds u16: {value}"))
 }
 
 fn require_zero_dvc_param(params: &HashMap<u16, f64>, id: u16, label: &str) -> Result<(), String> {
@@ -4882,19 +4932,23 @@ fn dvc_move_period(
     ))
 }
 
-fn dvc_exact_value_period(effect: Node<'_, '_>, generator: &str) -> Result<(u64, String), String> {
+fn dvc_exact_generator_period(
+    effect: Node<'_, '_>,
+    source_family: &str,
+    generator: &str,
+) -> Result<(u64, String), String> {
     let raw = effect
         .attribute("DURATION")
-        .ok_or_else(|| format!("VALUE FX {generator} EFFECT is missing DURATION"))?
+        .ok_or_else(|| format!("{source_family} {generator} EFFECT is missing DURATION"))?
         .trim();
     let duration_ms = raw.parse::<i32>().map_err(|_| {
         format!(
-            "VALUE FX {generator} DURATION must be a positive signed 32-bit integer, found {raw}"
+            "{source_family} {generator} DURATION must be a positive signed 32-bit integer, found {raw}"
         )
     })?;
     if duration_ms <= 0 {
         return Err(format!(
-            "VALUE FX {generator} DURATION must be greater than 0, found {duration_ms}"
+            "{source_family} {generator} DURATION must be greater than 0, found {duration_ms}"
         ));
     }
 
@@ -5967,13 +6021,18 @@ mod tests {
                      generator_id: u16,
                      numeric_params: &str,
                      param_count: usize| {
-            let mapping = if generator_id == 521 {
-                r#"<MAPPING NAME="Rectangle" DASUID="mapping-521" TYPE="0" X="-10" Y="-10" SX="160" SY="70" ANGLE="17.5" LOCKED="0"/>"#
-            } else {
-                ""
+            let mapping = match generator_id {
+                521 => {
+                    r#"<MAPPING NAME="Rectangle" DASUID="mapping-521" TYPE="0" X="-10" Y="-10" SX="160" SY="70" ANGLE="17.5" LOCKED="0"/>"#
+                }
+                530 => {
+                    r#"<MAPPING NAME="Rectangle" DASUID="mapping-530" TYPE="0" X="-10" Y="-10" SX="160" SY="70" ANGLE="17.5" LOCKED="0"/>"#
+                }
+                _ => "",
             };
+            let duration = if generator_id == 127 { 1025 } else { 1000 };
             format!(
-                r##"<SCENE DASUID="{uid}" NAME="{name}" COLOR="#ff112233" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="8"><FIXTUREDATAS NB="0"/><RACKS><RACK TYPE="{rack_type}"><EFFECT TYPE="{effect_type}" ID="{generator_id}" DURATION="1000"><PARAMS NB="{param_count}">{palette}{numeric_params}</PARAMS></EFFECT>{mapping}{beams}</RACK></RACKS></SCENE>"##
+                r##"<SCENE DASUID="{uid}" NAME="{name}" COLOR="#ff112233" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="8"><FIXTUREDATAS NB="0"/><RACKS><RACK TYPE="{rack_type}"><EFFECT TYPE="{effect_type}" ID="{generator_id}" DURATION="{duration}"><PARAMS NB="{param_count}">{palette}{numeric_params}</PARAMS></EFFECT>{mapping}{beams}</RACK></RACKS></SCENE>"##
             )
         };
         let scenes = [
@@ -5983,7 +6042,7 @@ mod tests {
                 2,
                 2,
                 127,
-                r#"<PARAM TYPE="2" ID="2" VAL="0"/><PARAM TYPE="6" ID="3" VAL="0"/><PARAM TYPE="0" ID="10" VAL="2"/><PARAM TYPE="2" ID="11" VAL="1"/><PARAM TYPE="2" ID="12" VAL="1"/><PARAM TYPE="2" ID="13" VAL="0"/><PARAM TYPE="0" ID="14" VAL="50"/>"#,
+                r#"<PARAM TYPE="2" ID="2" VAL="1"/><PARAM TYPE="6" ID="3" VAL="1"/><PARAM TYPE="0" ID="10" VAL="2"/><PARAM TYPE="2" ID="11" VAL="1"/><PARAM TYPE="2" ID="12" VAL="1"/><PARAM TYPE="2" ID="13" VAL="0"/><PARAM TYPE="0" ID="14" VAL="50"/>"#,
                 8,
             ),
             scene(
@@ -6010,7 +6069,7 @@ mod tests {
                 2,
                 2,
                 133,
-                r#"<PARAM TYPE="2" ID="2" VAL="0"/><PARAM TYPE="6" ID="3" VAL="0"/><PARAM TYPE="0" ID="10" VAL="2"/><PARAM TYPE="1" ID="11" VAL="25"/><PARAM TYPE="0" ID="12" VAL="1"/>"#,
+                r#"<PARAM TYPE="2" ID="2" VAL="0"/><PARAM TYPE="6" ID="3" VAL="0"/><PARAM TYPE="0" ID="10" VAL="2"/><PARAM TYPE="1" ID="11" VAL="0.25"/><PARAM TYPE="0" ID="12" VAL="1"/>"#,
                 6,
             ),
             scene(
@@ -6028,7 +6087,7 @@ mod tests {
                 6,
                 8,
                 530,
-                r#"<PARAM TYPE="6" ID="3" VAL="0"/><PARAM TYPE="0" ID="4" VAL="0"/><PARAM TYPE="0" ID="10" VAL="5"/><PARAM TYPE="1" ID="11" VAL="20"/><PARAM TYPE="1" ID="12" VAL="1"/><PARAM TYPE="1" ID="13" VAL="1"/><PARAM TYPE="1" ID="14" VAL="100"/>"#,
+                r#"<PARAM TYPE="6" ID="3" VAL="0"/><PARAM TYPE="0" ID="4" VAL="0"/><PARAM TYPE="0" ID="10" VAL="5"/><PARAM TYPE="0" ID="11" VAL="20"/><PARAM TYPE="0" ID="12" VAL="1"/><PARAM TYPE="0" ID="13" VAL="1"/><PARAM TYPE="0" ID="14" VAL="100"/>"#,
                 8,
             ),
         ]
@@ -6843,7 +6902,7 @@ mod tests {
     }
 
     #[test]
-    fn dvc3b_six_spatial_generators_convert_with_palette_and_beam_order() {
+    fn dvc3b_exact_spatial_routes_convert_and_non_equivalent_evaluators_fail_closed() {
         let xml = synthetic_dvc3b().replacen(
             r#"SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1""#,
             r#"SSLPRESETDMXDEFAULT="255" SSLPRESETDEFAULTPRESET="1""#,
@@ -6854,8 +6913,8 @@ mod tests {
             outcome.project.custom_profiles[0].dmx_modes[0].controls[0].default_value,
             0
         );
-        assert_eq!(outcome.report.summary.effects_converted, 6);
-        assert_eq!(outcome.report.summary.effects_skipped, 0);
+        assert_eq!(outcome.report.summary.effects_converted, 2);
+        assert_eq!(outcome.report.summary.effects_skipped, 4);
         assert!(outcome
             .report
             .converted
@@ -6873,7 +6932,7 @@ mod tests {
                 .iter()
                 .filter(|detail| detail.message.contains("source_family=Mappings;"))
                 .count(),
-            2
+            1
         );
         assert_eq!(
             outcome
@@ -6883,7 +6942,7 @@ mod tests {
                 .iter()
                 .filter(|detail| detail.message.contains("source_family=Colour FX;"))
                 .count(),
-            4
+            1
         );
 
         let requests = outcome
@@ -6897,7 +6956,7 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(requests.len(), 6);
+        assert_eq!(requests.len(), 2);
         assert!(requests.iter().all(|request| request.stops.len() == 3));
         assert!(requests.iter().all(|request| {
             request.spatial_pattern.as_ref().is_some_and(|pattern| {
@@ -6914,32 +6973,30 @@ mod tests {
                 .spatial_pattern
                 .as_ref()
                 .map(|pattern| &pattern.recipe),
-            Some(ColorEffectSpatialRecipe::KnightRider { size: 2, .. })
-        )));
-        assert!(requests.iter().any(|request| matches!(
-            request
-                .spatial_pattern
-                .as_ref()
-                .map(|pattern| &pattern.recipe),
-            Some(ColorEffectSpatialRecipe::Burst {
-                color_width: 50.0,
-                gradient: 100.0
+            Some(ColorEffectSpatialRecipe::KnightRider {
+                daslight_exact: true,
+                grayscale: true,
+                vertical_symmetry: true,
+                size: 2,
+                ..
             })
         )));
-        assert!(requests.iter().any(|request| matches!(
-            request
-                .spatial_pattern
-                .as_ref()
-                .map(|pattern| &pattern.recipe),
-            Some(ColorEffectSpatialRecipe::RandomFill { point_width: 1 })
-        )));
-        assert!(requests.iter().any(|request| matches!(
-            request
-                .spatial_pattern
-                .as_ref()
-                .map(|pattern| &pattern.recipe),
-            Some(ColorEffectSpatialRecipe::Sparkle { number: 2, .. })
-        )));
+        let knight = requests
+            .iter()
+            .find(|request| {
+                matches!(
+                    request
+                        .spatial_pattern
+                        .as_ref()
+                        .map(|pattern| &pattern.recipe),
+                    Some(ColorEffectSpatialRecipe::KnightRider { .. })
+                )
+            })
+            .expect("synthetic 127 must retain the exact Knight Rider request");
+        assert_eq!(
+            knight.period_ms, 1_000,
+            "1025 ms must floor to 25 exact 40 ms frames"
+        );
         assert!(requests.iter().any(|request| matches!(
             request
                 .spatial_pattern
@@ -7002,17 +7059,16 @@ mod tests {
             }),
             "521 must preserve the raw Rectangle and authored per-beam Patch coordinates"
         );
-        assert!(requests.iter().any(|request| matches!(
-            request
-                .spatial_pattern
-                .as_ref()
-                .map(|pattern| &pattern.recipe),
-            Some(ColorEffectSpatialRecipe::Perlin {
-                octaves: 5,
-                zoom: 20.0,
-                ..
-            })
-        )));
+        for (generator, reason) in [
+            ("Burst", "CBurstEffect evaluator 0x140362B70"),
+            ("Random fill", "Qt per-thread qrand state"),
+            ("Sparkle", "prior percent-scaled lifespan route"),
+            ("Perlin", "evaluates the authored Rectangle"),
+        ] {
+            assert!(outcome.report.skipped.details.iter().any(|detail| {
+                detail.item.contains(generator) && detail.message.contains(reason)
+            }));
+        }
     }
 
     #[test]
@@ -7023,8 +7079,8 @@ mod tests {
             1,
         );
         let outcome = import_bytes(xml.as_bytes(), "synthetic-dvc3b-missing-palette.dvc").unwrap();
-        assert_eq!(outcome.report.summary.effects_converted, 5);
-        assert_eq!(outcome.report.summary.effects_skipped, 1);
+        assert_eq!(outcome.report.summary.effects_converted, 1);
+        assert_eq!(outcome.report.summary.effects_skipped, 5);
         assert!(outcome.report.skipped.details.iter().any(|detail| detail
             .message
             .contains("palette PARAM TYPE=4 ID=1 is missing COLORS")));
@@ -7322,7 +7378,8 @@ mod tests {
         assert!(request.steps.iter().all(|step| step.fixture_ids.is_empty()));
         assert!(converted.note.contains("preset_type=65"));
         assert!(converted.note.contains("preset_range=16384..49151"));
-        assert!(converted.approximations.is_empty());
+        assert_eq!(converted.approximations.len(), 1);
+        assert!(converted.approximations[0].contains("evaluator 0x140376540"));
     }
 
     #[test]
@@ -8327,6 +8384,7 @@ mod tests {
             };
             let ColorEffectSpatialRecipe::KnightRider {
                 daslight_exact,
+                grayscale,
                 vertical_symmetry,
                 size,
                 one_way,
@@ -8338,6 +8396,7 @@ mod tests {
                 panic!("VALUE ID 624 must use the KnightRider recipe");
             };
             assert!(daslight_exact);
+            assert!(!grayscale);
             assert_eq!(vertical_symmetry, expected_symmetry);
             assert_eq!(
                 (size, one_way, fading, go_outside, gradient),
@@ -9064,9 +9123,14 @@ mod tests {
             .zip(daslight_levels_capture)
             .map(|(actual, observed)| actual.abs_diff(observed) as u64)
             .sum::<u64>();
+        // C0b routes COLOR 127 through the recovered 40 ms Knight Rider
+        // evaluator instead of the generic continuous sweep. The non-atomic
+        // UI capture now differs by 858 across these 53 cells; retain a tight
+        // 900 bound while the packet-atomic Chaser assertions below stay exact.
         assert!(
-            capture_absolute_error <= 700,
-            "20.000 s Par-OrangeStrobe visual capture error {capture_absolute_error} exceeded the packet-skew allowance"
+            capture_absolute_error <= 900,
+            "20.000 s Par-OrangeStrobe visual capture error {capture_absolute_error} exceeded the packet-skew allowance; actual={:?}",
+            &frame_at_twenty[..daslight_levels_capture.len()]
         );
         assert_eq!(
             [
@@ -9584,13 +9648,25 @@ mod tests {
         }
         let outcome = import_path(path).unwrap();
         crate::validate_project_file(&outcome.project).unwrap();
-        assert_eq!(outcome.report.summary.effects_converted, 30);
-        assert_eq!(outcome.report.summary.effects_skipped, 0);
+        assert_eq!(outcome.report.summary.effects_converted, 27);
+        assert_eq!(outcome.report.summary.effects_skipped, 3);
         assert_eq!(
-            outcome.report.skipped.count, 0,
-            "full Shinkan import must not skip authored project data: {:#?}",
+            outcome.report.skipped.count, 3,
+            "full Shinkan must fail closed only for the three proven non-equivalent COLOR evaluators: {:#?}",
             outcome.report.skipped
         );
+        for reason in [
+            "CBurstEffect evaluator 0x140362B70",
+            "Qt per-thread qrand state",
+            "prior percent-scaled lifespan route",
+        ] {
+            assert!(outcome
+                .report
+                .skipped
+                .details
+                .iter()
+                .any(|detail| detail.message.contains(reason)));
+        }
         assert_eq!(outcome.report.unsupported.count, 3);
         assert!(outcome.report.unsupported.details.iter().all(|detail| {
             detail.item == "Daslight hardware devices"
@@ -9680,9 +9756,9 @@ mod tests {
                     counts
                 });
         assert_eq!(spatial_counts.get(&127), Some(&5));
-        assert_eq!(spatial_counts.get(&121), Some(&1));
-        assert_eq!(spatial_counts.get(&131), Some(&1));
-        assert_eq!(spatial_counts.get(&133), Some(&1));
+        assert_eq!(spatial_counts.get(&121), None);
+        assert_eq!(spatial_counts.get(&131), None);
+        assert_eq!(spatial_counts.get(&133), None);
         assert_eq!(spatial_counts.get(&129), Some(&2));
         assert_eq!(spatial_counts.get(&130), Some(&3));
         assert!(!outcome
@@ -10088,13 +10164,9 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(
-            recipes
-                .iter()
-                .filter(|recipe| matches!(recipe, ColorEffectSpatialRecipe::Burst { .. }))
-                .count(),
-            3
-        );
+        assert!(!recipes
+            .iter()
+            .any(|recipe| matches!(recipe, ColorEffectSpatialRecipe::Burst { .. })));
         assert_eq!(
             recipes
                 .iter()
@@ -10102,13 +10174,28 @@ mod tests {
                 .count(),
             1
         );
+        assert!(!recipes
+            .iter()
+            .any(|recipe| matches!(recipe, ColorEffectSpatialRecipe::Perlin { .. })));
+        assert_eq!(outcome.report.summary.effects_skipped, 4);
         assert_eq!(
-            recipes
+            outcome
+                .report
+                .skipped
+                .details
                 .iter()
-                .filter(|recipe| matches!(recipe, ColorEffectSpatialRecipe::Perlin { .. }))
+                .filter(|detail| detail
+                    .message
+                    .contains("CBurstEffect evaluator 0x140362B70"))
                 .count(),
-            1
+            3
         );
+        assert!(outcome.report.skipped.details.iter().any(|detail| {
+            detail
+                .message
+                .contains("CPerlinEffect evaluator 0x140365090")
+                && detail.message.contains("authored Rectangle")
+        }));
     }
 
     // Real saved Daslight specimen authored on 2026-08-10 (Fable, elevated

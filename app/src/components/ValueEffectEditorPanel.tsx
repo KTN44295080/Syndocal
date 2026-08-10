@@ -70,7 +70,7 @@ const defaultValueGeneratorRecipe = (
     case "Plasma":
       return { Plasma: { grayscale: false, vertical_symmetry: false, size_x: 1, param_x: 2, size_y: 1, param_y: 2, speed_x: -1, param_sx: 2, speed_y: 1, param_sy: -1 } };
     case "KnightRider":
-      return { KnightRider: { size: 8, one_way: false, fading: true, go_outside: false, gradient: 50 } };
+      return { KnightRider: { grayscale: false, vertical_symmetry: false, size: 8, one_way: false, fading: true, go_outside: false, gradient: 50 } };
     case "Sweep":
       return { Sweep: { direction_change: false } };
     case "Sparkle":
@@ -131,7 +131,7 @@ const valueQuickLooks: ValueQuickLook[] = [
   {
     label: "Knight Rider Scan",
     recipe: {
-      KnightRider: { size: 2, one_way: false, fading: true, go_outside: false, gradient: 50 },
+      KnightRider: { grayscale: false, vertical_symmetry: false, size: 2, one_way: false, fading: true, go_outside: false, gradient: 50 },
     },
     points: quickLookRampPoints,
     beats: 1,

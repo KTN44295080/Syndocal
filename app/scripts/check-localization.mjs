@@ -378,6 +378,7 @@ const valueRecipeLine = (kind) => spatialRecipeSource
   ?.split(/\r?\n/)
   .find((line) => line.includes(`{ ${kind}:`)) ?? "";
 assert.match(valueRecipeLine("KnightRider"), /daslight_exact\?: boolean/);
+assert.match(valueRecipeLine("KnightRider"), /grayscale\?: boolean/);
 assert.match(valueRecipeLine("KnightRider"), /vertical_symmetry\?: boolean/);
 for (const blockedExactKind of ["Burst", "Sparkle", "RandomFill", "Perlin"]) {
   assert.doesNotMatch(

@@ -32,7 +32,7 @@ type ColorSpatialKind = "PaletteFlow" | "KnightRider" | "Burst" | "RandomFill" |
 const defaultSpatialRecipe = (kind: Exclude<ColorSpatialKind, "PaletteFlow">): ColorEffectSpatialRecipe => {
   switch (kind) {
     case "KnightRider":
-      return { KnightRider: { size: 8, one_way: false, fading: true, go_outside: false, gradient: 50 } };
+      return { KnightRider: { grayscale: false, vertical_symmetry: false, size: 8, one_way: false, fading: true, go_outside: false, gradient: 50 } };
     case "Burst":
       return { Burst: { color_width: 50, gradient: 100 } };
     case "RandomFill":
@@ -135,7 +135,7 @@ const colorQuickLooks: ColorQuickLook[] = [
     algorithm: "Cycle",
     interpolation: "Rgb",
     recipe: {
-      KnightRider: { size: 4, one_way: false, fading: false, go_outside: false, gradient: 0 },
+      KnightRider: { grayscale: false, vertical_symmetry: false, size: 4, one_way: false, fading: false, go_outside: false, gradient: 0 },
     },
     beats: 1,
   },
@@ -528,6 +528,8 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
         </div>
         <Show when={spatialKind() === "KnightRider"}>
           <div class="colorEffectModeGrid">
+            <label><input type="checkbox" checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
+            <label>Transform<select value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
             <label>Size<input type="number" min="1" step="1" value={spatialNumber("size", 8)} onInput={(event) => patchSpatialValues({ size: Math.max(1, Math.round(Number(event.currentTarget.value) || 1)) })} /></label>
             <label>Gradient %<input type="number" min="0" max="100" step="1" value={spatialNumber("gradient", 50)} onInput={(event) => patchSpatialValues({ gradient: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
             <label><input type="checkbox" checked={spatialBoolean("one_way")} onInput={(event) => patchSpatialValues({ one_way: event.currentTarget.checked })} /> One way only</label>

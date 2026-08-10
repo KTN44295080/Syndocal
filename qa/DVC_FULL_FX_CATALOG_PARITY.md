@@ -65,7 +65,8 @@ GUI順とfactory集合は完全一致する。
 | 628 | Perlin | `CPerlinEffect` | `0x140365090` |
 
 全propertyのTYPE/ID/default/domain、factory/constructor/vtable、評価式、fail-closed境界は
-`qa/DVC_VALUE_CATALOG_PARITY.md`を正本とする。DVC-V6で624をexact実装済み。
+`qa/DVC_VALUE_CATALOG_PARITY.md`を正本とする。DVC-V6で624、DVC-C0bで同じ回収済み評価器を
+共有するCOLOR 127をexact実装済み。
 622/628はconstructor chainで初期化されず`.dvc`にも保存されないpalette-wrap object state、
 626/627は`.dvc`に存在しないQt/CRT per-thread RNG stateとprior draw historyが不足するため、
 推測seed/stateを作らずprecise fail-closedを維持する。
@@ -275,9 +276,10 @@ Explosion / Starfield / Graph / Lines / Grid。21項目を最下端Gridまで観
 
 ## 現行Syndocal importerとの逆照合
 
-68 IDのうち22 IDにはconverter routeがあり、VALUE 622/626/627/628の4 IDはclass固有理由で
-precise fail-closed、残る42 IDは未routeでgeneric `Skipped`になる。22 routeは実装数ではなく
-入口coverageであり、strict/exactを別に監査した。
+68 IDのうちC0b後は18 IDがruntime targetを作れるconverter route、VALUE
+622/626/627/628とCOLOR 121/131/133、MAPPINGS 530の8 IDがclass固有理由でprecise
+fail-closed、残る42 IDは未routeでgeneric `Skipped`になる。18 routeはfull-domain完成数ではなく、
+strict/exactを別に監査した。
 
 | route群 | 現在の境界 |
 |---|---|
@@ -285,11 +287,13 @@ precise fail-closed、残る42 IDは未routeでgeneric `Skipped`になる。22 r
 | COLOR MAPPINGS 36 | strict。外部`SELECTIONS`参照はprecise fail-closed |
 | MOVE 221 | strict。`Phasing=0`のみ |
 | COLOR 129/130 | evaluator式は証明済みだが、palette以外のPARAM TYPE検証が不足 |
-| COLOR 121/127/131/133 | generic/non-exact。133は`LifeSpan` raw `0..0.9`のscaleも不一致 |
-| MOVE 223/224 | `BEAMID` targetを保持せず複数beamをApproximate。224 count域もfactoryと不一致 |
-| CHASER 321/322/325 | 322はTYPE検証不足。321/325は範囲clamp、325はrandom順をstable置換 |
+| COLOR 127 | strict schema、40ms量子化、合成後qGray、Transform foldを共有exact evaluatorで実装 |
+| COLOR 121/131/133 | strict schema後、generic evaluator非等価または非serialize qrand state/historyでprecise fail-closed |
+| MOVE 223/224 | `BEAMID` targetを保持しない互換route。distinct evaluator差を常時Approximate |
+| CHASER 321/322/325 | 322はstrict。321/325はdistinct evaluator/random順差を常時Approximate |
 | CURVE 3/7/10 | 40ms式は証明済みだが、PARAM TYPE/range検証がfactory contractと不一致 |
-| MAPPINGS 521/530 | 521はID10 unit→percent変換不足。530はgeneric noiseでRectangleを未処理 |
+| MAPPINGS 521 | strict schema、unit→percent、Rectangle placementを実装 |
+| MAPPINGS 530 | strict schemaとRectangle検証後、generic noise/placement/palette-wrap非等価でprecise fail-closed |
 
 この監査により、DVC-ENUM直後の条件付きstrict-coreは6 ID、要correctness routeは16 IDだった。
 未route追加より先に後者をstrict化し、再現不能な近似はprecise fail-closedへ戻す。
@@ -311,6 +315,22 @@ precise fail-closed、残る42 IDは未routeでgeneric `Skipped`になる。22 r
 ただしCOLOR paletteはfactory `1..255`に対し現protocol/engine `2..16`、VALUE paletteは`2..32`という
 横断表現域が残る。Line 223のPOINTS exact-2制約、CHASER 321/325のclamp/意味論差も既存境界である。
 したがって、条件付きexact-coreは13 routeへ増えたが、13/68をfull-domain完成率とは呼ばない。
+
+### DVC-C0b correctness disposition（2026-08-10）
+
+- COLOR 127は`CKnightRiderEffect / 0x140363FE0`へ切替え、factory TYPE/domain、
+  `DURATION`の40ms floor、Transform=1、共通Grayscaleを保持する。GrayscaleはDaslight同様、
+  lane source-over完了後の8-bit qGrayとして適用し、`.sdc`はdefault falseの加算フィールドで互換を保つ。
+- COLOR 121は`CBurstEffect / 0x140362B70`とgeneric radial Burstが非等価、COLOR 131は
+  `CRandomFillEffect / 0x140365C70`、COLOR 133は`CSparklesEffect / 0x1403660F0`の
+  per-thread qrand state/historyが非serialize、MAPPINGS 530は`CPerlinEffect / 0x140365090`が
+  Rectangleを評価するのにgeneric stage-space noiseが捨てるため、全schema/domain検証後にprecise
+  fail-closedとした。
+- MOVE 223/224とCHASER 321/325は既存showの互換bodyを壊さず、distinct evaluatorまたはrandom順、
+  beam identity損失を全populated targetで常時`Approximate`として可視化する。empty Chaser no-opは
+  runtime bodyを作らないためApproximateを付けない。
+- 分類はruntime-convert 18、precise fail-closed 8、未route 42。18のうち条件付きexact-coreは14、
+  明示compatibility routeは4。palette 1..255等の横断表現域が残るため14/68をfull-domain完成率とは呼ばない。
 
 ## 未実装・未証明境界
 
