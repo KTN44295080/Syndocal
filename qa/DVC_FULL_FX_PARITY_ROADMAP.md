@@ -26,12 +26,12 @@ Daslight 5.0.6.2 / FileVersion `25.0905.165.111`の実機dropdown全項目とfac
 | COLOR FX | 121,127,128,129,130,131,133,**134** | **121**,127,**128 Perlin**,129,130,**134 Sweep** | 131/133 precise fail-closed。Sweep=132という旧推定は撤回 |
 | MOVE | 221 Circle, 222 Curve, 223 Line, 224 Polygon, 225 Points | **221–225全5種exact** | なし |
 | CHASER | 321 #1, 322 #2, 323 #3, 324 #4, 325 random | 321,322,325 | 323,324未route。distinct evaluatorの演出意味が未証明 |
-| CURVE | 3–13（11種） | 3 Inverse Ramp, 7 Sinus, 10 Strobe | 4,5,6,8,9,11,12,13未route。Custom 13だけ別schema |
+| CURVE | 3–13（11種） | 3 Inverse Ramp, 7 Sinus, **9 Square**, 10 Strobe | 4,5,6,8,11,12,13未route。Custom 13だけ別schema |
 | MAPPINGS | 521–530（10種） | 521 Rainbow, **530 Perlin** | 522–529未route |
 | COLOR MAPPINGS | 21,22,23,29–37,40–42,44,45,47–50（21種） | 36 Rainbow | 残20種未route |
 
-現行runtime converter routeは26/68 ID、precise fail-closedは4、未routeは38。うち条件付きexact-coreは
-24、明示compatibilityはCHASER 321/325の2 route。これはID単位の入口coverageであり、共有raster classの再利用度や
+現行runtime converter routeは27/68 ID、precise fail-closedは4、未routeは37。うち条件付きexact-coreは
+25、明示compatibilityはCHASER 321/325の2 route。これはID単位の入口coverageであり、共有raster classの再利用度や
 STEPS/SUPER SCENEなど非generator構造を含む「製品完成率」ではない。未routeをUI名だけで近似せず、
 各evaluatorの意味論を回収したトランシェだけを増やす。
 

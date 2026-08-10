@@ -278,9 +278,9 @@ Explosion / Starfield / Graph / Lines / Grid。21項目を最下端Gridまで観
 
 ## 現行Syndocal importerとの逆照合
 
-68 IDのうちDVC-PERLIN-EXACT後は26 IDがruntime targetを作れるconverter route、VALUE
+68 IDのうちDVC-CURVE-SQUARE-EXACT後は27 IDがruntime targetを作れるconverter route、VALUE
 626/627とCOLOR 131/133の4 IDがclass固有理由でprecise
-fail-closed、残る38 IDは未routeでgeneric `Skipped`になる。26 routeはfull-domain完成数ではなく、
+fail-closed、残る37 IDは未routeでgeneric `Skipped`になる。27 routeはfull-domain完成数ではなく、
 strict/exactを別に監査した。
 
 | route群 | 現在の境界 |
@@ -295,7 +295,7 @@ strict/exactを別に監査した。
 | COLOR 128 | strict schema、固有Perlin evaluator、40ms scheduler、qGray、Transform foldを実装 |
 | COLOR 131/133 | strict schema後、非serialize qrand state/historyでprecise fail-closed |
 | CHASER 321/322/325 | 322はstrict。321/325はdistinct evaluator/random順差を常時Approximate |
-| CURVE 3/7/10 | strict factory schemaと証明済み40 ms式を実装 |
+| CURVE 3/7/9/10 | strict factory schemaと証明済み40 ms式を実装。9は400-cell整数bandのSquare evaluator |
 | MAPPINGS 521 | strict schema、unit→percent、Rectangle placementを実装 |
 | MAPPINGS 530 | strict schema、Rectangle placement、固有Perlin evaluator、Qt5 FastTransformation互換の0..360度raster rotationを実装 |
 
@@ -408,11 +408,20 @@ strict/exactを別に監査した。
   source x/y列のFNV-1a64 `b8c647db6b017785`を回帰固定した。runtime-convertは23→26、
   precise fail-closedは6→4、未routeは39→38、条件付きexact-coreは21→24となる。
 
+### DVC-CURVE-SQUARE-EXACT（2026-08-10）
+
+- `CSquareEffect / 0x140370420`のsample count、400-cell整数grid、`floor(400/Rate)` band幅、
+  float Phase加算後のtruncation、band parity、Size/Offset後clampを静的解析から復元した。
+- CURVE ID9をstrict共通schema、40 ms source grid、ordered beam target、Phasing保持で既存LFO bodyへ
+  routeする。`daslight_curve`があるSquareだけ量子化式を使い、native Syndocal Squareは連続時間を維持する。
+- runtime-convertは26→27、未routeは38→37、条件付きexact-coreは24→25。precise fail-closed 4と
+  明示compatibility 2は不変。
+
 ## 未実装・未証明境界
 
 カタログ列挙は完了したが、次は別軸で残る。
 
-1. CURVEのPulse/Ramp/Random/Sinus3/Square/Tangeant/Triangle/Customはdistinct evaluator入口とschemaまで。
+1. CURVEのPulse/Ramp/Random/Sinus3/Tangeant/Triangle/Customはdistinct evaluator入口とschemaまで。
    評価式をdecompileしてから実装する。
 2. CHASER #3/#4はschemaとdistinct evaluatorまで。DMX系列または式を確定してから実装する。
 3. Spiral/Butterfly/MediaとCOLOR MAPPINGS専用13 classはschema/evaluator入口までで、

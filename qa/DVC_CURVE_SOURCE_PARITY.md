@@ -11,6 +11,7 @@ Date: 2026-08-09
 - Static evaluator entry points recovered from RTTI/vtables:
   - `CSinusEffect`: `0x140370250`
   - `CInverseRampEffect`: `0x14036fcb0`
+  - `CSquareEffect`: `0x140370420`
   - `CStrobeEffect`: `0x1403705b0`
 - The imported source buffer is evaluated on a 40 ms grid.
 
@@ -30,6 +31,11 @@ For `sample_count=floor(DURATION/40)` and `t=sample_index/sample_count`:
   `interval=floor(25/Rate)`, `remainder=sample_index%interval`; High when
   `remainder==0` or `remainder<interval*Phase/2`, otherwise Low. Low is `Offset`; High is
   `Offset+Size/2`; both are clamped to 0..1.
+- Square:
+  `grid=floor((sample_index%sample_count)*400/sample_count)`,
+  `cell=trunc(grid+400-Phase*400)%400`, `band=trunc(cell/floor(400/Rate))`;
+  even bands are `Offset+Size`, odd bands are `Offset`, then clamped to 0..1. The integer
+  `floor(400/Rate)` preserves Daslight's uneven terminal band for Rates that do not divide 400.
 
 `DURATION` is the complete sampled Curve buffer, not `DURATION/Rate`. Rate controls how many
 wave cycles are drawn into that buffer. The former Syndocal conversion divided DURATION by Rate
@@ -84,4 +90,4 @@ field and continues to deserialize with `None`.
 - A physical controller/fixture is not required to verify these normalized DMX time series, but
   fixture photometry, PWM response, and device latency remain physical acceptance items.
 - Native responsive-window acceptance is run separately; it is not inferred from the successful
-  release build.
+release build.

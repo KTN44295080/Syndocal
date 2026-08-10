@@ -27137,10 +27137,11 @@ fn validate_lfo_effect_request(request: &LfoEffectRequest) -> Result<(), String>
     if let Some(source) = &request.daslight_curve {
         if !matches!(
             request.shape,
-            LfoShape::Sine | LfoShape::Saw | LfoShape::Strobe
+            LfoShape::Sine | LfoShape::Saw | LfoShape::Square | LfoShape::Strobe
         ) {
             return Err(
-                "Daslight Curve source is only valid for Sine, Saw, or Strobe shapes".to_string(),
+                "Daslight Curve source is only valid for Sine, Saw, Square, or Strobe shapes"
+                    .to_string(),
             );
         }
         if !(0.0..=1.0).contains(&request.phase) {
@@ -27157,6 +27158,18 @@ fn validate_lfo_effect_request(request: &LfoEffectRequest) -> Result<(), String>
         }
         if source.sample_ms == 0 {
             return Err("Daslight Curve source sample interval must be at least 1 ms".to_string());
+        }
+        if request.shape == LfoShape::Square
+            && (source.rate.fract().abs() > f32::EPSILON
+                || !(1.0..=10.0).contains(&source.rate)
+                || source.size > 2.0
+                || !(-1.0..=1.0).contains(&source.offset)
+                || source.sample_ms != 40)
+        {
+            return Err(
+                "Daslight Square requires integer Rate 1..10, Size 0..2, Offset -1..1, and a 40 ms sample grid"
+                    .to_string(),
+            );
         }
         if request.period_ms < u64::from(source.sample_ms) {
             return Err(format!(
@@ -32787,6 +32800,14 @@ fn evaluate_daslight_curve_normalized_with_offset(
             let centered = source_phase - (source_phase + 0.5).floor();
             (source.offset - centered * source.size + source.size - 0.5).clamp(0.0, 1.0)
         }
+        LfoShape::Square => daslight_square_curve_source_value(
+            sample_index,
+            sample_count,
+            source.rate as i32,
+            source.size,
+            request.phase,
+            source.offset,
+        ),
         LfoShape::Strobe => {
             let samples_per_second = 1_000.0 / f32::from(source.sample_ms.max(1));
             let interval_samples = (samples_per_second / source.rate).floor().max(1.0) as u64;
@@ -32811,6 +32832,25 @@ fn evaluate_daslight_curve_normalized_with_offset(
     } else {
         ((source_value - low) / span).clamp(0.0, 1.0)
     }
+}
+
+fn daslight_square_curve_source_value(
+    sample_index: u64,
+    sample_count: u64,
+    rate: i32,
+    size: f32,
+    phase: f32,
+    offset: f32,
+) -> f32 {
+    debug_assert!(sample_count > 0);
+    debug_assert!((1..=10).contains(&rate));
+    let grid_cell = (sample_index % sample_count).saturating_mul(400) / sample_count;
+    let phase_cells = 400.0_f32 - phase * 400.0;
+    let wrapped_cell = ((grid_cell as f32 + phase_cells).trunc() as i32).rem_euclid(400);
+    let half_period_cells = 400 / rate;
+    let band = (wrapped_cell as f32 / half_period_cells as f32).trunc() as i32;
+    let unit = if band & 1 == 0 { 1.0 } else { 0.0 };
+    (offset + unit * size).clamp(0.0, 1.0)
 }
 
 #[cfg(test)]
@@ -54094,6 +54134,71 @@ mod tests {
     }
 
     #[test]
+    fn daslight_square_uses_the_native_400_cell_integer_bands() {
+        let rate_three = (0..400)
+            .map(|sample| daslight_square_curve_source_value(sample, 400, 3, 1.0, 0.0, 0.0))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rate_three.iter().filter(|value| **value == 1.0).count(),
+            266
+        );
+        assert!(rate_three[..133].iter().all(|value| *value == 1.0));
+        assert!(rate_three[133..266].iter().all(|value| *value == 0.0));
+        assert!(rate_three[266..399].iter().all(|value| *value == 1.0));
+        assert_eq!(rate_three[399], 0.0);
+
+        let phase_shifted = (0..25)
+            .map(|sample| daslight_square_curve_source_value(sample, 25, 3, 0.75, 0.25, 0.1))
+            .collect::<Vec<_>>();
+        assert!(phase_shifted[..15]
+            .iter()
+            .all(|value| (*value - 0.85).abs() < f32::EPSILON));
+        assert!(phase_shifted[15..23]
+            .iter()
+            .all(|value| (*value - 0.1).abs() < f32::EPSILON));
+        assert!(phase_shifted[23..]
+            .iter()
+            .all(|value| (*value - 0.85).abs() < f32::EPSILON));
+
+        let mut request = test_lfo_request(
+            "Imported Square",
+            LfoShape::Square,
+            1_000,
+            0.25,
+            EffectBlendMode::Override,
+            6_554,
+            55_705,
+        );
+        request.daslight_curve = Some(DaslightCurveSource {
+            rate: 3.0,
+            size: 0.75,
+            offset: 0.1,
+            sample_ms: 40,
+        });
+        validate_lfo_effect_request(&request).unwrap();
+        let started = Instant::now();
+        let clock = ClockSnapshot::default();
+        assert_eq!(
+            evaluate_lfo_effect(
+                &request,
+                started,
+                started + Duration::from_millis(560),
+                &clock,
+            ),
+            55_705
+        );
+        assert_eq!(
+            evaluate_lfo_effect(
+                &request,
+                started,
+                started + Duration::from_millis(600),
+                &clock,
+            ),
+            6_554
+        );
+    }
+
+    #[test]
     fn daslight_sinus_preserves_source_phase_and_sample_grid() {
         let mut request = test_lfo_request(
             "Imported Sinus",
@@ -54192,7 +54297,7 @@ mod tests {
         });
         assert!(validate_lfo_effect_request(&request)
             .unwrap_err()
-            .contains("only valid for Sine, Saw, or Strobe"));
+            .contains("only valid for Sine, Saw, Square, or Strobe"));
 
         request.shape = LfoShape::Sine;
         request.daslight_curve.as_mut().unwrap().size = -0.01;

@@ -2168,6 +2168,7 @@ fn parse_scene_effects(
                 (Some(5), Some(3), Some(36)) => Some("Rainbow"),
                 (Some(8), Some(5), Some(3)) => Some("Inverse Ramp"),
                 (Some(8), Some(5), Some(7)) => Some("Sinus"),
+                (Some(8), Some(5), Some(9)) => Some("Square"),
                 (Some(8), Some(5), Some(10)) => Some("Strobe"),
                 (Some(2), Some(2), Some(121)) => Some("Burst"),
                 (Some(2), Some(2), Some(127)) => Some("Knight Rider"),
@@ -2315,6 +2316,14 @@ fn convert_dvc_effect(
             fixture_refs,
         ),
         (8, 5, 7) => convert_dvc_sinus_effect(
+            scene,
+            scene_name,
+            rack,
+            effect,
+            effect_id,
+            fixture_refs,
+        ),
+        (8, 5, 9) => convert_dvc_square_effect(
             scene,
             scene_name,
             rack,
@@ -4038,6 +4047,95 @@ fn convert_dvc_sinus_effect(
             transition_ms: None,
         }),
         generator: "Sinus",
+        note,
+        approximations,
+        warnings: Vec::new(),
+    })
+}
+
+fn convert_dvc_square_effect(
+    scene: Node<'_, '_>,
+    scene_name: &str,
+    rack: Node<'_, '_>,
+    effect: Node<'_, '_>,
+    effect_id: u64,
+    fixture_refs: &HashMap<String, FixtureImportRef>,
+) -> Result<ConvertedDvcEffect, String> {
+    let params = dvc_curve_effect_params(effect, "Square")?;
+    let rate = dvc_param(&params, 1, "Rate")?;
+    let size = dvc_param(&params, 2, "Size")?;
+    let phase = dvc_param(&params, 3, "Phase")?;
+    let offset = dvc_param(&params, 4, "Offset")?;
+    let phasing = dvc_param(&params, 5, "Phasing")?;
+    let duration_ms = effect
+        .attribute("DURATION")
+        .ok_or_else(|| "Square EFFECT is missing DURATION".to_string())?
+        .parse::<f64>()
+        .map_err(|error| format!("Square DURATION is invalid: {error}"))?;
+    if !duration_ms.is_finite()
+        || duration_ms < f64::from(DASLIGHT_CURVE_SAMPLE_MS)
+        || duration_ms > u64::MAX as f64
+    {
+        return Err(format!(
+            "DURATION must be a finite Curve source buffer of at least {DASLIGHT_CURVE_SAMPLE_MS} ms, found {duration_ms}"
+        ));
+    }
+    let period_ms = duration_ms.round() as u64;
+    let raw_low = offset;
+    let raw_high = offset + size;
+    let low = normalized_dmx(raw_low);
+    let high = normalized_dmx(raw_high);
+    let mut targets = dvc_rack_targets(rack, fixture_refs)?;
+    let incompatible_dimmer_targets = retain_dvc_dimmer_targets(&mut targets, fixture_refs);
+    if targets.fixture_ids.is_empty() {
+        return Err("BEAMS resolved to no Square fixture targets".to_string());
+    }
+
+    let mut approximations = Vec::new();
+    if incompatible_dimmer_targets > 0 {
+        approximations.push(format!(
+            "{incompatible_dimmer_targets} fixture target(s) without a Dimmer attribute or addressable color beam were omitted"
+        ));
+    }
+    let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
+    if let Some(clock_warning) = clock_warning {
+        approximations.push(clock_warning);
+    }
+    let beam_targets = dvc_effect_beam_targets(&targets, "Dimmer");
+    let request = LfoEffectRequest {
+        label: format!("{scene_name} (Square)"),
+        fixture_ids: targets.fixture_ids,
+        target_group_ids: Vec::new(),
+        attribute: "Dimmer".to_string(),
+        video_targets: Vec::new(),
+        shape: LfoShape::Square,
+        period_ms,
+        clock_sync,
+        low,
+        high,
+        phase: phase as f32,
+        fixture_spread: phasing as f32,
+        beam_targets,
+        blend_mode: EffectBlendMode::Override,
+        daslight_curve: Some(DaslightCurveSource {
+            rate: rate as f32,
+            size: size as f32,
+            offset: offset as f32,
+            sample_ms: DASLIGHT_CURVE_SAMPLE_MS,
+        }),
+    };
+    let half_period_cells = 400_u64 / rate as u64;
+    let note = format!(
+        "feature=Dimmer; shape=Square; evaluator=CSquareEffect@0x140370420; Daslight sampled Curve buffer duration_ms={period_ms}; sample_ms={DASLIGHT_CURVE_SAMPLE_MS}; rate={rate}; grid_cells=400; half_period_cells=floor(400/Rate)={half_period_cells}; phase_cells=trunc(floor(sample_index*400/sample_count)+400-Phase*400)%400; even_band=high; low={low}; high={high}; source_phase={phase}; fixture_spread={phasing}; size={size}; offset={offset}; {clock_note}"
+    );
+    Ok(ConvertedDvcEffect {
+        target: Some(CueEffectTarget {
+            effect_id,
+            enabled: true,
+            params: Some(EffectParamsSnapshot::Lfo(request)),
+            transition_ms: None,
+        }),
+        generator: "Square",
         note,
         approximations,
         warnings: Vec::new(),
@@ -7666,6 +7764,65 @@ mod tests {
             assert!(converted.note.contains("pulse_interval_ms=480"));
             assert!(converted.note.contains("fixture_spread=0.4"));
         }
+    }
+
+    #[test]
+    fn dvc_square_conversion_preserves_quantized_source_and_beam_order() {
+        let document = Document::parse(
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="8"><EFFECT TYPE="5" ID="9" DURATION="1000"><PARAMS NB="5"><PARAM TYPE="0" ID="1" VAL="3"/><PARAM TYPE="1" ID="2" VAL="0.75"/><PARAM TYPE="1" ID="3" VAL="0.25"/><PARAM TYPE="1" ID="4" VAL="0.1"/><PARAM TYPE="1" ID="5" VAL="0.6"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
+        )
+        .unwrap();
+        let scene = document.root_element();
+        let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+        let effect = direct_child(rack, "EFFECT").unwrap();
+        let converted = convert_dvc_effect(
+            scene,
+            "Quantized Square",
+            rack,
+            effect,
+            8,
+            5,
+            9,
+            1,
+            &effect_test_profiles(),
+            &effect_test_fixture_refs(),
+        )
+        .unwrap();
+        let Some(EffectParamsSnapshot::Lfo(request)) =
+            converted.target.expect("runtime target").params
+        else {
+            panic!("CURVE 9 must convert to cue-owned LFO params");
+        };
+        assert_eq!(request.shape, LfoShape::Square);
+        assert_eq!(
+            (request.low, request.high),
+            (normalized_dmx(0.1), normalized_dmx(0.85))
+        );
+        assert_eq!(request.period_ms, 1_000);
+        assert_eq!(request.phase, 0.25);
+        assert_eq!(request.fixture_spread, 0.6);
+        assert_eq!(
+            request.daslight_curve,
+            Some(DaslightCurveSource {
+                rate: 3.0,
+                size: 0.75,
+                offset: 0.1,
+                sample_ms: 40,
+            })
+        );
+        assert_eq!(
+            request
+                .beam_targets
+                .iter()
+                .map(|target| target.fixture_id)
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+        assert!(converted.note.contains("CSquareEffect@0x140370420"));
+        assert!(converted
+            .note
+            .contains("half_period_cells=floor(400/Rate)=133"));
+        assert!(converted.approximations.is_empty());
     }
 
     #[test]
