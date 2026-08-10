@@ -56,6 +56,9 @@ export const createInitialEngineSnapshot = (): EngineSnapshot => ({
   dmx_previews: [{ universe: 0, values: Array.from({ length: 512 }, () => 0) }],
   telemetry: {
     frame_counter: 0,
+    enabled_effect_count: 0,
+    supported_effect_count: 0,
+    effects_over_supported_envelope: false,
     queue_depth: 0,
     queue_depth_abs_max: 0,
     queue_push_failure_count: 0,

@@ -1,6 +1,7 @@
 use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    hash::{BuildHasherDefault, Hasher},
     sync::{
         atomic::{AtomicU32, AtomicU64, Ordering},
         mpsc, Arc, Condvar, Mutex, RwLock, Weak,
@@ -79,6 +80,36 @@ const AUTO_VJ_MAX_TRANSITION_MS: u64 = 60_000;
 const AUDIO_REACTIVE_MAX_ENVELOPE_MS: u32 = 60_000;
 pub const GROUP_STROBE_MAX_HZ: f32 = 30.0;
 pub const VIDEO_ISF_PROJECT_SOURCE_MAX_BYTES: usize = 16 * 1024 * 1024;
+
+/// Supported real-time effect envelope: 64 simultaneous enabled effects over
+/// 200 fixtures at each effect family's validated parameter maxima, evaluated
+/// at 44 Hz. Larger stacks remain valid, but output timing is not guaranteed.
+pub const SUPPORTED_EFFECT_ENVELOPE_ENABLED_EFFECTS: usize = 64;
+pub const SUPPORTED_EFFECT_ENVELOPE_FIXTURES: usize = 200;
+pub const SUPPORTED_EFFECT_ENVELOPE_HZ: u32 = 44;
+
+struct ChaserAttributeHasher(u64);
+
+impl Default for ChaserAttributeHasher {
+    fn default() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+}
+
+impl Hasher for ChaserAttributeHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 ^= u64::from(*byte);
+            self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+type ChaserAttributeMap<V> = HashMap<String, V, BuildHasherDefault<ChaserAttributeHasher>>;
 
 #[cfg(target_os = "windows")]
 mod realtime_thread {
@@ -3209,8 +3240,8 @@ fn clear_runtime_effect_caches_with_policy(kind: &RuntimeEffectKind, clear_spark
             clear_runtime_color_effect_caches(runtime, clear_sparkle_state)
         }
         RuntimeEffectKind::Chaser(runtime) => {
-            for cache in runtime.target_level_cache.values() {
-                cache.set(None);
+            for target in &runtime.hot_targets {
+                target.cache.set(None);
             }
             for target in &runtime.beam_targets {
                 target.cache.set(None);
@@ -3397,15 +3428,11 @@ impl CompiledCurveFunction {
         if progress >= last.position {
             return last.value.clamp(0.0, 1.0);
         }
-        let mut index = 0;
-        for candidate in 0..self.points.len() - 1 {
-            if progress >= self.points[candidate].position
-                && progress < self.points[candidate + 1].position
-            {
-                index = candidate;
-                break;
-            }
-        }
+        let index = self
+            .points
+            .partition_point(|point| point.position <= progress)
+            .saturating_sub(1)
+            .min(self.points.len() - 2);
         let left = &self.points[index];
         let right = &self.points[index + 1];
         let span = (right.position - left.position).max(f32::EPSILON);
@@ -4681,6 +4708,8 @@ struct CompiledDaslightKnightRider {
     grayscale: bool,
     background: DaslightKnightColor,
     lanes: Arc<[CompiledDaslightKnightLane]>,
+    cached_motion_phase: Cell<Option<u64>>,
+    cached_lane_motion: RefCell<Vec<(f64, f64)>>,
 }
 
 impl CompiledDaslightKnightRider {
@@ -4736,6 +4765,7 @@ impl CompiledDaslightKnightRider {
             })
             .collect::<Vec<_>>();
 
+        let cached_lane_motion = vec![(0.0, 1.0); lanes.len()];
         Ok(Self {
             strip_count,
             size: (f64::from(authored_size) * strip_count as f64 / 100.0).max(f64::EPSILON),
@@ -4746,6 +4776,8 @@ impl CompiledDaslightKnightRider {
             grayscale,
             background: DaslightKnightColor::from_color(request.stops[0].color),
             lanes: Arc::from(lanes),
+            cached_motion_phase: Cell::new(None),
+            cached_lane_motion: RefCell::new(cached_lane_motion),
         })
     }
 
@@ -4798,6 +4830,43 @@ impl CompiledDaslightKnightRider {
     }
 
     fn sample_at_phase(&self, time_phase: f64, destination_index: usize) -> ColorEffectColor {
+        let source_position = daslight_corrected_source_position(
+            destination_index,
+            self.strip_count,
+            self.vertical_symmetry,
+        );
+        let phase_bits = time_phase.to_bits();
+        if self.cached_motion_phase.get() != Some(phase_bits) {
+            let mut cached_lane_motion = self.cached_lane_motion.borrow_mut();
+            for (motion, lane) in cached_lane_motion.iter_mut().zip(self.lanes.iter()) {
+                *motion = self.motion_head(time_phase + lane.phase);
+            }
+            self.cached_motion_phase.set(Some(phase_bits));
+        }
+        let cached_lane_motion = self.cached_lane_motion.borrow();
+        let composed = self
+            .lanes
+            .iter()
+            .zip(cached_lane_motion.iter().copied())
+            .fold(self.background, |destination, (lane, (head, direction))| {
+                destination.source_over(
+                    lane.color,
+                    self.profile_weight(head, direction, source_position),
+                )
+            });
+        if self.grayscale {
+            daslight_grayscale_color(composed.into_color())
+        } else {
+            composed.into_color()
+        }
+    }
+
+    #[cfg(test)]
+    fn sample_at_phase_uncached(
+        &self,
+        time_phase: f64,
+        destination_index: usize,
+    ) -> ColorEffectColor {
         let source_position = daslight_corrected_source_position(
             destination_index,
             self.strip_count,
@@ -5053,6 +5122,8 @@ struct RuntimeMoveEffect {
     path: CompiledMovePath,
     targets: Vec<RuntimeMoveTarget>,
     target_indices: HashMap<FixtureId, usize>,
+    single_target_indices: HashMap<FixtureId, usize>,
+    last_single_target_index: Cell<Option<usize>>,
     /// Fixture/control identity is compiled once on add/update/rebuild. The
     /// 44 Hz evaluator performs two fixed hash reads and no beam search.
     attribute_indices: HashMap<FixtureId, HashMap<String, usize>>,
@@ -5087,11 +5158,133 @@ struct RuntimeChaserEffect {
     step_order: Vec<usize>,
     target_phase_offsets: HashMap<FixtureId, f32>,
     target_step_levels: HashMap<FixtureId, Vec<u16>>,
-    target_level_cache: HashMap<FixtureId, Cell<Option<RuntimeChaserEvaluation>>>,
-    feature_indices: HashMap<String, usize>,
+    target_step_maxima: HashMap<FixtureId, CompiledChaserStepMaxima>,
+    hot_targets: Vec<RuntimeChaserHotTarget>,
+    hot_target_indices: HashMap<FixtureId, usize>,
+    last_hot_target_index: Cell<Option<usize>>,
+    feature_indices: ChaserAttributeMap<usize>,
+    hot_feature_slots: [RuntimeChaserFeatureSlot; 32],
     feature_fixture_ids: Vec<Vec<FixtureId>>,
     beam_targets: Vec<RuntimeChaserBeamTarget>,
     beam_attribute_indices: HashMap<FixtureId, HashMap<String, usize>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RuntimeChaserFeatureSlot {
+    hash: u64,
+    feature_index: u8,
+}
+
+const EMPTY_CHASER_FEATURE_INDEX: u8 = u8::MAX;
+
+impl Default for RuntimeChaserFeatureSlot {
+    fn default() -> Self {
+        Self {
+            hash: 0,
+            feature_index: EMPTY_CHASER_FEATURE_INDEX,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeChaserHotTarget {
+    fixture_id: FixtureId,
+    phase_offset: f32,
+    step_levels: Vec<u16>,
+    step_maxima: CompiledChaserStepMaxima,
+    build_up_down_levels: Option<Vec<u16>>,
+    block_levels: Option<CompiledChaserBlockLevels>,
+    feature_mask: u16,
+    control_feature_indices: Vec<Option<u8>>,
+    cache: Cell<Option<RuntimeChaserEvaluation>>,
+}
+
+#[derive(Debug, Clone)]
+enum CompiledChaserBlockLevels {
+    Constant(u16),
+    Cyclic(Vec<u16>),
+}
+
+#[derive(Debug, Clone, Default)]
+struct CompiledChaserStepMaxima {
+    prefix: Vec<u16>,
+    suffix: Vec<u16>,
+}
+
+impl CompiledChaserStepMaxima {
+    fn compile(levels: &[u16]) -> Self {
+        let mut prefix = Vec::with_capacity(levels.len() + 1);
+        prefix.push(0);
+        for level in levels {
+            prefix.push(prefix.last().copied().unwrap_or(0).max(*level));
+        }
+
+        let mut suffix = vec![0; levels.len() + 1];
+        for index in (0..levels.len()).rev() {
+            suffix[index] = suffix[index + 1].max(levels[index]);
+        }
+        Self { prefix, suffix }
+    }
+}
+
+fn compile_chaser_build_up_down_levels(
+    step_count: usize,
+    wing_count: usize,
+    maxima: &CompiledChaserStepMaxima,
+) -> Vec<u16> {
+    let cycle_len = step_count.max(1) * 2;
+    (0..cycle_len)
+        .map(|absolute_slot| {
+            (0..wing_count.max(1)).fold(0_u16, |level, wing| {
+                let wing_offset = wing * cycle_len / wing_count.max(1);
+                let cycle_position = (absolute_slot + wing_offset) % cycle_len;
+                let filling = cycle_position < step_count;
+                let frontier = if filling {
+                    cycle_position
+                } else {
+                    cycle_position - step_count
+                };
+                let wing_level = if filling {
+                    maxima.prefix[frontier + 1]
+                } else {
+                    maxima.suffix[frontier + 1]
+                };
+                level.max(wing_level)
+            })
+        })
+        .collect()
+}
+
+fn compile_chaser_block_levels(
+    step_order: &[usize],
+    step_levels: &[u16],
+    active_step_count: usize,
+    wing_count: usize,
+) -> CompiledChaserBlockLevels {
+    let path_len = step_order.len().max(1);
+    let wing_count = wing_count.max(1);
+    let largest_wing_gap = path_len.div_ceil(wing_count);
+    if active_step_count >= largest_wing_gap {
+        let level = step_order.iter().fold(0_u16, |level, step_index| {
+            level.max(step_levels.get(*step_index).copied().unwrap_or(0))
+        });
+        return CompiledChaserBlockLevels::Constant(level);
+    }
+    CompiledChaserBlockLevels::Cyclic(
+        (0..path_len)
+            .map(|absolute_slot| {
+                (0..wing_count).fold(0_u16, |level, wing| {
+                    let wing_offset = wing * path_len / wing_count;
+                    level.max(chaser_block_level_for_order(
+                        step_order,
+                        step_levels,
+                        active_step_count,
+                        (absolute_slot + wing_offset) as i64,
+                    ))
+                })
+            })
+            .collect(),
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -5110,6 +5303,7 @@ struct RuntimeChaserEvaluation {
 struct RuntimeChaserBeamTarget {
     phase_offset: f32,
     step_levels: Vec<u16>,
+    step_maxima: CompiledChaserStepMaxima,
     feature_index: usize,
     virtual_intensity: bool,
     cache: Cell<Option<RuntimeChaserEvaluation>>,
@@ -13662,11 +13856,12 @@ impl EngineRuntime {
             };
 
             let parked_values = self.parked_fixture_values.get(&fixture.id);
-            for control in &mode.controls {
-                let value = self.render_control_value(
+            for (control_index, control) in mode.controls.iter().enumerate() {
+                let value = self.render_control_value_indexed(
                     fixture,
                     mode.controls.as_slice(),
                     control,
+                    Some(control_index),
                     now,
                     parked_values,
                     false,
@@ -13676,17 +13871,25 @@ impl EngineRuntime {
         }
     }
 
-    fn render_control_value(
+    #[allow(clippy::too_many_arguments)]
+    fn render_control_value_indexed(
         &self,
         fixture: &RuntimeFixture,
         controls: &[AttributeControl],
         control: &AttributeControl,
+        control_index: Option<usize>,
         now: Instant,
         parked_values: Option<&HashMap<String, u16>>,
         use_programmer_preview: bool,
     ) -> u16 {
-        let raw_value =
-            self.raw_control_value(fixture, control, now, parked_values, use_programmer_preview);
+        let raw_value = self.raw_control_value_indexed(
+            fixture,
+            control,
+            control_index,
+            now,
+            parked_values,
+            use_programmer_preview,
+        );
         apply_fixture_limits(
             &fixture.limits,
             &control.attribute,
@@ -13715,11 +13918,36 @@ impl EngineRuntime {
         parked_values: Option<&HashMap<String, u16>>,
         use_programmer_preview: bool,
     ) -> u16 {
+        self.raw_control_value_indexed(
+            fixture,
+            control,
+            None,
+            now,
+            parked_values,
+            use_programmer_preview,
+        )
+    }
+
+    fn raw_control_value_indexed(
+        &self,
+        fixture: &RuntimeFixture,
+        control: &AttributeControl,
+        control_index: Option<usize>,
+        now: Instant,
+        parked_values: Option<&HashMap<String, u16>>,
+        use_programmer_preview: bool,
+    ) -> u16 {
         parked_values
             .and_then(|values| values.get(&control.attribute))
             .copied()
             .unwrap_or_else(|| {
-                self.render_unlimited_control_value(fixture, control, now, use_programmer_preview)
+                self.render_unlimited_control_value_indexed(
+                    fixture,
+                    control,
+                    control_index,
+                    now,
+                    use_programmer_preview,
+                )
             })
     }
 
@@ -13727,6 +13955,23 @@ impl EngineRuntime {
         &self,
         fixture: &RuntimeFixture,
         control: &AttributeControl,
+        now: Instant,
+        use_programmer_preview: bool,
+    ) -> u16 {
+        self.render_unlimited_control_value_indexed(
+            fixture,
+            control,
+            None,
+            now,
+            use_programmer_preview,
+        )
+    }
+
+    fn render_unlimited_control_value_indexed(
+        &self,
+        fixture: &RuntimeFixture,
+        control: &AttributeControl,
+        control_index: Option<usize>,
         now: Instant,
         use_programmer_preview: bool,
     ) -> u16 {
@@ -13750,9 +13995,10 @@ impl EngineRuntime {
             let value = self.apply_playback_level(fixture.id, &control.attribute, value);
             self.apply_cue_step_activations(fixture.id, &control.attribute, value, now)
         };
-        let value = self.apply_effects_with_transition_policy(
+        let value = self.apply_effects_with_transition_policy_for_control(
             fixture,
             &control.attribute,
+            control_index,
             value,
             now,
             effect_transition_control_is_discrete(control),
@@ -18464,11 +18710,34 @@ impl EngineRuntime {
         now: Instant,
         discrete: bool,
     ) -> u16 {
+        self.apply_effects_with_transition_policy_for_control(
+            fixture, attribute, None, base_value, now, discrete,
+        )
+    }
+
+    fn apply_effects_with_transition_policy_for_control(
+        &self,
+        fixture: &RuntimeFixture,
+        attribute: &str,
+        control_index: Option<usize>,
+        base_value: u16,
+        now: Instant,
+        discrete: bool,
+    ) -> u16 {
         let mut value = base_value;
         let clock = self.clock.snapshot(now);
+        let attribute_hash = chaser_attribute_hash(attribute);
         for effect in self.effects.iter().filter(|effect| effect.enabled) {
-            value = apply_runtime_effect_to_attribute(
-                effect, fixture, attribute, value, now, &clock, 1.0,
+            value = apply_runtime_effect_to_attribute_prehashed(
+                effect,
+                fixture,
+                attribute,
+                attribute_hash,
+                control_index,
+                value,
+                now,
+                &clock,
+                1.0,
             );
         }
         for activation in self
@@ -22137,11 +22406,26 @@ impl EngineRuntime {
         self.build_snapshot_with_touch_surface(queue_depth, self.touch_surface.clone())
     }
 
+    fn enabled_effect_count(&self) -> usize {
+        self.effects
+            .iter()
+            .filter(|effect| effect.enabled)
+            .count()
+            .saturating_add(
+                self.active_effect_activation_indices
+                    .iter()
+                    .filter_map(|index| self.effect_activations.get(*index))
+                    .filter(|activation| activation.key.is_some() && activation.effect.enabled)
+                    .count(),
+            )
+    }
+
     fn build_snapshot_with_touch_surface(
         &self,
         queue_depth: usize,
         touch_surface: TouchSurfaceSummary,
     ) -> EngineSnapshot {
+        let enabled_effect_count = self.enabled_effect_count();
         let fixtures = self
             .fixtures
             .iter()
@@ -22264,6 +22548,10 @@ impl EngineRuntime {
             dmx_previews: self.dmx_preview_snapshot(),
             telemetry: EngineTelemetry {
                 frame_counter: self.frame_counter,
+                enabled_effect_count,
+                supported_effect_count: SUPPORTED_EFFECT_ENVELOPE_ENABLED_EFFECTS,
+                effects_over_supported_envelope: enabled_effect_count
+                    > SUPPORTED_EFFECT_ENVELOPE_ENABLED_EFFECTS,
                 queue_depth,
                 queue_depth_abs_max: self.queue_depth_abs_max,
                 queue_push_failure_count: self.shared_telemetry.queue_push_failure_count(),
@@ -22558,11 +22846,12 @@ impl EngineRuntime {
                     let Some(mode) = fixture.profile.dmx_modes.get(fixture.mode_index) else {
                         continue;
                     };
-                    for control in &mode.controls {
-                        let value = self.render_control_value(
+                    for (control_index, control) in mode.controls.iter().enumerate() {
+                        let value = self.render_control_value_indexed(
                             fixture,
                             mode.controls.as_slice(),
                             control,
+                            Some(control_index),
                             self.last_tick,
                             None,
                             true,
@@ -25510,6 +25799,31 @@ fn apply_runtime_effect_to_attribute(
     clock: &ClockSnapshot,
     rate: f32,
 ) -> u16 {
+    apply_runtime_effect_to_attribute_prehashed(
+        effect,
+        fixture,
+        attribute,
+        chaser_attribute_hash(attribute),
+        None,
+        base_value,
+        now,
+        clock,
+        rate,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_runtime_effect_to_attribute_prehashed(
+    effect: &RuntimeEffect,
+    fixture: &RuntimeFixture,
+    attribute: &str,
+    attribute_hash: u64,
+    control_index: Option<usize>,
+    base_value: u16,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> u16 {
     match &effect.kind {
         RuntimeEffectKind::Color(runtime) => {
             let next = if runtime.spatial.is_some() {
@@ -25597,47 +25911,50 @@ fn apply_runtime_effect_to_attribute(
             }
         }
         RuntimeEffectKind::Chaser(runtime) => {
-            if let Some(target_index) = runtime
-                .beam_attribute_indices
-                .get(&fixture.id)
-                .and_then(|attributes| attributes.get(attribute))
-                .copied()
-            {
-                return evaluate_chaser_beam_effect_at_rate(
-                    runtime,
-                    target_index,
-                    effect.created_at,
-                    now,
-                    clock,
-                    rate,
-                )
-                .map(|(evaluated, virtual_intensity)| {
-                    if virtual_intensity {
-                        scale_u16(base_value, evaluated as f32 / u16::MAX as f32)
-                    } else {
-                        blend_effect_value(base_value, evaluated, &runtime.request.blend_mode)
-                    }
-                })
-                .unwrap_or(base_value);
+            if !runtime.beam_targets.is_empty() {
+                if let Some(target_index) = runtime
+                    .beam_attribute_indices
+                    .get(&fixture.id)
+                    .and_then(|attributes| attributes.get(attribute))
+                    .copied()
+                {
+                    return evaluate_chaser_beam_effect_at_rate(
+                        runtime,
+                        target_index,
+                        effect.created_at,
+                        now,
+                        clock,
+                        rate,
+                    )
+                    .map(|(evaluated, virtual_intensity)| {
+                        if virtual_intensity {
+                            scale_u16(base_value, evaluated as f32 / u16::MAX as f32)
+                        } else {
+                            blend_effect_value(base_value, evaluated, &runtime.request.blend_mode)
+                        }
+                    })
+                    .unwrap_or(base_value);
+                }
             }
-            let Some(feature_index) = runtime.feature_indices.get(attribute) else {
+            let Some(target) = runtime_chaser_hot_target(runtime, fixture.id) else {
                 return base_value;
             };
-            if !runtime.target_phase_offsets.contains_key(&fixture.id) {
-                return base_value;
-            }
-            let Some(feature_fixture_ids) = runtime.feature_fixture_ids.get(*feature_index) else {
+            let feature_index = control_index
+                .and_then(|index| target.control_feature_indices.get(index).copied().flatten())
+                .map(usize::from)
+                .or_else(|| runtime_chaser_feature_index(runtime, attribute, attribute_hash));
+            let Some(feature_index) = feature_index else {
                 return base_value;
             };
-            if feature_fixture_ids.binary_search(&fixture.id).is_err() {
+            if target.feature_mask & (1_u16 << feature_index) == 0 {
                 return base_value;
             }
             blend_effect_value(
                 base_value,
-                evaluate_chaser_effect_at_rate(
+                evaluate_chaser_hot_target_at_rate(
                     runtime,
-                    *feature_index,
-                    fixture.id,
+                    target,
+                    feature_index,
                     effect.created_at,
                     now,
                     clock,
@@ -26815,8 +27132,12 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
             step_order: Vec::new(),
             target_phase_offsets: HashMap::new(),
             target_step_levels: HashMap::new(),
-            target_level_cache: HashMap::new(),
-            feature_indices: HashMap::new(),
+            target_step_maxima: HashMap::new(),
+            hot_targets: Vec::new(),
+            hot_target_indices: HashMap::new(),
+            last_hot_target_index: Cell::new(None),
+            feature_indices: ChaserAttributeMap::default(),
+            hot_feature_slots: [RuntimeChaserFeatureSlot::default(); 32],
             feature_fixture_ids: Vec::new(),
             beam_targets: Vec::new(),
             beam_attribute_indices: HashMap::new(),
@@ -26830,6 +27151,8 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
                 path,
                 targets: Vec::new(),
                 target_indices: HashMap::new(),
+                single_target_indices: HashMap::new(),
+                last_single_target_index: Cell::new(None),
                 attribute_indices: HashMap::new(),
                 rotation_cosine,
                 rotation_sine,
@@ -27717,12 +28040,24 @@ fn runtime_move_effect_from_request(
             }
         }
     }
+    let mut target_counts = HashMap::<FixtureId, usize>::new();
+    for target in &targets {
+        *target_counts.entry(target.fixture_id).or_default() += 1;
+    }
+    let single_target_indices = targets
+        .iter()
+        .enumerate()
+        .filter(|(_, target)| target_counts.get(&target.fixture_id) == Some(&1))
+        .map(|(index, target)| (target.fixture_id, index))
+        .collect();
     let (rotation_cosine, rotation_sine) = move_rotation(request.rotation_degrees);
     Ok(RuntimeMoveEffect {
         request,
         path,
         targets,
         target_indices,
+        single_target_indices,
+        last_single_target_index: Cell::new(None),
         attribute_indices,
         rotation_cosine,
         rotation_sine,
@@ -27772,11 +28107,13 @@ fn evaluate_runtime_move_attribute_at_rate(
     clock: &ClockSnapshot,
     rate: f32,
 ) -> Option<u16> {
-    let target = runtime
-        .attribute_indices
-        .get(&fixture_id)
-        .and_then(|attributes| attributes.get(attribute))
-        .and_then(|index| runtime.targets.get(*index))?;
+    let target = runtime_move_single_target(runtime, fixture_id).or_else(|| {
+        runtime
+            .attribute_indices
+            .get(&fixture_id)
+            .and_then(|attributes| attributes.get(attribute))
+            .and_then(|index| runtime.targets.get(*index))
+    })?;
     let axis = if target.pan_attribute.eq_ignore_ascii_case(attribute) {
         MovementAxis::Pan
     } else if target.tilt_attribute.eq_ignore_ascii_case(attribute) {
@@ -27837,6 +28174,24 @@ fn evaluate_runtime_move_attribute_at_rate(
     }
     .clamp(0.0, 1.0);
     Some((normalized * u16::MAX as f32).round() as u16)
+}
+
+fn runtime_move_single_target(
+    runtime: &RuntimeMoveEffect,
+    fixture_id: FixtureId,
+) -> Option<&RuntimeMoveTarget> {
+    if let Some(index) = runtime.last_single_target_index.get() {
+        if runtime
+            .targets
+            .get(index)
+            .is_some_and(|target| target.fixture_id == fixture_id)
+        {
+            return runtime.targets.get(index);
+        }
+    }
+    let index = runtime.single_target_indices.get(&fixture_id).copied()?;
+    runtime.last_single_target_index.set(Some(index));
+    runtime.targets.get(index)
 }
 
 fn evaluate_daslight_move_delta(
@@ -29722,19 +30077,20 @@ fn runtime_chaser_effect_from_request(
             }
         }
     }
+    let target_step_maxima: HashMap<FixtureId, CompiledChaserStepMaxima> = target_step_levels
+        .iter()
+        .map(|(fixture_id, levels)| (*fixture_id, CompiledChaserStepMaxima::compile(levels)))
+        .collect();
     let target_phase_offsets: HashMap<FixtureId, f32> = target_order
-        .into_iter()
+        .iter()
+        .copied()
         .enumerate()
         .map(|(index, fixture_id)| {
             let normalized = index as f32 / target_denominator;
             (fixture_id, normalized * request.fixture_spread * path_len)
         })
         .collect();
-    let target_level_cache = target_phase_offsets
-        .keys()
-        .map(|fixture_id| (*fixture_id, Cell::new(None)))
-        .collect();
-    let mut feature_indices = HashMap::new();
+    let mut feature_indices = ChaserAttributeMap::default();
     let feature_fixture_ids = request
         .features
         .iter()
@@ -29806,6 +30162,7 @@ fn runtime_chaser_effect_from_request(
                 beam_targets.push(RuntimeChaserBeamTarget {
                     phase_offset: 0.0,
                     step_levels: vec![0; steps.len()],
+                    step_maxima: CompiledChaserStepMaxima::default(),
                     feature_index,
                     virtual_intensity,
                     cache: Cell::new(None),
@@ -29819,6 +30176,7 @@ fn runtime_chaser_effect_from_request(
     let beam_target_count = beam_targets.len().max(1) as f32;
     for (index, target) in beam_targets.iter_mut().enumerate() {
         target.phase_offset = index as f32 / beam_target_count * request.fixture_spread * path_len;
+        target.step_maxima = CompiledChaserStepMaxima::compile(&target.step_levels);
     }
     if require_resolved_target
         && feature_fixture_ids
@@ -29833,13 +30191,105 @@ fn runtime_chaser_effect_from_request(
     {
         return Err("Each Chaser feature must resolve on at least one target fixture".to_string());
     }
+    let hot_targets = target_order
+        .iter()
+        .map(|fixture_id| {
+            let feature_mask = feature_fixture_ids.iter().enumerate().fold(
+                0_u16,
+                |mask, (feature_index, fixture_ids)| {
+                    if fixture_ids.binary_search(fixture_id).is_ok() {
+                        mask | (1_u16 << feature_index)
+                    } else {
+                        mask
+                    }
+                },
+            );
+            RuntimeChaserHotTarget {
+                fixture_id: *fixture_id,
+                phase_offset: target_phase_offsets.get(fixture_id).copied().unwrap_or(0.0),
+                step_levels: target_step_levels
+                    .get(fixture_id)
+                    .cloned()
+                    .unwrap_or_default(),
+                step_maxima: target_step_maxima
+                    .get(fixture_id)
+                    .cloned()
+                    .unwrap_or_default(),
+                build_up_down_levels: (request.direction == ChaserDirection::BuildUpDown
+                    && request.overlap <= f32::EPSILON)
+                    .then(|| {
+                        compile_chaser_build_up_down_levels(
+                            request.steps.len(),
+                            request.wings as usize,
+                            target_step_maxima
+                                .get(fixture_id)
+                                .expect("Chaser target maxima must be compiled"),
+                        )
+                    }),
+                block_levels: (request.direction != ChaserDirection::BuildUpDown
+                    && request.overlap <= f32::EPSILON)
+                    .then(|| {
+                        compile_chaser_block_levels(
+                            &step_order,
+                            target_step_levels
+                                .get(fixture_id)
+                                .expect("Chaser target levels must be compiled"),
+                            request.active_step_count as usize,
+                            request.wings as usize,
+                        )
+                    }),
+                feature_mask,
+                control_feature_indices: fixtures
+                    .iter()
+                    .find(|fixture| fixture.id == *fixture_id)
+                    .and_then(|fixture| fixture.profile.dmx_modes.get(fixture.mode_index))
+                    .map(|mode| {
+                        mode.controls
+                            .iter()
+                            .map(|control| {
+                                feature_indices
+                                    .get(&control.attribute)
+                                    .copied()
+                                    .filter(|feature_index| {
+                                        feature_mask & (1_u16 << *feature_index) != 0
+                                    })
+                                    .and_then(|feature_index| u8::try_from(feature_index).ok())
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                cache: Cell::new(None),
+            }
+        })
+        .collect::<Vec<_>>();
+    let hot_target_indices = hot_targets
+        .iter()
+        .enumerate()
+        .map(|(index, target)| (target.fixture_id, index))
+        .collect();
+    let mut hot_feature_slots = [RuntimeChaserFeatureSlot::default(); 32];
+    for (attribute, feature_index) in &feature_indices {
+        let hash = chaser_attribute_hash(attribute);
+        let mut slot = hash as usize & (hot_feature_slots.len() - 1);
+        while hot_feature_slots[slot].feature_index != EMPTY_CHASER_FEATURE_INDEX {
+            slot = (slot + 1) & (hot_feature_slots.len() - 1);
+        }
+        hot_feature_slots[slot] = RuntimeChaserFeatureSlot {
+            hash,
+            feature_index: *feature_index as u8,
+        };
+    }
     Ok(RuntimeChaserEffect {
         request,
         step_order,
         target_phase_offsets,
         target_step_levels,
-        target_level_cache,
+        target_step_maxima,
+        hot_targets,
+        hot_target_indices,
+        last_hot_target_index: Cell::new(None),
         feature_indices,
+        hot_feature_slots,
         feature_fixture_ids,
         beam_targets,
         beam_attribute_indices,
@@ -32534,17 +32984,30 @@ fn chaser_block_level_for_steps(
     step_levels: &[u16],
     absolute_slot: i64,
 ) -> u16 {
-    if runtime.step_order.is_empty() {
+    chaser_block_level_for_order(
+        &runtime.step_order,
+        step_levels,
+        runtime.request.active_step_count as usize,
+        absolute_slot,
+    )
+}
+
+fn chaser_block_level_for_order(
+    step_order: &[usize],
+    step_levels: &[u16],
+    active_step_count: usize,
+    absolute_slot: i64,
+) -> u16 {
+    if step_order.is_empty() {
         return 0;
     }
     let mut level = 0;
     let mut seen_steps = [0_u64; 4];
     let mut selected_count = 0_usize;
-    let target_count = runtime.request.active_step_count as usize;
-    for path_offset in 0..runtime.step_order.len() {
-        let order_index = (absolute_slot - path_offset as i64)
-            .rem_euclid(runtime.step_order.len() as i64) as usize;
-        let step_index = runtime.step_order[order_index];
+    for path_offset in 0..step_order.len() {
+        let order_index =
+            (absolute_slot - path_offset as i64).rem_euclid(step_order.len() as i64) as usize;
+        let step_index = step_order[order_index];
         let word = step_index / 64;
         let mask = 1_u64 << (step_index % 64);
         if seen_steps[word] & mask != 0 {
@@ -32553,7 +33016,7 @@ fn chaser_block_level_for_steps(
         seen_steps[word] |= mask;
         selected_count += 1;
         level = level.max(step_levels.get(step_index).copied().unwrap_or(0));
-        if selected_count >= target_count {
+        if selected_count >= active_step_count {
             break;
         }
     }
@@ -32563,6 +33026,7 @@ fn chaser_block_level_for_steps(
 fn chaser_build_up_down_level_for_steps(
     runtime: &RuntimeChaserEffect,
     step_levels: &[u16],
+    step_maxima: &CompiledChaserStepMaxima,
     absolute_slot: i64,
     current_weight: f32,
     next_weight: f32,
@@ -32579,35 +33043,18 @@ fn chaser_build_up_down_level_for_steps(
         cycle_position - step_count
     };
     let fading = runtime.request.overlap > f32::EPSILON;
-    let mut normalized_level = 0.0_f32;
-    for (position, step_index) in runtime.step_order.iter().copied().enumerate() {
-        let weight = if filling {
-            if position < frontier {
-                1.0
-            } else if position == frontier {
-                if fading {
-                    next_weight
-                } else {
-                    1.0
-                }
-            } else {
-                0.0
-            }
-        } else if position < frontier {
-            0.0
-        } else if position == frontier {
-            if fading {
-                current_weight
-            } else {
-                0.0
-            }
-        } else {
-            1.0
-        };
-        normalized_level = normalized_level
-            .max(step_levels.get(step_index).copied().unwrap_or(0) as f32 / 65_535.0 * weight);
+    let frontier_step = runtime.step_order[frontier];
+    let frontier_level =
+        step_levels.get(frontier_step).copied().unwrap_or(0) as f32 / u16::MAX as f32;
+    if filling {
+        let completed = step_maxima.prefix[frontier] as f32 / u16::MAX as f32;
+        let frontier_weight = if fading { next_weight } else { 1.0 };
+        completed.max(frontier_level * frontier_weight)
+    } else {
+        let remaining = step_maxima.suffix[frontier + 1] as f32 / u16::MAX as f32;
+        let frontier_weight = if fading { current_weight } else { 0.0 };
+        remaining.max(frontier_level * frontier_weight)
     }
-    normalized_level
 }
 
 #[cfg(test)]
@@ -32644,35 +33091,100 @@ fn evaluate_chaser_effect_at_rate(
     let Some(feature) = runtime.request.features.get(feature_index) else {
         return 0;
     };
+    let Some(target) = runtime_chaser_hot_target(runtime, fixture_id) else {
+        return 0;
+    };
     let normalized_level =
-        evaluate_chaser_effect_normalized(runtime, fixture_id, created_at, now, clock, rate);
+        evaluate_chaser_hot_target_normalized(runtime, target, created_at, now, clock, rate);
     scale_effect_u16(feature.low, feature.high, normalized_level)
 }
 
-fn evaluate_chaser_effect_normalized(
+fn runtime_chaser_hot_target(
     runtime: &RuntimeChaserEffect,
     fixture_id: FixtureId,
+) -> Option<&RuntimeChaserHotTarget> {
+    if let Some(index) = runtime.last_hot_target_index.get() {
+        if runtime
+            .hot_targets
+            .get(index)
+            .is_some_and(|target| target.fixture_id == fixture_id)
+        {
+            return runtime.hot_targets.get(index);
+        }
+    }
+    let index = runtime.hot_target_indices.get(&fixture_id).copied()?;
+    runtime.last_hot_target_index.set(Some(index));
+    runtime.hot_targets.get(index)
+}
+
+fn chaser_attribute_hash(attribute: &str) -> u64 {
+    attribute.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
+fn runtime_chaser_feature_index(
+    runtime: &RuntimeChaserEffect,
+    attribute: &str,
+    hash: u64,
+) -> Option<usize> {
+    let mask = runtime.hot_feature_slots.len() - 1;
+    let mut slot = hash as usize & mask;
+    loop {
+        let candidate = runtime.hot_feature_slots[slot];
+        if candidate.feature_index == EMPTY_CHASER_FEATURE_INDEX {
+            return None;
+        }
+        if candidate.hash == hash {
+            let feature_index = candidate.feature_index as usize;
+            if runtime
+                .request
+                .features
+                .get(feature_index)
+                .is_some_and(|feature| feature.attribute == attribute)
+            {
+                return Some(feature_index);
+            }
+        }
+        slot = (slot + 1) & mask;
+    }
+}
+
+fn evaluate_chaser_hot_target_at_rate(
+    runtime: &RuntimeChaserEffect,
+    target: &RuntimeChaserHotTarget,
+    feature_index: usize,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> u16 {
+    let Some(feature) = runtime.request.features.get(feature_index) else {
+        return 0;
+    };
+    scale_effect_u16(
+        feature.low,
+        feature.high,
+        evaluate_chaser_hot_target_normalized(runtime, target, created_at, now, clock, rate),
+    )
+}
+
+fn evaluate_chaser_hot_target_normalized(
+    runtime: &RuntimeChaserEffect,
+    target: &RuntimeChaserHotTarget,
     created_at: Instant,
     now: Instant,
     clock: &ClockSnapshot,
     rate: f32,
 ) -> f32 {
-    let Some(cache) = runtime.target_level_cache.get(&fixture_id) else {
-        return 0.0;
-    };
-    let Some(step_levels) = runtime.target_step_levels.get(&fixture_id) else {
-        return 0.0;
-    };
-    let phase_offset = runtime
-        .target_phase_offsets
-        .get(&fixture_id)
-        .copied()
-        .unwrap_or(0.0);
     evaluate_chaser_target_normalized(
         runtime,
-        phase_offset,
-        step_levels,
-        cache,
+        target.phase_offset,
+        &target.step_levels,
+        &target.step_maxima,
+        target.build_up_down_levels.as_deref(),
+        target.block_levels.as_ref(),
+        &target.cache,
         created_at,
         now,
         clock,
@@ -32695,6 +33207,9 @@ fn evaluate_chaser_beam_effect_at_rate(
         runtime,
         target.phase_offset,
         &target.step_levels,
+        &target.step_maxima,
+        None,
+        None,
         &target.cache,
         created_at,
         now,
@@ -32712,6 +33227,9 @@ fn evaluate_chaser_target_normalized(
     runtime: &RuntimeChaserEffect,
     phase_offset: f32,
     step_levels: &[u16],
+    step_maxima: &CompiledChaserStepMaxima,
+    build_up_down_levels: Option<&[u16]>,
+    block_levels: Option<&CompiledChaserBlockLevels>,
     cache: &Cell<Option<RuntimeChaserEvaluation>>,
     created_at: Instant,
     now: Instant,
@@ -32740,6 +33258,30 @@ fn evaluate_chaser_target_normalized(
         runtime.request.overlap,
     );
     let mut normalized_level = 0.0_f32;
+    if let Some(levels) = build_up_down_levels {
+        let index = absolute_slot.rem_euclid(levels.len() as i64) as usize;
+        let normalized_level = levels[index] as f32 / u16::MAX as f32;
+        cache.set(Some(RuntimeChaserEvaluation {
+            at: now,
+            normalized_level,
+        }));
+        return normalized_level;
+    }
+    if let Some(levels) = block_levels {
+        let level = match levels {
+            CompiledChaserBlockLevels::Constant(level) => *level,
+            CompiledChaserBlockLevels::Cyclic(levels) => {
+                let index = absolute_slot.rem_euclid(levels.len() as i64) as usize;
+                levels[index]
+            }
+        };
+        let normalized_level = (level as f32 / u16::MAX as f32 * current_weight).clamp(0.0, 1.0);
+        cache.set(Some(RuntimeChaserEvaluation {
+            at: now,
+            normalized_level,
+        }));
+        return normalized_level;
+    }
     let wing_count = runtime.request.wings.max(1) as usize;
     for wing in 0..wing_count {
         let wing_offset = (wing * path_len) / wing_count;
@@ -32748,6 +33290,7 @@ fn evaluate_chaser_target_normalized(
             normalized_level = normalized_level.max(chaser_build_up_down_level_for_steps(
                 runtime,
                 step_levels,
+                step_maxima,
                 wing_slot,
                 current_weight,
                 next_weight,
@@ -34543,6 +35086,48 @@ mod tests {
     use protocol::{AudioWaveformPoint, DmxModeSummary, GeometrySummary, Vec3, VideoMediaMetadata};
     use std::net::UdpSocket;
     use std::sync::Barrier;
+
+    const RELEASE_GATE_EFFECT_COUNT: usize = SUPPORTED_EFFECT_ENVELOPE_ENABLED_EFFECTS;
+    const RELEASE_GATE_FIXTURE_COUNT: usize = SUPPORTED_EFFECT_ENVELOPE_FIXTURES;
+    const RELEASE_GATE_HZ: u32 = SUPPORTED_EFFECT_ENVELOPE_HZ;
+    const RELEASE_GATE_SAMPLES: usize = if cfg!(debug_assertions) { 20 } else { 1_000 };
+    const RELEASE_GATE_P95_LIMIT: Duration = Duration::from_millis(5);
+    const RELEASE_GATE_P99_LIMIT: Duration = Duration::from_millis(8);
+    const RELEASE_GATE_MAX_LIMIT: Duration = Duration::from_millis(12);
+
+    const _: () = assert!(RELEASE_GATE_EFFECT_COUNT == 64);
+    const _: () = assert!(RELEASE_GATE_FIXTURE_COUNT == 200);
+    const _: () = assert!(RELEASE_GATE_HZ == 44);
+
+    fn measure_release_gate(
+        created_at: Instant,
+        mut evaluate: impl FnMut(Instant) -> u64,
+    ) -> (Duration, Duration, Duration) {
+        let mut durations = Vec::with_capacity(RELEASE_GATE_SAMPLES);
+        let mut checksum = 0_u64;
+        for sample in 0..RELEASE_GATE_SAMPLES {
+            let at = created_at + DMX_TICK_INTERVAL * (sample as u32 + 1);
+            let started = Instant::now();
+            checksum = checksum.wrapping_add(evaluate(at));
+            durations.push(started.elapsed());
+        }
+        std::hint::black_box(checksum);
+        assert_ne!(checksum, 0);
+        durations.sort_unstable();
+        (
+            durations[(RELEASE_GATE_SAMPLES * 95 / 100).min(RELEASE_GATE_SAMPLES - 1)],
+            durations[(RELEASE_GATE_SAMPLES * 99 / 100).min(RELEASE_GATE_SAMPLES - 1)],
+            *durations.last().unwrap(),
+        )
+    }
+
+    fn assert_release_gate_percentiles(p95: Duration, p99: Duration, max: Duration) {
+        if !cfg!(debug_assertions) {
+            assert!(p95 <= RELEASE_GATE_P95_LIMIT, "p95 was {p95:?}");
+            assert!(p99 <= RELEASE_GATE_P99_LIMIT, "p99 was {p99:?}");
+            assert!(max <= RELEASE_GATE_MAX_LIMIT, "max was {max:?}");
+        }
+    }
 
     fn add_runtime_test_video_layer(
         runtime: &mut EngineRuntime,
@@ -45396,6 +45981,82 @@ mod tests {
     }
 
     #[test]
+    fn supported_effect_envelope_matches_release_gate_shape() {
+        assert_eq!(RELEASE_GATE_EFFECT_COUNT, 64);
+        assert_eq!(RELEASE_GATE_FIXTURE_COUNT, 200);
+        assert_eq!(RELEASE_GATE_HZ, 44);
+        assert_eq!(
+            RELEASE_GATE_EFFECT_COUNT,
+            SUPPORTED_EFFECT_ENVELOPE_ENABLED_EFFECTS
+        );
+        assert_eq!(
+            RELEASE_GATE_FIXTURE_COUNT,
+            SUPPORTED_EFFECT_ENVELOPE_FIXTURES
+        );
+        assert_eq!(RELEASE_GATE_HZ, SUPPORTED_EFFECT_ENVELOPE_HZ);
+        assert_eq!(
+            1_000_000 / DMX_TICK_INTERVAL.as_micros(),
+            u128::from(RELEASE_GATE_HZ)
+        );
+    }
+
+    #[test]
+    fn telemetry_reports_enabled_effect_count_at_and_over_supported_envelope() {
+        let mut runtime = runtime_with_move_fixtures(1);
+        let request = PositionWaveEffectRequest {
+            label: "Envelope telemetry".to_string(),
+            fixture_ids: vec![1],
+            target_group_ids: Vec::new(),
+            attribute: "Dimmer".to_string(),
+            video_targets: Vec::new(),
+            shape: LfoShape::Sine,
+            origin: Vec3::default(),
+            direction: Vec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            speed: 1.0,
+            wavelength: 1.0,
+            clock_sync: None,
+            low: 0,
+            high: u16::MAX,
+            phase: 0.0,
+            blend_mode: EffectBlendMode::Override,
+        };
+
+        for effect_id in 1..=SUPPORTED_EFFECT_ENVELOPE_ENABLED_EFFECTS as u64 {
+            runtime.apply_command(EngineCommand::AddPositionWaveEffect {
+                effect_id,
+                request: request.clone(),
+            });
+            assert_eq!(runtime.last_error, None);
+        }
+        let at_envelope = runtime.build_snapshot(0).telemetry;
+        assert_eq!(
+            at_envelope.enabled_effect_count,
+            SUPPORTED_EFFECT_ENVELOPE_ENABLED_EFFECTS
+        );
+        assert_eq!(
+            at_envelope.supported_effect_count,
+            SUPPORTED_EFFECT_ENVELOPE_ENABLED_EFFECTS
+        );
+        assert!(!at_envelope.effects_over_supported_envelope);
+
+        runtime.apply_command(EngineCommand::AddPositionWaveEffect {
+            effect_id: SUPPORTED_EFFECT_ENVELOPE_ENABLED_EFFECTS as u64 + 1,
+            request,
+        });
+        assert_eq!(runtime.last_error, None);
+        let over_envelope = runtime.build_snapshot(0).telemetry;
+        assert_eq!(
+            over_envelope.enabled_effect_count,
+            SUPPORTED_EFFECT_ENVELOPE_ENABLED_EFFECTS + 1
+        );
+        assert!(over_envelope.effects_over_supported_envelope);
+    }
+
+    #[test]
     fn telemetry_accumulates_tick_jitter_statistics() {
         let engine = EngineHandle::start(DmxOutputConfig {
             enabled: false,
@@ -55248,9 +55909,39 @@ mod tests {
                     color: DaslightKnightColor::from_color(test_color(0, u16::MAX, 0)),
                 },
             ]),
+            cached_motion_phase: Cell::new(None),
+            cached_lane_motion: RefCell::new(vec![(0.0, 1.0); 2]),
         };
         let color = composed.sample_at_phase(0.25, 0);
         assert_eq!(color, test_color(16_383, 32_767, 16_383));
+    }
+
+    #[test]
+    fn corrected_knight_rider_motion_cache_preserves_uncached_sampling() {
+        let request = test_daslight_knight_request(
+            30_040,
+            100,
+            false,
+            true,
+            true,
+            50.0,
+            true,
+            &(0..255).map(|index| index as u16 * 257).collect::<Vec<_>>(),
+        );
+        let compiled = CompiledDaslightKnightRider::compile(
+            &request, 200, 100.0, false, true, true, 50.0, true,
+        )
+        .unwrap();
+
+        for phase in [-1.25, 0.0, 0.125, 0.5, 1.75] {
+            for destination_index in 0..200 {
+                assert_eq!(
+                    compiled.sample_at_phase(phase, destination_index),
+                    compiled.sample_at_phase_uncached(phase, destination_index),
+                    "phase {phase} destination {destination_index}",
+                );
+            }
+        }
     }
 
     #[test]
@@ -60370,14 +61061,16 @@ mod tests {
         assert!(
             (32_767..=32_769).contains(&evaluate_chaser_effect(&resolved, 0, 1, now, now, &clock))
         );
-        let cached = resolved.target_level_cache[&1]
+        let fixture_target = runtime_chaser_hot_target(&resolved, 1).unwrap();
+        let cached = fixture_target
+            .cache
             .get()
             .expect("first Chaser feature should cache the fixture level");
         assert_eq!(cached.at, now);
         assert!(
             (29_999..=30_002).contains(&evaluate_chaser_effect(&resolved, 1, 1, now, now, &clock))
         );
-        assert_eq!(resolved.target_level_cache[&1].get(), Some(cached));
+        assert_eq!(fixture_target.cache.get(), Some(cached));
         assert_eq!(resolved.feature_fixture_ids[1], vec![1]);
 
         runtime.effects.push(RuntimeEffect {
@@ -60760,6 +61453,129 @@ mod tests {
     }
 
     #[test]
+    fn chaser_build_up_down_compiled_maxima_preserve_linear_scan_results() {
+        let runtime = runtime_with_chaser_fixtures(64);
+        let fixture_ids = (1..=64).collect::<Vec<_>>();
+        let mut request = test_chaser_request(&fixture_ids);
+        request.steps = (0..256)
+            .map(|index| protocol::ChaserStep {
+                fixture_ids: vec![fixture_ids[index % fixture_ids.len()]],
+                target_group_ids: Vec::new(),
+                beam_targets: Vec::new(),
+                level: ((index * 977) % u16::MAX as usize) as u16,
+            })
+            .collect();
+        request.direction = ChaserDirection::BuildUpDown;
+        request.active_step_count = 1;
+        request.wings = 16;
+        let resolved = runtime.resolve_chaser_effect_request(request).unwrap();
+        let levels = &resolved.target_step_levels[&1];
+        let maxima = &resolved.target_step_maxima[&1];
+
+        let linear = |absolute_slot: i64, current_weight: f32, next_weight: f32| {
+            let step_count = resolved.step_order.len();
+            let cycle_position = absolute_slot.rem_euclid((step_count * 2) as i64) as usize;
+            let filling = cycle_position < step_count;
+            let frontier = if filling {
+                cycle_position
+            } else {
+                cycle_position - step_count
+            };
+            let fading = resolved.request.overlap > f32::EPSILON;
+            resolved.step_order.iter().copied().enumerate().fold(
+                0.0_f32,
+                |normalized_level, (position, step_index)| {
+                    let weight = if filling {
+                        if position < frontier {
+                            1.0
+                        } else if position == frontier {
+                            if fading {
+                                next_weight
+                            } else {
+                                1.0
+                            }
+                        } else {
+                            0.0
+                        }
+                    } else if position < frontier {
+                        0.0
+                    } else if position == frontier {
+                        if fading {
+                            current_weight
+                        } else {
+                            0.0
+                        }
+                    } else {
+                        1.0
+                    };
+                    normalized_level.max(
+                        levels.get(step_index).copied().unwrap_or(0) as f32 / u16::MAX as f32
+                            * weight,
+                    )
+                },
+            )
+        };
+
+        for absolute_slot in -512..512 {
+            for (current_weight, next_weight) in [(1.0, 0.0), (0.75, 0.25), (0.1, 0.9)] {
+                assert_eq!(
+                    chaser_build_up_down_level_for_steps(
+                        &resolved,
+                        levels,
+                        maxima,
+                        absolute_slot,
+                        current_weight,
+                        next_weight,
+                    ),
+                    linear(absolute_slot, current_weight, next_weight),
+                    "slot {absolute_slot} weights {current_weight}/{next_weight}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn chaser_compiled_block_levels_preserve_linear_wing_scan_results() {
+        let runtime = runtime_with_chaser_fixtures(64);
+        let fixture_ids = (1..=64).collect::<Vec<_>>();
+        let mut request = test_chaser_request(&fixture_ids);
+        request.steps = (0..256)
+            .map(|index| protocol::ChaserStep {
+                fixture_ids: vec![fixture_ids[index % fixture_ids.len()]],
+                target_group_ids: Vec::new(),
+                beam_targets: Vec::new(),
+                level: ((index * 977) % u16::MAX as usize) as u16,
+            })
+            .collect();
+        request.active_step_count = 64;
+        request.wings = 16;
+        request.overlap = 0.0;
+        let resolved = runtime.resolve_chaser_effect_request(request).unwrap();
+        let target = runtime_chaser_hot_target(&resolved, 1).unwrap();
+        let compiled = target.block_levels.as_ref().unwrap();
+        let path_len = resolved.step_order.len();
+
+        for absolute_slot in -512_i64..512 {
+            let expected = (0..resolved.request.wings as usize).fold(0_u16, |level, wing| {
+                let wing_offset = wing * path_len / resolved.request.wings as usize;
+                level.max(chaser_block_level_for_steps(
+                    &resolved,
+                    &target.step_levels,
+                    absolute_slot + wing_offset as i64,
+                ))
+            });
+            let actual = match compiled {
+                CompiledChaserBlockLevels::Constant(level) => *level,
+                CompiledChaserBlockLevels::Cyclic(levels) => {
+                    let index = absolute_slot.rem_euclid(levels.len() as i64) as usize;
+                    levels[index]
+                }
+            };
+            assert_eq!(actual, expected, "slot {absolute_slot}");
+        }
+    }
+
+    #[test]
     fn chaser_venue_stack_200_fixtures_64_effects_stays_bounded() {
         let runtime = runtime_with_chaser_fixtures(200);
         let fixture_ids = (1..=200).collect::<Vec<_>>();
@@ -60809,9 +61625,9 @@ mod tests {
                 }
             }
             assert!(stack.iter().all(|effect| effect
-                .target_level_cache
-                .values()
-                .all(|cached| cached.get().is_some_and(|value| value.at == at))));
+                .hot_targets
+                .iter()
+                .all(|target| target.cache.get().is_some_and(|value| value.at == at))));
         }
 
         assert_ne!(checksum, 0);
@@ -61583,6 +62399,59 @@ mod tests {
             &effect, 1, "Pan", 0, created_at, created_at, &clock,
         )
         .is_none());
+    }
+
+    #[test]
+    fn curve_partition_lookup_preserves_linear_segment_selection() {
+        let mut request = test_curve_request(&[1]);
+        request.points = (0..32)
+            .map(|index| CurveEffectPoint {
+                position: index as f32 / 31.0,
+                value: ((index * 13) % 31) as f32 / 30.0,
+                in_tangent: if index % 2 == 0 { -32.0 } else { 32.0 },
+                out_tangent: if index % 2 == 0 { 32.0 } else { -32.0 },
+            })
+            .collect();
+        validate_curve_effect_request(&request).unwrap();
+        let compiled = CompiledCurveFunction::compile(&request);
+
+        let linear_sample = |progress: f32| {
+            let progress = progress.clamp(0.0, 1.0);
+            let first = &compiled.points[0];
+            if progress <= first.position {
+                return first.value.clamp(0.0, 1.0);
+            }
+            let last = &compiled.points[compiled.points.len() - 1];
+            if progress >= last.position {
+                return last.value.clamp(0.0, 1.0);
+            }
+            let index = (0..compiled.points.len() - 1)
+                .find(|candidate| {
+                    progress >= compiled.points[*candidate].position
+                        && progress < compiled.points[*candidate + 1].position
+                })
+                .unwrap();
+            let left = &compiled.points[index];
+            let right = &compiled.points[index + 1];
+            let span = (right.position - left.position).max(f32::EPSILON);
+            let local = ((progress - left.position) / span).clamp(0.0, 1.0);
+            let local2 = local * local;
+            let local3 = local2 * local;
+            let h00 = 2.0 * local3 - 3.0 * local2 + 1.0;
+            let h10 = local3 - 2.0 * local2 + local;
+            let h01 = -2.0 * local3 + 3.0 * local2;
+            let h11 = local3 - local2;
+            (h00 * left.value
+                + h10 * span * left.out_tangent
+                + h01 * right.value
+                + h11 * span * right.in_tangent)
+                .clamp(0.0, 1.0)
+        };
+
+        for sample in 0..=8_192 {
+            let progress = sample as f32 / 8_192.0;
+            assert_eq!(compiled.sample(progress), linear_sample(progress));
+        }
     }
 
     #[test]
@@ -62835,6 +63704,377 @@ mod tests {
             assert!(p99 <= Duration::from_millis(8), "p99 was {p99:?}");
             assert!(max <= Duration::from_millis(12), "max was {max:?}");
         }
+    }
+
+    #[test]
+    fn max_parameter_chaser_release_stack_meets_44hz_budget() {
+        const MAX_STEPS: usize = 256;
+        const MAX_FEATURES: usize = 16;
+        const MAX_WINGS: u8 = 16;
+        const MAX_ACTIVE_STEP_COUNT: u16 = 64;
+
+        let mut runtime = runtime_with_chaser_fixtures(RELEASE_GATE_FIXTURE_COUNT as u64);
+        let fixture_ids = (1..=RELEASE_GATE_FIXTURE_COUNT as u64).collect::<Vec<_>>();
+        let feature_names = (0..MAX_FEATURES)
+            .map(|index| match index {
+                0 => "Dimmer".to_string(),
+                1 => "Pan".to_string(),
+                _ => format!("ChaserMax{index}"),
+            })
+            .collect::<Vec<_>>();
+        for fixture in &mut runtime.fixtures {
+            let mode = &mut fixture.profile.dmx_modes[fixture.mode_index];
+            let template = mode.controls[0].clone();
+            for attribute in feature_names.iter().skip(2) {
+                let mut control = template.clone();
+                control.attribute = attribute.clone();
+                control.channel_name = attribute.clone();
+                mode.controls.push(control);
+            }
+        }
+
+        let mut base = test_chaser_request(&fixture_ids);
+        base.steps = (0..MAX_STEPS)
+            .map(|index| protocol::ChaserStep {
+                fixture_ids: vec![fixture_ids[index % fixture_ids.len()]],
+                target_group_ids: Vec::new(),
+                beam_targets: Vec::new(),
+                level: if index % 3 == 0 { u16::MAX } else { 32_768 },
+            })
+            .collect();
+        base.features = feature_names
+            .iter()
+            .map(|attribute| ChaserFeature {
+                attribute: attribute.clone(),
+                low: 0,
+                high: u16::MAX,
+            })
+            .collect();
+        base.direction = ChaserDirection::Forward;
+        base.active_step_count = MAX_ACTIVE_STEP_COUNT;
+        base.wings = MAX_WINGS;
+        base.phase = 64.0 / (MAX_STEPS * 2) as f32;
+        base.fixture_spread = 0.0;
+        validate_chaser_effect_request(&base).unwrap();
+        assert_eq!(base.steps.len(), MAX_STEPS);
+        assert_eq!(base.features.len(), MAX_FEATURES);
+        assert_eq!(base.direction, ChaserDirection::Forward);
+        assert_eq!(base.wings, MAX_WINGS);
+        assert_eq!(base.active_step_count, MAX_ACTIVE_STEP_COUNT);
+
+        let created_at = Instant::now();
+        for index in 0..RELEASE_GATE_EFFECT_COUNT {
+            let kind = RuntimeEffectKind::Chaser(
+                runtime.resolve_chaser_effect_request(base.clone()).unwrap(),
+            );
+            runtime.effects.push(RuntimeEffect {
+                id: index as EffectId + 1,
+                kind,
+                enabled: true,
+                created_at,
+            });
+        }
+        assert_eq!(runtime.effects.len(), RELEASE_GATE_EFFECT_COUNT);
+        assert_eq!(runtime.fixtures.len(), RELEASE_GATE_FIXTURE_COUNT);
+
+        let (p95, p99, max) = measure_release_gate(created_at, |at| {
+            let mut checksum = 0_u64;
+            let clock = runtime.clock.snapshot(at);
+            for fixture in &runtime.fixtures {
+                let mut values = [16_384_u16; MAX_FEATURES];
+                for effect in &runtime.effects {
+                    let RuntimeEffectKind::Chaser(chaser) = &effect.kind else {
+                        unreachable!("dedicated max Chaser gate contains only Chaser effects");
+                    };
+                    let target = runtime_chaser_hot_target(chaser, fixture.id)
+                        .expect("max Chaser target must remain compiled");
+                    let normalized = evaluate_chaser_hot_target_normalized(
+                        chaser,
+                        target,
+                        effect.created_at,
+                        at,
+                        &clock,
+                        1.0,
+                    );
+                    for (feature_index, value) in values.iter_mut().enumerate() {
+                        if target.feature_mask & (1_u16 << feature_index) == 0 {
+                            continue;
+                        }
+                        let feature = &chaser.request.features[feature_index];
+                        *value = blend_effect_value(
+                            *value,
+                            scale_effect_u16(feature.low, feature.high, normalized),
+                            &chaser.request.blend_mode,
+                        );
+                    }
+                }
+                checksum = values.into_iter().fold(checksum, |checksum, value| {
+                    checksum.wrapping_add(value as u64)
+                });
+            }
+            checksum
+        });
+        eprintln!(
+            "Max Chaser 64x200 (256 steps, 16 features, 64 active steps, 16 wings): p95={}us p99={}us max={}us",
+            p95.as_micros(),
+            p99.as_micros(),
+            max.as_micros()
+        );
+        assert_release_gate_percentiles(p95, p99, max);
+    }
+
+    #[test]
+    fn max_parameter_curve_release_stack_meets_44hz_budget() {
+        const MAX_CONTROL_POINTS: usize = 32;
+
+        let mut runtime = runtime_with_move_fixtures(RELEASE_GATE_FIXTURE_COUNT as u64);
+        let fixture_ids = (1..=RELEASE_GATE_FIXTURE_COUNT as u64).collect::<Vec<_>>();
+        let mut base = test_curve_request(&fixture_ids);
+        base.points = (0..MAX_CONTROL_POINTS)
+            .map(|index| CurveEffectPoint {
+                position: index as f32 / (MAX_CONTROL_POINTS - 1) as f32,
+                value: ((index * 13) % MAX_CONTROL_POINTS) as f32 / (MAX_CONTROL_POINTS - 1) as f32,
+                in_tangent: if index % 2 == 0 { -32.0 } else { 32.0 },
+                out_tangent: if index % 2 == 0 { 32.0 } else { -32.0 },
+            })
+            .collect();
+        base.fixture_spread = 1.0;
+        validate_curve_effect_request(&base).unwrap();
+        assert_eq!(base.points.len(), MAX_CONTROL_POINTS);
+
+        let created_at = Instant::now();
+        for index in 0..RELEASE_GATE_EFFECT_COUNT {
+            let mut request = base.clone();
+            request.phase = index as f32 / RELEASE_GATE_EFFECT_COUNT as f32;
+            let kind =
+                RuntimeEffectKind::Curve(runtime.resolve_curve_effect_request(request).unwrap());
+            runtime.effects.push(RuntimeEffect {
+                id: index as EffectId + 1,
+                kind,
+                enabled: true,
+                created_at,
+            });
+        }
+        assert!(runtime.effects.iter().all(|effect| matches!(
+            &effect.kind,
+            RuntimeEffectKind::Curve(curve) if curve.function.points.len() == MAX_CONTROL_POINTS
+        )));
+        assert_eq!(runtime.effects.len(), RELEASE_GATE_EFFECT_COUNT);
+        assert_eq!(runtime.fixtures.len(), RELEASE_GATE_FIXTURE_COUNT);
+
+        let (p95, p99, max) = measure_release_gate(created_at, |at| {
+            runtime.fixtures.iter().fold(0_u64, |checksum, fixture| {
+                checksum.wrapping_add(
+                    runtime
+                        .apply_effects_with_transition_policy(fixture, "Dimmer", 16_384, at, false)
+                        as u64,
+                )
+            })
+        });
+        eprintln!(
+            "Max Curve 64x200 (32 control points): p95={}us p99={}us max={}us",
+            p95.as_micros(),
+            p99.as_micros(),
+            max.as_micros()
+        );
+        assert_release_gate_percentiles(p95, p99, max);
+    }
+
+    #[test]
+    fn max_parameter_smooth_move_release_stack_meets_44hz_budget() {
+        const MAX_PATH_POINTS: usize = 256;
+        const MAX_COMPILED_SAMPLES: usize = 8_193;
+
+        let mut runtime = runtime_with_move_fixtures(RELEASE_GATE_FIXTURE_COUNT as u64);
+        let fixture_ids = (1..=RELEASE_GATE_FIXTURE_COUNT as u64).collect::<Vec<_>>();
+        let mut base = test_move_request(&fixture_ids);
+        base.points = (0..MAX_PATH_POINTS)
+            .map(|index| {
+                let angle = std::f32::consts::TAU * index as f32 / MAX_PATH_POINTS as f32;
+                MovePathPoint {
+                    x: 0.5 + angle.cos() * 0.45,
+                    y: 0.5 + angle.sin() * 0.45,
+                }
+            })
+            .collect();
+        base.closed = true;
+        base.interpolation = protocol::MoveInterpolation::Smooth;
+        validate_move_effect_request(&base).unwrap();
+        assert_eq!(base.points.len(), MAX_PATH_POINTS);
+        assert_eq!(base.interpolation, protocol::MoveInterpolation::Smooth);
+        assert_eq!(
+            CompiledMovePath::compile(&base).unwrap().arc_sample_count(),
+            Some(MAX_COMPILED_SAMPLES)
+        );
+
+        let created_at = Instant::now();
+        for index in 0..RELEASE_GATE_EFFECT_COUNT {
+            let mut request = base.clone();
+            request.phase = index as f32 / RELEASE_GATE_EFFECT_COUNT as f32;
+            let kind =
+                RuntimeEffectKind::Move(runtime.resolve_move_effect_request(request).unwrap());
+            runtime.effects.push(RuntimeEffect {
+                id: index as EffectId + 1,
+                kind,
+                enabled: true,
+                created_at,
+            });
+        }
+        assert!(runtime.effects.iter().all(|effect| matches!(
+            &effect.kind,
+            RuntimeEffectKind::Move(move_effect)
+                if move_effect.path.arc_sample_count() == Some(MAX_COMPILED_SAMPLES)
+        )));
+        assert_eq!(runtime.effects.len(), RELEASE_GATE_EFFECT_COUNT);
+        assert_eq!(runtime.fixtures.len(), RELEASE_GATE_FIXTURE_COUNT);
+
+        let (p95, p99, max) = measure_release_gate(created_at, |at| {
+            let mut checksum = 0_u64;
+            for fixture in &runtime.fixtures {
+                for attribute in ["Pan", "Tilt"] {
+                    checksum =
+                        checksum.wrapping_add(runtime.apply_effects_with_transition_policy(
+                            fixture, attribute, 16_384, at, false,
+                        ) as u64);
+                }
+            }
+            checksum
+        });
+        eprintln!(
+            "Max Smooth Move 64x200 (256 path points, 8193 compiled samples): p95={}us p99={}us max={}us",
+            p95.as_micros(),
+            p99.as_micros(),
+            max.as_micros()
+        );
+        assert_release_gate_percentiles(p95, p99, max);
+    }
+
+    #[test]
+    fn max_target_lfo_release_stack_meets_44hz_budget() {
+        let mut runtime = runtime_with_move_fixtures(RELEASE_GATE_FIXTURE_COUNT as u64);
+        let fixture_ids = (1..=RELEASE_GATE_FIXTURE_COUNT as u64).collect::<Vec<_>>();
+        let base = LfoEffectRequest {
+            label: "Max-target LFO".to_string(),
+            fixture_ids: fixture_ids.clone(),
+            target_group_ids: Vec::new(),
+            attribute: "Dimmer".to_string(),
+            video_targets: Vec::new(),
+            shape: LfoShape::Perlin,
+            period_ms: 1_000,
+            clock_sync: None,
+            low: 0,
+            high: u16::MAX,
+            phase: 0.0,
+            fixture_spread: 1.0,
+            beam_targets: Vec::new(),
+            blend_mode: EffectBlendMode::Override,
+            daslight_curve: None,
+        };
+        validate_lfo_effect_request(&base).unwrap();
+        assert_eq!(base.fixture_ids.len(), RELEASE_GATE_FIXTURE_COUNT);
+
+        let created_at = Instant::now();
+        for index in 0..RELEASE_GATE_EFFECT_COUNT {
+            let mut request = base.clone();
+            request.phase = index as f32 / RELEASE_GATE_EFFECT_COUNT as f32;
+            let kind = RuntimeEffectKind::Lfo(runtime.resolve_lfo_effect_request(request).unwrap());
+            runtime.effects.push(RuntimeEffect {
+                id: index as EffectId + 1,
+                kind,
+                enabled: true,
+                created_at,
+            });
+        }
+        assert!(runtime.effects.iter().all(|effect| matches!(
+            &effect.kind,
+            RuntimeEffectKind::Lfo(lfo) if lfo.targets.len() == RELEASE_GATE_FIXTURE_COUNT
+        )));
+        assert_eq!(runtime.effects.len(), RELEASE_GATE_EFFECT_COUNT);
+
+        let (p95, p99, max) = measure_release_gate(created_at, |at| {
+            runtime.fixtures.iter().fold(0_u64, |checksum, fixture| {
+                checksum.wrapping_add(
+                    runtime
+                        .apply_effects_with_transition_policy(fixture, "Dimmer", 16_384, at, false)
+                        as u64,
+                )
+            })
+        });
+        eprintln!(
+            "Max-target LFO 64x200 (200 fixture targets, Perlin): p95={}us p99={}us max={}us",
+            p95.as_micros(),
+            p99.as_micros(),
+            max.as_micros()
+        );
+        assert_release_gate_percentiles(p95, p99, max);
+    }
+
+    #[test]
+    fn max_target_position_wave_release_stack_meets_44hz_budget() {
+        let mut runtime = runtime_with_move_fixtures(RELEASE_GATE_FIXTURE_COUNT as u64);
+        let fixture_ids = (1..=RELEASE_GATE_FIXTURE_COUNT as u64).collect::<Vec<_>>();
+        let base = PositionWaveEffectRequest {
+            label: "Max-target Position Wave".to_string(),
+            fixture_ids: fixture_ids.clone(),
+            target_group_ids: Vec::new(),
+            attribute: "Dimmer".to_string(),
+            video_targets: Vec::new(),
+            shape: LfoShape::Perlin,
+            origin: Vec3::default(),
+            direction: Vec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 1.0,
+            },
+            speed: 1.0,
+            wavelength: 0.001,
+            clock_sync: None,
+            low: 0,
+            high: u16::MAX,
+            phase: 0.0,
+            blend_mode: EffectBlendMode::Override,
+        };
+        assert_eq!(base.fixture_ids.len(), RELEASE_GATE_FIXTURE_COUNT);
+
+        let created_at = Instant::now();
+        for index in 0..RELEASE_GATE_EFFECT_COUNT {
+            let mut request = base.clone();
+            request.phase = index as f32 / RELEASE_GATE_EFFECT_COUNT as f32;
+            let kind = RuntimeEffectKind::PositionWave(
+                runtime
+                    .resolve_position_wave_effect_request(request)
+                    .unwrap(),
+            );
+            runtime.effects.push(RuntimeEffect {
+                id: index as EffectId + 1,
+                kind,
+                enabled: true,
+                created_at,
+            });
+        }
+        assert!(runtime.effects.iter().all(|effect| matches!(
+            &effect.kind,
+            RuntimeEffectKind::PositionWave(wave)
+                if wave.fixture_ids.len() == RELEASE_GATE_FIXTURE_COUNT
+        )));
+        assert_eq!(runtime.effects.len(), RELEASE_GATE_EFFECT_COUNT);
+
+        let (p95, p99, max) = measure_release_gate(created_at, |at| {
+            runtime.fixtures.iter().fold(0_u64, |checksum, fixture| {
+                checksum.wrapping_add(
+                    runtime
+                        .apply_effects_with_transition_policy(fixture, "Dimmer", 16_384, at, false)
+                        as u64,
+                )
+            })
+        });
+        eprintln!(
+            "Max-target Position Wave 64x200 (200 fixture targets, Perlin): p95={}us p99={}us max={}us",
+            p95.as_micros(),
+            p99.as_micros(),
+            max.as_micros()
+        );
+        assert_release_gate_percentiles(p95, p99, max);
     }
 
     #[test]

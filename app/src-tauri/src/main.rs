@@ -31298,6 +31298,9 @@ f 1 2 3
         let mut snapshot = EngineSnapshot::default();
         snapshot.clock.bpm = 128.0;
         snapshot.telemetry.frame_counter = 44;
+        snapshot.telemetry.enabled_effect_count = 65;
+        snapshot.telemetry.supported_effect_count = 64;
+        snapshot.telemetry.effects_over_supported_envelope = true;
         snapshot.telemetry.tick_jitter_p99_us = 900;
         snapshot.telemetry.tick_jitter_samples = 32;
         snapshot.telemetry.command_queue_latency_p99_us = 700;
@@ -31342,6 +31345,9 @@ f 1 2 3
         assert_eq!(report.captured_at_unix_ms, 1_780_000);
         assert_eq!(report.clock.bpm, 128.0);
         assert_eq!(report.telemetry.frame_counter, 44);
+        assert_eq!(report.telemetry.enabled_effect_count, 65);
+        assert_eq!(report.telemetry.supported_effect_count, 64);
+        assert!(report.telemetry.effects_over_supported_envelope);
         assert_eq!(report.telemetry.tick_jitter_p99_us, 900);
         assert_eq!(report.dmx_output_count, 2);
         assert_eq!(report.enabled_dmx_output_count, 1);

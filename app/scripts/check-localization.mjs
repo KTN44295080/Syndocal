@@ -46,6 +46,13 @@ assert.equal(localization.translateUiText("Audio Reactive", "ja"), "オーディ
 assert.equal(localization.translateUiText("Audio feature input level", "ja"), "音声特徴量の入力レベル");
 assert.equal(localization.translateUiText("Open Scene FX", "ja"), "シーンFXを開く");
 assert.equal(
+  localization.translateUiText(
+    "Enabled effects 65 / supported 64. Output timing is no longer guaranteed.",
+    "ja",
+  ),
+  "有効FX 65 / サポート上限 64。出力タイミングは保証されません。",
+);
+assert.equal(
   localization.translateUiText("Built-in FX for Program Texture (layer 12)", "ja"),
   "Program Texture（レイヤー12）の内蔵FX",
 );

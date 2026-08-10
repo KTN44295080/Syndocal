@@ -3317,6 +3317,12 @@ pub struct LearnedOscControl {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EngineTelemetry {
     pub frame_counter: u64,
+    #[serde(default)]
+    pub enabled_effect_count: usize,
+    #[serde(default)]
+    pub supported_effect_count: usize,
+    #[serde(default)]
+    pub effects_over_supported_envelope: bool,
     pub queue_depth: usize,
     #[serde(default)]
     pub queue_depth_abs_max: usize,
@@ -3395,6 +3401,9 @@ impl Default for EngineTelemetry {
     fn default() -> Self {
         Self {
             frame_counter: 0,
+            enabled_effect_count: 0,
+            supported_effect_count: 0,
+            effects_over_supported_envelope: false,
             queue_depth: 0,
             queue_depth_abs_max: 0,
             queue_push_failure_count: 0,

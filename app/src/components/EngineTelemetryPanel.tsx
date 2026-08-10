@@ -98,6 +98,11 @@ export function EngineTelemetryPanel(props: EngineTelemetryPanelProps) {
           </>
         )}
       </Show>
+      <Show when={props.telemetry.effects_over_supported_envelope}>
+        <strong class="telemetryError" role="status">
+          {`Enabled effects ${props.telemetry.enabled_effect_count} / supported ${props.telemetry.supported_effect_count}. Output timing is no longer guaranteed.`}
+        </strong>
+      </Show>
       <div class="telemetryGrid">
         <For each={metrics()}>
           {(entry) => (

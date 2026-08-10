@@ -2619,6 +2619,9 @@ export interface EngineSnapshot {
   dmx_previews: DmxUniversePreview[];
   telemetry: {
     frame_counter: number;
+    enabled_effect_count: number;
+    supported_effect_count: number;
+    effects_over_supported_envelope: boolean;
     queue_depth: number;
     queue_depth_abs_max: number;
     queue_push_failure_count: number;

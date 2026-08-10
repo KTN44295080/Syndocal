@@ -14,6 +14,7 @@ enum CompiledMovePathKind {
     ArcLength {
         samples: Vec<MoveArcSample>,
         total_length: f32,
+        distance_index: Vec<usize>,
     },
     DaslightLine {
         points: Vec<MovePathPoint>,
@@ -192,10 +193,12 @@ impl CompiledMovePath {
             return Err("Move effect path must contain at least two distinct points".to_string());
         }
 
+        let distance_index = compile_arc_distance_index(&samples, total_length);
         Ok(Self {
             kind: CompiledMovePathKind::ArcLength {
                 samples,
                 total_length,
+                distance_index,
             },
         })
     }
@@ -211,7 +214,8 @@ impl CompiledMovePath {
             CompiledMovePathKind::ArcLength {
                 samples,
                 total_length,
-            } => sample_arc_length_path(samples, *total_length, progress),
+                distance_index,
+            } => sample_arc_length_path(samples, *total_length, distance_index, progress),
             CompiledMovePathKind::TwoPointCircle {
                 center_x,
                 center_y,
@@ -250,6 +254,7 @@ impl CompiledMovePath {
             CompiledMovePathKind::ArcLength {
                 samples,
                 total_length,
+                distance_index,
             } => {
                 let doubled = 2.0 * f64::from(phase);
                 let progress = if doubled <= 1.0 {
@@ -257,7 +262,7 @@ impl CompiledMovePath {
                 } else {
                     2.0 - doubled
                 } as f32;
-                sample_arc_length_path(samples, *total_length, progress)
+                sample_arc_length_path(samples, *total_length, distance_index, progress)
             }
             CompiledMovePathKind::DaslightLine { points } => sample_equal_time_edges(points, phase),
             CompiledMovePathKind::DaslightPolygon { points } => {
@@ -270,6 +275,14 @@ impl CompiledMovePath {
             CompiledMovePathKind::TwoPointCircle { .. } | CompiledMovePathKind::Circle { .. } => {
                 self.sample(phase)
             }
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn arc_sample_count(&self) -> Option<usize> {
+        match &self.kind {
+            CompiledMovePathKind::ArcLength { samples, .. } => Some(samples.len()),
+            _ => None,
         }
     }
 }
@@ -333,10 +346,12 @@ fn compile_daslight_curve(points: &[MovePathPoint]) -> Result<CompiledMovePath, 
             kind: CompiledMovePathKind::Constant(points[0]),
         });
     }
+    let distance_index = compile_arc_distance_index(&samples, total_length);
     Ok(CompiledMovePath {
         kind: CompiledMovePathKind::ArcLength {
             samples,
             total_length,
+            distance_index,
         },
     })
 }
@@ -363,6 +378,7 @@ fn uniform_catmull_rom(
 fn sample_arc_length_path(
     samples: &[MoveArcSample],
     total_length: f32,
+    distance_index: &[usize],
     progress: f32,
 ) -> MovePathPoint {
     if progress <= 0.0 {
@@ -373,8 +389,14 @@ fn sample_arc_length_path(
     }
 
     let target_distance = progress * total_length;
-    let mut lower = 0_usize;
-    let mut upper = samples.len() - 1;
+    let bucket_count = distance_index.len().saturating_sub(1).max(1);
+    let bucket = ((progress * bucket_count as f32).floor() as usize).min(bucket_count - 1);
+    // Include one neighbouring bucket on each side so f32 boundary rounding
+    // cannot narrow the exact binary-search bracket.
+    let mut lower = distance_index[bucket.saturating_sub(1)].saturating_sub(1);
+    let mut upper = distance_index[(bucket + 2).min(bucket_count)]
+        .max(lower + 1)
+        .min(samples.len() - 1);
     while lower + 1 < upper {
         let middle = lower + (upper - lower) / 2;
         if samples[middle].distance < target_distance {
@@ -392,6 +414,53 @@ fn sample_arc_length_path(
         x: from.point.x + (to.point.x - from.point.x) * t,
         y: from.point.y + (to.point.y - from.point.y) * t,
     }
+}
+
+#[cfg(test)]
+fn sample_arc_length_path_binary(
+    samples: &[MoveArcSample],
+    total_length: f32,
+    progress: f32,
+) -> MovePathPoint {
+    if progress <= 0.0 {
+        return samples[0].point;
+    }
+    if progress >= 1.0 {
+        return samples[samples.len() - 1].point;
+    }
+    let target_distance = progress * total_length;
+    let mut lower = 0_usize;
+    let mut upper = samples.len() - 1;
+    while lower + 1 < upper {
+        let middle = lower + (upper - lower) / 2;
+        if samples[middle].distance < target_distance {
+            lower = middle;
+        } else {
+            upper = middle;
+        }
+    }
+    let from = samples[lower];
+    let to = samples[upper];
+    let distance = (to.distance - from.distance).max(MIN_PATH_LENGTH);
+    let t = ((target_distance - from.distance) / distance).clamp(0.0, 1.0);
+    MovePathPoint {
+        x: from.point.x + (to.point.x - from.point.x) * t,
+        y: from.point.y + (to.point.y - from.point.y) * t,
+    }
+}
+
+fn compile_arc_distance_index(samples: &[MoveArcSample], total_length: f32) -> Vec<usize> {
+    let bucket_count = samples.len().saturating_sub(1).max(1);
+    let mut index = Vec::with_capacity(bucket_count + 1);
+    let mut sample_index = 0_usize;
+    for bucket in 0..=bucket_count {
+        let target_distance = total_length * bucket as f32 / bucket_count as f32;
+        while sample_index + 1 < samples.len() && samples[sample_index].distance < target_distance {
+            sample_index += 1;
+        }
+        index.push(sample_index);
+    }
+    index
 }
 
 fn compile_circle_path(points: &[MovePathPoint]) -> Result<CompiledMovePath, String> {
@@ -1107,5 +1176,40 @@ mod tests {
         assert_eq!(path.sample_daslight_phase(0.5), request.points[3]);
         assert_eq!(path.sample_daslight_phase(0.0), request.points[0]);
         assert_eq!(path.sample_daslight_phase(0.75), halfway);
+    }
+
+    #[test]
+    fn indexed_arc_lookup_preserves_full_binary_search_samples() {
+        let mut request = request(
+            (0..256)
+                .map(|index| {
+                    let angle = std::f32::consts::TAU * index as f32 / 256.0;
+                    MovePathPoint {
+                        x: 0.5 + angle.cos() * 0.45,
+                        y: 0.5 + angle.sin() * 0.45,
+                    }
+                })
+                .collect(),
+        );
+        request.closed = true;
+        request.interpolation = MoveInterpolation::Smooth;
+        let path = CompiledMovePath::compile(&request).unwrap();
+        let CompiledMovePathKind::ArcLength {
+            samples,
+            total_length,
+            ..
+        } = &path.kind
+        else {
+            panic!("Smooth max-point path must compile to arc-length samples");
+        };
+        assert_eq!(samples.len(), 8_193);
+        for sample in 0..=10_000 {
+            let progress = sample as f32 / 10_000.0;
+            assert_eq!(
+                path.sample(progress),
+                sample_arc_length_path_binary(samples, *total_length, progress),
+                "progress {progress}"
+            );
+        }
     }
 }

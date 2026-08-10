@@ -3135,6 +3135,11 @@ const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
     /^VJ show ready with (\d+) clips?\(s\)\. VJ Program remains Off and Blackout until you enable it explicitly\.$/,
     (clips) => `VJショーを${clips}クリップで準備しました。明示的に有効化するまでVJ ProgramはOff・Blackoutのままです。`,
   ],
+  [
+    /^Enabled effects (\d+) \/ supported (\d+)\. Output timing is no longer guaranteed\.$/,
+    (count, supported) =>
+      `有効FX ${count} / サポート上限 ${supported}。出力タイミングは保証されません。`,
+  ],
 ];
 
 export function uiLocaleFromUnknown(value: unknown): UiLocale {
