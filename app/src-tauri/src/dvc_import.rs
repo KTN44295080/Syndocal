@@ -2175,6 +2175,7 @@ fn parse_scene_effects(
                 (Some(2), Some(2), Some(130)) => Some("Rainbow"),
                 (Some(2), Some(2), Some(131)) => Some("Random fill"),
                 (Some(2), Some(2), Some(133)) => Some("Sparkle"),
+                (Some(2), Some(2), Some(128)) => Some("Perlin"),
                 (Some(2), Some(2), Some(134)) => Some("Sweep"),
                 (Some(7), Some(7), Some(621)) => Some("Rainbow"),
                 (Some(7), Some(7), Some(622)) => Some("Burst"),
@@ -2340,7 +2341,7 @@ fn convert_dvc_effect(
             fixture_refs,
         ),
         (5, 3, 36)
-        | (2, 2, 121 | 127 | 129 | 130 | 131 | 133 | 134)
+        | (2, 2, 121 | 127 | 128 | 129 | 130 | 131 | 133 | 134)
         | (6, 8, 521 | 530) => {
             convert_dvc_color_spatial_effect(
                 scene,
@@ -2762,17 +2763,30 @@ fn convert_dvc_value_effect(
                 dvc_integer_range_param(&params, 11, "VALUE FX Random fill Point Height", 1, 10)?;
             return Err("VALUE FX Random fill ID=627 remains fail-closed: its no-replacement evaluator is recovered, but Qt qrand delegates to per-thread CRT rand and the initial thread state plus prior draw history are not serialized in .dvc; choosing a seed would not be Daslight-exact".to_string());
         }
-        628 => {
-            let _vertical_symmetry = dvc_binary_param(&params, 3, "VALUE FX Perlin Transform")?;
-            let _octaves = dvc_integer_range_param(&params, 10, "VALUE FX Perlin Octaves", 2, 10)?;
-            let _zoom = dvc_integer_range_param(&params, 11, "VALUE FX Perlin Zoom", 1, 100)?;
-            let _direction =
-                dvc_integer_range_param(&params, 12, "VALUE FX Perlin Direction", 1, 100)?;
-            let _speed = dvc_integer_range_param(&params, 13, "VALUE FX Perlin Speed", 1, 10)?;
-            let _amplitude =
-                dvc_integer_range_param(&params, 14, "VALUE FX Perlin Amplitude", 5, 100)?;
-            return Err("VALUE FX Perlin ID=628 remains fail-closed after proving palette_wrap=true in the shared constructor: recovered CPerlinEffect evaluator 0x140365090 and its 16-bit cyclic palette sampling are not represented by Syndocal's generic stage-space fractal-noise evaluator; no frame-equivalent runtime target was created".to_string());
-        }
+        628 => ColorEffectSpatialRecipe::Perlin {
+            daslight_exact: true,
+            grayscale: false,
+            vertical_symmetry: dvc_binary_param(&params, 3, "VALUE FX Perlin Transform")?,
+            horizontal_symmetry: false,
+            rotation_degrees: 0.0,
+            octaves: dvc_integer_range_param(&params, 10, "VALUE FX Perlin Octaves", 2, 10)? as u8,
+            zoom: dvc_integer_range_param(&params, 11, "VALUE FX Perlin Zoom", 1, 100)?,
+            direction_degrees: dvc_integer_range_param(
+                &params,
+                12,
+                "VALUE FX Perlin Direction",
+                1,
+                100,
+            )?,
+            speed: dvc_integer_range_param(&params, 13, "VALUE FX Perlin Speed", 1, 10)?,
+            amplitude: dvc_integer_range_param(
+                &params,
+                14,
+                "VALUE FX Perlin Amplitude",
+                5,
+                100,
+            )?,
+        },
         _ => unreachable!(),
     };
 
@@ -2857,7 +2871,7 @@ fn convert_dvc_value_effect(
             feature_spec.preset_type
         ));
     }
-    let (period_ms, period_note) = if matches!(generator_id, 622 | 624 | 625) {
+    let (period_ms, period_note) = if matches!(generator_id, 622 | 624 | 625 | 628) {
         dvc_exact_generator_period(effect, "VALUE FX", generator)?
     } else {
         dvc_move_period(
@@ -2889,6 +2903,7 @@ fn convert_dvc_value_effect(
         622 => "evaluator=CBurstEffect@0x140362B70; palette_wrap=true@shared-constructor+0x12c",
         624 => "evaluator=CKnightRiderEffect exact generated-frame table",
         625 => "evaluator=CSweepEffect@0x1403665A0 exact generated-frame sampler",
+        628 => "evaluator=CPerlinEffect@0x140365090 exact lattice hash/cosine interpolation; Direction is retained as evaluator-dead source state; palette_wrap=true@shared-constructor+0x12c",
         _ => "evaluator=verified generator route",
     };
     let request = ValueEffectRequest {
@@ -2953,6 +2968,7 @@ fn convert_dvc_color_spatial_effect(
         36 => "Rainbow",
         121 => "Burst",
         127 => "Knight Rider",
+        128 => "Perlin",
         129 => "Plasma",
         130 => "Rainbow",
         131 => "Random fill",
@@ -3061,6 +3077,40 @@ fn convert_dvc_color_spatial_effect(
                     0,
                     100,
                 )? as f32,
+            }
+        }
+        128 => {
+            require_exact_dvc_params(&params, &[2, 3, 10, 11, 12, 13, 14])?;
+            require_exact_dvc_param_types(
+                effect,
+                &[
+                    (1, 4),
+                    (2, 2),
+                    (3, 6),
+                    (10, 0),
+                    (11, 0),
+                    (12, 0),
+                    (13, 0),
+                    (14, 0),
+                ],
+            )?;
+            let transform = dvc_param(&params, 3, "COLOR FX Perlin Transform")?;
+            if !matches!(transform, 0.0 | 1.0) {
+                return Err(format!(
+                    "COLOR FX Perlin Transform PARAM 3 must be None(0) or Vertical symmetry(1), found {transform}"
+                ));
+            }
+            ColorEffectSpatialRecipe::Perlin {
+                daslight_exact: true,
+                grayscale: dvc_binary_param(&params, 2, "COLOR FX Perlin Grayscale")?,
+                vertical_symmetry: transform == 1.0,
+                horizontal_symmetry: false,
+                rotation_degrees: 0.0,
+                octaves: dvc_integer_range_param(&params, 10, "COLOR FX Perlin Octaves", 2, 10)? as u8,
+                zoom: dvc_integer_range_param(&params, 11, "COLOR FX Perlin Zoom", 1, 100)?,
+                direction_degrees: dvc_integer_range_param(&params, 12, "COLOR FX Perlin Direction", 1, 100)?,
+                speed: dvc_integer_range_param(&params, 13, "COLOR FX Perlin Speed", 1, 10)?,
+                amplitude: dvc_integer_range_param(&params, 14, "COLOR FX Perlin Amplitude", 5, 100)?,
             }
         }
         121 => {
@@ -3224,27 +3274,34 @@ fn convert_dvc_color_spatial_effect(
                     "MAPPINGS Perlin Transform PARAM 3 must be None(0), Vertical symmetry(1), or Horizontal symmetry(2), found {transform}"
                 ));
             }
-            dvc_integer_range_param(&params, 4, "MAPPINGS Perlin Rotation", 0, 360)?;
-            dvc_integer_range_param(&params, 10, "MAPPINGS Perlin Octaves", 2, 10)?;
-            dvc_integer_range_param(&params, 11, "MAPPINGS Perlin Zoom", 1, 100)?;
-            dvc_integer_range_param(&params, 12, "MAPPINGS Perlin Direction", 1, 100)?;
-            dvc_integer_range_param(&params, 13, "MAPPINGS Perlin Speed", 1, 10)?;
-            dvc_integer_range_param(&params, 14, "MAPPINGS Perlin Amplitude", 5, 100)?;
-            dvc_mapping_rectangle(rack, "MAPPINGS Perlin ID=530", true)?;
-            return Err("MAPPINGS Perlin ID=530 remains fail-closed after exact schema, Rectangle validation, and proving palette_wrap=true in the shared constructor: recovered CPerlinEffect evaluator 0x140365090 evaluates the authored Rectangle, while Syndocal's generic stage-space fractal noise discards that placement and is not frame-equivalent; no runtime target was created".to_string());
+            let rotation_degrees =
+                dvc_integer_range_param(&params, 4, "MAPPINGS Perlin Rotation", 0, 360)?;
+            ColorEffectSpatialRecipe::Perlin {
+                daslight_exact: true,
+                grayscale: false,
+                vertical_symmetry: transform == 1.0,
+                horizontal_symmetry: transform == 2.0,
+                rotation_degrees,
+                octaves: dvc_integer_range_param(&params, 10, "MAPPINGS Perlin Octaves", 2, 10)? as u8,
+                zoom: dvc_integer_range_param(&params, 11, "MAPPINGS Perlin Zoom", 1, 100)?,
+                direction_degrees: dvc_integer_range_param(&params, 12, "MAPPINGS Perlin Direction", 1, 100)?,
+                speed: dvc_integer_range_param(&params, 13, "MAPPINGS Perlin Speed", 1, 10)?,
+                amplitude: dvc_integer_range_param(&params, 14, "MAPPINGS Perlin Amplitude", 5, 100)?,
+            }
         }
         _ => unreachable!(),
     };
-    let mapping_rectangle = matches!(generator_id, 36 | 521)
+    let mapping_rectangle = matches!(generator_id, 36 | 521 | 530)
         .then(|| {
             dvc_mapping_rectangle(
                 rack,
-                if generator_id == 36 {
-                    "COLOR MAPPINGS Rainbow ID=36"
-                } else {
-                    "MAPPINGS Rainbow ID=521"
+                match generator_id {
+                    36 => "COLOR MAPPINGS Rainbow ID=36",
+                    521 => "MAPPINGS Rainbow ID=521",
+                    530 => "MAPPINGS Perlin ID=530",
+                    _ => unreachable!(),
                 },
-                generator_id == 36,
+                matches!(generator_id, 36 | 530),
             )
         })
         .transpose()?;
@@ -3293,7 +3350,7 @@ fn convert_dvc_color_spatial_effect(
             "{omitted_spatial_targets} beam target(s) without a verified color segment or Dimmer attribute were omitted"
         ));
     }
-    let (period_ms, period_note) = if matches!(generator_id, 121 | 127 | 134) {
+    let (period_ms, period_note) = if matches!(generator_id, 121 | 127 | 128 | 134 | 530) {
         dvc_exact_generator_period(effect, "COLOR FX", generator)?
     } else {
         dvc_move_period(effect, scene, generator, &mut approximations)?
@@ -3394,23 +3451,38 @@ fn convert_dvc_color_spatial_effect(
             }
         ),
         ColorEffectSpatialRecipe::Perlin {
+            daslight_exact,
+            grayscale,
+            vertical_symmetry,
+            horizontal_symmetry,
+            rotation_degrees,
             octaves,
             zoom,
             direction_degrees,
             speed,
             amplitude,
         } => format!(
-            "Octaves={octaves}; Zoom={zoom}; Direction={direction_degrees}; Speed={speed}; Amplitude={amplitude}"
+            "Evaluator={}; Grayscale={}; Transform={}; Rotation={rotation_degrees}; Octaves={octaves}; Zoom={zoom}; Direction={direction_degrees} (source-retained/evaluator-dead); Speed={speed}; Amplitude={amplitude}; evaluator=CPerlinEffect@0x140365090; palette_wrap=true@shared-constructor+0x12c",
+            if *daslight_exact { "Daslight exact" } else { "Enhanced" },
+            u8::from(*grayscale),
+            if *vertical_symmetry {
+                "Vertical symmetry"
+            } else if *horizontal_symmetry {
+                "Horizontal symmetry"
+            } else {
+                "None"
+            }
         ),
     };
     let placement = mapping_rectangle
         .map(|rectangle| {
             dvc_color_spatial_placement(
                 rectangle,
-                if generator_id == 36 {
-                    "COLOR MAPPINGS Rainbow ID=36"
-                } else {
-                    "MAPPINGS Rainbow ID=521"
+                match generator_id {
+                    36 => "COLOR MAPPINGS Rainbow ID=36",
+                    521 => "MAPPINGS Rainbow ID=521",
+                    530 => "MAPPINGS Perlin ID=530",
+                    _ => unreachable!(),
                 },
                 &targets.beam_targets,
                 fixture_refs,
@@ -6886,8 +6958,8 @@ mod tests {
             outcome.project.custom_profiles[0].dmx_modes[0].controls[0].default_value,
             0
         );
-        assert_eq!(outcome.report.summary.effects_converted, 3);
-        assert_eq!(outcome.report.summary.effects_skipped, 3);
+        assert_eq!(outcome.report.summary.effects_converted, 4);
+        assert_eq!(outcome.report.summary.effects_skipped, 2);
         assert!(outcome
             .report
             .converted
@@ -6905,7 +6977,7 @@ mod tests {
                 .iter()
                 .filter(|detail| detail.message.contains("source_family=Mappings;"))
                 .count(),
-            1
+            2
         );
         assert_eq!(
             outcome
@@ -6929,7 +7001,7 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(requests.len(), 3);
+        assert_eq!(requests.len(), 4);
         assert!(requests.iter().all(|request| request.stops.len() == 3));
         assert!(requests.iter().all(|request| {
             request.spatial_pattern.as_ref().is_some_and(|pattern| {
@@ -6952,6 +7024,24 @@ mod tests {
                 vertical_symmetry: true,
                 size: 2,
                 ..
+            })
+        )));
+        assert!(requests.iter().any(|request| matches!(
+            request
+                .spatial_pattern
+                .as_ref()
+                .map(|pattern| &pattern.recipe),
+            Some(ColorEffectSpatialRecipe::Perlin {
+                daslight_exact: true,
+                grayscale: false,
+                vertical_symmetry: false,
+                horizontal_symmetry: false,
+                rotation_degrees: 0.0,
+                octaves: 5,
+                zoom: 20.0,
+                direction_degrees: 1.0,
+                speed: 1.0,
+                amplitude: 100.0,
             })
         )));
         assert!(requests.iter().any(|request| matches!(
@@ -7048,7 +7138,6 @@ mod tests {
         for (generator, reason) in [
             ("Random fill", "Qt per-thread qrand state"),
             ("Sparkle", "prior percent-scaled lifespan route"),
-            ("Perlin", "evaluates the authored Rectangle"),
         ] {
             assert!(outcome.report.skipped.details.iter().any(|detail| {
                 detail.item.contains(generator) && detail.message.contains(reason)
@@ -7064,8 +7153,8 @@ mod tests {
             1,
         );
         let outcome = import_bytes(xml.as_bytes(), "synthetic-dvc3b-missing-palette.dvc").unwrap();
-        assert_eq!(outcome.report.summary.effects_converted, 2);
-        assert_eq!(outcome.report.summary.effects_skipped, 4);
+        assert_eq!(outcome.report.summary.effects_converted, 3);
+        assert_eq!(outcome.report.summary.effects_skipped, 3);
         assert!(outcome.report.skipped.details.iter().any(|detail| detail
             .message
             .contains("palette PARAM TYPE=4 ID=1 is missing COLORS")));
@@ -8589,7 +8678,7 @@ mod tests {
     }
 
     #[test]
-    fn dvc_value_unrecoverable_generators_fail_closed_after_exact_schema_validation() {
+    fn dvc_value_random_generators_fail_closed_after_exact_schema_validation() {
         let cases = [
             (
                 626,
@@ -8612,17 +8701,6 @@ mod tests {
                 r#"<PARAM TYPE="0" ID="11" VAL="1"/>"#,
                 r#"<PARAM TYPE="0" ID="11" VAL="11"/>"#,
                 "VALUE FX Random fill Point Height PARAM 11 must be an integer within 1..10, found 11",
-            ),
-            (
-                628,
-                "Perlin",
-                7,
-                r#"<PARAM TYPE="0" ID="10" VAL="4"/><PARAM TYPE="0" ID="11" VAL="75"/><PARAM TYPE="0" ID="12" VAL="2"/><PARAM TYPE="0" ID="13" VAL="1"/><PARAM TYPE="0" ID="14" VAL="70"/>"#,
-                "VALUE FX Perlin ID=628 remains fail-closed",
-                "generic stage-space fractal-noise evaluator",
-                r#"<PARAM TYPE="0" ID="14" VAL="70"/>"#,
-                r#"<PARAM TYPE="0" ID="14" VAL="101"/>"#,
-                "VALUE FX Perlin Amplitude PARAM 14 must be an integer within 5..100, found 101",
             ),
         ];
 
@@ -8649,9 +8727,7 @@ mod tests {
                 let error = convert_value_fx_test_source(&source, generator_id).unwrap_err();
                 assert!(error.contains(semantic_error));
                 assert!(error.contains(semantic_detail));
-                if generator_id != 628 {
-                    assert!(error.contains("serialized in .dvc"));
-                }
+                assert!(error.contains("serialized in .dvc"));
             }
 
             let invalid_transform =
@@ -8699,6 +8775,64 @@ mod tests {
                 .unwrap_err()
                 .contains(semantic_error));
         }
+    }
+
+    #[test]
+    fn dvc_value_perlin_imports_exact_recipe_and_rejects_schema_drift() {
+        let class_params = r#"<PARAM TYPE="0" ID="10" VAL="4"/><PARAM TYPE="0" ID="11" VAL="75"/><PARAM TYPE="0" ID="12" VAL="2"/><PARAM TYPE="0" ID="13" VAL="1"/><PARAM TYPE="0" ID="14" VAL="70"/>"#;
+        for transform in [0, 1] {
+            let source = value_fx_test_source(628, transform, 7, class_params, true);
+            let converted = convert_value_fx_test_source(&source, 628).unwrap();
+            assert!(converted.approximations.is_empty());
+            assert!(converted.note.contains("evaluator=CPerlinEffect@0x140365090"));
+            assert!(converted.note.contains("Direction is retained as evaluator-dead source state"));
+            let EffectParamsSnapshot::Value(value) = converted.target.unwrap().params.unwrap()
+            else {
+                panic!("VALUE Perlin must retain its Value body");
+            };
+            assert_eq!(value.period_ms, 3_000);
+            assert!(matches!(
+                value.spatial_pattern.unwrap().recipe,
+                ColorEffectSpatialRecipe::Perlin {
+                    daslight_exact: true,
+                    grayscale: false,
+                    vertical_symmetry,
+                    horizontal_symmetry: false,
+                    rotation_degrees: 0.0,
+                    octaves: 4,
+                    zoom: 75.0,
+                    direction_degrees: 2.0,
+                    speed: 1.0,
+                    amplitude: 70.0,
+                } if vertical_symmetry == (transform == 1)
+            ));
+        }
+
+        let invalid_transform = value_fx_test_source(628, 2, 7, class_params, true);
+        assert!(convert_value_fx_test_source(&invalid_transform, 628)
+            .unwrap_err()
+            .contains("VALUE FX Perlin Transform PARAM 3 must be 0 or 1, found 2"));
+        let source = value_fx_test_source(628, 0, 7, class_params, true);
+        assert!(convert_value_fx_test_source(
+            &source.replacen(
+                r#"<PARAM TYPE="0" ID="10" VAL="4"/>"#,
+                r#"<PARAM TYPE="1" ID="10" VAL="4"/>"#,
+                1,
+            ),
+            628,
+        )
+        .unwrap_err()
+        .contains("expected PARAM 10 TYPE=0, found TYPE=1"));
+        assert!(convert_value_fx_test_source(
+            &source.replacen(
+                r#"<PARAM TYPE="0" ID="14" VAL="70"/>"#,
+                r#"<PARAM TYPE="0" ID="14" VAL="101"/>"#,
+                1,
+            ),
+            628,
+        )
+        .unwrap_err()
+        .contains("VALUE FX Perlin Amplitude PARAM 14 must be an integer within 5..100, found 101"));
     }
 
     #[test]
@@ -10334,16 +10468,20 @@ mod tests {
                 .count(),
             1
         );
-        assert!(!recipes
-            .iter()
-            .any(|recipe| matches!(recipe, ColorEffectSpatialRecipe::Perlin { .. })));
-        assert_eq!(outcome.report.summary.effects_skipped, 1);
-        assert!(outcome.report.skipped.details.iter().any(|detail| {
-            detail
-                .message
-                .contains("CPerlinEffect evaluator 0x140365090")
-                && detail.message.contains("authored Rectangle")
-        }));
+        assert_eq!(
+            recipes
+                .iter()
+                .filter(|recipe| matches!(
+                    recipe,
+                    ColorEffectSpatialRecipe::Perlin {
+                        daslight_exact: true,
+                        ..
+                    }
+                ))
+                .count(),
+            1
+        );
+        assert_eq!(outcome.report.summary.effects_skipped, 0);
     }
 
     // Real saved Daslight specimen authored on 2026-08-10 (Fable, elevated

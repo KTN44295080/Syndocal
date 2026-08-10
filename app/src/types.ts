@@ -1929,7 +1929,7 @@ export type ColorEffectSpatialRecipe =
   | { Plasma: { grayscale: boolean; vertical_symmetry: boolean; size_x: number; param_x: number; size_y: number; param_y: number; speed_x: number; param_sx: number; speed_y: number; param_sy: number } }
   | { ColorRainbow: { grayscale: boolean; vertical_symmetry: boolean; color_width: number; angle_degrees: number; gradient: number } }
   | { Rainbow: { grayscale: boolean; vertical_symmetry: boolean; horizontal_symmetry: boolean; rotation_degrees: number; color_width: number; angle_degrees: number; gradient: number } }
-  | { Perlin: { octaves: number; zoom: number; direction_degrees: number; speed: number; amplitude: number } };
+  | { Perlin: { daslight_exact?: boolean; grayscale?: boolean; vertical_symmetry?: boolean; horizontal_symmetry?: boolean; rotation_degrees?: number; octaves: number; zoom: number; direction_degrees: number; speed: number; amplitude: number } };
 
 export type ColorEffectSpatialCoordinateFrame = "DaslightPatchCanvas";
 

@@ -78,7 +78,7 @@ const defaultValueGeneratorRecipe = (
     case "RandomFill":
       return { RandomFill: { point_width: 1 } };
     case "Perlin":
-      return { Perlin: { octaves: 5, zoom: 20, direction_degrees: 0, speed: 1, amplitude: 100 } };
+      return { Perlin: { daslight_exact: false, grayscale: false, vertical_symmetry: false, horizontal_symmetry: false, rotation_degrees: 0, octaves: 5, zoom: 20, direction_degrees: 0, speed: 1, amplitude: 100 } };
   }
 };
 
@@ -282,7 +282,13 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
     const recipe = props.spatialPattern?.recipe;
     return Boolean(recipe && "Sweep" in recipe && recipe.Sweep.daslight_exact === true);
   });
-  const daslightExactTiming = createMemo(() => daslightExactBurst() || daslightExactSweep());
+  const daslightExactPerlin = createMemo(() => {
+    const recipe = props.spatialPattern?.recipe;
+    return Boolean(recipe && "Perlin" in recipe && recipe.Perlin.daslight_exact === true);
+  });
+  const daslightExactTiming = createMemo(() =>
+    daslightExactBurst() || daslightExactSweep() || daslightExactPerlin(),
+  );
   const generatorNumber = (key: string, fallback = 0) => {
     const value = generatorValues()[key];
     return typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -338,6 +344,35 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
     if (daslightExact) {
       props.onPeriodMs(Math.max(40, Math.floor(Math.max(40, props.periodMs) / 40) * 40));
     }
+  };
+  const setPerlinEvaluator = (daslightExact: boolean) => {
+    if (generatorKind() !== "Perlin") return;
+    if (daslightExact) {
+      patchGeneratorValues({
+        daslight_exact: true,
+        grayscale: false,
+        vertical_symmetry: generatorBoolean("vertical_symmetry"),
+        horizontal_symmetry: false,
+        rotation_degrees: 0,
+        octaves: clamp(Math.round(generatorNumber("octaves", 5)), 2, 10),
+        zoom: clamp(Math.round(generatorNumber("zoom", 20)), 1, 100),
+        direction_degrees: clamp(Math.round(generatorNumber("direction_degrees", 1)), 1, 100),
+        speed: clamp(Math.round(generatorNumber("speed", 1)), 1, 10),
+        amplitude: clamp(Math.round(generatorNumber("amplitude", 100)), 5, 100),
+      });
+      props.onPeriodMs(Math.max(40, Math.floor(Math.max(40, props.periodMs) / 40) * 40));
+      return;
+    }
+    patchGeneratorValues({
+      daslight_exact: false,
+      grayscale: false,
+      vertical_symmetry: false,
+      horizontal_symmetry: false,
+      rotation_degrees: 0,
+      octaves: clamp(Math.round(generatorNumber("octaves", 5)), 1, 16),
+      zoom: Math.max(0.01, generatorNumber("zoom", 20)),
+      amplitude: clamp(generatorNumber("amplitude", 100), 0, 100),
+    });
   };
   const applyQuickLook = (look: ValueQuickLook) => {
     if (daslightExactKnight()) return;
@@ -651,13 +686,16 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
           </div>
         </Show>
         <Show when={generatorKind() === "Perlin"}>
-          <div class="colorEffectModeGrid">
-            <label>Octaves<input type="number" min="1" max="16" step="1" value={generatorNumber("octaves", 5)} onInput={(event) => patchGeneratorValues({ octaves: clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 16) })} /></label>
-            <label>Zoom<input type="number" min="0.01" step="0.1" value={generatorNumber("zoom", 20)} onInput={(event) => patchGeneratorValues({ zoom: Math.max(0.01, Number(event.currentTarget.value) || 0.01) })} /></label>
-            <label>Direction °<input type="number" step="1" value={generatorNumber("direction_degrees")} onInput={(event) => patchGeneratorValues({ direction_degrees: Number(event.currentTarget.value) || 0 })} /></label>
-            <label>Speed<input type="number" step="0.1" value={generatorNumber("speed", 1)} onInput={(event) => patchGeneratorValues({ speed: Number(event.currentTarget.value) || 0 })} /></label>
-            <label>Amplitude %<input type="number" min="0" max="100" step="1" value={generatorNumber("amplitude", 100)} onInput={(event) => patchGeneratorValues({ amplitude: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
+          <div class="colorEffectModeGrid" data-value-perlin-evaluator={daslightExactPerlin() ? "daslight" : "enhanced"}>
+            <label>Evaluator<select data-value-perlin-evaluator-select value={daslightExactPerlin() ? "daslight" : "enhanced"} onInput={(event) => setPerlinEvaluator(event.currentTarget.value === "daslight")}><option value="enhanced">Enhanced</option><option value="daslight">Daslight exact</option></select></label>
+            <Show when={daslightExactPerlin()}><label>Transform<select data-value-perlin-transform value={generatorTransform()} onInput={(event) => patchGeneratorValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label></Show>
+            <label>Octaves<input type="number" min={daslightExactPerlin() ? "2" : "1"} max={daslightExactPerlin() ? "10" : "16"} step="1" value={generatorNumber("octaves", 5)} onInput={(event) => patchGeneratorValues({ octaves: clamp(Math.round(Number(event.currentTarget.value) || 1), daslightExactPerlin() ? 2 : 1, daslightExactPerlin() ? 10 : 16) })} /></label>
+            <label>Zoom<input type="number" min={daslightExactPerlin() ? "1" : "0.01"} max={daslightExactPerlin() ? "100" : undefined} step={daslightExactPerlin() ? "1" : "0.1"} value={generatorNumber("zoom", 20)} onInput={(event) => patchGeneratorValues({ zoom: daslightExactPerlin() ? clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 100) : Math.max(0.01, Number(event.currentTarget.value) || 0.01) })} /></label>
+            <label>Direction {daslightExactPerlin() ? "(stored)" : "°"}<input type="number" min={daslightExactPerlin() ? "1" : undefined} max={daslightExactPerlin() ? "100" : undefined} step="1" value={generatorNumber("direction_degrees", daslightExactPerlin() ? 1 : 0)} title={daslightExactPerlin() ? "Daslight stores Direction but CPerlinEffect does not consume it" : undefined} onInput={(event) => patchGeneratorValues({ direction_degrees: daslightExactPerlin() ? clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 100) : Number(event.currentTarget.value) || 0 })} /></label>
+            <label>Speed<input type="number" min={daslightExactPerlin() ? "1" : undefined} max={daslightExactPerlin() ? "10" : undefined} step={daslightExactPerlin() ? "1" : "0.1"} value={generatorNumber("speed", 1)} onInput={(event) => patchGeneratorValues({ speed: daslightExactPerlin() ? clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 10) : Number(event.currentTarget.value) || 0 })} /></label>
+            <label>Amplitude %<input type="number" min={daslightExactPerlin() ? "5" : "0"} max="100" step="1" value={generatorNumber("amplitude", 100)} onInput={(event) => patchGeneratorValues({ amplitude: clamp(daslightExactPerlin() ? Math.round(Number(event.currentTarget.value) || 5) : Number(event.currentTarget.value), daslightExactPerlin() ? 5 : 0, 100) })} /></label>
           </div>
+          <Show when={daslightExactPerlin()}><div class="effectFormHint textPretty" data-value-perlin-direction-note>Direction is preserved from Daslight but intentionally has no effect in its recovered evaluator.</div></Show>
         </Show>
       </fieldset>
 

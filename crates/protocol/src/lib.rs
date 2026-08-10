@@ -2374,6 +2374,16 @@ pub enum ColorEffectSpatialRecipe {
         gradient: f32,
     },
     Perlin {
+        #[serde(default, skip_serializing_if = "is_false")]
+        daslight_exact: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        grayscale: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        vertical_symmetry: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        horizontal_symmetry: bool,
+        #[serde(default, skip_serializing_if = "is_zero_f32")]
+        rotation_degrees: f32,
         octaves: u8,
         zoom: f32,
         direction_degrees: f32,
@@ -5041,6 +5051,11 @@ mod tests {
         let mut spatial = parsed;
         spatial.spatial_pattern = Some(Box::new(super::ColorEffectSpatialPattern {
             recipe: super::ColorEffectSpatialRecipe::Perlin {
+                daslight_exact: false,
+                grayscale: false,
+                vertical_symmetry: false,
+                horizontal_symmetry: false,
+                rotation_degrees: 0.0,
                 octaves: 5,
                 zoom: 20.0,
                 direction_degrees: 1.0,

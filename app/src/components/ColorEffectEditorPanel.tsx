@@ -49,7 +49,7 @@ const defaultSpatialRecipe = (kind: Exclude<ColorSpatialKind, "PaletteFlow">): C
     case "Rainbow":
       return { Rainbow: { grayscale: false, vertical_symmetry: false, horizontal_symmetry: false, rotation_degrees: 0, color_width: 0, angle_degrees: 0, gradient: 100 } };
     case "Perlin":
-      return { Perlin: { octaves: 5, zoom: 20, direction_degrees: 0, speed: 1, amplitude: 100 } };
+      return { Perlin: { daslight_exact: false, grayscale: false, vertical_symmetry: false, horizontal_symmetry: false, rotation_degrees: 0, octaves: 5, zoom: 20, direction_degrees: 0, speed: 1, amplitude: 100 } };
   }
 };
 
@@ -124,7 +124,7 @@ const colorQuickLooks: ColorQuickLook[] = [
     ],
     algorithm: "Bounce",
     interpolation: "HsvShortest",
-    recipe: { Perlin: { octaves: 5, zoom: 20, direction_degrees: 0, speed: 1, amplitude: 100 } },
+    recipe: { Perlin: { daslight_exact: false, grayscale: false, vertical_symmetry: false, horizontal_symmetry: false, rotation_degrees: 0, octaves: 5, zoom: 20, direction_degrees: 0, speed: 1, amplitude: 100 } },
     beats: 8,
   },
   {
@@ -224,7 +224,15 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
   const daslightExactSweep = createMemo(() =>
     spatialKind() === "Sweep" && spatialBoolean("daslight_exact"),
   );
-  const daslightExactTiming = createMemo(() => daslightExactBurst() || daslightExactSweep());
+  const daslightExactPerlin = createMemo(() =>
+    spatialKind() === "Perlin" && spatialBoolean("daslight_exact"),
+  );
+  const perlinHasMappingPlacement = createMemo(() =>
+    spatialKind() === "Perlin" && props.spatialPattern?.placement !== undefined,
+  );
+  const daslightExactTiming = createMemo(() =>
+    daslightExactBurst() || daslightExactSweep() || daslightExactPerlin(),
+  );
   const spatialTransform = () => spatialBoolean("vertical_symmetry")
     ? "vertical"
     : spatialBoolean("horizontal_symmetry")
@@ -289,6 +297,37 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
     if (daslightExact) {
       props.onPeriodMs(Math.max(40, Math.floor(Math.max(40, props.periodMs) / 40) * 40));
     }
+  };
+  const setPerlinEvaluator = (daslightExact: boolean) => {
+    if (spatialKind() !== "Perlin") return;
+    if (daslightExact) {
+      patchSpatialValues({
+        daslight_exact: true,
+        grayscale: spatialBoolean("grayscale"),
+        vertical_symmetry: spatialBoolean("vertical_symmetry"),
+        horizontal_symmetry: perlinHasMappingPlacement() && spatialBoolean("horizontal_symmetry"),
+        rotation_degrees: perlinHasMappingPlacement()
+          ? clamp(Math.round(spatialNumber("rotation_degrees")), 0, 360)
+          : 0,
+        octaves: clamp(Math.round(spatialNumber("octaves", 5)), 2, 10),
+        zoom: clamp(Math.round(spatialNumber("zoom", 20)), 1, 100),
+        direction_degrees: clamp(Math.round(spatialNumber("direction_degrees", 1)), 1, 100),
+        speed: clamp(Math.round(spatialNumber("speed", 1)), 1, 10),
+        amplitude: clamp(Math.round(spatialNumber("amplitude", 100)), 5, 100),
+      });
+      props.onPeriodMs(Math.max(40, Math.floor(Math.max(40, props.periodMs) / 40) * 40));
+      return;
+    }
+    patchSpatialValues({
+      daslight_exact: false,
+      grayscale: false,
+      vertical_symmetry: false,
+      horizontal_symmetry: false,
+      rotation_degrees: 0,
+      octaves: clamp(Math.round(spatialNumber("octaves", 5)), 1, 16),
+      zoom: Math.max(0.01, spatialNumber("zoom", 20)),
+      amplitude: clamp(spatialNumber("amplitude", 100), 0, 100),
+    });
   };
 
   const stopError = createMemo(() => {
@@ -640,13 +679,22 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
           </div>
         </Show>
         <Show when={spatialKind() === "Perlin"}>
-          <div class="colorEffectModeGrid">
-            <label>Octaves<input type="number" min="1" max="16" step="1" value={spatialNumber("octaves", 5)} onInput={(event) => patchSpatialValues({ octaves: clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 16) })} /></label>
-            <label>Zoom<input type="number" min="0.01" step="0.1" value={spatialNumber("zoom", 20)} onInput={(event) => patchSpatialValues({ zoom: Math.max(0.01, Number(event.currentTarget.value) || 0.01) })} /></label>
-            <label>Direction °<input type="number" step="1" value={spatialNumber("direction_degrees")} onInput={(event) => patchSpatialValues({ direction_degrees: Number(event.currentTarget.value) || 0 })} /></label>
-            <label>Speed<input type="number" step="0.1" value={spatialNumber("speed", 1)} onInput={(event) => patchSpatialValues({ speed: Number(event.currentTarget.value) || 0 })} /></label>
-            <label>Amplitude %<input type="number" min="0" max="100" step="1" value={spatialNumber("amplitude", 100)} onInput={(event) => patchSpatialValues({ amplitude: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
+          <div class="colorEffectModeGrid" data-color-perlin-evaluator={daslightExactPerlin() ? "daslight" : "enhanced"}>
+            <label>Evaluator<select data-color-perlin-evaluator-select value={daslightExactPerlin() ? "daslight" : "enhanced"} onInput={(event) => setPerlinEvaluator(event.currentTarget.value === "daslight")}><option value="enhanced">Enhanced</option><option value="daslight">Daslight exact</option></select></label>
+            <Show when={daslightExactPerlin()}>
+              <label><input type="checkbox" data-color-perlin-grayscale checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
+              <label>Transform<select data-color-perlin-transform value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical", horizontal_symmetry: event.currentTarget.value === "horizontal" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option><Show when={perlinHasMappingPlacement()}><option value="horizontal">Horizontal symmetry</option></Show></select></label>
+              <Show when={perlinHasMappingPlacement()}>
+                <label>Rotation °<input data-color-perlin-rotation type="number" min="0" max="0" step="1" value="0" disabled title="Nonzero Daslight raster rotation is still fail-closed" /></label>
+              </Show>
+            </Show>
+            <label>Octaves<input type="number" min={daslightExactPerlin() ? "2" : "1"} max={daslightExactPerlin() ? "10" : "16"} step="1" value={spatialNumber("octaves", 5)} onInput={(event) => patchSpatialValues({ octaves: clamp(Math.round(Number(event.currentTarget.value) || 1), daslightExactPerlin() ? 2 : 1, daslightExactPerlin() ? 10 : 16) })} /></label>
+            <label>Zoom<input type="number" min={daslightExactPerlin() ? "1" : "0.01"} max={daslightExactPerlin() ? "100" : undefined} step={daslightExactPerlin() ? "1" : "0.1"} value={spatialNumber("zoom", 20)} onInput={(event) => patchSpatialValues({ zoom: daslightExactPerlin() ? clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 100) : Math.max(0.01, Number(event.currentTarget.value) || 0.01) })} /></label>
+            <label>Direction {daslightExactPerlin() ? "(stored)" : "°"}<input type="number" min={daslightExactPerlin() ? "1" : undefined} max={daslightExactPerlin() ? "100" : undefined} step="1" value={spatialNumber("direction_degrees", daslightExactPerlin() ? 1 : 0)} title={daslightExactPerlin() ? "Daslight stores Direction but CPerlinEffect does not consume it" : undefined} onInput={(event) => patchSpatialValues({ direction_degrees: daslightExactPerlin() ? clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 100) : Number(event.currentTarget.value) || 0 })} /></label>
+            <label>Speed<input type="number" min={daslightExactPerlin() ? "1" : undefined} max={daslightExactPerlin() ? "10" : undefined} step={daslightExactPerlin() ? "1" : "0.1"} value={spatialNumber("speed", 1)} onInput={(event) => patchSpatialValues({ speed: daslightExactPerlin() ? clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 10) : Number(event.currentTarget.value) || 0 })} /></label>
+            <label>Amplitude %<input type="number" min={daslightExactPerlin() ? "5" : "0"} max="100" step="1" value={spatialNumber("amplitude", 100)} onInput={(event) => patchSpatialValues({ amplitude: clamp(daslightExactPerlin() ? Math.round(Number(event.currentTarget.value) || 5) : Number(event.currentTarget.value), daslightExactPerlin() ? 5 : 0, 100) })} /></label>
           </div>
+          <Show when={daslightExactPerlin()}><div class="effectFormHint textPretty" data-color-perlin-direction-note>Direction is preserved from Daslight but intentionally has no effect in its recovered evaluator.</div></Show>
         </Show>
         <div class="colorEffectModeGrid">
           <label>

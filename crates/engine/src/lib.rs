@@ -3511,6 +3511,10 @@ struct RuntimeColorSpatialState {
     /// Shared Daslight-exact COLOR 134 / VALUE 625 generated-frame sampler.
     /// Native authoring keeps the continuous Enhanced Sweep path instead.
     daslight_sweep: Option<CompiledDaslightSweep>,
+    /// Shared Daslight-exact COLOR 128 / MAPPINGS 530 / VALUE 628 fixed-hash
+    /// cosine-noise evaluator. Native authoring keeps the higher-resolution,
+    /// direction-aware Enhanced Perlin path instead.
+    daslight_perlin: Option<CompiledDaslightPerlin>,
 }
 
 const DASLIGHT_VALUE_FRAME_MS: u64 = 40;
@@ -3733,6 +3737,298 @@ impl CompiledDaslightSweep {
         first
             .interpolate(
                 self.frame_color(coordinate.upper, destination_index),
+                coordinate.amount,
+            )
+            .into_color()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CompiledDaslightPerlinOctave {
+    /// Fixed lattice phases in D/A/C/B order: left-bottom, left-top,
+    /// right-bottom, right-top. The only frame-varying term is added later.
+    base_radians: [f64; 4],
+    weight_x: f64,
+    weight_y: f64,
+    attenuation: f64,
+}
+
+#[derive(Debug, Clone)]
+struct CompiledDaslightPerlinTarget {
+    octaves: Vec<CompiledDaslightPerlinOctave>,
+}
+
+#[derive(Clone)]
+struct CompiledDaslightPerlin {
+    raw_frame_count: usize,
+    table_frame_count: usize,
+    speed: i32,
+    amplitude: i32,
+    grayscale: bool,
+    palette_cache: Arc<Vec<DaslightKnightColor>>,
+    targets: Vec<CompiledDaslightPerlinTarget>,
+    sine_table: Arc<[f64; 360]>,
+    temporal_coordinate: Cell<Option<DaslightKnightTemporalCoordinate>>,
+}
+
+fn daslight_perlin_hash_radians(x: i32, y: i32) -> f64 {
+    // CPerlinEffect helper 0x14035A950 uses signed 32-bit wraparound for the
+    // classic fixed lattice hash, clears the sign bit, maps it through
+    // 1 - hash / 2^30, then multiplies by pi.
+    let mut lattice = x.wrapping_mul(57).wrapping_add(y);
+    lattice ^= lattice.wrapping_shl(13);
+    let mixed = lattice
+        .wrapping_mul(lattice)
+        .wrapping_mul(0x0000_EC4D)
+        .wrapping_add(0x0131_071F)
+        .wrapping_mul(lattice)
+        .wrapping_sub(0x2DF7_22F3);
+    let positive = (mixed as u32) & 0x7FFF_FFFF;
+    (1.0 - f64::from(positive) * (1.0 / 1_073_741_824.0)) * std::f64::consts::PI
+}
+
+fn daslight_perlin_cosine_weight(fraction: f64) -> f64 {
+    (1.0 - (fraction * std::f64::consts::PI).cos()) * 0.5
+}
+
+impl CompiledDaslightPerlin {
+    fn compile(
+        request: &ColorEffectRequest,
+        runtime_targets: &[RuntimeColorSpatialTarget],
+        grayscale: bool,
+        vertical_symmetry: bool,
+        horizontal_symmetry: bool,
+        rotation_degrees: f32,
+        octaves: u8,
+        zoom: f32,
+        speed: f32,
+        amplitude: f32,
+    ) -> Result<Self, String> {
+        if !(protocol::DASLIGHT_COLOR_PALETTE_MIN_STOPS
+            ..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS)
+            .contains(&request.stops.len())
+        {
+            return Err(
+                "Daslight-exact Perlin requires between 1 and 255 palette stops".to_string(),
+            );
+        }
+        let integer = |label: &str, value: f32, minimum: i32, maximum: i32| {
+            if !value.is_finite()
+                || value.fract().abs() > f32::EPSILON
+                || value < minimum as f32
+                || value > maximum as f32
+            {
+                Err(format!(
+                    "Daslight-exact Perlin {label} must be an integer within {minimum}..{maximum}"
+                ))
+            } else {
+                Ok(value as i32)
+            }
+        };
+        if !(2..=10).contains(&octaves) {
+            return Err("Daslight-exact Perlin octaves must be within 2..10".to_string());
+        }
+        let zoom = integer("zoom", zoom, 1, 100)?;
+        let speed = integer("speed", speed, 1, 10)?;
+        let amplitude = integer("amplitude", amplitude, 5, 100)?;
+        if !rotation_degrees.is_finite()
+            || rotation_degrees.fract().abs() > f32::EPSILON
+            || !(0.0..=360.0).contains(&rotation_degrees)
+        {
+            return Err(
+                "Daslight-exact Perlin rotation must be an integer within 0..360 degrees"
+                    .to_string(),
+            );
+        }
+        if rotation_degrees != 0.0 {
+            return Err(
+                "Daslight-exact Perlin nonzero raster rotation is not yet represented".to_string(),
+            );
+        }
+        if vertical_symmetry && horizontal_symmetry {
+            return Err(
+                "Daslight-exact Perlin supports at most one Transform axis".to_string(),
+            );
+        }
+
+        let raw_frame_count = usize::try_from((request.period_ms / DASLIGHT_VALUE_FRAME_MS).max(1))
+            .map_err(|_| {
+                "Daslight-exact Perlin frame count does not fit this platform".to_string()
+            })?;
+        let table_frame_count = raw_frame_count.min(DASLIGHT_VALUE_FRAME_CAP);
+        let mapping_raster = request
+            .spatial_pattern
+            .as_ref()
+            .is_some_and(|pattern| pattern.placement.is_some());
+        let source_width = if mapping_raster {
+            100
+        } else {
+            runtime_targets
+                .first()
+                .map(|target| target.strip_count)
+                .unwrap_or(1)
+                .max(1)
+        };
+        let source_height = if mapping_raster { 100 } else { 1 };
+        let mut targets = Vec::with_capacity(runtime_targets.len());
+        for target in runtime_targets {
+            let destination = if mapping_raster {
+                target.daslight_raster_cell
+            } else {
+                i32::try_from(target.strip_index).ok().map(|x| (x, 0))
+            };
+            let source = destination.and_then(|(x, y)| {
+                if x < 0
+                    || y < 0
+                    || x >= source_width as i32
+                    || y >= source_height as i32
+                {
+                    return None;
+                }
+                let source_x = if vertical_symmetry {
+                    daslight_vertical_fold_source_index(x as usize, source_width)
+                } else {
+                    Some(x as usize)
+                }?;
+                let source_y = if horizontal_symmetry {
+                    daslight_vertical_fold_source_index(y as usize, source_height)
+                } else {
+                    Some(y as usize)
+                }?;
+                Some((source_x as f64, source_y as f64))
+            });
+            let mut compiled_octaves = Vec::with_capacity(usize::from(octaves - 1));
+            if let Some((x, y)) = source {
+                for octave in 0..usize::from(octaves - 1) {
+                    let frequency = 2.0_f64.powf(octave as f64);
+                    let scaled_x = x / f64::from(zoom) * frequency;
+                    let scaled_y = y / f64::from(zoom) * frequency;
+                    let lattice_x = scaled_x.trunc() as i32;
+                    let lattice_y = scaled_y.trunc() as i32;
+                    compiled_octaves.push(CompiledDaslightPerlinOctave {
+                        base_radians: [
+                            daslight_perlin_hash_radians(lattice_x, lattice_y),
+                            daslight_perlin_hash_radians(lattice_x, lattice_y.wrapping_add(1)),
+                            daslight_perlin_hash_radians(lattice_x.wrapping_add(1), lattice_y),
+                            daslight_perlin_hash_radians(
+                                lattice_x.wrapping_add(1),
+                                lattice_y.wrapping_add(1),
+                            ),
+                        ],
+                        weight_x: daslight_perlin_cosine_weight(
+                            scaled_x - f64::from(lattice_x),
+                        ),
+                        weight_y: daslight_perlin_cosine_weight(
+                            scaled_y - f64::from(lattice_y),
+                        ),
+                        attenuation: 0.7_f64.powf(octave as f64),
+                    });
+                }
+            }
+            targets.push(CompiledDaslightPerlinTarget {
+                octaves: compiled_octaves,
+            });
+        }
+        let sine_table = Arc::new(std::array::from_fn(|degree| {
+            (degree as f64 * (std::f64::consts::PI / 180.0)).sin()
+        }));
+        // Perlin has no class-specific Gradient property. Its common
+        // palette cache is the continuous, cyclic wrap=true form.
+        let palette_cache = compiled_daslight_burst_palette_cache(request, 1.0)?;
+        Ok(Self {
+            raw_frame_count,
+            table_frame_count,
+            speed,
+            amplitude,
+            grayscale,
+            palette_cache,
+            targets,
+            sine_table,
+            temporal_coordinate: Cell::new(None),
+        })
+    }
+
+    fn temporal_coordinate(&self, raw_tick: i64) -> DaslightKnightTemporalCoordinate {
+        if let Some(cached) = self
+            .temporal_coordinate
+            .get()
+            .filter(|cached| cached.raw_tick == raw_tick)
+        {
+            return cached;
+        }
+        let tick = raw_tick.rem_euclid(self.raw_frame_count as i64) as usize;
+        let unit = tick as f32 / self.raw_frame_count as f32;
+        let position = (self.table_frame_count - 1) as f32 * unit;
+        let lower = (f64::from(position).floor() as usize).min(self.table_frame_count - 1);
+        let coordinate = DaslightKnightTemporalCoordinate {
+            raw_tick,
+            lower,
+            upper: (lower + 1).min(self.table_frame_count - 1),
+            amount: position - lower as f32,
+        };
+        self.temporal_coordinate.set(Some(coordinate));
+        coordinate
+    }
+
+    fn lattice_signal(&self, base_radians: f64, frame_index: usize) -> f64 {
+        let time_radians = f64::from(self.speed)
+            * (std::f64::consts::PI * 2.0)
+            * frame_index as f64
+            / self.table_frame_count as f64;
+        let degrees = ((base_radians + time_radians) * (180.0 / std::f64::consts::PI)).trunc()
+            as i32;
+        let index = degrees.rem_euclid(360) as usize;
+        self.sine_table[index] * f64::from(self.amplitude) / 100.0
+    }
+
+    fn sample_frame_palette_byte(&self, frame_index: usize, target_index: usize) -> Option<u8> {
+        let Some(target) = self.targets.get(target_index) else {
+            return None;
+        };
+        if target.octaves.is_empty() {
+            return None;
+        }
+        let frame_index = frame_index.min(self.table_frame_count - 1);
+        let mut sum = 0.0_f64;
+        for octave in &target.octaves {
+            let bottom_left = self.lattice_signal(octave.base_radians[0], frame_index);
+            let top_left = self.lattice_signal(octave.base_radians[1], frame_index);
+            let bottom_right = self.lattice_signal(octave.base_radians[2], frame_index);
+            let top_right = self.lattice_signal(octave.base_radians[3], frame_index);
+            let left = bottom_left * (1.0 - octave.weight_y) + top_left * octave.weight_y;
+            let right =
+                bottom_right * (1.0 - octave.weight_y) + top_right * octave.weight_y;
+            sum += (left * (1.0 - octave.weight_x) + right * octave.weight_x)
+                * octave.attenuation;
+        }
+        Some((sum * 128.0 + 128.0).trunc().clamp(0.0, 255.0) as u8)
+    }
+
+    fn sample_frame(&self, frame_index: usize, target_index: usize) -> DaslightKnightColor {
+        let Some(byte) = self.sample_frame_palette_byte(frame_index, target_index) else {
+            return DaslightKnightColor::from_color(black_color());
+        };
+        let byte = u16::from(byte);
+        let palette_u16 = (f32::from(byte) / 255.0 * f32::from(u16::MAX)).trunc() as u16;
+        let palette_index = (u64::from(palette_u16)
+            * self.palette_cache.len().saturating_sub(1) as u64
+            / u64::from(u16::MAX)) as usize;
+        let mut color = self.palette_cache[palette_index.min(self.palette_cache.len() - 1)];
+        if self.grayscale {
+            color = DaslightKnightColor::from_color(daslight_grayscale_color(color.into_color()));
+        }
+        color
+    }
+
+    fn sample_at_tick(&self, raw_tick: i64, target_index: usize) -> ColorEffectColor {
+        let coordinate = self.temporal_coordinate(raw_tick);
+        let first = self.sample_frame(coordinate.lower, target_index);
+        if coordinate.amount <= 0.0 || coordinate.lower == coordinate.upper {
+            return first.into_color();
+        }
+        first
+            .interpolate(
+                self.sample_frame(coordinate.upper, target_index),
                 coordinate.amount,
             )
             .into_color()
@@ -4742,6 +5038,42 @@ fn compile_daslight_sweep(
     }
 }
 
+fn compile_daslight_perlin(
+    request: &ColorEffectRequest,
+    runtime_targets: &[RuntimeColorSpatialTarget],
+) -> Result<Option<CompiledDaslightPerlin>, String> {
+    let Some(pattern) = request.spatial_pattern.as_ref() else {
+        return Ok(None);
+    };
+    match &pattern.recipe {
+        ColorEffectSpatialRecipe::Perlin {
+            daslight_exact: true,
+            grayscale,
+            vertical_symmetry,
+            horizontal_symmetry,
+            rotation_degrees,
+            octaves,
+            zoom,
+            direction_degrees: _,
+            speed,
+            amplitude,
+        } => CompiledDaslightPerlin::compile(
+            request,
+            runtime_targets,
+            *grayscale,
+            *vertical_symmetry,
+            *horizontal_symmetry,
+            *rotation_degrees,
+            *octaves,
+            *zoom,
+            *speed,
+            *amplitude,
+        )
+        .map(Some),
+        _ => Ok(None),
+    }
+}
+
 #[derive(Clone)]
 struct RuntimeColorMappingEffect {
     request: ColorMappingEffectRequest,
@@ -4865,10 +5197,14 @@ struct RuntimeColorTarget {
 struct RuntimeColorSpatialTarget {
     fixture_id: FixtureId,
     beam_index: u16,
+    daslight_target_index: usize,
     strip_index: usize,
     strip_count: usize,
     x: f32,
     z: f32,
+    /// Exact integer cell in Daslight's fixed 100 x 100 mapping raster.
+    /// `None` means a profile-order one-row COLOR/VALUE strip.
+    daslight_raster_cell: Option<(i32, i32)>,
     /// Fixed spatial projection for the Daslight MAPPINGS Rainbow raster.
     /// Built with the target coordinates so the 44 Hz evaluator performs no
     /// placement lookup or trigonometry.
@@ -27062,12 +27398,47 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
             percent("gradient", *gradient)
         }
         ColorEffectSpatialRecipe::Perlin {
+            daslight_exact,
+            vertical_symmetry,
+            horizontal_symmetry,
+            rotation_degrees,
             octaves,
             zoom,
             direction_degrees,
             speed,
             amplitude,
+            ..
         } => {
+            if *vertical_symmetry && *horizontal_symmetry {
+                return Err("Perlin transform must select at most one symmetry axis".to_string());
+            }
+            if *daslight_exact {
+                if !(2..=10).contains(octaves) {
+                    return Err("Daslight-exact Perlin octaves must be within 2..10".to_string());
+                }
+                integer_range("Daslight-exact Perlin zoom", *zoom, 1.0, 100.0)?;
+                integer_range(
+                    "Daslight-exact Perlin direction",
+                    *direction_degrees,
+                    1.0,
+                    100.0,
+                )?;
+                integer_range("Daslight-exact Perlin speed", *speed, 1.0, 10.0)?;
+                integer_range("Daslight-exact Perlin amplitude", *amplitude, 5.0, 100.0)?;
+                integer_range(
+                    "Daslight-exact Perlin rotation",
+                    *rotation_degrees,
+                    0.0,
+                    360.0,
+                )?;
+                if *rotation_degrees != 0.0 {
+                    return Err(
+                        "Daslight-exact Perlin nonzero raster rotation is not yet represented"
+                            .to_string(),
+                    );
+                }
+                return Ok(());
+            }
             if !(1..=16).contains(octaves) {
                 return Err("Perlin octaves must be within 1..16".to_string());
             }
@@ -28134,6 +28505,12 @@ fn evaluate_runtime_value_attribute_at_rate(
                 .as_ref()
                 .map(|compiled| (state, compiled))
         });
+        let exact_perlin_runtime = spatial.spatial.as_deref().and_then(|state| {
+            state
+                .daslight_perlin
+                .as_ref()
+                .map(|compiled| (state, compiled))
+        });
         let generated =
             if let Some((state, compiled)) = exact_runtime {
                 let target = state.targets.get(binding.spatial_target_index)?;
@@ -28198,6 +28575,29 @@ fn evaluate_runtime_value_attribute_at_rate(
                     .map(|evaluation| evaluation.value)
                     .unwrap_or_else(|| {
                         let value = evaluate_daslight_sweep_color_at_rate(
+                            &spatial.request,
+                            target,
+                            compiled,
+                            created_at,
+                            now,
+                            clock,
+                            rate,
+                        )
+                        .red;
+                        target.daslight_value_cached.set(Some(
+                            RuntimeDaslightValueSpatialEvaluation { at: now, value },
+                        ));
+                        value
+                    })
+            } else if let Some((state, compiled)) = exact_perlin_runtime {
+                let target = state.targets.get(binding.spatial_target_index)?;
+                target
+                    .daslight_value_cached
+                    .get()
+                    .filter(|evaluation| evaluation.at == now)
+                    .map(|evaluation| evaluation.value)
+                    .unwrap_or_else(|| {
+                        let value = evaluate_daslight_perlin_color_at_rate(
                             &spatial.request,
                             target,
                             compiled,
@@ -29653,12 +30053,14 @@ fn runtime_color_effect_from_request(
         let daslight_knight_rider = compile_daslight_value_spatial(&request, strip_count)?;
         let daslight_burst = compile_daslight_burst(&request, strip_count)?;
         let daslight_sweep = compile_daslight_sweep(&request, strip_count)?;
+        let daslight_perlin = compile_daslight_perlin(&request, &targets)?;
         Some(Box::new(RuntimeColorSpatialState {
             targets,
             attribute_indices,
             daslight_knight_rider,
             daslight_burst,
             daslight_sweep,
+            daslight_perlin,
         }))
     } else {
         None
@@ -29857,7 +30259,7 @@ fn runtime_color_spatial_targets(
     };
     let mut resolved = Vec::with_capacity(pending.len());
     for (fixture_id, beam_index, selection, binding, stage_x, stage_z) in pending {
-        let (x, z) = if let Some(compiled_placement) = compiled_placement {
+        let (x, z, daslight_raster_cell) = if let Some(compiled_placement) = compiled_placement {
             let coordinates = placement_coordinates
                 .get(&(fixture_id, beam_index))
                 .ok_or_else(|| {
@@ -29871,11 +30273,23 @@ fn runtime_color_spatial_targets(
                 // but Daslight's rotated Rectangle mask excludes it.
                 continue;
             };
-            sample.normalized()
+            let (x, z) = sample.normalized();
+            let raster_x = i32::try_from(sample.raster_x).map_err(|_| {
+                format!(
+                    "Color spatial placement raster X does not fit i32 for fixture {fixture_id} beam {beam_index}"
+                )
+            })?;
+            let raster_y = i32::try_from(sample.raster_y).map_err(|_| {
+                format!(
+                    "Color spatial placement raster Y does not fit i32 for fixture {fixture_id} beam {beam_index}"
+                )
+            })?;
+            (x, z, Some((raster_x, raster_y)))
         } else {
             (
                 normalize(stage_x, min_x, max_x),
                 normalize(stage_z, min_z, max_z),
+                None,
             )
         };
         let rainbow_projected_coordinate =
@@ -29887,19 +30301,29 @@ fn runtime_color_spatial_targets(
             binding,
             x,
             z,
+            daslight_raster_cell,
             rainbow_projected_coordinate,
         ));
     }
     let mut selections = resolved
         .iter()
-        .map(|(_, _, selection, _, _, _, _)| *selection)
+        .map(|(_, _, selection, _, _, _, _, _)| *selection)
         .collect::<Vec<_>>();
     selections.sort_unstable();
     selections.dedup();
     let strip_count = selections.len().max(1);
     let mut targets = Vec::with_capacity(resolved.len());
     let mut attribute_indices = HashMap::<FixtureId, HashMap<String, usize>>::new();
-    for (fixture_id, beam_index, selection, binding, x, z, rainbow_projected_coordinate) in resolved
+    for (
+        fixture_id,
+        beam_index,
+        selection,
+        binding,
+        x,
+        z,
+        daslight_raster_cell,
+        rainbow_projected_coordinate,
+    ) in resolved
     {
         let strip_index = selections.binary_search(&selection).unwrap_or_default();
         let target_index = targets.len();
@@ -29918,10 +30342,12 @@ fn runtime_color_spatial_targets(
         targets.push(RuntimeColorSpatialTarget {
             fixture_id,
             beam_index,
+            daslight_target_index: target_index,
             strip_index,
             strip_count,
             x,
             z,
+            daslight_raster_cell,
             rainbow_projected_coordinate,
             binding,
             cached: Cell::new(None),
@@ -30907,6 +31333,7 @@ fn evaluate_runtime_color_spatial_attribute_at_rate(
                 spatial.daslight_knight_rider.as_ref(),
                 spatial.daslight_burst.as_ref(),
                 spatial.daslight_sweep.as_ref(),
+                spatial.daslight_perlin.as_ref(),
                 effect_id,
                 created_at,
                 now,
@@ -31143,12 +31570,37 @@ fn evaluate_daslight_sweep_color_at_rate(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn evaluate_daslight_perlin_color_at_rate(
+    request: &ColorEffectRequest,
+    target: &RuntimeColorSpatialTarget,
+    compiled: &CompiledDaslightPerlin,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> ColorEffectColor {
+    let valid_rate = valid_effect_rate(rate);
+    let time_phase = request
+        .clock_sync
+        .map(|clock_sync| {
+            (clock.beat_counter as f64 + clock.beat_phase as f64)
+                / clock_sync.beats.max(0.000_1) as f64
+                * f64::from(valid_rate)
+                + request.phase as f64
+        })
+        .unwrap_or(0.0);
+    let raw_tick = daslight_knight_rider_raw_tick(request, time_phase, created_at, now, valid_rate);
+    compiled.sample_at_tick(raw_tick, target.daslight_target_index)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn evaluate_color_spatial_sample_at_rate(
     request: &ColorEffectRequest,
     target: &RuntimeColorSpatialTarget,
     daslight_knight_rider: Option<&CompiledDaslightKnightRider>,
     daslight_burst: Option<&CompiledDaslightBurst>,
     daslight_sweep: Option<&CompiledDaslightSweep>,
+    daslight_perlin: Option<&CompiledDaslightPerlin>,
     effect_id: EffectId,
     created_at: Instant,
     now: Instant,
@@ -31204,6 +31656,20 @@ fn evaluate_color_spatial_sample_at_rate(
                 request,
                 target,
                 daslight_sweep,
+                created_at,
+                now,
+                clock,
+                rate,
+            ),
+            opacity: 1.0,
+        };
+    }
+    if let Some(daslight_perlin) = daslight_perlin {
+        return RuntimeColorSpatialSample {
+            color: evaluate_daslight_perlin_color_at_rate(
+                request,
+                target,
+                daslight_perlin,
                 created_at,
                 now,
                 clock,
@@ -31499,6 +31965,11 @@ fn evaluate_color_spatial_sample_at_rate(
             }
         }
         ColorEffectSpatialRecipe::Perlin {
+            daslight_exact: _,
+            grayscale: _,
+            vertical_symmetry: _,
+            horizontal_symmetry: _,
+            rotation_degrees: _,
             octaves,
             zoom,
             direction_degrees,
@@ -54262,6 +54733,33 @@ mod tests {
         request
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn test_daslight_perlin_request(
+        period_ms: u64,
+        octaves: u8,
+        zoom: f32,
+        direction_degrees: f32,
+        speed: f32,
+        amplitude: f32,
+        vertical_symmetry: bool,
+        grayscale: bool,
+    ) -> ColorEffectRequest {
+        let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::Perlin {
+            daslight_exact: true,
+            grayscale,
+            vertical_symmetry,
+            horizontal_symmetry: false,
+            rotation_degrees: 0.0,
+            octaves,
+            zoom,
+            direction_degrees,
+            speed,
+            amplitude,
+        });
+        request.period_ms = period_ms;
+        request
+    }
+
     fn test_spatial_color_target(
         strip_index: usize,
         strip_count: usize,
@@ -54273,6 +54771,8 @@ mod tests {
             beam_index: 0,
             strip_index,
             strip_count,
+            daslight_target_index: strip_index,
+            daslight_raster_cell: None,
             x,
             z,
             rainbow_projected_coordinate: None,
@@ -54328,12 +54828,15 @@ mod tests {
             compile_daslight_value_spatial(request, target.strip_count).unwrap();
         let daslight_burst = compile_daslight_burst(request, target.strip_count).unwrap();
         let daslight_sweep = compile_daslight_sweep(request, target.strip_count).unwrap();
+        let daslight_perlin =
+            compile_daslight_perlin(request, std::slice::from_ref(&target)).unwrap();
         evaluate_color_spatial_sample_at_rate(
             request,
             &target,
             daslight_knight_rider.as_ref(),
             daslight_burst.as_ref(),
             daslight_sweep.as_ref(),
+            daslight_perlin.as_ref(),
             97,
             created_at,
             created_at + Duration::from_millis(elapsed_ms),
@@ -56092,6 +56595,11 @@ mod tests {
     #[test]
     fn color_spatial_perlin_reuses_seeded_smooth_noise_and_amplitude() {
         let request = test_spatial_color_request(ColorEffectSpatialRecipe::Perlin {
+            daslight_exact: false,
+            grayscale: false,
+            vertical_symmetry: false,
+            horizontal_symmetry: false,
+            rotation_degrees: 0.0,
             octaves: 5,
             zoom: 20.0,
             direction_degrees: 1.0,
@@ -56103,6 +56611,108 @@ mod tests {
         let second = evaluate_test_spatial_color(&request, &target, 375);
         assert_eq!(first, second);
         assert!((32_767..=32_768).contains(&first.red), "{}", first.red);
+    }
+
+    #[test]
+    fn daslight_exact_perlin_matches_recovered_hash_and_frame_vectors() {
+        for ((x, y), expected) in [
+            ((0, 0), -0.885_272_484_752_390_3),
+            ((1, 0), -1.835_903_511_836_126),
+            ((0, 1), -1.999_460_421_460_771),
+            ((1, 1), -2.628_158_577_079_630_3),
+            ((-1, 0), 0.879_614_719_300_892_3),
+        ] {
+            assert!((daslight_perlin_hash_radians(x, y) - expected).abs() < 1.0e-12);
+        }
+
+        let request = test_daslight_perlin_request(3_000, 4, 5.0, 2.0, 1.0, 70.0, false, false);
+        let targets = (0..10)
+            .map(|index| test_spatial_color_target(index, 10, index as f32 / 9.0, 0.5))
+            .collect::<Vec<_>>();
+        let compiled = compile_daslight_perlin(&request, &targets).unwrap().unwrap();
+        assert_eq!((compiled.raw_frame_count, compiled.table_frame_count), (75, 75));
+        for (frame, expected) in [
+            (0, vec![0, 0, 0, 0, 0, 0, 36, 80, 72, 18]),
+            (10, vec![121, 64, 15, 13, 38, 0, 71, 112, 95, 34]),
+            (20, vec![255, 206, 153, 141, 152, 121, 143, 155, 139, 111]),
+            (37, vec![255, 255, 255, 255, 255, 255, 219, 176, 182, 235]),
+            (74, vec![0, 0, 0, 0, 0, 0, 36, 79, 73, 21]),
+        ] {
+            let actual = (0..10)
+                .map(|target| compiled.sample_frame_palette_byte(frame, target).unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected, "frame {frame}");
+        }
+    }
+
+    #[test]
+    fn daslight_exact_perlin_keeps_dead_direction_and_750_frame_scheduler_contract() {
+        let targets = (0..5)
+            .map(|index| test_spatial_color_target(index, 5, index as f32 / 4.0, 0.5))
+            .collect::<Vec<_>>();
+        let first = test_daslight_perlin_request(3_000, 4, 5.0, 1.0, 1.0, 70.0, false, false);
+        let second = test_daslight_perlin_request(3_000, 4, 5.0, 100.0, 1.0, 70.0, false, false);
+        let first = compile_daslight_perlin(&first, &targets).unwrap().unwrap();
+        let second = compile_daslight_perlin(&second, &targets).unwrap().unwrap();
+        for frame in [0, 1, 37, 74] {
+            for target in 0..targets.len() {
+                assert_eq!(
+                    first.sample_frame_palette_byte(frame, target),
+                    second.sample_frame_palette_byte(frame, target)
+                );
+            }
+        }
+
+        let capped = test_daslight_perlin_request(
+            751 * DASLIGHT_VALUE_FRAME_MS,
+            4,
+            5.0,
+            2.0,
+            1.0,
+            70.0,
+            false,
+            false,
+        );
+        let capped = compile_daslight_perlin(&capped, &targets).unwrap().unwrap();
+        assert_eq!(capped.raw_frame_count, 751);
+        assert_eq!(capped.table_frame_count, DASLIGHT_VALUE_FRAME_CAP);
+        let coordinate = capped.temporal_coordinate(1);
+        assert_eq!((coordinate.lower, coordinate.upper), (0, 1));
+        assert!((coordinate.amount - 749.0 / 751.0).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn daslight_exact_perlin_transform_and_grayscale_are_postprocessed() {
+        let folded_request =
+            test_daslight_perlin_request(3_000, 4, 5.0, 2.0, 1.0, 70.0, true, false);
+        let targets = (0..5)
+            .map(|index| test_spatial_color_target(index, 5, index as f32 / 4.0, 0.5))
+            .collect::<Vec<_>>();
+        let folded = compile_daslight_perlin(&folded_request, &targets)
+            .unwrap()
+            .unwrap();
+        assert_eq!(folded.sample_frame(20, 0), folded.sample_frame(20, 3));
+        assert_eq!(folded.sample_frame(20, 1), folded.sample_frame(20, 2));
+        assert_eq!(folded.sample_frame(20, 4).into_color(), black_color());
+
+        let mut grayscale_request =
+            test_daslight_perlin_request(3_000, 4, 5.0, 2.0, 1.0, 70.0, false, true);
+        grayscale_request.stops = vec![
+            ColorEffectStop {
+                position: 0.0,
+                color: test_color(u16::MAX, 0, 0),
+            },
+            ColorEffectStop {
+                position: 1.0,
+                color: test_color(0, 0, u16::MAX),
+            },
+        ];
+        let grayscale = compile_daslight_perlin(&grayscale_request, &targets)
+            .unwrap()
+            .unwrap();
+        let color = grayscale.sample_frame(10, 0).into_color();
+        assert_eq!(color.red, color.green);
+        assert_eq!(color.green, color.blue);
     }
 
     #[test]
