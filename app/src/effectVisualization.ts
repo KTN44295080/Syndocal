@@ -382,8 +382,33 @@ export const sampleMovePath = (
   interpolation: MoveInterpolation,
   closed: boolean,
 ): PreviewPoint[] => {
-  if (points.length < 2 || interpolation === "Line") return [...points];
-  if (interpolation === "Circle") return sampleCirclePath(points);
+  if (points.length < 2 || interpolation === "Line" || interpolation === "DaslightPoints") return [...points];
+  if (interpolation === "Circle" || interpolation === "DaslightCircle") return sampleCirclePath(points);
+  if (interpolation === "DaslightLine") return [points[0], points[1], points[0]];
+  if (interpolation === "DaslightPolygon") return [...points, points[0]];
+  if (interpolation === "DaslightCurve") {
+    const samples: PreviewPoint[] = [points[0]];
+    for (let segment = 0; segment < points.length - 1; segment += 1) {
+      const p0 = segment === 0 ? points[segment] : points[segment - 1];
+      const p1 = points[segment];
+      const p2 = points[segment + 1];
+      const p3 = points[segment + 2] ?? p2;
+      for (let slice = 1; slice <= 16; slice += 1) {
+        const t = slice / 16;
+        const squared = t * t;
+        const cubed = squared * t;
+        const h00 = 2 * cubed - 3 * squared + 1;
+        const h10 = cubed - 2 * squared + t;
+        const h01 = -2 * cubed + 3 * squared;
+        const h11 = cubed - squared;
+        samples.push({
+          x: h00 * p1.x + h10 * 0.5 * (p2.x - p0.x) + h01 * p2.x + h11 * 0.5 * (p3.x - p1.x),
+          y: h00 * p1.y + h10 * 0.5 * (p2.y - p0.y) + h01 * p2.y + h11 * 0.5 * (p3.y - p1.y),
+        });
+      }
+    }
+    return samples;
+  }
   const samples: PreviewPoint[] = [points[0]];
   const segmentCount = closed ? points.length : points.length - 1;
   for (let segment = 0; segment < segmentCount; segment += 1) {
@@ -415,6 +440,37 @@ export const moveFanoutPreviewState = (
 ): { progress: number; mirrorPan: boolean } => {
   const count = Math.max(1, Math.round(selectionCount));
   const rank = Math.max(0, Math.min(count - 1, Math.round(selectionRank)));
+  const daslightExact = request.interpolation.startsWith("Daslight");
+  if (daslightExact) {
+    const frameCount = Math.max(1, Math.floor(Math.max(10, request.period_ms) / 40));
+    const rawCycle = Math.max(0, Number.isFinite(elapsedMs) ? elapsedMs : 0)
+      / (frameCount * 40) + request.phase;
+    const phase = normalizePhase(rawCycle);
+    const directed = request.direction === "Reverse"
+      ? 1 - phase
+      : request.direction === "Bounce"
+        ? phase * 2 <= 1 ? phase * 2 : 2 - phase * 2
+        : phase;
+    const baseFrame = Math.floor(directed * frameCount) % frameCount;
+    const step = frameCount * clampUnit(request.fixture_spread);
+    const split = Math.floor(count / 2);
+    let shifted = baseFrame - rank * step;
+    if (request.symmetry === true && count >= 2 && rank >= split) {
+      const symmetryBase = request.interpolation === "DaslightPoints"
+        ? frameCount - baseFrame
+        : Math.ceil(frameCount / 2) - baseFrame;
+      shifted = symmetryBase - (count - 1 - rank) * step;
+    }
+    const frame = Math.round(((shifted % frameCount) + frameCount) % frameCount) % frameCount;
+    let progress = frame / frameCount;
+    if (request.interpolation === "DaslightCurve") {
+      const doubled = progress * 2;
+      progress = doubled <= 1 ? doubled : 2 - doubled;
+    } else if (request.interpolation === "DaslightLine") {
+      progress = (frame % Math.max(1, frameCount - 1)) / frameCount;
+    }
+    return { progress, mirrorPan: false };
+  }
   const circle = request.interpolation === "Circle";
   const secondWing = request.symmetry === true && rank >= Math.ceil(count / 2);
   const fanoutRank = circle && secondWing ? rank - Math.ceil(count / 2) : rank;
@@ -442,7 +498,9 @@ export const normalizeMovePathPoints = (
 ): MovePathPoint[] => {
   // Circle keeps every authored point as an equal-time segment boundary,
   // including degenerate adjacent/closing duplicates from source files.
-  if (interpolation === "Circle") return points.map((point) => ({ ...point }));
+  if (interpolation === "Circle" || interpolation?.startsWith("Daslight")) {
+    return points.map((point) => ({ ...point }));
+  }
   const normalized: MovePathPoint[] = [];
   for (const point of points) {
     const previous = normalized.at(-1);

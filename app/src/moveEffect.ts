@@ -104,11 +104,14 @@ export const moveEffectDraftError = (input: MoveDraftValidationInput) => {
       identities.add(identity);
     }
   }
-  const maximumPoints = input.interpolation === "Circle" ? 255 : 256;
+  const maximumPoints = input.interpolation.startsWith("Daslight") || input.interpolation === "Circle" ? 255 : 256;
+  if (input.interpolation === "DaslightLine" && input.points.length !== 2) {
+    return "Daslight Move Line requires exactly 2 path points.";
+  }
   if (input.points.length < 2 || input.points.length > maximumPoints) {
     return `Move paths require between 2 and ${maximumPoints} points.`;
   }
-  if (input.interpolation === "Circle" && !input.closed) {
+  if ((input.interpolation === "Circle" || input.interpolation === "DaslightCircle") && !input.closed) {
     return "Move Circle interpolation requires a closed path.";
   }
   if (input.points.some((point) =>

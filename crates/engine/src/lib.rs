@@ -4093,6 +4093,10 @@ struct RuntimeMoveEffect {
     attribute_indices: HashMap<FixtureId, HashMap<String, usize>>,
     rotation_cosine: f32,
     rotation_sine: f32,
+    daslight_frame_count: u32,
+    daslight_effective_period_ms: u64,
+    daslight_time_cache: Cell<Option<RuntimeDaslightMoveTimeEvaluation>>,
+    daslight_point_cache: Cell<Option<RuntimeDaslightMovePointEvaluation>>,
 }
 
 #[derive(Debug, Clone)]
@@ -4103,12 +4107,33 @@ struct RuntimeMoveTarget {
     phase_offset: f32,
     reverse_time: bool,
     mirror_pan: bool,
+    /// Daslight's raw fixture phasing is quantized once when the runtime
+    /// target is compiled. The 44 Hz evaluator then needs only integer frame
+    /// translation; it does not repeat float modulo/rounding for every beam.
+    daslight_frame_delta: u32,
+    daslight_reverse_wing: bool,
     cached: Cell<Option<RuntimeMoveEvaluation>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct RuntimeMoveEvaluation {
     at: Instant,
+    delta: MovePathPoint,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct RuntimeDaslightMoveTimeEvaluation {
+    at: Instant,
+    lower_frame: u32,
+    upper_frame: u32,
+    fraction: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct RuntimeDaslightMovePointEvaluation {
+    at: Instant,
+    lower_frame: u32,
+    upper_frame: u32,
     delta: MovePathPoint,
 }
 
@@ -25845,6 +25870,13 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
             let request = effect.move_effect.clone()?;
             let path = CompiledMovePath::compile(&request).ok()?;
             let (rotation_cosine, rotation_sine) = move_rotation(request.rotation_degrees);
+            let daslight_frame_count = if is_daslight_move_interpolation(request.interpolation) {
+                (request.period_ms / DASLIGHT_MOVE_FRAME_MS)
+                    .max(1)
+                    .min(u64::from(u32::MAX)) as u32
+            } else {
+                0
+            };
             RuntimeEffectKind::Move(RuntimeMoveEffect {
                 request,
                 path,
@@ -25853,6 +25885,11 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
                 attribute_indices: HashMap::new(),
                 rotation_cosine,
                 rotation_sine,
+                daslight_frame_count,
+                daslight_effective_period_ms: u64::from(daslight_frame_count)
+                    * DASLIGHT_MOVE_FRAME_MS,
+                daslight_time_cache: Cell::new(None),
+                daslight_point_cache: Cell::new(None),
             })
         }
         EffectKind::Value => {
@@ -26389,7 +26426,16 @@ pub fn validate_move_effect_request(request: &MoveEffectRequest) -> Result<(), S
     if request.fixture_ids.is_empty() && request.target_group_ids.is_empty() {
         return Err("Move effect must target at least one fixture or group".to_string());
     }
-    let maximum_points = if request.interpolation == protocol::MoveInterpolation::Circle {
+    let daslight_exact = is_daslight_move_interpolation(request.interpolation);
+    let maximum_points = if matches!(
+        request.interpolation,
+        protocol::MoveInterpolation::Circle
+            | protocol::MoveInterpolation::DaslightCircle
+            | protocol::MoveInterpolation::DaslightCurve
+            | protocol::MoveInterpolation::DaslightLine
+            | protocol::MoveInterpolation::DaslightPolygon
+            | protocol::MoveInterpolation::DaslightPoints
+    ) {
         255
     } else {
         256
@@ -26399,7 +26445,16 @@ pub fn validate_move_effect_request(request: &MoveEffectRequest) -> Result<(), S
             "Move effect requires between 2 and {maximum_points} path points"
         ));
     }
-    if request.interpolation == protocol::MoveInterpolation::Circle && !request.closed {
+    if request.interpolation == protocol::MoveInterpolation::DaslightLine
+        && request.points.len() != 2
+    {
+        return Err("Daslight Move Line requires exactly 2 path points".to_string());
+    }
+    if matches!(
+        request.interpolation,
+        protocol::MoveInterpolation::Circle | protocol::MoveInterpolation::DaslightCircle
+    ) && !request.closed
+    {
         return Err("Move Circle interpolation requires a closed path".to_string());
     }
     if request.points.iter().any(|point| {
@@ -26411,11 +26466,12 @@ pub fn validate_move_effect_request(request: &MoveEffectRequest) -> Result<(), S
         return Err("Move effect path points must be finite and within 0..1".to_string());
     }
     let first_point = request.points[0];
-    if !request
-        .points
-        .iter()
-        .skip(1)
-        .any(|point| (point.x - first_point.x).hypot(point.y - first_point.y) > 1.0e-6)
+    if !daslight_exact
+        && !request
+            .points
+            .iter()
+            .skip(1)
+            .any(|point| (point.x - first_point.x).hypot(point.y - first_point.y) > 1.0e-6)
     {
         return Err("Move effect path must contain at least two distinct points".to_string());
     }
@@ -26477,6 +26533,24 @@ pub fn validate_move_effect_request(request: &MoveEffectRequest) -> Result<(), S
     }
     Ok(())
 }
+
+fn is_daslight_move_interpolation(interpolation: protocol::MoveInterpolation) -> bool {
+    matches!(
+        interpolation,
+        protocol::MoveInterpolation::DaslightCircle
+            | protocol::MoveInterpolation::DaslightCurve
+            | protocol::MoveInterpolation::DaslightLine
+            | protocol::MoveInterpolation::DaslightPolygon
+            | protocol::MoveInterpolation::DaslightPoints
+    )
+}
+
+fn daslight_move_interpolates_frames(interpolation: protocol::MoveInterpolation) -> bool {
+    is_daslight_move_interpolation(interpolation)
+        && interpolation != protocol::MoveInterpolation::DaslightPoints
+}
+
+const DASLIGHT_MOVE_FRAME_MS: u64 = 40;
 
 fn runtime_move_effect_from_request(
     request: MoveEffectRequest,
@@ -26593,6 +26667,14 @@ fn runtime_move_effect_from_request(
         authored_move_selection_ranks(&compatible, 0, compatible.len());
     let symmetry_selection_split = selection_count.div_ceil(2);
     let circle = request.interpolation == protocol::MoveInterpolation::Circle;
+    let daslight_exact = is_daslight_move_interpolation(request.interpolation);
+    let daslight_frame_count = if daslight_exact {
+        (request.period_ms / DASLIGHT_MOVE_FRAME_MS)
+            .max(1)
+            .min(u64::from(u32::MAX)) as u32
+    } else {
+        0
+    };
     let targets = compatible
         .into_iter()
         .enumerate()
@@ -26615,13 +26697,36 @@ fn runtime_move_effect_from_request(
                 } else {
                     index as f32 / count * request.fixture_spread
                 };
+                let daslight_reverse_wing = daslight_exact
+                    && request.symmetry
+                    && selection_count >= 2
+                    && selection_rank >= selection_count / 2;
+                let daslight_offset_rank = if daslight_reverse_wing {
+                    selection_count
+                        .saturating_sub(1)
+                        .saturating_sub(selection_rank)
+                } else {
+                    selection_rank
+                };
+                let daslight_frame_delta = if daslight_exact {
+                    let cycle = daslight_frame_count.max(1) as f32;
+                    let step = cycle * request.fixture_spread;
+                    (-(daslight_offset_rank as f32 * step))
+                        .rem_euclid(cycle)
+                        .round() as u32
+                        % daslight_frame_count.max(1)
+                } else {
+                    0
+                };
                 RuntimeMoveTarget {
                     fixture_id,
                     pan_attribute,
                     tilt_attribute,
                     phase_offset,
-                    reverse_time: circle && second_wing,
-                    mirror_pan: !circle && second_wing,
+                    reverse_time: !daslight_exact && circle && second_wing,
+                    mirror_pan: !daslight_exact && !circle && second_wing,
+                    daslight_frame_delta,
+                    daslight_reverse_wing,
                     cached: Cell::new(None),
                 }
             },
@@ -26645,6 +26750,7 @@ fn runtime_move_effect_from_request(
         }
     }
     let (rotation_cosine, rotation_sine) = move_rotation(request.rotation_degrees);
+    let daslight_effective_period_ms = u64::from(daslight_frame_count) * DASLIGHT_MOVE_FRAME_MS;
     Ok(RuntimeMoveEffect {
         request,
         path,
@@ -26653,6 +26759,10 @@ fn runtime_move_effect_from_request(
         attribute_indices,
         rotation_cosine,
         rotation_sine,
+        daslight_frame_count,
+        daslight_effective_period_ms,
+        daslight_time_cache: Cell::new(None),
+        daslight_point_cache: Cell::new(None),
     })
 }
 
@@ -26716,25 +26826,26 @@ fn evaluate_runtime_move_attribute_at_rate(
         .get()
         .filter(|evaluation| evaluation.at == now)
         .unwrap_or_else(|| {
-            let progress = move_effect_progress(
-                &runtime.request,
-                target.phase_offset,
-                target.reverse_time,
-                created_at,
-                now,
-                clock,
-                rate,
-            );
-            let point = runtime.path.sample(progress);
-            let evaluation = RuntimeMoveEvaluation {
-                at: now,
-                delta: transform_move_delta(
+            let delta = if is_daslight_move_interpolation(runtime.request.interpolation) {
+                evaluate_daslight_move_delta(runtime, target, created_at, now, clock, rate)
+            } else {
+                let progress = move_effect_progress(
                     &runtime.request,
-                    point,
+                    target.phase_offset,
+                    target.reverse_time,
+                    created_at,
+                    now,
+                    clock,
+                    rate,
+                );
+                transform_move_delta(
+                    &runtime.request,
+                    runtime.path.sample(progress),
                     runtime.rotation_cosine,
                     runtime.rotation_sine,
-                ),
+                )
             };
+            let evaluation = RuntimeMoveEvaluation { at: now, delta };
             target.cached.set(Some(evaluation));
             evaluation
         });
@@ -26765,6 +26876,109 @@ fn evaluate_runtime_move_attribute_at_rate(
     Some((normalized * u16::MAX as f32).round() as u16)
 }
 
+fn evaluate_daslight_move_delta(
+    runtime: &RuntimeMoveEffect,
+    target: &RuntimeMoveTarget,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> MovePathPoint {
+    debug_assert!(runtime.daslight_frame_count > 0);
+    let frame_count = runtime.daslight_frame_count.max(1);
+    let time = runtime
+        .daslight_time_cache
+        .get()
+        .filter(|evaluation| evaluation.at == now)
+        .unwrap_or_else(|| {
+            let progress = move_effect_progress_with_period(
+                &runtime.request,
+                0.0,
+                false,
+                created_at,
+                now,
+                clock,
+                rate,
+                runtime.daslight_effective_period_ms,
+            );
+            let frame_time = progress * frame_count as f32;
+            let floor = frame_time.floor();
+            let evaluation = RuntimeDaslightMoveTimeEvaluation {
+                at: now,
+                lower_frame: floor.max(0.0) as u32,
+                upper_frame: floor.max(0.0) as u32 + 1,
+                fraction: frame_time - floor,
+            };
+            runtime.daslight_time_cache.set(Some(evaluation));
+            evaluation
+        });
+    let lower_frame =
+        daslight_move_target_frame(&runtime.request, target, time.lower_frame, frame_count);
+    let interpolates =
+        time.fraction > 0.0 && daslight_move_interpolates_frames(runtime.request.interpolation);
+    let upper_frame = if interpolates {
+        daslight_move_target_frame(&runtime.request, target, time.upper_frame, frame_count)
+    } else {
+        lower_frame
+    };
+    if let Some(cached) = runtime.daslight_point_cache.get().filter(|evaluation| {
+        evaluation.at == now
+            && evaluation.lower_frame == lower_frame
+            && evaluation.upper_frame == upper_frame
+    }) {
+        return cached.delta;
+    }
+    let first = runtime.path.sample_daslight_frame(lower_frame, frame_count);
+    let point = if interpolates {
+        let second = runtime.path.sample_daslight_frame(upper_frame, frame_count);
+        MovePathPoint {
+            x: first.x + (second.x - first.x) * time.fraction,
+            y: first.y + (second.y - first.y) * time.fraction,
+        }
+    } else {
+        first
+    };
+    let delta = transform_move_delta(
+        &runtime.request,
+        point,
+        runtime.rotation_cosine,
+        runtime.rotation_sine,
+    );
+    runtime
+        .daslight_point_cache
+        .set(Some(RuntimeDaslightMovePointEvaluation {
+            at: now,
+            lower_frame,
+            upper_frame,
+            delta,
+        }));
+    delta
+}
+
+fn daslight_move_target_frame(
+    request: &MoveEffectRequest,
+    target: &RuntimeMoveTarget,
+    base_frame: u32,
+    frame_count: u32,
+) -> u32 {
+    let frame_count = frame_count.max(1);
+    let base = base_frame % frame_count;
+    let translated_base = if target.daslight_reverse_wing {
+        let symmetry_origin =
+            if request.interpolation == protocol::MoveInterpolation::DaslightPoints {
+                0
+            } else {
+                frame_count / 2 + frame_count % 2
+            };
+        ((u64::from(symmetry_origin) + u64::from(frame_count) - u64::from(base))
+            % u64::from(frame_count)) as u32
+    } else {
+        base
+    };
+    ((u64::from(translated_base) + u64::from(target.daslight_frame_delta)) % u64::from(frame_count))
+        as u32
+}
+
 fn move_effect_progress(
     request: &MoveEffectRequest,
     fixture_phase_offset: f32,
@@ -26774,12 +26988,35 @@ fn move_effect_progress(
     clock: &ClockSnapshot,
     rate: f32,
 ) -> f32 {
+    move_effect_progress_with_period(
+        request,
+        fixture_phase_offset,
+        reverse_time,
+        created_at,
+        now,
+        clock,
+        rate,
+        request.period_ms,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn move_effect_progress_with_period(
+    request: &MoveEffectRequest,
+    fixture_phase_offset: f32,
+    reverse_time: bool,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+    free_run_period_ms: u64,
+) -> f32 {
     let rate = valid_effect_rate(rate);
     let cycle = if let Some(clock_sync) = request.clock_sync {
         let beat_position = clock.beat_counter as f32 + clock.beat_phase;
         beat_position / clock_sync.beats.max(0.000_1) * rate
     } else {
-        let period = request.period_ms.max(10) as f32 / 1_000.0;
+        let period = free_run_period_ms.max(10) as f32 / 1_000.0;
         now.saturating_duration_since(created_at).as_secs_f32() * rate / period
     };
     let time = cycle + request.phase;
@@ -56835,6 +57072,86 @@ mod tests {
     }
 
     #[test]
+    fn daslight_move_raw_phasing_and_two_wing_symmetry_use_integer_frame_contract() {
+        let runtime = runtime_with_move_fixtures(4);
+        let mut request = test_move_request(&[1, 2, 3, 4]);
+        request.points = vec![
+            MovePathPoint { x: 0.0, y: 0.5 },
+            MovePathPoint { x: 1.0, y: 0.5 },
+        ];
+        request.closed = false;
+        request.interpolation = protocol::MoveInterpolation::DaslightLine;
+        request.period_ms = 1_000;
+        request.fixture_spread = 0.25;
+        request.symmetry = true;
+        let effect = runtime.resolve_move_effect_request(request).unwrap();
+
+        assert_eq!(
+            effect
+                .targets
+                .iter()
+                .map(|target| daslight_move_target_frame(&effect.request, target, 0, 25))
+                .collect::<Vec<_>>(),
+            vec![0, 19, 7, 13],
+            "Line/Curve/Circle/Polygon symmetry uses ceil(cycle/2)-time and reverses second-wing target order"
+        );
+        assert!(effect
+            .targets
+            .iter()
+            .all(|target| !target.mirror_pan && !target.reverse_time));
+
+        let mut points_request = effect.request.clone();
+        points_request.interpolation = protocol::MoveInterpolation::DaslightPoints;
+        let points = runtime.resolve_move_effect_request(points_request).unwrap();
+        assert_eq!(
+            points
+                .targets
+                .iter()
+                .map(|target| daslight_move_target_frame(&points.request, target, 0, 25))
+                .collect::<Vec<_>>(),
+            vec![0, 19, 19, 0],
+            "Points uses cycle-time rather than the other MOVE evaluators' half-cycle symmetry origin"
+        );
+    }
+
+    #[test]
+    fn daslight_move_free_run_uses_the_quantized_frame_period() {
+        let runtime = runtime_with_move_fixtures(1);
+        let mut request = test_move_request(&[1]);
+        request.points = vec![
+            MovePathPoint { x: 0.0, y: 0.5 },
+            MovePathPoint { x: 1.0, y: 0.5 },
+        ];
+        request.closed = false;
+        request.interpolation = protocol::MoveInterpolation::DaslightLine;
+        request.period_ms = 1_025;
+        request.fixture_spread = 0.0;
+        request.symmetry = false;
+        let effect = runtime.resolve_move_effect_request(request).unwrap();
+        let created_at = Instant::now();
+        let clock = ClockSnapshot::default();
+
+        let start = evaluate_daslight_move_delta(
+            &effect,
+            &effect.targets[0],
+            created_at,
+            created_at,
+            &clock,
+            1.0,
+        );
+        let after_quantized_cycle = evaluate_daslight_move_delta(
+            &effect,
+            &effect.targets[0],
+            created_at,
+            created_at + Duration::from_millis(1_000),
+            &clock,
+            1.0,
+        );
+
+        assert_eq!(after_quantized_cycle, start);
+    }
+
+    #[test]
     fn move_circle_beam_fanout_compiles_authored_order_and_negative_total_spread() {
         let runtime = runtime_with_move_beam_fixture(3);
         let mut request = test_move_request(&[1]);
@@ -57279,7 +57596,7 @@ mod tests {
         let runtime = runtime_with_move_fixtures(200);
         let fixture_ids = (1..=200).collect::<Vec<_>>();
         let mut base = test_move_request(&fixture_ids);
-        base.interpolation = protocol::MoveInterpolation::Circle;
+        base.interpolation = protocol::MoveInterpolation::DaslightCircle;
         base.beam_targets = fixture_ids
             .iter()
             .enumerate()
@@ -59500,7 +59817,7 @@ mod tests {
         chaser_base.overlap = 0.25;
         chaser_base.fixture_spread = 0.5;
         let mut move_base = test_move_request(fixture_ids);
-        move_base.interpolation = protocol::MoveInterpolation::Circle;
+        move_base.interpolation = protocol::MoveInterpolation::DaslightCircle;
         move_base.beam_targets = fixture_ids
             .iter()
             .enumerate()

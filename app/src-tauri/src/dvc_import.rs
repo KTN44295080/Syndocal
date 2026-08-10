@@ -200,7 +200,6 @@ struct ConvertedDvcEffect {
 struct DvcRackTargets {
     ordered_steps: Vec<Vec<u64>>,
     fixture_ids: Vec<u64>,
-    has_multi_beam_selection: bool,
     beam_targets: Vec<ColorEffectBeamTarget>,
 }
 
@@ -2286,11 +2285,12 @@ fn convert_dvc_effect(
     fixture_refs: &HashMap<String, FixtureImportRef>,
 ) -> Result<ConvertedDvcEffect, String> {
     match (rack_type, effect_type, generator_id) {
-        (4, 4, 221) => convert_dvc_move_circle_effect(
+        (4, 4, 221..=225) => convert_dvc_move_exact_effect(
             scene,
             scene_name,
             rack,
             effect,
+            generator_id,
             effect_id,
             fixture_refs,
         ),
@@ -2302,15 +2302,6 @@ fn convert_dvc_effect(
             generator_id,
             effect_id,
             profiles,
-            fixture_refs,
-        ),
-        (4, 4, 223 | 224) => convert_dvc_move_effect(
-            scene,
-            scene_name,
-            rack,
-            effect,
-            generator_id,
-            effect_id,
             fixture_refs,
         ),
         (8, 5, 3) => convert_dvc_inverse_ramp_effect(
@@ -2512,50 +2503,47 @@ fn dvc_color_spatial_placement(
     })
 }
 
-fn convert_dvc_move_circle_effect(
+fn convert_dvc_move_exact_effect(
     scene: Node<'_, '_>,
     scene_name: &str,
     rack: Node<'_, '_>,
     effect: Node<'_, '_>,
+    generator_id: u16,
     effect_id: u64,
     fixture_refs: &HashMap<String, FixtureImportRef>,
 ) -> Result<ConvertedDvcEffect, String> {
-    let params_node = direct_child(effect, "PARAMS")
-        .ok_or_else(|| "Move Circle ID=221 is missing PARAMS".to_string())?;
-    if params_node.attribute("NB") != Some("3") {
-        return Err(format!(
-            "Move Circle ID=221 expected PARAMS NB=3, found {}",
-            params_node.attribute("NB").unwrap_or("missing")
-        ));
-    }
-    let (points, phasing, symmetry) = dvc_move_effect_params(effect, "Circle")?;
-    if phasing != 0.0 {
-        return Err(format!(
-            "Move Circle ID=221 Phasing PARAM 2={phasing} remains fail-closed because its raw-to-runtime fan-out scalar composition is not recovered"
-        ));
-    }
+    let (generator, interpolation, closed) = match generator_id {
+        221 => ("Circle", MoveInterpolation::DaslightCircle, true),
+        222 => ("Curve", MoveInterpolation::DaslightCurve, false),
+        223 => ("Line", MoveInterpolation::DaslightLine, false),
+        224 => ("Polygon", MoveInterpolation::DaslightPolygon, true),
+        225 => ("Points", MoveInterpolation::DaslightPoints, false),
+        _ => return Err(format!("unknown Move generator ID={generator_id}")),
+    };
+    let (points, phasing, symmetry) = dvc_move_effect_params(effect, generator)?;
     let targets = dvc_rack_targets(rack, fixture_refs)?;
     if targets.beam_targets.is_empty() {
-        return Err("Move Circle ID=221 BEAMS resolved to no targets".to_string());
+        return Err(format!(
+            "Move {generator} ID={generator_id} BEAMS resolved to no targets"
+        ));
     }
-
     let coordinate_mode = match scene.attribute("ATTRIBUTEVALUE_MODE") {
         Some("0") => MoveCoordinateMode::Absolute,
         Some("1") => MoveCoordinateMode::Relative,
         Some(value) => {
             return Err(format!(
-                "Move Circle ID=221 ATTRIBUTEVALUE_MODE must be 0 (Absolute) or 1 (Relative), found {value}"
+                "Move {generator} ID={generator_id} ATTRIBUTEVALUE_MODE must be 0 (Absolute) or 1 (Relative), found {value}"
             ));
         }
         None => {
-            return Err(
-                "Move Circle ID=221 owning scene is missing ATTRIBUTEVALUE_MODE".to_string(),
-            );
+            return Err(format!(
+                "Move {generator} ID={generator_id} owning scene is missing ATTRIBUTEVALUE_MODE"
+            ));
         }
     };
-    let mut approximations = Vec::new();
-    let (period_ms, free_run_note) = dvc_move_period(effect, scene, "Circle", &mut approximations)?;
+    let (period_ms, free_run_note) = dvc_exact_generator_period(effect, "MOVE FX", generator)?;
     let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
+    let mut approximations = Vec::new();
     if let Some(clock_warning) = clock_warning {
         approximations.push(clock_warning);
     }
@@ -2572,13 +2560,13 @@ fn convert_dvc_move_circle_effect(
         .collect();
     let point_count = points.len();
     let request = MoveEffectRequest {
-        label: format!("{scene_name} (Circle)"),
+        label: format!("{scene_name} ({generator})"),
         fixture_ids: targets.fixture_ids,
         target_group_ids: Vec::new(),
         beam_targets,
         points,
-        closed: true,
-        interpolation: MoveInterpolation::Circle,
+        closed,
+        interpolation,
         coordinate_mode,
         center_x: 0.5,
         center_y: 0.5,
@@ -2593,9 +2581,9 @@ fn convert_dvc_move_circle_effect(
         symmetry,
         blend_mode: EffectBlendMode::Override,
     };
-    engine::validate_move_effect_request(&request)
-        .map_err(|error| format!("confirmed Circle parameters are not representable: {error}"))?;
-
+    engine::validate_move_effect_request(&request).map_err(|error| {
+        format!("confirmed Move {generator} parameters are not representable: {error}")
+    })?;
     Ok(ConvertedDvcEffect {
         target: Some(CueEffectTarget {
             effect_id,
@@ -2603,9 +2591,9 @@ fn convert_dvc_move_circle_effect(
             params: Some(EffectParamsSnapshot::Move(request)),
             transition_ms: None,
         }),
-        generator: "Circle",
+        generator,
         note: format!(
-            "points={point_count} normalized Pan/Tilt vertices (DMX16=round(point*65535)); interpolation=Circle analytical circumcircle arcs; closed=true; direction=Forward; beam_targets={beam_count}; selections={selection_count}; coordinate_mode={coordinate_mode:?}; fixture_spread=id2=Phasing={phasing}; symmetry={}; {free_run_note}; {clock_note}",
+            "Daslight evaluator=ID {generator_id} {generator}; frame_quantum_ms=40; points={point_count}; beam_targets={beam_count}; selections={selection_count}; coordinate_mode={coordinate_mode:?}; raw_phasing={phasing}; symmetry={}; {free_run_note}; {clock_note}",
             u8::from(symmetry)
         ),
         approximations,
@@ -3742,99 +3730,6 @@ fn convert_dvc_chaser_effect(
     })
 }
 
-fn convert_dvc_move_effect(
-    scene: Node<'_, '_>,
-    scene_name: &str,
-    rack: Node<'_, '_>,
-    effect: Node<'_, '_>,
-    generator_id: u16,
-    effect_id: u64,
-    fixture_refs: &HashMap<String, FixtureImportRef>,
-) -> Result<ConvertedDvcEffect, String> {
-    let generator = if generator_id == 223 {
-        "Line"
-    } else {
-        "Polygon"
-    };
-    let (points, phasing, symmetry) = dvc_move_effect_params(effect, generator)?;
-    let targets = dvc_rack_targets(rack, fixture_refs)?;
-    if targets.fixture_ids.is_empty() {
-        return Err(format!("BEAMS resolved to no {generator} fixture targets"));
-    }
-
-    let mut approximations = Vec::new();
-    approximations.push(if generator_id == 223 {
-        "Daslight Line evaluator 0x14034A460 is not frame-equivalent to Syndocal's open-Line/Bounce compatibility route; serialized BEAM selections are flattened to fixture targets because this request carries no beam_targets"
-            .to_string()
-    } else {
-        "Daslight Polygon evaluator 0x14034A8F0 is not frame-equivalent to Syndocal's closed-Line/Forward compatibility route; serialized BEAM selections are flattened to fixture targets because this request carries no beam_targets"
-            .to_string()
-    });
-    if targets.has_multi_beam_selection {
-        approximations.push("segment selection approximated to fixture".to_string());
-    }
-    let (period_ms, free_run_note) =
-        dvc_move_period(effect, scene, generator, &mut approximations)?;
-    let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
-    if let Some(clock_warning) = clock_warning {
-        approximations.push(clock_warning);
-    }
-
-    let (closed, direction) = if generator_id == 223 {
-        (false, MoveDirection::Bounce)
-    } else {
-        (true, MoveDirection::Forward)
-    };
-    let point_count = points.len();
-    let request = MoveEffectRequest {
-        label: format!("{scene_name} ({generator})"),
-        fixture_ids: targets.fixture_ids,
-        target_group_ids: Vec::new(),
-        beam_targets: Vec::new(),
-        points,
-        closed,
-        interpolation: MoveInterpolation::Line,
-        coordinate_mode: MoveCoordinateMode::Absolute,
-        center_x: 0.5,
-        center_y: 0.5,
-        size_x: 1.0,
-        size_y: 1.0,
-        rotation_degrees: 0.0,
-        period_ms,
-        clock_sync,
-        direction,
-        phase: 0.0,
-        fixture_spread: phasing,
-        symmetry,
-        blend_mode: EffectBlendMode::Override,
-    };
-    engine::validate_move_effect_request(&request).map_err(|error| {
-        format!("confirmed {generator} parameters are not representable: {error}")
-    })?;
-
-    let direction_note = if generator_id == 223 {
-        "direction=Bounce; closed=false"
-    } else {
-        "direction=Forward; closed=true"
-    };
-    let note = format!(
-        "points={point_count} normalized Pan/Tilt vertices (DMX16=round(point*65535)); interpolation=Line; {direction_note}; fixture_spread=id2=Phasing/100={phasing}; symmetry={}; {free_run_note}; {clock_note}",
-        u8::from(symmetry)
-    );
-    Ok(ConvertedDvcEffect {
-        target: Some(CueEffectTarget {
-            effect_id,
-            enabled: true,
-            params: Some(EffectParamsSnapshot::Move(request)),
-            transition_ms: None,
-        }),
-        generator,
-        note,
-        approximations,
-        warnings: Vec::new(),
-    })
-}
-
 fn convert_dvc_inverse_ramp_effect(
     scene: Node<'_, '_>,
     scene_name: &str,
@@ -4273,16 +4168,20 @@ fn dvc_move_effect_params(
 ) -> Result<(Vec<MovePathPoint>, f32, bool), String> {
     let params_node = direct_child(effect, "PARAMS")
         .ok_or_else(|| format!("{generator} generator is missing PARAMS"))?;
-    let param_nodes = element_children(params_node)
-        .filter(|node| node.has_tag_name("PARAM"))
-        .collect::<Vec<_>>();
-    let declared = params_node
-        .attribute("NB")
-        .and_then(|value| value.parse::<usize>().ok());
-    if declared.is_some_and(|count| count != param_nodes.len()) {
+    let param_nodes = element_children(params_node).collect::<Vec<_>>();
+    if let Some(unexpected) = param_nodes.iter().find(|node| !node.has_tag_name("PARAM")) {
+        return Err(format!(
+            "{generator} PARAMS contains unexpected <{}> element",
+            unexpected.tag_name().name()
+        ));
+    }
+    let declared = required_attribute(params_node, "NB", "PARAMS")?
+        .parse::<usize>()
+        .map_err(|error| format!("PARAMS NB is invalid: {error}"))?;
+    if declared != param_nodes.len() {
         return Err(format!(
             "PARAMS declares {} entries but contains {}",
-            declared.unwrap_or_default(),
+            declared,
             param_nodes.len()
         ));
     }
@@ -4310,9 +4209,15 @@ fn dvc_move_effect_params(
                 }
                 let points_node = direct_child(param, "POINTS")
                     .ok_or_else(|| format!("{generator} Path PARAM 1 is missing POINTS"))?;
-                let point_nodes = element_children(points_node)
-                    .filter(|node| node.has_tag_name("POINT"))
-                    .collect::<Vec<_>>();
+                let point_nodes = element_children(points_node).collect::<Vec<_>>();
+                if let Some(unexpected) =
+                    point_nodes.iter().find(|node| !node.has_tag_name("POINT"))
+                {
+                    return Err(format!(
+                        "{generator} POINTS contains unexpected <{}> element",
+                        unexpected.tag_name().name()
+                    ));
+                }
                 let declared_points = required_attribute(points_node, "NB", "POINTS")?
                     .parse::<usize>()
                     .map_err(|error| format!("POINTS NB is invalid: {error}"))?;
@@ -4738,7 +4643,6 @@ fn dvc_rack_targets(
     let mut ordered_steps = Vec::<Vec<u64>>::new();
     let mut fixture_ids = Vec::new();
     let mut seen_fixture_ids = HashSet::new();
-    let mut has_multi_beam_selection = false;
     let mut beam_targets = Vec::with_capacity(beam_nodes.len());
     for (beam_index, beam) in beam_nodes.into_iter().enumerate() {
         let fixture_uid = required_attribute(beam, "FIXTURE", "BEAM")?;
@@ -4748,7 +4652,6 @@ fn dvc_rack_targets(
         let beam_id = required_attribute(beam, "BEAMID", "BEAM")?
             .parse::<u16>()
             .map_err(|error| format!("BEAMID is invalid: {error}"))?;
-        has_multi_beam_selection |= beam_id != 0;
         if seen_fixture_ids.insert(fixture_ref.fixture_id) {
             fixture_ids.push(fixture_ref.fixture_id);
         }
@@ -4780,7 +4683,6 @@ fn dvc_rack_targets(
     Ok(DvcRackTargets {
         ordered_steps,
         fixture_ids,
-        has_multi_beam_selection,
         beam_targets,
     })
 }
@@ -6011,9 +5913,13 @@ mod tests {
 
     fn synthetic_dvc3a2() -> String {
         let patch = r#"<PATCH NBFIXTURE="2"><FIXTURES><SSLLIBRARY SSLFIXUID="profile-move" SSLNAME="Test/Move.ssl2"><SSLPROPERTIES SSLBEAMOPENING="20"/><SSLMODES SSLNBMODE="1"><SSLMODE SSLMODEINDEX="0" SSLNBCHANNEL="3"><SSLCHANNEL SSLCHANNELTYPE="1" SSLCHANNELNAME="Pan" SSLCHANNELMSB="0" SSLCHANNELLSB="0"><SSLPRESETS><SSLPRESET SSLPRESETNAME="Pan" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL><SSLCHANNEL SSLCHANNELTYPE="2" SSLCHANNELNAME="Tilt" SSLCHANNELMSB="0" SSLCHANNELLSB="0"><SSLPRESETS><SSLPRESET SSLPRESETNAME="Tilt" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL><SSLCHANNEL SSLCHANNELTYPE="7" SSLCHANNELNAME="Dimmer" SSLCHANNELMSB="0" SSLCHANNELLSB="0"><SSLPRESETS><SSLPRESET SSLPRESETNAME="Dimmer" SSLPRESETDMXSTART="0" SSLPRESETDMXEND="255" SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1"/></SSLPRESETS></SSLCHANNEL></SSLMODE></SSLMODES></SSLLIBRARY><FIXTURE DASUID="fixture-1" NAME="Mover 1" ADDRESS="1" UNIVERS="1" POSX="0" POSY="0" ANGLE="0"/><FIXTURE DASUID="fixture-2" NAME="Mover 2" ADDRESS="4" UNIVERS="1" POSX="1" POSY="0" ANGLE="0"/></FIXTURES></PATCH>"#;
-        format!(
+        let source = format!(
             r##"<DLMFILE TYPE="Daslight" VERSION="5" DASBUILD="test-dvc3a2" VERSIONFILE="2"><PATCHS DATA="{}"/><FIXTUREGROUPS/><SCENES><BANK DASUID="bank-1" NAME="DVC-3a2" COLOR="#ff112233"><SCENE DASUID="scene-ramp" NAME="Inverse Ramp" COLOR="#ff112233" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><FIXTUREDATAS NB="0"/><RACKS><RACK TYPE="8"><EFFECT TYPE="5" ID="3" DURATION="5000"><PARAMS NB="5"><PARAM TYPE="0" ID="1" VAL="2"/><PARAM TYPE="1" ID="2" VAL="1.562"/><PARAM TYPE="1" ID="3" VAL="0.495"/><PARAM TYPE="1" ID="4" VAL="-0.848"/><PARAM TYPE="1" ID="5" VAL="0"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE><SCENE DASUID="scene-polygon" NAME="Move Polygon" COLOR="#ff445566" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="0.5" PLAY_TRIGGER="0" PLAY_DIVISION="1"><FIXTUREDATAS NB="0"/><RACKS><RACK TYPE="4"><EFFECT TYPE="4" ID="224" DURATION="2000"><PARAMS NB="3"><PARAM TYPE="5" ID="1"><POINTS NB="4"><POINT X="0.25" Y="0.5"/><POINT X="0.5" Y="0.75"/><POINT X="0.75" Y="0.5"/><POINT X="0.5" Y="0.25"/></POINTS></PARAM><PARAM TYPE="1" ID="2" VAL="0.02"/><PARAM TYPE="2" ID="3" VAL="1"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE></BANK></SCENES><SHORTCUTS/><TOUCH/><DEVICES/></DLMFILE>"##,
             qcompress(patch.as_bytes())
+        );
+        source.replace(
+            r##"<SCENE DASUID="scene-polygon" NAME="Move Polygon" COLOR="#ff445566" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="0.5" PLAY_TRIGGER="0" PLAY_DIVISION="1">"##,
+            r##"<SCENE DASUID="scene-polygon" NAME="Move Polygon" COLOR="#ff445566" FADE_IN="0" FADE_OUT="0" LOOP="0" SPEED="0.5" PLAY_TRIGGER="0" PLAY_DIVISION="1" ATTRIBUTEVALUE_MODE="0">"##,
         )
     }
 
@@ -6868,7 +6774,7 @@ mod tests {
             ]
         );
         assert!(polygon.closed);
-        assert_eq!(polygon.interpolation, MoveInterpolation::Line);
+        assert_eq!(polygon.interpolation, MoveInterpolation::DaslightPolygon);
         assert_eq!(polygon.direction, MoveDirection::Forward);
         assert_eq!(polygon.coordinate_mode, MoveCoordinateMode::Absolute);
         assert_eq!(polygon.period_ms, 2_000);
@@ -7225,6 +7131,56 @@ mod tests {
         )
         .unwrap_err();
         assert!(unexpected_error.contains("unexpected ID 4"));
+    }
+
+    #[test]
+    fn dvc_move_factory_ids_221_through_225_route_to_distinct_exact_evaluators() {
+        let cases = [
+            (221, "Circle", MoveInterpolation::DaslightCircle, true, 4),
+            (222, "Curve", MoveInterpolation::DaslightCurve, false, 4),
+            (223, "Line", MoveInterpolation::DaslightLine, false, 2),
+            (224, "Polygon", MoveInterpolation::DaslightPolygon, true, 4),
+            (225, "Points", MoveInterpolation::DaslightPoints, false, 4),
+        ];
+        for (generator_id, generator, expected, closed, point_count) in cases {
+            let all_points = [
+                r#"<POINT X="0.25" Y="0.5"/>"#,
+                r#"<POINT X="0.5" Y="0.75"/>"#,
+                r#"<POINT X="0.75" Y="0.5"/>"#,
+                r#"<POINT X="0.5" Y="0.25"/>"#,
+            ];
+            let points = all_points[..point_count].join("");
+            let source = format!(
+                r#"<SCENE ATTRIBUTEVALUE_MODE="0" SPEED="0.5" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="4"><EFFECT TYPE="4" ID="{generator_id}" DURATION="1025"><PARAMS NB="3"><PARAM TYPE="5" ID="1"><POINTS NB="{point_count}">{points}</POINTS></PARAM><PARAM TYPE="1" ID="2" VAL="0.375"/><PARAM TYPE="2" ID="3" VAL="1"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#
+            );
+            let document = Document::parse(&source).unwrap();
+            let scene = document.root_element();
+            let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+            let effect = direct_child(rack, "EFFECT").unwrap();
+            let converted = convert_dvc_effect(
+                scene,
+                "Factory Move",
+                rack,
+                effect,
+                4,
+                4,
+                generator_id,
+                1,
+                &effect_test_profiles(),
+                &effect_test_fixture_refs(),
+            )
+            .unwrap();
+            let Some(EffectParamsSnapshot::Move(request)) = converted.target.unwrap().params else {
+                panic!("MOVE {generator_id} must produce Move params");
+            };
+            assert_eq!(request.interpolation, expected, "{generator}");
+            assert_eq!(request.closed, closed, "{generator}");
+            assert_eq!(request.period_ms, 1_000, "{generator}");
+            assert_eq!(request.fixture_spread, 0.375, "{generator}");
+            assert!(request.symmetry, "{generator}");
+            assert_eq!(request.beam_targets.len(), 2, "{generator}");
+            assert!(converted.approximations.is_empty(), "{generator}");
+        }
     }
 
     #[test]
@@ -9919,8 +9875,8 @@ mod tests {
             .expect("full Shinkan golden must contain Left2Right");
         assert_eq!(left_to_right.points.len(), 2);
         assert!(!left_to_right.closed);
-        assert_eq!(left_to_right.interpolation, MoveInterpolation::Line);
-        assert_eq!(left_to_right.direction, MoveDirection::Bounce);
+        assert_eq!(left_to_right.interpolation, MoveInterpolation::DaslightLine);
+        assert_eq!(left_to_right.direction, MoveDirection::Forward);
         assert!((left_to_right.fixture_spread - 0.01).abs() < f32::EPSILON);
 
         let polygon = moves
@@ -9936,7 +9892,7 @@ mod tests {
             ]
         );
         assert!(polygon.closed);
-        assert_eq!(polygon.interpolation, MoveInterpolation::Line);
+        assert_eq!(polygon.interpolation, MoveInterpolation::DaslightPolygon);
         assert_eq!(polygon.direction, MoveDirection::Forward);
         assert!((polygon.fixture_spread - 0.02).abs() < f32::EPSILON);
 
@@ -9945,7 +9901,8 @@ mod tests {
             .expect("full Shinkan golden must contain M-CenterDivLoop");
         assert_eq!(center_div.points.len(), 2);
         assert!(!center_div.closed);
-        assert_eq!(center_div.direction, MoveDirection::Bounce);
+        assert_eq!(center_div.interpolation, MoveInterpolation::DaslightLine);
+        assert_eq!(center_div.direction, MoveDirection::Forward);
         assert!((center_div.fixture_spread - 0.176).abs() < f32::EPSILON);
     }
 
@@ -10556,7 +10513,10 @@ mod tests {
         )]);
         let targets = dvc_rack_targets(move_rack, &fixture_refs).unwrap();
         assert_eq!(targets.fixture_ids, vec![42]);
-        assert!(targets.has_multi_beam_selection);
+        assert!(targets
+            .beam_targets
+            .iter()
+            .any(|target| target.beam_index != 0));
         assert_eq!(targets.ordered_steps, vec![vec![42]; 6]);
         assert_eq!(
             targets
@@ -10728,7 +10688,7 @@ mod tests {
             .flat_map(|cue| &cue.effect_targets)
             .filter_map(|target| match target.params.as_ref() {
                 Some(EffectParamsSnapshot::Move(request))
-                    if request.interpolation == MoveInterpolation::Circle =>
+                    if request.interpolation == MoveInterpolation::DaslightCircle =>
                 {
                     Some(request)
                 }
@@ -10755,7 +10715,7 @@ mod tests {
             "imported Circle path must equal the four raw XML POINTS in source order"
         );
         assert!(circle.closed);
-        assert_eq!(circle.interpolation, MoveInterpolation::Circle);
+        assert_eq!(circle.interpolation, MoveInterpolation::DaslightCircle);
         assert_eq!(circle.coordinate_mode, MoveCoordinateMode::Absolute);
         assert_eq!(circle.center_x, 0.5);
         assert_eq!(circle.center_y, 0.5);
@@ -10798,12 +10758,10 @@ mod tests {
                 .iter()
                 .filter(|detail| {
                     detail.item == "Effect: New Scene (Circle)"
-                        && detail
-                            .message
-                            .contains("interpolation=Circle analytical circumcircle arcs")
+                        && detail.message.contains("Daslight evaluator=ID 221 Circle")
                         && detail.message.contains("beam_targets=6; selections=6")
                         && detail.message.contains("coordinate_mode=Absolute")
-                        && detail.message.contains("fixture_spread=id2=Phasing=0")
+                        && detail.message.contains("raw_phasing=0")
                         && detail.message.contains("symmetry=0")
                 })
                 .count(),
@@ -10833,15 +10791,15 @@ mod tests {
         let source = fs::read_to_string(path).unwrap();
         let unknown_source = source.replacen(
             r#"<EFFECT TYPE="4" ID="221" DURATION="5000">"#,
-            r#"<EFFECT TYPE="4" ID="222" DURATION="5000">"#,
+            r#"<EFFECT TYPE="4" ID="226" DURATION="5000">"#,
             1,
         );
         assert_ne!(unknown_source, source);
 
-        let outcome = import_bytes(unknown_source.as_bytes(), "unknown-move-222.dvc").unwrap();
+        let outcome = import_bytes(unknown_source.as_bytes(), "unknown-move-226.dvc").unwrap();
         crate::validate_project_file(&outcome.project).unwrap();
         assert!(outcome.report.skipped.details.iter().any(|detail| {
-            detail.message == "RACK TYPE=4 EFFECT TYPE=4 ID=222 is not confirmed for DVC-3b"
+            detail.message == "RACK TYPE=4 EFFECT TYPE=4 ID=226 is not confirmed for DVC-3b"
         }));
         assert!(!outcome
             .project
@@ -10857,7 +10815,7 @@ mod tests {
     }
 
     #[test]
-    fn dvc_move_circle_nonzero_raw_phasing_stays_fail_closed() {
+    fn dvc_move_circle_nonzero_raw_phasing_imports_exactly() {
         let path = Path::new(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../qa/specimens/ValueCatalog-Sweep-Plasma.dvc"
@@ -10880,21 +10838,28 @@ mod tests {
         let outcome =
             import_bytes(nonzero_source.as_bytes(), "circle-nonzero-phasing.dvc").unwrap();
         crate::validate_project_file(&outcome.project).unwrap();
-        assert!(outcome.report.skipped.details.iter().any(|detail| {
-            detail.item == "Effect: New Scene (Circle)"
-                && detail.message == "RACK TYPE=4 EFFECT TYPE=4 ID=221: Move Circle ID=221 Phasing PARAM 2=0.5 remains fail-closed because its raw-to-runtime fan-out scalar composition is not recovered"
-        }));
         assert!(!outcome
+            .report
+            .skipped
+            .details
+            .iter()
+            .any(|detail| { detail.item == "Effect: New Scene (Circle)" }));
+        let circle = outcome
             .project
             .snapshot
             .cues
             .iter()
             .flat_map(|cue| &cue.effect_targets)
-            .any(|target| matches!(
-                target.params.as_ref(),
+            .find_map(|target| match target.params.as_ref() {
                 Some(EffectParamsSnapshot::Move(request))
-                    if request.interpolation == MoveInterpolation::Circle
-            )));
+                    if request.interpolation == MoveInterpolation::DaslightCircle =>
+                {
+                    Some(request)
+                }
+                _ => None,
+            })
+            .expect("nonzero-phasing Circle must import through the exact evaluator");
+        assert_eq!(circle.fixture_spread, 0.5);
     }
 
     #[test]

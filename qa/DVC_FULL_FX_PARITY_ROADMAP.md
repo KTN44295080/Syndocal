@@ -9,6 +9,10 @@
 - 実装規律（不変）: 静的証明（factory/property/evaluator）に基づく厳密実装のみ。
   推測実装・近似実装はしない。`.sdc` v1互換はserde default追加のみ。44Hz hot pathへ
   未計測コストを持ち込まない。protocol/engine追加は本指示を包括承認として扱う。
+- 互換と改善の境界（2026-08-10追補）: `.dvc` importは元showの再現を優先し、40 ms量子化を
+  含むDaslight固有契約を専用modeで保持する。Syndocalの新規authoring既定は連続・高分解能の
+  Enhanced evaluatorとし、Daslightの欠陥やquirkを全体既定へ昇格しない。import後は明示的に
+  Enhanced modeへ切替可能にする。
 
 ## カタログ確定と現行importer coverage（DVC-ENUM完了、2026-08-10）
 
@@ -18,21 +22,23 @@ Daslight 5.0.6.2 / FileVersion `25.0905.165.111`の実機dropdown全項目とfac
 
 | ファミリー | 完全factory集合 | 現行converter route | precise fail-closed / 未route |
 |---|---|---|---|
-| VALUE 7/7 | 621–628（8種） | 621 Rainbow, 623 Plasma, 624 Knight Rider, 625 Sweep | 622/628: non-serialized palette-wrap state、626/627: non-serialized per-thread RNG state/history |
-| COLOR FX 2/2 | 121,127,128,129,130,131,133,**134** | 127,129,130 | 121/131/133 precise fail-closed。128 Perlin / 134 Sweepは未route。Sweep=132という旧推定は撤回 |
-| MOVE 4/4 | 221 Circle, 222 Curve, 223 Line, 224 Polygon, 225 Points | 221,223,224 | 222,225未route |
-| CHASER 3/6 | 321 #1, 322 #2, 323 #3, 324 #4, 325 random | 321,322,325 | 323,324未route。distinct evaluatorの演出意味が未証明 |
-| CURVE 8/5 | 3–13（11種） | 3 Inverse Ramp, 7 Sinus, 10 Strobe | 4,5,6,8,9,11,12,13未route。Custom 13だけ別schema |
-| MAPPINGS 6/8 | 521–530（10種） | 521 Rainbow | 530 precise fail-closed。522–529未route |
-| COLOR MAPPINGS 5/3 | 21,22,23,29–37,40–42,44,45,47–50（21種） | 36 Rainbow | 残20種未route |
+| VALUE | 621–628（8種） | 621 Rainbow, 623 Plasma, 624 Knight Rider, 625 Sweep | 622/628: non-serialized palette-wrap state、626/627: non-serialized per-thread RNG state/history |
+| COLOR FX | 121,127,128,129,130,131,133,**134** | 127,129,130 | 121/131/133 precise fail-closed。128 Perlin / 134 Sweepは未route。Sweep=132という旧推定は撤回 |
+| MOVE | 221 Circle, 222 Curve, 223 Line, 224 Polygon, 225 Points | **221–225全5種exact** | なし |
+| CHASER | 321 #1, 322 #2, 323 #3, 324 #4, 325 random | 321,322,325 | 323,324未route。distinct evaluatorの演出意味が未証明 |
+| CURVE | 3–13（11種） | 3 Inverse Ramp, 7 Sinus, 10 Strobe | 4,5,6,8,9,11,12,13未route。Custom 13だけ別schema |
+| MAPPINGS | 521–530（10種） | 521 Rainbow | 530 precise fail-closed。522–529未route |
+| COLOR MAPPINGS | 21,22,23,29–37,40–42,44,45,47–50（21種） | 36 Rainbow | 残20種未route |
 
-現行runtime converter routeは18/68 ID、precise fail-closedは8、未routeは42。これはID単位の入口coverageであり、共有raster classの再利用度や
+現行runtime converter routeは20/68 ID、precise fail-closedは8、未routeは40。うち条件付きexact-coreは
+18、明示compatibilityはCHASER 321/325の2 route。これはID単位の入口coverageであり、共有raster classの再利用度や
 STEPS/SUPER SCENEなど非generator構造を含む「製品完成率」ではない。未routeをUI名だけで近似せず、
 各evaluatorの意味論を回収したトランシェだけを増やす。
 
 ### converter routeの厳密性監査
 
-`converter routeあり`と`Daslight exact`は同義ではない。DVC-ENUM直後の逆照合では、strict TYPE/ID検証と
+`converter routeあり`と`Daslight exact`は同義ではない。以下はDVC-ENUM直後のbaseline監査であり、
+strict TYPE/ID検証と
 証明済みevaluator境界が揃うものを、次の条件付き6 routeとして分類した。
 
 - VALUE 621 / 623 / 624、および625の`Transform=0`
@@ -52,7 +58,7 @@ STEPS/SUPER SCENEなど非generator構造を含む「製品完成率」ではな
 - MOVE 223/224は`BEAMID` targetを破棄し、複数beamをApproximateへ落とす。224のpolygon count域も
   factory `2..255`と一致しない。
 
-したがって、未route IDの追加より先に既存22 routeをstrict化し、再現不能な近似は理由付き
+したがってDVC-ENUM時点では、未route IDの追加より先に既存22 routeをstrict化し、再現不能な近似は理由付き
 precise fail-closedへ戻す。22/68は入口coverage、6/68はDVC-ENUM直後の条件付きstrict-core数として
 別々に報告する。なお横断監査で、COLOR系paletteはDaslight factory `1..255`に対し現protocol/engineが
 `2..16`（VALUEは`2..32`）という既存の表現上限も判明した。以後はこのfull-domain境界を解消するまで、
@@ -92,11 +98,14 @@ strict-core数を製品全域のexact完成数とは呼ばない。
    COLOR 127の共有exact Knight evaluatorも0..254 laneを受理する。VALUEの`2..32`は独立factory contractを
    維持する。これで旧`2..16`横断境界は解消したが、残るPARAM/placement/beam/state境界があるためID分類と
    full-domain完成数はまだ増やさない。
-6. **新規IDトランシェ**: correctness着地後、(a)既存Sweep evaluatorを再利用できるCOLOR FX 134
-   → (b)Move残（222 Curve / 225 Points）→ (c)CURVE残 → (d)CHASER 323/324
-   → (e)MAPPINGS/COLOR MAPPINGS 2D群
+6. **DVC-MOVE-EXACT（実装済み、統合ゲート中）**: 221–225の個別evaluator、40 ms frame、
+   raw Phasing、2-wing Symmetry、beam/selection identityを専用modeでexact化した。223/224の
+   Approximateと222/225未route、221 nonzero-Phasing fail-closedを解消。Enhanced authoringは別modeで維持する。
+7. **次の新規IDトランシェ**: (a)既存Sweep evaluatorを再利用できるCOLOR FX 134
+   → (b)COLOR 121/131/133とMAPPINGS 530のstate/evaluator解決 → (c)CURVE残
+   → (d)CHASER 323/324 → (e)MAPPINGS/COLOR MAPPINGS 2D群
    （Media/Text等の埋め込み系はColour Mapping既存基盤を再利用）。
-7. **P-EXP（完了）**: 23 quick looks（VALUE6 / CURVE3 / CHASER3 / COLOR5 /
+8. **P-EXP（完了）**: 23 quick looks（VALUE6 / CURVE3 / CHASER3 / COLOR5 /
    MAPPING3 / MOVE3）を統合済み。ColorMappingは埋め込みmediaのため別設計。
 
 ## 各トランシェの受入（共通）

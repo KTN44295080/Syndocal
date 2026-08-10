@@ -285,7 +285,15 @@ export type EffectBlendMode = "Override" | "Add" | "Multiply";
 export type ColorEffectAlgorithm = "Cycle" | "Bounce" | "Sequence" | "Random";
 export type ColorEffectInterpolation = "Rgb" | "HsvShortest" | "HsvLongest";
 export type ChaserDirection = "Forward" | "Reverse" | "Bounce" | "BuildUpDown" | "Random";
-export type MoveInterpolation = "Line" | "Smooth" | "Circle";
+export type MoveInterpolation =
+  | "Line"
+  | "Smooth"
+  | "Circle"
+  | "DaslightCircle"
+  | "DaslightCurve"
+  | "DaslightLine"
+  | "DaslightPolygon"
+  | "DaslightPoints";
 export type MoveCoordinateMode = "Absolute" | "Relative";
 export type MoveDirection = "Forward" | "Reverse" | "Bounce";
 export type ValueEffectInterpolation = "Step" | "Line" | "Smooth";

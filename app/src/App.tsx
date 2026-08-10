@@ -17214,7 +17214,19 @@ export default function App() {
       },
       onInterpolation: (interpolation) => {
         setMoveInterpolation(interpolation);
-        if (interpolation === "Circle") setMovePathClosed(true);
+        if (interpolation === "Circle" || interpolation === "DaslightCircle" || interpolation === "DaslightPolygon") {
+          setMovePathClosed(true);
+        } else if (interpolation.startsWith("Daslight")) {
+          setMovePathClosed(false);
+        }
+        if (interpolation.startsWith("Daslight")) {
+          setEffectPeriod(Math.max(40, Math.floor(effectPeriod() / 40) * 40));
+        }
+        if (interpolation === "DaslightLine" && movePathPoints().length !== 2) {
+          setMovePathRecipe("Custom");
+          const points = movePathPoints();
+          setMovePathPoints(points.length >= 2 ? points.slice(0, 2) : movePathRecipePoints("Line"));
+        }
       },
       onCoordinateMode: setMoveCoordinateMode,
       onCenter: (center) => {

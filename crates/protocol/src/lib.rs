@@ -2593,10 +2593,23 @@ pub struct MovePathPoint {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MoveInterpolation {
+    /// Syndocal's arc-length linear path evaluator.
     Line,
+    /// Syndocal's enhanced centripetal Catmull-Rom evaluator.
     Smooth,
     /// Equal-time analytical circular arcs through adjacent path points.
     Circle,
+    /// Daslight 5 Circle (ID 221), including its 40 ms frame evaluator.
+    DaslightCircle,
+    /// Daslight 5 Curve (ID 222): uniform Catmull-Rom sampled at 16 slices
+    /// per segment, then traversed by polyline arc length.
+    DaslightCurve,
+    /// Daslight 5 Line (ID 223), including its cycle-minus-one endpoint rule.
+    DaslightLine,
+    /// Daslight 5 Polygon (ID 224), with equal time per authored edge.
+    DaslightPolygon,
+    /// Daslight 5 Points (ID 225), with frame-held authored vertices.
+    DaslightPoints,
 }
 
 /// An explicitly authored fixture beam/segment target for Move effects.
@@ -5442,6 +5455,26 @@ mod tests {
             ]),
             "Move beam targets must retain authored Vec order"
         );
+    }
+
+    #[test]
+    fn daslight_move_interpolation_variants_have_distinct_persistent_names() {
+        let variants = [
+            (super::MoveInterpolation::DaslightCircle, "DaslightCircle"),
+            (super::MoveInterpolation::DaslightCurve, "DaslightCurve"),
+            (super::MoveInterpolation::DaslightLine, "DaslightLine"),
+            (super::MoveInterpolation::DaslightPolygon, "DaslightPolygon"),
+            (super::MoveInterpolation::DaslightPoints, "DaslightPoints"),
+        ];
+
+        for (variant, name) in variants {
+            let json = serde_json::to_string(&variant).unwrap();
+            assert_eq!(json, format!("\"{name}\""));
+            assert_eq!(
+                serde_json::from_str::<super::MoveInterpolation>(&json).unwrap(),
+                variant
+            );
+        }
     }
 
     #[test]

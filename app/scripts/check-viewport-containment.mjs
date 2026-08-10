@@ -9781,9 +9781,11 @@ function hasExpectedControlModeSurface(result) {
         result.visibleMoveEffectDirectionButtonCount === 3 &&
         result.visibleMoveEffectTransformInputCount === 5 &&
         result.visibleMoveEffectCoordinateButtonCount === 2 &&
-        // DVC-V5b: interpolation grew Line/Smooth -> Line/Smooth/Circle
-        // (approved Move Circle exposure), so the segmented control is 3.
-        result.visibleMoveEffectInterpolationButtonCount === 3 &&
+        // DVC-MOVE-EXACT: keep Syndocal's three Enhanced evaluators and expose
+        // the five isolated Daslight compatibility evaluators, so the control
+        // has 3 + 5 modes. Containment/reachability assertions below remain
+        // unchanged and prevent the larger exact mode set from escaping its pane.
+        result.visibleMoveEffectInterpolationButtonCount === 8 &&
         result.visibleMoveEffectClosedToggleCount === 1 &&
         result.visibleMoveEffectSymmetryToggleCount === 1 &&
         result.visibleMoveEffectPointRowCount >= 2 &&

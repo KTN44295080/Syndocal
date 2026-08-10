@@ -113,8 +113,9 @@ GUI順は Circle / Curve / Polygon / Line / Points。factory集合は221–225�
 | 224 Polygon | `0x14036D350 -> 0x140347D60` | `CPolygonPosEffect / 0x140695670` | `0x14034A8F0` | diamond 4点 |
 | 225 Points | `0x14036D2E0 -> 0x140347C20` | `CPointsPosEffect / 0x140695820` | `0x14034A790` | `(.5,.25),(.5,.75)` |
 
-Circleの解析的circumcircle semanticsは`Phasing=0`境界でstrict実装済み。他4種もdistinct evaluator入口まで
-確定したが、UI名だけから式を類推しない。現行223/224 routeのbeam-target近似は実装完了に数えない。
+DVC-MOVE-EXACTで5 evaluatorの式、40 ms整数frame、外側補間、raw Phasing、2-wing Symmetryを
+静的回収し、ordered beam/selection identityとともに専用runtime modeへ実装した。詳細とassertion deltaは
+`qa/DVC_MOVE_EXACT_PARITY.md`を正本とする。
 
 ## CHASER FX — family/type 6
 
@@ -276,22 +277,21 @@ Explosion / Starfield / Graph / Lines / Grid。21項目を最下端Gridまで観
 
 ## 現行Syndocal importerとの逆照合
 
-68 IDのうちC0b後は18 IDがruntime targetを作れるconverter route、VALUE
+68 IDのうちDVC-MOVE-EXACT後は20 IDがruntime targetを作れるconverter route、VALUE
 622/626/627/628とCOLOR 121/131/133、MAPPINGS 530の8 IDがclass固有理由でprecise
-fail-closed、残る42 IDは未routeでgeneric `Skipped`になる。18 routeはfull-domain完成数ではなく、
+fail-closed、残る40 IDは未routeでgeneric `Skipped`になる。20 routeはfull-domain完成数ではなく、
 strict/exactを別に監査した。
 
 | route群 | 現在の境界 |
 |---|---|
 | VALUE 621/623/624/625 | strict。625は`Transform=0`のみ。対象ゼロのno-opもschema検証後に成立 |
 | COLOR MAPPINGS 36 | strict。外部`SELECTIONS`参照はprecise fail-closed |
-| MOVE 221 | strict。`Phasing=0`のみ |
-| COLOR 129/130 | evaluator式は証明済みだが、palette以外のPARAM TYPE検証が不足 |
+| MOVE 221–225 | strict。5 distinct evaluator、40 ms frame、全Phasing/Symmetry domain、ordered beam targetを保持 |
+| COLOR 129/130 | strict schemaと証明済みevaluator式を実装 |
 | COLOR 127 | strict schema、40ms量子化、合成後qGray、Transform foldを共有exact evaluatorで実装 |
 | COLOR 121/131/133 | strict schema後、generic evaluator非等価または非serialize qrand state/historyでprecise fail-closed |
-| MOVE 223/224 | `BEAMID` targetを保持しない互換route。distinct evaluator差を常時Approximate |
 | CHASER 321/322/325 | 322はstrict。321/325はdistinct evaluator/random順差を常時Approximate |
-| CURVE 3/7/10 | 40ms式は証明済みだが、PARAM TYPE/range検証がfactory contractと不一致 |
+| CURVE 3/7/10 | strict factory schemaと証明済み40 ms式を実装 |
 | MAPPINGS 521 | strict schema、unit→percent、Rectangle placementを実装 |
 | MAPPINGS 530 | strict schemaとRectangle検証後、generic noise/placement/palette-wrap非等価でprecise fail-closed |
 
@@ -345,6 +345,20 @@ strict/exactを別に監査した。
 - これでC0a/C0b時点の「COLOR palette 1..255対2..16」という横断境界は解消した。runtime-convert 18、
   precise fail-closed 8、未route 42、条件付きexact-core 14、compatibility 4というID分類自体は変わらない。
   他のPARAM、placement、beam identity、stateful RNG境界が残るため、なお14/68をfull-domain完成率とは呼ばない。
+
+### DVC-MOVE-EXACT（2026-08-10）
+
+- MOVE 221–225をそれぞれ`DaslightCircle / Curve / Line / Polygon / Points`へrouteする。
+- binary global `0x1408DAC38=40 ms`、durationのfloor/min-1 frame、4 evaluatorの外側frame補間と
+  Pointsのheld outputを保持する。
+- Circleの解析arc、Curveのuniform Catmull-Rom 16-slice + arc length triangle traversal、
+  Lineのcycle-minus-one quirk、Polygonのequal-edge time、Pointsのheld-index式を個別に実装する。
+- raw Phasingは`cycle * ID2`をselection rankごとにhalf-up整数frameへ落とし、Symmetryは
+  reverse orderの2-wing evaluatorとして保持する。BEAMID/selection identityはXML順を失わない。
+- runtime-convertは18→20、未routeは42→40、条件付きexact-coreは14→18、明示compatibilityは
+  4→2となる。残るcompatibilityはCHASER 321/325だけである。
+- `.dvc`互換の40 ms/quirkは専用modeに隔離する。新規authoringのSyndocal Enhanced
+  `Line / Smooth / Circle`は連続時間のまま維持し、import後にユーザーが明示切替できる。
 
 ## 未実装・未証明境界
 

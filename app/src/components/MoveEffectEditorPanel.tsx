@@ -13,7 +13,15 @@ import {
   type MoveEffectPointDragState,
 } from "../moveEffectDrag";
 
-export type MoveEffectInterpolation = "Line" | "Smooth" | "Circle";
+export type MoveEffectInterpolation =
+  | "Line"
+  | "Smooth"
+  | "Circle"
+  | "DaslightCircle"
+  | "DaslightCurve"
+  | "DaslightLine"
+  | "DaslightPolygon"
+  | "DaslightPoints";
 export type MoveEffectCoordinateMode = "Absolute" | "Relative";
 export type MoveEffectDirection = "Forward" | "Reverse" | "Bounce";
 
@@ -66,7 +74,16 @@ interface CanvasPoint {
 export { moveEffectMaximumPoints };
 
 const coordinateModes: MoveEffectCoordinateMode[] = ["Absolute", "Relative"];
-const interpolationModes: MoveEffectInterpolation[] = ["Line", "Smooth", "Circle"];
+const interpolationModes: { value: MoveEffectInterpolation; label: string }[] = [
+  { value: "Line", label: "Enhanced Line" },
+  { value: "Smooth", label: "Enhanced Smooth" },
+  { value: "Circle", label: "Enhanced Circle" },
+  { value: "DaslightCircle", label: "Daslight Circle" },
+  { value: "DaslightCurve", label: "Daslight Curve" },
+  { value: "DaslightLine", label: "Daslight Line" },
+  { value: "DaslightPolygon", label: "Daslight Polygon" },
+  { value: "DaslightPoints", label: "Daslight Points" },
+];
 const directionModes: MoveEffectDirection[] = ["Forward", "Reverse", "Bounce"];
 // P-EXP quick looks: named one-click path bundles reusing the existing
 // movePathRecipes catalog + interpolation + direction + clock
@@ -152,8 +169,16 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
   });
   const phasePercent = createMemo(() => Math.round(clampUnit(props.phase) * 100));
   const spreadPercent = createMemo(() => Math.round(clampUnit(props.spread) * 100));
-  const normalizedPeriodMs = createMemo(() => Math.max(10, Math.round(Number.isFinite(props.periodMs) ? props.periodMs : 10)));
-  const maximumPoints = createMemo(() => props.interpolation === "Circle" ? 255 : moveEffectMaximumPoints);
+  const daslightCompatibility = createMemo(() => props.interpolation.startsWith("Daslight"));
+  const normalizedPeriodMs = createMemo(() => {
+    const value = Math.round(Number.isFinite(props.periodMs) ? props.periodMs : 10);
+    return daslightCompatibility() ? Math.max(40, Math.floor(value / 40) * 40) : Math.max(10, value);
+  });
+  const maximumPoints = createMemo(() => {
+    if (props.interpolation === "DaslightLine") return 2;
+    if (props.interpolation.startsWith("Daslight") || props.interpolation === "Circle") return 255;
+    return moveEffectMaximumPoints;
+  });
   const effectiveBpm = createMemo(() => Number.isFinite(props.bpm) && props.bpm > 0 ? props.bpm : 120);
   const beatPeriodMs = (beats: number) => Math.max(10, Math.round((60_000 / effectiveBpm()) * beats));
   const clockSummary = createMemo(() =>
@@ -396,7 +421,7 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
               <input
                 type="checkbox"
                 checked={props.closed}
-                disabled={props.interpolation === "Circle"}
+                disabled={props.interpolation === "Circle" || props.interpolation === "DaslightCircle"}
                 onChange={(event) => props.onClosed(event.currentTarget.checked)}
               />
               Closed
@@ -530,14 +555,17 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
             </div>
             <div class="moveEffectClockRow">
               <label>
-                Period ms
+                {daslightCompatibility() ? "Period ms · 40 ms compatibility" : "Period ms"}
                 <input
                   class="tabularNums"
                   type="number"
-                  min="10"
-                  step="10"
+                  min={daslightCompatibility() ? "40" : "10"}
+                  step={daslightCompatibility() ? "40" : "10"}
                   value={normalizedPeriodMs()}
-                  onInput={(event) => props.onPeriodMs(Math.max(10, Math.round(Number(event.currentTarget.value) || 10)))}
+                  onInput={(event) => {
+                    const value = Math.round(Number(event.currentTarget.value) || 10);
+                    props.onPeriodMs(daslightCompatibility() ? Math.max(40, Math.floor(value / 40) * 40) : Math.max(10, value));
+                  }}
                 />
               </label>
               <div class="moveEffectClockPresets" aria-label="Move clock sync presets">
@@ -633,7 +661,11 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
               onClick={() => props.onSymmetry(!props.symmetry)}
             >
               <strong>Symmetry</strong>
-              <span>{props.interpolation === "Circle" ? "Reverse second-half traversal" : "Mirror second half Pan"}</span>
+              <span>{props.interpolation.startsWith("Daslight")
+                ? "Daslight two-wing reverse-time fan-out"
+                : props.interpolation === "Circle"
+                  ? "Reverse second-half traversal"
+                  : "Mirror second half Pan"}</span>
             </button>
           </section>
 
@@ -731,11 +763,11 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
                   {(interpolation) => (
                     <button
                       type="button"
-                      class={props.interpolation === interpolation ? "active" : ""}
-                      aria-pressed={props.interpolation === interpolation}
-                      onClick={() => props.onInterpolation(interpolation)}
+                      class={props.interpolation === interpolation.value ? "active" : ""}
+                      aria-pressed={props.interpolation === interpolation.value}
+                      onClick={() => props.onInterpolation(interpolation.value)}
                     >
-                      {interpolation}
+                      {interpolation.label}
                     </button>
                   )}
                 </For>
