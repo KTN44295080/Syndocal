@@ -1,5 +1,6 @@
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { normalizeMovePathPoints, sampleMovePath, transformMovePreview } from "../effectVisualization";
+import { movePathRecipePoints, type MovePathPreset } from "../moveEffect";
 import {
   beginMoveEffectPointDrag,
   commitMoveEffectPointDrag,
@@ -67,6 +68,24 @@ export { moveEffectMaximumPoints };
 const coordinateModes: MoveEffectCoordinateMode[] = ["Absolute", "Relative"];
 const interpolationModes: MoveEffectInterpolation[] = ["Line", "Smooth", "Circle"];
 const directionModes: MoveEffectDirection[] = ["Forward", "Reverse", "Bounce"];
+// P-EXP quick looks: named one-click path bundles reusing the existing
+// movePathRecipes catalog + interpolation + direction + clock
+// (qa/PRESET_EXPANSION_PLAN.md). Circle uses the V5b analytic Circle
+// interpolation; the others use Smooth. Fixture/beam targets stay authored.
+interface MoveQuickLook {
+  label: string;
+  recipe: MovePathPreset;
+  closed: boolean;
+  interpolation: MoveEffectInterpolation;
+  direction: MoveEffectDirection;
+  beats: number | null;
+}
+const moveQuickLooks: MoveQuickLook[] = [
+  { label: "Circle Spin", recipe: "Circle", closed: true, interpolation: "Circle", direction: "Forward", beats: 4 },
+  { label: "Line Sweep", recipe: "Line", closed: false, interpolation: "Smooth", direction: "Bounce", beats: 2 },
+  { label: "Figure Eight", recipe: "Figure Eight", closed: true, interpolation: "Smooth", direction: "Forward", beats: 8 },
+];
+
 const clockPresets = [
   { label: "Free", beats: null },
   { label: "1/4", beats: 0.25 },
@@ -538,6 +557,26 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
                   )}
                 </For>
               </div>
+            </div>
+            <div class="moveEffectClockPresets" aria-label="Move quick looks" data-move-quick-looks>
+              <For each={moveQuickLooks}>
+                {(look) => (
+                  <button
+                    type="button"
+                    data-move-quick-look={look.label}
+                    title={`${look.label}: ${look.recipe} ${look.interpolation} ${look.direction}${look.beats === null ? "" : `, ${look.beats} beat${look.beats === 1 ? "" : "s"}`}`}
+                    onClick={() => {
+                      props.onPoints(movePathRecipePoints(look.recipe).map((point) => ({ ...point })));
+                      props.onClosed(look.closed);
+                      props.onInterpolation(look.interpolation);
+                      props.onDirection(look.direction);
+                      props.onClockSyncBeats(look.beats);
+                    }}
+                  >
+                    {look.label}
+                  </button>
+                )}
+              </For>
             </div>
             <div class="moveEffectPhaseGrid">
               <label>
