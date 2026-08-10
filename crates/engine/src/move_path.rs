@@ -239,16 +239,19 @@ impl CompiledMovePath {
         }
     }
 
-    pub(super) fn sample_daslight_frame(&self, frame: u32, frame_count: u32) -> MovePathPoint {
-        let frame_count = frame_count.max(1);
+    pub(super) fn sample_daslight_phase(&self, phase: f32) -> MovePathPoint {
+        let phase = if phase.is_finite() {
+            phase.rem_euclid(1.0)
+        } else {
+            0.0
+        };
         match &self.kind {
             CompiledMovePathKind::Constant(point) => *point,
             CompiledMovePathKind::ArcLength {
                 samples,
                 total_length,
             } => {
-                let remainder = frame % frame_count;
-                let doubled = 2.0 * f64::from(remainder) / f64::from(frame_count);
+                let doubled = 2.0 * f64::from(phase);
                 let progress = if doubled <= 1.0 {
                     doubled
                 } else {
@@ -256,20 +259,16 @@ impl CompiledMovePath {
                 } as f32;
                 sample_arc_length_path(samples, *total_length, progress)
             }
-            CompiledMovePathKind::DaslightLine { points } => {
-                let divisor = frame_count.saturating_sub(1).max(1);
-                sample_equal_time_edges(points, frame % divisor, frame_count)
-            }
+            CompiledMovePathKind::DaslightLine { points } => sample_equal_time_edges(points, phase),
             CompiledMovePathKind::DaslightPolygon { points } => {
-                sample_equal_time_edges(points, frame % frame_count, frame_count)
+                sample_equal_time_edges(points, phase)
             }
             CompiledMovePathKind::DaslightPoints { points } => {
-                let scaled = points.len() as u64 * u64::from(frame % frame_count);
-                let index = (scaled / u64::from(frame_count)) as usize;
+                let index = (phase * points.len() as f32).floor() as usize;
                 points[index.min(points.len() - 1)]
             }
             CompiledMovePathKind::TwoPointCircle { .. } | CompiledMovePathKind::Circle { .. } => {
-                self.sample((frame % frame_count) as f32 / frame_count as f32)
+                self.sample(phase)
             }
         }
     }
@@ -283,12 +282,8 @@ fn all_points_equal(points: &[MovePathPoint]) -> bool {
     })
 }
 
-fn sample_equal_time_edges(
-    points: &[MovePathPoint],
-    remainder: u32,
-    frame_count: u32,
-) -> MovePathPoint {
-    let scaled = points.len() as f64 * f64::from(remainder) / f64::from(frame_count.max(1));
+fn sample_equal_time_edges(points: &[MovePathPoint], phase: f32) -> MovePathPoint {
+    let scaled = points.len() as f64 * f64::from(phase.rem_euclid(1.0));
     let index = scaled.floor() as usize % points.len();
     let next = (index + 1) % points.len();
     lerp_point(points[index], points[next], (scaled - index as f64) as f32)
@@ -1026,7 +1021,7 @@ mod tests {
     }
 
     #[test]
-    fn daslight_line_preserves_cycle_minus_one_endpoint_rule() {
+    fn corrected_daslight_line_reaches_both_endpoints_continuously() {
         let mut request = request(vec![
             MovePathPoint { x: 0.0, y: 0.25 },
             MovePathPoint { x: 1.0, y: 0.75 },
@@ -1034,10 +1029,10 @@ mod tests {
         request.interpolation = MoveInterpolation::DaslightLine;
         let path = CompiledMovePath::compile(&request).unwrap();
 
-        let expected_x = [0.0, 0.4, 0.8, 0.8, 0.0];
-        for (frame, expected) in expected_x.into_iter().enumerate() {
-            let point = path.sample_daslight_frame(frame as u32, 5);
-            assert!((point.x - expected).abs() < 1.0e-6, "frame {frame}");
+        let expected_x = [0.0, 0.5, 1.0, 0.5];
+        for (phase, expected) in [0.0, 0.25, 0.5, 0.75].into_iter().zip(expected_x) {
+            let point = path.sample_daslight_phase(phase);
+            assert!((point.x - expected).abs() < 1.0e-6, "phase {phase}");
         }
     }
 
@@ -1053,21 +1048,21 @@ mod tests {
         let path = CompiledMovePath::compile(&request).unwrap();
 
         assert_eq!(
-            path.sample_daslight_frame(1, 8),
+            path.sample_daslight_phase(0.125),
             MovePathPoint { x: 0.5, y: 0.0 }
         );
         assert_eq!(
-            path.sample_daslight_frame(2, 8),
+            path.sample_daslight_phase(0.25),
             MovePathPoint { x: 1.0, y: 0.0 }
         );
         assert_eq!(
-            path.sample_daslight_frame(7, 8),
+            path.sample_daslight_phase(0.875),
             MovePathPoint { x: 0.0, y: 0.5 }
         );
     }
 
     #[test]
-    fn daslight_points_holds_each_authored_vertex_for_integer_frames() {
+    fn corrected_daslight_points_holds_each_authored_vertex_for_equal_time() {
         let mut request = request(vec![
             MovePathPoint { x: 0.1, y: 0.2 },
             MovePathPoint { x: 0.5, y: 0.6 },
@@ -1076,10 +1071,11 @@ mod tests {
         request.interpolation = MoveInterpolation::DaslightPoints;
         let path = CompiledMovePath::compile(&request).unwrap();
 
-        assert_eq!(path.sample_daslight_frame(0, 6), request.points[0]);
-        assert_eq!(path.sample_daslight_frame(1, 6), request.points[0]);
-        assert_eq!(path.sample_daslight_frame(2, 6), request.points[1]);
-        assert_eq!(path.sample_daslight_frame(4, 6), request.points[2]);
+        assert_eq!(path.sample_daslight_phase(0.0), request.points[0]);
+        assert_eq!(path.sample_daslight_phase(0.32), request.points[0]);
+        assert_eq!(path.sample_daslight_phase(0.34), request.points[1]);
+        assert_eq!(path.sample_daslight_phase(0.67), request.points[2]);
+        assert_eq!(path.sample_daslight_phase(0.99), request.points[2]);
     }
 
     #[test]
@@ -1105,10 +1101,11 @@ mod tests {
         request.interpolation = MoveInterpolation::DaslightCurve;
         let path = CompiledMovePath::compile(&request).unwrap();
 
-        let halfway = path.sample_daslight_frame(25, 100);
+        let halfway = path.sample_daslight_phase(0.25);
         assert!((halfway.x - 0.5).abs() < 1.0e-5);
         assert!((halfway.y - 0.5).abs() < 1.0e-5);
-        assert_eq!(path.sample_daslight_frame(50, 100), request.points[3]);
-        assert_eq!(path.sample_daslight_frame(0, 100), request.points[0]);
+        assert_eq!(path.sample_daslight_phase(0.5), request.points[3]);
+        assert_eq!(path.sample_daslight_phase(0.0), request.points[0]);
+        assert_eq!(path.sample_daslight_phase(0.75), halfway);
     }
 }

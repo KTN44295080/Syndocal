@@ -1288,6 +1288,10 @@ fn is_zero_u16(value: &u16) -> bool {
     *value == 0
 }
 
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
+}
+
 fn is_zero_f32(value: &f32) -> bool {
     *value == 0.0
 }
@@ -2334,11 +2338,44 @@ pub enum ColorEffectSpatialRecipe {
         gradient: f32,
     },
     RandomFill {
+        /// Use Syndocal's deterministic, continuous-time replacement for the
+        /// non-serialized Qt qrand stream used by Daslight.
+        #[serde(default, skip_serializing_if = "is_false")]
+        syndocal_corrected: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        grayscale: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        vertical_symmetry: bool,
+        /// Stable source-derived seed. Zero is a valid deterministic seed.
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
+        rng_seed: u32,
         point_width: u16,
+        /// VALUE family 7 serializes Point Height even though its one-row
+        /// evaluator does not consume it. COLOR family 2 omits the field.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_point_height: Option<u16>,
     },
     Sparkle {
+        /// Use Syndocal's deterministic, continuous-time replacement for the
+        /// non-serialized Qt qrand placement stream used by Daslight.
+        #[serde(default, skip_serializing_if = "is_false")]
+        syndocal_corrected: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        grayscale: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        vertical_symmetry: bool,
+        /// Stable source-derived seed. Zero is a valid deterministic seed.
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
+        rng_seed: u32,
         number: u16,
+        /// Legacy native recipe percentage. Corrected recipes use
+        /// `lifetime_ms`; this field remains for byte-compatible .sdc loads.
         lifespan: f32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lifetime_ms: Option<u16>,
+        /// Raw Daslight 0..0.9 source value retained for provenance.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_lifespan: Option<f32>,
         width: u16,
     },
     Plasma {
@@ -2377,6 +2414,9 @@ pub enum ColorEffectSpatialRecipe {
         gradient: f32,
     },
     Perlin {
+        /// Select the recovered DVC evaluator family. The serialized field name
+        /// remains for compatibility; `true` now means Syndocal-corrected
+        /// continuous timing, analytic rotation/palette and meaningful Direction.
         #[serde(default, skip_serializing_if = "is_false")]
         daslight_exact: bool,
         #[serde(default, skip_serializing_if = "is_false")]
@@ -2484,7 +2524,8 @@ pub struct DaslightCurveSource {
     pub size: f32,
     /// The generator Offset value, before Daslight applies its native 0..1 clamp.
     pub offset: f32,
-    /// Daslight 5.0.6.2 precomputes Curve FX on a 40 ms sample grid.
+    /// Daslight 5.0.6.2 precomputes Curve FX on a 40 ms sample grid. This is
+    /// retained as source provenance; corrected runtime timing is continuous.
     #[serde(default = "default_daslight_curve_sample_ms")]
     pub sample_ms: u16,
 }
@@ -2631,16 +2672,16 @@ pub enum MoveInterpolation {
     Smooth,
     /// Equal-time analytical circular arcs through adjacent path points.
     Circle,
-    /// Daslight 5 Circle (ID 221), including its 40 ms frame evaluator.
+    /// Daslight 5 Circle (ID 221) geometry with corrected continuous timing.
     DaslightCircle,
     /// Daslight 5 Curve (ID 222): uniform Catmull-Rom sampled at 16 slices
     /// per segment, then traversed by polyline arc length.
     DaslightCurve,
-    /// Daslight 5 Line (ID 223), including its cycle-minus-one endpoint rule.
+    /// Daslight 5 Line (ID 223) geometry with continuous equal-time edges.
     DaslightLine,
     /// Daslight 5 Polygon (ID 224), with equal time per authored edge.
     DaslightPolygon,
-    /// Daslight 5 Points (ID 225), with frame-held authored vertices.
+    /// Daslight 5 Points (ID 225), intentionally holding equal-time authored vertices.
     DaslightPoints,
 }
 
@@ -5242,6 +5283,60 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<super::ColorEffectSpatialRecipe>(&json).unwrap(),
             exact
+        );
+    }
+
+    #[test]
+    fn corrected_random_recipes_roundtrip_without_changing_legacy_byte_shape() {
+        let legacy_fill_json = r#"{"RandomFill":{"point_width":2}}"#;
+        let legacy_fill: super::ColorEffectSpatialRecipe =
+            serde_json::from_str(legacy_fill_json).unwrap();
+        assert_eq!(
+            serde_json::to_string(&legacy_fill).unwrap(),
+            legacy_fill_json
+        );
+
+        let corrected_fill = super::ColorEffectSpatialRecipe::RandomFill {
+            syndocal_corrected: true,
+            grayscale: true,
+            vertical_symmetry: true,
+            rng_seed: 0x1234_5678,
+            point_width: 2,
+            source_point_height: Some(7),
+        };
+        let fill_json = serde_json::to_string(&corrected_fill).unwrap();
+        assert!(fill_json.contains(r#""syndocal_corrected":true"#));
+        assert!(fill_json.contains(r#""rng_seed":305419896"#));
+        assert_eq!(
+            serde_json::from_str::<super::ColorEffectSpatialRecipe>(&fill_json).unwrap(),
+            corrected_fill
+        );
+
+        let legacy_sparkle_json = r#"{"Sparkle":{"number":5,"lifespan":25.0,"width":1}}"#;
+        let legacy_sparkle: super::ColorEffectSpatialRecipe =
+            serde_json::from_str(legacy_sparkle_json).unwrap();
+        assert_eq!(
+            serde_json::to_string(&legacy_sparkle).unwrap(),
+            legacy_sparkle_json
+        );
+
+        let corrected_sparkle = super::ColorEffectSpatialRecipe::Sparkle {
+            syndocal_corrected: true,
+            grayscale: true,
+            vertical_symmetry: true,
+            rng_seed: 7,
+            number: 5,
+            lifespan: 0.0,
+            lifetime_ms: Some(250),
+            source_lifespan: Some(0.6),
+            width: 3,
+        };
+        let sparkle_json = serde_json::to_string(&corrected_sparkle).unwrap();
+        assert!(sparkle_json.contains(r#""lifetime_ms":250"#));
+        assert!(sparkle_json.contains(r#""source_lifespan":0.6"#));
+        assert_eq!(
+            serde_json::from_str::<super::ColorEffectSpatialRecipe>(&sparkle_json).unwrap(),
+            corrected_sparkle
         );
     }
 

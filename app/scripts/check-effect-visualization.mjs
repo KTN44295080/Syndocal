@@ -308,6 +308,7 @@ const circleFanoutRequest = {
   fixture_spread: 1,
   symmetry: false,
   interpolation: "Circle",
+  points: [{ x: 0, y: 0 }, { x: 1, y: 1 }],
 };
 assert.deepEqual(
   visualization.moveFanoutPreviewState(circleFanoutRequest, 250, 1, 4),
@@ -327,6 +328,49 @@ assert.deepEqual(
   }, 250, 3, 4),
   { progress: 0, mirrorPan: true },
   "legacy Smooth fan-out must retain positive spread and second-wing Pan mirroring",
+);
+const correctedDaslightLine = {
+  ...circleFanoutRequest,
+  period_ms: 1_025,
+  fixture_spread: 0.25,
+  interpolation: "DaslightLine",
+};
+closeTo(
+  visualization.moveFanoutPreviewState(correctedDaslightLine, 1_000, 0, 1).progress,
+  1_000 / 1_025,
+  "corrected Daslight MOVE preview must preserve authored duration",
+);
+assert.deepEqual(
+  visualization.moveFanoutPreviewState(correctedDaslightLine, 1_025, 0, 1),
+  { progress: 0, mirrorPan: false },
+  "corrected Daslight MOVE preview must close at the authored period",
+);
+const correctedDaslightPoints = {
+  ...correctedDaslightLine,
+  period_ms: 1_000,
+  interpolation: "DaslightPoints",
+  points: [{ x: 0, y: 0 }, { x: 0.5, y: 0.5 }, { x: 1, y: 1 }],
+};
+assert.equal(
+  visualization.moveFanoutPreviewState(correctedDaslightPoints, 320, 0, 1).progress,
+  0,
+  "Daslight Points intentionally holds the first authored point",
+);
+assert.equal(
+  visualization.moveFanoutPreviewState(correctedDaslightPoints, 340, 0, 1).progress,
+  0.5,
+  "Daslight Points advances at the next equal-time point boundary",
+);
+const correctedStrobeSource = { rate: 25, size: 2, offset: 0, sample_ms: 40 };
+assert.equal(
+  visualization.evaluateDaslightCurveSource("Strobe", correctedStrobeSource, 0, 0.01, 1_000),
+  0,
+  "imported Strobe duty must not expand with the recovered 40 ms sample grid",
+);
+assert.equal(
+  visualization.evaluateDaslightCurveSource("Strobe", correctedStrobeSource, 0, 0.04, 1_000),
+  1,
+  "imported Strobe frequency must still follow the authored Rate",
 );
 assert.equal(moveEffect.moveEffectDraftError(validMoveDraft), "", "a closed two-point Circle draft must remain valid");
 assert.equal(
@@ -566,8 +610,8 @@ assert.match(
 );
 assert.match(
   sceneFxDefaultsSource,
-  /sampled\.length - 1[\s\S]*?Math\.floor\(fanout\.progress \* sampleIntervals\)/,
-  "Move scene preview must map phase across sampled path intervals rather than array length",
+  /sampled\.length - 1[\s\S]*?fanout\.progress \* sampleIntervals[\s\S]*?fraction = scaledSample - lowerIndex/,
+  "Move scene preview must continuously interpolate phase across sampled path intervals",
 );
 assert.match(
   tauriSource,

@@ -22,6 +22,10 @@ const valueEffectEditorSource = await readFile(
   new URL("../src/components/ValueEffectEditorPanel.tsx", import.meta.url),
   "utf8",
 );
+const colorEffectEditorSource = await readFile(
+  new URL("../src/components/ColorEffectEditorPanel.tsx", import.meta.url),
+  "utf8",
+);
 const typesSource = await readFile(new URL("../src/types.ts", import.meta.url), "utf8");
 
 assert.equal(localization.uiLocaleFromUnknown("ja"), "ja");
@@ -327,6 +331,13 @@ assert.equal(
   ),
   "Rainbow・Black 0 / White 100の値パレット、3ポイント。ダブルクリックで追加。ポイントにフォーカスし、矢印キーで微調整、Shiftで粗く、Altで細かく、Deleteで削除。",
 );
+assert.equal(
+  localization.translateUiText(
+    "Sweep Black 0 White 100 value palette with 3 points. Double-click to add. Focus a point and use Arrow keys to nudge, Shift coarse, Alt fine, Delete to remove.",
+    "ja",
+  ),
+  "スイープ・Black 0 / White 100の値パレット、3ポイント。ダブルクリックで追加。ポイントにフォーカスし、矢印キーで微調整、Shiftで粗く、Altで細かく、Deleteで削除。",
+);
 assert.ok(
   valueEffectEditorSource.includes('generatorKind() === "CustomEnvelope" ? `${props.mode} ${props.interpolation} value envelope`'),
   "Value FX canvas must retain the localized custom-envelope aria contract",
@@ -335,12 +346,18 @@ assert.ok(
   valueEffectEditorSource.includes('`${generatorKind()} Black 0 White 100 value palette`'),
   "Value FX canvas must expose the localized Daslight-generator palette aria contract",
 );
+assert.ok(
+  valueEffectEditorSource.includes(
+    "Imported DVC corrected Knight Rider parameters are editable; the generator is re-evaluated analytically.",
+  ),
+  "Imported corrected Knight Rider must state that its parameters are editable and analytically re-evaluated",
+);
 assert.equal(
   localization.translateUiText(
-    "Imported Daslight-exact Knight Rider generator parameters are read-only; the value palette and timing remain editable.",
+    "Imported DVC corrected Knight Rider parameters are editable; the generator is re-evaluated analytically.",
     "ja",
   ),
-  "インポートしたDaslight完全互換のナイトライダー生成パラメーターは読み取り専用です。値パレットとタイミングは編集できます。",
+  "インポートしたDVC補正ナイトライダーのパラメーターは編集できます。ジェネレーターは解析的に再計算されます。",
 );
 assert.equal(
   localization.translateUiText("Imported Transform", "ja"),
@@ -352,8 +369,8 @@ assert.ok(
   "The exact editor lock must remain scoped to Knight Rider",
 );
 assert.ok(
-  valueEffectEditorSource.includes('data-value-daslight-exact-lock={daslightExactKnight() ? "knight-rider" : undefined}'),
-  "Imported exact Knight Rider must expose its read-only editor boundary",
+  valueEffectEditorSource.includes('data-value-daslight-exact-knight={daslightExactKnight() ? "knight-rider" : undefined}'),
+  "Imported exact Knight Rider must stay identifiable without declaring a read-only boundary",
 );
 assert.ok(
   valueEffectEditorSource.includes("data-value-daslight-exact-transform={generatorTransform()}")
@@ -362,13 +379,13 @@ assert.ok(
   "Imported exact Knight Rider must expose the recovered Transform value",
 );
 assert.ok(
-  valueEffectEditorSource.includes("disabled={daslightExactKnight()}"),
-  "Imported exact Knight Rider generator controls must stay disabled",
+  !valueEffectEditorSource.includes("disabled={daslightExactKnight()}"),
+  "Imported exact Knight Rider generator controls must no longer be disabled",
 );
 assert.equal(
   [...valueEffectEditorSource.matchAll(/if \(daslightExactKnight\(\)\) return;/g)].length,
-  3,
-  "Imported exact Knight Rider must reject kind, parameter, and quick-look edits",
+  0,
+  "Imported exact Knight Rider must accept kind, parameter, and quick-look edits",
 );
 const spatialRecipeSource = typesSource.match(
   /export type ColorEffectSpatialRecipe =([\s\S]*?);\r?\n\r?\nexport type ColorEffectSpatialCoordinateFrame/,
@@ -386,15 +403,38 @@ assert.match(valueRecipeLine("Burst"), /vertical_symmetry\?: boolean/);
 assert.ok(
   valueEffectEditorSource.includes('recipe.Burst.daslight_exact === true')
     && valueEffectEditorSource.includes('<option value="enhanced">Enhanced</option>')
-    && valueEffectEditorSource.includes('<option value="daslight">DVC recovered core</option>')
-    && valueEffectEditorSource.includes('"Period ms · 40 ms compatibility"'),
-  "Burst must expose an explicit recovered-core to Enhanced compatibility boundary",
+    && valueEffectEditorSource.includes('<option value="daslight">DVC corrected</option>'),
+  "Burst must expose an explicit DVC-corrected to Enhanced compatibility boundary",
 );
-for (const blockedExactKind of ["Sparkle", "RandomFill"]) {
-  assert.doesNotMatch(
-    valueRecipeLine(blockedExactKind),
-    /daslight_exact|vertical_symmetry/,
-    `${blockedExactKind} must not expose an unimplementable exact compatibility state`,
+for (const editorSource of [valueEffectEditorSource, colorEffectEditorSource]) {
+  assert.equal(
+    [...editorSource.matchAll(/<option value="daslight">DVC corrected<\/option>/g)].length,
+    3,
+    "Burst, Sweep, and Perlin must use the DVC corrected evaluator label",
+  );
+  assert.ok(
+    editorSource.includes("Period ms")
+      && editorSource.includes('min="10"')
+      && editorSource.includes('step="10"')
+      && editorSource.includes("props.onPeriodMs(Math.max(10, value));"),
+    "DVC and Enhanced effects must share the authored 10 ms period contract",
+  );
+  assert.doesNotMatch(editorSource, /40 ms compatibility|daslightExactTiming|Math\.floor\([^\n]*\/ 40\)/);
+}
+assert.match(valueRecipeLine("RandomFill"), /syndocal_corrected\?: boolean/);
+assert.match(valueRecipeLine("RandomFill"), /rng_seed\?: number/);
+assert.match(valueRecipeLine("RandomFill"), /vertical_symmetry\?: boolean/);
+assert.match(valueRecipeLine("RandomFill"), /source_point_height\?: number \| null/);
+assert.match(valueRecipeLine("Sparkle"), /syndocal_corrected\?: boolean/);
+assert.match(valueRecipeLine("Sparkle"), /rng_seed\?: number/);
+assert.match(valueRecipeLine("Sparkle"), /lifetime_ms\?: number \| null/);
+assert.match(valueRecipeLine("Sparkle"), /source_lifespan\?: number \| null/);
+for (const editorSource of [valueEffectEditorSource, colorEffectEditorSource]) {
+  assert.ok(
+    editorSource.includes('<option value="corrected">Syndocal corrected</option>')
+      && editorSource.includes('max="4294967295"')
+      && editorSource.includes('Lifetime ms'),
+    "Random fill and Sparkle must expose their deterministic corrected evaluator boundary",
   );
 }
 for (const dynamicAriaPrefix of [
@@ -486,6 +526,8 @@ for (const [sourceText, expectedJapaneseDisplay] of [
   ["Direction change", "方向を交互に変更"],
   ["Plasma", "プラズマ"],
   ["Rainbow strip", "Rainbowストリップ"],
+  ["Simultaneous particles created per 40 ms generation", "40 msごとの生成で同時に作られるパーティクル数"],
+  ["Effect-time milliseconds, scaling with clock sync and BPM speed", "エフェクト時間のミリ秒。クロック同期とBPM速度に応じて伸縮します"],
   ["Perlin mapping", "Perlinマッピング"],
   ["Grayscale", "グレースケール"],
   ["Horizontal symmetry", "左右対称"],

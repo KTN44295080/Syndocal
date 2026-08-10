@@ -1524,8 +1524,8 @@ const japaneseText: Record<string, string> = {
   "Color beam-space pattern": "ColorのBeam空間パターン",
   "Palette flow": "パレットフロー",
   "Knight Rider": "ナイトライダー",
-  "Imported Daslight-exact Knight Rider generator parameters are read-only; the value palette and timing remain editable.":
-    "インポートしたDaslight完全互換のナイトライダー生成パラメーターは読み取り専用です。値パレットとタイミングは編集できます。",
+  "Imported DVC corrected Knight Rider parameters are editable; the generator is re-evaluated analytically.":
+    "インポートしたDVC補正ナイトライダーのパラメーターは編集できます。ジェネレーターは解析的に再計算されます。",
   "Imported Transform": "インポート時の変形",
   Sweep: "スイープ",
   "Direction change": "方向を交互に変更",
@@ -1551,9 +1551,15 @@ const japaneseText: Record<string, string> = {
   Enhanced: "拡張",
   "Daslight exact": "Daslight完全互換",
   "DVC recovered core": "DVC復元コア",
+  "DVC corrected": "DVC補正版",
+  "Syndocal corrected": "Syndocal補正版",
+  Legacy: "旧方式",
+  "Lifetime ms": "寿命（ms）",
   "DVC source": "DVCソース",
-  "Direction is preserved from Daslight but intentionally has no effect in its recovered evaluator.":
-    "DirectionはDaslightから保持しますが、復元した評価器では意図的に効果を持ちません。",
+  "DVC Direction now drives spatial phase: 1 = 0°, 100 = 360°, with linear steps between.":
+    "DVCのDirectionは空間位相に作用します。1 = 0°、100 = 360°で、その間は線形です。",
+  "Syndocal maps 1 to 0°, 100 to 360°, linearly":
+    "Syndocalは1を0°、100を360°へ線形に対応付けます",
   "Size X": "サイズ X",
   "Param X": "パラメータ X",
   "Size Y": "サイズ Y",
@@ -1564,6 +1570,10 @@ const japaneseText: Record<string, string> = {
   "Param SY": "パラメータ SY",
   "Point width": "ポイント幅",
   "Sparkle number": "スパークル数",
+  "Simultaneous particles created per 40 ms generation":
+    "40 msごとの生成で同時に作られるパーティクル数",
+  "Effect-time milliseconds, scaling with clock sync and BPM speed":
+    "エフェクト時間のミリ秒。クロック同期とBPM速度に応じて伸縮します",
   "Life span %": "寿命（%）",
   "Sparkle width": "スパークル幅",
   "Rotation °": "回転（°）",
@@ -2689,7 +2699,7 @@ const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
     },
   ],
   [
-    /^(ColorRainbow|Burst|Plasma|KnightRider|Sparkle|RandomFill|Perlin) Black 0 White 100 value palette with (\d+) points\. Double-click to add\. Focus a point and use Arrow keys to nudge, Shift coarse, Alt fine, Delete to remove\.$/,
+    /^(ColorRainbow|Burst|Plasma|KnightRider|Sweep|Sparkle|RandomFill|Perlin) Black 0 White 100 value palette with (\d+) points\. Double-click to add\. Focus a point and use Arrow keys to nudge, Shift coarse, Alt fine, Delete to remove\.$/,
     (generator, count) => {
       const localizedGenerator = generator === "ColorRainbow"
         ? "Rainbow"

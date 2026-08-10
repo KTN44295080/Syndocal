@@ -169,10 +169,9 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
   });
   const phasePercent = createMemo(() => Math.round(clampUnit(props.phase) * 100));
   const spreadPercent = createMemo(() => Math.round(clampUnit(props.spread) * 100));
-  const daslightCompatibility = createMemo(() => props.interpolation.startsWith("Daslight"));
   const normalizedPeriodMs = createMemo(() => {
     const value = Math.round(Number.isFinite(props.periodMs) ? props.periodMs : 10);
-    return daslightCompatibility() ? Math.max(40, Math.floor(value / 40) * 40) : Math.max(10, value);
+    return Math.max(10, value);
   });
   const maximumPoints = createMemo(() => {
     if (props.interpolation === "DaslightLine") return 2;
@@ -555,16 +554,16 @@ export function MoveEffectEditorPanel(props: MoveEffectEditorPanelProps) {
             </div>
             <div class="moveEffectClockRow">
               <label>
-                {daslightCompatibility() ? "Period ms · 40 ms compatibility" : "Period ms"}
+                Period ms
                 <input
                   class="tabularNums"
                   type="number"
-                  min={daslightCompatibility() ? "40" : "10"}
-                  step={daslightCompatibility() ? "40" : "10"}
+                  min="10"
+                  step="10"
                   value={normalizedPeriodMs()}
                   onInput={(event) => {
                     const value = Math.round(Number(event.currentTarget.value) || 10);
-                    props.onPeriodMs(daslightCompatibility() ? Math.max(40, Math.floor(value / 40) * 40) : Math.max(10, value));
+                    props.onPeriodMs(Math.max(10, value));
                   }}
                 />
               </label>

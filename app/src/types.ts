@@ -1924,8 +1924,8 @@ export type ColorEffectSpatialRecipe =
   | { KnightRider: { daslight_exact?: boolean; grayscale?: boolean; vertical_symmetry?: boolean; size: number; one_way: boolean; fading: boolean; go_outside: boolean; gradient: number } }
   | { Sweep: { daslight_exact?: boolean; grayscale?: boolean; vertical_symmetry?: boolean; direction_change: boolean } }
   | { Burst: { daslight_exact?: boolean; grayscale?: boolean; vertical_symmetry?: boolean; color_width: number; gradient: number } }
-  | { RandomFill: { point_width: number } }
-  | { Sparkle: { number: number; lifespan: number; width: number } }
+  | { RandomFill: { syndocal_corrected?: boolean; grayscale?: boolean; vertical_symmetry?: boolean; rng_seed?: number; point_width: number; source_point_height?: number | null } }
+  | { Sparkle: { syndocal_corrected?: boolean; grayscale?: boolean; vertical_symmetry?: boolean; rng_seed?: number; number: number; lifespan: number; lifetime_ms?: number | null; source_lifespan?: number | null; width: number } }
   | { Plasma: { grayscale: boolean; vertical_symmetry: boolean; size_x: number; param_x: number; size_y: number; param_y: number; speed_x: number; param_sx: number; speed_y: number; param_sy: number } }
   | { ColorRainbow: { grayscale: boolean; vertical_symmetry: boolean; color_width: number; angle_degrees: number; gradient: number } }
   | { Rainbow: { grayscale: boolean; vertical_symmetry: boolean; horizontal_symmetry: boolean; rotation_degrees: number; color_width: number; angle_degrees: number; gradient: number } }

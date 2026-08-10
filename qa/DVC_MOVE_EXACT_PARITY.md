@@ -8,12 +8,13 @@
 
 ## 結論
 
-MOVE factoryの5 IDは、共通schemaだけでなく個別evaluator、40 ms frame契約、外側の
+MOVE factoryの5 IDは、共通schemaだけでなく個別evaluator、40 ms生成契約、外側の
 frame補間、Phasing、Symmetry、ordered beam/selection identityまで回収した。importerは
 `DaslightCircle / Curve / Line / Polygon / Points`という専用modeへrouteし、既存の
 Syndocal `Line / Smooth / Circle`とは混ぜない。これにより221–225は全PARAM domainで
 runtime-convertされ、旧223/224 Approximateと222/225未route、221 nonzero-Phasing
-fail-closedは解消する。
+fail-closedは解消する。回収した40 ms timer/tableは互換性の証跡として保持するが、Syndocal
+runtimeはauthored `DURATION`と連続位相を使い、見た目を保ったまま量子化欠陥を再現しない。
 
 ## factoryと共通schema
 
@@ -37,24 +38,24 @@ sceneのID221 bodyが`DURATION=5000`で保存されることを実機経路で�
 
 ## 時間契約
 
-Daslightのframe quantumはbinary global `0x1408DAC38 = 40 ms`。duration setterは
+Daslightのframe quantumはbinary global `0x1408DAC38 = 40 ms`。元実装のduration setterは
 `max(1, floor(DURATION / 40))` framesを作る。MOVE evaluatorはこの整数frameを入力にし、
 Circle/Curve/Line/Polygonの外側wrapperは隣接整数frameの出力を実時刻で線形補間する。
 Pointsだけはheld outputで、外側補間を行わない。
 
-Syndocalはこの40 ms量子化を`.dvc`由来の5専用modeにだけ適用する。新規authoringの既定
-`Line / Smooth / Circle`は連続・高分解能のEnhanced evaluatorを維持する。ユーザーがimport済み
-bodyをEnhanced modeへ切り替えれば、その時点からDaslightの時間量子化・quirkを外せる。
-互換性のための欠陥をSyndocal全体の既定値にはしない。
+Syndocalは`.dvc`に保存された正の`DURATION`をそのまま取り込み、共通runtime下限の10 msだけを
+適用する。Circle/Curve/Line/Polygonは連続位相で評価し、Pointsだけはデザイン上のstep動作として
+authored頂点を等時間holdする。40 ms由来のframe countはimport reportのprovenanceに残すが、
+period短縮・階段状hold・cycle-minus-one endpoint quirkには使わない。
 
 ## evaluator式
 
 ### 221 Circle
 
-既存DVC-V5bで回収した解析的circumcircle evaluatorを整数frameで評価する。2点は一周円、
+既存DVC-V5bで回収した解析的circumcircle evaluatorを連続位相で評価する。2点は一周円、
 3点以上は隣接tripleのsigned radius、同符号arc、変曲時half-arc reflection、degenerate linear
 fallbackを用い、各authored edgeへ等時間を与える。Daslight専用modeは旧Enhanced `Circle`と
-geometry coreを共有するが、時間入力だけは40 ms frame契約に従う。
+geometry coreを共有し、authored periodの連続時間を使う。
 
 ### 222 Curve
 
@@ -64,31 +65,31 @@ waveである。Syndocal Enhanced `Smooth`のcentripetal Catmull-Rom/32分割と
 
 ### 223 Line
 
-exactly 2点を使う。一般形はauthored point列にreverse interiorを連結し、
-`remainder = frame % max(cycle - 1, 1)`、`q = point_count * remainder / cycle`でcyclic edgeを
-線形補間する。このためcycle末端にDaslight固有のstart duplicate/endpoint quirkがある。
+exactly 2点を使う。回収式の`cycle-minus-one` endpoint quirkは再現せず、往路と復路の2辺を
+連続位相で等時間線形補間する。両端への到達とauthored period終端での閉路を保証する。
 
 ### 224 Polygon
 
-authored point列をclosed cyclic edgeとして、`q = point_count * (frame % cycle) / cycle`で
-sampleする。各辺は物理長ではなく同じframe数を受け取る。
+authored point列をclosed cyclic edgeとして、`q = point_count * phase`でsampleする。
+各辺は物理長ではなく同じ時間を受け取る。
 
 ### 225 Points
 
-`index = floor(point_count * (frame % cycle) / cycle)`の頂点をholdする。次frameへの補間はない。
+`index = floor(point_count * phase)`の頂点をholdする。これはtimer量子化ではなくPointsの意図した
+step表現なので、連続runtimeでも補間しない。
 
 全点同値の合法bodyは5 modeともconstant pathとして保持し、旧Enhanced pathの
 「distinct point必須」validationは変更しない。
 
 ## Phasing / Symmetry / target identity
 
-`step = cycle * raw_Phase_ID2`。selection identityはXML `BEAMID`と`IDSELECTION`のorderを保持し、
-first-seen selection rankごとに`round_half_up(wrap(base - rank * step))`した整数frameを選ぶ。
+`step = raw_Phase_ID2`。selection identityはXML `BEAMID`と`IDSELECTION`のorderを保持し、
+first-seen selection rankごとに`wrap(base - rank * step)`した連続位相を選ぶ。
 同じselection IDは同じrankと位相を共有する。
 
 Symmetryはselection数2以上で2 wingに分ける。前半はascending rank、後半はtarget orderを反転し、
-Circle/Curve/Line/Polygonは`ceil(cycle/2) - frame`、Pointsは`cycle - frame`をreverse wingのbaseに
-する。これは旧Syndocal Line/SmoothのPan mirrorではなく、Daslight evaluatorのreverse-time契約である。
+Circle/Curve/Line/Polygonは`wrap(0.5 - phase)`、Pointsは`wrap(-phase)`をreverse wingのbaseに
+する。これは旧Syndocal Line/SmoothのPan mirrorではなく、回収したreverse-time構造を連続化した契約である。
 
 ## protocol / persistence boundary
 
@@ -101,30 +102,22 @@ atomicにbindする。profile不一致ならidentityを壊さずdormantにし、
 
 | 契約 | 旧 | 新 | 理由 |
 |---|---|---|---|
-| ID221 nonzero Phasing | dedicated `Skipped` | raw `0..1`をinteger-frame fan-outへ保持 | scalar compositionとhalf-up frame契約を回収した |
+| ID221 nonzero Phasing | dedicated `Skipped` | raw `0..1`をcontinuous fan-outへ保持 | scalar compositionとselection orderを回収しtimer量子化は除外した |
 | ID222 / 225 | unknown Move `Skipped` | distinct exact Curve / Points body | evaluator意味論を静的回収した |
 | ID223 / 224 | legacy Line近似、beam identity lossを`Approximate` | dedicated exact evaluator + ordered beam targets | evaluatorとfan-outの非等価境界を解消した |
 | unknown Move regression | ID222 mutation | ID226 mutation | 222が合法routeになったためfactory外IDへ移した |
 | authoring mode | Line/Smooth/Circle | Enhanced 3種を維持しDaslight exact 5種を追加 | 互換quirkを新規authoring既定にしない |
 | viewport interpolation control | visible button count 3 | visible button count 8 | Enhanced 3種を削らずexact 5種を一対一で選べるようにした。overflow/containment/reachability assertionは変更しない |
+| imported runtime timing | 40 ms frame countへperiodを短縮 | authored `DURATION`（min 10 ms）と連続位相 | 保存値を変えるtimer-grid欠陥と階段状holdを再現しない。Pointsの頂点holdだけは表現として維持 |
 
 ## 受入ゲート
 
 - protocol full: `49/49` pass。legacy bytesと5 exact variantのserde名を固定。
-- engine full: `511` pass / `2` manual benchmark ignore。MOVE path、整数frame、raw Phasing、
-  two-wing Symmetry、量子化periodを含む。
+- engine focused gateはMOVE path、continuous Phasing、two-wing Symmetry、authored period、
+  Points-only holdを対象にする。全workspace件数はcorrected timing tranche統合後に更新する。
 - Tauri/backend full: `400` pass / `9` hardware/long-running ignore。full `dvc`は`73/73` pass。
 - frontend: TypeScript `--noEmit`、production build、MOVE helper、effect visualization、
   localization `3044/3044`、Scene FX / FX visual / control-modeの5 viewportをpass。
 - full viewport matrix: exit `0`。interpolation button `3 -> 8`以外のcontainment/reachability契約は維持。
-- exact MOVE venue regression: 200 fixtures x 64 effects x 10 framesをreleaseで`14.529 ms`
-  （上限5秒）。target frame offset、tick time、同一frame path/transformをprecompute/cacheし、44 Hz側に
-  beam探索・float modulo・重複circle sampleを残さない。
-- mixed 64-effect x 200-fixture release A/B: Enhanced Circle `p95 5.515 ms`、exact Circle
-  `p95 5.049..5.307 ms`。exact化は同一ホストで非増加だが、測定時のsystem CPUが`33..37%`で
-  固定absolute gate `p95 <= 5 ms`を最大0.307 ms超えたためgreenとは記録しない。gateは緩和せず、
-  controlled-host rerun境界として残す（p99/maxは8/12 ms内、1回の外乱maxを除く）。
-- native release: `pnpm --dir app tauri build --no-bundle` pass。ビルド直前に絶対パスが
-  `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`と一致するprocessだけを停止し、
-  再生成exeを明示パスで起動。返却app IDも同じexe、title `Syndocal`のwindowはexactly 1、
-  screenshotとaccessibility treeの取得に成功しresponsiveであることを確認した。
+- 旧integer-frame cacheで測定したvenue/mixed A/B値はcorrected continuous runtimeの性能証跡には
+  流用しない。200 fixtures x 64 effects gateとnative release acceptanceは統合後に再実行する。

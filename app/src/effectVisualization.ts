@@ -24,6 +24,8 @@ const clamp = (value: number, minimum: number, maximum: number) =>
 export const clampUnit = (value: number) => clamp(value, 0, 1);
 const pathNumber = (value: number) => Number(value.toFixed(3));
 const normalizePhase = (phase: number) => ((Number.isFinite(phase) ? phase : 0) % 1 + 1) % 1;
+const STROBE_PULSES_PER_PERIOD = 10;
+const STROBE_DUTY_CYCLE = 0.2;
 
 /** Mirrors engine::evaluate_lfo_shape, including the deterministic noise hash. */
 export const evaluateLfoShape = (shape: LfoShape, phase: number): number => {
@@ -42,7 +44,7 @@ export const evaluateLfoShape = (shape: LfoShape, phase: number): number => {
     case "Square":
       return normalized < 0.5 ? 1 : 0;
     case "Strobe":
-      return (normalized * 10) % 1 < 0.2 ? 1 : 0;
+      return (normalized * STROBE_PULSES_PER_PERIOD) % 1 < STROBE_DUTY_CYCLE ? 1 : 0;
     case "Random":
       return hashUnitFloat(Math.floor(normalized * 16) >>> 0);
     case "Perlin": {
@@ -95,8 +97,7 @@ export const evaluateDaslightCurveSource = (
     case "Strobe": {
       const elapsedSeconds = position * Math.max(10, periodMs) / 1000;
       const cyclePosition = normalizePhase(elapsedSeconds * source.rate);
-      const recoveredMinimumDuty = Math.min(1, Math.max(0, source.sample_ms / 1000 * source.rate));
-      const duty = Math.min(1, Math.max(recoveredMinimumDuty, phase * 0.5));
+      const duty = Math.min(1, Math.max(STROBE_DUTY_CYCLE, phase * 0.5));
       value = cyclePosition < duty
         ? source.offset + source.size * 0.5
         : source.offset;
@@ -492,10 +493,10 @@ export const sampleMovePath = (
 
 type MoveFanoutPreview = Pick<
   MoveEffectRequest,
-  "period_ms" | "direction" | "phase" | "fixture_spread" | "symmetry" | "interpolation"
+  "period_ms" | "direction" | "phase" | "fixture_spread" | "symmetry" | "interpolation" | "points"
 >;
 
-/** Mirrors the compiled Move target phase/reverse flags used by the 44 Hz evaluator. */
+/** Mirrors the compiled Move target phase/reverse flags used by the runtime evaluator. */
 export const moveFanoutPreviewState = (
   request: MoveFanoutPreview,
   elapsedMs: number,
@@ -506,32 +507,34 @@ export const moveFanoutPreviewState = (
   const rank = Math.max(0, Math.min(count - 1, Math.round(selectionRank)));
   const daslightExact = request.interpolation.startsWith("Daslight");
   if (daslightExact) {
-    const frameCount = Math.max(1, Math.floor(Math.max(10, request.period_ms) / 40));
     const rawCycle = Math.max(0, Number.isFinite(elapsedMs) ? elapsedMs : 0)
-      / (frameCount * 40) + request.phase;
+      / Math.max(10, request.period_ms) + request.phase;
     const phase = normalizePhase(rawCycle);
-    const directed = request.direction === "Reverse"
+    const directed = normalizePhase(request.direction === "Reverse"
       ? 1 - phase
       : request.direction === "Bounce"
         ? phase * 2 <= 1 ? phase * 2 : 2 - phase * 2
-        : phase;
-    const baseFrame = Math.floor(directed * frameCount) % frameCount;
-    const step = frameCount * clampUnit(request.fixture_spread);
+        : phase);
     const split = Math.floor(count / 2);
-    let shifted = baseFrame - rank * step;
-    if (request.symmetry === true && count >= 2 && rank >= split) {
-      const symmetryBase = request.interpolation === "DaslightPoints"
-        ? frameCount - baseFrame
-        : Math.ceil(frameCount / 2) - baseFrame;
-      shifted = symmetryBase - (count - 1 - rank) * step;
-    }
-    const frame = Math.round(((shifted % frameCount) + frameCount) % frameCount) % frameCount;
-    let progress = frame / frameCount;
+    const reverseWing = request.symmetry === true && count >= 2 && rank >= split;
+    const offsetRank = reverseWing ? count - 1 - rank : rank;
+    const translated = reverseWing
+      ? normalizePhase((request.interpolation === "DaslightPoints" ? 0 : 0.5) - directed)
+      : directed;
+    const targetPhase = normalizePhase(
+      translated - offsetRank * clampUnit(request.fixture_spread),
+    );
+    let progress = targetPhase;
     if (request.interpolation === "DaslightCurve") {
       const doubled = progress * 2;
       progress = doubled <= 1 ? doubled : 2 - doubled;
-    } else if (request.interpolation === "DaslightLine") {
-      progress = (frame % Math.max(1, frameCount - 1)) / frameCount;
+    } else if (request.interpolation === "DaslightPoints") {
+      const pointCount = request.points.length;
+      const pointIndex = Math.min(
+        Math.max(0, pointCount - 1),
+        Math.floor(targetPhase * pointCount),
+      );
+      progress = pointCount <= 1 ? 0 : pointIndex / (pointCount - 1);
     }
     return { progress, mirrorPan: false };
   }

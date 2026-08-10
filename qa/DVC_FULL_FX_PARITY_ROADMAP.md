@@ -23,16 +23,16 @@ Daslight 5.0.6.2 / FileVersion `25.0905.165.111`の実機dropdown全項目とfac
 
 | ファミリー | 完全factory集合 | 現行converter route | precise fail-closed / 未route |
 |---|---|---|---|
-| VALUE | 621–628（8種） | 621 Rainbow, **622 Burst**, 623 Plasma, 624 Knight Rider, **625 Sweep (Transform 0/1)**, **628 Perlin** | 626/627: non-serialized per-thread RNG state/history |
-| COLOR FX | 121,127,128,129,130,131,133,**134** | **121**,127,**128 Perlin**,129,130,**134 Sweep** | 131/133 precise fail-closed。Sweep=132という旧推定は撤回 |
+| VALUE | 621–628（8種） | **621–628全8種**（626/627はstable source seedのCorrected RNG） | なし |
+| COLOR FX | 121,127,128,129,130,131,133,**134** | **全8種**（131/133はstable source seedのCorrected RNG） | なし。Sweep=132という旧推定は撤回 |
 | MOVE | 221 Circle, 222 Curve, 223 Line, 224 Polygon, 225 Points | **221–225全5種exact** | なし |
 | CHASER | 321 #1, 322 #2, 323 #3, 324 #4, 325 random | 321,322,325 | 323,324未route。distinct evaluatorの演出意味が未証明 |
 | CURVE | 3–13（11種） | 3 Inverse Ramp, **4 Pulse (Corrected)**, 7 Sinus, **9 Square**, 10 Strobe | 5,6,8,11,12,13未route。Custom 13だけ別schema |
 | MAPPINGS | 521–530（10種） | 521 Rainbow, **530 Perlin** | 522–529未route |
 | COLOR MAPPINGS | 21,22,23,29–37,40–42,44,45,47–50（21種） | 36 Rainbow | 残20種未route |
 
-現行runtime converter routeは28/68 ID、precise fail-closedは4、未routeは36。うち条件付きexact-coreは
-25、明示compatibilityはCHASER 321/325の2 route。これはID単位の入口coverageであり、共有raster classの再利用度や
+現行runtime converter routeは32/68 ID、random-state由来のprecise fail-closedは0、未routeは36。うち条件付きexact-coreは
+25、626/627/131/133は明示Corrected、CHASER 325も既存stable permutationをCorrectedとして報告する。これはID単位の入口coverageであり、共有raster classの再利用度や
 STEPS/SUPER SCENEなど非generator構造を含む「製品完成率」ではない。未routeをUI名だけで近似せず、
 各evaluatorの意味論を回収したトランシェだけを増やす。
 
@@ -112,7 +112,12 @@ strict-core数を製品全域のexact完成数とは呼ばない。
 9. **DVC-PERLIN-EXACT（完了）**: Perlin 128/530/628の固有evaluatorとMAPPINGS 2D placementを実装。
    **次の新規IDトランシェ**: (a)CURVE残 → (b)CHASER 323/324 → (c)MAPPINGS/COLOR MAPPINGS 2D群
    （Media/Text等の埋め込み系はColour Mapping既存基盤を再利用）。
-10. **P-EXP（完了）**: 23 quick looks（VALUE6 / CURVE3 / CHASER3 / COLOR5 /
+10. **DVC-RNG-CORRECTED（完了）**: VALUE 626/627とCOLOR 131/133をstrict schemaでrouteし、
+   非serialize qrand履歴だけをsource identity由来のstable u32 seedへ置換した。Random fillは
+   no-replacement rank、palette-to-palette連続遷移、端セルcoverage、Sparkleはretained population、
+   `lifetime_ms=round(100/(1-LifeSpan))`、実Width、1色palette安全性を実装。旧`.sdc`は
+   `syndocal_corrected=false`のlegacy evaluatorを維持する。正本は`qa/DVC_RANDOM_CORRECTED_PARITY.md`。
+11. **P-EXP（完了）**: 23 quick looks（VALUE6 / CURVE3 / CHASER3 / COLOR5 /
    MAPPING3 / MOVE3）を統合済み。ColorMappingは埋め込みmediaのため別設計。
 
 ## 各トランシェの受入（共通）

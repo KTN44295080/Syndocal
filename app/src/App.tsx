@@ -17219,9 +17219,6 @@ export default function App() {
         } else if (interpolation.startsWith("Daslight")) {
           setMovePathClosed(false);
         }
-        if (interpolation.startsWith("Daslight")) {
-          setEffectPeriod(Math.max(40, Math.floor(effectPeriod() / 40) * 40));
-        }
         if (interpolation === "DaslightLine" && movePathPoints().length !== 2) {
           setMovePathRecipe("Custom");
           const points = movePathPoints();

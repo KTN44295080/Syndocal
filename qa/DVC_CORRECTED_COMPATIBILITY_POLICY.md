@@ -4,17 +4,23 @@ Date: 2026-08-10
 
 ## Product rule
 
-Syndocal imports the authored show, not Daslight's accidental implementation defects.
-Recovered factory schemas, parameter domains, beam/selection identity, palette order, phase,
-direction, symmetry, geometry, and deliberately stepped effect shapes remain compatibility
-contracts. A defect caused by timer granularity, integer truncation, an uninitialised or
-non-serialised process state, low-quality raster scaling, or an unpainted destination pixel is
-corrected when that correction does not replace the authored effect.
+Syndocal imports the authored show, not Daslight's accidental implementation defects. The
+compatibility target is the same practical look and motion, not instruction-for-instruction,
+timer-for-timer, or pixel-artifact parity. Recovered factory schemas, parameter domains,
+beam/selection identity, palette order, phase, direction, symmetry, geometry, and deliberately
+stepped effect shapes remain compatibility contracts. When those contracts can be represented by
+a smaller continuous-time, deterministic, full-coverage common evaluator with a practically
+equivalent result, that cleaner evaluator is preferred over recovered frame tables, integer
+caches, toolkit raster paths, or process-global state. A defect caused by timer granularity,
+integer truncation, an uninitialised or non-serialised process state, low-quality raster scaling,
+or an unpainted destination pixel is corrected.
 
 If a defect has a large visible contribution to an existing show, the corrected evaluator is the
-import default and the recovered behavior may remain as an explicit **Legacy quirks** option. It
-must not be labelled simply `Daslight exact`, because exact provenance does not make a defect a
-desirable product contract. Import reports must name every intentional correction.
+import default and the recovered behavior may remain as an explicit **Legacy quirks** option only
+when a real project or synchronized capture demonstrates that it is needed. It must not be
+labelled simply `Daslight exact`, because exact provenance does not make a defect a desirable
+product contract. Import reports must name every intentional correction. Tiny differences caused
+only by a cleaner implementation do not justify a Legacy mode.
 
 ## Repository-wide audit
 
@@ -22,17 +28,17 @@ desirable product contract. Import reports must name every intentional correctio
 |---|---|---|---|
 | CURVE 3/7/9/10 | Source position held on a 40 ms grid | Timer/storage artifact | **Corrected:** continuous-time evaluation retains authored equations and clamp regions |
 | CURVE 9 Square | `floor(400/Rate)` leaves an uneven terminal band | Integer-grid artifact | **Corrected:** equal authored bands replace the integer residue |
-| CURVE 10 Strobe | `floor(25/Rate)` changes the requested frequency | Timer-grid artifact | **Corrected:** exact authored rate; recovered 40 ms minimum flash width and Phase duty extension retained |
+| CURVE 10 Strobe | `floor(25/Rate)` changes frequency and the 40 ms minimum pulse can become 100% duty at high Rate | Timer-grid artifact | Use exact authored rate and a dimensionless common duty; keep Phase duty intent, not the 40 ms floor |
 | CURVE 4 Pulse | Fixed `0.005` triangle slope makes amplitude depend on DURATION | Evaluator defect | **Corrected:** normalized continuous window retains Rate, Size, Offset, Phase and beam order |
-| VALUE/COLOR 622/121 Burst | 16-bit integer segment residue, 1024-entry RGBA64 cache, raster seam | Rendering artifacts that can visibly affect a show | Keep recovered core as Legacy quirks; corrected core removes gaps/banding without changing radial motion or palette order |
+| VALUE/COLOR 622/121 Burst | 16-bit integer segment residue, 65,536-entry palette cache, 1,024-entry Qt gradient table, raster seam and 750-frame cap | Rendering/cache artifacts | Replace the current import default with an analytic cyclic evaluator that retains pixel radius, palette order and Gradient meaning. Do not keep a production Legacy mode without a demonstrated project need |
 | VALUE/COLOR 624/127 Knight Rider | Qt nearest-neighbour fold can leave the last odd pixel and width-one raster clear | Unpainted-pixel defect | **Corrected:** full destination coverage now retains the recovered painted samples, head motion, fading, direction and palette semantics |
-| VALUE/COLOR 625/134 Sweep | 40 ms frame-count floor shortens DURATION; Qt fold can clear the odd tail | Timer and raster defects | Destination coverage **corrected**; authored-duration correction remains pending. Hard boundary and Direction Change stay intact |
-| VALUE/COLOR/MAPPINGS 628/128/530 Perlin | 40 ms period floor and Qt nearest-neighbour rotation | Timer and resampling artifacts | Preserve the recovered noise/hash semantics while using authored duration and corrected spatial resampling |
+| VALUE/COLOR 625/134 Sweep | 40 ms frame-count floor shortens DURATION; Qt fold can clear the odd tail | Timer and raster defects | Destination coverage **corrected**; move imported effects to the existing continuous common evaluator. Hard boundary and Direction Change stay intact |
+| VALUE/COLOR/MAPPINGS 628/128/530 Perlin | 40 ms period floor, 750-frame table, 65,536-entry integer palette cache, Qt nearest-neighbour rotation, evaluator-dead Direction | Timer, cache, resampling and dead-control defects | Preserve the recognizable noise/palette semantics; use authored duration, continuous deterministic evaluation, analytic palette sampling, hole-free inverse rotation, and a documented meaningful Direction mapping |
 | VALUE/COLOR 623/129 Plasma | 8-bit wrapping sine table is part of the recovered appearance | Visually material evaluator identity | Retain for imported compatibility unless capture evidence shows a defect that can be removed without changing the effect |
 | MAPPINGS/COLOR MAPPINGS placement | Rotated inclusion mask with axis-aligned raster lookup | Rotation-coordinate defect | Correct raster lookup into the same inverse-rotated local frame; retain raw Patch coordinates and inclusion geometry |
 | VALUE 626/627, COLOR 131/133 | Import fails closed because Qt qrand history is not serialised | Missing provenance, not authored state | Implement a deterministic Syndocal seed and report the correction; do not keep these FX unavailable merely to mimic process history |
 | CHASER 325 | Process/thread random order was replaced by a stable permutation | Beneficial correction already present | Keep deterministic behavior and reclassify it from generic compatibility to corrected import |
-| MOVE 221-225 | 40 ms path frames are interpolated between adjacent frames; Points is intentionally held | Mostly source parameterisation/effect semantics | Retain geometry, wings, phasing and Points hold. Remove only period shortening or endpoint loss proven to be an artifact |
+| MOVE 221-225 | DURATION floor, frame-rounded phasing, Line endpoint loss; Points intentionally holds authored vertices | Timer/endpoint defects plus one deliberate stepped shape | Retain geometry, wings, selection order and Points hold; use authored duration and continuous phase for the other paths, with equal authored point dwell for Points |
 | qGray, hard palette boundaries, Direction Change, Transform intent | Recovered authored/post-process semantics | Artistic contract | Retain |
 
 ## Acceptance rule for every correction

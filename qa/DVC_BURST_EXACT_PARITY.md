@@ -154,7 +154,7 @@ previous byte shape when all are false.
 |---|---|---|
 | COLOR 121 / VALUE 622 must be Skipped | both create exact runtime targets | unconditional constructor write proves wrap=true and the evaluator is now represented |
 | Burst must not expose exact protocol state | exact flags round-trip; false fields stay omitted | additive compatibility mode preserves legacy JSON |
-| local Shinkan Burst is skipped | one exact Burst imports; only Random fill and Sparkle remain skipped | class-specific blocker was removed |
+| local Shinkan Burst is skipped | Burst imports exact; Random fill and Sparkle now import through explicit Corrected RNG evaluators | class-specific Burst blocker and non-authored qrand-history blocker were removed separately |
 | homecoming has no Burst recipes and 4 skipped FX | three exact Burst recipes and only Perlin skipped | all three saved Burst bodies now use the exact route |
 | exact Burst VALUE may use the generic RGB spatial path without a dedicated budget | VALUE exact uses a generic-reference-proven component fast path; 64x200 release is p95 1.967 ms / p99 3.829 ms / max 4.467 ms | the generic path measured p95 11.955 ms and failed the existing 5 ms gate |
 
@@ -171,3 +171,22 @@ previous byte shape when all are false.
 - VALUE 622 and COLOR 121 cover Transform 0/1, strict TYPE/domain rejection, quantized
   duration, exact flags, ImportReport provenance, and saved-project goldens;
 - localization and editor contracts cover the explicit evaluator switch and 40 ms label.
+
+## Superseded by the corrected analytic evaluator (2026-08-10)
+
+The recovery evidence above remains the authoritative description of the DVC source
+behaviour, but the shipping corrected route no longer reproduces its implementation
+artifacts. The corrected Burst evaluator is now analytic: pixel-centre radial
+coordinate computed directly, equal cyclic palette segments, direct Gradient
+hold/interpolation, and continuous authored-period phase from
+`time_phase_for_continuous_spatial` (an authored 1025 ms period completes in exactly
+1025 ms). The 65,536-entry palette cache, Qt 1024 RGBA64 lookup table, seam epsilon,
+750-frame cap, frame cache, and 40 ms generated-frame stepping were removed. Transform
+folding moved from the recovered nearest-fold to a tent mapping after an A/B audit
+showed the nearest fold failed to place authored endpoints at both destination
+endpoints (N=5 nearest `[1,3,3,1,1]` vs tent `[0,2,4,2,0]`); no show-level reason
+justified preserving the Qt raster artifact. qGray and palette identity/order are
+preserved. Real serialized parameters are pinned by
+`qa/specimens/ValueCatalog-Burst-KnightRider.dvc` (Burst gradient is a 0..1 float in
+the source; Color Width an integer), imported by the repo-portable specimen golden in
+`app/src-tauri/src/dvc_import.rs` tests.

@@ -64,13 +64,16 @@ GUI順とfactory集合は完全一致する。
 | 627 | Random fill | `CRandomFillEffect` | `0x140365C70` |
 | 628 | Perlin | `CPerlinEffect` | `0x140365090` |
 
-全propertyのTYPE/ID/default/domain、factory/constructor/vtable、評価式、fail-closed境界は
+全propertyのTYPE/ID/default/domain、factory/constructor/vtable、評価式、現行境界は
 `qa/DVC_VALUE_CATALOG_PARITY.md`を正本とする。DVC-V6で624、DVC-C0bで同じ回収済み評価器を
-共有するCOLOR 127、DVC-BURST-EXACTで622と共有するCOLOR 121をexact実装済み。
+共有するCOLOR 127、DVC-BURST-EXACTで622と共有するCOLOR 121を実装した。当時は回収した
+40 ms evaluator/cacheも互換契約に含めたため、これらBurst/Knight Rider/Sweepの内部artifactは
+現行にも残る。ただしimport requestのperiod自体は、その後authored `DURATION`保持へ訂正済みである。
 共有constructor `0x140350BE0` の `0x14035155A` がpalette-wrap `+0x12c=true`を無条件に
-初期化することを再証明し、旧「未初期化」判定を撤回した。628はwrapではなく未実装の固有Perlin
-evaluator差、626/627は`.dvc`に存在しないQt/CRT per-thread RNG stateとprior draw historyが
-現時点の境界である。
+初期化することを再証明し、旧「未初期化」判定を撤回した。DVC-V3/V6当時は628を未実装の
+固有Perlin evaluator差、626/627を非serialize Qt/CRT RNG履歴によりfail-closedとしたが、
+その境界はその後supersededになった。現行は628をcontinuous/analyticなDVC Corrected Perlin、
+626/627をstable source seedのCorrected evaluatorとしてimportする。
 
 ## COLOR FX — family/type 2
 
@@ -114,9 +117,11 @@ GUI順は Circle / Curve / Polygon / Line / Points。factory集合は221–225�
 | 224 Polygon | `0x14036D350 -> 0x140347D60` | `CPolygonPosEffect / 0x140695670` | `0x14034A8F0` | diamond 4点 |
 | 225 Points | `0x14036D2E0 -> 0x140347C20` | `CPointsPosEffect / 0x140695820` | `0x14034A790` | `(.5,.25),(.5,.75)` |
 
-DVC-MOVE-EXACTで5 evaluatorの式、40 ms整数frame、外側補間、raw Phasing、2-wing Symmetryを
-静的回収し、ordered beam/selection identityとともに専用runtime modeへ実装した。詳細とassertion deltaは
-`qa/DVC_MOVE_EXACT_PARITY.md`を正本とする。
+DVC-MOVE-EXACTで5 evaluatorの式、Daslightの40 ms整数frame、外側補間、raw Phasing、
+2-wing Symmetryを静的回収した。当時の最初のruntimeはそのframe契約も再現したが、その時間契約は
+corrected timing trancheでsupersededになった。現行はauthored `DURATION`、continuous Phasing、
+連続path評価を使い、Pointsだけを意図した頂点holdとして残す。ordered beam/selection identityと
+geometryは維持する。詳細とassertion deltaは`qa/DVC_MOVE_EXACT_PARITY.md`を正本とする。
 
 ## CHASER FX — family/type 6
 
@@ -278,26 +283,25 @@ Explosion / Starfield / Graph / Lines / Grid。21項目を最下端Gridまで観
 
 ## 現行Syndocal importerとの逆照合
 
-68 IDのうちDVC-CURVE-SQUARE-EXACT後は27 IDがruntime targetを作れるconverter route、VALUE
-626/627とCOLOR 131/133の4 IDがclass固有理由でprecise
-fail-closed、残る37 IDは未routeでgeneric `Skipped`になる。27 routeはfull-domain完成数ではなく、
+68 IDのうち現行は32 IDがruntime targetを作れるconverter route、random-state由来のprecise
+fail-closedは0、残る36 IDは未routeでgeneric `Skipped`になる。32 routeはfull-domain完成数ではなく、
 strict/exactを別に監査した。
 
 | route群 | 現在の境界 |
 |---|---|
-| VALUE 621/622/623/624/625/628 | strict。622はcyclic palette/radial/40ms evaluator。625はTransform 0/1、Direction Changeを共有Sweep evaluatorでexact化。628は固有Perlin hash/cosine/sine evaluator。対象ゼロのno-opもschema検証後に成立 |
+| VALUE 621–628 | strict。626/627はstable source seed、628はcontinuous fixed-hash/cosine/analytic palette/active DirectionのCorrected evaluator。対象ゼロのno-opもschema検証後に成立 |
 | COLOR MAPPINGS 36 | strict。外部`SELECTIONS`参照はprecise fail-closed |
-| MOVE 221–225 | strict。5 distinct evaluator、40 ms frame、全Phasing/Symmetry domain、ordered beam targetを保持 |
+| MOVE 221–225 | strict。5 distinct geometry、authored DURATION、continuous Phasing/Symmetry、ordered beam targetを保持。Pointsのみ等時間vertex hold |
 | COLOR 129/130 | strict schemaと証明済みevaluator式を実装 |
-| COLOR 127 | strict schema、40ms量子化、合成後qGray、Transform foldを共有exact evaluatorで実装 |
-| COLOR 121 | strict schema、cyclic palette、raw pixel radius、40ms、qGray、Transform foldを共有exact Burst evaluatorで実装 |
-| COLOR 134 | strict schema、hard boundary、Direction Change、qGray、Transform foldを共有exact Sweep evaluatorで実装 |
-| COLOR 128 | strict schema、固有Perlin evaluator、40ms scheduler、qGray、Transform foldを実装 |
-| COLOR 131/133 | strict schema後、非serialize qrand state/historyでprecise fail-closed |
-| CHASER 321/322/325 | 322はstrict。321/325はdistinct evaluator/random順差を常時Approximate |
-| CURVE 3/7/9/10 | strict factory schemaと証明済み40 ms式を実装。9は400-cell整数bandのSquare evaluator |
+| COLOR 127 | strict schema、authored DURATIONを保持。合成後qGray、Transform foldと内部40 ms tableはlegacy互換 evaluatorに残る |
+| COLOR 121 | strict schema、authored DURATIONを保持。cyclic palette、raw pixel radius、内部40 ms/cache、qGray、Transform foldはlegacy Burst evaluatorに残る |
+| COLOR 134 | strict schema、authored DURATIONを保持。hard boundary、Direction Change、qGray、Transform foldと内部40 ms tableはlegacy Sweep evaluatorに残る |
+| COLOR 128 | strict schema、固有Perlin evaluator、連続時間、qGray、Transform foldを実装 |
+| COLOR 131/133 | strict schema、recovered random grammar、stable source seed、qGray/TransformをCorrected evaluatorで実装 |
+| CHASER 321/322/325 | 322はstrict。321はcompatibility。325の既存stable permutationはCorrectedとして報告 |
+| CURVE 3/7/9/10 | strict factory schemaと回収式をCorrected continuous evaluatorで実装。9はequal authored band、10 Strobeはexact Rateとdimensionless duty |
 | MAPPINGS 521 | strict schema、unit→percent、Rectangle placementを実装 |
-| MAPPINGS 530 | strict schema、Rectangle placement、固有Perlin evaluator、Qt5 FastTransformation互換の0..360度raster rotationを実装 |
+| MAPPINGS 530 | strict schema、Rectangle placement、固有Perlin evaluator、穴のない解析的0..360度inverse rotationを実装 |
 
 この監査により、DVC-ENUM直後の条件付きstrict-coreは6 ID、要correctness routeは16 IDだった。
 未route追加より先に後者をstrict化し、再現不能な近似はprecise fail-closedへ戻す。
@@ -322,14 +326,18 @@ strict/exactを別に監査した。
 
 ### DVC-C0b correctness disposition（2026-08-10）
 
-- COLOR 127は`CKnightRiderEffect / 0x140363FE0`へ切替え、factory TYPE/domain、
-  `DURATION`の40ms floor、Transform=1、共通Grayscaleを保持する。GrayscaleはDaslight同様、
+- C0b当時、COLOR 127は`CKnightRiderEffect / 0x140363FE0`へ切替え、factory TYPE/domain、
+  importer periodの40ms floor、Transform=1、共通Grayscaleを保持した。GrayscaleはDaslight同様、
   lane source-over完了後の8-bit qGrayとして適用し、`.sdc`はdefault falseの加算フィールドで互換を保つ。
-- COLOR 121は`CBurstEffect / 0x140362B70`とgeneric radial Burstが非等価、COLOR 131は
+- C0b当時、COLOR 121は`CBurstEffect / 0x140362B70`とgeneric radial Burstが非等価、COLOR 131は
   `CRandomFillEffect / 0x140365C70`、COLOR 133は`CSparklesEffect / 0x1403660F0`の
   per-thread qrand state/historyが非serialize、MAPPINGS 530は`CPerlinEffect / 0x140365090`が
   Rectangleを評価するのにgeneric stage-space noiseが捨てるため、全schema/domain検証後にprecise
   fail-closedとした。
+- これらは当時のdispositionである。その後、authored DURATION period保持、COLOR 131/133のstable
+  source seed、MAPPINGS 530のcontinuous fixed-hash Perlinとinverse-local rotationを実装し、該当する
+  period量子化／RNG／Perlin fail-closed境界はsupersededになった。COLOR 121/127/134のevaluator内部に
+  残る40 ms table/cacheはまだcorrectedではない。
 - MOVE 223/224とCHASER 321/325は既存showの互換bodyを壊さず、distinct evaluatorまたはrandom順、
   beam identity損失を全populated targetで常時`Approximate`として可視化する。empty Chaser no-opは
   runtime bodyを作らないためApproximateを付けない。
@@ -350,19 +358,21 @@ strict/exactを別に監査した。
   precise fail-closed 8、未route 42、条件付きexact-core 14、compatibility 4というID分類自体は変わらない。
   他のPARAM、placement、beam identity、stateful RNG境界が残るため、なお14/68をfull-domain完成率とは呼ばない。
 
-### DVC-MOVE-EXACT（2026-08-10）
+### DVC-MOVE recovered source and corrected runtime（2026-08-10）
 
-- MOVE 221–225をそれぞれ`DaslightCircle / Curve / Line / Polygon / Points`へrouteする。
-- binary global `0x1408DAC38=40 ms`、durationのfloor/min-1 frame、4 evaluatorの外側frame補間と
-  Pointsのheld outputを保持する。
+- MOVE 221–225をそれぞれ`DaslightCircle / Curve / Line / Polygon / Points`へrouteした。
+- DVC-MOVE-EXACT当時はbinary global `0x1408DAC38=40 ms`、durationのfloor/min-1 frame、
+  4 evaluatorの外側frame補間とPointsのheld outputまでruntimeに保持した。
 - Circleの解析arc、Curveのuniform Catmull-Rom 16-slice + arc length triangle traversal、
   Lineのcycle-minus-one quirk、Polygonのequal-edge time、Pointsのheld-index式を個別に実装する。
-- raw Phasingは`cycle * ID2`をselection rankごとにhalf-up整数frameへ落とし、Symmetryは
-  reverse orderの2-wing evaluatorとして保持する。BEAMID/selection identityはXML順を失わない。
+- 当時のraw Phasingは`cycle * ID2`をselection rankごとにhalf-up整数frameへ落とし、Symmetryは
+  reverse orderの2-wing evaluatorとして保持した。BEAMID/selection identityはXML順を失わない。
 - runtime-convertは18→20、未routeは42→40、条件付きexact-coreは14→18、明示compatibilityは
   4→2となる。残るcompatibilityはCHASER 321/325だけである。
-- `.dvc`互換の40 ms/quirkは専用modeに隔離する。新規authoringのSyndocal Enhanced
-  `Line / Smooth / Circle`は連続時間のまま維持し、import後にユーザーが明示切替できる。
+- その後のcorrected timing trancheが40 ms period短縮、frame-rounded Phasing、Line endpoint lossを
+  supersedeした。現行importはauthored DURATION（共通min 10 ms）とcontinuous phaseを使い、
+  Circle/Curve/Line/Polygonを連続評価する。Pointsだけは各authored vertexを等時間holdする。
+  Syndocal Enhanced `Line / Smooth / Circle`も従来どおり連続時間である。
 
 ### DVC-BURST-EXACT（2026-08-10）
 
@@ -377,6 +387,8 @@ strict/exactを別に監査した。
   明示compatibilityはCHASER 321/325の2 routeのまま、未routeは40のままである。
 - 新規authoringはEnhancedを既定とし、import bodyはDVC recovered coreを保持する。editorの明示切替で
   Enhancedへ移行できる。
+- その後の共通duration correctionでrequest periodはauthored DURATION保持へ変わったが、Burstの
+  40 ms scheduler、750 cap、16-bit/Qt palette・gradient cache、seamは現行にも残るlegacy artifactである。
 
 ### DVC-SWEEP-EXACT（2026-08-10）
 
@@ -389,24 +401,37 @@ strict/exactを別に監査した。
   `grayscale` / `vertical_symmetry`をdefault false・false時omitで加算し、legacy `.sdc` shapeを保つ。
 - runtime-convertは22→23、未routeは40→39、条件付きexact-coreは20→21。precise fail-closed 6、
   明示compatibility 2は不変。MAPPINGS 528 / COLOR MAPPINGS 44の2D placementは本claimに含めない。
-- `.dvc` importは`daslight_exact=true`で粗い40 ms gridを隔離し、新規authoringは連続時間Enhancedを
-  既定とする。editorから明示的に相互切替できる。
+- その後の共通duration correctionで`.dvc` request periodはauthored DURATIONを保持する。
+  `daslight_exact=true`のSweep evaluator内部には粗い40 ms grid、750 cap、Qt foldが現行にも残り、
+  新規authoringは連続時間Enhancedを既定とする。editorから明示的に相互切替できる。
 - 200灯体 x 64 exact Sweepのrelease 44Hz計測はp95 4.023 ms / p99 5.080 ms /
   max 6.112 msで5/8/12 ms gateを通過した。全workspace test、production frontend build、
   localization 3066/3066、Scene Settings 5 viewport、`tauri build --no-bundle`とexact checkoutの
   responsive native windowまで確認した。
 
-### DVC-PERLIN-EXACT（2026-08-10）
+### DVC-PERLIN recovered source and corrected runtime（2026-08-10）
 
-- `CPerlinEffect / 0x140365090`のsigned hash、cosine interpolation、degree-truncated sine lookup、
-  octave attenuation、40 ms scheduler、750生成frame cap、cyclic palette cacheをVALUE 628 / COLOR 128 /
-  MAPPINGS 530の共有exact evaluatorとして実装した。DirectionはDaslight同様に保存するが評価器では消費しない。
-- common postprocessのTransform foldとqGrayをpalette合成後に適用する。MAPPINGSはRectangleの100 x 100
-  raster cellを使い、Rotation 0..360はQt 5の`QImage::transformed(FastTransformation)`と100 x 100
-  `drawImage`の2段16.16固定小数sampling、26.6 outline、全scanline raster boundaryまで再現する。
-- Daslight同梱Qt5Gui.dllをオラクルに0..360度 x 100 x 100セルの3,610,000座標を全比較し差分0、
-  source x/y列のFNV-1a64 `b8c647db6b017785`を回帰固定した。runtime-convertは23→26、
-  precise fail-closedは6→4、未routeは39→38、条件付きexact-coreは21→24となる。
+- `CPerlinEffect / 0x140365090`からsigned fixed hash、cosine interpolation、octave attenuation、
+  Transform、qGray、palette orderを回収した。これらは見た目を構成する演出契約としてVALUE 628 /
+  COLOR 128 / MAPPINGS 530の共有evaluatorに保持する。serialized field名`daslight_exact`はlegacy
+  `.sdc`互換のため残すが、`true`の製品上の意味はDVC corrected evaluatorである。
+- 回収時に証明した40 ms scheduler、750生成frame cap、65,536-entry integer palette cache、
+  degree-truncated sine lookup、Qt nearest-neighbour raster rotationは生成・timer・cache実装由来であり、
+  runtime契約にはしない。authored `DURATION`を連続phaseとして評価し、fixed hashとcosine weightへ
+  解析的sineを直接適用する。paletteは同じcyclic authored orderを解析的に補間し、Transform後の
+  palette合成色へqGrayを適用する。
+- DVC `Direction`の整数域`1..100`は`degrees = (raw - 1) * 360 / 99`で線形変換する。
+  したがって`1 = 0°`、factory default `2 = 3.636...°`、`100 = 360°`であり、defaultは回収元の
+  +X向きに近い。spatial phaseはzoom後座標`(x,y)`に対し
+  `TAU * (x * cos(theta) + y * sin(theta))`を加える。`Speed`はauthored period内の整数cycle数なので、
+  Directionを実際に効かせてもperiod境界は連続する。
+- MAPPINGS rotationは100 x 100 Qt imageを作らず、中心`(0.5,0.5)`まわりに連続座標をinverse rotate
+  してunbounded Perlin fieldを直接sampleする。これによりnearest-neighbour hole、edge smear、固定小数
+  boundaryを除去する。Rectangle placementも同じinverse-local座標を使うため、ANGLE付きmaskとsampling
+  frameは一致する。
+- Qt5Gui.dllで全比較した3,610,000座標とFNV-1a64 `b8c647db6b017785`は、旧挙動の逆解析が正しかった
+  ことを示すrecovery oracleとして保存するが、production regression contractにはしない。
+  runtime-convertは23→26、precise fail-closedは6→4、未routeは39→38、条件付きexact-coreは21→24となる。
 
 ### DVC-CURVE recovered source and corrected runtime（2026-08-10）
 
@@ -416,8 +441,10 @@ strict/exactを別に監査した。
   既存LFO bodyへrouteした。その後のcorrected-import監査で、DVC Squareも連続時間の等幅bandへ変更し、
   `floor(400/Rate)`の終端residueを除去した。native Syndocal Squareは従来の連続時間を維持する。
 - 同じ監査でID3 Inverse Ramp / 7 Sinusの40ms hold、ID10 Strobeの`floor(25/Rate)`周波数誤差を
-  除去した。Strobeの40ms最小flash幅とPhase dutyは演出特性として保持する。ID4 Pulseは回収carrierを
-  保ち、固定0.005 windowと40ms holdをnormalized continuous windowへ訂正してrouteした。
+  除去した。初期回収時に保持したStrobeの40ms最小flash幅はその後supersededになり、現行はexact
+  authored `1/Rate` intervalとRate非依存のdimensionless base duty 20%（Phaseで`max(0.2, Phase/2)`）を
+  使う。ID4 Pulseは回収carrierを保ち、固定0.005 windowと40ms holdをnormalized continuous windowへ
+  訂正してrouteした。
 - runtime-convertは26→27、未routeは38→37、条件付きexact-coreは24→25。precise fail-closed 4と
   明示compatibility 2は不変。
 
@@ -431,8 +458,9 @@ strict/exactを別に監査した。
 3. Spiral/Butterfly/MediaとCOLOR MAPPINGS専用13 classはschema/evaluator入口までで、
    raster algorithm bodyの意味論が未復元。
 4. `TYPE7 Shape`のserialized glyph表現と`TYPE10 Text Direction`の合法enum域は未証明。
-5. Sparkle/Random fillは外部per-thread qrand履歴のため、evaluator addressとschemaだけでは
-   replay exactnessにならない。Perlin固有evaluatorとraster rotation境界は解消済み。
+5. Sparkle/Random fillの外部per-thread qrand履歴そのものはreplay不能だが、作者が保存した
+   schemaと演出grammarをstable source seedでCorrected実装済み。正本は
+   `qa/DVC_RANDOM_CORRECTED_PARITY.md`。
 6. factoryにないID空隙が予約か廃止かは製品履歴の問題で、現バイナリからは断言しない。
 
 この境界より内側だけを次トランシェへ渡し、UI名の類似やSyndocal既存recipeへの近似で埋めない。

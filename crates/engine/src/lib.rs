@@ -1,9 +1,9 @@
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     sync::{
         atomic::{AtomicU32, AtomicU64, Ordering},
-        mpsc, Arc, Condvar, Mutex, OnceLock, RwLock, Weak,
+        mpsc, Arc, Condvar, Mutex, RwLock, Weak,
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -3196,8 +3196,18 @@ enum RuntimeEffectKind {
 }
 
 fn clear_runtime_effect_caches(kind: &RuntimeEffectKind) {
+    clear_runtime_effect_caches_with_policy(kind, true);
+}
+
+fn clear_runtime_effect_sample_caches(kind: &RuntimeEffectKind) {
+    clear_runtime_effect_caches_with_policy(kind, false);
+}
+
+fn clear_runtime_effect_caches_with_policy(kind: &RuntimeEffectKind, clear_sparkle_state: bool) {
     match kind {
-        RuntimeEffectKind::Color(runtime) => clear_runtime_color_effect_caches(runtime),
+        RuntimeEffectKind::Color(runtime) => {
+            clear_runtime_color_effect_caches(runtime, clear_sparkle_state)
+        }
         RuntimeEffectKind::Chaser(runtime) => {
             for cache in runtime.target_level_cache.values() {
                 cache.set(None);
@@ -3216,7 +3226,7 @@ fn clear_runtime_effect_caches(kind: &RuntimeEffectKind) {
                 target.cached.set(None);
             }
             if let Some(spatial) = runtime.spatial.as_deref() {
-                clear_runtime_color_effect_caches(spatial);
+                clear_runtime_color_effect_caches(spatial, clear_sparkle_state);
             }
         }
         RuntimeEffectKind::Curve(runtime) => {
@@ -3238,11 +3248,16 @@ fn clear_runtime_effect_caches(kind: &RuntimeEffectKind) {
     }
 }
 
-fn clear_runtime_color_effect_caches(runtime: &RuntimeColorEffect) {
+fn clear_runtime_color_effect_caches(runtime: &RuntimeColorEffect, clear_sparkle_state: bool) {
     for target in &runtime.targets {
         target.cached.set(None);
     }
     if let Some(spatial) = runtime.spatial.as_deref() {
+        if clear_sparkle_state {
+            if let Some(random_fx) = spatial.syndocal_random_fx.as_ref() {
+                random_fx.clear_runtime_state();
+            }
+        }
         for target in &spatial.targets {
             target.cached.set(None);
             target.daslight_value_cached.set(None);
@@ -3499,83 +3514,82 @@ struct RuntimeColorEffect {
 struct RuntimeColorSpatialState {
     targets: Vec<RuntimeColorSpatialTarget>,
     attribute_indices: HashMap<FixtureId, HashMap<String, usize>>,
-    /// Shared Daslight-exact COLOR 127 / VALUE 624 evaluator compiled once
-    /// during command/rebuild. COLOR can supply the complete 1..255 factory
-    /// palette (0..254 lanes); VALUE remains constrained by its own 2..32
-    /// point contract. The 44 Hz path only samples the completed frame table.
+    /// Dense O(1) fixture-to-target join for the common one-spatial-target per
+    /// fixture case. Sparse IDs and multi-beam fixtures keep the general map.
+    dense_fixture_targets: Option<RuntimeColorSpatialDenseFixtureTargets>,
+    /// Shared DVC-corrected COLOR 127 / VALUE 624 analytic geometry compiled
+    /// once during command/rebuild. COLOR can supply the complete 1..255
+    /// factory palette (0..254 lanes); VALUE remains constrained by its own
+    /// 2..32 point contract.
     daslight_knight_rider: Option<CompiledDaslightKnightRider>,
-    /// Shared Daslight-exact COLOR 121 / VALUE 622 evaluator. Unlike the
-    /// native Burst recipe, this preserves CBurstEffect's pixel-radius domain,
-    /// cyclic 16-bit palette cache and generated-frame interpolation.
+    /// Shared DVC-corrected COLOR 121 / VALUE 622 evaluator preserving
+    /// CBurstEffect's pixel-centre radius and cyclic palette semantics without
+    /// its fixed lookup/cache artifacts.
     daslight_burst: Option<CompiledDaslightBurst>,
-    /// Shared Daslight-exact COLOR 134 / VALUE 625 generated-frame sampler.
-    /// Native authoring keeps the continuous Enhanced Sweep path instead.
+    /// Shared DVC-corrected COLOR 134 / VALUE 625 continuous hard-boundary
+    /// sampler. Native authoring keeps the Enhanced Sweep path separate.
     daslight_sweep: Option<CompiledDaslightSweep>,
-    /// Shared Daslight-exact COLOR 128 / MAPPINGS 530 / VALUE 628 fixed-hash
-    /// cosine-noise evaluator. Native authoring keeps the higher-resolution,
-    /// direction-aware Enhanced Perlin path instead.
+    /// Deterministic, continuous replacement for the unavailable Qt qrand
+    /// stream used by DVC Random fill and Sparkle generators.
+    syndocal_random_fx: Option<CompiledSyndocalRandomFx>,
+    /// Shared DVC-corrected COLOR 128 / MAPPINGS 530 / VALUE 628 fixed-hash
+    /// cosine-noise evaluator. It preserves the recovered procedural character
+    /// without the 40 ms table, Qt raster rotation or integer palette cache.
     daslight_perlin: Option<CompiledDaslightPerlin>,
 }
 
-const DASLIGHT_VALUE_FRAME_MS: u64 = 40;
-const DASLIGHT_VALUE_FRAME_CAP: usize = 750;
-const DASLIGHT_KNIGHT_FRAME_TABLE_MAX_BYTES: usize = 2 * 1024 * 1024;
-const DASLIGHT_BURST_PALETTE_CACHE_SIZE: usize = 65_536;
-const DASLIGHT_QT_GRADIENT_TABLE_SIZE: usize = 1_024;
-const DASLIGHT_BURST_SEAM_EPSILON: f64 = 1.0e-5;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct DaslightBurstPaletteCacheKey {
-    colors: Vec<[u16; 3]>,
-    gradient_bits: u32,
+#[derive(Clone)]
+struct RuntimeColorSpatialDenseFixtureTargets {
+    first_fixture_id: FixtureId,
+    target_indices: Vec<Option<usize>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct DaslightBurstFrameCacheKey {
-    palette: DaslightBurstPaletteCacheKey,
-    table_frame_count: usize,
-    strip_count: usize,
-    color_width_bits: u32,
-    vertical_symmetry: bool,
-    grayscale: bool,
+impl RuntimeColorSpatialDenseFixtureTargets {
+    fn compile(
+        targets: &[RuntimeColorSpatialTarget],
+        attribute_indices: &HashMap<FixtureId, HashMap<String, usize>>,
+    ) -> Option<Self> {
+        let first_fixture_id = attribute_indices.keys().copied().min()?;
+        let last_fixture_id = attribute_indices.keys().copied().max()?;
+        let span = last_fixture_id
+            .checked_sub(first_fixture_id)?
+            .checked_add(1)
+            .and_then(|span| usize::try_from(span).ok())?;
+        if span > targets.len().saturating_mul(4).max(1) {
+            return None;
+        }
+        let mut target_indices = vec![None; span];
+        for (fixture_id, attributes) in attribute_indices {
+            let mut indices = attributes.values().copied();
+            let target_index = indices.next()?;
+            if indices.any(|index| index != target_index) {
+                return None;
+            }
+            let dense_index = usize::try_from(fixture_id.checked_sub(first_fixture_id)?).ok()?;
+            target_indices[dense_index] = Some(target_index);
+        }
+        Some(Self {
+            first_fixture_id,
+            target_indices,
+        })
+    }
+
+    fn target_index(&self, fixture_id: FixtureId) -> Option<usize> {
+        let index = usize::try_from(fixture_id.checked_sub(self.first_fixture_id)?).ok()?;
+        self.target_indices.get(index).copied().flatten()
+    }
 }
 
-static DASLIGHT_BURST_PALETTE_CACHE: OnceLock<
-    Mutex<HashMap<DaslightBurstPaletteCacheKey, Weak<Vec<DaslightKnightColor>>>>,
-> = OnceLock::new();
-static DASLIGHT_BURST_GRADIENT_TABLE_CACHE: OnceLock<
-    Mutex<HashMap<(usize, usize), Weak<Vec<u16>>>>,
-> = OnceLock::new();
-static DASLIGHT_BURST_FRAME_CACHE: OnceLock<
-    Mutex<HashMap<DaslightBurstFrameCacheKey, Weak<Vec<DaslightKnightColor>>>>,
-> = OnceLock::new();
+const SYNDOCAL_SPARKLE_GENERATION_MS: f64 = 40.0;
+/// Bounds catch-up work after a large visual-clock discontinuity. Particle
+/// storage is independently bounded by the authored lifetime below.
+const SYNDOCAL_SPARKLE_EPOCH_JUMP_RESET_THRESHOLD: u64 = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct DaslightKnightColor {
     red: f32,
     green: f32,
     blue: f32,
-}
-
-fn daslight_knight_frame_cell_count(
-    table_frame_count: usize,
-    strip_count: usize,
-) -> Result<usize, String> {
-    let cell_count = table_frame_count.checked_mul(strip_count).ok_or_else(|| {
-        "Daslight-exact Knight Rider completed frame table size overflowed".to_string()
-    })?;
-    let byte_count = cell_count
-        .checked_mul(std::mem::size_of::<DaslightKnightColor>())
-        .ok_or_else(|| {
-            "Daslight-exact Knight Rider completed frame table byte size overflowed".to_string()
-        })?;
-    if byte_count > DASLIGHT_KNIGHT_FRAME_TABLE_MAX_BYTES {
-        return Err(format!(
-            "Daslight-exact Knight Rider completed frame table requires {byte_count} bytes, exceeding the {}-byte per-effect limit",
-            DASLIGHT_KNIGHT_FRAME_TABLE_MAX_BYTES
-        ));
-    }
-    Ok(cell_count)
 }
 
 impl DaslightKnightColor {
@@ -3629,14 +3643,11 @@ impl DaslightKnightColor {
 
 #[derive(Clone)]
 struct CompiledDaslightSweep {
-    raw_frame_count: usize,
-    table_frame_count: usize,
     strip_count: usize,
     palette: Vec<DaslightKnightColor>,
     grayscale: bool,
     vertical_symmetry: bool,
     direction_change: bool,
-    temporal_coordinate: Cell<Option<DaslightKnightTemporalCoordinate>>,
 }
 
 impl CompiledDaslightSweep {
@@ -3655,14 +3666,7 @@ impl CompiledDaslightSweep {
                 "Daslight-exact Sweep requires between 1 and 255 palette stops".to_string(),
             );
         }
-        let raw_frame_count = usize::try_from((request.period_ms / DASLIGHT_VALUE_FRAME_MS).max(1))
-            .map_err(|_| {
-                "Daslight-exact Sweep frame count does not fit this platform".to_string()
-            })?;
-        let table_frame_count = raw_frame_count.min(DASLIGHT_VALUE_FRAME_CAP);
         Ok(Self {
-            raw_frame_count,
-            table_frame_count,
             strip_count: strip_count.max(1),
             palette: request
                 .stops
@@ -3672,28 +3676,23 @@ impl CompiledDaslightSweep {
             grayscale,
             vertical_symmetry,
             direction_change,
-            temporal_coordinate: Cell::new(None),
         })
     }
 
-    fn frame_color(&self, frame_index: usize, destination_index: usize) -> DaslightKnightColor {
-        let source_index = if self.vertical_symmetry {
-            daslight_vertical_fold_source_index(destination_index, self.strip_count)
-        } else {
-            Some(destination_index.min(self.strip_count - 1))
-        };
-        let Some(source_index) = source_index else {
-            return DaslightKnightColor::from_color(black_color());
-        };
+    fn sample_at_phase(&self, time_phase: f64, destination_index: usize) -> ColorEffectColor {
+        let source_position = daslight_corrected_source_position(
+            destination_index,
+            self.strip_count,
+            self.vertical_symmetry,
+        );
         let palette_count = self.palette.len();
-        let phase = frame_index as f32 / self.table_frame_count as f32;
-        let scaled = phase * palette_count as f32;
+        let scaled = time_phase.rem_euclid(1.0) * palette_count as f64;
         let transition_index = scaled.floor() as usize % palette_count;
-        let swept_cells = (scaled.fract() * self.strip_count as f32).trunc() as usize;
+        let boundary = scaled.fract() * self.strip_count as f64;
         let uses_next = if self.direction_change && transition_index % 2 == 1 {
-            source_index >= self.strip_count.saturating_sub(swept_cells)
+            source_position >= self.strip_count as f64 - boundary
         } else {
-            source_index < swept_cells
+            source_position + 1.0 <= boundary
         };
         let mut color = if uses_next {
             self.palette[(transition_index + 1) % palette_count]
@@ -3703,46 +3702,655 @@ impl CompiledDaslightSweep {
         if self.grayscale {
             color = DaslightKnightColor::from_color(daslight_grayscale_color(color.into_color()));
         }
-        color
-    }
-
-    fn temporal_coordinate(&self, raw_tick: i64) -> DaslightKnightTemporalCoordinate {
-        if let Some(cached) = self
-            .temporal_coordinate
-            .get()
-            .filter(|cached| cached.raw_tick == raw_tick)
-        {
-            return cached;
-        }
-        let tick = raw_tick.rem_euclid(self.raw_frame_count as i64) as usize;
-        let unit = tick as f32 / self.raw_frame_count as f32;
-        let position = (self.table_frame_count - 1) as f32 * unit;
-        let lower = (f64::from(position).floor() as usize).min(self.table_frame_count - 1);
-        let coordinate = DaslightKnightTemporalCoordinate {
-            raw_tick,
-            lower,
-            upper: (lower + 1).min(self.table_frame_count - 1),
-            amount: position - lower as f32,
-        };
-        self.temporal_coordinate.set(Some(coordinate));
-        coordinate
-    }
-
-    fn sample_at_tick(&self, raw_tick: i64, destination_index: usize) -> ColorEffectColor {
-        let coordinate = self.temporal_coordinate(raw_tick);
-        let first = self.frame_color(coordinate.lower, destination_index);
-        if coordinate.amount <= 0.0 || coordinate.lower == coordinate.upper {
-            return first.into_color();
-        }
-        first
-            .interpolate(
-                self.frame_color(coordinate.upper, destination_index),
-                coordinate.amount,
-            )
-            .into_color()
+        color.into_color()
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SyndocalSparkleParticle {
+    generation_epoch: u64,
+    particle_index: usize,
+    born_visual_ms: f64,
+    start: usize,
+    particle_seed: u64,
+}
+
+impl SyndocalSparkleParticle {
+    fn palette_index_for_count(self, palette_count: usize) -> usize {
+        if palette_count > 1 {
+            1 + (splitmix64(self.particle_seed ^ 0xA53C_9E17) % (palette_count - 1) as u64) as usize
+        } else {
+            0
+        }
+    }
+}
+
+#[derive(Debug)]
+struct SyndocalSparkleState {
+    particles: Vec<SyndocalSparkleParticle>,
+    strip: Vec<ColorEffectColor>,
+    last_created_at: Option<Instant>,
+    last_now: Option<Instant>,
+    last_visual_ms: f64,
+    rendered_visual_ms: Option<f64>,
+    max_particles: usize,
+    #[cfg(test)]
+    render_count: usize,
+    #[cfg(test)]
+    reset_count: usize,
+}
+
+impl Clone for SyndocalSparkleState {
+    fn clone(&self) -> Self {
+        Self {
+            // Runtime clones preserve occupancy without reserving the maximum
+            // authored population in every copied activation.
+            particles: self.particles.clone(),
+            strip: self.strip.clone(),
+            last_created_at: self.last_created_at,
+            last_now: self.last_now,
+            last_visual_ms: self.last_visual_ms,
+            rendered_visual_ms: self.rendered_visual_ms,
+            max_particles: self.max_particles,
+            #[cfg(test)]
+            render_count: self.render_count,
+            #[cfg(test)]
+            reset_count: self.reset_count,
+        }
+    }
+}
+
+impl SyndocalSparkleState {
+    fn new(strip_count: usize, number: usize, lifetime_ms: f64) -> Self {
+        let max_particles = number.saturating_mul(
+            usize::try_from(Self::lifetime_generations(lifetime_ms))
+                .unwrap_or(usize::MAX)
+                .saturating_add(1),
+        );
+        Self {
+            particles: Vec::with_capacity(max_particles),
+            strip: vec![black_color(); strip_count.max(1)],
+            last_created_at: None,
+            last_now: None,
+            last_visual_ms: 0.0,
+            rendered_visual_ms: None,
+            max_particles,
+            #[cfg(test)]
+            render_count: 0,
+            #[cfg(test)]
+            reset_count: 0,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.particles.clear();
+        self.last_created_at = None;
+        self.last_now = None;
+        self.last_visual_ms = 0.0;
+        self.rendered_visual_ms = None;
+        self.strip.fill(black_color());
+    }
+
+    fn invalidate_rendered_strip(&mut self) {
+        self.rendered_visual_ms = None;
+    }
+
+    fn lifetime_generations(lifetime_ms: f64) -> u64 {
+        (lifetime_ms / SYNDOCAL_SPARKLE_GENERATION_MS)
+            .ceil()
+            .clamp(0.0, u64::MAX as f64) as u64
+    }
+
+    fn loop_epochs(period_ms: f64) -> u64 {
+        ((period_ms / SYNDOCAL_SPARKLE_GENERATION_MS)
+            .floor()
+            .clamp(0.0, u64::MAX as f64) as u64)
+            .max(1)
+    }
+
+    fn generation_epoch(visual_ms: f64) -> u64 {
+        if !visual_ms.is_finite() || visual_ms <= 0.0 {
+            0
+        } else {
+            (visual_ms / SYNDOCAL_SPARKLE_GENERATION_MS)
+                .floor()
+                .clamp(0.0, u64::MAX as f64) as u64
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_epoch(
+        &mut self,
+        generation_epoch: u64,
+        born_visual_ms: f64,
+        loop_epochs: u64,
+        number: usize,
+        width: usize,
+        rng_seed: u32,
+    ) {
+        let source_width = self.strip.len().max(1);
+        let sparkle_width = width.min(source_width);
+        let start_count = source_width.saturating_sub(sparkle_width) + 1;
+        // DVC repeats its discrete floor(period/40) frame grid. Absolute
+        // epochs keep cadence and particle identity monotonic while only the
+        // seed epoch wraps to repeat placement and palette choices.
+        let seed_epoch = generation_epoch % loop_epochs;
+        for particle_index in 0..number {
+            let particle_seed = splitmix64(
+                u64::from(rng_seed)
+                    ^ seed_epoch.wrapping_mul(0xA24B_AED4_963E_E407)
+                    ^ (particle_index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+            );
+            self.particles.push(SyndocalSparkleParticle {
+                generation_epoch,
+                particle_index,
+                born_visual_ms,
+                start: (particle_seed % start_count as u64) as usize,
+                particle_seed,
+            });
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn reset(
+        &mut self,
+        visual_ms: f64,
+        created_at: Instant,
+        now: Instant,
+        number: usize,
+        lifetime_ms: f64,
+        period_ms: f64,
+        width: usize,
+        rng_seed: u32,
+    ) {
+        self.particles.clear();
+        let current_epoch = Self::generation_epoch(visual_ms);
+        let first_epoch = current_epoch.saturating_sub(Self::lifetime_generations(lifetime_ms));
+        let loop_epochs = Self::loop_epochs(period_ms);
+        for generation_epoch in first_epoch..=current_epoch {
+            let born_visual_ms = generation_epoch as f64 * SYNDOCAL_SPARKLE_GENERATION_MS;
+            if visual_ms - born_visual_ms >= lifetime_ms {
+                continue;
+            }
+            self.spawn_epoch(
+                generation_epoch,
+                born_visual_ms,
+                loop_epochs,
+                number,
+                width,
+                rng_seed,
+            );
+        }
+        self.particles
+            .retain(|particle| visual_ms - particle.born_visual_ms < lifetime_ms);
+        debug_assert!(self.particles.len() <= self.max_particles);
+        self.last_created_at = Some(created_at);
+        self.last_now = Some(now);
+        self.last_visual_ms = visual_ms;
+        #[cfg(test)]
+        {
+            self.reset_count += 1;
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn update(
+        &mut self,
+        visual_ms: f64,
+        created_at: Instant,
+        now: Instant,
+        number: usize,
+        lifetime_ms: f64,
+        period_ms: f64,
+        width: usize,
+        grayscale: bool,
+        rng_seed: u32,
+        palette: &[ColorEffectColor],
+    ) {
+        let visual_ms = if visual_ms.is_finite() {
+            visual_ms.max(0.0)
+        } else {
+            0.0
+        };
+        let previous_epoch = Self::generation_epoch(self.last_visual_ms);
+        let current_epoch = Self::generation_epoch(visual_ms);
+        let wall_discontinuity = self.last_now.is_some_and(|last_now| {
+            now.checked_duration_since(last_now).is_none()
+                || now.saturating_duration_since(last_now).as_secs_f64() * 1_000.0
+                    > lifetime_ms + SYNDOCAL_SPARKLE_GENERATION_MS
+        });
+        if self.rendered_visual_ms == Some(visual_ms)
+            && self.last_created_at == Some(created_at)
+            && !wall_discontinuity
+        {
+            self.last_now = Some(now);
+            return;
+        }
+        let reverse = self.last_now.is_some() && visual_ms < self.last_visual_ms;
+        let epoch_jump = current_epoch.saturating_sub(previous_epoch);
+        let must_reset = self.last_now.is_none()
+            || self.last_created_at != Some(created_at)
+            || wall_discontinuity
+            || reverse
+            || epoch_jump >= SYNDOCAL_SPARKLE_EPOCH_JUMP_RESET_THRESHOLD;
+
+        if must_reset {
+            self.reset(
+                visual_ms,
+                created_at,
+                now,
+                number,
+                lifetime_ms,
+                period_ms,
+                width,
+                rng_seed,
+            );
+        } else {
+            self.particles
+                .retain(|particle| visual_ms - particle.born_visual_ms < lifetime_ms);
+            if current_epoch > previous_epoch {
+                let first_epoch = previous_epoch
+                    .saturating_add(1)
+                    .max(current_epoch.saturating_sub(Self::lifetime_generations(lifetime_ms)));
+                let loop_epochs = Self::loop_epochs(period_ms);
+                for generation_epoch in first_epoch..=current_epoch {
+                    self.spawn_epoch(
+                        generation_epoch,
+                        generation_epoch as f64 * SYNDOCAL_SPARKLE_GENERATION_MS,
+                        loop_epochs,
+                        number,
+                        width,
+                        rng_seed,
+                    );
+                }
+            }
+            self.particles
+                .retain(|particle| visual_ms - particle.born_visual_ms < lifetime_ms);
+            debug_assert!(self.particles.len() <= self.max_particles);
+            self.last_created_at = Some(created_at);
+            self.last_now = Some(now);
+            self.last_visual_ms = visual_ms;
+        }
+
+        self.strip.fill(black_color());
+        let sparkle_width = width.min(self.strip.len());
+        for particle in &self.particles {
+            let age_ms = visual_ms - particle.born_visual_ms;
+            if age_ms >= lifetime_ms {
+                continue;
+            }
+            let alpha = (1.0 - age_ms / lifetime_ms).clamp(0.0, 1.0) as f32;
+            let particle_color = palette[particle.palette_index_for_count(palette.len())];
+            for color in &mut self.strip[particle.start..particle.start + sparkle_width] {
+                *color = interpolate_color_effect_color(
+                    *color,
+                    particle_color,
+                    alpha,
+                    ColorEffectInterpolation::Rgb,
+                );
+            }
+        }
+        if grayscale {
+            for color in &mut self.strip {
+                *color = daslight_grayscale_color(*color);
+            }
+        }
+        self.rendered_visual_ms = Some(visual_ms);
+        #[cfg(test)]
+        {
+            self.render_count += 1;
+        }
+    }
+}
+
+#[derive(Clone)]
+enum CompiledSyndocalRandomFx {
+    RandomFill {
+        point_width: usize,
+        cell_count: usize,
+        grayscale: bool,
+        vertical_symmetry: bool,
+        palette: Arc<[ColorEffectColor]>,
+        /// One deterministic no-replacement rank per palette transition and
+        /// source cell. This replaces Qt's unavailable process-global qrand
+        /// history while preserving Random fill's authored visual grammar.
+        ranks: Arc<[u32]>,
+    },
+    Sparkle {
+        number: usize,
+        lifetime_ms: f64,
+        width: usize,
+        grayscale: bool,
+        vertical_symmetry: bool,
+        rng_seed: u32,
+        period_ms: f64,
+        palette: Arc<[ColorEffectColor]>,
+        state: RefCell<SyndocalSparkleState>,
+    },
+}
+
+struct PreservedSyndocalSparkleState {
+    number: usize,
+    lifetime_ms: f64,
+    width: usize,
+    rng_seed: u32,
+    strip_count: usize,
+    state: RefCell<SyndocalSparkleState>,
+}
+
+impl CompiledSyndocalRandomFx {
+    fn compile(request: &ColorEffectRequest, strip_count: usize) -> Result<Option<Self>, String> {
+        let Some(pattern) = request.spatial_pattern.as_ref() else {
+            return Ok(None);
+        };
+        let palette = request
+            .stops
+            .iter()
+            .map(|stop| stop.color)
+            .collect::<Arc<[_]>>();
+        match &pattern.recipe {
+            ColorEffectSpatialRecipe::RandomFill {
+                syndocal_corrected: true,
+                grayscale,
+                vertical_symmetry,
+                rng_seed,
+                point_width,
+                ..
+            } => {
+                let point_width = usize::from(*point_width);
+                let cell_count = strip_count.max(1).div_ceil(point_width).max(1);
+                let mut ranks = vec![0_u32; cell_count * palette.len()];
+                let mut ordered = (0..cell_count).collect::<Vec<_>>();
+                for transition in 0..palette.len() {
+                    ordered.sort_unstable_by_key(|cell| {
+                        (
+                            splitmix64(
+                                u64::from(*rng_seed)
+                                    ^ (transition as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                                    ^ (*cell as u64).wrapping_mul(0xD1B5_4A32_D192_ED03),
+                            ),
+                            *cell,
+                        )
+                    });
+                    for (rank, cell) in ordered.iter().copied().enumerate() {
+                        ranks[transition * cell_count + cell] = rank as u32;
+                    }
+                }
+                Ok(Some(Self::RandomFill {
+                    point_width,
+                    cell_count,
+                    grayscale: *grayscale,
+                    vertical_symmetry: *vertical_symmetry,
+                    palette,
+                    ranks: ranks.into(),
+                }))
+            }
+            ColorEffectSpatialRecipe::Sparkle {
+                syndocal_corrected: true,
+                grayscale,
+                vertical_symmetry,
+                rng_seed,
+                number,
+                lifetime_ms: Some(lifetime_ms),
+                // Validated import provenance only; runtime uses lifetime_ms.
+                source_lifespan: _,
+                width,
+                ..
+            } => Ok(Some(Self::Sparkle {
+                number: usize::from(*number),
+                lifetime_ms: f64::from(*lifetime_ms),
+                width: usize::from(*width),
+                grayscale: *grayscale,
+                vertical_symmetry: *vertical_symmetry,
+                rng_seed: *rng_seed,
+                period_ms: request.period_ms.max(10) as f64,
+                palette,
+                state: RefCell::new(SyndocalSparkleState::new(
+                    strip_count,
+                    usize::from(*number),
+                    f64::from(*lifetime_ms),
+                )),
+            })),
+            _ => Ok(None),
+        }
+    }
+
+    fn sample_at_time(
+        &self,
+        time_phase: f64,
+        destination_index: usize,
+        strip_count: usize,
+        created_at: Instant,
+        now: Instant,
+    ) -> ColorEffectColor {
+        match self {
+            Self::RandomFill {
+                point_width,
+                cell_count,
+                grayscale,
+                vertical_symmetry,
+                palette,
+                ranks,
+            } => {
+                let source_index = if *vertical_symmetry {
+                    daslight_vertical_fold_source_index(destination_index, strip_count)
+                } else {
+                    Some(destination_index.min(strip_count.saturating_sub(1)))
+                };
+                let Some(source_index) = source_index else {
+                    return black_color();
+                };
+                let cell = (source_index / *point_width).min(cell_count.saturating_sub(1));
+                let scaled = time_phase.rem_euclid(1.0) * palette.len() as f64;
+                let transition = scaled.floor() as usize % palette.len();
+                let progress = scaled.fract();
+                let rank =
+                    usize::try_from(ranks[transition * *cell_count + cell]).unwrap_or_default();
+                let amount = (progress * *cell_count as f64 - rank as f64).clamp(0.0, 1.0);
+                let mut color = interpolate_color_effect_color(
+                    palette[transition],
+                    palette[(transition + 1) % palette.len()],
+                    amount as f32,
+                    ColorEffectInterpolation::Rgb,
+                );
+                if *grayscale {
+                    color = daslight_grayscale_color(color);
+                }
+                color
+            }
+            Self::Sparkle {
+                number,
+                lifetime_ms,
+                width,
+                grayscale,
+                vertical_symmetry,
+                rng_seed,
+                period_ms,
+                palette,
+                state,
+            } => {
+                let source_index = if *vertical_symmetry {
+                    daslight_vertical_fold_source_index(destination_index, strip_count)
+                } else {
+                    Some(destination_index.min(strip_count.saturating_sub(1)))
+                };
+                let Some(source_index) = source_index else {
+                    return black_color();
+                };
+                let mut state = state.borrow_mut();
+                state.update(
+                    time_phase * *period_ms,
+                    created_at,
+                    now,
+                    *number,
+                    *lifetime_ms,
+                    *period_ms,
+                    *width,
+                    *grayscale,
+                    *rng_seed,
+                    palette,
+                );
+                state
+                    .strip
+                    .get(source_index)
+                    .copied()
+                    .unwrap_or_else(black_color)
+            }
+        }
+    }
+
+    fn clear_runtime_state(&self) {
+        if let Self::Sparkle { state, .. } = self {
+            state.borrow_mut().clear();
+        }
+    }
+
+    fn take_sparkle_state(&mut self) -> Option<PreservedSyndocalSparkleState> {
+        let Self::Sparkle {
+            number,
+            lifetime_ms,
+            width,
+            rng_seed,
+            state,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let strip_count = state.get_mut().strip.len();
+        Some(PreservedSyndocalSparkleState {
+            number: *number,
+            lifetime_ms: *lifetime_ms,
+            width: *width,
+            rng_seed: *rng_seed,
+            strip_count,
+            state: std::mem::replace(
+                state,
+                RefCell::new(SyndocalSparkleState::new(
+                    strip_count,
+                    *number,
+                    *lifetime_ms,
+                )),
+            ),
+        })
+    }
+
+    fn restore_sparkle_state(&mut self, mut preserved: PreservedSyndocalSparkleState) -> bool {
+        let Self::Sparkle {
+            number,
+            lifetime_ms,
+            width,
+            rng_seed,
+            state,
+            ..
+        } = self
+        else {
+            return false;
+        };
+        if *number != preserved.number
+            || *lifetime_ms != preserved.lifetime_ms
+            || *width != preserved.width
+            || *rng_seed != preserved.rng_seed
+            || state.get_mut().strip.len() != preserved.strip_count
+        {
+            return false;
+        }
+        preserved.state.get_mut().invalidate_rendered_strip();
+        *state = preserved.state;
+        true
+    }
+
+    fn migrate_compatible_sparkle_state_from(&mut self, previous: &mut Self) -> bool {
+        previous
+            .take_sparkle_state()
+            .is_some_and(|preserved| self.restore_sparkle_state(preserved))
+    }
+}
+
+fn runtime_color_random_fx_mut(
+    runtime: &mut RuntimeColorEffect,
+) -> Option<&mut CompiledSyndocalRandomFx> {
+    runtime
+        .spatial
+        .as_deref_mut()
+        .and_then(|spatial| spatial.syndocal_random_fx.as_mut())
+}
+
+fn take_runtime_sparkle_state(
+    kind: &mut RuntimeEffectKind,
+) -> Option<PreservedSyndocalSparkleState> {
+    match kind {
+        RuntimeEffectKind::Color(runtime) => {
+            runtime_color_random_fx_mut(runtime)?.take_sparkle_state()
+        }
+        RuntimeEffectKind::Value(runtime) => runtime
+            .spatial
+            .as_deref_mut()
+            .and_then(runtime_color_random_fx_mut)?
+            .take_sparkle_state(),
+        _ => None,
+    }
+}
+
+fn restore_runtime_sparkle_state(
+    kind: &mut RuntimeEffectKind,
+    preserved: PreservedSyndocalSparkleState,
+) -> bool {
+    match kind {
+        RuntimeEffectKind::Color(runtime) => runtime_color_random_fx_mut(runtime)
+            .is_some_and(|random_fx| random_fx.restore_sparkle_state(preserved)),
+        RuntimeEffectKind::Value(runtime) => runtime
+            .spatial
+            .as_deref_mut()
+            .and_then(runtime_color_random_fx_mut)
+            .is_some_and(|random_fx| random_fx.restore_sparkle_state(preserved)),
+        _ => false,
+    }
+}
+
+fn migrate_compatible_runtime_sparkle_state(
+    previous: &mut RuntimeEffectKind,
+    rebuilt: &mut RuntimeEffectKind,
+) -> bool {
+    take_runtime_sparkle_state(previous)
+        .is_some_and(|preserved| restore_runtime_sparkle_state(rebuilt, preserved))
+}
+
+fn migrate_compatible_color_sparkle_state(
+    previous: &mut RuntimeColorEffect,
+    rebuilt: &mut RuntimeColorEffect,
+) -> bool {
+    let Some(previous) = runtime_color_random_fx_mut(previous) else {
+        return false;
+    };
+    let Some(rebuilt) = runtime_color_random_fx_mut(rebuilt) else {
+        return false;
+    };
+    rebuilt.migrate_compatible_sparkle_state_from(previous)
+}
+
+fn migrate_compatible_value_sparkle_state(
+    previous: &mut RuntimeValueEffect,
+    rebuilt: &mut RuntimeValueEffect,
+) -> bool {
+    let Some(previous) = previous
+        .spatial
+        .as_deref_mut()
+        .and_then(runtime_color_random_fx_mut)
+    else {
+        return false;
+    };
+    let Some(rebuilt) = rebuilt
+        .spatial
+        .as_deref_mut()
+        .and_then(runtime_color_random_fx_mut)
+    else {
+        return false;
+    };
+    rebuilt.migrate_compatible_sparkle_state_from(previous)
+}
+
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 struct CompiledDaslightPerlinOctave {
     /// Fixed lattice phases in D/A/C/B order: left-bottom, left-top,
@@ -3755,20 +4363,32 @@ struct CompiledDaslightPerlinOctave {
 
 #[derive(Debug, Clone)]
 struct CompiledDaslightPerlinTarget {
+    /// The complete fixed spatial field collapsed with
+    /// `sin(spatial + time) = sin(spatial) cos(time) + cos(spatial) sin(time)`.
+    /// Runtime sampling therefore needs no target- or octave-local trig.
+    sine_component: f64,
+    cosine_component: f64,
+    #[cfg(test)]
     octaves: Vec<CompiledDaslightPerlinOctave>,
+    #[cfg(test)]
+    directional_phase_radians: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CompiledDaslightPerlinTimeSignal {
+    cycle_bits: u64,
+    sine: f64,
+    cosine: f64,
 }
 
 #[derive(Clone)]
 struct CompiledDaslightPerlin {
-    raw_frame_count: usize,
-    table_frame_count: usize,
     speed: i32,
     amplitude: i32,
     grayscale: bool,
-    palette_cache: Arc<Vec<DaslightKnightColor>>,
+    palette: Vec<DaslightKnightColor>,
     targets: Vec<CompiledDaslightPerlinTarget>,
-    sine_table: Arc<[f64; 360]>,
-    temporal_coordinate: Cell<Option<DaslightKnightTemporalCoordinate>>,
+    time_signal: Cell<Option<CompiledDaslightPerlinTimeSignal>>,
 }
 
 fn daslight_perlin_hash_radians(x: i32, y: i32) -> f64 {
@@ -3791,177 +4411,33 @@ fn daslight_perlin_cosine_weight(fraction: f64) -> f64 {
     (1.0 - (fraction * std::f64::consts::PI).cos()) * 0.5
 }
 
-fn daslight_qround(value: f64) -> i64 {
-    if value >= 0.0 {
-        (value + 0.5).floor() as i64
-    } else {
-        (value - 0.5).ceil() as i64
-    }
+/// DVC stores Direction as the integer range 1..100. The source evaluator
+/// ignored it; corrected evaluation maps the complete domain linearly so the
+/// factory default (2) remains close to the original positive-X orientation.
+fn corrected_perlin_direction_degrees(direction: i32) -> f64 {
+    f64::from(direction - 1) * (360.0 / 99.0)
 }
 
-/// Reproduces the two Qt 5 raster operations used by Daslight's shared
-/// CAbstractColorEffect postprocessor: QImage::transformed(..., FastTransformation)
-/// followed by QPainter::drawImage into the original 100 x 100 target.
-fn daslight_perlin_rotation_source_map(rotation_degrees: i32) -> Vec<(usize, usize)> {
-    const SIZE: usize = 100;
-    const FIXED_ONE: i64 = 65_536;
-    const SAMPLE_EPSILON: f64 = 1.0 / FIXED_ONE as f64;
-
+/// Rotate an unbounded procedural field around the authored raster centre.
+/// Perlin is defined outside the 0..1 window, so intentionally do not clamp:
+/// this avoids the holes and edge smearing introduced by Qt's nearest-neighbor
+/// image rotation.
+fn corrected_perlin_inverse_rotate(
+    normalized_x: f64,
+    normalized_y: f64,
+    rotation_degrees: i32,
+) -> (f64, f64) {
     if matches!(rotation_degrees, 0 | 360) {
-        return (0..SIZE * SIZE)
-            .map(|index| (index % SIZE, index / SIZE))
-            .collect();
+        return (normalized_x, normalized_y);
     }
-
-    let cardinal_source = |x: usize, y: usize| match rotation_degrees {
-        90 => (y, SIZE - 1 - x),
-        180 => (SIZE - 1 - x, SIZE - 1 - y),
-        270 => (SIZE - 1 - y, x),
-        _ => unreachable!(),
-    };
-    if matches!(rotation_degrees, 90 | 180 | 270) {
-        return (0..SIZE * SIZE)
-            .map(|index| cardinal_source(index % SIZE, index / SIZE))
-            .collect();
-    }
-
-    let radians = f64::from(rotation_degrees) * 0.017_453_292_519_943_295_769_f64;
-    // QMatrix::rotate evaluates the CRT functions separately. Preserve that
-    // operation order because the result is later quantized to fixed point.
-    let sin = radians.sin();
-    let cos = radians.cos();
-    let map_point =
-        |x: f64, y: f64, dx: f64, dy: f64| (cos * x - sin * y + dx, sin * x + cos * y + dy);
-    let aligned_bounds = |points: &[(f64, f64); 4]| {
-        let min_x = points
-            .iter()
-            .map(|point| point.0)
-            .fold(f64::INFINITY, f64::min);
-        let min_y = points
-            .iter()
-            .map(|point| point.1)
-            .fold(f64::INFINITY, f64::min);
-        let max_x = points
-            .iter()
-            .map(|point| point.0)
-            .fold(f64::NEG_INFINITY, f64::max);
-        let max_y = points
-            .iter()
-            .map(|point| point.1)
-            .fold(f64::NEG_INFINITY, f64::max);
-        (
-            min_x.floor() as i64,
-            min_y.floor() as i64,
-            max_x.ceil() as i64,
-            max_y.ceil() as i64,
-        )
-    };
-
-    let source_corners = [
-        (0.0, 0.0),
-        (SIZE as f64, 0.0),
-        (SIZE as f64, SIZE as f64),
-        (0.0, SIZE as f64),
-    ];
-    let initial = source_corners.map(|(x, y)| map_point(x, y, 50.0, 50.0));
-    let (initial_left, initial_top, _, _) = aligned_bounds(&initial);
-    let true_dx = 50.0 - initial_left as f64;
-    let true_dy = 50.0 - initial_top as f64;
-    let transformed = source_corners.map(|(x, y)| map_point(x, y, true_dx, true_dy));
-    let (left, top, right, bottom) = aligned_bounds(&transformed);
-    let width = usize::try_from(right - left).expect("Qt rotation width must be positive");
-    let height = usize::try_from(bottom - top).expect("Qt rotation height must be positive");
-
-    // QOutlineMapper quantizes the rotated rectangle to 26.6 fixed point,
-    // and QRasterizer establishes the left edge of each covered scanline.
-    let outline = transformed.map(|(x, y)| (daslight_qround(x * 64.0), daslight_qround(y * 64.0)));
-    let min_y = transformed
-        .iter()
-        .map(|point| point.1)
-        .fold(f64::INFINITY, f64::min);
-    let max_y = transformed
-        .iter()
-        .map(|point| point.1)
-        .fold(f64::NEG_INFINITY, f64::max);
-    let control_top = 0_i64.max((min_y + 0.5).trunc() as i64);
-    let control_bottom = (height as i64 - 1).min((max_y - 0.5).trunc() as i64);
-    let mut span_starts = vec![i64::MAX; height];
-    for edge in 0..4 {
-        let mut a = outline[edge];
-        let mut b = outline[(edge + 1) % 4];
-        if a.1 > b.1 {
-            std::mem::swap(&mut a, &mut b);
-        }
-        let row_top = control_top.max((a.1 + 32) >> 6);
-        let row_bottom = control_bottom.min((b.1 - 32) >> 6);
-        if row_top > row_bottom {
-            continue;
-        }
-        let slope = if a.1 == b.1 {
-            0
-        } else {
-            (((b.0 - a.0) as f64 / (b.1 - a.1) as f64) * FIXED_ONE as f64).trunc() as i64
-        };
-        for row in row_top..=row_bottom {
-            // The aliased raster span begins at any pixel touched across the
-            // scanline's full vertical extent, not only at its centre.
-            let sample_y = if slope >= 0 {
-                row << 16
-            } else {
-                (row + 1) << 16
-            };
-            let x_fixed = 32_768_i64 + a.0 * 1_024 + ((slope * (sample_y - a.1 * 1_024)) >> 16);
-            span_starts[row as usize] = span_starts[row as usize].min(x_fixed >> 16);
-        }
-    }
-
-    // QSpanData::setupMatrix prepends a 1/65536 translation before inversion.
-    let adjusted_dx = true_dx + SAMPLE_EPSILON * (cos - sin);
-    let adjusted_dy = true_dy + SAMPLE_EPSILON * (sin + cos);
-    let inverse_m11 = cos;
-    let inverse_m12 = -sin;
-    let inverse_m21 = sin;
-    let inverse_m22 = cos;
-    let inverse_dx = (-sin * adjusted_dy) - (cos * adjusted_dx);
-    let inverse_dy = (sin * adjusted_dx) - (cos * adjusted_dy);
-    let fixed_dx = (inverse_m11 * FIXED_ONE as f64).trunc() as i64;
-    let fixed_dy = (inverse_m12 * FIXED_ONE as f64).trunc() as i64;
-
-    let scale_axis = |output: usize, extent: usize| {
-        let start = extent - SIZE;
-        let span = SIZE * 2 - extent;
-        let step = span as f64 / SIZE as f64;
-        let fixed_step = (step * FIXED_ONE as f64).trunc() as i64;
-        let fixed_first =
-            ((step * 0.5 + start as f64 - SAMPLE_EPSILON) * FIXED_ONE as f64).trunc() as i64;
-        let coordinate = (fixed_first + output as i64 * fixed_step) >> 16;
-        coordinate.clamp(start as i64, (start + span - 1) as i64) as usize
-    };
-
-    let mut result = Vec::with_capacity(SIZE * SIZE);
-    for output_y in 0..SIZE {
-        let intermediate_y = scale_axis(output_y, height);
-        let span_start = span_starts[intermediate_y];
-        debug_assert_ne!(span_start, i64::MAX);
-        let fixed_source_y = ((inverse_m22 * (intermediate_y as f64 + 0.5)
-            + inverse_m12 * (span_start as f64 + 0.5)
-            + inverse_dy)
-            * FIXED_ONE as f64)
-            .trunc() as i64;
-        let fixed_source_x = ((inverse_m21 * (intermediate_y as f64 + 0.5)
-            + inverse_m11 * (span_start as f64 + 0.5)
-            + inverse_dx)
-            * FIXED_ONE as f64)
-            .trunc() as i64;
-        for output_x in 0..SIZE {
-            let intermediate_x = scale_axis(output_x, width);
-            let delta = intermediate_x as i64 - span_start;
-            let source_x = ((fixed_source_x + delta * fixed_dx) >> 16).clamp(0, 99);
-            let source_y = ((fixed_source_y + delta * fixed_dy) >> 16).clamp(0, 99);
-            result.push((source_x as usize, source_y as usize));
-        }
-    }
-    result
+    let radians = f64::from(rotation_degrees).to_radians();
+    let (sine, cosine) = radians.sin_cos();
+    let delta_x = normalized_x - 0.5;
+    let delta_y = normalized_y - 0.5;
+    (
+        delta_x * cosine + delta_y * sine + 0.5,
+        -delta_x * sine + delta_y * cosine + 0.5,
+    )
 }
 
 impl CompiledDaslightPerlin {
@@ -3974,6 +4450,7 @@ impl CompiledDaslightPerlin {
         rotation_degrees: f32,
         octaves: u8,
         zoom: f32,
+        direction: f32,
         speed: f32,
         amplitude: f32,
     ) -> Result<Self, String> {
@@ -3982,7 +4459,7 @@ impl CompiledDaslightPerlin {
             .contains(&request.stops.len())
         {
             return Err(
-                "Daslight-exact Perlin requires between 1 and 255 palette stops".to_string(),
+                "DVC corrected Perlin requires between 1 and 255 palette stops".to_string(),
             );
         }
         let integer = |label: &str, value: f32, minimum: i32, maximum: i32| {
@@ -3992,169 +4469,163 @@ impl CompiledDaslightPerlin {
                 || value > maximum as f32
             {
                 Err(format!(
-                    "Daslight-exact Perlin {label} must be an integer within {minimum}..{maximum}"
+                    "DVC corrected Perlin {label} must be an integer within {minimum}..{maximum}"
                 ))
             } else {
                 Ok(value as i32)
             }
         };
         if !(2..=10).contains(&octaves) {
-            return Err("Daslight-exact Perlin octaves must be within 2..10".to_string());
+            return Err("DVC corrected Perlin octaves must be within 2..10".to_string());
         }
         let zoom = integer("zoom", zoom, 1, 100)?;
+        let direction = integer("direction", direction, 1, 100)?;
         let speed = integer("speed", speed, 1, 10)?;
         let amplitude = integer("amplitude", amplitude, 5, 100)?;
         let rotation_degrees = integer("rotation", rotation_degrees, 0, 360)?;
         if vertical_symmetry && horizontal_symmetry {
-            return Err("Daslight-exact Perlin supports at most one Transform axis".to_string());
+            return Err("DVC corrected Perlin supports at most one Transform axis".to_string());
         }
 
-        let raw_frame_count = usize::try_from((request.period_ms / DASLIGHT_VALUE_FRAME_MS).max(1))
-            .map_err(|_| {
-                "Daslight-exact Perlin frame count does not fit this platform".to_string()
-            })?;
-        let table_frame_count = raw_frame_count.min(DASLIGHT_VALUE_FRAME_CAP);
         let mapping_raster = request
             .spatial_pattern
             .as_ref()
             .is_some_and(|pattern| pattern.placement.is_some());
         if rotation_degrees != 0 && !mapping_raster {
             return Err(
-                "Daslight-exact Perlin rotation requires MAPPINGS raster placement".to_string(),
+                "DVC corrected Perlin rotation requires MAPPINGS raster placement".to_string(),
             );
         }
-        let rotation_source_map =
-            (rotation_degrees != 0).then(|| daslight_perlin_rotation_source_map(rotation_degrees));
-        let source_width = if mapping_raster {
-            100
-        } else {
-            runtime_targets
-                .first()
-                .map(|target| target.strip_count)
-                .unwrap_or(1)
-                .max(1)
-        };
-        let source_height = if mapping_raster { 100 } else { 1 };
+        let direction_radians = corrected_perlin_direction_degrees(direction)
+            .rem_euclid(360.0)
+            .to_radians();
+        let (direction_sine, direction_cosine) = direction_radians.sin_cos();
         let mut targets = Vec::with_capacity(runtime_targets.len());
         for target in runtime_targets {
-            let destination = if mapping_raster {
-                target.daslight_raster_cell
-            } else {
-                i32::try_from(target.strip_index).ok().map(|x| (x, 0))
-            };
-            let source = destination.and_then(|(x, y)| {
-                if x < 0 || y < 0 || x >= source_width as i32 || y >= source_height as i32 {
-                    return None;
-                }
-                let source_x = if vertical_symmetry {
-                    daslight_vertical_fold_source_index(x as usize, source_width)
+            let strip_last = target.strip_count.saturating_sub(1) as f64;
+            let (mut normalized_x, mut normalized_y, source_width, source_height) =
+                if mapping_raster {
+                    (f64::from(target.x), f64::from(target.z), 99.0, 99.0)
                 } else {
-                    Some(x as usize)
-                }?;
-                let source_y = if horizontal_symmetry {
-                    daslight_vertical_fold_source_index(y as usize, source_height)
-                } else {
-                    Some(y as usize)
-                }?;
-                let (source_x, source_y) = rotation_source_map
-                    .as_ref()
-                    .map(|source_map| source_map[source_y * 100 + source_x])
-                    .unwrap_or((source_x, source_y));
-                Some((source_x as f64, source_y as f64))
-            });
+                    let normalized_x = if target.strip_count <= 1 {
+                        0.5
+                    } else {
+                        target.strip_index as f64 / strip_last
+                    };
+                    (normalized_x, 0.0, strip_last, 0.0)
+                };
+
+            if vertical_symmetry {
+                normalized_x = f64::from(daslight_symmetry_coordinate(normalized_x as f32));
+            }
+            if horizontal_symmetry {
+                normalized_y = f64::from(daslight_symmetry_coordinate(normalized_y as f32));
+            }
+            (normalized_x, normalized_y) =
+                corrected_perlin_inverse_rotate(normalized_x, normalized_y, rotation_degrees);
+            let x = normalized_x * source_width;
+            let y = normalized_y * source_height;
+            let base_x = x / f64::from(zoom);
+            let base_y = y / f64::from(zoom);
+            // Direction was serialized but evaluator-dead in Daslight. The
+            // corrected evaluator turns it into a spatial phase projection.
+            // Speed still determines the integer temporal cycles per period,
+            // so the procedural field remains seamless at the period boundary.
+            let directional_phase_radians =
+                std::f64::consts::TAU * (base_x * direction_cosine + base_y * direction_sine);
+            #[cfg(test)]
             let mut compiled_octaves = Vec::with_capacity(usize::from(octaves - 1));
-            if let Some((x, y)) = source {
-                for octave in 0..usize::from(octaves - 1) {
-                    let frequency = 2.0_f64.powf(octave as f64);
-                    let scaled_x = x / f64::from(zoom) * frequency;
-                    let scaled_y = y / f64::from(zoom) * frequency;
-                    let lattice_x = scaled_x.trunc() as i32;
-                    let lattice_y = scaled_y.trunc() as i32;
-                    compiled_octaves.push(CompiledDaslightPerlinOctave {
-                        base_radians: [
-                            daslight_perlin_hash_radians(lattice_x, lattice_y),
-                            daslight_perlin_hash_radians(lattice_x, lattice_y.wrapping_add(1)),
-                            daslight_perlin_hash_radians(lattice_x.wrapping_add(1), lattice_y),
-                            daslight_perlin_hash_radians(
-                                lattice_x.wrapping_add(1),
-                                lattice_y.wrapping_add(1),
-                            ),
-                        ],
-                        weight_x: daslight_perlin_cosine_weight(scaled_x - f64::from(lattice_x)),
-                        weight_y: daslight_perlin_cosine_weight(scaled_y - f64::from(lattice_y)),
-                        attenuation: 0.7_f64.powf(octave as f64),
-                    });
+            let mut sine_component = 0.0_f64;
+            let mut cosine_component = 0.0_f64;
+            for octave in 0..usize::from(octaves - 1) {
+                let frequency = 2.0_f64.powf(octave as f64);
+                let scaled_x = base_x * frequency;
+                let scaled_y = base_y * frequency;
+                // Analytic rotation may legitimately leave the 0..1 raster;
+                // floor keeps Perlin interpolation continuous for negatives.
+                let lattice_x = scaled_x.floor() as i32;
+                let lattice_y = scaled_y.floor() as i32;
+                let base_radians = [
+                    daslight_perlin_hash_radians(lattice_x, lattice_y),
+                    daslight_perlin_hash_radians(lattice_x, lattice_y.wrapping_add(1)),
+                    daslight_perlin_hash_radians(lattice_x.wrapping_add(1), lattice_y),
+                    daslight_perlin_hash_radians(
+                        lattice_x.wrapping_add(1),
+                        lattice_y.wrapping_add(1),
+                    ),
+                ];
+                let weight_x = daslight_perlin_cosine_weight(scaled_x - f64::from(lattice_x));
+                let weight_y = daslight_perlin_cosine_weight(scaled_y - f64::from(lattice_y));
+                let attenuation = 0.7_f64.powf(octave as f64);
+                let lattice_weights = [
+                    (1.0 - weight_x) * (1.0 - weight_y),
+                    (1.0 - weight_x) * weight_y,
+                    weight_x * (1.0 - weight_y),
+                    weight_x * weight_y,
+                ];
+                for (base_radians, lattice_weight) in base_radians.into_iter().zip(lattice_weights)
+                {
+                    let (sine, cosine) = (base_radians + directional_phase_radians).sin_cos();
+                    let coefficient = lattice_weight * attenuation;
+                    sine_component += coefficient * sine;
+                    cosine_component += coefficient * cosine;
                 }
+                #[cfg(test)]
+                compiled_octaves.push(CompiledDaslightPerlinOctave {
+                    base_radians,
+                    weight_x,
+                    weight_y,
+                    attenuation,
+                });
             }
             targets.push(CompiledDaslightPerlinTarget {
+                sine_component,
+                cosine_component,
+                #[cfg(test)]
                 octaves: compiled_octaves,
+                #[cfg(test)]
+                directional_phase_radians,
             });
         }
-        let sine_table = Arc::new(std::array::from_fn(|degree| {
-            (degree as f64 * (std::f64::consts::PI / 180.0)).sin()
-        }));
-        // Perlin has no class-specific Gradient property. Its common
-        // palette cache is the continuous, cyclic wrap=true form.
-        let palette_cache = compiled_daslight_burst_palette_cache(request, 1.0)?;
         Ok(Self {
-            raw_frame_count,
-            table_frame_count,
             speed,
             amplitude,
             grayscale,
-            palette_cache,
+            palette: request
+                .stops
+                .iter()
+                .map(|stop| DaslightKnightColor::from_color(stop.color))
+                .collect(),
             targets,
-            sine_table,
-            temporal_coordinate: Cell::new(None),
+            time_signal: Cell::new(None),
         })
     }
 
-    fn temporal_coordinate(&self, raw_tick: i64) -> DaslightKnightTemporalCoordinate {
-        if let Some(cached) = self
-            .temporal_coordinate
-            .get()
-            .filter(|cached| cached.raw_tick == raw_tick)
-        {
-            return cached;
-        }
-        let tick = raw_tick.rem_euclid(self.raw_frame_count as i64) as usize;
-        let unit = tick as f32 / self.raw_frame_count as f32;
-        let position = (self.table_frame_count - 1) as f32 * unit;
-        let lower = (f64::from(position).floor() as usize).min(self.table_frame_count - 1);
-        let coordinate = DaslightKnightTemporalCoordinate {
-            raw_tick,
-            lower,
-            upper: (lower + 1).min(self.table_frame_count - 1),
-            amount: position - lower as f32,
-        };
-        self.temporal_coordinate.set(Some(coordinate));
-        coordinate
+    #[cfg(test)]
+    fn lattice_signal(
+        &self,
+        base_radians: f64,
+        directional_phase_radians: f64,
+        time_phase: f64,
+    ) -> f64 {
+        let cycle = time_phase.rem_euclid(1.0);
+        let time_radians = f64::from(self.speed) * std::f64::consts::TAU * cycle;
+        (base_radians + directional_phase_radians + time_radians).sin() * f64::from(self.amplitude)
+            / 100.0
     }
 
-    fn lattice_signal(&self, base_radians: f64, frame_index: usize) -> f64 {
-        let time_radians =
-            f64::from(self.speed) * (std::f64::consts::PI * 2.0) * frame_index as f64
-                / self.table_frame_count as f64;
-        let degrees =
-            ((base_radians + time_radians) * (180.0 / std::f64::consts::PI)).trunc() as i32;
-        let index = degrees.rem_euclid(360) as usize;
-        self.sine_table[index] * f64::from(self.amplitude) / 100.0
-    }
-
-    fn sample_frame_palette_byte(&self, frame_index: usize, target_index: usize) -> Option<u8> {
-        let Some(target) = self.targets.get(target_index) else {
-            return None;
-        };
-        if target.octaves.is_empty() {
-            return None;
-        }
-        let frame_index = frame_index.min(self.table_frame_count - 1);
+    #[cfg(test)]
+    fn sample_phase_palette_byte_scalar(&self, time_phase: f64, target_index: usize) -> Option<u8> {
+        let target = self.targets.get(target_index)?;
         let mut sum = 0.0_f64;
         for octave in &target.octaves {
-            let bottom_left = self.lattice_signal(octave.base_radians[0], frame_index);
-            let top_left = self.lattice_signal(octave.base_radians[1], frame_index);
-            let bottom_right = self.lattice_signal(octave.base_radians[2], frame_index);
-            let top_right = self.lattice_signal(octave.base_radians[3], frame_index);
+            let signal = |base_radians| {
+                self.lattice_signal(base_radians, target.directional_phase_radians, time_phase)
+            };
+            let bottom_left = signal(octave.base_radians[0]);
+            let top_left = signal(octave.base_radians[1]);
+            let bottom_right = signal(octave.base_radians[2]);
+            let top_right = signal(octave.base_radians[3]);
             let left = bottom_left * (1.0 - octave.weight_y) + top_left * octave.weight_y;
             let right = bottom_right * (1.0 - octave.weight_y) + top_right * octave.weight_y;
             sum += (left * (1.0 - octave.weight_x) + right * octave.weight_x) * octave.attenuation;
@@ -4162,34 +4633,47 @@ impl CompiledDaslightPerlin {
         Some((sum * 128.0 + 128.0).trunc().clamp(0.0, 255.0) as u8)
     }
 
-    fn sample_frame(&self, frame_index: usize, target_index: usize) -> DaslightKnightColor {
-        let Some(byte) = self.sample_frame_palette_byte(frame_index, target_index) else {
-            return DaslightKnightColor::from_color(black_color());
+    fn sample_phase_palette_byte(&self, time_phase: f64, target_index: usize) -> Option<u8> {
+        let Some(target) = self.targets.get(target_index) else {
+            return None;
         };
-        let byte = u16::from(byte);
-        let palette_u16 = (f32::from(byte) / 255.0 * f32::from(u16::MAX)).trunc() as u16;
-        let palette_index = (u64::from(palette_u16)
-            * self.palette_cache.len().saturating_sub(1) as u64
-            / u64::from(u16::MAX)) as usize;
-        let mut color = self.palette_cache[palette_index.min(self.palette_cache.len() - 1)];
+        let cycle = time_phase.rem_euclid(1.0);
+        let cycle_bits = cycle.to_bits();
+        let signal = self
+            .time_signal
+            .get()
+            .filter(|signal| signal.cycle_bits == cycle_bits)
+            .unwrap_or_else(|| {
+                let radians = f64::from(self.speed) * std::f64::consts::TAU * cycle;
+                let (sine, cosine) = radians.sin_cos();
+                let signal = CompiledDaslightPerlinTimeSignal {
+                    cycle_bits,
+                    sine,
+                    cosine,
+                };
+                self.time_signal.set(Some(signal));
+                signal
+            });
+        let sum = (target.sine_component * signal.cosine + target.cosine_component * signal.sine)
+            * f64::from(self.amplitude)
+            / 100.0;
+        Some((sum * 128.0 + 128.0).trunc().clamp(0.0, 255.0) as u8)
+    }
+
+    fn sample_at_phase(&self, time_phase: f64, target_index: usize) -> ColorEffectColor {
+        let Some(byte) = self.sample_phase_palette_byte(time_phase, target_index) else {
+            return black_color();
+        };
+        let palette_position = (f64::from(byte) / f64::from(u8::MAX)).rem_euclid(1.0);
+        let scaled = palette_position * self.palette.len() as f64;
+        let first_index = scaled.floor() as usize % self.palette.len();
+        let second_index = (first_index + 1) % self.palette.len();
+        let mut color = self.palette[first_index]
+            .interpolate(self.palette[second_index], scaled.fract() as f32);
         if self.grayscale {
             color = DaslightKnightColor::from_color(daslight_grayscale_color(color.into_color()));
         }
-        color
-    }
-
-    fn sample_at_tick(&self, raw_tick: i64, target_index: usize) -> ColorEffectColor {
-        let coordinate = self.temporal_coordinate(raw_tick);
-        let first = self.sample_frame(coordinate.lower, target_index);
-        if coordinate.amount <= 0.0 || coordinate.lower == coordinate.upper {
-            return first.into_color();
-        }
-        first
-            .interpolate(
-                self.sample_frame(coordinate.upper, target_index),
-                coordinate.amount,
-            )
-            .into_color()
+        color.into_color()
     }
 }
 
@@ -4203,37 +4687,21 @@ enum DaslightKnightMotion {
 
 #[derive(Debug, Clone, Copy)]
 struct CompiledDaslightKnightLane {
-    phase: f32,
+    phase: f64,
     color: DaslightKnightColor,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct DaslightKnightTemporalCoordinate {
-    raw_tick: i64,
-    lower: usize,
-    upper: usize,
-    amount: f32,
 }
 
 #[derive(Clone)]
 struct CompiledDaslightKnightRider {
-    raw_frame_count: usize,
-    table_frame_count: usize,
     strip_count: usize,
-    size: usize,
-    step: usize,
-    offset: f32,
-    reflection_cycle: usize,
+    size: f64,
     motion: DaslightKnightMotion,
+    fading: bool,
+    gradient: f64,
     vertical_symmetry: bool,
+    grayscale: bool,
     background: DaslightKnightColor,
-    profile: Arc<[f32]>,
     lanes: Arc<[CompiledDaslightKnightLane]>,
-    /// Completed source-over output for every table frame and strip cell.
-    /// Daslight's builder renders this table once; the 44 Hz path only reads
-    /// the two adjacent temporal samples.
-    frames: Arc<Vec<DaslightKnightColor>>,
-    temporal_coordinate: Cell<Option<DaslightKnightTemporalCoordinate>>,
 }
 
 impl CompiledDaslightKnightRider {
@@ -4278,699 +4746,114 @@ impl CompiledDaslightKnightRider {
             );
         }
 
-        let raw_frame_count = usize::try_from((request.period_ms / DASLIGHT_VALUE_FRAME_MS).max(1))
-            .map_err(|_| {
-                "Daslight-exact Knight Rider frame count does not fit this platform".to_string()
-            })?;
-        let source_frame_count = raw_frame_count.min(DASLIGHT_VALUE_FRAME_CAP);
         let strip_count = strip_count.max(1);
-        let size = usize::from(if vertical_symmetry {
-            authored_size.max(3)
-        } else {
-            authored_size
-        });
-        let even_adjustment = usize::from(size % 2 == 0);
-        let odd_size = size - even_adjustment;
-
         let motion = match (one_way, go_outside) {
             (true, true) => DaslightKnightMotion::OneWayOutside,
             (true, false) => DaslightKnightMotion::OneWayInside,
             (false, true) => DaslightKnightMotion::BounceOutside,
             (false, false) => DaslightKnightMotion::BounceInside,
         };
-        let checked_twice = |value: usize| {
-            value
-                .checked_mul(2)
-                .ok_or_else(|| "Daslight-exact Knight Rider descriptor size overflowed".to_string())
-        };
-        let (table_frame_count, profile_length, step, offset, reflection_cycle) = match motion {
-            DaslightKnightMotion::OneWayOutside => {
-                let base = strip_count.checked_add(size).ok_or_else(|| {
-                    "Daslight-exact Knight Rider descriptor width overflowed".to_string()
-                })?;
-                let multiplier = (source_frame_count / checked_twice(base)?).max(1);
-                (
-                    base.checked_mul(multiplier).ok_or_else(|| {
-                        "Daslight-exact Knight Rider frame count overflowed".to_string()
-                    })?,
-                    base.saturating_sub(1)
-                        .checked_mul(multiplier)
-                        .ok_or_else(|| {
-                            "Daslight-exact Knight Rider profile length overflowed".to_string()
-                        })?,
-                    multiplier,
-                    0.0,
-                    base,
-                )
-            }
-            DaslightKnightMotion::OneWayInside => {
-                let base = strip_count;
-                let multiplier = (source_frame_count / checked_twice(base)?).max(1);
-                (
-                    base.checked_mul(multiplier).ok_or_else(|| {
-                        "Daslight-exact Knight Rider frame count overflowed".to_string()
-                    })?,
-                    strip_count.checked_mul(multiplier).ok_or_else(|| {
-                        "Daslight-exact Knight Rider profile length overflowed".to_string()
-                    })?,
-                    multiplier,
-                    odd_size as f32 * 0.5 * multiplier as f32,
-                    base,
-                )
-            }
-            DaslightKnightMotion::BounceOutside => {
-                let base = strip_count.checked_add(size).ok_or_else(|| {
-                    "Daslight-exact Knight Rider descriptor width overflowed".to_string()
-                })?;
-                let mut quotient = source_frame_count / checked_twice(base)?;
-                if quotient % 2 == 1 {
-                    quotient -= 1;
-                }
-                let multiplier = quotient.max(1);
-                (
-                    checked_twice(base)?
-                        .checked_mul(multiplier)
-                        .ok_or_else(|| {
-                            "Daslight-exact Knight Rider frame count overflowed".to_string()
-                        })?,
-                    base.saturating_sub(1)
-                        .checked_mul(multiplier)
-                        .ok_or_else(|| {
-                            "Daslight-exact Knight Rider profile length overflowed".to_string()
-                        })?,
-                    multiplier,
-                    multiplier as f32,
-                    checked_twice(base)?,
-                )
-            }
-            DaslightKnightMotion::BounceInside => {
-                let base = strip_count
-                    .saturating_sub(1)
-                    .checked_add(even_adjustment)
-                    .unwrap_or(usize::MAX)
-                    .max(1);
-                let mut quotient = source_frame_count / checked_twice(base)?;
-                if quotient % 2 == 1 {
-                    quotient -= 1;
-                }
-                let multiplier = quotient.max(1);
-                (
-                    checked_twice(base)?
-                        .checked_mul(multiplier)
-                        .ok_or_else(|| {
-                            "Daslight-exact Knight Rider frame count overflowed".to_string()
-                        })?,
-                    strip_count
-                        .saturating_sub(1)
-                        .checked_add(size)
-                        .and_then(|value| value.checked_mul(multiplier))
-                        .ok_or_else(|| {
-                            "Daslight-exact Knight Rider profile length overflowed".to_string()
-                        })?,
-                    multiplier,
-                    odd_size as f32 * 0.5 * multiplier as f32,
-                    checked_twice(base)?,
-                )
-            }
-        };
-        if table_frame_count == 0 || profile_length == 0 {
-            return Err("Daslight-exact Knight Rider produced an empty descriptor".to_string());
-        }
-        let frame_cell_count = daslight_knight_frame_cell_count(table_frame_count, strip_count)?;
-
-        let lit_length = size
-            .checked_mul(step)
-            .ok_or_else(|| "Daslight-exact Knight Rider lit profile overflowed".to_string())?;
-        let gradient = gradient as usize;
-        let peak = (lit_length.saturating_sub(1) * (100_usize.saturating_sub(gradient))) / 100;
-        let mut profile = Vec::new();
-        profile
-            .try_reserve_exact(profile_length)
-            .map_err(|_| "Daslight-exact Knight Rider profile allocation failed".to_string())?;
-        for index in 0..profile_length {
-            let raw = if !fading {
-                1.0
-            } else if index >= lit_length {
-                0.0
-            } else if index <= peak {
-                if peak == 0 {
-                    1.0
-                } else {
-                    index as f32 / peak as f32
-                }
-            } else {
-                let denominator = lit_length - peak - 1;
-                1.0 - (index - peak - 1) as f32 / denominator as f32
-            };
-            // QColor::setGreenF receives the divss-derived f32 profile as
-            // qreal, then qRound performs the 16-bit conversion in double
-            // precision. Preserve that promotion boundary exactly.
-            let quantized =
-                (f64::from(raw.clamp(0.0, 1.0)) * f64::from(u16::MAX) + 0.5).floor() as u16;
-            profile.push(quantized as f32 / u16::MAX as f32);
-        }
-
         let lane_count = request.stops.len() - 1;
-        let lanes = (1..=lane_count)
-            .map(|lane| {
-                let phase = if lane_count == 1 {
-                    0.0
-                } else if one_way {
-                    (((table_frame_count - 1) as u128 * lane as u128) / lane_count as u128) as f32
-                } else {
-                    let lane = lane as i32;
-                    let lane_count = lane_count as i32;
-                    let half = lane_count / 2;
-                    if lane < half {
-                        (lane as f32 * 0.5 * table_frame_count as f32) / (lane_count - 1) as f32
-                    } else {
-                        ((lane_count - 1 - lane) as f32 * 0.5 * table_frame_count as f32)
-                            / (lane_count - 1) as f32
-                            + table_frame_count as f32 * 0.5
-                    }
-                };
-                let palette_index = (lane % lane_count) + 1;
-                CompiledDaslightKnightLane {
-                    phase,
-                    color: DaslightKnightColor::from_color(request.stops[palette_index].color),
-                }
+        let lanes = (0..lane_count)
+            .map(|lane| CompiledDaslightKnightLane {
+                phase: lane as f64 / lane_count.max(1) as f64,
+                color: DaslightKnightColor::from_color(request.stops[lane + 1].color),
             })
             .collect::<Vec<_>>();
 
-        let mut compiled = Self {
-            raw_frame_count,
-            table_frame_count,
+        Ok(Self {
             strip_count,
-            size,
-            step,
-            offset,
-            reflection_cycle,
+            size: f64::from(authored_size),
             motion,
+            fading,
+            gradient: f64::from(gradient) / 100.0,
             vertical_symmetry,
+            grayscale,
             background: DaslightKnightColor::from_color(request.stops[0].color),
-            profile: Arc::from(profile),
             lanes: Arc::from(lanes),
-            frames: Arc::new(Vec::new()),
-            temporal_coordinate: Cell::new(None),
-        };
-        let mut frames = Vec::new();
-        frames.try_reserve_exact(frame_cell_count).map_err(|_| {
-            "Daslight-exact Knight Rider completed frame table allocation failed".to_string()
-        })?;
-        for frame_index in 0..table_frame_count {
-            for destination_index in 0..strip_count {
-                let composed = compiled.compose_frame(frame_index, destination_index);
-                frames.push(if grayscale {
-                    DaslightKnightColor::from_color(daslight_grayscale_color(composed.into_color()))
-                } else {
-                    composed
-                });
-            }
-        }
-        compiled.frames = Arc::new(frames);
-        if grayscale {
-            compiled.background = DaslightKnightColor::from_color(daslight_grayscale_color(
-                compiled.background.into_color(),
-            ));
-        }
-        Ok(compiled)
+        })
     }
 
-    fn profile_index(
-        &self,
-        frame_index: usize,
-        lane_phase: f32,
-        source_index: usize,
-    ) -> Option<usize> {
-        let table_frame_count = self.table_frame_count;
-        let phase = ((frame_index as f32 + lane_phase).trunc() as i64)
-            .rem_euclid(table_frame_count as i64) as usize;
-        let step = self.step;
-        let profile_length = self.profile.len();
-        let pixel_offset = source_index as f32 * step as f32;
-
+    fn motion_head(&self, phase: f64) -> (f64, f64) {
+        let cycle = phase.rem_euclid(1.0);
+        let last = self.strip_count.saturating_sub(1) as f64;
         match self.motion {
             DaslightKnightMotion::OneWayOutside => {
-                let position = phase as f32 - step as f32 - pixel_offset;
-                (position >= 0.0).then(|| position.trunc() as usize % profile_length)
+                let start = -self.size;
+                (start + cycle * (last + self.size * 2.0), 1.0)
             }
-            DaslightKnightMotion::OneWayInside => {
-                let position = (self.size - 1) as f32 * step as f32 + phase as f32 - pixel_offset;
-                Some((position.trunc() as i64).rem_euclid(profile_length as i64) as usize)
-            }
+            DaslightKnightMotion::OneWayInside => (cycle * self.strip_count as f64, 1.0),
             DaslightKnightMotion::BounceOutside => {
-                let half = table_frame_count / 2;
-                let position = if phase < half {
-                    phase as f32 - step as f32 - pixel_offset
-                } else {
-                    (table_frame_count - phase - 1) as f32 - pixel_offset
-                };
-                if phase < half {
-                    (position >= 0.0).then(|| position.trunc() as usize % profile_length)
-                } else {
-                    let index = position.trunc() as i64;
-                    (index >= 0 && (index as usize) < profile_length).then_some(index as usize)
-                }
+                let (travel, direction) = corrected_triangle_motion(cycle);
+                let start = -self.size;
+                (start + travel * (last + self.size * 2.0), direction)
             }
             DaslightKnightMotion::BounceInside => {
-                let adjusted = phase + step / 2;
-                let mut reflected = adjusted % self.reflection_cycle;
-                if reflected >= self.reflection_cycle / 2 {
-                    reflected = self.reflection_cycle - reflected - 1;
-                }
-                let mut position = reflected as f32 + self.offset - pixel_offset;
-                while position < 0.0 {
-                    position += profile_length as f32;
-                }
-                Some((position.trunc() as i64).rem_euclid(profile_length as i64) as usize)
+                let (travel, direction) = corrected_triangle_motion(cycle);
+                (travel * last, direction)
             }
         }
     }
 
-    fn compose_frame(&self, frame_index: usize, destination_index: usize) -> DaslightKnightColor {
-        let source_index = if self.vertical_symmetry {
-            daslight_vertical_fold_source_index(destination_index, self.strip_count)
+    fn profile_weight(&self, head: f64, direction: f64, source_position: f64) -> f32 {
+        let local = if direction >= 0.0 {
+            (head - source_position) / self.size
         } else {
-            Some(destination_index.min(self.strip_count - 1))
+            (source_position - head) / self.size
         };
-        let Some(source_index) = source_index else {
-            return self.background;
+        if !(0.0..=1.0).contains(&local) {
+            return 0.0;
+        }
+        if !self.fading {
+            return 1.0;
+        }
+        let peak = 1.0 - self.gradient;
+        let weight = if local <= peak {
+            if peak <= f64::EPSILON {
+                1.0
+            } else {
+                local / peak
+            }
+        } else if peak >= 1.0 - f64::EPSILON {
+            local
+        } else {
+            (1.0 - local) / (1.0 - peak)
         };
+        weight.clamp(0.0, 1.0) as f32
+    }
 
-        self.lanes
+    fn sample_at_phase(&self, time_phase: f64, destination_index: usize) -> ColorEffectColor {
+        let source_position = daslight_corrected_source_position(
+            destination_index,
+            self.strip_count,
+            self.vertical_symmetry,
+        );
+        let composed = self
+            .lanes
             .iter()
             .fold(self.background, |destination, lane| {
-                let Some(profile_index) = self.profile_index(frame_index, lane.phase, source_index)
-                else {
-                    return destination;
-                };
-                destination.source_over(lane.color, self.profile[profile_index])
-            })
-    }
-
-    #[cfg(test)]
-    fn sample_frame(&self, frame_index: usize, destination_index: usize) -> DaslightKnightColor {
-        if self.vertical_symmetry && destination_index >= self.strip_count {
-            return self.background;
+                let (head, direction) = self.motion_head(time_phase + lane.phase);
+                destination.source_over(
+                    lane.color,
+                    self.profile_weight(head, direction, source_position),
+                )
+            });
+        if self.grayscale {
+            daslight_grayscale_color(composed.into_color())
+        } else {
+            composed.into_color()
         }
-        let frame_index = frame_index % self.table_frame_count;
-        let destination_index = destination_index.min(self.strip_count - 1);
-        self.frames[frame_index * self.strip_count + destination_index]
-    }
-
-    fn temporal_coordinate(&self, raw_tick: i64) -> DaslightKnightTemporalCoordinate {
-        if let Some(cached) = self
-            .temporal_coordinate
-            .get()
-            .filter(|cached| cached.raw_tick == raw_tick)
-        {
-            return cached;
-        }
-        let tick = raw_tick.rem_euclid(self.raw_frame_count as i64) as usize;
-        let unit = tick as f32 / self.raw_frame_count as f32;
-        let position = (self.table_frame_count - 1) as f32 * unit;
-        let lower = (f64::from(position).floor() as usize).min(self.table_frame_count - 1);
-        let coordinate = DaslightKnightTemporalCoordinate {
-            raw_tick,
-            lower,
-            upper: (lower + 1).min(self.table_frame_count - 1),
-            amount: position - lower as f32,
-        };
-        self.temporal_coordinate.set(Some(coordinate));
-        coordinate
-    }
-
-    fn sample_at_tick(&self, raw_tick: i64, destination_index: usize) -> ColorEffectColor {
-        let coordinate = self.temporal_coordinate(raw_tick);
-        let destination_index = destination_index.min(self.strip_count - 1);
-        let first = self.frames[coordinate.lower * self.strip_count + destination_index];
-        if coordinate.amount <= 0.0 || coordinate.lower == coordinate.upper {
-            return first.into_color();
-        }
-        first
-            .interpolate(
-                self.frames[coordinate.upper * self.strip_count + destination_index],
-                coordinate.amount,
-            )
-            .into_color()
     }
 }
 
 #[derive(Clone)]
 struct CompiledDaslightBurst {
-    raw_frame_count: usize,
-    table_frame_count: usize,
     strip_count: usize,
-    #[cfg(test)]
-    palette_cache: Arc<Vec<DaslightKnightColor>>,
-    /// Qt 5.15.2's RGBA64 radial brush first quantizes each generated frame
-    /// through a 1024-entry QGradientCache table. Each cell is the exact
-    /// 16-bit red value later used as the shared palette-cache index.
-    #[cfg(test)]
-    gradient_index_tables: Arc<Vec<u16>>,
-    /// Completed generated-frame colors after the exact Qt quantization and
-    /// common post-process. The 44 Hz evaluator only reads two cells here.
-    frames: Arc<Vec<DaslightKnightColor>>,
-    temporal_coordinate: Cell<Option<DaslightKnightTemporalCoordinate>>,
-}
-
-fn daslight_qt_round(value: f64) -> i64 {
-    if value >= 0.0 {
-        (value + 0.5).floor() as i64
-    } else {
-        (value - 0.5).ceil() as i64
-    }
-}
-
-fn daslight_qt_gradient_set_color_at(stops: &mut Vec<(f64, u16)>, position: f64, red: u16) {
-    let mut index = 0;
-    while index < stops.len() && stops[index].0 < position {
-        index += 1;
-    }
-    if index < stops.len() && stops[index].0 == position {
-        stops[index].1 = red;
-    } else {
-        stops.insert(index, (position, red));
-    }
-}
-
-fn daslight_qt_interpolate_red_256(
-    first: u16,
-    first_weight: i64,
-    second: u16,
-    second_weight: i64,
-) -> u16 {
-    (((i64::from(first) * first_weight) >> 8) + ((i64::from(second) * second_weight) >> 8)) as u16
-}
-
-fn daslight_qt_generate_gradient_red_table(stops: &[(f64, u16)], output: &mut Vec<u16>) {
-    debug_assert!((2..=4).contains(&stops.len()));
-    let table_start = output.len();
-
-    // QGradientCache has a separate two-stop fast path. Frame zero replaces
-    // the first stop at position zero and reaches this branch, so preserving
-    // it is observable rather than merely an optimization detail.
-    if stops.len() == 2 {
-        let (mut first_stop, mut first_red) = stops[0];
-        let (mut second_stop, mut second_red) = stops[1];
-        if second_stop < first_stop {
-            std::mem::swap(&mut first_stop, &mut second_stop);
-            std::mem::swap(&mut first_red, &mut second_red);
-        }
-        let first_index =
-            daslight_qt_round(first_stop * (DASLIGHT_QT_GRADIENT_TABLE_SIZE - 1) as f64);
-        let second_index =
-            daslight_qt_round(second_stop * (DASLIGHT_QT_GRADIENT_TABLE_SIZE - 1) as f64);
-        let mut red_accumulator = i64::from(first_red) << 16;
-        let red_second = i64::from(second_red) << 16;
-        let mut index = 0_i64;
-        while index <= first_index.min(DASLIGHT_QT_GRADIENT_TABLE_SIZE as i64) {
-            output.push(first_red);
-            index += 1;
-        }
-        if index < second_index {
-            let reciprocal = 1.0 / (second_index - first_index) as f64;
-            let red_delta = daslight_qt_round((red_second - red_accumulator) as f64 * reciprocal);
-            red_accumulator += 1 << 15;
-            while index < second_index.min(DASLIGHT_QT_GRADIENT_TABLE_SIZE as i64) {
-                red_accumulator += red_delta;
-                output.push((red_accumulator >> 16).clamp(0, i64::from(u16::MAX)) as u16);
-                index += 1;
-            }
-        }
-        while output.len() - table_start < DASLIGHT_QT_GRADIENT_TABLE_SIZE {
-            output.push(second_red);
-        }
-        return;
-    }
-
-    let mut current_red = stops[0].1;
-    let begin_position = stops[0].0;
-    let end_position = stops[stops.len() - 1].0;
-    let increment = 1.0 / DASLIGHT_QT_GRADIENT_TABLE_SIZE as f64;
-    let mut gradient_position = 1.5 * increment;
-    output.push(current_red);
-    while gradient_position <= begin_position {
-        output.push(*output.last().expect("gradient table has first entry"));
-        gradient_position += increment;
-    }
-
-    let mut current_stop = 0_usize;
-    if gradient_position < end_position {
-        while gradient_position > stops[current_stop + 1].0 {
-            current_stop += 1;
-        }
-        if current_stop != 0 {
-            current_red = stops[current_stop].1;
-        }
-        let mut next_red = stops[current_stop + 1].1;
-        let mut difference = stops[current_stop + 1].0 - stops[current_stop].0;
-        let mut scale = if difference == 0.0 {
-            0.0
-        } else {
-            256.0 / difference
-        };
-        let mut interpolation = (gradient_position - stops[current_stop].0) * scale;
-        let mut interpolation_delta = increment * scale;
-
-        loop {
-            let distance = daslight_qt_round(interpolation);
-            debug_assert!((0..=256).contains(&distance));
-            output.push(daslight_qt_interpolate_red_256(
-                current_red,
-                256 - distance,
-                next_red,
-                distance,
-            ));
-            gradient_position += increment;
-            if gradient_position >= end_position {
-                break;
-            }
-            interpolation += interpolation_delta;
-
-            let mut skip = 0_usize;
-            while gradient_position > stops[current_stop + skip + 1].0 {
-                skip += 1;
-            }
-            if skip != 0 {
-                current_stop += skip;
-                current_red = if skip == 1 {
-                    next_red
-                } else {
-                    stops[current_stop].1
-                };
-                next_red = stops[current_stop + 1].1;
-                difference = stops[current_stop + 1].0 - stops[current_stop].0;
-                scale = if difference == 0.0 {
-                    0.0
-                } else {
-                    256.0 / difference
-                };
-                interpolation = (gradient_position - stops[current_stop].0) * scale;
-                interpolation_delta = increment * scale;
-            }
-        }
-    }
-
-    let final_red = stops[stops.len() - 1].1;
-    while output.len() - table_start < DASLIGHT_QT_GRADIENT_TABLE_SIZE - 1 {
-        output.push(final_red);
-    }
-    if output.len() - table_start == DASLIGHT_QT_GRADIENT_TABLE_SIZE - 1 {
-        output.push(final_red);
-    } else {
-        output[table_start + DASLIGHT_QT_GRADIENT_TABLE_SIZE - 1] = final_red;
-    }
-    debug_assert_eq!(output.len() - table_start, DASLIGHT_QT_GRADIENT_TABLE_SIZE);
-}
-
-fn daslight_burst_gradient_index_tables(
-    frame_count: usize,
-    palette_cache_length: usize,
-) -> Result<Vec<u16>, String> {
-    let cell_count = frame_count
-        .checked_mul(DASLIGHT_QT_GRADIENT_TABLE_SIZE)
-        .ok_or_else(|| "Daslight-exact Burst gradient table length overflowed".to_string())?;
-    let mut tables = Vec::new();
-    tables
-        .try_reserve_exact(cell_count)
-        .map_err(|_| "Daslight-exact Burst gradient table allocation failed".to_string())?;
-    let palette_last = u16::try_from(palette_cache_length.saturating_sub(1))
-        .map_err(|_| "Daslight-exact Burst palette index overflowed".to_string())?;
-    for frame_index in 0..frame_count {
-        let time = f64::from(frame_index as f32 / frame_count as f32);
-        let initial_u16 = ((1.0 - time) * f64::from(u16::MAX)).trunc() as u16;
-        let initial_index =
-            ((u64::from(initial_u16) * u64::from(palette_last)) / u64::from(u16::MAX)) as u16;
-        let mut stops = Vec::with_capacity(4);
-        daslight_qt_gradient_set_color_at(&mut stops, 0.0, initial_index);
-        let seam_position = time - DASLIGHT_BURST_SEAM_EPSILON;
-        if seam_position >= 0.0 {
-            daslight_qt_gradient_set_color_at(&mut stops, seam_position, palette_last);
-        }
-        daslight_qt_gradient_set_color_at(&mut stops, time, 0);
-        daslight_qt_gradient_set_color_at(&mut stops, 1.0, initial_index);
-        daslight_qt_generate_gradient_red_table(&stops, &mut tables);
-    }
-    debug_assert_eq!(tables.len(), cell_count);
-    Ok(tables)
-}
-
-fn compiled_daslight_burst_palette_cache(
-    request: &ColorEffectRequest,
-    gradient: f32,
-) -> Result<Arc<Vec<DaslightKnightColor>>, String> {
-    let key = DaslightBurstPaletteCacheKey {
-        colors: request
-            .stops
-            .iter()
-            .map(|stop| [stop.color.red, stop.color.green, stop.color.blue])
-            .collect(),
-        gradient_bits: gradient.to_bits(),
-    };
-    let cache = DASLIGHT_BURST_PALETTE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(compiled) = cache
-        .lock()
-        .map_err(|_| "Daslight-exact Burst palette cache lock was poisoned".to_string())?
-        .get(&key)
-        .and_then(Weak::upgrade)
-    {
-        return Ok(compiled);
-    }
-
-    let stop_count = request.stops.len();
-    let samples_per_segment = DASLIGHT_BURST_PALETTE_CACHE_SIZE / stop_count;
-    let cache_length = samples_per_segment
-        .checked_mul(stop_count)
-        .ok_or_else(|| "Daslight-exact Burst palette cache length overflowed".to_string())?;
-    let hold = ((1.0_f32 - gradient) * samples_per_segment as f32).trunc() as usize;
-    let mut palette_cache = Vec::new();
-    palette_cache
-        .try_reserve_exact(cache_length)
-        .map_err(|_| "Daslight-exact Burst palette cache allocation failed".to_string())?;
-    for segment in 0..stop_count {
-        let first = DaslightKnightColor::from_color(request.stops[segment].color);
-        let second =
-            DaslightKnightColor::from_color(request.stops[(segment + 1) % stop_count].color);
-        for sample in 0..samples_per_segment {
-            let amount = if sample < hold || hold >= samples_per_segment {
-                0.0
-            } else {
-                ((sample - hold) as f32 / (samples_per_segment - hold) as f32).clamp(0.0, 1.0)
-            };
-            palette_cache.push(first.interpolate(second, amount));
-        }
-    }
-    let compiled = Arc::new(palette_cache);
-    let mut cache = cache
-        .lock()
-        .map_err(|_| "Daslight-exact Burst palette cache lock was poisoned".to_string())?;
-    if let Some(existing) = cache.get(&key).and_then(Weak::upgrade) {
-        return Ok(existing);
-    }
-    cache.retain(|_, value| value.strong_count() > 0);
-    cache.insert(key, Arc::downgrade(&compiled));
-    Ok(compiled)
-}
-
-fn compiled_daslight_burst_gradient_tables(
-    frame_count: usize,
-    palette_cache_length: usize,
-) -> Result<Arc<Vec<u16>>, String> {
-    let key = (frame_count, palette_cache_length);
-    let cache = DASLIGHT_BURST_GRADIENT_TABLE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(compiled) = cache
-        .lock()
-        .map_err(|_| "Daslight-exact Burst gradient cache lock was poisoned".to_string())?
-        .get(&key)
-        .and_then(Weak::upgrade)
-    {
-        return Ok(compiled);
-    }
-
-    let compiled = Arc::new(daslight_burst_gradient_index_tables(
-        frame_count,
-        palette_cache_length,
-    )?);
-    let mut cache = cache
-        .lock()
-        .map_err(|_| "Daslight-exact Burst gradient cache lock was poisoned".to_string())?;
-    if let Some(existing) = cache.get(&key).and_then(Weak::upgrade) {
-        return Ok(existing);
-    }
-    cache.retain(|_, value| value.strong_count() > 0);
-    cache.insert(key, Arc::downgrade(&compiled));
-    Ok(compiled)
-}
-
-fn compiled_daslight_burst_frames(
-    key: DaslightBurstFrameCacheKey,
-    palette_cache: &Arc<Vec<DaslightKnightColor>>,
-    gradient_index_tables: &Arc<Vec<u16>>,
-) -> Result<Arc<Vec<DaslightKnightColor>>, String> {
-    let cache = DASLIGHT_BURST_FRAME_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(compiled) = cache
-        .lock()
-        .map_err(|_| "Daslight-exact Burst frame cache lock was poisoned".to_string())?
-        .get(&key)
-        .and_then(Weak::upgrade)
-    {
-        return Ok(compiled);
-    }
-
-    let cell_count = key
-        .table_frame_count
-        .checked_mul(key.strip_count)
-        .ok_or_else(|| "Daslight-exact Burst completed frame table overflowed".to_string())?;
-    let mut frames = Vec::new();
-    frames
-        .try_reserve_exact(cell_count)
-        .map_err(|_| "Daslight-exact Burst completed frame allocation failed".to_string())?;
-    let color_width = f64::from(f32::from_bits(key.color_width_bits));
-    let raster_center = key.strip_count as f64 * 0.5;
-    for frame_index in 0..key.table_frame_count {
-        for destination_index in 0..key.strip_count {
-            let source_index = if key.vertical_symmetry {
-                daslight_vertical_fold_source_index(destination_index, key.strip_count)
-            } else {
-                Some(destination_index)
-            };
-            let Some(source_index) = source_index else {
-                frames.push(DaslightKnightColor::from_color(black_color()));
-                continue;
-            };
-            // QPainter samples at pixel centres. The radial coordinate is
-            // rounded into the recovered 1024-entry RGBA64 gradient table,
-            // whose red channel indexes the cyclic 16-bit palette cache.
-            let pixel_center = source_index as f64 + 0.5;
-            let radial = ((pixel_center - raster_center).abs() / color_width).clamp(0.0, 1.0);
-            let gradient_index =
-                daslight_qt_round(radial * (DASLIGHT_QT_GRADIENT_TABLE_SIZE - 1) as f64)
-                    .clamp(0, (DASLIGHT_QT_GRADIENT_TABLE_SIZE - 1) as i64)
-                    as usize;
-            let palette_index = gradient_index_tables
-                [frame_index * DASLIGHT_QT_GRADIENT_TABLE_SIZE + gradient_index]
-                as usize;
-            let mut color = palette_cache[palette_index.min(palette_cache.len() - 1)];
-            if key.grayscale {
-                color =
-                    DaslightKnightColor::from_color(daslight_grayscale_color(color.into_color()));
-            }
-            frames.push(color);
-        }
-    }
-    debug_assert_eq!(frames.len(), cell_count);
-
-    let compiled = Arc::new(frames);
-    let mut cache = cache
-        .lock()
-        .map_err(|_| "Daslight-exact Burst frame cache lock was poisoned".to_string())?;
-    if let Some(existing) = cache.get(&key).and_then(Weak::upgrade) {
-        return Ok(existing);
-    }
-    cache.retain(|_, value| value.strong_count() > 0);
-    cache.insert(key, Arc::downgrade(&compiled));
-    Ok(compiled)
+    palette: Vec<DaslightKnightColor>,
+    color_width: f64,
+    gradient: f64,
+    vertical_symmetry: bool,
+    grayscale: bool,
 }
 
 impl CompiledDaslightBurst {
@@ -5003,113 +4886,57 @@ impl CompiledDaslightBurst {
             return Err("Daslight-exact Burst gradient must be within 0..1".to_string());
         }
 
-        let raw_frame_count = usize::try_from((request.period_ms / DASLIGHT_VALUE_FRAME_MS).max(1))
-            .map_err(|_| {
-                "Daslight-exact Burst frame count does not fit this platform".to_string()
-            })?;
-        let table_frame_count = raw_frame_count.min(DASLIGHT_VALUE_FRAME_CAP);
-        // CBurstEffect's shared palette builder keeps wrap=true. The cache
-        // therefore has one integer-divided segment per stop including
-        // last -> first. Exact duplicate recipes are interned at compile time:
-        // this changes no sample, but avoids multiplying the large immutable
-        // Qt-compatible tables across a 64-FX venue stack.
-        let palette_cache = compiled_daslight_burst_palette_cache(request, gradient)?;
-        let gradient_index_tables =
-            compiled_daslight_burst_gradient_tables(table_frame_count, palette_cache.len())?;
-        let strip_count = strip_count.max(1);
-        let frames = compiled_daslight_burst_frames(
-            DaslightBurstFrameCacheKey {
-                palette: DaslightBurstPaletteCacheKey {
-                    colors: request
-                        .stops
-                        .iter()
-                        .map(|stop| [stop.color.red, stop.color.green, stop.color.blue])
-                        .collect(),
-                    gradient_bits: gradient.to_bits(),
-                },
-                table_frame_count,
-                strip_count,
-                color_width_bits: color_width.to_bits(),
-                vertical_symmetry,
-                grayscale,
-            },
-            &palette_cache,
-            &gradient_index_tables,
-        )?;
-
         Ok(Self {
-            raw_frame_count,
-            table_frame_count,
-            strip_count,
-            #[cfg(test)]
-            palette_cache,
-            #[cfg(test)]
-            gradient_index_tables,
-            frames,
-            temporal_coordinate: Cell::new(None),
+            strip_count: strip_count.max(1),
+            palette: request
+                .stops
+                .iter()
+                .map(|stop| DaslightKnightColor::from_color(stop.color))
+                .collect(),
+            color_width: f64::from(color_width),
+            gradient: f64::from(gradient),
+            vertical_symmetry,
+            grayscale,
         })
     }
 
-    fn temporal_coordinate(&self, raw_tick: i64) -> DaslightKnightTemporalCoordinate {
-        if let Some(cached) = self
-            .temporal_coordinate
-            .get()
-            .filter(|cached| cached.raw_tick == raw_tick)
-        {
-            return cached;
-        }
-        let tick = raw_tick.rem_euclid(self.raw_frame_count as i64) as usize;
-        let unit = tick as f32 / self.raw_frame_count as f32;
-        let position = (self.table_frame_count - 1) as f32 * unit;
-        let lower = (f64::from(position).floor() as usize).min(self.table_frame_count - 1);
-        let coordinate = DaslightKnightTemporalCoordinate {
-            raw_tick,
-            lower,
-            upper: (lower + 1).min(self.table_frame_count - 1),
-            amount: position - lower as f32,
+    fn radial_coordinate(&self, destination_index: usize) -> f64 {
+        let source_position = daslight_corrected_source_position(
+            destination_index,
+            self.strip_count,
+            self.vertical_symmetry,
+        );
+        let pixel_center = source_position + 0.5;
+        let raster_center = self.strip_count as f64 * 0.5;
+        ((pixel_center - raster_center).abs() / self.color_width).clamp(0.0, 1.0)
+    }
+
+    fn palette_color(&self, coordinate: f64) -> DaslightKnightColor {
+        let scaled = coordinate.rem_euclid(1.0) * self.palette.len() as f64;
+        let first_index = scaled.floor() as usize % self.palette.len();
+        let local = scaled.fract();
+        let hold = 1.0 - self.gradient;
+        let amount = if self.gradient <= f64::EPSILON || local <= hold {
+            0.0
+        } else {
+            ((local - hold) / self.gradient).clamp(0.0, 1.0)
         };
-        self.temporal_coordinate.set(Some(coordinate));
-        coordinate
+        self.palette[first_index].interpolate(
+            self.palette[(first_index + 1) % self.palette.len()],
+            amount as f32,
+        )
     }
 
-    #[cfg(test)]
-    fn sample_frame(&self, frame_index: usize, destination_index: usize) -> DaslightKnightColor {
-        let destination_index = destination_index.min(self.strip_count - 1);
-        let frame_index = frame_index.min(self.table_frame_count - 1);
-        self.frames[frame_index * self.strip_count + destination_index]
-    }
-
-    fn sample_at_tick(&self, raw_tick: i64, destination_index: usize) -> ColorEffectColor {
-        let coordinate = self.temporal_coordinate(raw_tick);
-        let destination_index = destination_index.min(self.strip_count - 1);
-        let first = self.frames[coordinate.lower * self.strip_count + destination_index];
-        if coordinate.amount <= 0.0 || coordinate.lower == coordinate.upper {
-            return first.into_color();
+    fn sample_at_phase(&self, time_phase: f64, destination_index: usize) -> ColorEffectColor {
+        let palette_coordinate =
+            (self.radial_coordinate(destination_index) - time_phase).rem_euclid(1.0);
+        let color = self.palette_color(palette_coordinate);
+        if self.grayscale {
+            daslight_grayscale_color(color.into_color())
+        } else {
+            color.into_color()
         }
-        first
-            .interpolate(
-                self.frames[coordinate.upper * self.strip_count + destination_index],
-                coordinate.amount,
-            )
-            .into_color()
     }
-}
-
-fn daslight_knight_rider_raw_tick(
-    request: &ColorEffectRequest,
-    time_phase: f64,
-    created_at: Instant,
-    now: Instant,
-    rate: f32,
-) -> i64 {
-    if request.clock_sync.is_some() {
-        let raw_frames = (request.period_ms / DASLIGHT_VALUE_FRAME_MS).max(1) as f32;
-        return ((time_phase as f32) * raw_frames).trunc() as i64;
-    }
-    let elapsed_ms = now.saturating_duration_since(created_at).as_millis() as f32;
-    let shifted_ms =
-        elapsed_ms * valid_effect_rate(rate) + request.phase * request.period_ms as f32;
-    (shifted_ms / DASLIGHT_VALUE_FRAME_MS as f32).trunc() as i64
 }
 
 fn compile_daslight_value_spatial(
@@ -5212,7 +5039,7 @@ fn compile_daslight_perlin(
             rotation_degrees,
             octaves,
             zoom,
-            direction_degrees: _,
+            direction_degrees,
             speed,
             amplitude,
         } => CompiledDaslightPerlin::compile(
@@ -5224,6 +5051,7 @@ fn compile_daslight_perlin(
             *rotation_degrees,
             *octaves,
             *zoom,
+            *direction_degrees,
             *speed,
             *amplitude,
         )
@@ -5266,10 +5094,6 @@ struct RuntimeMoveEffect {
     attribute_indices: HashMap<FixtureId, HashMap<String, usize>>,
     rotation_cosine: f32,
     rotation_sine: f32,
-    daslight_frame_count: u32,
-    daslight_effective_period_ms: u64,
-    daslight_time_cache: Cell<Option<RuntimeDaslightMoveTimeEvaluation>>,
-    daslight_point_cache: Cell<Option<RuntimeDaslightMovePointEvaluation>>,
 }
 
 #[derive(Debug, Clone)]
@@ -5280,10 +5104,9 @@ struct RuntimeMoveTarget {
     phase_offset: f32,
     reverse_time: bool,
     mirror_pan: bool,
-    /// Daslight's raw fixture phasing is quantized once when the runtime
-    /// target is compiled. The 44 Hz evaluator then needs only integer frame
-    /// translation; it does not repeat float modulo/rounding for every beam.
-    daslight_frame_delta: u32,
+    /// Corrected continuous fixture phasing. This preserves authored selection
+    /// order without tying the offset to a 40 ms frame count.
+    daslight_phase_delta: f32,
     daslight_reverse_wing: bool,
     cached: Cell<Option<RuntimeMoveEvaluation>>,
 }
@@ -5291,22 +5114,6 @@ struct RuntimeMoveTarget {
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct RuntimeMoveEvaluation {
     at: Instant,
-    delta: MovePathPoint,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct RuntimeDaslightMoveTimeEvaluation {
-    at: Instant,
-    lower_frame: u32,
-    upper_frame: u32,
-    fraction: f32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct RuntimeDaslightMovePointEvaluation {
-    at: Instant,
-    lower_frame: u32,
-    upper_frame: u32,
     delta: MovePathPoint,
 }
 
@@ -5360,9 +5167,6 @@ struct RuntimeColorSpatialTarget {
     strip_count: usize,
     x: f32,
     z: f32,
-    /// Exact integer cell in Daslight's fixed 100 x 100 mapping raster.
-    /// `None` means a profile-order one-row COLOR/VALUE strip.
-    daslight_raster_cell: Option<(i32, i32)>,
     /// Fixed spatial projection for the Daslight MAPPINGS Rainbow raster.
     /// Built with the target coordinates so the 44 Hz evaluator performs no
     /// placement lookup or trigonometry.
@@ -5395,27 +5199,20 @@ struct RuntimeColorSpatialSample {
     opacity: f32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct CompiledColorSpatialPlacementSample {
-    raster_x: i128,
-    raster_y: i128,
+    normalized_x: f32,
+    normalized_y: f32,
 }
 
 impl CompiledColorSpatialPlacementSample {
     fn normalized(self) -> (f32, f32) {
-        (
-            (self.raster_x as f64 / 100.0) as f32,
-            (self.raster_y as f64 / 100.0) as f32,
-        )
+        (self.normalized_x, self.normalized_y)
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 struct CompiledColorSpatialPlacement {
-    x: i64,
-    y: i64,
-    sx: i64,
-    sy: i64,
     mask_center_x: f64,
     mask_center_y: f64,
     mask_half_width: f64,
@@ -5459,10 +5256,6 @@ impl CompiledColorSpatialPlacement {
             placement.sx as f64 * mask_sine.abs() + placement.sy as f64 * mask_cosine.abs();
 
         Ok(Self {
-            x: placement.x,
-            y: placement.y,
-            sx: placement.sx,
-            sy: placement.sy,
             mask_center_x: placement.x as f64 + rotated_aabb_width * 0.5,
             mask_center_y: placement.y as f64 + rotated_aabb_height * 0.5,
             mask_half_width,
@@ -5475,26 +5268,27 @@ impl CompiledColorSpatialPlacement {
     fn sample(self, patch_x: i64, patch_y: i64) -> Option<CompiledColorSpatialPlacementSample> {
         let delta_x = patch_x as f64 - self.mask_center_x;
         let delta_y = patch_y as f64 - self.mask_center_y;
-        // Invert the mapping-angle rotation for inclusion only. Raster lookup
-        // deliberately continues to use the unrotated raw X/Y window below.
+        // The Rectangle's authored X/Y anchor describes the rotated AABB, so
+        // first return the patch point to the Rectangle's local frame. Using
+        // that same local frame for sampling avoids the recovered Daslight bug
+        // where only the hit mask rotated while the colour raster stayed
+        // axis-aligned.
         let mask_x = delta_x * self.mask_cosine + delta_y * self.mask_sine;
         let mask_y = -delta_x * self.mask_sine + delta_y * self.mask_cosine;
         if mask_x.abs() > self.mask_half_width || mask_y.abs() > self.mask_half_height {
             return None;
         }
 
+        let normalized_x =
+            ((mask_x + self.mask_half_width) / (self.mask_half_width * 2.0)).clamp(0.0, 1.0);
+        let normalized_y =
+            ((mask_y + self.mask_half_height) / (self.mask_half_height * 2.0)).clamp(0.0, 1.0);
+
         Some(CompiledColorSpatialPlacementSample {
-            raster_x: daslight_axis_aligned_raster_cell(patch_x, self.x, self.sx),
-            raster_y: daslight_axis_aligned_raster_cell(patch_y, self.y, self.sy),
+            normalized_x: normalized_x as f32,
+            normalized_y: normalized_y as f32,
         })
     }
-}
-
-fn daslight_axis_aligned_raster_cell(point: i64, origin: i64, extent: i64) -> i128 {
-    // i128 preserves the exact signed difference and multiplication even at
-    // the i64 extremes. Rust integer division truncates toward zero, matching
-    // the recovered Daslight cast semantics.
-    (i128::from(point) - i128::from(origin)) * 100 / i128::from(extent)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -15321,8 +15115,10 @@ impl EngineRuntime {
         );
         let mut previously_active = Vec::new();
         let mut previously_active_transitions = Vec::new();
-        for index in &self.active_effect_activation_indices {
-            let Some(activation) = self.effect_activations.get(*index) else {
+        let mut previously_active_sparkle_states = Vec::new();
+        let active_effect_activation_indices = self.active_effect_activation_indices.clone();
+        for index in active_effect_activation_indices {
+            let Some(activation) = self.effect_activations.get_mut(index) else {
                 continue;
             };
             let Some(key) = activation.key else {
@@ -15338,6 +15134,9 @@ impl EngineRuntime {
                 now.saturating_duration_since(transition.started_at) < transition.duration
             }) {
                 previously_active_transitions.push((key, activation.effect.id, transition.clone()));
+            }
+            if let Some(preserved) = take_runtime_sparkle_state(&mut activation.effect.kind) {
+                previously_active_sparkle_states.push((key, activation.effect.id, preserved));
             }
         }
         let cue_owned_counts = self
@@ -15771,6 +15570,16 @@ impl EngineRuntime {
                     *candidate_key == key && *effect_id == activation.effect.id
                 })
                 .map(|(_, _, transition)| transition.clone());
+            if let Some(index) =
+                previously_active_sparkle_states
+                    .iter()
+                    .position(|(candidate_key, effect_id, _)| {
+                        *candidate_key == key && *effect_id == activation.effect.id
+                    })
+            {
+                let (_, _, preserved) = previously_active_sparkle_states.remove(index);
+                restore_runtime_sparkle_state(&mut activation.effect.kind, preserved);
+            }
         }
     }
 
@@ -16855,7 +16664,8 @@ impl EngineRuntime {
             };
             let has_group_reference = !runtime.request.target_group_ids.is_empty();
             match runtime_value_effect_from_request(runtime.request.clone(), fixtures, false) {
-                Ok(rebuilt) => {
+                Ok(mut rebuilt) => {
+                    migrate_compatible_value_sparkle_state(runtime, &mut rebuilt);
                     *runtime = rebuilt;
                     !runtime.targets.is_empty() || has_group_reference
                 }
@@ -17071,7 +16881,8 @@ impl EngineRuntime {
             };
             let has_group_reference = !runtime.request.target_group_ids.is_empty();
             match runtime_color_effect_from_request(runtime.request.clone(), fixtures) {
-                Ok(rebuilt) => {
+                Ok(mut rebuilt) => {
+                    migrate_compatible_color_sparkle_state(runtime, &mut rebuilt);
                     *runtime = rebuilt;
                     !runtime.targets.is_empty()
                         || runtime
@@ -19784,7 +19595,11 @@ impl EngineRuntime {
                     // state so a dial move does not restart free-running effects.
                     effect.created_at = activation.effect.created_at;
                     effect.enabled = activation.effect.enabled;
-                    clear_runtime_effect_caches(&effect.kind);
+                    migrate_compatible_runtime_sparkle_state(
+                        &mut activation.effect.kind,
+                        &mut effect.kind,
+                    );
+                    clear_runtime_effect_sample_caches(&effect.kind);
                     activation.effect = effect;
                 }
                 slot += 1;
@@ -27047,13 +26862,6 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
             let request = effect.move_effect.clone()?;
             let path = CompiledMovePath::compile(&request).ok()?;
             let (rotation_cosine, rotation_sine) = move_rotation(request.rotation_degrees);
-            let daslight_frame_count = if is_daslight_move_interpolation(request.interpolation) {
-                (request.period_ms / DASLIGHT_MOVE_FRAME_MS)
-                    .max(1)
-                    .min(u64::from(u32::MAX)) as u32
-            } else {
-                0
-            };
             RuntimeEffectKind::Move(RuntimeMoveEffect {
                 request,
                 path,
@@ -27062,11 +26870,6 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
                 attribute_indices: HashMap::new(),
                 rotation_cosine,
                 rotation_sine,
-                daslight_frame_count,
-                daslight_effective_period_ms: u64::from(daslight_frame_count)
-                    * DASLIGHT_MOVE_FRAME_MS,
-                daslight_time_cache: Cell::new(None),
-                daslight_point_cache: Cell::new(None),
             })
         }
         EffectKind::Value => {
@@ -27494,22 +27297,55 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
                 percent("gradient", *gradient)
             }
         }
-        ColorEffectSpatialRecipe::RandomFill { point_width } => {
-            if *point_width == 0 {
-                Err("Random fill point width must be at least 1".to_string())
-            } else {
-                Ok(())
+        ColorEffectSpatialRecipe::RandomFill {
+            syndocal_corrected,
+            point_width,
+            source_point_height,
+            ..
+        } => {
+            if *syndocal_corrected && !(1..=10).contains(point_width) {
+                return Err("Corrected Random fill point width must be within 1..10".to_string());
             }
+            if !*syndocal_corrected && *point_width == 0 {
+                return Err("Random fill point width must be at least 1".to_string());
+            }
+            if source_point_height.is_some_and(|height| !(1..=10).contains(&height)) {
+                return Err("Random fill source point height must be within 1..10".to_string());
+            }
+            Ok(())
         }
         ColorEffectSpatialRecipe::Sparkle {
+            syndocal_corrected,
             number,
             lifespan,
+            lifetime_ms,
+            source_lifespan,
             width,
+            ..
         } => {
-            if *number == 0 || *width == 0 {
-                return Err("Sparkle number and width must be at least 1".to_string());
+            if *syndocal_corrected {
+                if !(1..=10).contains(number) || !(1..=90).contains(width) {
+                    return Err(
+                        "Corrected Sparkle number/width must be within 1..10 and 1..90".to_string(),
+                    );
+                }
+                if !lifetime_ms.is_some_and(|lifetime| (100..=1_000).contains(&lifetime)) {
+                    return Err(
+                        "Corrected Sparkle lifetime must be within 100..1000 ms".to_string()
+                    );
+                }
+                if source_lifespan
+                    .is_some_and(|source| !source.is_finite() || !(0.0..=0.9).contains(&source))
+                {
+                    return Err("Sparkle source lifespan must be within 0..0.9".to_string());
+                }
+                Ok(())
+            } else {
+                if *number == 0 || *width == 0 {
+                    return Err("Sparkle number and width must be at least 1".to_string());
+                }
+                percent("lifespan", *lifespan)
             }
-            percent("lifespan", *lifespan)
         }
         ColorEffectSpatialRecipe::Plasma {
             size_x,
@@ -27784,13 +27620,6 @@ fn is_daslight_move_interpolation(interpolation: protocol::MoveInterpolation) ->
     )
 }
 
-fn daslight_move_interpolates_frames(interpolation: protocol::MoveInterpolation) -> bool {
-    is_daslight_move_interpolation(interpolation)
-        && interpolation != protocol::MoveInterpolation::DaslightPoints
-}
-
-const DASLIGHT_MOVE_FRAME_MS: u64 = 40;
-
 fn runtime_move_effect_from_request(
     request: MoveEffectRequest,
     fixtures: &[RuntimeFixture],
@@ -27907,13 +27736,6 @@ fn runtime_move_effect_from_request(
     let symmetry_selection_split = selection_count.div_ceil(2);
     let circle = request.interpolation == protocol::MoveInterpolation::Circle;
     let daslight_exact = is_daslight_move_interpolation(request.interpolation);
-    let daslight_frame_count = if daslight_exact {
-        (request.period_ms / DASLIGHT_MOVE_FRAME_MS)
-            .max(1)
-            .min(u64::from(u32::MAX)) as u32
-    } else {
-        0
-    };
     let targets = compatible
         .into_iter()
         .enumerate()
@@ -27947,15 +27769,10 @@ fn runtime_move_effect_from_request(
                 } else {
                     selection_rank
                 };
-                let daslight_frame_delta = if daslight_exact {
-                    let cycle = daslight_frame_count.max(1) as f32;
-                    let step = cycle * request.fixture_spread;
-                    (-(daslight_offset_rank as f32 * step))
-                        .rem_euclid(cycle)
-                        .round() as u32
-                        % daslight_frame_count.max(1)
+                let daslight_phase_delta = if daslight_exact {
+                    (-(daslight_offset_rank as f32 * request.fixture_spread)).rem_euclid(1.0)
                 } else {
-                    0
+                    0.0
                 };
                 RuntimeMoveTarget {
                     fixture_id,
@@ -27964,7 +27781,7 @@ fn runtime_move_effect_from_request(
                     phase_offset,
                     reverse_time: !daslight_exact && circle && second_wing,
                     mirror_pan: !daslight_exact && !circle && second_wing,
-                    daslight_frame_delta,
+                    daslight_phase_delta,
                     daslight_reverse_wing,
                     cached: Cell::new(None),
                 }
@@ -27989,7 +27806,6 @@ fn runtime_move_effect_from_request(
         }
     }
     let (rotation_cosine, rotation_sine) = move_rotation(request.rotation_degrees);
-    let daslight_effective_period_ms = u64::from(daslight_frame_count) * DASLIGHT_MOVE_FRAME_MS;
     Ok(RuntimeMoveEffect {
         request,
         path,
@@ -27998,10 +27814,6 @@ fn runtime_move_effect_from_request(
         attribute_indices,
         rotation_cosine,
         rotation_sine,
-        daslight_frame_count,
-        daslight_effective_period_ms,
-        daslight_time_cache: Cell::new(None),
-        daslight_point_cache: Cell::new(None),
     })
 }
 
@@ -28123,99 +27935,36 @@ fn evaluate_daslight_move_delta(
     clock: &ClockSnapshot,
     rate: f32,
 ) -> MovePathPoint {
-    debug_assert!(runtime.daslight_frame_count > 0);
-    let frame_count = runtime.daslight_frame_count.max(1);
-    let time = runtime
-        .daslight_time_cache
-        .get()
-        .filter(|evaluation| evaluation.at == now)
-        .unwrap_or_else(|| {
-            let progress = move_effect_progress_with_period(
-                &runtime.request,
-                0.0,
-                false,
-                created_at,
-                now,
-                clock,
-                rate,
-                runtime.daslight_effective_period_ms,
-            );
-            let frame_time = progress * frame_count as f32;
-            let floor = frame_time.floor();
-            let evaluation = RuntimeDaslightMoveTimeEvaluation {
-                at: now,
-                lower_frame: floor.max(0.0) as u32,
-                upper_frame: floor.max(0.0) as u32 + 1,
-                fraction: frame_time - floor,
-            };
-            runtime.daslight_time_cache.set(Some(evaluation));
-            evaluation
-        });
-    let lower_frame =
-        daslight_move_target_frame(&runtime.request, target, time.lower_frame, frame_count);
-    let interpolates =
-        time.fraction > 0.0 && daslight_move_interpolates_frames(runtime.request.interpolation);
-    let upper_frame = if interpolates {
-        daslight_move_target_frame(&runtime.request, target, time.upper_frame, frame_count)
-    } else {
-        lower_frame
-    };
-    if let Some(cached) = runtime.daslight_point_cache.get().filter(|evaluation| {
-        evaluation.at == now
-            && evaluation.lower_frame == lower_frame
-            && evaluation.upper_frame == upper_frame
-    }) {
-        return cached.delta;
-    }
-    let first = runtime.path.sample_daslight_frame(lower_frame, frame_count);
-    let point = if interpolates {
-        let second = runtime.path.sample_daslight_frame(upper_frame, frame_count);
-        MovePathPoint {
-            x: first.x + (second.x - first.x) * time.fraction,
-            y: first.y + (second.y - first.y) * time.fraction,
-        }
-    } else {
-        first
-    };
-    let delta = transform_move_delta(
+    let base_phase =
+        move_effect_progress(&runtime.request, 0.0, false, created_at, now, clock, rate);
+    let phase = daslight_move_target_phase(&runtime.request, target, base_phase);
+    let point = runtime.path.sample_daslight_phase(phase);
+    transform_move_delta(
         &runtime.request,
         point,
         runtime.rotation_cosine,
         runtime.rotation_sine,
-    );
-    runtime
-        .daslight_point_cache
-        .set(Some(RuntimeDaslightMovePointEvaluation {
-            at: now,
-            lower_frame,
-            upper_frame,
-            delta,
-        }));
-    delta
+    )
 }
 
-fn daslight_move_target_frame(
+fn daslight_move_target_phase(
     request: &MoveEffectRequest,
     target: &RuntimeMoveTarget,
-    base_frame: u32,
-    frame_count: u32,
-) -> u32 {
-    let frame_count = frame_count.max(1);
-    let base = base_frame % frame_count;
+    base_phase: f32,
+) -> f32 {
+    let base = base_phase.rem_euclid(1.0);
     let translated_base = if target.daslight_reverse_wing {
         let symmetry_origin =
             if request.interpolation == protocol::MoveInterpolation::DaslightPoints {
-                0
+                0.0
             } else {
-                frame_count / 2 + frame_count % 2
+                0.5
             };
-        ((u64::from(symmetry_origin) + u64::from(frame_count) - u64::from(base))
-            % u64::from(frame_count)) as u32
+        (symmetry_origin - base).rem_euclid(1.0)
     } else {
         base
     };
-    ((u64::from(translated_base) + u64::from(target.daslight_frame_delta)) % u64::from(frame_count))
-        as u32
+    (translated_base + target.daslight_phase_delta).rem_euclid(1.0)
 }
 
 fn move_effect_progress(
@@ -28250,22 +27999,22 @@ fn move_effect_progress_with_period(
     rate: f32,
     free_run_period_ms: u64,
 ) -> f32 {
-    let rate = valid_effect_rate(rate);
+    let rate = f64::from(valid_effect_rate(rate));
     let cycle = if let Some(clock_sync) = request.clock_sync {
-        let beat_position = clock.beat_counter as f32 + clock.beat_phase;
-        beat_position / clock_sync.beats.max(0.000_1) * rate
+        let beat_position = clock.beat_counter as f64 + f64::from(clock.beat_phase);
+        beat_position / f64::from(clock_sync.beats.max(0.000_1)) * rate
     } else {
-        let period = free_run_period_ms.max(10) as f32 / 1_000.0;
-        now.saturating_duration_since(created_at).as_secs_f32() * rate / period
+        let period = free_run_period_ms.max(10) as f64 / 1_000.0;
+        now.saturating_duration_since(created_at).as_secs_f64() * rate / period
     };
-    let time = cycle + request.phase;
+    let time = cycle + f64::from(request.phase);
     let phase = if reverse_time {
-        0.5 - time + fixture_phase_offset
+        0.5 - time + f64::from(fixture_phase_offset)
     } else {
-        time + fixture_phase_offset
+        time + f64::from(fixture_phase_offset)
     }
     .rem_euclid(1.0);
-    match request.direction {
+    let progress = match request.direction {
         MoveDirection::Forward => phase,
         MoveDirection::Reverse => 1.0 - phase,
         MoveDirection::Bounce => {
@@ -28276,7 +28025,8 @@ fn move_effect_progress_with_period(
                 2.0 - doubled
             }
         }
-    }
+    };
+    progress as f32
 }
 
 fn validate_scalar_effect_features(
@@ -28847,16 +28597,17 @@ fn value_effect_progress(
     clock: &ClockSnapshot,
     rate: f32,
 ) -> f32 {
-    let rate = valid_effect_rate(rate);
+    let rate = f64::from(valid_effect_rate(rate));
     let cycle = if let Some(clock_sync) = request.clock_sync {
-        let beat_position = clock.beat_counter as f32 + clock.beat_phase;
-        beat_position / clock_sync.beats.max(0.000_1) * rate
+        let beat_position = clock.beat_counter as f64 + f64::from(clock.beat_phase);
+        beat_position / f64::from(clock_sync.beats.max(0.000_1)) * rate
     } else {
-        let period = request.period_ms.max(10) as f32 / 1_000.0;
-        now.saturating_duration_since(created_at).as_secs_f32() * rate / period
+        let period = request.period_ms.max(10) as f64 / 1_000.0;
+        now.saturating_duration_since(created_at).as_secs_f64() * rate / period
     };
-    let phase = (cycle + request.phase + fixture_phase_offset).rem_euclid(1.0);
-    match request.direction {
+    let phase =
+        (cycle + f64::from(request.phase) + f64::from(fixture_phase_offset)).rem_euclid(1.0);
+    let progress = match request.direction {
         ValueEffectDirection::Forward => phase,
         ValueEffectDirection::Reverse => 1.0 - phase,
         ValueEffectDirection::Bounce => {
@@ -28867,7 +28618,8 @@ fn value_effect_progress(
                 2.0 - doubled
             }
         }
-    }
+    };
+    progress as f32
 }
 
 pub fn validate_curve_effect_request(request: &CurveEffectRequest) -> Result<(), String> {
@@ -29051,16 +28803,17 @@ fn curve_effect_progress(
     clock: &ClockSnapshot,
     rate: f32,
 ) -> f32 {
-    let rate = valid_effect_rate(rate);
+    let rate = f64::from(valid_effect_rate(rate));
     let cycle = if let Some(clock_sync) = request.clock_sync {
-        let beat_position = clock.beat_counter as f32 + clock.beat_phase;
-        beat_position / clock_sync.beats.max(0.000_1) * rate
+        let beat_position = clock.beat_counter as f64 + f64::from(clock.beat_phase);
+        beat_position / f64::from(clock_sync.beats.max(0.000_1)) * rate
     } else {
-        let period = request.period_ms.max(10) as f32 / 1_000.0;
-        now.saturating_duration_since(created_at).as_secs_f32() * rate / period
+        let period = request.period_ms.max(10) as f64 / 1_000.0;
+        now.saturating_duration_since(created_at).as_secs_f64() * rate / period
     };
-    let phase = (cycle + request.phase + fixture_phase_offset).rem_euclid(1.0);
-    match request.direction {
+    let phase =
+        (cycle + f64::from(request.phase) + f64::from(fixture_phase_offset)).rem_euclid(1.0);
+    let progress = match request.direction {
         ValueEffectDirection::Forward => phase,
         ValueEffectDirection::Reverse => 1.0 - phase,
         ValueEffectDirection::Bounce => {
@@ -29071,7 +28824,8 @@ fn curve_effect_progress(
                 2.0 - doubled
             }
         }
-    }
+    };
+    progress as f32
 }
 
 pub fn validate_mapping_effect_request(request: &MappingEffectRequest) -> Result<(), String> {
@@ -29345,13 +29099,13 @@ fn evaluate_mapping_effect_normalized(
     clock: &ClockSnapshot,
     rate: f32,
 ) -> f32 {
-    let rate = valid_effect_rate(rate);
+    let rate = f64::from(valid_effect_rate(rate));
     let cycle = if let Some(clock_sync) = request.clock_sync {
-        let beat_position = clock.beat_counter as f32 + clock.beat_phase;
-        beat_position / clock_sync.beats.max(0.000_1) * rate
+        let beat_position = clock.beat_counter as f64 + f64::from(clock.beat_phase);
+        beat_position / f64::from(clock_sync.beats.max(0.000_1)) * rate
     } else {
-        let period = request.period_ms.max(10) as f32 / 1_000.0;
-        now.saturating_duration_since(created_at).as_secs_f32() * rate / period
+        let period = request.period_ms.max(10) as f64 / 1_000.0;
+        now.saturating_duration_since(created_at).as_secs_f64() * rate / period
     };
     let traversal = match request.direction {
         MappingEffectDirection::Forward => cycle,
@@ -29368,7 +29122,7 @@ fn evaluate_mapping_effect_normalized(
     };
     evaluate_lfo_shape(
         &request.shape,
-        (request.phase + traversal - order_phase).rem_euclid(1.0),
+        (f64::from(request.phase) + traversal - f64::from(order_phase)).rem_euclid(1.0) as f32,
     )
 }
 
@@ -29837,15 +29591,15 @@ fn color_mapping_frame_index(
     if frame_count <= 1 {
         return 0;
     }
-    let rate = valid_effect_rate(rate);
+    let rate = f64::from(valid_effect_rate(rate));
     let cycle = if let Some(clock_sync) = request.clock_sync {
-        let beat_position = clock.beat_counter as f32 + clock.beat_phase;
-        beat_position / clock_sync.beats.max(0.000_1) * rate
+        let beat_position = clock.beat_counter as f64 + f64::from(clock.beat_phase);
+        beat_position / f64::from(clock_sync.beats.max(0.000_1)) * rate
     } else {
-        let period = request.period_ms.max(10) as f32 / 1_000.0;
-        now.saturating_duration_since(created_at).as_secs_f32() * rate / period
+        let period = request.period_ms.max(10) as f64 / 1_000.0;
+        now.saturating_duration_since(created_at).as_secs_f64() * rate / period
     };
-    let phase = (cycle + request.phase).rem_euclid(1.0);
+    let phase = (cycle + f64::from(request.phase)).rem_euclid(1.0);
     let progress = match request.playback_direction {
         ColorMappingPlaybackDirection::Forward => phase,
         ColorMappingPlaybackDirection::Reverse => 1.0 - phase,
@@ -29858,7 +29612,7 @@ fn color_mapping_frame_index(
             }
         }
     };
-    ((progress * frame_count as f32).floor() as usize).min(frame_count - 1)
+    ((progress * frame_count as f64).floor() as usize).min(frame_count - 1)
 }
 
 pub fn validate_chaser_effect_request(request: &ChaserEffectRequest) -> Result<(), String> {
@@ -30221,13 +29975,18 @@ fn runtime_color_effect_from_request(
         let daslight_knight_rider = compile_daslight_value_spatial(&request, strip_count)?;
         let daslight_burst = compile_daslight_burst(&request, strip_count)?;
         let daslight_sweep = compile_daslight_sweep(&request, strip_count)?;
+        let syndocal_random_fx = CompiledSyndocalRandomFx::compile(&request, strip_count)?;
         let daslight_perlin = compile_daslight_perlin(&request, &targets)?;
+        let dense_fixture_targets =
+            RuntimeColorSpatialDenseFixtureTargets::compile(&targets, &attribute_indices);
         Some(Box::new(RuntimeColorSpatialState {
             targets,
             attribute_indices,
+            dense_fixture_targets,
             daslight_knight_rider,
             daslight_burst,
             daslight_sweep,
+            syndocal_random_fx,
             daslight_perlin,
         }))
     } else {
@@ -30427,7 +30186,7 @@ fn runtime_color_spatial_targets(
     };
     let mut resolved = Vec::with_capacity(pending.len());
     for (fixture_id, beam_index, selection, binding, stage_x, stage_z) in pending {
-        let (x, z, daslight_raster_cell) = if let Some(compiled_placement) = compiled_placement {
+        let (x, z) = if let Some(compiled_placement) = compiled_placement {
             let coordinates = placement_coordinates
                 .get(&(fixture_id, beam_index))
                 .ok_or_else(|| {
@@ -30441,23 +30200,11 @@ fn runtime_color_spatial_targets(
                 // but Daslight's rotated Rectangle mask excludes it.
                 continue;
             };
-            let (x, z) = sample.normalized();
-            let raster_x = i32::try_from(sample.raster_x).map_err(|_| {
-                format!(
-                    "Color spatial placement raster X does not fit i32 for fixture {fixture_id} beam {beam_index}"
-                )
-            })?;
-            let raster_y = i32::try_from(sample.raster_y).map_err(|_| {
-                format!(
-                    "Color spatial placement raster Y does not fit i32 for fixture {fixture_id} beam {beam_index}"
-                )
-            })?;
-            (x, z, Some((raster_x, raster_y)))
+            sample.normalized()
         } else {
             (
                 normalize(stage_x, min_x, max_x),
                 normalize(stage_z, min_z, max_z),
-                None,
             )
         };
         let rainbow_projected_coordinate =
@@ -30469,29 +30216,19 @@ fn runtime_color_spatial_targets(
             binding,
             x,
             z,
-            daslight_raster_cell,
             rainbow_projected_coordinate,
         ));
     }
     let mut selections = resolved
         .iter()
-        .map(|(_, _, selection, _, _, _, _, _)| *selection)
+        .map(|(_, _, selection, _, _, _, _)| *selection)
         .collect::<Vec<_>>();
     selections.sort_unstable();
     selections.dedup();
     let strip_count = selections.len().max(1);
     let mut targets = Vec::with_capacity(resolved.len());
     let mut attribute_indices = HashMap::<FixtureId, HashMap<String, usize>>::new();
-    for (
-        fixture_id,
-        beam_index,
-        selection,
-        binding,
-        x,
-        z,
-        daslight_raster_cell,
-        rainbow_projected_coordinate,
-    ) in resolved
+    for (fixture_id, beam_index, selection, binding, x, z, rainbow_projected_coordinate) in resolved
     {
         let strip_index = selections.binary_search(&selection).unwrap_or_default();
         let target_index = targets.len();
@@ -30515,7 +30252,6 @@ fn runtime_color_spatial_targets(
             strip_count,
             x,
             z,
-            daslight_raster_cell,
             rainbow_projected_coordinate,
             binding,
             cached: Cell::new(None),
@@ -31483,13 +31219,27 @@ fn evaluate_runtime_color_spatial_attribute_at_rate(
     rate: f32,
 ) -> Option<u16> {
     let spatial = runtime.spatial.as_ref()?;
-    let target = spatial
-        .attribute_indices
-        .get(&fixture_id)
-        .and_then(|attributes| attributes.get(attribute))
-        .and_then(|index| spatial.targets.get(*index))?;
+    let target_index = spatial
+        .dense_fixture_targets
+        .as_ref()
+        .and_then(|dense| dense.target_index(fixture_id))
+        .or_else(|| {
+            spatial
+                .attribute_indices
+                .get(&fixture_id)
+                .and_then(|attributes| attributes.get(attribute))
+                .copied()
+        })?;
+    let target = spatial.targets.get(target_index)?;
     let binding = &target.binding;
-    let output = binding.outputs.get(attribute)?;
+    let output = if binding.outputs.len() <= 8 {
+        binding
+            .outputs
+            .iter()
+            .find_map(|(candidate, output)| (candidate == attribute).then_some(output))
+    } else {
+        binding.outputs.get(attribute)
+    }?;
     let evaluated = target
         .cached
         .get()
@@ -31501,6 +31251,7 @@ fn evaluate_runtime_color_spatial_attribute_at_rate(
                 spatial.daslight_knight_rider.as_ref(),
                 spatial.daslight_burst.as_ref(),
                 spatial.daslight_sweep.as_ref(),
+                spatial.syndocal_random_fx.as_ref(),
                 spatial.daslight_perlin.as_ref(),
                 effect_id,
                 created_at,
@@ -31658,7 +31409,7 @@ fn evaluate_color_effect_at_rate(
             let step = (absolute_phase * request.stops.len() as f64).floor() as i64;
             let random =
                 splitmix64(effect_id ^ fixture_id.rotate_left(21) ^ (step as u64).rotate_left(43));
-            request.stops[random as usize % request.stops.len()].color
+            request.stops[(random % request.stops.len() as u64) as usize].color
         }
     }
 }
@@ -31673,20 +31424,10 @@ fn evaluate_daslight_knight_rider_color_at_rate(
     clock: &ClockSnapshot,
     rate: f32,
 ) -> ColorEffectColor {
-    let valid_rate = valid_effect_rate(rate);
-    let time_phase = request
-        .clock_sync
-        .map(|clock_sync| {
-            (clock.beat_counter as f64 + clock.beat_phase as f64)
-                / clock_sync.beats.max(0.000_1) as f64
-                * f64::from(valid_rate)
-                + request.phase as f64
-        })
-        // Free-running raw ticks use the recovered integer millisecond path;
-        // the normalized colour phase was never consumed by that branch.
-        .unwrap_or(0.0);
-    let raw_tick = daslight_knight_rider_raw_tick(request, time_phase, created_at, now, valid_rate);
-    compiled.sample_at_tick(raw_tick, target.strip_index)
+    compiled.sample_at_phase(
+        time_phase_for_continuous_spatial(request, created_at, now, clock, rate),
+        target.strip_index,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -31699,18 +31440,10 @@ fn evaluate_daslight_burst_color_at_rate(
     clock: &ClockSnapshot,
     rate: f32,
 ) -> ColorEffectColor {
-    let valid_rate = valid_effect_rate(rate);
-    let time_phase = request
-        .clock_sync
-        .map(|clock_sync| {
-            (clock.beat_counter as f64 + clock.beat_phase as f64)
-                / clock_sync.beats.max(0.000_1) as f64
-                * f64::from(valid_rate)
-                + request.phase as f64
-        })
-        .unwrap_or(0.0);
-    let raw_tick = daslight_knight_rider_raw_tick(request, time_phase, created_at, now, valid_rate);
-    compiled.sample_at_tick(raw_tick, target.strip_index)
+    compiled.sample_at_phase(
+        time_phase_for_continuous_spatial(request, created_at, now, clock, rate),
+        target.strip_index,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -31723,18 +31456,10 @@ fn evaluate_daslight_sweep_color_at_rate(
     clock: &ClockSnapshot,
     rate: f32,
 ) -> ColorEffectColor {
-    let valid_rate = valid_effect_rate(rate);
-    let time_phase = request
-        .clock_sync
-        .map(|clock_sync| {
-            (clock.beat_counter as f64 + clock.beat_phase as f64)
-                / clock_sync.beats.max(0.000_1) as f64
-                * f64::from(valid_rate)
-                + request.phase as f64
-        })
-        .unwrap_or(0.0);
-    let raw_tick = daslight_knight_rider_raw_tick(request, time_phase, created_at, now, valid_rate);
-    compiled.sample_at_tick(raw_tick, target.strip_index)
+    compiled.sample_at_phase(
+        time_phase_for_continuous_spatial(request, created_at, now, clock, rate),
+        target.strip_index,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -31754,11 +31479,35 @@ fn evaluate_daslight_perlin_color_at_rate(
             (clock.beat_counter as f64 + clock.beat_phase as f64)
                 / clock_sync.beats.max(0.000_1) as f64
                 * f64::from(valid_rate)
-                + request.phase as f64
         })
-        .unwrap_or(0.0);
-    let raw_tick = daslight_knight_rider_raw_tick(request, time_phase, created_at, now, valid_rate);
-    compiled.sample_at_tick(raw_tick, target.daslight_target_index)
+        .unwrap_or_else(|| {
+            now.saturating_duration_since(created_at).as_secs_f64() * f64::from(valid_rate)
+                / (request.period_ms.max(10) as f64 / 1_000.0)
+        })
+        + request.phase as f64;
+    compiled.sample_at_phase(time_phase, target.daslight_target_index)
+}
+
+fn time_phase_for_continuous_spatial(
+    request: &ColorEffectRequest,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> f64 {
+    let rate = f64::from(valid_effect_rate(rate));
+    request
+        .clock_sync
+        .map(|clock_sync| {
+            (clock.beat_counter as f64 + clock.beat_phase as f64)
+                / clock_sync.beats.max(0.000_1) as f64
+                * rate
+        })
+        .unwrap_or_else(|| {
+            now.saturating_duration_since(created_at).as_secs_f64() * rate
+                / (request.period_ms.max(10) as f64 / 1000.0)
+        })
+        + request.phase as f64
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -31768,6 +31517,7 @@ fn evaluate_color_spatial_sample_at_rate(
     daslight_knight_rider: Option<&CompiledDaslightKnightRider>,
     daslight_burst: Option<&CompiledDaslightBurst>,
     daslight_sweep: Option<&CompiledDaslightSweep>,
+    syndocal_random_fx: Option<&CompiledSyndocalRandomFx>,
     daslight_perlin: Option<&CompiledDaslightPerlin>,
     effect_id: EffectId,
     created_at: Instant,
@@ -31832,6 +31582,18 @@ fn evaluate_color_spatial_sample_at_rate(
             opacity: 1.0,
         };
     }
+    if let Some(syndocal_random_fx) = syndocal_random_fx {
+        return RuntimeColorSpatialSample {
+            color: syndocal_random_fx.sample_at_time(
+                time_phase_for_continuous_spatial(request, created_at, now, clock, rate),
+                target.strip_index,
+                target.strip_count,
+                created_at,
+                now,
+            ),
+            opacity: 1.0,
+        };
+    }
     if let Some(daslight_perlin) = daslight_perlin {
         return RuntimeColorSpatialSample {
             color: evaluate_daslight_perlin_color_at_rate(
@@ -31846,20 +31608,7 @@ fn evaluate_color_spatial_sample_at_rate(
             opacity: 1.0,
         };
     }
-    let valid_rate = valid_effect_rate(rate);
-    let rate = f64::from(valid_rate);
-    let time_phase = request
-        .clock_sync
-        .map(|clock_sync| {
-            (clock.beat_counter as f64 + clock.beat_phase as f64)
-                / clock_sync.beats.max(0.000_1) as f64
-                * rate
-        })
-        .unwrap_or_else(|| {
-            now.saturating_duration_since(created_at).as_secs_f64() * rate
-                / (request.period_ms.max(10) as f64 / 1000.0)
-        })
-        + request.phase as f64;
+    let time_phase = time_phase_for_continuous_spatial(request, created_at, now, clock, rate);
     let strip_count = target.strip_count.max(1);
     let strip_position = if strip_count <= 1 {
         0.5
@@ -32000,7 +31749,7 @@ fn evaluate_color_spatial_sample_at_rate(
                 spatial_palette_color(request, 1.0 - distance / width, *gradient)
             }
         }
-        ColorEffectSpatialRecipe::RandomFill { point_width } => {
+        ColorEffectSpatialRecipe::RandomFill { point_width, .. } => {
             let point_width = usize::from(*point_width).max(1);
             let cell_count = strip_count.div_ceil(point_width).max(1);
             let cell = target.strip_index / point_width;
@@ -32011,7 +31760,7 @@ fn evaluate_color_spatial_sample_at_rate(
                 black_color()
             } else {
                 let palette_index =
-                    splitmix64(effect_id ^ cell as u64) as usize % request.stops.len();
+                    (splitmix64(effect_id ^ cell as u64) % request.stops.len() as u64) as usize;
                 request.stops[palette_index].color
             }
         }
@@ -32019,6 +31768,7 @@ fn evaluate_color_spatial_sample_at_rate(
             number,
             lifespan,
             width,
+            ..
         } => {
             let epoch = time_phase.floor() as i64;
             let age = time_phase.rem_euclid(1.0) as f32;
@@ -32031,10 +31781,11 @@ fn evaluate_color_spatial_sample_at_rate(
                 for sparkle in 0..usize::from(*number) {
                     let sparkle_seed =
                         seed ^ (epoch as u64).rotate_left(29) ^ (sparkle as u64).rotate_left(47);
-                    let center = splitmix64(sparkle_seed) as usize % strip_count;
+                    let center = (splitmix64(sparkle_seed) % strip_count as u64) as usize;
                     if target.strip_index.abs_diff(center) <= radius {
-                        let palette_index =
-                            splitmix64(sparkle_seed ^ 0xA53C_9E17) as usize % request.stops.len();
+                        let palette_index = (splitmix64(sparkle_seed ^ 0xA53C_9E17)
+                            % request.stops.len() as u64)
+                            as usize;
                         color = scale_color(request.stops[palette_index].color, 1.0 - age / life);
                         break;
                     }
@@ -32200,41 +31951,36 @@ fn daslight_symmetry_coordinate(coordinate: f32) -> f32 {
     1.0 - (coordinate * 2.0 - 1.0).abs()
 }
 
+fn corrected_triangle_motion(cycle: f64) -> (f64, f64) {
+    if cycle <= 0.5 {
+        (cycle * 2.0, 1.0)
+    } else {
+        ((1.0 - cycle) * 2.0, -1.0)
+    }
+}
+
+fn daslight_corrected_source_position(
+    destination_index: usize,
+    source_width: usize,
+    vertical_symmetry: bool,
+) -> f64 {
+    let source_width = source_width.max(1);
+    let destination_index = destination_index.min(source_width - 1);
+    if !vertical_symmetry || source_width == 1 {
+        return destination_index as f64;
+    }
+    let coordinate = destination_index as f32 / (source_width - 1) as f32;
+    f64::from(daslight_symmetry_coordinate(coordinate)) * (source_width - 1) as f64
+}
+
 fn daslight_vertical_fold_source_index(
     destination_index: usize,
     source_width: usize,
 ) -> Option<usize> {
-    // Transform=1 draws the source into a floor(width / 2) rectangle, then
-    // draws a horizontally mirrored source into a second rectangle of the
-    // same width. Daslight enables Antialiasing but not Qt's
-    // SmoothPixmapTransform, so Qt 5.15.2's fixed-point nearest-neighbour
-    // scaler selects one source pixel per destination pixel. Syndocal retains
-    // those recovered samples but corrects Qt's unpainted final odd pixel and
-    // width-one clear result: both are destination-coverage defects, not an
-    // authored Transform meaning.
-    let half_width = source_width / 2;
     if source_width == 0 || destination_index >= source_width {
         return None;
     }
-    if half_width == 0 {
-        return Some(0);
-    }
-    let odd_tail = destination_index >= half_width.saturating_mul(2);
-    let local_index = if odd_tail {
-        0
-    } else {
-        destination_index % half_width
-    };
-    let scale = half_width as f64 / source_width as f64;
-    let fixed_step = (65_536.0_f64 / scale) as u64;
-    let fixed_base = ((fixed_step as f64 * 0.5).ceil() as u64).saturating_sub(1);
-    let sampled = ((fixed_base + local_index as u64 * fixed_step) >> 16) as usize;
-    let sampled = sampled.min(source_width - 1);
-    if odd_tail || destination_index < half_width {
-        Some(sampled)
-    } else {
-        Some(source_width - 1 - sampled)
-    }
+    Some(daslight_corrected_source_position(destination_index, source_width, true).round() as usize)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -32747,7 +32493,7 @@ fn evaluate_lfo_effect_normalized_with_offset(
     clock: &ClockSnapshot,
     rate: f32,
 ) -> f32 {
-    let rate = valid_effect_rate(rate);
+    let rate = f64::from(valid_effect_rate(rate));
     if let Some(source) = &request.daslight_curve {
         return evaluate_daslight_curve_normalized_with_offset(
             request,
@@ -32756,20 +32502,24 @@ fn evaluate_lfo_effect_normalized_with_offset(
             created_at,
             now,
             clock,
-            rate,
+            rate as f32,
         );
     }
     if let Some(clock_sync) = request.clock_sync {
-        let beats = clock_sync.beats.max(0.000_1);
-        let beat_position = clock.beat_counter as f32 + clock.beat_phase;
-        let phase =
-            (beat_position / beats * rate + request.phase + fixture_phase_offset).rem_euclid(1.0);
-        return evaluate_lfo_shape(&request.shape, phase);
+        let beats = f64::from(clock_sync.beats.max(0.000_1));
+        let beat_position = clock.beat_counter as f64 + f64::from(clock.beat_phase);
+        let phase = (beat_position / beats * rate
+            + f64::from(request.phase)
+            + f64::from(fixture_phase_offset))
+        .rem_euclid(1.0);
+        return evaluate_lfo_shape(&request.shape, phase as f32);
     }
-    let period = request.period_ms.max(10) as f32 / 1000.0;
-    let elapsed = now.saturating_duration_since(created_at).as_secs_f32();
-    let phase = (elapsed * rate / period + request.phase + fixture_phase_offset).rem_euclid(1.0);
-    evaluate_lfo_shape(&request.shape, phase)
+    let period = request.period_ms.max(10) as f64 / 1000.0;
+    let elapsed = now.saturating_duration_since(created_at).as_secs_f64();
+    let phase =
+        (elapsed * rate / period + f64::from(request.phase) + f64::from(fixture_phase_offset))
+            .rem_euclid(1.0);
+    evaluate_lfo_shape(&request.shape, phase as f32)
 }
 
 fn evaluate_daslight_curve_normalized_with_offset(
@@ -32782,15 +32532,16 @@ fn evaluate_daslight_curve_normalized_with_offset(
     rate: f32,
 ) -> f32 {
     let outer_phase = if let Some(clock_sync) = request.clock_sync {
-        let beats = clock_sync.beats.max(0.000_1);
-        let beat_position = clock.beat_counter as f32 + clock.beat_phase;
-        (beat_position / beats * rate).rem_euclid(1.0)
+        let beats = f64::from(clock_sync.beats.max(0.000_1));
+        let beat_position = clock.beat_counter as f64 + f64::from(clock.beat_phase);
+        (beat_position / beats * f64::from(rate)).rem_euclid(1.0)
     } else {
-        let duration_seconds = request.period_ms.max(10) as f32 / 1_000.0;
-        let elapsed = now.saturating_duration_since(created_at).as_secs_f32();
-        (elapsed * rate / duration_seconds).rem_euclid(1.0)
+        let duration_seconds = request.period_ms.max(10) as f64 / 1_000.0;
+        let elapsed = now.saturating_duration_since(created_at).as_secs_f64();
+        (elapsed * f64::from(rate) / duration_seconds).rem_euclid(1.0)
     };
-    let shifted_outer_phase = (outer_phase + fixture_phase_offset).rem_euclid(1.0);
+    let shifted_outer_phase =
+        (outer_phase + f64::from(fixture_phase_offset)).rem_euclid(1.0) as f32;
 
     let source_value = match &request.shape {
         LfoShape::Sine => {
@@ -32820,14 +32571,18 @@ fn evaluate_daslight_curve_normalized_with_offset(
             source.offset,
         ),
         LfoShape::Strobe => {
+            // Free-run traverses period_ms of authored content in period_ms, so
+            // flashes remain exactly source.rate Hz. Clock sync compresses that
+            // same content into the beat window, scaling by period/beat-window.
             let elapsed_in_buffer_seconds =
                 shifted_outer_phase * request.period_ms.max(10) as f32 / 1_000.0;
             let cycle_position = (elapsed_in_buffer_seconds * source.rate).rem_euclid(1.0);
-            let recovered_minimum_duty =
-                (f32::from(source.sample_ms.max(1)) / 1_000.0 * source.rate).clamp(0.0, 1.0);
-            let duty = recovered_minimum_duty
-                .max(request.phase * 0.5)
-                .clamp(0.0, 1.0);
+            let cycle_position = if 1.0 - cycle_position <= STROBE_PHASE_EPSILON {
+                0.0
+            } else {
+                cycle_position
+            };
+            let duty = STROBE_DUTY_CYCLE.max(request.phase * 0.5).clamp(0.0, 1.0);
             if cycle_position < duty {
                 (source.offset + source.size * 0.5).clamp(0.0, 1.0)
             } else {
@@ -32974,21 +32729,24 @@ fn evaluate_position_wave_effect_normalized(
     clock: &ClockSnapshot,
     rate: f32,
 ) -> f32 {
-    let rate = valid_effect_rate(rate);
-    let wavelength = request.wavelength.abs().max(0.001);
-    let elapsed = now.saturating_duration_since(created_at).as_secs_f32();
-    let distance_phase =
-        projected_distance(position, request.origin, request.direction) / wavelength;
+    let rate = f64::from(valid_effect_rate(rate));
+    let wavelength = f64::from(request.wavelength.abs().max(0.001));
+    let elapsed = now.saturating_duration_since(created_at).as_secs_f64();
+    let distance_phase = f64::from(projected_distance(
+        position,
+        request.origin,
+        request.direction,
+    )) / wavelength;
     let time_phase = request
         .clock_sync
         .map(|clock_sync| {
-            let beats = clock_sync.beats.max(0.000_1);
-            let beat_position = clock.beat_counter as f32 + clock.beat_phase;
+            let beats = f64::from(clock_sync.beats.max(0.000_1));
+            let beat_position = clock.beat_counter as f64 + f64::from(clock.beat_phase);
             beat_position / beats * rate
         })
-        .unwrap_or_else(|| elapsed * rate * request.speed / wavelength);
-    let phase = (request.phase + time_phase - distance_phase).rem_euclid(1.0);
-    evaluate_lfo_shape(&request.shape, phase)
+        .unwrap_or_else(|| elapsed * rate * f64::from(request.speed) / wavelength);
+    let phase = (f64::from(request.phase) + time_phase - distance_phase).rem_euclid(1.0);
+    evaluate_lfo_shape(&request.shape, phase as f32)
 }
 
 #[cfg(test)]
@@ -33355,35 +33113,35 @@ fn evaluate_node_graph_output_normalized(
     let mut value = match &output.source {
         CompiledNodeGraphSource::Lfo(lfo) => {
             let phase = if let Some(clock_sync) = lfo.clock_sync {
-                let beats = clock_sync.beats.max(0.000_1);
-                let beat_position = clock.beat_counter as f32 + clock.beat_phase;
-                (beat_position / beats + lfo.phase).rem_euclid(1.0)
+                let beats = f64::from(clock_sync.beats.max(0.000_1));
+                let beat_position = clock.beat_counter as f64 + f64::from(clock.beat_phase);
+                (beat_position / beats + f64::from(lfo.phase)).rem_euclid(1.0)
             } else {
-                let period = lfo.period_ms.max(10) as f32 / 1000.0;
+                let period = lfo.period_ms.max(10) as f64 / 1000.0;
                 let elapsed = now
                     .saturating_duration_since(graph.created_at)
-                    .as_secs_f32();
-                (elapsed / period + lfo.phase).rem_euclid(1.0)
+                    .as_secs_f64();
+                (elapsed / period + f64::from(lfo.phase)).rem_euclid(1.0)
             };
-            evaluate_lfo_shape(&lfo.shape, phase) * lfo.amplitude + lfo.bias
+            evaluate_lfo_shape(&lfo.shape, phase as f32) * lfo.amplitude + lfo.bias
         }
         CompiledNodeGraphSource::PositionWave(wave) => {
-            let wavelength = wave.wavelength.abs().max(0.001);
+            let wavelength = f64::from(wave.wavelength.abs().max(0.001));
             let elapsed = now
                 .saturating_duration_since(graph.created_at)
-                .as_secs_f32();
+                .as_secs_f64();
             let distance_phase =
-                projected_distance(position, wave.origin, wave.direction) / wavelength;
+                f64::from(projected_distance(position, wave.origin, wave.direction)) / wavelength;
             let time_phase = wave
                 .clock_sync
                 .map(|clock_sync| {
-                    let beats = clock_sync.beats.max(0.000_1);
-                    let beat_position = clock.beat_counter as f32 + clock.beat_phase;
+                    let beats = f64::from(clock_sync.beats.max(0.000_1));
+                    let beat_position = clock.beat_counter as f64 + f64::from(clock.beat_phase);
                     beat_position / beats
                 })
-                .unwrap_or_else(|| elapsed * wave.speed / wavelength);
-            let phase = (wave.phase + time_phase - distance_phase).rem_euclid(1.0);
-            evaluate_lfo_shape(&wave.shape, phase)
+                .unwrap_or_else(|| elapsed * f64::from(wave.speed) / wavelength);
+            let phase = (f64::from(wave.phase) + time_phase - distance_phase).rem_euclid(1.0);
+            evaluate_lfo_shape(&wave.shape, phase as f32)
         }
         CompiledNodeGraphSource::Audio { node_id } => graph
             .audio_nodes
@@ -33606,9 +33364,10 @@ fn projected_distance(position: Vec3, origin: Vec3, direction: Vec3) -> f32 {
 }
 
 const STROBE_PULSES_PER_PERIOD: f32 = 10.0;
-/// Daslight's graph only resolves this very narrow pulse to roughly 1-2% of a
-/// period. DVC-3c deliberately uses the conservative 2% graph-derived approximation.
-const STROBE_PULSE_WIDTH_FRACTION: f32 = 0.02;
+const STROBE_PHASE_EPSILON: f32 = 1.0e-6;
+/// Common dimensionless high-time for native and imported strobe sources.
+/// Keeping duty independent from sample cadence and rate avoids timer-grid artifacts.
+const STROBE_DUTY_CYCLE: f32 = 0.2;
 
 fn evaluate_lfo_shape(shape: &LfoShape, phase: f32) -> f32 {
     let phase = phase.rem_euclid(1.0);
@@ -33636,7 +33395,7 @@ fn evaluate_lfo_shape(shape: &LfoShape, phase: f32) -> f32 {
         }
         LfoShape::Strobe => {
             let pulse_phase = (phase * STROBE_PULSES_PER_PERIOD).fract();
-            if pulse_phase < STROBE_PULSE_WIDTH_FRACTION * STROBE_PULSES_PER_PERIOD {
+            if pulse_phase < STROBE_DUTY_CYCLE {
                 1.0
             } else {
                 0.0
@@ -54128,7 +53887,7 @@ mod tests {
     }
 
     #[test]
-    fn corrected_dvc_strobe_uses_exact_rate_with_recovered_minimum_flash_width() {
+    fn corrected_dvc_strobe_uses_exact_rate_with_common_dimensionless_duty() {
         let mut request = test_lfo_request(
             "Imported Strobe",
             LfoShape::Strobe,
@@ -54156,7 +53915,7 @@ mod tests {
         });
         assert_eq!(
             samples,
-            [u16::MAX, u16::MAX, 0, 0, 0, u16::MAX, u16::MAX, 0]
+            [u16::MAX, u16::MAX, u16::MAX, 0, 0, u16::MAX, u16::MAX, 0,]
         );
 
         request.phase = 0.4;
@@ -54169,6 +53928,98 @@ mod tests {
             )
         });
         assert_eq!(extended, [u16::MAX, u16::MAX, u16::MAX, 0]);
+
+        request.phase = 0.0;
+        request.daslight_curve.as_mut().unwrap().rate = 25.0;
+        let cadence_independent = [0, 10, 40].map(|elapsed_ms| {
+            evaluate_lfo_effect(
+                &request,
+                started,
+                started + Duration::from_millis(elapsed_ms),
+                &clock,
+            )
+        });
+        assert_eq!(cadence_independent, [u16::MAX, 0, u16::MAX]);
+    }
+
+    #[test]
+    fn corrected_dvc_strobe_pins_free_run_and_synced_content_length_contract() {
+        let mut request = test_lfo_request(
+            "Imported Strobe",
+            LfoShape::Strobe,
+            5_000,
+            0.0,
+            EffectBlendMode::Override,
+            0,
+            u16::MAX,
+        );
+        request.daslight_curve = Some(DaslightCurveSource {
+            rate: 2.0,
+            size: 2.0,
+            offset: 0.0,
+            sample_ms: 40,
+        });
+        let started = Instant::now();
+        let free = [0, 100, 500].map(|elapsed_ms| {
+            evaluate_lfo_effect(
+                &request,
+                started,
+                started + Duration::from_millis(elapsed_ms),
+                &ClockSnapshot::default(),
+            )
+        });
+        assert_eq!(free, [u16::MAX, 0, u16::MAX], "free-run must be 2 Hz");
+
+        request.clock_sync = Some(EffectClockSync { beats: 4.0 });
+        let synced = [
+            ClockSnapshot {
+                bpm: 120.0,
+                ..ClockSnapshot::default()
+            },
+            ClockSnapshot {
+                bpm: 120.0,
+                beat_phase: 0.1,
+                ..ClockSnapshot::default()
+            },
+            ClockSnapshot {
+                bpm: 120.0,
+                beat_phase: 0.4,
+                ..ClockSnapshot::default()
+            },
+        ]
+        .map(|clock| evaluate_lfo_effect(&request, started, started, &clock));
+        assert_eq!(
+            synced,
+            [u16::MAX, 0, u16::MAX],
+            "5 s of content compressed into four beats at 120 BPM must flash at 5 Hz"
+        );
+    }
+
+    #[test]
+    fn corrected_effect_phase_advances_after_eighty_three_hours() {
+        let mut request = test_value_request(&[1]);
+        request.period_ms = 10;
+        request.phase = 0.0;
+        request.direction = ValueEffectDirection::Forward;
+        request.clock_sync = None;
+        let now = Instant::now() + Duration::from_secs(300_000);
+        let created_at = now - Duration::from_secs(300_000);
+        let phases = (0..4_u32)
+            .map(|tick| {
+                value_effect_progress(
+                    &request,
+                    0.0,
+                    created_at,
+                    now + Duration::from_micros(22_700) * tick,
+                    &ClockSnapshot::default(),
+                    1.0,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            phases.windows(2).all(|pair| pair[1] > pair[0]),
+            "phases={phases:?}"
+        );
     }
 
     #[test]
@@ -55130,7 +54981,6 @@ mod tests {
             strip_index,
             strip_count,
             daslight_target_index: strip_index,
-            daslight_raster_cell: None,
             x,
             z,
             rainbow_projected_coordinate: None,
@@ -55186,6 +55036,8 @@ mod tests {
             compile_daslight_value_spatial(request, target.strip_count).unwrap();
         let daslight_burst = compile_daslight_burst(request, target.strip_count).unwrap();
         let daslight_sweep = compile_daslight_sweep(request, target.strip_count).unwrap();
+        let syndocal_random_fx =
+            CompiledSyndocalRandomFx::compile(request, target.strip_count).unwrap();
         let daslight_perlin =
             compile_daslight_perlin(request, std::slice::from_ref(&target)).unwrap();
         evaluate_color_spatial_sample_at_rate(
@@ -55194,6 +55046,7 @@ mod tests {
             daslight_knight_rider.as_ref(),
             daslight_burst.as_ref(),
             daslight_sweep.as_ref(),
+            syndocal_random_fx.as_ref(),
             daslight_perlin.as_ref(),
             97,
             created_at,
@@ -55201,6 +55054,55 @@ mod tests {
             &ClockSnapshot::default(),
             1.0,
         )
+    }
+
+    fn test_corrected_sparkle_request(
+        rng_seed: u32,
+        number: u16,
+        lifetime_ms: u16,
+        width: u16,
+        grayscale: bool,
+        vertical_symmetry: bool,
+    ) -> ColorEffectRequest {
+        let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::Sparkle {
+            syndocal_corrected: true,
+            grayscale,
+            vertical_symmetry,
+            rng_seed,
+            number,
+            lifespan: 0.0,
+            lifetime_ms: Some(lifetime_ms),
+            source_lifespan: Some(0.0),
+            width,
+        });
+        request.stops[0].color = black_color();
+        request.stops[1].color = test_color(u16::MAX, 32_768, 0);
+        request
+    }
+
+    fn compiled_sparkle_state(
+        compiled: &CompiledSyndocalRandomFx,
+    ) -> &RefCell<SyndocalSparkleState> {
+        let CompiledSyndocalRandomFx::Sparkle { state, .. } = compiled else {
+            panic!("expected compiled corrected Sparkle state");
+        };
+        state
+    }
+
+    fn activation_sparkle_fx(
+        runtime: &EngineRuntime,
+        activation_index: usize,
+    ) -> &CompiledSyndocalRandomFx {
+        let RuntimeEffectKind::Color(color) =
+            &runtime.effect_activations[activation_index].effect.kind
+        else {
+            panic!("expected a Color activation");
+        };
+        color
+            .spatial
+            .as_deref()
+            .and_then(|spatial| spatial.syndocal_random_fx.as_ref())
+            .expect("expected compiled corrected Sparkle state")
     }
 
     fn test_color_control(attribute: &str, offset: u16) -> AttributeControl {
@@ -55383,39 +55285,32 @@ mod tests {
     }
 
     #[test]
-    fn color_spatial_patch_canvas_rectangle_locks_recovered_raster_cells() {
+    fn color_spatial_patch_canvas_rectangle_keeps_continuous_local_coordinates() {
         let id_521 = CompiledColorSpatialPlacement::compile(&test_patch_canvas_placement(
             2_630, -140, 140, 50, 0.0,
         ))
         .unwrap();
-        for (patch_x, expected_raster_x) in [(2_640, 7), (2_670, 28), (2_700, 50), (2_730, 71)] {
-            assert_eq!(
-                id_521.sample(patch_x, -130),
-                Some(CompiledColorSpatialPlacementSample {
-                    raster_x: expected_raster_x,
-                    raster_y: 20,
-                })
-            );
+        for (patch_x, expected_normalized_x) in [
+            (2_640, 10.0 / 140.0),
+            (2_670, 40.0 / 140.0),
+            (2_700, 70.0 / 140.0),
+            (2_730, 100.0 / 140.0),
+        ] {
+            let sample = id_521.sample(patch_x, -130).unwrap();
+            assert!((sample.normalized_x - expected_normalized_x).abs() < 1.0e-6);
+            assert!((sample.normalized_y - 0.2).abs() < 1.0e-6);
         }
 
         let id_36 = CompiledColorSpatialPlacement::compile(&test_patch_canvas_placement(
             1_994, 166, 513, 52, 0.0,
         ))
         .unwrap();
-        assert_eq!(
-            id_36.sample(2_004, 176),
-            Some(CompiledColorSpatialPlacementSample {
-                raster_x: 1,
-                raster_y: 19,
-            })
-        );
-        assert_eq!(
-            id_36.sample(2_467, 178),
-            Some(CompiledColorSpatialPlacementSample {
-                raster_x: 92,
-                raster_y: 23,
-            })
-        );
+        let first = id_36.sample(2_004, 176).unwrap();
+        assert!((first.normalized_x - 10.0 / 513.0).abs() < 1.0e-6);
+        assert!((first.normalized_y - 10.0 / 52.0).abs() < 1.0e-6);
+        let second = id_36.sample(2_467, 178).unwrap();
+        assert!((second.normalized_x - 473.0 / 513.0).abs() < 1.0e-6);
+        assert!((second.normalized_y - 12.0 / 52.0).abs() < 1.0e-6);
     }
 
     #[test]
@@ -55473,17 +55368,10 @@ mod tests {
         let runtime = runtime_color_effect_from_request(request, &fixtures).unwrap();
         let targets = &runtime.spatial.as_ref().unwrap().targets;
         assert_eq!(targets.len(), 4);
-        assert_eq!(
-            targets
-                .iter()
-                .map(|target| (
-                    target.beam_index,
-                    (target.x * 100.0).round() as i32,
-                    (target.z * 100.0).round() as i32,
-                ))
-                .collect::<Vec<_>>(),
-            vec![(0, 7, 20), (1, 28, 20), (2, 50, 20), (3, 71, 20)]
-        );
+        for (target, expected_x) in targets.iter().zip([10.0, 40.0, 70.0, 100.0]) {
+            assert!((target.x - expected_x / 140.0).abs() < 1.0e-6);
+            assert!((target.z - 0.2).abs() < 1.0e-6);
+        }
         assert_eq!(
             targets
                 .iter()
@@ -55492,36 +55380,38 @@ mod tests {
                         as i32
                 })
                 .collect::<Vec<_>>(),
-            vec![7, 28, 50, 71],
-            "runtime Rainbow projection must be compiled from Patch raster cells, not stage normalization"
+            vec![7, 29, 50, 71],
+            "runtime Rainbow projection must use continuous Patch-local coordinates, not stage normalization or integer cells"
         );
     }
 
     #[test]
-    fn color_spatial_patch_canvas_raster_cells_truncate_toward_zero_at_boundaries() {
-        assert_eq!(daslight_axis_aligned_raster_cell(9, 0, 1_000), 0);
-        assert_eq!(daslight_axis_aligned_raster_cell(10, 0, 1_000), 1);
-        assert_eq!(daslight_axis_aligned_raster_cell(-9, 0, 1_000), 0);
-        assert_eq!(daslight_axis_aligned_raster_cell(-10, 0, 1_000), -1);
-        assert_eq!(daslight_axis_aligned_raster_cell(1_999, 1_994, 513), 0);
-        assert_eq!(daslight_axis_aligned_raster_cell(2_000, 1_994, 513), 1);
+    fn color_spatial_patch_canvas_uses_continuous_local_coordinates() {
+        let placement = CompiledColorSpatialPlacement::compile(&test_patch_canvas_placement(
+            0, 0, 1_000, 500, 0.0,
+        ))
+        .unwrap();
+        let sample = placement.sample(9, 251).unwrap();
+        assert!((sample.normalized_x - 0.009).abs() < 1.0e-6);
+        assert!((sample.normalized_y - 0.502).abs() < 1.0e-6);
     }
 
     #[test]
-    fn color_spatial_patch_canvas_angle_rotates_only_reanchored_inclusion_mask() {
+    fn color_spatial_patch_canvas_angle_rotates_mask_and_raster_together() {
         let placement = CompiledColorSpatialPlacement::compile(&test_patch_canvas_placement(
             100, 200, 40, 20, 90.0,
         ))
         .unwrap();
 
         // The 40x20 Rectangle becomes a 20x40 vertical mask whose rotated
-        // AABB is re-anchored at (100,200). Sampling still subtracts the raw
-        // origin and divides by the unrotated 40x20 extents.
+        // AABB is re-anchored at (100,200). Sampling returns the same point in
+        // the inverse-rotated local frame instead of using raw axis-aligned
+        // Patch coordinates.
         assert_eq!(
             placement.sample(110, 230),
             Some(CompiledColorSpatialPlacementSample {
-                raster_x: 25,
-                raster_y: 150,
+                normalized_x: 0.75,
+                normalized_y: 0.5,
             })
         );
         assert!(placement.sample(130, 210).is_none());
@@ -55600,1004 +55490,474 @@ mod tests {
     }
 
     #[test]
-    fn daslight_exact_knight_rider_compiles_recovered_r_f_t_branch_descriptors() {
-        let maximum_cells =
-            DASLIGHT_KNIGHT_FRAME_TABLE_MAX_BYTES / std::mem::size_of::<DaslightKnightColor>();
-        assert_eq!(
-            daslight_knight_frame_cell_count(1, maximum_cells).unwrap(),
-            maximum_cells
-        );
-        assert!(daslight_knight_frame_cell_count(1, maximum_cells + 1)
-            .unwrap_err()
-            .contains("per-effect limit"));
-
-        let cases = [
-            (
-                true,
-                true,
-                DaslightKnightMotion::OneWayOutside,
-                8,
-                7,
-                1,
-                0.0,
-                8,
-            ),
-            (
-                true,
-                false,
-                DaslightKnightMotion::OneWayInside,
-                10,
-                10,
-                2,
-                3.0,
-                5,
-            ),
-            (
-                false,
-                true,
-                DaslightKnightMotion::BounceOutside,
-                16,
-                7,
-                1,
-                1.0,
-                16,
-            ),
-            (
-                false,
-                false,
-                DaslightKnightMotion::BounceInside,
-                16,
-                14,
-                2,
-                3.0,
-                8,
-            ),
-        ];
-        for (one_way, go_outside, motion, frames, profile, step, offset, reflection_cycle) in cases
-        {
+    fn corrected_knight_rider_descriptor_is_duration_independent_and_covers_four_motions() {
+        let compile = |one_way, go_outside| {
             let request = test_daslight_knight_request(
-                1_000,
-                3,
+                1_025,
+                2,
                 one_way,
-                true,
+                false,
                 go_outside,
                 50.0,
                 false,
                 &[0, u16::MAX],
             );
-            let compiled = CompiledDaslightKnightRider::compile(
-                &request, 5, 3, one_way, true, go_outside, 50.0, false,
+            CompiledDaslightKnightRider::compile(
+                &request, 5, 2, one_way, false, go_outside, 50.0, false,
             )
-            .unwrap();
-            assert_eq!(compiled.raw_frame_count, 25);
-            assert_eq!(compiled.table_frame_count, frames);
-            assert_eq!(compiled.frames.len(), frames * 5);
-            assert_eq!(compiled.profile.len(), profile);
-            assert_eq!(compiled.step, step);
-            assert_eq!(compiled.offset, offset);
-            assert_eq!(compiled.reflection_cycle, reflection_cycle);
-            assert_eq!(compiled.motion, motion);
-        }
+            .unwrap()
+        };
+        let one_way_outside = compile(true, true);
+        let one_way_inside = compile(true, false);
+        let bounce_outside = compile(false, true);
+        let bounce_inside = compile(false, false);
 
-        let capped_request = test_daslight_knight_request(
-            751 * 40,
-            3,
-            true,
-            true,
+        assert_eq!(one_way_outside.motion_head(0.0), (-2.0, 1.0));
+        assert_eq!(one_way_outside.motion_head(0.5), (2.0, 1.0));
+        assert_eq!(one_way_inside.motion_head(0.0), (0.0, 1.0));
+        assert_eq!(one_way_inside.motion_head(0.5), (2.5, 1.0));
+        assert_eq!(bounce_outside.motion_head(0.0), (-2.0, 1.0));
+        assert_eq!(bounce_outside.motion_head(0.25), (2.0, 1.0));
+        assert_eq!(bounce_outside.motion_head(0.5), (6.0, 1.0));
+        assert_eq!(bounce_outside.motion_head(0.75), (2.0, -1.0));
+        assert_eq!(bounce_inside.motion_head(0.0), (0.0, 1.0));
+        assert_eq!(bounce_inside.motion_head(0.25), (2.0, 1.0));
+        assert_eq!(bounce_inside.motion_head(0.5), (4.0, 1.0));
+        assert_eq!(bounce_inside.motion_head(0.75), (2.0, -1.0));
+
+        let mut longer = test_daslight_knight_request(
+            30_040,
+            2,
+            false,
+            false,
             true,
             50.0,
             false,
             &[0, u16::MAX],
         );
-        let capped = CompiledDaslightKnightRider::compile(
-            &capped_request,
-            5,
-            3,
-            true,
-            true,
-            true,
-            50.0,
-            false,
-        )
-        .unwrap();
-        assert_eq!(capped.raw_frame_count, 751);
-        assert_eq!(capped.table_frame_count, 8 * (750 / 16));
-        assert_eq!(capped.profile.len(), 7 * (750 / 16));
-        assert_eq!(capped.sample_at_tick(0, 0), capped.sample_at_tick(751, 0));
-        assert_eq!(capped.sample_at_tick(-1, 0), capped.sample_at_tick(750, 0));
-
-        let short_request =
-            test_daslight_knight_request(10, 3, true, true, true, 50.0, false, &[0, u16::MAX]);
-        let short = CompiledDaslightKnightRider::compile(
-            &short_request,
-            5,
-            3,
-            true,
-            true,
-            true,
-            50.0,
-            false,
-        )
-        .unwrap();
-        assert_eq!(short.raw_frame_count, 1);
-
-        let max_palette = (0..u8::MAX)
-            .map(|index| u16::from(index) * 257)
-            .collect::<Vec<_>>();
-        let max_palette_request =
-            test_daslight_knight_request(1_000, 3, true, true, true, 50.0, false, &max_palette);
-        let max_palette_compiled = CompiledDaslightKnightRider::compile(
-            &max_palette_request,
-            5,
-            3,
-            true,
-            true,
-            true,
-            50.0,
-            false,
-        )
-        .unwrap();
-        assert_eq!(max_palette_compiled.lanes.len(), 254);
-
-        let single_palette_request =
-            test_daslight_knight_request(1_000, 3, true, true, true, 50.0, false, &[12_345]);
-        let single_palette = CompiledDaslightKnightRider::compile(
-            &single_palette_request,
-            5,
-            3,
-            true,
-            true,
-            true,
-            50.0,
-            false,
-        )
-        .unwrap();
-        assert!(single_palette.lanes.is_empty());
-        assert!(single_palette
-            .frames
-            .iter()
-            .all(|color| color.into_color() == test_color(12_345, 0, 0)));
-
-        let overflow = CompiledDaslightKnightRider::compile(
-            &short_request,
-            usize::MAX / 2,
-            3,
-            true,
-            true,
-            false,
-            50.0,
-            false,
-        )
-        .err()
-        .expect("an unrepresentable completed frame table must fail closed");
-        assert!(overflow.contains("completed frame table size overflowed"));
+        longer.phase = 0.0;
+        let longer =
+            CompiledDaslightKnightRider::compile(&longer, 5, 2, false, false, true, 50.0, false)
+                .unwrap();
+        assert_eq!(bounce_outside.motion_head(0.25), longer.motion_head(0.25));
+        assert_eq!(bounce_outside.lanes.len(), longer.lanes.len());
     }
 
     #[test]
-    fn daslight_exact_knight_rider_preserves_non_fading_and_even_size_descriptors() {
-        let non_fading_request =
-            test_daslight_knight_request(1_000, 3, true, false, true, 50.0, false, &[0, u16::MAX]);
-        let non_fading = CompiledDaslightKnightRider::compile(
-            &non_fading_request,
-            5,
-            3,
+    fn corrected_knight_rider_preserves_multilane_palette_order_and_source_over() {
+        let request = test_daslight_knight_request(
+            1_025,
+            1,
+            true,
             true,
             false,
-            true,
             50.0,
             false,
-        )
-        .unwrap();
-        assert_eq!(non_fading.profile.len(), 7);
-        assert!(non_fading.profile.iter().all(|weight| *weight == 1.0));
+            &[0, 10_000, 20_000, 30_000],
+        );
+        let compiled =
+            CompiledDaslightKnightRider::compile(&request, 5, 1, true, true, false, 50.0, false)
+                .unwrap();
+        assert_eq!(
+            compiled
+                .lanes
+                .iter()
+                .map(|lane| (lane.phase, lane.color.into_color().red))
+                .collect::<Vec<_>>(),
+            vec![(0.0, 10_000), (1.0 / 3.0, 20_000), (2.0 / 3.0, 30_000)]
+        );
 
-        let even_size_request =
-            test_daslight_knight_request(1_000, 4, false, true, false, 50.0, false, &[0, u16::MAX]);
-        let even_size = CompiledDaslightKnightRider::compile(
-            &even_size_request,
-            5,
+        let composed = CompiledDaslightKnightRider {
+            strip_count: 1,
+            size: 1.0,
+            motion: DaslightKnightMotion::OneWayInside,
+            fading: true,
+            gradient: 0.5,
+            vertical_symmetry: false,
+            grayscale: false,
+            background: DaslightKnightColor::from_color(test_color(0, 0, u16::MAX)),
+            lanes: Arc::from([
+                CompiledDaslightKnightLane {
+                    phase: 0.0,
+                    color: DaslightKnightColor::from_color(test_color(u16::MAX, 0, 0)),
+                },
+                CompiledDaslightKnightLane {
+                    phase: 0.0,
+                    color: DaslightKnightColor::from_color(test_color(0, u16::MAX, 0)),
+                },
+            ]),
+        };
+        let color = composed.sample_at_phase(0.25, 0);
+        assert_eq!(color, test_color(16_383, 32_767, 16_383));
+    }
+
+    #[test]
+    fn corrected_knight_rider_is_continuous_reload_stable_and_grayscale_postcomposed() {
+        let mut request = test_daslight_knight_request(
+            1_025,
             4,
             false,
             true,
             false,
             50.0,
             false,
-        )
-        .unwrap();
-        assert_eq!(even_size.step, 2);
-        assert_eq!(even_size.table_frame_count, 20);
-        assert_eq!(even_size.profile.len(), 16);
-        assert_eq!(even_size.offset, 3.0);
-        assert_eq!(even_size.reflection_cycle, 10);
-    }
-
-    #[test]
-    fn daslight_exact_knight_rider_scheduler_matches_external_tick_vector() {
-        let request =
-            test_daslight_knight_request(1_000, 3, true, true, true, 50.0, false, &[0, u16::MAX]);
-        let compiled =
-            CompiledDaslightKnightRider::compile(&request, 5, 3, true, true, true, 50.0, false)
+            &[5_000, 30_000, 60_000],
+        );
+        request.stops[1].color = test_color(u16::MAX, 0, 0);
+        request.stops[2].color = test_color(0, u16::MAX, 0);
+        let first =
+            CompiledDaslightKnightRider::compile(&request, 9, 4, false, true, false, 50.0, false)
                 .unwrap();
-
-        // R=25 and T=8 produce p=f32(7*f32(4/25))=1.12. Frame 1
-        // is black and frame 2 is white at target 0; the recovered mixed
-        // temporal interpolation followed by truncation yields 7864.
-        assert_eq!(compiled.sample_at_tick(4, 0).red, 7_864);
-    }
-
-    #[test]
-    fn daslight_exact_knight_rider_four_motion_branches_match_reference_frames() {
-        let binary = |rows: &[&str]| {
-            rows.iter()
-                .map(|row| {
-                    row.bytes()
-                        .map(|value| if value == b'1' { u16::MAX } else { 0 })
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>()
-        };
-        let sample_rows = |compiled: &CompiledDaslightKnightRider| {
-            (0..compiled.table_frame_count)
-                .map(|frame| {
-                    (0..compiled.strip_count)
-                        .map(|index| compiled.sample_frame(frame, index).into_color().red)
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>()
-        };
-
-        let one_way_outside =
-            test_daslight_knight_request(1_000, 3, true, true, true, 50.0, false, &[0, u16::MAX]);
-        let one_way_outside = CompiledDaslightKnightRider::compile(
-            &one_way_outside,
-            5,
-            3,
-            true,
-            true,
-            true,
-            50.0,
-            false,
-        )
-        .unwrap();
-        assert_eq!(
-            sample_rows(&one_way_outside),
-            binary(&["00000", "00000", "10000", "11000", "01100", "00110", "00011", "00001",])
-        );
-
-        let one_way_inside =
-            test_daslight_knight_request(1_000, 3, true, true, false, 50.0, false, &[0, u16::MAX]);
-        let one_way_inside = CompiledDaslightKnightRider::compile(
-            &one_way_inside,
-            5,
-            3,
-            true,
-            true,
-            false,
-            50.0,
-            false,
-        )
-        .unwrap();
-        assert_eq!(
-            sample_rows(&one_way_inside),
-            vec![
-                vec![43_690, 65_535, 0, 0, 0],
-                vec![21_845, 65_535, 32_768, 0, 0],
-                vec![0, 43_690, 65_535, 0, 0],
-                vec![0, 21_845, 65_535, 32_768, 0],
-                vec![0, 0, 43_690, 65_535, 0],
-                vec![0, 0, 21_845, 65_535, 32_768],
-                vec![0, 0, 0, 43_690, 65_535],
-                vec![32_768, 0, 0, 21_845, 65_535],
-                vec![65_535, 0, 0, 0, 43_690],
-                vec![65_535, 32_768, 0, 0, 21_845],
-            ]
-        );
-
-        let bounce_outside =
-            test_daslight_knight_request(1_000, 3, false, true, true, 50.0, false, &[0, u16::MAX]);
-        let bounce_outside = CompiledDaslightKnightRider::compile(
-            &bounce_outside,
-            5,
-            3,
-            false,
-            true,
-            true,
-            50.0,
-            false,
-        )
-        .unwrap();
-        assert_eq!(
-            sample_rows(&bounce_outside),
-            binary(&[
-                "00000", "00000", "10000", "11000", "01100", "00110", "00011", "00001", "00000",
-                "00001", "00011", "00110", "01100", "11000", "10000", "00000",
-            ])
-        );
-
-        let bounce_inside =
-            test_daslight_knight_request(1_000, 3, false, true, false, 50.0, false, &[0, u16::MAX]);
-        let bounce_inside = CompiledDaslightKnightRider::compile(
-            &bounce_inside,
-            5,
-            3,
-            false,
-            true,
-            false,
-            50.0,
-            false,
-        )
-        .unwrap();
-        assert_eq!(
-            sample_rows(&bounce_inside),
-            vec![
-                vec![43_690, 65_535, 0, 0, 0],
-                vec![21_845, 65_535, 32_768, 0, 0],
-                vec![0, 43_690, 65_535, 0, 0],
-                vec![0, 43_690, 65_535, 0, 0],
-                vec![21_845, 65_535, 32_768, 0, 0],
-                vec![43_690, 65_535, 0, 0, 0],
-                vec![65_535, 32_768, 0, 0, 0],
-                vec![65_535, 32_768, 0, 0, 0],
-                vec![43_690, 65_535, 0, 0, 0],
-                vec![21_845, 65_535, 32_768, 0, 0],
-                vec![0, 43_690, 65_535, 0, 0],
-                vec![0, 43_690, 65_535, 0, 0],
-                vec![21_845, 65_535, 32_768, 0, 0],
-                vec![43_690, 65_535, 0, 0, 0],
-                vec![65_535, 32_768, 0, 0, 0],
-                vec![65_535, 32_768, 0, 0, 0],
-            ]
-        );
-    }
-
-    #[test]
-    fn daslight_exact_knight_rider_uses_mixed_precision_lane_source_over() {
-        let half = 32_768.0_f32 / u16::MAX as f32;
-        let lane_weights = [
-            (32_000_u16, [1.0, half, 0.0, 0.0, 0.0]),
-            (64_000_u16, [0.0, half, 1.0, 1.0, half]),
-            (16_000_u16, [0.0, 0.0, 0.0, 0.0, half]),
-        ];
-        let resolved = (0..5)
-            .map(|index| {
-                lane_weights
-                    .iter()
-                    .fold(
-                        DaslightKnightColor::from_color(test_color(0, 0, 0)),
-                        |destination, (red, weights)| {
-                            destination.source_over(
-                                DaslightKnightColor::from_color(test_color(*red, 0, 0)),
-                                weights[index],
-                            )
-                        },
-                    )
-                    .into_color()
-                    .red
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(resolved, vec![32_000, 40_000, 64_000, 64_000, 24_000]);
-    }
-
-    #[test]
-    fn daslight_exact_knight_rider_transform_folds_lanes_but_preserves_base() {
-        let plain_request =
-            test_daslight_knight_request(1_000, 3, true, true, true, 50.0, false, &[1_000, 60_000]);
-        let folded_request =
-            test_daslight_knight_request(1_000, 3, true, true, true, 50.0, true, &[1_000, 60_000]);
-        let plain = CompiledDaslightKnightRider::compile(
-            &plain_request,
-            5,
-            3,
-            true,
-            true,
-            true,
-            50.0,
-            false,
-        )
-        .unwrap();
-        let folded = CompiledDaslightKnightRider::compile(
-            &folded_request,
-            5,
-            3,
-            true,
-            true,
-            true,
-            50.0,
-            true,
-        )
-        .unwrap();
-        for (destination, source) in [Some(1), Some(3), Some(3), Some(1), Some(1)]
-            .into_iter()
-            .enumerate()
-        {
-            let actual = folded.sample_frame(4, destination);
-            let expected = source
-                .map(|source| plain.sample_frame(4, source))
-                .unwrap_or(folded.background);
-            assert_eq!(actual, expected);
+        let repeated =
+            CompiledDaslightKnightRider::compile(&request, 9, 4, false, true, false, 50.0, false)
+                .unwrap();
+        for phase in [0.0, 0.101, 0.102, 0.499, 0.999] {
+            for index in 0..9 {
+                assert_eq!(
+                    first.sample_at_phase(phase, index),
+                    repeated.sample_at_phase(phase, index)
+                );
+            }
         }
+        assert_ne!(
+            first.sample_at_phase(0.101, 1),
+            first.sample_at_phase(0.102, 1)
+        );
 
-        let single_request =
-            test_daslight_knight_request(1_000, 1, true, true, true, 50.0, true, &[1_000, 60_000]);
-        let single = CompiledDaslightKnightRider::compile(
-            &single_request,
-            1,
-            1,
-            true,
-            true,
-            true,
-            50.0,
-            true,
-        )
-        .unwrap();
-        assert_ne!(single.sample_frame(4, 0), single.background);
+        let grayscale =
+            CompiledDaslightKnightRider::compile(&request, 9, 4, false, true, false, 50.0, false)
+                .map(|mut compiled| {
+                    compiled.grayscale = true;
+                    compiled
+                })
+                .unwrap();
+        let color = first.sample_at_phase(0.101, 1);
+        assert_eq!(
+            grayscale.sample_at_phase(0.101, 1),
+            daslight_grayscale_color(color)
+        );
     }
 
     #[test]
-    fn daslight_exact_knight_rider_grayscale_is_applied_after_completed_frame_composition() {
-        let mut color_request =
-            test_daslight_knight_request(1_000, 3, true, true, true, 50.0, false, &[0, 1, 2]);
-        color_request.stops[0].color = test_color(12_000, 4_000, 40_000);
-        color_request.stops[1].color = test_color(60_000, 2_000, 8_000);
-        color_request.stops[2].color = test_color(1_000, 55_000, 20_000);
-        let mut grayscale_request = color_request.clone();
-        let ColorEffectSpatialRecipe::KnightRider { grayscale, .. } =
-            &mut grayscale_request.spatial_pattern.as_mut().unwrap().recipe
+    fn corrected_authored_period_is_exact_free_run_and_clock_synced() {
+        let request = test_daslight_burst_request(
+            1_025,
+            10.0,
+            1.0,
+            false,
+            false,
+            &[black_color(), test_color(u16::MAX, 0, 0)],
+        );
+        let compiled = compile_daslight_burst(&request, 5).unwrap().unwrap();
+        let target = test_spatial_color_target(2, 5, 0.5, 0.5);
+        let created_at = Instant::now();
+        let evaluate = |request: &ColorEffectRequest, now, clock: &ClockSnapshot| {
+            evaluate_daslight_burst_color_at_rate(
+                request, &target, &compiled, created_at, now, clock, 1.0,
+            )
+        };
+        let start = evaluate(&request, created_at, &ClockSnapshot::default());
+        assert_ne!(
+            evaluate(
+                &request,
+                created_at + Duration::from_millis(1_000),
+                &ClockSnapshot::default(),
+            ),
+            start,
+            "1025 ms must not be floored to a 1000 ms cycle"
+        );
+        assert_eq!(
+            evaluate(
+                &request,
+                created_at + Duration::from_millis(1_025),
+                &ClockSnapshot::default(),
+            ),
+            start
+        );
+
+        let mut synced = request.clone();
+        synced.clock_sync = Some(EffectClockSync { beats: 1.0 });
+        let before = ClockSnapshot {
+            beat_phase: 1_000.0 / 1_025.0,
+            ..ClockSnapshot::default()
+        };
+        let complete = ClockSnapshot {
+            beat_counter: 1,
+            beat_phase: 0.0,
+            ..ClockSnapshot::default()
+        };
+        assert_ne!(evaluate(&synced, created_at, &before), start);
+        assert_eq!(evaluate(&synced, created_at, &complete), start);
+
+        let knight_request =
+            test_daslight_knight_request(1_025, 1, true, false, false, 50.0, false, &[0, u16::MAX]);
+        let knight = compile_daslight_value_spatial(&knight_request, 5)
+            .unwrap()
+            .unwrap();
+        let edge = test_spatial_color_target(4, 5, 1.0, 0.5);
+        let evaluate_knight = |request: &ColorEffectRequest, now, clock: &ClockSnapshot| {
+            evaluate_daslight_knight_rider_color_at_rate(
+                request, &edge, &knight, created_at, now, clock, 1.0,
+            )
+        };
+        let knight_start = evaluate_knight(&knight_request, created_at, &ClockSnapshot::default());
+        assert_ne!(
+            evaluate_knight(
+                &knight_request,
+                created_at + Duration::from_millis(1_000),
+                &ClockSnapshot::default(),
+            ),
+            knight_start
+        );
+        assert_eq!(
+            evaluate_knight(
+                &knight_request,
+                created_at + Duration::from_millis(1_025),
+                &ClockSnapshot::default(),
+            ),
+            knight_start
+        );
+        let mut synced_knight = knight_request.clone();
+        synced_knight.clock_sync = Some(EffectClockSync { beats: 1.0 });
+        assert_ne!(
+            evaluate_knight(&synced_knight, created_at, &before),
+            knight_start
+        );
+        assert_eq!(
+            evaluate_knight(&synced_knight, created_at, &complete),
+            knight_start
+        );
+
+        let mut sweep_request = test_spatial_color_request(ColorEffectSpatialRecipe::Sweep {
+            daslight_exact: true,
+            grayscale: false,
+            vertical_symmetry: false,
+            direction_change: false,
+        });
+        sweep_request.period_ms = 1_025;
+        sweep_request.stops[0].color = test_color(u16::MAX, 0, 0);
+        sweep_request.stops[1].color = test_color(0, 0, u16::MAX);
+        let sweep = compile_daslight_sweep(&sweep_request, 5).unwrap().unwrap();
+        let evaluate_sweep = |request: &ColorEffectRequest, now, clock: &ClockSnapshot| {
+            evaluate_daslight_sweep_color_at_rate(
+                request, &edge, &sweep, created_at, now, clock, 1.0,
+            )
+        };
+        let sweep_start = evaluate_sweep(&sweep_request, created_at, &ClockSnapshot::default());
+        assert_ne!(
+            evaluate_sweep(
+                &sweep_request,
+                created_at + Duration::from_millis(1_000),
+                &ClockSnapshot::default(),
+            ),
+            sweep_start
+        );
+        assert_eq!(
+            evaluate_sweep(
+                &sweep_request,
+                created_at + Duration::from_millis(1_025),
+                &ClockSnapshot::default(),
+            ),
+            sweep_start
+        );
+        let mut synced_sweep = sweep_request.clone();
+        synced_sweep.clock_sync = Some(EffectClockSync { beats: 1.0 });
+        assert_ne!(
+            evaluate_sweep(&synced_sweep, created_at, &before),
+            sweep_start
+        );
+        assert_eq!(
+            evaluate_sweep(&synced_sweep, created_at, &complete),
+            sweep_start
+        );
+    }
+
+    #[test]
+    fn corrected_burst_has_no_40ms_staircase_and_uses_pixel_centre_radius() {
+        let request = test_daslight_burst_request(
+            1_025,
+            10.0,
+            1.0,
+            false,
+            false,
+            &[black_color(), test_color(u16::MAX, 0, 0)],
+        );
+        let compiled = compile_daslight_burst(&request, 5).unwrap().unwrap();
+        assert!((compiled.radial_coordinate(0) - 0.2).abs() < 1.0e-12);
+        assert!((compiled.radial_coordinate(2) - 0.0).abs() < 1.0e-12);
+        assert!((compiled.radial_coordinate(4) - 0.2).abs() < 1.0e-12);
+        assert_ne!(
+            compiled.sample_at_phase(500.0 / 1_025.0, 2),
+            compiled.sample_at_phase(501.0 / 1_025.0, 2)
+        );
+    }
+
+    #[test]
+    fn corrected_burst_uses_equal_cyclic_segments_and_direct_gradient_hold() {
+        let palette = [
+            test_color(u16::MAX, 0, 0),
+            test_color(0, u16::MAX, 0),
+            test_color(0, 0, u16::MAX),
+        ];
+        let held = test_daslight_burst_request(1_025, 10.0, 0.0, false, false, &palette);
+        let held = compile_daslight_burst(&held, 5).unwrap().unwrap();
+        assert_eq!(held.palette_color(0.0).into_color(), palette[0]);
+        assert_eq!(held.palette_color(1.0 / 3.0).into_color(), palette[1]);
+        assert_eq!(held.palette_color(2.0 / 3.0).into_color(), palette[2]);
+        assert_eq!(held.palette_color(0.2).into_color(), palette[0]);
+
+        let interpolated = test_daslight_burst_request(1_025, 10.0, 1.0, false, false, &palette);
+        let interpolated = compile_daslight_burst(&interpolated, 5).unwrap().unwrap();
+        let blended = interpolated.palette_color(1.0 / 6.0).into_color();
+        assert!((i32::from(blended.red) - 32_767).abs() <= 1);
+        assert!((i32::from(blended.green) - 32_767).abs() <= 1);
+        assert_eq!(blended.blue, 0);
+    }
+
+    #[test]
+    fn corrected_burst_preserves_qgray_and_tent_transform() {
+        let request = test_daslight_burst_request(
+            1_025,
+            10.0,
+            1.0,
+            true,
+            true,
+            &[test_color(u16::MAX, 0, 0), black_color()],
+        );
+        let compiled = compile_daslight_burst(&request, 5).unwrap().unwrap();
+        assert_eq!(compiled.radial_coordinate(0), compiled.radial_coordinate(4));
+        assert_eq!(compiled.radial_coordinate(1), compiled.radial_coordinate(3));
+        let raw = compiled.palette_color(compiled.radial_coordinate(2));
+        assert_eq!(
+            compiled.sample_at_phase(0.0, 2),
+            daslight_grayscale_color(raw.into_color())
+        );
+    }
+
+    #[test]
+    fn corrected_sweep_boundary_is_analytic_and_direction_change_reverses_alternates() {
+        let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::Sweep {
+            daslight_exact: true,
+            grayscale: false,
+            vertical_symmetry: false,
+            direction_change: false,
+        });
+        request.stops[0].color = test_color(u16::MAX, 0, 0);
+        request.stops[1].color = test_color(0, 0, u16::MAX);
+        let forward = compile_daslight_sweep(&request, 5).unwrap().unwrap();
+        assert_eq!(
+            forward.sample_at_phase(0.099_999, 0),
+            request.stops[0].color
+        );
+        assert_eq!(forward.sample_at_phase(0.1, 0), request.stops[1].color);
+        assert_eq!(forward.sample_at_phase(0.1, 1), request.stops[0].color);
+
+        let mut reversed_request = request.clone();
+        let Some(pattern) = reversed_request.spatial_pattern.as_mut() else {
+            unreachable!()
+        };
+        let ColorEffectSpatialRecipe::Sweep {
+            direction_change, ..
+        } = &mut pattern.recipe
         else {
             unreachable!()
         };
-        *grayscale = true;
+        *direction_change = true;
+        let reversed = compile_daslight_sweep(&reversed_request, 5)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            reversed.sample_at_phase(0.599_999, 4),
+            request.stops[1].color
+        );
+        assert_eq!(reversed.sample_at_phase(0.6, 4), request.stops[0].color);
+        assert_eq!(reversed.sample_at_phase(0.6, 3), request.stops[1].color);
+    }
 
-        let color = CompiledDaslightKnightRider::compile(
-            &color_request,
-            5,
-            3,
-            true,
-            true,
-            true,
-            50.0,
-            false,
-        )
-        .unwrap();
-        let grayscale = CompiledDaslightKnightRider::compile(
-            &grayscale_request,
-            5,
-            3,
-            true,
-            true,
-            true,
-            50.0,
-            false,
-        )
-        .unwrap();
-
-        for frame in 0..color.table_frame_count {
-            for destination in 0..color.strip_count {
-                let expected = DaslightKnightColor::from_color(daslight_grayscale_color(
-                    color.sample_frame(frame, destination).into_color(),
-                ));
-                assert_eq!(grayscale.sample_frame(frame, destination), expected);
+    #[test]
+    fn corrected_sweep_is_continuous_phase_reload_stable_and_tent_mapped() {
+        let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::Sweep {
+            daslight_exact: true,
+            grayscale: false,
+            vertical_symmetry: true,
+            direction_change: false,
+        });
+        request.period_ms = 1_025;
+        request.stops[0].color = test_color(u16::MAX, 0, 0);
+        request.stops[1].color = test_color(0, 0, u16::MAX);
+        let first = compile_daslight_sweep(&request, 5).unwrap().unwrap();
+        let repeated = compile_daslight_sweep(&request, 5).unwrap().unwrap();
+        for phase in [0.0, 0.1, 0.2, 0.499, 0.999] {
+            for index in 0..5 {
+                assert_eq!(
+                    first.sample_at_phase(phase, index),
+                    repeated.sample_at_phase(phase, index)
+                );
             }
         }
         assert_eq!(
-            grayscale.background,
-            DaslightKnightColor::from_color(daslight_grayscale_color(
-                color.background.into_color(),
-            ))
+            (0..5)
+                .map(|index| daslight_corrected_source_position(index, 5, true))
+                .collect::<Vec<_>>(),
+            vec![0.0, 2.0, 4.0, 2.0, 0.0]
         );
+        assert_eq!(first.sample_at_phase(0.2, 0), first.sample_at_phase(0.2, 4));
+        assert_eq!(first.sample_at_phase(0.2, 1), first.sample_at_phase(0.2, 3));
     }
 
     #[test]
-    fn daslight_exact_knight_rider_validation_is_additive_to_native_recipe() {
-        let exact_fractional =
-            test_daslight_knight_request(1_000, 3, true, true, false, 50.5, false, &[0, u16::MAX]);
-        assert!(validate_runtime_color_effect_request(&exact_fractional)
+    fn corrected_transform_uses_triangle_mapping_not_qt_nearest_fold() {
+        assert_eq!(
+            (0..4)
+                .map(|index| daslight_vertical_fold_source_index(index, 4))
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(2), Some(2), Some(0)]
+        );
+        assert_eq!(
+            (0..5)
+                .map(|index| daslight_vertical_fold_source_index(index, 5))
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(2), Some(4), Some(2), Some(0)]
+        );
+        assert_eq!(
+            (0..6)
+                .map(|index| daslight_vertical_fold_source_index(index, 6))
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(2), Some(4), Some(4), Some(2), Some(0)]
+        );
+        assert_eq!(daslight_vertical_fold_source_index(0, 1), Some(0));
+    }
+
+    #[test]
+    fn corrected_daslight_family_validation_remains_additive() {
+        let invalid_knight =
+            test_daslight_knight_request(1_025, 0, true, true, false, 50.0, false, &[0, u16::MAX]);
+        assert!(validate_color_effect_request(&invalid_knight)
             .unwrap_err()
-            .contains("integer"));
-
-        let mut native_fractional = exact_fractional.clone();
-        native_fractional.spatial_pattern.as_mut().unwrap().recipe =
-            ColorEffectSpatialRecipe::KnightRider {
-                daslight_exact: false,
-                grayscale: false,
-                vertical_symmetry: false,
-                size: 3,
-                one_way: true,
-                fading: true,
-                go_outside: false,
-                gradient: 50.5,
-            };
-        assert!(validate_runtime_color_effect_request(&native_fractional).is_ok());
-
-        let mut invalid_native_transform = native_fractional;
-        invalid_native_transform
-            .spatial_pattern
-            .as_mut()
-            .unwrap()
-            .recipe = ColorEffectSpatialRecipe::KnightRider {
-            daslight_exact: false,
-            grayscale: false,
-            vertical_symmetry: true,
-            size: 3,
-            one_way: true,
-            fading: true,
-            go_outside: false,
-            gradient: 50.0,
-        };
-        assert!(
-            validate_runtime_color_effect_request(&invalid_native_transform)
-                .unwrap_err()
-                .contains("requires the Daslight exact evaluator")
-        );
-    }
-
-    #[test]
-    fn color_spatial_knight_rider_sweeps_an_absolute_palette_window() {
-        let request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
-            daslight_exact: false,
-            grayscale: false,
-            vertical_symmetry: false,
-            size: 3,
-            one_way: true,
-            fading: false,
-            go_outside: false,
-            gradient: 50.0,
-        });
-        let samples = (0..5)
-            .map(|index| {
-                evaluate_test_spatial_sample(
-                    &request,
-                    &test_spatial_color_target(index, 5, index as f32 / 4.0, 0.5),
-                    500,
-                )
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(samples[0].opacity, 1.0);
-        assert_eq!(samples[1].opacity, 1.0);
-        assert_eq!(samples[2].opacity, 1.0);
-        assert_eq!(samples[3].opacity, 1.0);
-        assert_eq!(samples[4].opacity, 1.0);
-        assert_eq!(samples[0].color, test_color(0, 0, 0));
-        assert_eq!(samples[2].color, test_color(u16::MAX, u16::MAX, u16::MAX));
-    }
-
-    #[test]
-    fn color_spatial_sweep_matches_daslight_one_row_palette_boundary_and_direction_change() {
-        let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::Sweep {
-            daslight_exact: false,
-            grayscale: false,
-            vertical_symmetry: false,
-            direction_change: true,
-        });
-        let red = test_color(u16::MAX, 0, 0);
-        let green = test_color(0, u16::MAX, 0);
-        let blue = test_color(0, 0, u16::MAX);
-        request.stops = vec![
-            protocol::ColorEffectStop {
-                position: 0.0,
-                color: red,
-            },
-            protocol::ColorEffectStop {
-                position: 0.5,
-                color: green,
-            },
-            protocol::ColorEffectStop {
-                position: 1.0,
-                color: blue,
-            },
-        ];
-        let targets = (0..5)
-            .map(|index| test_spatial_color_target(index, 5, index as f32 / 4.0, 0.5))
-            .collect::<Vec<_>>();
-
-        let at_start = targets
-            .iter()
-            .map(|target| evaluate_test_spatial_color(&request, target, 0))
-            .collect::<Vec<_>>();
-        assert_eq!(at_start, vec![red; 5]);
-
-        // 100 ms => palette phase 0.3. Daslight truncates 0.3 * 5 to a
-        // one-cell boundary, with no gradient at the boundary.
-        let first_transition = targets
-            .iter()
-            .map(|target| evaluate_test_spatial_color(&request, target, 100))
-            .collect::<Vec<_>>();
-        assert_eq!(first_transition, vec![green, red, red, red, red]);
-
-        // 400 ms => transition 1, progress 0.2. Direction Change reverses the
-        // one-row raster, so the next colour now enters from the right edge.
-        let reversed_transition = targets
-            .iter()
-            .map(|target| evaluate_test_spatial_color(&request, target, 400))
-            .collect::<Vec<_>>();
-        assert_eq!(reversed_transition, vec![green, green, green, green, blue]);
-
-        request.spatial_pattern.as_mut().unwrap().recipe = ColorEffectSpatialRecipe::Sweep {
-            daslight_exact: false,
-            grayscale: false,
-            vertical_symmetry: false,
-            direction_change: false,
-        };
-        let fixed_direction = targets
-            .iter()
-            .map(|target| evaluate_test_spatial_color(&request, target, 400))
-            .collect::<Vec<_>>();
-        assert_eq!(fixed_direction, vec![blue, green, green, green, green]);
-
-        request.spatial_pattern.as_mut().unwrap().recipe = ColorEffectSpatialRecipe::Sweep {
-            daslight_exact: false,
-            grayscale: true,
-            vertical_symmetry: true,
-            direction_change: false,
-        };
-        let transformed = targets
-            .iter()
-            .map(|target| evaluate_test_spatial_color(&request, target, 200))
-            .collect::<Vec<_>>();
-        assert_eq!(transformed[0], transformed[3]);
-        assert_eq!(transformed[1], transformed[2]);
-        assert_ne!(transformed[0], transformed[1]);
-        assert_eq!(transformed[4], transformed[0]);
-        assert!(transformed
-            .iter()
-            .all(|color| color.red == color.green && color.green == color.blue));
-    }
-
-    #[test]
-    fn daslight_exact_sweep_uses_generated_frame_sampling_and_keeps_enhanced_separate() {
-        let red = test_color(u16::MAX, 0, 0);
-        let green = test_color(0, u16::MAX, 0);
-        let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::Sweep {
-            daslight_exact: true,
-            grayscale: false,
-            vertical_symmetry: false,
-            direction_change: false,
-        });
-        request.period_ms = 160;
-        request.stops = vec![
-            ColorEffectStop {
-                position: 0.0,
-                color: red,
-            },
-            ColorEffectStop {
-                position: 1.0,
-                color: green,
-            },
-        ];
-        let compiled = compile_daslight_sweep(&request, 5).unwrap().unwrap();
-        assert_eq!(compiled.raw_frame_count, 4);
-        assert_eq!(compiled.table_frame_count, 4);
-        assert_eq!(
-            compiled.sample_at_tick(1, 0),
-            DaslightKnightColor::from_color(red)
-                .interpolate(DaslightKnightColor::from_color(green), 0.75)
-                .into_color()
-        );
-        assert_eq!(compiled.sample_at_tick(1, 4), red);
-
-        request.spatial_pattern.as_mut().unwrap().recipe = ColorEffectSpatialRecipe::Sweep {
-            daslight_exact: true,
-            grayscale: true,
-            vertical_symmetry: true,
-            direction_change: false,
-        };
-        let folded = compile_daslight_sweep(&request, 5).unwrap().unwrap();
-        let frame = (0..5)
-            .map(|index| folded.sample_at_tick(0, index))
-            .collect::<Vec<_>>();
-        assert_eq!(frame[0], frame[3]);
-        assert_eq!(frame[1], frame[2]);
-        assert_eq!(frame[4], frame[0]);
-        assert!(frame
-            .iter()
-            .all(|color| color.red == color.green && color.green == color.blue));
-
-        request.period_ms = 751 * DASLIGHT_VALUE_FRAME_MS;
-        let capped = compile_daslight_sweep(&request, 5).unwrap().unwrap();
-        assert_eq!(capped.raw_frame_count, 751);
-        assert_eq!(capped.table_frame_count, DASLIGHT_VALUE_FRAME_CAP);
-    }
-
-    #[test]
-    fn color_spatial_knight_rider_size_is_absolute_beam_cells() {
-        let request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
-            daslight_exact: false,
-            grayscale: false,
-            vertical_symmetry: false,
-            size: 32,
-            one_way: true,
-            fading: true,
-            go_outside: false,
-            gradient: 100.0,
-        });
-        let lit = (0..48)
-            .filter(|index| {
-                evaluate_test_spatial_sample(
-                    &request,
-                    &test_spatial_color_target(*index, 48, *index as f32 / 47.0, 0.5),
-                    500,
-                )
-                .color
-                    != test_color(0, 0, 0)
-            })
-            .count();
-        assert_eq!(lit, 32);
-    }
-
-    #[test]
-    fn color_spatial_knight_rider_bidirectional_sweep_starts_at_strip_center() {
-        let request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
-            daslight_exact: false,
-            grayscale: false,
-            vertical_symmetry: false,
-            size: 3,
-            one_way: false,
-            fading: true,
-            go_outside: false,
-            gradient: 50.0,
-        });
-        let samples_at = |elapsed_ms| {
-            (0..7)
-                .map(|index| {
-                    evaluate_test_spatial_color(
-                        &request,
-                        &test_spatial_color_target(index, 7, index as f32 / 6.0, 0.5),
-                        elapsed_ms,
-                    )
-                    .red
-                })
-                .collect::<Vec<_>>()
-        };
-        let at_start = samples_at(0);
-        let at_quarter = samples_at(250);
-        let at_half = samples_at(500);
-        assert_eq!(
-            at_start.iter().position(|level| *level == u16::MAX),
-            Some(3)
-        );
-        assert!(at_quarter[1] > at_quarter[3]);
-        assert_eq!(at_half.iter().position(|level| *level == u16::MAX), Some(0));
-    }
-
-    #[test]
-    fn color_spatial_knight_rider_fading_selects_palette_interpolation() {
-        let fading = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
-            daslight_exact: false,
-            grayscale: false,
-            vertical_symmetry: false,
-            size: 4,
-            one_way: true,
-            fading: true,
-            go_outside: false,
-            gradient: 50.0,
-        });
-        let stepped = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
-            daslight_exact: false,
-            grayscale: false,
-            vertical_symmetry: false,
-            size: 4,
-            one_way: true,
-            fading: false,
-            go_outside: false,
-            gradient: 50.0,
-        });
-        let target = test_spatial_color_target(1, 6, 0.2, 0.5);
-        let smooth = evaluate_test_spatial_sample(&fading, &target, 500);
-        let discrete = evaluate_test_spatial_sample(&stepped, &target, 500);
-        assert_eq!(smooth.opacity, 1.0);
-        assert_eq!(discrete.opacity, 1.0);
-        assert_ne!(smooth.color, discrete.color);
-    }
-
-    #[test]
-    fn color_spatial_burst_expands_from_strip_center() {
-        let request = test_spatial_color_request(ColorEffectSpatialRecipe::Burst {
-            daslight_exact: false,
-            grayscale: false,
-            vertical_symmetry: false,
-            color_width: 20.0,
-            gradient: 100.0,
-        });
-        let on_front =
-            evaluate_test_spatial_color(&request, &test_spatial_color_target(3, 5, 0.75, 0.5), 500);
-        let away =
-            evaluate_test_spatial_color(&request, &test_spatial_color_target(2, 5, 0.5, 0.5), 500);
-        assert_eq!(on_front, test_color(u16::MAX, u16::MAX, u16::MAX));
-        assert_eq!(away, test_color(0, 0, 0));
-    }
-
-    #[test]
-    fn daslight_exact_burst_builds_cyclic_16bit_palette_cache() {
-        let request = test_daslight_burst_request(
-            1_000,
-            50.0,
-            1.0,
-            false,
-            false,
-            &[test_color(0, 0, 0), test_color(u16::MAX, 0, 0)],
-        );
-        let compiled = compile_daslight_burst(&request, 5).unwrap().unwrap();
-        assert_eq!(compiled.palette_cache.len(), 65_536);
-        assert_eq!(compiled.palette_cache[0].into_color().red, 0);
-        assert_eq!(compiled.palette_cache[32_768].into_color().red, u16::MAX);
-        assert!(compiled.palette_cache[16_384].into_color().red > 32_000);
-        assert!(
-            compiled.palette_cache[65_535].into_color().red < 4,
-            "wrap=true must blend the final palette segment back to stop zero"
-        );
-
-        let stepped = test_daslight_burst_request(
-            1_000,
-            50.0,
-            0.0,
-            false,
-            false,
-            &[test_color(0, 0, 0), test_color(u16::MAX, 0, 0)],
-        );
-        let stepped = compile_daslight_burst(&stepped, 5).unwrap().unwrap();
-        assert_eq!(stepped.palette_cache[32_767].into_color().red, 0);
-        assert_eq!(stepped.palette_cache[32_768].into_color().red, u16::MAX);
-        assert_eq!(stepped.palette_cache[65_535].into_color().red, u16::MAX);
-    }
-
-    #[test]
-    fn daslight_exact_burst_interns_identical_immutable_compile_tables() {
-        let request = test_daslight_burst_request(
-            30_040,
-            900.0,
-            0.5,
-            false,
-            false,
-            &[test_color(0, 0, 0), test_color(u16::MAX, 0, 0)],
-        );
-        let first = compile_daslight_burst(&request, 200).unwrap().unwrap();
-        let second = compile_daslight_burst(&request, 200).unwrap().unwrap();
-        assert!(Arc::ptr_eq(&first.palette_cache, &second.palette_cache));
-        assert!(Arc::ptr_eq(
-            &first.gradient_index_tables,
-            &second.gradient_index_tables
-        ));
-        assert!(Arc::ptr_eq(&first.frames, &second.frames));
-
-        let distinct_palette = test_daslight_burst_request(
-            30_040,
-            900.0,
-            0.0,
-            false,
-            false,
-            &[test_color(0, 0, 0), test_color(u16::MAX, 0, 0)],
-        );
-        let distinct_palette = compile_daslight_burst(&distinct_palette, 200)
-            .unwrap()
-            .unwrap();
-        assert!(!Arc::ptr_eq(
-            &first.palette_cache,
-            &distinct_palette.palette_cache
-        ));
-        assert!(Arc::ptr_eq(
-            &first.gradient_index_tables,
-            &distinct_palette.gradient_index_tables
-        ));
-        assert!(!Arc::ptr_eq(&first.frames, &distinct_palette.frames));
-    }
-
-    #[test]
-    fn daslight_exact_burst_uses_pixel_centres_generated_frames_and_postprocess() {
-        let request = test_daslight_burst_request(
-            400,
-            10.0,
-            0.0,
-            false,
-            false,
-            &[
-                test_color(0, 0, 0),
-                test_color(u16::MAX, u16::MAX, u16::MAX),
-            ],
-        );
-        let compiled = compile_daslight_burst(&request, 5).unwrap().unwrap();
-        assert_eq!(compiled.raw_frame_count, 10);
-        assert_eq!(compiled.table_frame_count, 10);
-        assert_eq!(
-            compiled.gradient_index_tables.len(),
-            10 * DASLIGHT_QT_GRADIENT_TABLE_SIZE
-        );
-        let frame_zero = &compiled.gradient_index_tables[..DASLIGHT_QT_GRADIENT_TABLE_SIZE];
-        assert_eq!((frame_zero[0], frame_zero[1_023]), (0, u16::MAX));
-        assert!(frame_zero.windows(2).all(|pair| pair[0] <= pair[1]));
-        let frame_five = &compiled.gradient_index_tables
-            [5 * DASLIGHT_QT_GRADIENT_TABLE_SIZE..6 * DASLIGHT_QT_GRADIENT_TABLE_SIZE];
-        assert_eq!((frame_five[0], frame_five[1_023]), (32_767, 32_767));
-        assert!(frame_five[511] > 65_000);
-        assert!(frame_five[512] < 100);
-        assert_eq!(compiled.sample_frame(0, 2).into_color(), black_color());
-        assert_eq!(
-            compiled.sample_frame(4, 2).into_color(),
-            test_color(u16::MAX, u16::MAX, u16::MAX)
-        );
-        assert_eq!(
-            compiled.sample_frame(5, 2).into_color(),
-            black_color(),
-            "the (cache_len - 1) integer scale keeps the exact half-cycle seam on the first segment"
-        );
-        assert_eq!(
-            compiled.sample_frame(0, 0),
-            compiled.sample_frame(0, 4),
-            "x+0.5 sampling around width/2 must be mirror symmetric"
-        );
-        let coordinate = compiled.temporal_coordinate(5);
-        assert_eq!((coordinate.lower, coordinate.upper), (4, 5));
-        assert!((coordinate.amount - 0.5).abs() <= f32::EPSILON);
-
-        let grayscale = test_daslight_burst_request(
-            400,
-            10.0,
-            0.0,
-            false,
-            true,
-            &[test_color(u16::MAX, 0, 0), test_color(0, 0, u16::MAX)],
-        );
-        let grayscale = compile_daslight_burst(&grayscale, 5).unwrap().unwrap();
-        assert_eq!(
-            grayscale.sample_frame(0, 2).into_color(),
-            test_color(87 * 257, 87 * 257, 87 * 257)
-        );
-    }
-
-    #[test]
-    fn corrected_burst_transform_folds_and_covers_odd_tail() {
-        let request = test_daslight_burst_request(
-            400,
-            10.0,
-            1.0,
-            true,
-            false,
-            &[test_color(0, 0, 0), test_color(u16::MAX, 0, 0)],
-        );
-        let compiled = compile_daslight_burst(&request, 5).unwrap().unwrap();
-        assert_eq!(compiled.sample_frame(3, 0), compiled.sample_frame(3, 2));
-        assert_eq!(compiled.sample_frame(3, 1), compiled.sample_frame(3, 3));
-        assert_eq!(compiled.sample_frame(3, 4), compiled.sample_frame(3, 0));
-    }
-
-    #[test]
-    fn daslight_exact_burst_validation_is_additive_to_enhanced_recipe() {
-        let enhanced = test_spatial_color_request(ColorEffectSpatialRecipe::Burst {
-            daslight_exact: false,
-            grayscale: false,
-            vertical_symmetry: false,
-            color_width: 50.0,
-            gradient: 100.0,
-        });
-        validate_color_effect_request(&enhanced).unwrap();
-
-        let invalid_width = test_daslight_burst_request(
-            1_000,
+            .contains("size must be within 1..100"));
+        let invalid_burst = test_daslight_burst_request(
+            1_025,
             50.5,
             1.0,
             false,
             false,
-            &[test_color(0, 0, 0), test_color(u16::MAX, 0, 0)],
+            &[black_color(), test_color(u16::MAX, 0, 0)],
         );
-        assert!(validate_color_effect_request(&invalid_width)
+        assert!(validate_color_effect_request(&invalid_burst)
             .unwrap_err()
             .contains("integer within 10..900"));
-        let invalid_gradient = test_daslight_burst_request(
-            1_000,
-            50.0,
-            1.01,
-            false,
-            false,
-            &[test_color(0, 0, 0), test_color(u16::MAX, 0, 0)],
-        );
-        assert!(validate_color_effect_request(&invalid_gradient)
-            .unwrap_err()
-            .contains("within 0..1"));
     }
 
     #[test]
     fn color_spatial_random_fill_is_seeded_and_fills_by_point_width() {
-        let mut request =
-            test_spatial_color_request(ColorEffectSpatialRecipe::RandomFill { point_width: 1 });
+        let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::RandomFill {
+            syndocal_corrected: false,
+            grayscale: false,
+            vertical_symmetry: false,
+            rng_seed: 0,
+            point_width: 1,
+            source_point_height: None,
+        });
         request.stops[0].color = test_color(u16::MAX, 0, 0);
         request.stops[1].color = test_color(0, 0, u16::MAX);
         let colors = (0..5)
@@ -56631,8 +55991,14 @@ mod tests {
     #[test]
     fn color_spatial_sparkle_has_deterministic_bounded_population() {
         let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::Sparkle {
+            syndocal_corrected: false,
+            grayscale: false,
+            vertical_symmetry: false,
+            rng_seed: 0,
             number: 2,
             lifespan: 50.0,
+            lifetime_ms: None,
+            source_lifespan: None,
             width: 2,
         });
         request.stops[0].color = test_color(u16::MAX, 0, 0);
@@ -56647,6 +56013,967 @@ mod tests {
             })
             .count();
         assert!((1..=6).contains(&lit), "lit={lit}");
+    }
+
+    #[test]
+    fn corrected_random_fill_compiles_seeded_no_replacement_continuous_cells() {
+        let request_for_seed = |rng_seed| {
+            let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::RandomFill {
+                syndocal_corrected: true,
+                grayscale: false,
+                vertical_symmetry: false,
+                rng_seed,
+                point_width: 2,
+                source_point_height: Some(7),
+            });
+            request.stops[0].color = test_color(u16::MAX, 0, 0);
+            request.stops[1].color = test_color(0, 0, u16::MAX);
+            request
+        };
+        let request = request_for_seed(0x1234_5678);
+        validate_color_effect_request(&request).unwrap();
+        let compiled = CompiledSyndocalRandomFx::compile(&request, 11)
+            .unwrap()
+            .unwrap();
+        let CompiledSyndocalRandomFx::RandomFill {
+            cell_count, ranks, ..
+        } = &compiled
+        else {
+            panic!("corrected Random fill must compile its rank table");
+        };
+        assert_eq!(*cell_count, 6, "div_ceil must retain the one-cell tail");
+        for transition in ranks.chunks_exact(*cell_count) {
+            let mut sorted = transition.to_vec();
+            sorted.sort_unstable();
+            assert_eq!(sorted, (0..*cell_count as u32).collect::<Vec<_>>());
+        }
+        let repeated = CompiledSyndocalRandomFx::compile(&request_for_seed(0x1234_5678), 11)
+            .unwrap()
+            .unwrap();
+        let changed = CompiledSyndocalRandomFx::compile(&request_for_seed(0x8765_4321), 11)
+            .unwrap()
+            .unwrap();
+        let ranks_of = |compiled: &CompiledSyndocalRandomFx| match compiled {
+            CompiledSyndocalRandomFx::RandomFill { ranks, .. } => ranks.to_vec(),
+            _ => unreachable!(),
+        };
+        assert_eq!(ranks_of(&compiled), ranks_of(&repeated));
+        assert_ne!(ranks_of(&compiled), ranks_of(&changed));
+
+        let cell = ranks[..*cell_count]
+            .iter()
+            .position(|rank| *rank == 2)
+            .unwrap();
+        let phase_for_amount = |amount: f64| (2.0 + amount) / *cell_count as f64 / 2.0;
+        let at = Instant::now();
+        let first = compiled.sample_at_time(phase_for_amount(0.25), cell * 2, 11, at, at);
+        let second = compiled.sample_at_time(phase_for_amount(0.50), cell * 2, 11, at, at);
+        assert_ne!(
+            first, second,
+            "cell transition must be continuous, not frame-stepped"
+        );
+        assert_ne!(
+            compiled.sample_at_time(0.10, 10, 11, at, at),
+            black_color(),
+            "Random fill must transition palette-to-palette without a black reset"
+        );
+    }
+
+    #[test]
+    fn corrected_sparkle_is_reload_stable_continuous_and_single_palette_safe() {
+        let request_for = |rng_seed, lifetime_ms, width| {
+            let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::Sparkle {
+                syndocal_corrected: true,
+                grayscale: false,
+                vertical_symmetry: false,
+                rng_seed,
+                number: 1,
+                lifespan: 0.0,
+                lifetime_ms: Some(lifetime_ms),
+                source_lifespan: Some(0.0),
+                width,
+            });
+            request.stops[0].color = black_color();
+            request.stops[1].color = test_color(u16::MAX, u16::MAX, u16::MAX);
+            request
+        };
+        let request = request_for(91, 100, 3);
+        validate_color_effect_request(&request).unwrap();
+        let compiled = CompiledSyndocalRandomFx::compile(&request, 17)
+            .unwrap()
+            .unwrap();
+        let repeated = CompiledSyndocalRandomFx::compile(&request_for(91, 100, 3), 17)
+            .unwrap()
+            .unwrap();
+        let changed = CompiledSyndocalRandomFx::compile(&request_for(92, 100, 3), 17)
+            .unwrap()
+            .unwrap();
+        let at = Instant::now();
+        let samples = |compiled: &CompiledSyndocalRandomFx| {
+            (0..17)
+                .map(|index| compiled.sample_at_time(0.013, index, 17, at, at))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(samples(&compiled), samples(&repeated));
+        assert_ne!(samples(&compiled), samples(&changed));
+        let single = CompiledSyndocalRandomFx::compile(&request_for(91, 100, 1), 1)
+            .unwrap()
+            .unwrap();
+        let single_at_spawn = single.sample_at_time(0.0, 0, 1, at, at);
+        let single_one_ms_later =
+            single.sample_at_time(0.001, 0, 1, at, at + Duration::from_millis(1));
+        assert!(single_at_spawn.red > single_one_ms_later.red);
+        assert!(single_one_ms_later.red > 0);
+
+        let mut single_palette = request_for(91, 100, 1);
+        single_palette.stops.truncate(1);
+        single_palette.stops[0].color = test_color(12_345, 23_456, 34_567);
+        let compiled = CompiledSyndocalRandomFx::compile(&single_palette, 1)
+            .unwrap()
+            .unwrap();
+        assert_ne!(compiled.sample_at_time(0.001, 0, 1, at, at), black_color());
+    }
+
+    #[test]
+    fn corrected_sparkle_cold_start_synthesizes_trailing_visual_epochs() {
+        let request = test_corrected_sparkle_request(0x1234_5678, 10, 1_000, 1, false, false);
+        let compiled = CompiledSyndocalRandomFx::compile(&request, 17)
+            .unwrap()
+            .unwrap();
+        let created_at = Instant::now();
+        let now = created_at + Duration::from_millis(7_000);
+        for index in 0..17 {
+            compiled.sample_at_time(5.0, index, 17, created_at, now);
+        }
+
+        let state = compiled_sparkle_state(&compiled).borrow();
+        assert_eq!(state.max_particles, 260);
+        assert_eq!(state.particles.len(), 250);
+        assert_eq!(
+            state.render_count, 1,
+            "the complete strip is built once per update"
+        );
+        assert_eq!(state.particles.first().unwrap().generation_epoch, 101);
+        assert_eq!(state.particles.last().unwrap().generation_epoch, 125);
+        for (offset, generation) in state.particles.chunks_exact(10).enumerate() {
+            let epoch = 101 + offset as u64;
+            assert!(generation.iter().all(|particle| {
+                particle.generation_epoch == epoch && particle.born_visual_ms == epoch as f64 * 40.0
+            }));
+            assert_eq!(
+                generation
+                    .iter()
+                    .map(|particle| particle.particle_index)
+                    .collect::<Vec<_>>(),
+                (0..10).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn corrected_sparkle_expires_on_100_and_1000_ms_visual_clock_boundaries() {
+        let assert_boundary = |lifetime_ms: u16| {
+            let request =
+                test_corrected_sparkle_request(0xCAFE_BABE, 1, lifetime_ms, 1, false, false);
+            let compiled = CompiledSyndocalRandomFx::compile(&request, 1)
+                .unwrap()
+                .unwrap();
+            let created_at = Instant::now();
+            compiled.sample_at_time(0.0, 0, 1, created_at, created_at);
+            let before = u64::from(lifetime_ms - 1);
+            compiled.sample_at_time(
+                before as f64 / 1_000.0,
+                0,
+                1,
+                created_at,
+                created_at + Duration::from_millis(1),
+            );
+            {
+                let state = compiled_sparkle_state(&compiled).borrow();
+                assert!(state
+                    .particles
+                    .iter()
+                    .any(|particle| particle.generation_epoch == 0));
+                assert!(state.particles.iter().any(|particle| {
+                    particle.generation_epoch == 1 && particle.born_visual_ms == 40.0
+                }));
+            }
+            let boundary = u64::from(lifetime_ms);
+            compiled.sample_at_time(
+                boundary as f64 / 1_000.0,
+                0,
+                1,
+                created_at,
+                created_at + Duration::from_millis(2),
+            );
+            assert!(!compiled_sparkle_state(&compiled)
+                .borrow()
+                .particles
+                .iter()
+                .any(|particle| particle.generation_epoch == 0));
+        };
+
+        assert_boundary(100);
+        assert_boundary(1_000);
+    }
+
+    #[test]
+    fn corrected_sparkle_births_use_crossed_visual_epoch_boundaries() {
+        let request = test_corrected_sparkle_request(31, 2, 1_000, 1, false, false);
+        let compiled = CompiledSyndocalRandomFx::compile(&request, 1)
+            .unwrap()
+            .unwrap();
+        let created_at = Instant::now();
+        compiled.sample_at_time(0.0, 0, 1, created_at, created_at);
+        let now = created_at + Duration::from_millis(100);
+        compiled.sample_at_time(0.08, 0, 1, created_at, now);
+
+        let state = compiled_sparkle_state(&compiled).borrow();
+        for particle_index in 0..2 {
+            assert!(state.particles.iter().any(|particle| {
+                particle.generation_epoch == 1
+                    && particle.particle_index == particle_index
+                    && particle.born_visual_ms == 40.0
+            }));
+            assert!(state.particles.iter().any(|particle| {
+                particle.generation_epoch == 2
+                    && particle.particle_index == particle_index
+                    && particle.born_visual_ms == 80.0
+            }));
+        }
+    }
+
+    #[test]
+    fn corrected_sparkle_visual_lifetime_and_population_are_tempo_invariant() {
+        let target = test_spatial_color_target(0, 1, 0.5, 0.5);
+        let created_at = Instant::now();
+        let evaluate = |request: &ColorEffectRequest,
+                        compiled: &CompiledSyndocalRandomFx,
+                        now: Instant,
+                        clock: &ClockSnapshot| {
+            evaluate_color_spatial_sample_at_rate(
+                request,
+                &target,
+                None,
+                None,
+                None,
+                Some(compiled),
+                None,
+                97,
+                created_at,
+                now,
+                clock,
+                1.0,
+            )
+            .color
+        };
+
+        let mut double_speed_request =
+            test_corrected_sparkle_request(0xA5A5_5A5A, 1, 100, 1, false, false);
+        double_speed_request.clock_sync = Some(EffectClockSync { beats: 1.0 });
+        let double_speed = CompiledSyndocalRandomFx::compile(&double_speed_request, 1)
+            .unwrap()
+            .unwrap();
+        evaluate(
+            &double_speed_request,
+            &double_speed,
+            created_at,
+            &ClockSnapshot::default(),
+        );
+        evaluate(
+            &double_speed_request,
+            &double_speed,
+            created_at + Duration::from_millis(49),
+            &ClockSnapshot {
+                bpm: 120.0,
+                beat_phase: 0.098,
+                ..ClockSnapshot::default()
+            },
+        );
+        assert!(compiled_sparkle_state(&double_speed)
+            .borrow()
+            .particles
+            .iter()
+            .any(|particle| particle.generation_epoch == 0));
+        evaluate(
+            &double_speed_request,
+            &double_speed,
+            created_at + Duration::from_millis(50),
+            &ClockSnapshot {
+                bpm: 120.0,
+                beat_phase: 0.1,
+                ..ClockSnapshot::default()
+            },
+        );
+        assert!(!compiled_sparkle_state(&double_speed)
+            .borrow()
+            .particles
+            .iter()
+            .any(|particle| particle.generation_epoch == 0));
+
+        let free_request = test_corrected_sparkle_request(0xA5A5_5A5A, 10, 1_000, 1, false, false);
+        let mut slow_request = free_request.clone();
+        slow_request.clock_sync = Some(EffectClockSync { beats: 4.0 });
+        let mut fast_request = free_request.clone();
+        fast_request.clock_sync = Some(EffectClockSync { beats: 0.25 });
+        let free = CompiledSyndocalRandomFx::compile(&free_request, 1)
+            .unwrap()
+            .unwrap();
+        let slow = CompiledSyndocalRandomFx::compile(&slow_request, 1)
+            .unwrap()
+            .unwrap();
+        let fast = CompiledSyndocalRandomFx::compile(&fast_request, 1)
+            .unwrap()
+            .unwrap();
+        evaluate(
+            &free_request,
+            &free,
+            created_at + Duration::from_secs(5),
+            &ClockSnapshot::default(),
+        );
+        evaluate(
+            &slow_request,
+            &slow,
+            created_at + Duration::from_secs(20),
+            &ClockSnapshot {
+                bpm: 60.0,
+                beat_counter: 20,
+                ..ClockSnapshot::default()
+            },
+        );
+        evaluate(
+            &fast_request,
+            &fast,
+            created_at + Duration::from_millis(313),
+            &ClockSnapshot {
+                bpm: 240.0,
+                beat_counter: 1,
+                beat_phase: 0.25,
+                ..ClockSnapshot::default()
+            },
+        );
+        let populations = [&free, &slow, &fast]
+            .map(|compiled| compiled_sparkle_state(compiled).borrow().particles.len());
+        assert_eq!(populations, [250; 3]);
+    }
+
+    #[test]
+    fn corrected_sparkle_reverse_seek_and_wall_jump_reset_with_full_history() {
+        let request = test_corrected_sparkle_request(77, 3, 500, 2, false, false);
+        let compiled = CompiledSyndocalRandomFx::compile(&request, 9)
+            .unwrap()
+            .unwrap();
+        let created_at = Instant::now();
+        compiled.sample_at_time(0.0, 0, 9, created_at, created_at);
+        compiled.sample_at_time(
+            0.08,
+            0,
+            9,
+            created_at,
+            created_at + Duration::from_millis(80),
+        );
+        compiled.sample_at_time(
+            0.04,
+            0,
+            9,
+            created_at,
+            created_at + Duration::from_millis(100),
+        );
+        {
+            let state = compiled_sparkle_state(&compiled).borrow();
+            assert_eq!(state.particles.len(), 6);
+            assert!(state.particles.iter().all(|particle| {
+                (particle.generation_epoch == 0 && particle.born_visual_ms == 0.0)
+                    || (particle.generation_epoch == 1 && particle.born_visual_ms == 40.0)
+            }));
+            assert_eq!(state.reset_count, 2);
+        }
+
+        let seek_created_at = created_at + Duration::from_millis(20);
+        compiled.sample_at_time(
+            0.05,
+            0,
+            9,
+            seek_created_at,
+            created_at + Duration::from_millis(120),
+        );
+        {
+            let state = compiled_sparkle_state(&compiled).borrow();
+            assert_eq!(state.particles.len(), 6);
+            assert_eq!(state.particles.first().unwrap().generation_epoch, 0);
+            assert_eq!(state.particles.last().unwrap().generation_epoch, 1);
+            assert_eq!(state.reset_count, 3);
+        }
+
+        let jumped_at = created_at + Duration::from_secs(2);
+        let jumped = (0..9)
+            .map(|index| compiled.sample_at_time(2.0, index, 9, seek_created_at, jumped_at))
+            .collect::<Vec<_>>();
+        let fresh = CompiledSyndocalRandomFx::compile(&request, 9)
+            .unwrap()
+            .unwrap();
+        let fresh_at_jump = (0..9)
+            .map(|index| fresh.sample_at_time(2.0, index, 9, seek_created_at, jumped_at))
+            .collect::<Vec<_>>();
+        assert_eq!(jumped, fresh_at_jump);
+        let state = compiled_sparkle_state(&compiled).borrow();
+        assert_eq!(state.particles.len(), 39);
+        assert_eq!(state.particles.first().unwrap().generation_epoch, 38);
+        assert_eq!(state.particles.last().unwrap().generation_epoch, 50);
+        assert!(state.particles.iter().all(|particle| {
+            particle.born_visual_ms
+                == particle.generation_epoch as f64 * SYNDOCAL_SPARKLE_GENERATION_MS
+        }));
+        assert_eq!(state.reset_count, 4);
+    }
+
+    #[test]
+    fn corrected_sparkle_fast_sync_saturates_without_capacity_wipes() {
+        let mut request = test_corrected_sparkle_request(0xDEAD_BEEF, 10, 1_000, 90, false, false);
+        request.clock_sync = Some(EffectClockSync { beats: 0.25 });
+        let compiled = CompiledSyndocalRandomFx::compile(&request, 100)
+            .unwrap()
+            .unwrap();
+        let target = test_spatial_color_target(0, 100, 0.0, 0.5);
+        let created_at = Instant::now();
+        let mut maximum_population = 0;
+        let mut minimum_warm_population = usize::MAX;
+
+        for tick in 0..=88_u64 {
+            let wall_ms = tick * 23;
+            let beat_position = wall_ms as f64 / 1_000.0 * 160.0 / 60.0;
+            let beat_counter = beat_position.floor() as u64;
+            let beat_phase = beat_position.fract() as f32;
+            evaluate_color_spatial_sample_at_rate(
+                &request,
+                &target,
+                None,
+                None,
+                None,
+                Some(&compiled),
+                None,
+                97,
+                created_at,
+                created_at + Duration::from_millis(wall_ms),
+                &ClockSnapshot {
+                    bpm: 160.0,
+                    beat_counter,
+                    beat_phase,
+                    ..ClockSnapshot::default()
+                },
+                1.0,
+            );
+            let visual_ms = beat_position / 0.25 * 1_000.0;
+            let state = compiled_sparkle_state(&compiled).borrow();
+            maximum_population = maximum_population.max(state.particles.len());
+            if visual_ms >= 1_000.0 {
+                minimum_warm_population = minimum_warm_population.min(state.particles.len());
+                assert!(
+                    state.particles.len() > 10,
+                    "the saturated field must never collapse to one Number-sized epoch"
+                );
+            }
+            assert!(state.particles.len() <= state.max_particles);
+            assert_eq!(state.reset_count, 1, "tick={tick} visual_ms={visual_ms}");
+        }
+
+        let state = compiled_sparkle_state(&compiled).borrow();
+        assert_eq!(state.max_particles, 260);
+        assert!(maximum_population <= 260);
+        assert!(minimum_warm_population > 10);
+    }
+
+    #[test]
+    fn corrected_sparkle_epoch_jump_threshold_resets_to_full_history() {
+        let request = test_corrected_sparkle_request(0x1234_5678, 2, 1_000, 1, false, false);
+        let compiled = CompiledSyndocalRandomFx::compile(&request, 5)
+            .unwrap()
+            .unwrap();
+        let created_at = Instant::now();
+        compiled.sample_at_time(1.0, 0, 5, created_at, created_at);
+        let jumped_visual_ms = 1_000.0
+            + SYNDOCAL_SPARKLE_EPOCH_JUMP_RESET_THRESHOLD as f64 * SYNDOCAL_SPARKLE_GENERATION_MS;
+        compiled.sample_at_time(
+            jumped_visual_ms / 1_000.0,
+            0,
+            5,
+            created_at,
+            created_at + Duration::from_millis(1),
+        );
+
+        let state = compiled_sparkle_state(&compiled).borrow();
+        let current_epoch = SyndocalSparkleState::generation_epoch(jumped_visual_ms);
+        assert_eq!(state.reset_count, 2);
+        assert_eq!(state.particles.len(), 50);
+        assert_eq!(
+            state.particles.first().unwrap().generation_epoch,
+            current_epoch - 24
+        );
+        assert_eq!(
+            state.particles.last().unwrap().generation_epoch,
+            current_epoch
+        );
+    }
+
+    #[test]
+    fn corrected_sparkle_reuses_strip_across_wall_ticks_at_one_visual_time() {
+        let request = test_corrected_sparkle_request(17, 3, 500, 2, false, false);
+        let compiled = CompiledSyndocalRandomFx::compile(&request, 9)
+            .unwrap()
+            .unwrap();
+        let created_at = Instant::now();
+        for index in 0..9 {
+            compiled.sample_at_time(
+                0.05,
+                index,
+                9,
+                created_at,
+                created_at + Duration::from_millis(50),
+            );
+        }
+        for index in 0..9 {
+            compiled.sample_at_time(
+                0.05,
+                index,
+                9,
+                created_at,
+                created_at + Duration::from_millis(73),
+            );
+        }
+        assert_eq!(compiled_sparkle_state(&compiled).borrow().render_count, 1);
+        compiled.sample_at_time(
+            0.06,
+            0,
+            9,
+            created_at,
+            created_at + Duration::from_millis(96),
+        );
+        assert_eq!(compiled_sparkle_state(&compiled).borrow().render_count, 2);
+    }
+
+    #[test]
+    fn corrected_sparkle_authored_loop_repeats_seeded_pattern() {
+        let mut request = test_corrected_sparkle_request(0xBADC_0FFE, 3, 100, 2, false, false);
+        request.period_ms = 200;
+        let first = CompiledSyndocalRandomFx::compile(&request, 17)
+            .unwrap()
+            .unwrap();
+        let repeated = CompiledSyndocalRandomFx::compile(&request, 17)
+            .unwrap()
+            .unwrap();
+        let created_at = Instant::now();
+        first.sample_at_time(0.8, 0, 17, created_at, created_at);
+        repeated.sample_at_time(1.8, 0, 17, created_at, created_at);
+        let placement_seed = |compiled: &CompiledSyndocalRandomFx, epoch| {
+            compiled_sparkle_state(compiled)
+                .borrow()
+                .particles
+                .iter()
+                .filter(|particle| particle.generation_epoch == epoch)
+                .map(|particle| {
+                    (
+                        particle.particle_index,
+                        particle.start,
+                        particle.particle_seed,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(placement_seed(&first, 4), placement_seed(&repeated, 9));
+
+        request.period_ms = 10;
+        let one_frame_first = CompiledSyndocalRandomFx::compile(&request, 17)
+            .unwrap()
+            .unwrap();
+        let one_frame_next = CompiledSyndocalRandomFx::compile(&request, 17)
+            .unwrap()
+            .unwrap();
+        one_frame_first.sample_at_time(0.0, 0, 17, created_at, created_at);
+        one_frame_next.sample_at_time(4.0, 0, 17, created_at, created_at);
+        assert_eq!(
+            placement_seed(&one_frame_first, 0),
+            placement_seed(&one_frame_next, 1)
+        );
+    }
+
+    #[test]
+    fn corrected_sparkle_wrap_preserves_late_particle_identity_and_lifetime() {
+        let mut request = test_corrected_sparkle_request(0xCAFE_BABE, 3, 100, 2, false, false);
+        request.period_ms = 200;
+        let compiled = CompiledSyndocalRandomFx::compile(&request, 17)
+            .unwrap()
+            .unwrap();
+        let created_at = Instant::now();
+        compiled.sample_at_time(0.8, 0, 17, created_at, created_at);
+        let before = compiled_sparkle_state(&compiled)
+            .borrow()
+            .particles
+            .iter()
+            .filter(|particle| particle.generation_epoch == 4)
+            .copied()
+            .collect::<Vec<_>>();
+        compiled.sample_at_time(
+            1.0,
+            0,
+            17,
+            created_at,
+            created_at + Duration::from_millis(40),
+        );
+        let after = compiled_sparkle_state(&compiled)
+            .borrow()
+            .particles
+            .iter()
+            .filter(|particle| particle.generation_epoch == 4)
+            .copied()
+            .collect::<Vec<_>>();
+        assert_eq!(before.len(), 3);
+        assert_eq!(after, before);
+        assert!(compiled_sparkle_state(&compiled)
+            .borrow()
+            .particles
+            .iter()
+            .any(|particle| particle.generation_epoch == 5));
+    }
+
+    #[test]
+    fn corrected_sparkle_live_modifier_rebuild_preserves_only_compatible_state() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        runtime.fixtures.push(test_runtime_color_fixture(
+            1,
+            Vec::new(),
+            vec![
+                test_color_control("ColorRed", 1),
+                test_color_control("ColorGreen", 2),
+                test_color_control("ColorBlue", 3),
+            ],
+        ));
+        let mut request = test_corrected_sparkle_request(0x0102_0304, 3, 500, 2, false, false);
+        request.spatial_pattern.as_mut().unwrap().beam_targets =
+            vec![protocol::ColorEffectBeamTarget {
+                fixture_id: 1,
+                beam_index: 0,
+                selection_index: 0,
+                feature_attribute: None,
+            }];
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![CueEffectTarget {
+                effect_id: 77,
+                enabled: true,
+                params: Some(EffectParamsSnapshot::Color(request)),
+                transition_ms: None,
+            }],
+        );
+        let started = Instant::now();
+        runtime.rebuild_effect_activations(started);
+        runtime.start_cue(1, started, PendingCueTriggerSource::Manual);
+        let activation_index = runtime.cues[0].effect_activation_range.start;
+        activation_sparkle_fx(&runtime, activation_index).sample_at_time(
+            0.2,
+            0,
+            1,
+            started,
+            started + Duration::from_millis(200),
+        );
+        let before = compiled_sparkle_state(activation_sparkle_fx(&runtime, activation_index))
+            .borrow()
+            .particles
+            .clone();
+
+        runtime.apply_command(EngineCommand::SetCueLiveModifier {
+            cue_id: 1,
+            speed: 2.0,
+            size: 1.0,
+            phase: 0.0,
+            direction: CueLiveDirection::Authored,
+            segment: 0,
+        });
+        let compatible =
+            compiled_sparkle_state(activation_sparkle_fx(&runtime, activation_index)).borrow();
+        assert_eq!(compatible.particles, before);
+        assert_eq!(compatible.reset_count, 1);
+        drop(compatible);
+
+        let Some(EffectParamsSnapshot::Color(request)) =
+            runtime.cues[0].effect_targets[0].params.as_mut()
+        else {
+            panic!("expected authored Color params");
+        };
+        let ColorEffectSpatialRecipe::Sparkle { rng_seed, .. } =
+            &mut request.spatial_pattern.as_mut().unwrap().recipe
+        else {
+            panic!("expected authored Sparkle recipe");
+        };
+        *rng_seed ^= 1;
+        runtime.reapply_cue_live_modifier(0, started + Duration::from_millis(201), false);
+        let incompatible =
+            compiled_sparkle_state(activation_sparkle_fx(&runtime, activation_index)).borrow();
+        assert!(incompatible.particles.is_empty());
+        assert_eq!(incompatible.reset_count, 0);
+    }
+
+    #[test]
+    fn corrected_sparkle_general_rebuild_migrates_across_palette_shrink() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        runtime.fixtures.push(test_runtime_color_fixture(
+            1,
+            Vec::new(),
+            vec![
+                test_color_control("ColorRed", 1),
+                test_color_control("ColorGreen", 2),
+                test_color_control("ColorBlue", 3),
+            ],
+        ));
+        let mut request = test_corrected_sparkle_request(0x1122_3344, 3, 500, 2, false, false);
+        request.stops.insert(
+            1,
+            protocol::ColorEffectStop {
+                position: 0.5,
+                color: test_color(0, u16::MAX, 32_768),
+            },
+        );
+        request.spatial_pattern.as_mut().unwrap().beam_targets =
+            vec![protocol::ColorEffectBeamTarget {
+                fixture_id: 1,
+                beam_index: 0,
+                selection_index: 0,
+                feature_attribute: None,
+            }];
+        create_effect_only_cue(
+            &mut runtime,
+            1,
+            vec![CueEffectTarget {
+                effect_id: 77,
+                enabled: true,
+                params: Some(EffectParamsSnapshot::Color(request)),
+                transition_ms: None,
+            }],
+        );
+        let started = Instant::now();
+        runtime.rebuild_effect_activations(started);
+        runtime.start_cue(1, started, PendingCueTriggerSource::Manual);
+        let activation_index = runtime.cues[0].effect_activation_range.start;
+        activation_sparkle_fx(&runtime, activation_index).sample_at_time(
+            0.2,
+            0,
+            1,
+            started,
+            started + Duration::from_millis(200),
+        );
+        let before = compiled_sparkle_state(activation_sparkle_fx(&runtime, activation_index))
+            .borrow()
+            .particles
+            .clone();
+        assert!(!before.is_empty());
+
+        runtime.apply_command(EngineCommand::SetFixtureGroups {
+            fixture_id: 1,
+            group_ids: vec!["sparkle-target".to_string()],
+        });
+        assert_eq!(
+            compiled_sparkle_state(activation_sparkle_fx(&runtime, activation_index))
+                .borrow()
+                .particles,
+            before,
+            "fixture-target topology rebuild must migrate compatible Sparkle state"
+        );
+
+        let shrink_color = test_color(12_345, 23_456, 34_567);
+        let Some(EffectParamsSnapshot::Color(request)) =
+            runtime.cues[0].effect_targets[0].params.as_mut()
+        else {
+            panic!("expected authored Color params");
+        };
+        request.stops.truncate(1);
+        request.stops[0].color = shrink_color;
+        runtime.rebuild_effect_activations(started + Duration::from_millis(201));
+        assert_eq!(
+            compiled_sparkle_state(activation_sparkle_fx(&runtime, activation_index))
+                .borrow()
+                .particles,
+            before,
+            "palette cardinality is intentionally absent from the compatibility predicate"
+        );
+        assert_eq!(
+            activation_sparkle_fx(&runtime, activation_index).sample_at_time(
+                0.2,
+                0,
+                1,
+                started,
+                started + Duration::from_millis(201),
+            ),
+            shrink_color
+        );
+    }
+
+    #[test]
+    fn corrected_sparkle_palette_growth_renders_in_range_deterministically_after_migration() {
+        let palette_request = |palette_count: usize| {
+            let mut request = test_corrected_sparkle_request(0x5566_7788, 4, 500, 2, false, false);
+            request.stops = (0..palette_count)
+                .map(|index| protocol::ColorEffectStop {
+                    position: index as f32 / (palette_count - 1) as f32,
+                    color: test_color(
+                        (index as u16).saturating_mul(10_000),
+                        (index as u16).saturating_mul(7_000),
+                        (index as u16).saturating_mul(4_000),
+                    ),
+                })
+                .collect();
+            request
+        };
+        let three_stop = palette_request(3);
+        let five_stop = palette_request(5);
+        let created_at = Instant::now();
+        let migrate_and_render = || {
+            let mut previous = CompiledSyndocalRandomFx::compile(&three_stop, 7)
+                .unwrap()
+                .unwrap();
+            previous.sample_at_time(
+                0.2,
+                0,
+                7,
+                created_at,
+                created_at + Duration::from_millis(200),
+            );
+            let before = compiled_sparkle_state(&previous).borrow().particles.clone();
+            let mut rebuilt = CompiledSyndocalRandomFx::compile(&five_stop, 7)
+                .unwrap()
+                .unwrap();
+            assert!(rebuilt.migrate_compatible_sparkle_state_from(&mut previous));
+            assert_eq!(compiled_sparkle_state(&rebuilt).borrow().particles, before);
+            let palette_indices = before
+                .iter()
+                .map(|particle| particle.palette_index_for_count(5))
+                .collect::<Vec<_>>();
+            assert!(palette_indices.iter().all(|index| (1..5).contains(index)));
+            let rendered = (0..7)
+                .map(|index| {
+                    rebuilt.sample_at_time(
+                        0.2,
+                        index,
+                        7,
+                        created_at,
+                        created_at + Duration::from_millis(201),
+                    )
+                })
+                .collect::<Vec<_>>();
+            (palette_indices, rendered)
+        };
+
+        let first = migrate_and_render();
+        let repeated = migrate_and_render();
+        assert_eq!(first, repeated);
+    }
+
+    #[test]
+    fn corrected_sparkle_same_seed_and_time_sequence_is_instance_stable() {
+        let request = test_corrected_sparkle_request(0x0BAD_F00D, 4, 1_000, 3, false, false);
+        let first = CompiledSyndocalRandomFx::compile(&request, 23)
+            .unwrap()
+            .unwrap();
+        let second = CompiledSyndocalRandomFx::compile(&request, 23)
+            .unwrap()
+            .unwrap();
+        let created_at = Instant::now();
+        for elapsed_ms in [0_u64, 20, 45, 80, 130, 377] {
+            let now = created_at + Duration::from_millis(elapsed_ms);
+            let phase = elapsed_ms as f64 / 1_000.0;
+            let first_strip = (0..23)
+                .map(|index| first.sample_at_time(phase, index, 23, created_at, now))
+                .collect::<Vec<_>>();
+            let second_strip = (0..23)
+                .map(|index| second.sample_at_time(phase, index, 23, created_at, now))
+                .collect::<Vec<_>>();
+            assert_eq!(first_strip, second_strip, "elapsed_ms={elapsed_ms}");
+            assert_eq!(
+                compiled_sparkle_state(&first).borrow().particles,
+                compiled_sparkle_state(&second).borrow().particles,
+                "elapsed_ms={elapsed_ms}"
+            );
+        }
+    }
+
+    #[test]
+    fn corrected_sparkle_preserves_width_transform_and_qgray() {
+        let created_at = Instant::now();
+        let width_request = test_corrected_sparkle_request(19, 1, 500, 3, false, false);
+        let width = CompiledSyndocalRandomFx::compile(&width_request, 8)
+            .unwrap()
+            .unwrap();
+        let width_strip = (0..8)
+            .map(|index| width.sample_at_time(0.0, index, 8, created_at, created_at))
+            .collect::<Vec<_>>();
+        let particle_start = compiled_sparkle_state(&width).borrow().particles[0].start;
+        assert_eq!(
+            width_strip
+                .iter()
+                .enumerate()
+                .filter_map(|(index, color)| (*color != black_color()).then_some(index))
+                .collect::<Vec<_>>(),
+            (particle_start..particle_start + 3).collect::<Vec<_>>()
+        );
+
+        let transformed_request = test_corrected_sparkle_request(19, 1, 500, 3, false, true);
+        let transformed = CompiledSyndocalRandomFx::compile(&transformed_request, 8)
+            .unwrap()
+            .unwrap();
+        let transformed_strip = (0..8)
+            .map(|index| transformed.sample_at_time(0.0, index, 8, created_at, created_at))
+            .collect::<Vec<_>>();
+        let state = compiled_sparkle_state(&transformed).borrow();
+        for (destination_index, actual) in transformed_strip.iter().enumerate() {
+            let expected = daslight_vertical_fold_source_index(destination_index, 8)
+                .and_then(|source_index| state.strip.get(source_index).copied())
+                .unwrap_or_else(black_color);
+            assert_eq!(*actual, expected, "destination_index={destination_index}");
+        }
+        drop(state);
+
+        let grayscale_request = test_corrected_sparkle_request(19, 1, 500, 1, true, false);
+        let grayscale = CompiledSyndocalRandomFx::compile(&grayscale_request, 1)
+            .unwrap()
+            .unwrap();
+        let color = grayscale.sample_at_time(0.0, 0, 1, created_at, created_at);
+        assert_ne!(color, black_color());
+        assert_eq!(color.red, color.green);
+        assert_eq!(color.green, color.blue);
+    }
+
+    #[test]
+    fn corrected_random_recipe_domains_fail_closed_without_breaking_legacy() {
+        let missing_lifetime = test_spatial_color_request(ColorEffectSpatialRecipe::Sparkle {
+            syndocal_corrected: true,
+            grayscale: false,
+            vertical_symmetry: false,
+            rng_seed: 1,
+            number: 1,
+            lifespan: 0.0,
+            lifetime_ms: None,
+            source_lifespan: Some(0.0),
+            width: 1,
+        });
+        assert!(validate_color_effect_request(&missing_lifetime)
+            .unwrap_err()
+            .contains("100..1000 ms"));
+        let bad_width = test_spatial_color_request(ColorEffectSpatialRecipe::RandomFill {
+            syndocal_corrected: true,
+            grayscale: false,
+            vertical_symmetry: false,
+            rng_seed: 1,
+            point_width: 11,
+            source_point_height: None,
+        });
+        assert!(validate_color_effect_request(&bad_width)
+            .unwrap_err()
+            .contains("within 1..10"));
     }
 
     #[test]
@@ -56786,24 +57113,24 @@ mod tests {
     }
 
     #[test]
-    fn corrected_knight_rider_fold_keeps_qt_samples_but_covers_every_destination() {
+    fn corrected_knight_rider_fold_uses_tent_samples_and_covers_every_destination() {
         assert_eq!(
             (0..4)
                 .map(|index| daslight_vertical_fold_source_index(index, 4))
                 .collect::<Vec<_>>(),
-            vec![Some(0), Some(2), Some(3), Some(1)]
+            vec![Some(0), Some(2), Some(2), Some(0)]
         );
         assert_eq!(
             (0..5)
                 .map(|index| daslight_vertical_fold_source_index(index, 5))
                 .collect::<Vec<_>>(),
-            vec![Some(1), Some(3), Some(3), Some(1), Some(1)]
+            vec![Some(0), Some(2), Some(4), Some(2), Some(0)]
         );
         assert_eq!(
             (0..6)
                 .map(|index| daslight_vertical_fold_source_index(index, 6))
                 .collect::<Vec<_>>(),
-            vec![Some(0), Some(2), Some(4), Some(5), Some(3), Some(1)]
+            vec![Some(0), Some(2), Some(4), Some(4), Some(2), Some(0)]
         );
         assert_eq!(daslight_vertical_fold_source_index(0, 1), Some(0));
     }
@@ -56972,7 +57299,7 @@ mod tests {
     }
 
     #[test]
-    fn daslight_exact_perlin_matches_recovered_hash_and_frame_vectors() {
+    fn dvc_corrected_perlin_preserves_hash_and_uses_continuous_phase() {
         for ((x, y), expected) in [
             ((0, 0), -0.885_272_484_752_390_3),
             ((1, 0), -1.835_903_511_836_126),
@@ -56983,131 +57310,110 @@ mod tests {
             assert!((daslight_perlin_hash_radians(x, y) - expected).abs() < 1.0e-12);
         }
 
-        let request = test_daslight_perlin_request(3_000, 4, 5.0, 2.0, 1.0, 70.0, false, false);
+        let request = test_daslight_perlin_request(1_001, 4, 5.0, 2.0, 1.0, 70.0, false, false);
         let targets = (0..10)
             .map(|index| test_spatial_color_target(index, 10, index as f32 / 9.0, 0.5))
             .collect::<Vec<_>>();
         let compiled = compile_daslight_perlin(&request, &targets)
             .unwrap()
             .unwrap();
-        assert_eq!(
-            (compiled.raw_frame_count, compiled.table_frame_count),
-            (75, 75)
-        );
-        for (frame, expected) in [
-            (0, vec![0, 0, 0, 0, 0, 0, 36, 80, 72, 18]),
-            (10, vec![121, 64, 15, 13, 38, 0, 71, 112, 95, 34]),
-            (20, vec![255, 206, 153, 141, 152, 121, 143, 155, 139, 111]),
-            (37, vec![255, 255, 255, 255, 255, 255, 219, 176, 182, 235]),
-            (74, vec![0, 0, 0, 0, 0, 0, 36, 79, 73, 21]),
-        ] {
-            let actual = (0..10)
-                .map(|target| compiled.sample_frame_palette_byte(frame, target).unwrap())
-                .collect::<Vec<_>>();
-            assert_eq!(actual, expected, "frame {frame}");
-        }
-    }
-
-    #[test]
-    fn daslight_exact_perlin_rotation_matches_qt5_all_angle_raster_contract() {
-        for (angle, vectors) in [
-            (
-                1,
-                [((0, 0), (0, 2)), ((1, 60), (2, 61)), ((99, 99), (99, 97))],
-            ),
-            (
-                17,
-                [((0, 0), (4, 25)), ((50, 50), (50, 49)), ((99, 0), (73, 4))],
-            ),
-            (
-                45,
-                [((0, 0), (9, 50)), ((2, 60), (35, 74)), ((0, 99), (50, 90))],
-            ),
-            (
-                90,
-                [((0, 0), (0, 99)), ((50, 50), (50, 49)), ((99, 0), (0, 0))],
-            ),
-            (
-                171,
-                [((0, 0), (85, 98)), ((1, 60), (92, 47)), ((99, 99), (15, 1))],
-            ),
-            (
-                246,
-                [((0, 0), (93, 33)), ((1, 60), (57, 18)), ((0, 99), (33, 6))],
-            ),
-            (
-                300,
-                [((0, 0), (61, 7)), ((2, 60), (29, 27)), ((99, 99), (38, 92))],
-            ),
-            (
-                359,
-                [((0, 0), (2, 0)), ((50, 50), (50, 50)), ((99, 0), (99, 2))],
-            ),
-            (
-                360,
-                [((0, 0), (0, 0)), ((50, 50), (50, 50)), ((99, 99), (99, 99))],
-            ),
-        ] {
-            let source_map = daslight_perlin_rotation_source_map(angle);
-            for ((x, y), expected) in vectors {
+        assert_eq!(compiled.palette.len(), request.stops.len());
+        let octave = compiled.targets[6].octaves[0];
+        let directional_phase = compiled.targets[6].directional_phase_radians;
+        let first = compiled.lattice_signal(octave.base_radians[0], directional_phase, 0.1);
+        let one_millisecond_later =
+            compiled.lattice_signal(octave.base_radians[0], directional_phase, 0.101);
+        assert!((first - one_millisecond_later).abs() > 1.0e-6);
+        for target in 0..targets.len() {
+            for phase in [0.0, 0.001, 0.1, 0.499, 0.75, 0.999] {
                 assert_eq!(
-                    source_map[y * 100 + x],
-                    expected,
-                    "angle {angle}, ({x}, {y})"
+                    compiled.sample_phase_palette_byte(phase, target),
+                    compiled.sample_phase_palette_byte_scalar(phase, target),
+                    "compiled trigonometric coefficients must preserve the recovered scalar result at target {target}, phase {phase}"
                 );
             }
+            assert_eq!(
+                compiled.sample_phase_palette_byte(0.0, target),
+                compiled.sample_phase_palette_byte(1.0, target),
+                "integer Speed must close the authored period"
+            );
         }
-
-        let mut fnv1a = 0xcbf2_9ce4_8422_2325_u64;
-        for angle in 0..=360 {
-            for (source_x, source_y) in daslight_perlin_rotation_source_map(angle) {
-                for byte in [source_x as u8, source_y as u8] {
-                    fnv1a ^= u64::from(byte);
-                    fnv1a = fnv1a.wrapping_mul(0x0000_0100_0000_01b3);
-                }
-            }
-        }
-        assert_eq!(fnv1a, 0xb8c6_47db_6b01_7785);
     }
 
     #[test]
-    fn daslight_exact_perlin_keeps_dead_direction_and_750_frame_scheduler_contract() {
+    fn dvc_corrected_perlin_rotation_is_analytic_and_hole_free() {
+        for (angle, expected) in [
+            (0, (0.25, 0.5)),
+            (90, (0.5, 0.75)),
+            (180, (0.75, 0.5)),
+            (270, (0.5, 0.25)),
+            (360, (0.25, 0.5)),
+        ] {
+            let actual = corrected_perlin_inverse_rotate(0.25, 0.5, angle);
+            assert!((actual.0 - expected.0).abs() < 1.0e-12, "angle {angle}");
+            assert!((actual.1 - expected.1).abs() < 1.0e-12, "angle {angle}");
+        }
+
+        let rotated_corner = corrected_perlin_inverse_rotate(0.0, 0.0, 45);
+        assert!(rotated_corner.0 < 0.0);
+        let source_radius = (0.5_f64.powi(2) + 0.5_f64.powi(2)).sqrt();
+        let rotated_radius =
+            ((rotated_corner.0 - 0.5).powi(2) + (rotated_corner.1 - 0.5).powi(2)).sqrt();
+        assert!((source_radius - rotated_radius).abs() < 1.0e-12);
+
+        let mut request =
+            test_daslight_perlin_request(1_001, 4, 20.0, 2.0, 1.0, 70.0, false, false);
+        let pattern = request.spatial_pattern.as_mut().unwrap();
+        if let ColorEffectSpatialRecipe::Perlin {
+            rotation_degrees, ..
+        } = &mut pattern.recipe
+        {
+            *rotation_degrees = 45.0;
+        }
+        pattern.placement = Some(test_patch_canvas_placement(0, 0, 100, 100, 0.0));
+        let target = test_spatial_color_target(0, 1, 0.0, 0.0);
+        let compiled = compile_daslight_perlin(&request, &[target])
+            .unwrap()
+            .unwrap();
+        assert!(!compiled.targets[0].octaves.is_empty());
+        assert!(compiled.sample_phase_palette_byte(0.25, 0).is_some());
+    }
+
+    #[test]
+    fn dvc_corrected_perlin_direction_maps_full_domain_and_changes_spatial_phase() {
+        assert_eq!(corrected_perlin_direction_degrees(1), 0.0);
+        assert!((corrected_perlin_direction_degrees(2) - 360.0 / 99.0).abs() < 1.0e-12);
+        assert_eq!(corrected_perlin_direction_degrees(100), 360.0);
+
         let targets = (0..5)
             .map(|index| test_spatial_color_target(index, 5, index as f32 / 4.0, 0.5))
             .collect::<Vec<_>>();
         let first = test_daslight_perlin_request(3_000, 4, 5.0, 1.0, 1.0, 70.0, false, false);
-        let second = test_daslight_perlin_request(3_000, 4, 5.0, 100.0, 1.0, 70.0, false, false);
+        let second = test_daslight_perlin_request(3_000, 4, 5.0, 50.0, 1.0, 70.0, false, false);
+        let wrapped = test_daslight_perlin_request(3_000, 4, 5.0, 100.0, 1.0, 70.0, false, false);
         let first = compile_daslight_perlin(&first, &targets).unwrap().unwrap();
         let second = compile_daslight_perlin(&second, &targets).unwrap().unwrap();
-        for frame in [0, 1, 37, 74] {
-            for target in 0..targets.len() {
-                assert_eq!(
-                    first.sample_frame_palette_byte(frame, target),
-                    second.sample_frame_palette_byte(frame, target)
-                );
-            }
-        }
-
-        let capped = test_daslight_perlin_request(
-            751 * DASLIGHT_VALUE_FRAME_MS,
-            4,
-            5.0,
-            2.0,
-            1.0,
-            70.0,
-            false,
-            false,
+        let wrapped = compile_daslight_perlin(&wrapped, &targets)
+            .unwrap()
+            .unwrap();
+        assert_ne!(
+            first.targets[3].directional_phase_radians,
+            second.targets[3].directional_phase_radians
         );
-        let capped = compile_daslight_perlin(&capped, &targets).unwrap().unwrap();
-        assert_eq!(capped.raw_frame_count, 751);
-        assert_eq!(capped.table_frame_count, DASLIGHT_VALUE_FRAME_CAP);
-        let coordinate = capped.temporal_coordinate(1);
-        assert_eq!((coordinate.lower, coordinate.upper), (0, 1));
-        assert!((coordinate.amount - 749.0 / 751.0).abs() < 1.0e-6);
+        assert_eq!(
+            first.targets[3].directional_phase_radians,
+            wrapped.targets[3].directional_phase_radians,
+            "Direction endpoints 1=0 degrees and 100=360 degrees must have identical phase"
+        );
+        assert_eq!(
+            first.sample_phase_palette_byte(0.25, 3),
+            wrapped.sample_phase_palette_byte(0.25, 3),
+            "Direction endpoints 1=0 degrees and 100=360 degrees must coincide"
+        );
     }
 
     #[test]
-    fn daslight_exact_perlin_transform_and_grayscale_are_postprocessed() {
+    fn dvc_corrected_perlin_transform_and_grayscale_are_postprocessed() {
         let folded_request =
             test_daslight_perlin_request(3_000, 4, 5.0, 2.0, 1.0, 70.0, true, false);
         let targets = (0..5)
@@ -57116,9 +57422,14 @@ mod tests {
         let folded = compile_daslight_perlin(&folded_request, &targets)
             .unwrap()
             .unwrap();
-        assert_eq!(folded.sample_frame(20, 0), folded.sample_frame(20, 3));
-        assert_eq!(folded.sample_frame(20, 1), folded.sample_frame(20, 2));
-        assert_eq!(folded.sample_frame(20, 4), folded.sample_frame(20, 0));
+        assert_eq!(
+            folded.sample_at_phase(0.2, 0),
+            folded.sample_at_phase(0.2, 4)
+        );
+        assert_eq!(
+            folded.sample_at_phase(0.2, 1),
+            folded.sample_at_phase(0.2, 3)
+        );
 
         let mut grayscale_request =
             test_daslight_perlin_request(3_000, 4, 5.0, 2.0, 1.0, 70.0, false, true);
@@ -57135,7 +57446,7 @@ mod tests {
         let grayscale = compile_daslight_perlin(&grayscale_request, &targets)
             .unwrap()
             .unwrap();
-        let color = grayscale.sample_frame(10, 0).into_color();
+        let color = grayscale.sample_at_phase(0.1, 0);
         assert_eq!(color.red, color.green);
         assert_eq!(color.green, color.blue);
     }
@@ -59281,7 +59592,7 @@ mod tests {
     }
 
     #[test]
-    fn daslight_move_raw_phasing_and_two_wing_symmetry_use_integer_frame_contract() {
+    fn corrected_daslight_move_phasing_and_two_wing_symmetry_use_continuous_phase() {
         let runtime = runtime_with_move_fixtures(4);
         let mut request = test_move_request(&[1, 2, 3, 4]);
         request.points = vec![
@@ -59295,15 +59606,14 @@ mod tests {
         request.symmetry = true;
         let effect = runtime.resolve_move_effect_request(request).unwrap();
 
-        assert_eq!(
-            effect
-                .targets
-                .iter()
-                .map(|target| daslight_move_target_frame(&effect.request, target, 0, 25))
-                .collect::<Vec<_>>(),
-            vec![0, 19, 7, 13],
-            "Line/Curve/Circle/Polygon symmetry uses ceil(cycle/2)-time and reverses second-wing target order"
-        );
+        let phases = effect
+            .targets
+            .iter()
+            .map(|target| daslight_move_target_phase(&effect.request, target, 0.0))
+            .collect::<Vec<_>>();
+        for (actual, expected) in phases.iter().zip([0.0, 0.75, 0.25, 0.5]) {
+            assert!((actual - expected).abs() < 1.0e-6, "{phases:?}");
+        }
         assert!(effect
             .targets
             .iter()
@@ -59312,19 +59622,18 @@ mod tests {
         let mut points_request = effect.request.clone();
         points_request.interpolation = protocol::MoveInterpolation::DaslightPoints;
         let points = runtime.resolve_move_effect_request(points_request).unwrap();
-        assert_eq!(
-            points
-                .targets
-                .iter()
-                .map(|target| daslight_move_target_frame(&points.request, target, 0, 25))
-                .collect::<Vec<_>>(),
-            vec![0, 19, 19, 0],
-            "Points uses cycle-time rather than the other MOVE evaluators' half-cycle symmetry origin"
-        );
+        let point_phases = points
+            .targets
+            .iter()
+            .map(|target| daslight_move_target_phase(&points.request, target, 0.0))
+            .collect::<Vec<_>>();
+        for (actual, expected) in point_phases.iter().zip([0.0, 0.75, 0.75, 0.0]) {
+            assert!((actual - expected).abs() < 1.0e-6, "{point_phases:?}");
+        }
     }
 
     #[test]
-    fn daslight_move_free_run_uses_the_quantized_frame_period() {
+    fn corrected_daslight_move_free_run_preserves_the_authored_period() {
         let runtime = runtime_with_move_fixtures(1);
         let mut request = test_move_request(&[1]);
         request.points = vec![
@@ -59348,7 +59657,7 @@ mod tests {
             &clock,
             1.0,
         );
-        let after_quantized_cycle = evaluate_daslight_move_delta(
+        let before_authored_cycle = evaluate_daslight_move_delta(
             &effect,
             &effect.targets[0],
             created_at,
@@ -59356,8 +59665,17 @@ mod tests {
             &clock,
             1.0,
         );
+        let after_authored_cycle = evaluate_daslight_move_delta(
+            &effect,
+            &effect.targets[0],
+            created_at,
+            created_at + Duration::from_millis(1_025),
+            &clock,
+            1.0,
+        );
 
-        assert_eq!(after_quantized_cycle, start);
+        assert_ne!(before_authored_cycle, start);
+        assert_eq!(after_authored_cycle, start);
     }
 
     #[test]
@@ -62242,7 +62560,7 @@ mod tests {
         }
     }
 
-    fn populate_daslight_exact_knight_release_effects(
+    fn populate_corrected_knight_release_effects(
         runtime: &mut EngineRuntime,
         fixture_ids: &[FixtureId],
         created_at: Instant,
@@ -62251,32 +62569,30 @@ mod tests {
         for index in 0..effect_count {
             let one_way = index % 4 < 2;
             let go_outside = index % 2 == 0;
-            let mut request = test_value_request(fixture_ids);
-            request.period_ms = 751 * DASLIGHT_VALUE_FRAME_MS;
-            request.phase = index as f32 / effect_count as f32;
-            request.points = (0..32)
-                .map(|point_index| ValueEffectPoint {
-                    position: point_index as f32 / 31.0,
-                    value: (point_index as f32 * 2_114.0) / u16::MAX as f32,
+            let stop_count = if index == 0 { 255 } else { 32 };
+            let palette_red = (0..stop_count)
+                .map(|stop| {
+                    ((stop as f64 / (stop_count - 1) as f64) * f64::from(u16::MAX)).round() as u16
                 })
-                .collect();
-            request.spatial_pattern = Some(protocol::ColorEffectSpatialPattern {
-                recipe: ColorEffectSpatialRecipe::KnightRider {
-                    daslight_exact: true,
-                    grayscale: false,
-                    vertical_symmetry: index % 2 == 1,
-                    size: 100,
-                    one_way,
-                    fading: true,
-                    go_outside,
-                    gradient: 50.0,
-                },
-                beam_targets: Vec::new(),
-                placement: None,
-            });
-            let kind = RuntimeEffectKind::Value(
+                .collect::<Vec<_>>();
+            let mut request = test_daslight_knight_request(
+                30_040,
+                100,
+                one_way,
+                true,
+                go_outside,
+                50.0,
+                index % 2 == 1,
+                &palette_red,
+            );
+            request.fixture_ids = fixture_ids.to_vec();
+            if index == 0 {
+                request.clock_sync = Some(EffectClockSync { beats: 0.25 });
+            }
+            request.phase = index as f32 / effect_count as f32;
+            let kind = RuntimeEffectKind::Color(
                 runtime
-                    .resolve_value_effect_request(request)
+                    .resolve_color_effect_request(request)
                     .expect("exact Knight Rider benchmark request must compile"),
             );
             runtime.effects.push(RuntimeEffect {
@@ -62288,7 +62604,7 @@ mod tests {
         }
     }
 
-    fn populate_daslight_exact_burst_release_effects(
+    fn populate_corrected_burst_release_effects(
         runtime: &mut EngineRuntime,
         fixture_ids: &[FixtureId],
         created_at: Instant,
@@ -62296,7 +62612,7 @@ mod tests {
     ) {
         for index in 0..effect_count {
             let mut request = test_value_request(fixture_ids);
-            request.period_ms = 751 * DASLIGHT_VALUE_FRAME_MS;
+            request.period_ms = 30_040;
             request.phase = index as f32 / effect_count as f32;
             request.points = (0..32)
                 .map(|point_index| ValueEffectPoint {
@@ -62329,7 +62645,7 @@ mod tests {
         }
     }
 
-    fn populate_daslight_exact_sweep_release_effects(
+    fn populate_corrected_sweep_release_effects(
         runtime: &mut EngineRuntime,
         fixture_ids: &[FixtureId],
         created_at: Instant,
@@ -62337,7 +62653,7 @@ mod tests {
     ) {
         for index in 0..effect_count {
             let mut request = test_value_request(fixture_ids);
-            request.period_ms = 751 * DASLIGHT_VALUE_FRAME_MS;
+            request.period_ms = 30_040;
             request.phase = index as f32 / effect_count as f32;
             request.points = (0..32)
                 .map(|point_index| ValueEffectPoint {
@@ -62369,33 +62685,313 @@ mod tests {
         }
     }
 
+    fn populate_corrected_spatial_release_effects(
+        runtime: &mut EngineRuntime,
+        fixture_ids: &[FixtureId],
+        created_at: Instant,
+        effect_count: usize,
+    ) {
+        for index in 0..effect_count {
+            let recipe_ordinal = index.saturating_sub(1) / 3;
+            let recipe = if index == 0 {
+                ColorEffectSpatialRecipe::KnightRider {
+                    daslight_exact: true,
+                    grayscale: false,
+                    vertical_symmetry: false,
+                    size: 100,
+                    one_way: false,
+                    fading: true,
+                    go_outside: true,
+                    gradient: 50.0,
+                }
+            } else {
+                match (index - 1) % 3 {
+                    0 => ColorEffectSpatialRecipe::Perlin {
+                        daslight_exact: true,
+                        grayscale: recipe_ordinal % 3 == 2,
+                        vertical_symmetry: recipe_ordinal % 2 == 1,
+                        horizontal_symmetry: false,
+                        rotation_degrees: ((recipe_ordinal * 37) % 361) as f32,
+                        octaves: 2 + (recipe_ordinal % 9) as u8,
+                        zoom: (5 + recipe_ordinal % 20) as f32,
+                        direction_degrees: (1 + (recipe_ordinal * 17) % 100) as f32,
+                        speed: (1 + recipe_ordinal % 10) as f32,
+                        amplitude: (50 + recipe_ordinal % 51) as f32,
+                    },
+                    1 => ColorEffectSpatialRecipe::RandomFill {
+                        syndocal_corrected: true,
+                        grayscale: recipe_ordinal % 3 == 1,
+                        vertical_symmetry: recipe_ordinal % 2 == 1,
+                        rng_seed: 0xA5A5_0000 ^ index as u32,
+                        point_width: 1 + (recipe_ordinal % 10) as u16,
+                        source_point_height: Some(1 + (recipe_ordinal % 10) as u16),
+                    },
+                    _ => ColorEffectSpatialRecipe::Sparkle {
+                        syndocal_corrected: true,
+                        grayscale: recipe_ordinal % 3 == 1,
+                        vertical_symmetry: recipe_ordinal % 2 == 1,
+                        rng_seed: 0x5A5A_0000 ^ index as u32,
+                        number: if recipe_ordinal < 2 {
+                            10
+                        } else {
+                            1 + (recipe_ordinal % 5) as u16
+                        },
+                        lifespan: 0.0,
+                        lifetime_ms: Some(if recipe_ordinal < 2 {
+                            1_000
+                        } else {
+                            100 + (recipe_ordinal % 5) as u16 * 100
+                        }),
+                        source_lifespan: Some((recipe_ordinal % 10) as f32 / 10.0),
+                        width: if recipe_ordinal < 2 {
+                            90
+                        } else {
+                            1 + (recipe_ordinal % 8) as u16
+                        },
+                    },
+                }
+            };
+            let mut request = test_spatial_color_request(recipe);
+            let fast_clock_row = match &request.spatial_pattern.as_ref().unwrap().recipe {
+                ColorEffectSpatialRecipe::Sparkle {
+                    number,
+                    lifetime_ms,
+                    width,
+                    ..
+                } => *number == 10 && *lifetime_ms == Some(1_000) && *width == 90,
+                ColorEffectSpatialRecipe::KnightRider { .. } => true,
+                _ => false,
+            };
+            if fast_clock_row {
+                request.clock_sync = Some(EffectClockSync { beats: 0.25 });
+            }
+            if matches!(
+                request
+                    .spatial_pattern
+                    .as_ref()
+                    .map(|pattern| &pattern.recipe),
+                Some(ColorEffectSpatialRecipe::Perlin { .. })
+            ) {
+                let beam_targets = fixture_ids
+                    .iter()
+                    .enumerate()
+                    .map(
+                        |(selection_index, fixture_id)| protocol::ColorEffectBeamTarget {
+                            fixture_id: *fixture_id,
+                            beam_index: 0,
+                            selection_index: selection_index as u32,
+                            feature_attribute: None,
+                        },
+                    )
+                    .collect::<Vec<_>>();
+                let target_coordinates = fixture_ids
+                    .iter()
+                    .enumerate()
+                    .map(|(selection_index, fixture_id)| {
+                        protocol::ColorEffectSpatialPlacementTarget {
+                            fixture_id: *fixture_id,
+                            beam_index: 0,
+                            patch_x: selection_index as i64,
+                            patch_y: 0,
+                        }
+                    })
+                    .collect();
+                let mut placement =
+                    test_patch_canvas_placement(0, 0, fixture_ids.len() as i64, 1, 0.0);
+                placement.target_coordinates = target_coordinates;
+                let pattern = request.spatial_pattern.as_mut().unwrap();
+                pattern.beam_targets = beam_targets;
+                pattern.placement = Some(placement);
+            }
+            request.label = format!("Corrected spatial benchmark {index}");
+            request.fixture_ids = fixture_ids.to_vec();
+            request.period_ms = 1_003 + (index % 7) as u64 * 137;
+            request.phase = index as f32 / effect_count as f32;
+            request.stops = if matches!(
+                request
+                    .spatial_pattern
+                    .as_ref()
+                    .map(|pattern| &pattern.recipe),
+                Some(ColorEffectSpatialRecipe::KnightRider { .. })
+            ) {
+                (0..255)
+                    .map(|stop| protocol::ColorEffectStop {
+                        position: stop as f32 / 254.0,
+                        color: test_color(stop as u16 * 258, 0, u16::MAX - stop as u16 * 258),
+                    })
+                    .collect()
+            } else {
+                vec![
+                    protocol::ColorEffectStop {
+                        position: 0.0,
+                        color: black_color(),
+                    },
+                    protocol::ColorEffectStop {
+                        position: 0.33,
+                        color: test_color(u16::MAX, 8_192, 0),
+                    },
+                    protocol::ColorEffectStop {
+                        position: 0.67,
+                        color: test_color(0, u16::MAX, 16_384),
+                    },
+                    protocol::ColorEffectStop {
+                        position: 1.0,
+                        color: test_color(24_576, 0, u16::MAX),
+                    },
+                ]
+            };
+            let kind = RuntimeEffectKind::Color(
+                runtime
+                    .resolve_color_effect_request(request)
+                    .expect("corrected spatial benchmark request must compile"),
+            );
+            runtime.effects.push(RuntimeEffect {
+                id: index as EffectId + 1,
+                kind,
+                enabled: true,
+                created_at,
+            });
+        }
+    }
+
     #[test]
-    fn daslight_exact_knight_rider_release_stack_meets_44hz_budget() {
+    fn corrected_perlin_random_fill_and_sparkle_release_stack_meets_44hz_budget() {
         const FIXTURE_COUNT: u64 = 200;
         const EFFECT_COUNT: usize = 64;
         const SAMPLES: usize = if cfg!(debug_assertions) { 20 } else { 1_000 };
-        const ATTRIBUTES: [&str; 1] = ["Dimmer"];
+        const ATTRIBUTES: [&str; 1] = ["ColorRed"];
 
         let mut runtime = runtime_with_mixed_effect_fixtures(FIXTURE_COUNT);
         let fixture_ids = (1..=FIXTURE_COUNT).collect::<Vec<_>>();
         let created_at = Instant::now();
-        // Request validation, target expansion, descriptor/profile generation,
-        // and all 64 x 32-point palette compiles deliberately happen outside
-        // the timed 44 Hz loop.
-        populate_daslight_exact_knight_release_effects(
+        // Request validation, 200-fixture target expansion, Random fill rank
+        // construction, and Perlin octave/hash compilation all happen before
+        // the timed 44 Hz runtime sampling loop.
+        populate_corrected_spatial_release_effects(
             &mut runtime,
             &fixture_ids,
             created_at,
             EFFECT_COUNT,
         );
         assert_eq!(runtime.effects.len(), EFFECT_COUNT);
-        assert!(runtime.effects.iter().all(|effect| matches!(
-            &effect.kind,
-            RuntimeEffectKind::Value(RuntimeValueEffect {
-                spatial: Some(spatial),
-                ..
-            }) if spatial.spatial.as_ref().and_then(|state| state.daslight_knight_rider.as_ref()).is_some_and(|compiled| compiled.lanes.len() == 31)
-        )));
+
+        let mut recipe_counts = [0_usize; 3];
+        let mut perlin_octaves = 0_u16;
+        let mut perlin_direction_min = f32::INFINITY;
+        let mut perlin_direction_max = f32::NEG_INFINITY;
+        let mut saw_plain_perlin = false;
+        let mut saw_folded_perlin = false;
+        let mut saw_rotated_perlin = false;
+        let mut max_sparkle_rows = 0;
+        let mut max_knight_rows = 0;
+        for effect in &runtime.effects {
+            let RuntimeEffectKind::Color(color) = &effect.kind else {
+                panic!("corrected spatial benchmark must contain only Color effects");
+            };
+            let spatial = color
+                .spatial
+                .as_ref()
+                .expect("corrected spatial benchmark must compile spatial state");
+            assert_eq!(spatial.targets.len(), FIXTURE_COUNT as usize);
+            let recipe = &color
+                .request
+                .spatial_pattern
+                .as_ref()
+                .expect("corrected spatial benchmark must retain recipe")
+                .recipe;
+            match recipe {
+                ColorEffectSpatialRecipe::Perlin {
+                    vertical_symmetry,
+                    rotation_degrees,
+                    octaves,
+                    direction_degrees,
+                    ..
+                } => {
+                    recipe_counts[0] += 1;
+                    perlin_octaves |= 1_u16 << u32::from(*octaves);
+                    perlin_direction_min = perlin_direction_min.min(*direction_degrees);
+                    perlin_direction_max = perlin_direction_max.max(*direction_degrees);
+                    saw_plain_perlin |= !*vertical_symmetry;
+                    saw_folded_perlin |= *vertical_symmetry;
+                    saw_rotated_perlin |= *rotation_degrees != 0.0;
+                    let compiled = spatial
+                        .daslight_perlin
+                        .as_ref()
+                        .expect("corrected Perlin must compile its hot-path state");
+                    assert!(compiled
+                        .targets
+                        .iter()
+                        .all(|target| target.octaves.len() == usize::from(*octaves - 1)));
+                    assert!(spatial.syndocal_random_fx.is_none());
+                }
+                ColorEffectSpatialRecipe::RandomFill { .. } => {
+                    recipe_counts[1] += 1;
+                    assert!(matches!(
+                        spatial.syndocal_random_fx.as_ref(),
+                        Some(CompiledSyndocalRandomFx::RandomFill { .. })
+                    ));
+                    assert!(spatial.daslight_perlin.is_none());
+                }
+                ColorEffectSpatialRecipe::Sparkle {
+                    number,
+                    lifetime_ms,
+                    width,
+                    ..
+                } => {
+                    recipe_counts[2] += 1;
+                    let Some(CompiledSyndocalRandomFx::Sparkle { state, .. }) =
+                        spatial.syndocal_random_fx.as_ref()
+                    else {
+                        panic!("corrected Sparkle must compile its visual-clock state");
+                    };
+                    if *number == 10
+                        && *lifetime_ms == Some(1_000)
+                        && *width == 90
+                        && color
+                            .request
+                            .clock_sync
+                            .is_some_and(|clock_sync| clock_sync.beats == 0.25)
+                    {
+                        max_sparkle_rows += 1;
+                    }
+                    let lifetime_ms = f64::from(lifetime_ms.unwrap());
+                    let expected_max_particles = usize::from(*number).saturating_mul(
+                        usize::try_from(SyndocalSparkleState::lifetime_generations(lifetime_ms))
+                            .unwrap()
+                            .saturating_add(1),
+                    );
+                    assert_eq!(state.borrow().max_particles, expected_max_particles);
+                    assert!(spatial.daslight_perlin.is_none());
+                }
+                ColorEffectSpatialRecipe::KnightRider { size, .. } => {
+                    assert_eq!(*size, 100);
+                    assert_eq!(color.request.stops.len(), 255);
+                    assert!(color
+                        .request
+                        .clock_sync
+                        .is_some_and(|clock_sync| clock_sync.beats == 0.25));
+                    assert_eq!(
+                        spatial
+                            .daslight_knight_rider
+                            .as_ref()
+                            .expect("maximum Knight Rider descriptor")
+                            .lanes
+                            .len(),
+                        254
+                    );
+                    max_knight_rows += 1;
+                    assert!(spatial.syndocal_random_fx.is_none());
+                    assert!(spatial.daslight_perlin.is_none());
+                }
+                _ => panic!("unexpected corrected spatial benchmark recipe"),
+            }
+        }
+        assert_eq!(recipe_counts, [21, 21, 21]);
+        assert_eq!(max_sparkle_rows, 2);
+        assert_eq!(max_knight_rows, 1);
+        assert!(perlin_octaves.count_ones() >= 3);
+        assert!(perlin_direction_max > perlin_direction_min);
+        assert!(saw_plain_perlin && saw_folded_perlin && saw_rotated_perlin);
 
         let mut durations = Vec::with_capacity(SAMPLES);
         let mut checksum = 0_u64;
@@ -62419,15 +63015,94 @@ mod tests {
         let p99 = durations[(SAMPLES * 99 / 100).min(SAMPLES - 1)];
         let max = *durations.last().unwrap();
         eprintln!(
-            "Daslight exact Knight Rider 64x200 precomputed-from-31-lanes stack per-tick evaluation: p95={}us p99={}us max={}us",
+            "Corrected Perlin/RandomFill/Sparkle/Knight 64x200 max-row stack per-tick evaluation: p95={}us p99={}us max={}us",
             p95.as_micros(),
             p99.as_micros(),
             max.as_micros()
         );
-        // The frame tables are precomputed from all four recovered motion
-        // branches, the 750-frame source cap, 31 over-composited lanes, and the
-        // transform fold. The timed production path exercises table lookup,
-        // temporal interpolation, and VALUE range/application semantics.
+        // Preserve the established full-rig 5/8/12ms release gate. The hard
+        // maximum remains well inside one 22.7ms DMX tick.
+        if !cfg!(debug_assertions) {
+            assert!(p95 <= Duration::from_millis(5), "p95 was {p95:?}");
+            assert!(p99 <= Duration::from_millis(8), "p99 was {p99:?}");
+            assert!(max <= Duration::from_millis(12), "max was {max:?}");
+        }
+    }
+
+    #[test]
+    fn corrected_knight_rider_release_stack_meets_44hz_budget() {
+        const FIXTURE_COUNT: u64 = 200;
+        const EFFECT_COUNT: usize = 64;
+        const SAMPLES: usize = if cfg!(debug_assertions) { 20 } else { 1_000 };
+        const ATTRIBUTES: [&str; 1] = ["ColorRed"];
+
+        let mut runtime = runtime_with_mixed_effect_fixtures(FIXTURE_COUNT);
+        let fixture_ids = (1..=FIXTURE_COUNT).collect::<Vec<_>>();
+        let created_at = Instant::now();
+        // Request validation, target expansion, descriptor/profile generation,
+        // and the 255-stop maximum row compile happen outside the timed loop.
+        populate_corrected_knight_release_effects(
+            &mut runtime,
+            &fixture_ids,
+            created_at,
+            EFFECT_COUNT,
+        );
+        assert_eq!(runtime.effects.len(), EFFECT_COUNT);
+        let lane_counts = runtime
+            .effects
+            .iter()
+            .map(|effect| {
+                let RuntimeEffectKind::Color(color) = &effect.kind else {
+                    panic!("Knight Rider release stack must contain only Color effects");
+                };
+                color
+                    .spatial
+                    .as_deref()
+                    .and_then(|spatial| spatial.daslight_knight_rider.as_ref())
+                    .expect("Knight Rider descriptor")
+                    .lanes
+                    .len()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(lane_counts.iter().filter(|lanes| **lanes == 254).count(), 1);
+        assert_eq!(lane_counts.iter().filter(|lanes| **lanes == 31).count(), 63);
+        let RuntimeEffectKind::Color(maximum) = &runtime.effects[0].kind else {
+            unreachable!()
+        };
+        assert!(maximum
+            .request
+            .clock_sync
+            .is_some_and(|clock_sync| clock_sync.beats == 0.25));
+
+        let mut durations = Vec::with_capacity(SAMPLES);
+        let mut checksum = 0_u64;
+        for sample in 0..SAMPLES {
+            let at = created_at + DMX_TICK_INTERVAL * (sample as u32 + 1);
+            let started = Instant::now();
+            for fixture in &runtime.fixtures {
+                for attribute in ATTRIBUTES {
+                    checksum =
+                        checksum.wrapping_add(runtime.apply_effects_with_transition_policy(
+                            fixture, attribute, 16_384, at, false,
+                        ) as u64);
+                }
+            }
+            durations.push(started.elapsed());
+        }
+        std::hint::black_box(checksum);
+        assert_ne!(checksum, 0);
+        durations.sort_unstable();
+        let p95 = durations[(SAMPLES * 95 / 100).min(SAMPLES - 1)];
+        let p99 = durations[(SAMPLES * 99 / 100).min(SAMPLES - 1)];
+        let max = *durations.last().unwrap();
+        eprintln!(
+            "Corrected Knight Rider 64x200 analytic stack (one 254-lane max row) per-tick evaluation: p95={}us p99={}us max={}us",
+            p95.as_micros(),
+            p99.as_micros(),
+            max.as_micros()
+        );
+        // The timed path exercises four duration-independent motion branches,
+        // bounded 31-lane source-over, tent Transform, and VALUE application.
         // Keep the established full-rig 5/8/12ms release gate, whose hard
         // maximum remains inside one 22.7ms DMX tick.
         if !cfg!(debug_assertions) {
@@ -62438,7 +63113,7 @@ mod tests {
     }
 
     #[test]
-    fn daslight_exact_burst_release_stack_meets_44hz_budget() {
+    fn corrected_burst_release_stack_meets_44hz_budget() {
         const FIXTURE_COUNT: u64 = 200;
         const EFFECT_COUNT: usize = 64;
         const SAMPLES: usize = if cfg!(debug_assertions) { 20 } else { 1_000 };
@@ -62447,9 +63122,8 @@ mod tests {
         let mut runtime = runtime_with_mixed_effect_fixtures(FIXTURE_COUNT);
         let fixture_ids = (1..=FIXTURE_COUNT).collect::<Vec<_>>();
         let created_at = Instant::now();
-        // Palette construction and the RGBA64-compatible 750 x 1024 gradient
-        // table generation deliberately happen outside the timed 44 Hz loop.
-        populate_daslight_exact_burst_release_effects(
+        // Palette conversion happens outside the timed 44 Hz loop.
+        populate_corrected_burst_release_effects(
             &mut runtime,
             &fixture_ids,
             created_at,
@@ -62461,7 +63135,7 @@ mod tests {
             RuntimeEffectKind::Value(RuntimeValueEffect {
                 spatial: Some(spatial),
                 ..
-            }) if spatial.spatial.as_ref().and_then(|state| state.daslight_burst.as_ref()).is_some_and(|compiled| compiled.table_frame_count == DASLIGHT_VALUE_FRAME_CAP)
+            }) if spatial.spatial.as_ref().and_then(|state| state.daslight_burst.as_ref()).is_some_and(|compiled| compiled.palette.len() == 32)
         )));
 
         let mut durations = Vec::with_capacity(SAMPLES);
@@ -62486,13 +63160,13 @@ mod tests {
         let p99 = durations[(SAMPLES * 99 / 100).min(SAMPLES - 1)];
         let max = *durations.last().unwrap();
         eprintln!(
-            "Daslight exact Burst 64x200 precomputed-RGBA64-table stack per-tick evaluation: p95={}us p99={}us max={}us",
+            "Corrected Burst 64x200 analytic radial stack per-tick evaluation: p95={}us p99={}us max={}us",
             p95.as_micros(),
             p99.as_micros(),
             max.as_micros()
         );
-        // The timed production path performs fixed radial/table/palette
-        // lookups, temporal interpolation, and VALUE range application. It
+        // The timed production path performs fixed radial/palette arithmetic
+        // and VALUE range application. It
         // must preserve the established 5/8/12ms release gate and remain
         // comfortably inside one 22.7ms DMX tick.
         if !cfg!(debug_assertions) {
@@ -62503,7 +63177,7 @@ mod tests {
     }
 
     #[test]
-    fn daslight_exact_sweep_release_stack_meets_44hz_budget() {
+    fn corrected_sweep_release_stack_meets_44hz_budget() {
         const FIXTURE_COUNT: u64 = 200;
         const EFFECT_COUNT: usize = 64;
         const SAMPLES: usize = if cfg!(debug_assertions) { 20 } else { 1_000 };
@@ -62512,7 +63186,7 @@ mod tests {
         let mut runtime = runtime_with_mixed_effect_fixtures(FIXTURE_COUNT);
         let fixture_ids = (1..=FIXTURE_COUNT).collect::<Vec<_>>();
         let created_at = Instant::now();
-        populate_daslight_exact_sweep_release_effects(
+        populate_corrected_sweep_release_effects(
             &mut runtime,
             &fixture_ids,
             created_at,
@@ -62524,7 +63198,7 @@ mod tests {
             RuntimeEffectKind::Value(RuntimeValueEffect {
                 spatial: Some(spatial),
                 ..
-            }) if spatial.spatial.as_ref().and_then(|state| state.daslight_sweep.as_ref()).is_some_and(|compiled| compiled.table_frame_count == DASLIGHT_VALUE_FRAME_CAP)
+            }) if spatial.spatial.as_ref().and_then(|state| state.daslight_sweep.as_ref()).is_some_and(|compiled| compiled.palette.len() == 32)
         )));
 
         let mut durations = Vec::with_capacity(SAMPLES);
@@ -62549,14 +63223,13 @@ mod tests {
         let p99 = durations[(SAMPLES * 99 / 100).min(SAMPLES - 1)];
         let max = *durations.last().unwrap();
         eprintln!(
-            "Daslight exact Sweep 64x200 generated-frame stack per-tick evaluation: p95={}us p99={}us max={}us",
+            "Corrected Sweep 64x200 analytic-boundary stack per-tick evaluation: p95={}us p99={}us max={}us",
             p95.as_micros(),
             p99.as_micros(),
             max.as_micros()
         );
-        // Sweep evaluates two bounded generated frames and performs the
-        // recovered mixed-precision interpolation without allocation or
-        // search. Preserve the established full-rig 5/8/12ms release gate.
+        // Sweep evaluates one analytic boundary without allocation or search.
+        // Preserve the established full-rig 5/8/12ms release gate.
         if !cfg!(debug_assertions) {
             assert!(p95 <= Duration::from_millis(5), "p95 was {p95:?}");
             assert!(p99 <= Duration::from_millis(8), "p99 was {p99:?}");

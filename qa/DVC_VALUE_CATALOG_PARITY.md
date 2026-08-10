@@ -8,7 +8,7 @@
 - SHA-256: `325D83EC54D41305D60B466B486EFE413B8F3E2656B45A544277C0CE9B87AE2A`
 - Audit dates: 2026-08-09 through 2026-08-10
 - Method: read-only PE factory, RTTI, vtable, constructor, serializer, and evaluator disassembly, followed by a Qt 5.15.2 raster-path audit for Burst pixel-centre sampling and the Transform fold. No Daslight file was written and no runtime/UI observation is claimed by the static audit.
-- Implemented scope: exact VALUE-family factory and serialized schemas for IDs 622-628; exact ID622 Burst, ID623 Plasma, ID624 Knight Rider, and ID625 Sweep imports; additive Daslight-exact Burst/Knight evaluators plus the shared exact Sweep evaluator and Transform=1 fold; strict schema/domain validation followed by precise fail-closed dispositions for IDs 626, 627, and 628; binary-address and Qt-raster-path proof of the discrete one-row mappings.
+- Implemented scope: exact VALUE-family factory and serialized schemas for IDs 622-628; routed imports for all eight VALUE generators; additive recovered-core evaluators where source state is complete and explicit Syndocal-corrected evaluators where timer/raster/qrand process quirks are not authored state. IDs 626/627 preserve strict schema and recovered visual grammar with a stable source-identity seed; see `qa/DVC_RANDOM_CORRECTED_PARITY.md`.
 - Existing anchors reused: ID621 Rainbow, ID625 Sweep, the shared Plasma byte evaluator, and the shared Transform post-process previously recorded in `qa/DVC_PLASMA_RAINBOW_SOURCE_PARITY.md` and `qa/DVC_SWEEP_SOURCE_PARITY.md`.
 
 All virtual addresses below apply only to the binary identity above.
@@ -52,19 +52,29 @@ This is the same factory dispatch previously used to prove ID621 -> `CRainbowEff
 ID625 -> `CSweepEffect`; the six rows above complete IDs 622 through 624 and 626 through
 628 without extrapolating from UI names.
 
-## Recovered 40 ms VALUE frame grid
+## Recovered 40 ms VALUE source grid and current duration contract
 
 This contract is recovered from the VALUE source-buffer path itself, not inferred from
 the separately documented CURVE family. The DURATION loader at
 `0x140346D84..0x140346E51` calls signed `QStringRef::toInt`, divides that integer by 40
 with unsigned arithmetic after the signed-domain check, and replaces a zero quotient
-with one. The importer therefore accepts only a positive, integral signed-32-bit
-DURATION for Daslight-exact IDs 622, 624, and 625 and computes:
+with one. The recovered Daslight source path therefore accepts only a positive, integral
+signed-32-bit DURATION and computes:
 
 ```text
 R = max(1, floor(DURATION / 40))
 period_ms = 40 * R
 ```
+
+The first Syndocal recovered-core tranche also assigned `period_ms=40*R`; that historical
+choice is now **superseded**. The current importer retains the exact positive signed-32-bit
+source validation but stores `period_ms=max(authored DURATION,10 ms)`, so it does not shorten
+or round the saved duration. IDs 622 Burst, 624 Knight Rider, and 625 Sweep still compile and
+sample their recovered 40 ms frame/table evaluator from that authored period; those legacy
+timer/cache artifacts have not yet been replaced by the corrected continuous evaluator.
+IDs 626/627 use their corrected continuous deterministic evaluators, and ID628 uses the
+corrected continuous Perlin evaluator. The recovered `R` remains import-report provenance,
+not the current request period.
 
 The common source-buffer builder is `0x14035AD60`; its evaluator call is
 `0x14035B02E..0x14035B03C`. Knight Rider obtains its generated frame count through
@@ -91,10 +101,13 @@ frac  = f32(p - f32(lo))
 The two raw layer images are first resolved to floating QDasColor values at
 `0x140357130`; temporal interpolation at `0x1402E1F50` preserves the recovered mixed
 precision order `diff=f32(B-A)`, then
-`out=f32(f64(A)+f64(diff)*f64(frac))`. The imported period is consequently quantized:
-DURATION 1, 9, 10, or 39 gives `R=1, period_ms=40`; 40, 41, or 79 also gives
-`R=1, period_ms=40`; 80 gives `R=2, period_ms=80`. Zero, negative, fractional, or
-signed-32-bit-overflow DURATION remains fail-closed rather than being clamped.
+`out=f32(f64(A)+f64(diff)*f64(frac))`. In Daslight, and in Syndocal's initial
+recovered-core implementation at that time, DURATION 1, 9, 10, or 39 gave
+`R=1, period_ms=40`; 40, 41, or 79 also gave `R=1, period_ms=40`; 80 gave
+`R=2, period_ms=80`. The period assignment in that sentence is superseded: current import
+produces 10 ms for source 1 or 9, preserves 10, 39, 40, 41, 79, and 80 ms exactly, and records
+`R` separately. Zero, negative, fractional, or signed-32-bit-overflow DURATION remains
+fail-closed rather than being clamped.
 
 ## ID622 Burst — exact cyclic evaluator landed
 
@@ -265,13 +278,14 @@ The existing native Knight Rider branch remains unchanged. Two omitted-when-fals
 `daslight_exact` and `vertical_symmetry`, form the additive compatibility boundary;
 legacy/native recipes deserialize to false and retain their previous serialized byte
 shape. The VALUE ID624 importer alone sets `daslight_exact=true`, maps PARAM 3 to
-`vertical_symmetry`, and quantizes DURATION through the recovered 40 ms frame grid.
-Syndocal compiles bounded exact state at command/rebuild time; the 44 Hz path remains a
-fixed bounded evaluation per beam.
+`vertical_symmetry`, and preserves authored DURATION. Its compatibility evaluator still
+derives the recovered 40 ms frame grid and bounded table internally; this legacy artifact
+has not been reclassified as corrected. The 44 Hz path remains a fixed bounded evaluation
+per beam.
 
 **Disposition: proven and imported for Transform 0 and 1.**
 
-## ID626 Sparkles — evaluator recovered, qrand provenance unavailable
+## ID626 Sparkles — evaluator recovered, corrected stable seed
 
 `CSparklesEffect` constructor `0x140354ED0..0x140355227` adds:
 
@@ -301,15 +315,16 @@ is per physical thread. `.dvc` serializes neither the initial thread state nor t
 and ordering of earlier draws on that thread. Selecting seed 1, a wall-clock seed, or any
 other seed would reproduce one possible realization, not the authored Daslight session.
 
-The existing recipe uses a bounded epoch-seeded SplitMix population, treats lifespan as
-a 0..100 percent cutoff with an age fade, and treats Width as a strip-cell radius. Units,
-population history, placement, palette selection, and effective width all differ. The
-recovered Transform=1 fold cannot restore the missing random provenance.
+The corrected recipe replaces only that unavailable qrand history. It retains the recovered
+spawn rate (`Number` particles per 40 ms), retained population, palette cycling and real
+rectangle Width. The recovered decrement becomes continuous
+`lifetime_ms=round(100/(1-LifeSpan))`, exactly spanning 100..1000 ms for the source domain.
+Placement is counter-based from a stable source-identity seed and particle ordinal.
 
-**Disposition: fail-closed after exact schema and domain validation; blocked on missing
-per-thread qrand initial state and prior draw history.**
+**Disposition: strict schema, imported as `implementation=SyndocalCorrected`; seed and raw
+LifeSpan provenance are recorded in the import report.**
 
-## ID627 Random fill — evaluator recovered, qrand provenance unavailable
+## ID627 Random fill — evaluator recovered, corrected stable seed
 
 `CRandomFillEffect` constructor `0x140354D60..0x140354EC1` adds:
 
@@ -342,16 +357,16 @@ the next palette color. As for ID626, the Windows Qt 5.15.2 call delegates to a
 per-thread CRT stream. `.dvc` carries neither its incoming state nor prior call history,
 so the exact cell permutation for the authored session cannot be reconstructed.
 
-The existing recipe has no Point Height field and instead uses deterministic
-effect-ID/target hashing, different cell partitioning, black unfilled cells, and
-independently hashed palette choices. Implementing the recovered no-replacement loop with
-a Syndocal-selected seed would still be an invented realization. The recovered
-Transform=1 fold cannot restore the missing random provenance.
+The corrected recipe compiles one stable no-replacement rank for every cell and palette
+transition. It uses `div_ceil` so a partial terminal cell is painted, transitions from the
+current palette stop directly to the next without a black reset, and interpolates the rank
+boundary continuously. VALUE Point Height remains serialized, range-checked and reported
+as evaluator-dead source provenance.
 
-**Disposition: fail-closed after exact schema and domain validation; blocked on missing
-per-thread qrand initial state and prior draw history.**
+**Disposition: strict schema, imported as `implementation=SyndocalCorrected`; seed, Point
+Width and raw Point Height provenance are recorded in the import report.**
 
-## ID628 Perlin — evaluator recovered, exact runtime pending
+## ID628 Perlin — recovered source and corrected runtime
 
 `CPerlinEffect` constructor `0x140353F50..0x140354297` adds:
 
@@ -385,15 +400,24 @@ The palette-cache path reads the same object `+0x12c` byte as Burst. The correct
 constructor proof applies here too: `0x14035155A` unconditionally writes true, so cyclic
 palette topology is now proven and is not a remaining provenance blocker.
 
-The remaining incompatibility is evaluator-level. The existing native recipe uses Direction and Speed
-as coordinate translation, scales by Zoom/10, uses effect-ID-seeded SplitMix value noise
-with smoothstep, weights octaves by 0.5 and normalizes them, then samples the palette as a
-float. It does not reproduce the fixed hash, cosine interpolation, degree-quantized
-time-rotated sine signal, `0.7^o` attenuation, or 16-bit cyclic cache above. Transform=1
-cannot make those generators frame-equivalent.
+At the DVC-V3/V6 audit point, the only available native recipe used Direction and Speed as
+coordinate translation, Zoom/10, effect-ID-seeded SplitMix value noise, smoothstep,
+normalized `0.5^o` octave weights, and floating palette lookup. It did not reproduce the
+fixed hash, cosine interpolation, degree-quantized time-rotated sine signal, `0.7^o`
+attenuation, or cyclic palette above. The resulting ID628 fail-closed disposition was
+correct for that tranche, but it is now **superseded**.
 
-**Disposition: fail-closed after exact schema and domain validation; blocked only until
-the recovered class-specific Perlin evaluator is implemented.**
+The current DVC-corrected evaluator preserves the recovered signed fixed hash, cosine
+interpolation, `0.7^o` octave character, Transform intent, palette order, and cyclic palette
+look. It removes the recovered 40 ms scheduler, 750-frame table, 65,536-entry integer palette
+cache, and degree-truncated sine table, evaluating authored DURATION as continuous phase with
+analytic sine and palette interpolation. DVC Direction `raw=1..100` maps linearly through
+`degrees=(raw-1)*360/99`; 1 and 100 are the same 0/360-degree endpoint, while factory default
+2 remains near +X. Direction drives spatial phase rather than remaining evaluator-dead.
+
+**Disposition: corrected/imported after exact schema and domain validation. The serialized
+`daslight_exact=true` spelling remains for `.sdc` compatibility but denotes the DVC-corrected
+runtime, not the superseded fail-closed or table-exact implementation.**
 
 ## Transform=1 on a one-row raster
 
@@ -432,9 +456,8 @@ the claim to unrelated mapping-family consumers.
 ID622 Burst now uses this exact fold. ID623 Plasma's earlier Transform disposition
 remains governed by its separately recorded proof. ID625 Sweep now carries
 `vertical_symmetry` beside `direction_change` and uses this same exact fold for both
-legal Transform values. IDs 626, 627, and 628 validate either
-Transform value, but their remaining generator-level boundaries occur before the fold can
-make the whole effect reconstructible.
+legal Transform values. IDs 626 and 627 also apply this fold in their corrected random
+evaluators; the unavailable process-history seed is replaced independently.
 
 ## Importer contract and deliberate boundary
 
@@ -444,35 +467,38 @@ make the whole effect reconstructible.
 | 623 | `CPlasmaEffect` | `4/1, 6/3, 0/10..17` | IDs 10..17 one-for-one; no ID2 -> `grayscale=false`; ID3 -> `vertical_symmetry` | Proven/imported |
 | 624 | `CKnightRiderEffect` | `4/1, 6/3, 0/10, 2/11..13, 0/14` | dedicated integer evaluator; ID3 -> exact discrete fold; IDs 10..14 one-for-one | Proven/imported |
 | 625 | `CSweepEffect` | `4/1, 6/3, 2/10` | ID3 -> exact discrete fold; ID10 -> `direction_change`; no ID2 -> `grayscale=false` | Proven/imported for Transform 0 and 1 |
-| 626 | `CSparklesEffect` | `4/1, 6/3, 0/10, 1/11, 0/12` | per-thread qrand initial state and prior draw history are absent from `.dvc` | Fail-closed |
-| 627 | `CRandomFillEffect` | `4/1, 6/3, 0/10, 0/11` | per-thread qrand initial state and prior draw history are absent from `.dvc` | Fail-closed |
-| 628 | `CPerlinEffect` | `4/1, 6/3, 0/10..14` | wrap=true is proven; fixed-hash/cosine/sine evaluator is not yet represented | Fail-closed |
+| 626 | `CSparklesEffect` | `4/1, 6/3, 0/10, 1/11, 0/12` | recovered retained particles; unavailable qrand -> stable source seed; raw LifeSpan -> 100..1000 ms | Corrected/imported |
+| 627 | `CRandomFillEffect` | `4/1, 6/3, 0/10, 0/11` | recovered no-replacement fill; unavailable qrand -> stable source seed; Point Height kept as evaluator-dead provenance | Corrected/imported |
+| 628 | `CPerlinEffect` | `4/1, 6/3, 0/10..14` | fixed hash/cosine/octave and cyclic palette retained; continuous authored phase, analytic palette, meaningful Direction | Corrected/imported |
 
 `dvc_import.rs` recognizes all eight VALUE catalog IDs so reports use the recovered class
 names. It first applies `require_exact_dvc_params` and
 `require_exact_dvc_param_types`, rejects missing/extra IDs and wrong TYPEs, and validates
 constructor domains without clamping. ID622 constructs the additive Burst compatibility
 recipe with `daslight_exact=true`, raw Color Width 10..900, Gradient 0..1, cyclic palette,
-Transform 0/1, and the recovered signed 40 ms duration grid. ID623 constructs the
-previously proven Plasma recipe. ID624 constructs the additive Knight Rider compatibility recipe with
-`daslight_exact=true`, preserves Transform 0/1 in `vertical_symmetry`, and uses the
-recovered signed 40 ms duration grid. An empty-BEAMS ID624 remains a validated source
-no-op and creates no runtime effect. ID625 sets `daslight_exact=true`, maps Transform 0/1
-and Direction Change 0/1 one-for-one into the shared Sweep recipe, uses the same signed
-40 ms grid and mixed-precision generated-frame sampler, and also keeps empty BEAMS as a
-validated no-op.
+Transform 0/1, and authored DURATION; its compatibility evaluator still derives the recovered
+40 ms frame grid internally. ID623 constructs the previously proven Plasma recipe. ID624
+constructs the additive Knight Rider compatibility recipe with `daslight_exact=true`,
+preserves Transform 0/1 in `vertical_symmetry`, and likewise preserves authored DURATION
+while retaining the recovered internal 40 ms grid. An empty-BEAMS ID624 remains a validated
+source no-op and creates no runtime effect. ID625 sets `daslight_exact=true`, maps Transform
+0/1 and Direction Change 0/1 one-for-one into the shared Sweep recipe, preserves authored
+DURATION, retains the 40 ms mixed-precision generated-frame sampler internally, and also
+keeps empty BEAMS as a validated no-op.
 
-IDs 626, 627, and 628 return their evaluator/provenance-specific deliberate-boundary error
-before target/no-op handling. Empty BEAMS does not make an unreconstructible generator
-safe to import. Knight Rider and Burst exact fields default false and are omitted when
-false, so legacy and native `.sdc` JSON retains its prior byte shape. The VALUE editor
+IDs 626 and 627 now construct additive corrected recipes after strict TYPE/ID/domain
+validation; empty BEAMS remains a validated source no-op. Their stable seed is derived
+from scene/rack/effect source identity rather than allocated `effect_id`. Corrected fields
+default away, so legacy and native `.sdc` JSON retains its prior byte shape. The VALUE editor
 exposes Burst's exact/Enhanced evaluator switch, keeps Enhanced as the authoring default,
-and displays exact Transform, raw pixel radius, Gradient 0..1, and 40 ms timing. Knight
-Rider retains its import-only compatibility marker and locked exact parameters.
+and exposes Corrected/Legacy, seed, Transform and lifetime-ms controls for random recipes.
+Knight Rider retains its import-only compatibility marker and locked exact parameters.
+ID628 now constructs the DVC-corrected Perlin recipe with authored DURATION, fixed recovered
+hash/cosine/octave character, analytic cyclic palette sampling, and active Direction mapping;
+it no longer creates a fail-closed report.
 
 All static proof remains binary-version-specific. It does not claim physical fixture,
-optics, latency, or visual acceptance, and the three blocked rows must not be relabeled
-exact until their missing runtime provenance is available.
+optics, latency, or exact replay of an unavailable process-global random draw history.
 
 ## Focused regression evidence
 
@@ -481,20 +507,24 @@ The focused regressions cover:
 - ID623 Transform 0 and 1, absent Grayscale -> false, all eight exact field mappings,
   targeted conversion, and empty-BEAMS source no-op;
 - ID622 Transform 0 and 1, `daslight_exact=true`, raw pixel radius, Gradient 0..1,
-  cyclic cache provenance, strict TYPE/ID/domain drift rejection, exact duration grid,
+  cyclic cache provenance, strict TYPE/ID/domain drift rejection, authored request period
+  plus the still-legacy internal duration grid,
   empty-BEAMS source no-op, immutable compile-table interning, generic-reference equality,
   and the 200-fixture x 64 release performance gate;
 - ID624 Transform 0 and 1, `daslight_exact=true`, all five class fields, strict
   TYPE/ID/domain drift rejection, and empty-BEAMS source no-op;
 - ID625 Transform 0 and 1, Direction Change 0 and 1, the recovered discrete fold with
   corrected odd/single-pixel coverage, strict TYPE/extra-PARAM rejection, and empty-BEAMS no-op;
-- the signed duration boundary and recovered frame grid: 1..79 ms representative inputs
-  quantize to 40 ms, 80 ms produces two frames, and zero/negative/fractional/i32-overflow
-  values fail closed;
-- both allowed Transform values for IDs 626, 627, and 628 followed by the exact qrand or
-  evaluator boundary error, including the same rejection with empty BEAMS;
-- wrong TYPE, extra PARAM, invalid Transform, and at least one constructor-domain failure
-  for every residual blocked generator;
+- the signed duration boundary and recovered frame-grid provenance: current requests preserve
+  authored 10/39/40/41/79/80 ms (and apply only the common 10 ms floor below that), while the
+  still-legacy Burst/Knight Rider/Sweep evaluators derive their internal 40 ms frame count;
+  zero/negative/fractional/i32-overflow values fail closed;
+- both allowed Transform values for IDs 626/627, corrected recipe fields, reload-stable
+  source seed, raw evaluator-dead provenance, lifetime conversion, and empty-BEAMS no-op;
+- wrong TYPE, extra PARAM, invalid Transform, and constructor-domain failures for every
+  corrected random generator;
+- ID628 corrected fixed-hash/cosine/octave character, continuous phase, analytic cyclic
+  palette, active Direction endpoints/default, Transform, and strict schema/domain failures;
 - legacy Knight Rider JSON byte-shape plus exact-flag round-trip, native false-path
   preservation, the ID624 discrete fold maps for N=4/5/6/1, and the frontend read-only,
   localization, and visible-Transform contracts;
@@ -540,3 +570,58 @@ golden asserts exactly two such skips). The same file now also carries the first
 COLOR MAPPINGS `5/3` body (generator ID 36 with a `<MAPPING>` placement rectangle) and a
 Move `4/4` ID 221 rack with `BEAMID` 1..6 — see `qa/DVC_SPECIMEN_REQUESTS.md` for the
 full capture record; both feed the next import tranche.
+
+## Second real specimen: Burst / Knight Rider / Sweep-Transform (2026-08-10, Fable + user)
+
+`qa/specimens/ValueCatalog-Burst-KnightRider.dvc` was authored natively in Daslight 5
+(scratch Save As from the DVC-MOVE-EXACT lineage patch; original files untouched) to pin
+the remaining VALUE generator schemas ahead of the corrected Burst/Knight Rider/Sweep
+tranche. Three new Laser-Color scenes each bind the mega bar rgba group (user-assisted
+setup: both the generic Dimmer preset and the concrete mega-bar dimmer channel are bound,
+and a static `R=255` colour is stored for visual verification). Captures live under
+`target/qa/ui-comparison/bks-specimens/`.
+
+Serialized schema facts (first real capture for 622/624 and for Transform=1):
+
+1. **ID622 Burst, `PARAMS NB="4"`**: `TYPE4/ID1` palette (default three stops
+   white/grey/black), `TYPE6/ID3 VAL="0"` (Transform None), `TYPE0/ID10 VAL="50"`
+   (Color Width 50 — integer), `TYPE1/ID11 VAL="1"` (Gradient at UI 100.0 — serialized as
+   **float 1.0**, confirming the Burst gradient source domain is a 0..1 hold/interpolation
+   fraction, not a percent integer).
+2. **ID624 Knight Rider, `PARAMS NB="7"`**: `TYPE4/ID1` palette (two stops black/white),
+   `TYPE6/ID3 VAL="0"`, `TYPE0/ID10 VAL="1"` (Size 1), `TYPE2/ID11 VAL="0"` (One Way Only
+   off), `TYPE2/ID12 VAL="1"` (Fading — default ON), `TYPE2/ID13 VAL="0"` (Go Outside
+   off), `TYPE0/ID14 VAL="50"` (Gradient 50 — **integer percent**, a different domain than
+   Burst's float gradient).
+3. **ID625 Sweep with Transform**: `TYPE6/ID3 VAL="1"` — the UI `Transform = Vertical
+   symmetry` serializes as enum value 1 on the shared ID3 slot; `TYPE2/ID10 VAL="0"`
+   (Direction Change off). The UI Transform dropdown offers exactly `{None, Vertical
+   symmetry}`.
+4. **Dual PRESET binding forms in one scene**: each of the three scenes carries both
+   `PRESET SSLFIXTURE="69bdd010-d626-11ea-b9df-7da99bfefe5c-3afb4fbb" SSLCHANNEL="33"
+   SSLPRESET="0"` (concrete profile-channel binding via the mega-bar channel FX badge —
+   first real capture of this form) and `PRESET SSLFIXTURE="" SSLCHANNEL="-1"
+   SSLPRESET="4"` (the generic Dimmer preset-type binding already known from the
+   Sweep/Plasma specimen).
+5. **Beam serialization at group scale**: each scene stores 96 `BEAM` rows across the
+   mega-bar group selection; the tail rows carry `IDSELECTION` 1..32 matching the UI's
+   `32 Beam(s)` readout.
+
+These facts settle two frontend/editor open questions from the corrected-tranche audit:
+Burst `gradient` is a 0..1 float (UI `step="0.01"` and the `0 = hard segment boundary`
+hold reading are correct), and Knight Rider `gradient` is an integer 0..100 percent.
+
+## Knight Rider / Sweep superseded by corrected analytic evaluators (2026-08-10)
+
+The recovered table implementations documented above for ID624 Knight Rider and ID625
+Sweep remain valid as source evidence, but the corrected routes were rewritten to
+analytic evaluators driven by the normalized continuous phase: authored periods are
+exact (no `floor(period/40)` frame quantization, no 40 ms raw-tick stepping), Knight
+Rider uses a duration-independent geometry descriptor preserving its four motions,
+multi-lane palette order, and source-over compositing (period-derived multiplier and
+750-frame cap removed), and Sweep uses an analytic continuous-phase hard boundary
+(generated table removed). Transform folding for the corrected family moved from
+nearest-fold to tent mapping (see the Burst parity document for the A/B evidence).
+The `ValueCatalog-Burst-KnightRider.dvc` specimen pins the serialized schemas,
+including the dual PRESET binding forms and the Knight Rider integer-percent gradient
+versus Burst float gradient distinction.

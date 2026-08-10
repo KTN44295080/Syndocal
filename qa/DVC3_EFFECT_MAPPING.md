@@ -191,6 +191,10 @@ Syndocalの現行Scene Settingsでは、作成時のMAPPINGS / COLOR MAPPINGSを
    再証明し、121をcyclic 16-bit cache、raw pixel radius、RGBA64のQt 1024-entry gradient table、
    40ms、qGray、Transform foldまで専用exact evaluatorへ移した。generic BurstはEnhancedとして分離維持。
    Shinkanは28 / 2、homecomingは12 / 1へ再交渉し、残るskippedはそれぞれqrand系とPerlinだけである。
+   **2026-08-10 DVC-RNG-CORRECTED訂正**: 131/133は非serialize qrand履歴の完全再生を
+   互換要件から外し、strict schemaと回収済みno-replacement／retained-particle grammarを保持した
+   stable source-seed evaluatorへrouteした。syntheticは6 converted / 0 skipped、full Shinkanは
+   30 / 0へ更新。seed、raw LifeSpan/Point Height、`implementation=SyndocalCorrected`をreportに残す。
 3. **DVC-3c（照合完了）**: MOVE FX / TYPE=8、ID 322・129・130・CURVE波形10を照合済み。
    VALUE FX ID621の対象ゼロ実保存形は忠実なno-opとして変換済み。対象ありVALUE FXは厳密schemaの
    合成検体まで実装済み、COLOR MAPPINGSは実保存検体なし。どちらも実保存形との照合完了には数えない。

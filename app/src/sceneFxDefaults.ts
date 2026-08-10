@@ -317,9 +317,17 @@ export const previewSceneFxFixtures = (
       if (selectionRank === undefined) return fixture;
       const fanout = moveFanoutPreviewState(request, elapsedMs, selectionRank, selectionCount);
       const sampleIntervals = Math.max(1, sampled.length - 1);
-      const sampledIndex = Math.min(sampled.length - 1, Math.floor(fanout.progress * sampleIntervals));
-      const sourcePoint = sampled[sampledIndex];
-      if (!sourcePoint) return fixture;
+      const scaledSample = Math.max(0, Math.min(sampleIntervals, fanout.progress * sampleIntervals));
+      const lowerIndex = Math.floor(scaledSample);
+      const upperIndex = Math.min(sampled.length - 1, lowerIndex + 1);
+      const first = sampled[lowerIndex];
+      const second = sampled[upperIndex];
+      if (!first || !second) return fixture;
+      const fraction = scaledSample - lowerIndex;
+      const sourcePoint = {
+        x: first.x + (second.x - first.x) * fraction,
+        y: first.y + (second.y - first.y) * fraction,
+      };
       const point = fanout.mirrorPan
         ? { ...sourcePoint, x: Math.max(0, Math.min(100, anchorX * 2 - sourcePoint.x)) }
         : sourcePoint;

@@ -62,8 +62,9 @@ All routed DVC Curve sources now follow `DVC_CORRECTED_COMPATIBILITY_POLICY.md`:
   defect and the 40 ms output hold.
 - Square uses `band=floor(fract(t-Phase)*Rate)`, removing the 400-cell residue while preserving
   authored band count, alternating polarity, Size and Offset.
-- Strobe uses the exact authored `1/Rate` interval. It retains the recovered 40 ms minimum flash
-  width and `Phase/2` duty extension, but no longer changes frequency through `floor(25/Rate)`.
+- Strobe uses the exact authored `1/Rate` interval and a common dimensionless 20% base duty,
+  extended by `max(0.2, Phase/2)`. Duty is independent from the recovered 40 ms sample grid and
+  Rate, so high Rates do not collapse into an always-high output.
 
 Each import report records the recovered grid and the applicable correction; none of these
 routes is described as frame-equivalent Daslight output. Size and Offset remain source values
@@ -80,8 +81,8 @@ field and continues to deserialize with `None`.
 
 ## Regression evidence
 
-- Focused engine regressions cover removal of the 40 ms hold, exact Strobe Rate with recovered
-  minimum flash width, equal Square bands, normalized Pulse amplitude, Sinus source Phase, a
+- Focused engine regressions cover removal of the 40 ms hold, exact Strobe Rate with common
+  dimensionless duty, equal Square bands, normalized Pulse amplitude, Sinus source Phase, a
   clipped Sinus plateau, the real `all_rampFlash` descending range/zero plateau, and invalid
   source profiles.
 - `cargo test -p syndocal dvc_ -- --nocapture`

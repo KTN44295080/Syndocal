@@ -128,11 +128,13 @@ normalization produced `(0.5,0.5)` for all four BEAMIDs.
 
 DVC-V5a corrects ID521 through the same optional placement body used by family-5
 Rainbow. The importer retains the raw signed Rectangle and exact Patch-canvas point
-for each fixture/beam identity. The engine compiles the rotated inclusion geometry and
-raw axis-aligned raster cell before the 44 Hz evaluator runs. Therefore the comparison
-above now resolves to cell `(7,20)` instead of the old normalized centre. PARAM ID4
-Rotation remains generator-raster rotation; `MAPPING@ANGLE` remains inclusion-mask
-rotation only.
+for each fixture/beam identity. The first implementation compiled rotated inclusion
+geometry but sampled the generator from a raw axis-aligned cell. The corrected runtime
+now inverse-rotates each included point into Rectangle-local continuous coordinates, so
+ANGLE no longer causes the mask and sampled image to use different frames. At angle 0,
+the comparison above remains cell `(7,20)` instead of the old normalized centre. PARAM
+ID4 Rotation remains generator-field rotation; `MAPPING@ANGLE` remains placement-frame
+rotation.
 
 ### Why ID36 is now exactly representable
 
@@ -161,14 +163,17 @@ The 2026-08-10 approval was implemented with this additive shape:
 3. `ColorEffectSpatialPlacement` contains coordinate frame
    `DaslightPatchCanvas`, shape `Rectangle`, raw signed `x/y/sx/sy`,
    `mapping_angle_degrees`, sampling rule
-   `RotatedInclusionMaskAxisAlignedRaster`, and `target_coordinates`.
+   `RotatedInclusionMaskAxisAlignedRaster`, and `target_coordinates`. The sampling-rule
+   enum spelling remains on the wire for additive compatibility; corrected runtime
+   semantics are rotated inclusion plus the same inverse-local sampling frame.
 4. Each placement target contains `fixture_id`, `beam_index`, and raw signed
    `patch_x/patch_y`; this joins placement to authored target identity without stage
    coordinate reuse.
 5. The engine compiles Rectangle centre/extents, mapping-angle sine/cosine, inclusion,
-   signed truncating raster cells, and Rainbow projection while rebuilding runtime
-   targets. The tick reads fixed per-target coordinates/projection; it performs no
-   placement allocation, trigonometry, identity search, or Patch-coordinate lookup.
+   continuous inverse-local coordinates, and Rainbow projection while rebuilding runtime
+   targets. It does not retain a 100 x 100 integer-cell cache. The tick reads fixed
+   per-target coordinates/projection; it performs no placement allocation, trigonometry,
+   identity search, or Patch-coordinate lookup.
 
 Legacy Rainbow JSON with no Grayscale and legacy patterns with no placement deserialize
 to their defaults and serialize back without adding either field. New populated bodies
