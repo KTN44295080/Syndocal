@@ -15,6 +15,8 @@ import { ArtRdmPanel } from "./components/ArtRdmPanel";
 import { defaultColorEffectStops } from "./components/ColorEffectEditorPanel";
 import {
   cloneFxPaletteStops,
+  DASLIGHT_FX_PALETTE_MAX_STOPS,
+  DASLIGHT_FX_PALETTE_MIN_STOPS,
   fxPaletteStopsToColorMappingFrame,
   type FxColorPaletteDefinition,
 } from "./fxColorPalettes";
@@ -15892,7 +15894,7 @@ export default function App() {
   };
   const colorEffectDraftValid = createMemo(() => {
     const stops = colorEffectStops();
-    if (stops.length < 2 || stops.length > 16) return false;
+    if (stops.length < DASLIGHT_FX_PALETTE_MIN_STOPS || stops.length > DASLIGHT_FX_PALETTE_MAX_STOPS) return false;
     return stops.every((stop, index) =>
       Number.isFinite(stop.position)
       && stop.position >= 0
@@ -16347,7 +16349,7 @@ export default function App() {
     }
     if (colorEffect) {
       if (!colorEffectDraftValid()) {
-        setMessage("Color effects require 2 to 16 ordered palette stops with valid colors.");
+        setMessage("Color effects require 1 to 255 ordered palette stops with valid colors.");
         return null;
       }
       return {

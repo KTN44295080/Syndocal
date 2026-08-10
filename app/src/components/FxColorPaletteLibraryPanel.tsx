@@ -3,6 +3,8 @@ import {
   builtinFxColorPalettes,
   cloneFxPaletteStops,
   customFxColorPalettes,
+  DASLIGHT_FX_PALETTE_MAX_STOPS,
+  DASLIGHT_FX_PALETTE_MIN_STOPS,
   fxPaletteColorToHex,
   normalizeFxPaletteStops,
   type FxColorPaletteDefinition,
@@ -37,7 +39,7 @@ export function FxColorPaletteLibraryPanel(props: FxColorPaletteLibraryPanelProp
   const orderedDraftStops = createMemo(() => normalizeFxPaletteStops(draftStops()));
   const draftError = createMemo(() => {
     const stops = orderedDraftStops();
-    if (stops.length < 2 || stops.length > 16) return "FX palettes require 2 to 16 color stops.";
+    if (stops.length < DASLIGHT_FX_PALETTE_MIN_STOPS || stops.length > DASLIGHT_FX_PALETTE_MAX_STOPS) return "FX palettes require 1 to 255 color stops.";
     if (stops.some((stop, index) => index > 0 && stop.position <= stops[index - 1].position)) {
       return "Each color stop needs a unique position.";
     }
@@ -71,7 +73,12 @@ export function FxColorPaletteLibraryPanel(props: FxColorPaletteLibraryPanelProp
 
   const addStop = () => {
     const stops = orderedDraftStops();
-    if (stops.length >= 16) return;
+    if (stops.length >= DASLIGHT_FX_PALETTE_MAX_STOPS) return;
+    if (stops.length === 1) {
+      const position = stops[0].position < 0.5 ? 1 : 0;
+      setDraftStops([...stops, { position, color: { ...stops[0].color } }]);
+      return;
+    }
     let left = stops[0];
     let right = stops[1];
     let largestGap = (right?.position ?? 1) - (left?.position ?? 0);
@@ -225,8 +232,8 @@ export function FxColorPaletteLibraryPanel(props: FxColorPaletteLibraryPanelProp
                       type="number"
                       min="0"
                       max="1"
-                      step="0.01"
-                      value={stop.position.toFixed(2)}
+                      step="0.0001"
+                      value={stop.position.toFixed(4)}
                       onChange={(event) => updateStop(index(), { position: Number(event.currentTarget.value) })}
                     />
                   </label>
@@ -234,7 +241,7 @@ export function FxColorPaletteLibraryPanel(props: FxColorPaletteLibraryPanelProp
                     type="button"
                     aria-label={`Remove FX palette color ${index() + 1}`}
                     title="Remove color"
-                    disabled={orderedDraftStops().length <= 2}
+                    disabled={orderedDraftStops().length <= DASLIGHT_FX_PALETTE_MIN_STOPS}
                     onClick={() => setDraftStops(orderedDraftStops()
                       .filter((_, candidate) => candidate !== index()))}
                   >
@@ -245,7 +252,7 @@ export function FxColorPaletteLibraryPanel(props: FxColorPaletteLibraryPanelProp
             </For>
           </div>
           <div class="fxColorPaletteEditorActions">
-            <button type="button" disabled={orderedDraftStops().length >= 16} onClick={addStop}>Add color</button>
+            <button type="button" disabled={orderedDraftStops().length >= DASLIGHT_FX_PALETTE_MAX_STOPS} onClick={addStop}>Add color</button>
             <button type="button" class="primary" disabled={busy() || Boolean(draftError())} onClick={() => void createPalette()}>
               Save as new
             </button>

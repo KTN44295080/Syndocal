@@ -86,6 +86,12 @@ strict-core数を製品全域のexact完成数とは呼ばない。
    ゲートはDVC focused 71/71、workspace全体397 pass / 0 fail / 9 ignored、frontend build、
    localization 3045/3045、Value/FX可視化契約、`tauri build --no-bundle`を通過。exact checkoutの
    release exeをPID 73200で再起動し、`Syndocal` responsive windowが1件であることを確認した。
+   **C0c完了**: COLOR / COLOR MAPPINGS / MAPPINGSのfactory palette cardinality `1..255`を、
+   protocol、DVC parser、project/reference palette、runtime、editor/libraryの全経路へ通した。1色は
+   constant output、255色はlossless、256色はprecise rejectionとし、hot-path lookupは二分探索へ変更した。
+   COLOR 127の共有exact Knight evaluatorも0..254 laneを受理する。VALUEの`2..32`は独立factory contractを
+   維持する。これで旧`2..16`横断境界は解消したが、残るPARAM/placement/beam/state境界があるためID分類と
+   full-domain完成数はまだ増やさない。
 6. **新規IDトランシェ**: correctness着地後、(a)既存Sweep evaluatorを再利用できるCOLOR FX 134
    → (b)Move残（222 Curve / 225 Points）→ (c)CURVE残 → (d)CHASER 323/324
    → (e)MAPPINGS/COLOR MAPPINGS 2D群

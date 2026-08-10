@@ -4207,9 +4207,12 @@ fn dvc_color_palette_and_params(
                     color_nodes.len()
                 ));
             }
-            if !(2..=16).contains(&color_nodes.len()) {
+            if !(protocol::DASLIGHT_COLOR_PALETTE_MIN_STOPS
+                ..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS)
+                .contains(&color_nodes.len())
+            {
                 return Err(format!(
-                    "palette requires 2..16 COLOR entries, found {}",
+                    "palette requires 1..255 COLOR entries, found {}",
                     color_nodes.len()
                 ));
             }
@@ -4237,7 +4240,11 @@ fn dvc_color_palette_and_params(
                     *output = (value * u16::MAX as f64).round() as u16;
                 }
                 stops.push(ColorEffectStop {
-                    position: index as f32 / (color_count - 1) as f32,
+                    position: if color_count == 1 {
+                        0.0
+                    } else {
+                        index as f32 / (color_count - 1) as f32
+                    },
                     color: ColorEffectColor {
                         red: rgb[0],
                         green: rgb[1],
@@ -6899,6 +6906,34 @@ mod tests {
             active_nonzero,
             "cue recall must activate its owned Move effect"
         );
+    }
+
+    #[test]
+    fn dvc_color_palette_parser_accepts_the_full_factory_cardinality_domain() {
+        let parse = |count: usize| {
+            let colors = (0..count)
+                .map(|index| {
+                    let value = index as f64 / count.max(1) as f64;
+                    format!(r#"<COLOR VAL="{value}/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>"#)
+                })
+                .collect::<String>();
+            let xml = format!(
+                r#"<EFFECT><PARAMS NB="1"><PARAM TYPE="4" ID="1"><COLORS NB="{count}">{colors}</COLORS></PARAM></PARAMS></EFFECT>"#
+            );
+            let document = Document::parse(&xml).unwrap();
+            dvc_color_palette_and_params(document.root_element())
+        };
+
+        let (_, one) = parse(1).unwrap();
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].position, 0.0);
+
+        let (_, maximum) = parse(255).unwrap();
+        assert_eq!(maximum.len(), 255);
+        assert_eq!(maximum.first().unwrap().position, 0.0);
+        assert_eq!(maximum.last().unwrap().position, 1.0);
+
+        assert!(parse(256).unwrap_err().contains("requires 1..255"));
     }
 
     #[test]

@@ -1,5 +1,6 @@
 import { createMemo, For, Show } from "solid-js";
 import { buildColorGradient } from "../effectVisualization";
+import { DASLIGHT_FX_PALETTE_MAX_STOPS, DASLIGHT_FX_PALETTE_MIN_STOPS } from "../fxColorPalettes";
 import type {
   ColorEffectAlgorithm,
   ColorEffectColor,
@@ -256,8 +257,8 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
   };
 
   const stopError = createMemo(() => {
-    if (props.stops.length < 2 || props.stops.length > 16) {
-      return "A color effect requires 2 to 16 palette stops.";
+    if (props.stops.length < DASLIGHT_FX_PALETTE_MIN_STOPS || props.stops.length > DASLIGHT_FX_PALETTE_MAX_STOPS) {
+      return "A color effect requires 1 to 255 palette stops.";
     }
     if (
       props.stops.some(
@@ -326,13 +327,13 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
   };
 
   const removeStop = (index: number) => {
-    if (orderedStops().length <= 2) return;
+    if (orderedStops().length <= DASLIGHT_FX_PALETTE_MIN_STOPS) return;
     publishStops(orderedStops().filter((_, candidateIndex) => candidateIndex !== index));
   };
 
   const addStop = () => {
     const stops = orderedStops();
-    if (stops.length >= 16) return;
+    if (stops.length >= DASLIGHT_FX_PALETTE_MAX_STOPS) return;
     if (stops.length === 0) {
       publishStops(defaultColorEffectStops.slice(0, 2).map((stop) => ({ ...stop, color: { ...stop.color } })));
       return;
@@ -447,8 +448,8 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
                       type="number"
                       min="0"
                       max="1"
-                      step="0.01"
-                      value={stop.position.toFixed(2)}
+                      step="0.0001"
+                      value={stop.position.toFixed(4)}
                       aria-label={`Position for palette stop ${stopNumber()}`}
                       onChange={(event) => updateStop(index(), { position: Number(event.currentTarget.value) })}
                     />
@@ -478,7 +479,7 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
                     class="colorEffectStopAction remove"
                     aria-label={`Remove palette stop ${stopNumber()}`}
                     title="Remove stop"
-                    disabled={orderedStops().length <= 2}
+                    disabled={orderedStops().length <= DASLIGHT_FX_PALETTE_MIN_STOPS}
                     onClick={() => removeStop(index())}
                   >
                     ×
@@ -489,8 +490,8 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
           </For>
         </div>
         <div class="colorEffectPaletteFooter">
-          <span class="tabularNums">{orderedStops().length} / 16 stops</span>
-          <button type="button" onClick={addStop} disabled={orderedStops().length >= 16}>Add stop</button>
+          <span class="tabularNums">{orderedStops().length} / 255 stops</span>
+          <button type="button" onClick={addStop} disabled={orderedStops().length >= DASLIGHT_FX_PALETTE_MAX_STOPS}>Add stop</button>
         </div>
         <Show when={stopError()}>
           {(error) => <p class="fieldError textPretty" role="alert">{error()}</p>}

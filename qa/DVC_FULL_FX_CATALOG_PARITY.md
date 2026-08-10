@@ -332,6 +332,20 @@ strict/exactを別に監査した。
 - 分類はruntime-convert 18、precise fail-closed 8、未route 42。18のうち条件付きexact-coreは14、
   明示compatibility routeは4。palette 1..255等の横断表現域が残るため14/68をfull-domain完成率とは呼ばない。
 
+### DVC-C0c COLOR palette full-domain（2026-08-10）
+
+- COLOR / COLOR MAPPINGS / MAPPINGSの`TYPE4/ID1` factory cardinality `1..255`を、protocol、
+  `.sdc` reference palette、DVC parser、Tauri command validation、runtime、editor、palette libraryの
+  全経路で同じ共有境界へ統一した。256以上は理由付きで拒否する。
+- 1色paletteはposition 0のconstant outputとして保持し、255色paletteは順序・16-bit RGB・等間隔positionを
+  losslessに保持する。UI position精度を4桁へ上げ、255 stopを相互に区別できるようにした。
+- 44Hz側の通常palette lookupを線形走査から`partition_point`へ変更した。COLOR 127 exact Knight Riderも
+  0..254 laneを受理し、frame tableをcommand/rebuild時に完成させる。VALUE importerの`2..32`は別factory
+  contractなので拡張していない。
+- これでC0a/C0b時点の「COLOR palette 1..255対2..16」という横断境界は解消した。runtime-convert 18、
+  precise fail-closed 8、未route 42、条件付きexact-core 14、compatibility 4というID分類自体は変わらない。
+  他のPARAM、placement、beam identity、stateful RNG境界が残るため、なお14/68をfull-domain完成率とは呼ばない。
+
 ## 未実装・未証明境界
 
 カタログ列挙は完了したが、次は別軸で残る。

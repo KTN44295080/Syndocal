@@ -20,14 +20,19 @@ try {
   const {
     builtinFxColorPalettes,
     customFxColorPalettes,
+    DASLIGHT_FX_PALETTE_MAX_STOPS,
+    DASLIGHT_FX_PALETTE_MIN_STOPS,
     fxPaletteStopsToColorMappingFrame,
+    normalizeFxPaletteStops,
   } = await server.ssrLoadModule("/src/fxColorPalettes.ts");
 
+  assert.equal(DASLIGHT_FX_PALETTE_MIN_STOPS, 1);
+  assert.equal(DASLIGHT_FX_PALETTE_MAX_STOPS, 255);
   assert.equal(builtinFxColorPalettes.length, 32, "the built-in library must keep 32 palettes");
   assert.equal(new Set(builtinFxColorPalettes.map((entry) => entry.id)).size, 32);
   assert.equal(new Set(builtinFxColorPalettes.map((entry) => entry.label)).size, 32);
   for (const entry of builtinFxColorPalettes) {
-    assert.ok(entry.stops.length >= 2 && entry.stops.length <= 16, `${entry.label} stop count`);
+    assert.ok(entry.stops.length >= 1 && entry.stops.length <= 255, `${entry.label} stop count`);
     assert.deepEqual([...entry.stops].sort((a, b) => a.position - b.position), entry.stops);
     assert.equal(new Set(entry.stops.map((stop) => stop.position)).size, entry.stops.length);
     for (const stop of entry.stops) {
@@ -51,6 +56,20 @@ try {
   const frame = fxPaletteStopsToColorMappingFrame(custom[0].stops);
   assert.equal(frame.pixels.length, custom[0].stops.length);
   assert.ok(frame.pixels.every(Number.isSafeInteger));
+  const oneStop = customFxColorPalettes([{
+    id: 20,
+    label: "Single Color",
+    kind: "Color",
+    values: [],
+    color_stops: [{ position: 0, color: { red: 1, green: 2, blue: 3 } }],
+  }]);
+  assert.equal(oneStop.length, 1);
+  assert.equal(oneStop[0].stops.length, 1);
+  const oversized = Array.from({ length: 300 }, (_, index) => ({
+    position: index / 299,
+    color: { red: index, green: index, blue: index },
+  }));
+  assert.equal(normalizeFxPaletteStops(oversized).length, 255);
 
   const [appSource, paneSource, editorSource, protocolSource, tauriSource, engineSource, dvcSource] = await Promise.all([
     readFile(resolve(appRoot, "src/App.tsx"), "utf8"),
@@ -84,7 +103,10 @@ try {
     /(?:^|\r?\n)    Rainbow \{[\s\S]*?grayscale: bool,[\s\S]*?horizontal_symmetry: bool/,
   );
   assert.match(protocolSource, /serde\(default, skip_serializing_if = "Vec::is_empty"\)[\s\S]*pub color_stops: Vec<ColorEffectStop>/);
-  assert.match(tauriSource, /fn validate_fx_palette_stops[\s\S]*2\.\.=16/);
+  assert.match(editorSource, /DASLIGHT_FX_PALETTE_MAX_STOPS/);
+  assert.match(protocolSource, /DASLIGHT_COLOR_PALETTE_MIN_STOPS: usize = 1/);
+  assert.match(protocolSource, /DASLIGHT_COLOR_PALETTE_MAX_STOPS: usize = u8::MAX as usize/);
+  assert.match(tauriSource, /fn validate_fx_palette_stops[\s\S]*DASLIGHT_COLOR_PALETTE_MAX_STOPS/);
   assert.match(engineSource, /fn validate_and_sanitize_palette[\s\S]*palette\.color_stops/);
   assert.match(engineSource, /fn daslight_grayscale_color[\s\S]*red \* 11 \+ green \* 16 \+ blue \* 5/);
   assert.match(engineSource, /fn daslight_symmetry_coordinate[\s\S]*1\.0 - \(coordinate \* 2\.0 - 1\.0\)\.abs\(\)/);
@@ -93,7 +115,7 @@ try {
 
   console.log(
     `pass FX color palettes builtIn=${builtinFxColorPalettes.length} ` +
-      `custom=${custom.length} maxStops=16 colorMappingPixels=${frame.pixels.length} ` +
+      `custom=${custom.length} minStops=1 maxStops=255 colorMappingPixels=${frame.pixels.length} ` +
       "allSceneFx=true plasmaRainbowEditable=true grayscaleTransform=exact persistence=backward-compatible",
   );
 } finally {

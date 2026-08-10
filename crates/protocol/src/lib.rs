@@ -2236,6 +2236,11 @@ pub struct ColorEffectStop {
     pub color: ColorEffectColor,
 }
 
+/// Daslight 5.0.6.2 TYPE4/ID1 factory cardinality for COLOR, MAPPINGS,
+/// and COLOR MAPPINGS palettes.
+pub const DASLIGHT_COLOR_PALETTE_MIN_STOPS: usize = 1;
+pub const DASLIGHT_COLOR_PALETTE_MAX_STOPS: usize = u8::MAX as usize;
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ColorEffectAlgorithm {
     Cycle,

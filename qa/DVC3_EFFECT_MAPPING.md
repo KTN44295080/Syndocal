@@ -112,6 +112,11 @@ factoryにないCOLOR FXの122–126/132は現バイナリの未登録空隙で�
 schema/scale/beam-target/乱数境界の逆照合結果は同正本と`qa/DVC_FULL_FX_PARITY_ROADMAP.md`に分離した。
 2026-08-10のDVC-C0aで追加7 routeのTYPE/domain/scale coreをstrict化したが、paletteのfactory
 `1..255`対protocol `2..16`など横断表現域が残るため、13 routeをfull-domain完成とは数えない。
+**2026-08-10 C0c訂正**: COLOR / COLOR MAPPINGS / MAPPINGSの`TYPE4/ID1` paletteはprotocol、
+DVC parser、project保存、runtime、editor/libraryを同じ`1..255`境界へ統一した。1 stopはconstant output、
+255 stopはlossless、256 stopは拒否し、COLOR 127 exact evaluatorも最大254 laneを受理する。VALUEの
+`2..32`は別factory contractとして維持する。この訂正は旧横断上限だけを解消し、未実装IDや別PARAM境界を
+exact扱いへ昇格させない。
 
 VALUE Sweepについては、同実行ファイルのRTTI `CSweepEffect`、vtable `0x140696440`、
 evaluator `0x1403665A0`、constructor `0x140355D30`を追加解析した。constructorは

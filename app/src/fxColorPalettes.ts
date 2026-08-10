@@ -7,6 +7,9 @@ export interface FxColorPaletteDefinition {
   customPaletteId?: number;
 }
 
+export const DASLIGHT_FX_PALETTE_MIN_STOPS = 1;
+export const DASLIGHT_FX_PALETTE_MAX_STOPS = 255;
+
 const clamp = (value: number, minimum: number, maximum: number) =>
   Math.min(maximum, Math.max(minimum, Number.isFinite(value) ? value : minimum));
 
@@ -37,7 +40,7 @@ const palette = (id: string, label: string, hexColors: string[]): FxColorPalette
 
 // Thirty-two production-ready looks plus project-saved custom palettes. The
 // observed Daslight show palettes contained five or ten slots; Syndocal keeps
-// up to sixteen editable stops per palette and does not cap custom creation
+// the complete one-to-255 TYPE4/ID1 factory domain and does not cap custom creation
 // below the project's shared 128-palette safety boundary.
 export const builtinFxColorPalettes: FxColorPaletteDefinition[] = [
   palette("rainbow", "Full Rainbow", ["#ff0000", "#ff7a00", "#ffff00", "#00ff00", "#00ffff", "#0066ff", "#7a00ff", "#ff00cc"]),
@@ -82,7 +85,7 @@ export const cloneFxPaletteStops = (stops: ColorEffectStop[]) =>
 
 export const normalizeFxPaletteStops = (stops: ColorEffectStop[]) =>
   cloneFxPaletteStops(stops)
-    .slice(0, 16)
+    .slice(0, DASLIGHT_FX_PALETTE_MAX_STOPS)
     .map((stop) => ({
       position: clamp(stop.position, 0, 1),
       color: {
@@ -96,7 +99,7 @@ export const normalizeFxPaletteStops = (stops: ColorEffectStop[]) =>
 export const customFxColorPalettes = (palettes: ReferencePaletteSummary[]) =>
   palettes.flatMap<FxColorPaletteDefinition>((entry) => {
     const stops = normalizeFxPaletteStops(entry.color_stops ?? []);
-    return stops.length >= 2
+    return stops.length >= DASLIGHT_FX_PALETTE_MIN_STOPS
       ? [{ id: `custom:${entry.id}`, label: entry.label, stops, customPaletteId: entry.id }]
       : [];
   });

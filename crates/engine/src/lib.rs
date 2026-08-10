@@ -3499,9 +3499,10 @@ struct RuntimeColorEffect {
 struct RuntimeColorSpatialState {
     targets: Vec<RuntimeColorSpatialTarget>,
     attribute_indices: HashMap<FixtureId, HashMap<String, usize>>,
-    /// Import-only ID624 evaluator compiled once during command/rebuild.
-    /// Its builder composites at most 31 lanes into completed frames; the
-    /// 44 Hz path only samples that table.
+    /// Shared Daslight-exact COLOR 127 / VALUE 624 evaluator compiled once
+    /// during command/rebuild. COLOR can supply the complete 1..255 factory
+    /// palette (0..254 lanes); VALUE remains constrained by its own 2..32
+    /// point contract. The 44 Hz path only samples the completed frame table.
     daslight_knight_rider: Option<CompiledDaslightKnightRider>,
 }
 
@@ -3651,9 +3652,12 @@ impl CompiledDaslightKnightRider {
                 ..
             })
         );
-        if !(2..=32).contains(&request.stops.len()) {
+        if !(protocol::DASLIGHT_COLOR_PALETTE_MIN_STOPS
+            ..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS)
+            .contains(&request.stops.len())
+        {
             return Err(
-                "Daslight-exact Knight Rider requires between 2 and 32 VALUE points".to_string(),
+                "Daslight-exact Knight Rider requires between 1 and 255 palette stops".to_string(),
             );
         }
         if !(1..=100).contains(&authored_size) {
@@ -22285,8 +22289,12 @@ fn validate_and_sanitize_palette(
             return Err("Palette attributes must be non-empty and unique".to_string());
         }
     }
-    if !palette.color_stops.is_empty() && !(2..=16).contains(&palette.color_stops.len()) {
-        return Err("An FX color palette must contain from 2 to 16 stops".to_string());
+    if !palette.color_stops.is_empty()
+        && !(protocol::DASLIGHT_COLOR_PALETTE_MIN_STOPS
+            ..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS)
+            .contains(&palette.color_stops.len())
+    {
+        return Err("An FX color palette must contain from 1 to 255 stops".to_string());
     }
     palette
         .color_stops
@@ -26121,8 +26129,10 @@ fn validate_runtime_color_effect_request(request: &ColorEffectRequest) -> Result
     if request.fixture_ids.is_empty() && request.target_group_ids.is_empty() {
         return Err("Color effect must target at least one fixture or group".to_string());
     }
-    if !(2..=16).contains(&request.stops.len()) {
-        return Err("Color effect requires between 2 and 16 stops".to_string());
+    if !(protocol::DASLIGHT_COLOR_PALETTE_MIN_STOPS..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS)
+        .contains(&request.stops.len())
+    {
+        return Err("Color effect requires between 1 and 255 stops".to_string());
     }
     let mut previous = None;
     for stop in &request.stops {
@@ -30520,13 +30530,11 @@ fn spatial_palette_color(
     gradient_percent: f32,
 ) -> ColorEffectColor {
     let position = position.clamp(0.0, 1.0);
-    let discrete = request
+    let discrete_index = request
         .stops
-        .iter()
-        .rev()
-        .find(|stop| stop.position <= position)
-        .unwrap_or(&request.stops[0])
-        .color;
+        .partition_point(|stop| stop.position <= position)
+        .saturating_sub(1);
+    let discrete = request.stops[discrete_index].color;
     let gradient = (gradient_percent / 100.0).clamp(0.0, 1.0);
     if gradient <= f32::EPSILON {
         discrete
@@ -30591,17 +30599,18 @@ fn spatial_value_noise(x: f32, z: f32, seed: u32) -> f32 {
 
 fn evaluate_cycle_color(request: &ColorEffectRequest, position: f32) -> ColorEffectColor {
     let stops = &request.stops;
-    for pair in stops.windows(2) {
-        if position >= pair[0].position && position < pair[1].position {
-            let amount = (position - pair[0].position)
-                / (pair[1].position - pair[0].position).max(f32::EPSILON);
-            return interpolate_color_effect_color(
-                pair[0].color,
-                pair[1].color,
-                amount,
-                request.interpolation,
-            );
-        }
+    let upper = stops.partition_point(|stop| stop.position <= position);
+    if upper > 0 && upper < stops.len() {
+        let first = &stops[upper - 1];
+        let second = &stops[upper];
+        let amount =
+            (position - first.position) / (second.position - first.position).max(f32::EPSILON);
+        return interpolate_color_effect_color(
+            first.color,
+            second.color,
+            amount,
+            request.interpolation,
+        );
     }
     let first = &stops[0];
     let last = &stops[stops.len() - 1];
@@ -30624,20 +30633,21 @@ fn evaluate_cycle_color(request: &ColorEffectRequest, position: f32) -> ColorEff
 
 fn evaluate_linear_stop_color(request: &ColorEffectRequest, position: f32) -> ColorEffectColor {
     let stops = &request.stops;
-    if position <= stops[0].position {
+    let upper = stops.partition_point(|stop| stop.position < position);
+    if upper == 0 {
         return stops[0].color;
     }
-    for pair in stops.windows(2) {
-        if position <= pair[1].position {
-            let amount = (position - pair[0].position)
-                / (pair[1].position - pair[0].position).max(f32::EPSILON);
-            return interpolate_color_effect_color(
-                pair[0].color,
-                pair[1].color,
-                amount,
-                request.interpolation,
-            );
-        }
+    if upper < stops.len() {
+        let first = &stops[upper - 1];
+        let second = &stops[upper];
+        let amount =
+            (position - first.position) / (second.position - first.position).max(f32::EPSILON);
+        return interpolate_color_effect_color(
+            first.color,
+            second.color,
+            amount,
+            request.interpolation,
+        );
     }
     stops[stops.len() - 1].color
 }
@@ -53086,7 +53096,9 @@ mod tests {
         vertical_symmetry: bool,
         palette_red: &[u16],
     ) -> ColorEffectRequest {
-        assert!((2..=32).contains(&palette_red.len()));
+        assert!((protocol::DASLIGHT_COLOR_PALETTE_MIN_STOPS
+            ..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS)
+            .contains(&palette_red.len()));
         let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
             daslight_exact: true,
             grayscale: false,
@@ -53102,7 +53114,11 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(index, red)| protocol::ColorEffectStop {
-                position: index as f32 / (palette_red.len() - 1) as f32,
+                position: if palette_red.len() == 1 {
+                    0.0
+                } else {
+                    index as f32 / (palette_red.len() - 1) as f32
+                },
                 color: test_color(*red, 0, 0),
             })
             .collect();
@@ -53308,9 +53324,42 @@ mod tests {
 
         let mut one_stop = valid.clone();
         one_stop.stops.truncate(1);
-        assert!(validate_runtime_color_effect_request(&one_stop)
+        assert!(validate_runtime_color_effect_request(&one_stop).is_ok());
+        assert_eq!(
+            evaluate_cycle_color(&one_stop, 0.73),
+            one_stop.stops[0].color
+        );
+
+        let mut maximum = valid.clone();
+        let maximum_last = u8::MAX - 1;
+        maximum.stops = (0..=maximum_last)
+            .map(|index| protocol::ColorEffectStop {
+                position: f32::from(index) / f32::from(maximum_last),
+                color: test_color(u16::from(index) * 257, 0, 0),
+            })
+            .collect();
+        assert!(validate_runtime_color_effect_request(&maximum).is_ok());
+        let exact_stop_position = maximum.stops[127].position;
+        assert_eq!(
+            evaluate_cycle_color(&maximum, exact_stop_position),
+            maximum.stops[127].color
+        );
+        assert_eq!(
+            evaluate_linear_stop_color(&maximum, exact_stop_position),
+            maximum.stops[127].color
+        );
+
+        let mut oversized = maximum;
+        let oversized_last = u16::from(u8::MAX) + 1;
+        oversized.stops = (0..=oversized_last)
+            .map(|index| protocol::ColorEffectStop {
+                position: f32::from(index) / f32::from(oversized_last),
+                color: test_color(index * 255, 0, 0),
+            })
+            .collect();
+        assert!(validate_runtime_color_effect_request(&oversized)
             .unwrap_err()
-            .contains("between 2 and 16"));
+            .contains("between 1 and 255"));
 
         let mut unordered = valid.clone();
         unordered.stops[1].position = 0.0;
@@ -53670,8 +53719,8 @@ mod tests {
         .unwrap();
         assert_eq!(short.raw_frame_count, 1);
 
-        let max_palette = (0..32)
-            .map(|index| index as u16 * 2_000)
+        let max_palette = (0..u8::MAX)
+            .map(|index| u16::from(index) * 257)
             .collect::<Vec<_>>();
         let max_palette_request =
             test_daslight_knight_request(1_000, 3, true, true, true, 50.0, false, &max_palette);
@@ -53686,7 +53735,26 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(max_palette_compiled.lanes.len(), 31);
+        assert_eq!(max_palette_compiled.lanes.len(), 254);
+
+        let single_palette_request =
+            test_daslight_knight_request(1_000, 3, true, true, true, 50.0, false, &[12_345]);
+        let single_palette = CompiledDaslightKnightRider::compile(
+            &single_palette_request,
+            5,
+            3,
+            true,
+            true,
+            true,
+            50.0,
+            false,
+        )
+        .unwrap();
+        assert!(single_palette.lanes.is_empty());
+        assert!(single_palette
+            .frames
+            .iter()
+            .all(|color| color.into_color() == test_color(12_345, 0, 0)));
 
         let overflow = CompiledDaslightKnightRider::compile(
             &short_request,
@@ -56203,7 +56271,7 @@ mod tests {
     }
 
     #[test]
-    fn color_effect_large_stack_reuses_per_fixture_tick_evaluations() {
+    fn color_effect_255_stop_large_stack_reuses_per_fixture_tick_evaluations() {
         let mut runtime = EngineRuntime::new(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
@@ -56225,6 +56293,13 @@ mod tests {
             );
             request.algorithm = ColorEffectAlgorithm::Cycle;
             request.fixture_spread = 1.0;
+            let maximum_last = u8::MAX - 1;
+            request.stops = (0..=maximum_last)
+                .map(|index| protocol::ColorEffectStop {
+                    position: f32::from(index) / f32::from(maximum_last),
+                    color: test_color(u16::from(index) * 257, (id * 431) as u16, (id * 211) as u16),
+                })
+                .collect();
             let effect = runtime.resolve_color_effect_request(request).unwrap();
             runtime.effects.push(RuntimeEffect {
                 id,
@@ -56245,7 +56320,7 @@ mod tests {
         assert_ne!(checksum, 0);
         assert!(
             started.elapsed() < Duration::from_secs(3),
-            "large Color stack evaluation took {:?}",
+            "255-stop large Color stack evaluation took {:?}",
             started.elapsed()
         );
         assert!(runtime.effects.iter().all(|effect| match &effect.kind {

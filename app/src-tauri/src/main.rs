@@ -7955,8 +7955,12 @@ fn validate_reference_palette_values(
 }
 
 fn validate_fx_palette_stops(stops: &mut Vec<protocol::ColorEffectStop>) -> Result<(), String> {
-    if !stops.is_empty() && !(2..=16).contains(&stops.len()) {
-        return Err("An FX color palette must contain from 2 to 16 stops".to_string());
+    if !stops.is_empty()
+        && !(protocol::DASLIGHT_COLOR_PALETTE_MIN_STOPS
+            ..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS)
+            .contains(&stops.len())
+    {
+        return Err("An FX color palette must contain from 1 to 255 stops".to_string());
     }
     stops.sort_by(|left, right| left.position.total_cmp(&right.position));
     let mut previous_position = None;
@@ -26424,8 +26428,10 @@ fn validate_color_effect_request(request: &ColorEffectRequest) -> Result<(), Str
     if request.fixture_ids.is_empty() && request.target_group_ids.is_empty() {
         return Err("Color effect must target at least one fixture or group".to_string());
     }
-    if !(2..=16).contains(&request.stops.len()) {
-        return Err("Color effect requires between 2 and 16 stops".to_string());
+    if !(protocol::DASLIGHT_COLOR_PALETTE_MIN_STOPS..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS)
+        .contains(&request.stops.len())
+    {
+        return Err("Color effect requires between 1 and 255 stops".to_string());
     }
     let mut previous_position = None;
     for stop in &request.stops {
@@ -34860,6 +34866,36 @@ f 1 2 3
     }
 
     #[test]
+    fn fx_palette_validation_accepts_the_complete_daslight_cardinality_domain() {
+        let stops = |last: u16| {
+            (0..=last)
+                .map(|index| protocol::ColorEffectStop {
+                    position: if last == 0 {
+                        0.0
+                    } else {
+                        f32::from(index) / f32::from(last)
+                    },
+                    color: protocol::ColorEffectColor {
+                        red: index.saturating_mul(255),
+                        green: 0,
+                        blue: 0,
+                    },
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let mut one = stops(0);
+        validate_fx_palette_stops(&mut one).unwrap();
+        let mut maximum = stops(u16::from(u8::MAX) - 1);
+        validate_fx_palette_stops(&mut maximum).unwrap();
+        assert_eq!(maximum.len(), 255);
+        let mut oversized = stops(u16::from(u8::MAX));
+        assert!(validate_fx_palette_stops(&mut oversized)
+            .unwrap_err()
+            .contains("from 1 to 255"));
+    }
+
+    #[test]
     fn project_file_validation_rejects_corrupt_emitter_calibration() {
         let mut fixture = project_fixture(1, "Emitter Fixture", 0, 1);
         let mut function = project_color_wheel_function("Red", "Red", "#ff0000", 0, 65_535);
@@ -39398,9 +39434,33 @@ f 1 2 3
 
         request = sample_color_effect_request();
         request.stops.truncate(1);
+        validate_color_effect_request(&request).unwrap();
+
+        request = sample_color_effect_request();
+        let maximum_last = u8::MAX - 1;
+        request.stops = (0..=maximum_last)
+            .map(|index| protocol::ColorEffectStop {
+                position: f32::from(index) / f32::from(maximum_last),
+                color: protocol::ColorEffectColor {
+                    red: u16::from(index) * 257,
+                    green: 0,
+                    blue: 0,
+                },
+            })
+            .collect();
+        validate_color_effect_request(&request).unwrap();
+
+        request.stops.push(protocol::ColorEffectStop {
+            position: 1.0,
+            color: protocol::ColorEffectColor {
+                red: u16::MAX,
+                green: 0,
+                blue: 0,
+            },
+        });
         assert!(validate_color_effect_request(&request)
             .unwrap_err()
-            .contains("between 2 and 16"));
+            .contains("between 1 and 255"));
 
         request = sample_color_effect_request();
         request.stops[1].position = request.stops[0].position;
