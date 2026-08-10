@@ -94,6 +94,23 @@ VALUE FX=`RACK TYPE=7 / EFFECT TYPE=7`、MAPPINGS=`6 / 8`、COLOR MAPPINGS=`5 / 
 Rainbow/Burst/Plasma/Knight Rider/Sparkleは
 各ファミリーの登録entryが同じfactory addressを参照しており、名前が同じgenerator本体は共通実装である。
 
+2026-08-10のDVC-ENUMでは、同じバイナリのfactory登録域を全familyについて機械走査し、
+Daslight実機のdropdownを最下端まで観測した。追加で確定した完全集合は次のとおり。
+
+- COLOR FX: 121 Burst / 127 Knight Rider / 128 Perlin / 129 Plasma / 130 Rainbow /
+  131 Random fill / 133 Sparkle / **134 Sweep**。旧推定のSweep=132は誤り。
+- MOVE FX: 221 Circle / 222 Curve / 223 Line / 224 Polygon / 225 Points。
+- CHASER FX: 321 #1 / 322 #2 / 323 #3 / 324 #4 / 325 random。
+- CURVE FX: 3 Inverse Ramp / 4 Pulse / 5 Ramp / 6 Random / 7 Sinus / 8 Sinus3 /
+  9 Square / 10 Strobe / 11 Tangeant / 12 Triangle / 13 Custom。
+- MAPPINGSは521–530の10種、COLOR MAPPINGSは既記の21種で完全。
+
+全IDのcreator/constructor/RTTI/vtable/evaluator入口、serialized TYPE/ID/default/domain、
+実機UI順、STEPS/SUPER SCENEの専用保存形は`qa/DVC_FULL_FX_CATALOG_PARITY.md`を正本とする。
+factoryにないCOLOR FXの122–126/132は現バイナリの未登録空隙であり、予約/廃止までは断言しない。
+現行converter route 22 IDのうち条件付きstrict routeは6 IDであり、routeの存在をexact完成とは扱わない。
+schema/scale/beam-target/乱数境界の逆照合結果は同正本と`qa/DVC_FULL_FX_PARITY_ROADMAP.md`に分離した。
+
 VALUE Sweepについては、同実行ファイルのRTTI `CSweepEffect`、vtable `0x140696440`、
 evaluator `0x1403665A0`、constructor `0x140355D30`を追加解析した。constructorは
 `Direction Change`（ID10、default false）を1個追加し、evaluatorはpalette transitionごとに
@@ -112,8 +129,12 @@ Syndocal importerはこの実形をSkippedではなくsource no-opとして変�
 DMXへ影響しないことを回帰試験で固定する。対象ありVALUE FXについては、PRESET selector/range、
 RACK beam/selection順、grayscale palette、PARAM 3/10/11/12を厳密検証して共通spatial generatorへ渡す経路を
 合成DVCで固定した。具体的segment featureはその1属性だけ、generic Dimmerは選択RGB segmentだけを同率で
-スケールし、global Dimmerや隣接segmentへ漏らさない。実際にDaslightが保存した対象ありVALUE検体はまだないため、
-これは保存形の製品間照合完了とは数えず、実検体が現行schemaと一致するかを残件とする。COLOR MAPPINGSの実保存検体もまだない。
+スケールし、global Dimmerや隣接segmentへ漏らさない。この「対象ありVALUE / COLOR MAPPINGS実保存検体なし」という
+2026-07-19時点の境界は、追跡済み`qa/specimens/ValueCatalog-Sweep-Plasma.dvc`で解消した。
+同goldenは対象ありVALUE 625/623、COLOR MAPPINGS 36、MOVE 221を実保存し、2026-08-10の
+DVC-ENUM scratchはさらにCOLOR 130 / CHASER 321 / CURVE 7 / MAPPINGS 521 / STEPS /
+SUPER SCENEのdefault保存形を追加した。ただし、これは未実装IDすべての個別保存検体を意味しない。
+各未実装classの式と特殊型の保存表現は`qa/DVC_FULL_FX_CATALOG_PARITY.md`の未証明境界として別管理する。
 
 Syndocalの現行Scene Settingsでは、作成時のMAPPINGS / COLOR MAPPINGSを
 `2D MAPPING`の1入口へ統合し、既定の新規作成を`ColorMapping`とする。これは
@@ -143,6 +164,10 @@ Syndocalの現行Scene Settingsでは、作成時のMAPPINGS / COLOR MAPPINGSを
    金標準変換数: 127:5 / 121:4 / 131:1 / 133:1 / 521:1 / 530:1。dvc 22/22（Knight Rider実発光・時間掃引の
    金標準テスト含む）、engine 370/370、マトリクス232全緑。同条件A/Bベンチ +3.8%（誤差内）で既存スタック非劣化。
    絶対値2ms予算は環境負荷40%のため未計測 — クリーン環境での再計測が残件。
+   **2026-08-10訂正**: ここでいう「6ジェネレータ全て実装・変換」は当時のconverter route完了を指し、
+   Daslight exact parityの完了ではない。DVC-ENUM factory schemaとの逆照合で、121/127/131/133/530は
+   compatibility/近似、521はID10 scale不一致と判明した。現行分類は
+   `qa/DVC_FULL_FX_CATALOG_PARITY.md`を優先する。
 3. **DVC-3c（照合完了）**: MOVE FX / TYPE=8、ID 322・129・130・CURVE波形10を照合済み。
    VALUE FX ID621の対象ゼロ実保存形は忠実なno-opとして変換済み。対象ありVALUE FXは厳密schemaの
    合成検体まで実装済み、COLOR MAPPINGSは実保存検体なし。どちらも実保存形との照合完了には数えない。

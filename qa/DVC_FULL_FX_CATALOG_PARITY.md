@@ -1,0 +1,311 @@
+# Daslight 5 FX 全カタログ静的・実機証明（DVC-ENUM）
+
+- 確定日: 2026-08-10
+- 対象: `C:\Daslight 5\Daslight 5\Daslight 5.exe`
+- ProductVersion: `5.0.6.2`
+- FileVersion: `25.0905.165.111`
+- size: `9,778,688 bytes`
+- SHA-256: `325D83EC54D41305D60B466B486EFE413B8F3E2656B45A544277C0CE9B87AE2A`
+- 実機保存標本: `qa/specimens/DVC-ENUM-25.0905.165.111.dvc`
+- 元にした既存golden: `qa/specimens/ValueCatalog-Sweep-Plasma.dvc`
+
+## 結論
+
+Daslight 5.0.6.2 が新規シーンで提示する9ファミリーを実機GUIで全て開き、
+ドロップダウンの全UI名を最下端まで観測した。同じ実行ファイルのfactory登録域を機械走査し、
+全ての名前付きFXについて `family/type + ID -> creator -> constructor -> RTTI/vtable -> evaluator`
+を静的に回収した。現バイナリについて**未列挙の名前付きFXはない**。
+
+この文書の「完全」はカタログ、class identity、serialized property schema、evaluator入口の完全性を指す。
+全evaluatorの演出式を意味論まで復元済み、または全FXをSyndocalへ実装済み、という意味ではない。
+未復元境界は末尾に分離する。
+
+## 証跡手順と非破壊境界
+
+1. 追跡済みgoldenを直接編集せず、`target/qa/dvc-enum/` に新規scratch copyを作成した。
+2. Daslightのscratch専用ウィンドウでファミリーチューザーと全ドロップダウンを観測した。
+3. COLOR FX / CHASER FX / CURVE FX / MAPPINGS / STEPS / SUPER SCENEを新規sceneとして追加し、
+   `Ctrl+S`はscratchにだけ実行した。元goldenのSHA-256は
+   `0A4785BC8F2929AA781AC2CD2D5121D63424371EC3421BBD3C95D7F13E6493B4` のまま不変である。
+4. 保存後scratch（78,758 bytes）のSHA-256は
+   `29411CE809DB298A573AECAA40666B2AB8D186352A9F8BABEE64899C35E8EC2A`。
+5. scratchの実保存 `RACK/EFFECT/PARAM` とfactory走査結果を突合した。
+
+実機GUIの全9入口は次のとおり。
+
+| GUI入口 | 保存形 | 名前付きgenerator数 |
+|---|---|---:|
+| STEPS | `RACK TYPE=9 / STEPS/STEP` | 専用構造 |
+| COLOR FX | `RACK TYPE=2 / EFFECT TYPE=2` | 8 |
+| CHASER FX | `RACK TYPE=3 / EFFECT TYPE=6` | 5 |
+| MOVE FX | `RACK TYPE=4 / EFFECT TYPE=4` | 5 |
+| VALUE FX | `RACK TYPE=7 / EFFECT TYPE=7` | 8 |
+| CURVE FX | `RACK TYPE=8 / EFFECT TYPE=5` | 11 |
+| MAPPINGS | `RACK TYPE=6 / EFFECT TYPE=8` | 10 |
+| COLOR MAPPINGS | `RACK TYPE=5 / EFFECT TYPE=3` | 21 |
+| SUPER SCENE | `RACK TYPE=1 / TIMELINES/TIMELINE/BLOCKS` | 専用構造 |
+
+scratch実保存のdefault anchorは COLOR FX Rainbow=130、CHASER #1=321、CURVE Sinus=7、
+MAPPINGS Rainbow=521。STEPSは `WAITTIME=25 / FADETIME=0` の1 step、SUPER SCENEは
+空の1 timelineとして保存された。
+
+## VALUE FX — family/type 7
+
+GUI順とfactory集合は完全一致する。
+
+| ID | UI名 | class | evaluator |
+|---:|---|---|---:|
+| 621 | Rainbow | `CRainbowEffect` | `0x140365A00` |
+| 622 | Burst | `CBurstEffect` | `0x140362B70` |
+| 623 | Plasma | `CPlasmaEffect` | `0x1403654F0` |
+| 624 | Knight Rider | `CKnightRiderEffect` | `0x140363FE0` |
+| 625 | Sweep | `CSweepEffect` | `0x1403665A0` |
+| 626 | Sparkle | `CSparklesEffect` | `0x1403660F0` |
+| 627 | Random fill | `CRandomFillEffect` | `0x140365C70` |
+| 628 | Perlin | `CPerlinEffect` | `0x140365090` |
+
+全propertyのTYPE/ID/default/domain、factory/constructor/vtable、評価式、fail-closed境界は
+`qa/DVC_VALUE_CATALOG_PARITY.md`を正本とする。DVC-V6で624をexact実装済み。
+622/628はconstructor chainで初期化されず`.dvc`にも保存されないpalette-wrap object state、
+626/627は`.dvc`に存在しないQt/CRT per-thread RNG stateとprior draw historyが不足するため、
+推測seed/stateを作らずprecise fail-closedを維持する。
+
+## COLOR FX — family/type 2
+
+factory登録集合は `{121,127,128,129,130,131,133,134}`。旧推定のSweep=132は誤りで、
+**Sweep=134**。122–126と132はこのバイナリのfactoryに登録がない空隙であり、
+「予約」「廃止」といった製品履歴までは断言しない。
+
+共通property:
+
+- `TYPE4/ID1 Color Palette`: 1..255 colors
+- `TYPE2/ID2 Grayscale`: default false
+- `TYPE6/ID3 Transform`: default 0、`0=None / 1=Vertical symmetry`
+- Horizontal symmetryはfamily 3/8だけに追加され、COLOR FXにはない
+
+| ID / UI名 | factory ID-store -> creator -> ctor | class / vtable | evaluator | 固有schema（TYPE/ID） |
+|---|---|---|---:|---|
+| 121 Burst | `0x14036A296 -> 0x14036CA20 -> 0x1403503C0` | `CBurstEffect / 0x140695D08` | `0x140362B70` | `T0/10 Color Width=50[10..900]`; `T1/11 Gradient=1[0..1]` |
+| 127 Knight Rider | `0x14036A0A6 -> 0x14036D040 -> 0x140352ED0` | `CKnightRiderEffect / 0x140696548` | `0x140363FE0` | `T0/10 Size=1[1..100]`; `T2/11 One Way=false`; `T2/12 Fading=true`; `T2/13 Go Outside=false`; `T0/14 Gradient=50[0..100]` |
+| 128 Perlin | `0x140369CE4 -> 0x14036D200 -> 0x140353F50` | `CPerlinEffect / 0x140696860` | `0x140365090` | `T0/10 Octaves=4[2..10]`; `11 Zoom=75[1..100]`; `12 Direction=2[1..100]`; `13 Speed=1[1..10]`; `14 Amplitude=70[5..100]` |
+| 129 Plasma | `0x14036A19E -> 0x14036D270 -> 0x1403542A0` | `CPlasmaEffect / 0x140695F18` | `0x1403654F0` | `T0/10..17 Size X=1, Param X=2, Size Y=1, Param Y=2, Speed X=-1, Param SX=2, Speed Y=1, Param SY=-1`; domains `0..20` / `-5..5` |
+| 130 Rainbow | `0x14036A38E -> 0x14036D4A0 -> 0x140354A80` | `CRainbowEffect / 0x140695AF8` | `0x140365A00` | `T1/10 Color Width=0[0..1]`; `T0/11 Angle=0[0..360]`; `T1/12 Gradient=1[0..1]` |
+| 131 Random fill | `0x140369DD2 -> 0x14036D660 -> 0x140354D60` | `CRandomFillEffect / 0x140696650` | `0x140365C70` | `T0/10 Point Width=1[1..10]`; family2ではID11 Heightを登録しない |
+| 133 Sparkle | `0x140369EC0 -> 0x14036D7B0 -> 0x140354ED0` | `CSparklesEffect / 0x140696B78` | `0x1403660F0` | `T0/10 Number=5[1..10]`; `T1/11 LifeSpan=0[0..0.9]`; `T0/12 Width=1[1..90]`; family2ではID13 Heightなし |
+| 134 Sweep | `0x140369FB5 -> 0x14036D9E0 -> 0x140355D30` | `CSweepEffect / 0x140696440` | `0x1403665A0` | `T2/10 Direction Change=false` |
+
+## MOVE FX — family/type 4
+
+GUI順は Circle / Curve / Polygon / Line / Points。factory集合は221–225の連番で空隙なし。
+全classは共通constructor `0x140347890` だけを使用し、派生固有propertyはない。
+
+- `TYPE5/ID1 POINTS`: 2..255 normalized points
+- `TYPE1/ID2 Phasing`: default 0、0..1
+- `TYPE2/ID3 Symmetry`: default false
+- property ID4は存在しない
+
+| ID / UI名 | creator -> ctor | class / vtable | evaluator | default POINTS |
+|---|---|---|---:|---|
+| 221 Circle | `0x14036CD30 -> 0x1403476C0` | `CCirclePosEffect / 0x1406954C0` | `0x140349650` | diamond 4点 |
+| 222 Curve | `0x14036CDA0 -> 0x140347720` | `CCurvePosEffect / 0x140695598` | `0x14034A0E0` | `(1/6,.25),(1/3,.75),(2/3,.25),(5/6,.75)` |
+| 223 Line | `0x14036D120 -> 0x140347AF0` | `CLinePosEffect / 0x140695748` | `0x14034A460` | `(.5,.25),(.5,.75)` |
+| 224 Polygon | `0x14036D350 -> 0x140347D60` | `CPolygonPosEffect / 0x140695670` | `0x14034A8F0` | diamond 4点 |
+| 225 Points | `0x14036D2E0 -> 0x140347C20` | `CPointsPosEffect / 0x140695820` | `0x14034A790` | `(.5,.25),(.5,.75)` |
+
+Circleの解析的circumcircle semanticsは`Phasing=0`境界でstrict実装済み。他4種もdistinct evaluator入口まで
+確定したが、UI名だけから式を類推しない。現行223/224 routeのbeam-target近似は実装完了に数えない。
+
+## CHASER FX — family/type 6
+
+GUI順とfactory集合は321–325の連番で一致し、空隙なし。共通base `0x140374F80` はpropertyを登録しない。
+
+| ID / UI名 | creator -> ctor | class / vtable | evaluator | schema |
+|---|---|---|---:|---|
+| 321 Chaser #1 | `0x14036CB00 -> 0x140374780` | `CChaserType1Effect / 0x1406C88C8` | `0x140376540` | `T2/10 One Way=true`; `T2/11 Fading=false`; `T0/12 Nb pixels on=1[0..1000]` |
+| 322 Chaser #2 | `0x14036CB70 -> 0x1403748F0` | `CChaserType2Effect / 0x1406C8998` | `0x140376FA0` | `T2/10 Fading=true` |
+| 323 Chaser #3 | `0x14036CBE0 -> 0x1403749B0` | `CChaserType3Effect / 0x1406C8A68` | `0x1403775F0` | 321と同じ3 property |
+| 324 Chaser #4 | `0x14036CC50 -> 0x140374B20` | `CChaserType4Effect / 0x1406C8B38` | `0x140378400` | 321と同じ3 property |
+| 325 Chaser random | `0x14036CCC0 -> 0x140374C90` | `CChaserType5EffectRandom / 0x1406C8C08` | `0x1403791F0` | `T2/11 Fading=false`; `T0/12 Nb pixels on=1[0..1000]`; `T1/13 Flash=100[0..100]`; `T0/14 Random sequence=0[0..255]`; `T0/15 Nb cycles=1[1..255]` |
+
+321/322/325にはconverter routeがある。ただし322はTYPE検証不足、321はfactory範囲との差、325は
+random順のstable置換があり、3 routeともstrict完成とは数えない。323/324はclass/schema/distinct evaluatorまで
+証明済みだが、演出上の意味を命名できるGUI/DMX系列は未採取なので式は未断言。
+
+## CURVE FX — family/type 5
+
+GUI順は Sinus / Sinus3 / Tangeant / Triangle / Pulse / Square / Ramp /
+Inverse Ramp / Random / Strobe / Custom。全11項目をスクロール最下端まで実機観測した。
+
+ID3–12は共通constructor `0x14036E500`:
+
+- `TYPE0/ID1 Rate=2 [1..10]`
+- `TYPE1/ID2 Size=1 [0..2]`
+- `TYPE1/ID3 Phase=0 [0..1]`
+- `TYPE1/ID4 Offset=0 [-1..1]`
+- `TYPE1/ID5 Phasing=0 [0..1]`
+
+Custom ID13だけはこの5-property schemaではない。base listを消去し、
+`TYPE5/ID1 Points=[(0,.5),(1,.5)] [NB 2..255]` と `TYPE1/ID2 Phasing=0[0..1]` を登録する。
+
+| ID / UI名 | factory ID-store -> creator -> ctor | class / vtable | evaluator |
+|---|---|---|---:|
+| 3 Inverse Ramp | `0x140369547 -> 0x14036D580 -> 0x14036E860` | `CRampInvEffect / 0x1406C8258` | `0x14036FCB0` |
+| 4 Pulse | `0x140369826 -> 0x14036D3C0 -> 0x14036E7A0` | `CPulseEffect / 0x1406C83F8` | `0x14036F8D0` |
+| 5 Ramp | `0x14036963C -> 0x14036D510 -> 0x14036E800` | `CRampEffect / 0x1406C8188` | `0x14036FAE0` |
+| 6 Random | `0x140369452 -> 0x14036D5F0 -> 0x14036E8C0` | `CRandomEffect / 0x1406C8328` | `0x14036FE90` |
+| 7 Sinus | `0x140369BFA -> 0x14036D740 -> 0x14036E9E0` | `CSinusEffect / 0x1406C7E48` | `0x140370250` |
+| 8 Sinus3 | `0x140369B05 -> 0x14036D6D0 -> 0x14036E980` | `CSinus3Effect / 0x1406C7F18` | `0x140370070` |
+| 9 Square | `0x140369731 -> 0x14036D890 -> 0x14036EA40` | `CSquareEffect / 0x1406C80B8` | `0x140370420` |
+| 10 Strobe | `0x14036935D -> 0x14036D970 -> 0x14036EAA0` | `CStrobeEffect / 0x1406C84C8` | `0x1403705B0` |
+| 11 Tangeant | `0x140369A10 -> 0x14036DA50 -> 0x14036EB00` | `CTangeantEffect / 0x1406C7FE8` | `0x140370760` |
+| 12 Triangle | `0x14036991B -> 0x14036DB30 -> 0x14036EB60` | `CTriangleEffect / 0x1406C8598` | `0x140370930` |
+| 13 Custom | `0x140369268 -> 0x14036CE10 -> 0x14036E270` | `CCustomCurveEffect / 0x1406C8668` | `0x14036F1F0` |
+
+Sinus / Inverse Ramp / Strobeの式は`qa/DVC_CURVE_SOURCE_PARITY.md`で意味論まで確定済み。
+残り8種はfactory入口とserialized schemaをexact回収済みだが、式未decompile。
+
+## MAPPINGS / COLOR MAPPINGS — family/type 8 / 3
+
+両familyは同じraster effect class群を再利用するが、保存family、base property、利用class集合が異なる。
+
+MAPPINGS base:
+
+- `TYPE4/ID1 Values`: default white / 0.498 gray / black
+- `TYPE6/ID3 Transform`: `0=None / 1=Vertical / 2=Horizontal`
+- `TYPE0/ID4 Rotation=0 [0..360]`
+- ID2は登録しない
+
+COLOR MAPPINGS baseは上記に `TYPE2/ID2 Grayscale=false` を追加し、default paletteは8色rainbow。
+
+### 完全ID表
+
+| class / UI名 | MAPPINGS ID | COLOR MAPPINGS ID | evaluator |
+|---|---:|---:|---:|
+| `CRainbowEffect` / Rainbow | 521 | 36 | `0x140365A00` |
+| `CSpiralEffect` / Spiral | 522 | 42 | `0x140366240` |
+| `CBurstEffect` / Burst | 523 | 22 | `0x140362B70` |
+| `CButterflyEffect` / Butterfly | 524 | 23 | `0x140362EB0` |
+| `CPlasmaEffect` / Plasma | 525 | 34 | `0x1403654F0` |
+| `CMediaEffect` / Media | 526 | 33 | `0x140364940` |
+| `CKnightRiderEffect` / Knight Rider | 527 | 30 | `0x140363FE0` |
+| `CSweepEffect` / Sweep | 528 | 44 | `0x1403665A0` |
+| `CSparklesEffect` / Sparkle | 529 | 40 | `0x1403660F0` |
+| `CPerlinEffect` / Perlin | 530 | 32 | `0x140365090` |
+| `CBounceEffect` / Bounce | — | 21 | `0x1403627E0` |
+| `CFireEffect` / Fire | — | 29 | `0x140363720` |
+| `CLineEffect` / Lines | — | 31 | `0x1403641D0` |
+| `CRainEffect` / Rain | — | 35 | `0x140365660` |
+| `CRandomFillEffect` / Random fill | — | 37 | `0x140365C70` |
+| `CTubeEffect` / Tube | — | 41 | `0x1403660F0` |
+| `CTextEffect` / Text | — | 45 | `0x140366940` |
+| `CExplosionEffect` / Explosion | — | 47 | `0x1403635E0` |
+| `CStarfieldEffect` / Starfield | — | 48 | `0x140366460` |
+| `CGraphEffect` / Graph | — | 49 | `0x1403638A0` |
+| `CGridEffect` / Grid | — | 50 | `0x140363C00` |
+
+factoryのexact ID-storeは、MAPPINGSが
+`521@0x1403687E1, 522@0x1403686E9, 523@0x1403685F7, 524@0x140368514,
+525@0x140368437, 526@0x140368361, 527@0x140368284, 528@0x1403681AE,
+529@0x1403680D8, 530@0x140368002`。COLOR MAPPINGSが
+`21@0x14036B2F1, 22@0x14036B5D2, 23@0x14036B4DA, 29@0x14036B1F9,
+30@0x14036B010, 31@0x14036A586, 32@0x14036A959, 33@0x14036B101,
+34@0x14036B3E9, 35@0x14036AA51, 36@0x14036B7BB, 37@0x14036AB42,
+40@0x14036AD2F, 41@0x14036AC37, 42@0x14036B6C3, 44@0x14036AE20,
+45@0x14036AF18, 47@0x14036A868, 48@0x14036A770, 49@0x14036A67B,
+50@0x14036A491`。
+
+共有raster classのcreator/constructor/vtable chain:
+
+| class | creator -> ctor | vtable |
+|---|---|---:|
+| `CBounceEffect` | `0x14036C9B0 -> 0x14034FA50` | `0x140696968` |
+| `CBurstEffect` | `0x14036CA20 -> 0x1403503C0` | `0x140695D08` |
+| `CButterflyEffect` | `0x14036CA90 -> 0x140350540` | `0x140695E10` |
+| `CExplosionEffect` | `0x14036CE80 -> 0x140351690` | `0x140696D98` |
+| `CFireEffect` | `0x14036CEF0 -> 0x1403520C0` | `0x140696020` |
+| `CGraphEffect` | `0x14036CF60 -> 0x140352530` | `0x140696FA8` |
+| `CGridEffect` | `0x14036CFD0 -> 0x140352B60` | `0x1406971B8` |
+| `CKnightRiderEffect` | `0x14036D040 -> 0x140352ED0` | `0x140696548` |
+| `CLineEffect` | `0x14036D0B0 -> 0x140353300` | `0x1406970B0` |
+| `CMediaEffect` | `0x14036D190 -> 0x140353840` | `0x140696230` |
+| `CPerlinEffect` | `0x14036D200 -> 0x140353F50` | `0x140696860` |
+| `CPlasmaEffect` | `0x14036D270 -> 0x1403542A0` | `0x140695F18` |
+| `CRainEffect` | `0x14036D430 -> 0x1403546C0` | `0x140696A70` |
+| `CRainbowEffect` | `0x14036D4A0 -> 0x140354A80` | `0x140695AF8` |
+| `CRandomFillEffect` | `0x14036D660 -> 0x140354D60` | `0x140696650` |
+| `CSparklesEffect` | `0x14036D7B0 -> 0x140354ED0` | `0x140696B78` |
+| `CSpiralEffect` | `0x14036D820 -> 0x140355230` | `0x140695C00` |
+| `CStarfieldEffect` | `0x14036D900 -> 0x140355410` | `0x140696EA0` |
+| `CSweepEffect` | `0x14036D9E0 -> 0x140355D30` | `0x140696440` |
+| `CTextEffect` | `0x14036DAC0 -> 0x140355E10` | `0x140696338` |
+| `CTubeEffect` | `0x14036DBA0 -> 0x140356240` | `0x140696C88` |
+
+Tubeのvtable evaluator slotがSparklesと同じ`0x1403660F0`を指すことは観測値のまま記録する。
+直感で別addressへ「修正」しない。
+
+COLOR MAPPINGSの実機GUI順は Rainbow / Spiral / Burst / Butterfly / Plasma / Bounce /
+Fire / Media / Knight Rider / Text / Sweep / Sparkle / Tube / Random fill / Rain / Perlin /
+Explosion / Starfield / Graph / Lines / Grid。21項目を最下端Gridまで観測した。
+
+### class固有serialized schema
+
+| class | 固有schema（baseへ加算） |
+|---|---|
+| Bounce | `T6/10 Item={Points,Shape}`; `T7/11 Shape`; `T0/12 Number=6[1..20]`; `13 Size=40[1..100]`; `14 Speed=1[0..10]`; `T2/16 Collide=false`; `T2/17 Fill=false`; `T0/18 Points=3[2..10]`; ID15なし |
+| Burst | `T0/10 Color Width=50[10..900]`; `T1/11 Gradient=1[0..1]` |
+| Butterfly | `T0/10 Color Width=100[1..100]`; `T1/11 Gradient=.5[0..1]`; `T2/12 Clockwise=true` |
+| Explosion | `T7/10 Shape`; `T0/11 Explosion number=5[1..50]`; `12 size=5[0..100]`; `13 particles=10[1..100]`; `14 particle size=10[1..100]`; `T1/15 life=0[0..0.9]`; `T0/16 trail=10[1..25]`; `T1/17 gravity=0[0..10]` |
+| Fire | `T0/10 Flames=20[1..100]`; `11 Width=20[10..200]`; `12 Height=50[1..100]`; `13 Hotspot=250[10..255]` |
+| Graph | `T0/10 Height=10[1..100]`; `11 Width=10[1..100]`; `12 Pitch=10[0..100]`; `13 Frequency=2[0..10]`; `T1/14 Amplitude=1[0..2]`; `15 Offset=0[-1..1]` |
+| Grid | `T0/10 Size=1[1..5]`; `11 Width=2[2..20]` |
+| Knight Rider | `T0/10 Size=1[1..100]`; `T2/11 One Way=false`; `12 Fading=true`; `13 Go Outside=false`; `T0/14 Gradient=50[0..100]` |
+| Lines | `T0/10 Size=2[2..20]` |
+| Media | `T2/10 Media Path=true`; `T1/11 Colorize=0[0..1]` |
+| Perlin | `T0/10 Octaves=4[2..10]`; `11 Zoom=75[1..100]`; `12 Direction=2[1..100]`; `13 Speed=1[1..10]`; `14 Amplitude=70[5..100]` |
+| Plasma | `T0/10..17 Size X=1, Param X=2, Size Y=1, Param Y=2, Speed X=-1, Param SX=2, Speed Y=1, Param SY=-1`; domains `0..20` / `-5..5` |
+| Rain | `T0/10 Speed=1[0..10]`; `11 Width=5[5..10]`; `12 Height=10[10..30]`; `13 Number=50[1..100]`; `14 Trail=10[1..30]` |
+| Rainbow | `T1/10 Color Width=0[0..1]`; `T0/11 Angle=0[0..360]`; `T1/12 Gradient=1[0..1]` |
+| Random fill | `T0/10 Point Width=1[1..10]`; `11 Point Height=1[1..10]` |
+| Sparkle | `T0/10 Number=5[1..10]`; `T1/11 LifeSpan=0[0..0.9]`; `T0/12 Width=1[1..90]`; `13 Height=1[1..90]` |
+| Spiral | `T0/10 Radius=30[0..200]`; `11 Arms=1[1..10]`; `T1/12 Gradient=1[0..1]` |
+| Starfield | `T7/10 Shape`; `T0/11 Particles=1[1..10]`; `12 Size=10[1..100]`; `13 Trail=10[1..25]`; `T1/14 Rotation=0[-5..5]` |
+| Sweep | `T2/10 Direction Change=false` |
+| Text | `T3/10 Text="Text"`; `T0/11 Size=8[5..80]`; `T2/12 Anti Alias=false`; `T10/13 Direction=1`; `T2/14 Vertical=false`; `T0/15 Vertical Offset=0[-100..100]`; `16 Horizontal Offset=0[-100..100]` |
+| Tube | 固有PARAMなし |
+
+## 現行Syndocal importerとの逆照合
+
+68 IDのうち22 IDにはconverter routeがあり、VALUE 622/626/627/628の4 IDはclass固有理由で
+precise fail-closed、残る42 IDは未routeでgeneric `Skipped`になる。22 routeは実装数ではなく
+入口coverageであり、strict/exactを別に監査した。
+
+| route群 | 現在の境界 |
+|---|---|
+| VALUE 621/623/624/625 | strict。625は`Transform=0`のみ。対象ゼロのno-opもschema検証後に成立 |
+| COLOR MAPPINGS 36 | strict。外部`SELECTIONS`参照はprecise fail-closed |
+| MOVE 221 | strict。`Phasing=0`のみ |
+| COLOR 129/130 | evaluator式は証明済みだが、palette以外のPARAM TYPE検証が不足 |
+| COLOR 121/127/131/133 | generic/non-exact。133は`LifeSpan` raw `0..0.9`のscaleも不一致 |
+| MOVE 223/224 | `BEAMID` targetを保持せず複数beamをApproximate。224 count域もfactoryと不一致 |
+| CHASER 321/322/325 | 322はTYPE検証不足。321/325は範囲clamp、325はrandom順をstable置換 |
+| CURVE 3/7/10 | 40ms式は証明済みだが、PARAM TYPE/range検証がfactory contractと不一致 |
+| MAPPINGS 521/530 | 521はID10 unit→percent変換不足。530はgeneric noiseでRectangleを未処理 |
+
+この監査により、条件付きstrict routeは6 ID、要correctness routeは16 IDである。次トランシェは
+未route追加より先に後者をstrict化し、再現不能な近似はprecise fail-closedへ戻す。
+
+## 未実装・未証明境界
+
+カタログ列挙は完了したが、次は別軸で残る。
+
+1. CURVEのPulse/Ramp/Random/Sinus3/Square/Tangeant/Triangle/Customはdistinct evaluator入口とschemaまで。
+   評価式をdecompileしてから実装する。
+2. CHASER #3/#4はschemaとdistinct evaluatorまで。DMX系列または式を確定してから実装する。
+3. Spiral/Butterfly/MediaとCOLOR MAPPINGS専用13 classはschema/evaluator入口までで、
+   raster algorithm bodyの意味論が未復元。
+4. `TYPE7 Shape`のserialized glyph表現と`TYPE10 Text Direction`の合法enum域は未証明。
+5. Sparkle/Random fillは外部per-thread qrand履歴、VALUE Burst/Perlinは非serialize stateのため、
+   evaluator addressとschemaだけではreplay exactnessにならない。
+6. factoryにないID空隙が予約か廃止かは製品履歴の問題で、現バイナリからは断言しない。
+
+この境界より内側だけを次トランシェへ渡し、UI名の類似やSyndocal既存recipeへの近似で埋めない。
