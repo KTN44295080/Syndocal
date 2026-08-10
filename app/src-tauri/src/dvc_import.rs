@@ -2703,12 +2703,12 @@ fn convert_dvc_value_effect(
             }
         }
         622 => {
-            let _transform = dvc_binary_param(&params, 3, "VALUE FX Burst Transform")?;
+            let _vertical_symmetry = dvc_binary_param(&params, 3, "VALUE FX Burst Transform")?;
             let _color_width =
                 dvc_integer_range_param(&params, 10, "VALUE FX Burst Color Width", 10, 900)?;
             let _gradient =
                 dvc_finite_range_param(&params, 11, "VALUE FX Burst Gradient", 0.0, 1.0)?;
-            return Err("VALUE FX Burst ID=622 remains fail-closed: Daslight uses a radial cyclic sawtooth with raw radius 10..900, while the existing Burst recipe uses a normalized finite expanding band".to_string());
+            return Err("VALUE FX Burst ID=622 remains fail-closed: Daslight's palette-wrap byte at object +0x12c changes cache topology but is neither initialized by the Burst/base constructor chain nor serialized in .dvc; choosing wrap=false would not be Daslight-exact".to_string());
         }
         623 => ColorEffectSpatialRecipe::Plasma {
             grayscale: false,
@@ -2723,14 +2723,24 @@ fn convert_dvc_value_effect(
             param_sy: dvc_integer_range_param(&params, 17, "VALUE FX Plasma Param SY", -5, 5)?,
         },
         624 => {
-            let _transform = dvc_binary_param(&params, 3, "VALUE FX Knight Rider Transform")?;
-            let _size = dvc_integer_range_param(&params, 10, "VALUE FX Knight Rider Size", 1, 100)?;
-            let _one_way = dvc_binary_param(&params, 11, "VALUE FX Knight Rider One Way Only")?;
-            let _fading = dvc_binary_param(&params, 12, "VALUE FX Knight Rider Fading")?;
-            let _go_outside = dvc_binary_param(&params, 13, "VALUE FX Knight Rider Go Outside")?;
-            let _gradient =
-                dvc_integer_range_param(&params, 14, "VALUE FX Knight Rider Gradient", 0, 100)?;
-            return Err("VALUE FX Knight Rider ID=624 remains fail-closed: Daslight builds a discrete integer profile with distinct one-way/bounce and inside/outside branches that is not equivalent to the existing continuous KnightRider recipe".to_string());
+            let vertical_symmetry =
+                dvc_binary_param(&params, 3, "VALUE FX Knight Rider Transform")?;
+            ColorEffectSpatialRecipe::KnightRider {
+                daslight_exact: true,
+                vertical_symmetry,
+                size: dvc_integer_range_param(&params, 10, "VALUE FX Knight Rider Size", 1, 100)?
+                    as u16,
+                one_way: dvc_binary_param(&params, 11, "VALUE FX Knight Rider One Way Only")?,
+                fading: dvc_binary_param(&params, 12, "VALUE FX Knight Rider Fading")?,
+                go_outside: dvc_binary_param(&params, 13, "VALUE FX Knight Rider Go Outside")?,
+                gradient: dvc_integer_range_param(
+                    &params,
+                    14,
+                    "VALUE FX Knight Rider Gradient",
+                    0,
+                    100,
+                )?,
+            }
         }
         625 => {
             require_zero_dvc_param(&params, 3, "VALUE FX Sweep Transform")?;
@@ -2739,23 +2749,26 @@ fn convert_dvc_value_effect(
             }
         }
         626 => {
-            let _transform = dvc_binary_param(&params, 3, "VALUE FX Sparkles Transform")?;
+            let _vertical_symmetry = dvc_binary_param(&params, 3, "VALUE FX Sparkles Transform")?;
             let _number = dvc_integer_range_param(&params, 10, "VALUE FX Sparkles Number", 1, 10)?;
             let _lifespan =
                 dvc_finite_range_param(&params, 11, "VALUE FX Sparkles LifeSpan", 0.0, 0.9)?;
             let _width = dvc_integer_range_param(&params, 12, "VALUE FX Sparkles Width", 1, 90)?;
-            return Err("VALUE FX Sparkles ID=626 remains fail-closed: Daslight spawns and advances persistent particles with decrement (1-L)*0.4, while the existing Sparkle recipe uses bounded epoch-seeded strip cells and percent lifespan".to_string());
+            return Err("VALUE FX Sparkles ID=626 remains fail-closed: its retained-particle evaluator is recovered, but Qt qrand delegates to per-thread CRT rand and the initial thread state plus prior draw history are not serialized in .dvc; choosing a seed would not be Daslight-exact".to_string());
         }
         627 => {
-            let _transform = dvc_binary_param(&params, 3, "VALUE FX Random fill Transform")?;
+            let _vertical_symmetry =
+                dvc_binary_param(&params, 3, "VALUE FX Random fill Transform")?;
             let _point_width =
                 dvc_integer_range_param(&params, 10, "VALUE FX Random fill Point Width", 1, 10)?;
+            // Point Height is serialized for VALUE family 7 but the recovered
+            // evaluator forces height to one and never consumes this value.
             let _point_height =
                 dvc_integer_range_param(&params, 11, "VALUE FX Random fill Point Height", 1, 10)?;
-            return Err("VALUE FX Random fill ID=627 remains fail-closed: Point Height PARAM 11 and Daslight's qrand no-replacement palette transition are not representable by the existing RandomFill recipe".to_string());
+            return Err("VALUE FX Random fill ID=627 remains fail-closed: its no-replacement evaluator is recovered, but Qt qrand delegates to per-thread CRT rand and the initial thread state plus prior draw history are not serialized in .dvc; choosing a seed would not be Daslight-exact".to_string());
         }
         628 => {
-            let _transform = dvc_binary_param(&params, 3, "VALUE FX Perlin Transform")?;
+            let _vertical_symmetry = dvc_binary_param(&params, 3, "VALUE FX Perlin Transform")?;
             let _octaves = dvc_integer_range_param(&params, 10, "VALUE FX Perlin Octaves", 2, 10)?;
             let _zoom = dvc_integer_range_param(&params, 11, "VALUE FX Perlin Zoom", 1, 100)?;
             let _direction =
@@ -2763,7 +2776,7 @@ fn convert_dvc_value_effect(
             let _speed = dvc_integer_range_param(&params, 13, "VALUE FX Perlin Speed", 1, 10)?;
             let _amplitude =
                 dvc_integer_range_param(&params, 14, "VALUE FX Perlin Amplitude", 5, 100)?;
-            return Err("VALUE FX Perlin ID=628 remains fail-closed: Daslight's degree-quantized sine-gradient evaluator ignores Direction PARAM 12 and does not match the existing seeded smooth-value-noise Perlin recipe".to_string());
+            return Err("VALUE FX Perlin ID=628 remains fail-closed: Daslight's palette-wrap byte at object +0x12c changes cache topology but is neither initialized by the Perlin/base constructor chain nor serialized in .dvc; choosing wrap=false would not be Daslight-exact".to_string());
         }
         _ => unreachable!(),
     };
@@ -2849,12 +2862,16 @@ fn convert_dvc_value_effect(
             feature_spec.preset_type
         ));
     }
-    let (period_ms, period_note) = dvc_move_period(
-        effect,
-        scene,
-        &format!("VALUE FX {generator}"),
-        &mut approximations,
-    )?;
+    let (period_ms, period_note) = if generator_id == 624 {
+        dvc_exact_value_period(effect, generator)?
+    } else {
+        dvc_move_period(
+            effect,
+            scene,
+            &format!("VALUE FX {generator}"),
+            &mut approximations,
+        )?
+    };
     let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
     if let Some(clock_warning) = clock_warning {
         approximations.push(clock_warning);
@@ -3009,6 +3026,8 @@ fn convert_dvc_color_spatial_effect(
             require_zero_dvc_param(&params, 2, "Knight Rider header")?;
             require_zero_dvc_param(&params, 3, "Knight Rider transform")?;
             ColorEffectSpatialRecipe::KnightRider {
+                daslight_exact: false,
+                vertical_symmetry: false,
                 size: dvc_u16_param(&params, 10, "Size")?,
                 one_way: dvc_binary_param(&params, 11, "One Way Only")?,
                 fading: dvc_binary_param(&params, 12, "Fading")?,
@@ -3200,6 +3219,7 @@ fn convert_dvc_color_spatial_effect(
             fading,
             go_outside,
             gradient,
+            ..
         } => format!(
             "Size={size}; OneWay={}; Fading={}; GoOutside={}; Gradient={gradient}",
             u8::from(*one_way),
@@ -4855,6 +4875,36 @@ fn dvc_move_period(
     Ok((
         period_ms,
         format!("period_ms=round(EFFECT DURATION)={period_ms}"),
+    ))
+}
+
+fn dvc_exact_value_period(effect: Node<'_, '_>, generator: &str) -> Result<(u64, String), String> {
+    let raw = effect
+        .attribute("DURATION")
+        .ok_or_else(|| format!("VALUE FX {generator} EFFECT is missing DURATION"))?
+        .trim();
+    let duration_ms = raw.parse::<i32>().map_err(|_| {
+        format!(
+            "VALUE FX {generator} DURATION must be a positive signed 32-bit integer, found {raw}"
+        )
+    })?;
+    if duration_ms <= 0 {
+        return Err(format!(
+            "VALUE FX {generator} DURATION must be greater than 0, found {duration_ms}"
+        ));
+    }
+
+    // Daslight loads DURATION through QStringRef::toInt, performs unsigned
+    // integer division by the global 40 ms generator quantum, clamps zero to
+    // one frame, discards the raw duration, and subsequently serializes
+    // frame_count * 40. Preserve that quantized period exactly.
+    let frame_count = (duration_ms as u64 / 40).max(1);
+    let period_ms = frame_count * 40;
+    Ok((
+        period_ms,
+        format!(
+            "frame_count=max(1,floor(EFFECT DURATION / 40))={frame_count}; period_ms=frame_count*40={period_ms}"
+        ),
     ))
 }
 
@@ -8049,49 +8099,126 @@ mod tests {
     }
 
     #[test]
-    fn dvc_value_catalog_validates_exact_blocked_schemas_before_semantic_rejection() {
+    fn dvc_value_knight_rider_imports_exact_recipe_and_rejects_schema_drift() {
+        let class_params = r#"<PARAM TYPE="0" ID="10" VAL="1"/><PARAM TYPE="2" ID="11" VAL="0"/><PARAM TYPE="2" ID="12" VAL="1"/><PARAM TYPE="2" ID="13" VAL="0"/><PARAM TYPE="0" ID="14" VAL="50"/>"#;
+
+        for (transform, expected_symmetry) in [(0, false), (1, true)] {
+            let source = value_fx_test_source(624, transform, 7, class_params, true);
+            let converted = convert_value_fx_test_source(&source, 624).unwrap();
+            assert!(converted.approximations.is_empty());
+            assert!(converted.note.contains(
+                "frame_count=max(1,floor(EFFECT DURATION / 40))=75; period_ms=frame_count*40=3000"
+            ));
+            let EffectParamsSnapshot::Value(value) = converted.target.unwrap().params.unwrap()
+            else {
+                panic!("VALUE Knight Rider must retain its Value body");
+            };
+            let ColorEffectSpatialRecipe::KnightRider {
+                daslight_exact,
+                vertical_symmetry,
+                size,
+                one_way,
+                fading,
+                go_outside,
+                gradient,
+            } = value.spatial_pattern.unwrap().recipe
+            else {
+                panic!("VALUE ID 624 must use the KnightRider recipe");
+            };
+            assert!(daslight_exact);
+            assert_eq!(vertical_symmetry, expected_symmetry);
+            assert_eq!(
+                (size, one_way, fading, go_outside, gradient),
+                (1, false, true, false, 50.0)
+            );
+        }
+
+        let no_op = value_fx_test_source(624, 0, 7, class_params, false);
+        let converted = convert_value_fx_test_source(&no_op, 624).unwrap();
+        assert!(converted.target.is_none());
+        assert!(converted.note.contains("source no-op preserved"));
+
+        let invalid_transform = value_fx_test_source(624, 2, 7, class_params, true);
+        assert!(convert_value_fx_test_source(&invalid_transform, 624)
+            .unwrap_err()
+            .contains("VALUE FX Knight Rider Transform PARAM 3 must be 0 or 1, found 2"));
+
+        let source = value_fx_test_source(624, 0, 7, class_params, true);
+        let wrong_type = source.replacen(
+            r#"<PARAM TYPE="0" ID="10""#,
+            r#"<PARAM TYPE="1" ID="10""#,
+            1,
+        );
+        assert!(convert_value_fx_test_source(&wrong_type, 624)
+            .unwrap_err()
+            .contains("expected PARAM 10 TYPE=0, found TYPE=1"));
+
+        let extra_param = source
+            .replacen(r#"<PARAMS NB="7">"#, r#"<PARAMS NB="8">"#, 1)
+            .replacen(
+                "</PARAMS>",
+                r#"<PARAM TYPE="0" ID="99" VAL="0"/></PARAMS>"#,
+                1,
+            );
+        let extra_error = convert_value_fx_test_source(&extra_param, 624).unwrap_err();
+        assert!(extra_error.contains("expected PARAM IDs"));
+        assert!(extra_error.contains("99"));
+
+        let out_of_range = source.replacen(
+            r#"<PARAM TYPE="0" ID="10" VAL="1"/>"#,
+            r#"<PARAM TYPE="0" ID="10" VAL="101"/>"#,
+            1,
+        );
+        assert!(convert_value_fx_test_source(&out_of_range, 624)
+            .unwrap_err()
+            .contains(
+                "VALUE FX Knight Rider Size PARAM 10 must be an integer within 1..100, found 101"
+            ));
+    }
+
+    #[test]
+    fn dvc_value_unrecoverable_generators_fail_closed_after_exact_schema_validation() {
         let cases = [
             (
                 622,
+                "Burst",
                 4,
                 r#"<PARAM TYPE="0" ID="10" VAL="50"/><PARAM TYPE="1" ID="11" VAL="1"/>"#,
                 "VALUE FX Burst ID=622 remains fail-closed",
+                "neither initialized by the Burst/base constructor chain",
                 r#"<PARAM TYPE="0" ID="10" VAL="50"/>"#,
                 r#"<PARAM TYPE="0" ID="10" VAL="901"/>"#,
                 "VALUE FX Burst Color Width PARAM 10 must be an integer within 10..900, found 901",
             ),
             (
-                624,
-                7,
-                r#"<PARAM TYPE="0" ID="10" VAL="1"/><PARAM TYPE="2" ID="11" VAL="0"/><PARAM TYPE="2" ID="12" VAL="1"/><PARAM TYPE="2" ID="13" VAL="0"/><PARAM TYPE="0" ID="14" VAL="50"/>"#,
-                "VALUE FX Knight Rider ID=624 remains fail-closed",
-                r#"<PARAM TYPE="0" ID="10" VAL="1"/>"#,
-                r#"<PARAM TYPE="0" ID="10" VAL="101"/>"#,
-                "VALUE FX Knight Rider Size PARAM 10 must be an integer within 1..100, found 101",
-            ),
-            (
                 626,
+                "Sparkles",
                 5,
                 r#"<PARAM TYPE="0" ID="10" VAL="5"/><PARAM TYPE="1" ID="11" VAL="0"/><PARAM TYPE="0" ID="12" VAL="1"/>"#,
                 "VALUE FX Sparkles ID=626 remains fail-closed",
+                "per-thread CRT rand",
                 r#"<PARAM TYPE="1" ID="11" VAL="0"/>"#,
                 r#"<PARAM TYPE="1" ID="11" VAL="1"/>"#,
                 "VALUE FX Sparkles LifeSpan PARAM 11 must be within 0..0.9, found 1",
             ),
             (
                 627,
+                "Random fill",
                 4,
                 r#"<PARAM TYPE="0" ID="10" VAL="1"/><PARAM TYPE="0" ID="11" VAL="1"/>"#,
                 "VALUE FX Random fill ID=627 remains fail-closed",
+                "per-thread CRT rand",
                 r#"<PARAM TYPE="0" ID="11" VAL="1"/>"#,
                 r#"<PARAM TYPE="0" ID="11" VAL="11"/>"#,
                 "VALUE FX Random fill Point Height PARAM 11 must be an integer within 1..10, found 11",
             ),
             (
                 628,
+                "Perlin",
                 7,
                 r#"<PARAM TYPE="0" ID="10" VAL="4"/><PARAM TYPE="0" ID="11" VAL="75"/><PARAM TYPE="0" ID="12" VAL="2"/><PARAM TYPE="0" ID="13" VAL="1"/><PARAM TYPE="0" ID="14" VAL="70"/>"#,
                 "VALUE FX Perlin ID=628 remains fail-closed",
+                "neither initialized by the Perlin/base constructor chain",
                 r#"<PARAM TYPE="0" ID="14" VAL="70"/>"#,
                 r#"<PARAM TYPE="0" ID="14" VAL="101"/>"#,
                 "VALUE FX Perlin Amplitude PARAM 14 must be an integer within 5..100, found 101",
@@ -8100,9 +8227,11 @@ mod tests {
 
         for (
             generator_id,
+            generator,
             declared_params,
             class_params,
             semantic_error,
+            semantic_detail,
             valid_range_param,
             invalid_range_param,
             range_error,
@@ -8114,23 +8243,16 @@ mod tests {
                     transform,
                     declared_params,
                     class_params,
-                    false,
+                    true,
                 );
-                assert!(convert_value_fx_test_source(&source, generator_id)
-                    .unwrap_err()
-                    .contains(semantic_error));
+                let error = convert_value_fx_test_source(&source, generator_id).unwrap_err();
+                assert!(error.contains(semantic_error));
+                assert!(error.contains(semantic_detail));
+                assert!(error.contains("serialized in .dvc"));
             }
 
-            let generator = match generator_id {
-                622 => "Burst",
-                624 => "Knight Rider",
-                626 => "Sparkles",
-                627 => "Random fill",
-                628 => "Perlin",
-                _ => unreachable!(),
-            };
             let invalid_transform =
-                value_fx_test_source(generator_id, 2, declared_params, class_params, false);
+                value_fx_test_source(generator_id, 2, declared_params, class_params, true);
             assert!(
                 convert_value_fx_test_source(&invalid_transform, generator_id)
                     .unwrap_err()
@@ -8139,8 +8261,7 @@ mod tests {
                     ))
             );
 
-            let source =
-                value_fx_test_source(generator_id, 0, declared_params, class_params, false);
+            let source = value_fx_test_source(generator_id, 0, declared_params, class_params, true);
             let wrong_type = source.replacen(
                 r#"<PARAM TYPE="0" ID="10""#,
                 r#"<PARAM TYPE="1" ID="10""#,
@@ -8165,10 +8286,55 @@ mod tests {
             assert!(extra_error.contains("expected PARAM IDs"));
             assert!(extra_error.contains("99"));
 
-            let out_of_range = source.replacen(valid_range_param, invalid_range_param, 1);
-            assert!(convert_value_fx_test_source(&out_of_range, generator_id)
+            let invalid = source.replacen(valid_range_param, invalid_range_param, 1);
+            assert!(convert_value_fx_test_source(&invalid, generator_id)
                 .unwrap_err()
                 .contains(range_error));
+
+            let no_op = value_fx_test_source(generator_id, 0, declared_params, class_params, false);
+            assert!(convert_value_fx_test_source(&no_op, generator_id)
+                .unwrap_err()
+                .contains(semantic_error));
+        }
+    }
+
+    #[test]
+    fn dvc_exact_value_duration_uses_the_recovered_signed_40ms_frame_grid() {
+        let class_params = r#"<PARAM TYPE="0" ID="10" VAL="1"/><PARAM TYPE="2" ID="11" VAL="0"/><PARAM TYPE="2" ID="12" VAL="1"/><PARAM TYPE="2" ID="13" VAL="0"/><PARAM TYPE="0" ID="14" VAL="50"/>"#;
+        let base = value_fx_test_source(624, 0, 7, class_params, true);
+
+        for (duration, expected_period, expected_frames) in [
+            ("1", 40, 1),
+            ("9", 40, 1),
+            ("10", 40, 1),
+            ("39", 40, 1),
+            ("40", 40, 1),
+            ("41", 40, 1),
+            ("79", 40, 1),
+            ("80", 80, 2),
+        ] {
+            let source = base.replacen("DURATION=\"3000\"", &format!("DURATION=\"{duration}\""), 1);
+            let converted = convert_value_fx_test_source(&source, 624).unwrap();
+            assert!(converted.note.contains(&format!(
+                "frame_count=max(1,floor(EFFECT DURATION / 40))={expected_frames}"
+            )));
+            let EffectParamsSnapshot::Value(value) = converted.target.unwrap().params.unwrap()
+            else {
+                panic!("exact VALUE Knight Rider must retain its Value body");
+            };
+            assert_eq!(value.period_ms, expected_period);
+        }
+
+        for (duration, error) in [
+            ("0", "must be greater than 0"),
+            ("-1", "must be greater than 0"),
+            ("1.5", "must be a positive signed 32-bit integer"),
+            ("2147483648", "must be a positive signed 32-bit integer"),
+        ] {
+            let source = base.replacen("DURATION=\"3000\"", &format!("DURATION=\"{duration}\""), 1);
+            assert!(convert_value_fx_test_source(&source, 624)
+                .unwrap_err()
+                .contains(error));
         }
     }
 

@@ -1913,7 +1913,7 @@ export interface ColorEffectBeamTarget {
 }
 
 export type ColorEffectSpatialRecipe =
-  | { KnightRider: { size: number; one_way: boolean; fading: boolean; go_outside: boolean; gradient: number } }
+  | { KnightRider: { daslight_exact?: boolean; vertical_symmetry?: boolean; size: number; one_way: boolean; fading: boolean; go_outside: boolean; gradient: number } }
   | { Sweep: { direction_change: boolean } }
   | { Burst: { color_width: number; gradient: number } }
   | { RandomFill: { point_width: number } }

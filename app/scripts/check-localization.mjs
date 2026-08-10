@@ -22,6 +22,7 @@ const valueEffectEditorSource = await readFile(
   new URL("../src/components/ValueEffectEditorPanel.tsx", import.meta.url),
   "utf8",
 );
+const typesSource = await readFile(new URL("../src/types.ts", import.meta.url), "utf8");
 
 assert.equal(localization.uiLocaleFromUnknown("ja"), "ja");
 assert.equal(localization.uiLocaleFromUnknown("en"), "en");
@@ -334,6 +335,57 @@ assert.ok(
   valueEffectEditorSource.includes('`${generatorKind()} Black 0 White 100 value palette`'),
   "Value FX canvas must expose the localized Daslight-generator palette aria contract",
 );
+assert.equal(
+  localization.translateUiText(
+    "Imported Daslight-exact Knight Rider generator parameters are read-only; the value palette and timing remain editable.",
+    "ja",
+  ),
+  "インポートしたDaslight完全互換のナイトライダー生成パラメーターは読み取り専用です。値パレットとタイミングは編集できます。",
+);
+assert.equal(
+  localization.translateUiText("Imported Transform", "ja"),
+  "インポート時の変形",
+);
+assert.ok(
+  valueEffectEditorSource.includes('"KnightRider" in recipe')
+    && valueEffectEditorSource.includes("recipe.KnightRider.daslight_exact === true"),
+  "The exact editor lock must remain scoped to Knight Rider",
+);
+assert.ok(
+  valueEffectEditorSource.includes('data-value-daslight-exact-lock={daslightExactKnight() ? "knight-rider" : undefined}'),
+  "Imported exact Knight Rider must expose its read-only editor boundary",
+);
+assert.ok(
+  valueEffectEditorSource.includes("data-value-daslight-exact-transform={generatorTransform()}")
+    && valueEffectEditorSource.includes('<strong>Imported Transform</strong>')
+    && valueEffectEditorSource.includes('generatorTransform() === "vertical" ? "Vertical symmetry" : "None"'),
+  "Imported exact Knight Rider must expose the recovered Transform value",
+);
+assert.ok(
+  valueEffectEditorSource.includes("disabled={daslightExactKnight()}"),
+  "Imported exact Knight Rider generator controls must stay disabled",
+);
+assert.equal(
+  [...valueEffectEditorSource.matchAll(/if \(daslightExactKnight\(\)\) return;/g)].length,
+  3,
+  "Imported exact Knight Rider must reject kind, parameter, and quick-look edits",
+);
+const spatialRecipeSource = typesSource.match(
+  /export type ColorEffectSpatialRecipe =([\s\S]*?);\r?\n\r?\nexport type ColorEffectSpatialCoordinateFrame/,
+)?.[1];
+assert.ok(spatialRecipeSource, "ColorEffectSpatialRecipe declaration must remain discoverable");
+const valueRecipeLine = (kind) => spatialRecipeSource
+  ?.split(/\r?\n/)
+  .find((line) => line.includes(`{ ${kind}:`)) ?? "";
+assert.match(valueRecipeLine("KnightRider"), /daslight_exact\?: boolean/);
+assert.match(valueRecipeLine("KnightRider"), /vertical_symmetry\?: boolean/);
+for (const blockedExactKind of ["Burst", "Sparkle", "RandomFill", "Perlin"]) {
+  assert.doesNotMatch(
+    valueRecipeLine(blockedExactKind),
+    /daslight_exact|vertical_symmetry/,
+    `${blockedExactKind} must not expose an unimplementable exact compatibility state`,
+  );
+}
 for (const dynamicAriaPrefix of [
   "Envelope point ",
   "Select envelope point ",

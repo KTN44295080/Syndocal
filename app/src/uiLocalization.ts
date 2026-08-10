@@ -1523,6 +1523,9 @@ const japaneseText: Record<string, string> = {
   "Color beam-space pattern": "ColorのBeam空間パターン",
   "Palette flow": "パレットフロー",
   "Knight Rider": "ナイトライダー",
+  "Imported Daslight-exact Knight Rider generator parameters are read-only; the value palette and timing remain editable.":
+    "インポートしたDaslight完全互換のナイトライダー生成パラメーターは読み取り専用です。値パレットとタイミングは編集できます。",
+  "Imported Transform": "インポート時の変形",
   Sweep: "スイープ",
   "Direction change": "方向を交互に変更",
   Burst: "バースト",

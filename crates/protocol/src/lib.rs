@@ -2282,6 +2282,12 @@ pub struct EffectBeamTarget {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ColorEffectSpatialRecipe {
     KnightRider {
+        /// Use the recovered Daslight VALUE-family integer evaluator.
+        #[serde(default, skip_serializing_if = "is_false")]
+        daslight_exact: bool,
+        /// Apply Daslight Transform=1 after rendering the source strip.
+        #[serde(default, skip_serializing_if = "is_false")]
+        vertical_symmetry: bool,
         /// Lit window width in ordered beam cells (1..=100).
         size: u16,
         one_way: bool,
@@ -5105,6 +5111,40 @@ mod tests {
             serde_json::to_string(&legacy_pattern).unwrap(),
             legacy_pattern_json,
             "a missing placement stays omitted and preserves the legacy byte shape"
+        );
+    }
+
+    #[test]
+    fn daslight_exact_knight_rider_flags_roundtrip_without_changing_legacy_byte_shape() {
+        let legacy_json = r#"{"KnightRider":{"size":8,"one_way":false,"fading":true,"go_outside":false,"gradient":50.0}}"#;
+        let legacy: super::ColorEffectSpatialRecipe = serde_json::from_str(legacy_json).unwrap();
+        let super::ColorEffectSpatialRecipe::KnightRider {
+            daslight_exact,
+            vertical_symmetry,
+            ..
+        } = &legacy
+        else {
+            unreachable!()
+        };
+        assert!(!daslight_exact);
+        assert!(!vertical_symmetry);
+        assert_eq!(serde_json::to_string(&legacy).unwrap(), legacy_json);
+
+        let exact = super::ColorEffectSpatialRecipe::KnightRider {
+            daslight_exact: true,
+            vertical_symmetry: true,
+            size: 8,
+            one_way: false,
+            fading: true,
+            go_outside: false,
+            gradient: 50.0,
+        };
+        let json = serde_json::to_string(&exact).unwrap();
+        assert!(json.contains(r#""daslight_exact":true"#));
+        assert!(json.contains(r#""vertical_symmetry":true"#));
+        assert_eq!(
+            serde_json::from_str::<super::ColorEffectSpatialRecipe>(&json).unwrap(),
+            exact
         );
     }
 

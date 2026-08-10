@@ -3245,6 +3245,7 @@ fn clear_runtime_color_effect_caches(runtime: &RuntimeColorEffect) {
     if let Some(spatial) = runtime.spatial.as_deref() {
         for target in &spatial.targets {
             target.cached.set(None);
+            target.daslight_value_cached.set(None);
         }
     }
 }
@@ -3287,6 +3288,14 @@ struct RuntimeValueSpatialBinding {
     low: u16,
     high: u16,
     virtual_intensity: bool,
+    /// Joined once against RuntimeColorSpatialState::attribute_indices.
+    spatial_target_index: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuntimeDaslightValueSpatialEvaluation {
+    at: Instant,
+    value: u16,
 }
 
 #[derive(Debug, Clone)]
@@ -3490,6 +3499,539 @@ struct RuntimeColorEffect {
 struct RuntimeColorSpatialState {
     targets: Vec<RuntimeColorSpatialTarget>,
     attribute_indices: HashMap<FixtureId, HashMap<String, usize>>,
+    /// Import-only ID624 evaluator compiled once during command/rebuild.
+    /// Its builder composites at most 31 lanes into completed frames; the
+    /// 44 Hz path only samples that table.
+    daslight_knight_rider: Option<CompiledDaslightKnightRider>,
+}
+
+const DASLIGHT_VALUE_FRAME_MS: u64 = 40;
+const DASLIGHT_VALUE_FRAME_CAP: usize = 750;
+const DASLIGHT_KNIGHT_FRAME_TABLE_MAX_BYTES: usize = 2 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct DaslightKnightColor {
+    red: f32,
+    green: f32,
+    blue: f32,
+}
+
+fn daslight_knight_frame_cell_count(
+    table_frame_count: usize,
+    strip_count: usize,
+) -> Result<usize, String> {
+    let cell_count = table_frame_count.checked_mul(strip_count).ok_or_else(|| {
+        "Daslight-exact Knight Rider completed frame table size overflowed".to_string()
+    })?;
+    let byte_count = cell_count
+        .checked_mul(std::mem::size_of::<DaslightKnightColor>())
+        .ok_or_else(|| {
+            "Daslight-exact Knight Rider completed frame table byte size overflowed".to_string()
+        })?;
+    if byte_count > DASLIGHT_KNIGHT_FRAME_TABLE_MAX_BYTES {
+        return Err(format!(
+            "Daslight-exact Knight Rider completed frame table requires {byte_count} bytes, exceeding the {}-byte per-effect limit",
+            DASLIGHT_KNIGHT_FRAME_TABLE_MAX_BYTES
+        ));
+    }
+    Ok(cell_count)
+}
+
+impl DaslightKnightColor {
+    fn from_color(color: ColorEffectColor) -> Self {
+        Self {
+            red: color.red as f32 / u16::MAX as f32,
+            green: color.green as f32 / u16::MAX as f32,
+            blue: color.blue as f32 / u16::MAX as f32,
+        }
+    }
+
+    fn source_over(self, source: Self, weight: f32) -> Self {
+        if weight <= 0.0 {
+            return self;
+        }
+        let channel = |destination: f32, source: f32| {
+            let source_term = source * weight;
+            let destination_premultiplied = destination * 1.0_f32;
+            let destination_term =
+                (f64::from(destination_premultiplied) * (1.0_f64 - f64::from(weight))) as f32;
+            source_term + destination_term
+        };
+        Self {
+            red: channel(self.red, source.red),
+            green: channel(self.green, source.green),
+            blue: channel(self.blue, source.blue),
+        }
+    }
+
+    fn interpolate(self, other: Self, amount: f32) -> Self {
+        let channel = |first: f32, second: f32| {
+            let difference = second - first;
+            (f64::from(first) + f64::from(difference) * f64::from(amount)) as f32
+        };
+        Self {
+            red: channel(self.red, other.red),
+            green: channel(self.green, other.green),
+            blue: channel(self.blue, other.blue),
+        }
+    }
+
+    fn into_color(self) -> ColorEffectColor {
+        let channel = |value: f32| (value.clamp(0.0, 1.0) * u16::MAX as f32).trunc() as u16;
+        ColorEffectColor {
+            red: channel(self.red),
+            green: channel(self.green),
+            blue: channel(self.blue),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DaslightKnightMotion {
+    OneWayOutside,
+    OneWayInside,
+    BounceOutside,
+    BounceInside,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CompiledDaslightKnightLane {
+    phase: f32,
+    color: DaslightKnightColor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct DaslightKnightTemporalCoordinate {
+    raw_tick: i64,
+    lower: usize,
+    upper: usize,
+    amount: f32,
+}
+
+#[derive(Clone)]
+struct CompiledDaslightKnightRider {
+    raw_frame_count: usize,
+    table_frame_count: usize,
+    strip_count: usize,
+    size: usize,
+    step: usize,
+    offset: f32,
+    reflection_cycle: usize,
+    motion: DaslightKnightMotion,
+    vertical_symmetry: bool,
+    background: DaslightKnightColor,
+    profile: Arc<[f32]>,
+    lanes: Arc<[CompiledDaslightKnightLane]>,
+    /// Completed source-over output for every table frame and strip cell.
+    /// Daslight's builder renders this table once; the 44 Hz path only reads
+    /// the two adjacent temporal samples.
+    frames: Arc<Vec<DaslightKnightColor>>,
+    temporal_coordinate: Cell<Option<DaslightKnightTemporalCoordinate>>,
+}
+
+impl CompiledDaslightKnightRider {
+    #[allow(clippy::too_many_arguments)]
+    fn compile(
+        request: &ColorEffectRequest,
+        strip_count: usize,
+        authored_size: u16,
+        one_way: bool,
+        fading: bool,
+        go_outside: bool,
+        gradient: f32,
+        vertical_symmetry: bool,
+    ) -> Result<Self, String> {
+        if !(2..=32).contains(&request.stops.len()) {
+            return Err(
+                "Daslight-exact Knight Rider requires between 2 and 32 VALUE points".to_string(),
+            );
+        }
+        if !(1..=100).contains(&authored_size) {
+            return Err("Daslight-exact Knight Rider size must be within 1..100".to_string());
+        }
+        if !gradient.is_finite()
+            || gradient.fract().abs() > f32::EPSILON
+            || !(0.0..=100.0).contains(&gradient)
+        {
+            return Err(
+                "Daslight-exact Knight Rider gradient must be an integer within 0..100".to_string(),
+            );
+        }
+
+        let raw_frame_count = usize::try_from((request.period_ms / DASLIGHT_VALUE_FRAME_MS).max(1))
+            .map_err(|_| {
+                "Daslight-exact Knight Rider frame count does not fit this platform".to_string()
+            })?;
+        let source_frame_count = raw_frame_count.min(DASLIGHT_VALUE_FRAME_CAP);
+        let strip_count = strip_count.max(1);
+        let size = usize::from(if vertical_symmetry {
+            authored_size.max(3)
+        } else {
+            authored_size
+        });
+        let even_adjustment = usize::from(size % 2 == 0);
+        let odd_size = size - even_adjustment;
+
+        let motion = match (one_way, go_outside) {
+            (true, true) => DaslightKnightMotion::OneWayOutside,
+            (true, false) => DaslightKnightMotion::OneWayInside,
+            (false, true) => DaslightKnightMotion::BounceOutside,
+            (false, false) => DaslightKnightMotion::BounceInside,
+        };
+        let checked_twice = |value: usize| {
+            value
+                .checked_mul(2)
+                .ok_or_else(|| "Daslight-exact Knight Rider descriptor size overflowed".to_string())
+        };
+        let (table_frame_count, profile_length, step, offset, reflection_cycle) = match motion {
+            DaslightKnightMotion::OneWayOutside => {
+                let base = strip_count.checked_add(size).ok_or_else(|| {
+                    "Daslight-exact Knight Rider descriptor width overflowed".to_string()
+                })?;
+                let multiplier = (source_frame_count / checked_twice(base)?).max(1);
+                (
+                    base.checked_mul(multiplier).ok_or_else(|| {
+                        "Daslight-exact Knight Rider frame count overflowed".to_string()
+                    })?,
+                    base.saturating_sub(1)
+                        .checked_mul(multiplier)
+                        .ok_or_else(|| {
+                            "Daslight-exact Knight Rider profile length overflowed".to_string()
+                        })?,
+                    multiplier,
+                    0.0,
+                    base,
+                )
+            }
+            DaslightKnightMotion::OneWayInside => {
+                let base = strip_count;
+                let multiplier = (source_frame_count / checked_twice(base)?).max(1);
+                (
+                    base.checked_mul(multiplier).ok_or_else(|| {
+                        "Daslight-exact Knight Rider frame count overflowed".to_string()
+                    })?,
+                    strip_count.checked_mul(multiplier).ok_or_else(|| {
+                        "Daslight-exact Knight Rider profile length overflowed".to_string()
+                    })?,
+                    multiplier,
+                    odd_size as f32 * 0.5 * multiplier as f32,
+                    base,
+                )
+            }
+            DaslightKnightMotion::BounceOutside => {
+                let base = strip_count.checked_add(size).ok_or_else(|| {
+                    "Daslight-exact Knight Rider descriptor width overflowed".to_string()
+                })?;
+                let mut quotient = source_frame_count / checked_twice(base)?;
+                if quotient % 2 == 1 {
+                    quotient -= 1;
+                }
+                let multiplier = quotient.max(1);
+                (
+                    checked_twice(base)?
+                        .checked_mul(multiplier)
+                        .ok_or_else(|| {
+                            "Daslight-exact Knight Rider frame count overflowed".to_string()
+                        })?,
+                    base.saturating_sub(1)
+                        .checked_mul(multiplier)
+                        .ok_or_else(|| {
+                            "Daslight-exact Knight Rider profile length overflowed".to_string()
+                        })?,
+                    multiplier,
+                    multiplier as f32,
+                    checked_twice(base)?,
+                )
+            }
+            DaslightKnightMotion::BounceInside => {
+                let base = strip_count
+                    .saturating_sub(1)
+                    .checked_add(even_adjustment)
+                    .unwrap_or(usize::MAX)
+                    .max(1);
+                let mut quotient = source_frame_count / checked_twice(base)?;
+                if quotient % 2 == 1 {
+                    quotient -= 1;
+                }
+                let multiplier = quotient.max(1);
+                (
+                    checked_twice(base)?
+                        .checked_mul(multiplier)
+                        .ok_or_else(|| {
+                            "Daslight-exact Knight Rider frame count overflowed".to_string()
+                        })?,
+                    strip_count
+                        .saturating_sub(1)
+                        .checked_add(size)
+                        .and_then(|value| value.checked_mul(multiplier))
+                        .ok_or_else(|| {
+                            "Daslight-exact Knight Rider profile length overflowed".to_string()
+                        })?,
+                    multiplier,
+                    odd_size as f32 * 0.5 * multiplier as f32,
+                    checked_twice(base)?,
+                )
+            }
+        };
+        if table_frame_count == 0 || profile_length == 0 {
+            return Err("Daslight-exact Knight Rider produced an empty descriptor".to_string());
+        }
+        let frame_cell_count = daslight_knight_frame_cell_count(table_frame_count, strip_count)?;
+
+        let lit_length = size
+            .checked_mul(step)
+            .ok_or_else(|| "Daslight-exact Knight Rider lit profile overflowed".to_string())?;
+        let gradient = gradient as usize;
+        let peak = (lit_length.saturating_sub(1) * (100_usize.saturating_sub(gradient))) / 100;
+        let mut profile = Vec::new();
+        profile
+            .try_reserve_exact(profile_length)
+            .map_err(|_| "Daslight-exact Knight Rider profile allocation failed".to_string())?;
+        for index in 0..profile_length {
+            let raw = if !fading {
+                1.0
+            } else if index >= lit_length {
+                0.0
+            } else if index <= peak {
+                if peak == 0 {
+                    1.0
+                } else {
+                    index as f32 / peak as f32
+                }
+            } else {
+                let denominator = lit_length - peak - 1;
+                1.0 - (index - peak - 1) as f32 / denominator as f32
+            };
+            // QColor::setGreenF receives the divss-derived f32 profile as
+            // qreal, then qRound performs the 16-bit conversion in double
+            // precision. Preserve that promotion boundary exactly.
+            let quantized =
+                (f64::from(raw.clamp(0.0, 1.0)) * f64::from(u16::MAX) + 0.5).floor() as u16;
+            profile.push(quantized as f32 / u16::MAX as f32);
+        }
+
+        let lane_count = request.stops.len() - 1;
+        let lanes = (1..=lane_count)
+            .map(|lane| {
+                let phase = if lane_count == 1 {
+                    0.0
+                } else if one_way {
+                    (((table_frame_count - 1) as u128 * lane as u128) / lane_count as u128) as f32
+                } else {
+                    let lane = lane as i32;
+                    let lane_count = lane_count as i32;
+                    let half = lane_count / 2;
+                    if lane < half {
+                        (lane as f32 * 0.5 * table_frame_count as f32) / (lane_count - 1) as f32
+                    } else {
+                        ((lane_count - 1 - lane) as f32 * 0.5 * table_frame_count as f32)
+                            / (lane_count - 1) as f32
+                            + table_frame_count as f32 * 0.5
+                    }
+                };
+                let palette_index = (lane % lane_count) + 1;
+                CompiledDaslightKnightLane {
+                    phase,
+                    color: DaslightKnightColor::from_color(request.stops[palette_index].color),
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let mut compiled = Self {
+            raw_frame_count,
+            table_frame_count,
+            strip_count,
+            size,
+            step,
+            offset,
+            reflection_cycle,
+            motion,
+            vertical_symmetry,
+            background: DaslightKnightColor::from_color(request.stops[0].color),
+            profile: Arc::from(profile),
+            lanes: Arc::from(lanes),
+            frames: Arc::new(Vec::new()),
+            temporal_coordinate: Cell::new(None),
+        };
+        let mut frames = Vec::new();
+        frames.try_reserve_exact(frame_cell_count).map_err(|_| {
+            "Daslight-exact Knight Rider completed frame table allocation failed".to_string()
+        })?;
+        for frame_index in 0..table_frame_count {
+            for destination_index in 0..strip_count {
+                frames.push(compiled.compose_frame(frame_index, destination_index));
+            }
+        }
+        compiled.frames = Arc::new(frames);
+        Ok(compiled)
+    }
+
+    fn profile_index(
+        &self,
+        frame_index: usize,
+        lane_phase: f32,
+        source_index: usize,
+    ) -> Option<usize> {
+        let table_frame_count = self.table_frame_count;
+        let phase = ((frame_index as f32 + lane_phase).trunc() as i64)
+            .rem_euclid(table_frame_count as i64) as usize;
+        let step = self.step;
+        let profile_length = self.profile.len();
+        let pixel_offset = source_index as f32 * step as f32;
+
+        match self.motion {
+            DaslightKnightMotion::OneWayOutside => {
+                let position = phase as f32 - step as f32 - pixel_offset;
+                (position >= 0.0).then(|| position.trunc() as usize % profile_length)
+            }
+            DaslightKnightMotion::OneWayInside => {
+                let position = (self.size - 1) as f32 * step as f32 + phase as f32 - pixel_offset;
+                Some((position.trunc() as i64).rem_euclid(profile_length as i64) as usize)
+            }
+            DaslightKnightMotion::BounceOutside => {
+                let half = table_frame_count / 2;
+                let position = if phase < half {
+                    phase as f32 - step as f32 - pixel_offset
+                } else {
+                    (table_frame_count - phase - 1) as f32 - pixel_offset
+                };
+                if phase < half {
+                    (position >= 0.0).then(|| position.trunc() as usize % profile_length)
+                } else {
+                    let index = position.trunc() as i64;
+                    (index >= 0 && (index as usize) < profile_length).then_some(index as usize)
+                }
+            }
+            DaslightKnightMotion::BounceInside => {
+                let adjusted = phase + step / 2;
+                let mut reflected = adjusted % self.reflection_cycle;
+                if reflected >= self.reflection_cycle / 2 {
+                    reflected = self.reflection_cycle - reflected - 1;
+                }
+                let mut position = reflected as f32 + self.offset - pixel_offset;
+                while position < 0.0 {
+                    position += profile_length as f32;
+                }
+                Some((position.trunc() as i64).rem_euclid(profile_length as i64) as usize)
+            }
+        }
+    }
+
+    fn compose_frame(&self, frame_index: usize, destination_index: usize) -> DaslightKnightColor {
+        let source_index = if self.vertical_symmetry {
+            daslight_vertical_fold_source_index(destination_index, self.strip_count)
+        } else {
+            Some(destination_index.min(self.strip_count - 1))
+        };
+        let Some(source_index) = source_index else {
+            return self.background;
+        };
+
+        self.lanes
+            .iter()
+            .fold(self.background, |destination, lane| {
+                let Some(profile_index) = self.profile_index(frame_index, lane.phase, source_index)
+                else {
+                    return destination;
+                };
+                destination.source_over(lane.color, self.profile[profile_index])
+            })
+    }
+
+    #[cfg(test)]
+    fn sample_frame(&self, frame_index: usize, destination_index: usize) -> DaslightKnightColor {
+        if self.vertical_symmetry && destination_index >= self.strip_count {
+            return self.background;
+        }
+        let frame_index = frame_index % self.table_frame_count;
+        let destination_index = destination_index.min(self.strip_count - 1);
+        self.frames[frame_index * self.strip_count + destination_index]
+    }
+
+    fn temporal_coordinate(&self, raw_tick: i64) -> DaslightKnightTemporalCoordinate {
+        if let Some(cached) = self
+            .temporal_coordinate
+            .get()
+            .filter(|cached| cached.raw_tick == raw_tick)
+        {
+            return cached;
+        }
+        let tick = raw_tick.rem_euclid(self.raw_frame_count as i64) as usize;
+        let unit = tick as f32 / self.raw_frame_count as f32;
+        let position = (self.table_frame_count - 1) as f32 * unit;
+        let lower = (f64::from(position).floor() as usize).min(self.table_frame_count - 1);
+        let coordinate = DaslightKnightTemporalCoordinate {
+            raw_tick,
+            lower,
+            upper: (lower + 1).min(self.table_frame_count - 1),
+            amount: position - lower as f32,
+        };
+        self.temporal_coordinate.set(Some(coordinate));
+        coordinate
+    }
+
+    fn sample_at_tick(&self, raw_tick: i64, destination_index: usize) -> ColorEffectColor {
+        let coordinate = self.temporal_coordinate(raw_tick);
+        let destination_index = destination_index.min(self.strip_count - 1);
+        let first = self.frames[coordinate.lower * self.strip_count + destination_index];
+        if coordinate.amount <= 0.0 || coordinate.lower == coordinate.upper {
+            return first.into_color();
+        }
+        first
+            .interpolate(
+                self.frames[coordinate.upper * self.strip_count + destination_index],
+                coordinate.amount,
+            )
+            .into_color()
+    }
+}
+
+fn daslight_knight_rider_raw_tick(
+    request: &ColorEffectRequest,
+    time_phase: f64,
+    created_at: Instant,
+    now: Instant,
+    rate: f32,
+) -> i64 {
+    if request.clock_sync.is_some() {
+        let raw_frames = (request.period_ms / DASLIGHT_VALUE_FRAME_MS).max(1) as f32;
+        return ((time_phase as f32) * raw_frames).trunc() as i64;
+    }
+    let elapsed_ms = now.saturating_duration_since(created_at).as_millis() as f32;
+    let shifted_ms =
+        elapsed_ms * valid_effect_rate(rate) + request.phase * request.period_ms as f32;
+    (shifted_ms / DASLIGHT_VALUE_FRAME_MS as f32).trunc() as i64
+}
+
+fn compile_daslight_value_spatial(
+    request: &ColorEffectRequest,
+    strip_count: usize,
+) -> Result<Option<CompiledDaslightKnightRider>, String> {
+    let Some(pattern) = request.spatial_pattern.as_ref() else {
+        return Ok(None);
+    };
+    match &pattern.recipe {
+        ColorEffectSpatialRecipe::KnightRider {
+            daslight_exact: true,
+            vertical_symmetry,
+            size,
+            one_way,
+            fading,
+            go_outside,
+            gradient,
+        } => CompiledDaslightKnightRider::compile(
+            request,
+            strip_count,
+            *size,
+            *one_way,
+            *fading,
+            *go_outside,
+            *gradient,
+            *vertical_symmetry,
+        )
+        .map(Some),
+        _ => Ok(None),
+    }
 }
 
 #[derive(Clone)]
@@ -3600,6 +4142,9 @@ struct RuntimeColorSpatialTarget {
     rainbow_projected_coordinate: Option<f32>,
     binding: RuntimeColorBinding,
     cached: Cell<Option<RuntimeColorSpatialEvaluation>>,
+    /// Exact VALUE generators bypass generic colour-space conversions but keep
+    /// the same per-target/per-now cache boundary.
+    daslight_value_cached: Cell<Option<RuntimeDaslightValueSpatialEvaluation>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -16931,55 +17476,15 @@ impl EngineRuntime {
             .filter_map(|index| self.effect_activations.get(*index))
             .filter(|activation| activation.key.is_some())
         {
-            let transport_now = self.effect_evaluation_now(activation.key, now);
-            let evaluation_now = self.source_effect_evaluation_now(
-                &activation.effect,
-                transport_now,
-                activation.rate,
-                activation.source_loop_fill,
-            );
             let input = value;
-            let activation_clock = effect_activation_clock_snapshot(
-                activation.key,
-                &activation.effect,
-                evaluation_now,
-                &clock,
-            );
-            let next = apply_runtime_effect_to_attribute(
-                &activation.effect,
-                fixture,
-                attribute,
-                input,
-                evaluation_now,
-                &activation_clock,
-                activation.rate,
-            );
-            value = if let Some(transition) = &activation.transition {
-                let previous_evaluation_now = self.source_effect_evaluation_now(
-                    &transition.from,
-                    transport_now,
-                    transition.from_rate,
-                    activation.source_loop_fill,
-                );
-                let previous_clock = effect_activation_clock_snapshot(
-                    activation.key,
-                    &transition.from,
-                    previous_evaluation_now,
-                    &clock,
-                );
-                let previous = apply_runtime_effect_to_attribute(
-                    &transition.from,
-                    fixture,
-                    attribute,
-                    input,
-                    previous_evaluation_now,
-                    &previous_clock,
-                    transition.from_rate,
-                );
-                let progress = runtime_effect_transition_progress(transition, transport_now);
-                transition_effect_value(previous, next, progress, discrete)
+            value = if cue_list_activation_uses_shared_clock(activation) {
+                self.apply_cue_list_activation_with_shared_clock(
+                    activation, fixture, attribute, input, now, &clock, discrete,
+                )
             } else {
-                next
+                self.apply_effect_activation_general(
+                    activation, fixture, attribute, input, now, &clock, discrete,
+                )
             };
         }
         for graph in &self.node_graphs {
@@ -17022,6 +17527,105 @@ impl EngineRuntime {
             }
         }
         value
+    }
+
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn apply_cue_list_activation_with_shared_clock(
+        &self,
+        activation: &RuntimeEffectActivation,
+        fixture: &RuntimeFixture,
+        attribute: &str,
+        input: u16,
+        now: Instant,
+        clock: &ClockSnapshot,
+        discrete: bool,
+    ) -> u16 {
+        debug_assert!(cue_list_activation_uses_shared_clock(activation));
+        let next = apply_runtime_effect_to_attribute(
+            &activation.effect,
+            fixture,
+            attribute,
+            input,
+            now,
+            clock,
+            activation.rate,
+        );
+        let Some(transition) = &activation.transition else {
+            return next;
+        };
+        let previous = apply_runtime_effect_to_attribute(
+            &transition.from,
+            fixture,
+            attribute,
+            input,
+            now,
+            clock,
+            transition.from_rate,
+        );
+        let progress = runtime_effect_transition_progress(transition, now);
+        transition_effect_value(previous, next, progress, discrete)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_effect_activation_general(
+        &self,
+        activation: &RuntimeEffectActivation,
+        fixture: &RuntimeFixture,
+        attribute: &str,
+        input: u16,
+        now: Instant,
+        clock: &ClockSnapshot,
+        discrete: bool,
+    ) -> u16 {
+        let transport_now = self.effect_evaluation_now(activation.key, now);
+        let evaluation_now = self.source_effect_evaluation_now(
+            &activation.effect,
+            transport_now,
+            activation.rate,
+            activation.source_loop_fill,
+        );
+        let activation_clock = effect_activation_clock_snapshot(
+            activation.key,
+            &activation.effect,
+            evaluation_now,
+            clock,
+        );
+        let next = apply_runtime_effect_to_attribute(
+            &activation.effect,
+            fixture,
+            attribute,
+            input,
+            evaluation_now,
+            &activation_clock,
+            activation.rate,
+        );
+        let Some(transition) = &activation.transition else {
+            return next;
+        };
+        let previous_evaluation_now = self.source_effect_evaluation_now(
+            &transition.from,
+            transport_now,
+            transition.from_rate,
+            activation.source_loop_fill,
+        );
+        let previous_clock = effect_activation_clock_snapshot(
+            activation.key,
+            &transition.from,
+            previous_evaluation_now,
+            clock,
+        );
+        let previous = apply_runtime_effect_to_attribute(
+            &transition.from,
+            fixture,
+            attribute,
+            input,
+            previous_evaluation_now,
+            &previous_clock,
+            transition.from_rate,
+        );
+        let progress = runtime_effect_transition_progress(transition, transport_now);
+        transition_effect_value(previous, next, progress, discrete)
     }
 
     fn request_cue(&mut self, cue_id: CueId, now: Instant) {
@@ -23787,6 +24391,22 @@ fn runtime_effect_transition_progress(transition: &RuntimeEffectTransition, now:
     progress
 }
 
+#[inline]
+fn cue_list_activation_uses_shared_clock(activation: &RuntimeEffectActivation) -> bool {
+    // Only the manual Cue path is provably identical to `(now, global clock)`.
+    // Timeline transports, explicit loop-fill policy, and rate changes retain
+    // the general path so pause/seek/source-period semantics cannot drift.
+    matches!(
+        activation.key,
+        Some(RuntimeEffectActivationKey::CueList { .. })
+    ) && activation.source_loop_fill.is_none()
+        && activation.rate == 1.0
+        && activation
+            .transition
+            .as_ref()
+            .is_none_or(|transition| transition.from_rate == 1.0)
+}
+
 fn apply_runtime_video_effect_matching(
     effect: &RuntimeEffect,
     rate: f32,
@@ -25566,11 +26186,27 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
         }
     };
     match recipe {
-        ColorEffectSpatialRecipe::KnightRider { size, gradient, .. } => {
+        ColorEffectSpatialRecipe::KnightRider {
+            daslight_exact,
+            vertical_symmetry,
+            size,
+            gradient,
+            ..
+        } => {
+            if *vertical_symmetry && !*daslight_exact {
+                return Err(
+                    "Knight Rider vertical symmetry requires the Daslight exact evaluator"
+                        .to_string(),
+                );
+            }
             if !(1..=100).contains(size) {
                 return Err("Knight Rider size must be within 1..100 beam cells".to_string());
             }
-            percent("gradient", *gradient)
+            if *daslight_exact {
+                integer_range("Daslight Knight Rider gradient", *gradient, 0.0, 100.0)
+            } else {
+                percent("gradient", *gradient)
+            }
         }
         ColorEffectSpatialRecipe::Sweep { .. } => Ok(()),
         ColorEffectSpatialRecipe::Burst {
@@ -26438,6 +27074,7 @@ fn runtime_value_spatial_effect(
                         low,
                         high,
                         virtual_intensity,
+                        spatial_target_index: usize::MAX,
                     },
                 )
                 .is_some()
@@ -26450,6 +27087,27 @@ fn runtime_value_spatial_effect(
         }
     }
     let spatial = runtime_color_effect_from_request(color_request, fixtures)?;
+    let spatial_state = spatial
+        .spatial
+        .as_deref()
+        .ok_or_else(|| "Value generator spatial runtime is missing its target state".to_string())?;
+    for (fixture_id, attributes) in &mut bindings {
+        let target_indices = spatial_state
+            .attribute_indices
+            .get(fixture_id)
+            .ok_or_else(|| {
+                format!(
+                "Value generator fixture {fixture_id} is missing its compiled spatial target join"
+            )
+            })?;
+        for (attribute, binding) in attributes {
+            binding.spatial_target_index = *target_indices.get(attribute).ok_or_else(|| {
+                format!(
+                    "Value generator fixture {fixture_id} attribute '{attribute}' is missing its compiled spatial target join"
+                )
+            })?;
+        }
+    }
     Ok((spatial, bindings))
 }
 
@@ -26490,9 +27148,45 @@ fn evaluate_runtime_value_attribute_at_rate(
             .spatial_bindings
             .get(&fixture_id)
             .and_then(|attributes| attributes.get(attribute))?;
-        let generated = evaluate_runtime_color_spatial_attribute_at_rate(
-            spatial, fixture_id, attribute, 0, effect_id, created_at, now, clock, rate,
-        )?;
+        let exact_runtime = spatial.spatial.as_deref().and_then(|state| {
+            state
+                .daslight_knight_rider
+                .as_ref()
+                .map(|compiled| (state, compiled))
+        });
+        let generated =
+            if let Some((state, compiled)) = exact_runtime {
+                let target = state.targets.get(binding.spatial_target_index)?;
+                target
+                    .daslight_value_cached
+                    .get()
+                    .filter(|evaluation| evaluation.at == now)
+                    .map(|evaluation| evaluation.value)
+                    .unwrap_or_else(|| {
+                        // Imported VALUE palettes are grayscale. The recovered
+                        // evaluator therefore has identical RGB components, so
+                        // red is the exact generic Intensity/component result
+                        // without RGBW/CMY/HSV conversion or output-map lookup.
+                        let value = evaluate_daslight_knight_rider_color_at_rate(
+                            &spatial.request,
+                            target,
+                            compiled,
+                            created_at,
+                            now,
+                            clock,
+                            rate,
+                        )
+                        .red;
+                        target.daslight_value_cached.set(Some(
+                            RuntimeDaslightValueSpatialEvaluation { at: now, value },
+                        ));
+                        value
+                    })
+            } else {
+                evaluate_runtime_color_spatial_attribute_at_rate(
+                    spatial, fixture_id, attribute, 0, effect_id, created_at, now, clock, rate,
+                )?
+            };
         let ranged = scale_effect_u16(
             binding.low,
             binding.high,
@@ -27922,9 +28616,15 @@ fn runtime_color_effect_from_request(
     let spatial = if request.spatial_pattern.is_some() {
         let (targets, attribute_indices) =
             runtime_color_spatial_targets(&request, fixtures, &targets)?;
+        let strip_count = targets
+            .first()
+            .map(|target| target.strip_count)
+            .unwrap_or(1);
+        let daslight_knight_rider = compile_daslight_value_spatial(&request, strip_count)?;
         Some(Box::new(RuntimeColorSpatialState {
             targets,
             attribute_indices,
+            daslight_knight_rider,
         }))
     } else {
         None
@@ -28191,6 +28891,7 @@ fn runtime_color_spatial_targets(
             rainbow_projected_coordinate,
             binding,
             cached: Cell::new(None),
+            daslight_value_cached: Cell::new(None),
         });
     }
     Ok((targets, attribute_indices))
@@ -29169,6 +29870,7 @@ fn evaluate_runtime_color_spatial_attribute_at_rate(
             let sample = evaluate_color_spatial_sample_at_rate(
                 &runtime.request,
                 target,
+                spatial.daslight_knight_rider.as_ref(),
                 effect_id,
                 created_at,
                 now,
@@ -29331,9 +30033,36 @@ fn evaluate_color_effect_at_rate(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn evaluate_daslight_knight_rider_color_at_rate(
+    request: &ColorEffectRequest,
+    target: &RuntimeColorSpatialTarget,
+    compiled: &CompiledDaslightKnightRider,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> ColorEffectColor {
+    let valid_rate = valid_effect_rate(rate);
+    let time_phase = request
+        .clock_sync
+        .map(|clock_sync| {
+            (clock.beat_counter as f64 + clock.beat_phase as f64)
+                / clock_sync.beats.max(0.000_1) as f64
+                * f64::from(valid_rate)
+                + request.phase as f64
+        })
+        // Free-running raw ticks use the recovered integer millisecond path;
+        // the normalized colour phase was never consumed by that branch.
+        .unwrap_or(0.0);
+    let raw_tick = daslight_knight_rider_raw_tick(request, time_phase, created_at, now, valid_rate);
+    compiled.sample_at_tick(raw_tick, target.strip_index)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn evaluate_color_spatial_sample_at_rate(
     request: &ColorEffectRequest,
     target: &RuntimeColorSpatialTarget,
+    daslight_knight_rider: Option<&CompiledDaslightKnightRider>,
     effect_id: EffectId,
     created_at: Instant,
     now: Instant,
@@ -29355,7 +30084,22 @@ fn evaluate_color_spatial_sample_at_rate(
             opacity: 1.0,
         };
     };
-    let rate = f64::from(valid_effect_rate(rate));
+    if let Some(daslight_knight_rider) = daslight_knight_rider {
+        return RuntimeColorSpatialSample {
+            color: evaluate_daslight_knight_rider_color_at_rate(
+                request,
+                target,
+                daslight_knight_rider,
+                created_at,
+                now,
+                clock,
+                rate,
+            ),
+            opacity: 1.0,
+        };
+    }
+    let valid_rate = valid_effect_rate(rate);
+    let rate = f64::from(valid_rate);
     let time_phase = request
         .clock_sync
         .map(|clock_sync| {
@@ -29385,6 +30129,7 @@ fn evaluate_color_spatial_sample_at_rate(
             fading,
             go_outside,
             gradient,
+            ..
         } => {
             // Daslight's mapping Size is an absolute cell width. Direct DMX
             // captures of the same 10-beam scene at Size=1 and Size=3 show a
@@ -29670,6 +30415,35 @@ fn daslight_symmetry_coordinate(coordinate: f32) -> f32 {
     // mirrored copy into the second half. This tent map is the equivalent
     // source coordinate for the normalized beam/mapping position.
     1.0 - (coordinate * 2.0 - 1.0).abs()
+}
+
+fn daslight_vertical_fold_source_index(
+    destination_index: usize,
+    source_width: usize,
+) -> Option<usize> {
+    // Transform=1 draws the source into a floor(width / 2) rectangle, then
+    // draws a horizontally mirrored source into a second rectangle of the
+    // same width. Daslight enables Antialiasing but not Qt's
+    // SmoothPixmapTransform, so Qt 5.15.2's fixed-point nearest-neighbour
+    // scaler selects one source pixel per destination pixel. The unpainted
+    // final pixel of an odd-width image, and the whole width-one image, stay
+    // clear.
+    let half_width = source_width / 2;
+    if half_width == 0 || destination_index >= half_width.saturating_mul(2) {
+        return None;
+    }
+
+    let local_index = destination_index % half_width;
+    let scale = half_width as f64 / source_width as f64;
+    let fixed_step = (65_536.0_f64 / scale) as u64;
+    let fixed_base = ((fixed_step as f64 * 0.5).ceil() as u64).saturating_sub(1);
+    let sampled = ((fixed_base + local_index as u64 * fixed_step) >> 16) as usize;
+    let sampled = sampled.min(source_width - 1);
+    if destination_index < half_width {
+        Some(sampled)
+    } else {
+        Some(source_width - 1 - sampled)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -52273,6 +53047,39 @@ mod tests {
         request
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn test_daslight_knight_request(
+        period_ms: u64,
+        size: u16,
+        one_way: bool,
+        fading: bool,
+        go_outside: bool,
+        gradient: f32,
+        vertical_symmetry: bool,
+        palette_red: &[u16],
+    ) -> ColorEffectRequest {
+        assert!((2..=32).contains(&palette_red.len()));
+        let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
+            daslight_exact: true,
+            vertical_symmetry,
+            size,
+            one_way,
+            fading,
+            go_outside,
+            gradient,
+        });
+        request.period_ms = period_ms;
+        request.stops = palette_red
+            .iter()
+            .enumerate()
+            .map(|(index, red)| protocol::ColorEffectStop {
+                position: index as f32 / (palette_red.len() - 1) as f32,
+                color: test_color(*red, 0, 0),
+            })
+            .collect();
+        request
+    }
+
     fn test_spatial_color_target(
         strip_index: usize,
         strip_count: usize,
@@ -52289,6 +53096,7 @@ mod tests {
             rainbow_projected_coordinate: None,
             binding: RuntimeColorBinding::new(HashMap::new()),
             cached: Cell::new(None),
+            daslight_value_cached: Cell::new(None),
         }
     }
 
@@ -52334,9 +53142,12 @@ mod tests {
             .as_ref()
             .and_then(|pattern| CompiledRainbowProjection::compile(&pattern.recipe))
             .map(|projection| projection.project(target.x, target.z));
+        let daslight_knight_rider =
+            compile_daslight_value_spatial(request, target.strip_count).unwrap();
         evaluate_color_spatial_sample_at_rate(
             request,
             &target,
+            daslight_knight_rider.as_ref(),
             97,
             created_at,
             created_at + Duration::from_millis(elapsed_ms),
@@ -52709,8 +53520,467 @@ mod tests {
     }
 
     #[test]
+    fn daslight_exact_knight_rider_compiles_recovered_r_f_t_branch_descriptors() {
+        let maximum_cells =
+            DASLIGHT_KNIGHT_FRAME_TABLE_MAX_BYTES / std::mem::size_of::<DaslightKnightColor>();
+        assert_eq!(
+            daslight_knight_frame_cell_count(1, maximum_cells).unwrap(),
+            maximum_cells
+        );
+        assert!(daslight_knight_frame_cell_count(1, maximum_cells + 1)
+            .unwrap_err()
+            .contains("per-effect limit"));
+
+        let cases = [
+            (
+                true,
+                true,
+                DaslightKnightMotion::OneWayOutside,
+                8,
+                7,
+                1,
+                0.0,
+                8,
+            ),
+            (
+                true,
+                false,
+                DaslightKnightMotion::OneWayInside,
+                10,
+                10,
+                2,
+                3.0,
+                5,
+            ),
+            (
+                false,
+                true,
+                DaslightKnightMotion::BounceOutside,
+                16,
+                7,
+                1,
+                1.0,
+                16,
+            ),
+            (
+                false,
+                false,
+                DaslightKnightMotion::BounceInside,
+                16,
+                14,
+                2,
+                3.0,
+                8,
+            ),
+        ];
+        for (one_way, go_outside, motion, frames, profile, step, offset, reflection_cycle) in cases
+        {
+            let request = test_daslight_knight_request(
+                1_000,
+                3,
+                one_way,
+                true,
+                go_outside,
+                50.0,
+                false,
+                &[0, u16::MAX],
+            );
+            let compiled = CompiledDaslightKnightRider::compile(
+                &request, 5, 3, one_way, true, go_outside, 50.0, false,
+            )
+            .unwrap();
+            assert_eq!(compiled.raw_frame_count, 25);
+            assert_eq!(compiled.table_frame_count, frames);
+            assert_eq!(compiled.frames.len(), frames * 5);
+            assert_eq!(compiled.profile.len(), profile);
+            assert_eq!(compiled.step, step);
+            assert_eq!(compiled.offset, offset);
+            assert_eq!(compiled.reflection_cycle, reflection_cycle);
+            assert_eq!(compiled.motion, motion);
+        }
+
+        let capped_request = test_daslight_knight_request(
+            751 * 40,
+            3,
+            true,
+            true,
+            true,
+            50.0,
+            false,
+            &[0, u16::MAX],
+        );
+        let capped = CompiledDaslightKnightRider::compile(
+            &capped_request,
+            5,
+            3,
+            true,
+            true,
+            true,
+            50.0,
+            false,
+        )
+        .unwrap();
+        assert_eq!(capped.raw_frame_count, 751);
+        assert_eq!(capped.table_frame_count, 8 * (750 / 16));
+        assert_eq!(capped.profile.len(), 7 * (750 / 16));
+        assert_eq!(capped.sample_at_tick(0, 0), capped.sample_at_tick(751, 0));
+        assert_eq!(capped.sample_at_tick(-1, 0), capped.sample_at_tick(750, 0));
+
+        let short_request =
+            test_daslight_knight_request(10, 3, true, true, true, 50.0, false, &[0, u16::MAX]);
+        let short = CompiledDaslightKnightRider::compile(
+            &short_request,
+            5,
+            3,
+            true,
+            true,
+            true,
+            50.0,
+            false,
+        )
+        .unwrap();
+        assert_eq!(short.raw_frame_count, 1);
+
+        let max_palette = (0..32)
+            .map(|index| index as u16 * 2_000)
+            .collect::<Vec<_>>();
+        let max_palette_request =
+            test_daslight_knight_request(1_000, 3, true, true, true, 50.0, false, &max_palette);
+        let max_palette_compiled = CompiledDaslightKnightRider::compile(
+            &max_palette_request,
+            5,
+            3,
+            true,
+            true,
+            true,
+            50.0,
+            false,
+        )
+        .unwrap();
+        assert_eq!(max_palette_compiled.lanes.len(), 31);
+
+        let overflow = CompiledDaslightKnightRider::compile(
+            &short_request,
+            usize::MAX / 2,
+            3,
+            true,
+            true,
+            false,
+            50.0,
+            false,
+        )
+        .err()
+        .expect("an unrepresentable completed frame table must fail closed");
+        assert!(overflow.contains("completed frame table size overflowed"));
+    }
+
+    #[test]
+    fn daslight_exact_knight_rider_preserves_non_fading_and_even_size_descriptors() {
+        let non_fading_request =
+            test_daslight_knight_request(1_000, 3, true, false, true, 50.0, false, &[0, u16::MAX]);
+        let non_fading = CompiledDaslightKnightRider::compile(
+            &non_fading_request,
+            5,
+            3,
+            true,
+            false,
+            true,
+            50.0,
+            false,
+        )
+        .unwrap();
+        assert_eq!(non_fading.profile.len(), 7);
+        assert!(non_fading.profile.iter().all(|weight| *weight == 1.0));
+
+        let even_size_request =
+            test_daslight_knight_request(1_000, 4, false, true, false, 50.0, false, &[0, u16::MAX]);
+        let even_size = CompiledDaslightKnightRider::compile(
+            &even_size_request,
+            5,
+            4,
+            false,
+            true,
+            false,
+            50.0,
+            false,
+        )
+        .unwrap();
+        assert_eq!(even_size.step, 2);
+        assert_eq!(even_size.table_frame_count, 20);
+        assert_eq!(even_size.profile.len(), 16);
+        assert_eq!(even_size.offset, 3.0);
+        assert_eq!(even_size.reflection_cycle, 10);
+    }
+
+    #[test]
+    fn daslight_exact_knight_rider_scheduler_matches_external_tick_vector() {
+        let request =
+            test_daslight_knight_request(1_000, 3, true, true, true, 50.0, false, &[0, u16::MAX]);
+        let compiled =
+            CompiledDaslightKnightRider::compile(&request, 5, 3, true, true, true, 50.0, false)
+                .unwrap();
+
+        // R=25 and T=8 produce p=f32(7*f32(4/25))=1.12. Frame 1
+        // is black and frame 2 is white at target 0; the recovered mixed
+        // temporal interpolation followed by truncation yields 7864.
+        assert_eq!(compiled.sample_at_tick(4, 0).red, 7_864);
+    }
+
+    #[test]
+    fn daslight_exact_knight_rider_four_motion_branches_match_reference_frames() {
+        let binary = |rows: &[&str]| {
+            rows.iter()
+                .map(|row| {
+                    row.bytes()
+                        .map(|value| if value == b'1' { u16::MAX } else { 0 })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+        let sample_rows = |compiled: &CompiledDaslightKnightRider| {
+            (0..compiled.table_frame_count)
+                .map(|frame| {
+                    (0..compiled.strip_count)
+                        .map(|index| compiled.sample_frame(frame, index).into_color().red)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let one_way_outside =
+            test_daslight_knight_request(1_000, 3, true, true, true, 50.0, false, &[0, u16::MAX]);
+        let one_way_outside = CompiledDaslightKnightRider::compile(
+            &one_way_outside,
+            5,
+            3,
+            true,
+            true,
+            true,
+            50.0,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            sample_rows(&one_way_outside),
+            binary(&["00000", "00000", "10000", "11000", "01100", "00110", "00011", "00001",])
+        );
+
+        let one_way_inside =
+            test_daslight_knight_request(1_000, 3, true, true, false, 50.0, false, &[0, u16::MAX]);
+        let one_way_inside = CompiledDaslightKnightRider::compile(
+            &one_way_inside,
+            5,
+            3,
+            true,
+            true,
+            false,
+            50.0,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            sample_rows(&one_way_inside),
+            vec![
+                vec![43_690, 65_535, 0, 0, 0],
+                vec![21_845, 65_535, 32_768, 0, 0],
+                vec![0, 43_690, 65_535, 0, 0],
+                vec![0, 21_845, 65_535, 32_768, 0],
+                vec![0, 0, 43_690, 65_535, 0],
+                vec![0, 0, 21_845, 65_535, 32_768],
+                vec![0, 0, 0, 43_690, 65_535],
+                vec![32_768, 0, 0, 21_845, 65_535],
+                vec![65_535, 0, 0, 0, 43_690],
+                vec![65_535, 32_768, 0, 0, 21_845],
+            ]
+        );
+
+        let bounce_outside =
+            test_daslight_knight_request(1_000, 3, false, true, true, 50.0, false, &[0, u16::MAX]);
+        let bounce_outside = CompiledDaslightKnightRider::compile(
+            &bounce_outside,
+            5,
+            3,
+            false,
+            true,
+            true,
+            50.0,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            sample_rows(&bounce_outside),
+            binary(&[
+                "00000", "00000", "10000", "11000", "01100", "00110", "00011", "00001", "00000",
+                "00001", "00011", "00110", "01100", "11000", "10000", "00000",
+            ])
+        );
+
+        let bounce_inside =
+            test_daslight_knight_request(1_000, 3, false, true, false, 50.0, false, &[0, u16::MAX]);
+        let bounce_inside = CompiledDaslightKnightRider::compile(
+            &bounce_inside,
+            5,
+            3,
+            false,
+            true,
+            false,
+            50.0,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            sample_rows(&bounce_inside),
+            vec![
+                vec![43_690, 65_535, 0, 0, 0],
+                vec![21_845, 65_535, 32_768, 0, 0],
+                vec![0, 43_690, 65_535, 0, 0],
+                vec![0, 43_690, 65_535, 0, 0],
+                vec![21_845, 65_535, 32_768, 0, 0],
+                vec![43_690, 65_535, 0, 0, 0],
+                vec![65_535, 32_768, 0, 0, 0],
+                vec![65_535, 32_768, 0, 0, 0],
+                vec![43_690, 65_535, 0, 0, 0],
+                vec![21_845, 65_535, 32_768, 0, 0],
+                vec![0, 43_690, 65_535, 0, 0],
+                vec![0, 43_690, 65_535, 0, 0],
+                vec![21_845, 65_535, 32_768, 0, 0],
+                vec![43_690, 65_535, 0, 0, 0],
+                vec![65_535, 32_768, 0, 0, 0],
+                vec![65_535, 32_768, 0, 0, 0],
+            ]
+        );
+    }
+
+    #[test]
+    fn daslight_exact_knight_rider_uses_mixed_precision_lane_source_over() {
+        let half = 32_768.0_f32 / u16::MAX as f32;
+        let lane_weights = [
+            (32_000_u16, [1.0, half, 0.0, 0.0, 0.0]),
+            (64_000_u16, [0.0, half, 1.0, 1.0, half]),
+            (16_000_u16, [0.0, 0.0, 0.0, 0.0, half]),
+        ];
+        let resolved = (0..5)
+            .map(|index| {
+                lane_weights
+                    .iter()
+                    .fold(
+                        DaslightKnightColor::from_color(test_color(0, 0, 0)),
+                        |destination, (red, weights)| {
+                            destination.source_over(
+                                DaslightKnightColor::from_color(test_color(*red, 0, 0)),
+                                weights[index],
+                            )
+                        },
+                    )
+                    .into_color()
+                    .red
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(resolved, vec![32_000, 40_000, 64_000, 64_000, 24_000]);
+    }
+
+    #[test]
+    fn daslight_exact_knight_rider_transform_folds_lanes_but_preserves_base() {
+        let plain_request =
+            test_daslight_knight_request(1_000, 3, true, true, true, 50.0, false, &[1_000, 60_000]);
+        let folded_request =
+            test_daslight_knight_request(1_000, 3, true, true, true, 50.0, true, &[1_000, 60_000]);
+        let plain = CompiledDaslightKnightRider::compile(
+            &plain_request,
+            5,
+            3,
+            true,
+            true,
+            true,
+            50.0,
+            false,
+        )
+        .unwrap();
+        let folded = CompiledDaslightKnightRider::compile(
+            &folded_request,
+            5,
+            3,
+            true,
+            true,
+            true,
+            50.0,
+            true,
+        )
+        .unwrap();
+        for (destination, source) in [Some(1), Some(3), Some(3), Some(1), None]
+            .into_iter()
+            .enumerate()
+        {
+            let actual = folded.sample_frame(4, destination);
+            let expected = source
+                .map(|source| plain.sample_frame(4, source))
+                .unwrap_or(folded.background);
+            assert_eq!(actual, expected);
+        }
+
+        let single_request =
+            test_daslight_knight_request(1_000, 1, true, true, true, 50.0, true, &[1_000, 60_000]);
+        let single = CompiledDaslightKnightRider::compile(
+            &single_request,
+            1,
+            1,
+            true,
+            true,
+            true,
+            50.0,
+            true,
+        )
+        .unwrap();
+        assert_eq!(single.sample_frame(4, 0), single.background);
+    }
+
+    #[test]
+    fn daslight_exact_knight_rider_validation_is_additive_to_native_recipe() {
+        let exact_fractional =
+            test_daslight_knight_request(1_000, 3, true, true, false, 50.5, false, &[0, u16::MAX]);
+        assert!(validate_runtime_color_effect_request(&exact_fractional)
+            .unwrap_err()
+            .contains("integer"));
+
+        let mut native_fractional = exact_fractional.clone();
+        native_fractional.spatial_pattern.as_mut().unwrap().recipe =
+            ColorEffectSpatialRecipe::KnightRider {
+                daslight_exact: false,
+                vertical_symmetry: false,
+                size: 3,
+                one_way: true,
+                fading: true,
+                go_outside: false,
+                gradient: 50.5,
+            };
+        assert!(validate_runtime_color_effect_request(&native_fractional).is_ok());
+
+        let mut invalid_native_transform = native_fractional;
+        invalid_native_transform
+            .spatial_pattern
+            .as_mut()
+            .unwrap()
+            .recipe = ColorEffectSpatialRecipe::KnightRider {
+            daslight_exact: false,
+            vertical_symmetry: true,
+            size: 3,
+            one_way: true,
+            fading: true,
+            go_outside: false,
+            gradient: 50.0,
+        };
+        assert!(
+            validate_runtime_color_effect_request(&invalid_native_transform)
+                .unwrap_err()
+                .contains("requires the Daslight exact evaluator")
+        );
+    }
+
+    #[test]
     fn color_spatial_knight_rider_sweeps_an_absolute_palette_window() {
         let request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
+            daslight_exact: false,
+            vertical_symmetry: false,
             size: 3,
             one_way: true,
             fading: false,
@@ -52796,6 +54066,8 @@ mod tests {
     #[test]
     fn color_spatial_knight_rider_size_is_absolute_beam_cells() {
         let request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
+            daslight_exact: false,
+            vertical_symmetry: false,
             size: 32,
             one_way: true,
             fading: true,
@@ -52819,6 +54091,8 @@ mod tests {
     #[test]
     fn color_spatial_knight_rider_bidirectional_sweep_starts_at_strip_center() {
         let request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
+            daslight_exact: false,
+            vertical_symmetry: false,
             size: 3,
             one_way: false,
             fading: true,
@@ -52851,6 +54125,8 @@ mod tests {
     #[test]
     fn color_spatial_knight_rider_fading_selects_palette_interpolation() {
         let fading = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
+            daslight_exact: false,
+            vertical_symmetry: false,
             size: 4,
             one_way: true,
             fading: true,
@@ -52858,6 +54134,8 @@ mod tests {
             gradient: 50.0,
         });
         let stepped = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
+            daslight_exact: false,
+            vertical_symmetry: false,
             size: 4,
             one_way: true,
             fading: false,
@@ -53075,6 +54353,29 @@ mod tests {
             evaluate_test_spatial_color(&mapping, &test_spatial_color_target(0, 1, 0.5, 0.5), 0,),
             test_color(87 * 257, 87 * 257, 87 * 257)
         );
+    }
+
+    #[test]
+    fn daslight_exact_knight_rider_fold_uses_qt_nearest_pixels_and_clears_odd_tail() {
+        assert_eq!(
+            (0..4)
+                .map(|index| daslight_vertical_fold_source_index(index, 4))
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(2), Some(3), Some(1)]
+        );
+        assert_eq!(
+            (0..5)
+                .map(|index| daslight_vertical_fold_source_index(index, 5))
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(3), Some(3), Some(1), None]
+        );
+        assert_eq!(
+            (0..6)
+                .map(|index| daslight_vertical_fold_source_index(index, 6))
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(2), Some(4), Some(5), Some(3), Some(1)]
+        );
+        assert_eq!(daslight_vertical_fold_source_index(0, 1), None);
     }
 
     #[test]
@@ -57149,6 +58450,84 @@ mod tests {
     }
 
     #[test]
+    fn daslight_exact_value_specialized_path_matches_generic_spatial_reference() {
+        let controls = vec![
+            test_color_control("ColorRed", 1),
+            test_color_control("ColorGreen", 2),
+            test_color_control("ColorBlue", 3),
+        ];
+        let fixtures = vec![
+            test_runtime_color_fixture(1, Vec::new(), controls.clone()),
+            test_runtime_color_fixture(2, Vec::new(), controls),
+        ];
+        let mut request = test_value_request(&[1, 2]);
+        request.low = 1_000;
+        request.high = 60_000;
+        request.spatial_pattern = Some(protocol::ColorEffectSpatialPattern {
+            recipe: ColorEffectSpatialRecipe::KnightRider {
+                daslight_exact: true,
+                vertical_symmetry: false,
+                size: 3,
+                one_way: true,
+                fading: true,
+                go_outside: true,
+                gradient: 50.0,
+            },
+            beam_targets: Vec::new(),
+            placement: None,
+        });
+        let runtime = runtime_value_effect_from_request(request, &fixtures, true).unwrap();
+        let spatial = runtime.spatial.as_deref().expect("VALUE spatial runtime");
+        let state = spatial.spatial.as_deref().expect("compiled spatial state");
+        assert!(state.daslight_knight_rider.is_some());
+
+        let created_at = Instant::now();
+        let clock = ClockSnapshot::default();
+        for elapsed_ms in [0, 40, 160, 520, 960, 1_000] {
+            let now = created_at + Duration::from_millis(elapsed_ms);
+            for fixture_id in [1, 2] {
+                for (attribute, base_value) in [
+                    ("ColorRed", 40_000),
+                    ("ColorGreen", 20_000),
+                    ("ColorBlue", 10_000),
+                ] {
+                    let binding = runtime
+                        .spatial_bindings
+                        .get(&fixture_id)
+                        .and_then(|attributes| attributes.get(attribute))
+                        .expect("compiled VALUE binding");
+                    assert!(binding.virtual_intensity);
+                    assert!(binding.spatial_target_index < state.targets.len());
+
+                    let specialized = evaluate_runtime_value_attribute_at_rate(
+                        &runtime, fixture_id, attribute, base_value, 97, created_at, now, &clock,
+                        1.0,
+                    )
+                    .expect("specialized exact VALUE result");
+                    let generic_generated = evaluate_runtime_color_spatial_attribute_at_rate(
+                        spatial, fixture_id, attribute, 0, 97, created_at, now, &clock, 1.0,
+                    )
+                    .expect("generic spatial reference result");
+                    let generic_ranged = scale_effect_u16(
+                        binding.low,
+                        binding.high,
+                        generic_generated as f32 / u16::MAX as f32,
+                    );
+                    let generic = scale_u16(base_value, generic_ranged as f32 / u16::MAX as f32);
+                    assert_eq!(
+                        specialized, generic,
+                        "{fixture_id} {attribute} at {elapsed_ms}ms"
+                    );
+                    assert!(state.targets[binding.spatial_target_index]
+                        .daslight_value_cached
+                        .get()
+                        .is_some_and(|cached| cached.at == now));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn value_absolute_line_maps_envelope_into_range_and_ignores_other_attributes() {
         let runtime = runtime_with_move_fixtures(1);
         let effect = runtime
@@ -58094,6 +59473,119 @@ mod tests {
                 enabled: true,
                 created_at,
             });
+        }
+    }
+
+    fn populate_daslight_exact_knight_release_effects(
+        runtime: &mut EngineRuntime,
+        fixture_ids: &[FixtureId],
+        created_at: Instant,
+        effect_count: usize,
+    ) {
+        for index in 0..effect_count {
+            let one_way = index % 4 < 2;
+            let go_outside = index % 2 == 0;
+            let mut request = test_value_request(fixture_ids);
+            request.period_ms = 751 * DASLIGHT_VALUE_FRAME_MS;
+            request.phase = index as f32 / effect_count as f32;
+            request.points = (0..32)
+                .map(|point_index| ValueEffectPoint {
+                    position: point_index as f32 / 31.0,
+                    value: (point_index as f32 * 2_114.0) / u16::MAX as f32,
+                })
+                .collect();
+            request.spatial_pattern = Some(protocol::ColorEffectSpatialPattern {
+                recipe: ColorEffectSpatialRecipe::KnightRider {
+                    daslight_exact: true,
+                    vertical_symmetry: index % 2 == 1,
+                    size: 100,
+                    one_way,
+                    fading: true,
+                    go_outside,
+                    gradient: 50.0,
+                },
+                beam_targets: Vec::new(),
+                placement: None,
+            });
+            let kind = RuntimeEffectKind::Value(
+                runtime
+                    .resolve_value_effect_request(request)
+                    .expect("exact Knight Rider benchmark request must compile"),
+            );
+            runtime.effects.push(RuntimeEffect {
+                id: index as EffectId + 1,
+                kind,
+                enabled: true,
+                created_at,
+            });
+        }
+    }
+
+    #[test]
+    fn daslight_exact_knight_rider_release_stack_meets_44hz_budget() {
+        const FIXTURE_COUNT: u64 = 200;
+        const EFFECT_COUNT: usize = 64;
+        const SAMPLES: usize = if cfg!(debug_assertions) { 20 } else { 1_000 };
+        const ATTRIBUTES: [&str; 1] = ["Dimmer"];
+
+        let mut runtime = runtime_with_mixed_effect_fixtures(FIXTURE_COUNT);
+        let fixture_ids = (1..=FIXTURE_COUNT).collect::<Vec<_>>();
+        let created_at = Instant::now();
+        // Request validation, target expansion, descriptor/profile generation,
+        // and all 64 x 32-point palette compiles deliberately happen outside
+        // the timed 44 Hz loop.
+        populate_daslight_exact_knight_release_effects(
+            &mut runtime,
+            &fixture_ids,
+            created_at,
+            EFFECT_COUNT,
+        );
+        assert_eq!(runtime.effects.len(), EFFECT_COUNT);
+        assert!(runtime.effects.iter().all(|effect| matches!(
+            &effect.kind,
+            RuntimeEffectKind::Value(RuntimeValueEffect {
+                spatial: Some(spatial),
+                ..
+            }) if spatial.spatial.as_ref().and_then(|state| state.daslight_knight_rider.as_ref()).is_some_and(|compiled| compiled.lanes.len() == 31)
+        )));
+
+        let mut durations = Vec::with_capacity(SAMPLES);
+        let mut checksum = 0_u64;
+        for sample in 0..SAMPLES {
+            let at = created_at + DMX_TICK_INTERVAL * (sample as u32 + 1);
+            let started = Instant::now();
+            for fixture in &runtime.fixtures {
+                for attribute in ATTRIBUTES {
+                    checksum =
+                        checksum.wrapping_add(runtime.apply_effects_with_transition_policy(
+                            fixture, attribute, 16_384, at, false,
+                        ) as u64);
+                }
+            }
+            durations.push(started.elapsed());
+        }
+        std::hint::black_box(checksum);
+        assert_ne!(checksum, 0);
+        durations.sort_unstable();
+        let p95 = durations[(SAMPLES * 95 / 100).min(SAMPLES - 1)];
+        let p99 = durations[(SAMPLES * 99 / 100).min(SAMPLES - 1)];
+        let max = *durations.last().unwrap();
+        eprintln!(
+            "Daslight exact Knight Rider 64x200 precomputed-from-31-lanes stack per-tick evaluation: p95={}us p99={}us max={}us",
+            p95.as_micros(),
+            p99.as_micros(),
+            max.as_micros()
+        );
+        // The frame tables are precomputed from all four recovered motion
+        // branches, the 750-frame source cap, 31 over-composited lanes, and the
+        // transform fold. The timed production path exercises table lookup,
+        // temporal interpolation, and VALUE range/application semantics.
+        // Keep the established full-rig 5/8/12ms release gate, whose hard
+        // maximum remains inside one 22.7ms DMX tick.
+        if !cfg!(debug_assertions) {
+            assert!(p95 <= Duration::from_millis(5), "p95 was {p95:?}");
+            assert!(p99 <= Duration::from_millis(8), "p99 was {p99:?}");
+            assert!(max <= Duration::from_millis(12), "max was {max:?}");
         }
     }
 
@@ -61054,6 +62546,86 @@ mod tests {
         assert!(runtime.effect_activations[activation_index]
             .transition
             .is_none());
+    }
+
+    #[test]
+    fn cue_list_transition_shared_clock_fast_path_matches_general_evaluation() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let mut first_request = test_lfo_request(
+            "First clocked state",
+            LfoShape::Sine,
+            1_000,
+            0.125,
+            EffectBlendMode::Override,
+            4_000,
+            54_000,
+        );
+        first_request.clock_sync = Some(protocol::EffectClockSync { beats: 2.0 });
+        let mut second_request = test_lfo_request(
+            "Second clocked state",
+            LfoShape::Triangle,
+            1_000,
+            0.625,
+            EffectBlendMode::Override,
+            1_000,
+            61_000,
+        );
+        second_request.clock_sync = Some(protocol::EffectClockSync { beats: 0.5 });
+        let first = owned_lfo_target(101, first_request);
+        let mut second = owned_lfo_target(101, second_request);
+        second.transition_ms = Some(1_000);
+        create_effect_only_cue(&mut runtime, 1, vec![first]);
+        create_effect_only_cue(&mut runtime, 2, vec![second]);
+
+        let recalled_at = Instant::now();
+        runtime.start_cue(1, recalled_at, PendingCueTriggerSource::Manual);
+        runtime.start_cue(2, recalled_at, PendingCueTriggerSource::Manual);
+        let activation =
+            runtime.effect_activations[runtime.active_effect_activation_indices[0]].clone();
+        assert!(cue_list_activation_uses_shared_clock(&activation));
+
+        let fixture = &runtime.fixtures[0];
+        for (elapsed_ms, discrete) in [(0, false), (137, false), (500, true), (999, false)] {
+            let at = recalled_at + Duration::from_millis(elapsed_ms);
+            let clock = runtime.clock.snapshot(at);
+            let fast_activation = activation.clone();
+            let general_activation = activation.clone();
+            let fast = runtime.apply_cue_list_activation_with_shared_clock(
+                &fast_activation,
+                fixture,
+                "Dimmer",
+                20_000,
+                at,
+                &clock,
+                discrete,
+            );
+            let general = runtime.apply_effect_activation_general(
+                &general_activation,
+                fixture,
+                "Dimmer",
+                20_000,
+                at,
+                &clock,
+                discrete,
+            );
+            assert_eq!(fast, general, "mismatch at {elapsed_ms} ms");
+        }
+
+        let mut non_unit_rate = activation.clone();
+        non_unit_rate.rate = 0.5;
+        assert!(!cue_list_activation_uses_shared_clock(&non_unit_rate));
+        let mut explicit_loop_fill = activation.clone();
+        explicit_loop_fill.source_loop_fill = Some(true);
+        assert!(!cue_list_activation_uses_shared_clock(&explicit_loop_fill));
+        let mut outgoing_non_unit_rate = activation;
+        outgoing_non_unit_rate
+            .transition
+            .as_mut()
+            .expect("test activation must retain an outgoing transition")
+            .from_rate = 2.0;
+        assert!(!cue_list_activation_uses_shared_clock(
+            &outgoing_non_unit_rate
+        ));
     }
 
     #[test]

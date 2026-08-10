@@ -262,6 +262,14 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
     if (!recipe) return {};
     return Object.values(recipe)[0] as Record<string, number | boolean>;
   });
+  const daslightExactKnight = createMemo(() => {
+    const recipe = props.spatialPattern?.recipe;
+    return Boolean(
+      recipe
+      && "KnightRider" in recipe
+      && recipe.KnightRider.daslight_exact === true,
+    );
+  });
   const generatorNumber = (key: string, fallback = 0) => {
     const value = generatorValues()[key];
     return typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -269,6 +277,7 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
   const generatorBoolean = (key: string) => generatorValues()[key] === true;
   const generatorTransform = () => generatorBoolean("vertical_symmetry") ? "vertical" : "none";
   const selectGeneratorKind = (kind: ValueGeneratorKind) => {
+    if (daslightExactKnight()) return;
     if (kind === "CustomEnvelope") {
       props.onSpatialPattern(null);
       return;
@@ -279,6 +288,7 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
     });
   };
   const patchGeneratorValues = (patch: Record<string, number | boolean>) => {
+    if (daslightExactKnight()) return;
     const pattern = props.spatialPattern;
     const kind = generatorKind();
     if (!pattern || kind === "CustomEnvelope") return;
@@ -288,6 +298,7 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
     });
   };
   const applyQuickLook = (look: ValueQuickLook) => {
+    if (daslightExactKnight()) return;
     props.onPoints(look.points.map((point) => ({ ...point })));
     props.onSpatialPattern({
       recipe: structuredClone(look.recipe),
@@ -468,8 +479,26 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
         </div>
       </header>
 
-      <fieldset class="colorEffectMotionPanel valueEffectGeneratorPanel" data-value-generator={generatorKind()}>
+      <fieldset
+        class="colorEffectMotionPanel valueEffectGeneratorPanel"
+        data-value-generator={generatorKind()}
+        data-value-daslight-exact-lock={daslightExactKnight() ? "knight-rider" : undefined}
+        disabled={daslightExactKnight()}
+      >
         <legend>Value generator</legend>
+        <Show when={daslightExactKnight()}>
+          <div class="effectFormHint textPretty">
+            Imported Daslight-exact Knight Rider generator parameters are read-only; the value palette and timing remain editable.
+          </div>
+          <div
+            class="effectFormHint textPretty"
+            data-value-daslight-exact-transform={generatorTransform()}
+          >
+            <strong>Imported Transform</strong>
+            <span aria-hidden="true"> · </span>
+            <span>{generatorTransform() === "vertical" ? "Vertical symmetry" : "None"}</span>
+          </div>
+        </Show>
         <div class="colorEffectModeGrid">
           <label>
             Generator
