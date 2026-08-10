@@ -1922,7 +1922,7 @@ export interface ColorEffectBeamTarget {
 
 export type ColorEffectSpatialRecipe =
   | { KnightRider: { daslight_exact?: boolean; grayscale?: boolean; vertical_symmetry?: boolean; size: number; one_way: boolean; fading: boolean; go_outside: boolean; gradient: number } }
-  | { Sweep: { direction_change: boolean } }
+  | { Sweep: { daslight_exact?: boolean; grayscale?: boolean; vertical_symmetry?: boolean; direction_change: boolean } }
   | { Burst: { daslight_exact?: boolean; grayscale?: boolean; vertical_symmetry?: boolean; color_width: number; gradient: number } }
   | { RandomFill: { point_width: number } }
   | { Sparkle: { number: number; lifespan: number; width: number } }

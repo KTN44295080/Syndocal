@@ -2304,6 +2304,15 @@ pub enum ColorEffectSpatialRecipe {
         gradient: f32,
     },
     Sweep {
+        /// Preserve Daslight's generated 40 ms frame table and temporal interpolation.
+        #[serde(default, skip_serializing_if = "is_false")]
+        daslight_exact: bool,
+        /// Apply Daslight's common Grayscale post-process after rasterization.
+        #[serde(default, skip_serializing_if = "is_false")]
+        grayscale: bool,
+        /// Apply Daslight Transform=1 after rendering the source strip.
+        #[serde(default, skip_serializing_if = "is_false")]
+        vertical_symmetry: bool,
         /// Alternate the sweep direction after each palette transition.
         direction_change: bool,
     },
@@ -5267,6 +5276,9 @@ mod tests {
 
         parsed.spatial_pattern = Some(super::ColorEffectSpatialPattern {
             recipe: super::ColorEffectSpatialRecipe::Sweep {
+                daslight_exact: false,
+                grayscale: false,
+                vertical_symmetry: false,
                 direction_change: true,
             },
             beam_targets: vec![super::ColorEffectBeamTarget {
@@ -5277,6 +5289,21 @@ mod tests {
             }],
             placement: None,
         });
+        let json = serde_json::to_string(&parsed).unwrap();
+        assert!(!json.contains("daslight_exact"));
+        assert!(!json.contains("grayscale"));
+        assert!(!json.contains("vertical_symmetry"));
+        let roundtrip: super::ValueEffectRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtrip, parsed);
+
+        if let Some(pattern) = parsed.spatial_pattern.as_mut() {
+            pattern.recipe = super::ColorEffectSpatialRecipe::Sweep {
+                daslight_exact: true,
+                grayscale: true,
+                vertical_symmetry: true,
+                direction_change: false,
+            };
+        }
         let json = serde_json::to_string(&parsed).unwrap();
         let roundtrip: super::ValueEffectRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(roundtrip, parsed);

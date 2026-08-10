@@ -8,7 +8,7 @@
 - SHA-256: `325D83EC54D41305D60B466B486EFE413B8F3E2656B45A544277C0CE9B87AE2A`
 - Audit dates: 2026-08-09 through 2026-08-10
 - Method: read-only PE factory, RTTI, vtable, constructor, serializer, and evaluator disassembly, followed by a Qt 5.15.2 raster-path audit for Burst pixel-centre sampling and the Transform fold. No Daslight file was written and no runtime/UI observation is claimed by the static audit.
-- Implemented scope: exact VALUE-family factory and serialized schemas for IDs 622-624 and 626-628; exact ID622 Burst, ID623 Plasma, and ID624 Knight Rider imports; additive Daslight-exact Burst/Knight evaluators and Transform=1 fold; strict schema/domain validation followed by precise fail-closed dispositions for IDs 626, 627, and 628; binary-address and Qt-raster-path proof of the discrete one-row mappings.
+- Implemented scope: exact VALUE-family factory and serialized schemas for IDs 622-628; exact ID622 Burst, ID623 Plasma, ID624 Knight Rider, and ID625 Sweep imports; additive Daslight-exact Burst/Knight evaluators plus the shared exact Sweep evaluator and Transform=1 fold; strict schema/domain validation followed by precise fail-closed dispositions for IDs 626, 627, and 628; binary-address and Qt-raster-path proof of the discrete one-row mappings.
 - Existing anchors reused: ID621 Rainbow, ID625 Sweep, the shared Plasma byte evaluator, and the shared Transform post-process previously recorded in `qa/DVC_PLASMA_RAINBOW_SOURCE_PARITY.md` and `qa/DVC_SWEEP_SOURCE_PARITY.md`.
 
 All virtual addresses below apply only to the binary identity above.
@@ -59,7 +59,7 @@ the separately documented CURVE family. The DURATION loader at
 `0x140346D84..0x140346E51` calls signed `QStringRef::toInt`, divides that integer by 40
 with unsigned arithmetic after the signed-domain check, and replaces a zero quotient
 with one. The importer therefore accepts only a positive, integral signed-32-bit
-DURATION for Daslight-exact IDs 622 and 624 and computes:
+DURATION for Daslight-exact IDs 622, 624, and 625 and computes:
 
 ```text
 R = max(1, floor(DURATION / 40))
@@ -428,9 +428,9 @@ ID624 exact fold; it does not use a continuous tent-map approximation and does n
 this new exactness claim to unrelated mapping-family consumers.
 
 ID622 Burst now uses this exact fold. ID623 Plasma's earlier Transform disposition
-remains governed by its separately recorded proof. ID625 Sweep still has only
-`direction_change` and remains fail-closed for
-Transform=1 under its existing focused test. IDs 626, 627, and 628 validate either
+remains governed by its separately recorded proof. ID625 Sweep now carries
+`vertical_symmetry` beside `direction_change` and uses this same exact fold for both
+legal Transform values. IDs 626, 627, and 628 validate either
 Transform value, but their remaining generator-level boundaries occur before the fold can
 make the whole effect reconstructible.
 
@@ -441,7 +441,7 @@ make the whole effect reconstructible.
 | 622 | `CBurstEffect` | `4/1, 6/3, 0/10, 1/11` | dedicated cyclic radial evaluator; ID3 -> exact discrete fold; IDs 10/11 one-for-one | Proven/imported |
 | 623 | `CPlasmaEffect` | `4/1, 6/3, 0/10..17` | IDs 10..17 one-for-one; no ID2 -> `grayscale=false`; ID3 -> `vertical_symmetry` | Proven/imported |
 | 624 | `CKnightRiderEffect` | `4/1, 6/3, 0/10, 2/11..13, 0/14` | dedicated integer evaluator; ID3 -> exact discrete fold; IDs 10..14 one-for-one | Proven/imported |
-| 625 | `CSweepEffect` | `4/1, 6/3, 2/10` | ID10 -> `direction_change`; ID3 only exact at 0 | Proven at Transform=0; Transform=1 fail-closed |
+| 625 | `CSweepEffect` | `4/1, 6/3, 2/10` | ID3 -> exact discrete fold; ID10 -> `direction_change`; no ID2 -> `grayscale=false` | Proven/imported for Transform 0 and 1 |
 | 626 | `CSparklesEffect` | `4/1, 6/3, 0/10, 1/11, 0/12` | per-thread qrand initial state and prior draw history are absent from `.dvc` | Fail-closed |
 | 627 | `CRandomFillEffect` | `4/1, 6/3, 0/10, 0/11` | per-thread qrand initial state and prior draw history are absent from `.dvc` | Fail-closed |
 | 628 | `CPerlinEffect` | `4/1, 6/3, 0/10..14` | wrap=true is proven; fixed-hash/cosine/sine evaluator is not yet represented | Fail-closed |
@@ -455,7 +455,10 @@ Transform 0/1, and the recovered signed 40 ms duration grid. ID623 constructs th
 previously proven Plasma recipe. ID624 constructs the additive Knight Rider compatibility recipe with
 `daslight_exact=true`, preserves Transform 0/1 in `vertical_symmetry`, and uses the
 recovered signed 40 ms duration grid. An empty-BEAMS ID624 remains a validated source
-no-op and creates no runtime effect.
+no-op and creates no runtime effect. ID625 sets `daslight_exact=true`, maps Transform 0/1
+and Direction Change 0/1 one-for-one into the shared Sweep recipe, uses the same signed
+40 ms grid and mixed-precision generated-frame sampler, and also keeps empty BEAMS as a
+validated no-op.
 
 IDs 626, 627, and 628 return their evaluator/provenance-specific deliberate-boundary error
 before target/no-op handling. Empty BEAMS does not make an unreconstructible generator
@@ -481,6 +484,8 @@ The focused regressions cover:
   and the 200-fixture x 64 release performance gate;
 - ID624 Transform 0 and 1, `daslight_exact=true`, all five class fields, strict
   TYPE/ID/domain drift rejection, and empty-BEAMS source no-op;
+- ID625 Transform 0 and 1, Direction Change 0 and 1, the exact discrete fold including
+  odd/single-pixel black tails, strict TYPE/extra-PARAM rejection, and empty-BEAMS no-op;
 - the signed duration boundary and recovered frame grid: 1..79 ms representative inputs
   quantize to 40 ms, 80 ms produces two frames, and zero/negative/fractional/i32-overflow
   values fail closed;
@@ -491,7 +496,8 @@ The focused regressions cover:
 - legacy Knight Rider JSON byte-shape plus exact-flag round-trip, native false-path
   preservation, the ID624 discrete fold maps for N=4/5/6/1, and the frontend read-only,
   localization, and visible-Transform contracts;
-- unchanged ID625 Transform=1 rejection and strict TYPE/extra-PARAM tests.
+- the assertion delta from ID625 Transform=1 rejection to exact conversion, while
+  preserving strict TYPE/extra-PARAM tests.
 
 ## Real saved specimen confirmation (2026-08-10, Fable, elevated permissions)
 
@@ -525,7 +531,7 @@ Scope update (same day, second cycle): the specimen is now feature-complete. Two
 additional strongpoint-targeted Sweep/Plasma scenes carry a bound Dimmer feature
 (serialized as `PRESET SSLPRESET="4" SSLCHANNEL="-1" MIN="0" MAX="1"`), and the
 repo-portable golden `dvc_local_golden_value_sweep_and_plasma_import_from_saved_specimen`
-asserts they import as `Sweep { direction_change: true }` and `Plasma` with the exact
+asserts they import as `Sweep { direction_change: true, .. }` and `Plasma` with the exact
 constructor defaults. The two original laser-targeted scenes stay in the file as real
 coverage of the fail-closed path (their f3200a profile exposes no PRESET type 4; the
 golden asserts exactly two such skips). The same file now also carries the first real

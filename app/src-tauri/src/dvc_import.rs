@@ -2175,6 +2175,7 @@ fn parse_scene_effects(
                 (Some(2), Some(2), Some(130)) => Some("Rainbow"),
                 (Some(2), Some(2), Some(131)) => Some("Random fill"),
                 (Some(2), Some(2), Some(133)) => Some("Sparkle"),
+                (Some(2), Some(2), Some(134)) => Some("Sweep"),
                 (Some(7), Some(7), Some(621)) => Some("Rainbow"),
                 (Some(7), Some(7), Some(622)) => Some("Burst"),
                 (Some(7), Some(7), Some(623)) => Some("Plasma"),
@@ -2339,7 +2340,7 @@ fn convert_dvc_effect(
             fixture_refs,
         ),
         (5, 3, 36)
-        | (2, 2, 121 | 127 | 129 | 130 | 131 | 133)
+        | (2, 2, 121 | 127 | 129 | 130 | 131 | 133 | 134)
         | (6, 8, 521 | 530) => {
             convert_dvc_color_spatial_effect(
                 scene,
@@ -2736,12 +2737,12 @@ fn convert_dvc_value_effect(
                 )?,
             }
         }
-        625 => {
-            require_zero_dvc_param(&params, 3, "VALUE FX Sweep Transform")?;
-            ColorEffectSpatialRecipe::Sweep {
-                direction_change: dvc_binary_param(&params, 10, "VALUE FX Sweep Direction Change")?,
-            }
-        }
+        625 => ColorEffectSpatialRecipe::Sweep {
+            daslight_exact: true,
+            grayscale: false,
+            vertical_symmetry: dvc_binary_param(&params, 3, "VALUE FX Sweep Transform")?,
+            direction_change: dvc_binary_param(&params, 10, "VALUE FX Sweep Direction Change")?,
+        },
         626 => {
             let _vertical_symmetry = dvc_binary_param(&params, 3, "VALUE FX Sparkles Transform")?;
             let _number = dvc_integer_range_param(&params, 10, "VALUE FX Sparkles Number", 1, 10)?;
@@ -2856,7 +2857,7 @@ fn convert_dvc_value_effect(
             feature_spec.preset_type
         ));
     }
-    let (period_ms, period_note) = if matches!(generator_id, 622 | 624) {
+    let (period_ms, period_note) = if matches!(generator_id, 622 | 624 | 625) {
         dvc_exact_generator_period(effect, "VALUE FX", generator)?
     } else {
         dvc_move_period(
@@ -2887,6 +2888,7 @@ fn convert_dvc_value_effect(
     let evaluator_note = match generator_id {
         622 => "evaluator=CBurstEffect@0x140362B70; palette_wrap=true@shared-constructor+0x12c",
         624 => "evaluator=CKnightRiderEffect exact generated-frame table",
+        625 => "evaluator=CSweepEffect@0x1403665A0 exact generated-frame sampler",
         _ => "evaluator=verified generator route",
     };
     let request = ValueEffectRequest {
@@ -2955,6 +2957,7 @@ fn convert_dvc_color_spatial_effect(
         130 => "Rainbow",
         131 => "Random fill",
         133 => "Sparkle",
+        134 => "Sweep",
         521 => "Rainbow",
         530 => "Perlin",
         _ => {
@@ -3096,6 +3099,16 @@ fn convert_dvc_color_spatial_effect(
             }
             dvc_integer_range_param(&params, 12, "COLOR FX Sparkle Width", 1, 90)?;
             return Err("COLOR FX Sparkle ID=133 remains fail-closed after exact schema validation: recovered CSparklesEffect evaluator 0x1403660F0 consumes Qt per-thread qrand state and prior draw history that are not serialized in the .dvc, and the prior percent-scaled lifespan route is not evaluator-equivalent; no runtime target was created".to_string());
+        }
+        134 => {
+            require_exact_dvc_params(&params, &[2, 3, 10])?;
+            require_exact_dvc_param_types(effect, &[(1, 4), (2, 2), (3, 6), (10, 2)])?;
+            ColorEffectSpatialRecipe::Sweep {
+                daslight_exact: true,
+                grayscale: dvc_binary_param(&params, 2, "COLOR FX Sweep Grayscale")?,
+                vertical_symmetry: dvc_binary_param(&params, 3, "COLOR FX Sweep Transform")?,
+                direction_change: dvc_binary_param(&params, 10, "COLOR FX Sweep Direction Change")?,
+            }
         }
         129 => {
             require_exact_dvc_params(&params, &[2, 3, 10, 11, 12, 13, 14, 15, 16, 17])?;
@@ -3280,7 +3293,7 @@ fn convert_dvc_color_spatial_effect(
             "{omitted_spatial_targets} beam target(s) without a verified color segment or Dimmer attribute were omitted"
         ));
     }
-    let (period_ms, period_note) = if matches!(generator_id, 121 | 127) {
+    let (period_ms, period_note) = if matches!(generator_id, 121 | 127 | 134) {
         dvc_exact_generator_period(effect, "COLOR FX", generator)?
     } else {
         dvc_move_period(effect, scene, generator, &mut approximations)?
@@ -3303,8 +3316,19 @@ fn convert_dvc_color_spatial_effect(
             u8::from(*fading),
             u8::from(*go_outside)
         ),
-        ColorEffectSpatialRecipe::Sweep { direction_change } => {
-            format!("DirectionChange={}", u8::from(*direction_change))
+        ColorEffectSpatialRecipe::Sweep {
+            daslight_exact,
+            grayscale,
+            vertical_symmetry,
+            direction_change,
+        } => {
+            format!(
+                "Evaluator={}; Grayscale={}; Transform={}; DirectionChange={}; evaluator=CSweepEffect@0x1403665A0",
+                if *daslight_exact { "Daslight exact" } else { "Enhanced" },
+                u8::from(*grayscale),
+                if *vertical_symmetry { "Vertical symmetry" } else { "None" },
+                u8::from(*direction_change)
+            )
         }
         ColorEffectSpatialRecipe::Burst {
             daslight_exact,
@@ -4438,15 +4462,6 @@ fn dvc_unit_param(params: &HashMap<u16, f64>, id: u16, label: &str) -> Result<f3
         ));
     }
     Ok(value)
-}
-
-fn require_zero_dvc_param(params: &HashMap<u16, f64>, id: u16, label: &str) -> Result<(), String> {
-    let value = dvc_param(params, id, label)?;
-    if value == 0.0 {
-        Ok(())
-    } else {
-        Err(format!("{label} PARAM {id} must be 0, found {value}"))
-    }
 }
 
 fn dvc_binary_param(params: &HashMap<u16, f64>, id: u16, label: &str) -> Result<bool, String> {
@@ -7689,6 +7704,23 @@ mod tests {
             }
         ));
 
+        let sweep_xml = format!(
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="2"><EFFECT TYPE="2" ID="134" DURATION="1000"><PARAMS NB="4">{palette}<PARAM TYPE="2" ID="2" VAL="1"/><PARAM TYPE="6" ID="3" VAL="1"/><PARAM TYPE="2" ID="10" VAL="1"/></PARAMS></EFFECT><BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS></RACK></RACKS></SCENE>"#
+        );
+        let converted = convert(&sweep_xml, 134);
+        assert!(converted
+            .note
+            .contains("evaluator=CSweepEffect@0x1403665A0"));
+        assert!(matches!(
+            recipe(converted),
+            ColorEffectSpatialRecipe::Sweep {
+                daslight_exact: true,
+                grayscale: true,
+                vertical_symmetry: true,
+                direction_change: true,
+            }
+        ));
+
         let mapping_xml = format!(
             r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="2"><EFFECT TYPE="2" ID="521" DURATION="1000"><PARAMS NB="6">{palette}<PARAM TYPE="6" ID="3" VAL="2"/><PARAM TYPE="0" ID="4" VAL="0"/><PARAM TYPE="1" ID="10" VAL="0.5"/><PARAM TYPE="0" ID="11" VAL="90"/><PARAM TYPE="1" ID="12" VAL="1"/></PARAMS></EFFECT><MAPPING NAME="Rectangle" DASUID="mapping-transform" TYPE="0" X="0" Y="0" SX="100" SY="100" ANGLE="0" LOCKED="0"/><BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS></RACK></RACKS></SCENE>"#
         );
@@ -7794,6 +7826,23 @@ mod tests {
             rainbow.replacen(r#"ID="11" VAL="45""#, r#"ID="11" VAL="361""#, 1),
         ] {
             assert!(convert(&invalid, 2, 2, 130).is_err());
+        }
+
+        let sweep = source(
+            2,
+            2,
+            134,
+            r#"<PARAM TYPE="2" ID="2" VAL="1"/><PARAM TYPE="6" ID="3" VAL="1"/><PARAM TYPE="2" ID="10" VAL="1"/>"#,
+            "",
+        );
+        assert!(convert(&sweep, 2, 2, 134).is_ok());
+        for invalid in [
+            sweep.replacen(r#"TYPE="2" ID="10""#, r#"TYPE="0" ID="10""#, 1),
+            sweep.replacen(r#"ID="2" VAL="1""#, r#"ID="2" VAL="2""#, 1),
+            sweep.replacen(r#"ID="3" VAL="1""#, r#"ID="3" VAL="2""#, 1),
+            sweep.replacen(r#"ID="10" VAL="1""#, r#"ID="10" VAL="2""#, 1),
+        ] {
+            assert!(convert(&invalid, 2, 2, 134).is_err());
         }
 
         let mapping = source(
@@ -8237,7 +8286,10 @@ mod tests {
         assert!(matches!(
             pattern.recipe,
             ColorEffectSpatialRecipe::Sweep {
-                direction_change: true
+                daslight_exact: true,
+                grayscale: false,
+                vertical_symmetry: false,
+                direction_change: true,
             }
         ));
         assert_eq!(pattern.beam_targets.len(), 1);
@@ -8254,7 +8306,10 @@ mod tests {
         assert!(matches!(
             value.spatial_pattern.unwrap().recipe,
             ColorEffectSpatialRecipe::Sweep {
-                direction_change: false
+                daslight_exact: true,
+                grayscale: false,
+                vertical_symmetry: false,
+                direction_change: false,
             }
         ));
 
@@ -8267,14 +8322,24 @@ mod tests {
             .unwrap_err()
             .contains("expected PARAM 10 TYPE=2, found TYPE=1"));
 
-        let unproven_transform = targeted.replacen(
+        let transformed = targeted.replacen(
             r#"<PARAM TYPE="6" ID="3" VAL="0"/>"#,
             r#"<PARAM TYPE="6" ID="3" VAL="1"/>"#,
             1,
         );
-        assert!(convert_targeted(&unproven_transform)
-            .unwrap_err()
-            .contains("VALUE FX Sweep Transform PARAM 3 must be 0"));
+        let converted = convert_targeted(&transformed).unwrap();
+        let EffectParamsSnapshot::Value(value) = converted.target.unwrap().params.unwrap() else {
+            panic!("transformed Sweep must retain its Value body");
+        };
+        assert!(matches!(
+            value.spatial_pattern.unwrap().recipe,
+            ColorEffectSpatialRecipe::Sweep {
+                daslight_exact: true,
+                grayscale: false,
+                vertical_symmetry: true,
+                direction_change: true,
+            }
+        ));
 
         let extra_param = targeted
             .replacen(r#"<PARAMS NB="3">"#, r#"<PARAMS NB="4">"#, 1)
@@ -8638,41 +8703,59 @@ mod tests {
 
     #[test]
     fn dvc_exact_value_duration_uses_the_recovered_signed_40ms_frame_grid() {
-        let class_params = r#"<PARAM TYPE="0" ID="10" VAL="1"/><PARAM TYPE="2" ID="11" VAL="0"/><PARAM TYPE="2" ID="12" VAL="1"/><PARAM TYPE="2" ID="13" VAL="0"/><PARAM TYPE="0" ID="14" VAL="50"/>"#;
-        let base = value_fx_test_source(624, 0, 7, class_params, true);
+        let bases = [
+            (
+                624,
+                value_fx_test_source(
+                    624,
+                    0,
+                    7,
+                    r#"<PARAM TYPE="0" ID="10" VAL="1"/><PARAM TYPE="2" ID="11" VAL="0"/><PARAM TYPE="2" ID="12" VAL="1"/><PARAM TYPE="2" ID="13" VAL="0"/><PARAM TYPE="0" ID="14" VAL="50"/>"#,
+                    true,
+                ),
+            ),
+            (
+                625,
+                value_fx_test_source(625, 0, 3, r#"<PARAM TYPE="2" ID="10" VAL="1"/>"#, true),
+            ),
+        ];
 
-        for (duration, expected_period, expected_frames) in [
-            ("1", 40, 1),
-            ("9", 40, 1),
-            ("10", 40, 1),
-            ("39", 40, 1),
-            ("40", 40, 1),
-            ("41", 40, 1),
-            ("79", 40, 1),
-            ("80", 80, 2),
-        ] {
-            let source = base.replacen("DURATION=\"3000\"", &format!("DURATION=\"{duration}\""), 1);
-            let converted = convert_value_fx_test_source(&source, 624).unwrap();
-            assert!(converted.note.contains(&format!(
-                "frame_count=max(1,floor(EFFECT DURATION / 40))={expected_frames}"
-            )));
-            let EffectParamsSnapshot::Value(value) = converted.target.unwrap().params.unwrap()
-            else {
-                panic!("exact VALUE Knight Rider must retain its Value body");
-            };
-            assert_eq!(value.period_ms, expected_period);
-        }
+        for (generator_id, base) in bases {
+            for (duration, expected_period, expected_frames) in [
+                ("1", 40, 1),
+                ("9", 40, 1),
+                ("10", 40, 1),
+                ("39", 40, 1),
+                ("40", 40, 1),
+                ("41", 40, 1),
+                ("79", 40, 1),
+                ("80", 80, 2),
+            ] {
+                let source =
+                    base.replacen("DURATION=\"3000\"", &format!("DURATION=\"{duration}\""), 1);
+                let converted = convert_value_fx_test_source(&source, generator_id).unwrap();
+                assert!(converted.note.contains(&format!(
+                    "frame_count=max(1,floor(EFFECT DURATION / 40))={expected_frames}"
+                )));
+                let EffectParamsSnapshot::Value(value) = converted.target.unwrap().params.unwrap()
+                else {
+                    panic!("exact VALUE generator must retain its Value body");
+                };
+                assert_eq!(value.period_ms, expected_period);
+            }
 
-        for (duration, error) in [
-            ("0", "must be greater than 0"),
-            ("-1", "must be greater than 0"),
-            ("1.5", "must be a positive signed 32-bit integer"),
-            ("2147483648", "must be a positive signed 32-bit integer"),
-        ] {
-            let source = base.replacen("DURATION=\"3000\"", &format!("DURATION=\"{duration}\""), 1);
-            assert!(convert_value_fx_test_source(&source, 624)
-                .unwrap_err()
-                .contains(error));
+            for (duration, error) in [
+                ("0", "must be greater than 0"),
+                ("-1", "must be greater than 0"),
+                ("1.5", "must be a positive signed 32-bit integer"),
+                ("2147483648", "must be a positive signed 32-bit integer"),
+            ] {
+                let source =
+                    base.replacen("DURATION=\"3000\"", &format!("DURATION=\"{duration}\""), 1);
+                assert!(convert_value_fx_test_source(&source, generator_id)
+                    .unwrap_err()
+                    .contains(error));
+            }
         }
     }
 
@@ -9806,7 +9889,7 @@ mod tests {
                         .as_ref()
                         .map(|pattern| match &pattern.recipe {
                             ColorEffectSpatialRecipe::KnightRider { .. } => 127,
-                            ColorEffectSpatialRecipe::Sweep { .. } => 625,
+                            ColorEffectSpatialRecipe::Sweep { .. } => 134,
                             ColorEffectSpatialRecipe::Burst { .. } => 121,
                             ColorEffectSpatialRecipe::RandomFill { .. } => 131,
                             ColorEffectSpatialRecipe::Sparkle { .. } => 133,
@@ -10326,7 +10409,8 @@ mod tests {
             recipes.iter().any(|recipe| matches!(
                 recipe,
                 ColorEffectSpatialRecipe::Sweep {
-                    direction_change: true
+                    direction_change: true,
+                    ..
                 }
             )),
             "saved VALUE Sweep specimen (ID625) must import as Sweep with direction_change=true; found {recipes:?}"

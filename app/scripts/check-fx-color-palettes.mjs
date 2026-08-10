@@ -85,6 +85,7 @@ try {
   assert.match(appSource, /Added \$\{palette\.label\} as a synchronized Colour layer beside/);
   assert.match(appSource, /fxPaletteStopsToColorMappingFrame\(palette\.stops\)/);
   assert.match(editorSource, /<option value="Plasma">Plasma<\/option>/);
+  assert.match(editorSource, /<option value="Sweep">Sweep<\/option>/);
   assert.match(editorSource, /<option value="ColorRainbow">Rainbow strip<\/option>/);
   assert.match(editorSource, /min="0" max="20" step="1" value=\{spatialNumber\("size_x", 1\)\}/);
   assert.match(editorSource, /min="-5" max="5" step="1" value=\{spatialNumber\("speed_x", -1\)\}/);
@@ -97,6 +98,15 @@ try {
   );
   assert.match(editorSource, /<option value="vertical">Vertical symmetry<\/option>/);
   assert.match(editorSource, /<option value="horizontal">Horizontal symmetry<\/option>/);
+  for (const sweepContract of [
+    "data-color-sweep-controls",
+    "data-color-sweep-evaluator",
+    "data-color-sweep-grayscale",
+    "data-color-sweep-transform",
+    "data-color-sweep-direction-change",
+  ]) {
+    assert.ok(editorSource.includes(sweepContract), `COLOR Sweep must expose ${sweepContract}`);
+  }
   assert.match(protocolSource, /Plasma \{[\s\S]*?serde\(default\)[\s\S]*?grayscale: bool,[\s\S]*?vertical_symmetry: bool/);
   assert.match(
     protocolSource,

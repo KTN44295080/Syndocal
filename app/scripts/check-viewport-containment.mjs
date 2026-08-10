@@ -19199,16 +19199,33 @@ async function runSceneSettingsViewport(client, viewport) {
   });
   await waitForClientCondition(
     client,
-    'document.querySelector("[data-value-generator=\\"Sweep\\"] [data-value-sweep-direction-change]") !== null',
+    'document.querySelector("[data-value-generator=\\"Sweep\\"] [data-value-sweep-direction-change]") !== null && document.querySelector("[data-value-generator=\\"Sweep\\"] [data-value-sweep-transform]") !== null && document.querySelector("[data-value-generator=\\"Sweep\\"] [data-value-sweep-evaluator]") !== null',
     `T32 VALUE Sweep selection ${viewport.width}x${viewport.height}`,
   );
   const valueSweepState = await evaluatePageFunction(client, () => {
     const control = document.querySelector('[data-value-sweep-direction-change]');
-    if (!(control instanceof HTMLInputElement)) return { present: false, toggled: false };
+    const transform = document.querySelector('[data-value-sweep-transform]');
+    const evaluator = document.querySelector('[data-value-sweep-evaluator]');
+    if (!(control instanceof HTMLInputElement)
+      || !(transform instanceof HTMLSelectElement)
+      || !(evaluator instanceof HTMLSelectElement)) {
+      return { present: false, directionToggled: false, transformToggled: false, evaluatorToggled: false };
+    }
     const startedOff = !control.checked;
+    const startedNone = transform.value === 'none';
+    const startedEnhanced = evaluator.value === 'enhanced';
+    evaluator.value = 'daslight';
+    evaluator.dispatchEvent(new Event("input", { bubbles: true }));
+    transform.value = 'vertical';
+    transform.dispatchEvent(new Event("input", { bubbles: true }));
     control.checked = true;
     control.dispatchEvent(new Event("input", { bubbles: true }));
-    return { present: true, toggled: startedOff && control.checked };
+    return {
+      present: true,
+      directionToggled: startedOff && control.checked,
+      transformToggled: startedNone && transform.value === 'vertical',
+      evaluatorToggled: startedEnhanced && evaluator.value === 'daslight',
+    };
   });
   // P-EXP: the VALUE quick-look row applies a named recipe + palette + clock
   // from one real click. Plasma Drift first (destroys any leftover Sweep
@@ -19318,6 +19335,46 @@ async function runSceneSettingsViewport(client, viewport) {
   );
   await sleep(120);
   const oneClickAdded = await readSceneSettingsState(client);
+  const colorSweepSelected = await evaluatePageFunction(client, () => {
+    const select = document.querySelector('[data-color-spatial-select]');
+    if (!(select instanceof HTMLSelectElement)) return false;
+    select.value = 'Sweep';
+    select.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  });
+  await waitForClientCondition(
+    client,
+    'document.querySelector("[data-color-sweep-controls]") !== null',
+    `COLOR Sweep selection ${viewport.width}x${viewport.height}`,
+  );
+  const colorSweepState = await evaluatePageFunction(client, () => {
+    const grayscale = document.querySelector('[data-color-sweep-grayscale]');
+    const transform = document.querySelector('[data-color-sweep-transform]');
+    const direction = document.querySelector('[data-color-sweep-direction-change]');
+    const evaluator = document.querySelector('[data-color-sweep-evaluator]');
+    if (!(grayscale instanceof HTMLInputElement)
+      || !(transform instanceof HTMLSelectElement)
+      || !(direction instanceof HTMLInputElement)
+      || !(evaluator instanceof HTMLSelectElement)) {
+      return { present: false, grayscaleOn: false, transformVertical: false, directionOn: false, evaluatorExact: false };
+    }
+    const startedEnhanced = evaluator.value === 'enhanced';
+    evaluator.value = 'daslight';
+    evaluator.dispatchEvent(new Event('input', { bubbles: true }));
+    grayscale.checked = true;
+    grayscale.dispatchEvent(new Event('input', { bubbles: true }));
+    transform.value = 'vertical';
+    transform.dispatchEvent(new Event('input', { bubbles: true }));
+    direction.checked = true;
+    direction.dispatchEvent(new Event('input', { bubbles: true }));
+    return {
+      present: true,
+      grayscaleOn: grayscale.checked,
+      transformVertical: transform.value === 'vertical',
+      directionOn: direction.checked,
+      evaluatorExact: startedEnhanced && evaluator.value === 'daslight',
+    };
+  });
   const paletteEditorOpened = await clickSceneSettingsTarget(
     client,
     "[data-fx-color-palette-library] .fxColorPaletteEditorDisclosure > summary",
@@ -19643,6 +19700,13 @@ async function runSceneSettingsViewport(client, viewport) {
       && oneClickAdded.editorType === "Color"
       && oneClickAdded.ownedFxToggleCount === 1
       && oneClickAdded.ownedFxRemoveCount === 1],
+    ["colorSweepExposesAllVerifiedDaslightParameters", () =>
+      colorSweepSelected
+      && colorSweepState.present
+      && colorSweepState.grayscaleOn
+      && colorSweepState.transformVertical
+      && colorSweepState.directionOn
+      && colorSweepState.evaluatorExact],
     ["surfaceSelectionSurvivesFxCreationAndReturnsToContents", () =>
       returnContentsSurfaceClicked
       && createdFxContents.kind === "FX"
@@ -19729,7 +19793,9 @@ async function runSceneSettingsViewport(client, viewport) {
       && valueGeneratorState.horizontalOverflowPx <= 1
       && valueSweepSelected
       && valueSweepState.present
-      && valueSweepState.toggled
+      && valueSweepState.directionToggled
+      && valueSweepState.transformToggled
+      && valueSweepState.evaluatorToggled
       && valueCustomSelected
       && valueCustomState.generatorKind === "CustomEnvelope"
       && valueCustomState.modeCount === 1
@@ -19779,6 +19845,7 @@ async function runSceneSettingsViewport(client, viewport) {
     fxSurface,
     createdFx,
     valueGeneratorState,
+    valueSweepState,
     valueCustomState,
     valueQuickLookState,
     valueQuickLookPlasma,
@@ -19795,6 +19862,7 @@ async function runSceneSettingsViewport(client, viewport) {
     oneClickEditContext,
     oneClickAddGesture,
     oneClickAdded,
+    colorSweepState,
     oneClickPaletteCreated,
     oneClickPaletteApplied,
     pointerOnlyStripGesture,

@@ -3508,6 +3508,9 @@ struct RuntimeColorSpatialState {
     /// native Burst recipe, this preserves CBurstEffect's pixel-radius domain,
     /// cyclic 16-bit palette cache and generated-frame interpolation.
     daslight_burst: Option<CompiledDaslightBurst>,
+    /// Shared Daslight-exact COLOR 134 / VALUE 625 generated-frame sampler.
+    /// Native authoring keeps the continuous Enhanced Sweep path instead.
+    daslight_sweep: Option<CompiledDaslightSweep>,
 }
 
 const DASLIGHT_VALUE_FRAME_MS: u64 = 40;
@@ -3617,6 +3620,122 @@ impl DaslightKnightColor {
             green: channel(self.green),
             blue: channel(self.blue),
         }
+    }
+}
+
+#[derive(Clone)]
+struct CompiledDaslightSweep {
+    raw_frame_count: usize,
+    table_frame_count: usize,
+    strip_count: usize,
+    palette: Vec<DaslightKnightColor>,
+    grayscale: bool,
+    vertical_symmetry: bool,
+    direction_change: bool,
+    temporal_coordinate: Cell<Option<DaslightKnightTemporalCoordinate>>,
+}
+
+impl CompiledDaslightSweep {
+    fn compile(
+        request: &ColorEffectRequest,
+        strip_count: usize,
+        grayscale: bool,
+        vertical_symmetry: bool,
+        direction_change: bool,
+    ) -> Result<Self, String> {
+        if !(protocol::DASLIGHT_COLOR_PALETTE_MIN_STOPS
+            ..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS)
+            .contains(&request.stops.len())
+        {
+            return Err(
+                "Daslight-exact Sweep requires between 1 and 255 palette stops".to_string(),
+            );
+        }
+        let raw_frame_count = usize::try_from((request.period_ms / DASLIGHT_VALUE_FRAME_MS).max(1))
+            .map_err(|_| {
+                "Daslight-exact Sweep frame count does not fit this platform".to_string()
+            })?;
+        let table_frame_count = raw_frame_count.min(DASLIGHT_VALUE_FRAME_CAP);
+        Ok(Self {
+            raw_frame_count,
+            table_frame_count,
+            strip_count: strip_count.max(1),
+            palette: request
+                .stops
+                .iter()
+                .map(|stop| DaslightKnightColor::from_color(stop.color))
+                .collect(),
+            grayscale,
+            vertical_symmetry,
+            direction_change,
+            temporal_coordinate: Cell::new(None),
+        })
+    }
+
+    fn frame_color(&self, frame_index: usize, destination_index: usize) -> DaslightKnightColor {
+        let source_index = if self.vertical_symmetry {
+            daslight_vertical_fold_source_index(destination_index, self.strip_count)
+        } else {
+            Some(destination_index.min(self.strip_count - 1))
+        };
+        let Some(source_index) = source_index else {
+            return DaslightKnightColor::from_color(black_color());
+        };
+        let palette_count = self.palette.len();
+        let phase = frame_index as f32 / self.table_frame_count as f32;
+        let scaled = phase * palette_count as f32;
+        let transition_index = scaled.floor() as usize % palette_count;
+        let swept_cells = (scaled.fract() * self.strip_count as f32).trunc() as usize;
+        let uses_next = if self.direction_change && transition_index % 2 == 1 {
+            source_index >= self.strip_count.saturating_sub(swept_cells)
+        } else {
+            source_index < swept_cells
+        };
+        let mut color = if uses_next {
+            self.palette[(transition_index + 1) % palette_count]
+        } else {
+            self.palette[transition_index]
+        };
+        if self.grayscale {
+            color = DaslightKnightColor::from_color(daslight_grayscale_color(color.into_color()));
+        }
+        color
+    }
+
+    fn temporal_coordinate(&self, raw_tick: i64) -> DaslightKnightTemporalCoordinate {
+        if let Some(cached) = self
+            .temporal_coordinate
+            .get()
+            .filter(|cached| cached.raw_tick == raw_tick)
+        {
+            return cached;
+        }
+        let tick = raw_tick.rem_euclid(self.raw_frame_count as i64) as usize;
+        let unit = tick as f32 / self.raw_frame_count as f32;
+        let position = (self.table_frame_count - 1) as f32 * unit;
+        let lower = (f64::from(position).floor() as usize).min(self.table_frame_count - 1);
+        let coordinate = DaslightKnightTemporalCoordinate {
+            raw_tick,
+            lower,
+            upper: (lower + 1).min(self.table_frame_count - 1),
+            amount: position - lower as f32,
+        };
+        self.temporal_coordinate.set(Some(coordinate));
+        coordinate
+    }
+
+    fn sample_at_tick(&self, raw_tick: i64, destination_index: usize) -> ColorEffectColor {
+        let coordinate = self.temporal_coordinate(raw_tick);
+        let first = self.frame_color(coordinate.lower, destination_index);
+        if coordinate.amount <= 0.0 || coordinate.lower == coordinate.upper {
+            return first.into_color();
+        }
+        first
+            .interpolate(
+                self.frame_color(coordinate.upper, destination_index),
+                coordinate.amount,
+            )
+            .into_color()
     }
 }
 
@@ -4592,6 +4711,31 @@ fn compile_daslight_burst(
             *gradient,
             *vertical_symmetry,
             *grayscale,
+        )
+        .map(Some),
+        _ => Ok(None),
+    }
+}
+
+fn compile_daslight_sweep(
+    request: &ColorEffectRequest,
+    strip_count: usize,
+) -> Result<Option<CompiledDaslightSweep>, String> {
+    let Some(pattern) = request.spatial_pattern.as_ref() else {
+        return Ok(None);
+    };
+    match &pattern.recipe {
+        ColorEffectSpatialRecipe::Sweep {
+            daslight_exact: true,
+            grayscale,
+            vertical_symmetry,
+            direction_change,
+        } => CompiledDaslightSweep::compile(
+            request,
+            strip_count,
+            *grayscale,
+            *vertical_symmetry,
+            *direction_change,
         )
         .map(Some),
         _ => Ok(None),
@@ -27984,6 +28128,12 @@ fn evaluate_runtime_value_attribute_at_rate(
                 .as_ref()
                 .map(|compiled| (state, compiled))
         });
+        let exact_sweep_runtime = spatial.spatial.as_deref().and_then(|state| {
+            state
+                .daslight_sweep
+                .as_ref()
+                .map(|compiled| (state, compiled))
+        });
         let generated =
             if let Some((state, compiled)) = exact_runtime {
                 let target = state.targets.get(binding.spatial_target_index)?;
@@ -28025,6 +28175,29 @@ fn evaluate_runtime_value_attribute_at_rate(
                         // RGB binding/output-map path while preserving its
                         // generated red component byte-for-byte.
                         let value = evaluate_daslight_burst_color_at_rate(
+                            &spatial.request,
+                            target,
+                            compiled,
+                            created_at,
+                            now,
+                            clock,
+                            rate,
+                        )
+                        .red;
+                        target.daslight_value_cached.set(Some(
+                            RuntimeDaslightValueSpatialEvaluation { at: now, value },
+                        ));
+                        value
+                    })
+            } else if let Some((state, compiled)) = exact_sweep_runtime {
+                let target = state.targets.get(binding.spatial_target_index)?;
+                target
+                    .daslight_value_cached
+                    .get()
+                    .filter(|evaluation| evaluation.at == now)
+                    .map(|evaluation| evaluation.value)
+                    .unwrap_or_else(|| {
+                        let value = evaluate_daslight_sweep_color_at_rate(
                             &spatial.request,
                             target,
                             compiled,
@@ -29479,11 +29652,13 @@ fn runtime_color_effect_from_request(
             .unwrap_or(1);
         let daslight_knight_rider = compile_daslight_value_spatial(&request, strip_count)?;
         let daslight_burst = compile_daslight_burst(&request, strip_count)?;
+        let daslight_sweep = compile_daslight_sweep(&request, strip_count)?;
         Some(Box::new(RuntimeColorSpatialState {
             targets,
             attribute_indices,
             daslight_knight_rider,
             daslight_burst,
+            daslight_sweep,
         }))
     } else {
         None
@@ -30731,6 +30906,7 @@ fn evaluate_runtime_color_spatial_attribute_at_rate(
                 target,
                 spatial.daslight_knight_rider.as_ref(),
                 spatial.daslight_burst.as_ref(),
+                spatial.daslight_sweep.as_ref(),
                 effect_id,
                 created_at,
                 now,
@@ -30943,11 +31119,36 @@ fn evaluate_daslight_burst_color_at_rate(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn evaluate_daslight_sweep_color_at_rate(
+    request: &ColorEffectRequest,
+    target: &RuntimeColorSpatialTarget,
+    compiled: &CompiledDaslightSweep,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> ColorEffectColor {
+    let valid_rate = valid_effect_rate(rate);
+    let time_phase = request
+        .clock_sync
+        .map(|clock_sync| {
+            (clock.beat_counter as f64 + clock.beat_phase as f64)
+                / clock_sync.beats.max(0.000_1) as f64
+                * f64::from(valid_rate)
+                + request.phase as f64
+        })
+        .unwrap_or(0.0);
+    let raw_tick = daslight_knight_rider_raw_tick(request, time_phase, created_at, now, valid_rate);
+    compiled.sample_at_tick(raw_tick, target.strip_index)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn evaluate_color_spatial_sample_at_rate(
     request: &ColorEffectRequest,
     target: &RuntimeColorSpatialTarget,
     daslight_knight_rider: Option<&CompiledDaslightKnightRider>,
     daslight_burst: Option<&CompiledDaslightBurst>,
+    daslight_sweep: Option<&CompiledDaslightSweep>,
     effect_id: EffectId,
     created_at: Instant,
     now: Instant,
@@ -30989,6 +31190,20 @@ fn evaluate_color_spatial_sample_at_rate(
                 request,
                 target,
                 daslight_burst,
+                created_at,
+                now,
+                clock,
+                rate,
+            ),
+            opacity: 1.0,
+        };
+    }
+    if let Some(daslight_sweep) = daslight_sweep {
+        return RuntimeColorSpatialSample {
+            color: evaluate_daslight_sweep_color_at_rate(
+                request,
+                target,
+                daslight_sweep,
                 created_at,
                 now,
                 clock,
@@ -31092,26 +31307,48 @@ fn evaluate_color_spatial_sample_at_rate(
                 opacity: 1.0,
             };
         }
-        ColorEffectSpatialRecipe::Sweep { direction_change } => {
+        ColorEffectSpatialRecipe::Sweep {
+            daslight_exact: _,
+            grayscale,
+            vertical_symmetry,
+            direction_change,
+        } => {
             // Daslight 5.0.6.2 CSweepEffect evaluator 0x1403665A0 renders
             // the next palette colour across the full raster and overlays the
             // current colour from floor(progress * width) to the right edge.
-            // For a one-row VALUE strip, Direction Change rotates alternate
-            // palette transitions by 180 degrees (0x140366847..0x1403668D4).
+            // Direction Change rotates alternate transitions by 180 degrees
+            // (0x140366847..0x1403668D4). The common Transform fold and qGray
+            // post-process run after the completed source raster.
             let palette_count = request.stops.len();
             let scaled = time_phase.rem_euclid(1.0) as f32 * palette_count as f32;
             let transition_index = scaled.floor() as usize % palette_count;
             let progress = scaled.fract();
             let swept_cells = (progress * strip_count as f32).trunc() as usize;
-            let uses_next = if *direction_change && transition_index % 2 == 1 {
-                target.strip_index >= strip_count.saturating_sub(swept_cells)
+            let source_index = if *vertical_symmetry {
+                daslight_vertical_fold_source_index(target.strip_index, strip_count)
             } else {
-                target.strip_index < swept_cells
+                Some(target.strip_index)
             };
-            if uses_next {
+            let Some(source_index) = source_index else {
+                return RuntimeColorSpatialSample {
+                    color: black_color(),
+                    opacity: 1.0,
+                };
+            };
+            let uses_next = if *direction_change && transition_index % 2 == 1 {
+                source_index >= strip_count.saturating_sub(swept_cells)
+            } else {
+                source_index < swept_cells
+            };
+            let color = if uses_next {
                 request.stops[(transition_index + 1) % palette_count].color
             } else {
                 request.stops[transition_index].color
+            };
+            if *grayscale {
+                daslight_grayscale_color(color)
+            } else {
+                color
             }
         }
         ColorEffectSpatialRecipe::Burst {
@@ -54090,11 +54327,13 @@ mod tests {
         let daslight_knight_rider =
             compile_daslight_value_spatial(request, target.strip_count).unwrap();
         let daslight_burst = compile_daslight_burst(request, target.strip_count).unwrap();
+        let daslight_sweep = compile_daslight_sweep(request, target.strip_count).unwrap();
         evaluate_color_spatial_sample_at_rate(
             request,
             &target,
             daslight_knight_rider.as_ref(),
             daslight_burst.as_ref(),
+            daslight_sweep.as_ref(),
             97,
             created_at,
             created_at + Duration::from_millis(elapsed_ms),
@@ -55064,6 +55303,9 @@ mod tests {
     #[test]
     fn color_spatial_sweep_matches_daslight_one_row_palette_boundary_and_direction_change() {
         let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::Sweep {
+            daslight_exact: false,
+            grayscale: false,
+            vertical_symmetry: false,
             direction_change: true,
         });
         let red = test_color(u16::MAX, 0, 0);
@@ -55110,6 +55352,9 @@ mod tests {
         assert_eq!(reversed_transition, vec![green, green, green, green, blue]);
 
         request.spatial_pattern.as_mut().unwrap().recipe = ColorEffectSpatialRecipe::Sweep {
+            daslight_exact: false,
+            grayscale: false,
+            vertical_symmetry: false,
             direction_change: false,
         };
         let fixed_direction = targets
@@ -55117,6 +55362,79 @@ mod tests {
             .map(|target| evaluate_test_spatial_color(&request, target, 400))
             .collect::<Vec<_>>();
         assert_eq!(fixed_direction, vec![blue, green, green, green, green]);
+
+        request.spatial_pattern.as_mut().unwrap().recipe = ColorEffectSpatialRecipe::Sweep {
+            daslight_exact: false,
+            grayscale: true,
+            vertical_symmetry: true,
+            direction_change: false,
+        };
+        let transformed = targets
+            .iter()
+            .map(|target| evaluate_test_spatial_color(&request, target, 200))
+            .collect::<Vec<_>>();
+        assert_eq!(transformed[0], transformed[3]);
+        assert_eq!(transformed[1], transformed[2]);
+        assert_ne!(transformed[0], transformed[1]);
+        assert_eq!(transformed[4], black_color());
+        assert!(transformed[..4]
+            .iter()
+            .all(|color| color.red == color.green && color.green == color.blue));
+    }
+
+    #[test]
+    fn daslight_exact_sweep_uses_generated_frame_sampling_and_keeps_enhanced_separate() {
+        let red = test_color(u16::MAX, 0, 0);
+        let green = test_color(0, u16::MAX, 0);
+        let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::Sweep {
+            daslight_exact: true,
+            grayscale: false,
+            vertical_symmetry: false,
+            direction_change: false,
+        });
+        request.period_ms = 160;
+        request.stops = vec![
+            ColorEffectStop {
+                position: 0.0,
+                color: red,
+            },
+            ColorEffectStop {
+                position: 1.0,
+                color: green,
+            },
+        ];
+        let compiled = compile_daslight_sweep(&request, 5).unwrap().unwrap();
+        assert_eq!(compiled.raw_frame_count, 4);
+        assert_eq!(compiled.table_frame_count, 4);
+        assert_eq!(
+            compiled.sample_at_tick(1, 0),
+            DaslightKnightColor::from_color(red)
+                .interpolate(DaslightKnightColor::from_color(green), 0.75)
+                .into_color()
+        );
+        assert_eq!(compiled.sample_at_tick(1, 4), red);
+
+        request.spatial_pattern.as_mut().unwrap().recipe = ColorEffectSpatialRecipe::Sweep {
+            daslight_exact: true,
+            grayscale: true,
+            vertical_symmetry: true,
+            direction_change: false,
+        };
+        let folded = compile_daslight_sweep(&request, 5).unwrap().unwrap();
+        let frame = (0..5)
+            .map(|index| folded.sample_at_tick(0, index))
+            .collect::<Vec<_>>();
+        assert_eq!(frame[0], frame[3]);
+        assert_eq!(frame[1], frame[2]);
+        assert_eq!(frame[4], black_color());
+        assert!(frame[..4]
+            .iter()
+            .all(|color| color.red == color.green && color.green == color.blue));
+
+        request.period_ms = 751 * DASLIGHT_VALUE_FRAME_MS;
+        let capped = compile_daslight_sweep(&request, 5).unwrap().unwrap();
+        assert_eq!(capped.raw_frame_count, 751);
+        assert_eq!(capped.table_frame_count, DASLIGHT_VALUE_FRAME_CAP);
     }
 
     #[test]
@@ -60976,6 +61294,46 @@ mod tests {
         }
     }
 
+    fn populate_daslight_exact_sweep_release_effects(
+        runtime: &mut EngineRuntime,
+        fixture_ids: &[FixtureId],
+        created_at: Instant,
+        effect_count: usize,
+    ) {
+        for index in 0..effect_count {
+            let mut request = test_value_request(fixture_ids);
+            request.period_ms = 751 * DASLIGHT_VALUE_FRAME_MS;
+            request.phase = index as f32 / effect_count as f32;
+            request.points = (0..32)
+                .map(|point_index| ValueEffectPoint {
+                    position: point_index as f32 / 31.0,
+                    value: (point_index as f32 * 2_114.0) / u16::MAX as f32,
+                })
+                .collect();
+            request.spatial_pattern = Some(protocol::ColorEffectSpatialPattern {
+                recipe: ColorEffectSpatialRecipe::Sweep {
+                    daslight_exact: true,
+                    grayscale: false,
+                    vertical_symmetry: index % 2 == 1,
+                    direction_change: index % 3 == 0,
+                },
+                beam_targets: Vec::new(),
+                placement: None,
+            });
+            let kind = RuntimeEffectKind::Value(
+                runtime
+                    .resolve_value_effect_request(request)
+                    .expect("exact Sweep benchmark request must compile"),
+            );
+            runtime.effects.push(RuntimeEffect {
+                id: index as EffectId + 1,
+                kind,
+                enabled: true,
+                created_at,
+            });
+        }
+    }
+
     #[test]
     fn daslight_exact_knight_rider_release_stack_meets_44hz_budget() {
         const FIXTURE_COUNT: u64 = 200;
@@ -61102,6 +61460,68 @@ mod tests {
         // lookups, temporal interpolation, and VALUE range application. It
         // must preserve the established 5/8/12ms release gate and remain
         // comfortably inside one 22.7ms DMX tick.
+        if !cfg!(debug_assertions) {
+            assert!(p95 <= Duration::from_millis(5), "p95 was {p95:?}");
+            assert!(p99 <= Duration::from_millis(8), "p99 was {p99:?}");
+            assert!(max <= Duration::from_millis(12), "max was {max:?}");
+        }
+    }
+
+    #[test]
+    fn daslight_exact_sweep_release_stack_meets_44hz_budget() {
+        const FIXTURE_COUNT: u64 = 200;
+        const EFFECT_COUNT: usize = 64;
+        const SAMPLES: usize = if cfg!(debug_assertions) { 20 } else { 1_000 };
+        const ATTRIBUTES: [&str; 1] = ["Dimmer"];
+
+        let mut runtime = runtime_with_mixed_effect_fixtures(FIXTURE_COUNT);
+        let fixture_ids = (1..=FIXTURE_COUNT).collect::<Vec<_>>();
+        let created_at = Instant::now();
+        populate_daslight_exact_sweep_release_effects(
+            &mut runtime,
+            &fixture_ids,
+            created_at,
+            EFFECT_COUNT,
+        );
+        assert_eq!(runtime.effects.len(), EFFECT_COUNT);
+        assert!(runtime.effects.iter().all(|effect| matches!(
+            &effect.kind,
+            RuntimeEffectKind::Value(RuntimeValueEffect {
+                spatial: Some(spatial),
+                ..
+            }) if spatial.spatial.as_ref().and_then(|state| state.daslight_sweep.as_ref()).is_some_and(|compiled| compiled.table_frame_count == DASLIGHT_VALUE_FRAME_CAP)
+        )));
+
+        let mut durations = Vec::with_capacity(SAMPLES);
+        let mut checksum = 0_u64;
+        for sample in 0..SAMPLES {
+            let at = created_at + DMX_TICK_INTERVAL * (sample as u32 + 1);
+            let started = Instant::now();
+            for fixture in &runtime.fixtures {
+                for attribute in ATTRIBUTES {
+                    checksum =
+                        checksum.wrapping_add(runtime.apply_effects_with_transition_policy(
+                            fixture, attribute, 16_384, at, false,
+                        ) as u64);
+                }
+            }
+            durations.push(started.elapsed());
+        }
+        std::hint::black_box(checksum);
+        assert_ne!(checksum, 0);
+        durations.sort_unstable();
+        let p95 = durations[(SAMPLES * 95 / 100).min(SAMPLES - 1)];
+        let p99 = durations[(SAMPLES * 99 / 100).min(SAMPLES - 1)];
+        let max = *durations.last().unwrap();
+        eprintln!(
+            "Daslight exact Sweep 64x200 generated-frame stack per-tick evaluation: p95={}us p99={}us max={}us",
+            p95.as_micros(),
+            p99.as_micros(),
+            max.as_micros()
+        );
+        // Sweep evaluates two bounded generated frames and performs the
+        // recovered mixed-precision interpolation without allocation or
+        // search. Preserve the established full-rig 5/8/12ms release gate.
         if !cfg!(debug_assertions) {
             assert!(p95 <= Duration::from_millis(5), "p95 was {p95:?}");
             assert!(p99 <= Duration::from_millis(8), "p99 was {p99:?}");

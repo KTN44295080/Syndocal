@@ -34,7 +34,9 @@ Phasing = 選択ビーム順の位相分散。2026-08-08 に Syndocal LFO の `f
 
 ### COLOR FX（RACK=2, EFFECT TYPE=2）→ Syndocal Color エンジン + 新規パターンレシピ
 
-共通ヘッダ: 1=パレット、Plasma/Rainbowでは2=Grayscale（0/1）、3=Transform（0=None / 1=Vertical symmetry）。その他の確認済みCOLOR FXでは2/3=0を要求する。
+共通ヘッダ: 1=パレット。Plasma/Rainbow/Sweepでは2=Grayscale（0/1）、全確認済みCOLOR FXで
+3=Transform（0=None / 1=Vertical symmetry）を持つ。classごとの厳密なTYPE/ID列は下表と
+`qa/DVC_FULL_FX_CATALOG_PARITY.md`を正本とする。
 
 | ID | ジェネレータ | パラメータ対応（実測） |
 |---|---|---|
@@ -44,6 +46,7 @@ Phasing = 選択ビーム順の位相分散。2026-08-08 に Syndocal LFO の `f
 | 133 | **Sparkle** | 10=Sparkle Number(5✓), 11=Sparkle LifeSpan(0✓), 12=Sparkle Width(1✓) |
 | 129 | **Plasma** | 2=Grayscale、3=Transform、10..17=Size X / Param X / Size Y / Param Y / Speed X / Param SX / Speed Y / Param SY。UI・XML一致に加え、Daslight 5.0.6.2バイナリから8bit sine-table生成式、Qt整数Grayscale、半幅反転Transform、各範囲を確定。詳細は `qa/DVC_PLASMA_RAINBOW_SOURCE_PARITY.md`。 |
 | 130 | **Rainbow** | 2=Grayscale、3=Transform、10=Color Width、11=Angle、12=Gradient。UI・XML一致に加え、パレット数依存のgradient length・投影・時間方向、Qt整数Grayscale、半幅反転TransformをDaslightバイナリから確定。詳細は `qa/DVC_PLASMA_RAINBOW_SOURCE_PARITY.md`。 |
+| 134 | **Sweep** | 2=Grayscale、3=Transform、10=Direction Change。`CSweepEffect / 0x1403665A0`のhard boundary、交互180度、Qt整数Grayscale、半幅nearest TransformをVALUE 625と共有してexact実装。詳細は `qa/DVC_SWEEP_SOURCE_PARITY.md`。 |
 
 カラーパレットはUI上5枠程度のスウォッチ列（実測: WineRed系5色、FillCyan青系5色+等）。XML上の格納位置は
 `EFFECT/PARAMS/PARAM[@TYPE='4'][@ID='1']/COLORS/COLOR/@VAL`で確定し、先頭3値を正規化RGBとして変換する。Beams は 4（ムービング群）〜64（8バー×8セグメント）
@@ -108,7 +111,7 @@ Daslight実機のdropdownを最下端まで観測した。追加で確定した�
 全IDのcreator/constructor/RTTI/vtable/evaluator入口、serialized TYPE/ID/default/domain、
 実機UI順、STEPS/SUPER SCENEの専用保存形は`qa/DVC_FULL_FX_CATALOG_PARITY.md`を正本とする。
 factoryにないCOLOR FXの122–126/132は現バイナリの未登録空隙であり、予約/廃止までは断言しない。
-現行converter route 22 IDのうち条件付きstrict routeは6 IDであり、routeの存在をexact完成とは扱わない。
+現行converter routeはDVC-SWEEP-EXACT後23 ID、条件付きexact-coreは21 IDであり、routeの存在だけをexact完成とは扱わない。
 schema/scale/beam-target/乱数境界の逆照合結果は同正本と`qa/DVC_FULL_FX_PARITY_ROADMAP.md`に分離した。
 2026-08-10のDVC-C0aで追加7 routeのTYPE/domain/scale coreをstrict化したが、paletteのfactory
 `1..255`対protocol `2..16`など横断表現域が残るため、13 routeをfull-domain完成とは数えない。
@@ -125,8 +128,11 @@ evaluator `0x1403665A0`、constructor `0x140355D30`を追加解析した。const
 transitionごとに0/180度を交互に使用する。さらに共通constructor `0x140350BE0` とserializer
 `0x140347160` / property serializer `0x14034E440`を追跡し、ID625がTYPE4/ID1 palette、TYPE6/ID3
 Transform、TYPE2/ID10 Direction Changeの3 PARAMを保存することを静的に確定した。Syndocal importerは
-この型・ID列だけを受理し、Direction Change 0/1を変換する。未証明のTransform=1とschema driftは
-fail-closedのままにする。実保存ID625 goldenと2D MAPPINGS Sweepの90/270度向きは別残件とする。
+この型・ID列だけを受理し、Direction Change 0/1とTransform 0/1を変換する。共通Qt-nearest
+foldの証明と実装により旧Transform=1 fail-closedは解消した。import bodyは`daslight_exact=true`で
+signed 40ms生成フレーム再生を保持し、新規作成は連続時間Enhancedを既定にする。さらに同classを使うCOLOR 134も
+TYPE4/1, TYPE2/2, TYPE6/3, TYPE2/10をstrictに受理し、Grayscaleを含めexact route化した。
+実保存ID625 goldenは取得済み。2D MAPPINGS 528 / COLOR MAPPINGS 44の配置・回転は別残件とする。
 詳細は`qa/DVC_SWEEP_SOURCE_PARITY.md`を正本とする。
 
 さらに `C:\Users\kouty\Desktop\Shinkan-Left\Codex-Chaser322-Probe.dvc` に、VALUE FX Rainbow

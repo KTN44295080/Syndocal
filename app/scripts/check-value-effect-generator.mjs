@@ -54,6 +54,14 @@ assert.ok(
   "VALUE Sweep must expose Daslight's Direction Change switch",
 );
 assert.ok(
+  editorSource.includes("data-value-sweep-evaluator"),
+  "VALUE Sweep must expose the Enhanced / Daslight-exact compatibility boundary",
+);
+assert.ok(
+  editorSource.includes("data-value-sweep-transform"),
+  "VALUE Sweep must expose the now-proven Daslight Transform switch",
+);
+assert.ok(
   editorSource.includes('<option value="CustomEnvelope">Custom envelope</option>'),
   "Syndocal's richer Custom Envelope mode must remain available",
 );

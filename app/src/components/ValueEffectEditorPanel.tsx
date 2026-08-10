@@ -72,7 +72,7 @@ const defaultValueGeneratorRecipe = (
     case "KnightRider":
       return { KnightRider: { grayscale: false, vertical_symmetry: false, size: 8, one_way: false, fading: true, go_outside: false, gradient: 50 } };
     case "Sweep":
-      return { Sweep: { direction_change: false } };
+      return { Sweep: { daslight_exact: false, grayscale: false, vertical_symmetry: false, direction_change: false } };
     case "Sparkle":
       return { Sparkle: { number: 5, lifespan: 25, width: 1 } };
     case "RandomFill":
@@ -105,7 +105,7 @@ interface ValueQuickLook {
 const valueQuickLooks: ValueQuickLook[] = [
   {
     label: "Sweep Bounce",
-    recipe: { Sweep: { direction_change: true } },
+    recipe: { Sweep: { daslight_exact: false, grayscale: false, vertical_symmetry: false, direction_change: true } },
     points: quickLookGrayscalePoints,
     beats: 2,
   },
@@ -278,6 +278,11 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
       && recipe.Burst.daslight_exact === true,
     );
   });
+  const daslightExactSweep = createMemo(() => {
+    const recipe = props.spatialPattern?.recipe;
+    return Boolean(recipe && "Sweep" in recipe && recipe.Sweep.daslight_exact === true);
+  });
+  const daslightExactTiming = createMemo(() => daslightExactBurst() || daslightExactSweep());
   const generatorNumber = (key: string, fallback = 0) => {
     const value = generatorValues()[key];
     return typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -323,6 +328,13 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
           color_width: clamp(currentWidth, 0, 100),
           gradient: clamp(currentGradient <= 1 ? currentGradient * 100 : currentGradient, 0, 100),
         });
+    if (daslightExact) {
+      props.onPeriodMs(Math.max(40, Math.floor(Math.max(40, props.periodMs) / 40) * 40));
+    }
+  };
+  const setSweepEvaluator = (daslightExact: boolean) => {
+    if (generatorKind() !== "Sweep") return;
+    patchGeneratorValues({ daslight_exact: daslightExact });
     if (daslightExact) {
       props.onPeriodMs(Math.max(40, Math.floor(Math.max(40, props.periodMs) / 40) * 40));
     }
@@ -590,6 +602,8 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
         </Show>
         <Show when={generatorKind() === "Sweep"}>
           <div class="colorEffectModeGrid">
+            <label>Evaluator<select data-value-sweep-evaluator value={daslightExactSweep() ? "daslight" : "enhanced"} onInput={(event) => setSweepEvaluator(event.currentTarget.value === "daslight")}><option value="enhanced">Enhanced</option><option value="daslight">Daslight exact</option></select></label>
+            <label>Transform<select data-value-sweep-transform value={generatorTransform()} onInput={(event) => patchGeneratorValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
             <label><input type="checkbox" data-value-sweep-direction-change checked={generatorBoolean("direction_change")} onInput={(event) => patchGeneratorValues({ direction_change: event.currentTarget.checked })} /> Direction change</label>
           </div>
         </Show>
@@ -774,16 +788,16 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
           </div>
         </Show>
         <label class="valueEffectPeriodField">
-          {daslightExactBurst() ? "Period ms · 40 ms compatibility" : "Period ms"}
+          {daslightExactTiming() ? "Period ms · 40 ms compatibility" : "Period ms"}
           <input
             class="tabularNums"
             type="number"
-            min={daslightExactBurst() ? "40" : "10"}
-            step={daslightExactBurst() ? "40" : "10"}
+            min={daslightExactTiming() ? "40" : "10"}
+            step={daslightExactTiming() ? "40" : "10"}
             value={normalizedPeriodMs()}
             onInput={(event) => {
-              const value = Math.round(Number(event.currentTarget.value) || (daslightExactBurst() ? 40 : 10));
-              props.onPeriodMs(daslightExactBurst() ? Math.max(40, Math.floor(value / 40) * 40) : Math.max(10, value));
+              const value = Math.round(Number(event.currentTarget.value) || (daslightExactTiming() ? 40 : 10));
+              props.onPeriodMs(daslightExactTiming() ? Math.max(40, Math.floor(value / 40) * 40) : Math.max(10, value));
             }}
           />
         </label>

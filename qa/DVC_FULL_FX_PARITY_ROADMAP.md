@@ -22,16 +22,16 @@ Daslight 5.0.6.2 / FileVersion `25.0905.165.111`の実機dropdown全項目とfac
 
 | ファミリー | 完全factory集合 | 現行converter route | precise fail-closed / 未route |
 |---|---|---|---|
-| VALUE | 621–628（8種） | 621 Rainbow, **622 Burst**, 623 Plasma, 624 Knight Rider, 625 Sweep | 626/627: non-serialized per-thread RNG state/history。628は固有Perlin evaluator未実装 |
-| COLOR FX | 121,127,128,129,130,131,133,**134** | **121**,127,129,130 | 131/133 precise fail-closed。128 Perlin / 134 Sweepは未route。Sweep=132という旧推定は撤回 |
+| VALUE | 621–628（8種） | 621 Rainbow, **622 Burst**, 623 Plasma, 624 Knight Rider, **625 Sweep (Transform 0/1)** | 626/627: non-serialized per-thread RNG state/history。628は固有Perlin evaluator未実装 |
+| COLOR FX | 121,127,128,129,130,131,133,**134** | **121**,127,129,130,**134 Sweep** | 131/133 precise fail-closed。128 Perlinは未route。Sweep=132という旧推定は撤回 |
 | MOVE | 221 Circle, 222 Curve, 223 Line, 224 Polygon, 225 Points | **221–225全5種exact** | なし |
 | CHASER | 321 #1, 322 #2, 323 #3, 324 #4, 325 random | 321,322,325 | 323,324未route。distinct evaluatorの演出意味が未証明 |
 | CURVE | 3–13（11種） | 3 Inverse Ramp, 7 Sinus, 10 Strobe | 4,5,6,8,9,11,12,13未route。Custom 13だけ別schema |
 | MAPPINGS | 521–530（10種） | 521 Rainbow | 530 precise fail-closed。522–529未route |
 | COLOR MAPPINGS | 21,22,23,29–37,40–42,44,45,47–50（21種） | 36 Rainbow | 残20種未route |
 
-現行runtime converter routeは22/68 ID、precise fail-closedは6、未routeは40。うち条件付きexact-coreは
-20、明示compatibilityはCHASER 321/325の2 route。これはID単位の入口coverageであり、共有raster classの再利用度や
+現行runtime converter routeは23/68 ID、precise fail-closedは6、未routeは39。うち条件付きexact-coreは
+21、明示compatibilityはCHASER 321/325の2 route。これはID単位の入口coverageであり、共有raster classの再利用度や
 STEPS/SUPER SCENEなど非generator構造を含む「製品完成率」ではない。未routeをUI名だけで近似せず、
 各evaluatorの意味論を回収したトランシェだけを増やす。
 
@@ -104,11 +104,14 @@ strict-core数を製品全域のexact完成数とは呼ばない。
    COLOR 121 / VALUE 622をcyclic 16-bit palette、raw pixel radius、RGBA64のQt 1024-entry
    gradient tableとseam、40 ms scheduler、qGray、Transform foldまでexact化した。
    Enhanced authoringは別modeで維持し、editorから明示切替できる。
-8. **次の新規IDトランシェ**: (a)既存Sweep evaluatorを再利用できるCOLOR FX 134
-   → (b)Perlin 128/530/628の固有evaluator/2D placement → (c)CURVE残
-   → (d)CHASER 323/324 → (e)MAPPINGS/COLOR MAPPINGS 2D群
+8. **DVC-SWEEP-EXACT（完了）**: `CSweepEffect / 0x1403665A0`を共有するCOLOR 134をstrict route化し、
+   VALUE 625のTransform 1境界も解消した。signed 40 ms生成フレームと補間、hard boundary、
+   Direction Change、Qt nearest fold、COLOR qGrayを一つのexact evaluatorで保持し、全パラメータと
+   Enhanced / exact切替を両editorへ露出した。新規作成は連続時間Enhancedを既定に維持する。
+9. **次の新規IDトランシェ**: (a)Perlin 128/530/628の固有evaluator/2D placement → (b)CURVE残
+   → (c)CHASER 323/324 → (d)MAPPINGS/COLOR MAPPINGS 2D群
    （Media/Text等の埋め込み系はColour Mapping既存基盤を再利用）。
-9. **P-EXP（完了）**: 23 quick looks（VALUE6 / CURVE3 / CHASER3 / COLOR5 /
+10. **P-EXP（完了）**: 23 quick looks（VALUE6 / CURVE3 / CHASER3 / COLOR5 /
    MAPPING3 / MOVE3）を統合済み。ColorMappingは埋め込みmediaのため別設計。
 
 ## 各トランシェの受入（共通）

@@ -278,19 +278,20 @@ Explosion / Starfield / Graph / Lines / Grid。21項目を最下端Gridまで観
 
 ## 現行Syndocal importerとの逆照合
 
-68 IDのうちDVC-BURST-EXACT後は22 IDがruntime targetを作れるconverter route、VALUE
+68 IDのうちDVC-SWEEP-EXACT後は23 IDがruntime targetを作れるconverter route、VALUE
 626/627/628とCOLOR 131/133、MAPPINGS 530の6 IDがclass固有理由でprecise
-fail-closed、残る40 IDは未routeでgeneric `Skipped`になる。22 routeはfull-domain完成数ではなく、
+fail-closed、残る39 IDは未routeでgeneric `Skipped`になる。23 routeはfull-domain完成数ではなく、
 strict/exactを別に監査した。
 
 | route群 | 現在の境界 |
 |---|---|
-| VALUE 621/622/623/624/625 | strict。622はcyclic palette/radial/40ms evaluator。625は`Transform=0`のみ。対象ゼロのno-opもschema検証後に成立 |
+| VALUE 621/622/623/624/625 | strict。622はcyclic palette/radial/40ms evaluator。625はTransform 0/1、Direction Changeを共有Sweep evaluatorでexact化。対象ゼロのno-opもschema検証後に成立 |
 | COLOR MAPPINGS 36 | strict。外部`SELECTIONS`参照はprecise fail-closed |
 | MOVE 221–225 | strict。5 distinct evaluator、40 ms frame、全Phasing/Symmetry domain、ordered beam targetを保持 |
 | COLOR 129/130 | strict schemaと証明済みevaluator式を実装 |
 | COLOR 127 | strict schema、40ms量子化、合成後qGray、Transform foldを共有exact evaluatorで実装 |
 | COLOR 121 | strict schema、cyclic palette、raw pixel radius、40ms、qGray、Transform foldを共有exact Burst evaluatorで実装 |
+| COLOR 134 | strict schema、hard boundary、Direction Change、qGray、Transform foldを共有exact Sweep evaluatorで実装 |
 | COLOR 131/133 | strict schema後、非serialize qrand state/historyでprecise fail-closed |
 | CHASER 321/322/325 | 322はstrict。321/325はdistinct evaluator/random順差を常時Approximate |
 | CURVE 3/7/10 | strict factory schemaと証明済み40 ms式を実装 |
@@ -375,6 +376,24 @@ strict/exactを別に監査した。
   明示compatibilityはCHASER 321/325の2 routeのまま、未routeは40のままである。
 - 新規authoringはEnhancedを既定とし、import bodyだけDaslight exactを保持する。editorの明示切替で
   Enhancedへ移行できる。
+
+### DVC-SWEEP-EXACT（2026-08-10）
+
+- `CSweepEffect / 0x1403665A0`を共有するVALUE 625とCOLOR 134を、signed 40 ms frame grid、
+  `F=min(R,750)`生成表とmixed-precision temporal interpolation、palette数倍phase、整数hard
+  boundary、次色fill＋現色overlay、transitionごとの180度Direction Changeまで同一evaluatorで実装した。
+- 共通Transform 1はQt nearestの半幅forward/reverse copyを使い、奇数幅の末尾と幅1をtransparent
+  blackのまま残す。COLORのGrayscaleは合成後にQt整数qGrayを適用する。VALUEにはID2がないためfalse固定。
+- VALUE 625の旧`Transform=1` fail-closedを解消し、COLOR 134をstrict route化した。protocolは
+  `grayscale` / `vertical_symmetry`をdefault false・false時omitで加算し、legacy `.sdc` shapeを保つ。
+- runtime-convertは22→23、未routeは40→39、条件付きexact-coreは20→21。precise fail-closed 6、
+  明示compatibility 2は不変。MAPPINGS 528 / COLOR MAPPINGS 44の2D placementは本claimに含めない。
+- `.dvc` importは`daslight_exact=true`で粗い40 ms gridを隔離し、新規authoringは連続時間Enhancedを
+  既定とする。editorから明示的に相互切替できる。
+- 200灯体 x 64 exact Sweepのrelease 44Hz計測はp95 4.023 ms / p99 5.080 ms /
+  max 6.112 msで5/8/12 ms gateを通過した。全workspace test、production frontend build、
+  localization 3066/3066、Scene Settings 5 viewport、`tauri build --no-bundle`とexact checkoutの
+  responsive native windowまで確認した。
 
 ## 未実装・未証明境界
 
