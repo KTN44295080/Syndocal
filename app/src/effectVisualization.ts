@@ -65,10 +65,7 @@ export const evaluateDaslightCurveSource = (
   progress: number,
   periodMs: number,
 ): number => {
-  const continuousPosition = normalizePhase(progress);
-  const count = Math.max(1, Math.floor(Math.max(source.sample_ms, periodMs) / Math.max(1, source.sample_ms)));
-  const index = Math.floor(continuousPosition * count) % count;
-  const position = index / count;
+  const position = normalizePhase(progress);
   let value: number;
   switch (shape) {
     case "Sine":
@@ -78,8 +75,8 @@ export const evaluateDaslightCurveSource = (
     case "Pulse": {
       const rateAngle = Math.fround(source.rate * 2 * Math.PI * 2);
       const phaseAngle = Math.fround(-Math.fround(phase) * Math.PI * 2);
-      const angle = Math.fround(Math.fround(rateAngle * Math.fround(continuousPosition)) + phaseAngle);
-      const window = 1 - Math.abs(continuousPosition * 2 - 1);
+      const angle = Math.fround(Math.fround(rateAngle * Math.fround(position)) + phaseAngle);
+      const window = 1 - Math.abs(position * 2 - 1);
       value = Math.sin(angle) * Math.fround(source.size * window) + source.offset + 0.5;
       break;
     }
@@ -90,18 +87,17 @@ export const evaluateDaslightCurveSource = (
       break;
     }
     case "Square": {
-      const gridCell = Math.floor(index * 400 / count);
-      const wrappedCell = ((Math.trunc(gridCell + 400 - phase * 400) % 400) + 400) % 400;
-      const halfPeriodCells = Math.floor(400 / source.rate);
-      const band = Math.trunc(wrappedCell / halfPeriodCells);
+      const shifted = normalizePhase(position - phase);
+      const band = Math.floor(shifted * source.rate);
       value = source.offset + (band % 2 === 0 ? source.size : 0);
       break;
     }
     case "Strobe": {
-      const samplesPerSecond = 1000 / Math.max(1, source.sample_ms);
-      const interval = Math.max(1, Math.floor(samplesPerSecond / source.rate));
-      const intervalPosition = index % interval;
-      value = intervalPosition === 0 || intervalPosition < interval * phase * 0.5
+      const elapsedSeconds = position * Math.max(10, periodMs) / 1000;
+      const cyclePosition = normalizePhase(elapsedSeconds * source.rate);
+      const recoveredMinimumDuty = Math.min(1, Math.max(0, source.sample_ms / 1000 * source.rate));
+      const duty = Math.min(1, Math.max(recoveredMinimumDuty, phase * 0.5));
+      value = cyclePosition < duty
         ? source.offset + source.size * 0.5
         : source.offset;
       break;

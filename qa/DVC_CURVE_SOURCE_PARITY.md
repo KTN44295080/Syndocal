@@ -53,16 +53,22 @@ Imported LFO requests retain an additive `daslight_curve` source profile contain
 `size`, `offset`, and recovered provenance `sample_ms=40`. Native Syndocal LFOs omit the profile
 and retain their existing continuous evaluator.
 
-CURVE 4 Pulse is the first corrected-import route under
-`DVC_CORRECTED_COMPATIBILITY_POLICY.md`. It retains the recovered carrier and all authored
-parameters, but uses `window=1-abs(2*t-1)` on continuous time. This removes both the
-DURATION-dependent amplitude defect and the 40 ms output hold. The import report records the
-recovered grid and both corrections; it does not call this frame-equivalent Daslight output.
+All routed DVC Curve sources now follow `DVC_CORRECTED_COMPATIBILITY_POLICY.md`:
 
-The existing Sinus, Inverse Ramp, Square, and Strobe routes still quantize the source position
-before applying the recovered equation; their conversion to corrected continuous timing is a
-tracked repository-wide audit item. Size and Offset are preserved instead of being reduced to
-clamped endpoints: every sample is clamped after evaluation. This is necessary for
+- Sinus and Inverse Ramp retain the recovered equations but evaluate continuous `t` instead of
+  holding 40 ms work samples.
+- Pulse retains the recovered carrier and all authored parameters, but uses
+  `window=1-abs(2*t-1)` on continuous time. This removes both the DURATION-dependent amplitude
+  defect and the 40 ms output hold.
+- Square uses `band=floor(fract(t-Phase)*Rate)`, removing the 400-cell residue while preserving
+  authored band count, alternating polarity, Size and Offset.
+- Strobe uses the exact authored `1/Rate` interval. It retains the recovered 40 ms minimum flash
+  width and `Phase/2` duty extension, but no longer changes frequency through `floor(25/Rate)`.
+
+Each import report records the recovered grid and the applicable correction; none of these
+routes is described as frame-equivalent Daslight output. Size and Offset remain source values
+instead of being reduced to clamped endpoints: every evaluated value is clamped. This is
+necessary for
 `homecoming2606.dvc` scene `all_rampFlash`, whose raw
 Inverse Ramp range is approximately `-0.567..0.995`; its negative portion must remain at DMX 0
 for a finite interval.
@@ -74,11 +80,10 @@ field and continues to deserialize with `None`.
 
 ## Regression evidence
 
-- `cargo test -p engine daslight_ -- --nocapture`
-  - 6 passed, 0 failed.
-  - Covers 40 ms hold boundaries, Strobe Rate/Phase pulse widths, Sinus source Phase, a clipped
-    Sinus plateau, the real `all_rampFlash` descending range/zero plateau, and invalid source
-    profiles.
+- Focused engine regressions cover removal of the 40 ms hold, exact Strobe Rate with recovered
+  minimum flash width, equal Square bands, normalized Pulse amplitude, Sinus source Phase, a
+  clipped Sinus plateau, the real `all_rampFlash` descending range/zero plateau, and invalid
+  source profiles.
 - `cargo test -p syndocal dvc_ -- --nocapture`
   - 45 passed, 0 failed.
   - Covers synthetic conversion plus all locally available `.dvc` inventories and goldens.

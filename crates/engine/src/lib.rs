@@ -32790,16 +32790,11 @@ fn evaluate_daslight_curve_normalized_with_offset(
         let elapsed = now.saturating_duration_since(created_at).as_secs_f32();
         (elapsed * rate / duration_seconds).rem_euclid(1.0)
     };
-    let sample_ms = u64::from(source.sample_ms.max(1));
-    let sample_count = (request.period_ms.max(sample_ms) / sample_ms).max(1);
     let shifted_outer_phase = (outer_phase + fixture_phase_offset).rem_euclid(1.0);
-    let sample_index = ((shifted_outer_phase * sample_count as f32).floor() as u64)
-        .min(sample_count.saturating_sub(1));
 
     let source_value = match &request.shape {
         LfoShape::Sine => {
-            let source_position = sample_index as f32 / sample_count as f32;
-            let phase = source_position * source.rate * 0.5 - request.phase;
+            let phase = shifted_outer_phase * source.rate * 0.5 - request.phase;
             ((phase * std::f32::consts::TAU).sin() * source.size * 0.5
                 + source.offset
                 + source.size * 0.5)
@@ -32813,25 +32808,27 @@ fn evaluate_daslight_curve_normalized_with_offset(
             source.offset,
         ),
         LfoShape::Saw => {
-            let source_position = sample_index as f32 / sample_count as f32;
-            let source_phase = source_position * source.rate * 0.5 - request.phase;
+            let source_phase = shifted_outer_phase * source.rate * 0.5 - request.phase;
             let centered = source_phase - (source_phase + 0.5).floor();
             (source.offset - centered * source.size + source.size - 0.5).clamp(0.0, 1.0)
         }
-        LfoShape::Square => daslight_square_curve_source_value(
-            sample_index,
-            sample_count,
+        LfoShape::Square => corrected_square_curve_source_value(
+            shifted_outer_phase,
             source.rate as i32,
             source.size,
             request.phase,
             source.offset,
         ),
         LfoShape::Strobe => {
-            let samples_per_second = 1_000.0 / f32::from(source.sample_ms.max(1));
-            let interval_samples = (samples_per_second / source.rate).floor().max(1.0) as u64;
-            let interval_position = sample_index % interval_samples;
-            let extended_high_samples = interval_samples as f32 * request.phase * 0.5;
-            if interval_position == 0 || (interval_position as f32) < extended_high_samples {
+            let elapsed_in_buffer_seconds =
+                shifted_outer_phase * request.period_ms.max(10) as f32 / 1_000.0;
+            let cycle_position = (elapsed_in_buffer_seconds * source.rate).rem_euclid(1.0);
+            let recovered_minimum_duty =
+                (f32::from(source.sample_ms.max(1)) / 1_000.0 * source.rate).clamp(0.0, 1.0);
+            let duty = recovered_minimum_duty
+                .max(request.phase * 0.5)
+                .clamp(0.0, 1.0);
+            if cycle_position < duty {
                 (source.offset + source.size * 0.5).clamp(0.0, 1.0)
             } else {
                 source.offset.clamp(0.0, 1.0)
@@ -32876,21 +32873,16 @@ fn corrected_pulse_curve_source_value(
         as f32
 }
 
-fn daslight_square_curve_source_value(
-    sample_index: u64,
-    sample_count: u64,
+fn corrected_square_curve_source_value(
+    source_position: f32,
     rate: i32,
     size: f32,
     phase: f32,
     offset: f32,
 ) -> f32 {
-    debug_assert!(sample_count > 0);
     debug_assert!((1..=10).contains(&rate));
-    let grid_cell = (sample_index % sample_count).saturating_mul(400) / sample_count;
-    let phase_cells = 400.0_f32 - phase * 400.0;
-    let wrapped_cell = ((grid_cell as f32 + phase_cells).trunc() as i32).rem_euclid(400);
-    let half_period_cells = 400 / rate;
-    let band = (wrapped_cell as f32 / half_period_cells as f32).trunc() as i32;
+    let position = (source_position - phase).rem_euclid(1.0);
+    let band = (position * rate as f32).floor() as i32;
     let unit = if band & 1 == 0 { 1.0 } else { 0.0 };
     (offset + unit * size).clamp(0.0, 1.0)
 }
@@ -54136,7 +54128,7 @@ mod tests {
     }
 
     #[test]
-    fn daslight_strobe_uses_the_native_40ms_rate_quantization() {
+    fn corrected_dvc_strobe_uses_exact_rate_with_recovered_minimum_flash_width() {
         let mut request = test_lfo_request(
             "Imported Strobe",
             LfoShape::Strobe,
@@ -54164,7 +54156,7 @@ mod tests {
         });
         assert_eq!(
             samples,
-            [u16::MAX, u16::MAX, 0, 0, u16::MAX, u16::MAX, 0, u16::MAX]
+            [u16::MAX, u16::MAX, 0, 0, 0, u16::MAX, u16::MAX, 0]
         );
 
         request.phase = 0.4;
@@ -54240,21 +54232,24 @@ mod tests {
     }
 
     #[test]
-    fn daslight_square_uses_the_native_400_cell_integer_bands() {
+    fn corrected_dvc_square_uses_equal_bands_without_terminal_integer_residue() {
         let rate_three = (0..400)
-            .map(|sample| daslight_square_curve_source_value(sample, 400, 3, 1.0, 0.0, 0.0))
+            .map(|sample| {
+                corrected_square_curve_source_value(sample as f32 / 400.0, 3, 1.0, 0.0, 0.0)
+            })
             .collect::<Vec<_>>();
         assert_eq!(
             rate_three.iter().filter(|value| **value == 1.0).count(),
-            266
+            267
         );
-        assert!(rate_three[..133].iter().all(|value| *value == 1.0));
-        assert!(rate_three[133..266].iter().all(|value| *value == 0.0));
-        assert!(rate_three[266..399].iter().all(|value| *value == 1.0));
-        assert_eq!(rate_three[399], 0.0);
+        assert!(rate_three[..134].iter().all(|value| *value == 1.0));
+        assert!(rate_three[134..267].iter().all(|value| *value == 0.0));
+        assert!(rate_three[267..].iter().all(|value| *value == 1.0));
 
         let phase_shifted = (0..25)
-            .map(|sample| daslight_square_curve_source_value(sample, 25, 3, 0.75, 0.25, 0.1))
+            .map(|sample| {
+                corrected_square_curve_source_value(sample as f32 / 25.0, 3, 0.75, 0.25, 0.1)
+            })
             .collect::<Vec<_>>();
         assert!(phase_shifted[..15]
             .iter()
@@ -54305,7 +54300,7 @@ mod tests {
     }
 
     #[test]
-    fn daslight_sinus_preserves_source_phase_and_sample_grid() {
+    fn corrected_dvc_sinus_preserves_source_phase_without_sample_hold() {
         let mut request = test_lfo_request(
             "Imported Sinus",
             LfoShape::Sine,
@@ -54343,8 +54338,8 @@ mod tests {
             &clock,
         );
         assert_eq!(at_zero, 32_768);
-        assert_eq!(before_next_sample, at_zero);
-        assert!((40_000..=42_000).contains(&after_next_sample));
+        assert_ne!(before_next_sample, at_zero);
+        assert!(after_next_sample > before_next_sample);
         assert!(near_peak > 65_000);
 
         request.phase = 0.25;

@@ -3921,7 +3921,10 @@ fn convert_dvc_inverse_ramp_effect(
         return Err("BEAMS resolved to no Inverse Ramp fixture targets".to_string());
     }
 
-    let mut approximations = Vec::new();
+    let mut approximations = vec![
+        "Syndocal evaluates Inverse Ramp continuously instead of holding Daslight's 40 ms work samples; Rate/Phase/Size/Offset, descending direction, clamp intervals, and beam order are preserved"
+            .to_string(),
+    ];
     if incompatible_dimmer_targets > 0 {
         approximations.push(format!(
             "{incompatible_dimmer_targets} fixture target(s) without a Dimmer attribute or addressable color beam were omitted"
@@ -3956,7 +3959,7 @@ fn convert_dvc_inverse_ramp_effect(
         }),
     };
     let note = format!(
-        "feature=Dimmer; Daslight sampled Curve buffer duration_ms={period_ms}; sample_ms={DASLIGHT_CURVE_SAMPLE_MS}; rate={rate}; descending_ramp=Saw directed from low-field {low} to high-field {high}; source_range={raw_low:.3}..{raw_high:.3} with native 0..1 clamp; source_phase={phase}; fixture_spread={phasing}; size={size}; offset={offset}; {clock_note}"
+        "feature=Dimmer; implementation=SyndocalCorrected; duration_ms={period_ms}; recovered_sample_ms={DASLIGHT_CURVE_SAMPLE_MS}; runtime_time=continuous; correction_reason=timer granularity must not stair-step output; rate={rate}; descending_ramp=Saw directed from low-field {low} to high-field {high}; source_range={raw_low:.3}..{raw_high:.3} with native 0..1 clamp; source_phase={phase}; fixture_spread={phasing}; size={size}; offset={offset}; {clock_note}"
     );
     Ok(ConvertedDvcEffect {
         target: Some(CueEffectTarget {
@@ -4105,7 +4108,10 @@ fn convert_dvc_sinus_effect(
         return Err("BEAMS resolved to no Sinus fixture targets".to_string());
     }
 
-    let mut approximations = Vec::new();
+    let mut approximations = vec![
+        "Syndocal evaluates Sinus continuously instead of holding Daslight's 40 ms work samples; Rate/Phase/Size/Offset, clamp intervals, and beam order are preserved"
+            .to_string(),
+    ];
     if incompatible_dimmer_targets > 0 {
         approximations.push(format!(
             "{incompatible_dimmer_targets} fixture target(s) without a Dimmer attribute or addressable color beam were omitted"
@@ -4139,7 +4145,7 @@ fn convert_dvc_sinus_effect(
         }),
     };
     let note = format!(
-        "feature=Dimmer; Daslight sampled Curve buffer duration_ms={period_ms}; sample_ms={DASLIGHT_CURVE_SAMPLE_MS}; rate={rate}; low={low}; high={high}; source_range={raw_low:.3}..{raw_high:.3} with native 0..1 clamp; source_phase={phase}; fixture_spread={phasing}; offset={offset}; {clock_note}"
+        "feature=Dimmer; implementation=SyndocalCorrected; duration_ms={period_ms}; recovered_sample_ms={DASLIGHT_CURVE_SAMPLE_MS}; runtime_time=continuous; correction_reason=timer granularity must not stair-step output; rate={rate}; low={low}; high={high}; source_range={raw_low:.3}..{raw_high:.3} with native 0..1 clamp; source_phase={phase}; fixture_spread={phasing}; offset={offset}; {clock_note}"
     );
     Ok(ConvertedDvcEffect {
         target: Some(CueEffectTarget {
@@ -4193,7 +4199,10 @@ fn convert_dvc_square_effect(
         return Err("BEAMS resolved to no Square fixture targets".to_string());
     }
 
-    let mut approximations = Vec::new();
+    let mut approximations = vec![
+        "Syndocal replaces Square's 40 ms hold and floor(400/Rate) residue with continuous equal-width authored bands; Rate/Phase/Size/Offset and beam order are preserved"
+            .to_string(),
+    ];
     if incompatible_dimmer_targets > 0 {
         approximations.push(format!(
             "{incompatible_dimmer_targets} fixture target(s) without a Dimmer attribute or addressable color beam were omitted"
@@ -4226,9 +4235,8 @@ fn convert_dvc_square_effect(
             sample_ms: DASLIGHT_CURVE_SAMPLE_MS,
         }),
     };
-    let half_period_cells = 400_u64 / rate as u64;
     let note = format!(
-        "feature=Dimmer; shape=Square; evaluator=CSquareEffect@0x140370420; Daslight sampled Curve buffer duration_ms={period_ms}; sample_ms={DASLIGHT_CURVE_SAMPLE_MS}; rate={rate}; grid_cells=400; half_period_cells=floor(400/Rate)={half_period_cells}; phase_cells=trunc(floor(sample_index*400/sample_count)+400-Phase*400)%400; even_band=high; low={low}; high={high}; source_phase={phase}; fixture_spread={phasing}; size={size}; offset={offset}; {clock_note}"
+        "feature=Dimmer; shape=Square; evaluator=CSquareEffect@0x140370420; implementation=SyndocalCorrected; duration_ms={period_ms}; recovered_sample_ms={DASLIGHT_CURVE_SAMPLE_MS}; runtime_time=continuous; recovered_grid_cells=400; recovered_half_period_cells=floor(400/Rate); Syndocal_band=floor(fract(progress-Phase)*Rate); correction_reason=timer granularity and integer residue must not change authored bands; rate={rate}; even_band=high; low={low}; high={high}; source_phase={phase}; fixture_spread={phasing}; size={size}; offset={offset}; {clock_note}"
     );
     Ok(ConvertedDvcEffect {
         target: Some(CueEffectTarget {
@@ -4258,7 +4266,6 @@ fn convert_dvc_strobe_effect(
     let phase = dvc_param(&params, 3, "Phase")?;
     let offset = dvc_param(&params, 4, "Offset")?;
     let phasing = dvc_param(&params, 5, "Phasing")?;
-    let samples_per_second = 1_000.0 / f64::from(DASLIGHT_CURVE_SAMPLE_MS);
     let duration_ms = effect
         .attribute("DURATION")
         .ok_or_else(|| "Strobe EFFECT is missing DURATION".to_string())?
@@ -4286,7 +4293,10 @@ fn convert_dvc_strobe_effect(
         return Err("BEAMS resolved to no Strobe fixture targets".to_string());
     }
 
-    let mut approximations = Vec::new();
+    let mut approximations = vec![
+        "Syndocal uses the authored Strobe Rate continuously instead of floor(25/Rate); the recovered 40 ms minimum flash width, Phase duty extension, Size/Offset, and beam order are preserved"
+            .to_string(),
+    ];
     if incompatible_dimmer_targets > 0 {
         approximations.push(format!(
             "{incompatible_dimmer_targets} fixture target(s) without a Dimmer attribute or addressable color beam were omitted"
@@ -4320,10 +4330,8 @@ fn convert_dvc_strobe_effect(
             sample_ms: DASLIGHT_CURVE_SAMPLE_MS,
         }),
     };
-    let interval_samples = (samples_per_second / rate).floor() as u64;
-    let interval_ms = interval_samples * u64::from(DASLIGHT_CURVE_SAMPLE_MS);
     let note = format!(
-        "feature=Dimmer; shape=Strobe; Daslight sampled Curve buffer duration_ms={period_ms}; sample_ms={DASLIGHT_CURVE_SAMPLE_MS}; rate={rate}; pulse_interval_samples=floor(25/Rate)={interval_samples}; pulse_interval_ms={interval_ms}; pulse_high_samples=1 plus samples with remainder < interval*Phase/2; low={low}; high={high}; source_phase={phase}; fixture_spread={phasing}; size={size}; offset={offset}; {clock_note}"
+        "feature=Dimmer; shape=Strobe; implementation=SyndocalCorrected; duration_ms={period_ms}; recovered_sample_ms={DASLIGHT_CURVE_SAMPLE_MS}; runtime_time=continuous; recovered_interval=floor(25/Rate); Syndocal_interval_seconds=1/Rate; minimum_high_ms={DASLIGHT_CURVE_SAMPLE_MS}; extended_duty=Phase/2; correction_reason=integer timer division must not change authored Rate; rate={rate}; low={low}; high={high}; source_phase={phase}; fixture_spread={phasing}; size={size}; offset={offset}; {clock_note}"
     );
     Ok(ConvertedDvcEffect {
         target: Some(CueEffectTarget {
@@ -7811,10 +7819,14 @@ mod tests {
             .any(|note| note == "segment selection approximated to fixture"));
         assert!(converted.warnings.is_empty());
         assert!(converted.note.contains("fixture_spread=0.2"));
+        assert!(converted
+            .approximations
+            .iter()
+            .any(|note| note.contains("evaluates Sinus continuously")));
     }
 
     #[test]
-    fn dvc_strobe_conversion_scales_size_and_preserves_sampled_source() {
+    fn dvc_strobe_conversion_scales_size_and_records_corrected_rate() {
         for (size, expected_high) in [(1.0, 32_768), (2.0, 65_535)] {
             let xml = format!(
                 r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="8"><EFFECT TYPE="5" ID="10" DURATION="5000"><PARAMS NB="5"><PARAM TYPE="0" ID="1" VAL="2"/><PARAM TYPE="1" ID="2" VAL="{size}"/><PARAM TYPE="1" ID="3" VAL="0"/><PARAM TYPE="1" ID="4" VAL="0"/><PARAM TYPE="1" ID="5" VAL="0.4"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#
@@ -7860,16 +7872,18 @@ mod tests {
                 .approximations
                 .iter()
                 .any(|note| note.contains("2% of the period")));
+            assert!(converted.note.contains("implementation=SyndocalCorrected"));
+            assert!(converted.note.contains("Syndocal_interval_seconds=1/Rate"));
             assert!(converted
-                .note
-                .contains("pulse_interval_samples=floor(25/Rate)=12"));
-            assert!(converted.note.contains("pulse_interval_ms=480"));
+                .approximations
+                .iter()
+                .any(|note| note.contains("authored Strobe Rate continuously")));
             assert!(converted.note.contains("fixture_spread=0.4"));
         }
     }
 
     #[test]
-    fn dvc_square_conversion_preserves_quantized_source_and_beam_order() {
+    fn dvc_square_conversion_uses_corrected_equal_bands_and_preserves_beam_order() {
         let document = Document::parse(
             r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="8"><EFFECT TYPE="5" ID="9" DURATION="1000"><PARAMS NB="5"><PARAM TYPE="0" ID="1" VAL="3"/><PARAM TYPE="1" ID="2" VAL="0.75"/><PARAM TYPE="1" ID="3" VAL="0.25"/><PARAM TYPE="1" ID="4" VAL="0.1"/><PARAM TYPE="1" ID="5" VAL="0.6"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
         )
@@ -7921,10 +7935,10 @@ mod tests {
             vec![2, 1]
         );
         assert!(converted.note.contains("CSquareEffect@0x140370420"));
-        assert!(converted
-            .note
-            .contains("half_period_cells=floor(400/Rate)=133"));
-        assert!(converted.approximations.is_empty());
+        assert!(converted.note.contains("implementation=SyndocalCorrected"));
+        assert!(converted.note.contains("Syndocal_band=floor"));
+        assert_eq!(converted.approximations.len(), 1);
+        assert!(converted.approximations[0].contains("equal-width authored bands"));
     }
 
     #[test]
@@ -7985,7 +7999,7 @@ mod tests {
     }
 
     #[test]
-    fn dvc_inverse_ramp_preserves_normalized_phasing_without_approximation() {
+    fn dvc_inverse_ramp_preserves_normalized_phasing_with_timing_correction() {
         let document = Document::parse(
             r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="8"><EFFECT TYPE="5" ID="3" DURATION="5000"><PARAMS NB="5"><PARAM TYPE="0" ID="1" VAL="2"/><PARAM TYPE="1" ID="2" VAL="1"/><PARAM TYPE="1" ID="3" VAL="0"/><PARAM TYPE="1" ID="4" VAL="0"/><PARAM TYPE="1" ID="5" VAL="0.6"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
         )
@@ -8017,6 +8031,10 @@ mod tests {
             .iter()
             .all(|note| !note.contains("Phasing")));
         assert!(converted.note.contains("fixture_spread=0.6"));
+        assert!(converted
+            .approximations
+            .iter()
+            .any(|note| note.contains("evaluates Inverse Ramp continuously")));
     }
 
     #[test]

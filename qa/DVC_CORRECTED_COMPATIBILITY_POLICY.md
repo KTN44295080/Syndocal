@@ -20,10 +20,10 @@ desirable product contract. Import reports must name every intentional correctio
 
 | Existing route or boundary | Recovered behavior already represented by Syndocal | Classification | Disposition |
 |---|---|---|---|
-| CURVE 3/7/9/10 | Source position held on a 40 ms grid | Timer/storage artifact | Replace by continuous-time evaluation; retain an explicit legacy option only if visual comparison proves it necessary |
-| CURVE 9 Square | `floor(400/Rate)` leaves an uneven terminal band | Integer-grid artifact | Use equal authored bands in corrected evaluation |
-| CURVE 10 Strobe | `floor(25/Rate)` changes the requested frequency | Timer-grid artifact | Use the authored rate and duty continuously |
-| CURVE 4 Pulse | Fixed `0.005` triangle slope makes amplitude depend on DURATION | Evaluator defect | **Corrected in the Pulse route:** normalize the window to 0..1 while retaining Rate, Size, Offset, Phase and beam order |
+| CURVE 3/7/9/10 | Source position held on a 40 ms grid | Timer/storage artifact | **Corrected:** continuous-time evaluation retains authored equations and clamp regions |
+| CURVE 9 Square | `floor(400/Rate)` leaves an uneven terminal band | Integer-grid artifact | **Corrected:** equal authored bands replace the integer residue |
+| CURVE 10 Strobe | `floor(25/Rate)` changes the requested frequency | Timer-grid artifact | **Corrected:** exact authored rate; recovered 40 ms minimum flash width and Phase duty extension retained |
+| CURVE 4 Pulse | Fixed `0.005` triangle slope makes amplitude depend on DURATION | Evaluator defect | **Corrected:** normalized continuous window retains Rate, Size, Offset, Phase and beam order |
 | VALUE/COLOR 622/121 Burst | 16-bit integer segment residue, 1024-entry RGBA64 cache, raster seam | Rendering artifacts that can visibly affect a show | Keep recovered core as Legacy quirks; corrected core removes gaps/banding without changing radial motion or palette order |
 | VALUE/COLOR 624/127 Knight Rider | Qt nearest-neighbour fold can leave the last odd pixel and width-one raster clear | Unpainted-pixel defect | **Corrected:** full destination coverage now retains the recovered painted samples, head motion, fading, direction and palette semantics |
 | VALUE/COLOR 625/134 Sweep | 40 ms frame-count floor shortens DURATION; Qt fold can clear the odd tail | Timer and raster defects | Destination coverage **corrected**; authored-duration correction remains pending. Hard boundary and Direction Change stay intact |

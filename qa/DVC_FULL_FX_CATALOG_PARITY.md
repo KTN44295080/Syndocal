@@ -408,12 +408,16 @@ strict/exactを別に監査した。
   source x/y列のFNV-1a64 `b8c647db6b017785`を回帰固定した。runtime-convertは23→26、
   precise fail-closedは6→4、未routeは39→38、条件付きexact-coreは21→24となる。
 
-### DVC-CURVE-SQUARE-EXACT（2026-08-10）
+### DVC-CURVE recovered source and corrected runtime（2026-08-10）
 
 - `CSquareEffect / 0x140370420`のsample count、400-cell整数grid、`floor(400/Rate)` band幅、
   float Phase加算後のtruncation、band parity、Size/Offset後clampを静的解析から復元した。
-- CURVE ID9をstrict共通schema、40 ms source grid、ordered beam target、Phasing保持で既存LFO bodyへ
-  routeする。`daslight_curve`があるSquareだけ量子化式を使い、native Syndocal Squareは連続時間を維持する。
+- CURVE ID9をstrict共通schema、回収元40 ms grid provenance、ordered beam target、Phasing保持で
+  既存LFO bodyへrouteした。その後のcorrected-import監査で、DVC Squareも連続時間の等幅bandへ変更し、
+  `floor(400/Rate)`の終端residueを除去した。native Syndocal Squareは従来の連続時間を維持する。
+- 同じ監査でID3 Inverse Ramp / 7 Sinusの40ms hold、ID10 Strobeの`floor(25/Rate)`周波数誤差を
+  除去した。Strobeの40ms最小flash幅とPhase dutyは演出特性として保持する。ID4 Pulseは回収carrierを
+  保ち、固定0.005 windowと40ms holdをnormalized continuous windowへ訂正してrouteした。
 - runtime-convertは26→27、未routeは38→37、条件付きexact-coreは24→25。precise fail-closed 4と
   明示compatibility 2は不変。
 
@@ -421,7 +425,7 @@ strict/exactを別に監査した。
 
 カタログ列挙は完了したが、次は別軸で残る。
 
-1. CURVEのPulse/Ramp/Random/Sinus3/Tangeant/Triangle/Customはdistinct evaluator入口とschemaまで。
+1. CURVEのRamp/Random/Sinus3/Tangeant/Triangle/Customはdistinct evaluator入口とschemaまで。
    評価式をdecompileしてから実装する。
 2. CHASER #3/#4はschemaとdistinct evaluatorまで。DMX系列または式を確定してから実装する。
 3. Spiral/Butterfly/MediaとCOLOR MAPPINGS専用13 classはschema/evaluator入口までで、

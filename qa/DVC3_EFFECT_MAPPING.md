@@ -29,7 +29,7 @@
 | 3 | **Inverse Ramp**（2026-07-19 homecomingで照合） | all_rampFlash: Rate=2⇔1=2✓, Size=1.56⇔2=1.562✓, Phase=49.5⇔3=0.495✓, Offset=-84.8⇔4=-0.848✓ — **全一致** |
 | 10 | **Strobe** | Documents版Fl-StrobeのUI名に加え、Daslight 5.0.6.2バイナリの `CStrobeEffect` 評価関数で40msサンプル列・Rate間隔・Phaseパルス幅を確定 |
 
-時間換算（2026-08-09訂正）: `EFFECT DURATION` はCurveの外側サンプルバッファ長であり、Rateで割った値は周期ではない。Sinus / Ramp系はバッファ全体に `Rate/2` 周期を描き、全Curveを40ms刻みで評価する。したがって `DURATION=5000, Rate=10` は500ms周期ではなく、5秒バッファ内に5周期（実効1秒周期）。DVC由来LFOは `daslight_curve={rate,size,offset,sample_ms:40}` を保持し、通常のSyndocal LFOとは別に原サンプル列を再生する。Size/Offsetを端点だけへ畳み込まず各サンプルで0..1 clampするため、`all_rampFlash`の負側がDMX 0へ張り付く区間も保持する。
+時間換算（2026-08-10再訂正）: `EFFECT DURATION` はCurveの外側バッファ長であり、Rateで割った値は周期ではない。Sinus / Ramp系はバッファ全体に `Rate/2` 周期を描く。したがって `DURATION=5000, Rate=10` は500ms周期ではなく、5秒バッファ内に5周期（実効1秒周期）。DVC由来LFOは `daslight_curve={rate,size,offset,sample_ms:40}` に回収元の格子をprovenanceとして保持するが、SyndocalCorrected runtimeは連続時間で評価する。Size/Offsetを端点だけへ畳み込まず各時刻で0..1 clampするため、`all_rampFlash`の負側がDMX 0へ張り付く区間も保持する。
 Phasing = 選択ビーム順の位相分散。2026-08-08 に Syndocal LFO の `fixture_spread` へ 0..1 の正規化値を無変換で保存し、`phase_i = global_phase + i / target_count * Phasing` として command-time に灯体順をコンパイルする実装へ更新した。直接指定灯体の後に group を patch 順で展開し、group membership 変更時も再コンパイルする。Sinus / Inverse Ramp / Strobe の非ゼロ値 0.2 / 0.6 / 0.4 と、3灯体の DMX8 出力 `[64, 0, 128]`（authored order `[2,1,3]`, Saw, spread=0.75, t=0）を回帰試験で固定。旧 `.sdc` は欠落時 0、0 は従来どおり非出力。Attribute value=Absolute。
 
 ### COLOR FX（RACK=2, EFFECT TYPE=2）→ Syndocal Color エンジン + 新規パターンレシピ
@@ -259,7 +259,7 @@ Syndocalの現行Scene Settingsでは、作成時のMAPPINGS / COLOR MAPPINGSを
   - Sinus: `t=sample_index/sample_count`; `clamp(sin(2π*(Rate/2*t-Phase))*Size/2 + Offset + Size/2, 0, 1)`。
   - Inverse Ramp: `x=Rate/2*t-Phase`; `centered=x-floor(x+0.5)`; `clamp(Offset-centered*Size+Size-0.5, 0, 1)`。
   - Strobe: `interval_samples=floor(25/Rate)`; `remainder=sample_index%interval_samples`; `remainder==0` または `remainder<interval_samples*Phase/2` のサンプルだけHigh。Low=`Offset`, High=`Offset+Size/2`（各0..1 clamp）。
-- したがってDocuments版Fl-Strobe（Rate=2/Size=2/Phase=0/Offset=0/Phasing=0/DURATION=5000）は、5秒バッファ、12サンプル=480ms間隔、1サンプル=40ms幅のフルフラッシュである。旧実装の250ms間隔・2%幅は撤回した。
+- 回収元のDocuments版Fl-Strobe（Rate=2/Size=2/Phase=0/Offset=0/Phasing=0/DURATION=5000）は、5秒バッファ、12サンプル=480ms間隔、1サンプル=40ms幅だった。SyndocalCorrectedは周波数の整数誤差だけを除き、正確な500ms間隔と回収済み40ms最小幅で再生する。
 - Pulse(4)は矩形ではなく減衰振動波、Square(9)は50%デューティ矩形（キャプチャ有）。波形切替でRate等は既定値へ戻る。
 
 ### COLOR FX ID=129 = Plasma（B-WineRed (2) 実UI照合・全11パラメータ一致）
