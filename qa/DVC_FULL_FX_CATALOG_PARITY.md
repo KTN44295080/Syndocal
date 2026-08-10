@@ -135,9 +135,11 @@ GUI順とfactory集合は321–325の連番で一致し、空隙なし。共通b
 | 324 Chaser #4 | `0x14036CC50 -> 0x140374B20` | `CChaserType4Effect / 0x1406C8B38` | `0x140378400` | 321と同じ3 property |
 | 325 Chaser random | `0x14036CCC0 -> 0x140374C90` | `CChaserType5EffectRandom / 0x1406C8C08` | `0x1403791F0` | `T2/11 Fading=false`; `T0/12 Nb pixels on=1[0..1000]`; `T1/13 Flash=100[0..100]`; `T0/14 Random sequence=0[0..255]`; `T0/15 Nb cycles=1[1..255]` |
 
-321/322/325にはconverter routeがある。ただし322はTYPE検証不足、321はfactory範囲との差、325は
-random順のstable置換があり、3 routeともstrict完成とは数えない。323/324はclass/schema/distinct evaluatorまで
-証明済みだが、演出上の意味を命名できるGUI/DMX系列は未採取なので式は未断言。
+321–325の全5種にconverter routeがある。323/324はpinned binaryのevaluatorから、保存beam順を
+両端から中央へpair化するoutside-in順と、その正確な逆順であるcenter-out順を回収した。import時に
+既存Chaser stepへ一度だけ変換し、One Way / Fading / Nb pixels onも共通runtimeへ結線する。
+40 ms work-frameと折返し重複frameはCorrected連続clockへ置換する。式、実保存32-beam specimen、
+偶奇topology regressionの正本は`qa/DVC_CHASER_SYMMETRIC_PARITY.md`とする。
 
 ## CURVE FX — family/type 5
 
@@ -285,8 +287,8 @@ Explosion / Starfield / Graph / Lines / Grid。21項目を最下端Gridまで観
 
 ## 現行Syndocal importerとの逆照合
 
-68 IDのうち現行は32 IDがruntime targetを作れるconverter route、random-state由来のprecise
-fail-closedは0、残る36 IDは未routeでgeneric `Skipped`になる。32 routeはfull-domain完成数ではなく、
+68 IDのうち現行は39 IDがruntime targetを作れるconverter route、random-state由来のprecise
+fail-closedは0、残る29 IDは未routeでgeneric `Skipped`になる。39 routeはfull-domain完成数ではなく、
 strict/exactを別に監査した。
 
 | route群 | 現在の境界 |
@@ -300,8 +302,8 @@ strict/exactを別に監査した。
 | COLOR 134 | strict schema、authored DURATIONを保持。hard boundary、Direction Change、qGray、Transform foldと内部40 ms tableはlegacy Sweep evaluatorに残る |
 | COLOR 128 | strict schema、固有Perlin evaluator、連続時間、qGray、Transform foldを実装 |
 | COLOR 131/133 | strict schema、recovered random grammar、stable source seed、qGray/TransformをCorrected evaluatorで実装 |
-| CHASER 321/322/325 | 322はstrict。321はcompatibility。325の既存stable permutationはCorrectedとして報告 |
-| CURVE 3/7/9/10 | strict factory schemaと回収式をCorrected continuous evaluatorで実装。9はequal authored band、10 Strobeはexact Rateとdimensionless duty |
+| CHASER 321–325 | 323/324はstrict schemaと回収済み対称pair topologyをCorrected連続clockへ変換。321はcompatibility、325の既存stable permutationはCorrectedとして報告 |
+| CURVE 3–12 | strict factory schemaと回収式をCorrected continuous evaluatorで実装。6 Randomだけ非serialize qrand履歴をstable source seedへ置換 |
 | MAPPINGS 521 | strict schema、unit→percent、Rectangle placementを実装 |
 | MAPPINGS 530 | strict schema、Rectangle placement、固有Perlin evaluator、穴のない解析的0..360度inverse rotationを実装 |
 
@@ -454,9 +456,10 @@ strict/exactを別に監査した。
 
 カタログ列挙は完了したが、次は別軸で残る。
 
-1. CURVEのRamp/Random/Sinus3/Tangeant/Triangle/Customはdistinct evaluator入口とschemaまで。
-   評価式をdecompileしてから実装する。
-2. CHASER #3/#4はschemaとdistinct evaluatorまで。DMX系列または式を確定してから実装する。
+1. CURVE 3–12は評価式を回収してroute済み。別schemaのCustom 13だけはserialized pointsと
+   evaluatorの補間・端点意味論を確定してから実装する。
+2. CHASER #3/#4は式と対称pair topologyを回収し、実保存specimen付きでroute済み。実灯体の
+   photometryとdevice latencyだけは物理受入に残る。
 3. Spiral/Butterfly/MediaとCOLOR MAPPINGS専用13 classはschema/evaluator入口までで、
    raster algorithm bodyの意味論が未復元。
 4. `TYPE7 Shape`のserialized glyph表現と`TYPE10 Text Direction`の合法enum域は未証明。

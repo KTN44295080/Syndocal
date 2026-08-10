@@ -31,13 +31,13 @@ Daslight 5.0.6.2 / FileVersion `25.0905.165.111`の実機dropdown全項目とfac
 | VALUE | 621–628（8種） | **621–628全8種**（626/627はstable source seedのCorrected RNG） | なし |
 | COLOR FX | 121,127,128,129,130,131,133,**134** | **全8種**（131/133はstable source seedのCorrected RNG） | なし。Sweep=132という旧推定は撤回 |
 | MOVE | 221 Circle, 222 Curve, 223 Line, 224 Polygon, 225 Points | **221–225全5種exact** | なし |
-| CHASER | 321 #1, 322 #2, 323 #3, 324 #4, 325 random | 321,322,325 | 323,324未route。distinct evaluatorの演出意味が未証明 |
-| CURVE | 3–13（11種） | 3 Inverse Ramp, **4 Pulse (Corrected)**, 7 Sinus, **9 Square**, 10 Strobe | 5,6,8,11,12,13未route。Custom 13だけ別schema |
+| CHASER | 321 #1, 322 #2, 323 #3, 324 #4, 325 random | **321–325全5種**（323/324は回収済み対称pair topologyをCorrected連続clockへ変換） | なし |
+| CURVE | 3–13（11種） | **3–12全10種**（6 Randomだけstable source seedのCorrected RNG） | Custom 13だけ未route・別schema |
 | MAPPINGS | 521–530（10種） | 521 Rainbow, **530 Perlin** | 522–529未route |
 | COLOR MAPPINGS | 21,22,23,29–37,40–42,44,45,47–50（21種） | 36 Rainbow | 残20種未route |
 
-現行runtime converter routeは32/68 ID、random-state由来のprecise fail-closedは0、未routeは36。うち条件付きexact-coreは
-25、626/627/131/133は明示Corrected、CHASER 325も既存stable permutationをCorrectedとして報告する。これはID単位の入口coverageであり、共有raster classの再利用度や
+現行runtime converter routeは39/68 ID、random-state由来のprecise fail-closedは0、未routeは29。
+626/627/131/133、CURVE 6、CHASER 323/324は明示Corrected、CHASER 325も既存stable permutationをCorrectedとして報告する。これはID単位の入口coverageであり、共有raster classの再利用度や
 STEPS/SUPER SCENEなど非generator構造を含む「製品完成率」ではない。未routeをUI名だけで近似せず、
 各evaluatorの意味論を回収したトランシェだけを増やす。
 
@@ -115,7 +115,8 @@ strict-core数を製品全域のexact完成数とは呼ばない。
    Direction Change、Qt nearest fold、COLOR qGrayを一つのexact evaluatorで保持し、全パラメータと
    Enhanced / exact切替を両editorへ露出した。新規作成は連続時間Enhancedを既定に維持する。
 9. **DVC-PERLIN-EXACT（完了）**: Perlin 128/530/628の固有evaluatorとMAPPINGS 2D placementを実装。
-   **次の新規IDトランシェ**: (a)CURVE残 → (b)CHASER 323/324 → (c)MAPPINGS/COLOR MAPPINGS 2D群
+   **新規IDトランシェ進捗**: CURVE 5/6/8/11/12とCHASER 323/324は完了。次は
+   MAPPINGS/COLOR MAPPINGS 2D群、その後に別schemaのCURVE Custom 13を回収する
    （Media/Text等の埋め込み系はColour Mapping既存基盤を再利用）。
 10. **DVC-RNG-CORRECTED（完了）**: VALUE 626/627とCOLOR 131/133をstrict schemaでrouteし、
    非serialize qrand履歴だけをsource identity由来のstable u32 seedへ置換した。Random fillは

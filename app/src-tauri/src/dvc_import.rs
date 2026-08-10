@@ -2162,6 +2162,8 @@ fn parse_scene_effects(
             let generator = match (rack_type, effect_type, generator_id) {
                 (Some(3), Some(6), Some(321)) => Some("Chaser #1"),
                 (Some(3), Some(6), Some(322)) => Some("Chaser #2"),
+                (Some(3), Some(6), Some(323)) => Some("Chaser #3"),
+                (Some(3), Some(6), Some(324)) => Some("Chaser #4"),
                 (Some(3), Some(6), Some(325)) => Some("Chaser random"),
                 (Some(4), Some(4), Some(221)) => Some("Circle"),
                 (Some(4), Some(4), Some(223)) => Some("Line"),
@@ -2304,7 +2306,7 @@ fn convert_dvc_effect(
             effect_id,
             fixture_refs,
         ),
-        (3, 6, 321 | 322 | 325) => convert_dvc_chaser_effect(
+        (3, 6, 321 | 322 | 323 | 324 | 325) => convert_dvc_chaser_effect(
             scene,
             scene_name,
             rack,
@@ -3760,17 +3762,19 @@ fn convert_dvc_chaser_effect(
     let generator = match generator_id {
         321 => "Chaser #1",
         322 => "Chaser #2",
+        323 => "Chaser #3",
+        324 => "Chaser #4",
         _ => "Chaser random",
     };
     let params = dvc_effect_params(effect)?;
     let expected_params: &[u16] = match generator_id {
-        321 => &[10, 11, 12],
+        321 | 323 | 324 => &[10, 11, 12],
         322 => &[10],
         _ => &[11, 12, 13, 14, 15],
     };
     require_exact_dvc_params(&params, expected_params)?;
     let expected_types: &[(u16, u16)] = match generator_id {
-        321 => &[(10, 2), (11, 2), (12, 0)],
+        321 | 323 | 324 => &[(10, 2), (11, 2), (12, 0)],
         322 => &[(10, 2)],
         _ => &[(11, 2), (12, 0), (13, 1), (14, 0), (15, 0)],
     };
@@ -3780,7 +3784,7 @@ fn convert_dvc_chaser_effect(
     // empty BEAMS rack as a source no-op. A malformed effect must not bypass
     // fail-closed validation merely because it currently targets nothing.
     let fading = dvc_binary_param(&params, if generator_id == 322 { 10 } else { 11 }, "Fading")?;
-    let one_way = if generator_id == 321 {
+    let one_way = if matches!(generator_id, 321 | 323 | 324) {
         Some(dvc_binary_param(&params, 10, "One Way Only")?)
     } else {
         None
@@ -3847,6 +3851,14 @@ fn convert_dvc_chaser_effect(
             "Daslight Chaser #1 evaluator 0x140376540 is not frame-equivalent to Syndocal's Forward/Bounce/overlap compatibility route"
                 .to_string(),
         ),
+        323 => approximations.push(
+            "Daslight Chaser #3 evaluator 0x1403775F0 is converted to ordered outside-in symmetric beam-pair steps; the recovered 40 ms frame grid is replaced by the continuous Syndocal Chaser clock"
+                .to_string(),
+        ),
+        324 => approximations.push(
+            "Daslight Chaser #4 evaluator 0x140378400 is converted to ordered center-out symmetric beam-pair steps; the recovered 40 ms frame grid is replaced by the continuous Syndocal Chaser clock"
+                .to_string(),
+        ),
         325 => {}
         _ => {}
     }
@@ -3887,7 +3899,19 @@ fn convert_dvc_chaser_effect(
             feature_spec.preset_type
         ));
     }
-    if ordered_steps.len() == 1 && generator_id != 322 {
+    if matches!(generator_id, 323 | 324) {
+        ordered_beam_steps =
+            dvc_symmetric_chaser_beam_steps(ordered_beam_steps, generator_id == 324);
+        ordered_steps = vec![Vec::new(); ordered_beam_steps.len()];
+        if ordered_steps.len() == 1 {
+            ordered_steps.push(Vec::new());
+            ordered_beam_steps.push(ordered_beam_steps[0].clone());
+            approximations.push(
+                "the single symmetric beam pair was duplicated as an identical second step to preserve constant output within the Chaser engine's two-step minimum"
+                    .to_string(),
+            );
+        }
+    } else if ordered_steps.len() == 1 && generator_id != 322 {
         ordered_steps.push(Vec::new());
         ordered_beam_steps.push(Vec::new());
         approximations.push(
@@ -3903,9 +3927,10 @@ fn convert_dvc_chaser_effect(
         ));
     }
 
-    let (direction, duty_cycle, generator_note, random_seed, random_cycle_count) = if generator_id
-        == 321
-    {
+    let (direction, duty_cycle, generator_note, random_seed, random_cycle_count) = if matches!(
+        generator_id,
+        321 | 323 | 324
+    ) {
         let one_way = one_way.unwrap_or(false);
         (
             if one_way {
@@ -3915,9 +3940,14 @@ fn convert_dvc_chaser_effect(
             },
             1.0,
             format!(
-                "param10=One Way Only({}); param11=Fading({}) per Daslight UI-order interpretation",
+                "param10=One Way Only({}); param11=Fading({}); topology={}",
                 u8::from(one_way),
-                u8::from(fading)
+                u8::from(fading),
+                match generator_id {
+                    323 => "symmetric outside-in pairs",
+                    324 => "symmetric center-out pairs",
+                    _ => "source beam order",
+                }
             ),
             (effect_id % u32::MAX as u64).max(1),
             1,
@@ -3951,14 +3981,15 @@ fn convert_dvc_chaser_effect(
         )
     };
 
-    let generator_slots = if generator_id == 322 {
-        ordered_steps.len().saturating_mul(2)
-    } else if generator_id == 325 {
-        ordered_steps
+    let generator_slots = match generator_id {
+        322 => ordered_steps.len().saturating_mul(2),
+        323 | 324 if direction == ChaserDirection::Bounce && ordered_steps.len() > 1 => {
+            ordered_steps.len().saturating_mul(2).saturating_sub(2)
+        }
+        325 => ordered_steps
             .len()
-            .saturating_mul(random_cycle_count as usize)
-    } else {
-        ordered_steps.len()
+            .saturating_mul(random_cycle_count as usize),
+        _ => ordered_steps.len(),
     };
     let (step_duration_ms, free_run_note) =
         dvc_chaser_step_duration(effect, scene, generator_slots, &mut approximations)?;
@@ -4025,6 +4056,33 @@ fn convert_dvc_chaser_effect(
         approximations,
         warnings: Vec::new(),
     })
+}
+
+/// Collapse the saved one-dimensional beam order into the mirrored pair order
+/// recovered from `CChaserType3Effect` and `CChaserType4Effect`.
+///
+/// Type 3 visits both ends first and walks toward the centre. Type 4 uses the
+/// exact reverse order. Odd target counts retain the centre beam once rather
+/// than manufacturing a duplicate target.
+fn dvc_symmetric_chaser_beam_steps(
+    mut source_steps: Vec<Vec<EffectBeamTarget>>,
+    center_out: bool,
+) -> Vec<Vec<EffectBeamTarget>> {
+    let source_count = source_steps.len();
+    let pair_count = source_count.div_ceil(2);
+    let mut paired_steps = Vec::with_capacity(pair_count);
+    for left in 0..pair_count {
+        let right = source_count - 1 - left;
+        let mut pair = std::mem::take(&mut source_steps[left]);
+        if right != left {
+            pair.extend(std::mem::take(&mut source_steps[right]));
+        }
+        paired_steps.push(pair);
+    }
+    if center_out {
+        paired_steps.reverse();
+    }
+    paired_steps
 }
 
 fn convert_dvc_additional_curve_effect(
@@ -8142,6 +8200,18 @@ mod tests {
                 "must be 0 or 1",
             ),
             (
+                323,
+                r#"<PARAM TYPE="2" ID="10" VAL="1"/><PARAM TYPE="1" ID="11" VAL="0"/><PARAM TYPE="0" ID="12" VAL="1"/>"#,
+                3,
+                "expected PARAM 11 TYPE=2",
+            ),
+            (
+                324,
+                r#"<PARAM TYPE="2" ID="10" VAL="0"/><PARAM TYPE="2" ID="11" VAL="2"/><PARAM TYPE="0" ID="12" VAL="1"/>"#,
+                3,
+                "must be 0 or 1",
+            ),
+            (
                 325,
                 r#"<PARAM TYPE="2" ID="11" VAL="0"/><PARAM TYPE="0" ID="12" VAL="1"/><PARAM TYPE="1" ID="13" VAL="50"/><PARAM TYPE="0" ID="14" VAL="1"/><PARAM TYPE="0" ID="15" VAL="256"/>"#,
                 5,
@@ -8158,6 +8228,16 @@ mod tests {
             (
                 321,
                 r#"<PARAM TYPE="2" ID="10" VAL="1"/><PARAM TYPE="2" ID="11" VAL="0"/><PARAM TYPE="0" ID="12" VAL="0"/>"#,
+                3,
+            ),
+            (
+                323,
+                r#"<PARAM TYPE="2" ID="10" VAL="1"/><PARAM TYPE="2" ID="11" VAL="0"/><PARAM TYPE="0" ID="12" VAL="1"/>"#,
+                3,
+            ),
+            (
+                324,
+                r#"<PARAM TYPE="2" ID="10" VAL="0"/><PARAM TYPE="2" ID="11" VAL="1"/><PARAM TYPE="0" ID="12" VAL="1"/>"#,
                 3,
             ),
             (
@@ -11552,6 +11632,150 @@ mod tests {
                 .iter()
                 .any(|detail| detail.item.contains(&format!("({generator})"))));
         }
+    }
+
+    // Real saved Daslight 5.0.6.2 specimen authored on 2026-08-11. Both
+    // effects use the same ordered 32-beam Dimmer binding; only the symmetric
+    // Chaser generator and its boolean controls differ.
+    #[test]
+    fn dvc_local_golden_symmetric_chasers_preserve_recovered_pair_topology() {
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../qa/specimens/ChaserCatalog-323-324.dvc"
+        ));
+        assert!(
+            path.is_file(),
+            "repo-portable symmetric Chaser specimen is missing"
+        );
+        let outcome = import_path(path).unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+
+        let requests = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .flat_map(|cue| &cue.effect_targets)
+            .filter_map(|target| match target.params.as_ref() {
+                Some(EffectParamsSnapshot::Chaser(request))
+                    if request.label.contains("Chaser #3")
+                        || request.label.contains("Chaser #4") =>
+                {
+                    Some(request)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(requests.len(), 2);
+
+        let type3 = requests
+            .iter()
+            .find(|request| request.label.contains("Chaser #3"))
+            .expect("saved Chaser #3 must import");
+        assert_eq!(type3.direction, ChaserDirection::Forward);
+        assert_eq!(type3.overlap, 0.0);
+        assert_eq!(type3.active_step_count, 1);
+        assert_eq!(type3.steps.len(), 16);
+        assert_eq!(type3.step_duration_ms, 313);
+        assert_eq!(
+            type3.steps[0]
+                .beam_targets
+                .iter()
+                .map(|target| target.selection_index)
+                .collect::<Vec<_>>(),
+            vec![0, 31],
+            "Chaser #3 must start at both authored ends"
+        );
+        assert_eq!(
+            type3.steps[15]
+                .beam_targets
+                .iter()
+                .map(|target| target.selection_index)
+                .collect::<Vec<_>>(),
+            vec![15, 16],
+            "Chaser #3 must finish at the authored centre pair"
+        );
+
+        let type4 = requests
+            .iter()
+            .find(|request| request.label.contains("Chaser #4"))
+            .expect("saved Chaser #4 must import");
+        assert_eq!(type4.direction, ChaserDirection::Bounce);
+        assert_eq!(type4.overlap, 1.0);
+        assert_eq!(type4.active_step_count, 1);
+        assert_eq!(type4.steps.len(), 16);
+        assert_eq!(type4.step_duration_ms, 167);
+        assert_eq!(
+            type4.steps[0]
+                .beam_targets
+                .iter()
+                .map(|target| target.selection_index)
+                .collect::<Vec<_>>(),
+            vec![15, 16],
+            "Chaser #4 must start at the authored centre pair"
+        );
+        assert_eq!(
+            type4.steps[15]
+                .beam_targets
+                .iter()
+                .map(|target| target.selection_index)
+                .collect::<Vec<_>>(),
+            vec![0, 31],
+            "Chaser #4 must finish at both authored ends"
+        );
+        for evaluator in [
+            "Chaser #3 evaluator 0x1403775F0",
+            "Chaser #4 evaluator 0x140378400",
+        ] {
+            assert!(outcome
+                .report
+                .approximate
+                .details
+                .iter()
+                .any(|detail| detail.message.contains(evaluator)));
+        }
+        for generator in ["Chaser #3", "Chaser #4"] {
+            assert!(!outcome
+                .report
+                .skipped
+                .details
+                .iter()
+                .any(|detail| detail.item.contains(generator)));
+        }
+    }
+
+    #[test]
+    fn dvc_symmetric_chaser_pairing_retains_an_odd_centre_once() {
+        let source = (0..5_u32)
+            .map(|selection_index| {
+                vec![EffectBeamTarget {
+                    fixture_id: 1,
+                    beam_index: selection_index as u16,
+                    selection_index,
+                    feature_attribute: "Dimmer".to_string(),
+                }]
+            })
+            .collect::<Vec<_>>();
+        let outside_in = dvc_symmetric_chaser_beam_steps(source.clone(), false);
+        let center_out = dvc_symmetric_chaser_beam_steps(source, true);
+        let selections = |steps: &[Vec<EffectBeamTarget>]| {
+            steps
+                .iter()
+                .map(|step| {
+                    step.iter()
+                        .map(|target| target.selection_index)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            selections(&outside_in),
+            vec![vec![0, 4], vec![1, 3], vec![2]]
+        );
+        assert_eq!(
+            selections(&center_out),
+            vec![vec![2], vec![1, 3], vec![0, 4]]
+        );
     }
 
     // Real saved Daslight specimen authored on 2026-08-10 (Fable, elevated
