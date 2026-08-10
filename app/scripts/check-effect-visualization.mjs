@@ -372,6 +372,42 @@ assert.equal(
   1,
   "imported Strobe frequency must still follow the authored Rate",
 );
+const correctedCurveSource = { rate: 2, size: 1, offset: 0, sample_ms: 40 };
+assert.deepEqual(
+  [0, 0.25, 0.5, 0.75].map((progress) =>
+    visualization.evaluateDaslightCurveSource("Ramp", correctedCurveSource, 0, progress, 5_000)),
+  [0.5, 0.75, 0, 0.25],
+  "imported Ramp must retain the recovered ascending centered saw",
+);
+assert.deepEqual(
+  [0, 0.125, 0.25, 0.75].map((progress) =>
+    visualization.evaluateDaslightCurveSource("Sinus3", correctedCurveSource, 0, progress, 5_000)),
+  [0.5, 0.6767766952966369, 1, 0],
+  "imported Sinus3 must cube the recovered sine carrier",
+);
+assert.deepEqual(
+  [0, 0.125, 0.375].map((progress) =>
+    visualization.evaluateDaslightCurveSource("Tangeant", correctedCurveSource, 0, progress, 5_000)),
+  [0.5, 1, 0],
+  "imported Tangeant must retain the recovered tangent and native clamp",
+);
+assert.deepEqual(
+  [0, 0.25, 0.5, 0.75].map((progress) =>
+    visualization.evaluateDaslightCurveSource("Triangle", correctedCurveSource, 0, progress, 5_000)),
+  [0.5, 0, 0.5, 1],
+  "imported Triangle must retain the recovered three-quarter-cycle alignment",
+);
+const correctedRandomSource = { ...correctedCurveSource, rng_seed: 0x1357_9bdf };
+assert.equal(
+  visualization.evaluateDaslightCurveSource("Random", correctedRandomSource, 0, 0, 5_000),
+  visualization.evaluateDaslightCurveSource("Random", correctedRandomSource, 0, 0, 5_000),
+  "imported Random must reload the same source-seeded value",
+);
+assert.notEqual(
+  visualization.evaluateDaslightCurveSource("Random", correctedRandomSource, 0, 0.1, 5_000),
+  visualization.evaluateDaslightCurveSource("Random", correctedRandomSource, 0, 0.2, 5_000),
+  "imported Random must advance on the recovered angle-derived step boundary",
+);
 assert.equal(moveEffect.moveEffectDraftError(validMoveDraft), "", "a closed two-point Circle draft must remain valid");
 assert.equal(
   moveEffect.moveEffectDraftError({

@@ -33929,6 +33929,7 @@ f 1 2 3
             size: 0.5,
             offset: 0.1,
             sample_ms: 40,
+            rng_seed: None,
         });
         let params = EffectParamsSnapshot::Lfo(source_request);
         let snapshot = EngineSnapshot {
@@ -33991,6 +33992,7 @@ f 1 2 3
                 size: 0.5,
                 offset: 0.1,
                 sample_ms: 40,
+                rng_seed: None,
             })
         );
         assert!(roundtrip.snapshot.effects.is_empty());

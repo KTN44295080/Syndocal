@@ -169,8 +169,10 @@ Custom ID13だけはこの5-property schemaではない。base listを消去し�
 | 12 Triangle | `0x14036991B -> 0x14036DB30 -> 0x14036EB60` | `CTriangleEffect / 0x1406C8598` | `0x140370930` |
 | 13 Custom | `0x140369268 -> 0x14036CE10 -> 0x14036E270` | `CCustomCurveEffect / 0x1406C8668` | `0x14036F1F0` |
 
-Sinus / Inverse Ramp / Strobeの式は`qa/DVC_CURVE_SOURCE_PARITY.md`で意味論まで確定済み。
-残り8種はfactory入口とserialized schemaをexact回収済みだが、式未decompile。
+ID3–12の式は`qa/DVC_CURVE_SOURCE_PARITY.md`で意味論まで確定済み。Ramp / Random /
+Sinus3 / Tangeant / Triangleは2026-08-11の追加逆アセンブルで確定し、Random constructorの
+400-entry `qrand()%100` tableと非serialize process historyも分離した。Custom ID13だけは
+factory入口とserialized points schemaまでの回収で、evaluator意味論は別トランシェに残る。
 
 ## MAPPINGS / COLOR MAPPINGS — family/type 8 / 3
 

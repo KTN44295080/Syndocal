@@ -2014,11 +2014,18 @@ pub enum LfoShape {
     /// legacy shape without a `DaslightCurveSource` profile.
     Pulse,
     Triangle,
+    /// Daslight Curve ID 5. Native Syndocal authoring does not expose this
+    /// centered ascending ramp without a `DaslightCurveSource` profile.
+    Ramp,
     Saw,
     Square,
     Strobe,
     Random,
     Perlin,
+    /// Daslight Curve ID 8: a cubed sine generator.
+    Sinus3,
+    /// Daslight Curve ID 11. The spelling preserves the Daslight UI label.
+    Tangeant,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -2518,6 +2525,10 @@ pub struct DaslightCurveSource {
     /// retained as source provenance; corrected runtime timing is continuous.
     #[serde(default = "default_daslight_curve_sample_ms")]
     pub sample_ms: u16,
+    /// Stable source-identity seed used only by Daslight Curve ID 6 Random.
+    /// Daslight's process-global qrand history is not serialized in `.dvc`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rng_seed: Option<u32>,
 }
 
 fn default_daslight_curve_sample_ms() -> u16 {
@@ -4577,6 +4588,7 @@ mod tests {
             size: 1.562,
             offset: -0.848,
             sample_ms: 40,
+            rng_seed: None,
         });
         let imported_encoded = serde_json::to_string(&imported).unwrap();
         let imported_decoded: super::CueEffectTarget =
@@ -4586,6 +4598,29 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&imported_encoded).unwrap()["params"]["Lfo"]
                 ["daslight_curve"]["sample_ms"],
             40
+        );
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&imported_encoded).unwrap()["params"]["Lfo"]
+                ["daslight_curve"]
+                .get("rng_seed")
+                .is_none()
+        );
+
+        let mut imported_random = imported.clone();
+        let Some(super::EffectParamsSnapshot::Lfo(random_request)) =
+            imported_random.params.as_mut()
+        else {
+            panic!("imported random target must contain LFO params");
+        };
+        random_request.shape = super::LfoShape::Random;
+        random_request.daslight_curve.as_mut().unwrap().rng_seed = Some(0x1357_9BDF);
+        let random_encoded = serde_json::to_string(&imported_random).unwrap();
+        let random_decoded: super::CueEffectTarget = serde_json::from_str(&random_encoded).unwrap();
+        assert_eq!(random_decoded, imported_random);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&random_encoded).unwrap()["params"]["Lfo"]
+                ["daslight_curve"]["rng_seed"],
+            0x1357_9BDF_u32
         );
 
         let mut legacy_owned_value = serde_json::to_value(&target).unwrap();

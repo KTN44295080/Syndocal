@@ -39,6 +39,7 @@ export const evaluateLfoShape = (shape: LfoShape, phase: number): number => {
       return Math.sin(normalized * Math.PI) ** 2;
     case "Triangle":
       return normalized < 0.5 ? normalized * 2 : (1 - normalized) * 2;
+    case "Ramp":
     case "Saw":
       return normalized;
     case "Square":
@@ -56,6 +57,12 @@ export const evaluateLfoShape = (shape: LfoShape, phase: number): number => {
       const first = hashUnitFloat(left);
       return first + (hashUnitFloat(right) - first) * eased;
     }
+    case "Sinus3": {
+      const carrier = Math.sin(normalized * Math.PI * 2);
+      return (carrier ** 3 + 1) * 0.5;
+    }
+    case "Tangeant":
+      return clampUnit(Math.tan(normalized * Math.PI * 2) * 0.5 + 0.5);
   }
 };
 
@@ -74,6 +81,15 @@ export const evaluateDaslightCurveSource = (
       value = Math.sin(Math.PI * 2 * (source.rate * 0.5 * position - phase)) * source.size * 0.5
         + source.offset + source.size * 0.5;
       break;
+    case "Sinus3": {
+      const carrier = Math.sin(Math.PI * 2 * (source.rate * 0.5 * position - phase));
+      value = carrier ** 3 * source.size * 0.5 + source.offset + source.size * 0.5;
+      break;
+    }
+    case "Tangeant":
+      value = Math.tan(Math.PI * 2 * (source.rate * 0.5 * position - phase))
+        * source.size * 0.5 + source.offset + source.size * 0.5;
+      break;
     case "Pulse": {
       const rateAngle = Math.fround(source.rate * 2 * Math.PI * 2);
       const phaseAngle = Math.fround(-Math.fround(phase) * Math.PI * 2);
@@ -86,6 +102,23 @@ export const evaluateDaslightCurveSource = (
       const sourcePhase = source.rate * 0.5 * position - phase;
       const centered = sourcePhase - Math.floor(sourcePhase + 0.5);
       value = source.offset - centered * source.size + source.size - 0.5;
+      break;
+    }
+    case "Ramp": {
+      const sourcePhase = source.rate * 0.5 * position - phase;
+      const centered = sourcePhase - Math.floor(sourcePhase + 0.5);
+      value = source.offset + centered * source.size + source.size - 0.5;
+      break;
+    }
+    case "Triangle": {
+      const sourcePhase = source.rate * 0.5 * position - phase;
+      value = source.offset + evaluateLfoShape("Triangle", sourcePhase + 0.75) * source.size;
+      break;
+    }
+    case "Random": {
+      const sourcePhase = position * source.rate * Math.PI - phase * Math.PI * 2;
+      const step = Math.floor(Math.abs(sourcePhase)) >>> 0;
+      value = source.size * (correctedCurveRandomBucket(source.rng_seed ?? 0, step) + source.offset);
       break;
     }
     case "Square": {
@@ -110,14 +143,21 @@ export const evaluateDaslightCurveSource = (
 };
 
 const hashUnitFloat = (seed: number): number => {
+  return hashU32(seed) / 0xffff_ffff;
+};
+
+const hashU32 = (seed: number): number => {
   let value = (seed + 0x9e37_79b9) >>> 0;
   value = (value ^ (value >>> 16)) >>> 0;
   value = Math.imul(value, 0x7feb_352d) >>> 0;
   value = (value ^ (value >>> 15)) >>> 0;
   value = Math.imul(value, 0x846c_a68b) >>> 0;
   value = (value ^ (value >>> 16)) >>> 0;
-  return value / 0xffff_ffff;
+  return value;
 };
+
+const correctedCurveRandomBucket = (seed: number, step: number): number =>
+  hashU32((seed ^ Math.imul(step, 0x9e37_79b9)) >>> 0) % 100 / 100;
 
 export const buildLfoPreviewPath = (
   shape: LfoShape,

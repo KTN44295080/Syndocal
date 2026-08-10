@@ -3,6 +3,9 @@ export type UiLocale = "en" | "ja";
 export const uiLocaleStorageKey = "syndocal.uiLocale.v1";
 
 const japaneseText: Record<string, string> = {
+  Ramp: "ランプ",
+  Sinus3: "サイン3",
+  Tangeant: "タンジェント",
   "Project menu": "プロジェクトメニュー",
   "Control mapping learn": "コントロールマッピングLearn",
   "MIDI Learn": "MIDI Learn",

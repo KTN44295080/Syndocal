@@ -422,6 +422,9 @@ for (const dynamicAriaPrefix of [
 for (const shape of ["Sine", "Cosine", "Triangle", "Saw", "Square", "Random", "Perlin"]) {
   assert.equal(localization.translateUiText(shape, "ja"), shape);
 }
+assert.equal(localization.translateUiText("Ramp", "ja"), "ランプ");
+assert.equal(localization.translateUiText("Sinus3", "ja"), "サイン3");
+assert.equal(localization.translateUiText("Tangeant", "ja"), "タンジェント");
 for (const category of ["Dimmer", "Color", "Position", "Beam"]) {
   assert.equal(localization.translateUiText(category, "ja"), category);
 }

@@ -2169,9 +2169,14 @@ fn parse_scene_effects(
                 (Some(5), Some(3), Some(36)) => Some("Rainbow"),
                 (Some(8), Some(5), Some(3)) => Some("Inverse Ramp"),
                 (Some(8), Some(5), Some(4)) => Some("Pulse"),
+                (Some(8), Some(5), Some(5)) => Some("Ramp"),
+                (Some(8), Some(5), Some(6)) => Some("Random"),
                 (Some(8), Some(5), Some(7)) => Some("Sinus"),
+                (Some(8), Some(5), Some(8)) => Some("Sinus3"),
                 (Some(8), Some(5), Some(9)) => Some("Square"),
                 (Some(8), Some(5), Some(10)) => Some("Strobe"),
+                (Some(8), Some(5), Some(11)) => Some("Tangeant"),
+                (Some(8), Some(5), Some(12)) => Some("Triangle"),
                 (Some(2), Some(2), Some(121)) => Some("Burst"),
                 (Some(2), Some(2), Some(127)) => Some("Knight Rider"),
                 (Some(2), Some(2), Some(129)) => Some("Plasma"),
@@ -2325,6 +2330,17 @@ fn convert_dvc_effect(
             effect_id,
             fixture_refs,
         ),
+        (8, 5, generator_id @ (5 | 6 | 8 | 11 | 12)) => {
+            convert_dvc_additional_curve_effect(
+                scene,
+                scene_name,
+                rack,
+                effect,
+                generator_id,
+                effect_id,
+                fixture_refs,
+            )
+        }
         (8, 5, 7) => convert_dvc_sinus_effect(
             scene,
             scene_name,
@@ -4011,6 +4027,166 @@ fn convert_dvc_chaser_effect(
     })
 }
 
+fn convert_dvc_additional_curve_effect(
+    scene: Node<'_, '_>,
+    scene_name: &str,
+    rack: Node<'_, '_>,
+    effect: Node<'_, '_>,
+    generator_id: u16,
+    effect_id: u64,
+    fixture_refs: &HashMap<String, FixtureImportRef>,
+) -> Result<ConvertedDvcEffect, String> {
+    let (generator, shape, evaluator) = match generator_id {
+        5 => ("Ramp", LfoShape::Ramp, "CRampEffect@0x14036FAE0"),
+        6 => ("Random", LfoShape::Random, "CRandomEffect@0x14036FE90"),
+        8 => ("Sinus3", LfoShape::Sinus3, "CSinus3Effect@0x140370070"),
+        11 => (
+            "Tangeant",
+            LfoShape::Tangeant,
+            "CTangeantEffect@0x140370760",
+        ),
+        12 => (
+            "Triangle",
+            LfoShape::Triangle,
+            "CTriangleEffect@0x140370930",
+        ),
+        _ => return Err(format!("unsupported additional Curve ID {generator_id}")),
+    };
+    let params = dvc_curve_effect_params(effect, generator)?;
+    let rate = dvc_param(&params, 1, "Rate")?;
+    let size = dvc_param(&params, 2, "Size")?;
+    let phase = dvc_param(&params, 3, "Phase")?;
+    let offset = dvc_param(&params, 4, "Offset")?;
+    let phasing = dvc_param(&params, 5, "Phasing")?;
+    let duration_ms = effect
+        .attribute("DURATION")
+        .ok_or_else(|| format!("{generator} EFFECT is missing DURATION"))?
+        .parse::<f64>()
+        .map_err(|error| format!("{generator} DURATION is invalid: {error}"))?;
+    if !duration_ms.is_finite()
+        || duration_ms < f64::from(DASLIGHT_CURVE_SAMPLE_MS)
+        || duration_ms > u64::MAX as f64
+    {
+        return Err(format!(
+            "DURATION must be a finite Curve source buffer of at least {DASLIGHT_CURVE_SAMPLE_MS} ms, found {duration_ms}"
+        ));
+    }
+    let period_ms = duration_ms.round() as u64;
+    let rng_seed =
+        (generator_id == 6).then(|| dvc_corrected_rng_seed(scene, rack, effect, generator_id));
+    let (low, high, source_range) = match generator_id {
+        5 => {
+            let raw_low = offset + size * 0.5 - 0.5;
+            let raw_high = offset + size * 1.5 - 0.5;
+            (
+                normalized_dmx(raw_low),
+                normalized_dmx(raw_high),
+                format!("{raw_low:.3}..{raw_high:.3}"),
+            )
+        }
+        6 => {
+            let raw_low = size * offset;
+            let raw_high = size * (offset + 0.99);
+            (
+                normalized_dmx(raw_low),
+                normalized_dmx(raw_high),
+                format!("{raw_low:.3}..{raw_high:.3}"),
+            )
+        }
+        8 | 12 => {
+            let raw_low = offset;
+            let raw_high = offset + size;
+            (
+                normalized_dmx(raw_low),
+                normalized_dmx(raw_high),
+                format!("{raw_low:.3}..{raw_high:.3}"),
+            )
+        }
+        11 => (
+            0,
+            u16::MAX,
+            "unbounded tangent before native clamp".to_string(),
+        ),
+        _ => unreachable!(),
+    };
+
+    let mut targets = dvc_rack_targets(rack, fixture_refs)?;
+    let incompatible_dimmer_targets = retain_dvc_dimmer_targets(&mut targets, fixture_refs);
+    if targets.fixture_ids.is_empty() {
+        return Err(format!("BEAMS resolved to no {generator} fixture targets"));
+    }
+    let correction = if generator_id == 6 {
+        "Syndocal replaces the non-serialized process-global qrand table with a stable source-identity seed and evaluates the recovered intentional random steps without a 40 ms source-buffer hold"
+    } else {
+        "Syndocal evaluates the recovered generator continuously instead of holding Daslight's 40 ms work samples; authored Rate/Phase/Size/Offset, clamp regions, and beam order are preserved"
+    };
+    let mut approximations = vec![correction.to_string()];
+    if incompatible_dimmer_targets > 0 {
+        approximations.push(format!(
+            "{incompatible_dimmer_targets} fixture target(s) without a Dimmer attribute or addressable color beam were omitted"
+        ));
+    }
+    let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
+    if let Some(clock_warning) = clock_warning {
+        approximations.push(clock_warning);
+    }
+    let beam_targets = dvc_effect_beam_targets(&targets, "Dimmer");
+    let request = LfoEffectRequest {
+        label: format!("{scene_name} ({generator})"),
+        fixture_ids: targets.fixture_ids,
+        target_group_ids: Vec::new(),
+        attribute: "Dimmer".to_string(),
+        video_targets: Vec::new(),
+        shape,
+        period_ms,
+        clock_sync,
+        low,
+        high,
+        phase: phase as f32,
+        fixture_spread: phasing as f32,
+        beam_targets,
+        blend_mode: EffectBlendMode::Override,
+        daslight_curve: Some(DaslightCurveSource {
+            rate: rate as f32,
+            size: size as f32,
+            offset: offset as f32,
+            sample_ms: DASLIGHT_CURVE_SAMPLE_MS,
+            rng_seed,
+        }),
+    };
+    let evaluator_detail = match generator_id {
+        5 => "centered=(Rate/2*progress-Phase)-floor(Rate/2*progress-Phase+0.5); source=clamp(Offset+centered*Size+Size-0.5,0,1)",
+        6 => "step=floor(abs(Rate*pi*progress-Phase*TAU)); recovered_table=400*qrand()%100; source=clamp(Size*(bucket/100+Offset),0,1)",
+        8 => "source=clamp(sin(Rate*pi*progress-Phase*TAU)^3*Size/2+Offset+Size/2,0,1)",
+        11 => "source=clamp(tan(Rate*pi*progress-Phase*TAU)*Size/2+Offset+Size/2,0,1)",
+        12 => "source=clamp(Triangle(Rate/2*progress-Phase+0.75)*Size+Offset,0,1)",
+        _ => unreachable!(),
+    };
+    let correction_reason = if generator_id == 6 {
+        "qrand process history is absent from DVC and timer granularity must not add an extra source-buffer hold"
+    } else {
+        "timer granularity must not stair-step output"
+    };
+    let rng_note = rng_seed
+        .map(|seed| format!("; unavailable_qrand=stable_source_seed; rng_seed={seed}"))
+        .unwrap_or_default();
+    let note = format!(
+        "feature=Dimmer; shape={generator}; evaluator={evaluator}; implementation=SyndocalCorrected; duration_ms={period_ms}; recovered_sample_ms={DASLIGHT_CURVE_SAMPLE_MS}; runtime_time=continuous; {evaluator_detail}; correction_reason={correction_reason}; rate={rate}; low={low}; high={high}; source_range={source_range} with native 0..1 clamp; source_phase={phase}; fixture_spread={phasing}; size={size}; offset={offset}{rng_note}; {clock_note}"
+    );
+    Ok(ConvertedDvcEffect {
+        target: Some(CueEffectTarget {
+            effect_id,
+            enabled: true,
+            params: Some(EffectParamsSnapshot::Lfo(request)),
+            transition_ms: None,
+        }),
+        generator,
+        note,
+        approximations,
+        warnings: Vec::new(),
+    })
+}
+
 fn convert_dvc_inverse_ramp_effect(
     scene: Node<'_, '_>,
     scene_name: &str,
@@ -4086,6 +4262,7 @@ fn convert_dvc_inverse_ramp_effect(
             size: size as f32,
             offset: offset as f32,
             sample_ms: DASLIGHT_CURVE_SAMPLE_MS,
+            rng_seed: None,
         }),
     };
     let note = format!(
@@ -4179,6 +4356,7 @@ fn convert_dvc_pulse_effect(
             size: size as f32,
             offset: offset as f32,
             sample_ms: DASLIGHT_CURVE_SAMPLE_MS,
+            rng_seed: None,
         }),
     };
     let note = format!(
@@ -4272,6 +4450,7 @@ fn convert_dvc_sinus_effect(
             size: size as f32,
             offset: offset as f32,
             sample_ms: DASLIGHT_CURVE_SAMPLE_MS,
+            rng_seed: None,
         }),
     };
     let note = format!(
@@ -4363,6 +4542,7 @@ fn convert_dvc_square_effect(
             size: size as f32,
             offset: offset as f32,
             sample_ms: DASLIGHT_CURVE_SAMPLE_MS,
+            rng_seed: None,
         }),
     };
     let note = format!(
@@ -4458,6 +4638,7 @@ fn convert_dvc_strobe_effect(
             size: size as f32,
             offset: offset as f32,
             sample_ms: DASLIGHT_CURVE_SAMPLE_MS,
+            rng_seed: None,
         }),
     };
     let note = format!(
@@ -7261,6 +7442,7 @@ mod tests {
                 size: 0.5,
                 offset: 0.1,
                 sample_ms: 40,
+                rng_seed: None,
             })
         );
 
@@ -7340,6 +7522,7 @@ mod tests {
                 size: 1.562,
                 offset: -0.848,
                 sample_ms: 40,
+                rng_seed: None,
             })
         );
         assert!(outcome.report.converted.details.iter().any(|detail| {
@@ -8152,6 +8335,7 @@ mod tests {
                     size: size as f32,
                     offset: 0.0,
                     sample_ms: 40,
+                    rng_seed: None,
                 })
             );
             assert!(!converted
@@ -8210,6 +8394,7 @@ mod tests {
                 size: 0.75,
                 offset: 0.1,
                 sample_ms: 40,
+                rng_seed: None,
             })
         );
         assert_eq!(
@@ -8266,6 +8451,7 @@ mod tests {
                 size: 0.5,
                 offset: -0.1,
                 sample_ms: 40,
+                rng_seed: None,
             })
         );
         assert_eq!(
@@ -11249,6 +11435,123 @@ mod tests {
             1
         );
         assert_eq!(outcome.report.summary.effects_skipped, 0);
+    }
+
+    // Real saved Daslight 5.0.6.2 specimen authored on 2026-08-11. Each scene
+    // keeps the same concrete Dimmer binding and ordered 32-beam selection;
+    // only the Curve generator ID changes.
+    #[test]
+    fn dvc_local_golden_unrouted_curve_catalog_imports_all_five_saved_generators() {
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../qa/specimens/CurveCatalog-Unrouted.dvc"
+        ));
+        assert!(path.is_file(), "repo-portable Curve specimen is missing");
+        let outcome = import_path(path).unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+
+        let requests = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .flat_map(|cue| &cue.effect_targets)
+            .filter_map(|target| match target.params.as_ref() {
+                Some(EffectParamsSnapshot::Lfo(request)) => Some(request),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            requests.len(),
+            5,
+            "all captured Curve generators must import"
+        );
+
+        let mut canonical_beam_order = None;
+        for (generator, shape) in [
+            ("Ramp", LfoShape::Ramp),
+            ("Random", LfoShape::Random),
+            ("Sinus3", LfoShape::Sinus3),
+            ("Tangeant", LfoShape::Tangeant),
+            ("Triangle", LfoShape::Triangle),
+        ] {
+            let request = requests
+                .iter()
+                .find(|request| request.label == format!("New Scene ({generator})"))
+                .unwrap_or_else(|| panic!("saved Curve {generator} must retain its label"));
+            assert_eq!(request.shape, shape);
+            assert_eq!(request.attribute, "Dimmer");
+            assert_eq!(request.period_ms, 5_000);
+            assert_eq!(request.beam_targets.len(), 32);
+            assert_eq!(
+                request
+                    .beam_targets
+                    .iter()
+                    .map(|target| target.selection_index)
+                    .collect::<Vec<_>>(),
+                (0..32).collect::<Vec<_>>(),
+                "{generator} must preserve captured beam selection order"
+            );
+            assert!(request
+                .beam_targets
+                .iter()
+                .all(|target| target.feature_attribute == "Dimmer"));
+            let beam_order = request
+                .beam_targets
+                .iter()
+                .map(|target| (target.fixture_id, target.beam_index, target.selection_index))
+                .collect::<Vec<_>>();
+            if let Some(canonical) = &canonical_beam_order {
+                assert_eq!(&beam_order, canonical, "{generator} target order drifted");
+            } else {
+                canonical_beam_order = Some(beam_order);
+            }
+            let source = request
+                .daslight_curve
+                .as_ref()
+                .unwrap_or_else(|| panic!("{generator} must retain Curve provenance"));
+            assert_eq!(source.rate, 2.0);
+            assert_eq!(source.size, 1.0);
+            assert_eq!(source.offset, 0.0);
+            assert_eq!(source.sample_ms, 40);
+            if generator == "Random" {
+                assert!(
+                    source.rng_seed.is_some(),
+                    "Random must carry a stable source seed"
+                );
+            } else {
+                assert_eq!(source.rng_seed, None);
+            }
+        }
+        assert!(outcome.report.summary.effects_converted >= 5);
+        for evaluator in [
+            "CRampEffect@0x14036FAE0",
+            "CRandomEffect@0x14036FE90",
+            "CSinus3Effect@0x140370070",
+            "CTangeantEffect@0x140370760",
+            "CTriangleEffect@0x140370930",
+        ] {
+            assert!(outcome
+                .report
+                .converted
+                .details
+                .iter()
+                .any(|detail| detail.message.contains(evaluator)));
+        }
+        assert!(outcome.report.converted.details.iter().any(|detail| {
+            detail.item.contains("Random")
+                && detail
+                    .message
+                    .contains("unavailable_qrand=stable_source_seed")
+        }));
+        for generator in ["Ramp", "Random", "Sinus3", "Tangeant", "Triangle"] {
+            assert!(!outcome
+                .report
+                .skipped
+                .details
+                .iter()
+                .any(|detail| detail.item.contains(&format!("({generator})"))));
+        }
     }
 
     // Real saved Daslight specimen authored on 2026-08-10 (Fable, elevated

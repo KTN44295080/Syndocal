@@ -279,7 +279,7 @@ export interface RemoteControlStatus {
 }
 
 export type ClockSource = "Manual" | "Tap" | "MidiClock" | "MidiTimecode" | "Ltc" | "AbletonLink";
-export type LfoShape = "Sine" | "Cosine" | "Pulse" | "Triangle" | "Saw" | "Square" | "Strobe" | "Random" | "Perlin";
+export type LfoShape = "Sine" | "Cosine" | "Pulse" | "Triangle" | "Ramp" | "Saw" | "Square" | "Strobe" | "Random" | "Perlin" | "Sinus3" | "Tangeant";
 export type EffectKind = "Lfo" | "PositionWave" | "Color" | "Chaser" | "Move" | "Value" | "Curve" | "Mapping" | "ColorMapping";
 export type EffectBlendMode = "Override" | "Add" | "Multiply";
 export type ColorEffectAlgorithm = "Cycle" | "Bounce" | "Sequence" | "Random";
@@ -1878,6 +1878,7 @@ export interface DaslightCurveSource {
   size: number;
   offset: number;
   sample_ms: number;
+  rng_seed?: number | null;
 }
 
 export interface LfoEffectRequest {

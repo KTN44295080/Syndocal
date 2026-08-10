@@ -27223,18 +27223,31 @@ fn validate_lfo_effect_request(request: &LfoEffectRequest) -> Result<(), String>
     if !(0.0..=1.0).contains(&request.fixture_spread) {
         return Err("LFO effect fixture spread must be within 0..1".to_string());
     }
-    if request.shape == LfoShape::Pulse && request.daslight_curve.is_none() {
-        return Err("Daslight Pulse requires its sampled Curve source profile".to_string());
+    if matches!(
+        request.shape,
+        LfoShape::Pulse | LfoShape::Ramp | LfoShape::Sinus3 | LfoShape::Tangeant
+    ) && request.daslight_curve.is_none()
+    {
+        return Err(format!(
+            "Daslight {:?} requires its Curve source profile",
+            request.shape
+        ));
     }
     if let Some(source) = &request.daslight_curve {
         if !matches!(
             request.shape,
-            LfoShape::Sine | LfoShape::Pulse | LfoShape::Saw | LfoShape::Square | LfoShape::Strobe
+            LfoShape::Sine
+                | LfoShape::Pulse
+                | LfoShape::Triangle
+                | LfoShape::Ramp
+                | LfoShape::Saw
+                | LfoShape::Square
+                | LfoShape::Strobe
+                | LfoShape::Random
+                | LfoShape::Sinus3
+                | LfoShape::Tangeant
         ) {
-            return Err(
-                "Daslight Curve source is only valid for Sine, Pulse, Saw, Square, or Strobe shapes"
-                    .to_string(),
-            );
+            return Err("Daslight Curve source is not valid for this LFO shape".to_string());
         }
         if !(0.0..=1.0).contains(&request.phase) {
             return Err("Daslight Curve source phase must be within 0..1".to_string());
@@ -27250,6 +27263,12 @@ fn validate_lfo_effect_request(request: &LfoEffectRequest) -> Result<(), String>
         }
         if source.sample_ms == 0 {
             return Err("Daslight Curve source sample interval must be at least 1 ms".to_string());
+        }
+        if request.shape == LfoShape::Random && source.rng_seed.is_none() {
+            return Err("Daslight Random requires a stable source seed".to_string());
+        }
+        if request.shape != LfoShape::Random && source.rng_seed.is_some() {
+            return Err("Daslight Curve source seed is only valid for Random".to_string());
         }
         if matches!(request.shape, LfoShape::Pulse | LfoShape::Square)
             && (source.rate.fract().abs() > f32::EPSILON
@@ -32666,6 +32685,19 @@ fn evaluate_daslight_curve_normalized_with_offset(
                 + source.size * 0.5)
                 .clamp(0.0, 1.0)
         }
+        LfoShape::Sinus3 => {
+            let phase = shifted_outer_phase * source.rate * 0.5 - request.phase;
+            let carrier = (phase * std::f32::consts::TAU).sin();
+            (carrier.powi(3) * source.size * 0.5 + source.offset + source.size * 0.5)
+                .clamp(0.0, 1.0)
+        }
+        LfoShape::Tangeant => {
+            let phase = shifted_outer_phase * source.rate * 0.5 - request.phase;
+            ((phase * std::f32::consts::TAU).tan() * source.size * 0.5
+                + source.offset
+                + source.size * 0.5)
+                .clamp(0.0, 1.0)
+        }
         LfoShape::Pulse => corrected_pulse_curve_source_value(
             shifted_outer_phase,
             source.rate as i32,
@@ -32677,6 +32709,23 @@ fn evaluate_daslight_curve_normalized_with_offset(
             let source_phase = shifted_outer_phase * source.rate * 0.5 - request.phase;
             let centered = source_phase - (source_phase + 0.5).floor();
             (source.offset - centered * source.size + source.size - 0.5).clamp(0.0, 1.0)
+        }
+        LfoShape::Ramp => {
+            let source_phase = shifted_outer_phase * source.rate * 0.5 - request.phase;
+            let centered = source_phase - (source_phase + 0.5).floor();
+            (source.offset + centered * source.size + source.size - 0.5).clamp(0.0, 1.0)
+        }
+        LfoShape::Triangle => {
+            let source_phase = shifted_outer_phase * source.rate * 0.5 - request.phase;
+            let triangle = evaluate_lfo_shape(&LfoShape::Triangle, source_phase + 0.75);
+            (source.offset + triangle * source.size).clamp(0.0, 1.0)
+        }
+        LfoShape::Random => {
+            let source_phase = shifted_outer_phase * source.rate * std::f32::consts::PI
+                - request.phase * std::f32::consts::TAU;
+            let step = source_phase.abs().floor() as u32;
+            let bucket = corrected_curve_random_bucket(source.rng_seed.unwrap_or_default(), step);
+            (source.size * (bucket + source.offset)).clamp(0.0, 1.0)
         }
         LfoShape::Square => corrected_square_curve_source_value(
             shifted_outer_phase,
@@ -33593,6 +33642,7 @@ fn evaluate_lfo_shape(shape: &LfoShape, phase: f32) -> f32 {
                 (1.0 - phase) * 2.0
             }
         }
+        LfoShape::Ramp => phase,
         LfoShape::Saw => phase,
         LfoShape::Square => {
             if phase < 0.5 {
@@ -33611,7 +33661,17 @@ fn evaluate_lfo_shape(shape: &LfoShape, phase: f32) -> f32 {
         }
         LfoShape::Random => stepped_noise(phase, 16),
         LfoShape::Perlin => smooth_periodic_noise(phase, 8),
+        LfoShape::Sinus3 => {
+            let carrier = (phase * std::f32::consts::TAU).sin();
+            (carrier.powi(3) + 1.0) * 0.5
+        }
+        LfoShape::Tangeant => ((phase * std::f32::consts::TAU).tan() * 0.5 + 0.5).clamp(0.0, 1.0),
     }
+}
+
+fn corrected_curve_random_bucket(seed: u32, step: u32) -> f32 {
+    let mixed = seed ^ step.wrapping_mul(0x9E37_79B9);
+    (hash_u32(mixed) % 100) as f32 / 100.0
 }
 
 fn stepped_noise(phase: f32, steps: u32) -> f32 {
@@ -33631,13 +33691,17 @@ fn smooth_periodic_noise(phase: f32, steps: u32) -> f32 {
 }
 
 fn hash_unit_float(seed: u32) -> f32 {
+    hash_u32(seed) as f32 / u32::MAX as f32
+}
+
+fn hash_u32(seed: u32) -> u32 {
     let mut value = seed.wrapping_add(0x9E37_79B9);
     value ^= value >> 16;
     value = value.wrapping_mul(0x7FEB_352D);
     value ^= value >> 15;
     value = value.wrapping_mul(0x846C_A68B);
     value ^= value >> 16;
-    value as f32 / u32::MAX as f32
+    value
 }
 
 struct BpmClock {
@@ -36466,6 +36530,26 @@ mod tests {
             blend_mode,
             daslight_curve: None,
         }
+    }
+
+    fn test_daslight_curve_request(shape: LfoShape, rng_seed: Option<u32>) -> LfoEffectRequest {
+        let mut request = test_lfo_request(
+            "Imported Curve",
+            shape,
+            5_000,
+            0.0,
+            EffectBlendMode::Override,
+            0,
+            u16::MAX,
+        );
+        request.daslight_curve = Some(DaslightCurveSource {
+            rate: 2.0,
+            size: 1.0,
+            offset: 0.0,
+            sample_ms: 40,
+            rng_seed,
+        });
+        request
     }
 
     fn owned_lfo_target(effect_id: EffectId, request: LfoEffectRequest) -> CueEffectTarget {
@@ -54228,6 +54312,7 @@ mod tests {
             size: 2.0,
             offset: 0.0,
             sample_ms: 40,
+            rng_seed: None,
         });
         let started = Instant::now();
         let clock = ClockSnapshot::default();
@@ -54284,6 +54369,7 @@ mod tests {
             size: 2.0,
             offset: 0.0,
             sample_ms: 40,
+            rng_seed: None,
         });
         let started = Instant::now();
         let free = [0, 100, 500].map(|elapsed_ms| {
@@ -54382,6 +54468,7 @@ mod tests {
             size: 0.5,
             offset: 0.0,
             sample_ms: 40,
+            rng_seed: None,
         });
         validate_lfo_effect_request(&request).unwrap();
         let started = Instant::now();
@@ -54452,6 +54539,7 @@ mod tests {
             size: 0.75,
             offset: 0.1,
             sample_ms: 40,
+            rng_seed: None,
         });
         validate_lfo_effect_request(&request).unwrap();
         let started = Instant::now();
@@ -54492,6 +54580,7 @@ mod tests {
             size: 1.0,
             offset: 0.0,
             sample_ms: 40,
+            rng_seed: None,
         });
         let started = Instant::now();
         let clock = ClockSnapshot::default();
@@ -54539,6 +54628,7 @@ mod tests {
             size: 1.0,
             offset: -0.25,
             sample_ms: 40,
+            rng_seed: None,
         });
         let started = Instant::now();
         let clock = ClockSnapshot::default();
@@ -54557,6 +54647,149 @@ mod tests {
     }
 
     #[test]
+    fn corrected_dvc_ramp_preserves_the_recovered_ascending_centered_saw_without_sample_hold() {
+        let request = test_daslight_curve_request(LfoShape::Ramp, None);
+        validate_lfo_effect_request(&request).unwrap();
+        let started = Instant::now();
+        let clock = ClockSnapshot::default();
+        let values = [0, 39, 1_250, 2_500, 3_750].map(|elapsed_ms| {
+            evaluate_lfo_effect(
+                &request,
+                started,
+                started + Duration::from_millis(elapsed_ms),
+                &clock,
+            )
+        });
+        assert_eq!(values[0], 32_768);
+        assert_ne!(
+            values[1], values[0],
+            "the recovered 40 ms hold must be removed"
+        );
+        assert!((49_100..=49_200).contains(&values[2]));
+        assert_eq!(values[3], 0, "the centered saw must wrap at half-cycle");
+        assert!((16_300..=16_450).contains(&values[4]));
+    }
+
+    #[test]
+    fn corrected_dvc_sinus3_preserves_the_recovered_cubed_sine_without_sample_hold() {
+        let request = test_daslight_curve_request(LfoShape::Sinus3, None);
+        validate_lfo_effect_request(&request).unwrap();
+        let started = Instant::now();
+        let clock = ClockSnapshot::default();
+        let values = [0, 39, 625, 1_250, 3_750].map(|elapsed_ms| {
+            evaluate_lfo_effect(
+                &request,
+                started,
+                started + Duration::from_millis(elapsed_ms),
+                &clock,
+            )
+        });
+        assert_eq!(values[0], 32_768);
+        assert_ne!(
+            values[1], values[0],
+            "the recovered 40 ms hold must be removed"
+        );
+        assert!((44_300..=44_400).contains(&values[2]));
+        assert_eq!(values[3], u16::MAX);
+        assert_eq!(values[4], 0);
+    }
+
+    #[test]
+    fn corrected_dvc_tangeant_preserves_the_recovered_tangent_and_native_clamp() {
+        let request = test_daslight_curve_request(LfoShape::Tangeant, None);
+        validate_lfo_effect_request(&request).unwrap();
+        let started = Instant::now();
+        let clock = ClockSnapshot::default();
+        let values = [0, 39, 625, 1_875].map(|elapsed_ms| {
+            evaluate_lfo_effect(
+                &request,
+                started,
+                started + Duration::from_millis(elapsed_ms),
+                &clock,
+            )
+        });
+        assert_eq!(values[0], 32_768);
+        assert_ne!(
+            values[1], values[0],
+            "the recovered 40 ms hold must be removed"
+        );
+        assert!(
+            values[2] >= 65_534,
+            "positive tangent branch must clamp high"
+        );
+        assert!(values[3] <= 1, "negative tangent branch must clamp low");
+    }
+
+    #[test]
+    fn corrected_dvc_triangle_preserves_the_recovered_three_quarter_cycle_alignment() {
+        let request = test_daslight_curve_request(LfoShape::Triangle, None);
+        validate_lfo_effect_request(&request).unwrap();
+        let started = Instant::now();
+        let clock = ClockSnapshot::default();
+        let values = [0, 39, 1_250, 2_500, 3_750].map(|elapsed_ms| {
+            evaluate_lfo_effect(
+                &request,
+                started,
+                started + Duration::from_millis(elapsed_ms),
+                &clock,
+            )
+        });
+        assert_eq!(values[0], 32_768);
+        assert_ne!(
+            values[1], values[0],
+            "the recovered 40 ms hold must be removed"
+        );
+        assert_eq!(values[2], 0);
+        assert_eq!(values[3], 32_768);
+        assert_eq!(values[4], u16::MAX);
+    }
+
+    #[test]
+    fn corrected_dvc_random_replaces_unserialized_qrand_history_with_a_stable_source_seed() {
+        let first = (0..40)
+            .map(|step| corrected_curve_random_bucket(0x1357_9BDF, step))
+            .collect::<Vec<_>>();
+        let reloaded = (0..40)
+            .map(|step| corrected_curve_random_bucket(0x1357_9BDF, step))
+            .collect::<Vec<_>>();
+        let different_source = (0..40)
+            .map(|step| corrected_curve_random_bucket(0x2468_ACE0, step))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            first, reloaded,
+            "the same imported source must reload identically"
+        );
+        assert_ne!(
+            first, different_source,
+            "source identity must select the sequence"
+        );
+        assert!(first.iter().all(|value| {
+            (0.0..=0.99).contains(value) && (value * 100.0 - (value * 100.0).round()).abs() < 0.001
+        }));
+
+        let request = test_daslight_curve_request(LfoShape::Random, Some(0x1357_9BDF));
+        validate_lfo_effect_request(&request).unwrap();
+        let started = Instant::now();
+        let clock = ClockSnapshot::default();
+        let before_step = evaluate_lfo_effect(
+            &request,
+            started,
+            started + Duration::from_millis(790),
+            &clock,
+        );
+        let after_step = evaluate_lfo_effect(
+            &request,
+            started,
+            started + Duration::from_millis(810),
+            &clock,
+        );
+        assert_ne!(
+            before_step, after_step,
+            "the recovered angle-derived step boundary must not be quantized to 40 ms"
+        );
+    }
+
+    #[test]
     fn daslight_curve_profile_rejects_unrepresentable_source_parameters() {
         let mut request = test_lfo_request(
             "Imported Curve",
@@ -54572,12 +54805,37 @@ mod tests {
             size: 1.0,
             offset: 0.0,
             sample_ms: 40,
+            rng_seed: None,
         });
+        validate_lfo_effect_request(&request).unwrap();
+
+        request.shape = LfoShape::Perlin;
         assert!(validate_lfo_effect_request(&request)
             .unwrap_err()
-            .contains("only valid for Sine, Pulse, Saw, Square, or Strobe"));
+            .contains("not valid for this LFO shape"));
+
+        request.shape = LfoShape::Random;
+        assert!(validate_lfo_effect_request(&request)
+            .unwrap_err()
+            .contains("stable source seed"));
+        request.daslight_curve.as_mut().unwrap().rng_seed = Some(7);
+        validate_lfo_effect_request(&request).unwrap();
+
+        request.shape = LfoShape::Sinus3;
+        request.daslight_curve = None;
+        assert!(validate_lfo_effect_request(&request)
+            .unwrap_err()
+            .contains("requires its Curve source profile"));
 
         request.shape = LfoShape::Sine;
+        request.daslight_curve = Some(DaslightCurveSource {
+            rate: 2.0,
+            size: 1.0,
+            offset: 0.0,
+            sample_ms: 40,
+            rng_seed: None,
+        });
+
         request.daslight_curve.as_mut().unwrap().size = -0.01;
         assert!(validate_lfo_effect_request(&request)
             .unwrap_err()
@@ -54606,6 +54864,7 @@ mod tests {
             size: 1.562,
             offset: -0.848,
             sample_ms: 40,
+            rng_seed: None,
         });
         let started = Instant::now();
         let clock = ClockSnapshot::default();
