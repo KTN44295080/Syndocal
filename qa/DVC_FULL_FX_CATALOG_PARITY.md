@@ -291,8 +291,26 @@ precise fail-closed、残る42 IDは未routeでgeneric `Skipped`になる。22 r
 | CURVE 3/7/10 | 40ms式は証明済みだが、PARAM TYPE/range検証がfactory contractと不一致 |
 | MAPPINGS 521/530 | 521はID10 unit→percent変換不足。530はgeneric noiseでRectangleを未処理 |
 
-この監査により、条件付きstrict routeは6 ID、要correctness routeは16 IDである。次トランシェは
+この監査により、DVC-ENUM直後の条件付きstrict-coreは6 ID、要correctness routeは16 IDだった。
 未route追加より先に後者をstrict化し、再現不能な近似はprecise fail-closedへ戻す。
+
+### DVC-C0a hardening（2026-08-10）
+
+- MAPPINGS 521は`TYPE1/ID10=0..1`を`*100`でruntime percentへ変換し、全PARAM TYPE、
+  Rotation/Angle integer `0..360`を検証する。
+- COLOR 129/130は全TYPEとfactory domainを検証する。Plasma 10..13=`0..20`、14..17=`-5..5`、
+  Rainbow Width/Gradient=`0..1`、Angle integer `0..360`。
+- CURVE 3/7/10は共通`T0/ID1 integer 1..10`, `T1/ID2 0..2`, `ID3 0..1`,
+  `ID4 -1..1`, `ID5 0..1`へ統一した。
+- CHASER 321/322/325はempty BEAMSより前にID/TYPE/domainを検証する。321/325の
+  `Nb pixels on=0..1000`をschema上受理し、empty targetならno-op、targetあり0は表現不能理由付き
+  fail-closed。322は`T2/ID10` binaryを厳密検証する。
+- MOVE 224のPOINTS域を旧`3..256`からfactory `2..255`へ訂正した。
+
+これで129/130、322、CURVE 3/7/10、521の7 routeは評価器／入力coreがstrict化された。
+ただしCOLOR paletteはfactory `1..255`に対し現protocol/engine `2..16`、VALUE paletteは`2..32`という
+横断表現域が残る。Line 223のPOINTS exact-2制約、CHASER 321/325のclamp/意味論差も既存境界である。
+したがって、条件付きexact-coreは13 routeへ増えたが、13/68をfull-domain完成率とは呼ばない。
 
 ## 未実装・未証明境界
 

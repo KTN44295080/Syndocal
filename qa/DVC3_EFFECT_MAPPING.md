@@ -110,6 +110,8 @@ Daslight実機のdropdownを最下端まで観測した。追加で確定した�
 factoryにないCOLOR FXの122–126/132は現バイナリの未登録空隙であり、予約/廃止までは断言しない。
 現行converter route 22 IDのうち条件付きstrict routeは6 IDであり、routeの存在をexact完成とは扱わない。
 schema/scale/beam-target/乱数境界の逆照合結果は同正本と`qa/DVC_FULL_FX_PARITY_ROADMAP.md`に分離した。
+2026-08-10のDVC-C0aで追加7 routeのTYPE/domain/scale coreをstrict化したが、paletteのfactory
+`1..255`対protocol `2..16`など横断表現域が残るため、13 routeをfull-domain完成とは数えない。
 
 VALUE Sweepについては、同実行ファイルのRTTI `CSweepEffect`、vtable `0x140696440`、
 evaluator `0x1403665A0`、constructor `0x140355D30`を追加解析した。constructorは

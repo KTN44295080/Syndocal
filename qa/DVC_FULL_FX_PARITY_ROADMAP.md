@@ -32,9 +32,8 @@ STEPS/SUPER SCENEなど非generator構造を含む「製品完成率」ではな
 
 ### converter routeの厳密性監査
 
-`converter routeあり`と`Daslight exact`は同義ではない。DVC-ENUMのfactory schemaを現行コードへ
-逆照合した結果、strict TYPE/ID検証と証明済みevaluator境界がend-to-endで揃うのは、現時点では
-次の条件付き6 routeである。
+`converter routeあり`と`Daslight exact`は同義ではない。DVC-ENUM直後の逆照合では、strict TYPE/ID検証と
+証明済みevaluator境界が揃うものを、次の条件付き6 routeとして分類した。
 
 - VALUE 621 / 623 / 624、および625の`Transform=0`
 - COLOR MAPPINGS 36（外部`SELECTIONS`参照なし）
@@ -54,8 +53,10 @@ STEPS/SUPER SCENEなど非generator構造を含む「製品完成率」ではな
   factory `2..255`と一致しない。
 
 したがって、未route IDの追加より先に既存22 routeをstrict化し、再現不能な近似は理由付き
-precise fail-closedへ戻す。22/68は入口coverage、6/68は上記条件での現時点strict route数として
-別々に報告する。
+precise fail-closedへ戻す。22/68は入口coverage、6/68はDVC-ENUM直後の条件付きstrict-core数として
+別々に報告する。なお横断監査で、COLOR系paletteはDaslight factory `1..255`に対し現protocol/engineが
+`2..16`（VALUEは`2..32`）という既存の表現上限も判明した。以後はこのfull-domain境界を解消するまで、
+strict-core数を製品全域のexact完成数とは呼ばない。
 
 ## 実施順
 
@@ -68,8 +69,16 @@ precise fail-closedへ戻す。22/68は入口coverage、6/68は上記条件で�
    評価器自体を回収済みだが、622/628はconstructor由来のpalette-wrap state、626/627は
    per-thread qrand state/historyが`.dvc`から復元不能なため、推測せずprecise fail-closedを維持する。
    追加のDaslight証跡で欠落stateの導出経路を確定できた場合だけexact実装へ戻す。
-5. **DVC-CORRECTNESS（次）**: 上記16 routeをfactory TYPE/range/evaluator/beam-targetと再突合する。
-   まず521/133のscale誤りを回帰テストで露出し、exactへ直せるrouteはstrict化する。
+5. **DVC-CORRECTNESS（進行中）**: 上記16 routeをfactory TYPE/range/evaluator/beam-targetと再突合する。
+   **C0a完了**: MAPPINGS 521のunit→percent、COLOR 129/130、CHASER 321/322/325、
+   CURVE 3/7/10、MOVE 224のTYPE/domain/no-op順序をfactory contractへ一致させた。
+   これにより従来の条件付き6 routeに、129/130、322、3/7/10、521の7 exact-core routeが加わった。
+   ただし上記palette上限など横断表現域は残るため、13をfull-domain完成数にはしない。
+   ゲートはDVC focused 71/71、Syndocal全体397 pass / 0 fail / 9 ignored、
+   `pnpm --dir app tauri build --no-bundle`成功、exact checkout exe 1件のresponsive native windowで固定した。
+   **C0b次**: COLOR 121/131/133とMAPPINGS 530は、非等価generic/RNG/palette state/Rectangle欠落を
+   class固有理由付きprecise fail-closedへ戻す。COLOR 127はVALUE 624と共有する回収済み評価器で
+   exact化する。MOVE 223/224とCHASER 321/325は既存show互換を維持しつつ常時Approximateを明示する。
    `.dvc`だけではexact replay不能なqrand/palette-wrap/generic置換routeは、近似成功扱いを撤回して
    class固有理由付きprecise fail-closedへ戻す。
 6. **新規IDトランシェ**: correctness着地後、(a)既存Sweep evaluatorを再利用できるCOLOR FX 134

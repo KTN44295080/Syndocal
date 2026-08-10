@@ -3064,6 +3064,22 @@ fn convert_dvc_color_spatial_effect(
         }
         129 => {
             require_exact_dvc_params(&params, &[2, 3, 10, 11, 12, 13, 14, 15, 16, 17])?;
+            require_exact_dvc_param_types(
+                effect,
+                &[
+                    (1, 4),
+                    (2, 2),
+                    (3, 6),
+                    (10, 0),
+                    (11, 0),
+                    (12, 0),
+                    (13, 0),
+                    (14, 0),
+                    (15, 0),
+                    (16, 0),
+                    (17, 0),
+                ],
+            )?;
             let grayscale = dvc_binary_param(&params, 2, "Plasma Grayscale")?;
             let transform = dvc_param(&params, 3, "Plasma Transform")?;
             if !matches!(transform, 0.0 | 1.0) {
@@ -3074,18 +3090,22 @@ fn convert_dvc_color_spatial_effect(
             ColorEffectSpatialRecipe::Plasma {
                 grayscale,
                 vertical_symmetry: transform == 1.0,
-                size_x: dvc_finite_param(&params, 10, "Size X")?,
-                param_x: dvc_finite_param(&params, 11, "Param X")?,
-                size_y: dvc_finite_param(&params, 12, "Size Y")?,
-                param_y: dvc_finite_param(&params, 13, "Param Y")?,
-                speed_x: dvc_finite_param(&params, 14, "Speed X")?,
-                param_sx: dvc_finite_param(&params, 15, "Param SX")?,
-                speed_y: dvc_finite_param(&params, 16, "Speed Y")?,
-                param_sy: dvc_finite_param(&params, 17, "Param SY")?,
+                size_x: dvc_integer_range_param(&params, 10, "Plasma Size X", 0, 20)?,
+                param_x: dvc_integer_range_param(&params, 11, "Plasma Param X", 0, 20)?,
+                size_y: dvc_integer_range_param(&params, 12, "Plasma Size Y", 0, 20)?,
+                param_y: dvc_integer_range_param(&params, 13, "Plasma Param Y", 0, 20)?,
+                speed_x: dvc_integer_range_param(&params, 14, "Plasma Speed X", -5, 5)?,
+                param_sx: dvc_integer_range_param(&params, 15, "Plasma Param SX", -5, 5)?,
+                speed_y: dvc_integer_range_param(&params, 16, "Plasma Speed Y", -5, 5)?,
+                param_sy: dvc_integer_range_param(&params, 17, "Plasma Param SY", -5, 5)?,
             }
         }
         130 => {
             require_exact_dvc_params(&params, &[2, 3, 10, 11, 12])?;
+            require_exact_dvc_param_types(
+                effect,
+                &[(1, 4), (2, 2), (3, 6), (10, 1), (11, 0), (12, 1)],
+            )?;
             let grayscale = dvc_binary_param(&params, 2, "Rainbow Grayscale")?;
             let transform = dvc_param(&params, 3, "Rainbow Transform")?;
             if !matches!(transform, 0.0 | 1.0) {
@@ -3093,22 +3113,20 @@ fn convert_dvc_color_spatial_effect(
                     "Rainbow Transform PARAM 3 must be None(0) or Vertical symmetry(1), found {transform}"
                 ));
             }
-            let angle_degrees = dvc_finite_param(&params, 11, "Angle")?;
-            if angle_degrees.fract().abs() > f32::EPSILON {
-                return Err(format!(
-                    "Rainbow Angle PARAM 11 must be an integer, found {angle_degrees}"
-                ));
-            }
             ColorEffectSpatialRecipe::ColorRainbow {
                 grayscale,
                 vertical_symmetry: transform == 1.0,
-                color_width: dvc_finite_param(&params, 10, "Color Width")?,
-                angle_degrees,
+                color_width: dvc_unit_param(&params, 10, "Rainbow Color Width")?,
+                angle_degrees: dvc_integer_range_param(&params, 11, "Rainbow Angle", 0, 360)?,
                 gradient: dvc_unit_param(&params, 12, "Gradient")? * 100.0,
             }
         }
         521 => {
             require_exact_dvc_params(&params, &[3, 4, 10, 11, 12])?;
+            require_exact_dvc_param_types(
+                effect,
+                &[(1, 4), (3, 6), (4, 0), (10, 1), (11, 0), (12, 1)],
+            )?;
             let transform = dvc_param(&params, 3, "Transform")?;
             if !matches!(transform, 0.0 | 1.0 | 2.0) {
                 return Err(format!(
@@ -3119,9 +3137,21 @@ fn convert_dvc_color_spatial_effect(
                 grayscale: false,
                 vertical_symmetry: transform == 1.0,
                 horizontal_symmetry: transform == 2.0,
-                rotation_degrees: dvc_finite_param(&params, 4, "Rotation")?,
-                color_width: dvc_percent_param(&params, 10, "Color Width")?,
-                angle_degrees: dvc_finite_param(&params, 11, "Angle")?,
+                rotation_degrees: dvc_integer_range_param(
+                    &params,
+                    4,
+                    "MAPPINGS Rainbow Rotation",
+                    0,
+                    360,
+                )?,
+                color_width: dvc_unit_param(&params, 10, "MAPPINGS Rainbow Color Width")? * 100.0,
+                angle_degrees: dvc_integer_range_param(
+                    &params,
+                    11,
+                    "MAPPINGS Rainbow Angle",
+                    0,
+                    360,
+                )?,
                 gradient: dvc_unit_param(&params, 12, "Gradient")? * 100.0,
             }
         }
@@ -3392,22 +3422,6 @@ fn convert_dvc_chaser_effect(
     profiles: &[ParsedProfile],
     fixture_refs: &HashMap<String, FixtureImportRef>,
 ) -> Result<ConvertedDvcEffect, String> {
-    let targets = dvc_rack_targets(rack, fixture_refs)?;
-    if targets.ordered_steps.is_empty() {
-        let generator = match generator_id {
-            321 => "Chaser #1",
-            322 => "Chaser #2",
-            _ => "Chaser random",
-        };
-        return Ok(ConvertedDvcEffect {
-            target: None,
-            generator,
-            note: "source no-op preserved: Daslight BEAMS contains zero targets; no runtime effect was created"
-                .to_string(),
-            approximations: Vec::new(),
-            warnings: Vec::new(),
-        });
-    }
     let generator = match generator_id {
         321 => "Chaser #1",
         322 => "Chaser #2",
@@ -3420,6 +3434,71 @@ fn convert_dvc_chaser_effect(
         _ => &[11, 12, 13, 14, 15],
     };
     require_exact_dvc_params(&params, expected_params)?;
+    let expected_types: &[(u16, u16)] = match generator_id {
+        321 => &[(10, 2), (11, 2), (12, 0)],
+        322 => &[(10, 2)],
+        _ => &[(11, 2), (12, 0), (13, 1), (14, 0), (15, 0)],
+    };
+    require_exact_dvc_param_types(effect, expected_types)?;
+
+    // Validate the complete serialized class schema before recognizing an
+    // empty BEAMS rack as a source no-op. A malformed effect must not bypass
+    // fail-closed validation merely because it currently targets nothing.
+    let fading = dvc_binary_param(&params, if generator_id == 322 { 10 } else { 11 }, "Fading")?;
+    let one_way = if generator_id == 321 {
+        Some(dvc_binary_param(&params, 10, "One Way Only")?)
+    } else {
+        None
+    };
+    let pixels_on = if generator_id == 322 {
+        1
+    } else {
+        dvc_integer_range_param(&params, 12, "Nb pixels on", 0, 1000)? as u64
+    };
+    let (flash_percent, random_sequence, authored_random_cycle_count) = if generator_id == 325 {
+        let flash_percent = dvc_param(&params, 13, "Flash")?;
+        if !flash_percent.is_finite() || !(0.0..=100.0).contains(&flash_percent) {
+            return Err(format!(
+                "Flash must be within 0..100, found {flash_percent}"
+            ));
+        }
+        let random_sequence = dvc_param(&params, 14, "Random sequence")?;
+        if !random_sequence.is_finite()
+            || !(0.0..=255.0).contains(&random_sequence)
+            || random_sequence.fract().abs() > f64::EPSILON
+        {
+            return Err(format!(
+                "Random sequence PARAM 14 must be an integer from 0 to 255, found {random_sequence}"
+            ));
+        }
+        let cycles = dvc_positive_integer_param(&params, 15, "Nb cycles")?;
+        if cycles > u8::MAX as u64 {
+            return Err(format!(
+                "Nb cycles PARAM 15 must be an integer from 1 to 255, found {cycles}"
+            ));
+        }
+        (flash_percent, random_sequence as u64, cycles as u8)
+    } else {
+        (100.0, 1, 1)
+    };
+
+    let targets = dvc_rack_targets(rack, fixture_refs)?;
+    if targets.ordered_steps.is_empty() {
+        return Ok(ConvertedDvcEffect {
+            target: None,
+            generator,
+            note: format!(
+                "source no-op preserved: Daslight BEAMS contains zero targets; PARAM IDs {expected_params:?}, TYPEs, and domains validated; no runtime effect was created"
+            ),
+            approximations: Vec::new(),
+            warnings: Vec::new(),
+        });
+    }
+    if pixels_on == 0 {
+        return Err(format!(
+            "{generator} Nb pixels on PARAM 12=0 is valid Daslight schema but cannot be represented for a populated Syndocal Chaser target; remains fail-closed"
+        ));
+    }
 
     let feature_spec = dvc_rack_feature_spec(rack, profiles)?;
     let original_step_count = targets.ordered_steps.len();
@@ -3473,11 +3552,6 @@ fn convert_dvc_chaser_effect(
                 .to_string(),
         );
     }
-    let pixels_on = if generator_id == 322 {
-        1
-    } else {
-        dvc_positive_integer_param(&params, 12, "Nb pixels on")?
-    };
     let maximum_pixels = ordered_steps.len().min(64) as u64;
     let active_step_count = pixels_on.min(maximum_pixels) as u16;
     if pixels_on > maximum_pixels {
@@ -3486,11 +3560,10 @@ fn convert_dvc_chaser_effect(
         ));
     }
 
-    let fading = dvc_binary_param(&params, if generator_id == 322 { 10 } else { 11 }, "Fading")?;
     let (direction, duty_cycle, generator_note, random_seed, random_cycle_count) = if generator_id
         == 321
     {
-        let one_way = dvc_binary_param(&params, 10, "One Way Only")?;
+        let one_way = one_way.unwrap_or(false);
         (
             if one_way {
                 ChaserDirection::Forward
@@ -3518,27 +3591,6 @@ fn convert_dvc_chaser_effect(
             1,
         )
     } else {
-        let flash_percent = dvc_param(&params, 13, "Flash")?;
-        if !flash_percent.is_finite() || !(0.0..=100.0).contains(&flash_percent) {
-            return Err(format!(
-                "Flash must be within 0..100, found {flash_percent}"
-            ));
-        }
-        let random_sequence = dvc_param(&params, 14, "Random sequence")?;
-        if !random_sequence.is_finite()
-            || !(0.0..=255.0).contains(&random_sequence)
-            || random_sequence.fract().abs() > f64::EPSILON
-        {
-            return Err(format!(
-                "Random sequence PARAM 14 must be an integer from 0 to 255, found {random_sequence}"
-            ));
-        }
-        let cycles = dvc_positive_integer_param(&params, 15, "Nb cycles")?;
-        if cycles > u8::MAX as u64 {
-            return Err(format!(
-                "Nb cycles PARAM 15 must be an integer from 1 to 255, found {cycles}"
-            ));
-        }
         let mut duty_cycle = (flash_percent / 100.0) as f32;
         if duty_cycle <= 0.0 {
             duty_cycle = 0.001;
@@ -3549,10 +3601,10 @@ fn convert_dvc_chaser_effect(
             ChaserDirection::Random,
             duty_cycle,
             format!(
-                "random_sequence={random_sequence:.0}; flash_percent={flash_percent}; cycles={cycles}; deterministic reload-stable permutation series"
+                "random_sequence={random_sequence}; flash_percent={flash_percent}; cycles={authored_random_cycle_count}; deterministic reload-stable permutation series"
             ),
-            random_sequence as u64,
-            cycles as u8,
+            random_sequence,
+            authored_random_cycle_count,
         )
     };
 
@@ -3726,32 +3778,12 @@ fn convert_dvc_inverse_ramp_effect(
     effect_id: u64,
     fixture_refs: &HashMap<String, FixtureImportRef>,
 ) -> Result<ConvertedDvcEffect, String> {
-    let params = dvc_effect_params(effect)?;
-    require_exact_dvc_params(&params, &[1, 2, 3, 4, 5])?;
+    let params = dvc_curve_effect_params(effect, "Inverse Ramp")?;
     let rate = dvc_param(&params, 1, "Rate")?;
     let size = dvc_param(&params, 2, "Size")?;
     let phase = dvc_param(&params, 3, "Phase")?;
     let offset = dvc_param(&params, 4, "Offset")?;
     let phasing = dvc_param(&params, 5, "Phasing")?;
-    if !rate.is_finite() || rate <= 0.0 {
-        return Err(format!(
-            "Rate must be finite and greater than 0, found {rate}"
-        ));
-    }
-    if !size.is_finite() || size < 0.0 {
-        return Err(format!(
-            "Size must be finite and greater than or equal to 0, found {size}"
-        ));
-    }
-    if !phase.is_finite() || !(0.0..=1.0).contains(&phase) {
-        return Err(format!("Phase must be within 0..1, found {phase}"));
-    }
-    if !offset.is_finite() || !phasing.is_finite() {
-        return Err("Offset and Phasing must be finite".to_string());
-    }
-    if !(0.0..=1.0).contains(&phasing) {
-        return Err(format!("Phasing must be within 0..1, found {phasing}"));
-    }
     let duration_ms = effect
         .attribute("DURATION")
         .ok_or_else(|| "Inverse Ramp EFFECT is missing DURATION".to_string())?
@@ -3837,30 +3869,12 @@ fn convert_dvc_sinus_effect(
     effect_id: u64,
     fixture_refs: &HashMap<String, FixtureImportRef>,
 ) -> Result<ConvertedDvcEffect, String> {
-    let params = dvc_effect_params(effect)?;
-    require_exact_dvc_params(&params, &[1, 2, 3, 4, 5])?;
+    let params = dvc_curve_effect_params(effect, "Sinus")?;
     let rate = dvc_param(&params, 1, "Rate")?;
     let size = dvc_param(&params, 2, "Size")?;
     let phase = dvc_param(&params, 3, "Phase")?;
     let offset = dvc_param(&params, 4, "Offset")?;
     let phasing = dvc_param(&params, 5, "Phasing")?;
-    if !rate.is_finite() || rate <= 0.0 {
-        return Err(format!(
-            "Rate must be finite and greater than 0, found {rate}"
-        ));
-    }
-    if !size.is_finite() || !(0.0..=1.0).contains(&size) {
-        return Err(format!("Size must be within 0..1, found {size}"));
-    }
-    if !phase.is_finite() || !(0.0..=1.0).contains(&phase) {
-        return Err(format!("Phase must be within 0..1, found {phase}"));
-    }
-    if !offset.is_finite() || !phasing.is_finite() {
-        return Err("Offset and Phasing must be finite".to_string());
-    }
-    if !(0.0..=1.0).contains(&phasing) {
-        return Err(format!("Phasing must be within 0..1, found {phasing}"));
-    }
     let duration_ms = effect
         .attribute("DURATION")
         .ok_or_else(|| "Sinus EFFECT is missing DURATION".to_string())?
@@ -3945,38 +3959,13 @@ fn convert_dvc_strobe_effect(
     effect_id: u64,
     fixture_refs: &HashMap<String, FixtureImportRef>,
 ) -> Result<ConvertedDvcEffect, String> {
-    let params = dvc_effect_params(effect)?;
-    require_exact_dvc_params(&params, &[1, 2, 3, 4, 5])?;
+    let params = dvc_curve_effect_params(effect, "Strobe")?;
     let rate = dvc_param(&params, 1, "Rate")?;
     let size = dvc_param(&params, 2, "Size")?;
     let phase = dvc_param(&params, 3, "Phase")?;
     let offset = dvc_param(&params, 4, "Offset")?;
     let phasing = dvc_param(&params, 5, "Phasing")?;
-    if !rate.is_finite() || rate <= 0.0 {
-        return Err(format!(
-            "Rate must be finite and greater than 0, found {rate}"
-        ));
-    }
     let samples_per_second = 1_000.0 / f64::from(DASLIGHT_CURVE_SAMPLE_MS);
-    if rate > samples_per_second {
-        return Err(format!(
-            "Strobe Rate must not exceed the {samples_per_second:.3} Hz Daslight Curve sample grid, found {rate}"
-        ));
-    }
-    if !size.is_finite() || size < 0.0 {
-        return Err(format!(
-            "Size must be finite and greater than or equal to 0, found {size}"
-        ));
-    }
-    if !phase.is_finite() || !(0.0..=1.0).contains(&phase) {
-        return Err(format!("Phase must be within 0..1, found {phase}"));
-    }
-    if !offset.is_finite() || !phasing.is_finite() {
-        return Err("Offset and Phasing must be finite".to_string());
-    }
-    if !(0.0..=1.0).contains(&phasing) {
-        return Err(format!("Phasing must be within 0..1, found {phasing}"));
-    }
     let duration_ms = effect
         .attribute("DURATION")
         .ok_or_else(|| "Strobe EFFECT is missing DURATION".to_string())?
@@ -4085,6 +4074,21 @@ fn dvc_effect_params(effect: Node<'_, '_>) -> Result<HashMap<u16, f64>, String> 
             return Err(format!("PARAM {id} is duplicated"));
         }
     }
+    Ok(params)
+}
+
+fn dvc_curve_effect_params(
+    effect: Node<'_, '_>,
+    generator: &str,
+) -> Result<HashMap<u16, f64>, String> {
+    let params = dvc_effect_params(effect)?;
+    require_exact_dvc_params(&params, &[1, 2, 3, 4, 5])?;
+    require_exact_dvc_param_types(effect, &[(1, 0), (2, 1), (3, 1), (4, 1), (5, 1)])?;
+    dvc_integer_range_param(&params, 1, &format!("{generator} Rate"), 1, 10)?;
+    dvc_finite_range_param(&params, 2, &format!("{generator} Size"), 0.0, 2.0)?;
+    dvc_unit_param(&params, 3, &format!("{generator} Phase"))?;
+    dvc_finite_range_param(&params, 4, &format!("{generator} Offset"), -1.0, 1.0)?;
+    dvc_unit_param(&params, 5, &format!("{generator} Phasing"))?;
     Ok(params)
 }
 
@@ -4321,13 +4325,13 @@ fn dvc_move_effect_params(
     let valid_point_count = match generator {
         "Line" => points.len() == 2,
         "Circle" => (2..=255).contains(&points.len()),
-        _ => (3..=256).contains(&points.len()),
+        _ => (2..=255).contains(&points.len()),
     };
     if !valid_point_count {
         let expected = match generator {
             "Line" => "exactly 2",
             "Circle" => "between 2 and 255",
-            _ => "between 3 and 256",
+            _ => "between 2 and 255",
         };
         return Err(format!(
             "{generator} POINTS must contain {expected} vertices, found {}",
@@ -6015,7 +6019,7 @@ mod tests {
                 6,
                 8,
                 521,
-                r#"<PARAM TYPE="6" ID="3" VAL="1"/><PARAM TYPE="0" ID="4" VAL="171"/><PARAM TYPE="1" ID="10" VAL="0"/><PARAM TYPE="1" ID="11" VAL="0"/><PARAM TYPE="1" ID="12" VAL="1"/>"#,
+                r#"<PARAM TYPE="6" ID="3" VAL="1"/><PARAM TYPE="0" ID="4" VAL="171"/><PARAM TYPE="1" ID="10" VAL="0.25"/><PARAM TYPE="0" ID="11" VAL="0"/><PARAM TYPE="1" ID="12" VAL="1"/>"#,
                 6,
             ),
             scene(
@@ -6945,6 +6949,7 @@ mod tests {
                 grayscale: false,
                 vertical_symmetry: true,
                 rotation_degrees: 171.0,
+                color_width: 25.0,
                 ..
             })
         )));
@@ -7106,7 +7111,7 @@ mod tests {
             &effect_test_fixture_refs(),
         )
         .unwrap_err();
-        assert!(empty_error.contains("POINTS must contain between 3 and 256 vertices"));
+        assert!(empty_error.contains("POINTS must contain between 2 and 255 vertices"));
 
         let unexpected_document = Document::parse(
             r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="4"><EFFECT TYPE="4" ID="223" DURATION="1000"><PARAMS NB="4"><PARAM TYPE="5" ID="1"><POINTS NB="2"><POINT X="0" Y="0"/><POINT X="1" Y="1"/></POINTS></PARAM><PARAM TYPE="1" ID="2" VAL="0"/><PARAM TYPE="2" ID="3" VAL="0"/><PARAM TYPE="1" ID="4" VAL="0"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
@@ -7132,9 +7137,125 @@ mod tests {
     }
 
     #[test]
+    fn dvc_curve_and_polygon_schema_match_factory_types_and_domains() {
+        let curve = r#"<EFFECT><PARAMS NB="5"><PARAM TYPE="0" ID="1" VAL="2"/><PARAM TYPE="1" ID="2" VAL="1"/><PARAM TYPE="1" ID="3" VAL="0.25"/><PARAM TYPE="1" ID="4" VAL="0"/><PARAM TYPE="1" ID="5" VAL="0.5"/></PARAMS></EFFECT>"#;
+        let validate_curve = |xml: &str| {
+            let document = Document::parse(xml).unwrap();
+            dvc_curve_effect_params(document.root_element(), "Curve")
+        };
+        assert!(validate_curve(curve).is_ok());
+        for invalid in [
+            curve.replacen(r#"TYPE="0" ID="1""#, r#"TYPE="1" ID="1""#, 1),
+            curve.replacen(r#"ID="1" VAL="2""#, r#"ID="1" VAL="2.5""#, 1),
+            curve.replacen(r#"ID="2" VAL="1""#, r#"ID="2" VAL="2.01""#, 1),
+            curve.replacen(r#"ID="3" VAL="0.25""#, r#"ID="3" VAL="1.01""#, 1),
+            curve.replacen(r#"ID="4" VAL="0""#, r#"ID="4" VAL="-1.01""#, 1),
+            curve.replacen(r#"ID="5" VAL="0.5""#, r#"ID="5" VAL="1.01""#, 1),
+        ] {
+            assert!(validate_curve(&invalid).is_err());
+        }
+
+        let polygon = |points: String, count: usize| {
+            format!(
+                r#"<EFFECT><PARAMS NB="3"><PARAM TYPE="5" ID="1"><POINTS NB="{count}">{points}</POINTS></PARAM><PARAM TYPE="1" ID="2" VAL="0"/><PARAM TYPE="2" ID="3" VAL="0"/></PARAMS></EFFECT>"#
+            )
+        };
+        let two_points = polygon(r#"<POINT X="0" Y="0"/><POINT X="1" Y="1"/>"#.to_string(), 2);
+        let document = Document::parse(&two_points).unwrap();
+        assert_eq!(
+            dvc_move_effect_params(document.root_element(), "Polygon")
+                .unwrap()
+                .0
+                .len(),
+            2
+        );
+        let points_256 = (0..256)
+            .map(|index| format!(r#"<POINT X="{}" Y="0"/>"#, index as f32 / 255.0))
+            .collect::<String>();
+        let polygon_256 = polygon(points_256, 256);
+        let document = Document::parse(&polygon_256).unwrap();
+        assert!(dvc_move_effect_params(document.root_element(), "Polygon")
+            .unwrap_err()
+            .contains("between 2 and 255"));
+    }
+
+    #[test]
+    fn dvc_empty_chasers_validate_class_schema_before_noop() {
+        let convert = |generator_id: u16, params: &str, count: usize| {
+            let xml = format!(
+                r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="3"><EFFECT TYPE="6" ID="{generator_id}" DURATION="1000"><PARAMS NB="{count}">{params}</PARAMS></EFFECT><BEAMS NB="0"/></RACK></RACKS></SCENE>"#
+            );
+            let document = Document::parse(&xml).unwrap();
+            let scene = document.root_element();
+            let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+            let effect = direct_child(rack, "EFFECT").unwrap();
+            convert_dvc_effect(
+                scene,
+                "empty chaser",
+                rack,
+                effect,
+                3,
+                6,
+                generator_id,
+                1,
+                &effect_test_profiles(),
+                &effect_test_fixture_refs(),
+            )
+        };
+        for (generator_id, params, count, expected) in [
+            (
+                321,
+                r#"<PARAM TYPE="2" ID="10" VAL="2"/><PARAM TYPE="2" ID="11" VAL="0"/><PARAM TYPE="0" ID="12" VAL="1"/>"#,
+                3,
+                "must be 0 or 1",
+            ),
+            (
+                322,
+                r#"<PARAM TYPE="1" ID="10" VAL="1"/>"#,
+                1,
+                "expected PARAM 10 TYPE=2",
+            ),
+            (
+                322,
+                r#"<PARAM TYPE="2" ID="10" VAL="2"/>"#,
+                1,
+                "must be 0 or 1",
+            ),
+            (
+                325,
+                r#"<PARAM TYPE="2" ID="11" VAL="0"/><PARAM TYPE="0" ID="12" VAL="1"/><PARAM TYPE="1" ID="13" VAL="50"/><PARAM TYPE="0" ID="14" VAL="1"/><PARAM TYPE="0" ID="15" VAL="256"/>"#,
+                5,
+                "integer from 1 to 255",
+            ),
+        ] {
+            let error = convert(generator_id, params, count).unwrap_err();
+            assert!(
+                error.contains(expected),
+                "expected {expected:?}, found {error:?}"
+            );
+        }
+        for (generator_id, params, count) in [
+            (
+                321,
+                r#"<PARAM TYPE="2" ID="10" VAL="1"/><PARAM TYPE="2" ID="11" VAL="0"/><PARAM TYPE="0" ID="12" VAL="0"/>"#,
+                3,
+            ),
+            (
+                325,
+                r#"<PARAM TYPE="2" ID="11" VAL="0"/><PARAM TYPE="0" ID="12" VAL="0"/><PARAM TYPE="1" ID="13" VAL="50"/><PARAM TYPE="0" ID="14" VAL="1"/><PARAM TYPE="0" ID="15" VAL="1"/>"#,
+                5,
+            ),
+        ] {
+            let converted = convert(generator_id, params, count).unwrap();
+            assert!(converted.target.is_none());
+            assert!(converted.note.contains("domains validated"));
+        }
+    }
+
+    #[test]
     fn dvc_chaser_321_with_unexpected_binary_param_stays_skipped() {
         let document = Document::parse(
-            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="8"><RACKS><RACK TYPE="3"><EFFECT TYPE="6" ID="321" DURATION="1000"><PARAMS NB="3"><PARAM ID="10" VAL="2"/><PARAM ID="11" VAL="1"/><PARAM ID="12" VAL="1"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="8"><RACKS><RACK TYPE="3"><EFFECT TYPE="6" ID="321" DURATION="1000"><PARAMS NB="3"><PARAM TYPE="2" ID="10" VAL="2"/><PARAM TYPE="2" ID="11" VAL="1"/><PARAM TYPE="0" ID="12" VAL="1"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
         )
         .unwrap();
         let scene = document.root_element();
@@ -7159,7 +7280,7 @@ mod tests {
     #[test]
     fn dvc_chaser_generic_preset_type_restores_segment_features_and_range() {
         let document = Document::parse(
-            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="8"><RACKS><RACK TYPE="3"><EFFECT TYPE="6" ID="321" DURATION="1000"><PARAMS NB="3"><PARAM ID="10" VAL="1"/><PARAM ID="11" VAL="0"/><PARAM ID="12" VAL="1"/></PARAMS></EFFECT><PRESETS><PRESET SSLFIXTURE="" SSLCHANNEL="-1" SSLPRESET="65" MIN="0.25" MAX="0.75"><BEAMS/></PRESET></PRESETS><BEAMS NB="2"><BEAM FIXTURE="fixture-red" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-red" BEAMID="1" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="8"><RACKS><RACK TYPE="3"><EFFECT TYPE="6" ID="321" DURATION="1000"><PARAMS NB="3"><PARAM TYPE="2" ID="10" VAL="1"/><PARAM TYPE="2" ID="11" VAL="0"/><PARAM TYPE="0" ID="12" VAL="1"/></PARAMS></EFFECT><PRESETS><PRESET SSLFIXTURE="" SSLCHANNEL="-1" SSLPRESET="65" MIN="0.25" MAX="0.75"><BEAMS/></PRESET></PRESETS><BEAMS NB="2"><BEAM FIXTURE="fixture-red" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-red" BEAMID="1" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
         )
         .unwrap();
         let scene = document.root_element();
@@ -7207,7 +7328,7 @@ mod tests {
     #[test]
     fn dvc_sinus_prefers_bpm_sync_and_preserves_phasing_and_segment_targets() {
         let document = Document::parse(
-            r#"<SCENE SPEED="1" PLAY_TRIGGER="2" PLAY_DIVISION="4"><RACKS><RACK TYPE="8"><EFFECT TYPE="5" ID="7" DURATION="5000"><PARAMS NB="5"><PARAM ID="1" VAL="10"/><PARAM ID="2" VAL="1"/><PARAM ID="3" VAL="0.25"/><PARAM ID="4" VAL="0"/><PARAM ID="5" VAL="0.2"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="1" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="2" PLAY_DIVISION="4"><RACKS><RACK TYPE="8"><EFFECT TYPE="5" ID="7" DURATION="5000"><PARAMS NB="5"><PARAM TYPE="0" ID="1" VAL="10"/><PARAM TYPE="1" ID="2" VAL="1"/><PARAM TYPE="1" ID="3" VAL="0.25"/><PARAM TYPE="1" ID="4" VAL="0"/><PARAM TYPE="1" ID="5" VAL="0.2"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="1" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
         )
         .unwrap();
         let scene = document.root_element();
@@ -7252,7 +7373,7 @@ mod tests {
     fn dvc_strobe_conversion_scales_size_and_preserves_sampled_source() {
         for (size, expected_high) in [(1.0, 32_768), (2.0, 65_535)] {
             let xml = format!(
-                r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="8"><EFFECT TYPE="5" ID="10" DURATION="5000"><PARAMS NB="5"><PARAM ID="1" VAL="2"/><PARAM ID="2" VAL="{size}"/><PARAM ID="3" VAL="0"/><PARAM ID="4" VAL="0"/><PARAM ID="5" VAL="0.4"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#
+                r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="8"><EFFECT TYPE="5" ID="10" DURATION="5000"><PARAMS NB="5"><PARAM TYPE="0" ID="1" VAL="2"/><PARAM TYPE="1" ID="2" VAL="{size}"/><PARAM TYPE="1" ID="3" VAL="0"/><PARAM TYPE="1" ID="4" VAL="0"/><PARAM TYPE="1" ID="5" VAL="0.4"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#
             );
             let document = Document::parse(&xml).unwrap();
             let scene = document.root_element();
@@ -7306,7 +7427,7 @@ mod tests {
     #[test]
     fn dvc_inverse_ramp_preserves_normalized_phasing_without_approximation() {
         let document = Document::parse(
-            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="8"><EFFECT TYPE="5" ID="3" DURATION="5000"><PARAMS NB="5"><PARAM ID="1" VAL="2"/><PARAM ID="2" VAL="1"/><PARAM ID="3" VAL="0"/><PARAM ID="4" VAL="0"/><PARAM ID="5" VAL="0.6"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="8"><EFFECT TYPE="5" ID="3" DURATION="5000"><PARAMS NB="5"><PARAM TYPE="0" ID="1" VAL="2"/><PARAM TYPE="1" ID="2" VAL="1"/><PARAM TYPE="1" ID="3" VAL="0"/><PARAM TYPE="1" ID="4" VAL="0"/><PARAM TYPE="1" ID="5" VAL="0.6"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
         )
         .unwrap();
         let scene = document.root_element();
@@ -7341,7 +7462,7 @@ mod tests {
     #[test]
     fn dvc_plasma_conversion_parses_five_color_slash_palette_and_parameters() {
         let document = Document::parse(
-            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="2"><EFFECT TYPE="2" ID="129" DURATION="5000"><PARAMS NB="11"><PARAM TYPE="4" ID="1"><COLORS NB="5"><COLOR VAL="0.94902/0.0196078/0.266667/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.2/0.1/0.3/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.4/0.3/0.2/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.6/0.5/0.4/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.8/0.7/0.6/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/></COLORS></PARAM><PARAM ID="2" VAL="0"/><PARAM ID="3" VAL="0"/><PARAM ID="10" VAL="1"/><PARAM ID="11" VAL="2"/><PARAM ID="12" VAL="1"/><PARAM ID="13" VAL="2"/><PARAM ID="14" VAL="-1"/><PARAM ID="15" VAL="2"/><PARAM ID="16" VAL="1"/><PARAM ID="17" VAL="-1"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="2"><EFFECT TYPE="2" ID="129" DURATION="5000"><PARAMS NB="11"><PARAM TYPE="4" ID="1"><COLORS NB="5"><COLOR VAL="0.94902/0.0196078/0.266667/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.2/0.1/0.3/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.4/0.3/0.2/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.6/0.5/0.4/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.8/0.7/0.6/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/></COLORS></PARAM><PARAM TYPE="2" ID="2" VAL="0"/><PARAM TYPE="6" ID="3" VAL="0"/><PARAM TYPE="0" ID="10" VAL="1"/><PARAM TYPE="0" ID="11" VAL="2"/><PARAM TYPE="0" ID="12" VAL="1"/><PARAM TYPE="0" ID="13" VAL="2"/><PARAM TYPE="0" ID="14" VAL="-1"/><PARAM TYPE="0" ID="15" VAL="2"/><PARAM TYPE="0" ID="16" VAL="1"/><PARAM TYPE="0" ID="17" VAL="-1"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
         )
         .unwrap();
         let scene = document.root_element();
@@ -7398,7 +7519,7 @@ mod tests {
     #[test]
     fn dvc_color_rainbow_conversion_maps_width_angle_and_gradient_times_100() {
         let document = Document::parse(
-            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="2"><EFFECT TYPE="2" ID="130" DURATION="5000"><PARAMS NB="6"><PARAM TYPE="4" ID="1"><COLORS NB="5"><COLOR VAL="0/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.2/0.1/0.3/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.4/0.3/0.2/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.6/0.5/0.4/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.8/0.7/0.6/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/></COLORS></PARAM><PARAM ID="2" VAL="0"/><PARAM ID="3" VAL="0"/><PARAM ID="10" VAL="0.25"/><PARAM ID="11" VAL="45"/><PARAM ID="12" VAL="0.75"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="2"><EFFECT TYPE="2" ID="130" DURATION="5000"><PARAMS NB="6"><PARAM TYPE="4" ID="1"><COLORS NB="5"><COLOR VAL="0/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.2/0.1/0.3/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.4/0.3/0.2/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.6/0.5/0.4/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0.8/0.7/0.6/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/></COLORS></PARAM><PARAM TYPE="2" ID="2" VAL="0"/><PARAM TYPE="6" ID="3" VAL="0"/><PARAM TYPE="1" ID="10" VAL="0.25"/><PARAM TYPE="0" ID="11" VAL="45"/><PARAM TYPE="1" ID="12" VAL="0.75"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
         )
         .unwrap();
         let scene = document.root_element();
@@ -7468,7 +7589,7 @@ mod tests {
         let palette = r#"<PARAM TYPE="4" ID="1"><COLORS NB="2"><COLOR VAL="1/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0/0/1/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/></COLORS></PARAM>"#;
 
         let plasma_xml = format!(
-            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="2"><EFFECT TYPE="2" ID="129" DURATION="1000"><PARAMS NB="11">{palette}<PARAM ID="2" VAL="1"/><PARAM ID="3" VAL="1"/><PARAM ID="10" VAL="1"/><PARAM ID="11" VAL="2"/><PARAM ID="12" VAL="1"/><PARAM ID="13" VAL="2"/><PARAM ID="14" VAL="-1"/><PARAM ID="15" VAL="2"/><PARAM ID="16" VAL="1"/><PARAM ID="17" VAL="-1"/></PARAMS></EFFECT><BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS></RACK></RACKS></SCENE>"#
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="2"><EFFECT TYPE="2" ID="129" DURATION="1000"><PARAMS NB="11">{palette}<PARAM TYPE="2" ID="2" VAL="1"/><PARAM TYPE="6" ID="3" VAL="1"/><PARAM TYPE="0" ID="10" VAL="1"/><PARAM TYPE="0" ID="11" VAL="2"/><PARAM TYPE="0" ID="12" VAL="1"/><PARAM TYPE="0" ID="13" VAL="2"/><PARAM TYPE="0" ID="14" VAL="-1"/><PARAM TYPE="0" ID="15" VAL="2"/><PARAM TYPE="0" ID="16" VAL="1"/><PARAM TYPE="0" ID="17" VAL="-1"/></PARAMS></EFFECT><BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS></RACK></RACKS></SCENE>"#
         );
         assert!(matches!(
             recipe(convert(&plasma_xml, 129)),
@@ -7480,7 +7601,7 @@ mod tests {
         ));
 
         let rainbow_xml = format!(
-            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="2"><EFFECT TYPE="2" ID="130" DURATION="1000"><PARAMS NB="6">{palette}<PARAM ID="2" VAL="1"/><PARAM ID="3" VAL="1"/><PARAM ID="10" VAL="0.25"/><PARAM ID="11" VAL="45"/><PARAM ID="12" VAL="0.75"/></PARAMS></EFFECT><BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS></RACK></RACKS></SCENE>"#
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="2"><EFFECT TYPE="2" ID="130" DURATION="1000"><PARAMS NB="6">{palette}<PARAM TYPE="2" ID="2" VAL="1"/><PARAM TYPE="6" ID="3" VAL="1"/><PARAM TYPE="1" ID="10" VAL="0.25"/><PARAM TYPE="0" ID="11" VAL="45"/><PARAM TYPE="1" ID="12" VAL="0.75"/></PARAMS></EFFECT><BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS></RACK></RACKS></SCENE>"#
         );
         assert!(matches!(
             recipe(convert(&rainbow_xml, 130)),
@@ -7492,7 +7613,7 @@ mod tests {
         ));
 
         let mapping_xml = format!(
-            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="2"><EFFECT TYPE="2" ID="521" DURATION="1000"><PARAMS NB="6">{palette}<PARAM ID="3" VAL="2"/><PARAM ID="4" VAL="0"/><PARAM ID="10" VAL="50"/><PARAM ID="11" VAL="90"/><PARAM ID="12" VAL="1"/></PARAMS></EFFECT><MAPPING NAME="Rectangle" DASUID="mapping-transform" TYPE="0" X="0" Y="0" SX="100" SY="100" ANGLE="0" LOCKED="0"/><BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS></RACK></RACKS></SCENE>"#
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="2"><EFFECT TYPE="2" ID="521" DURATION="1000"><PARAMS NB="6">{palette}<PARAM TYPE="6" ID="3" VAL="2"/><PARAM TYPE="0" ID="4" VAL="0"/><PARAM TYPE="1" ID="10" VAL="0.5"/><PARAM TYPE="0" ID="11" VAL="90"/><PARAM TYPE="1" ID="12" VAL="1"/></PARAMS></EFFECT><MAPPING NAME="Rectangle" DASUID="mapping-transform" TYPE="0" X="0" Y="0" SX="100" SY="100" ANGLE="0" LOCKED="0"/><BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS></RACK></RACKS></SCENE>"#
         );
         assert!(matches!(
             recipe(convert(&mapping_xml, 521)),
@@ -7500,6 +7621,7 @@ mod tests {
                 grayscale: false,
                 vertical_symmetry: false,
                 horizontal_symmetry: true,
+                color_width: 50.0,
                 ..
             }
         ));
@@ -7532,6 +7654,96 @@ mod tests {
                 }],
             })
         );
+    }
+
+    #[test]
+    fn dvc_exact_color_and_mapping_routes_reject_factory_schema_drift() {
+        let palette = r#"<PARAM TYPE="4" ID="1"><COLORS NB="2"><COLOR VAL="1/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0/0/1/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/></COLORS></PARAM>"#;
+        let source = |rack_type: u16,
+                      effect_type: u16,
+                      generator_id: u16,
+                      params: &str,
+                      mapping: &str| {
+            format!(
+                r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="{rack_type}"><EFFECT TYPE="{effect_type}" ID="{generator_id}" DURATION="1000"><PARAMS NB="{}">{palette}{params}</PARAMS></EFFECT>{mapping}<BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS></RACK></RACKS></SCENE>"#,
+                params.matches("<PARAM ").count() + 1
+            )
+        };
+        let convert = |xml: &str, rack_type: u16, effect_type: u16, generator_id: u16| {
+            let document = Document::parse(xml).unwrap();
+            let scene = document.root_element();
+            let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+            let effect = direct_child(rack, "EFFECT").unwrap();
+            convert_dvc_effect(
+                scene,
+                "strict schema",
+                rack,
+                effect,
+                rack_type,
+                effect_type,
+                generator_id,
+                1,
+                &effect_test_profiles(),
+                &effect_test_fixture_refs(),
+            )
+        };
+
+        let plasma = source(
+            2,
+            2,
+            129,
+            r#"<PARAM TYPE="2" ID="2" VAL="0"/><PARAM TYPE="6" ID="3" VAL="0"/><PARAM TYPE="0" ID="10" VAL="1"/><PARAM TYPE="0" ID="11" VAL="2"/><PARAM TYPE="0" ID="12" VAL="1"/><PARAM TYPE="0" ID="13" VAL="2"/><PARAM TYPE="0" ID="14" VAL="-1"/><PARAM TYPE="0" ID="15" VAL="2"/><PARAM TYPE="0" ID="16" VAL="1"/><PARAM TYPE="0" ID="17" VAL="-1"/>"#,
+            "",
+        );
+        assert!(convert(&plasma, 2, 2, 129).is_ok());
+        for invalid in [
+            plasma.replacen(r#"TYPE="0" ID="10""#, r#"TYPE="1" ID="10""#, 1),
+            plasma.replacen(r#"ID="10" VAL="1""#, r#"ID="10" VAL="21""#, 1),
+        ] {
+            assert!(convert(&invalid, 2, 2, 129).is_err());
+        }
+
+        let rainbow = source(
+            2,
+            2,
+            130,
+            r#"<PARAM TYPE="2" ID="2" VAL="0"/><PARAM TYPE="6" ID="3" VAL="0"/><PARAM TYPE="1" ID="10" VAL="0.25"/><PARAM TYPE="0" ID="11" VAL="45"/><PARAM TYPE="1" ID="12" VAL="0.75"/>"#,
+            "",
+        );
+        assert!(convert(&rainbow, 2, 2, 130).is_ok());
+        for invalid in [
+            rainbow.replacen(r#"TYPE="0" ID="11""#, r#"TYPE="1" ID="11""#, 1),
+            rainbow.replacen(r#"ID="10" VAL="0.25""#, r#"ID="10" VAL="1.01""#, 1),
+            rainbow.replacen(r#"ID="11" VAL="45""#, r#"ID="11" VAL="361""#, 1),
+        ] {
+            assert!(convert(&invalid, 2, 2, 130).is_err());
+        }
+
+        let mapping = source(
+            6,
+            8,
+            521,
+            r#"<PARAM TYPE="6" ID="3" VAL="1"/><PARAM TYPE="0" ID="4" VAL="171"/><PARAM TYPE="1" ID="10" VAL="0.25"/><PARAM TYPE="0" ID="11" VAL="0"/><PARAM TYPE="1" ID="12" VAL="1"/>"#,
+            r#"<MAPPING NAME="Rectangle" DASUID="mapping-521" TYPE="0" X="0" Y="0" SX="100" SY="100" ANGLE="0" LOCKED="0"/>"#,
+        );
+        let converted = convert(&mapping, 6, 8, 521).unwrap();
+        let Some(EffectParamsSnapshot::Color(request)) = converted.target.unwrap().params else {
+            panic!("MAPPINGS 521 must convert to Color params");
+        };
+        assert!(matches!(
+            request.spatial_pattern.unwrap().recipe,
+            ColorEffectSpatialRecipe::Rainbow {
+                color_width: 25.0,
+                ..
+            }
+        ));
+        for invalid in [
+            mapping.replacen(r#"TYPE="1" ID="10""#, r#"TYPE="0" ID="10""#, 1),
+            mapping.replacen(r#"ID="10" VAL="0.25""#, r#"ID="10" VAL="1.01""#, 1),
+            mapping.replacen(r#"ID="4" VAL="171""#, r#"ID="4" VAL="171.5""#, 1),
+        ] {
+            assert!(convert(&invalid, 6, 8, 521).is_err());
+        }
     }
 
     #[test]
@@ -7702,7 +7914,7 @@ mod tests {
     #[test]
     fn dvc_chaser_322_preserves_empty_noop_and_converts_populated_build_clear_cycle() {
         let document = Document::parse(
-            r#"<DLMFILE DASBUILD="test" VERSIONFILE="2"><SCENE NAME="SS-Blue" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="3"><EFFECT TYPE="6" ID="322" DURATION="5000"><PARAMS NB="1"><PARAM ID="10" VAL="1"/></PARAMS></EFFECT><BEAMS NB="0"/></RACK></RACKS></SCENE></DLMFILE>"#,
+            r#"<DLMFILE DASBUILD="test" VERSIONFILE="2"><SCENE NAME="SS-Blue" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="3"><EFFECT TYPE="6" ID="322" DURATION="5000"><PARAMS NB="1"><PARAM TYPE="2" ID="10" VAL="1"/></PARAMS></EFFECT><BEAMS NB="0"/></RACK></RACKS></SCENE></DLMFILE>"#,
         )
         .unwrap();
         let scene = document
@@ -7733,7 +7945,7 @@ mod tests {
             .any(|note| note.contains("source no-op preserved")));
 
         let populated = Document::parse(
-            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="3"><EFFECT TYPE="6" ID="322" DURATION="5000"><PARAMS NB="1"><PARAM ID="10" VAL="1"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="3"><EFFECT TYPE="6" ID="322" DURATION="5000"><PARAMS NB="1"><PARAM TYPE="2" ID="10" VAL="1"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
         )
         .unwrap();
         let scene = populated.root_element();
