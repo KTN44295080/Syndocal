@@ -3791,6 +3791,179 @@ fn daslight_perlin_cosine_weight(fraction: f64) -> f64 {
     (1.0 - (fraction * std::f64::consts::PI).cos()) * 0.5
 }
 
+fn daslight_qround(value: f64) -> i64 {
+    if value >= 0.0 {
+        (value + 0.5).floor() as i64
+    } else {
+        (value - 0.5).ceil() as i64
+    }
+}
+
+/// Reproduces the two Qt 5 raster operations used by Daslight's shared
+/// CAbstractColorEffect postprocessor: QImage::transformed(..., FastTransformation)
+/// followed by QPainter::drawImage into the original 100 x 100 target.
+fn daslight_perlin_rotation_source_map(rotation_degrees: i32) -> Vec<(usize, usize)> {
+    const SIZE: usize = 100;
+    const FIXED_ONE: i64 = 65_536;
+    const SAMPLE_EPSILON: f64 = 1.0 / FIXED_ONE as f64;
+
+    if matches!(rotation_degrees, 0 | 360) {
+        return (0..SIZE * SIZE)
+            .map(|index| (index % SIZE, index / SIZE))
+            .collect();
+    }
+
+    let cardinal_source = |x: usize, y: usize| match rotation_degrees {
+        90 => (y, SIZE - 1 - x),
+        180 => (SIZE - 1 - x, SIZE - 1 - y),
+        270 => (SIZE - 1 - y, x),
+        _ => unreachable!(),
+    };
+    if matches!(rotation_degrees, 90 | 180 | 270) {
+        return (0..SIZE * SIZE)
+            .map(|index| cardinal_source(index % SIZE, index / SIZE))
+            .collect();
+    }
+
+    let radians = f64::from(rotation_degrees) * 0.017_453_292_519_943_295_769_f64;
+    // QMatrix::rotate evaluates the CRT functions separately. Preserve that
+    // operation order because the result is later quantized to fixed point.
+    let sin = radians.sin();
+    let cos = radians.cos();
+    let map_point =
+        |x: f64, y: f64, dx: f64, dy: f64| (cos * x - sin * y + dx, sin * x + cos * y + dy);
+    let aligned_bounds = |points: &[(f64, f64); 4]| {
+        let min_x = points
+            .iter()
+            .map(|point| point.0)
+            .fold(f64::INFINITY, f64::min);
+        let min_y = points
+            .iter()
+            .map(|point| point.1)
+            .fold(f64::INFINITY, f64::min);
+        let max_x = points
+            .iter()
+            .map(|point| point.0)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let max_y = points
+            .iter()
+            .map(|point| point.1)
+            .fold(f64::NEG_INFINITY, f64::max);
+        (
+            min_x.floor() as i64,
+            min_y.floor() as i64,
+            max_x.ceil() as i64,
+            max_y.ceil() as i64,
+        )
+    };
+
+    let source_corners = [
+        (0.0, 0.0),
+        (SIZE as f64, 0.0),
+        (SIZE as f64, SIZE as f64),
+        (0.0, SIZE as f64),
+    ];
+    let initial = source_corners.map(|(x, y)| map_point(x, y, 50.0, 50.0));
+    let (initial_left, initial_top, _, _) = aligned_bounds(&initial);
+    let true_dx = 50.0 - initial_left as f64;
+    let true_dy = 50.0 - initial_top as f64;
+    let transformed = source_corners.map(|(x, y)| map_point(x, y, true_dx, true_dy));
+    let (left, top, right, bottom) = aligned_bounds(&transformed);
+    let width = usize::try_from(right - left).expect("Qt rotation width must be positive");
+    let height = usize::try_from(bottom - top).expect("Qt rotation height must be positive");
+
+    // QOutlineMapper quantizes the rotated rectangle to 26.6 fixed point,
+    // and QRasterizer establishes the left edge of each covered scanline.
+    let outline = transformed.map(|(x, y)| (daslight_qround(x * 64.0), daslight_qround(y * 64.0)));
+    let min_y = transformed
+        .iter()
+        .map(|point| point.1)
+        .fold(f64::INFINITY, f64::min);
+    let max_y = transformed
+        .iter()
+        .map(|point| point.1)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let control_top = 0_i64.max((min_y + 0.5).trunc() as i64);
+    let control_bottom = (height as i64 - 1).min((max_y - 0.5).trunc() as i64);
+    let mut span_starts = vec![i64::MAX; height];
+    for edge in 0..4 {
+        let mut a = outline[edge];
+        let mut b = outline[(edge + 1) % 4];
+        if a.1 > b.1 {
+            std::mem::swap(&mut a, &mut b);
+        }
+        let row_top = control_top.max((a.1 + 32) >> 6);
+        let row_bottom = control_bottom.min((b.1 - 32) >> 6);
+        if row_top > row_bottom {
+            continue;
+        }
+        let slope = if a.1 == b.1 {
+            0
+        } else {
+            (((b.0 - a.0) as f64 / (b.1 - a.1) as f64) * FIXED_ONE as f64).trunc() as i64
+        };
+        for row in row_top..=row_bottom {
+            // The aliased raster span begins at any pixel touched across the
+            // scanline's full vertical extent, not only at its centre.
+            let sample_y = if slope >= 0 {
+                row << 16
+            } else {
+                (row + 1) << 16
+            };
+            let x_fixed = 32_768_i64 + a.0 * 1_024 + ((slope * (sample_y - a.1 * 1_024)) >> 16);
+            span_starts[row as usize] = span_starts[row as usize].min(x_fixed >> 16);
+        }
+    }
+
+    // QSpanData::setupMatrix prepends a 1/65536 translation before inversion.
+    let adjusted_dx = true_dx + SAMPLE_EPSILON * (cos - sin);
+    let adjusted_dy = true_dy + SAMPLE_EPSILON * (sin + cos);
+    let inverse_m11 = cos;
+    let inverse_m12 = -sin;
+    let inverse_m21 = sin;
+    let inverse_m22 = cos;
+    let inverse_dx = (-sin * adjusted_dy) - (cos * adjusted_dx);
+    let inverse_dy = (sin * adjusted_dx) - (cos * adjusted_dy);
+    let fixed_dx = (inverse_m11 * FIXED_ONE as f64).trunc() as i64;
+    let fixed_dy = (inverse_m12 * FIXED_ONE as f64).trunc() as i64;
+
+    let scale_axis = |output: usize, extent: usize| {
+        let start = extent - SIZE;
+        let span = SIZE * 2 - extent;
+        let step = span as f64 / SIZE as f64;
+        let fixed_step = (step * FIXED_ONE as f64).trunc() as i64;
+        let fixed_first =
+            ((step * 0.5 + start as f64 - SAMPLE_EPSILON) * FIXED_ONE as f64).trunc() as i64;
+        let coordinate = (fixed_first + output as i64 * fixed_step) >> 16;
+        coordinate.clamp(start as i64, (start + span - 1) as i64) as usize
+    };
+
+    let mut result = Vec::with_capacity(SIZE * SIZE);
+    for output_y in 0..SIZE {
+        let intermediate_y = scale_axis(output_y, height);
+        let span_start = span_starts[intermediate_y];
+        debug_assert_ne!(span_start, i64::MAX);
+        let fixed_source_y = ((inverse_m22 * (intermediate_y as f64 + 0.5)
+            + inverse_m12 * (span_start as f64 + 0.5)
+            + inverse_dy)
+            * FIXED_ONE as f64)
+            .trunc() as i64;
+        let fixed_source_x = ((inverse_m21 * (intermediate_y as f64 + 0.5)
+            + inverse_m11 * (span_start as f64 + 0.5)
+            + inverse_dx)
+            * FIXED_ONE as f64)
+            .trunc() as i64;
+        for output_x in 0..SIZE {
+            let intermediate_x = scale_axis(output_x, width);
+            let delta = intermediate_x as i64 - span_start;
+            let source_x = ((fixed_source_x + delta * fixed_dx) >> 16).clamp(0, 99);
+            let source_y = ((fixed_source_y + delta * fixed_dy) >> 16).clamp(0, 99);
+            result.push((source_x as usize, source_y as usize));
+        }
+    }
+    result
+}
+
 impl CompiledDaslightPerlin {
     fn compile(
         request: &ColorEffectRequest,
@@ -3831,24 +4004,9 @@ impl CompiledDaslightPerlin {
         let zoom = integer("zoom", zoom, 1, 100)?;
         let speed = integer("speed", speed, 1, 10)?;
         let amplitude = integer("amplitude", amplitude, 5, 100)?;
-        if !rotation_degrees.is_finite()
-            || rotation_degrees.fract().abs() > f32::EPSILON
-            || !(0.0..=360.0).contains(&rotation_degrees)
-        {
-            return Err(
-                "Daslight-exact Perlin rotation must be an integer within 0..360 degrees"
-                    .to_string(),
-            );
-        }
-        if rotation_degrees != 0.0 {
-            return Err(
-                "Daslight-exact Perlin nonzero raster rotation is not yet represented".to_string(),
-            );
-        }
+        let rotation_degrees = integer("rotation", rotation_degrees, 0, 360)?;
         if vertical_symmetry && horizontal_symmetry {
-            return Err(
-                "Daslight-exact Perlin supports at most one Transform axis".to_string(),
-            );
+            return Err("Daslight-exact Perlin supports at most one Transform axis".to_string());
         }
 
         let raw_frame_count = usize::try_from((request.period_ms / DASLIGHT_VALUE_FRAME_MS).max(1))
@@ -3860,6 +4018,13 @@ impl CompiledDaslightPerlin {
             .spatial_pattern
             .as_ref()
             .is_some_and(|pattern| pattern.placement.is_some());
+        if rotation_degrees != 0 && !mapping_raster {
+            return Err(
+                "Daslight-exact Perlin rotation requires MAPPINGS raster placement".to_string(),
+            );
+        }
+        let rotation_source_map =
+            (rotation_degrees != 0).then(|| daslight_perlin_rotation_source_map(rotation_degrees));
         let source_width = if mapping_raster {
             100
         } else {
@@ -3878,11 +4043,7 @@ impl CompiledDaslightPerlin {
                 i32::try_from(target.strip_index).ok().map(|x| (x, 0))
             };
             let source = destination.and_then(|(x, y)| {
-                if x < 0
-                    || y < 0
-                    || x >= source_width as i32
-                    || y >= source_height as i32
-                {
+                if x < 0 || y < 0 || x >= source_width as i32 || y >= source_height as i32 {
                     return None;
                 }
                 let source_x = if vertical_symmetry {
@@ -3895,6 +4056,10 @@ impl CompiledDaslightPerlin {
                 } else {
                     Some(y as usize)
                 }?;
+                let (source_x, source_y) = rotation_source_map
+                    .as_ref()
+                    .map(|source_map| source_map[source_y * 100 + source_x])
+                    .unwrap_or((source_x, source_y));
                 Some((source_x as f64, source_y as f64))
             });
             let mut compiled_octaves = Vec::with_capacity(usize::from(octaves - 1));
@@ -3915,12 +4080,8 @@ impl CompiledDaslightPerlin {
                                 lattice_y.wrapping_add(1),
                             ),
                         ],
-                        weight_x: daslight_perlin_cosine_weight(
-                            scaled_x - f64::from(lattice_x),
-                        ),
-                        weight_y: daslight_perlin_cosine_weight(
-                            scaled_y - f64::from(lattice_y),
-                        ),
+                        weight_x: daslight_perlin_cosine_weight(scaled_x - f64::from(lattice_x)),
+                        weight_y: daslight_perlin_cosine_weight(scaled_y - f64::from(lattice_y)),
                         attenuation: 0.7_f64.powf(octave as f64),
                     });
                 }
@@ -3971,12 +4132,11 @@ impl CompiledDaslightPerlin {
     }
 
     fn lattice_signal(&self, base_radians: f64, frame_index: usize) -> f64 {
-        let time_radians = f64::from(self.speed)
-            * (std::f64::consts::PI * 2.0)
-            * frame_index as f64
-            / self.table_frame_count as f64;
-        let degrees = ((base_radians + time_radians) * (180.0 / std::f64::consts::PI)).trunc()
-            as i32;
+        let time_radians =
+            f64::from(self.speed) * (std::f64::consts::PI * 2.0) * frame_index as f64
+                / self.table_frame_count as f64;
+        let degrees =
+            ((base_radians + time_radians) * (180.0 / std::f64::consts::PI)).trunc() as i32;
         let index = degrees.rem_euclid(360) as usize;
         self.sine_table[index] * f64::from(self.amplitude) / 100.0
     }
@@ -3996,10 +4156,8 @@ impl CompiledDaslightPerlin {
             let bottom_right = self.lattice_signal(octave.base_radians[2], frame_index);
             let top_right = self.lattice_signal(octave.base_radians[3], frame_index);
             let left = bottom_left * (1.0 - octave.weight_y) + top_left * octave.weight_y;
-            let right =
-                bottom_right * (1.0 - octave.weight_y) + top_right * octave.weight_y;
-            sum += (left * (1.0 - octave.weight_x) + right * octave.weight_x)
-                * octave.attenuation;
+            let right = bottom_right * (1.0 - octave.weight_y) + top_right * octave.weight_y;
+            sum += (left * (1.0 - octave.weight_x) + right * octave.weight_x) * octave.attenuation;
         }
         Some((sum * 128.0 + 128.0).trunc().clamp(0.0, 255.0) as u8)
     }
@@ -27431,12 +27589,6 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
                     0.0,
                     360.0,
                 )?;
-                if *rotation_degrees != 0.0 {
-                    return Err(
-                        "Daslight-exact Perlin nonzero raster rotation is not yet represented"
-                            .to_string(),
-                    );
-                }
                 return Ok(());
             }
             if !(1..=16).contains(octaves) {
@@ -56629,8 +56781,13 @@ mod tests {
         let targets = (0..10)
             .map(|index| test_spatial_color_target(index, 10, index as f32 / 9.0, 0.5))
             .collect::<Vec<_>>();
-        let compiled = compile_daslight_perlin(&request, &targets).unwrap().unwrap();
-        assert_eq!((compiled.raw_frame_count, compiled.table_frame_count), (75, 75));
+        let compiled = compile_daslight_perlin(&request, &targets)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (compiled.raw_frame_count, compiled.table_frame_count),
+            (75, 75)
+        );
         for (frame, expected) in [
             (0, vec![0, 0, 0, 0, 0, 0, 36, 80, 72, 18]),
             (10, vec![121, 64, 15, 13, 38, 0, 71, 112, 95, 34]),
@@ -56643,6 +56800,68 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(actual, expected, "frame {frame}");
         }
+    }
+
+    #[test]
+    fn daslight_exact_perlin_rotation_matches_qt5_all_angle_raster_contract() {
+        for (angle, vectors) in [
+            (
+                1,
+                [((0, 0), (0, 2)), ((1, 60), (2, 61)), ((99, 99), (99, 97))],
+            ),
+            (
+                17,
+                [((0, 0), (4, 25)), ((50, 50), (50, 49)), ((99, 0), (73, 4))],
+            ),
+            (
+                45,
+                [((0, 0), (9, 50)), ((2, 60), (35, 74)), ((0, 99), (50, 90))],
+            ),
+            (
+                90,
+                [((0, 0), (0, 99)), ((50, 50), (50, 49)), ((99, 0), (0, 0))],
+            ),
+            (
+                171,
+                [((0, 0), (85, 98)), ((1, 60), (92, 47)), ((99, 99), (15, 1))],
+            ),
+            (
+                246,
+                [((0, 0), (93, 33)), ((1, 60), (57, 18)), ((0, 99), (33, 6))],
+            ),
+            (
+                300,
+                [((0, 0), (61, 7)), ((2, 60), (29, 27)), ((99, 99), (38, 92))],
+            ),
+            (
+                359,
+                [((0, 0), (2, 0)), ((50, 50), (50, 50)), ((99, 0), (99, 2))],
+            ),
+            (
+                360,
+                [((0, 0), (0, 0)), ((50, 50), (50, 50)), ((99, 99), (99, 99))],
+            ),
+        ] {
+            let source_map = daslight_perlin_rotation_source_map(angle);
+            for ((x, y), expected) in vectors {
+                assert_eq!(
+                    source_map[y * 100 + x],
+                    expected,
+                    "angle {angle}, ({x}, {y})"
+                );
+            }
+        }
+
+        let mut fnv1a = 0xcbf2_9ce4_8422_2325_u64;
+        for angle in 0..=360 {
+            for (source_x, source_y) in daslight_perlin_rotation_source_map(angle) {
+                for byte in [source_x as u8, source_y as u8] {
+                    fnv1a ^= u64::from(byte);
+                    fnv1a = fnv1a.wrapping_mul(0x0000_0100_0000_01b3);
+                }
+            }
+        }
+        assert_eq!(fnv1a, 0xb8c6_47db_6b01_7785);
     }
 
     #[test]

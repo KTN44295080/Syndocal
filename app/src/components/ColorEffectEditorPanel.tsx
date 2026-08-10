@@ -685,7 +685,7 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
               <label><input type="checkbox" data-color-perlin-grayscale checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
               <label>Transform<select data-color-perlin-transform value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical", horizontal_symmetry: event.currentTarget.value === "horizontal" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option><Show when={perlinHasMappingPlacement()}><option value="horizontal">Horizontal symmetry</option></Show></select></label>
               <Show when={perlinHasMappingPlacement()}>
-                <label>Rotation °<input data-color-perlin-rotation type="number" min="0" max="0" step="1" value="0" disabled title="Nonzero Daslight raster rotation is still fail-closed" /></label>
+                <label>Rotation °<input data-color-perlin-rotation type="number" min="0" max="360" step="1" value={spatialNumber("rotation_degrees")} onInput={(event) => patchSpatialValues({ rotation_degrees: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 360) })} /></label>
               </Show>
             </Show>
             <label>Octaves<input type="number" min={daslightExactPerlin() ? "2" : "1"} max={daslightExactPerlin() ? "10" : "16"} step="1" value={spatialNumber("octaves", 5)} onInput={(event) => patchSpatialValues({ octaves: clamp(Math.round(Number(event.currentTarget.value) || 1), daslightExactPerlin() ? 2 : 1, daslightExactPerlin() ? 10 : 16) })} /></label>

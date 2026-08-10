@@ -278,25 +278,26 @@ Explosion / Starfield / Graph / Lines / Grid。21項目を最下端Gridまで観
 
 ## 現行Syndocal importerとの逆照合
 
-68 IDのうちDVC-SWEEP-EXACT後は23 IDがruntime targetを作れるconverter route、VALUE
-626/627/628とCOLOR 131/133、MAPPINGS 530の6 IDがclass固有理由でprecise
-fail-closed、残る39 IDは未routeでgeneric `Skipped`になる。23 routeはfull-domain完成数ではなく、
+68 IDのうちDVC-PERLIN-EXACT後は26 IDがruntime targetを作れるconverter route、VALUE
+626/627とCOLOR 131/133の4 IDがclass固有理由でprecise
+fail-closed、残る38 IDは未routeでgeneric `Skipped`になる。26 routeはfull-domain完成数ではなく、
 strict/exactを別に監査した。
 
 | route群 | 現在の境界 |
 |---|---|
-| VALUE 621/622/623/624/625 | strict。622はcyclic palette/radial/40ms evaluator。625はTransform 0/1、Direction Changeを共有Sweep evaluatorでexact化。対象ゼロのno-opもschema検証後に成立 |
+| VALUE 621/622/623/624/625/628 | strict。622はcyclic palette/radial/40ms evaluator。625はTransform 0/1、Direction Changeを共有Sweep evaluatorでexact化。628は固有Perlin hash/cosine/sine evaluator。対象ゼロのno-opもschema検証後に成立 |
 | COLOR MAPPINGS 36 | strict。外部`SELECTIONS`参照はprecise fail-closed |
 | MOVE 221–225 | strict。5 distinct evaluator、40 ms frame、全Phasing/Symmetry domain、ordered beam targetを保持 |
 | COLOR 129/130 | strict schemaと証明済みevaluator式を実装 |
 | COLOR 127 | strict schema、40ms量子化、合成後qGray、Transform foldを共有exact evaluatorで実装 |
 | COLOR 121 | strict schema、cyclic palette、raw pixel radius、40ms、qGray、Transform foldを共有exact Burst evaluatorで実装 |
 | COLOR 134 | strict schema、hard boundary、Direction Change、qGray、Transform foldを共有exact Sweep evaluatorで実装 |
+| COLOR 128 | strict schema、固有Perlin evaluator、40ms scheduler、qGray、Transform foldを実装 |
 | COLOR 131/133 | strict schema後、非serialize qrand state/historyでprecise fail-closed |
 | CHASER 321/322/325 | 322はstrict。321/325はdistinct evaluator/random順差を常時Approximate |
 | CURVE 3/7/10 | strict factory schemaと証明済み40 ms式を実装 |
 | MAPPINGS 521 | strict schema、unit→percent、Rectangle placementを実装 |
-| MAPPINGS 530 | wrap=trueは証明済み。strict schemaとRectangle検証後、固有Perlin noise/placement未実装でprecise fail-closed |
+| MAPPINGS 530 | strict schema、Rectangle placement、固有Perlin evaluator、Qt5 FastTransformation互換の0..360度raster rotationを実装 |
 
 この監査により、DVC-ENUM直後の条件付きstrict-coreは6 ID、要correctness routeは16 IDだった。
 未route追加より先に後者をstrict化し、再現不能な近似はprecise fail-closedへ戻す。
@@ -395,6 +396,18 @@ strict/exactを別に監査した。
   localization 3066/3066、Scene Settings 5 viewport、`tauri build --no-bundle`とexact checkoutの
   responsive native windowまで確認した。
 
+### DVC-PERLIN-EXACT（2026-08-10）
+
+- `CPerlinEffect / 0x140365090`のsigned hash、cosine interpolation、degree-truncated sine lookup、
+  octave attenuation、40 ms scheduler、750生成frame cap、cyclic palette cacheをVALUE 628 / COLOR 128 /
+  MAPPINGS 530の共有exact evaluatorとして実装した。DirectionはDaslight同様に保存するが評価器では消費しない。
+- common postprocessのTransform foldとqGrayをpalette合成後に適用する。MAPPINGSはRectangleの100 x 100
+  raster cellを使い、Rotation 0..360はQt 5の`QImage::transformed(FastTransformation)`と100 x 100
+  `drawImage`の2段16.16固定小数sampling、26.6 outline、全scanline raster boundaryまで再現する。
+- Daslight同梱Qt5Gui.dllをオラクルに0..360度 x 100 x 100セルの3,610,000座標を全比較し差分0、
+  source x/y列のFNV-1a64 `b8c647db6b017785`を回帰固定した。runtime-convertは23→26、
+  precise fail-closedは6→4、未routeは39→38、条件付きexact-coreは21→24となる。
+
 ## 未実装・未証明境界
 
 カタログ列挙は完了したが、次は別軸で残る。
@@ -406,7 +419,7 @@ strict/exactを別に監査した。
    raster algorithm bodyの意味論が未復元。
 4. `TYPE7 Shape`のserialized glyph表現と`TYPE10 Text Direction`の合法enum域は未証明。
 5. Sparkle/Random fillは外部per-thread qrand履歴のため、evaluator addressとschemaだけでは
-   replay exactnessにならない。Perlinはwrap=trueまで証明済みだが固有hash/cosine/sine evaluatorが未実装。
+   replay exactnessにならない。Perlin固有evaluatorとraster rotation境界は解消済み。
 6. factoryにないID空隙が予約か廃止かは製品履歴の問題で、現バイナリからは断言しない。
 
 この境界より内側だけを次トランシェへ渡し、UI名の類似やSyndocal既存recipeへの近似で埋めない。

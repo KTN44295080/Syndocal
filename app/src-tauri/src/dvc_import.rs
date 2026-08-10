@@ -2779,13 +2779,7 @@ fn convert_dvc_value_effect(
                 100,
             )?,
             speed: dvc_integer_range_param(&params, 13, "VALUE FX Perlin Speed", 1, 10)?,
-            amplitude: dvc_integer_range_param(
-                &params,
-                14,
-                "VALUE FX Perlin Amplitude",
-                5,
-                100,
-            )?,
+            amplitude: dvc_integer_range_param(&params, 14, "VALUE FX Perlin Amplitude", 5, 100)?,
         },
         _ => unreachable!(),
     };
@@ -3106,11 +3100,24 @@ fn convert_dvc_color_spatial_effect(
                 vertical_symmetry: transform == 1.0,
                 horizontal_symmetry: false,
                 rotation_degrees: 0.0,
-                octaves: dvc_integer_range_param(&params, 10, "COLOR FX Perlin Octaves", 2, 10)? as u8,
+                octaves: dvc_integer_range_param(&params, 10, "COLOR FX Perlin Octaves", 2, 10)?
+                    as u8,
                 zoom: dvc_integer_range_param(&params, 11, "COLOR FX Perlin Zoom", 1, 100)?,
-                direction_degrees: dvc_integer_range_param(&params, 12, "COLOR FX Perlin Direction", 1, 100)?,
+                direction_degrees: dvc_integer_range_param(
+                    &params,
+                    12,
+                    "COLOR FX Perlin Direction",
+                    1,
+                    100,
+                )?,
                 speed: dvc_integer_range_param(&params, 13, "COLOR FX Perlin Speed", 1, 10)?,
-                amplitude: dvc_integer_range_param(&params, 14, "COLOR FX Perlin Amplitude", 5, 100)?,
+                amplitude: dvc_integer_range_param(
+                    &params,
+                    14,
+                    "COLOR FX Perlin Amplitude",
+                    5,
+                    100,
+                )?,
             }
         }
         121 => {
@@ -3282,11 +3289,24 @@ fn convert_dvc_color_spatial_effect(
                 vertical_symmetry: transform == 1.0,
                 horizontal_symmetry: transform == 2.0,
                 rotation_degrees,
-                octaves: dvc_integer_range_param(&params, 10, "MAPPINGS Perlin Octaves", 2, 10)? as u8,
+                octaves: dvc_integer_range_param(&params, 10, "MAPPINGS Perlin Octaves", 2, 10)?
+                    as u8,
                 zoom: dvc_integer_range_param(&params, 11, "MAPPINGS Perlin Zoom", 1, 100)?,
-                direction_degrees: dvc_integer_range_param(&params, 12, "MAPPINGS Perlin Direction", 1, 100)?,
+                direction_degrees: dvc_integer_range_param(
+                    &params,
+                    12,
+                    "MAPPINGS Perlin Direction",
+                    1,
+                    100,
+                )?,
                 speed: dvc_integer_range_param(&params, 13, "MAPPINGS Perlin Speed", 1, 10)?,
-                amplitude: dvc_integer_range_param(&params, 14, "MAPPINGS Perlin Amplitude", 5, 100)?,
+                amplitude: dvc_integer_range_param(
+                    &params,
+                    14,
+                    "MAPPINGS Perlin Amplitude",
+                    5,
+                    100,
+                )?,
             }
         }
         _ => unreachable!(),
@@ -7146,6 +7166,49 @@ mod tests {
     }
 
     #[test]
+    fn dvc3b_mappings_perlin_preserves_nonzero_exact_raster_rotation() {
+        let xml = synthetic_dvc3b().replacen(
+            r#"<PARAM TYPE="6" ID="3" VAL="0"/><PARAM TYPE="0" ID="4" VAL="0"/><PARAM TYPE="0" ID="10" VAL="5"/>"#,
+            r#"<PARAM TYPE="6" ID="3" VAL="0"/><PARAM TYPE="0" ID="4" VAL="246"/><PARAM TYPE="0" ID="10" VAL="5"/>"#,
+            1,
+        );
+        let outcome = import_bytes(xml.as_bytes(), "synthetic-dvc3b-rotation.dvc").unwrap();
+        let perlin = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .flat_map(|cue| &cue.effect_targets)
+            .find_map(|target| match target.params.as_ref() {
+                Some(EffectParamsSnapshot::Color(request)) => request
+                    .spatial_pattern
+                    .as_ref()
+                    .filter(|pattern| {
+                        matches!(
+                            pattern.recipe,
+                            ColorEffectSpatialRecipe::Perlin {
+                                daslight_exact: true,
+                                ..
+                            }
+                        )
+                    })
+                    .map(|pattern| &pattern.recipe),
+                _ => None,
+            })
+            .expect("MAPPINGS Perlin ID530 must convert");
+        assert!(matches!(
+            perlin,
+            ColorEffectSpatialRecipe::Perlin {
+                rotation_degrees: 246.0,
+                ..
+            }
+        ));
+        assert!(!outcome.report.skipped.details.iter().any(|detail| {
+            detail.item.contains("Perlin") && detail.message.contains("rotation")
+        }));
+    }
+
+    #[test]
     fn dvc3b_generator_without_verified_palette_source_stays_skipped() {
         let xml = synthetic_dvc3b().replacen(
             r#"<PARAM TYPE="4" ID="1"><COLORS NB="3"><COLOR VAL="0/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="1/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0/0/1/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/></COLORS></PARAM>"#,
@@ -8784,8 +8847,12 @@ mod tests {
             let source = value_fx_test_source(628, transform, 7, class_params, true);
             let converted = convert_value_fx_test_source(&source, 628).unwrap();
             assert!(converted.approximations.is_empty());
-            assert!(converted.note.contains("evaluator=CPerlinEffect@0x140365090"));
-            assert!(converted.note.contains("Direction is retained as evaluator-dead source state"));
+            assert!(converted
+                .note
+                .contains("evaluator=CPerlinEffect@0x140365090"));
+            assert!(converted
+                .note
+                .contains("Direction is retained as evaluator-dead source state"));
             let EffectParamsSnapshot::Value(value) = converted.target.unwrap().params.unwrap()
             else {
                 panic!("VALUE Perlin must retain its Value body");
@@ -8832,7 +8899,9 @@ mod tests {
             628,
         )
         .unwrap_err()
-        .contains("VALUE FX Perlin Amplitude PARAM 14 must be an integer within 5..100, found 101"));
+        .contains(
+            "VALUE FX Perlin Amplitude PARAM 14 must be an integer within 5..100, found 101"
+        ));
     }
 
     #[test]
