@@ -1516,6 +1516,7 @@ const japaneseText: Record<string, string> = {
   "Chaser quick looks": "Chaserクイックルック",
   "Color quick looks": "Colorクイックルック",
   "Mapping quick looks": "Mappingクイックルック",
+  "Move quick looks": "Moveクイックルック",
   Generator: "ジェネレーター",
   "Custom envelope": "カスタムエンベロープ",
   "Value palette": "値パレット",
