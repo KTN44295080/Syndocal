@@ -637,14 +637,14 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
         </Show>
         <Show when={generatorKind() === "Sweep"}>
           <div class="colorEffectModeGrid">
-            <label>Evaluator<select data-value-sweep-evaluator value={daslightExactSweep() ? "daslight" : "enhanced"} onInput={(event) => setSweepEvaluator(event.currentTarget.value === "daslight")}><option value="enhanced">Enhanced</option><option value="daslight">Daslight exact</option></select></label>
+            <label>Evaluator<select data-value-sweep-evaluator value={daslightExactSweep() ? "daslight" : "enhanced"} onInput={(event) => setSweepEvaluator(event.currentTarget.value === "daslight")}><option value="enhanced">Enhanced</option><option value="daslight">DVC recovered core</option></select></label>
             <label>Transform<select data-value-sweep-transform value={generatorTransform()} onInput={(event) => patchGeneratorValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
             <label><input type="checkbox" data-value-sweep-direction-change checked={generatorBoolean("direction_change")} onInput={(event) => patchGeneratorValues({ direction_change: event.currentTarget.checked })} /> Direction change</label>
           </div>
         </Show>
         <Show when={generatorKind() === "Burst"}>
           <div class="colorEffectModeGrid">
-            <label>Evaluator<select value={daslightExactBurst() ? "daslight" : "enhanced"} onInput={(event) => setBurstEvaluator(event.currentTarget.value === "daslight")}><option value="enhanced">Enhanced</option><option value="daslight">Daslight exact</option></select></label>
+            <label>Evaluator<select value={daslightExactBurst() ? "daslight" : "enhanced"} onInput={(event) => setBurstEvaluator(event.currentTarget.value === "daslight")}><option value="enhanced">Enhanced</option><option value="daslight">DVC recovered core</option></select></label>
             <Show when={daslightExactBurst()}>
               <label>Transform<select value={generatorTransform()} onInput={(event) => patchGeneratorValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
             </Show>
@@ -687,7 +687,7 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
         </Show>
         <Show when={generatorKind() === "Perlin"}>
           <div class="colorEffectModeGrid" data-value-perlin-evaluator={daslightExactPerlin() ? "daslight" : "enhanced"}>
-            <label>Evaluator<select data-value-perlin-evaluator-select value={daslightExactPerlin() ? "daslight" : "enhanced"} onInput={(event) => setPerlinEvaluator(event.currentTarget.value === "daslight")}><option value="enhanced">Enhanced</option><option value="daslight">Daslight exact</option></select></label>
+            <label>Evaluator<select data-value-perlin-evaluator-select value={daslightExactPerlin() ? "daslight" : "enhanced"} onInput={(event) => setPerlinEvaluator(event.currentTarget.value === "daslight")}><option value="enhanced">Enhanced</option><option value="daslight">DVC recovered core</option></select></label>
             <Show when={daslightExactPerlin()}><label>Transform<select data-value-perlin-transform value={generatorTransform()} onInput={(event) => patchGeneratorValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label></Show>
             <label>Octaves<input type="number" min={daslightExactPerlin() ? "2" : "1"} max={daslightExactPerlin() ? "10" : "16"} step="1" value={generatorNumber("octaves", 5)} onInput={(event) => patchGeneratorValues({ octaves: clamp(Math.round(Number(event.currentTarget.value) || 1), daslightExactPerlin() ? 2 : 1, daslightExactPerlin() ? 10 : 16) })} /></label>
             <label>Zoom<input type="number" min={daslightExactPerlin() ? "1" : "0.01"} max={daslightExactPerlin() ? "100" : undefined} step={daslightExactPerlin() ? "1" : "0.1"} value={generatorNumber("zoom", 20)} onInput={(event) => patchGeneratorValues({ zoom: daslightExactPerlin() ? clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 100) : Math.max(0.01, Number(event.currentTarget.value) || 0.01) })} /></label>

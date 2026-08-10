@@ -386,11 +386,11 @@ assert.match(valueRecipeLine("Burst"), /vertical_symmetry\?: boolean/);
 assert.ok(
   valueEffectEditorSource.includes('recipe.Burst.daslight_exact === true')
     && valueEffectEditorSource.includes('<option value="enhanced">Enhanced</option>')
-    && valueEffectEditorSource.includes('<option value="daslight">Daslight exact</option>')
+    && valueEffectEditorSource.includes('<option value="daslight">DVC recovered core</option>')
     && valueEffectEditorSource.includes('"Period ms · 40 ms compatibility"'),
-  "Burst must expose an explicit imported-exact to Enhanced compatibility boundary",
+  "Burst must expose an explicit recovered-core to Enhanced compatibility boundary",
 );
-for (const blockedExactKind of ["Sparkle", "RandomFill", "Perlin"]) {
+for (const blockedExactKind of ["Sparkle", "RandomFill"]) {
   assert.doesNotMatch(
     valueRecipeLine(blockedExactKind),
     /daslight_exact|vertical_symmetry/,

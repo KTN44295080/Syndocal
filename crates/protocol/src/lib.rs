@@ -2002,6 +2002,9 @@ const fn default_timeline_count_in_beats() -> u8 {
 pub enum LfoShape {
     Sine,
     Cosine,
+    /// Daslight Curve ID 4. Native Syndocal authoring does not expose this
+    /// legacy shape without a `DaslightCurveSource` profile.
+    Pulse,
     Triangle,
     Saw,
     Square,

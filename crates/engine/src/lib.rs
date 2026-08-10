@@ -27134,13 +27134,16 @@ fn validate_lfo_effect_request(request: &LfoEffectRequest) -> Result<(), String>
     if !(0.0..=1.0).contains(&request.fixture_spread) {
         return Err("LFO effect fixture spread must be within 0..1".to_string());
     }
+    if request.shape == LfoShape::Pulse && request.daslight_curve.is_none() {
+        return Err("Daslight Pulse requires its sampled Curve source profile".to_string());
+    }
     if let Some(source) = &request.daslight_curve {
         if !matches!(
             request.shape,
-            LfoShape::Sine | LfoShape::Saw | LfoShape::Square | LfoShape::Strobe
+            LfoShape::Sine | LfoShape::Pulse | LfoShape::Saw | LfoShape::Square | LfoShape::Strobe
         ) {
             return Err(
-                "Daslight Curve source is only valid for Sine, Saw, Square, or Strobe shapes"
+                "Daslight Curve source is only valid for Sine, Pulse, Saw, Square, or Strobe shapes"
                     .to_string(),
             );
         }
@@ -27159,7 +27162,7 @@ fn validate_lfo_effect_request(request: &LfoEffectRequest) -> Result<(), String>
         if source.sample_ms == 0 {
             return Err("Daslight Curve source sample interval must be at least 1 ms".to_string());
         }
-        if request.shape == LfoShape::Square
+        if matches!(request.shape, LfoShape::Pulse | LfoShape::Square)
             && (source.rate.fract().abs() > f32::EPSILON
                 || !(1.0..=10.0).contains(&source.rate)
                 || source.size > 2.0
@@ -27167,7 +27170,7 @@ fn validate_lfo_effect_request(request: &LfoEffectRequest) -> Result<(), String>
                 || source.sample_ms != 40)
         {
             return Err(
-                "Daslight Square requires integer Rate 1..10, Size 0..2, Offset -1..1, and a 40 ms sample grid"
+                "Daslight Pulse/Square requires integer Rate 1..10, Size 0..2, Offset -1..1, and a 40 ms sample grid"
                     .to_string(),
             );
         }
@@ -32205,21 +32208,29 @@ fn daslight_vertical_fold_source_index(
     // draws a horizontally mirrored source into a second rectangle of the
     // same width. Daslight enables Antialiasing but not Qt's
     // SmoothPixmapTransform, so Qt 5.15.2's fixed-point nearest-neighbour
-    // scaler selects one source pixel per destination pixel. The unpainted
-    // final pixel of an odd-width image, and the whole width-one image, stay
-    // clear.
+    // scaler selects one source pixel per destination pixel. Syndocal retains
+    // those recovered samples but corrects Qt's unpainted final odd pixel and
+    // width-one clear result: both are destination-coverage defects, not an
+    // authored Transform meaning.
     let half_width = source_width / 2;
-    if half_width == 0 || destination_index >= half_width.saturating_mul(2) {
+    if source_width == 0 || destination_index >= source_width {
         return None;
     }
-
-    let local_index = destination_index % half_width;
+    if half_width == 0 {
+        return Some(0);
+    }
+    let odd_tail = destination_index >= half_width.saturating_mul(2);
+    let local_index = if odd_tail {
+        0
+    } else {
+        destination_index % half_width
+    };
     let scale = half_width as f64 / source_width as f64;
     let fixed_step = (65_536.0_f64 / scale) as u64;
     let fixed_base = ((fixed_step as f64 * 0.5).ceil() as u64).saturating_sub(1);
     let sampled = ((fixed_base + local_index as u64 * fixed_step) >> 16) as usize;
     let sampled = sampled.min(source_width - 1);
-    if destination_index < half_width {
+    if odd_tail || destination_index < half_width {
         Some(sampled)
     } else {
         Some(source_width - 1 - sampled)
@@ -32794,6 +32805,13 @@ fn evaluate_daslight_curve_normalized_with_offset(
                 + source.size * 0.5)
                 .clamp(0.0, 1.0)
         }
+        LfoShape::Pulse => corrected_pulse_curve_source_value(
+            shifted_outer_phase,
+            source.rate as i32,
+            source.size,
+            request.phase,
+            source.offset,
+        ),
         LfoShape::Saw => {
             let source_position = sample_index as f32 / sample_count as f32;
             let source_phase = source_position * source.rate * 0.5 - request.phase;
@@ -32832,6 +32850,30 @@ fn evaluate_daslight_curve_normalized_with_offset(
     } else {
         ((source_value - low) / span).clamp(0.0, 1.0)
     }
+}
+
+/// Preserves the carrier recovered from `CPulseEffect::evaluate` at
+/// `0x14036F8D0`, but corrects two source-buffer artifacts. Daslight multiplies
+/// by a fixed 0.005 triangle slope, so buffers shorter than 400 samples never
+/// reach the authored Size, and then holds the result on its 40 ms work grid.
+/// Syndocal evaluates a normalized triangle continuously while retaining Rate,
+/// Phase, Size, Offset, and the zero-valued cycle endpoints.
+fn corrected_pulse_curve_source_value(
+    source_position: f32,
+    rate: i32,
+    size: f32,
+    phase: f32,
+    offset: f32,
+) -> f32 {
+    debug_assert!((1..=10).contains(&rate));
+    let source_position = source_position.rem_euclid(1.0);
+    let rate_angle = (f64::from(rate * 2) * std::f64::consts::TAU) as f32;
+    let phase_angle = (-f64::from(phase) * std::f64::consts::TAU) as f32;
+    let angle = rate_angle * source_position + phase_angle;
+    let window = 1.0 - (source_position * 2.0 - 1.0).abs();
+    let amplitude = size * window;
+    ((f64::from(angle).sin() * f64::from(amplitude)) + f64::from(offset) + 0.5).clamp(0.0, 1.0)
+        as f32
 }
 
 fn daslight_square_curve_source_value(
@@ -33581,6 +33623,10 @@ fn evaluate_lfo_shape(shape: &LfoShape, phase: f32) -> f32 {
     match shape {
         LfoShape::Sine => ((phase * std::f32::consts::TAU).sin() + 1.0) * 0.5,
         LfoShape::Cosine => ((phase * std::f32::consts::TAU).cos() + 1.0) * 0.5,
+        // Exact imported Pulse requests take the sampled evaluator above.
+        // This normalized bell is only a defensive fallback for previews of
+        // malformed/legacy data; validation rejects native Pulse requests.
+        LfoShape::Pulse => (phase * std::f32::consts::PI).sin().powi(2),
         LfoShape::Triangle => {
             if phase < 0.5 {
                 phase * 2.0
@@ -54134,6 +54180,66 @@ mod tests {
     }
 
     #[test]
+    fn daslight_pulse_preserves_carrier_but_corrects_duration_scaled_amplitude() {
+        let samples = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875]
+            .map(|position| corrected_pulse_curve_source_value(position, 1, 0.5, 0.0, 0.0));
+        let expected = [0.5, 0.625, 0.5, 0.125, 0.5, 0.875, 0.5, 0.375];
+        for (actual, expected) in samples.into_iter().zip(expected) {
+            assert!(
+                (actual - expected).abs() < 0.000_01,
+                "{actual} != {expected}"
+            );
+        }
+
+        let corrected_peak = corrected_pulse_curve_source_value(0.5, 1, 0.5, 0.75, 0.0);
+        assert!(
+            (corrected_peak - 1.0).abs() < 0.000_01,
+            "corrected peak {corrected_peak}"
+        );
+        let daslight_fixed_slope_peak: f32 = 0.5 + 0.5 * (12.0 * 0.005);
+        assert!((daslight_fixed_slope_peak - 0.53).abs() < f32::EPSILON);
+
+        let mut request = test_lfo_request(
+            "Imported Pulse",
+            LfoShape::Pulse,
+            16_000,
+            0.0,
+            EffectBlendMode::Override,
+            0,
+            u16::MAX,
+        );
+        request.daslight_curve = Some(DaslightCurveSource {
+            rate: 1.0,
+            size: 0.5,
+            offset: 0.0,
+            sample_ms: 40,
+        });
+        validate_lfo_effect_request(&request).unwrap();
+        let started = Instant::now();
+        let clock = ClockSnapshot::default();
+        assert_eq!(
+            evaluate_lfo_effect(&request, started, started, &clock),
+            32_768
+        );
+        assert_ne!(
+            evaluate_lfo_effect(
+                &request,
+                started,
+                started + Duration::from_millis(39),
+                &clock,
+            ),
+            32_768,
+            "corrected Pulse must not hold the first sample for 40 ms"
+        );
+        assert!((40_900..=41_030).contains(&evaluate_lfo_effect(
+            &request,
+            started,
+            started + Duration::from_millis(2_000),
+            &clock,
+        )));
+    }
+
+    #[test]
     fn daslight_square_uses_the_native_400_cell_integer_bands() {
         let rate_three = (0..400)
             .map(|sample| daslight_square_curve_source_value(sample, 400, 3, 1.0, 0.0, 0.0))
@@ -54297,7 +54403,7 @@ mod tests {
         });
         assert!(validate_lfo_effect_request(&request)
             .unwrap_err()
-            .contains("only valid for Sine, Saw, Square, or Strobe"));
+            .contains("only valid for Sine, Pulse, Saw, Square, or Strobe"));
 
         request.shape = LfoShape::Sine;
         request.daslight_curve.as_mut().unwrap().size = -0.01;
@@ -55905,7 +56011,7 @@ mod tests {
             true,
         )
         .unwrap();
-        for (destination, source) in [Some(1), Some(3), Some(3), Some(1), None]
+        for (destination, source) in [Some(1), Some(3), Some(3), Some(1), Some(1)]
             .into_iter()
             .enumerate()
         {
@@ -55929,7 +56035,7 @@ mod tests {
             true,
         )
         .unwrap();
-        assert_eq!(single.sample_frame(4, 0), single.background);
+        assert_ne!(single.sample_frame(4, 0), single.background);
     }
 
     #[test]
@@ -56136,8 +56242,8 @@ mod tests {
         assert_eq!(transformed[0], transformed[3]);
         assert_eq!(transformed[1], transformed[2]);
         assert_ne!(transformed[0], transformed[1]);
-        assert_eq!(transformed[4], black_color());
-        assert!(transformed[..4]
+        assert_eq!(transformed[4], transformed[0]);
+        assert!(transformed
             .iter()
             .all(|color| color.red == color.green && color.green == color.blue));
     }
@@ -56186,8 +56292,8 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(frame[0], frame[3]);
         assert_eq!(frame[1], frame[2]);
-        assert_eq!(frame[4], black_color());
-        assert!(frame[..4]
+        assert_eq!(frame[4], frame[0]);
+        assert!(frame
             .iter()
             .all(|color| color.red == color.green && color.green == color.blue));
 
@@ -56443,7 +56549,7 @@ mod tests {
     }
 
     #[test]
-    fn daslight_exact_burst_transform_folds_and_clears_odd_tail() {
+    fn corrected_burst_transform_folds_and_covers_odd_tail() {
         let request = test_daslight_burst_request(
             400,
             10.0,
@@ -56455,7 +56561,7 @@ mod tests {
         let compiled = compile_daslight_burst(&request, 5).unwrap().unwrap();
         assert_eq!(compiled.sample_frame(3, 0), compiled.sample_frame(3, 2));
         assert_eq!(compiled.sample_frame(3, 1), compiled.sample_frame(3, 3));
-        assert_eq!(compiled.sample_frame(3, 4).into_color(), black_color());
+        assert_eq!(compiled.sample_frame(3, 4), compiled.sample_frame(3, 0));
     }
 
     #[test]
@@ -56685,7 +56791,7 @@ mod tests {
     }
 
     #[test]
-    fn daslight_exact_knight_rider_fold_uses_qt_nearest_pixels_and_clears_odd_tail() {
+    fn corrected_knight_rider_fold_keeps_qt_samples_but_covers_every_destination() {
         assert_eq!(
             (0..4)
                 .map(|index| daslight_vertical_fold_source_index(index, 4))
@@ -56696,7 +56802,7 @@ mod tests {
             (0..5)
                 .map(|index| daslight_vertical_fold_source_index(index, 5))
                 .collect::<Vec<_>>(),
-            vec![Some(1), Some(3), Some(3), Some(1), None]
+            vec![Some(1), Some(3), Some(3), Some(1), Some(1)]
         );
         assert_eq!(
             (0..6)
@@ -56704,7 +56810,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![Some(0), Some(2), Some(4), Some(5), Some(3), Some(1)]
         );
-        assert_eq!(daslight_vertical_fold_source_index(0, 1), None);
+        assert_eq!(daslight_vertical_fold_source_index(0, 1), Some(0));
     }
 
     #[test]
@@ -57017,7 +57123,7 @@ mod tests {
             .unwrap();
         assert_eq!(folded.sample_frame(20, 0), folded.sample_frame(20, 3));
         assert_eq!(folded.sample_frame(20, 1), folded.sample_frame(20, 2));
-        assert_eq!(folded.sample_frame(20, 4).into_color(), black_color());
+        assert_eq!(folded.sample_frame(20, 4), folded.sample_frame(20, 0));
 
         let mut grayscale_request =
             test_daslight_perlin_request(3_000, 4, 5.0, 2.0, 1.0, 70.0, false, true);

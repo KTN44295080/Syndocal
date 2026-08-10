@@ -375,7 +375,7 @@ strict/exactを別に監査した。
   p95 1.967 ms / p99 3.829 ms / max 4.467 msで5/8/12 ms gateを通過した。
 - runtime-convertは20→22、precise fail-closedは8→6、条件付きexact-coreは18→20。
   明示compatibilityはCHASER 321/325の2 routeのまま、未routeは40のままである。
-- 新規authoringはEnhancedを既定とし、import bodyだけDaslight exactを保持する。editorの明示切替で
+- 新規authoringはEnhancedを既定とし、import bodyはDVC recovered coreを保持する。editorの明示切替で
   Enhancedへ移行できる。
 
 ### DVC-SWEEP-EXACT（2026-08-10）

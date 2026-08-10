@@ -78,6 +78,11 @@ exact Burst and Knight Rider evaluators. COLOR Grayscale is applied after raster
 composition with Qt's integer `qGray=(11R+16G+5B)/32`; VALUE has no serialized
 Grayscale property.
 
+That final-pixel/width-one result is recovered evidence, not the current Syndocal output.
+Under the corrected-import policy Syndocal retains Qt's sampled source indices for painted
+pixels, fills an odd tail from the first folded sample, and maps width one to its sole source
+pixel. Transform intent is preserved without manufacturing a black beam.
+
 ## Syndocal mapping
 
 - Protocol: `ColorEffectSpatialRecipe::Sweep` now carries additive, default-false,
@@ -97,7 +102,7 @@ Grayscale property.
 - COLOR importer: ID134 validates the exact four-property schema and binary domains,
   then maps Grayscale, Transform, and Direction Change one-for-one, validates the signed
   DURATION grid, and sets `daslight_exact=true`.
-- Scene Settings: both VALUE Sweep and COLOR Sweep expose an Enhanced / Daslight exact
+- Scene Settings: both VALUE Sweep and COLOR Sweep expose an Enhanced / DVC recovered core
   evaluator switch, Transform, and Direction Change; COLOR additionally exposes
   Grayscale. New authored recipes default to Enhanced with all three switches off.
   Imported exact bodies can be explicitly upgraded to Enhanced, and imported beam

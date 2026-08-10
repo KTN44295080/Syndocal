@@ -11,6 +11,7 @@ Date: 2026-08-09
 - Static evaluator entry points recovered from RTTI/vtables:
   - `CSinusEffect`: `0x140370250`
   - `CInverseRampEffect`: `0x14036fcb0`
+  - `CPulseEffect`: `0x14036F8D0`
   - `CSquareEffect`: `0x140370420`
   - `CStrobeEffect`: `0x1403705b0`
 - The imported source buffer is evaluated on a 40 ms grid.
@@ -27,6 +28,11 @@ For `sample_count=floor(DURATION/40)` and `t=sample_index/sample_count`:
 - Inverse Ramp:
   `x=Rate/2*t-Phase`, `centered=x-floor(x+0.5)`, then
   `clamp(Offset-centered*Size+Size-0.5, 0, 1)`
+- Pulse:
+  `carrier=sin(2*pi*(2*Rate*t-Phase))`; Daslight multiplies the carrier by a triangle
+  whose fixed slope is `0.005` per sample. Consequently its peak is
+  `floor(sample_count/2)*0.005`, so DURATION changes the effective Size and short buffers never
+  reach the authored amplitude.
 - Strobe:
   `interval=floor(25/Rate)`, `remainder=sample_index%interval`; High when
   `remainder==0` or `remainder<interval*Phase/2`, otherwise Low. Low is `Offset`; High is
@@ -44,12 +50,20 @@ and approximated Strobe as ten 2%-wide pulses; both assumptions were removed.
 ## Syndocal representation
 
 Imported LFO requests retain an additive `daslight_curve` source profile containing `rate`,
-`size`, `offset`, and `sample_ms=40`. Native Syndocal LFOs omit the profile and retain their
-existing continuous evaluator.
+`size`, `offset`, and recovered provenance `sample_ms=40`. Native Syndocal LFOs omit the profile
+and retain their existing continuous evaluator.
 
-The evaluator quantizes the source position before applying the recovered equation. Size and
-Offset are preserved instead of being reduced to clamped endpoints: every sample is clamped
-after evaluation. This is necessary for `homecoming2606.dvc` scene `all_rampFlash`, whose raw
+CURVE 4 Pulse is the first corrected-import route under
+`DVC_CORRECTED_COMPATIBILITY_POLICY.md`. It retains the recovered carrier and all authored
+parameters, but uses `window=1-abs(2*t-1)` on continuous time. This removes both the
+DURATION-dependent amplitude defect and the 40 ms output hold. The import report records the
+recovered grid and both corrections; it does not call this frame-equivalent Daslight output.
+
+The existing Sinus, Inverse Ramp, Square, and Strobe routes still quantize the source position
+before applying the recovered equation; their conversion to corrected continuous timing is a
+tracked repository-wide audit item. Size and Offset are preserved instead of being reduced to
+clamped endpoints: every sample is clamped after evaluation. This is necessary for
+`homecoming2606.dvc` scene `all_rampFlash`, whose raw
 Inverse Ramp range is approximately `-0.567..0.995`; its negative portion must remain at DMX 0
 for a finite interval.
 

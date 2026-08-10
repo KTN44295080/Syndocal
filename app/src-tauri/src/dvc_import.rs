@@ -2167,6 +2167,7 @@ fn parse_scene_effects(
                 (Some(4), Some(4), Some(224)) => Some("Polygon"),
                 (Some(5), Some(3), Some(36)) => Some("Rainbow"),
                 (Some(8), Some(5), Some(3)) => Some("Inverse Ramp"),
+                (Some(8), Some(5), Some(4)) => Some("Pulse"),
                 (Some(8), Some(5), Some(7)) => Some("Sinus"),
                 (Some(8), Some(5), Some(9)) => Some("Square"),
                 (Some(8), Some(5), Some(10)) => Some("Strobe"),
@@ -2308,6 +2309,14 @@ fn convert_dvc_effect(
             fixture_refs,
         ),
         (8, 5, 3) => convert_dvc_inverse_ramp_effect(
+            scene,
+            scene_name,
+            rack,
+            effect,
+            effect_id,
+            fixture_refs,
+        ),
+        (8, 5, 4) => convert_dvc_pulse_effect(
             scene,
             scene_name,
             rack,
@@ -3410,7 +3419,7 @@ fn convert_dvc_color_spatial_effect(
         } => {
             format!(
                 "Evaluator={}; Grayscale={}; Transform={}; DirectionChange={}; evaluator=CSweepEffect@0x1403665A0",
-                if *daslight_exact { "Daslight exact" } else { "Enhanced" },
+                if *daslight_exact { "DVC recovered core" } else { "Enhanced" },
                 u8::from(*grayscale),
                 if *vertical_symmetry { "Vertical symmetry" } else { "None" },
                 u8::from(*direction_change)
@@ -3492,7 +3501,7 @@ fn convert_dvc_color_spatial_effect(
             amplitude,
         } => format!(
             "Evaluator={}; Grayscale={}; Transform={}; Rotation={rotation_degrees}; Octaves={octaves}; Zoom={zoom}; Direction={direction_degrees} (source-retained/evaluator-dead); Speed={speed}; Amplitude={amplitude}; evaluator=CPerlinEffect@0x140365090; palette_wrap=true@shared-constructor+0x12c",
-            if *daslight_exact { "Daslight exact" } else { "Enhanced" },
+            if *daslight_exact { "DVC recovered core" } else { "Enhanced" },
             u8::from(*grayscale),
             if *vertical_symmetry {
                 "Vertical symmetry"
@@ -3957,6 +3966,99 @@ fn convert_dvc_inverse_ramp_effect(
             transition_ms: None,
         }),
         generator: "Inverse Ramp",
+        note,
+        approximations,
+        warnings: Vec::new(),
+    })
+}
+
+fn convert_dvc_pulse_effect(
+    scene: Node<'_, '_>,
+    scene_name: &str,
+    rack: Node<'_, '_>,
+    effect: Node<'_, '_>,
+    effect_id: u64,
+    fixture_refs: &HashMap<String, FixtureImportRef>,
+) -> Result<ConvertedDvcEffect, String> {
+    let params = dvc_curve_effect_params(effect, "Pulse")?;
+    let rate = dvc_param(&params, 1, "Rate")?;
+    let size = dvc_param(&params, 2, "Size")?;
+    let phase = dvc_param(&params, 3, "Phase")?;
+    let offset = dvc_param(&params, 4, "Offset")?;
+    let phasing = dvc_param(&params, 5, "Phasing")?;
+    let duration_ms = effect
+        .attribute("DURATION")
+        .ok_or_else(|| "Pulse EFFECT is missing DURATION".to_string())?
+        .parse::<f64>()
+        .map_err(|error| format!("Pulse DURATION is invalid: {error}"))?;
+    if !duration_ms.is_finite()
+        || duration_ms < f64::from(DASLIGHT_CURVE_SAMPLE_MS)
+        || duration_ms > u64::MAX as f64
+    {
+        return Err(format!(
+            "DURATION must be a finite Curve source buffer of at least {DASLIGHT_CURVE_SAMPLE_MS} ms, found {duration_ms}"
+        ));
+    }
+    let period_ms = duration_ms.round() as u64;
+    let sample_count = period_ms / u64::from(DASLIGHT_CURVE_SAMPLE_MS);
+    if sample_count > u64::from(u32::MAX) {
+        return Err(format!(
+            "Pulse source buffer has {sample_count} samples, exceeding Daslight's 32-bit evaluator domain"
+        ));
+    }
+    let mut targets = dvc_rack_targets(rack, fixture_refs)?;
+    let incompatible_dimmer_targets = retain_dvc_dimmer_targets(&mut targets, fixture_refs);
+    if targets.fixture_ids.is_empty() {
+        return Err("BEAMS resolved to no Pulse fixture targets".to_string());
+    }
+
+    let mut approximations = vec![
+        "Syndocal replaces Daslight's fixed 0.005 Pulse window and 40 ms hold with a normalized continuous window, so DURATION no longer changes authored Size and motion does not stair-step; carrier Rate/Phase, Offset, and cycle endpoints are preserved"
+            .to_string(),
+    ];
+    if incompatible_dimmer_targets > 0 {
+        approximations.push(format!(
+            "{incompatible_dimmer_targets} fixture target(s) without a Dimmer attribute or addressable color beam were omitted"
+        ));
+    }
+    let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
+    if let Some(clock_warning) = clock_warning {
+        approximations.push(clock_warning);
+    }
+    let beam_targets = dvc_effect_beam_targets(&targets, "Dimmer");
+    let request = LfoEffectRequest {
+        label: format!("{scene_name} (Pulse)"),
+        fixture_ids: targets.fixture_ids,
+        target_group_ids: Vec::new(),
+        attribute: "Dimmer".to_string(),
+        video_targets: Vec::new(),
+        shape: LfoShape::Pulse,
+        period_ms,
+        clock_sync,
+        low: 0,
+        high: u16::MAX,
+        phase: phase as f32,
+        fixture_spread: phasing as f32,
+        beam_targets,
+        blend_mode: EffectBlendMode::Override,
+        daslight_curve: Some(DaslightCurveSource {
+            rate: rate as f32,
+            size: size as f32,
+            offset: offset as f32,
+            sample_ms: DASLIGHT_CURVE_SAMPLE_MS,
+        }),
+    };
+    let note = format!(
+        "feature=Dimmer; shape=Pulse; source_evaluator=CPulseEffect@0x14036F8D0; implementation=SyndocalCorrected; duration_ms={period_ms}; recovered_sample_ms={DASLIGHT_CURVE_SAMPLE_MS}; recovered_sample_count={sample_count}; runtime_time=continuous; rate={rate}; carrier=sin(TAU*(2*Rate*progress-Phase)); Daslight_fixed_window_slope=0.005; Syndocal_window=1-abs(2*progress-1); correction_reason=DURATION must not scale authored Size and timer granularity must not stair-step output; source_range=clamp(Offset+0.5+carrier*Size*window,0,1); source_phase={phase}; fixture_spread={phasing}; size={size}; offset={offset}; {clock_note}"
+    );
+    Ok(ConvertedDvcEffect {
+        target: Some(CueEffectTarget {
+            effect_id,
+            enabled: true,
+            params: Some(EffectParamsSnapshot::Lfo(request)),
+            transition_ms: None,
+        }),
+        generator: "Pulse",
         note,
         approximations,
         warnings: Vec::new(),
@@ -7823,6 +7925,63 @@ mod tests {
             .note
             .contains("half_period_cells=floor(400/Rate)=133"));
         assert!(converted.approximations.is_empty());
+    }
+
+    #[test]
+    fn dvc_pulse_conversion_records_corrected_window_and_preserves_beam_order() {
+        let document = Document::parse(
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="8"><EFFECT TYPE="5" ID="4" DURATION="16000"><PARAMS NB="5"><PARAM TYPE="0" ID="1" VAL="1"/><PARAM TYPE="1" ID="2" VAL="0.5"/><PARAM TYPE="1" ID="3" VAL="0.25"/><PARAM TYPE="1" ID="4" VAL="-0.1"/><PARAM TYPE="1" ID="5" VAL="0.6"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="2"/></BEAMS></RACK></RACKS></SCENE>"#,
+        )
+        .unwrap();
+        let scene = document.root_element();
+        let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+        let effect = direct_child(rack, "EFFECT").unwrap();
+        let converted = convert_dvc_effect(
+            scene,
+            "Exact Pulse",
+            rack,
+            effect,
+            8,
+            5,
+            4,
+            1,
+            &effect_test_profiles(),
+            &effect_test_fixture_refs(),
+        )
+        .unwrap();
+        let Some(EffectParamsSnapshot::Lfo(request)) =
+            converted.target.expect("runtime target").params
+        else {
+            panic!("CURVE 4 must convert to cue-owned LFO params");
+        };
+        assert_eq!(request.shape, LfoShape::Pulse);
+        assert_eq!((request.low, request.high), (0, u16::MAX));
+        assert_eq!(request.period_ms, 16_000);
+        assert_eq!(request.phase, 0.25);
+        assert_eq!(request.fixture_spread, 0.6);
+        assert_eq!(
+            request.daslight_curve,
+            Some(DaslightCurveSource {
+                rate: 1.0,
+                size: 0.5,
+                offset: -0.1,
+                sample_ms: 40,
+            })
+        );
+        assert_eq!(
+            request
+                .beam_targets
+                .iter()
+                .map(|target| target.fixture_id)
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+        assert!(converted.note.contains("CPulseEffect@0x14036F8D0"));
+        assert!(converted.note.contains("Daslight_fixed_window_slope=0.005"));
+        assert!(converted.note.contains("implementation=SyndocalCorrected"));
+        assert!(converted.note.contains("sample_count=400"));
+        assert_eq!(converted.approximations.len(), 1);
+        assert!(converted.approximations[0].contains("DURATION no longer changes"));
     }
 
     #[test]

@@ -1550,6 +1550,10 @@ const japaneseText: Record<string, string> = {
   Evaluator: "評価器",
   Enhanced: "拡張",
   "Daslight exact": "Daslight完全互換",
+  "DVC recovered core": "DVC復元コア",
+  "DVC source": "DVCソース",
+  "Direction is preserved from Daslight but intentionally has no effect in its recovered evaluator.":
+    "DirectionはDaslightから保持しますが、復元した評価器では意図的に効果を持ちません。",
   "Size X": "サイズ X",
   "Param X": "パラメータ X",
   "Size Y": "サイズ Y",

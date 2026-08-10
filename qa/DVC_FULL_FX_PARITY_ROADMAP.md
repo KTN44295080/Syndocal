@@ -9,10 +9,11 @@
 - 実装規律（不変）: 静的証明（factory/property/evaluator）に基づく厳密実装のみ。
   推測実装・近似実装はしない。`.sdc` v1互換はserde default追加のみ。44Hz hot pathへ
   未計測コストを持ち込まない。protocol/engine追加は本指示を包括承認として扱う。
-- 互換と改善の境界（2026-08-10追補）: `.dvc` importは元showの再現を優先し、40 ms量子化を
-  含むDaslight固有契約を専用modeで保持する。Syndocalの新規authoring既定は連続・高分解能の
-  Enhanced evaluatorとし、Daslightの欠陥やquirkを全体既定へ昇格しない。import後は明示的に
-  Enhanced modeへ切替可能にする。
+- 互換と改善の境界（2026-08-10再訂正）: `.dvc` importが保持するのは元showの**作者が保存した
+  意味**であり、40 ms timer、整数割算の余り、Qtの未描画端ピクセル、非serialize RNG履歴などの
+  実装欠陥ではない。軽微な欠陥はimport時から修正する。見た目への寄与が大きい欠陥だけ回収済み
+  挙動を明示的なLegacy quirks optionとして残し、既定はCorrectedとする。既存routeを含む判定表と
+  受入規律は`qa/DVC_CORRECTED_COMPATIBILITY_POLICY.md`を正本とする。
 
 ## カタログ確定と現行importer coverage（DVC-ENUM完了、2026-08-10）
 
@@ -26,11 +27,11 @@ Daslight 5.0.6.2 / FileVersion `25.0905.165.111`の実機dropdown全項目とfac
 | COLOR FX | 121,127,128,129,130,131,133,**134** | **121**,127,**128 Perlin**,129,130,**134 Sweep** | 131/133 precise fail-closed。Sweep=132という旧推定は撤回 |
 | MOVE | 221 Circle, 222 Curve, 223 Line, 224 Polygon, 225 Points | **221–225全5種exact** | なし |
 | CHASER | 321 #1, 322 #2, 323 #3, 324 #4, 325 random | 321,322,325 | 323,324未route。distinct evaluatorの演出意味が未証明 |
-| CURVE | 3–13（11種） | 3 Inverse Ramp, 7 Sinus, **9 Square**, 10 Strobe | 4,5,6,8,11,12,13未route。Custom 13だけ別schema |
+| CURVE | 3–13（11種） | 3 Inverse Ramp, **4 Pulse (Corrected)**, 7 Sinus, **9 Square**, 10 Strobe | 5,6,8,11,12,13未route。Custom 13だけ別schema |
 | MAPPINGS | 521–530（10種） | 521 Rainbow, **530 Perlin** | 522–529未route |
 | COLOR MAPPINGS | 21,22,23,29–37,40–42,44,45,47–50（21種） | 36 Rainbow | 残20種未route |
 
-現行runtime converter routeは27/68 ID、precise fail-closedは4、未routeは37。うち条件付きexact-coreは
+現行runtime converter routeは28/68 ID、precise fail-closedは4、未routeは36。うち条件付きexact-coreは
 25、明示compatibilityはCHASER 321/325の2 route。これはID単位の入口coverageであり、共有raster classの再利用度や
 STEPS/SUPER SCENEなど非generator構造を含む「製品完成率」ではない。未routeをUI名だけで近似せず、
 各evaluatorの意味論を回収したトランシェだけを増やす。

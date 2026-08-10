@@ -15,6 +15,7 @@ import type {
   ColorEffectRequest,
   ColorMappingEffectRequest,
   CurveEffectRequest,
+  DaslightCurveSource,
   EffectKind,
   EffectParamsSnapshot,
   EffectSummary,
@@ -36,6 +37,8 @@ interface PreviewModel {
   low?: number;
   high?: number;
   phase?: number;
+  periodMs?: number;
+  daslightCurve?: DaslightCurveSource | null;
   color?: ColorEffectRequest | null;
   chaser?: ChaserEffectRequest | null;
   move?: MoveEffectRequest | null;
@@ -54,6 +57,8 @@ const modelFromParams = (params: EffectParamsSnapshot): PreviewModel => {
       low: params.Lfo.low,
       high: params.Lfo.high,
       phase: params.Lfo.phase,
+      periodMs: params.Lfo.period_ms,
+      daslightCurve: params.Lfo.daslight_curve,
     };
   }
   if ("PositionWave" in params) {
@@ -90,6 +95,8 @@ const modelFromEffect = (effect: EffectSummary): PreviewModel => ({
   low: effect.low,
   high: effect.high,
   phase: effect.phase,
+  periodMs: effect.period_ms ?? undefined,
+  daslightCurve: effect.lfo?.daslight_curve,
   color: effect.color,
   chaser: effect.chaser,
   move: effect.move_effect,
@@ -131,6 +138,8 @@ export function EffectGraphicalPreview(props: EffectGraphicalPreviewProps) {
           current.low ?? 0,
           current.high ?? 65_535,
           current.kind === "Lfo",
+          current.daslightCurve,
+          current.periodMs,
         )
       : "";
   });
@@ -184,6 +193,7 @@ export function EffectGraphicalPreview(props: EffectGraphicalPreviewProps) {
               data-lfo-low={current().low}
               data-lfo-high={current().high}
               data-lfo-phase={current().phase}
+              data-daslight-curve={current().daslightCurve ? current().shape : undefined}
               data-mapping-direction={current().mapping?.direction}
               data-mapping-repetitions={current().mapping?.repetitions}
               data-mapping-fixture-order={current().mapping?.fixture_ids.join(",")}
@@ -194,6 +204,7 @@ export function EffectGraphicalPreview(props: EffectGraphicalPreviewProps) {
             </svg>
             <span class="effectGraphicalReadout tabularNums">
               <b>{current().shape}</b>
+              <Show when={current().daslightCurve}><span>DVC source</span></Show>
               <span>{Math.round(current().low ?? 0)}–{Math.round(current().high ?? 0)}</span>
               <span>φ {Math.round((current().phase ?? 0) * 100)}%</span>
               <Show when={current().mapping}>

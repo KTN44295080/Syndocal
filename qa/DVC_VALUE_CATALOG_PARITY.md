@@ -423,9 +423,11 @@ N=1 -> [clear]
 
 For odd N both destination rectangles have width `floor(N/2)`, so the last column stays
 clear; for N=1 both target widths are zero. The constructor's default is 100 by 1, but
-slot 26 replaces that width at runtime. DVC-V6 locks these discrete mappings as the
-ID624 exact fold; it does not use a continuous tent-map approximation and does not widen
-this new exactness claim to unrelated mapping-family consumers.
+slot 26 replaces that width at runtime. DVC-V6 originally locked these discrete mappings
+as the ID624 exact fold. The later corrected-import policy keeps every painted Qt sample
+but replaces `clear` with the first folded sample and maps `N=1` to source 0. This is a
+destination-coverage correction, not a continuous tent-map rewrite, and it does not widen
+the claim to unrelated mapping-family consumers.
 
 ID622 Burst now uses this exact fold. ID623 Plasma's earlier Transform disposition
 remains governed by its separately recorded proof. ID625 Sweep now carries
@@ -484,8 +486,8 @@ The focused regressions cover:
   and the 200-fixture x 64 release performance gate;
 - ID624 Transform 0 and 1, `daslight_exact=true`, all five class fields, strict
   TYPE/ID/domain drift rejection, and empty-BEAMS source no-op;
-- ID625 Transform 0 and 1, Direction Change 0 and 1, the exact discrete fold including
-  odd/single-pixel black tails, strict TYPE/extra-PARAM rejection, and empty-BEAMS no-op;
+- ID625 Transform 0 and 1, Direction Change 0 and 1, the recovered discrete fold with
+  corrected odd/single-pixel coverage, strict TYPE/extra-PARAM rejection, and empty-BEAMS no-op;
 - the signed duration boundary and recovered frame grid: 1..79 ms representative inputs
   quantize to 40 ms, 80 ms produces two frames, and zero/negative/fractional/i32-overflow
   values fail closed;

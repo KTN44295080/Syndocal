@@ -99,8 +99,9 @@ existing equal-position stop. Relevant primary source:
 
 COLOR ID2 Grayscale is applied after the completed RGB raster through the existing exact
 8-bit `qGray` post-process. VALUE has no ID2 and therefore imports `grayscale=false`.
-Transform=1 uses the already proven Qt-nearest two-half fold; an odd final destination
-pixel and a width-one raster remain clear.
+Transform=1 uses the recovered Qt-nearest two-half samples. Daslight leaves an odd final
+destination pixel and a width-one raster clear; Syndocal corrects that coverage defect by
+filling the tail from the first folded sample and mapping width one to its sole source pixel.
 
 ## Time grid and runtime boundary
 
@@ -141,7 +142,9 @@ previous byte shape when all are false.
   identity, raw pixel Color Width `10..900`, and Gradient `0..1`.
 - ImportReport records evaluator `0x140362B70` and the constructor-proven wrap state.
 - New authoring defaults to Enhanced (`0..100%` width and gradient).
-- The editor exposes an explicit `Daslight exact` / `Enhanced` switch. Switching to
+- The editor exposes an explicit `DVC recovered core` / `Enhanced` switch. The recovered-core
+  name acknowledges the corrected destination coverage instead of claiming defect-for-defect
+  equality. Switching to
   exact quantizes the period to 40 ms; switching to Enhanced removes transform/grayscale
   compatibility state rather than leaking Daslight quirks into the native evaluator.
 
@@ -159,7 +162,8 @@ previous byte shape when all are false.
 
 - exact cache topology, wrap segment, hold/ramp threshold, RGBA64 1024-entry table
   quantization, frame-zero replacement, sub-table seam, pixel-center symmetry, 40 ms
-  generated-frame interpolation, qGray order, Transform odd-tail clearing, and Enhanced
+  generated-frame interpolation, qGray order, recovered Transform folding plus corrected
+  full-destination coverage, and Enhanced
   false-path validation have dedicated engine regressions;
 - duplicate immutable compile tables are interned, the completed-frame fast path is
   byte-for-byte compared with the generic spatial reference, and the 64x200 release gate

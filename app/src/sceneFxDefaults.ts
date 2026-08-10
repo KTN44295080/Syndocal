@@ -1,5 +1,6 @@
 import {
   evaluateLfoShape,
+  evaluateDaslightCurveSource,
   moveFanoutPreviewState,
   sampleColorStops,
   sampleMovePath,
@@ -240,9 +241,18 @@ export const previewSceneFxFixtures = (
   if ("Lfo" in params) {
     const request = params.Lfo;
     const targetIds = new Set(request.fixture_ids);
-    const progress = cycleProgress(elapsedMs, request.period_ms, request.phase);
-    const amount = evaluateLfoShape(request.shape, progress);
-    const value = request.low + (request.high - request.low) * amount;
+    const progress = cycleProgress(elapsedMs, request.period_ms);
+    const source = request.daslight_curve;
+    const amount = source
+      ? evaluateDaslightCurveSource(
+          request.shape,
+          source,
+          request.phase,
+          progress,
+          request.period_ms,
+        )
+      : evaluateLfoShape(request.shape, progress + request.phase);
+    const value = source ? amount * 65_535 : request.low + (request.high - request.low) * amount;
     return fixtures.map((fixture) => targetIds.has(fixture.id)
       ? setFixtureAttributes(fixture, { [request.attribute]: value })
       : fixture);

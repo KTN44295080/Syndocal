@@ -279,7 +279,7 @@ export interface RemoteControlStatus {
 }
 
 export type ClockSource = "Manual" | "Tap" | "MidiClock" | "MidiTimecode" | "Ltc" | "AbletonLink";
-export type LfoShape = "Sine" | "Cosine" | "Triangle" | "Saw" | "Square" | "Strobe" | "Random" | "Perlin";
+export type LfoShape = "Sine" | "Cosine" | "Pulse" | "Triangle" | "Saw" | "Square" | "Strobe" | "Random" | "Perlin";
 export type EffectKind = "Lfo" | "PositionWave" | "Color" | "Chaser" | "Move" | "Value" | "Curve" | "Mapping" | "ColorMapping";
 export type EffectBlendMode = "Override" | "Add" | "Multiply";
 export type ColorEffectAlgorithm = "Cycle" | "Bounce" | "Sequence" | "Random";

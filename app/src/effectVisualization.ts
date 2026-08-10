@@ -3,6 +3,7 @@ import type {
   ColorEffectInterpolation,
   ColorEffectStop,
   CurveEffectPoint,
+  DaslightCurveSource,
   LfoShape,
   MoveEffectRequest,
   MoveInterpolation,
@@ -32,6 +33,8 @@ export const evaluateLfoShape = (shape: LfoShape, phase: number): number => {
       return (Math.sin(normalized * Math.PI * 2) + 1) * 0.5;
     case "Cosine":
       return (Math.cos(normalized * Math.PI * 2) + 1) * 0.5;
+    case "Pulse":
+      return Math.sin(normalized * Math.PI) ** 2;
     case "Triangle":
       return normalized < 0.5 ? normalized * 2 : (1 - normalized) * 2;
     case "Saw":
@@ -54,6 +57,61 @@ export const evaluateLfoShape = (shape: LfoShape, phase: number): number => {
   }
 };
 
+/** Mirrors the versioned Daslight Curve source branch in engine. */
+export const evaluateDaslightCurveSource = (
+  shape: LfoShape,
+  source: DaslightCurveSource,
+  phase: number,
+  progress: number,
+  periodMs: number,
+): number => {
+  const continuousPosition = normalizePhase(progress);
+  const count = Math.max(1, Math.floor(Math.max(source.sample_ms, periodMs) / Math.max(1, source.sample_ms)));
+  const index = Math.floor(continuousPosition * count) % count;
+  const position = index / count;
+  let value: number;
+  switch (shape) {
+    case "Sine":
+      value = Math.sin(Math.PI * 2 * (source.rate * 0.5 * position - phase)) * source.size * 0.5
+        + source.offset + source.size * 0.5;
+      break;
+    case "Pulse": {
+      const rateAngle = Math.fround(source.rate * 2 * Math.PI * 2);
+      const phaseAngle = Math.fround(-Math.fround(phase) * Math.PI * 2);
+      const angle = Math.fround(Math.fround(rateAngle * Math.fround(continuousPosition)) + phaseAngle);
+      const window = 1 - Math.abs(continuousPosition * 2 - 1);
+      value = Math.sin(angle) * Math.fround(source.size * window) + source.offset + 0.5;
+      break;
+    }
+    case "Saw": {
+      const sourcePhase = source.rate * 0.5 * position - phase;
+      const centered = sourcePhase - Math.floor(sourcePhase + 0.5);
+      value = source.offset - centered * source.size + source.size - 0.5;
+      break;
+    }
+    case "Square": {
+      const gridCell = Math.floor(index * 400 / count);
+      const wrappedCell = ((Math.trunc(gridCell + 400 - phase * 400) % 400) + 400) % 400;
+      const halfPeriodCells = Math.floor(400 / source.rate);
+      const band = Math.trunc(wrappedCell / halfPeriodCells);
+      value = source.offset + (band % 2 === 0 ? source.size : 0);
+      break;
+    }
+    case "Strobe": {
+      const samplesPerSecond = 1000 / Math.max(1, source.sample_ms);
+      const interval = Math.max(1, Math.floor(samplesPerSecond / source.rate));
+      const intervalPosition = index % interval;
+      value = intervalPosition === 0 || intervalPosition < interval * phase * 0.5
+        ? source.offset + source.size * 0.5
+        : source.offset;
+      break;
+    }
+    default:
+      value = evaluateLfoShape(shape, position + phase);
+  }
+  return clampUnit(value);
+};
+
 const hashUnitFloat = (seed: number): number => {
   let value = (seed + 0x9e37_79b9) >>> 0;
   value = (value ^ (value >>> 16)) >>> 0;
@@ -73,6 +131,8 @@ export const buildLfoPreviewPath = (
   low = 0,
   high = 65_535,
   directed = true,
+  daslightCurve?: DaslightCurveSource | null,
+  periodMs = 1_000,
 ): string => {
   const count = Math.max(2, Math.round(samples));
   const first = clamp(low, 0, 65_535);
@@ -82,8 +142,16 @@ export const buildLfoPreviewPath = (
   const segments: string[] = [];
   for (let index = 0; index <= count; index += 1) {
     const progress = index / count;
-    const normalized = evaluateLfoShape(shape, progress + phase);
-    const output = from + (to - from) * normalized;
+    const normalized = daslightCurve
+      ? evaluateDaslightCurveSource(
+          shape,
+          daslightCurve,
+          phase,
+          progress,
+          periodMs,
+        )
+      : evaluateLfoShape(shape, progress + phase);
+    const output = daslightCurve ? normalized * 65_535 : from + (to - from) * normalized;
     segments.push(`${index === 0 ? "M" : "L"} ${pathNumber(progress * width)} ${pathNumber((1 - output / 65_535) * height)}`);
   }
   return segments.join(" ");

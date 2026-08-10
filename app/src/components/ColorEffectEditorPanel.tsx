@@ -616,7 +616,7 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
         </Show>
         <Show when={spatialKind() === "Burst"}>
           <div class="colorEffectModeGrid">
-            <label>Evaluator<select value={daslightExactBurst() ? "daslight" : "enhanced"} onInput={(event) => setBurstEvaluator(event.currentTarget.value === "daslight")}><option value="enhanced">Enhanced</option><option value="daslight">Daslight exact</option></select></label>
+            <label>Evaluator<select value={daslightExactBurst() ? "daslight" : "enhanced"} onInput={(event) => setBurstEvaluator(event.currentTarget.value === "daslight")}><option value="enhanced">Enhanced</option><option value="daslight">DVC recovered core</option></select></label>
             <Show when={daslightExactBurst()}>
               <label><input type="checkbox" checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
               <label>Transform<select value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
@@ -627,7 +627,7 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
         </Show>
         <Show when={spatialKind() === "Sweep"}>
           <div class="colorEffectModeGrid" data-color-sweep-controls>
-            <label>Evaluator<select data-color-sweep-evaluator value={daslightExactSweep() ? "daslight" : "enhanced"} onInput={(event) => setSweepEvaluator(event.currentTarget.value === "daslight")}><option value="enhanced">Enhanced</option><option value="daslight">Daslight exact</option></select></label>
+            <label>Evaluator<select data-color-sweep-evaluator value={daslightExactSweep() ? "daslight" : "enhanced"} onInput={(event) => setSweepEvaluator(event.currentTarget.value === "daslight")}><option value="enhanced">Enhanced</option><option value="daslight">DVC recovered core</option></select></label>
             <label><input type="checkbox" data-color-sweep-grayscale checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
             <label>Transform<select data-color-sweep-transform value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
             <label><input type="checkbox" data-color-sweep-direction-change checked={spatialBoolean("direction_change")} onInput={(event) => patchSpatialValues({ direction_change: event.currentTarget.checked })} /> Direction change</label>
@@ -680,7 +680,7 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
         </Show>
         <Show when={spatialKind() === "Perlin"}>
           <div class="colorEffectModeGrid" data-color-perlin-evaluator={daslightExactPerlin() ? "daslight" : "enhanced"}>
-            <label>Evaluator<select data-color-perlin-evaluator-select value={daslightExactPerlin() ? "daslight" : "enhanced"} onInput={(event) => setPerlinEvaluator(event.currentTarget.value === "daslight")}><option value="enhanced">Enhanced</option><option value="daslight">Daslight exact</option></select></label>
+            <label>Evaluator<select data-color-perlin-evaluator-select value={daslightExactPerlin() ? "daslight" : "enhanced"} onInput={(event) => setPerlinEvaluator(event.currentTarget.value === "daslight")}><option value="enhanced">Enhanced</option><option value="daslight">DVC recovered core</option></select></label>
             <Show when={daslightExactPerlin()}>
               <label><input type="checkbox" data-color-perlin-grayscale checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
               <label>Transform<select data-color-perlin-transform value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical", horizontal_symmetry: event.currentTarget.value === "horizontal" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option><Show when={perlinHasMappingPlacement()}><option value="horizontal">Horizontal symmetry</option></Show></select></label>
