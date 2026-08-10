@@ -181,6 +181,10 @@ Syndocalの現行Scene Settingsでは、作成時のMAPPINGS / COLOR MAPPINGSを
    (`0x140365090`)はRectangleを捨てるgeneric noise非等価のため、全TYPE/domain検証後にprecise
    fail-closedへ変更した。synthetic断言は旧6 converted / 0 skippedから2 / 4へ、full Shinkanは
    30 / 0から27 / 3へ、homecomingは13 / 0から9 / 4へ再交渉した。
+   **2026-08-10 DVC-BURST-EXACT訂正**: 共有constructor末尾がpalette-wrapを無条件trueにすることを
+   再証明し、121をcyclic 16-bit cache、raw pixel radius、RGBA64のQt 1024-entry gradient table、
+   40ms、qGray、Transform foldまで専用exact evaluatorへ移した。generic BurstはEnhancedとして分離維持。
+   Shinkanは28 / 2、homecomingは12 / 1へ再交渉し、残るskippedはそれぞれqrand系とPerlinだけである。
 3. **DVC-3c（照合完了）**: MOVE FX / TYPE=8、ID 322・129・130・CURVE波形10を照合済み。
    VALUE FX ID621の対象ゼロ実保存形は忠実なno-opとして変換済み。対象ありVALUE FXは厳密schemaの
    合成検体まで実装済み、COLOR MAPPINGSは実保存検体なし。どちらも実保存形との照合完了には数えない。

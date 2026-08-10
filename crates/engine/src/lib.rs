@@ -3,7 +3,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     sync::{
         atomic::{AtomicU32, AtomicU64, Ordering},
-        mpsc, Arc, Condvar, Mutex, RwLock, Weak,
+        mpsc, Arc, Condvar, Mutex, OnceLock, RwLock, Weak,
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -3504,11 +3504,44 @@ struct RuntimeColorSpatialState {
     /// palette (0..254 lanes); VALUE remains constrained by its own 2..32
     /// point contract. The 44 Hz path only samples the completed frame table.
     daslight_knight_rider: Option<CompiledDaslightKnightRider>,
+    /// Shared Daslight-exact COLOR 121 / VALUE 622 evaluator. Unlike the
+    /// native Burst recipe, this preserves CBurstEffect's pixel-radius domain,
+    /// cyclic 16-bit palette cache and generated-frame interpolation.
+    daslight_burst: Option<CompiledDaslightBurst>,
 }
 
 const DASLIGHT_VALUE_FRAME_MS: u64 = 40;
 const DASLIGHT_VALUE_FRAME_CAP: usize = 750;
 const DASLIGHT_KNIGHT_FRAME_TABLE_MAX_BYTES: usize = 2 * 1024 * 1024;
+const DASLIGHT_BURST_PALETTE_CACHE_SIZE: usize = 65_536;
+const DASLIGHT_QT_GRADIENT_TABLE_SIZE: usize = 1_024;
+const DASLIGHT_BURST_SEAM_EPSILON: f64 = 1.0e-5;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct DaslightBurstPaletteCacheKey {
+    colors: Vec<[u16; 3]>,
+    gradient_bits: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct DaslightBurstFrameCacheKey {
+    palette: DaslightBurstPaletteCacheKey,
+    table_frame_count: usize,
+    strip_count: usize,
+    color_width_bits: u32,
+    vertical_symmetry: bool,
+    grayscale: bool,
+}
+
+static DASLIGHT_BURST_PALETTE_CACHE: OnceLock<
+    Mutex<HashMap<DaslightBurstPaletteCacheKey, Weak<Vec<DaslightKnightColor>>>>,
+> = OnceLock::new();
+static DASLIGHT_BURST_GRADIENT_TABLE_CACHE: OnceLock<
+    Mutex<HashMap<(usize, usize), Weak<Vec<u16>>>>,
+> = OnceLock::new();
+static DASLIGHT_BURST_FRAME_CACHE: OnceLock<
+    Mutex<HashMap<DaslightBurstFrameCacheKey, Weak<Vec<DaslightKnightColor>>>>,
+> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct DaslightKnightColor {
@@ -4010,6 +4043,485 @@ impl CompiledDaslightKnightRider {
     }
 }
 
+#[derive(Clone)]
+struct CompiledDaslightBurst {
+    raw_frame_count: usize,
+    table_frame_count: usize,
+    strip_count: usize,
+    #[cfg(test)]
+    palette_cache: Arc<Vec<DaslightKnightColor>>,
+    /// Qt 5.15.2's RGBA64 radial brush first quantizes each generated frame
+    /// through a 1024-entry QGradientCache table. Each cell is the exact
+    /// 16-bit red value later used as the shared palette-cache index.
+    #[cfg(test)]
+    gradient_index_tables: Arc<Vec<u16>>,
+    /// Completed generated-frame colors after the exact Qt quantization and
+    /// common post-process. The 44 Hz evaluator only reads two cells here.
+    frames: Arc<Vec<DaslightKnightColor>>,
+    temporal_coordinate: Cell<Option<DaslightKnightTemporalCoordinate>>,
+}
+
+fn daslight_qt_round(value: f64) -> i64 {
+    if value >= 0.0 {
+        (value + 0.5).floor() as i64
+    } else {
+        (value - 0.5).ceil() as i64
+    }
+}
+
+fn daslight_qt_gradient_set_color_at(stops: &mut Vec<(f64, u16)>, position: f64, red: u16) {
+    let mut index = 0;
+    while index < stops.len() && stops[index].0 < position {
+        index += 1;
+    }
+    if index < stops.len() && stops[index].0 == position {
+        stops[index].1 = red;
+    } else {
+        stops.insert(index, (position, red));
+    }
+}
+
+fn daslight_qt_interpolate_red_256(
+    first: u16,
+    first_weight: i64,
+    second: u16,
+    second_weight: i64,
+) -> u16 {
+    (((i64::from(first) * first_weight) >> 8) + ((i64::from(second) * second_weight) >> 8)) as u16
+}
+
+fn daslight_qt_generate_gradient_red_table(stops: &[(f64, u16)], output: &mut Vec<u16>) {
+    debug_assert!((2..=4).contains(&stops.len()));
+    let table_start = output.len();
+
+    // QGradientCache has a separate two-stop fast path. Frame zero replaces
+    // the first stop at position zero and reaches this branch, so preserving
+    // it is observable rather than merely an optimization detail.
+    if stops.len() == 2 {
+        let (mut first_stop, mut first_red) = stops[0];
+        let (mut second_stop, mut second_red) = stops[1];
+        if second_stop < first_stop {
+            std::mem::swap(&mut first_stop, &mut second_stop);
+            std::mem::swap(&mut first_red, &mut second_red);
+        }
+        let first_index =
+            daslight_qt_round(first_stop * (DASLIGHT_QT_GRADIENT_TABLE_SIZE - 1) as f64);
+        let second_index =
+            daslight_qt_round(second_stop * (DASLIGHT_QT_GRADIENT_TABLE_SIZE - 1) as f64);
+        let mut red_accumulator = i64::from(first_red) << 16;
+        let red_second = i64::from(second_red) << 16;
+        let mut index = 0_i64;
+        while index <= first_index.min(DASLIGHT_QT_GRADIENT_TABLE_SIZE as i64) {
+            output.push(first_red);
+            index += 1;
+        }
+        if index < second_index {
+            let reciprocal = 1.0 / (second_index - first_index) as f64;
+            let red_delta = daslight_qt_round((red_second - red_accumulator) as f64 * reciprocal);
+            red_accumulator += 1 << 15;
+            while index < second_index.min(DASLIGHT_QT_GRADIENT_TABLE_SIZE as i64) {
+                red_accumulator += red_delta;
+                output.push((red_accumulator >> 16).clamp(0, i64::from(u16::MAX)) as u16);
+                index += 1;
+            }
+        }
+        while output.len() - table_start < DASLIGHT_QT_GRADIENT_TABLE_SIZE {
+            output.push(second_red);
+        }
+        return;
+    }
+
+    let mut current_red = stops[0].1;
+    let begin_position = stops[0].0;
+    let end_position = stops[stops.len() - 1].0;
+    let increment = 1.0 / DASLIGHT_QT_GRADIENT_TABLE_SIZE as f64;
+    let mut gradient_position = 1.5 * increment;
+    output.push(current_red);
+    while gradient_position <= begin_position {
+        output.push(*output.last().expect("gradient table has first entry"));
+        gradient_position += increment;
+    }
+
+    let mut current_stop = 0_usize;
+    if gradient_position < end_position {
+        while gradient_position > stops[current_stop + 1].0 {
+            current_stop += 1;
+        }
+        if current_stop != 0 {
+            current_red = stops[current_stop].1;
+        }
+        let mut next_red = stops[current_stop + 1].1;
+        let mut difference = stops[current_stop + 1].0 - stops[current_stop].0;
+        let mut scale = if difference == 0.0 {
+            0.0
+        } else {
+            256.0 / difference
+        };
+        let mut interpolation = (gradient_position - stops[current_stop].0) * scale;
+        let mut interpolation_delta = increment * scale;
+
+        loop {
+            let distance = daslight_qt_round(interpolation);
+            debug_assert!((0..=256).contains(&distance));
+            output.push(daslight_qt_interpolate_red_256(
+                current_red,
+                256 - distance,
+                next_red,
+                distance,
+            ));
+            gradient_position += increment;
+            if gradient_position >= end_position {
+                break;
+            }
+            interpolation += interpolation_delta;
+
+            let mut skip = 0_usize;
+            while gradient_position > stops[current_stop + skip + 1].0 {
+                skip += 1;
+            }
+            if skip != 0 {
+                current_stop += skip;
+                current_red = if skip == 1 {
+                    next_red
+                } else {
+                    stops[current_stop].1
+                };
+                next_red = stops[current_stop + 1].1;
+                difference = stops[current_stop + 1].0 - stops[current_stop].0;
+                scale = if difference == 0.0 {
+                    0.0
+                } else {
+                    256.0 / difference
+                };
+                interpolation = (gradient_position - stops[current_stop].0) * scale;
+                interpolation_delta = increment * scale;
+            }
+        }
+    }
+
+    let final_red = stops[stops.len() - 1].1;
+    while output.len() - table_start < DASLIGHT_QT_GRADIENT_TABLE_SIZE - 1 {
+        output.push(final_red);
+    }
+    if output.len() - table_start == DASLIGHT_QT_GRADIENT_TABLE_SIZE - 1 {
+        output.push(final_red);
+    } else {
+        output[table_start + DASLIGHT_QT_GRADIENT_TABLE_SIZE - 1] = final_red;
+    }
+    debug_assert_eq!(output.len() - table_start, DASLIGHT_QT_GRADIENT_TABLE_SIZE);
+}
+
+fn daslight_burst_gradient_index_tables(
+    frame_count: usize,
+    palette_cache_length: usize,
+) -> Result<Vec<u16>, String> {
+    let cell_count = frame_count
+        .checked_mul(DASLIGHT_QT_GRADIENT_TABLE_SIZE)
+        .ok_or_else(|| "Daslight-exact Burst gradient table length overflowed".to_string())?;
+    let mut tables = Vec::new();
+    tables
+        .try_reserve_exact(cell_count)
+        .map_err(|_| "Daslight-exact Burst gradient table allocation failed".to_string())?;
+    let palette_last = u16::try_from(palette_cache_length.saturating_sub(1))
+        .map_err(|_| "Daslight-exact Burst palette index overflowed".to_string())?;
+    for frame_index in 0..frame_count {
+        let time = f64::from(frame_index as f32 / frame_count as f32);
+        let initial_u16 = ((1.0 - time) * f64::from(u16::MAX)).trunc() as u16;
+        let initial_index =
+            ((u64::from(initial_u16) * u64::from(palette_last)) / u64::from(u16::MAX)) as u16;
+        let mut stops = Vec::with_capacity(4);
+        daslight_qt_gradient_set_color_at(&mut stops, 0.0, initial_index);
+        let seam_position = time - DASLIGHT_BURST_SEAM_EPSILON;
+        if seam_position >= 0.0 {
+            daslight_qt_gradient_set_color_at(&mut stops, seam_position, palette_last);
+        }
+        daslight_qt_gradient_set_color_at(&mut stops, time, 0);
+        daslight_qt_gradient_set_color_at(&mut stops, 1.0, initial_index);
+        daslight_qt_generate_gradient_red_table(&stops, &mut tables);
+    }
+    debug_assert_eq!(tables.len(), cell_count);
+    Ok(tables)
+}
+
+fn compiled_daslight_burst_palette_cache(
+    request: &ColorEffectRequest,
+    gradient: f32,
+) -> Result<Arc<Vec<DaslightKnightColor>>, String> {
+    let key = DaslightBurstPaletteCacheKey {
+        colors: request
+            .stops
+            .iter()
+            .map(|stop| [stop.color.red, stop.color.green, stop.color.blue])
+            .collect(),
+        gradient_bits: gradient.to_bits(),
+    };
+    let cache = DASLIGHT_BURST_PALETTE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(compiled) = cache
+        .lock()
+        .map_err(|_| "Daslight-exact Burst palette cache lock was poisoned".to_string())?
+        .get(&key)
+        .and_then(Weak::upgrade)
+    {
+        return Ok(compiled);
+    }
+
+    let stop_count = request.stops.len();
+    let samples_per_segment = DASLIGHT_BURST_PALETTE_CACHE_SIZE / stop_count;
+    let cache_length = samples_per_segment
+        .checked_mul(stop_count)
+        .ok_or_else(|| "Daslight-exact Burst palette cache length overflowed".to_string())?;
+    let hold = ((1.0_f32 - gradient) * samples_per_segment as f32).trunc() as usize;
+    let mut palette_cache = Vec::new();
+    palette_cache
+        .try_reserve_exact(cache_length)
+        .map_err(|_| "Daslight-exact Burst palette cache allocation failed".to_string())?;
+    for segment in 0..stop_count {
+        let first = DaslightKnightColor::from_color(request.stops[segment].color);
+        let second =
+            DaslightKnightColor::from_color(request.stops[(segment + 1) % stop_count].color);
+        for sample in 0..samples_per_segment {
+            let amount = if sample < hold || hold >= samples_per_segment {
+                0.0
+            } else {
+                ((sample - hold) as f32 / (samples_per_segment - hold) as f32).clamp(0.0, 1.0)
+            };
+            palette_cache.push(first.interpolate(second, amount));
+        }
+    }
+    let compiled = Arc::new(palette_cache);
+    let mut cache = cache
+        .lock()
+        .map_err(|_| "Daslight-exact Burst palette cache lock was poisoned".to_string())?;
+    if let Some(existing) = cache.get(&key).and_then(Weak::upgrade) {
+        return Ok(existing);
+    }
+    cache.retain(|_, value| value.strong_count() > 0);
+    cache.insert(key, Arc::downgrade(&compiled));
+    Ok(compiled)
+}
+
+fn compiled_daslight_burst_gradient_tables(
+    frame_count: usize,
+    palette_cache_length: usize,
+) -> Result<Arc<Vec<u16>>, String> {
+    let key = (frame_count, palette_cache_length);
+    let cache = DASLIGHT_BURST_GRADIENT_TABLE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(compiled) = cache
+        .lock()
+        .map_err(|_| "Daslight-exact Burst gradient cache lock was poisoned".to_string())?
+        .get(&key)
+        .and_then(Weak::upgrade)
+    {
+        return Ok(compiled);
+    }
+
+    let compiled = Arc::new(daslight_burst_gradient_index_tables(
+        frame_count,
+        palette_cache_length,
+    )?);
+    let mut cache = cache
+        .lock()
+        .map_err(|_| "Daslight-exact Burst gradient cache lock was poisoned".to_string())?;
+    if let Some(existing) = cache.get(&key).and_then(Weak::upgrade) {
+        return Ok(existing);
+    }
+    cache.retain(|_, value| value.strong_count() > 0);
+    cache.insert(key, Arc::downgrade(&compiled));
+    Ok(compiled)
+}
+
+fn compiled_daslight_burst_frames(
+    key: DaslightBurstFrameCacheKey,
+    palette_cache: &Arc<Vec<DaslightKnightColor>>,
+    gradient_index_tables: &Arc<Vec<u16>>,
+) -> Result<Arc<Vec<DaslightKnightColor>>, String> {
+    let cache = DASLIGHT_BURST_FRAME_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(compiled) = cache
+        .lock()
+        .map_err(|_| "Daslight-exact Burst frame cache lock was poisoned".to_string())?
+        .get(&key)
+        .and_then(Weak::upgrade)
+    {
+        return Ok(compiled);
+    }
+
+    let cell_count = key
+        .table_frame_count
+        .checked_mul(key.strip_count)
+        .ok_or_else(|| "Daslight-exact Burst completed frame table overflowed".to_string())?;
+    let mut frames = Vec::new();
+    frames
+        .try_reserve_exact(cell_count)
+        .map_err(|_| "Daslight-exact Burst completed frame allocation failed".to_string())?;
+    let color_width = f64::from(f32::from_bits(key.color_width_bits));
+    let raster_center = key.strip_count as f64 * 0.5;
+    for frame_index in 0..key.table_frame_count {
+        for destination_index in 0..key.strip_count {
+            let source_index = if key.vertical_symmetry {
+                daslight_vertical_fold_source_index(destination_index, key.strip_count)
+            } else {
+                Some(destination_index)
+            };
+            let Some(source_index) = source_index else {
+                frames.push(DaslightKnightColor::from_color(black_color()));
+                continue;
+            };
+            // QPainter samples at pixel centres. The radial coordinate is
+            // rounded into the recovered 1024-entry RGBA64 gradient table,
+            // whose red channel indexes the cyclic 16-bit palette cache.
+            let pixel_center = source_index as f64 + 0.5;
+            let radial = ((pixel_center - raster_center).abs() / color_width).clamp(0.0, 1.0);
+            let gradient_index =
+                daslight_qt_round(radial * (DASLIGHT_QT_GRADIENT_TABLE_SIZE - 1) as f64)
+                    .clamp(0, (DASLIGHT_QT_GRADIENT_TABLE_SIZE - 1) as i64)
+                    as usize;
+            let palette_index = gradient_index_tables
+                [frame_index * DASLIGHT_QT_GRADIENT_TABLE_SIZE + gradient_index]
+                as usize;
+            let mut color = palette_cache[palette_index.min(palette_cache.len() - 1)];
+            if key.grayscale {
+                color =
+                    DaslightKnightColor::from_color(daslight_grayscale_color(color.into_color()));
+            }
+            frames.push(color);
+        }
+    }
+    debug_assert_eq!(frames.len(), cell_count);
+
+    let compiled = Arc::new(frames);
+    let mut cache = cache
+        .lock()
+        .map_err(|_| "Daslight-exact Burst frame cache lock was poisoned".to_string())?;
+    if let Some(existing) = cache.get(&key).and_then(Weak::upgrade) {
+        return Ok(existing);
+    }
+    cache.retain(|_, value| value.strong_count() > 0);
+    cache.insert(key, Arc::downgrade(&compiled));
+    Ok(compiled)
+}
+
+impl CompiledDaslightBurst {
+    fn compile(
+        request: &ColorEffectRequest,
+        strip_count: usize,
+        color_width: f32,
+        gradient: f32,
+        vertical_symmetry: bool,
+        grayscale: bool,
+    ) -> Result<Self, String> {
+        if !(protocol::DASLIGHT_COLOR_PALETTE_MIN_STOPS
+            ..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS)
+            .contains(&request.stops.len())
+        {
+            return Err(
+                "Daslight-exact Burst requires between 1 and 255 palette stops".to_string(),
+            );
+        }
+        if !color_width.is_finite()
+            || color_width.fract().abs() > f32::EPSILON
+            || !(10.0..=900.0).contains(&color_width)
+        {
+            return Err(
+                "Daslight-exact Burst color width must be an integer within 10..900 pixels"
+                    .to_string(),
+            );
+        }
+        if !gradient.is_finite() || !(0.0..=1.0).contains(&gradient) {
+            return Err("Daslight-exact Burst gradient must be within 0..1".to_string());
+        }
+
+        let raw_frame_count = usize::try_from((request.period_ms / DASLIGHT_VALUE_FRAME_MS).max(1))
+            .map_err(|_| {
+                "Daslight-exact Burst frame count does not fit this platform".to_string()
+            })?;
+        let table_frame_count = raw_frame_count.min(DASLIGHT_VALUE_FRAME_CAP);
+        // CBurstEffect's shared palette builder keeps wrap=true. The cache
+        // therefore has one integer-divided segment per stop including
+        // last -> first. Exact duplicate recipes are interned at compile time:
+        // this changes no sample, but avoids multiplying the large immutable
+        // Qt-compatible tables across a 64-FX venue stack.
+        let palette_cache = compiled_daslight_burst_palette_cache(request, gradient)?;
+        let gradient_index_tables =
+            compiled_daslight_burst_gradient_tables(table_frame_count, palette_cache.len())?;
+        let strip_count = strip_count.max(1);
+        let frames = compiled_daslight_burst_frames(
+            DaslightBurstFrameCacheKey {
+                palette: DaslightBurstPaletteCacheKey {
+                    colors: request
+                        .stops
+                        .iter()
+                        .map(|stop| [stop.color.red, stop.color.green, stop.color.blue])
+                        .collect(),
+                    gradient_bits: gradient.to_bits(),
+                },
+                table_frame_count,
+                strip_count,
+                color_width_bits: color_width.to_bits(),
+                vertical_symmetry,
+                grayscale,
+            },
+            &palette_cache,
+            &gradient_index_tables,
+        )?;
+
+        Ok(Self {
+            raw_frame_count,
+            table_frame_count,
+            strip_count,
+            #[cfg(test)]
+            palette_cache,
+            #[cfg(test)]
+            gradient_index_tables,
+            frames,
+            temporal_coordinate: Cell::new(None),
+        })
+    }
+
+    fn temporal_coordinate(&self, raw_tick: i64) -> DaslightKnightTemporalCoordinate {
+        if let Some(cached) = self
+            .temporal_coordinate
+            .get()
+            .filter(|cached| cached.raw_tick == raw_tick)
+        {
+            return cached;
+        }
+        let tick = raw_tick.rem_euclid(self.raw_frame_count as i64) as usize;
+        let unit = tick as f32 / self.raw_frame_count as f32;
+        let position = (self.table_frame_count - 1) as f32 * unit;
+        let lower = (f64::from(position).floor() as usize).min(self.table_frame_count - 1);
+        let coordinate = DaslightKnightTemporalCoordinate {
+            raw_tick,
+            lower,
+            upper: (lower + 1).min(self.table_frame_count - 1),
+            amount: position - lower as f32,
+        };
+        self.temporal_coordinate.set(Some(coordinate));
+        coordinate
+    }
+
+    #[cfg(test)]
+    fn sample_frame(&self, frame_index: usize, destination_index: usize) -> DaslightKnightColor {
+        let destination_index = destination_index.min(self.strip_count - 1);
+        let frame_index = frame_index.min(self.table_frame_count - 1);
+        self.frames[frame_index * self.strip_count + destination_index]
+    }
+
+    fn sample_at_tick(&self, raw_tick: i64, destination_index: usize) -> ColorEffectColor {
+        let coordinate = self.temporal_coordinate(raw_tick);
+        let destination_index = destination_index.min(self.strip_count - 1);
+        let first = self.frames[coordinate.lower * self.strip_count + destination_index];
+        if coordinate.amount <= 0.0 || coordinate.lower == coordinate.upper {
+            return first.into_color();
+        }
+        first
+            .interpolate(
+                self.frames[coordinate.upper * self.strip_count + destination_index],
+                coordinate.amount,
+            )
+            .into_color()
+    }
+}
+
 fn daslight_knight_rider_raw_tick(
     request: &ColorEffectRequest,
     time_phase: f64,
@@ -4053,6 +4565,33 @@ fn compile_daslight_value_spatial(
             *go_outside,
             *gradient,
             *vertical_symmetry,
+        )
+        .map(Some),
+        _ => Ok(None),
+    }
+}
+
+fn compile_daslight_burst(
+    request: &ColorEffectRequest,
+    strip_count: usize,
+) -> Result<Option<CompiledDaslightBurst>, String> {
+    let Some(pattern) = request.spatial_pattern.as_ref() else {
+        return Ok(None);
+    };
+    match &pattern.recipe {
+        ColorEffectSpatialRecipe::Burst {
+            daslight_exact: true,
+            grayscale,
+            vertical_symmetry,
+            color_width,
+            gradient,
+        } => CompiledDaslightBurst::compile(
+            request,
+            strip_count,
+            *color_width,
+            *gradient,
+            *vertical_symmetry,
+            *grayscale,
         )
         .map(Some),
         _ => Ok(None),
@@ -26278,11 +26817,28 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
         }
         ColorEffectSpatialRecipe::Sweep { .. } => Ok(()),
         ColorEffectSpatialRecipe::Burst {
+            daslight_exact,
+            vertical_symmetry,
             color_width,
             gradient,
+            ..
         } => {
-            percent("color width", *color_width)?;
-            percent("gradient", *gradient)
+            if *vertical_symmetry && !*daslight_exact {
+                return Err(
+                    "Burst vertical symmetry requires the Daslight exact evaluator".to_string(),
+                );
+            }
+            if *daslight_exact {
+                integer_range("Daslight Burst color width", *color_width, 10.0, 900.0)?;
+                if gradient.is_finite() && (0.0..=1.0).contains(gradient) {
+                    Ok(())
+                } else {
+                    Err("Daslight Burst gradient must be within 0..1".to_string())
+                }
+            } else {
+                percent("color width", *color_width)?;
+                percent("gradient", *gradient)
+            }
         }
         ColorEffectSpatialRecipe::RandomFill { point_width } => {
             if *point_width == 0 {
@@ -27422,6 +27978,12 @@ fn evaluate_runtime_value_attribute_at_rate(
                 .as_ref()
                 .map(|compiled| (state, compiled))
         });
+        let exact_burst_runtime = spatial.spatial.as_deref().and_then(|state| {
+            state
+                .daslight_burst
+                .as_ref()
+                .map(|compiled| (state, compiled))
+        });
         let generated =
             if let Some((state, compiled)) = exact_runtime {
                 let target = state.targets.get(binding.spatial_target_index)?;
@@ -27436,6 +27998,33 @@ fn evaluate_runtime_value_attribute_at_rate(
                         // red is the exact generic Intensity/component result
                         // without RGBW/CMY/HSV conversion or output-map lookup.
                         let value = evaluate_daslight_knight_rider_color_at_rate(
+                            &spatial.request,
+                            target,
+                            compiled,
+                            created_at,
+                            now,
+                            clock,
+                            rate,
+                        )
+                        .red;
+                        target.daslight_value_cached.set(Some(
+                            RuntimeDaslightValueSpatialEvaluation { at: now, value },
+                        ));
+                        value
+                    })
+            } else if let Some((state, compiled)) = exact_burst_runtime {
+                let target = state.targets.get(binding.spatial_target_index)?;
+                target
+                    .daslight_value_cached
+                    .get()
+                    .filter(|evaluation| evaluation.at == now)
+                    .map(|evaluation| evaluation.value)
+                    .unwrap_or_else(|| {
+                        // Exact Burst uses the same grayscale VALUE palette
+                        // contract as exact Knight Rider. Bypass the generic
+                        // RGB binding/output-map path while preserving its
+                        // generated red component byte-for-byte.
+                        let value = evaluate_daslight_burst_color_at_rate(
                             &spatial.request,
                             target,
                             compiled,
@@ -28889,10 +29478,12 @@ fn runtime_color_effect_from_request(
             .map(|target| target.strip_count)
             .unwrap_or(1);
         let daslight_knight_rider = compile_daslight_value_spatial(&request, strip_count)?;
+        let daslight_burst = compile_daslight_burst(&request, strip_count)?;
         Some(Box::new(RuntimeColorSpatialState {
             targets,
             attribute_indices,
             daslight_knight_rider,
+            daslight_burst,
         }))
     } else {
         None
@@ -30139,6 +30730,7 @@ fn evaluate_runtime_color_spatial_attribute_at_rate(
                 &runtime.request,
                 target,
                 spatial.daslight_knight_rider.as_ref(),
+                spatial.daslight_burst.as_ref(),
                 effect_id,
                 created_at,
                 now,
@@ -30327,10 +30919,35 @@ fn evaluate_daslight_knight_rider_color_at_rate(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn evaluate_daslight_burst_color_at_rate(
+    request: &ColorEffectRequest,
+    target: &RuntimeColorSpatialTarget,
+    compiled: &CompiledDaslightBurst,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> ColorEffectColor {
+    let valid_rate = valid_effect_rate(rate);
+    let time_phase = request
+        .clock_sync
+        .map(|clock_sync| {
+            (clock.beat_counter as f64 + clock.beat_phase as f64)
+                / clock_sync.beats.max(0.000_1) as f64
+                * f64::from(valid_rate)
+                + request.phase as f64
+        })
+        .unwrap_or(0.0);
+    let raw_tick = daslight_knight_rider_raw_tick(request, time_phase, created_at, now, valid_rate);
+    compiled.sample_at_tick(raw_tick, target.strip_index)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn evaluate_color_spatial_sample_at_rate(
     request: &ColorEffectRequest,
     target: &RuntimeColorSpatialTarget,
     daslight_knight_rider: Option<&CompiledDaslightKnightRider>,
+    daslight_burst: Option<&CompiledDaslightBurst>,
     effect_id: EffectId,
     created_at: Instant,
     now: Instant,
@@ -30358,6 +30975,20 @@ fn evaluate_color_spatial_sample_at_rate(
                 request,
                 target,
                 daslight_knight_rider,
+                created_at,
+                now,
+                clock,
+                rate,
+            ),
+            opacity: 1.0,
+        };
+    }
+    if let Some(daslight_burst) = daslight_burst {
+        return RuntimeColorSpatialSample {
+            color: evaluate_daslight_burst_color_at_rate(
+                request,
+                target,
+                daslight_burst,
                 created_at,
                 now,
                 clock,
@@ -30486,6 +31117,7 @@ fn evaluate_color_spatial_sample_at_rate(
         ColorEffectSpatialRecipe::Burst {
             color_width,
             gradient,
+            ..
         } => {
             let radius = (strip_position - 0.5).abs() * 2.0;
             let front = time_phase.rem_euclid(1.0) as f32;
@@ -53362,6 +53994,37 @@ mod tests {
         request
     }
 
+    fn test_daslight_burst_request(
+        period_ms: u64,
+        color_width: f32,
+        gradient: f32,
+        vertical_symmetry: bool,
+        grayscale: bool,
+        palette: &[ColorEffectColor],
+    ) -> ColorEffectRequest {
+        let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::Burst {
+            daslight_exact: true,
+            grayscale,
+            vertical_symmetry,
+            color_width,
+            gradient,
+        });
+        request.period_ms = period_ms;
+        request.stops = palette
+            .iter()
+            .enumerate()
+            .map(|(index, color)| protocol::ColorEffectStop {
+                position: if palette.len() == 1 {
+                    0.0
+                } else {
+                    index as f32 / (palette.len() - 1) as f32
+                },
+                color: *color,
+            })
+            .collect();
+        request
+    }
+
     fn test_spatial_color_target(
         strip_index: usize,
         strip_count: usize,
@@ -53426,10 +54089,12 @@ mod tests {
             .map(|projection| projection.project(target.x, target.z));
         let daslight_knight_rider =
             compile_daslight_value_spatial(request, target.strip_count).unwrap();
+        let daslight_burst = compile_daslight_burst(request, target.strip_count).unwrap();
         evaluate_color_spatial_sample_at_rate(
             request,
             &target,
             daslight_knight_rider.as_ref(),
+            daslight_burst.as_ref(),
             97,
             created_at,
             created_at + Duration::from_millis(elapsed_ms),
@@ -54548,6 +55213,9 @@ mod tests {
     #[test]
     fn color_spatial_burst_expands_from_strip_center() {
         let request = test_spatial_color_request(ColorEffectSpatialRecipe::Burst {
+            daslight_exact: false,
+            grayscale: false,
+            vertical_symmetry: false,
             color_width: 20.0,
             gradient: 100.0,
         });
@@ -54557,6 +55225,194 @@ mod tests {
             evaluate_test_spatial_color(&request, &test_spatial_color_target(2, 5, 0.5, 0.5), 500);
         assert_eq!(on_front, test_color(u16::MAX, u16::MAX, u16::MAX));
         assert_eq!(away, test_color(0, 0, 0));
+    }
+
+    #[test]
+    fn daslight_exact_burst_builds_cyclic_16bit_palette_cache() {
+        let request = test_daslight_burst_request(
+            1_000,
+            50.0,
+            1.0,
+            false,
+            false,
+            &[test_color(0, 0, 0), test_color(u16::MAX, 0, 0)],
+        );
+        let compiled = compile_daslight_burst(&request, 5).unwrap().unwrap();
+        assert_eq!(compiled.palette_cache.len(), 65_536);
+        assert_eq!(compiled.palette_cache[0].into_color().red, 0);
+        assert_eq!(compiled.palette_cache[32_768].into_color().red, u16::MAX);
+        assert!(compiled.palette_cache[16_384].into_color().red > 32_000);
+        assert!(
+            compiled.palette_cache[65_535].into_color().red < 4,
+            "wrap=true must blend the final palette segment back to stop zero"
+        );
+
+        let stepped = test_daslight_burst_request(
+            1_000,
+            50.0,
+            0.0,
+            false,
+            false,
+            &[test_color(0, 0, 0), test_color(u16::MAX, 0, 0)],
+        );
+        let stepped = compile_daslight_burst(&stepped, 5).unwrap().unwrap();
+        assert_eq!(stepped.palette_cache[32_767].into_color().red, 0);
+        assert_eq!(stepped.palette_cache[32_768].into_color().red, u16::MAX);
+        assert_eq!(stepped.palette_cache[65_535].into_color().red, u16::MAX);
+    }
+
+    #[test]
+    fn daslight_exact_burst_interns_identical_immutable_compile_tables() {
+        let request = test_daslight_burst_request(
+            30_040,
+            900.0,
+            0.5,
+            false,
+            false,
+            &[test_color(0, 0, 0), test_color(u16::MAX, 0, 0)],
+        );
+        let first = compile_daslight_burst(&request, 200).unwrap().unwrap();
+        let second = compile_daslight_burst(&request, 200).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&first.palette_cache, &second.palette_cache));
+        assert!(Arc::ptr_eq(
+            &first.gradient_index_tables,
+            &second.gradient_index_tables
+        ));
+        assert!(Arc::ptr_eq(&first.frames, &second.frames));
+
+        let distinct_palette = test_daslight_burst_request(
+            30_040,
+            900.0,
+            0.0,
+            false,
+            false,
+            &[test_color(0, 0, 0), test_color(u16::MAX, 0, 0)],
+        );
+        let distinct_palette = compile_daslight_burst(&distinct_palette, 200)
+            .unwrap()
+            .unwrap();
+        assert!(!Arc::ptr_eq(
+            &first.palette_cache,
+            &distinct_palette.palette_cache
+        ));
+        assert!(Arc::ptr_eq(
+            &first.gradient_index_tables,
+            &distinct_palette.gradient_index_tables
+        ));
+        assert!(!Arc::ptr_eq(&first.frames, &distinct_palette.frames));
+    }
+
+    #[test]
+    fn daslight_exact_burst_uses_pixel_centres_generated_frames_and_postprocess() {
+        let request = test_daslight_burst_request(
+            400,
+            10.0,
+            0.0,
+            false,
+            false,
+            &[
+                test_color(0, 0, 0),
+                test_color(u16::MAX, u16::MAX, u16::MAX),
+            ],
+        );
+        let compiled = compile_daslight_burst(&request, 5).unwrap().unwrap();
+        assert_eq!(compiled.raw_frame_count, 10);
+        assert_eq!(compiled.table_frame_count, 10);
+        assert_eq!(
+            compiled.gradient_index_tables.len(),
+            10 * DASLIGHT_QT_GRADIENT_TABLE_SIZE
+        );
+        let frame_zero = &compiled.gradient_index_tables[..DASLIGHT_QT_GRADIENT_TABLE_SIZE];
+        assert_eq!((frame_zero[0], frame_zero[1_023]), (0, u16::MAX));
+        assert!(frame_zero.windows(2).all(|pair| pair[0] <= pair[1]));
+        let frame_five = &compiled.gradient_index_tables
+            [5 * DASLIGHT_QT_GRADIENT_TABLE_SIZE..6 * DASLIGHT_QT_GRADIENT_TABLE_SIZE];
+        assert_eq!((frame_five[0], frame_five[1_023]), (32_767, 32_767));
+        assert!(frame_five[511] > 65_000);
+        assert!(frame_five[512] < 100);
+        assert_eq!(compiled.sample_frame(0, 2).into_color(), black_color());
+        assert_eq!(
+            compiled.sample_frame(4, 2).into_color(),
+            test_color(u16::MAX, u16::MAX, u16::MAX)
+        );
+        assert_eq!(
+            compiled.sample_frame(5, 2).into_color(),
+            black_color(),
+            "the (cache_len - 1) integer scale keeps the exact half-cycle seam on the first segment"
+        );
+        assert_eq!(
+            compiled.sample_frame(0, 0),
+            compiled.sample_frame(0, 4),
+            "x+0.5 sampling around width/2 must be mirror symmetric"
+        );
+        let coordinate = compiled.temporal_coordinate(5);
+        assert_eq!((coordinate.lower, coordinate.upper), (4, 5));
+        assert!((coordinate.amount - 0.5).abs() <= f32::EPSILON);
+
+        let grayscale = test_daslight_burst_request(
+            400,
+            10.0,
+            0.0,
+            false,
+            true,
+            &[test_color(u16::MAX, 0, 0), test_color(0, 0, u16::MAX)],
+        );
+        let grayscale = compile_daslight_burst(&grayscale, 5).unwrap().unwrap();
+        assert_eq!(
+            grayscale.sample_frame(0, 2).into_color(),
+            test_color(87 * 257, 87 * 257, 87 * 257)
+        );
+    }
+
+    #[test]
+    fn daslight_exact_burst_transform_folds_and_clears_odd_tail() {
+        let request = test_daslight_burst_request(
+            400,
+            10.0,
+            1.0,
+            true,
+            false,
+            &[test_color(0, 0, 0), test_color(u16::MAX, 0, 0)],
+        );
+        let compiled = compile_daslight_burst(&request, 5).unwrap().unwrap();
+        assert_eq!(compiled.sample_frame(3, 0), compiled.sample_frame(3, 2));
+        assert_eq!(compiled.sample_frame(3, 1), compiled.sample_frame(3, 3));
+        assert_eq!(compiled.sample_frame(3, 4).into_color(), black_color());
+    }
+
+    #[test]
+    fn daslight_exact_burst_validation_is_additive_to_enhanced_recipe() {
+        let enhanced = test_spatial_color_request(ColorEffectSpatialRecipe::Burst {
+            daslight_exact: false,
+            grayscale: false,
+            vertical_symmetry: false,
+            color_width: 50.0,
+            gradient: 100.0,
+        });
+        validate_color_effect_request(&enhanced).unwrap();
+
+        let invalid_width = test_daslight_burst_request(
+            1_000,
+            50.5,
+            1.0,
+            false,
+            false,
+            &[test_color(0, 0, 0), test_color(u16::MAX, 0, 0)],
+        );
+        assert!(validate_color_effect_request(&invalid_width)
+            .unwrap_err()
+            .contains("integer within 10..900"));
+        let invalid_gradient = test_daslight_burst_request(
+            1_000,
+            50.0,
+            1.01,
+            false,
+            false,
+            &[test_color(0, 0, 0), test_color(u16::MAX, 0, 0)],
+        );
+        assert!(validate_color_effect_request(&invalid_gradient)
+            .unwrap_err()
+            .contains("within 0..1"));
     }
 
     #[test]
@@ -59011,6 +59867,80 @@ mod tests {
     }
 
     #[test]
+    fn daslight_exact_burst_value_specialized_path_matches_generic_spatial_reference() {
+        let controls = vec![
+            test_color_control("ColorRed", 1),
+            test_color_control("ColorGreen", 2),
+            test_color_control("ColorBlue", 3),
+        ];
+        let fixtures = vec![
+            test_runtime_color_fixture(1, Vec::new(), controls.clone()),
+            test_runtime_color_fixture(2, Vec::new(), controls),
+        ];
+        let mut request = test_value_request(&[1, 2]);
+        request.low = 1_000;
+        request.high = 60_000;
+        request.period_ms = 400;
+        request.spatial_pattern = Some(protocol::ColorEffectSpatialPattern {
+            recipe: ColorEffectSpatialRecipe::Burst {
+                daslight_exact: true,
+                grayscale: false,
+                vertical_symmetry: false,
+                color_width: 10.0,
+                gradient: 0.5,
+            },
+            beam_targets: Vec::new(),
+            placement: None,
+        });
+        let runtime = runtime_value_effect_from_request(request, &fixtures, true).unwrap();
+        let spatial = runtime.spatial.as_deref().expect("VALUE spatial runtime");
+        let state = spatial.spatial.as_deref().expect("compiled spatial state");
+        assert!(state.daslight_burst.is_some());
+
+        let created_at = Instant::now();
+        let clock = ClockSnapshot::default();
+        for elapsed_ms in [0, 40, 160, 360, 400, 520] {
+            let now = created_at + Duration::from_millis(elapsed_ms);
+            for fixture_id in [1, 2] {
+                for (attribute, base_value) in [
+                    ("ColorRed", 40_000),
+                    ("ColorGreen", 20_000),
+                    ("ColorBlue", 10_000),
+                ] {
+                    let binding = runtime
+                        .spatial_bindings
+                        .get(&fixture_id)
+                        .and_then(|attributes| attributes.get(attribute))
+                        .expect("compiled VALUE binding");
+                    let specialized = evaluate_runtime_value_attribute_at_rate(
+                        &runtime, fixture_id, attribute, base_value, 98, created_at, now, &clock,
+                        1.0,
+                    )
+                    .expect("specialized exact Burst VALUE result");
+                    let generic_generated = evaluate_runtime_color_spatial_attribute_at_rate(
+                        spatial, fixture_id, attribute, 0, 98, created_at, now, &clock, 1.0,
+                    )
+                    .expect("generic spatial reference result");
+                    let generic_ranged = scale_effect_u16(
+                        binding.low,
+                        binding.high,
+                        generic_generated as f32 / u16::MAX as f32,
+                    );
+                    let generic = scale_u16(base_value, generic_ranged as f32 / u16::MAX as f32);
+                    assert_eq!(
+                        specialized, generic,
+                        "{fixture_id} {attribute} at {elapsed_ms}ms"
+                    );
+                    assert!(state.targets[binding.spatial_target_index]
+                        .daslight_value_cached
+                        .get()
+                        .is_some_and(|cached| cached.at == now));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn value_absolute_line_maps_envelope_into_range_and_ignores_other_attributes() {
         let runtime = runtime_with_move_fixtures(1);
         let effect = runtime
@@ -60005,6 +60935,47 @@ mod tests {
         }
     }
 
+    fn populate_daslight_exact_burst_release_effects(
+        runtime: &mut EngineRuntime,
+        fixture_ids: &[FixtureId],
+        created_at: Instant,
+        effect_count: usize,
+    ) {
+        for index in 0..effect_count {
+            let mut request = test_value_request(fixture_ids);
+            request.period_ms = 751 * DASLIGHT_VALUE_FRAME_MS;
+            request.phase = index as f32 / effect_count as f32;
+            request.points = (0..32)
+                .map(|point_index| ValueEffectPoint {
+                    position: point_index as f32 / 31.0,
+                    value: (point_index as f32 * 2_114.0) / u16::MAX as f32,
+                })
+                .collect();
+            request.spatial_pattern = Some(protocol::ColorEffectSpatialPattern {
+                recipe: ColorEffectSpatialRecipe::Burst {
+                    daslight_exact: true,
+                    grayscale: false,
+                    vertical_symmetry: index % 2 == 1,
+                    color_width: 900.0,
+                    gradient: (index % 5) as f32 / 4.0,
+                },
+                beam_targets: Vec::new(),
+                placement: None,
+            });
+            let kind = RuntimeEffectKind::Value(
+                runtime
+                    .resolve_value_effect_request(request)
+                    .expect("exact Burst benchmark request must compile"),
+            );
+            runtime.effects.push(RuntimeEffect {
+                id: index as EffectId + 1,
+                kind,
+                enabled: true,
+                created_at,
+            });
+        }
+    }
+
     #[test]
     fn daslight_exact_knight_rider_release_stack_meets_44hz_budget() {
         const FIXTURE_COUNT: u64 = 200;
@@ -60066,6 +61037,71 @@ mod tests {
         // temporal interpolation, and VALUE range/application semantics.
         // Keep the established full-rig 5/8/12ms release gate, whose hard
         // maximum remains inside one 22.7ms DMX tick.
+        if !cfg!(debug_assertions) {
+            assert!(p95 <= Duration::from_millis(5), "p95 was {p95:?}");
+            assert!(p99 <= Duration::from_millis(8), "p99 was {p99:?}");
+            assert!(max <= Duration::from_millis(12), "max was {max:?}");
+        }
+    }
+
+    #[test]
+    fn daslight_exact_burst_release_stack_meets_44hz_budget() {
+        const FIXTURE_COUNT: u64 = 200;
+        const EFFECT_COUNT: usize = 64;
+        const SAMPLES: usize = if cfg!(debug_assertions) { 20 } else { 1_000 };
+        const ATTRIBUTES: [&str; 1] = ["Dimmer"];
+
+        let mut runtime = runtime_with_mixed_effect_fixtures(FIXTURE_COUNT);
+        let fixture_ids = (1..=FIXTURE_COUNT).collect::<Vec<_>>();
+        let created_at = Instant::now();
+        // Palette construction and the RGBA64-compatible 750 x 1024 gradient
+        // table generation deliberately happen outside the timed 44 Hz loop.
+        populate_daslight_exact_burst_release_effects(
+            &mut runtime,
+            &fixture_ids,
+            created_at,
+            EFFECT_COUNT,
+        );
+        assert_eq!(runtime.effects.len(), EFFECT_COUNT);
+        assert!(runtime.effects.iter().all(|effect| matches!(
+            &effect.kind,
+            RuntimeEffectKind::Value(RuntimeValueEffect {
+                spatial: Some(spatial),
+                ..
+            }) if spatial.spatial.as_ref().and_then(|state| state.daslight_burst.as_ref()).is_some_and(|compiled| compiled.table_frame_count == DASLIGHT_VALUE_FRAME_CAP)
+        )));
+
+        let mut durations = Vec::with_capacity(SAMPLES);
+        let mut checksum = 0_u64;
+        for sample in 0..SAMPLES {
+            let at = created_at + DMX_TICK_INTERVAL * (sample as u32 + 1);
+            let started = Instant::now();
+            for fixture in &runtime.fixtures {
+                for attribute in ATTRIBUTES {
+                    checksum =
+                        checksum.wrapping_add(runtime.apply_effects_with_transition_policy(
+                            fixture, attribute, 16_384, at, false,
+                        ) as u64);
+                }
+            }
+            durations.push(started.elapsed());
+        }
+        std::hint::black_box(checksum);
+        assert_ne!(checksum, 0);
+        durations.sort_unstable();
+        let p95 = durations[(SAMPLES * 95 / 100).min(SAMPLES - 1)];
+        let p99 = durations[(SAMPLES * 99 / 100).min(SAMPLES - 1)];
+        let max = *durations.last().unwrap();
+        eprintln!(
+            "Daslight exact Burst 64x200 precomputed-RGBA64-table stack per-tick evaluation: p95={}us p99={}us max={}us",
+            p95.as_micros(),
+            p99.as_micros(),
+            max.as_micros()
+        );
+        // The timed production path performs fixed radial/table/palette
+        // lookups, temporal interpolation, and VALUE range application. It
+        // must preserve the established 5/8/12ms release gate and remain
+        // comfortably inside one 22.7ms DMX tick.
         if !cfg!(debug_assertions) {
             assert!(p95 <= Duration::from_millis(5), "p95 was {p95:?}");
             assert!(p99 <= Duration::from_millis(8), "p99 was {p99:?}");

@@ -270,6 +270,14 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
       && recipe.KnightRider.daslight_exact === true,
     );
   });
+  const daslightExactBurst = createMemo(() => {
+    const recipe = props.spatialPattern?.recipe;
+    return Boolean(
+      recipe
+      && "Burst" in recipe
+      && recipe.Burst.daslight_exact === true,
+    );
+  });
   const generatorNumber = (key: string, fallback = 0) => {
     const value = generatorValues()[key];
     return typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -296,6 +304,28 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
       ...pattern,
       recipe: { [kind]: { ...generatorValues(), ...patch } } as ColorEffectSpatialRecipe,
     });
+  };
+  const setBurstEvaluator = (daslightExact: boolean) => {
+    if (generatorKind() !== "Burst") return;
+    const currentWidth = generatorNumber("color_width", 50);
+    const currentGradient = generatorNumber("gradient", daslightExactBurst() ? 1 : 100);
+    patchGeneratorValues(daslightExact
+      ? {
+          daslight_exact: true,
+          grayscale: false,
+          color_width: clamp(Math.round(currentWidth), 10, 900),
+          gradient: clamp(currentGradient > 1 ? currentGradient / 100 : currentGradient, 0, 1),
+        }
+      : {
+          daslight_exact: false,
+          grayscale: false,
+          vertical_symmetry: false,
+          color_width: clamp(currentWidth, 0, 100),
+          gradient: clamp(currentGradient <= 1 ? currentGradient * 100 : currentGradient, 0, 100),
+        });
+    if (daslightExact) {
+      props.onPeriodMs(Math.max(40, Math.floor(Math.max(40, props.periodMs) / 40) * 40));
+    }
   };
   const applyQuickLook = (look: ValueQuickLook) => {
     if (daslightExactKnight()) return;
@@ -565,8 +595,12 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
         </Show>
         <Show when={generatorKind() === "Burst"}>
           <div class="colorEffectModeGrid">
-            <label>Color width %<input type="number" min="0" max="100" step="1" value={generatorNumber("color_width", 50)} onInput={(event) => patchGeneratorValues({ color_width: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
-            <label>Gradient %<input type="number" min="0" max="100" step="1" value={generatorNumber("gradient", 100)} onInput={(event) => patchGeneratorValues({ gradient: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
+            <label>Evaluator<select value={daslightExactBurst() ? "daslight" : "enhanced"} onInput={(event) => setBurstEvaluator(event.currentTarget.value === "daslight")}><option value="enhanced">Enhanced</option><option value="daslight">Daslight exact</option></select></label>
+            <Show when={daslightExactBurst()}>
+              <label>Transform<select value={generatorTransform()} onInput={(event) => patchGeneratorValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
+            </Show>
+            <label>{daslightExactBurst() ? "Color width px" : "Color width %"}<input type="number" min={daslightExactBurst() ? "10" : "0"} max={daslightExactBurst() ? "900" : "100"} step="1" value={generatorNumber("color_width", 50)} onInput={(event) => patchGeneratorValues({ color_width: daslightExactBurst() ? clamp(Math.round(Number(event.currentTarget.value) || 10), 10, 900) : clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
+            <label>{daslightExactBurst() ? "Gradient 0..1" : "Gradient %"}<input type="number" min="0" max={daslightExactBurst() ? "1" : "100"} step={daslightExactBurst() ? "0.01" : "1"} value={generatorNumber("gradient", daslightExactBurst() ? 1 : 100)} onInput={(event) => patchGeneratorValues({ gradient: clamp(Number(event.currentTarget.value), 0, daslightExactBurst() ? 1 : 100) })} /></label>
           </div>
         </Show>
         <Show when={generatorKind() === "RandomFill"}>
@@ -740,14 +774,17 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
           </div>
         </Show>
         <label class="valueEffectPeriodField">
-          Period ms
+          {daslightExactBurst() ? "Period ms · 40 ms compatibility" : "Period ms"}
           <input
             class="tabularNums"
             type="number"
-            min="10"
-            step="10"
+            min={daslightExactBurst() ? "40" : "10"}
+            step={daslightExactBurst() ? "40" : "10"}
             value={normalizedPeriodMs()}
-            onInput={(event) => props.onPeriodMs(Math.max(10, Math.round(Number(event.currentTarget.value) || 10)))}
+            onInput={(event) => {
+              const value = Math.round(Number(event.currentTarget.value) || (daslightExactBurst() ? 40 : 10));
+              props.onPeriodMs(daslightExactBurst() ? Math.max(40, Math.floor(value / 40) * 40) : Math.max(10, value));
+            }}
           />
         </label>
         <div class="moveEffectClockPresets" aria-label="Value clock sync presets">

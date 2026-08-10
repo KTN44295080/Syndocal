@@ -22,16 +22,16 @@ Daslight 5.0.6.2 / FileVersion `25.0905.165.111`の実機dropdown全項目とfac
 
 | ファミリー | 完全factory集合 | 現行converter route | precise fail-closed / 未route |
 |---|---|---|---|
-| VALUE | 621–628（8種） | 621 Rainbow, 623 Plasma, 624 Knight Rider, 625 Sweep | 622/628: non-serialized palette-wrap state、626/627: non-serialized per-thread RNG state/history |
-| COLOR FX | 121,127,128,129,130,131,133,**134** | 127,129,130 | 121/131/133 precise fail-closed。128 Perlin / 134 Sweepは未route。Sweep=132という旧推定は撤回 |
+| VALUE | 621–628（8種） | 621 Rainbow, **622 Burst**, 623 Plasma, 624 Knight Rider, 625 Sweep | 626/627: non-serialized per-thread RNG state/history。628は固有Perlin evaluator未実装 |
+| COLOR FX | 121,127,128,129,130,131,133,**134** | **121**,127,129,130 | 131/133 precise fail-closed。128 Perlin / 134 Sweepは未route。Sweep=132という旧推定は撤回 |
 | MOVE | 221 Circle, 222 Curve, 223 Line, 224 Polygon, 225 Points | **221–225全5種exact** | なし |
 | CHASER | 321 #1, 322 #2, 323 #3, 324 #4, 325 random | 321,322,325 | 323,324未route。distinct evaluatorの演出意味が未証明 |
 | CURVE | 3–13（11種） | 3 Inverse Ramp, 7 Sinus, 10 Strobe | 4,5,6,8,9,11,12,13未route。Custom 13だけ別schema |
 | MAPPINGS | 521–530（10種） | 521 Rainbow | 530 precise fail-closed。522–529未route |
 | COLOR MAPPINGS | 21,22,23,29–37,40–42,44,45,47–50（21種） | 36 Rainbow | 残20種未route |
 
-現行runtime converter routeは20/68 ID、precise fail-closedは8、未routeは40。うち条件付きexact-coreは
-18、明示compatibilityはCHASER 321/325の2 route。これはID単位の入口coverageであり、共有raster classの再利用度や
+現行runtime converter routeは22/68 ID、precise fail-closedは6、未routeは40。うち条件付きexact-coreは
+20、明示compatibilityはCHASER 321/325の2 route。これはID単位の入口coverageであり、共有raster classの再利用度や
 STEPS/SUPER SCENEなど非generator構造を含む「製品完成率」ではない。未routeをUI名だけで近似せず、
 各evaluatorの意味論を回収したトランシェだけを増やす。
 
@@ -71,10 +71,9 @@ strict-core数を製品全域のexact完成数とは呼ばない。
 3. **DVC-ENUM（完了）**: 全ファミリーのfactoryディスパッチ表、実機GUI順、
    ID→creator→constructor→class/vtable→evaluator→property schemaを完全列挙。
    実保存scratchと突合し、現行converter 22/68、precise fail-closed 4、未route 42を確定。
-4. **DVC-V6（完了）**: VALUE ID624 Knight Riderをexact実装済み。VALUE残4種は
-   評価器自体を回収済みだが、622/628はconstructor由来のpalette-wrap state、626/627は
-   per-thread qrand state/historyが`.dvc`から復元不能なため、推測せずprecise fail-closedを維持する。
-   追加のDaslight証跡で欠落stateの導出経路を確定できた場合だけexact実装へ戻す。
+4. **DVC-V6（完了）**: VALUE ID624 Knight Riderをexact実装済み。当時622/628を阻害するとした
+   palette-wrap判定は、その後の共有constructor再監査で誤りと確定した。626/627のper-thread qrand
+   state/history境界は維持する。
 5. **DVC-CORRECTNESS（進行中）**: 上記16 routeをfactory TYPE/range/evaluator/beam-targetと再突合する。
    **C0a完了**: MAPPINGS 521のunit→percent、COLOR 129/130、CHASER 321/322/325、
    CURVE 3/7/10、MOVE 224のTYPE/domain/no-op順序をfactory contractへ一致させた。
@@ -98,14 +97,18 @@ strict-core数を製品全域のexact完成数とは呼ばない。
    COLOR 127の共有exact Knight evaluatorも0..254 laneを受理する。VALUEの`2..32`は独立factory contractを
    維持する。これで旧`2..16`横断境界は解消したが、残るPARAM/placement/beam/state境界があるためID分類と
    full-domain完成数はまだ増やさない。
-6. **DVC-MOVE-EXACT（実装済み、統合ゲート中）**: 221–225の個別evaluator、40 ms frame、
+6. **DVC-MOVE-EXACT（完了）**: 221–225の個別evaluator、40 ms frame、
    raw Phasing、2-wing Symmetry、beam/selection identityを専用modeでexact化した。223/224の
    Approximateと222/225未route、221 nonzero-Phasing fail-closedを解消。Enhanced authoringは別modeで維持する。
-7. **次の新規IDトランシェ**: (a)既存Sweep evaluatorを再利用できるCOLOR FX 134
-   → (b)COLOR 121/131/133とMAPPINGS 530のstate/evaluator解決 → (c)CURVE残
+7. **DVC-BURST-EXACT（完了）**: 共有constructorの`+0x12c=true`無条件writeを証明し、
+   COLOR 121 / VALUE 622をcyclic 16-bit palette、raw pixel radius、RGBA64のQt 1024-entry
+   gradient tableとseam、40 ms scheduler、qGray、Transform foldまでexact化した。
+   Enhanced authoringは別modeで維持し、editorから明示切替できる。
+8. **次の新規IDトランシェ**: (a)既存Sweep evaluatorを再利用できるCOLOR FX 134
+   → (b)Perlin 128/530/628の固有evaluator/2D placement → (c)CURVE残
    → (d)CHASER 323/324 → (e)MAPPINGS/COLOR MAPPINGS 2D群
    （Media/Text等の埋め込み系はColour Mapping既存基盤を再利用）。
-8. **P-EXP（完了）**: 23 quick looks（VALUE6 / CURVE3 / CHASER3 / COLOR5 /
+9. **P-EXP（完了）**: 23 quick looks（VALUE6 / CURVE3 / CHASER3 / COLOR5 /
    MAPPING3 / MOVE3）を統合済み。ColorMappingは埋め込みmediaのため別設計。
 
 ## 各トランシェの受入（共通）

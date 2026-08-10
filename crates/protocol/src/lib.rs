@@ -2308,6 +2308,16 @@ pub enum ColorEffectSpatialRecipe {
         direction_change: bool,
     },
     Burst {
+        /// Reproduce Daslight's CBurstEffect radial evaluator, cyclic palette
+        /// cache and 40 ms generated-frame scheduler.
+        #[serde(default, skip_serializing_if = "is_false")]
+        daslight_exact: bool,
+        /// Apply Daslight's common Grayscale post-process after rasterization.
+        #[serde(default, skip_serializing_if = "is_false")]
+        grayscale: bool,
+        /// Apply Daslight Transform=1 after rendering the source strip.
+        #[serde(default, skip_serializing_if = "is_false")]
+        vertical_symmetry: bool,
         color_width: f32,
         gradient: f32,
     },
@@ -5162,6 +5172,41 @@ mod tests {
             fading: true,
             go_outside: false,
             gradient: 50.0,
+        };
+        let json = serde_json::to_string(&exact).unwrap();
+        assert!(json.contains(r#""daslight_exact":true"#));
+        assert!(json.contains(r#""grayscale":true"#));
+        assert!(json.contains(r#""vertical_symmetry":true"#));
+        assert_eq!(
+            serde_json::from_str::<super::ColorEffectSpatialRecipe>(&json).unwrap(),
+            exact
+        );
+    }
+
+    #[test]
+    fn daslight_exact_burst_flags_roundtrip_without_changing_legacy_byte_shape() {
+        let legacy_json = r#"{"Burst":{"color_width":50.0,"gradient":100.0}}"#;
+        let legacy: super::ColorEffectSpatialRecipe = serde_json::from_str(legacy_json).unwrap();
+        let super::ColorEffectSpatialRecipe::Burst {
+            daslight_exact,
+            grayscale,
+            vertical_symmetry,
+            ..
+        } = &legacy
+        else {
+            unreachable!()
+        };
+        assert!(!daslight_exact);
+        assert!(!grayscale);
+        assert!(!vertical_symmetry);
+        assert_eq!(serde_json::to_string(&legacy).unwrap(), legacy_json);
+
+        let exact = super::ColorEffectSpatialRecipe::Burst {
+            daslight_exact: true,
+            grayscale: true,
+            vertical_symmetry: true,
+            color_width: 50.0,
+            gradient: 1.0,
         };
         let json = serde_json::to_string(&exact).unwrap();
         assert!(json.contains(r#""daslight_exact":true"#));

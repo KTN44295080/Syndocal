@@ -380,7 +380,17 @@ const valueRecipeLine = (kind) => spatialRecipeSource
 assert.match(valueRecipeLine("KnightRider"), /daslight_exact\?: boolean/);
 assert.match(valueRecipeLine("KnightRider"), /grayscale\?: boolean/);
 assert.match(valueRecipeLine("KnightRider"), /vertical_symmetry\?: boolean/);
-for (const blockedExactKind of ["Burst", "Sparkle", "RandomFill", "Perlin"]) {
+assert.match(valueRecipeLine("Burst"), /daslight_exact\?: boolean/);
+assert.match(valueRecipeLine("Burst"), /grayscale\?: boolean/);
+assert.match(valueRecipeLine("Burst"), /vertical_symmetry\?: boolean/);
+assert.ok(
+  valueEffectEditorSource.includes('recipe.Burst.daslight_exact === true')
+    && valueEffectEditorSource.includes('<option value="enhanced">Enhanced</option>')
+    && valueEffectEditorSource.includes('<option value="daslight">Daslight exact</option>')
+    && valueEffectEditorSource.includes('"Period ms · 40 ms compatibility"'),
+  "Burst must expose an explicit imported-exact to Enhanced compatibility boundary",
+);
+for (const blockedExactKind of ["Sparkle", "RandomFill", "Perlin"]) {
   assert.doesNotMatch(
     valueRecipeLine(blockedExactKind),
     /daslight_exact|vertical_symmetry/,

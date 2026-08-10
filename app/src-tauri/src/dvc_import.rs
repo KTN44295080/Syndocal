@@ -2690,14 +2690,19 @@ fn convert_dvc_value_effect(
                 gradient: dvc_unit_param(&params, 12, "VALUE FX Gradient")? * 100.0,
             }
         }
-        622 => {
-            let _vertical_symmetry = dvc_binary_param(&params, 3, "VALUE FX Burst Transform")?;
-            let _color_width =
-                dvc_integer_range_param(&params, 10, "VALUE FX Burst Color Width", 10, 900)?;
-            let _gradient =
-                dvc_finite_range_param(&params, 11, "VALUE FX Burst Gradient", 0.0, 1.0)?;
-            return Err("VALUE FX Burst ID=622 remains fail-closed: Daslight's palette-wrap byte at object +0x12c changes cache topology but is neither initialized by the Burst/base constructor chain nor serialized in .dvc; choosing wrap=false would not be Daslight-exact".to_string());
-        }
+        622 => ColorEffectSpatialRecipe::Burst {
+            daslight_exact: true,
+            grayscale: false,
+            vertical_symmetry: dvc_binary_param(&params, 3, "VALUE FX Burst Transform")?,
+            color_width: dvc_integer_range_param(
+                &params,
+                10,
+                "VALUE FX Burst Color Width",
+                10,
+                900,
+            )?,
+            gradient: dvc_finite_range_param(&params, 11, "VALUE FX Burst Gradient", 0.0, 1.0)?,
+        },
         623 => ColorEffectSpatialRecipe::Plasma {
             grayscale: false,
             vertical_symmetry: dvc_binary_param(&params, 3, "VALUE FX Plasma Transform")?,
@@ -2765,7 +2770,7 @@ fn convert_dvc_value_effect(
             let _speed = dvc_integer_range_param(&params, 13, "VALUE FX Perlin Speed", 1, 10)?;
             let _amplitude =
                 dvc_integer_range_param(&params, 14, "VALUE FX Perlin Amplitude", 5, 100)?;
-            return Err("VALUE FX Perlin ID=628 remains fail-closed: Daslight's palette-wrap byte at object +0x12c changes cache topology but is neither initialized by the Perlin/base constructor chain nor serialized in .dvc; choosing wrap=false would not be Daslight-exact".to_string());
+            return Err("VALUE FX Perlin ID=628 remains fail-closed after proving palette_wrap=true in the shared constructor: recovered CPerlinEffect evaluator 0x140365090 and its 16-bit cyclic palette sampling are not represented by Syndocal's generic stage-space fractal-noise evaluator; no frame-equivalent runtime target was created".to_string());
         }
         _ => unreachable!(),
     };
@@ -2851,7 +2856,7 @@ fn convert_dvc_value_effect(
             feature_spec.preset_type
         ));
     }
-    let (period_ms, period_note) = if generator_id == 624 {
+    let (period_ms, period_note) = if matches!(generator_id, 622 | 624) {
         dvc_exact_generator_period(effect, "VALUE FX", generator)?
     } else {
         dvc_move_period(
@@ -2879,6 +2884,11 @@ fn convert_dvc_value_effect(
     let primary_attribute = primary.attribute.clone();
     let primary_low = primary.low;
     let primary_high = primary.high;
+    let evaluator_note = match generator_id {
+        622 => "evaluator=CBurstEffect@0x140362B70; palette_wrap=true@shared-constructor+0x12c",
+        624 => "evaluator=CKnightRiderEffect exact generated-frame table",
+        _ => "evaluator=verified generator route",
+    };
     let request = ValueEffectRequest {
         label: format!("{scene_name} ({generator})"),
         fixture_ids,
@@ -2914,7 +2924,7 @@ fn convert_dvc_value_effect(
         }),
         generator,
         note: format!(
-            "source_family=Value FX; value_palette={}; preset_type={}; preset_range={}..{}; preset_source={}; beams={}; selections={}; {period_note}; {clock_note}",
+            "source_family=Value FX; value_palette={}; preset_type={}; preset_range={}..{}; preset_source={}; beams={}; selections={}; {period_note}; {clock_note}; {evaluator_note}",
             palette.len(),
             feature_spec.preset_type,
             feature_spec.low,
@@ -3053,11 +3063,13 @@ fn convert_dvc_color_spatial_effect(
         121 => {
             require_exact_dvc_params(&params, &[2, 3, 10, 11])?;
             require_exact_dvc_param_types(effect, &[(1, 4), (2, 2), (3, 6), (10, 0), (11, 1)])?;
-            dvc_binary_param(&params, 2, "COLOR FX Burst Grayscale")?;
-            dvc_binary_param(&params, 3, "COLOR FX Burst Transform")?;
-            dvc_integer_range_param(&params, 10, "COLOR FX Burst Width", 10, 900)?;
-            dvc_unit_param(&params, 11, "COLOR FX Burst Gradient")?;
-            return Err("COLOR FX Burst ID=121 remains fail-closed after exact schema validation: recovered CBurstEffect evaluator 0x140362B70 is not represented by Syndocal's generic radial Burst evaluator, and family-2 palette-cache/wrap topology has not been proven from constructor or serialized state; no equivalent runtime target was created".to_string());
+            ColorEffectSpatialRecipe::Burst {
+                daslight_exact: true,
+                grayscale: dvc_binary_param(&params, 2, "COLOR FX Burst Grayscale")?,
+                vertical_symmetry: dvc_binary_param(&params, 3, "COLOR FX Burst Transform")?,
+                color_width: dvc_integer_range_param(&params, 10, "COLOR FX Burst Width", 10, 900)?,
+                gradient: dvc_unit_param(&params, 11, "COLOR FX Burst Gradient")?,
+            }
         }
         131 => {
             require_exact_dvc_params(&params, &[2, 3, 10])?;
@@ -3206,7 +3218,7 @@ fn convert_dvc_color_spatial_effect(
             dvc_integer_range_param(&params, 13, "MAPPINGS Perlin Speed", 1, 10)?;
             dvc_integer_range_param(&params, 14, "MAPPINGS Perlin Amplitude", 5, 100)?;
             dvc_mapping_rectangle(rack, "MAPPINGS Perlin ID=530", true)?;
-            return Err("MAPPINGS Perlin ID=530 remains fail-closed after exact schema and Rectangle validation: recovered CPerlinEffect evaluator 0x140365090 evaluates the authored Rectangle, while Syndocal's generic stage-space fractal noise discards that placement, and the Daslight palette-wrap state is not yet represented; no equivalent runtime target was created".to_string());
+            return Err("MAPPINGS Perlin ID=530 remains fail-closed after exact schema, Rectangle validation, and proving palette_wrap=true in the shared constructor: recovered CPerlinEffect evaluator 0x140365090 evaluates the authored Rectangle, while Syndocal's generic stage-space fractal noise discards that placement and is not frame-equivalent; no runtime target was created".to_string());
         }
         _ => unreachable!(),
     };
@@ -3268,7 +3280,7 @@ fn convert_dvc_color_spatial_effect(
             "{omitted_spatial_targets} beam target(s) without a verified color segment or Dimmer attribute were omitted"
         ));
     }
-    let (period_ms, period_note) = if generator_id == 127 {
+    let (period_ms, period_note) = if matches!(generator_id, 121 | 127) {
         dvc_exact_generator_period(effect, "COLOR FX", generator)?
     } else {
         dvc_move_period(effect, scene, generator, &mut approximations)?
@@ -3295,9 +3307,14 @@ fn convert_dvc_color_spatial_effect(
             format!("DirectionChange={}", u8::from(*direction_change))
         }
         ColorEffectSpatialRecipe::Burst {
+            daslight_exact,
             color_width,
             gradient,
-        } => format!("ColorWidth={color_width}; Gradient={gradient}"),
+            ..
+        } => format!(
+            "ColorWidth={color_width}; Gradient={gradient}; DaslightExact={}; evaluator=CBurstEffect@0x140362B70; palette_wrap=true@shared-constructor+0x12c",
+            u8::from(*daslight_exact)
+        ),
         ColorEffectSpatialRecipe::RandomFill { point_width } => {
             format!("PointWidth={point_width}")
         }
@@ -6843,7 +6860,7 @@ mod tests {
     }
 
     #[test]
-    fn dvc3b_exact_spatial_routes_convert_and_non_equivalent_evaluators_fail_closed() {
+    fn dvc3b_exact_spatial_routes_convert_and_only_unrecovered_evaluators_fail_closed() {
         let xml = synthetic_dvc3b().replacen(
             r#"SSLPRESETDMXDEFAULT="0" SSLPRESETDEFAULTPRESET="1""#,
             r#"SSLPRESETDMXDEFAULT="255" SSLPRESETDEFAULTPRESET="1""#,
@@ -6854,8 +6871,8 @@ mod tests {
             outcome.project.custom_profiles[0].dmx_modes[0].controls[0].default_value,
             0
         );
-        assert_eq!(outcome.report.summary.effects_converted, 2);
-        assert_eq!(outcome.report.summary.effects_skipped, 4);
+        assert_eq!(outcome.report.summary.effects_converted, 3);
+        assert_eq!(outcome.report.summary.effects_skipped, 3);
         assert!(outcome
             .report
             .converted
@@ -6883,7 +6900,7 @@ mod tests {
                 .iter()
                 .filter(|detail| detail.message.contains("source_family=Colour FX;"))
                 .count(),
-            1
+            2
         );
 
         let requests = outcome
@@ -6897,7 +6914,7 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(requests.len(), 2);
+        assert_eq!(requests.len(), 3);
         assert!(requests.iter().all(|request| request.stops.len() == 3));
         assert!(requests.iter().all(|request| {
             request.spatial_pattern.as_ref().is_some_and(|pattern| {
@@ -6920,6 +6937,19 @@ mod tests {
                 vertical_symmetry: true,
                 size: 2,
                 ..
+            })
+        )));
+        assert!(requests.iter().any(|request| matches!(
+            request
+                .spatial_pattern
+                .as_ref()
+                .map(|pattern| &pattern.recipe),
+            Some(ColorEffectSpatialRecipe::Burst {
+                daslight_exact: true,
+                grayscale: false,
+                vertical_symmetry: false,
+                color_width: 50.0,
+                gradient: 1.0,
             })
         )));
         let knight = requests
@@ -7001,7 +7031,6 @@ mod tests {
             "521 must preserve the raw Rectangle and authored per-beam Patch coordinates"
         );
         for (generator, reason) in [
-            ("Burst", "CBurstEffect evaluator 0x140362B70"),
             ("Random fill", "Qt per-thread qrand state"),
             ("Sparkle", "prior percent-scaled lifespan route"),
             ("Perlin", "evaluates the authored Rectangle"),
@@ -7020,8 +7049,8 @@ mod tests {
             1,
         );
         let outcome = import_bytes(xml.as_bytes(), "synthetic-dvc3b-missing-palette.dvc").unwrap();
-        assert_eq!(outcome.report.summary.effects_converted, 1);
-        assert_eq!(outcome.report.summary.effects_skipped, 5);
+        assert_eq!(outcome.report.summary.effects_converted, 2);
+        assert_eq!(outcome.report.summary.effects_skipped, 4);
         assert!(outcome.report.skipped.details.iter().any(|detail| detail
             .message
             .contains("palette PARAM TYPE=4 ID=1 is missing COLORS")));
@@ -8439,19 +8468,64 @@ mod tests {
     }
 
     #[test]
-    fn dvc_value_unrecoverable_generators_fail_closed_after_exact_schema_validation() {
-        let cases = [
-            (
-                622,
-                "Burst",
-                4,
-                r#"<PARAM TYPE="0" ID="10" VAL="50"/><PARAM TYPE="1" ID="11" VAL="1"/>"#,
-                "VALUE FX Burst ID=622 remains fail-closed",
-                "neither initialized by the Burst/base constructor chain",
+    fn dvc_value_burst_imports_exact_recipe_and_rejects_schema_drift() {
+        let class_params = r#"<PARAM TYPE="0" ID="10" VAL="50"/><PARAM TYPE="1" ID="11" VAL="1"/>"#;
+        for transform in [0, 1] {
+            let source = value_fx_test_source(622, transform, 4, class_params, true);
+            let converted = convert_value_fx_test_source(&source, 622).unwrap();
+            assert!(converted.approximations.is_empty());
+            assert!(converted.note.contains(
+                "frame_count=max(1,floor(EFFECT DURATION / 40))=75; period_ms=frame_count*40=3000"
+            ));
+            let EffectParamsSnapshot::Value(value) = converted.target.unwrap().params.unwrap()
+            else {
+                panic!("VALUE Burst must retain its Value body");
+            };
+            assert_eq!(value.period_ms, 3_000);
+            assert!(matches!(
+                value.spatial_pattern.unwrap().recipe,
+                ColorEffectSpatialRecipe::Burst {
+                    daslight_exact: true,
+                    grayscale: false,
+                    vertical_symmetry,
+                    color_width: 50.0,
+                    gradient: 1.0,
+                } if vertical_symmetry == (transform == 1)
+            ));
+        }
+
+        let invalid_transform = value_fx_test_source(622, 2, 4, class_params, true);
+        assert!(convert_value_fx_test_source(&invalid_transform, 622)
+            .unwrap_err()
+            .contains("VALUE FX Burst Transform PARAM 3 must be 0 or 1, found 2"));
+        let source = value_fx_test_source(622, 0, 4, class_params, true);
+        assert!(convert_value_fx_test_source(
+            &source.replacen(
+                r#"<PARAM TYPE="0" ID="10" VAL="50"/>"#,
+                r#"<PARAM TYPE="1" ID="10" VAL="50"/>"#,
+                1,
+            ),
+            622,
+        )
+        .unwrap_err()
+        .contains("expected PARAM 10 TYPE=0, found TYPE=1"));
+        assert!(convert_value_fx_test_source(
+            &source.replacen(
                 r#"<PARAM TYPE="0" ID="10" VAL="50"/>"#,
                 r#"<PARAM TYPE="0" ID="10" VAL="901"/>"#,
-                "VALUE FX Burst Color Width PARAM 10 must be an integer within 10..900, found 901",
+                1,
             ),
+            622,
+        )
+        .unwrap_err()
+        .contains(
+            "VALUE FX Burst Color Width PARAM 10 must be an integer within 10..900, found 901"
+        ));
+    }
+
+    #[test]
+    fn dvc_value_unrecoverable_generators_fail_closed_after_exact_schema_validation() {
+        let cases = [
             (
                 626,
                 "Sparkles",
@@ -8480,7 +8554,7 @@ mod tests {
                 7,
                 r#"<PARAM TYPE="0" ID="10" VAL="4"/><PARAM TYPE="0" ID="11" VAL="75"/><PARAM TYPE="0" ID="12" VAL="2"/><PARAM TYPE="0" ID="13" VAL="1"/><PARAM TYPE="0" ID="14" VAL="70"/>"#,
                 "VALUE FX Perlin ID=628 remains fail-closed",
-                "neither initialized by the Perlin/base constructor chain",
+                "generic stage-space fractal-noise evaluator",
                 r#"<PARAM TYPE="0" ID="14" VAL="70"/>"#,
                 r#"<PARAM TYPE="0" ID="14" VAL="101"/>"#,
                 "VALUE FX Perlin Amplitude PARAM 14 must be an integer within 5..100, found 101",
@@ -8510,7 +8584,9 @@ mod tests {
                 let error = convert_value_fx_test_source(&source, generator_id).unwrap_err();
                 assert!(error.contains(semantic_error));
                 assert!(error.contains(semantic_detail));
-                assert!(error.contains("serialized in .dvc"));
+                if generator_id != 628 {
+                    assert!(error.contains("serialized in .dvc"));
+                }
             }
 
             let invalid_transform =
@@ -9639,15 +9715,14 @@ mod tests {
         }
         let outcome = import_path(path).unwrap();
         crate::validate_project_file(&outcome.project).unwrap();
-        assert_eq!(outcome.report.summary.effects_converted, 27);
-        assert_eq!(outcome.report.summary.effects_skipped, 3);
+        assert_eq!(outcome.report.summary.effects_converted, 28);
+        assert_eq!(outcome.report.summary.effects_skipped, 2);
         assert_eq!(
-            outcome.report.skipped.count, 3,
-            "full Shinkan must fail closed only for the three proven non-equivalent COLOR evaluators: {:#?}",
+            outcome.report.skipped.count, 2,
+            "full Shinkan must fail closed only for the two random-state COLOR evaluators: {:#?}",
             outcome.report.skipped
         );
         for reason in [
-            "CBurstEffect evaluator 0x140362B70",
             "Qt per-thread qrand state",
             "prior percent-scaled lifespan route",
         ] {
@@ -9747,7 +9822,7 @@ mod tests {
                     counts
                 });
         assert_eq!(spatial_counts.get(&127), Some(&5));
-        assert_eq!(spatial_counts.get(&121), None);
+        assert_eq!(spatial_counts.get(&121), Some(&1));
         assert_eq!(spatial_counts.get(&131), None);
         assert_eq!(spatial_counts.get(&133), None);
         assert_eq!(spatial_counts.get(&129), Some(&2));
@@ -10156,9 +10231,19 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert!(!recipes
-            .iter()
-            .any(|recipe| matches!(recipe, ColorEffectSpatialRecipe::Burst { .. })));
+        assert_eq!(
+            recipes
+                .iter()
+                .filter(|recipe| matches!(
+                    recipe,
+                    ColorEffectSpatialRecipe::Burst {
+                        daslight_exact: true,
+                        ..
+                    }
+                ))
+                .count(),
+            3
+        );
         assert_eq!(
             recipes
                 .iter()
@@ -10169,19 +10254,7 @@ mod tests {
         assert!(!recipes
             .iter()
             .any(|recipe| matches!(recipe, ColorEffectSpatialRecipe::Perlin { .. })));
-        assert_eq!(outcome.report.summary.effects_skipped, 4);
-        assert_eq!(
-            outcome
-                .report
-                .skipped
-                .details
-                .iter()
-                .filter(|detail| detail
-                    .message
-                    .contains("CBurstEffect evaluator 0x140362B70"))
-                .count(),
-            3
-        );
+        assert_eq!(outcome.report.summary.effects_skipped, 1);
         assert!(outcome.report.skipped.details.iter().any(|detail| {
             detail
                 .message

@@ -218,6 +218,9 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
     return typeof value === "number" && Number.isFinite(value) ? value : fallback;
   };
   const spatialBoolean = (key: string) => spatialValues()[key] === true;
+  const daslightExactBurst = createMemo(() =>
+    spatialKind() === "Burst" && spatialBoolean("daslight_exact"),
+  );
   const spatialTransform = () => spatialBoolean("vertical_symmetry")
     ? "vertical"
     : spatialBoolean("horizontal_symmetry")
@@ -254,6 +257,27 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
       ...pattern,
       recipe: { [kind]: { ...spatialValues(), ...patch } } as ColorEffectSpatialRecipe,
     });
+  };
+  const setBurstEvaluator = (daslightExact: boolean) => {
+    if (spatialKind() !== "Burst") return;
+    const currentWidth = spatialNumber("color_width", 50);
+    const currentGradient = spatialNumber("gradient", daslightExactBurst() ? 1 : 100);
+    patchSpatialValues(daslightExact
+      ? {
+          daslight_exact: true,
+          color_width: clamp(Math.round(currentWidth), 10, 900),
+          gradient: clamp(currentGradient > 1 ? currentGradient / 100 : currentGradient, 0, 1),
+        }
+      : {
+          daslight_exact: false,
+          grayscale: false,
+          vertical_symmetry: false,
+          color_width: clamp(currentWidth, 0, 100),
+          gradient: clamp(currentGradient <= 1 ? currentGradient * 100 : currentGradient, 0, 100),
+        });
+    if (daslightExact) {
+      props.onPeriodMs(Math.max(40, Math.floor(Math.max(40, props.periodMs) / 40) * 40));
+    }
   };
 
   const stopError = createMemo(() => {
@@ -540,8 +564,13 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
         </Show>
         <Show when={spatialKind() === "Burst"}>
           <div class="colorEffectModeGrid">
-            <label>Color width %<input type="number" min="0" max="100" step="1" value={spatialNumber("color_width", 50)} onInput={(event) => patchSpatialValues({ color_width: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
-            <label>Gradient %<input type="number" min="0" max="100" step="1" value={spatialNumber("gradient", 100)} onInput={(event) => patchSpatialValues({ gradient: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
+            <label>Evaluator<select value={daslightExactBurst() ? "daslight" : "enhanced"} onInput={(event) => setBurstEvaluator(event.currentTarget.value === "daslight")}><option value="enhanced">Enhanced</option><option value="daslight">Daslight exact</option></select></label>
+            <Show when={daslightExactBurst()}>
+              <label><input type="checkbox" checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
+              <label>Transform<select value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
+            </Show>
+            <label>{daslightExactBurst() ? "Color width px" : "Color width %"}<input type="number" min={daslightExactBurst() ? "10" : "0"} max={daslightExactBurst() ? "900" : "100"} step="1" value={spatialNumber("color_width", 50)} onInput={(event) => patchSpatialValues({ color_width: daslightExactBurst() ? clamp(Math.round(Number(event.currentTarget.value) || 10), 10, 900) : clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
+            <label>{daslightExactBurst() ? "Gradient 0..1" : "Gradient %"}<input type="number" min="0" max={daslightExactBurst() ? "1" : "100"} step={daslightExactBurst() ? "0.01" : "1"} value={spatialNumber("gradient", daslightExactBurst() ? 1 : 100)} onInput={(event) => patchSpatialValues({ gradient: clamp(Number(event.currentTarget.value), 0, daslightExactBurst() ? 1 : 100) })} /></label>
           </div>
         </Show>
         <Show when={spatialKind() === "RandomFill"}>
@@ -628,14 +657,17 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
           <span class="tabularNums">{clockSummary()}</span>
         </div>
         <label class="colorEffectPeriodInput">
-          Period ms
+          {daslightExactBurst() ? "Period ms · 40 ms compatibility" : "Period ms"}
           <input
             class="tabularNums"
             type="number"
-            min="10"
-            step="10"
+            min={daslightExactBurst() ? "40" : "10"}
+            step={daslightExactBurst() ? "40" : "10"}
             value={props.periodMs}
-            onInput={(event) => props.onPeriodMs(Math.max(10, Math.round(Number(event.currentTarget.value) || 10)))}
+            onInput={(event) => {
+              const value = Math.round(Number(event.currentTarget.value) || (daslightExactBurst() ? 40 : 10));
+              props.onPeriodMs(daslightExactBurst() ? Math.max(40, Math.floor(value / 40) * 40) : Math.max(10, value));
+            }}
           />
         </label>
         <div class="colorEffectClockPresets" aria-label="Color effect clock sync presets">

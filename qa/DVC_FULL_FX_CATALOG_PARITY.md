@@ -66,10 +66,11 @@ GUI順とfactory集合は完全一致する。
 
 全propertyのTYPE/ID/default/domain、factory/constructor/vtable、評価式、fail-closed境界は
 `qa/DVC_VALUE_CATALOG_PARITY.md`を正本とする。DVC-V6で624、DVC-C0bで同じ回収済み評価器を
-共有するCOLOR 127をexact実装済み。
-622/628はconstructor chainで初期化されず`.dvc`にも保存されないpalette-wrap object state、
-626/627は`.dvc`に存在しないQt/CRT per-thread RNG stateとprior draw historyが不足するため、
-推測seed/stateを作らずprecise fail-closedを維持する。
+共有するCOLOR 127、DVC-BURST-EXACTで622と共有するCOLOR 121をexact実装済み。
+共有constructor `0x140350BE0` の `0x14035155A` がpalette-wrap `+0x12c=true`を無条件に
+初期化することを再証明し、旧「未初期化」判定を撤回した。628はwrapではなく未実装の固有Perlin
+evaluator差、626/627は`.dvc`に存在しないQt/CRT per-thread RNG stateとprior draw historyが
+現時点の境界である。
 
 ## COLOR FX — family/type 2
 
@@ -277,23 +278,24 @@ Explosion / Starfield / Graph / Lines / Grid。21項目を最下端Gridまで観
 
 ## 現行Syndocal importerとの逆照合
 
-68 IDのうちDVC-MOVE-EXACT後は20 IDがruntime targetを作れるconverter route、VALUE
-622/626/627/628とCOLOR 121/131/133、MAPPINGS 530の8 IDがclass固有理由でprecise
-fail-closed、残る40 IDは未routeでgeneric `Skipped`になる。20 routeはfull-domain完成数ではなく、
+68 IDのうちDVC-BURST-EXACT後は22 IDがruntime targetを作れるconverter route、VALUE
+626/627/628とCOLOR 131/133、MAPPINGS 530の6 IDがclass固有理由でprecise
+fail-closed、残る40 IDは未routeでgeneric `Skipped`になる。22 routeはfull-domain完成数ではなく、
 strict/exactを別に監査した。
 
 | route群 | 現在の境界 |
 |---|---|
-| VALUE 621/623/624/625 | strict。625は`Transform=0`のみ。対象ゼロのno-opもschema検証後に成立 |
+| VALUE 621/622/623/624/625 | strict。622はcyclic palette/radial/40ms evaluator。625は`Transform=0`のみ。対象ゼロのno-opもschema検証後に成立 |
 | COLOR MAPPINGS 36 | strict。外部`SELECTIONS`参照はprecise fail-closed |
 | MOVE 221–225 | strict。5 distinct evaluator、40 ms frame、全Phasing/Symmetry domain、ordered beam targetを保持 |
 | COLOR 129/130 | strict schemaと証明済みevaluator式を実装 |
 | COLOR 127 | strict schema、40ms量子化、合成後qGray、Transform foldを共有exact evaluatorで実装 |
-| COLOR 121/131/133 | strict schema後、generic evaluator非等価または非serialize qrand state/historyでprecise fail-closed |
+| COLOR 121 | strict schema、cyclic palette、raw pixel radius、40ms、qGray、Transform foldを共有exact Burst evaluatorで実装 |
+| COLOR 131/133 | strict schema後、非serialize qrand state/historyでprecise fail-closed |
 | CHASER 321/322/325 | 322はstrict。321/325はdistinct evaluator/random順差を常時Approximate |
 | CURVE 3/7/10 | strict factory schemaと証明済み40 ms式を実装 |
 | MAPPINGS 521 | strict schema、unit→percent、Rectangle placementを実装 |
-| MAPPINGS 530 | strict schemaとRectangle検証後、generic noise/placement/palette-wrap非等価でprecise fail-closed |
+| MAPPINGS 530 | wrap=trueは証明済み。strict schemaとRectangle検証後、固有Perlin noise/placement未実装でprecise fail-closed |
 
 この監査により、DVC-ENUM直後の条件付きstrict-coreは6 ID、要correctness routeは16 IDだった。
 未route追加より先に後者をstrict化し、再現不能な近似はprecise fail-closedへ戻す。
@@ -360,6 +362,20 @@ strict/exactを別に監査した。
 - `.dvc`互換の40 ms/quirkは専用modeに隔離する。新規authoringのSyndocal Enhanced
   `Line / Smooth / Circle`は連続時間のまま維持し、import後にユーザーが明示切替できる。
 
+### DVC-BURST-EXACT（2026-08-10）
+
+- 共有constructor `0x140350BE0`末尾の`0x14035155A`は`+0x12c=true`を無条件writeする。
+  C0b/V6時点の「uninitialized palette-wrap」は誤りであり、COLOR 121 / VALUE 622のblockerではない。
+- `CBurstEffect / 0x140362B70`をcyclic 16-bit palette cache、raw pixel radius、
+  `QImage::Format_RGBA64`、Qt 1024-entry gradient table、`t-1e-5` seam、40 ms scheduler、
+  qGray、Transform foldまで専用modeで実装した。44Hz側は完成frame tableの2色参照だけを行い、
+  同一immutable tableを共有する。200灯体×64 exact Burstのrelease計測は
+  p95 1.967 ms / p99 3.829 ms / max 4.467 msで5/8/12 ms gateを通過した。
+- runtime-convertは20→22、precise fail-closedは8→6、条件付きexact-coreは18→20。
+  明示compatibilityはCHASER 321/325の2 routeのまま、未routeは40のままである。
+- 新規authoringはEnhancedを既定とし、import bodyだけDaslight exactを保持する。editorの明示切替で
+  Enhancedへ移行できる。
+
 ## 未実装・未証明境界
 
 カタログ列挙は完了したが、次は別軸で残る。
@@ -370,8 +386,8 @@ strict/exactを別に監査した。
 3. Spiral/Butterfly/MediaとCOLOR MAPPINGS専用13 classはschema/evaluator入口までで、
    raster algorithm bodyの意味論が未復元。
 4. `TYPE7 Shape`のserialized glyph表現と`TYPE10 Text Direction`の合法enum域は未証明。
-5. Sparkle/Random fillは外部per-thread qrand履歴、VALUE Burst/Perlinは非serialize stateのため、
-   evaluator addressとschemaだけではreplay exactnessにならない。
+5. Sparkle/Random fillは外部per-thread qrand履歴のため、evaluator addressとschemaだけでは
+   replay exactnessにならない。Perlinはwrap=trueまで証明済みだが固有hash/cosine/sine evaluatorが未実装。
 6. factoryにないID空隙が予約か廃止かは製品履歴の問題で、現バイナリからは断言しない。
 
 この境界より内側だけを次トランシェへ渡し、UI名の類似やSyndocal既存recipeへの近似で埋めない。
