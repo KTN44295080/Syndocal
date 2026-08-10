@@ -14,6 +14,11 @@
   実装欠陥ではない。軽微な欠陥はimport時から修正する。見た目への寄与が大きい欠陥だけ回収済み
   挙動を明示的なLegacy quirks optionとして残し、既定はCorrectedとする。既存routeを含む判定表と
   受入規律は`qa/DVC_CORRECTED_COMPATIBILITY_POLICY.md`を正本とする。
+- evaluator統一（2026-08-11）: Burst / Sweep / Knight Rider / Perlin / Sparkle / Random Fillの
+  Enhanced・corrected二重routeは廃止した。現行はcorrected analytic実装だけを使用し、recipeは
+  Syndocal-nativeの正規化domainで保存する。DVC domain変換はimport時、旧`.sdc`のroute flag変換は
+  v1 load migration時に一度だけ行う。以下の「別mode」「切替」「legacy evaluator」記述は各完了時点の
+  履歴であり、現行製品契約ではない。
 
 ## カタログ確定と現行importer coverage（DVC-ENUM完了、2026-08-10）
 

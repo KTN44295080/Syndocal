@@ -7,18 +7,7 @@ import type {
   ValueEffectMode,
   ValueEffectPoint,
 } from "../types";
-import {
-  correctedSparkleLifetimeMsFromLegacyPercent,
-  materializedRandomEffectSeed,
-} from "../randomEffectCompatibility";
-import {
-  burstEvaluatorPatch,
-  defaultSpatialRecipe,
-  matchesRandomSpatialKind,
-  perlinEvaluatorPatch,
-  sweepEvaluatorPatch,
-  type SpatialRecipeReadout,
-} from "../spatialRecipeCompatibility";
+import { defaultSpatialRecipe } from "../spatialRecipeCompatibility";
 
 export const valueEffectMaximumPoints = 32;
 
@@ -94,7 +83,7 @@ interface ValueQuickLook {
 const valueQuickLooks: ValueQuickLook[] = [
   {
     label: "Sweep Bounce",
-    recipe: { Sweep: { daslight_exact: false, grayscale: false, vertical_symmetry: false, direction_change: true } },
+    recipe: { Sweep: { grayscale: false, vertical_symmetry: false, direction_change: true } },
     points: quickLookGrayscalePoints,
     beats: 2,
   },
@@ -127,7 +116,7 @@ const valueQuickLooks: ValueQuickLook[] = [
   },
   {
     label: "Sparkle Rain",
-    recipe: { Sparkle: { syndocal_corrected: true, grayscale: false, vertical_symmetry: false, rng_seed: 1, number: 6, lifespan: 0, lifetime_ms: 400, source_lifespan: null, width: 1 } },
+    recipe: { Sparkle: { grayscale: false, vertical_symmetry: false, rng_seed: 1, number: 6, lifetime_ms: 400, source_lifespan: null, width: 10 } },
     points: quickLookRampPoints,
     beats: 1,
   },
@@ -139,7 +128,7 @@ const valueQuickLooks: ValueQuickLook[] = [
   },
   {
     label: "Random Fill Steps",
-    recipe: { RandomFill: { syndocal_corrected: true, grayscale: false, vertical_symmetry: false, rng_seed: 1, point_width: 2, source_point_height: null } },
+    recipe: { RandomFill: { grayscale: false, vertical_symmetry: false, rng_seed: 1, point_width: 20, source_point_height: null } },
     points: quickLookRampPoints,
     beats: 2,
   },
@@ -251,39 +240,11 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
     if (!recipe) return {};
     return Object.values(recipe)[0] as Record<string, number | boolean>;
   });
-  const daslightExactKnight = createMemo(() => {
-    const recipe = props.spatialPattern?.recipe;
-    return Boolean(
-      recipe
-      && "KnightRider" in recipe
-      && recipe.KnightRider.daslight_exact === true,
-    );
-  });
-  const daslightExactBurst = createMemo(() => {
-    const recipe = props.spatialPattern?.recipe;
-    return Boolean(
-      recipe
-      && "Burst" in recipe
-      && recipe.Burst.daslight_exact === true,
-    );
-  });
-  const daslightExactSweep = createMemo(() => {
-    const recipe = props.spatialPattern?.recipe;
-    return Boolean(recipe && "Sweep" in recipe && recipe.Sweep.daslight_exact === true);
-  });
-  const daslightExactPerlin = createMemo(() => {
-    const recipe = props.spatialPattern?.recipe;
-    return Boolean(recipe && "Perlin" in recipe && recipe.Perlin.daslight_exact === true);
-  });
   const generatorNumber = (key: string, fallback = 0) => {
     const value = generatorValues()[key];
     return typeof value === "number" && Number.isFinite(value) ? value : fallback;
   };
   const generatorBoolean = (key: string) => generatorValues()[key] === true;
-  const generatorReadout = (): SpatialRecipeReadout => ({ number: generatorNumber, boolean: generatorBoolean });
-  const perlinHasMappingPlacement = createMemo(() =>
-    generatorKind() === "Perlin" && props.spatialPattern?.placement !== undefined,
-  );
   const generatorTransform = () => generatorBoolean("vertical_symmetry") ? "vertical" : "none";
   const selectGeneratorKind = (kind: ValueGeneratorKind) => {
     if (kind === "CustomEnvelope") {
@@ -292,6 +253,7 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
     }
     props.onSpatialPattern({
       recipe: defaultSpatialRecipe(kind),
+      parameter_model_version: 1,
       beam_targets: props.spatialPattern?.beam_targets ?? [],
     });
   };
@@ -304,35 +266,11 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
       recipe: { [kind]: { ...generatorValues(), ...patch } } as ColorEffectSpatialRecipe,
     });
   };
-  const setRandomEvaluator = (corrected: boolean) => {
-    if (!matchesRandomSpatialKind(generatorKind())) return;
-    const rngSeed = materializedRandomEffectSeed(generatorValues().rng_seed);
-    if (corrected && generatorKind() === "Sparkle") {
-      patchGeneratorValues({
-        syndocal_corrected: true,
-        rng_seed: rngSeed,
-        lifetime_ms: correctedSparkleLifetimeMsFromLegacyPercent(props.periodMs, generatorValues().lifespan),
-      });
-      return;
-    }
-    patchGeneratorValues({ syndocal_corrected: corrected, rng_seed: rngSeed });
-  };
-  const setBurstEvaluator = (daslightExact: boolean) => {
-    if (generatorKind() !== "Burst") return;
-    patchGeneratorValues(burstEvaluatorPatch(daslightExact, generatorReadout()));
-  };
-  const setSweepEvaluator = (daslightExact: boolean) => {
-    if (generatorKind() !== "Sweep") return;
-    patchGeneratorValues(sweepEvaluatorPatch(daslightExact));
-  };
-  const setPerlinEvaluator = (daslightExact: boolean) => {
-    if (generatorKind() !== "Perlin") return;
-    patchGeneratorValues(perlinEvaluatorPatch(daslightExact, generatorReadout(), perlinHasMappingPlacement()));
-  };
   const applyQuickLook = (look: ValueQuickLook) => {
     props.onPoints(look.points.map((point) => ({ ...point })));
     props.onSpatialPattern({
       recipe: structuredClone(look.recipe),
+      parameter_model_version: 1,
       beam_targets: props.spatialPattern?.beam_targets ?? [],
     });
     props.onClockSyncBeats(look.beats);
@@ -513,22 +451,8 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
       <fieldset
         class="colorEffectMotionPanel valueEffectGeneratorPanel"
         data-value-generator={generatorKind()}
-        data-value-daslight-exact-knight={daslightExactKnight() ? "knight-rider" : undefined}
       >
         <legend>Value generator</legend>
-        <Show when={daslightExactKnight()}>
-          <div class="effectFormHint textPretty">
-            Imported DVC corrected Knight Rider parameters are editable; the generator is re-evaluated analytically.
-          </div>
-          <div
-            class="effectFormHint textPretty"
-            data-value-daslight-exact-transform={generatorTransform()}
-          >
-            <strong>Imported Transform</strong>
-            <span aria-hidden="true"> · </span>
-            <span>{generatorTransform() === "vertical" ? "Vertical symmetry" : "None"}</span>
-          </div>
-        </Show>
         <div class="colorEffectModeGrid">
           <label>
             Generator
@@ -581,7 +505,8 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
         </div>
         <Show when={generatorKind() === "KnightRider"}>
           <div class="colorEffectModeGrid">
-            <label>Size<input type="number" min="1" max="100" step="1" value={generatorNumber("size", 8)} onInput={(event) => patchGeneratorValues({ size: clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 100) })} /></label>
+            <label>Transform<select data-value-knight-transform value={generatorTransform()} onInput={(event) => patchGeneratorValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
+            <label>Size %<input type="number" min="0.01" max="100000" step="0.1" value={generatorNumber("size", 8)} onInput={(event) => patchGeneratorValues({ size: clamp(Number(event.currentTarget.value) || 0.01, 0.01, 100000) })} /></label>
             <label>Gradient %<input type="number" min="0" max="100" step="1" value={generatorNumber("gradient", 50)} onInput={(event) => patchGeneratorValues({ gradient: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
             <label><input type="checkbox" checked={generatorBoolean("one_way")} onInput={(event) => patchGeneratorValues({ one_way: event.currentTarget.checked })} /> One way only</label>
             <label><input type="checkbox" checked={generatorBoolean("fading")} onInput={(event) => patchGeneratorValues({ fading: event.currentTarget.checked })} /> Fading</label>
@@ -590,38 +515,31 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
         </Show>
         <Show when={generatorKind() === "Sweep"}>
           <div class="colorEffectModeGrid">
-            <label>Evaluator<select data-value-sweep-evaluator value={daslightExactSweep() ? "daslight" : "enhanced"} onInput={(event) => setSweepEvaluator(event.currentTarget.value === "daslight")}><option value="enhanced">Enhanced</option><option value="daslight">DVC corrected</option></select></label>
             <label>Transform<select data-value-sweep-transform value={generatorTransform()} onInput={(event) => patchGeneratorValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
             <label><input type="checkbox" data-value-sweep-direction-change checked={generatorBoolean("direction_change")} onInput={(event) => patchGeneratorValues({ direction_change: event.currentTarget.checked })} /> Direction change</label>
           </div>
         </Show>
         <Show when={generatorKind() === "Burst"}>
           <div class="colorEffectModeGrid">
-            <label>Evaluator<select value={daslightExactBurst() ? "daslight" : "enhanced"} onInput={(event) => setBurstEvaluator(event.currentTarget.value === "daslight")}><option value="enhanced">Enhanced</option><option value="daslight">DVC corrected</option></select></label>
-            <Show when={daslightExactBurst()}>
-              <label>Transform<select value={generatorTransform()} onInput={(event) => patchGeneratorValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
-            </Show>
-            <label>{daslightExactBurst() ? "Color width px" : "Color width %"}<input type="number" min={daslightExactBurst() ? "10" : "0"} max={daslightExactBurst() ? "900" : "100"} step="1" value={generatorNumber("color_width", 50)} onInput={(event) => patchGeneratorValues({ color_width: daslightExactBurst() ? clamp(Math.round(Number(event.currentTarget.value) || 10), 10, 900) : clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
-            <label>{daslightExactBurst() ? "Gradient 0..1" : "Gradient %"}<input type="number" min="0" max={daslightExactBurst() ? "1" : "100"} step={daslightExactBurst() ? "0.01" : "1"} value={generatorNumber("gradient", daslightExactBurst() ? 1 : 100)} onInput={(event) => patchGeneratorValues({ gradient: clamp(Number(event.currentTarget.value), 0, daslightExactBurst() ? 1 : 100) })} /></label>
+            <label>Transform<select value={generatorTransform()} onInput={(event) => patchGeneratorValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
+            <label>Color width %<input type="number" min="0.01" max="100000" step="0.1" value={generatorNumber("color_width", 50)} onInput={(event) => patchGeneratorValues({ color_width: clamp(Number(event.currentTarget.value) || 0.01, 0.01, 100000) })} /></label>
+            <label>Gradient %<input type="number" min="0" max="100" step="0.1" value={generatorNumber("gradient", 100)} onInput={(event) => patchGeneratorValues({ gradient: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
           </div>
         </Show>
         <Show when={generatorKind() === "RandomFill"}>
           <div class="colorEffectModeGrid">
-            <label>Evaluator<select value={generatorBoolean("syndocal_corrected") ? "corrected" : "legacy"} onInput={(event) => setRandomEvaluator(event.currentTarget.value === "corrected")}><option value="corrected">Syndocal corrected</option><option value="legacy">Legacy</option></select></label>
             <label>Transform<select value={generatorTransform()} onInput={(event) => patchGeneratorValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
-            <label>Point width<input type="number" min="1" max="10" step="1" value={generatorNumber("point_width", 1)} onInput={(event) => patchGeneratorValues({ point_width: clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 10) })} /></label>
-            <Show when={generatorBoolean("syndocal_corrected")}><label>Seed<input type="number" min="0" max="4294967295" step="1" value={generatorNumber("rng_seed", 0)} onInput={(event) => patchGeneratorValues({ rng_seed: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 4_294_967_295) })} /></label></Show>
+            <label>Point width %<input type="number" min="0.01" max="100000" step="0.1" value={generatorNumber("point_width", 10)} onInput={(event) => patchGeneratorValues({ point_width: clamp(Number(event.currentTarget.value) || 0.01, 0.01, 100000) })} /></label>
+            <label>Seed<input type="number" min="0" max="4294967295" step="1" value={generatorNumber("rng_seed", 0)} onInput={(event) => patchGeneratorValues({ rng_seed: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 4_294_967_295) })} /></label>
           </div>
         </Show>
         <Show when={generatorKind() === "Sparkle"}>
           <div class="colorEffectModeGrid">
-            <label>Evaluator<select value={generatorBoolean("syndocal_corrected") ? "corrected" : "legacy"} onInput={(event) => setRandomEvaluator(event.currentTarget.value === "corrected")}><option value="corrected">Syndocal corrected</option><option value="legacy">Legacy</option></select></label>
             <label>Transform<select value={generatorTransform()} onInput={(event) => patchGeneratorValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
             <label>Sparkle number<input type="number" min="1" max="10" step="1" title="Simultaneous particles created per 40 ms generation" value={generatorNumber("number", 5)} onInput={(event) => patchGeneratorValues({ number: clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 10) })} /></label>
-            <Show when={generatorBoolean("syndocal_corrected")}><label>Lifetime ms<input type="number" min="100" max="1000" step="1" title="Effect-time milliseconds, scaling with clock sync and BPM speed" value={generatorNumber("lifetime_ms", 250)} onInput={(event) => patchGeneratorValues({ lifetime_ms: clamp(Math.round(Number(event.currentTarget.value) || 100), 100, 1000) })} /></label></Show>
-            <Show when={!generatorBoolean("syndocal_corrected")}><label>Life span %<input type="number" min="0" max="100" step="1" value={generatorNumber("lifespan", 0)} onInput={(event) => patchGeneratorValues({ lifespan: clamp(Number(event.currentTarget.value), 0, 100) })} /></label></Show>
-            <label>Sparkle width<input type="number" min="1" max="90" step="1" value={generatorNumber("width", 1)} onInput={(event) => patchGeneratorValues({ width: clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 90) })} /></label>
-            <Show when={generatorBoolean("syndocal_corrected")}><label>Seed<input type="number" min="0" max="4294967295" step="1" value={generatorNumber("rng_seed", 0)} onInput={(event) => patchGeneratorValues({ rng_seed: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 4_294_967_295) })} /></label></Show>
+            <label>Lifetime ms<input type="number" min="100" max="1000" step="1" title="Effect-time milliseconds, scaling with clock sync and BPM speed" value={generatorNumber("lifetime_ms", 250)} onInput={(event) => patchGeneratorValues({ lifetime_ms: clamp(Math.round(Number(event.currentTarget.value) || 100), 100, 1000) })} /></label>
+            <label>Sparkle width %<input type="number" min="0.01" max="100000" step="0.1" value={generatorNumber("width", 10)} onInput={(event) => patchGeneratorValues({ width: clamp(Number(event.currentTarget.value) || 0.01, 0.01, 100000) })} /></label>
+            <label>Seed<input type="number" min="0" max="4294967295" step="1" value={generatorNumber("rng_seed", 0)} onInput={(event) => patchGeneratorValues({ rng_seed: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 4_294_967_295) })} /></label>
           </div>
         </Show>
         <Show when={generatorKind() === "Plasma"}>
@@ -646,16 +564,14 @@ export function ValueEffectEditorPanel(props: ValueEffectEditorPanelProps) {
           </div>
         </Show>
         <Show when={generatorKind() === "Perlin"}>
-          <div class="colorEffectModeGrid" data-value-perlin-evaluator={daslightExactPerlin() ? "daslight" : "enhanced"}>
-            <label>Evaluator<select data-value-perlin-evaluator-select value={daslightExactPerlin() ? "daslight" : "enhanced"} onInput={(event) => setPerlinEvaluator(event.currentTarget.value === "daslight")}><option value="enhanced">Enhanced</option><option value="daslight">DVC corrected</option></select></label>
-            <Show when={daslightExactPerlin()}><label>Transform<select data-value-perlin-transform value={generatorTransform()} onInput={(event) => patchGeneratorValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label></Show>
-            <label>Octaves<input type="number" min={daslightExactPerlin() ? "2" : "1"} max={daslightExactPerlin() ? "10" : "16"} step="1" value={generatorNumber("octaves", 5)} onInput={(event) => patchGeneratorValues({ octaves: clamp(Math.round(Number(event.currentTarget.value) || 1), daslightExactPerlin() ? 2 : 1, daslightExactPerlin() ? 10 : 16) })} /></label>
-            <label>Zoom<input type="number" min={daslightExactPerlin() ? "1" : "0.01"} max={daslightExactPerlin() ? "100" : undefined} step={daslightExactPerlin() ? "1" : "0.1"} value={generatorNumber("zoom", 20)} onInput={(event) => patchGeneratorValues({ zoom: daslightExactPerlin() ? clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 100) : Math.max(0.01, Number(event.currentTarget.value) || 0.01) })} /></label>
-            <label>Direction {daslightExactPerlin() ? "1..100" : "°"}<input type="number" min={daslightExactPerlin() ? "1" : undefined} max={daslightExactPerlin() ? "100" : undefined} step="1" value={generatorNumber("direction_degrees", daslightExactPerlin() ? 1 : 0)} title={daslightExactPerlin() ? "Syndocal maps 1 to 0°, 100 to 360°, linearly" : undefined} onInput={(event) => patchGeneratorValues({ direction_degrees: daslightExactPerlin() ? clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 100) : Number(event.currentTarget.value) || 0 })} /></label>
-            <label>Speed<input type="number" min={daslightExactPerlin() ? "1" : undefined} max={daslightExactPerlin() ? "10" : undefined} step={daslightExactPerlin() ? "1" : "0.1"} value={generatorNumber("speed", 1)} onInput={(event) => patchGeneratorValues({ speed: daslightExactPerlin() ? clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 10) : Number(event.currentTarget.value) || 0 })} /></label>
-            <label>Amplitude %<input type="number" min={daslightExactPerlin() ? "5" : "0"} max="100" step="1" value={generatorNumber("amplitude", 100)} onInput={(event) => patchGeneratorValues({ amplitude: clamp(daslightExactPerlin() ? Math.round(Number(event.currentTarget.value) || 5) : Number(event.currentTarget.value), daslightExactPerlin() ? 5 : 0, 100) })} /></label>
+          <div class="colorEffectModeGrid">
+            <label>Transform<select data-value-perlin-transform value={generatorTransform()} onInput={(event) => patchGeneratorValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
+            <label>Octaves<input type="number" min="1" max="16" step="1" value={generatorNumber("octaves", 5)} onInput={(event) => patchGeneratorValues({ octaves: clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 16) })} /></label>
+            <label>Zoom<input type="number" min="0.0001" step="0.01" value={generatorNumber("zoom", 0.5)} onInput={(event) => patchGeneratorValues({ zoom: Math.max(0.0001, Number(event.currentTarget.value) || 0.0001) })} /></label>
+            <label>Direction °<input type="number" step="0.1" value={generatorNumber("direction_degrees", 0)} onInput={(event) => patchGeneratorValues({ direction_degrees: Number(event.currentTarget.value) || 0 })} /></label>
+            <label>Speed<input type="number" min="0" step="0.1" value={generatorNumber("speed", 1)} onInput={(event) => patchGeneratorValues({ speed: Math.max(0, Number(event.currentTarget.value) || 0) })} /></label>
+            <label>Amplitude %<input type="number" min="0" max="100" step="0.1" value={generatorNumber("amplitude", 100)} onInput={(event) => patchGeneratorValues({ amplitude: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
           </div>
-          <Show when={daslightExactPerlin()}><div class="effectFormHint textPretty" data-value-perlin-direction-note>DVC Direction now drives spatial phase: 1 = 0°, 100 = 360°, with linear steps between.</div></Show>
         </Show>
       </fieldset>
 

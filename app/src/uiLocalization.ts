@@ -61,6 +61,7 @@ const japaneseText: Record<string, string> = {
   "OUTMODE / FLAG": "OUTMODE / FLAG",
   "Compressed fixture flags are intentionally not converted in DVC-1":
     "圧縮された灯体フラグはDVC-1では意図的に変換しません",
+  "DVC source": "DVCソース",
   "Invalid MSB/LSB pair imported as one 8-bit channel":
     "無効なMSB/LSBペアを単一の8-bitチャンネルとして取り込みました",
   "RACK/EFFECT numeric codes were not converted": "RACK/EFFECTの数値コードは変換していません",
@@ -1524,9 +1525,6 @@ const japaneseText: Record<string, string> = {
   "Color beam-space pattern": "ColorのBeam空間パターン",
   "Palette flow": "パレットフロー",
   "Knight Rider": "ナイトライダー",
-  "Imported DVC corrected Knight Rider parameters are editable; the generator is re-evaluated analytically.":
-    "インポートしたDVC補正ナイトライダーのパラメーターは編集できます。ジェネレーターは解析的に再計算されます。",
-  "Imported Transform": "インポート時の変形",
   Sweep: "スイープ",
   "Direction change": "方向を交互に変更",
   Burst: "バースト",
@@ -1542,24 +1540,11 @@ const japaneseText: Record<string, string> = {
   "Beam targets follow selected fixture profile order.":
     "ビームターゲットは選択した灯体プロファイルの順序に従います。",
   "Gradient %": "グラデーション（%）",
-  "Gradient 0..1": "グラデーション 0..1",
   "Go outside": "範囲外へ移動",
+  "Size %": "サイズ（%）",
   "Color width %": "Color幅（%）",
-  "Color width px": "Color幅（px）",
   "Color width": "Color幅",
-  Evaluator: "評価器",
-  Enhanced: "拡張",
-  "Daslight exact": "Daslight完全互換",
-  "DVC recovered core": "DVC復元コア",
-  "DVC corrected": "DVC補正版",
-  "Syndocal corrected": "Syndocal補正版",
-  Legacy: "旧方式",
   "Lifetime ms": "寿命（ms）",
-  "DVC source": "DVCソース",
-  "DVC Direction now drives spatial phase: 1 = 0°, 100 = 360°, with linear steps between.":
-    "DVCのDirectionは空間位相に作用します。1 = 0°、100 = 360°で、その間は線形です。",
-  "Syndocal maps 1 to 0°, 100 to 360°, linearly":
-    "Syndocalは1を0°、100を360°へ線形に対応付けます",
   "Size X": "サイズ X",
   "Param X": "パラメータ X",
   "Size Y": "サイズ Y",
@@ -1568,14 +1553,13 @@ const japaneseText: Record<string, string> = {
   "Param SX": "パラメータ SX",
   "Speed Y": "速度 Y",
   "Param SY": "パラメータ SY",
-  "Point width": "ポイント幅",
+  "Point width %": "ポイント幅（%）",
   "Sparkle number": "スパークル数",
   "Simultaneous particles created per 40 ms generation":
     "40 msごとの生成で同時に作られるパーティクル数",
   "Effect-time milliseconds, scaling with clock sync and BPM speed":
     "エフェクト時間のミリ秒。クロック同期とBPM速度に応じて伸縮します",
-  "Life span %": "寿命（%）",
-  "Sparkle width": "スパークル幅",
+  "Sparkle width %": "スパークル幅（%）",
   "Rotation °": "回転（°）",
   "Angle °": "角度（°）",
   Grayscale: "グレースケール",

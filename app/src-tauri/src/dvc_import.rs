@@ -25,6 +25,7 @@ use protocol::{
     TouchControlBinding, TouchControlKind, TouchControlSummary, TouchFeaturePresetTarget,
     TouchPageSummary, TouchSurfaceSummary, ValueEffectDirection, ValueEffectInterpolation,
     ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3,
+    COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
 };
 use roxmltree::{Document, Node};
 use serde::Serialize;
@@ -2683,6 +2684,49 @@ fn dvc_corrected_random_evaluator_note(
     }
 }
 
+fn normalize_dvc_spatial_recipe(
+    recipe: &mut ColorEffectSpatialRecipe,
+    strip_count: usize,
+    mapping_raster: bool,
+) {
+    let strip_count = strip_count.max(1) as f32;
+    match recipe {
+        ColorEffectSpatialRecipe::KnightRider { size, .. } => {
+            *size = *size * 100.0 / strip_count;
+        }
+        ColorEffectSpatialRecipe::Burst {
+            color_width,
+            gradient,
+            ..
+        } => {
+            *color_width = *color_width * 100.0 / strip_count;
+            *gradient *= 100.0;
+        }
+        ColorEffectSpatialRecipe::RandomFill { point_width, .. } => {
+            *point_width = *point_width * 100.0 / strip_count;
+        }
+        ColorEffectSpatialRecipe::Sparkle { width, .. } => {
+            *width = *width * 100.0 / strip_count;
+        }
+        ColorEffectSpatialRecipe::Perlin {
+            octaves,
+            zoom,
+            direction_degrees,
+            ..
+        } => {
+            *octaves = octaves.saturating_sub(1);
+            let source_span = if mapping_raster {
+                99.0
+            } else {
+                (strip_count - 1.0).max(1.0)
+            };
+            *zoom /= source_span;
+            *direction_degrees = (*direction_degrees - 1.0) * 360.0 / 99.0;
+        }
+        _ => {}
+    }
+}
+
 fn convert_dvc_value_effect(
     scene: Node<'_, '_>,
     scene_name: &str,
@@ -2750,7 +2794,7 @@ fn convert_dvc_value_effect(
     };
     require_exact_dvc_params(&params, expected_ids)?;
     require_exact_dvc_param_types(effect, expected_types)?;
-    let recipe = match generator_id {
+    let mut recipe = match generator_id {
         621 => {
             let transform = dvc_param(&params, 3, "VALUE FX Rainbow Transform")?;
             if !matches!(transform, 0.0 | 1.0) {
@@ -2773,7 +2817,6 @@ fn convert_dvc_value_effect(
             }
         }
         622 => ColorEffectSpatialRecipe::Burst {
-            daslight_exact: true,
             grayscale: false,
             vertical_symmetry: dvc_binary_param(&params, 3, "VALUE FX Burst Transform")?,
             color_width: dvc_integer_range_param(
@@ -2801,11 +2844,9 @@ fn convert_dvc_value_effect(
             let vertical_symmetry =
                 dvc_binary_param(&params, 3, "VALUE FX Knight Rider Transform")?;
             ColorEffectSpatialRecipe::KnightRider {
-                daslight_exact: true,
                 grayscale: false,
                 vertical_symmetry,
-                size: dvc_integer_range_param(&params, 10, "VALUE FX Knight Rider Size", 1, 100)?
-                    as u16,
+                size: dvc_integer_range_param(&params, 10, "VALUE FX Knight Rider Size", 1, 100)?,
                 one_way: dvc_binary_param(&params, 11, "VALUE FX Knight Rider One Way Only")?,
                 fading: dvc_binary_param(&params, 12, "VALUE FX Knight Rider Fading")?,
                 go_outside: dvc_binary_param(&params, 13, "VALUE FX Knight Rider Go Outside")?,
@@ -2819,7 +2860,6 @@ fn convert_dvc_value_effect(
             }
         }
         625 => ColorEffectSpatialRecipe::Sweep {
-            daslight_exact: true,
             grayscale: false,
             vertical_symmetry: dvc_binary_param(&params, 3, "VALUE FX Sweep Transform")?,
             direction_change: dvc_binary_param(&params, 10, "VALUE FX Sweep Direction Change")?,
@@ -2834,15 +2874,13 @@ fn convert_dvc_value_effect(
                 dvc_integer_range_param(&params, 12, "VALUE FX Sparkles Width", 1, 90)? as u16;
             let lifetime_ms = (100.0 / (1.0 - source_lifespan)).round() as u16;
             ColorEffectSpatialRecipe::Sparkle {
-                syndocal_corrected: true,
                 grayscale: false,
                 vertical_symmetry,
                 rng_seed: dvc_corrected_rng_seed(scene, rack, effect, generator_id),
                 number,
-                lifespan: 0.0,
                 lifetime_ms: Some(lifetime_ms),
                 source_lifespan: Some(source_lifespan),
-                width,
+                width: f32::from(width),
             }
         }
         627 => {
@@ -2856,16 +2894,14 @@ fn convert_dvc_value_effect(
                 dvc_integer_range_param(&params, 11, "VALUE FX Random fill Point Height", 1, 10)?
                     as u16;
             ColorEffectSpatialRecipe::RandomFill {
-                syndocal_corrected: true,
                 grayscale: false,
                 vertical_symmetry,
                 rng_seed: dvc_corrected_rng_seed(scene, rack, effect, generator_id),
-                point_width,
+                point_width: f32::from(point_width),
                 source_point_height: Some(source_point_height),
             }
         }
         628 => ColorEffectSpatialRecipe::Perlin {
-            daslight_exact: true,
             grayscale: false,
             vertical_symmetry: dvc_binary_param(&params, 3, "VALUE FX Perlin Transform")?,
             horizontal_symmetry: false,
@@ -2992,6 +3028,15 @@ fn convert_dvc_value_effect(
         (_, 628) => "evaluator=CPerlinEffect corrected continuous lattice hash/cosine interpolation; implementation=SyndocalCorrected; Direction is activated as spatial phase".to_string(),
         _ => "evaluator=verified generator route".to_string(),
     };
+    normalize_dvc_spatial_recipe(
+        &mut recipe,
+        beam_targets
+            .iter()
+            .map(|target| target.selection_index)
+            .collect::<HashSet<_>>()
+            .len(),
+        false,
+    );
     let request = ValueEffectRequest {
         label: format!("{scene_name} ({generator})"),
         fixture_ids,
@@ -3001,6 +3046,7 @@ fn convert_dvc_value_effect(
         points,
         spatial_pattern: Some(ColorEffectSpatialPattern {
             recipe,
+            parameter_model_version: COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
             beam_targets,
             placement: None,
         }),
@@ -3088,7 +3134,7 @@ fn convert_dvc_color_spatial_effect(
         }
     }
     let generator_approximations = Vec::new();
-    let recipe = match generator_id {
+    let mut recipe = match generator_id {
         36 => {
             require_exact_dvc_params(&params, &[2, 3, 4, 10, 11, 12])?;
             require_exact_dvc_param_types(
@@ -3148,11 +3194,9 @@ fn convert_dvc_color_spatial_effect(
                 ));
             }
             ColorEffectSpatialRecipe::KnightRider {
-                daslight_exact: true,
                 grayscale,
                 vertical_symmetry: transform == 1.0,
-                size: dvc_integer_range_param(&params, 10, "COLOR FX Knight Rider Size", 1, 100)?
-                    as u16,
+                size: dvc_integer_range_param(&params, 10, "COLOR FX Knight Rider Size", 1, 100)?,
                 one_way: dvc_binary_param(&params, 11, "COLOR FX Knight Rider One Way Only")?,
                 fading: dvc_binary_param(&params, 12, "COLOR FX Knight Rider Fading")?,
                 go_outside: dvc_binary_param(&params, 13, "COLOR FX Knight Rider Go Outside")?,
@@ -3187,7 +3231,6 @@ fn convert_dvc_color_spatial_effect(
                 ));
             }
             ColorEffectSpatialRecipe::Perlin {
-                daslight_exact: true,
                 grayscale: dvc_binary_param(&params, 2, "COLOR FX Perlin Grayscale")?,
                 vertical_symmetry: transform == 1.0,
                 horizontal_symmetry: false,
@@ -3216,7 +3259,6 @@ fn convert_dvc_color_spatial_effect(
             require_exact_dvc_params(&params, &[2, 3, 10, 11])?;
             require_exact_dvc_param_types(effect, &[(1, 4), (2, 2), (3, 6), (10, 0), (11, 1)])?;
             ColorEffectSpatialRecipe::Burst {
-                daslight_exact: true,
                 grayscale: dvc_binary_param(&params, 2, "COLOR FX Burst Grayscale")?,
                 vertical_symmetry: dvc_binary_param(&params, 3, "COLOR FX Burst Transform")?,
                 color_width: dvc_integer_range_param(&params, 10, "COLOR FX Burst Width", 10, 900)?,
@@ -3227,7 +3269,6 @@ fn convert_dvc_color_spatial_effect(
             require_exact_dvc_params(&params, &[2, 3, 10])?;
             require_exact_dvc_param_types(effect, &[(1, 4), (2, 2), (3, 6), (10, 0)])?;
             ColorEffectSpatialRecipe::RandomFill {
-                syndocal_corrected: true,
                 grayscale: dvc_binary_param(&params, 2, "COLOR FX Random fill Grayscale")?,
                 vertical_symmetry: dvc_binary_param(&params, 3, "COLOR FX Random fill Transform")?,
                 rng_seed: dvc_corrected_rng_seed(scene, rack, effect, generator_id),
@@ -3237,7 +3278,7 @@ fn convert_dvc_color_spatial_effect(
                     "COLOR FX Random fill Point Width",
                     1,
                     10,
-                )? as u16,
+                )?,
                 source_point_height: None,
             }
         }
@@ -3250,24 +3291,20 @@ fn convert_dvc_color_spatial_effect(
             let source_lifespan =
                 dvc_finite_range_param(&params, 11, "COLOR FX Sparkle LifeSpan", 0.0, 0.9)?;
             ColorEffectSpatialRecipe::Sparkle {
-                syndocal_corrected: true,
                 grayscale: dvc_binary_param(&params, 2, "COLOR FX Sparkle Grayscale")?,
                 vertical_symmetry: dvc_binary_param(&params, 3, "COLOR FX Sparkle Transform")?,
                 rng_seed: dvc_corrected_rng_seed(scene, rack, effect, generator_id),
                 number: dvc_integer_range_param(&params, 10, "COLOR FX Sparkle Number", 1, 10)?
                     as u16,
-                lifespan: 0.0,
                 lifetime_ms: Some((100.0 / (1.0 - source_lifespan)).round() as u16),
                 source_lifespan: Some(source_lifespan),
-                width: dvc_integer_range_param(&params, 12, "COLOR FX Sparkle Width", 1, 90)?
-                    as u16,
+                width: dvc_integer_range_param(&params, 12, "COLOR FX Sparkle Width", 1, 90)?,
             }
         }
         134 => {
             require_exact_dvc_params(&params, &[2, 3, 10])?;
             require_exact_dvc_param_types(effect, &[(1, 4), (2, 2), (3, 6), (10, 2)])?;
             ColorEffectSpatialRecipe::Sweep {
-                daslight_exact: true,
                 grayscale: dvc_binary_param(&params, 2, "COLOR FX Sweep Grayscale")?,
                 vertical_symmetry: dvc_binary_param(&params, 3, "COLOR FX Sweep Transform")?,
                 direction_change: dvc_binary_param(&params, 10, "COLOR FX Sweep Direction Change")?,
@@ -3390,7 +3427,6 @@ fn convert_dvc_color_spatial_effect(
             let rotation_degrees =
                 dvc_integer_range_param(&params, 4, "MAPPINGS Perlin Rotation", 0, 360)?;
             ColorEffectSpatialRecipe::Perlin {
-                daslight_exact: true,
                 grayscale: false,
                 vertical_symmetry: transform == 1.0,
                 horizontal_symmetry: transform == 2.0,
@@ -3501,27 +3537,23 @@ fn convert_dvc_color_spatial_effect(
             u8::from(*go_outside)
         ),
         ColorEffectSpatialRecipe::Sweep {
-            daslight_exact,
             grayscale,
             vertical_symmetry,
             direction_change,
         } => {
             format!(
-                "Evaluator={}; Grayscale={}; Transform={}; DirectionChange={}; evaluator=CSweepEffect@0x1403665A0",
-                if *daslight_exact { "DVC corrected" } else { "Enhanced" },
+                "Grayscale={}; Transform={}; DirectionChange={}; evaluator=CSweepEffect corrected analytic route",
                 u8::from(*grayscale),
                 if *vertical_symmetry { "Vertical symmetry" } else { "None" },
                 u8::from(*direction_change)
             )
         }
         ColorEffectSpatialRecipe::Burst {
-            daslight_exact,
             color_width,
             gradient,
             ..
         } => format!(
-            "ColorWidth={color_width}; Gradient={gradient}; DaslightExact={}; evaluator=CBurstEffect corrected analytic radius and cyclic palette",
-            u8::from(*daslight_exact)
+            "source_ColorWidth={color_width}; source_Gradient={gradient}; evaluator=CBurstEffect corrected analytic radius and cyclic palette"
         ),
         ColorEffectSpatialRecipe::RandomFill {
             grayscale,
@@ -3590,7 +3622,6 @@ fn convert_dvc_color_spatial_effect(
             }
         ),
         ColorEffectSpatialRecipe::Perlin {
-            daslight_exact,
             grayscale,
             vertical_symmetry,
             horizontal_symmetry,
@@ -3601,8 +3632,7 @@ fn convert_dvc_color_spatial_effect(
             speed,
             amplitude,
         } => format!(
-            "Evaluator={}; Grayscale={}; Transform={}; Rotation={rotation_degrees}; Octaves={octaves}; Zoom={zoom}; Direction={direction_degrees} ({}); Speed={speed}; Amplitude={amplitude}; recovered_evaluator=CPerlinEffect@0x140365090; palette_wrap=true@shared-constructor+0x12c",
-            if *daslight_exact { "DVC corrected" } else { "Enhanced" },
+            "Grayscale={}; Transform={}; source_Rotation={rotation_degrees}; source_Octaves={octaves}; source_Zoom={zoom}; source_Direction={direction_degrees} (source 1..100 mapped linearly to 0..360 degrees; spatial-phase-active); source_Speed={speed}; source_Amplitude={amplitude}; evaluator=unified analytic Perlin; palette_wrap=true",
             u8::from(*grayscale),
             if *vertical_symmetry {
                 "Vertical symmetry"
@@ -3610,11 +3640,6 @@ fn convert_dvc_color_spatial_effect(
                 "Horizontal symmetry"
             } else {
                 "None"
-            },
-            if *daslight_exact {
-                "source 1..100 mapped linearly to 0..360 degrees; spatial-phase-active"
-            } else {
-                "degrees"
             }
         ),
     };
@@ -3661,6 +3686,7 @@ fn convert_dvc_color_spatial_effect(
             warnings: Vec::new(),
         });
     }
+    normalize_dvc_spatial_recipe(&mut recipe, selection_count, placement.is_some());
     let request = ColorEffectRequest {
         label: format!("{scene_name} ({generator})"),
         fixture_ids: targets.fixture_ids,
@@ -3679,6 +3705,7 @@ fn convert_dvc_color_spatial_effect(
         },
         spatial_pattern: Some(Box::new(ColorEffectSpatialPattern {
             recipe,
+            parameter_model_version: COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
             beam_targets: targets.beam_targets,
             placement,
         })),
@@ -7479,10 +7506,9 @@ mod tests {
                 .as_ref()
                 .map(|pattern| &pattern.recipe),
             Some(ColorEffectSpatialRecipe::KnightRider {
-                daslight_exact: true,
                 grayscale: true,
                 vertical_symmetry: true,
-                size: 2,
+                size: 50.0,
                 ..
             })
         )));
@@ -7492,17 +7518,16 @@ mod tests {
                 .as_ref()
                 .map(|pattern| &pattern.recipe),
             Some(ColorEffectSpatialRecipe::Perlin {
-                daslight_exact: true,
                 grayscale: false,
                 vertical_symmetry: false,
                 horizontal_symmetry: false,
                 rotation_degrees: 0.0,
-                octaves: 5,
-                zoom: 20.0,
-                direction_degrees: 1.0,
+                octaves: 4,
+                zoom,
+                direction_degrees: 0.0,
                 speed: 1.0,
                 amplitude: 100.0,
-            })
+            }) if (*zoom - 20.0 / 99.0).abs() <= f32::EPSILON
         )));
         assert!(requests.iter().any(|request| matches!(
             request
@@ -7510,11 +7535,10 @@ mod tests {
                 .as_ref()
                 .map(|pattern| &pattern.recipe),
             Some(ColorEffectSpatialRecipe::Burst {
-                daslight_exact: true,
                 grayscale: false,
                 vertical_symmetry: false,
-                color_width: 50.0,
-                gradient: 1.0,
+                color_width: 1250.0,
+                gradient: 100.0,
             })
         )));
         let knight = requests
@@ -7621,8 +7645,7 @@ mod tests {
                 .as_ref()
                 .map(|pattern| &pattern.recipe),
             Some(ColorEffectSpatialRecipe::RandomFill {
-                syndocal_corrected: true,
-                point_width: 1,
+                point_width: 25.0,
                 source_point_height: None,
                 ..
             })
@@ -7633,11 +7656,10 @@ mod tests {
                 .as_ref()
                 .map(|pattern| &pattern.recipe),
             Some(ColorEffectSpatialRecipe::Sparkle {
-                syndocal_corrected: true,
                 number: 2,
                 lifetime_ms: Some(133),
                 source_lifespan: Some(0.25),
-                width: 1,
+                width: 25.0,
                 ..
             })
         )));
@@ -7662,13 +7684,7 @@ mod tests {
                     .spatial_pattern
                     .as_ref()
                     .filter(|pattern| {
-                        matches!(
-                            pattern.recipe,
-                            ColorEffectSpatialRecipe::Perlin {
-                                daslight_exact: true,
-                                ..
-                            }
-                        )
+                        matches!(pattern.recipe, ColorEffectSpatialRecipe::Perlin { .. })
                     })
                     .map(|pattern| &pattern.recipe),
                 _ => None,
@@ -8466,11 +8482,10 @@ mod tests {
         let converted = convert(&sweep_xml, 134);
         assert!(converted
             .note
-            .contains("evaluator=CSweepEffect@0x1403665A0"));
+            .contains("evaluator=CSweepEffect corrected analytic route"));
         assert!(matches!(
             recipe(converted),
             ColorEffectSpatialRecipe::Sweep {
-                daslight_exact: true,
                 grayscale: true,
                 vertical_symmetry: true,
                 direction_change: true,
@@ -9042,7 +9057,6 @@ mod tests {
         assert!(matches!(
             pattern.recipe,
             ColorEffectSpatialRecipe::Sweep {
-                daslight_exact: true,
                 grayscale: false,
                 vertical_symmetry: false,
                 direction_change: true,
@@ -9062,7 +9076,6 @@ mod tests {
         assert!(matches!(
             value.spatial_pattern.unwrap().recipe,
             ColorEffectSpatialRecipe::Sweep {
-                daslight_exact: true,
                 grayscale: false,
                 vertical_symmetry: false,
                 direction_change: false,
@@ -9090,7 +9103,6 @@ mod tests {
         assert!(matches!(
             value.spatial_pattern.unwrap().recipe,
             ColorEffectSpatialRecipe::Sweep {
-                daslight_exact: true,
                 grayscale: false,
                 vertical_symmetry: true,
                 direction_change: true,
@@ -9224,7 +9236,6 @@ mod tests {
                 panic!("VALUE Knight Rider must retain its Value body");
             };
             let ColorEffectSpatialRecipe::KnightRider {
-                daslight_exact,
                 grayscale,
                 vertical_symmetry,
                 size,
@@ -9236,12 +9247,11 @@ mod tests {
             else {
                 panic!("VALUE ID 624 must use the KnightRider recipe");
             };
-            assert!(daslight_exact);
             assert!(!grayscale);
             assert_eq!(vertical_symmetry, expected_symmetry);
             assert_eq!(
                 (size, one_way, fading, go_outside, gradient),
-                (1, false, true, false, 50.0)
+                (100.0, false, true, false, 50.0)
             );
         }
 
@@ -9306,11 +9316,10 @@ mod tests {
             assert!(matches!(
                 value.spatial_pattern.unwrap().recipe,
                 ColorEffectSpatialRecipe::Burst {
-                    daslight_exact: true,
                     grayscale: false,
                     vertical_symmetry,
-                    color_width: 50.0,
-                    gradient: 1.0,
+                    color_width: 5000.0,
+                    gradient: 100.0,
                 } if vertical_symmetry == (transform == 1)
             ));
         }
@@ -9430,12 +9439,11 @@ mod tests {
                 );
                 match value.spatial_pattern.unwrap().recipe {
                     ColorEffectSpatialRecipe::Sparkle {
-                        syndocal_corrected: true,
                         vertical_symmetry,
                         number: 5,
                         lifetime_ms: Some(100),
                         source_lifespan: Some(0.0),
-                        width: 1,
+                        width: 100.0,
                         rng_seed,
                         ..
                     } if generator_id == 626 => {
@@ -9443,9 +9451,8 @@ mod tests {
                         assert_ne!(rng_seed, 0);
                     }
                     ColorEffectSpatialRecipe::RandomFill {
-                        syndocal_corrected: true,
                         vertical_symmetry,
-                        point_width: 1,
+                        point_width: 100.0,
                         source_point_height: Some(1),
                         rng_seed,
                         ..
@@ -9554,17 +9561,17 @@ mod tests {
             assert!(matches!(
                 value.spatial_pattern.unwrap().recipe,
                 ColorEffectSpatialRecipe::Perlin {
-                    daslight_exact: true,
                     grayscale: false,
                     vertical_symmetry,
                     horizontal_symmetry: false,
                     rotation_degrees: 0.0,
-                    octaves: 4,
+                    octaves: 3,
                     zoom: 75.0,
-                    direction_degrees: 2.0,
+                    direction_degrees,
                     speed: 1.0,
                     amplitude: 70.0,
                 } if vertical_symmetry == (transform == 1)
+                    && (direction_degrees - 360.0 / 99.0).abs() <= f32::EPSILON
             ));
         }
 
@@ -11223,13 +11230,7 @@ mod tests {
         assert_eq!(
             recipes
                 .iter()
-                .filter(|recipe| matches!(
-                    recipe,
-                    ColorEffectSpatialRecipe::Burst {
-                        daslight_exact: true,
-                        ..
-                    }
-                ))
+                .filter(|recipe| matches!(recipe, ColorEffectSpatialRecipe::Burst { .. }))
                 .count(),
             3
         );
@@ -11243,13 +11244,7 @@ mod tests {
         assert_eq!(
             recipes
                 .iter()
-                .filter(|recipe| matches!(
-                    recipe,
-                    ColorEffectSpatialRecipe::Perlin {
-                        daslight_exact: true,
-                        ..
-                    }
-                ))
+                .filter(|recipe| matches!(recipe, ColorEffectSpatialRecipe::Perlin { .. }))
                 .count(),
             1
         );
@@ -11385,15 +11380,23 @@ mod tests {
                 )
             })
             .expect("saved ID622 Burst must import");
+        let burst_pattern = burst.spatial_pattern.as_ref().unwrap();
+        let burst_strip_count = burst_pattern
+            .beam_targets
+            .iter()
+            .map(|target| target.selection_index)
+            .collect::<HashSet<_>>()
+            .len()
+            .max(1) as f32;
         assert!(matches!(
-            burst.spatial_pattern.as_ref().map(|pattern| &pattern.recipe),
-            Some(ColorEffectSpatialRecipe::Burst {
-                daslight_exact: true,
+            &burst_pattern.recipe,
+            ColorEffectSpatialRecipe::Burst {
                 grayscale: false,
                 vertical_symmetry: false,
                 color_width,
                 gradient,
-            }) if *color_width == 50.0 && *gradient == 1.0
+            } if (*color_width - 5_000.0 / burst_strip_count).abs() <= f32::EPSILON
+                && *gradient == 100.0
         ));
 
         let knight = values
@@ -11408,18 +11411,26 @@ mod tests {
                 )
             })
             .expect("saved ID624 Knight Rider must import");
+        let knight_pattern = knight.spatial_pattern.as_ref().unwrap();
+        let knight_strip_count = knight_pattern
+            .beam_targets
+            .iter()
+            .map(|target| target.selection_index)
+            .collect::<HashSet<_>>()
+            .len()
+            .max(1) as f32;
         assert!(matches!(
-            knight.spatial_pattern.as_ref().map(|pattern| &pattern.recipe),
-            Some(ColorEffectSpatialRecipe::KnightRider {
-                daslight_exact: true,
+            &knight_pattern.recipe,
+            ColorEffectSpatialRecipe::KnightRider {
                 grayscale: false,
                 vertical_symmetry: false,
-                size: 1,
+                size,
                 one_way: false,
                 fading: true,
                 go_outside: false,
                 gradient,
-            }) if *gradient == 50.0
+            } if (*size - 100.0 / knight_strip_count).abs() <= f32::EPSILON
+                && *gradient == 50.0
         ));
 
         let sweep = values
@@ -11444,7 +11455,6 @@ mod tests {
                 .as_ref()
                 .map(|pattern| &pattern.recipe),
             Some(ColorEffectSpatialRecipe::Sweep {
-                daslight_exact: true,
                 grayscale: false,
                 vertical_symmetry: true,
                 direction_change: false,

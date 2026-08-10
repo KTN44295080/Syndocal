@@ -100,13 +100,16 @@ try {
   assert.match(editorSource, /<option value="horizontal">Horizontal symmetry<\/option>/);
   for (const sweepContract of [
     "data-color-sweep-controls",
-    "data-color-sweep-evaluator",
     "data-color-sweep-grayscale",
     "data-color-sweep-transform",
     "data-color-sweep-direction-change",
   ]) {
     assert.ok(editorSource.includes(sweepContract), `COLOR Sweep must expose ${sweepContract}`);
   }
+  assert.ok(
+    !editorSource.includes("data-color-sweep-evaluator"),
+    "COLOR Sweep must use the unified evaluator without a route control",
+  );
   assert.match(protocolSource, /Plasma \{[\s\S]*?serde\(default\)[\s\S]*?grayscale: bool,[\s\S]*?vertical_symmetry: bool/);
   assert.match(
     protocolSource,

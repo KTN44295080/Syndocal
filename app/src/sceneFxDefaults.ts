@@ -116,6 +116,7 @@ export const defaultSceneFxParams = (
         fixture_spread: fixtureIds.length > 1 ? 1 : 0,
         blend_mode: "Override",
         spatial_pattern: {
+          parameter_model_version: 1,
           recipe: {
             ColorRainbow: {
               grayscale: false,
@@ -164,6 +165,7 @@ export const defaultSceneFxParams = (
           { position: 1, value: 0 },
         ],
         spatial_pattern: {
+          parameter_model_version: 1,
           recipe: {
             ColorRainbow: {
               grayscale: false,

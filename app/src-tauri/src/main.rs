@@ -60,6 +60,7 @@ use protocol::{
     VideoLayerState, VideoLayerTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
     VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary, VideoOutputSummary,
     VideoOutputTarget, VideoParam, VideoRuntimeStatus, VideoSourceKind, VideoSourceSummary,
+    COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -16932,8 +16933,16 @@ fn load_project_checkpoint(
 }
 
 fn project_and_control_mappings_from_value(
-    value: Value,
+    mut value: Value,
 ) -> Result<(ProjectFile, ProjectControlMappings), String> {
+    let version = value
+        .get("version")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "Project version must be an unsigned integer".to_string())?;
+    if version != u64::from(PROJECT_FILE_VERSION) {
+        return Err(format!("Unsupported project version {version}"));
+    }
+    migrate_legacy_spatial_parameter_models(&mut value)?;
     let project: ProjectFile =
         serde_json::from_value(value.clone()).map_err(|error| error.to_string())?;
     let mappings: ProjectControlMappings =
@@ -16946,6 +16955,207 @@ fn project_and_control_mappings_from_value(
             dmx_mappings: validate_dmx_control_mappings(mappings.dmx_mappings)?,
         },
     ))
+}
+
+fn migrate_legacy_spatial_parameter_models(value: &mut Value) -> Result<(), String> {
+    fn number(value: f64, label: &str) -> Result<Value, String> {
+        serde_json::Number::from_f64(value)
+            .map(Value::Number)
+            .ok_or_else(|| format!("Legacy color spatial {label} is not finite"))
+    }
+
+    fn numeric_field(fields: &Map<String, Value>, name: &str) -> Option<f64> {
+        fields.get(name).and_then(Value::as_f64)
+    }
+
+    fn target_count(pattern: &Map<String, Value>, fallback: usize) -> usize {
+        let explicit = pattern
+            .get("beam_targets")
+            .and_then(Value::as_array)
+            .map(|targets| {
+                targets
+                    .iter()
+                    .filter_map(|target| target.get("selection_index").and_then(Value::as_u64))
+                    .collect::<HashSet<_>>()
+                    .len()
+            })
+            .unwrap_or_default();
+        explicit.max(fallback).max(1)
+    }
+
+    fn migrate_pattern(
+        pattern: &mut Map<String, Value>,
+        period_ms: u64,
+        fallback_target_count: usize,
+    ) -> Result<(), String> {
+        let model_version = pattern
+            .get("parameter_model_version")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        if model_version > u64::from(COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION) {
+            return Err(format!(
+                "Unsupported color spatial parameter model version {model_version}"
+            ));
+        }
+        if model_version == u64::from(COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION) {
+            return Ok(());
+        }
+
+        let strip_count = target_count(pattern, fallback_target_count) as f64;
+        let has_mapping_raster = pattern
+            .get("placement")
+            .is_some_and(|placement| !placement.is_null());
+        let recipe = pattern
+            .get_mut("recipe")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| "Color spatial pattern requires a recipe object".to_string())?;
+        let Some((kind, body)) = recipe.iter_mut().next() else {
+            return Err("Color spatial recipe object cannot be empty".to_string());
+        };
+        let fields = body
+            .as_object_mut()
+            .ok_or_else(|| format!("Color spatial {kind} recipe must be an object"))?;
+
+        match kind.as_str() {
+            "KnightRider" => {
+                fields.remove("daslight_exact");
+                if let Some(size) = numeric_field(fields, "size") {
+                    fields.insert(
+                        "size".to_string(),
+                        number(size * 100.0 / strip_count, "size")?,
+                    );
+                }
+            }
+            "Sweep" => {
+                fields.remove("daslight_exact");
+            }
+            "Burst" => {
+                let corrected = fields
+                    .remove("daslight_exact")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false);
+                if corrected {
+                    if let Some(width) = numeric_field(fields, "color_width") {
+                        fields.insert(
+                            "color_width".to_string(),
+                            number(width * 100.0 / strip_count, "Burst color width")?,
+                        );
+                    }
+                    if let Some(gradient) = numeric_field(fields, "gradient") {
+                        fields.insert(
+                            "gradient".to_string(),
+                            number(gradient * 100.0, "Burst gradient")?,
+                        );
+                    }
+                }
+            }
+            "RandomFill" => {
+                fields.remove("syndocal_corrected");
+                if let Some(width) = numeric_field(fields, "point_width") {
+                    fields.insert(
+                        "point_width".to_string(),
+                        number(width * 100.0 / strip_count, "Random fill point width")?,
+                    );
+                }
+            }
+            "Sparkle" => {
+                let corrected = fields
+                    .remove("syndocal_corrected")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false);
+                if let Some(width) = numeric_field(fields, "width") {
+                    fields.insert(
+                        "width".to_string(),
+                        number(width * 100.0 / strip_count, "Sparkle width")?,
+                    );
+                }
+                if !corrected {
+                    if let Some(lifespan) = numeric_field(fields, "lifespan") {
+                        let lifetime = ((period_ms as f64 * lifespan / 100.0).round() as u64)
+                            .clamp(100, 1_000);
+                        fields.insert("lifetime_ms".to_string(), Value::from(lifetime));
+                    }
+                }
+                fields.remove("lifespan");
+            }
+            "Perlin" => {
+                let corrected = fields
+                    .remove("daslight_exact")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false);
+                if corrected {
+                    if let Some(octaves) = fields.get("octaves").and_then(Value::as_u64) {
+                        fields.insert(
+                            "octaves".to_string(),
+                            Value::from(octaves.saturating_sub(1)),
+                        );
+                    }
+                    if let Some(zoom) = numeric_field(fields, "zoom") {
+                        let source_span = if has_mapping_raster {
+                            99.0
+                        } else {
+                            (strip_count - 1.0).max(1.0)
+                        };
+                        fields.insert(
+                            "zoom".to_string(),
+                            number(zoom / source_span, "Perlin zoom")?,
+                        );
+                    }
+                    if let Some(direction) = numeric_field(fields, "direction_degrees") {
+                        fields.insert(
+                            "direction_degrees".to_string(),
+                            number((direction - 1.0) * 360.0 / 99.0, "Perlin direction")?,
+                        );
+                    }
+                } else if let Some(zoom) = numeric_field(fields, "zoom") {
+                    if zoom > 0.0 {
+                        fields.insert("zoom".to_string(), number(10.0 / zoom, "Perlin zoom")?);
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        pattern.insert(
+            "parameter_model_version".to_string(),
+            Value::from(COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION),
+        );
+        Ok(())
+    }
+
+    fn walk(value: &mut Value) -> Result<(), String> {
+        match value {
+            Value::Array(values) => {
+                for value in values {
+                    walk(value)?;
+                }
+            }
+            Value::Object(object) => {
+                let period_ms = object
+                    .get("period_ms")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(1_000);
+                let fixture_count = object
+                    .get("fixture_ids")
+                    .and_then(Value::as_array)
+                    .map(|fixtures| fixtures.len())
+                    .unwrap_or_default();
+                if let Some(pattern) = object
+                    .get_mut("spatial_pattern")
+                    .and_then(Value::as_object_mut)
+                {
+                    migrate_pattern(pattern, period_ms, fixture_count)?;
+                }
+                for child in object.values_mut() {
+                    walk(child)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    walk(value)
 }
 
 fn load_project_from_file(
@@ -32860,6 +33070,135 @@ f 1 2 3
         assert_eq!(mappings.midi_mappings, vec![midi_mapping]);
         assert_eq!(mappings.osc_mappings, vec![osc_mapping]);
         assert_eq!(mappings.dmx_mappings, vec![dmx_mapping]);
+    }
+
+    #[test]
+    fn legacy_spatial_parameter_routes_migrate_deterministically_to_unified_domains() {
+        let request = |recipe: Value, period_ms| {
+            json!({
+                "period_ms": period_ms,
+                "fixture_ids": [1, 2, 3, 4],
+                "spatial_pattern": {
+                    "recipe": recipe,
+                    "beam_targets": []
+                }
+            })
+        };
+        let mut legacy = json!({
+            "requests": [
+                request(json!({"KnightRider": {"daslight_exact": false, "size": 2, "one_way": false, "fading": true, "go_outside": false, "gradient": 50.0}}), 2000),
+                request(json!({"Sweep": {"daslight_exact": true, "direction_change": true}}), 2000),
+                request(json!({"Burst": {"daslight_exact": true, "color_width": 2.0, "gradient": 0.5}}), 2000),
+                request(json!({"Burst": {"daslight_exact": false, "color_width": 40.0, "gradient": 25.0}}), 2000),
+                request(json!({"RandomFill": {"syndocal_corrected": false, "rng_seed": 7, "point_width": 2}}), 2000),
+                request(json!({"Sparkle": {"syndocal_corrected": false, "rng_seed": 7, "number": 2, "lifespan": 25.0, "width": 2}}), 2000),
+                request(json!({"Sparkle": {"syndocal_corrected": true, "rng_seed": 7, "number": 2, "lifespan": 0.0, "lifetime_ms": 250, "width": 2}}), 2000),
+                request(json!({"Perlin": {"daslight_exact": true, "octaves": 5, "zoom": 20.0, "direction_degrees": 2.0, "speed": 1.0, "amplitude": 70.0}}), 2000),
+                request(json!({"Perlin": {"daslight_exact": false, "octaves": 5, "zoom": 20.0, "direction_degrees": 45.0, "speed": 1.0, "amplitude": 70.0}}), 2000)
+            ]
+        });
+
+        migrate_legacy_spatial_parameter_models(&mut legacy).unwrap();
+        let requests = legacy["requests"].as_array().unwrap();
+        for request in requests {
+            let pattern = &request["spatial_pattern"];
+            assert_eq!(
+                pattern["parameter_model_version"],
+                COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION
+            );
+            let serialized = serde_json::to_string(pattern).unwrap();
+            assert!(!serialized.contains("daslight_exact"));
+            assert!(!serialized.contains("syndocal_corrected"));
+            assert!(!serialized.contains("\"lifespan\""));
+        }
+        assert_eq!(
+            requests[0]["spatial_pattern"]["recipe"]["KnightRider"]["size"],
+            50.0
+        );
+        assert_eq!(
+            requests[2]["spatial_pattern"]["recipe"]["Burst"]["color_width"],
+            50.0
+        );
+        assert_eq!(
+            requests[2]["spatial_pattern"]["recipe"]["Burst"]["gradient"],
+            50.0
+        );
+        assert_eq!(
+            requests[3]["spatial_pattern"]["recipe"]["Burst"]["color_width"],
+            40.0
+        );
+        assert_eq!(
+            requests[3]["spatial_pattern"]["recipe"]["Burst"]["gradient"],
+            25.0
+        );
+        assert_eq!(
+            requests[4]["spatial_pattern"]["recipe"]["RandomFill"]["point_width"],
+            50.0
+        );
+        assert_eq!(
+            requests[5]["spatial_pattern"]["recipe"]["Sparkle"]["width"],
+            50.0
+        );
+        assert_eq!(
+            requests[5]["spatial_pattern"]["recipe"]["Sparkle"]["lifetime_ms"],
+            500
+        );
+        assert_eq!(
+            requests[6]["spatial_pattern"]["recipe"]["Sparkle"]["width"],
+            50.0
+        );
+        assert_eq!(
+            requests[6]["spatial_pattern"]["recipe"]["Sparkle"]["lifetime_ms"],
+            250
+        );
+        assert_eq!(
+            requests[7]["spatial_pattern"]["recipe"]["Perlin"]["octaves"],
+            4
+        );
+        assert_eq!(
+            requests[7]["spatial_pattern"]["recipe"]["Perlin"]["zoom"],
+            20.0 / 3.0
+        );
+        assert_eq!(
+            requests[7]["spatial_pattern"]["recipe"]["Perlin"]["direction_degrees"],
+            360.0 / 99.0
+        );
+        assert_eq!(
+            requests[8]["spatial_pattern"]["recipe"]["Perlin"]["octaves"],
+            5
+        );
+        assert_eq!(
+            requests[8]["spatial_pattern"]["recipe"]["Perlin"]["zoom"],
+            0.5
+        );
+        assert_eq!(
+            requests[8]["spatial_pattern"]["recipe"]["Perlin"]["direction_degrees"],
+            45.0
+        );
+    }
+
+    #[test]
+    fn project_loader_rejects_future_file_and_spatial_parameter_versions() {
+        let project = empty_project_file();
+        let mut future_project = serde_json::to_value(&project).unwrap();
+        future_project["version"] = Value::from(u64::from(PROJECT_FILE_VERSION) + 1);
+        assert!(project_and_control_mappings_from_value(future_project)
+            .unwrap_err()
+            .contains("Unsupported project version 2"));
+
+        let mut future_spatial = serde_json::to_value(project).unwrap();
+        future_spatial["future_spatial_contract_probe"] = json!({
+            "period_ms": 1000,
+            "fixture_ids": [1],
+            "spatial_pattern": {
+                "parameter_model_version": COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION + 1,
+                "recipe": {"Sweep": {"direction_change": false}},
+                "beam_targets": []
+            }
+        });
+        assert!(project_and_control_mappings_from_value(future_spatial)
+            .unwrap_err()
+            .contains("Unsupported color spatial parameter model version 2"));
     }
 
     #[test]

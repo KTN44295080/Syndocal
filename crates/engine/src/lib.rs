@@ -3662,9 +3662,7 @@ impl CompiledDaslightSweep {
             ..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS)
             .contains(&request.stops.len())
         {
-            return Err(
-                "Daslight-exact Sweep requires between 1 and 255 palette stops".to_string(),
-            );
+            return Err("Sweep requires between 1 and 255 palette stops".to_string());
         }
         Ok(Self {
             strip_count: strip_count.max(1),
@@ -4050,14 +4048,15 @@ impl CompiledSyndocalRandomFx {
             .collect::<Arc<[_]>>();
         match &pattern.recipe {
             ColorEffectSpatialRecipe::RandomFill {
-                syndocal_corrected: true,
                 grayscale,
                 vertical_symmetry,
                 rng_seed,
                 point_width,
                 ..
             } => {
-                let point_width = usize::from(*point_width);
+                let point_width = ((*point_width / 100.0) * strip_count.max(1) as f32)
+                    .round()
+                    .max(1.0) as usize;
                 let cell_count = strip_count.max(1).div_ceil(point_width).max(1);
                 let mut ranks = vec![0_u32; cell_count * palette.len()];
                 let mut ordered = (0..cell_count).collect::<Vec<_>>();
@@ -4086,7 +4085,6 @@ impl CompiledSyndocalRandomFx {
                 }))
             }
             ColorEffectSpatialRecipe::Sparkle {
-                syndocal_corrected: true,
                 grayscale,
                 vertical_symmetry,
                 rng_seed,
@@ -4099,7 +4097,9 @@ impl CompiledSyndocalRandomFx {
             } => Ok(Some(Self::Sparkle {
                 number: usize::from(*number),
                 lifetime_ms: f64::from(*lifetime_ms),
-                width: usize::from(*width),
+                width: ((*width / 100.0) * strip_count.max(1) as f32)
+                    .round()
+                    .max(1.0) as usize,
                 grayscale: *grayscale,
                 vertical_symmetry: *vertical_symmetry,
                 rng_seed: *rng_seed,
@@ -4383,8 +4383,8 @@ struct CompiledDaslightPerlinTimeSignal {
 
 #[derive(Clone)]
 struct CompiledDaslightPerlin {
-    speed: i32,
-    amplitude: i32,
+    speed: f64,
+    amplitude: f64,
     grayscale: bool,
     palette: Vec<DaslightKnightColor>,
     targets: Vec<CompiledDaslightPerlinTarget>,
@@ -4411,13 +4411,6 @@ fn daslight_perlin_cosine_weight(fraction: f64) -> f64 {
     (1.0 - (fraction * std::f64::consts::PI).cos()) * 0.5
 }
 
-/// DVC stores Direction as the integer range 1..100. The source evaluator
-/// ignored it; corrected evaluation maps the complete domain linearly so the
-/// factory default (2) remains close to the original positive-X orientation.
-fn corrected_perlin_direction_degrees(direction: i32) -> f64 {
-    f64::from(direction - 1) * (360.0 / 99.0)
-}
-
 /// Rotate an unbounded procedural field around the authored raster centre.
 /// Perlin is defined outside the 0..1 window, so intentionally do not clamp:
 /// this avoids the holes and edge smearing introduced by Qt's nearest-neighbor
@@ -4425,12 +4418,12 @@ fn corrected_perlin_direction_degrees(direction: i32) -> f64 {
 fn corrected_perlin_inverse_rotate(
     normalized_x: f64,
     normalized_y: f64,
-    rotation_degrees: i32,
+    rotation_degrees: f64,
 ) -> (f64, f64) {
-    if matches!(rotation_degrees, 0 | 360) {
+    if rotation_degrees.rem_euclid(360.0).abs() <= f64::EPSILON {
         return (normalized_x, normalized_y);
     }
-    let radians = f64::from(rotation_degrees).to_radians();
+    let radians = rotation_degrees.to_radians();
     let (sine, cosine) = radians.sin_cos();
     let delta_x = normalized_x - 0.5;
     let delta_y = normalized_y - 0.5;
@@ -4458,62 +4451,48 @@ impl CompiledDaslightPerlin {
             ..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS)
             .contains(&request.stops.len())
         {
+            return Err("Perlin requires between 1 and 255 palette stops".to_string());
+        }
+        if !(1..=16).contains(&octaves) {
+            return Err("Perlin octaves must be within 1..16".to_string());
+        }
+        if !zoom.is_finite() || zoom <= 0.0 {
+            return Err("Perlin zoom must be finite and greater than zero".to_string());
+        }
+        if !direction.is_finite() || !speed.is_finite() || speed < 0.0 {
             return Err(
-                "DVC corrected Perlin requires between 1 and 255 palette stops".to_string(),
+                "Perlin direction and speed must be finite; speed cannot be negative".to_string(),
             );
         }
-        let integer = |label: &str, value: f32, minimum: i32, maximum: i32| {
-            if !value.is_finite()
-                || value.fract().abs() > f32::EPSILON
-                || value < minimum as f32
-                || value > maximum as f32
-            {
-                Err(format!(
-                    "DVC corrected Perlin {label} must be an integer within {minimum}..{maximum}"
-                ))
-            } else {
-                Ok(value as i32)
-            }
-        };
-        if !(2..=10).contains(&octaves) {
-            return Err("DVC corrected Perlin octaves must be within 2..10".to_string());
+        if !amplitude.is_finite() || !(0.0..=100.0).contains(&amplitude) {
+            return Err("Perlin amplitude must be within 0..100 percent".to_string());
         }
-        let zoom = integer("zoom", zoom, 1, 100)?;
-        let direction = integer("direction", direction, 1, 100)?;
-        let speed = integer("speed", speed, 1, 10)?;
-        let amplitude = integer("amplitude", amplitude, 5, 100)?;
-        let rotation_degrees = integer("rotation", rotation_degrees, 0, 360)?;
+        if !rotation_degrees.is_finite() {
+            return Err("Perlin rotation must be finite".to_string());
+        }
         if vertical_symmetry && horizontal_symmetry {
-            return Err("DVC corrected Perlin supports at most one Transform axis".to_string());
+            return Err("Perlin supports at most one Transform axis".to_string());
         }
 
         let mapping_raster = request
             .spatial_pattern
             .as_ref()
             .is_some_and(|pattern| pattern.placement.is_some());
-        if rotation_degrees != 0 && !mapping_raster {
-            return Err(
-                "DVC corrected Perlin rotation requires MAPPINGS raster placement".to_string(),
-            );
-        }
-        let direction_radians = corrected_perlin_direction_degrees(direction)
-            .rem_euclid(360.0)
-            .to_radians();
+        let direction_radians = f64::from(direction).rem_euclid(360.0).to_radians();
         let (direction_sine, direction_cosine) = direction_radians.sin_cos();
         let mut targets = Vec::with_capacity(runtime_targets.len());
         for target in runtime_targets {
             let strip_last = target.strip_count.saturating_sub(1) as f64;
-            let (mut normalized_x, mut normalized_y, source_width, source_height) =
-                if mapping_raster {
-                    (f64::from(target.x), f64::from(target.z), 99.0, 99.0)
+            let (mut normalized_x, mut normalized_y) = if mapping_raster {
+                (f64::from(target.x), f64::from(target.z))
+            } else {
+                let normalized_x = if target.strip_count <= 1 {
+                    0.5
                 } else {
-                    let normalized_x = if target.strip_count <= 1 {
-                        0.5
-                    } else {
-                        target.strip_index as f64 / strip_last
-                    };
-                    (normalized_x, 0.0, strip_last, 0.0)
+                    target.strip_index as f64 / strip_last
                 };
+                (normalized_x, 0.0)
+            };
 
             if vertical_symmetry {
                 normalized_x = f64::from(daslight_symmetry_coordinate(normalized_x as f32));
@@ -4521,12 +4500,13 @@ impl CompiledDaslightPerlin {
             if horizontal_symmetry {
                 normalized_y = f64::from(daslight_symmetry_coordinate(normalized_y as f32));
             }
-            (normalized_x, normalized_y) =
-                corrected_perlin_inverse_rotate(normalized_x, normalized_y, rotation_degrees);
-            let x = normalized_x * source_width;
-            let y = normalized_y * source_height;
-            let base_x = x / f64::from(zoom);
-            let base_y = y / f64::from(zoom);
+            (normalized_x, normalized_y) = corrected_perlin_inverse_rotate(
+                normalized_x,
+                normalized_y,
+                f64::from(rotation_degrees),
+            );
+            let base_x = normalized_x / f64::from(zoom);
+            let base_y = normalized_y / f64::from(zoom);
             // Direction was serialized but evaluator-dead in Daslight. The
             // corrected evaluator turns it into a spatial phase projection.
             // Speed still determines the integer temporal cycles per period,
@@ -4534,10 +4514,10 @@ impl CompiledDaslightPerlin {
             let directional_phase_radians =
                 std::f64::consts::TAU * (base_x * direction_cosine + base_y * direction_sine);
             #[cfg(test)]
-            let mut compiled_octaves = Vec::with_capacity(usize::from(octaves - 1));
+            let mut compiled_octaves = Vec::with_capacity(usize::from(octaves));
             let mut sine_component = 0.0_f64;
             let mut cosine_component = 0.0_f64;
-            for octave in 0..usize::from(octaves - 1) {
+            for octave in 0..usize::from(octaves) {
                 let frequency = 2.0_f64.powf(octave as f64);
                 let scaled_x = base_x * frequency;
                 let scaled_y = base_y * frequency;
@@ -4588,8 +4568,8 @@ impl CompiledDaslightPerlin {
             });
         }
         Ok(Self {
-            speed,
-            amplitude,
+            speed: f64::from(speed),
+            amplitude: f64::from(amplitude),
             grayscale,
             palette: request
                 .stops
@@ -4609,9 +4589,8 @@ impl CompiledDaslightPerlin {
         time_phase: f64,
     ) -> f64 {
         let cycle = time_phase.rem_euclid(1.0);
-        let time_radians = f64::from(self.speed) * std::f64::consts::TAU * cycle;
-        (base_radians + directional_phase_radians + time_radians).sin() * f64::from(self.amplitude)
-            / 100.0
+        let time_radians = self.speed * std::f64::consts::TAU * cycle;
+        (base_radians + directional_phase_radians + time_radians).sin() * self.amplitude / 100.0
     }
 
     #[cfg(test)]
@@ -4644,7 +4623,7 @@ impl CompiledDaslightPerlin {
             .get()
             .filter(|signal| signal.cycle_bits == cycle_bits)
             .unwrap_or_else(|| {
-                let radians = f64::from(self.speed) * std::f64::consts::TAU * cycle;
+                let radians = self.speed * std::f64::consts::TAU * cycle;
                 let (sine, cosine) = radians.sin_cos();
                 let signal = CompiledDaslightPerlinTimeSignal {
                     cycle_bits,
@@ -4655,7 +4634,7 @@ impl CompiledDaslightPerlin {
                 signal
             });
         let sum = (target.sine_component * signal.cosine + target.cosine_component * signal.sine)
-            * f64::from(self.amplitude)
+            * self.amplitude
             / 100.0;
         Some((sum * 128.0 + 128.0).trunc().clamp(0.0, 255.0) as u8)
     }
@@ -4709,7 +4688,7 @@ impl CompiledDaslightKnightRider {
     fn compile(
         request: &ColorEffectRequest,
         strip_count: usize,
-        authored_size: u16,
+        authored_size: f32,
         one_way: bool,
         fading: bool,
         go_outside: bool,
@@ -4730,20 +4709,16 @@ impl CompiledDaslightKnightRider {
             ..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS)
             .contains(&request.stops.len())
         {
-            return Err(
-                "Daslight-exact Knight Rider requires between 1 and 255 palette stops".to_string(),
-            );
+            return Err("Knight Rider requires between 1 and 255 palette stops".to_string());
         }
-        if !(1..=100).contains(&authored_size) {
-            return Err("Daslight-exact Knight Rider size must be within 1..100".to_string());
+        if !authored_size.is_finite() || authored_size <= 0.0 {
+            return Err("Knight Rider size must be a positive strip percentage".to_string());
         }
         if !gradient.is_finite()
             || gradient.fract().abs() > f32::EPSILON
             || !(0.0..=100.0).contains(&gradient)
         {
-            return Err(
-                "Daslight-exact Knight Rider gradient must be an integer within 0..100".to_string(),
-            );
+            return Err("Knight Rider gradient must be within 0..100 percent".to_string());
         }
 
         let strip_count = strip_count.max(1);
@@ -4763,7 +4738,7 @@ impl CompiledDaslightKnightRider {
 
         Ok(Self {
             strip_count,
-            size: f64::from(authored_size),
+            size: (f64::from(authored_size) * strip_count as f64 / 100.0).max(f64::EPSILON),
             motion,
             fading,
             gradient: f64::from(gradient) / 100.0,
@@ -4869,21 +4844,13 @@ impl CompiledDaslightBurst {
             ..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS)
             .contains(&request.stops.len())
         {
-            return Err(
-                "Daslight-exact Burst requires between 1 and 255 palette stops".to_string(),
-            );
+            return Err("Burst requires between 1 and 255 palette stops".to_string());
         }
-        if !color_width.is_finite()
-            || color_width.fract().abs() > f32::EPSILON
-            || !(10.0..=900.0).contains(&color_width)
-        {
-            return Err(
-                "Daslight-exact Burst color width must be an integer within 10..900 pixels"
-                    .to_string(),
-            );
+        if !color_width.is_finite() || color_width <= 0.0 {
+            return Err("Burst color width must be a positive strip percentage".to_string());
         }
-        if !gradient.is_finite() || !(0.0..=1.0).contains(&gradient) {
-            return Err("Daslight-exact Burst gradient must be within 0..1".to_string());
+        if !gradient.is_finite() || !(0.0..=100.0).contains(&gradient) {
+            return Err("Burst gradient must be within 0..100 percent".to_string());
         }
 
         Ok(Self {
@@ -4893,8 +4860,9 @@ impl CompiledDaslightBurst {
                 .iter()
                 .map(|stop| DaslightKnightColor::from_color(stop.color))
                 .collect(),
-            color_width: f64::from(color_width),
-            gradient: f64::from(gradient),
+            color_width: (f64::from(color_width) * strip_count.max(1) as f64 / 100.0)
+                .max(f64::EPSILON),
+            gradient: f64::from(gradient) / 100.0,
             vertical_symmetry,
             grayscale,
         })
@@ -4948,7 +4916,6 @@ fn compile_daslight_value_spatial(
     };
     match &pattern.recipe {
         ColorEffectSpatialRecipe::KnightRider {
-            daslight_exact: true,
             grayscale: _,
             vertical_symmetry,
             size,
@@ -4980,7 +4947,6 @@ fn compile_daslight_burst(
     };
     match &pattern.recipe {
         ColorEffectSpatialRecipe::Burst {
-            daslight_exact: true,
             grayscale,
             vertical_symmetry,
             color_width,
@@ -5007,7 +4973,6 @@ fn compile_daslight_sweep(
     };
     match &pattern.recipe {
         ColorEffectSpatialRecipe::Sweep {
-            daslight_exact: true,
             grayscale,
             vertical_symmetry,
             direction_change,
@@ -5032,7 +4997,6 @@ fn compile_daslight_perlin(
     };
     match &pattern.recipe {
         ColorEffectSpatialRecipe::Perlin {
-            daslight_exact: true,
             grayscale,
             vertical_symmetry,
             horizontal_symmetry,
@@ -5161,7 +5125,6 @@ struct RuntimeColorTarget {
 #[derive(Clone)]
 struct RuntimeColorSpatialTarget {
     fixture_id: FixtureId,
-    beam_index: u16,
     daslight_target_index: usize,
     strip_index: usize,
     strip_count: usize,
@@ -27194,6 +27157,13 @@ fn validate_runtime_color_effect_request(request: &ColorEffectRequest) -> Result
         return Err("Color effect fixture spread must be within 0..1".to_string());
     }
     if let Some(pattern) = &request.spatial_pattern {
+        if pattern.parameter_model_version != protocol::COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION
+        {
+            return Err(format!(
+                "Unsupported color spatial parameter model version {}",
+                pattern.parameter_model_version
+            ));
+        }
         validate_color_spatial_recipe(&pattern.recipe)?;
         let mut beam_targets = HashSet::new();
         for target in &pattern.beam_targets {
@@ -27250,64 +27220,32 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
         }
     };
     match recipe {
-        ColorEffectSpatialRecipe::KnightRider {
-            daslight_exact,
-            vertical_symmetry,
-            size,
-            gradient,
-            ..
-        } => {
-            if *vertical_symmetry && !*daslight_exact {
-                return Err(
-                    "Knight Rider vertical symmetry requires the Daslight exact evaluator"
-                        .to_string(),
-                );
+        ColorEffectSpatialRecipe::KnightRider { size, gradient, .. } => {
+            if !size.is_finite() || *size <= 0.0 {
+                return Err("Knight Rider size must be a positive strip percentage".to_string());
             }
-            if !(1..=100).contains(size) {
-                return Err("Knight Rider size must be within 1..100 beam cells".to_string());
-            }
-            if *daslight_exact {
-                integer_range("Daslight Knight Rider gradient", *gradient, 0.0, 100.0)
-            } else {
-                percent("gradient", *gradient)
-            }
+            percent("Knight Rider gradient", *gradient)
         }
         ColorEffectSpatialRecipe::Sweep { .. } => Ok(()),
         ColorEffectSpatialRecipe::Burst {
-            daslight_exact,
-            vertical_symmetry,
             color_width,
             gradient,
             ..
         } => {
-            if *vertical_symmetry && !*daslight_exact {
-                return Err(
-                    "Burst vertical symmetry requires the Daslight exact evaluator".to_string(),
-                );
+            if !color_width.is_finite() || *color_width <= 0.0 {
+                return Err("Burst color width must be a positive strip percentage".to_string());
             }
-            if *daslight_exact {
-                integer_range("Daslight Burst color width", *color_width, 10.0, 900.0)?;
-                if gradient.is_finite() && (0.0..=1.0).contains(gradient) {
-                    Ok(())
-                } else {
-                    Err("Daslight Burst gradient must be within 0..1".to_string())
-                }
-            } else {
-                percent("color width", *color_width)?;
-                percent("gradient", *gradient)
-            }
+            percent("Burst gradient", *gradient)
         }
         ColorEffectSpatialRecipe::RandomFill {
-            syndocal_corrected,
             point_width,
             source_point_height,
             ..
         } => {
-            if *syndocal_corrected && !(1..=10).contains(point_width) {
-                return Err("Corrected Random fill point width must be within 1..10".to_string());
-            }
-            if !*syndocal_corrected && *point_width == 0 {
-                return Err("Random fill point width must be at least 1".to_string());
+            if !point_width.is_finite() || *point_width <= 0.0 {
+                return Err(
+                    "Random fill point width must be a positive strip percentage".to_string(),
+                );
             }
             if source_point_height.is_some_and(|height| !(1..=10).contains(&height)) {
                 return Err("Random fill source point height must be within 1..10".to_string());
@@ -27315,37 +27253,27 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
             Ok(())
         }
         ColorEffectSpatialRecipe::Sparkle {
-            syndocal_corrected,
             number,
-            lifespan,
             lifetime_ms,
             source_lifespan,
             width,
             ..
         } => {
-            if *syndocal_corrected {
-                if !(1..=10).contains(number) || !(1..=90).contains(width) {
-                    return Err(
-                        "Corrected Sparkle number/width must be within 1..10 and 1..90".to_string(),
-                    );
-                }
-                if !lifetime_ms.is_some_and(|lifetime| (100..=1_000).contains(&lifetime)) {
-                    return Err(
-                        "Corrected Sparkle lifetime must be within 100..1000 ms".to_string()
-                    );
-                }
-                if source_lifespan
-                    .is_some_and(|source| !source.is_finite() || !(0.0..=0.9).contains(&source))
-                {
-                    return Err("Sparkle source lifespan must be within 0..0.9".to_string());
-                }
-                Ok(())
-            } else {
-                if *number == 0 || *width == 0 {
-                    return Err("Sparkle number and width must be at least 1".to_string());
-                }
-                percent("lifespan", *lifespan)
+            if *number == 0 || !width.is_finite() || *width <= 0.0 {
+                return Err(
+                    "Sparkle number and width must be positive; width is a strip percentage"
+                        .to_string(),
+                );
             }
+            if !lifetime_ms.is_some_and(|lifetime| (100..=1_000).contains(&lifetime)) {
+                return Err("Sparkle lifetime must be within 100..1000 ms".to_string());
+            }
+            if source_lifespan
+                .is_some_and(|source| !source.is_finite() || !(0.0..=0.9).contains(&source))
+            {
+                return Err("Sparkle source lifespan must be within 0..0.9".to_string());
+            }
+            Ok(())
         }
         ColorEffectSpatialRecipe::Plasma {
             size_x,
@@ -27408,7 +27336,6 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
             percent("gradient", *gradient)
         }
         ColorEffectSpatialRecipe::Perlin {
-            daslight_exact,
             vertical_symmetry,
             horizontal_symmetry,
             rotation_degrees,
@@ -27422,35 +27349,20 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
             if *vertical_symmetry && *horizontal_symmetry {
                 return Err("Perlin transform must select at most one symmetry axis".to_string());
             }
-            if *daslight_exact {
-                if !(2..=10).contains(octaves) {
-                    return Err("Daslight-exact Perlin octaves must be within 2..10".to_string());
-                }
-                integer_range("Daslight-exact Perlin zoom", *zoom, 1.0, 100.0)?;
-                integer_range(
-                    "Daslight-exact Perlin direction",
-                    *direction_degrees,
-                    1.0,
-                    100.0,
-                )?;
-                integer_range("Daslight-exact Perlin speed", *speed, 1.0, 10.0)?;
-                integer_range("Daslight-exact Perlin amplitude", *amplitude, 5.0, 100.0)?;
-                integer_range(
-                    "Daslight-exact Perlin rotation",
-                    *rotation_degrees,
-                    0.0,
-                    360.0,
-                )?;
-                return Ok(());
-            }
             if !(1..=16).contains(octaves) {
                 return Err("Perlin octaves must be within 1..16".to_string());
             }
             if !zoom.is_finite() || *zoom <= 0.0 {
                 return Err("Perlin zoom must be finite and greater than 0".to_string());
             }
-            if !direction_degrees.is_finite() || !speed.is_finite() {
-                return Err("Perlin direction and speed must be finite".to_string());
+            if !direction_degrees.is_finite()
+                || !speed.is_finite()
+                || *speed < 0.0
+                || !rotation_degrees.is_finite()
+            {
+                return Err(
+                    "Perlin direction, non-negative speed, and rotation must be finite".to_string(),
+                );
             }
             percent("amplitude", *amplitude)
         }
@@ -30228,7 +30140,8 @@ fn runtime_color_spatial_targets(
     let strip_count = selections.len().max(1);
     let mut targets = Vec::with_capacity(resolved.len());
     let mut attribute_indices = HashMap::<FixtureId, HashMap<String, usize>>::new();
-    for (fixture_id, beam_index, selection, binding, x, z, rainbow_projected_coordinate) in resolved
+    for (fixture_id, _beam_index, selection, binding, x, z, rainbow_projected_coordinate) in
+        resolved
     {
         let strip_index = selections.binary_search(&selection).unwrap_or_default();
         let target_index = targets.len();
@@ -30246,7 +30159,6 @@ fn runtime_color_spatial_targets(
         }
         targets.push(RuntimeColorSpatialTarget {
             fixture_id,
-            beam_index,
             daslight_target_index: target_index,
             strip_index,
             strip_count,
@@ -31615,183 +31527,14 @@ fn evaluate_color_spatial_sample_at_rate(
     } else {
         target.strip_index as f32 / (strip_count - 1) as f32
     };
-    let seed = effect_id
-        ^ target.fixture_id.rotate_left(17)
-        ^ u64::from(target.beam_index).rotate_left(41);
-
     let color = match &pattern.recipe {
-        ColorEffectSpatialRecipe::KnightRider {
-            grayscale,
-            size,
-            one_way,
-            fading,
-            go_outside,
-            gradient,
-            ..
-        } => {
-            // Daslight's mapping Size is an absolute cell width. Direct DMX
-            // captures of the same 10-beam scene at Size=1 and Size=3 show a
-            // wider raster at 3; scaling it by the selection length does not.
-            let width = f32::from((*size).max(1));
-            let half_width = width * 0.5;
-            let phase = time_phase.rem_euclid(1.0) as f32;
-            let last_index = strip_count.saturating_sub(1) as f32;
-            let level_at_center = |center: f32| {
-                let mut relative = target.strip_index as f32 - center;
-                if !*go_outside && width < strip_count as f32 && strip_count > 1 {
-                    let cycle = strip_count as f32;
-                    relative -= (relative / cycle).round() * cycle;
-                }
-                let window_position = relative + half_width;
-                if !(0.0..=width).contains(&window_position) {
-                    return 0.0;
-                }
-                // The moving raster selects a palette position. It does not
-                // alpha-blend the effect with the previous DMX value: direct
-                // captures retain the first palette colour outside the peak.
-                let peak = width * (1.0 - (*gradient / 100.0).clamp(0.0, 1.0));
-                let tail = width - peak;
-                if peak <= f32::EPSILON {
-                    1.0 - window_position / width
-                } else if tail <= f32::EPSILON {
-                    window_position / width
-                } else if window_position <= peak {
-                    window_position / peak
-                } else {
-                    1.0 - (window_position - peak) / tail
-                }
-                .clamp(0.0, 1.0)
-            };
-            let travel_span = last_index + if *go_outside { width } else { 0.0 };
-            let origin = if *go_outside { -half_width } else { 0.0 };
-            let center = if *one_way {
-                origin + phase * travel_span
-            } else if phase <= 0.5 {
-                // Daslight's bidirectional Knight Rider starts in the middle,
-                // reaches the first edge halfway through the authored period,
-                // then returns to the middle. It does not render two opposing
-                // heads and it does not begin at the first selected beam.
-                origin + (0.5 - phase) * travel_span
-            } else {
-                origin + (phase - 0.5) * travel_span
-            };
-            let level = level_at_center(center);
-            let color =
-                spatial_palette_color(request, level, if *fading { *gradient } else { 0.0 });
-            return RuntimeColorSpatialSample {
-                // Fading changes interpolation inside the palette. With it
-                // disabled Daslight lands on discrete palette stops; it does
-                // not make the mapping transparent.
-                color: if *grayscale {
-                    daslight_grayscale_color(color)
-                } else {
-                    color
-                },
-                opacity: 1.0,
-            };
-        }
-        ColorEffectSpatialRecipe::Sweep {
-            daslight_exact: _,
-            grayscale,
-            vertical_symmetry,
-            direction_change,
-        } => {
-            // Daslight 5.0.6.2 CSweepEffect evaluator 0x1403665A0 renders
-            // the next palette colour across the full raster and overlays the
-            // current colour from floor(progress * width) to the right edge.
-            // Direction Change rotates alternate transitions by 180 degrees
-            // (0x140366847..0x1403668D4). The common Transform fold and qGray
-            // post-process run after the completed source raster.
-            let palette_count = request.stops.len();
-            let scaled = time_phase.rem_euclid(1.0) as f32 * palette_count as f32;
-            let transition_index = scaled.floor() as usize % palette_count;
-            let progress = scaled.fract();
-            let swept_cells = (progress * strip_count as f32).trunc() as usize;
-            let source_index = if *vertical_symmetry {
-                daslight_vertical_fold_source_index(target.strip_index, strip_count)
-            } else {
-                Some(target.strip_index)
-            };
-            let Some(source_index) = source_index else {
-                return RuntimeColorSpatialSample {
-                    color: black_color(),
-                    opacity: 1.0,
-                };
-            };
-            let uses_next = if *direction_change && transition_index % 2 == 1 {
-                source_index >= strip_count.saturating_sub(swept_cells)
-            } else {
-                source_index < swept_cells
-            };
-            let color = if uses_next {
-                request.stops[(transition_index + 1) % palette_count].color
-            } else {
-                request.stops[transition_index].color
-            };
-            if *grayscale {
-                daslight_grayscale_color(color)
-            } else {
-                color
-            }
-        }
-        ColorEffectSpatialRecipe::Burst {
-            color_width,
-            gradient,
-            ..
-        } => {
-            let radius = (strip_position - 0.5).abs() * 2.0;
-            let front = time_phase.rem_euclid(1.0) as f32;
-            let width = (*color_width / 100.0).max(1.0 / strip_count as f32);
-            let distance = (radius - front).abs();
-            if distance > width {
-                black_color()
-            } else {
-                spatial_palette_color(request, 1.0 - distance / width, *gradient)
-            }
-        }
-        ColorEffectSpatialRecipe::RandomFill { point_width, .. } => {
-            let point_width = usize::from(*point_width).max(1);
-            let cell_count = strip_count.div_ceil(point_width).max(1);
-            let cell = target.strip_index / point_width;
-            let phase = time_phase.rem_euclid(1.0) as f32;
-            let filled = ((phase * cell_count as f32).floor() as usize + 1).min(cell_count);
-            let rank = spatial_random_rank(cell, cell_count, effect_id);
-            if rank >= filled {
-                black_color()
-            } else {
-                let palette_index =
-                    (splitmix64(effect_id ^ cell as u64) % request.stops.len() as u64) as usize;
-                request.stops[palette_index].color
-            }
-        }
-        ColorEffectSpatialRecipe::Sparkle {
-            number,
-            lifespan,
-            width,
-            ..
-        } => {
-            let epoch = time_phase.floor() as i64;
-            let age = time_phase.rem_euclid(1.0) as f32;
-            let life = (*lifespan / 100.0).max(0.04);
-            if age > life {
-                black_color()
-            } else {
-                let radius = usize::from(*width).saturating_sub(1);
-                let mut color = black_color();
-                for sparkle in 0..usize::from(*number) {
-                    let sparkle_seed =
-                        seed ^ (epoch as u64).rotate_left(29) ^ (sparkle as u64).rotate_left(47);
-                    let center = (splitmix64(sparkle_seed) % strip_count as u64) as usize;
-                    if target.strip_index.abs_diff(center) <= radius {
-                        let palette_index = (splitmix64(sparkle_seed ^ 0xA53C_9E17)
-                            % request.stops.len() as u64)
-                            as usize;
-                        color = scale_color(request.stops[palette_index].color, 1.0 - age / life);
-                        break;
-                    }
-                }
-                color
-            }
+        ColorEffectSpatialRecipe::KnightRider { .. }
+        | ColorEffectSpatialRecipe::Sweep { .. }
+        | ColorEffectSpatialRecipe::Burst { .. }
+        | ColorEffectSpatialRecipe::RandomFill { .. }
+        | ColorEffectSpatialRecipe::Sparkle { .. }
+        | ColorEffectSpatialRecipe::Perlin { .. } => {
+            unreachable!("unified spatial recipes are evaluated by their compiled analytic route")
         }
         ColorEffectSpatialRecipe::Plasma {
             grayscale,
@@ -31883,27 +31626,6 @@ fn evaluate_color_spatial_sample_at_rate(
                 color
             }
         }
-        ColorEffectSpatialRecipe::Perlin {
-            daslight_exact: _,
-            grayscale: _,
-            vertical_symmetry: _,
-            horizontal_symmetry: _,
-            rotation_degrees: _,
-            octaves,
-            zoom,
-            direction_degrees,
-            speed,
-            amplitude,
-        } => {
-            let direction = direction_degrees.to_radians();
-            let travel = time_phase as f32 * *speed;
-            let scale = (*zoom / 10.0).max(0.001);
-            let x = target.x * scale + travel * direction.cos();
-            let z = target.z * scale + travel * direction.sin();
-            let noise = spatial_fractal_noise(x, z, *octaves, effect_id as u32);
-            let value = (0.5 + (noise - 0.5) * (*amplitude / 100.0)).clamp(0.0, 1.0);
-            spatial_palette_color(request, value, 100.0)
-        }
     };
     RuntimeColorSpatialSample {
         color,
@@ -31916,15 +31638,6 @@ fn black_color() -> ColorEffectColor {
         red: 0,
         green: 0,
         blue: 0,
-    }
-}
-
-fn scale_color(color: ColorEffectColor, amount: f32) -> ColorEffectColor {
-    let amount = amount.clamp(0.0, 1.0);
-    ColorEffectColor {
-        red: (color.red as f32 * amount).round() as u16,
-        green: (color.green as f32 * amount).round() as u16,
-        blue: (color.blue as f32 * amount).round() as u16,
     }
 }
 
@@ -32046,54 +31759,6 @@ fn spatial_palette_color(
             ColorEffectInterpolation::Rgb,
         )
     }
-}
-
-fn spatial_random_rank(cell: usize, cell_count: usize, seed: u64) -> usize {
-    let key = splitmix64(seed ^ cell as u64);
-    (0..cell_count)
-        .filter(|candidate| {
-            let candidate_key = splitmix64(seed ^ *candidate as u64);
-            candidate_key < key || (candidate_key == key && *candidate < cell)
-        })
-        .count()
-}
-
-fn spatial_fractal_noise(x: f32, z: f32, octaves: u8, seed: u32) -> f32 {
-    let mut value = 0.0;
-    let mut weight = 0.5;
-    let mut weight_sum = 0.0;
-    let mut frequency = 1.0;
-    for octave in 0..octaves {
-        value +=
-            spatial_value_noise(x * frequency, z * frequency, seed ^ u32::from(octave)) * weight;
-        weight_sum += weight;
-        frequency *= 2.0;
-        weight *= 0.5;
-    }
-    if weight_sum <= f32::EPSILON {
-        0.5
-    } else {
-        (value / weight_sum).clamp(0.0, 1.0)
-    }
-}
-
-fn spatial_value_noise(x: f32, z: f32, seed: u32) -> f32 {
-    let x0 = x.floor() as i32;
-    let z0 = z.floor() as i32;
-    let tx = x - x.floor();
-    let tz = z - z.floor();
-    let smooth = |value: f32| value * value * (3.0 - 2.0 * value);
-    let sample = |sample_x: i32, sample_z: i32| {
-        let mixed = (sample_x as u32).wrapping_mul(0x8DA6_B343)
-            ^ (sample_z as u32).wrapping_mul(0xD816_3841)
-            ^ seed;
-        hash_unit_float(mixed)
-    };
-    let top = sample(x0, z0) + (sample(x0.saturating_add(1), z0) - sample(x0, z0)) * smooth(tx);
-    let bottom = sample(x0, z0.saturating_add(1))
-        + (sample(x0.saturating_add(1), z0.saturating_add(1)) - sample(x0, z0.saturating_add(1)))
-            * smooth(tx);
-    top + (bottom - top) * smooth(tz)
 }
 
 fn evaluate_cycle_color(request: &ColorEffectRequest, position: f32) -> ColorEffectColor {
@@ -54865,6 +54530,7 @@ mod tests {
         ];
         request.spatial_pattern = Some(Box::new(protocol::ColorEffectSpatialPattern {
             recipe,
+            parameter_model_version: protocol::COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
             beam_targets: Vec::new(),
             placement: None,
         }));
@@ -54874,7 +54540,7 @@ mod tests {
     #[allow(clippy::too_many_arguments)]
     fn test_daslight_knight_request(
         period_ms: u64,
-        size: u16,
+        size: impl Into<f64>,
         one_way: bool,
         fading: bool,
         go_outside: bool,
@@ -54885,8 +54551,8 @@ mod tests {
         assert!((protocol::DASLIGHT_COLOR_PALETTE_MIN_STOPS
             ..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS)
             .contains(&palette_red.len()));
+        let size = size.into() as f32;
         let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::KnightRider {
-            daslight_exact: true,
             grayscale: false,
             vertical_symmetry,
             size,
@@ -54920,7 +54586,6 @@ mod tests {
         palette: &[ColorEffectColor],
     ) -> ColorEffectRequest {
         let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::Burst {
-            daslight_exact: true,
             grayscale,
             vertical_symmetry,
             color_width,
@@ -54954,7 +54619,6 @@ mod tests {
         grayscale: bool,
     ) -> ColorEffectRequest {
         let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::Perlin {
-            daslight_exact: true,
             grayscale,
             vertical_symmetry,
             horizontal_symmetry: false,
@@ -54977,7 +54641,6 @@ mod tests {
     ) -> RuntimeColorSpatialTarget {
         RuntimeColorSpatialTarget {
             fixture_id: strip_index as u64 + 1,
-            beam_index: 0,
             strip_index,
             strip_count,
             daslight_target_index: strip_index,
@@ -55060,17 +54723,16 @@ mod tests {
         rng_seed: u32,
         number: u16,
         lifetime_ms: u16,
-        width: u16,
+        width: impl Into<f64>,
         grayscale: bool,
         vertical_symmetry: bool,
     ) -> ColorEffectRequest {
+        let width = width.into() as f32;
         let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::Sparkle {
-            syndocal_corrected: true,
             grayscale,
             vertical_symmetry,
             rng_seed,
             number,
-            lifespan: 0.0,
             lifetime_ms: Some(lifetime_ms),
             source_lifespan: Some(0.0),
             width,
@@ -55503,7 +55165,7 @@ mod tests {
                 &[0, u16::MAX],
             );
             CompiledDaslightKnightRider::compile(
-                &request, 5, 2, one_way, false, go_outside, 50.0, false,
+                &request, 5, 40.0, one_way, false, go_outside, 50.0, false,
             )
             .unwrap()
         };
@@ -55537,7 +55199,7 @@ mod tests {
         );
         longer.phase = 0.0;
         let longer =
-            CompiledDaslightKnightRider::compile(&longer, 5, 2, false, false, true, 50.0, false)
+            CompiledDaslightKnightRider::compile(&longer, 5, 40.0, false, false, true, 50.0, false)
                 .unwrap();
         assert_eq!(bounce_outside.motion_head(0.25), longer.motion_head(0.25));
         assert_eq!(bounce_outside.lanes.len(), longer.lanes.len());
@@ -55556,7 +55218,7 @@ mod tests {
             &[0, 10_000, 20_000, 30_000],
         );
         let compiled =
-            CompiledDaslightKnightRider::compile(&request, 5, 1, true, true, false, 50.0, false)
+            CompiledDaslightKnightRider::compile(&request, 5, 20.0, true, true, false, 50.0, false)
                 .unwrap();
         assert_eq!(
             compiled
@@ -55605,12 +55267,28 @@ mod tests {
         );
         request.stops[1].color = test_color(u16::MAX, 0, 0);
         request.stops[2].color = test_color(0, u16::MAX, 0);
-        let first =
-            CompiledDaslightKnightRider::compile(&request, 9, 4, false, true, false, 50.0, false)
-                .unwrap();
-        let repeated =
-            CompiledDaslightKnightRider::compile(&request, 9, 4, false, true, false, 50.0, false)
-                .unwrap();
+        let first = CompiledDaslightKnightRider::compile(
+            &request,
+            9,
+            400.0 / 9.0,
+            false,
+            true,
+            false,
+            50.0,
+            false,
+        )
+        .unwrap();
+        let repeated = CompiledDaslightKnightRider::compile(
+            &request,
+            9,
+            400.0 / 9.0,
+            false,
+            true,
+            false,
+            50.0,
+            false,
+        )
+        .unwrap();
         for phase in [0.0, 0.101, 0.102, 0.499, 0.999] {
             for index in 0..9 {
                 assert_eq!(
@@ -55624,13 +55302,21 @@ mod tests {
             first.sample_at_phase(0.102, 1)
         );
 
-        let grayscale =
-            CompiledDaslightKnightRider::compile(&request, 9, 4, false, true, false, 50.0, false)
-                .map(|mut compiled| {
-                    compiled.grayscale = true;
-                    compiled
-                })
-                .unwrap();
+        let grayscale = CompiledDaslightKnightRider::compile(
+            &request,
+            9,
+            400.0 / 9.0,
+            false,
+            true,
+            false,
+            50.0,
+            false,
+        )
+        .map(|mut compiled| {
+            compiled.grayscale = true;
+            compiled
+        })
+        .unwrap();
         let color = first.sample_at_phase(0.101, 1);
         assert_eq!(
             grayscale.sample_at_phase(0.101, 1),
@@ -55642,8 +55328,8 @@ mod tests {
     fn corrected_authored_period_is_exact_free_run_and_clock_synced() {
         let request = test_daslight_burst_request(
             1_025,
-            10.0,
-            1.0,
+            200.0,
+            100.0,
             false,
             false,
             &[black_color(), test_color(u16::MAX, 0, 0)],
@@ -55694,7 +55380,7 @@ mod tests {
         let knight = compile_daslight_value_spatial(&knight_request, 5)
             .unwrap()
             .unwrap();
-        let edge = test_spatial_color_target(4, 5, 1.0, 0.5);
+        let edge = test_spatial_color_target(0, 5, 0.0, 0.5);
         let evaluate_knight = |request: &ColorEffectRequest, now, clock: &ClockSnapshot| {
             evaluate_daslight_knight_rider_color_at_rate(
                 request, &edge, &knight, created_at, now, clock, 1.0,
@@ -55729,7 +55415,6 @@ mod tests {
         );
 
         let mut sweep_request = test_spatial_color_request(ColorEffectSpatialRecipe::Sweep {
-            daslight_exact: true,
             grayscale: false,
             vertical_symmetry: false,
             direction_change: false,
@@ -55738,9 +55423,16 @@ mod tests {
         sweep_request.stops[0].color = test_color(u16::MAX, 0, 0);
         sweep_request.stops[1].color = test_color(0, 0, u16::MAX);
         let sweep = compile_daslight_sweep(&sweep_request, 5).unwrap().unwrap();
+        let sweep_edge = test_spatial_color_target(4, 5, 1.0, 0.5);
         let evaluate_sweep = |request: &ColorEffectRequest, now, clock: &ClockSnapshot| {
             evaluate_daslight_sweep_color_at_rate(
-                request, &edge, &sweep, created_at, now, clock, 1.0,
+                request,
+                &sweep_edge,
+                &sweep,
+                created_at,
+                now,
+                clock,
+                1.0,
             )
         };
         let sweep_start = evaluate_sweep(&sweep_request, created_at, &ClockSnapshot::default());
@@ -55776,8 +55468,8 @@ mod tests {
     fn corrected_burst_has_no_40ms_staircase_and_uses_pixel_centre_radius() {
         let request = test_daslight_burst_request(
             1_025,
-            10.0,
-            1.0,
+            200.0,
+            100.0,
             false,
             false,
             &[black_color(), test_color(u16::MAX, 0, 0)],
@@ -55799,14 +55491,14 @@ mod tests {
             test_color(0, u16::MAX, 0),
             test_color(0, 0, u16::MAX),
         ];
-        let held = test_daslight_burst_request(1_025, 10.0, 0.0, false, false, &palette);
+        let held = test_daslight_burst_request(1_025, 200.0, 0.0, false, false, &palette);
         let held = compile_daslight_burst(&held, 5).unwrap().unwrap();
         assert_eq!(held.palette_color(0.0).into_color(), palette[0]);
         assert_eq!(held.palette_color(1.0 / 3.0).into_color(), palette[1]);
         assert_eq!(held.palette_color(2.0 / 3.0).into_color(), palette[2]);
         assert_eq!(held.palette_color(0.2).into_color(), palette[0]);
 
-        let interpolated = test_daslight_burst_request(1_025, 10.0, 1.0, false, false, &palette);
+        let interpolated = test_daslight_burst_request(1_025, 200.0, 100.0, false, false, &palette);
         let interpolated = compile_daslight_burst(&interpolated, 5).unwrap().unwrap();
         let blended = interpolated.palette_color(1.0 / 6.0).into_color();
         assert!((i32::from(blended.red) - 32_767).abs() <= 1);
@@ -55818,8 +55510,8 @@ mod tests {
     fn corrected_burst_preserves_qgray_and_tent_transform() {
         let request = test_daslight_burst_request(
             1_025,
-            10.0,
-            1.0,
+            200.0,
+            100.0,
             true,
             true,
             &[test_color(u16::MAX, 0, 0), black_color()],
@@ -55837,7 +55529,6 @@ mod tests {
     #[test]
     fn corrected_sweep_boundary_is_analytic_and_direction_change_reverses_alternates() {
         let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::Sweep {
-            daslight_exact: true,
             grayscale: false,
             vertical_symmetry: false,
             direction_change: false,
@@ -55877,7 +55568,6 @@ mod tests {
     #[test]
     fn corrected_sweep_is_continuous_phase_reload_stable_and_tent_mapped() {
         let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::Sweep {
-            daslight_exact: true,
             grayscale: false,
             vertical_symmetry: true,
             direction_change: false,
@@ -55929,101 +55619,33 @@ mod tests {
     }
 
     #[test]
-    fn corrected_daslight_family_validation_remains_additive() {
+    fn unified_daslight_family_validation_uses_native_domains() {
         let invalid_knight =
             test_daslight_knight_request(1_025, 0, true, true, false, 50.0, false, &[0, u16::MAX]);
         assert!(validate_color_effect_request(&invalid_knight)
             .unwrap_err()
-            .contains("size must be within 1..100"));
+            .contains("positive strip percentage"));
         let invalid_burst = test_daslight_burst_request(
             1_025,
-            50.5,
-            1.0,
+            0.0,
+            100.0,
             false,
             false,
             &[black_color(), test_color(u16::MAX, 0, 0)],
         );
         assert!(validate_color_effect_request(&invalid_burst)
             .unwrap_err()
-            .contains("integer within 10..900"));
-    }
-
-    #[test]
-    fn color_spatial_random_fill_is_seeded_and_fills_by_point_width() {
-        let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::RandomFill {
-            syndocal_corrected: false,
-            grayscale: false,
-            vertical_symmetry: false,
-            rng_seed: 0,
-            point_width: 1,
-            source_point_height: None,
-        });
-        request.stops[0].color = test_color(u16::MAX, 0, 0);
-        request.stops[1].color = test_color(0, 0, u16::MAX);
-        let colors = (0..5)
-            .map(|index| {
-                evaluate_test_spatial_color(
-                    &request,
-                    &test_spatial_color_target(index, 5, index as f32 / 4.0, 0.5),
-                    100,
-                )
-            })
-            .collect::<Vec<_>>();
-        let repeated = (0..5)
-            .map(|index| {
-                evaluate_test_spatial_color(
-                    &request,
-                    &test_spatial_color_target(index, 5, index as f32 / 4.0, 0.5),
-                    100,
-                )
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(colors, repeated);
-        assert_eq!(
-            colors
-                .iter()
-                .filter(|color| **color != test_color(0, 0, 0))
-                .count(),
-            1
-        );
-    }
-
-    #[test]
-    fn color_spatial_sparkle_has_deterministic_bounded_population() {
-        let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::Sparkle {
-            syndocal_corrected: false,
-            grayscale: false,
-            vertical_symmetry: false,
-            rng_seed: 0,
-            number: 2,
-            lifespan: 50.0,
-            lifetime_ms: None,
-            source_lifespan: None,
-            width: 2,
-        });
-        request.stops[0].color = test_color(u16::MAX, 0, 0);
-        request.stops[1].color = test_color(0, 0, u16::MAX);
-        let lit = (0..16)
-            .filter(|index| {
-                evaluate_test_spatial_color(
-                    &request,
-                    &test_spatial_color_target(*index, 16, *index as f32 / 15.0, 0.5),
-                    10,
-                ) != test_color(0, 0, 0)
-            })
-            .count();
-        assert!((1..=6).contains(&lit), "lit={lit}");
+            .contains("positive strip percentage"));
     }
 
     #[test]
     fn corrected_random_fill_compiles_seeded_no_replacement_continuous_cells() {
         let request_for_seed = |rng_seed| {
             let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::RandomFill {
-                syndocal_corrected: true,
                 grayscale: false,
                 vertical_symmetry: false,
                 rng_seed,
-                point_width: 2,
+                point_width: 200.0 / 11.0,
                 source_point_height: Some(7),
             });
             request.stops[0].color = test_color(u16::MAX, 0, 0);
@@ -56081,14 +55703,12 @@ mod tests {
 
     #[test]
     fn corrected_sparkle_is_reload_stable_continuous_and_single_palette_safe() {
-        let request_for = |rng_seed, lifetime_ms, width| {
+        let request_for = |rng_seed, lifetime_ms, width: f32| {
             let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::Sparkle {
-                syndocal_corrected: true,
                 grayscale: false,
                 vertical_symmetry: false,
                 rng_seed,
                 number: 1,
-                lifespan: 0.0,
                 lifetime_ms: Some(lifetime_ms),
                 source_lifespan: Some(0.0),
                 width,
@@ -56097,15 +55717,15 @@ mod tests {
             request.stops[1].color = test_color(u16::MAX, u16::MAX, u16::MAX);
             request
         };
-        let request = request_for(91, 100, 3);
+        let request = request_for(91, 100, 300.0 / 17.0);
         validate_color_effect_request(&request).unwrap();
         let compiled = CompiledSyndocalRandomFx::compile(&request, 17)
             .unwrap()
             .unwrap();
-        let repeated = CompiledSyndocalRandomFx::compile(&request_for(91, 100, 3), 17)
+        let repeated = CompiledSyndocalRandomFx::compile(&request_for(91, 100, 300.0 / 17.0), 17)
             .unwrap()
             .unwrap();
-        let changed = CompiledSyndocalRandomFx::compile(&request_for(92, 100, 3), 17)
+        let changed = CompiledSyndocalRandomFx::compile(&request_for(92, 100, 300.0 / 17.0), 17)
             .unwrap()
             .unwrap();
         let at = Instant::now();
@@ -56116,7 +55736,7 @@ mod tests {
         };
         assert_eq!(samples(&compiled), samples(&repeated));
         assert_ne!(samples(&compiled), samples(&changed));
-        let single = CompiledSyndocalRandomFx::compile(&request_for(91, 100, 1), 1)
+        let single = CompiledSyndocalRandomFx::compile(&request_for(91, 100, 100.0), 1)
             .unwrap()
             .unwrap();
         let single_at_spawn = single.sample_at_time(0.0, 0, 1, at, at);
@@ -56125,7 +55745,7 @@ mod tests {
         assert!(single_at_spawn.red > single_one_ms_later.red);
         assert!(single_one_ms_later.red > 0);
 
-        let mut single_palette = request_for(91, 100, 1);
+        let mut single_palette = request_for(91, 100, 100.0);
         single_palette.stops.truncate(1);
         single_palette.stops[0].color = test_color(12_345, 23_456, 34_567);
         let compiled = CompiledSyndocalRandomFx::compile(&single_palette, 1)
@@ -56904,7 +56524,7 @@ mod tests {
     #[test]
     fn corrected_sparkle_preserves_width_transform_and_qgray() {
         let created_at = Instant::now();
-        let width_request = test_corrected_sparkle_request(19, 1, 500, 3, false, false);
+        let width_request = test_corrected_sparkle_request(19, 1, 500, 37.5, false, false);
         let width = CompiledSyndocalRandomFx::compile(&width_request, 8)
             .unwrap()
             .unwrap();
@@ -56921,7 +56541,7 @@ mod tests {
             (particle_start..particle_start + 3).collect::<Vec<_>>()
         );
 
-        let transformed_request = test_corrected_sparkle_request(19, 1, 500, 3, false, true);
+        let transformed_request = test_corrected_sparkle_request(19, 1, 500, 37.5, false, true);
         let transformed = CompiledSyndocalRandomFx::compile(&transformed_request, 8)
             .unwrap()
             .unwrap();
@@ -56948,32 +56568,29 @@ mod tests {
     }
 
     #[test]
-    fn corrected_random_recipe_domains_fail_closed_without_breaking_legacy() {
+    fn unified_random_recipe_domains_fail_closed() {
         let missing_lifetime = test_spatial_color_request(ColorEffectSpatialRecipe::Sparkle {
-            syndocal_corrected: true,
             grayscale: false,
             vertical_symmetry: false,
             rng_seed: 1,
             number: 1,
-            lifespan: 0.0,
             lifetime_ms: None,
             source_lifespan: Some(0.0),
-            width: 1,
+            width: 1.0,
         });
         assert!(validate_color_effect_request(&missing_lifetime)
             .unwrap_err()
             .contains("100..1000 ms"));
         let bad_width = test_spatial_color_request(ColorEffectSpatialRecipe::RandomFill {
-            syndocal_corrected: true,
             grayscale: false,
             vertical_symmetry: false,
             rng_seed: 1,
-            point_width: 11,
+            point_width: 0.0,
             source_point_height: None,
         });
         assert!(validate_color_effect_request(&bad_width)
             .unwrap_err()
-            .contains("within 1..10"));
+            .contains("positive strip percentage"));
     }
 
     #[test]
@@ -57278,27 +56895,6 @@ mod tests {
     }
 
     #[test]
-    fn color_spatial_perlin_reuses_seeded_smooth_noise_and_amplitude() {
-        let request = test_spatial_color_request(ColorEffectSpatialRecipe::Perlin {
-            daslight_exact: false,
-            grayscale: false,
-            vertical_symmetry: false,
-            horizontal_symmetry: false,
-            rotation_degrees: 0.0,
-            octaves: 5,
-            zoom: 20.0,
-            direction_degrees: 1.0,
-            speed: 1.0,
-            amplitude: 0.0,
-        });
-        let target = test_spatial_color_target(0, 1, 0.37, 0.63);
-        let first = evaluate_test_spatial_color(&request, &target, 375);
-        let second = evaluate_test_spatial_color(&request, &target, 375);
-        assert_eq!(first, second);
-        assert!((32_767..=32_768).contains(&first.red), "{}", first.red);
-    }
-
-    #[test]
     fn dvc_corrected_perlin_preserves_hash_and_uses_continuous_phase() {
         for ((x, y), expected) in [
             ((0, 0), -0.885_272_484_752_390_3),
@@ -57349,12 +56945,12 @@ mod tests {
             (270, (0.5, 0.25)),
             (360, (0.25, 0.5)),
         ] {
-            let actual = corrected_perlin_inverse_rotate(0.25, 0.5, angle);
+            let actual = corrected_perlin_inverse_rotate(0.25, 0.5, f64::from(angle));
             assert!((actual.0 - expected.0).abs() < 1.0e-12, "angle {angle}");
             assert!((actual.1 - expected.1).abs() < 1.0e-12, "angle {angle}");
         }
 
-        let rotated_corner = corrected_perlin_inverse_rotate(0.0, 0.0, 45);
+        let rotated_corner = corrected_perlin_inverse_rotate(0.0, 0.0, 45.0);
         assert!(rotated_corner.0 < 0.0);
         let source_radius = (0.5_f64.powi(2) + 0.5_f64.powi(2)).sqrt();
         let rotated_radius =
@@ -57381,16 +56977,21 @@ mod tests {
 
     #[test]
     fn dvc_corrected_perlin_direction_maps_full_domain_and_changes_spatial_phase() {
-        assert_eq!(corrected_perlin_direction_degrees(1), 0.0);
-        assert!((corrected_perlin_direction_degrees(2) - 360.0 / 99.0).abs() < 1.0e-12);
-        assert_eq!(corrected_perlin_direction_degrees(100), 360.0);
-
         let targets = (0..5)
             .map(|index| test_spatial_color_target(index, 5, index as f32 / 4.0, 0.5))
             .collect::<Vec<_>>();
-        let first = test_daslight_perlin_request(3_000, 4, 5.0, 1.0, 1.0, 70.0, false, false);
-        let second = test_daslight_perlin_request(3_000, 4, 5.0, 50.0, 1.0, 70.0, false, false);
-        let wrapped = test_daslight_perlin_request(3_000, 4, 5.0, 100.0, 1.0, 70.0, false, false);
+        let first = test_daslight_perlin_request(3_000, 3, 1.25, 0.0, 1.0, 70.0, false, false);
+        let second = test_daslight_perlin_request(
+            3_000,
+            3,
+            1.25,
+            49.0 * 360.0 / 99.0,
+            1.0,
+            70.0,
+            false,
+            false,
+        );
+        let wrapped = test_daslight_perlin_request(3_000, 3, 1.25, 360.0, 1.0, 70.0, false, false);
         let first = compile_daslight_perlin(&first, &targets).unwrap().unwrap();
         let second = compile_daslight_perlin(&second, &targets).unwrap().unwrap();
         let wrapped = compile_daslight_perlin(&wrapped, &targets)
@@ -61331,6 +60932,7 @@ mod tests {
         request.low = 1_000;
         request.high = 5_000;
         request.spatial_pattern = Some(protocol::ColorEffectSpatialPattern {
+            parameter_model_version: protocol::COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
             recipe: ColorEffectSpatialRecipe::ColorRainbow {
                 grayscale: false,
                 vertical_symmetry: false,
@@ -61404,6 +61006,7 @@ mod tests {
         let fixtures = vec![test_runtime_color_fixture(1, Vec::new(), controls)];
         let mut request = test_value_request(&[1]);
         request.spatial_pattern = Some(protocol::ColorEffectSpatialPattern {
+            parameter_model_version: protocol::COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
             recipe: ColorEffectSpatialRecipe::ColorRainbow {
                 grayscale: false,
                 vertical_symmetry: false,
@@ -61459,7 +61062,7 @@ mod tests {
     }
 
     #[test]
-    fn daslight_exact_value_specialized_path_matches_generic_spatial_reference() {
+    fn unified_knight_value_specialized_path_matches_spatial_reference() {
         let controls = vec![
             test_color_control("ColorRed", 1),
             test_color_control("ColorGreen", 2),
@@ -61473,11 +61076,11 @@ mod tests {
         request.low = 1_000;
         request.high = 60_000;
         request.spatial_pattern = Some(protocol::ColorEffectSpatialPattern {
+            parameter_model_version: protocol::COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
             recipe: ColorEffectSpatialRecipe::KnightRider {
-                daslight_exact: true,
                 grayscale: false,
                 vertical_symmetry: false,
-                size: 3,
+                size: 150.0,
                 one_way: true,
                 fading: true,
                 go_outside: true,
@@ -61538,7 +61141,7 @@ mod tests {
     }
 
     #[test]
-    fn daslight_exact_burst_value_specialized_path_matches_generic_spatial_reference() {
+    fn unified_burst_value_specialized_path_matches_spatial_reference() {
         let controls = vec![
             test_color_control("ColorRed", 1),
             test_color_control("ColorGreen", 2),
@@ -61553,12 +61156,12 @@ mod tests {
         request.high = 60_000;
         request.period_ms = 400;
         request.spatial_pattern = Some(protocol::ColorEffectSpatialPattern {
+            parameter_model_version: protocol::COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
             recipe: ColorEffectSpatialRecipe::Burst {
-                daslight_exact: true,
                 grayscale: false,
                 vertical_symmetry: false,
-                color_width: 10.0,
-                gradient: 0.5,
+                color_width: 500.0,
+                gradient: 50.0,
             },
             beam_targets: Vec::new(),
             placement: None,
@@ -62487,6 +62090,8 @@ mod tests {
                             .collect::<Vec<_>>();
                         request.spatial_pattern = Some(Box::new(
                             protocol::ColorEffectSpatialPattern {
+                            parameter_model_version:
+                                protocol::COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
                             recipe: ColorEffectSpatialRecipe::Rainbow {
                                 grayscale: true,
                                 vertical_symmetry: false,
@@ -62621,12 +62226,12 @@ mod tests {
                 })
                 .collect();
             request.spatial_pattern = Some(protocol::ColorEffectSpatialPattern {
+                parameter_model_version: protocol::COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
                 recipe: ColorEffectSpatialRecipe::Burst {
-                    daslight_exact: true,
                     grayscale: false,
                     vertical_symmetry: index % 2 == 1,
-                    color_width: 900.0,
-                    gradient: (index % 5) as f32 / 4.0,
+                    color_width: 90_000.0 / fixture_ids.len().max(1) as f32,
+                    gradient: (index % 5) as f32 * 25.0,
                 },
                 beam_targets: Vec::new(),
                 placement: None,
@@ -62662,8 +62267,8 @@ mod tests {
                 })
                 .collect();
             request.spatial_pattern = Some(protocol::ColorEffectSpatialPattern {
+                parameter_model_version: protocol::COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
                 recipe: ColorEffectSpatialRecipe::Sweep {
-                    daslight_exact: true,
                     grayscale: false,
                     vertical_symmetry: index % 2 == 1,
                     direction_change: index % 3 == 0,
@@ -62693,12 +62298,13 @@ mod tests {
     ) {
         for index in 0..effect_count {
             let recipe_ordinal = index.saturating_sub(1) / 3;
+            let strip_count = fixture_ids.len().max(1) as f32;
+            let source_span = fixture_ids.len().saturating_sub(1).max(1) as f32;
             let recipe = if index == 0 {
                 ColorEffectSpatialRecipe::KnightRider {
-                    daslight_exact: true,
                     grayscale: false,
                     vertical_symmetry: false,
-                    size: 100,
+                    size: 10_000.0 / strip_count,
                     one_way: false,
                     fading: true,
                     go_outside: true,
@@ -62707,27 +62313,24 @@ mod tests {
             } else {
                 match (index - 1) % 3 {
                     0 => ColorEffectSpatialRecipe::Perlin {
-                        daslight_exact: true,
                         grayscale: recipe_ordinal % 3 == 2,
                         vertical_symmetry: recipe_ordinal % 2 == 1,
                         horizontal_symmetry: false,
                         rotation_degrees: ((recipe_ordinal * 37) % 361) as f32,
-                        octaves: 2 + (recipe_ordinal % 9) as u8,
-                        zoom: (5 + recipe_ordinal % 20) as f32,
-                        direction_degrees: (1 + (recipe_ordinal * 17) % 100) as f32,
+                        octaves: 1 + (recipe_ordinal % 9) as u8,
+                        zoom: (5 + recipe_ordinal % 20) as f32 / source_span,
+                        direction_degrees: ((recipe_ordinal * 17) % 100) as f32 * 360.0 / 99.0,
                         speed: (1 + recipe_ordinal % 10) as f32,
                         amplitude: (50 + recipe_ordinal % 51) as f32,
                     },
                     1 => ColorEffectSpatialRecipe::RandomFill {
-                        syndocal_corrected: true,
                         grayscale: recipe_ordinal % 3 == 1,
                         vertical_symmetry: recipe_ordinal % 2 == 1,
                         rng_seed: 0xA5A5_0000 ^ index as u32,
-                        point_width: 1 + (recipe_ordinal % 10) as u16,
+                        point_width: (1 + (recipe_ordinal % 10)) as f32 * 100.0 / strip_count,
                         source_point_height: Some(1 + (recipe_ordinal % 10) as u16),
                     },
                     _ => ColorEffectSpatialRecipe::Sparkle {
-                        syndocal_corrected: true,
                         grayscale: recipe_ordinal % 3 == 1,
                         vertical_symmetry: recipe_ordinal % 2 == 1,
                         rng_seed: 0x5A5A_0000 ^ index as u32,
@@ -62736,7 +62339,6 @@ mod tests {
                         } else {
                             1 + (recipe_ordinal % 5) as u16
                         },
-                        lifespan: 0.0,
                         lifetime_ms: Some(if recipe_ordinal < 2 {
                             1_000
                         } else {
@@ -62744,9 +62346,9 @@ mod tests {
                         }),
                         source_lifespan: Some((recipe_ordinal % 10) as f32 / 10.0),
                         width: if recipe_ordinal < 2 {
-                            90
+                            9_000.0 / strip_count
                         } else {
-                            1 + (recipe_ordinal % 8) as u16
+                            (1 + (recipe_ordinal % 8)) as f32 * 100.0 / strip_count
                         },
                     },
                 }
@@ -62756,9 +62358,8 @@ mod tests {
                 ColorEffectSpatialRecipe::Sparkle {
                     number,
                     lifetime_ms,
-                    width,
                     ..
-                } => *number == 10 && *lifetime_ms == Some(1_000) && *width == 90,
+                } => *number == 10 && *lifetime_ms == Some(1_000),
                 ColorEffectSpatialRecipe::KnightRider { .. } => true,
                 _ => false,
             };
@@ -62921,7 +62522,7 @@ mod tests {
                     assert!(compiled
                         .targets
                         .iter()
-                        .all(|target| target.octaves.len() == usize::from(*octaves - 1)));
+                        .all(|target| target.octaves.len() == usize::from(*octaves)));
                     assert!(spatial.syndocal_random_fx.is_none());
                 }
                 ColorEffectSpatialRecipe::RandomFill { .. } => {
@@ -62935,7 +62536,6 @@ mod tests {
                 ColorEffectSpatialRecipe::Sparkle {
                     number,
                     lifetime_ms,
-                    width,
                     ..
                 } => {
                     recipe_counts[2] += 1;
@@ -62946,7 +62546,6 @@ mod tests {
                     };
                     if *number == 10
                         && *lifetime_ms == Some(1_000)
-                        && *width == 90
                         && color
                             .request
                             .clock_sync
@@ -62964,7 +62563,8 @@ mod tests {
                     assert!(spatial.daslight_perlin.is_none());
                 }
                 ColorEffectSpatialRecipe::KnightRider { size, .. } => {
-                    assert_eq!(*size, 100);
+                    let expected_size = 10_000.0 / color.request.fixture_ids.len() as f32;
+                    assert!((*size - expected_size).abs() <= f32::EPSILON);
                     assert_eq!(color.request.stops.len(), 255);
                     assert!(color
                         .request

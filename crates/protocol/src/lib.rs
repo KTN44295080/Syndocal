@@ -1292,6 +1292,10 @@ fn is_zero_u32(value: &u32) -> bool {
     *value == 0
 }
 
+fn is_zero_u8(value: &u8) -> bool {
+    *value == 0
+}
+
 fn is_zero_f32(value: &f32) -> bool {
     *value == 0.0
 }
@@ -2291,29 +2295,25 @@ pub struct EffectBeamTarget {
     pub feature_attribute: String,
 }
 
+pub const COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION: u8 = 1;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ColorEffectSpatialRecipe {
     KnightRider {
-        /// Use the recovered Daslight VALUE-family integer evaluator.
-        #[serde(default, skip_serializing_if = "is_false")]
-        daslight_exact: bool,
         /// Apply Daslight's common Grayscale post-process after source-over composition.
         #[serde(default, skip_serializing_if = "is_false")]
         grayscale: bool,
         /// Apply Daslight Transform=1 after rendering the source strip.
         #[serde(default, skip_serializing_if = "is_false")]
         vertical_symmetry: bool,
-        /// Lit window width in ordered beam cells (1..=100).
-        size: u16,
+        /// Lit window width as a percentage of the ordered target strip.
+        size: f32,
         one_way: bool,
         fading: bool,
         go_outside: bool,
         gradient: f32,
     },
     Sweep {
-        /// Preserve Daslight's generated 40 ms frame table and temporal interpolation.
-        #[serde(default, skip_serializing_if = "is_false")]
-        daslight_exact: bool,
         /// Apply Daslight's common Grayscale post-process after rasterization.
         #[serde(default, skip_serializing_if = "is_false")]
         grayscale: bool,
@@ -2324,24 +2324,18 @@ pub enum ColorEffectSpatialRecipe {
         direction_change: bool,
     },
     Burst {
-        /// Reproduce Daslight's CBurstEffect radial evaluator, cyclic palette
-        /// cache and 40 ms generated-frame scheduler.
-        #[serde(default, skip_serializing_if = "is_false")]
-        daslight_exact: bool,
         /// Apply Daslight's common Grayscale post-process after rasterization.
         #[serde(default, skip_serializing_if = "is_false")]
         grayscale: bool,
         /// Apply Daslight Transform=1 after rendering the source strip.
         #[serde(default, skip_serializing_if = "is_false")]
         vertical_symmetry: bool,
+        /// Radial palette width as a percentage of the ordered target strip.
         color_width: f32,
+        /// Palette-segment interpolation width in percent.
         gradient: f32,
     },
     RandomFill {
-        /// Use Syndocal's deterministic, continuous-time replacement for the
-        /// non-serialized Qt qrand stream used by Daslight.
-        #[serde(default, skip_serializing_if = "is_false")]
-        syndocal_corrected: bool,
         #[serde(default, skip_serializing_if = "is_false")]
         grayscale: bool,
         #[serde(default, skip_serializing_if = "is_false")]
@@ -2349,17 +2343,14 @@ pub enum ColorEffectSpatialRecipe {
         /// Stable source-derived seed. Zero is a valid deterministic seed.
         #[serde(default, skip_serializing_if = "is_zero_u32")]
         rng_seed: u32,
-        point_width: u16,
+        /// Filled cell width as a percentage of the ordered target strip.
+        point_width: f32,
         /// VALUE family 7 serializes Point Height even though its one-row
         /// evaluator does not consume it. COLOR family 2 omits the field.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source_point_height: Option<u16>,
     },
     Sparkle {
-        /// Use Syndocal's deterministic, continuous-time replacement for the
-        /// non-serialized Qt qrand placement stream used by Daslight.
-        #[serde(default, skip_serializing_if = "is_false")]
-        syndocal_corrected: bool,
         #[serde(default, skip_serializing_if = "is_false")]
         grayscale: bool,
         #[serde(default, skip_serializing_if = "is_false")]
@@ -2368,15 +2359,13 @@ pub enum ColorEffectSpatialRecipe {
         #[serde(default, skip_serializing_if = "is_zero_u32")]
         rng_seed: u32,
         number: u16,
-        /// Legacy native recipe percentage. Corrected recipes use
-        /// `lifetime_ms`; this field remains for byte-compatible .sdc loads.
-        lifespan: f32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         lifetime_ms: Option<u16>,
         /// Raw Daslight 0..0.9 source value retained for provenance.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source_lifespan: Option<f32>,
-        width: u16,
+        /// Particle width as a percentage of the ordered target strip.
+        width: f32,
     },
     Plasma {
         #[serde(default)]
@@ -2414,11 +2403,6 @@ pub enum ColorEffectSpatialRecipe {
         gradient: f32,
     },
     Perlin {
-        /// Select the recovered DVC evaluator family. The serialized field name
-        /// remains for compatibility; `true` now means Syndocal-corrected
-        /// continuous timing, analytic rotation/palette and meaningful Direction.
-        #[serde(default, skip_serializing_if = "is_false")]
-        daslight_exact: bool,
         #[serde(default, skip_serializing_if = "is_false")]
         grayscale: bool,
         #[serde(default, skip_serializing_if = "is_false")]
@@ -2427,7 +2411,9 @@ pub enum ColorEffectSpatialRecipe {
         horizontal_symmetry: bool,
         #[serde(default, skip_serializing_if = "is_zero_f32")]
         rotation_degrees: f32,
+        /// Analytic octave count in the unified evaluator.
         octaves: u8,
+        /// Normalized spatial scale. The field is sampled as coordinate / zoom.
         zoom: f32,
         direction_degrees: f32,
         speed: f32,
@@ -2488,6 +2474,10 @@ pub struct ColorEffectSpatialPlacement {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ColorEffectSpatialPattern {
     pub recipe: ColorEffectSpatialRecipe,
+    /// Parameter-domain discriminator. Zero is the legacy dual-route wire model;
+    /// one is the unified Syndocal-native model. Higher values are rejected.
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub parameter_model_version: u8,
     /// Empty for native effects; the engine derives one beam from each target fixture.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub beam_targets: Vec<ColorEffectBeamTarget>,
@@ -5095,17 +5085,17 @@ mod tests {
         let mut spatial = parsed;
         spatial.spatial_pattern = Some(Box::new(super::ColorEffectSpatialPattern {
             recipe: super::ColorEffectSpatialRecipe::Perlin {
-                daslight_exact: false,
                 grayscale: false,
                 vertical_symmetry: false,
                 horizontal_symmetry: false,
                 rotation_degrees: 0.0,
                 octaves: 5,
-                zoom: 20.0,
-                direction_degrees: 1.0,
+                zoom: 0.5,
+                direction_degrees: 0.0,
                 speed: 1.0,
                 amplitude: 100.0,
             },
+            parameter_model_version: super::COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
             beam_targets: vec![super::ColorEffectBeamTarget {
                 fixture_id: 1,
                 beam_index: 7,
@@ -5169,6 +5159,7 @@ mod tests {
                 angle_degrees: 90.0,
                 gradient: 0.75,
             },
+            parameter_model_version: super::COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
             beam_targets: vec![super::ColorEffectBeamTarget {
                 fixture_id: 8,
                 beam_index: 3,
@@ -5214,49 +5205,50 @@ mod tests {
     }
 
     #[test]
-    fn daslight_exact_knight_rider_flags_roundtrip_without_changing_legacy_byte_shape() {
-        let legacy_json = r#"{"KnightRider":{"size":8,"one_way":false,"fading":true,"go_outside":false,"gradient":50.0}}"#;
+    fn unified_knight_rider_recipe_accepts_and_drops_legacy_route_flags() {
+        let legacy_json = r#"{"KnightRider":{"daslight_exact":true,"size":8,"one_way":false,"fading":true,"go_outside":false,"gradient":50.0}}"#;
         let legacy: super::ColorEffectSpatialRecipe = serde_json::from_str(legacy_json).unwrap();
         let super::ColorEffectSpatialRecipe::KnightRider {
-            daslight_exact,
             grayscale,
             vertical_symmetry,
+            size,
             ..
         } = &legacy
         else {
             unreachable!()
         };
-        assert!(!daslight_exact);
         assert!(!grayscale);
         assert!(!vertical_symmetry);
-        assert_eq!(serde_json::to_string(&legacy).unwrap(), legacy_json);
+        assert_eq!(*size, 8.0);
+        assert!(!serde_json::to_string(&legacy)
+            .unwrap()
+            .contains("daslight_exact"));
 
-        let exact = super::ColorEffectSpatialRecipe::KnightRider {
-            daslight_exact: true,
+        let unified = super::ColorEffectSpatialRecipe::KnightRider {
             grayscale: true,
             vertical_symmetry: true,
-            size: 8,
+            size: 80.0,
             one_way: false,
             fading: true,
             go_outside: false,
             gradient: 50.0,
         };
-        let json = serde_json::to_string(&exact).unwrap();
-        assert!(json.contains(r#""daslight_exact":true"#));
+        let json = serde_json::to_string(&unified).unwrap();
+        assert!(!json.contains("daslight_exact"));
         assert!(json.contains(r#""grayscale":true"#));
         assert!(json.contains(r#""vertical_symmetry":true"#));
         assert_eq!(
             serde_json::from_str::<super::ColorEffectSpatialRecipe>(&json).unwrap(),
-            exact
+            unified
         );
     }
 
     #[test]
-    fn daslight_exact_burst_flags_roundtrip_without_changing_legacy_byte_shape() {
-        let legacy_json = r#"{"Burst":{"color_width":50.0,"gradient":100.0}}"#;
+    fn unified_burst_recipe_accepts_and_drops_legacy_route_flags() {
+        let legacy_json =
+            r#"{"Burst":{"daslight_exact":false,"color_width":50.0,"gradient":100.0}}"#;
         let legacy: super::ColorEffectSpatialRecipe = serde_json::from_str(legacy_json).unwrap();
         let super::ColorEffectSpatialRecipe::Burst {
-            daslight_exact,
             grayscale,
             vertical_symmetry,
             ..
@@ -5264,72 +5256,68 @@ mod tests {
         else {
             unreachable!()
         };
-        assert!(!daslight_exact);
         assert!(!grayscale);
         assert!(!vertical_symmetry);
-        assert_eq!(serde_json::to_string(&legacy).unwrap(), legacy_json);
+        assert!(!serde_json::to_string(&legacy)
+            .unwrap()
+            .contains("daslight_exact"));
 
-        let exact = super::ColorEffectSpatialRecipe::Burst {
-            daslight_exact: true,
+        let unified = super::ColorEffectSpatialRecipe::Burst {
             grayscale: true,
             vertical_symmetry: true,
             color_width: 50.0,
-            gradient: 1.0,
+            gradient: 100.0,
         };
-        let json = serde_json::to_string(&exact).unwrap();
-        assert!(json.contains(r#""daslight_exact":true"#));
+        let json = serde_json::to_string(&unified).unwrap();
+        assert!(!json.contains("daslight_exact"));
         assert!(json.contains(r#""grayscale":true"#));
         assert!(json.contains(r#""vertical_symmetry":true"#));
         assert_eq!(
             serde_json::from_str::<super::ColorEffectSpatialRecipe>(&json).unwrap(),
-            exact
+            unified
         );
     }
 
     #[test]
-    fn corrected_random_recipes_roundtrip_without_changing_legacy_byte_shape() {
-        let legacy_fill_json = r#"{"RandomFill":{"point_width":2}}"#;
+    fn unified_random_recipes_accept_and_drop_legacy_route_fields() {
+        let legacy_fill_json = r#"{"RandomFill":{"syndocal_corrected":false,"point_width":2}}"#;
         let legacy_fill: super::ColorEffectSpatialRecipe =
             serde_json::from_str(legacy_fill_json).unwrap();
-        assert_eq!(
-            serde_json::to_string(&legacy_fill).unwrap(),
-            legacy_fill_json
-        );
+        assert!(!serde_json::to_string(&legacy_fill)
+            .unwrap()
+            .contains("syndocal_corrected"));
 
         let corrected_fill = super::ColorEffectSpatialRecipe::RandomFill {
-            syndocal_corrected: true,
             grayscale: true,
             vertical_symmetry: true,
             rng_seed: 0x1234_5678,
-            point_width: 2,
+            point_width: 20.0,
             source_point_height: Some(7),
         };
         let fill_json = serde_json::to_string(&corrected_fill).unwrap();
-        assert!(fill_json.contains(r#""syndocal_corrected":true"#));
+        assert!(!fill_json.contains("syndocal_corrected"));
         assert!(fill_json.contains(r#""rng_seed":305419896"#));
         assert_eq!(
             serde_json::from_str::<super::ColorEffectSpatialRecipe>(&fill_json).unwrap(),
             corrected_fill
         );
 
-        let legacy_sparkle_json = r#"{"Sparkle":{"number":5,"lifespan":25.0,"width":1}}"#;
+        let legacy_sparkle_json =
+            r#"{"Sparkle":{"syndocal_corrected":false,"number":5,"lifespan":25.0,"width":1}}"#;
         let legacy_sparkle: super::ColorEffectSpatialRecipe =
             serde_json::from_str(legacy_sparkle_json).unwrap();
-        assert_eq!(
-            serde_json::to_string(&legacy_sparkle).unwrap(),
-            legacy_sparkle_json
-        );
+        assert!(!serde_json::to_string(&legacy_sparkle)
+            .unwrap()
+            .contains("lifespan"));
 
         let corrected_sparkle = super::ColorEffectSpatialRecipe::Sparkle {
-            syndocal_corrected: true,
             grayscale: true,
             vertical_symmetry: true,
             rng_seed: 7,
             number: 5,
-            lifespan: 0.0,
             lifetime_ms: Some(250),
             source_lifespan: Some(0.6),
-            width: 3,
+            width: 30.0,
         };
         let sparkle_json = serde_json::to_string(&corrected_sparkle).unwrap();
         assert!(sparkle_json.contains(r#""lifetime_ms":250"#));
@@ -5375,6 +5363,7 @@ mod tests {
                 angle_degrees: 90.0,
                 gradient: 75.0,
             },
+            parameter_model_version: super::COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
             beam_targets: vec![super::ColorEffectBeamTarget {
                 fixture_id: 1,
                 beam_index: 3,
@@ -5389,11 +5378,11 @@ mod tests {
 
         parsed.spatial_pattern = Some(super::ColorEffectSpatialPattern {
             recipe: super::ColorEffectSpatialRecipe::Sweep {
-                daslight_exact: false,
                 grayscale: false,
                 vertical_symmetry: false,
                 direction_change: true,
             },
+            parameter_model_version: super::COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
             beam_targets: vec![super::ColorEffectBeamTarget {
                 fixture_id: 1,
                 beam_index: 3,
@@ -5411,7 +5400,6 @@ mod tests {
 
         if let Some(pattern) = parsed.spatial_pattern.as_mut() {
             pattern.recipe = super::ColorEffectSpatialRecipe::Sweep {
-                daslight_exact: true,
                 grayscale: true,
                 vertical_symmetry: true,
                 direction_change: false,

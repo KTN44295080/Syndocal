@@ -9,18 +9,7 @@ import type {
   ColorEffectSpatialRecipe,
   ColorEffectStop,
 } from "../types";
-import {
-  correctedSparkleLifetimeMsFromLegacyPercent,
-  materializedRandomEffectSeed,
-} from "../randomEffectCompatibility";
-import {
-  burstEvaluatorPatch,
-  defaultSpatialRecipe,
-  matchesRandomSpatialKind,
-  perlinEvaluatorPatch,
-  sweepEvaluatorPatch,
-  type SpatialRecipeReadout,
-} from "../spatialRecipeCompatibility";
+import { defaultSpatialRecipe } from "../spatialRecipeCompatibility";
 
 export interface ColorEffectEditorPanelProps {
   stops: ColorEffectStop[];
@@ -113,7 +102,7 @@ const colorQuickLooks: ColorQuickLook[] = [
     ],
     algorithm: "Bounce",
     interpolation: "HsvShortest",
-    recipe: { Perlin: { daslight_exact: false, grayscale: false, vertical_symmetry: false, horizontal_symmetry: false, rotation_degrees: 0, octaves: 5, zoom: 20, direction_degrees: 0, speed: 1, amplitude: 100 } },
+    recipe: { Perlin: { grayscale: false, vertical_symmetry: false, horizontal_symmetry: false, rotation_degrees: 0, octaves: 5, zoom: 0.5, direction_degrees: 0, speed: 1, amplitude: 100 } },
     beats: 8,
   },
   {
@@ -126,7 +115,7 @@ const colorQuickLooks: ColorQuickLook[] = [
     ],
     algorithm: "Cycle",
     interpolation: "Rgb",
-    recipe: { Sweep: { daslight_exact: false, grayscale: false, vertical_symmetry: false, direction_change: true } },
+    recipe: { Sweep: { grayscale: false, vertical_symmetry: false, direction_change: true } },
     beats: 1,
   },
   {
@@ -137,7 +126,7 @@ const colorQuickLooks: ColorQuickLook[] = [
     ],
     algorithm: "Cycle",
     interpolation: "Rgb",
-    recipe: { Sparkle: { syndocal_corrected: true, grayscale: false, vertical_symmetry: false, rng_seed: 1, number: 8, lifespan: 0, lifetime_ms: 250, source_lifespan: null, width: 1 } },
+    recipe: { Sparkle: { grayscale: false, vertical_symmetry: false, rng_seed: 1, number: 8, lifetime_ms: 250, source_lifespan: null, width: 10 } },
     beats: 0.5,
   },
 ];
@@ -207,16 +196,6 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
     return typeof value === "number" && Number.isFinite(value) ? value : fallback;
   };
   const spatialBoolean = (key: string) => spatialValues()[key] === true;
-  const spatialReadout = (): SpatialRecipeReadout => ({ number: spatialNumber, boolean: spatialBoolean });
-  const daslightExactBurst = createMemo(() =>
-    spatialKind() === "Burst" && spatialBoolean("daslight_exact"),
-  );
-  const daslightExactSweep = createMemo(() =>
-    spatialKind() === "Sweep" && spatialBoolean("daslight_exact"),
-  );
-  const daslightExactPerlin = createMemo(() =>
-    spatialKind() === "Perlin" && spatialBoolean("daslight_exact"),
-  );
   const perlinHasMappingPlacement = createMemo(() =>
     spatialKind() === "Perlin" && props.spatialPattern?.placement !== undefined,
   );
@@ -232,6 +211,7 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
     }
     props.onSpatialPattern({
       recipe: defaultSpatialRecipe(kind),
+      parameter_model_version: 1,
       beam_targets: props.spatialPattern?.beam_targets ?? [],
     });
   };
@@ -244,7 +224,7 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
     } else {
       const pattern = props.spatialPattern;
       const recipe = structuredClone(look.recipe);
-      props.onSpatialPattern(pattern ? { ...pattern, recipe } : { recipe, beam_targets: [] });
+      props.onSpatialPattern(pattern ? { ...pattern, recipe } : { recipe, parameter_model_version: 1, beam_targets: [] });
     }
     props.onClockSyncBeats(look.beats);
   };
@@ -257,32 +237,6 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
       recipe: { [kind]: { ...spatialValues(), ...patch } } as ColorEffectSpatialRecipe,
     });
   };
-  const setRandomEvaluator = (corrected: boolean) => {
-    if (!matchesRandomSpatialKind(spatialKind())) return;
-    const rngSeed = materializedRandomEffectSeed(spatialValues().rng_seed);
-    if (corrected && spatialKind() === "Sparkle") {
-      patchSpatialValues({
-        syndocal_corrected: true,
-        rng_seed: rngSeed,
-        lifetime_ms: correctedSparkleLifetimeMsFromLegacyPercent(props.periodMs, spatialValues().lifespan),
-      });
-      return;
-    }
-    patchSpatialValues({ syndocal_corrected: corrected, rng_seed: rngSeed });
-  };
-  const setBurstEvaluator = (daslightExact: boolean) => {
-    if (spatialKind() !== "Burst") return;
-    patchSpatialValues(burstEvaluatorPatch(daslightExact, spatialReadout()));
-  };
-  const setSweepEvaluator = (daslightExact: boolean) => {
-    if (spatialKind() !== "Sweep") return;
-    patchSpatialValues(sweepEvaluatorPatch(daslightExact));
-  };
-  const setPerlinEvaluator = (daslightExact: boolean) => {
-    if (spatialKind() !== "Perlin") return;
-    patchSpatialValues(perlinEvaluatorPatch(daslightExact, spatialReadout(), perlinHasMappingPlacement()));
-  };
-
   const stopError = createMemo(() => {
     if (props.stops.length < DASLIGHT_FX_PALETTE_MIN_STOPS || props.stops.length > DASLIGHT_FX_PALETTE_MAX_STOPS) {
       return "A color effect requires 1 to 255 palette stops.";
@@ -560,7 +514,7 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
           <div class="colorEffectModeGrid">
             <label><input type="checkbox" checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
             <label>Transform<select value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
-            <label>Size<input type="number" min="1" max="100" step="1" value={spatialNumber("size", 8)} onInput={(event) => patchSpatialValues({ size: clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 100) })} /></label>
+            <label>Size %<input type="number" min="0.01" max="100000" step="0.1" value={spatialNumber("size", 8)} onInput={(event) => patchSpatialValues({ size: clamp(Number(event.currentTarget.value) || 0.01, 0.01, 100000) })} /></label>
             <label>Gradient %<input type="number" min="0" max="100" step="1" value={spatialNumber("gradient", 50)} onInput={(event) => patchSpatialValues({ gradient: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
             <label><input type="checkbox" checked={spatialBoolean("one_way")} onInput={(event) => patchSpatialValues({ one_way: event.currentTarget.checked })} /> One way only</label>
             <label><input type="checkbox" checked={spatialBoolean("fading")} onInput={(event) => patchSpatialValues({ fading: event.currentTarget.checked })} /> Fading</label>
@@ -569,18 +523,14 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
         </Show>
         <Show when={spatialKind() === "Burst"}>
           <div class="colorEffectModeGrid">
-            <label>Evaluator<select value={daslightExactBurst() ? "daslight" : "enhanced"} onInput={(event) => setBurstEvaluator(event.currentTarget.value === "daslight")}><option value="enhanced">Enhanced</option><option value="daslight">DVC corrected</option></select></label>
-            <Show when={daslightExactBurst()}>
-              <label><input type="checkbox" checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
-              <label>Transform<select value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
-            </Show>
-            <label>{daslightExactBurst() ? "Color width px" : "Color width %"}<input type="number" min={daslightExactBurst() ? "10" : "0"} max={daslightExactBurst() ? "900" : "100"} step="1" value={spatialNumber("color_width", 50)} onInput={(event) => patchSpatialValues({ color_width: daslightExactBurst() ? clamp(Math.round(Number(event.currentTarget.value) || 10), 10, 900) : clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
-            <label>{daslightExactBurst() ? "Gradient 0..1" : "Gradient %"}<input type="number" min="0" max={daslightExactBurst() ? "1" : "100"} step={daslightExactBurst() ? "0.01" : "1"} value={spatialNumber("gradient", daslightExactBurst() ? 1 : 100)} onInput={(event) => patchSpatialValues({ gradient: clamp(Number(event.currentTarget.value), 0, daslightExactBurst() ? 1 : 100) })} /></label>
+            <label><input type="checkbox" checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
+            <label>Transform<select value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
+            <label>Color width %<input type="number" min="0.01" max="100000" step="0.1" value={spatialNumber("color_width", 50)} onInput={(event) => patchSpatialValues({ color_width: clamp(Number(event.currentTarget.value) || 0.01, 0.01, 100000) })} /></label>
+            <label>Gradient %<input type="number" min="0" max="100" step="0.1" value={spatialNumber("gradient", 100)} onInput={(event) => patchSpatialValues({ gradient: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
           </div>
         </Show>
         <Show when={spatialKind() === "Sweep"}>
           <div class="colorEffectModeGrid" data-color-sweep-controls>
-            <label>Evaluator<select data-color-sweep-evaluator value={daslightExactSweep() ? "daslight" : "enhanced"} onInput={(event) => setSweepEvaluator(event.currentTarget.value === "daslight")}><option value="enhanced">Enhanced</option><option value="daslight">DVC corrected</option></select></label>
             <label><input type="checkbox" data-color-sweep-grayscale checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
             <label>Transform<select data-color-sweep-transform value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
             <label><input type="checkbox" data-color-sweep-direction-change checked={spatialBoolean("direction_change")} onInput={(event) => patchSpatialValues({ direction_change: event.currentTarget.checked })} /> Direction change</label>
@@ -588,23 +538,20 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
         </Show>
         <Show when={spatialKind() === "RandomFill"}>
           <div class="colorEffectModeGrid">
-            <label>Evaluator<select value={spatialBoolean("syndocal_corrected") ? "corrected" : "legacy"} onInput={(event) => setRandomEvaluator(event.currentTarget.value === "corrected")}><option value="corrected">Syndocal corrected</option><option value="legacy">Legacy</option></select></label>
             <label><input type="checkbox" checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
             <label>Transform<select value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
-            <label>Point width<input type="number" min="1" max="10" step="1" value={spatialNumber("point_width", 1)} onInput={(event) => patchSpatialValues({ point_width: clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 10) })} /></label>
-            <Show when={spatialBoolean("syndocal_corrected")}><label>Seed<input type="number" min="0" max="4294967295" step="1" value={spatialNumber("rng_seed", 0)} onInput={(event) => patchSpatialValues({ rng_seed: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 4_294_967_295) })} /></label></Show>
+            <label>Point width %<input type="number" min="0.01" max="100000" step="0.1" value={spatialNumber("point_width", 10)} onInput={(event) => patchSpatialValues({ point_width: clamp(Number(event.currentTarget.value) || 0.01, 0.01, 100000) })} /></label>
+            <label>Seed<input type="number" min="0" max="4294967295" step="1" value={spatialNumber("rng_seed", 0)} onInput={(event) => patchSpatialValues({ rng_seed: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 4_294_967_295) })} /></label>
           </div>
         </Show>
         <Show when={spatialKind() === "Sparkle"}>
           <div class="colorEffectModeGrid">
-            <label>Evaluator<select value={spatialBoolean("syndocal_corrected") ? "corrected" : "legacy"} onInput={(event) => setRandomEvaluator(event.currentTarget.value === "corrected")}><option value="corrected">Syndocal corrected</option><option value="legacy">Legacy</option></select></label>
             <label><input type="checkbox" checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
             <label>Transform<select value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
             <label>Sparkle number<input type="number" min="1" max="10" step="1" title="Simultaneous particles created per 40 ms generation" value={spatialNumber("number", 5)} onInput={(event) => patchSpatialValues({ number: clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 10) })} /></label>
-            <Show when={spatialBoolean("syndocal_corrected")}><label>Lifetime ms<input type="number" min="100" max="1000" step="1" title="Effect-time milliseconds, scaling with clock sync and BPM speed" value={spatialNumber("lifetime_ms", 250)} onInput={(event) => patchSpatialValues({ lifetime_ms: clamp(Math.round(Number(event.currentTarget.value) || 100), 100, 1000) })} /></label></Show>
-            <Show when={!spatialBoolean("syndocal_corrected")}><label>Life span %<input type="number" min="0" max="100" step="1" value={spatialNumber("lifespan", 0)} onInput={(event) => patchSpatialValues({ lifespan: clamp(Number(event.currentTarget.value), 0, 100) })} /></label></Show>
-            <label>Sparkle width<input type="number" min="1" max="90" step="1" value={spatialNumber("width", 1)} onInput={(event) => patchSpatialValues({ width: clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 90) })} /></label>
-            <Show when={spatialBoolean("syndocal_corrected")}><label>Seed<input type="number" min="0" max="4294967295" step="1" value={spatialNumber("rng_seed", 0)} onInput={(event) => patchSpatialValues({ rng_seed: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 4_294_967_295) })} /></label></Show>
+            <label>Lifetime ms<input type="number" min="100" max="1000" step="1" title="Effect-time milliseconds, scaling with clock sync and BPM speed" value={spatialNumber("lifetime_ms", 250)} onInput={(event) => patchSpatialValues({ lifetime_ms: clamp(Math.round(Number(event.currentTarget.value) || 100), 100, 1000) })} /></label>
+            <label>Sparkle width %<input type="number" min="0.01" max="100000" step="0.1" value={spatialNumber("width", 10)} onInput={(event) => patchSpatialValues({ width: clamp(Number(event.currentTarget.value) || 0.01, 0.01, 100000) })} /></label>
+            <label>Seed<input type="number" min="0" max="4294967295" step="1" value={spatialNumber("rng_seed", 0)} onInput={(event) => patchSpatialValues({ rng_seed: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 4_294_967_295) })} /></label>
           </div>
         </Show>
         <Show when={spatialKind() === "Plasma"}>
@@ -641,22 +588,18 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
           </div>
         </Show>
         <Show when={spatialKind() === "Perlin"}>
-          <div class="colorEffectModeGrid" data-color-perlin-evaluator={daslightExactPerlin() ? "daslight" : "enhanced"}>
-            <label>Evaluator<select data-color-perlin-evaluator-select value={daslightExactPerlin() ? "daslight" : "enhanced"} onInput={(event) => setPerlinEvaluator(event.currentTarget.value === "daslight")}><option value="enhanced">Enhanced</option><option value="daslight">DVC corrected</option></select></label>
-            <Show when={daslightExactPerlin()}>
-              <label><input type="checkbox" data-color-perlin-grayscale checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
-              <label>Transform<select data-color-perlin-transform value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical", horizontal_symmetry: event.currentTarget.value === "horizontal" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option><Show when={perlinHasMappingPlacement()}><option value="horizontal">Horizontal symmetry</option></Show></select></label>
-              <Show when={perlinHasMappingPlacement()}>
-                <label>Rotation °<input data-color-perlin-rotation type="number" min="0" max="360" step="1" value={spatialNumber("rotation_degrees")} onInput={(event) => patchSpatialValues({ rotation_degrees: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 360) })} /></label>
-              </Show>
+          <div class="colorEffectModeGrid">
+            <label><input type="checkbox" data-color-perlin-grayscale checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
+            <label>Transform<select data-color-perlin-transform value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical", horizontal_symmetry: event.currentTarget.value === "horizontal" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option><Show when={perlinHasMappingPlacement()}><option value="horizontal">Horizontal symmetry</option></Show></select></label>
+            <Show when={perlinHasMappingPlacement()}>
+              <label>Rotation °<input data-color-perlin-rotation type="number" step="0.1" value={spatialNumber("rotation_degrees")} onInput={(event) => patchSpatialValues({ rotation_degrees: Number(event.currentTarget.value) || 0 })} /></label>
             </Show>
-            <label>Octaves<input type="number" min={daslightExactPerlin() ? "2" : "1"} max={daslightExactPerlin() ? "10" : "16"} step="1" value={spatialNumber("octaves", 5)} onInput={(event) => patchSpatialValues({ octaves: clamp(Math.round(Number(event.currentTarget.value) || 1), daslightExactPerlin() ? 2 : 1, daslightExactPerlin() ? 10 : 16) })} /></label>
-            <label>Zoom<input type="number" min={daslightExactPerlin() ? "1" : "0.01"} max={daslightExactPerlin() ? "100" : undefined} step={daslightExactPerlin() ? "1" : "0.1"} value={spatialNumber("zoom", 20)} onInput={(event) => patchSpatialValues({ zoom: daslightExactPerlin() ? clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 100) : Math.max(0.01, Number(event.currentTarget.value) || 0.01) })} /></label>
-            <label>Direction {daslightExactPerlin() ? "1..100" : "°"}<input type="number" min={daslightExactPerlin() ? "1" : undefined} max={daslightExactPerlin() ? "100" : undefined} step="1" value={spatialNumber("direction_degrees", daslightExactPerlin() ? 1 : 0)} title={daslightExactPerlin() ? "Syndocal maps 1 to 0°, 100 to 360°, linearly" : undefined} onInput={(event) => patchSpatialValues({ direction_degrees: daslightExactPerlin() ? clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 100) : Number(event.currentTarget.value) || 0 })} /></label>
-            <label>Speed<input type="number" min={daslightExactPerlin() ? "1" : undefined} max={daslightExactPerlin() ? "10" : undefined} step={daslightExactPerlin() ? "1" : "0.1"} value={spatialNumber("speed", 1)} onInput={(event) => patchSpatialValues({ speed: daslightExactPerlin() ? clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 10) : Number(event.currentTarget.value) || 0 })} /></label>
-            <label>Amplitude %<input type="number" min={daslightExactPerlin() ? "5" : "0"} max="100" step="1" value={spatialNumber("amplitude", 100)} onInput={(event) => patchSpatialValues({ amplitude: clamp(daslightExactPerlin() ? Math.round(Number(event.currentTarget.value) || 5) : Number(event.currentTarget.value), daslightExactPerlin() ? 5 : 0, 100) })} /></label>
+            <label>Octaves<input type="number" min="1" max="16" step="1" value={spatialNumber("octaves", 5)} onInput={(event) => patchSpatialValues({ octaves: clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 16) })} /></label>
+            <label>Zoom<input type="number" min="0.0001" step="0.01" value={spatialNumber("zoom", 0.5)} onInput={(event) => patchSpatialValues({ zoom: Math.max(0.0001, Number(event.currentTarget.value) || 0.0001) })} /></label>
+            <label>Direction °<input type="number" step="0.1" value={spatialNumber("direction_degrees", 0)} onInput={(event) => patchSpatialValues({ direction_degrees: Number(event.currentTarget.value) || 0 })} /></label>
+            <label>Speed<input type="number" min="0" step="0.1" value={spatialNumber("speed", 1)} onInput={(event) => patchSpatialValues({ speed: Math.max(0, Number(event.currentTarget.value) || 0) })} /></label>
+            <label>Amplitude %<input type="number" min="0" max="100" step="0.1" value={spatialNumber("amplitude", 100)} onInput={(event) => patchSpatialValues({ amplitude: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
           </div>
-          <Show when={daslightExactPerlin()}><div class="effectFormHint textPretty" data-color-perlin-direction-note>DVC Direction now drives spatial phase: 1 = 0°, 100 = 360°, with linear steps between.</div></Show>
         </Show>
         <div class="colorEffectModeGrid">
           <label>

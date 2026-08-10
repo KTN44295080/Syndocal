@@ -346,47 +346,16 @@ assert.ok(
   valueEffectEditorSource.includes('`${generatorKind()} Black 0 White 100 value palette`'),
   "Value FX canvas must expose the localized Daslight-generator palette aria contract",
 );
-assert.ok(
-  valueEffectEditorSource.includes(
-    "Imported DVC corrected Knight Rider parameters are editable; the generator is re-evaluated analytically.",
-  ),
-  "Imported corrected Knight Rider must state that its parameters are editable and analytically re-evaluated",
-);
-assert.equal(
-  localization.translateUiText(
-    "Imported DVC corrected Knight Rider parameters are editable; the generator is re-evaluated analytically.",
-    "ja",
-  ),
-  "インポートしたDVC補正ナイトライダーのパラメーターは編集できます。ジェネレーターは解析的に再計算されます。",
-);
-assert.equal(
-  localization.translateUiText("Imported Transform", "ja"),
-  "インポート時の変形",
-);
-assert.ok(
-  valueEffectEditorSource.includes('"KnightRider" in recipe')
-    && valueEffectEditorSource.includes("recipe.KnightRider.daslight_exact === true"),
-  "The exact editor lock must remain scoped to Knight Rider",
-);
-assert.ok(
-  valueEffectEditorSource.includes('data-value-daslight-exact-knight={daslightExactKnight() ? "knight-rider" : undefined}'),
-  "Imported exact Knight Rider must stay identifiable without declaring a read-only boundary",
-);
-assert.ok(
-  valueEffectEditorSource.includes("data-value-daslight-exact-transform={generatorTransform()}")
-    && valueEffectEditorSource.includes('<strong>Imported Transform</strong>')
-    && valueEffectEditorSource.includes('generatorTransform() === "vertical" ? "Vertical symmetry" : "None"'),
-  "Imported exact Knight Rider must expose the recovered Transform value",
-);
-assert.ok(
-  !valueEffectEditorSource.includes("disabled={daslightExactKnight()}"),
-  "Imported exact Knight Rider generator controls must no longer be disabled",
-);
-assert.equal(
-  [...valueEffectEditorSource.matchAll(/if \(daslightExactKnight\(\)\) return;/g)].length,
-  0,
-  "Imported exact Knight Rider must accept kind, parameter, and quick-look edits",
-);
+assert.equal(localization.translateUiText("Size %", "ja"), "サイズ（%）");
+assert.equal(localization.translateUiText("Point width %", "ja"), "ポイント幅（%）");
+assert.equal(localization.translateUiText("Sparkle width %", "ja"), "スパークル幅（%）");
+for (const editorSource of [valueEffectEditorSource, colorEffectEditorSource]) {
+  assert.doesNotMatch(
+    editorSource,
+    /DVC corrected|Syndocal corrected|Enhanced|daslightExactKnight|data-value-daslight-exact/,
+    "unified editors must not expose evaluator-route language or imported-route affordances",
+  );
+}
 const spatialRecipeSource = typesSource.match(
   /export type ColorEffectSpatialRecipe =([\s\S]*?);\r?\n\r?\nexport type ColorEffectSpatialCoordinateFrame/,
 )?.[1];
@@ -394,47 +363,41 @@ assert.ok(spatialRecipeSource, "ColorEffectSpatialRecipe declaration must remain
 const valueRecipeLine = (kind) => spatialRecipeSource
   ?.split(/\r?\n/)
   .find((line) => line.includes(`{ ${kind}:`)) ?? "";
-assert.match(valueRecipeLine("KnightRider"), /daslight_exact\?: boolean/);
+assert.doesNotMatch(valueRecipeLine("KnightRider"), /daslight_exact/);
 assert.match(valueRecipeLine("KnightRider"), /grayscale\?: boolean/);
 assert.match(valueRecipeLine("KnightRider"), /vertical_symmetry\?: boolean/);
-assert.match(valueRecipeLine("Burst"), /daslight_exact\?: boolean/);
+assert.doesNotMatch(valueRecipeLine("Burst"), /daslight_exact/);
 assert.match(valueRecipeLine("Burst"), /grayscale\?: boolean/);
 assert.match(valueRecipeLine("Burst"), /vertical_symmetry\?: boolean/);
-assert.ok(
-  valueEffectEditorSource.includes('recipe.Burst.daslight_exact === true')
-    && valueEffectEditorSource.includes('<option value="enhanced">Enhanced</option>')
-    && valueEffectEditorSource.includes('<option value="daslight">DVC corrected</option>'),
-  "Burst must expose an explicit DVC-corrected to Enhanced compatibility boundary",
-);
+assert.match(typesSource, /parameter_model_version: 1;/);
 for (const editorSource of [valueEffectEditorSource, colorEffectEditorSource]) {
   assert.equal(
     [...editorSource.matchAll(/<option value="daslight">DVC corrected<\/option>/g)].length,
-    3,
-    "Burst, Sweep, and Perlin must use the DVC corrected evaluator label",
+    0,
+    "unified effects must not retain DVC evaluator labels",
   );
   assert.ok(
     editorSource.includes("Period ms")
       && editorSource.includes('min="10"')
       && editorSource.includes('step="10"')
       && editorSource.includes("props.onPeriodMs(Math.max(10, value));"),
-    "DVC and Enhanced effects must share the authored 10 ms period contract",
+    "unified effects must retain the authored 10 ms period contract",
   );
   assert.doesNotMatch(editorSource, /40 ms compatibility|daslightExactTiming|Math\.floor\([^\n]*\/ 40\)/);
 }
-assert.match(valueRecipeLine("RandomFill"), /syndocal_corrected\?: boolean/);
+assert.doesNotMatch(valueRecipeLine("RandomFill"), /syndocal_corrected/);
 assert.match(valueRecipeLine("RandomFill"), /rng_seed\?: number/);
 assert.match(valueRecipeLine("RandomFill"), /vertical_symmetry\?: boolean/);
 assert.match(valueRecipeLine("RandomFill"), /source_point_height\?: number \| null/);
-assert.match(valueRecipeLine("Sparkle"), /syndocal_corrected\?: boolean/);
+assert.doesNotMatch(valueRecipeLine("Sparkle"), /syndocal_corrected|lifespan:/);
 assert.match(valueRecipeLine("Sparkle"), /rng_seed\?: number/);
 assert.match(valueRecipeLine("Sparkle"), /lifetime_ms\?: number \| null/);
 assert.match(valueRecipeLine("Sparkle"), /source_lifespan\?: number \| null/);
 for (const editorSource of [valueEffectEditorSource, colorEffectEditorSource]) {
   assert.ok(
-    editorSource.includes('<option value="corrected">Syndocal corrected</option>')
-      && editorSource.includes('max="4294967295"')
+    editorSource.includes('max="4294967295"')
       && editorSource.includes('Lifetime ms'),
-    "Random fill and Sparkle must expose their deterministic corrected evaluator boundary",
+    "Random fill and Sparkle must expose deterministic unified fields",
   );
 }
 for (const dynamicAriaPrefix of [

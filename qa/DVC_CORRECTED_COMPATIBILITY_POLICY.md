@@ -2,6 +2,13 @@
 
 Date: 2026-08-10
 
+Update: 2026-08-11 — Burst, Sweep, Knight Rider, Perlin, Sparkle, and Random Fill now have one
+production evaluator per family. The surviving implementation is the corrected analytic route,
+authored in Syndocal-native normalized domains. DVC pixel/enum values are converted only by the
+importer. The former `daslight_exact` and `syndocal_corrected` fields are accepted only as legacy
+v1 load input and are removed by deterministic load migration; they are no longer protocol fields,
+runtime dispatch inputs, or editor controls. Existing `source_*` fields remain provenance only.
+
 ## Product rule
 
 Syndocal imports the authored show, not Daslight's accidental implementation defects. The
@@ -15,12 +22,9 @@ caches, toolkit raster paths, or process-global state. A defect caused by timer 
 integer truncation, an uninitialised or non-serialised process state, low-quality raster scaling,
 or an unpainted destination pixel is corrected.
 
-If a defect has a large visible contribution to an existing show, the corrected evaluator is the
-import default and the recovered behavior may remain as an explicit **Legacy quirks** option only
-when a real project or synchronized capture demonstrates that it is needed. It must not be
-labelled simply `Daslight exact`, because exact provenance does not make a defect a desirable
-product contract. Import reports must name every intentional correction. Tiny differences caused
-only by a cleaner implementation do not justify a Legacy mode.
+Import reports must name every intentional correction. Tiny differences caused only by a cleaner
+implementation do not justify a Legacy mode. For the six unified spatial families above, the
+product ruling is final: no alternate evaluator mode is retained.
 
 ## Repository-wide audit
 
