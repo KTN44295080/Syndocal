@@ -292,14 +292,14 @@ Mediaの旧表記`T2/10`はcatalog転記誤りだった。`CMediaEffect` constru
 
 ## 現行Syndocal importerとの逆照合
 
-68 IDのうち現行converter coverageは67 ID（うちMAPPINGS 526とCOLOR MAPPINGS 29/33/35/41/45/47/48の空targetは
-source no-op）、random-state由来のprecise fail-closedは0、残る1 IDは未routeでgeneric
-`Skipped`になる。Media 33/526のnon-empty pathとText 45のpopulated targetはroute内でprecise fail-closedを維持する。
-67 routeはfull-domain完成数ではなく、
+68 IDのうち現行converter coverageは68 ID（うちMAPPINGS 526とCOLOR MAPPINGS 21/29/33/35/41/45/47/48の空targetは
+source no-op）、random-state由来のprecise fail-closedは0、未route IDは0。Media 33/526のnon-empty path、Text 45のpopulated target、Bounce active Shape 1..28はroute内でprecise fail-closedを維持する。
+68 routeはfull-domain完成数ではなく、
 strict/exactを別に監査した。
 
 | route群 | 現在の境界 |
 |---|---|
+| COLOR MAPPINGS 21 Bounce | strict NB=12と全inactive field、palette 1..255（populatedは2..255）、exact Rectangle/BEAMS attrs、owned COLOR target、Overrideを保持。Item=PointsはPoints 2..10 / Fill両値 / inactive Shape 0..28、Item=ShapeはXEEL U+E900 Shape0 / Collide両値だけをrouteし、active Shape1..28は`unsupported XEEL glyph geometry`でfail-closed。stable q15 even lanes、update-first/no-clamp/W-H swap、symmetric collision（dist2 zero skip）、closed path、later-wins/qGrayをfixed 100x100 `SyndocalCorrected` rasterで実装。200 target以下はsampled RGB全F Arc、超過はpreallocated fallback。Qt antialias edgeはSourceExact claim外 |
 | VALUE 621–628 | strict。626/627はstable source seed、628はcontinuous fixed-hash/cosine/analytic palette/active DirectionのCorrected evaluator。対象ゼロのno-opもschema検証後に成立 |
 | COLOR MAPPINGS 22/23/30/32/34/36/37/40/42/44 | strict PARAM ID/TYPE/domain、palette 1..255、Rectangle、owned COLOR beam target、Override mergeを保持。外部`SELECTIONS`はprecise fail-closed。23/37/42も共通qGray post-processを通る。37は100x100のflat-cell no-replacement permutationをstable source seedで生成するCorrected route |
 | COLOR MAPPINGS 31/49/50 | Lines/Graph/Grid専用classをstrict route。共通base、class固有parameter、owned COLOR target順、Rectangle/Patch、Transform後Rotation、Override、qGrayを保持する。Lines palette 2..255、Graph palette 2..10、Grid palette 2..5をclass域として検証し、固定100x100 rasterを連続解析samplingするSyndocalCorrected実装。GraphはHeight=1のsource invisible defectだけを一行opaqueへ訂正する |
@@ -541,6 +541,11 @@ strict/exactを別に監査した。
   empty/positive Rectangleのowned BEAMS=0だけvalidated source no-opとし、populated targetは決定論的font/fallbackと
   supported text-length/raster envelopeの2製品裁定待ちでprecise fail-closedにする。runtime effectを生成せずvalidated
   maximumも未裁定なので44 Hz gateは追加しない。正本は`qa/DVC_COLOR_MAPPINGS_TEXT_SOURCE_NOOP_PARITY.md`。
+- Bounce ID21追加でconverter routeは67→68、未routeは1→0となる。実保存
+  `ColorMappings-Remaining7.dvc`（SHA-256 `80CB936E0AE81BF2A809B49F381BCB6771373D95F91BE9DFA4D608FE93A936F9`）の
+  NB=12、raw PARAM順/default、empty Rectangle sentinel、BEAMS=0をvalidated source-noop goldenへ固定した。
+  populatedはShape0またはPointsを`SyndocalCorrected` rasterへrouteし、Qt antialias edgeと対象ありnative保存標本は
+  claim外、active Shape1..28はprecise fail-closed。正本は`qa/DVC_COLOR_MAPPINGS_BOUNCE_PARITY.md`。
 
 ### DVC-CURVE Custom 13（2026-08-11）
 
@@ -564,11 +569,11 @@ strict/exactを別に監査した。
    実保存specimenを`qa/DVC_CUSTOM_CURVE_SOURCE_PARITY.md`で固定した。
 2. CHASER #3/#4は式と対称pair topologyを回収し、実保存specimen付きでroute済み。実灯体の
    photometryとdevice latencyだけは物理受入に残る。
-3. MAPPINGS 521–530は全route済み。COLOR MAPPINGSの共有class
-   22/23/29/30/31/32/34/35/36/37/40/41/42/44/47/48/49/50もroute済み。Media 33/526は空sourceだけno-op、non-empty sourceは
+3. MAPPINGS 521–530とCOLOR MAPPINGS 21種は全route済み。COLOR MAPPINGSの共有class
+   21/22/23/29/30/31/32/34/35/36/37/40/41/42/44/47/48/49/50もroute済み。Media 33/526は空sourceだけno-op、non-empty sourceは
    decode/timing証明待ち。Text 45はowned BEAMS=0だけSourceExactBoundary no-op、populated sourceはfont/fallbackと
-   text-length/raster envelope裁定待ち。残るCOLOR MAPPINGS専用class 21はraster algorithm bodyまたは2D stateの意味論回収が必要。
-4. `TYPE7 Shape`のserialized glyph表現は未証明。`TYPE10 Text Direction`の合法enum域はstatic recoveryでinteger 0..8と確定した。
+   text-length/raster envelope裁定待ち。Bounce 21はShape0/PointsをCorrected routeし、Qt antialias edgeとactive Shape1..28を境界に残す。
+4. `TYPE7 Shape`はBounce Shape0 XEEL contourだけ回収済みで、Shape1..28のglyph geometryは未証明。`TYPE10 Text Direction`の合法enum域はstatic recoveryでinteger 0..8と確定した。
 5. Sparkle/Random fillの外部per-thread qrand履歴そのものはreplay不能だが、作者が保存した
    schemaと演出grammarをstable source seedでCorrected実装済み。正本は
    `qa/DVC_RANDOM_CORRECTED_PARITY.md`。

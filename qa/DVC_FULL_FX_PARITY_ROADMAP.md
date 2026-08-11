@@ -34,9 +34,9 @@ Daslight 5.0.6.2 / FileVersion `25.0905.165.111`の実機dropdown全項目とfac
 | CHASER | 321 #1, 322 #2, 323 #3, 324 #4, 325 random | **321–325全5種**（323/324は回収済み対称pair topologyをCorrected連続clockへ変換） | なし |
 | CURVE | 3–13（11種） | **3–13全11種**（6 Randomはstable source seed、13 Customはcontinuous right-point easingとadjacent-target lagのCorrected route） | なし |
 | MAPPINGS | 521–530（10種） | **521–530全10種**（526 Mediaは検証済み空パスno-op、529 Sparkleはstable source seedのCorrected RNG） | non-empty Media pathのみprecise fail-closed |
-| COLOR MAPPINGS | 21,22,23,29–37,40–42,44,45,47–50（21種） | **22/23/29/30/31/32/34/35/36/37/40/41/42/44/47/48/49/50**、33 Media空パスno-op、45 Text zero-owned-BEAMS SourceExactBoundary no-op（29 Fireはstable q15とsampled-only全世代heat cacheのCorrected fixed 100x100 raster、31 Lines / 49 Graph / 50 GridはCorrected analytic 100x100 raster、35 Rainはstable source seedのfixed 100x100 later-wins raster、37はstable source seedのCorrected 2D Random Fill、41 Tubeはshared Sparkleのfixed full-height raster、47 Explosion / 48 Starfieldはstable source seedとsampled-only全世代cacheを用いるCorrected particle raster） | 33 non-empty Media pathと45 populated Textはprecise fail-closed。残1種未route |
+| COLOR MAPPINGS | 21,22,23,29–37,40–42,44,45,47–50（21種） | **21/22/23/29/30/31/32/34/35/36/37/40/41/42/44/47/48/49/50**、33 Media空パスno-op、45 Text zero-owned-BEAMS SourceExactBoundary no-op（21 Bounceはstable q15、XEEL Shape0 / closed Points、sampled-only全世代RGB cacheのCorrected fixed 100x100 raster。Qt antialias edgeは非SourceExact） | 33 non-empty Media path、45 populated Text、Bounce active Shape 1..28はroute内precise fail-closed。未route IDなし |
 
-現行converter routeは67/68 ID、random-state由来のprecise fail-closedは0、未routeは1。
+現行converter routeは68/68 ID、random-state由来のprecise fail-closedは0、未routeは0。
 Media 33/526のnon-empty pathとText 45のpopulated targetはroute内でprecise fail-closedを維持する。
 626/627/131/133、CURVE 6、CHASER 323/324は明示Corrected、CHASER 325も既存stable permutationをCorrectedとして報告する。これはID単位の入口coverageであり、共有raster classの再利用度や
 STEPS/SUPER SCENEなど非generator構造を含む「製品完成率」ではない。未routeをUI名だけで近似せず、

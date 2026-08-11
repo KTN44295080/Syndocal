@@ -11,22 +11,22 @@ use protocol::{
     AttributeControl, AttributeResolution, AttributeValueSummary, ChannelFunctionSummary,
     ChaserDirection, ChaserEffectRequest, ChaserFeature, ChaserStep, ChildTimelineSummary,
     ColorEffectAlgorithm, ColorEffectBeamTarget, ColorEffectColor, ColorEffectInterpolation,
-    ColorEffectRequest, ColorEffectSpatialCoordinateFrame, ColorEffectSpatialMappingShape,
-    ColorEffectSpatialPattern, ColorEffectSpatialPlacement, ColorEffectSpatialPlacementTarget,
-    ColorEffectSpatialRecipe, ColorEffectSpatialSamplingRule, ColorEffectSpatialSparkleRasterMode,
-    ColorEffectStop, CueEffectTarget, CueFixtureTarget, CueListSummary, CueSummary,
-    DaslightCurveSource, DaslightCustomCurvePoint, DaslightCustomCurveSource, DmxControlAction,
-    DmxControlMapping, DmxModeSummary, DmxOutputConfig, DmxUniversePreview, EffectBeamTarget,
-    EffectBlendMode, EffectClockSync, EffectParamsSnapshot, EngineSnapshot, FixtureProfileSummary,
-    GeometrySummary, LfoEffectRequest, LfoShape, MidiControlAction, MidiControlFeedback,
-    MidiControlMapping, MidiControlMessage, MidiFeedbackMessage, MoveCoordinateMode, MoveDirection,
-    MoveEffectBeamTarget, MoveEffectRequest, MoveInterpolation, MovePathPoint,
-    PatchedFixtureSummary, ProjectFile, Rotation3, StageMapConfig, TimelineAudioClipSummary,
-    TimelineCueEventSummary, TimelineLayerKind, TimelineLayerSummary, TimelineTrackKind,
-    TouchControlBinding, TouchControlKind, TouchControlSummary, TouchFeaturePresetTarget,
-    TouchPageSummary, TouchSurfaceSummary, ValueEffectDirection, ValueEffectInterpolation,
-    ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3,
-    COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
+    ColorEffectRequest, ColorEffectSpatialBounceItem, ColorEffectSpatialCoordinateFrame,
+    ColorEffectSpatialMappingShape, ColorEffectSpatialPattern, ColorEffectSpatialPlacement,
+    ColorEffectSpatialPlacementTarget, ColorEffectSpatialRecipe, ColorEffectSpatialSamplingRule,
+    ColorEffectSpatialSparkleRasterMode, ColorEffectStop, CueEffectTarget, CueFixtureTarget,
+    CueListSummary, CueSummary, DaslightCurveSource, DaslightCustomCurvePoint,
+    DaslightCustomCurveSource, DmxControlAction, DmxControlMapping, DmxModeSummary,
+    DmxOutputConfig, DmxUniversePreview, EffectBeamTarget, EffectBlendMode, EffectClockSync,
+    EffectParamsSnapshot, EngineSnapshot, FixtureProfileSummary, GeometrySummary, LfoEffectRequest,
+    LfoShape, MidiControlAction, MidiControlFeedback, MidiControlMapping, MidiControlMessage,
+    MidiFeedbackMessage, MoveCoordinateMode, MoveDirection, MoveEffectBeamTarget,
+    MoveEffectRequest, MoveInterpolation, MovePathPoint, PatchedFixtureSummary, ProjectFile,
+    Rotation3, StageMapConfig, TimelineAudioClipSummary, TimelineCueEventSummary,
+    TimelineLayerKind, TimelineLayerSummary, TimelineTrackKind, TouchControlBinding,
+    TouchControlKind, TouchControlSummary, TouchFeaturePresetTarget, TouchPageSummary,
+    TouchSurfaceSummary, ValueEffectDirection, ValueEffectInterpolation, ValueEffectMode,
+    ValueEffectPoint, ValueEffectRequest, Vec3, COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
 };
 use roxmltree::{Document, Node};
 use serde::Serialize;
@@ -2169,6 +2169,7 @@ fn parse_scene_effects(
                 (Some(4), Some(4), Some(221)) => Some("Circle"),
                 (Some(4), Some(4), Some(223)) => Some("Line"),
                 (Some(4), Some(4), Some(224)) => Some("Polygon"),
+                (Some(5), Some(3), Some(21)) => Some("Bounce"),
                 (Some(5), Some(3), Some(22)) => Some("Burst"),
                 (Some(5), Some(3), Some(23)) => Some("Butterfly"),
                 (Some(5), Some(3), Some(30)) => Some("Knight Rider"),
@@ -2414,7 +2415,7 @@ fn convert_dvc_effect(
             fixture_refs,
         ),
         (5, 3, 45) => convert_dvc_text_source_noop(rack, effect, fixture_refs),
-        (5, 3, 22 | 23 | 29 | 30 | 31 | 32 | 33 | 34 | 35 | 36 | 37 | 40 | 41 | 42 | 44 | 47 | 48 | 49 | 50)
+        (5, 3, 21 | 22 | 23 | 29 | 30 | 31 | 32 | 33 | 34 | 35 | 36 | 37 | 40 | 41 | 42 | 44 | 47 | 48 | 49 | 50)
         | (2, 2, 121 | 127 | 128 | 129 | 130 | 131 | 133 | 134)
         | (6, 8, 521..=530) => {
             convert_dvc_color_spatial_effect(
@@ -2700,6 +2701,101 @@ struct DvcMappingRectangle {
     /// `(0,0,-1,-1,0,LOCKED=0)`. It is accepted only for source-noop racks
     /// and never reaches a runtime placement.
     native_empty_sentinel: bool,
+}
+
+fn require_strict_dvc_bounce_structure(
+    rack: Node<'_, '_>,
+    effect: Node<'_, '_>,
+) -> Result<(), String> {
+    const LABEL: &str = "COLOR MAPPINGS Bounce ID=21";
+    require_exact_custom_attributes(rack, &["EXPAND_RACK", "TYPE"], &format!("{LABEL} RACK"))?;
+    if rack.attribute("EXPAND_RACK") != Some("1") || rack.attribute("TYPE") != Some("5") {
+        return Err(format!(
+            "{LABEL} RACK requires EXPAND_RACK=1 TYPE=5, found EXPAND_RACK={} TYPE={}",
+            rack.attribute("EXPAND_RACK").unwrap_or("missing"),
+            rack.attribute("TYPE").unwrap_or("missing")
+        ));
+    }
+    require_exact_custom_attributes(
+        effect,
+        &["DURATION", "ID", "TYPE"],
+        &format!("{LABEL} EFFECT"),
+    )?;
+    let rack_children = element_children(rack).collect::<Vec<_>>();
+    for name in ["EFFECT", "MAPPING", "BEAMS"] {
+        let count = rack_children
+            .iter()
+            .filter(|node| node.has_tag_name(name))
+            .count();
+        if count != 1 {
+            return Err(format!(
+                "{LABEL} expected exactly one direct {name} container, found {count}"
+            ));
+        }
+    }
+    if let Some(unexpected) = rack_children.iter().find(|node| {
+        !node.has_tag_name("EFFECT") && !node.has_tag_name("MAPPING") && !node.has_tag_name("BEAMS")
+    }) {
+        return Err(format!(
+            "{LABEL} RACK contains unexpected <{}> element",
+            unexpected.tag_name().name()
+        ));
+    }
+    let effect_children = element_children(effect).collect::<Vec<_>>();
+    if effect_children.len() != 1 || !effect_children[0].has_tag_name("PARAMS") {
+        return Err(format!(
+            "{LABEL} EFFECT must contain exactly one direct PARAMS element"
+        ));
+    }
+    let params = effect_children[0];
+    require_exact_custom_attributes(params, &["NB"], &format!("{LABEL} PARAMS"))?;
+    for param in element_children(params) {
+        let id = required_attribute(param, "ID", "PARAM")?;
+        let expected: &[&str] = if id == "1" {
+            &["ID", "TYPE"]
+        } else {
+            &["ID", "TYPE", "VAL"]
+        };
+        require_exact_custom_attributes(param, expected, &format!("{LABEL} PARAM {id}"))?;
+        if id == "1" {
+            let colors = direct_child(param, "COLORS")
+                .ok_or_else(|| format!("{LABEL} palette PARAM 1 is missing COLORS"))?;
+            require_exact_custom_attributes(colors, &["NB"], &format!("{LABEL} COLORS"))?;
+            for (index, color) in element_children(colors).enumerate() {
+                require_exact_custom_attributes(
+                    color,
+                    &["VAL"],
+                    &format!("{LABEL} COLOR {index}"),
+                )?;
+            }
+        }
+    }
+    let beams = direct_child(rack, "BEAMS").expect("strict Bounce rack established BEAMS");
+    require_exact_custom_attributes(beams, &["NB"], &format!("{LABEL} BEAMS"))?;
+    let beam_children = element_children(beams).collect::<Vec<_>>();
+    if let Some(unexpected) = beam_children.iter().find(|node| !node.has_tag_name("BEAM")) {
+        return Err(format!(
+            "{LABEL} BEAMS contains unexpected <{}> element",
+            unexpected.tag_name().name()
+        ));
+    }
+    let declared = required_attribute(beams, "NB", "BEAMS")?
+        .parse::<usize>()
+        .map_err(|error| format!("{LABEL} BEAMS NB is invalid: {error}"))?;
+    if declared != beam_children.len() {
+        return Err(format!(
+            "{LABEL} BEAMS declares {declared} entries but contains {}",
+            beam_children.len()
+        ));
+    }
+    for (index, beam) in beam_children.iter().enumerate() {
+        require_exact_custom_attributes(
+            *beam,
+            &["BEAMID", "FIXTURE", "IDSELECTION"],
+            &format!("{LABEL} BEAM {index}"),
+        )?;
+    }
+    Ok(())
 }
 
 fn dvc_mapping_rectangle(
@@ -3505,6 +3601,7 @@ fn convert_dvc_color_spatial_effect(
     fixture_refs: &HashMap<String, FixtureImportRef>,
 ) -> Result<ConvertedDvcEffect, String> {
     let generator = match generator_id {
+        21 => "Bounce",
         22 => "Burst",
         23 => "Butterfly",
         29 => "Fire",
@@ -3550,7 +3647,8 @@ fn convert_dvc_color_spatial_effect(
     };
     let source_is_color_mappings = matches!(
         generator_id,
-        22 | 23
+        21 | 22
+            | 23
             | 29
             | 30
             | 31
@@ -3582,6 +3680,9 @@ fn convert_dvc_color_spatial_effect(
         44 => 528,
         _ => generator_id,
     };
+    if generator_id == 21 {
+        require_strict_dvc_bounce_structure(rack, effect)?;
+    }
     if matches!(generator_id, 33 | 526) {
         let source_family = if generator_id == 33 {
             "Color Mappings"
@@ -3753,6 +3854,57 @@ fn convert_dvc_color_spatial_effect(
     };
     let generator_approximations = Vec::new();
     let mut recipe = match shared_mapping_generator_id {
+        21 => {
+            require_exact_dvc_mapping_recipe_schema(
+                effect,
+                &params,
+                true,
+                &[
+                    (10, 6),
+                    (11, 7),
+                    (12, 0),
+                    (13, 0),
+                    (14, 0),
+                    (16, 2),
+                    (17, 2),
+                    (18, 0),
+                ],
+            )?;
+            if !(protocol::DASLIGHT_COLOR_PALETTE_MIN_STOPS
+                ..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS)
+                .contains(&stops.len())
+            {
+                return Err(format!(
+                    "COLOR MAPPINGS Bounce ID=21 palette requires 1..255 colors before target/no-op classification, found {}",
+                    stops.len()
+                ));
+            }
+            let item =
+                match dvc_integer_range_param(&params, 10, "COLOR MAPPINGS Bounce Item", 0, 1)?
+                    as u8
+                {
+                    0 => ColorEffectSpatialBounceItem::Shape,
+                    1 => ColorEffectSpatialBounceItem::Points,
+                    _ => unreachable!(),
+                };
+            ColorEffectSpatialRecipe::Bounce {
+                grayscale: dvc_binary_param(&params, 2, "COLOR MAPPINGS Bounce Grayscale")?,
+                rng_seed: dvc_corrected_rng_seed(scene, rack, effect, generator_id),
+                item,
+                shape: dvc_integer_range_param(&params, 11, "COLOR MAPPINGS Bounce Shape", 0, 28)?
+                    as u8,
+                number: dvc_integer_range_param(&params, 12, "COLOR MAPPINGS Bounce Number", 1, 20)?
+                    as u16,
+                size: dvc_integer_range_param(&params, 13, "COLOR MAPPINGS Bounce Size", 1, 100)?
+                    as u16,
+                speed: dvc_integer_range_param(&params, 14, "COLOR MAPPINGS Bounce Speed", 0, 10)?
+                    as u16,
+                collide: dvc_binary_param(&params, 16, "COLOR MAPPINGS Bounce Collide")?,
+                fill: dvc_binary_param(&params, 17, "COLOR MAPPINGS Bounce Fill")?,
+                points: dvc_integer_range_param(&params, 18, "COLOR MAPPINGS Bounce Points", 2, 10)?
+                    as u16,
+            }
+        }
         29 => {
             require_exact_dvc_mapping_recipe_schema(
                 effect,
@@ -4720,13 +4872,15 @@ fn convert_dvc_color_spatial_effect(
             dvc_mapping_rectangle(
                 rack,
                 &placement_label,
-                matches!(generator_id, 29 | 31 | 35 | 36 | 41 | 47 | 48 | 49 | 50)
-                    || shared_mapping_generator_id == 530,
+                matches!(
+                    generator_id,
+                    21 | 29 | 31 | 35 | 36 | 41 | 47 | 48 | 49 | 50
+                ) || shared_mapping_generator_id == 530,
             )
         })
         .transpose()?;
     let source_mapping_rectangle = mapping_rectangle;
-    if matches!(generator_id, 29 | 31 | 35 | 41 | 47 | 48 | 49 | 50) {
+    if matches!(generator_id, 21 | 29 | 31 | 35 | 41 | 47 | 48 | 49 | 50) {
         let beam_containers = element_children(rack)
             .filter(|node| node.has_tag_name("BEAMS"))
             .collect::<Vec<_>>();
@@ -4774,6 +4928,12 @@ fn convert_dvc_color_spatial_effect(
         }
     }
     let source_noop = source_is_color_mappings && targets.beam_targets.is_empty();
+    if generator_id == 21 && !source_noop && stops.len() < 2 {
+        return Err(format!(
+            "COLOR MAPPINGS Bounce ID=21 populated targets require 2..255 palette colors, found {}",
+            stops.len()
+        ));
+    }
     if mapping_rectangle.is_some_and(|rectangle| rectangle.native_empty_sentinel) {
         if source_noop {
             // Native COLOR MAPPINGS serializes an unset Rectangle this way.
@@ -4790,6 +4950,11 @@ fn convert_dvc_color_spatial_effect(
     }
     if !source_noop {
         let unsupported_shape = match &recipe {
+            ColorEffectSpatialRecipe::Bounce {
+                item: ColorEffectSpatialBounceItem::Shape,
+                shape,
+                ..
+            } if *shape != 0 => Some(*shape),
             ColorEffectSpatialRecipe::Explosion { shape, .. }
             | ColorEffectSpatialRecipe::Starfield { shape, .. }
                 if *shape != 0 =>
@@ -4799,6 +4964,11 @@ fn convert_dvc_color_spatial_effect(
             _ => None,
         };
         if let Some(shape) = unsupported_shape {
+            if generator_id == 21 {
+                return Err(format!(
+                    "COLOR MAPPINGS Bounce ID=21 populated Shape {shape} has unsupported XEEL glyph geometry; only Shape 0 is recovered"
+                ));
+            }
             return Err(format!(
                 "COLOR MAPPINGS {generator} ID={generator_id} populated Shape {shape} is a proprietary glyph; only filled-ellipse Shape 0 is confirmed"
             ));
@@ -4811,7 +4981,8 @@ fn convert_dvc_color_spatial_effect(
     }
     let omitted_spatial_targets =
         retain_dvc_color_spatial_targets(&mut targets, fixture_refs, source_is_mappings);
-    if matches!(generator_id, 29 | 31 | 35 | 41 | 47 | 48 | 49 | 50) && omitted_spatial_targets > 0
+    if matches!(generator_id, 21 | 29 | 31 | 35 | 41 | 47 | 48 | 49 | 50)
+        && omitted_spatial_targets > 0
     {
         return Err(format!(
             "COLOR MAPPINGS {generator} ID={generator_id} requires every owned BEAMS target to expose a verified color segment; omitted {omitted_spatial_targets} target(s)"
@@ -4832,7 +5003,7 @@ fn convert_dvc_color_spatial_effect(
     }
     let (period_ms, period_note) = if matches!(
         generator_id,
-        29 | 31 | 35 | 37 | 41 | 47 | 48 | 49 | 50 | 121 | 127 | 128 | 131 | 133 | 134
+        21 | 29 | 31 | 35 | 37 | 41 | 47 | 48 | 49 | 50 | 121 | 127 | 128 | 131 | 133 | 134
     ) || shared_mapping_generator_id == 530
     {
         let period_source_family = if source_is_color_mappings {
@@ -5053,6 +5224,23 @@ fn convert_dvc_color_spatial_effect(
             "implementation=SyndocalCorrected; evaluator=CRainEffect/0x140365660 recovered fixed 100x100 falling-particle raster; unavailable_qrand=stable_source_seed; rng_seed={rng_seed}; Grayscale={}; Speed={speed}; Width={width}; Height={height}; Number={number}; Trail={trail}; particle_table=first_100_pairs; vertical_wrap=true; horizontal_wrap=false; paint_order=later-wins_replacement; time=continuous; qGray=post-raster",
             u8::from(*grayscale)
         ),
+        ColorEffectSpatialRecipe::Bounce {
+            grayscale,
+            rng_seed,
+            item,
+            shape,
+            number,
+            size,
+            speed,
+            collide,
+            fill,
+            points,
+        } => format!(
+            "implementation=SyndocalCorrected; evaluator=CBounceEffect retained update-first 100x100 raster; unavailable_qrand=stable_source_seed; rng_seed={rng_seed}; Grayscale={}; Item={item:?}; Shape={shape}; Number={number}; Size={size}; Speed={speed}; Collide={}; Fill={}; Points={points}; random_table=q15_even_lanes_5000; generation0=update_first; boundary=no_clamp_with_source_W_H_swap; collision=source_order_symmetric_impulse_dist2_zero_skip; shape0=XEEL_U+E900_even_odd_contours; points=closed_path; raster_edge=deterministic_pixel_center_corrected_not_Qt_antialias_SourceExact; palette=background0_foreground_1_plus_item_mod_N_minus_1; paint_order=later_wins; qGray=post_raster",
+            u8::from(*grayscale),
+            u8::from(*collide),
+            u8::from(*fill)
+        ),
         ColorEffectSpatialRecipe::Fire {
             grayscale,
             rng_seed,
@@ -5102,8 +5290,10 @@ fn convert_dvc_color_spatial_effect(
             )
         })
         .transpose()?;
-    if matches!(generator_id, 29 | 31 | 35 | 37 | 41 | 47 | 48 | 49 | 50)
-        || matches!(shared_mapping_generator_id, 522..=529)
+    if matches!(
+        generator_id,
+        21 | 29 | 31 | 35 | 37 | 41 | 47 | 48 | 49 | 50
+    ) || matches!(shared_mapping_generator_id, 522..=529)
     {
         let transform = dvc_param(&params, 3, &format!("{mapping_family_label} Transform"))?;
         if !matches!(transform, 0.0 | 1.0 | 2.0) {
@@ -11731,6 +11921,183 @@ mod tests {
     }
 
     #[test]
+    fn dvc_color_mappings_bounce_imports_strict_noop_shape_and_points_routes() {
+        let source = |palette_count: usize, item: u8, shape: u8, beams: &str| {
+            let color = r#"<COLOR VAL="1/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>"#;
+            format!(
+                r#"<SCENE DASUID="bounce-scene" NAME="Bounce Scene" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK EXPAND_RACK="1" TYPE="5"><EFFECT TYPE="3" ID="21" DURATION="5000"><PARAMS NB="12"><PARAM TYPE="0" ID="18" VAL="10"/><PARAM TYPE="4" ID="1"><COLORS NB="{palette_count}">{}</COLORS></PARAM><PARAM TYPE="2" ID="17" VAL="1"/><PARAM TYPE="0" ID="12" VAL="20"/><PARAM TYPE="6" ID="3" VAL="2"/><PARAM TYPE="0" ID="14" VAL="10"/><PARAM TYPE="2" ID="2" VAL="1"/><PARAM TYPE="6" ID="10" VAL="{item}"/><PARAM TYPE="0" ID="4" VAL="360"/><PARAM TYPE="7" ID="11" VAL="{shape}"/><PARAM TYPE="2" ID="16" VAL="1"/><PARAM TYPE="0" ID="13" VAL="100"/></PARAMS></EFFECT><MAPPING NAME="Rectangle" DASUID="bounce" TYPE="0" X="0" Y="0" SX="100" SY="100" ANGLE="30" LOCKED="0"/>{beams}</RACK></RACKS></SCENE>"#,
+                color.repeat(palette_count)
+            )
+        };
+        let convert = |xml: &str| {
+            let document = Document::parse(xml).unwrap();
+            let scene = document.root_element();
+            let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+            let effect = direct_child(rack, "EFFECT").unwrap();
+            convert_dvc_effect(
+                scene,
+                "COLOR MAPPINGS Bounce",
+                rack,
+                effect,
+                5,
+                3,
+                21,
+                1,
+                &effect_test_profiles(),
+                &effect_test_fixture_refs(),
+            )
+        };
+        let owned = r#"<BEAMS NB="2"><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="2"/></BEAMS>"#;
+
+        for (item, shape) in [(0, 0), (1, 28)] {
+            let converted = convert(&source(255, item, shape, owned)).unwrap();
+            assert!(converted.approximations.is_empty());
+            assert!(converted.note.contains("implementation=SyndocalCorrected"));
+            assert!(converted.note.contains("generation0=update_first"));
+            assert!(converted.note.contains("not_Qt_antialias_SourceExact"));
+            let Some(EffectParamsSnapshot::Color(request)) =
+                converted.target.expect("populated Bounce target").params
+            else {
+                panic!("Bounce must create Color params");
+            };
+            assert_eq!(request.fixture_ids, vec![2, 1]);
+            assert_eq!(request.stops.len(), 255);
+            assert_eq!(request.period_ms, 5_000);
+            assert_eq!(request.blend_mode, EffectBlendMode::Override);
+            let pattern = request.spatial_pattern.unwrap();
+            assert_eq!(pattern.beam_targets.len(), 2);
+            match pattern.recipe {
+                ColorEffectSpatialRecipe::Bounce {
+                    grayscale: true,
+                    rng_seed,
+                    item: actual_item,
+                    shape: actual_shape,
+                    number: 20,
+                    size: 100,
+                    speed: 10,
+                    collide: true,
+                    fill: true,
+                    points: 10,
+                } => {
+                    assert_ne!(rng_seed, 0);
+                    assert_eq!(
+                        actual_item,
+                        if item == 0 {
+                            ColorEffectSpatialBounceItem::Shape
+                        } else {
+                            ColorEffectSpatialBounceItem::Points
+                        }
+                    );
+                    assert_eq!(actual_shape, shape);
+                }
+                recipe => panic!("unexpected Bounce recipe: {recipe:?}"),
+            }
+            let placement = pattern.placement.unwrap();
+            assert!(placement.horizontal_symmetry);
+            assert_eq!(placement.raster_rotation_degrees, 360.0);
+            assert_eq!(placement.target_coordinates.len(), 2);
+        }
+
+        let populated_shape = convert(&source(2, 0, 1, owned)).unwrap_err();
+        assert!(populated_shape.contains("unsupported XEEL glyph geometry"));
+        assert!(convert(&source(1, 1, 28, owned))
+            .unwrap_err()
+            .contains("populated targets require 2..255"));
+
+        let empty = source(1, 0, 28, r#"<BEAMS NB="0"/>"#).replacen(
+            r#"SX="100" SY="100" ANGLE="30""#,
+            r#"SX="-1" SY="-1" ANGLE="0""#,
+            1,
+        );
+        let no_op = convert(&empty).unwrap();
+        assert!(no_op.target.is_none());
+        assert!(no_op.note.contains("source no-op preserved"));
+        assert!(no_op.note.contains("Shape=28"));
+
+        let valid = source(2, 1, 28, owned);
+        for (invalid, expected) in [
+            (
+                valid.replacen(r#"<PARAMS NB="12">"#, r#"<PARAMS NB="11">"#, 1),
+                "PARAMS declares 11 entries but contains 12",
+            ),
+            (
+                valid.replacen(r#"TYPE="6" ID="10""#, r#"TYPE="0" ID="10""#, 1),
+                "expected PARAM 10 TYPE=6",
+            ),
+            (
+                valid.replacen(r#"ID="11" VAL="28""#, r#"ID="11" VAL="29""#, 1),
+                "integer within 0..28",
+            ),
+            (
+                valid.replacen(r#"ID="12" VAL="20""#, r#"ID="12" VAL="0""#, 1),
+                "integer within 1..20",
+            ),
+            (
+                valid.replacen(r#"ID="13" VAL="100""#, r#"ID="13" VAL="0""#, 1),
+                "integer within 1..100",
+            ),
+            (
+                valid.replacen(r#"ID="14" VAL="10""#, r#"ID="14" VAL="11""#, 1),
+                "integer within 0..10",
+            ),
+            (
+                valid.replacen(r#"ID="16" VAL="1""#, r#"ID="16" VAL="2""#, 1),
+                "must be 0 or 1",
+            ),
+            (
+                valid.replacen(r#"ID="17" VAL="1""#, r#"ID="17" VAL="2""#, 1),
+                "must be 0 or 1",
+            ),
+            (
+                valid.replacen(r#"ID="18" VAL="10""#, r#"ID="18" VAL="11""#, 1),
+                "integer within 2..10",
+            ),
+            (
+                valid.replacen("<BEAMS NB=", "<SELECTIONS/><BEAMS NB=", 1),
+                "RACK contains unexpected <SELECTIONS>",
+            ),
+            (
+                valid.replacen(r#"<BEAMS NB="2">"#, r#"<BEAMS NB="3">"#, 1),
+                "BEAMS declares 3 entries but contains 2",
+            ),
+            (
+                valid.replacen(r#"IDSELECTION="1""#, r#"IDSELECTION="1" EXTRA="1""#, 1),
+                "attributes must be exactly",
+            ),
+            (
+                valid.replacen(r#"LOCKED="0""#, r#"LOCKED="0" EXTRA="1""#, 1),
+                "expected Rectangle attributes",
+            ),
+        ] {
+            let error = convert(&invalid).unwrap_err();
+            assert!(
+                error.contains(expected),
+                "expected {expected:?}, found {error:?}"
+            );
+        }
+        for (invalid, expected) in [
+            (
+                empty.replacen(r#"<BEAMS NB="0"/>"#, r#"<BEAMS NB="0"><JUNK/></BEAMS>"#, 1),
+                "BEAMS contains unexpected <JUNK>",
+            ),
+            (
+                empty.replacen(r#"<BEAMS NB="0"/>"#, r#"<BEAMS NB="invalid"/>"#, 1),
+                "BEAMS NB is invalid",
+            ),
+            (
+                empty.replacen("</RACK>", r#"<BEAMS NB="0"/></RACK>"#, 1),
+                "expected exactly one direct BEAMS container, found 2",
+            ),
+        ] {
+            let error = convert(&invalid).unwrap_err();
+            assert!(
+                error.contains(expected),
+                "expected {expected:?}, found {error:?}"
+            );
+        }
+    }
+
+    #[test]
     fn dvc_color_mappings_rain_imports_strict_owned_raster_and_rejects_mutations() {
         let source = |palette_count: usize, beams: &str| {
             let color = r#"<COLOR VAL="1/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>"#;
@@ -14385,6 +14752,7 @@ mod tests {
                             ColorEffectSpatialRecipe::Lines { .. } => 31,
                             ColorEffectSpatialRecipe::Graph { .. } => 49,
                             ColorEffectSpatialRecipe::Rain { .. } => 35,
+                            ColorEffectSpatialRecipe::Bounce { .. } => 21,
                             ColorEffectSpatialRecipe::Fire { .. } => 29,
                             ColorEffectSpatialRecipe::Explosion { .. } => 47,
                             ColorEffectSpatialRecipe::Starfield { .. } => 48,
@@ -15842,6 +16210,124 @@ mod tests {
         assert!(converted.note.contains("Rectangle=(0,0,-1,-1,0)"));
         assert!(converted.note.contains("evaluator=CRainEffect/0x140365660"));
         assert!(converted.approximations.is_empty());
+    }
+
+    #[test]
+    fn dvc_local_golden_color_mappings_bounce_from_remaining7_specimen() {
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../qa/specimens/ColorMappings-Remaining7.dvc"
+        ));
+        let source = fs::read_to_string(path).unwrap();
+        assert_eq!(source.as_bytes().len(), 88_780);
+        let document = Document::parse(&source).unwrap();
+        let rack = document
+            .descendants()
+            .find(|node| {
+                node.has_tag_name("RACK")
+                    && node.attribute("TYPE") == Some("5")
+                    && direct_child(*node, "EFFECT")
+                        .is_some_and(|effect| effect.attribute("ID") == Some("21"))
+            })
+            .expect("Remaining7 must contain Bounce ID=21");
+        let effect = direct_child(rack, "EFFECT").unwrap();
+        let params = direct_child(effect, "PARAMS").unwrap();
+        assert_eq!(params.attribute("NB"), Some("12"));
+        assert_eq!(
+            element_children(params)
+                .map(|param| (
+                    param.attribute("TYPE").unwrap(),
+                    param.attribute("ID").unwrap(),
+                    param.attribute("VAL"),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("4", "1", None),
+                ("2", "2", Some("0")),
+                ("6", "3", Some("0")),
+                ("0", "4", Some("0")),
+                ("6", "10", Some("0")),
+                ("7", "11", Some("0")),
+                ("0", "12", Some("6")),
+                ("0", "13", Some("40")),
+                ("0", "14", Some("1")),
+                ("2", "16", Some("0")),
+                ("2", "17", Some("0")),
+                ("0", "18", Some("3")),
+            ]
+        );
+        let palette = direct_child(
+            element_children(params)
+                .find(|param| param.attribute("ID") == Some("1"))
+                .unwrap(),
+            "COLORS",
+        )
+        .unwrap();
+        assert_eq!(palette.attribute("NB"), Some("7"));
+        let mapping = direct_child(rack, "MAPPING").unwrap();
+        assert_eq!(
+            (
+                mapping.attribute("X"),
+                mapping.attribute("Y"),
+                mapping.attribute("SX"),
+                mapping.attribute("SY"),
+                mapping.attribute("ANGLE"),
+            ),
+            (Some("0"), Some("0"), Some("-1"), Some("-1"), Some("0"))
+        );
+        let beams = direct_child(rack, "BEAMS").unwrap();
+        assert_eq!(beams.attribute("NB"), Some("0"));
+        assert_eq!(element_children(beams).count(), 0);
+        let scene = rack
+            .ancestors()
+            .find(|node| node.has_tag_name("SCENE"))
+            .unwrap();
+        let seed = dvc_corrected_rng_seed(scene, rack, effect, 21);
+        assert_ne!(seed, 0);
+        let converted = convert_dvc_effect(
+            scene,
+            "Remaining7 Bounce",
+            rack,
+            effect,
+            5,
+            3,
+            21,
+            77,
+            &effect_test_profiles(),
+            &effect_test_fixture_refs(),
+        )
+        .unwrap();
+        assert!(converted.target.is_none());
+        assert!(converted.note.contains("source no-op preserved"));
+        assert!(converted.note.contains("Rectangle=(0,0,-1,-1,0)"));
+        assert!(converted.note.contains("Item=Shape"));
+        assert!(converted.note.contains("Shape=0"));
+        assert!(converted.note.contains(&format!("rng_seed={seed}")));
+        assert!(converted.approximations.is_empty());
+
+        let mut report = DvcImportReport::new(path.to_str().unwrap(), document.root_element());
+        let mut next_effect_id = 1;
+        let parsed = parse_scene_effects(
+            scene,
+            scene.attribute("NAME").unwrap_or("Remaining7"),
+            &effect_test_profiles(),
+            &effect_test_fixture_refs(),
+            &mut next_effect_id,
+            &mut report,
+        );
+        assert!(parsed.targets.is_empty());
+        assert_eq!(
+            next_effect_id, 1,
+            "source no-op must allocate no runtime effect ID"
+        );
+        assert!(report.converted.details.iter().any(|detail| {
+            detail.item.ends_with("(Bounce)")
+                && detail.message.contains("source no-op preserved")
+                && detail.message.contains("implementation=SyndocalCorrected")
+        }));
+        assert!(!report.skipped.details.iter().any(|detail| {
+            detail.item.ends_with("(Bounce)") && detail.message.contains("not confirmed")
+        }));
     }
 
     #[test]

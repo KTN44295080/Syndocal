@@ -87,6 +87,12 @@ native保存bodyは未取得。今回のrouteはbinary/static evidenceとsynthet
 将来再採取する場合はLinesとGridを各1 scene、palette/Size/Width/Transform/Rotationを非defaultにし、
 対象ありと`BEAMS NB=0`を分けて保存するとnative serializerの最終goldenになる。
 
+補足（2026-08-12）: `ColorMappings-Remaining7.dvc`でBounce ID21のnative NB=12/default/
+empty Rectangle/BEAMS=0は取得済み。次の優先標本は対象ありBounceをShape0 Collide OFF/ON、Points
+Fill OFF/ON（Points=2と10を含む）で各sceneへ保存したもの。可能ならShape1も別sceneへ保存し、
+現行の`unsupported XEEL glyph geometry`境界を維持したままserializer値を固定する。これが得られるまで
+Shape0/Pointsはrecovered `SyndocalCorrected` route、Qt antialias edgeは非SourceExactと明記する。
+
 ### 標本4: Move FXのBEAMID>0（`MoveBeamId.dvc`）
 
 1. マルチビームのムービング系灯体を1台パッチし、**一部のビームだけ**を選択。

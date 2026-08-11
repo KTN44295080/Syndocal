@@ -31,37 +31,38 @@ use protocol::{
     ChaserFeature, ChildTimelineSummary, ChildTimelineTransportPathSegment,
     ChildTimelineTransportRootSummary, ChildTimelineTransportRuntimeSummary, ClockSnapshot,
     ClockSource, ColorEffectAlgorithm, ColorEffectColor, ColorEffectInterpolation,
-    ColorEffectRequest, ColorEffectSpatialCoordinateFrame, ColorEffectSpatialMappingShape,
-    ColorEffectSpatialRecipe, ColorEffectSpatialSamplingRule, ColorEffectSpatialSparkleRasterMode,
-    ColorEffectStop, ColorMappingCellTarget, ColorMappingEffectRequest,
-    ColorMappingPlaybackDirection, ColorMappingSampling, ColorMappingWrapMode, CompositionId,
-    CompositionSummary, CueEffectTarget, CueFixtureTarget, CueId, CueIfcbTiming, CueListId,
-    CueListSummary, CueLiveDirection, CueLiveModifierSettings, CueLiveModifierState,
-    CueNodeGraphTarget, CuePaletteTarget, CuePartSummary, CueStepSummary, CueSummary,
-    CurveEffectPoint, CurveEffectRequest, DaslightCurveSource, DaslightCustomCurvePoint,
-    DaslightCustomCurveSource, DirectChildTimelineTransportSummary, DmxMergeMode, DmxModeSummary,
-    DmxOutputConfig, DmxOutputProtocol, DmxOutputRouteTelemetry, DmxUniversePreview,
-    EffectBeamTarget, EffectBlendMode, EffectClockSync, EffectId, EffectKind, EffectParamsSnapshot,
-    EffectSummary, EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId,
-    FixtureId, FixtureLimits, FixtureProfileSummary, LfoEffectRequest, LfoShape, LiveAudioFrame,
-    LiveAudioReactiveFeatures, MappingEffectDirection, MappingEffectRequest, MoveCoordinateMode,
-    MoveDirection, MoveEffectRequest, MovePathPoint, NodeGraphAudioRuntimeStatus, NodeGraphId,
-    NodeGraphNodeKind, NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId,
-    PatchFixtureRequest, PatchedFixtureSummary, PlaybackExecutorSummary, PositionWaveEffectRequest,
-    ProgrammerSnapshot, ProgrammerValueSummary, RecallMode, ReferencePaletteSummary, Rotation3,
-    StageMapConfig, StageMapPresetSummary, StageObjectId, StageObjectSummary, SubmasterSummary,
-    TimelineAudioClipId, TimelineAudioClipSummary, TimelineAutomationSummary,
-    TimelineCueEventSummary, TimelineEventId, TimelineLayerKind, TimelineLayerSummary,
-    TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind, TimelineVideoAutomationSummary,
-    TouchFeaturePresetTarget, TouchSurfaceSummary, Transform2D, ValueEffectDirection,
-    ValueEffectInterpolation, ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3,
-    VideoAutomationKeyframeSummary, VideoBlendMode, VideoColorAdjust, VideoCuePointSummary,
-    VideoEffectTarget, VideoFxAdjust, VideoIsfControlKind, VideoIsfEffectStageSummary,
-    VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerSummary, VideoLayerTarget,
-    VideoOutputId, VideoOutputKind, VideoOutputMapping, VideoOutputMappingPresetSummary,
-    VideoOutputSummary, VideoOutputTarget, VideoParam, VideoSnapshot, VideoSourceKind,
-    VideoSourceSummary, DEFAULT_CUE_LIST_ID, LIVE_AUDIO_FEATURE_BAND_CAPACITY,
-    MAX_CUE_AUTHORED_BEATS, MAX_TIMELINE_SCENE_BLOCK_LOOPS, MIN_CUE_AUTHORED_BEATS,
+    ColorEffectRequest, ColorEffectSpatialBounceItem, ColorEffectSpatialCoordinateFrame,
+    ColorEffectSpatialMappingShape, ColorEffectSpatialRecipe, ColorEffectSpatialSamplingRule,
+    ColorEffectSpatialSparkleRasterMode, ColorEffectStop, ColorMappingCellTarget,
+    ColorMappingEffectRequest, ColorMappingPlaybackDirection, ColorMappingSampling,
+    ColorMappingWrapMode, CompositionId, CompositionSummary, CueEffectTarget, CueFixtureTarget,
+    CueId, CueIfcbTiming, CueListId, CueListSummary, CueLiveDirection, CueLiveModifierSettings,
+    CueLiveModifierState, CueNodeGraphTarget, CuePaletteTarget, CuePartSummary, CueStepSummary,
+    CueSummary, CurveEffectPoint, CurveEffectRequest, DaslightCurveSource,
+    DaslightCustomCurvePoint, DaslightCustomCurveSource, DirectChildTimelineTransportSummary,
+    DmxMergeMode, DmxModeSummary, DmxOutputConfig, DmxOutputProtocol, DmxOutputRouteTelemetry,
+    DmxUniversePreview, EffectBeamTarget, EffectBlendMode, EffectClockSync, EffectId, EffectKind,
+    EffectParamsSnapshot, EffectSummary, EngineSnapshot, EngineTelemetry,
+    ExclusiveVideoTakeRequest, ExecutorId, FixtureId, FixtureLimits, FixtureProfileSummary,
+    LfoEffectRequest, LfoShape, LiveAudioFrame, LiveAudioReactiveFeatures, MappingEffectDirection,
+    MappingEffectRequest, MoveCoordinateMode, MoveDirection, MoveEffectRequest, MovePathPoint,
+    NodeGraphAudioRuntimeStatus, NodeGraphId, NodeGraphNodeKind, NodeGraphNodeSummary,
+    NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest, PatchedFixtureSummary,
+    PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot, ProgrammerValueSummary,
+    RecallMode, ReferencePaletteSummary, Rotation3, StageMapConfig, StageMapPresetSummary,
+    StageObjectId, StageObjectSummary, SubmasterSummary, TimelineAudioClipId,
+    TimelineAudioClipSummary, TimelineAutomationSummary, TimelineCueEventSummary, TimelineEventId,
+    TimelineLayerKind, TimelineLayerSummary, TimelineSnapRequest, TimelineSnapshot,
+    TimelineTrackKind, TimelineVideoAutomationSummary, TouchFeaturePresetTarget,
+    TouchSurfaceSummary, Transform2D, ValueEffectDirection, ValueEffectInterpolation,
+    ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
+    VideoBlendMode, VideoColorAdjust, VideoCuePointSummary, VideoEffectTarget, VideoFxAdjust,
+    VideoIsfControlKind, VideoIsfEffectStageSummary, VideoIsfEffectSummary, VideoLayerId,
+    VideoLayerState, VideoLayerSummary, VideoLayerTarget, VideoOutputId, VideoOutputKind,
+    VideoOutputMapping, VideoOutputMappingPresetSummary, VideoOutputSummary, VideoOutputTarget,
+    VideoParam, VideoSnapshot, VideoSourceKind, VideoSourceSummary, DEFAULT_CUE_LIST_ID,
+    LIVE_AUDIO_FEATURE_BAND_CAPACITY, MAX_CUE_AUTHORED_BEATS, MAX_TIMELINE_SCENE_BLOCK_LOOPS,
+    MIN_CUE_AUTHORED_BEATS,
 };
 use thiserror::Error;
 
@@ -3683,6 +3684,10 @@ struct RuntimeColorSpatialState {
     /// 102-row in-place heat buffer. Supported target sets precompute every
     /// sampled source generation; larger sets retain a preallocated fallback.
     daslight_fire: Option<CompiledDaslightFire>,
+    /// COLOR MAPPINGS ID 21 Bounce retained 100x100 particle/path raster.
+    /// Supported target sets retain sampled-only immutable frame backing;
+    /// larger permissive sets use one preallocated generation cache.
+    daslight_bounce: Option<CompiledDaslightBounce>,
     /// COLOR MAPPINGS ID 47 Explosion / ID 48 Starfield fixed 100x100
     /// retained-particle raster. Supported target sets precompute every
     /// sampled generation; larger permissive sets retain one dynamic
@@ -6288,6 +6293,692 @@ impl CompiledDaslightRain {
         } else {
             color
         }
+    }
+}
+
+const DASLIGHT_BOUNCE_RASTER_SIZE: usize = 100;
+const DASLIGHT_BOUNCE_RANDOM_COUNT: usize = 5_000;
+const DASLIGHT_BOUNCE_FRAME_CAP: usize = 750;
+
+#[derive(Clone)]
+struct CompiledDaslightBounceState {
+    x: Vec<f32>,
+    y: Vec<f32>,
+    vx: Vec<f32>,
+    vy: Vec<f32>,
+}
+
+impl CompiledDaslightBounceState {
+    fn copy_from(&mut self, source: &Self) {
+        self.x.copy_from_slice(&source.x);
+        self.y.copy_from_slice(&source.y);
+        self.vx.copy_from_slice(&source.vx);
+        self.vy.copy_from_slice(&source.vy);
+    }
+}
+
+#[derive(Clone)]
+struct CompiledDaslightBounceFrames {
+    red: Vec<u16>,
+    green: Vec<u16>,
+    blue: Vec<u16>,
+    sampled_pixel_count: usize,
+}
+
+#[derive(Clone, Copy, Default)]
+struct CompiledDaslightBounceSampleRow {
+    x_mask: u128,
+    slot_start: usize,
+}
+
+#[derive(Clone)]
+struct CompiledDaslightBounceRasterCache {
+    generation: Option<usize>,
+    state: CompiledDaslightBounceState,
+    red: Vec<u16>,
+    green: Vec<u16>,
+    blue: Vec<u16>,
+    #[cfg(test)]
+    rebuild_count: u64,
+}
+
+impl CompiledDaslightBounceRasterCache {
+    fn new(initial_state: &CompiledDaslightBounceState, sampled_pixel_count: usize) -> Self {
+        Self {
+            generation: None,
+            state: initial_state.clone(),
+            red: vec![0; sampled_pixel_count],
+            green: vec![0; sampled_pixel_count],
+            blue: vec![0; sampled_pixel_count],
+            #[cfg(test)]
+            rebuild_count: 0,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct CompiledDaslightBounceGlyph {
+    outer: Arc<[(f32, f32)]>,
+    inner: Arc<[(f32, f32)]>,
+}
+
+impl CompiledDaslightBounceGlyph {
+    fn compile() -> Self {
+        const OUTER: &[(f32, f32, bool)] = &[
+            (965.0, 781.0, true),
+            (930.0, 822.0, false),
+            (843.0, 888.0, false),
+            (744.0, 935.0, false),
+            (634.0, 960.0, false),
+            (576.0, 960.0, true),
+            (470.0, 960.0, false),
+            (283.0, 880.0, false),
+            (144.0, 741.0, false),
+            (64.0, 554.0, false),
+            (64.0, 448.0, true),
+            (64.0, 342.0, false),
+            (144.0, 155.0, false),
+            (283.0, 16.0, false),
+            (470.0, -64.0, false),
+            (576.0, -64.0, true),
+            (634.0, -64.0, false),
+            (744.0, -39.0, false),
+            (843.0, 8.0, false),
+            (930.0, 74.0, false),
+            (965.0, 115.0, true),
+            (640.0, 448.0, true),
+        ];
+        const INNER: &[(f32, f32, bool)] = &[
+            (704.0, 839.0, true),
+            (734.0, 839.0, false),
+            (775.0, 798.0, false),
+            (775.0, 768.0, true),
+            (775.0, 738.0, false),
+            (734.0, 697.0, false),
+            (704.0, 697.0, true),
+            (674.0, 697.0, false),
+            (633.0, 738.0, false),
+            (633.0, 768.0, true),
+            (633.0, 798.0, false),
+            (674.0, 839.0, false),
+        ];
+        Self {
+            outer: Self::flatten_true_type_contour(OUTER).into(),
+            inner: Self::flatten_true_type_contour(INNER).into(),
+        }
+    }
+
+    fn flatten_true_type_contour(points: &[(f32, f32, bool)]) -> Vec<(f32, f32)> {
+        debug_assert!(points.first().is_some_and(|point| point.2));
+        let start = (points[0].0, points[0].1);
+        let mut flattened = vec![start];
+        let mut current = start;
+        let mut index = 1;
+        while index < points.len() {
+            let point = points[index];
+            if point.2 {
+                flattened.push((point.0, point.1));
+                current = (point.0, point.1);
+                index += 1;
+                continue;
+            }
+            let next = if index + 1 < points.len() {
+                points[index + 1]
+            } else {
+                points[0]
+            };
+            let end = if next.2 {
+                (next.0, next.1)
+            } else {
+                ((point.0 + next.0) * 0.5, (point.1 + next.1) * 0.5)
+            };
+            for step in 1..=8 {
+                let t = step as f32 / 8.0;
+                let inverse = 1.0 - t;
+                flattened.push((
+                    inverse * inverse * current.0 + 2.0 * inverse * t * point.0 + t * t * end.0,
+                    inverse * inverse * current.1 + 2.0 * inverse * t * point.1 + t * t * end.1,
+                ));
+            }
+            current = end;
+            index += if next.2 { 2 } else { 1 };
+        }
+        if flattened.last().copied() != Some(start) {
+            flattened.push(start);
+        }
+        flattened
+    }
+
+    fn contains(
+        &self,
+        pixel_x: f32,
+        pixel_y: f32,
+        origin_x: f32,
+        origin_y: f32,
+        size: f32,
+    ) -> bool {
+        let glyph_x = 514.5 + (pixel_x - origin_x) * 400.0 / size;
+        let glyph_y = 448.0 - (pixel_y - origin_y) * 400.0 / size;
+        Self::point_in_polygon(glyph_x, glyph_y, &self.outer)
+            ^ Self::point_in_polygon(glyph_x, glyph_y, &self.inner)
+    }
+
+    fn point_in_polygon(x: f32, y: f32, polygon: &[(f32, f32)]) -> bool {
+        let mut inside = false;
+        for edge in polygon.windows(2) {
+            let (x1, y1) = edge[0];
+            let (x2, y2) = edge[1];
+            if (y1 > y) != (y2 > y) && x < (x2 - x1) * (y - y1) / (y2 - y1) + x1 {
+                inside = !inside;
+            }
+        }
+        inside
+    }
+}
+
+#[derive(Clone)]
+struct CompiledDaslightBounce {
+    random_a: Arc<[f32; DASLIGHT_BOUNCE_RANDOM_COUNT]>,
+    palette: Arc<[ColorEffectColor]>,
+    glyph: Arc<CompiledDaslightBounceGlyph>,
+    initial_state: Arc<CompiledDaslightBounceState>,
+    item: ColorEffectSpatialBounceItem,
+    number: usize,
+    size: f32,
+    speed: f32,
+    collide: bool,
+    fill: bool,
+    points: usize,
+    grayscale: bool,
+    rendered_frame_count: usize,
+    sample_x: Arc<[u8]>,
+    sample_y: Arc<[u8]>,
+    sampled_rows: [CompiledDaslightBounceSampleRow; DASLIGHT_BOUNCE_RASTER_SIZE],
+    precomputed_frames: Option<Arc<CompiledDaslightBounceFrames>>,
+    raster_cache: Option<RefCell<CompiledDaslightBounceRasterCache>>,
+}
+
+impl CompiledDaslightBounce {
+    #[cfg(test)]
+    fn compile(request: &ColorEffectRequest) -> Result<Option<Self>, String> {
+        Self::compile_with_sampled_rows(
+            request,
+            [(1_u128 << DASLIGHT_BOUNCE_RASTER_SIZE) - 1; DASLIGHT_BOUNCE_RASTER_SIZE],
+            false,
+        )
+    }
+
+    fn compile_for_targets(
+        request: &ColorEffectRequest,
+        targets: &[RuntimeColorSpatialTarget],
+    ) -> Result<Option<Self>, String> {
+        let mut sampled_rows = [0_u128; DASLIGHT_BOUNCE_RASTER_SIZE];
+        for target in targets {
+            let pixel_x = Self::raster_pixel(target.x);
+            let pixel_y = Self::raster_pixel(target.z);
+            sampled_rows[pixel_y] |= 1_u128 << pixel_x;
+        }
+        Self::compile_with_sampled_rows(
+            request,
+            sampled_rows,
+            targets.len() <= SUPPORTED_EFFECT_ENVELOPE_FIXTURES,
+        )
+    }
+
+    fn compile_with_sampled_rows(
+        request: &ColorEffectRequest,
+        sampled_rows: [u128; DASLIGHT_BOUNCE_RASTER_SIZE],
+        precompute_supported_frames: bool,
+    ) -> Result<Option<Self>, String> {
+        let Some(pattern) = request.spatial_pattern.as_ref() else {
+            return Ok(None);
+        };
+        let ColorEffectSpatialRecipe::Bounce {
+            grayscale,
+            rng_seed,
+            item,
+            shape,
+            number,
+            size,
+            speed,
+            collide,
+            fill,
+            points,
+        } = &pattern.recipe
+        else {
+            return Ok(None);
+        };
+        if *item == ColorEffectSpatialBounceItem::Shape && *shape != 0 {
+            return Err("Bounce supports only XEEL glyph Shape 0".to_string());
+        }
+        if !(2..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS).contains(&request.stops.len()) {
+            return Err("Bounce requires between 2 and 255 palette stops".to_string());
+        }
+        if !(1..=20).contains(number)
+            || !(1..=100).contains(size)
+            || *speed > 10
+            || !(2..=10).contains(points)
+        {
+            return Err("Bounce Number must be within 1..20, Size within 1..100, Speed within 0..10, and Points within 2..10".to_string());
+        }
+        let random_a = Arc::new(std::array::from_fn(|index| {
+            let even_key = (index as u64 * 2).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            let odd_key = (index as u64 * 2 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            let a = (splitmix64(u64::from(*rng_seed) ^ even_key) >> 49) as u16;
+            let _discarded_b = (splitmix64(u64::from(*rng_seed) ^ odd_key) >> 49) as u16;
+            f32::from(a) / 32_767.0
+        }));
+        let initial_state = Arc::new(Self::initial_state(
+            *item,
+            usize::from(*number),
+            usize::from(*points),
+            &random_a,
+        ));
+        let mut sample_x = Vec::new();
+        let mut sample_y = Vec::new();
+        let mut slot_start = 0;
+        let sampled_rows = sampled_rows.map(|x_mask| {
+            let row = CompiledDaslightBounceSampleRow { x_mask, slot_start };
+            slot_start += x_mask.count_ones() as usize;
+            row
+        });
+        for (pixel_y, row) in sampled_rows.iter().copied().enumerate() {
+            let mut pending = row.x_mask;
+            while pending != 0 {
+                let pixel_x = pending.trailing_zeros() as usize;
+                sample_x.push(pixel_x as u8);
+                sample_y.push(pixel_y as u8);
+                pending &= pending - 1;
+            }
+        }
+        let sampled_pixel_count = sample_x.len();
+        let rendered_frame_count = (request.period_ms as usize / 40)
+            .max(1)
+            .min(DASLIGHT_BOUNCE_FRAME_CAP);
+        let mut compiled = Self {
+            random_a,
+            palette: request.stops.iter().map(|stop| stop.color).collect(),
+            glyph: Arc::new(CompiledDaslightBounceGlyph::compile()),
+            initial_state,
+            item: *item,
+            number: usize::from(*number),
+            size: f32::from(*size),
+            speed: f32::from(*speed),
+            collide: *collide,
+            fill: *fill,
+            points: usize::from(*points),
+            grayscale: *grayscale,
+            rendered_frame_count,
+            sample_x: sample_x.into(),
+            sample_y: sample_y.into(),
+            sampled_rows,
+            precomputed_frames: None,
+            raster_cache: None,
+        };
+        if precompute_supported_frames {
+            compiled.precompute_frames(sampled_pixel_count);
+        } else {
+            compiled.raster_cache = Some(RefCell::new(CompiledDaslightBounceRasterCache::new(
+                &compiled.initial_state,
+                sampled_pixel_count,
+            )));
+        }
+        Ok(Some(compiled))
+    }
+
+    fn initial_state(
+        item: ColorEffectSpatialBounceItem,
+        number: usize,
+        points: usize,
+        random: &[f32; DASLIGHT_BOUNCE_RANDOM_COUNT],
+    ) -> CompiledDaslightBounceState {
+        let item_width = if item == ColorEffectSpatialBounceItem::Points {
+            points
+        } else {
+            1
+        };
+        let count = number * item_width;
+        let mut state = CompiledDaslightBounceState {
+            x: Vec::with_capacity(count),
+            y: Vec::with_capacity(count),
+            vx: Vec::with_capacity(count),
+            vy: Vec::with_capacity(count),
+        };
+        for item_index in 0..number {
+            let base = 2 + 10 * item_index;
+            for point_index in 0..item_width {
+                let key = (base + 10 * point_index) % DASLIGHT_BOUNCE_RANDOM_COUNT;
+                state.x.push(
+                    1.0 + 99.0
+                        * random[(key + DASLIGHT_BOUNCE_RANDOM_COUNT - 2)
+                            % DASLIGHT_BOUNCE_RANDOM_COUNT],
+                );
+                state.y.push(
+                    1.0 + 99.0
+                        * random[(key + DASLIGHT_BOUNCE_RANDOM_COUNT - 1)
+                            % DASLIGHT_BOUNCE_RANDOM_COUNT],
+                );
+                if item == ColorEffectSpatialBounceItem::Points {
+                    state.vx.push(1.0 + 99.0 * random[key]);
+                    state
+                        .vy
+                        .push(1.0 + 99.0 * random[(key + 1) % DASLIGHT_BOUNCE_RANDOM_COUNT]);
+                } else {
+                    state.vx.push(2.0 * random[key] - 1.0);
+                    state
+                        .vy
+                        .push(2.0 * random[(key + 1) % DASLIGHT_BOUNCE_RANDOM_COUNT] - 1.0);
+                }
+            }
+        }
+        state
+    }
+
+    #[inline(always)]
+    fn raster_pixel(normalized: f32) -> usize {
+        (normalized.clamp(0.0, 1.0) * DASLIGHT_BOUNCE_RASTER_SIZE as f32)
+            .floor()
+            .min((DASLIGHT_BOUNCE_RASTER_SIZE - 1) as f32) as usize
+    }
+
+    fn advance_state_dimensions(
+        &self,
+        state: &mut CompiledDaslightBounceState,
+        width: f32,
+        height: f32,
+    ) {
+        let boundary_size = if self.item == ColorEffectSpatialBounceItem::Points {
+            0.0
+        } else {
+            self.size
+        };
+        for index in 0..state.x.len() {
+            state.x[index] += state.vx[index] * self.speed;
+            state.y[index] += state.vy[index] * self.speed;
+            if state.x[index] < 0.0 && state.vx[index] < 0.0 {
+                state.vx[index] = -state.vx[index];
+            }
+            if state.y[index] < 0.0 && state.vy[index] < 0.0 {
+                state.vy[index] = -state.vy[index];
+            }
+            // Preserve the recovered source W/H swap defect and its lack of clamping.
+            if state.x[index] > height - boundary_size && state.vx[index] > 0.0 {
+                state.vx[index] = -state.vx[index];
+            }
+            if state.y[index] > width - boundary_size && state.vy[index] > 0.0 {
+                state.vy[index] = -state.vy[index];
+            }
+        }
+        if self.item == ColorEffectSpatialBounceItem::Shape && self.collide {
+            self.collide_shapes(state);
+        }
+    }
+
+    fn collide_shapes(&self, state: &mut CompiledDaslightBounceState) {
+        for left in 0..self.number {
+            for right in left + 1..self.number {
+                let dx = state.x[right] - state.x[left];
+                let dy = state.y[right] - state.y[left];
+                if dx.abs() > self.size || dy.abs() > self.size {
+                    continue;
+                }
+                let dist2 = dx * dx + dy * dy;
+                if dist2 == 0.0 || dist2 > self.size * self.size {
+                    continue;
+                }
+                let dvx = state.vx[right] - state.vx[left];
+                let dvy = state.vy[right] - state.vy[left];
+                let dot = dx * dvx + dy * dvy;
+                if dot > 0.0 {
+                    continue;
+                }
+                let impulse = dot / dist2;
+                state.vx[left] += impulse * dx;
+                state.vy[left] += impulse * dy;
+                state.vx[right] -= impulse * dx;
+                state.vy[right] -= impulse * dy;
+            }
+        }
+    }
+
+    fn point_hits_closed_path(
+        &self,
+        state: &CompiledDaslightBounceState,
+        item: usize,
+        x: f32,
+        y: f32,
+    ) -> bool {
+        let start = item * self.points;
+        let vertices =
+            (0..self.points).map(|offset| (state.x[start + offset], state.y[start + offset]));
+        if self.fill {
+            let mut inside = false;
+            let mut previous = (
+                state.x[start + self.points - 1],
+                state.y[start + self.points - 1],
+            );
+            for current in vertices {
+                if (previous.1 > y) != (current.1 > y)
+                    && x < (current.0 - previous.0) * (y - previous.1) / (current.1 - previous.1)
+                        + previous.0
+                {
+                    inside = !inside;
+                }
+                previous = current;
+            }
+            inside
+        } else {
+            let radius2 = (self.size * 0.5) * (self.size * 0.5);
+            let mut previous = (
+                state.x[start + self.points - 1],
+                state.y[start + self.points - 1],
+            );
+            for current in vertices {
+                let dx = current.0 - previous.0;
+                let dy = current.1 - previous.1;
+                let length2 = dx * dx + dy * dy;
+                let amount = if length2 == 0.0 {
+                    0.0
+                } else {
+                    (((x - previous.0) * dx + (y - previous.1) * dy) / length2).clamp(0.0, 1.0)
+                };
+                let nearest_x = previous.0 + amount * dx;
+                let nearest_y = previous.1 + amount * dy;
+                let delta_x = x - nearest_x;
+                let delta_y = y - nearest_y;
+                if delta_x * delta_x + delta_y * delta_y <= radius2 {
+                    return true;
+                }
+                previous = current;
+            }
+            false
+        }
+    }
+
+    fn sampled_color(
+        &self,
+        state: &CompiledDaslightBounceState,
+        pixel_x: u8,
+        pixel_y: u8,
+    ) -> ColorEffectColor {
+        let x = f32::from(pixel_x) + 0.5;
+        let y = f32::from(pixel_y) + 0.5;
+        // Coverage is binary in the corrected deterministic pixel-centre
+        // raster. Therefore reverse source order can stop at the first hit
+        // while remaining exactly equivalent to later-wins painting.
+        let mut color = self.palette[0];
+        for item in (0..self.number).rev() {
+            let hit = match self.item {
+                ColorEffectSpatialBounceItem::Shape => {
+                    self.glyph
+                        .contains(x, y, state.x[item], state.y[item], self.size)
+                }
+                ColorEffectSpatialBounceItem::Points => {
+                    self.point_hits_closed_path(state, item, x, y)
+                }
+            };
+            if hit {
+                color = self.palette[1 + item % (self.palette.len() - 1)];
+                break;
+            }
+        }
+        if self.grayscale {
+            daslight_grayscale_color(color)
+        } else {
+            color
+        }
+    }
+
+    fn render_sampled(
+        &self,
+        state: &CompiledDaslightBounceState,
+        red: &mut [u16],
+        green: &mut [u16],
+        blue: &mut [u16],
+    ) {
+        for slot in 0..self.sample_x.len() {
+            let color = self.sampled_color(state, self.sample_x[slot], self.sample_y[slot]);
+            red[slot] = color.red;
+            green[slot] = color.green;
+            blue[slot] = color.blue;
+        }
+    }
+
+    fn precompute_frames(&mut self, sampled_pixel_count: usize) {
+        let mut state = (*self.initial_state).clone();
+        let mut frames = CompiledDaslightBounceFrames {
+            red: vec![0; self.rendered_frame_count * sampled_pixel_count],
+            green: vec![0; self.rendered_frame_count * sampled_pixel_count],
+            blue: vec![0; self.rendered_frame_count * sampled_pixel_count],
+            sampled_pixel_count,
+        };
+        for generation in 0..self.rendered_frame_count {
+            self.advance_state_dimensions(
+                &mut state,
+                DASLIGHT_BOUNCE_RASTER_SIZE as f32,
+                DASLIGHT_BOUNCE_RASTER_SIZE as f32,
+            );
+            let start = generation * sampled_pixel_count;
+            self.render_sampled(
+                &state,
+                &mut frames.red[start..start + sampled_pixel_count],
+                &mut frames.green[start..start + sampled_pixel_count],
+                &mut frames.blue[start..start + sampled_pixel_count],
+            );
+        }
+        self.precomputed_frames = Some(Arc::new(frames));
+    }
+
+    fn generation(&self, time_phase: f64) -> usize {
+        ((time_phase.rem_euclid(1.0) * self.rendered_frame_count as f64).floor() as usize)
+            .min(self.rendered_frame_count - 1)
+    }
+
+    fn prepare_generation(&self, generation: usize) {
+        if self.precomputed_frames.is_some() {
+            return;
+        }
+        let mut cache = self
+            .raster_cache
+            .as_ref()
+            .expect("dynamic Bounce evaluator must retain a raster cache")
+            .borrow_mut();
+        if cache.generation == Some(generation) {
+            return;
+        }
+        let first_generation = if cache
+            .generation
+            .is_some_and(|previous| previous + 1 == generation)
+        {
+            generation
+        } else {
+            cache.state.copy_from(&self.initial_state);
+            0
+        };
+        for _ in first_generation..=generation {
+            self.advance_state_dimensions(
+                &mut cache.state,
+                DASLIGHT_BOUNCE_RASTER_SIZE as f32,
+                DASLIGHT_BOUNCE_RASTER_SIZE as f32,
+            );
+        }
+        let mut red = std::mem::take(&mut cache.red);
+        let mut green = std::mem::take(&mut cache.green);
+        let mut blue = std::mem::take(&mut cache.blue);
+        self.render_sampled(&cache.state, &mut red, &mut green, &mut blue);
+        cache.red = red;
+        cache.green = green;
+        cache.blue = blue;
+        cache.generation = Some(generation);
+        #[cfg(test)]
+        {
+            cache.rebuild_count += 1;
+        }
+    }
+
+    fn sample_at_phase(
+        &self,
+        time_phase: f64,
+        normalized_x: f32,
+        normalized_y: f32,
+    ) -> ColorEffectColor {
+        let generation = self.generation(time_phase);
+        let pixel_x = Self::raster_pixel(normalized_x) as u8;
+        let pixel_y = Self::raster_pixel(normalized_y) as u8;
+        let row = self.sampled_rows[usize::from(pixel_y)];
+        debug_assert_ne!(row.x_mask & (1_u128 << pixel_x), 0);
+        let preceding = row.x_mask & ((1_u128 << pixel_x) - 1);
+        let slot = row.slot_start + preceding.count_ones() as usize;
+        if let Some(frames) = &self.precomputed_frames {
+            let index = generation * frames.sampled_pixel_count + slot;
+            ColorEffectColor {
+                red: frames.red[index],
+                green: frames.green[index],
+                blue: frames.blue[index],
+            }
+        } else {
+            self.prepare_generation(generation);
+            let cache = self
+                .raster_cache
+                .as_ref()
+                .expect("dynamic Bounce cache missing")
+                .borrow();
+            ColorEffectColor {
+                red: cache.red[slot],
+                green: cache.green[slot],
+                blue: cache.blue[slot],
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn storage_pointers(&self) -> (usize, usize, usize, usize, usize, usize) {
+        let frames = self
+            .precomputed_frames
+            .as_ref()
+            .map_or((0, 0, 0), |frames| {
+                (
+                    frames.red.as_ptr() as usize,
+                    frames.green.as_ptr() as usize,
+                    frames.blue.as_ptr() as usize,
+                )
+            });
+        (
+            self.random_a.as_ptr() as usize,
+            self.palette.as_ptr() as usize,
+            frames.0,
+            frames.1,
+            frames.2,
+            self.initial_state.x.as_ptr() as usize,
+        )
+    }
+
+    #[cfg(test)]
+    fn cache_state(&self) -> (Option<usize>, u64) {
+        self.raster_cache.as_ref().map_or((None, 0), |cache| {
+            let cache = cache.borrow();
+            (cache.generation, cache.rebuild_count)
+        })
     }
 }
 
@@ -30229,6 +30920,18 @@ fn validate_runtime_color_effect_request(request: &ColorEffectRequest) -> Result
                     return Err("Rain requires Override blend mode".to_string());
                 }
             }
+            ColorEffectSpatialRecipe::Bounce { .. } => {
+                if !(2..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS).contains(&request.stops.len())
+                {
+                    return Err("Bounce requires between 2 and 255 palette stops".to_string());
+                }
+                if pattern.placement.is_none() {
+                    return Err("Bounce requires a placed 100x100 spatial raster".to_string());
+                }
+                if request.blend_mode != EffectBlendMode::Override {
+                    return Err("Bounce requires Override blend mode".to_string());
+                }
+            }
             ColorEffectSpatialRecipe::Fire { .. } => {
                 if !(2..=4).contains(&request.stops.len()) {
                     return Err("Fire requires between 2 and 4 palette stops".to_string());
@@ -30625,6 +31328,35 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
             }
             if !(1..=30).contains(trail) {
                 return Err("Rain Trail must be within 1..30".to_string());
+            }
+            Ok(())
+        }
+        ColorEffectSpatialRecipe::Bounce {
+            item,
+            shape,
+            number,
+            size,
+            speed,
+            points,
+            ..
+        } => {
+            if *item == ColorEffectSpatialBounceItem::Shape && *shape != 0 {
+                return Err("Bounce supports only XEEL glyph Shape 0".to_string());
+            }
+            if *shape > 28 {
+                return Err("Bounce Shape must be within 0..28".to_string());
+            }
+            if !(1..=20).contains(number) {
+                return Err("Bounce Number must be within 1..20".to_string());
+            }
+            if !(1..=100).contains(size) {
+                return Err("Bounce Size must be within 1..100".to_string());
+            }
+            if *speed > 10 {
+                return Err("Bounce Speed must be within 0..10".to_string());
+            }
+            if !(2..=10).contains(points) {
+                return Err("Bounce Points must be within 2..10".to_string());
             }
             Ok(())
         }
@@ -31415,12 +32147,13 @@ pub fn validate_value_effect_request(request: &ValueEffectRequest) -> Result<(),
                 | ColorEffectSpatialRecipe::Lines { .. }
                 | ColorEffectSpatialRecipe::Graph { .. }
                 | ColorEffectSpatialRecipe::Rain { .. }
+                | ColorEffectSpatialRecipe::Bounce { .. }
                 | ColorEffectSpatialRecipe::Fire { .. }
                 | ColorEffectSpatialRecipe::Explosion { .. }
                 | ColorEffectSpatialRecipe::Starfield { .. }
         ) {
             return Err(
-                "Fire, Graph, Grid, Lines, Rain, Explosion, and Starfield spatial recipes are supported only by Color effects"
+                "Bounce, Fire, Graph, Grid, Lines, Rain, Explosion, and Starfield spatial recipes are supported only by Color effects"
                     .to_string(),
             );
         }
@@ -33390,6 +34123,7 @@ fn runtime_color_effect_from_request(
         let daslight_grid_lines = CompiledDaslightGridLines::compile(&request)?;
         let daslight_graph = CompiledDaslightGraph::compile(&request)?;
         let daslight_rain = CompiledDaslightRain::compile(&request)?;
+        let daslight_bounce = CompiledDaslightBounce::compile_for_targets(&request, &targets)?;
         let daslight_fire = CompiledDaslightFire::compile_for_targets(&request, &targets)?;
         let daslight_particles =
             CompiledDaslightParticles::compile_for_targets(&request, &targets)?;
@@ -33407,6 +34141,7 @@ fn runtime_color_effect_from_request(
             daslight_grid_lines,
             daslight_graph,
             daslight_rain,
+            daslight_bounce,
             daslight_fire,
             daslight_particles,
         }))
@@ -34677,6 +35412,7 @@ fn evaluate_runtime_color_spatial_attribute_at_rate(
                 spatial.daslight_grid_lines.as_ref(),
                 spatial.daslight_graph.as_ref(),
                 spatial.daslight_rain.as_ref(),
+                spatial.daslight_bounce.as_ref(),
                 spatial.daslight_fire.as_ref(),
                 spatial.daslight_particles.as_ref(),
                 effect_id,
@@ -34966,6 +35702,7 @@ fn evaluate_color_spatial_sample_at_rate(
     daslight_grid_lines: Option<&CompiledDaslightGridLines>,
     daslight_graph: Option<&CompiledDaslightGraph>,
     daslight_rain: Option<&CompiledDaslightRain>,
+    daslight_bounce: Option<&CompiledDaslightBounce>,
     daslight_fire: Option<&CompiledDaslightFire>,
     daslight_particles: Option<&CompiledDaslightParticles>,
     effect_id: EffectId,
@@ -35012,6 +35749,16 @@ fn evaluate_color_spatial_sample_at_rate(
     if let Some(daslight_rain) = daslight_rain {
         return RuntimeColorSpatialSample {
             color: daslight_rain.sample_at_phase(
+                time_phase_for_continuous_spatial(request, created_at, now, clock, rate),
+                target.x,
+                target.z,
+            ),
+            opacity: 1.0,
+        };
+    }
+    if let Some(daslight_bounce) = daslight_bounce {
+        return RuntimeColorSpatialSample {
+            color: daslight_bounce.sample_at_phase(
                 time_phase_for_continuous_spatial(request, created_at, now, clock, rate),
                 target.x,
                 target.z,
@@ -35127,6 +35874,7 @@ fn evaluate_color_spatial_sample_at_rate(
         | ColorEffectSpatialRecipe::Lines { .. }
         | ColorEffectSpatialRecipe::Graph { .. }
         | ColorEffectSpatialRecipe::Rain { .. }
+        | ColorEffectSpatialRecipe::Bounce { .. }
         | ColorEffectSpatialRecipe::Fire { .. }
         | ColorEffectSpatialRecipe::Explosion { .. }
         | ColorEffectSpatialRecipe::Starfield { .. } => {
@@ -59142,6 +59890,442 @@ mod tests {
             .collect()
     }
 
+    fn test_bounce_request(
+        item: ColorEffectSpatialBounceItem,
+        fill: bool,
+        collide: bool,
+        period_ms: u64,
+    ) -> ColorEffectRequest {
+        let mut request = test_grid_lines_request(
+            ColorEffectSpatialRecipe::Bounce {
+                grayscale: false,
+                rng_seed: 0x21A5_5A21,
+                item,
+                shape: if item == ColorEffectSpatialBounceItem::Points {
+                    28
+                } else {
+                    0
+                },
+                number: 6,
+                size: 40,
+                speed: 1,
+                collide,
+                fill,
+                points: 3,
+            },
+            &[0, 20_000, 50_000, u16::MAX],
+        );
+        request.period_ms = period_ms;
+        let pattern = request.spatial_pattern.as_mut().unwrap();
+        pattern.beam_targets = vec![protocol::ColorEffectBeamTarget {
+            fixture_id: 1,
+            beam_index: 0,
+            selection_index: 0,
+            feature_attribute: None,
+        }];
+        pattern.placement.as_mut().unwrap().target_coordinates =
+            vec![protocol::ColorEffectSpatialPlacementTarget {
+                fixture_id: 1,
+                beam_index: 0,
+                patch_x: 50,
+                patch_y: 50,
+            }];
+        request
+    }
+
+    #[test]
+    fn color_mappings_bounce_rng_glyph_and_frame_count_are_exact() {
+        let request = test_bounce_request(ColorEffectSpatialBounceItem::Shape, false, true, 30_000);
+        let compiled = CompiledDaslightBounce::compile(&request).unwrap().unwrap();
+        assert_eq!(compiled.random_a.len(), 5_000);
+        for index in [0_usize, 1, 2, 2_499, 4_999] {
+            let even = (index as u64 * 2).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            let odd = (index as u64 * 2 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            let expected = ((splitmix64(0x21A5_5A21 ^ even) >> 49) as u16) as f32 / 32_767.0;
+            let _discarded = splitmix64(0x21A5_5A21 ^ odd) >> 49;
+            assert_eq!(compiled.random_a[index].to_bits(), expected.to_bits());
+        }
+        let wrapped = CompiledDaslightBounce::initial_state(
+            ColorEffectSpatialBounceItem::Points,
+            501,
+            10,
+            &compiled.random_a,
+        );
+        for values in [&wrapped.x, &wrapped.y, &wrapped.vx, &wrapped.vy] {
+            assert_eq!(values[5_000].to_bits(), values[0].to_bits());
+        }
+        assert_eq!(compiled.rendered_frame_count, 750);
+        for (period, expected) in [(1, 1), (40, 1), (5_000, 125), (30_000, 750), (40_000, 750)] {
+            let value = CompiledDaslightBounce::compile(&test_bounce_request(
+                ColorEffectSpatialBounceItem::Shape,
+                false,
+                false,
+                period,
+            ))
+            .unwrap()
+            .unwrap();
+            assert_eq!(value.rendered_frame_count, expected, "period={period}");
+        }
+
+        let glyph = CompiledDaslightBounceGlyph::compile();
+        let bbox = glyph.outer.iter().fold(
+            (
+                f32::INFINITY,
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+            ),
+            |(min_x, min_y, max_x, max_y), &(x, y)| {
+                (min_x.min(x), min_y.min(y), max_x.max(x), max_y.max(y))
+            },
+        );
+        assert_eq!(bbox, (64.0, -64.0, 965.0, 960.0));
+        assert!(glyph.contains(-314.5, 0.0, 0.0, 0.0, 400.0));
+        assert!(!glyph.contains(189.5, -320.0, 0.0, 0.0, 400.0));
+        assert!(
+            glyph.outer.len() > 20,
+            "off-curve points must create implicit quadratic spans"
+        );
+        assert!(
+            glyph.inner.len() > 12,
+            "inner contour must remain an even-odd hole"
+        );
+    }
+
+    #[test]
+    fn color_mappings_bounce_update_boundary_collision_and_paths_are_exact() {
+        let mut points = CompiledDaslightBounce::compile(&test_bounce_request(
+            ColorEffectSpatialBounceItem::Points,
+            true,
+            false,
+            5_000,
+        ))
+        .unwrap()
+        .unwrap();
+        let initial = (*points.initial_state).clone();
+        let mut generation_zero = initial.clone();
+        points.advance_state_dimensions(&mut generation_zero, 100.0, 100.0);
+        assert_eq!(
+            generation_zero.x[0],
+            initial.x[0] + initial.vx[0] * points.speed,
+            "generation zero must update before painting"
+        );
+        assert_ne!(generation_zero.x[0].to_bits(), initial.x[0].to_bits());
+
+        let mut non_square = initial.clone();
+        non_square.x[0] = 16.0;
+        non_square.y[0] = 26.0;
+        non_square.vx[0] = 1.0;
+        non_square.vy[0] = 1.0;
+        points.speed = 10.0;
+        points.advance_state_dimensions(&mut non_square, 20.0, 30.0);
+        assert_eq!(non_square.x[0], 26.0);
+        assert_eq!(
+            non_square.vx[0], 1.0,
+            "X compares against H, preserving the swap"
+        );
+        assert_eq!(
+            non_square.y[0], 36.0,
+            "boundary response must not clamp overshoot"
+        );
+        assert_eq!(
+            non_square.vy[0], -1.0,
+            "Y compares against W, preserving the swap"
+        );
+
+        points.points = 4;
+        points.number = 1;
+        points.size = 2.0;
+        let square = CompiledDaslightBounceState {
+            x: vec![10.0, 20.0, 20.0, 10.0],
+            y: vec![10.0, 10.0, 20.0, 20.0],
+            vx: vec![0.0; 4],
+            vy: vec![0.0; 4],
+        };
+        points.fill = true;
+        assert!(points.point_hits_closed_path(&square, 0, 15.0, 15.0));
+        assert!(!points.point_hits_closed_path(&square, 0, 25.0, 15.0));
+        points.fill = false;
+        assert!(
+            points.point_hits_closed_path(&square, 0, 10.0, 15.0),
+            "closing edge must be stroked"
+        );
+        assert!(!points.point_hits_closed_path(&square, 0, 15.0, 15.0));
+
+        let mut shape = CompiledDaslightBounce::compile(&test_bounce_request(
+            ColorEffectSpatialBounceItem::Shape,
+            false,
+            true,
+            5_000,
+        ))
+        .unwrap()
+        .unwrap();
+        shape.number = 2;
+        shape.speed = 0.0;
+        shape.size = 20.0;
+        let mut approach = CompiledDaslightBounceState {
+            x: vec![10.0, 20.0],
+            y: vec![10.0, 10.0],
+            vx: vec![1.0, -1.0],
+            vy: vec![0.0, 0.0],
+        };
+        shape.advance_state_dimensions(&mut approach, 100.0, 100.0);
+        assert_eq!(approach.vx, vec![-1.0, 1.0]);
+        let mut separating = CompiledDaslightBounceState {
+            vx: vec![-1.0, 1.0],
+            ..approach.clone()
+        };
+        shape.advance_state_dimensions(&mut separating, 100.0, 100.0);
+        assert_eq!(separating.vx, vec![-1.0, 1.0]);
+        let mut coincident = CompiledDaslightBounceState {
+            x: vec![10.0, 10.0],
+            y: vec![10.0, 10.0],
+            vx: vec![1.0, -1.0],
+            vy: vec![2.0, -2.0],
+        };
+        shape.advance_state_dimensions(&mut coincident, 100.0, 100.0);
+        assert_eq!(coincident.vx, vec![1.0, -1.0], "dist2 zero must be skipped");
+        assert!(coincident.vx.iter().all(|value| value.is_finite()));
+    }
+
+    #[test]
+    fn color_mappings_bounce_reference_frames_fallback_and_arc_clone_are_exact() {
+        let targets = test_particle_mask_targets();
+        for (item, fill, collide) in [
+            (ColorEffectSpatialBounceItem::Shape, false, false),
+            (ColorEffectSpatialBounceItem::Shape, false, true),
+            (ColorEffectSpatialBounceItem::Points, false, false),
+            (ColorEffectSpatialBounceItem::Points, true, false),
+        ] {
+            let request = test_bounce_request(item, fill, collide, 5_000);
+            let full = CompiledDaslightBounce::compile(&request).unwrap().unwrap();
+            let supported = CompiledDaslightBounce::compile_for_targets(&request, &targets)
+                .unwrap()
+                .unwrap();
+            assert!(supported.raster_cache.is_none());
+            assert_eq!(supported.rendered_frame_count, 125);
+            let frames = supported.precomputed_frames.as_ref().unwrap();
+            assert_eq!(frames.sampled_pixel_count, 200);
+            assert_eq!(frames.red.len(), 125 * 200);
+            for generation in [0_usize, 1, 63, 124] {
+                let phase = (generation as f64 + 0.25) / 125.0;
+                for target in &targets {
+                    assert_eq!(
+                        supported.sample_at_phase(phase, target.x, target.z),
+                        full.sample_at_phase(phase, target.x, target.z),
+                        "item={item:?} fill={fill} collide={collide} generation={generation}"
+                    );
+                }
+            }
+            let pointers = supported.storage_pointers();
+            let clone = supported.clone();
+            assert_eq!(clone.storage_pointers(), pointers);
+            assert_eq!(Arc::strong_count(&supported.random_a), 2);
+            assert_eq!(Arc::strong_count(&supported.palette), 2);
+            assert_eq!(
+                Arc::strong_count(supported.precomputed_frames.as_ref().unwrap()),
+                2
+            );
+        }
+
+        let request = test_bounce_request(ColorEffectSpatialBounceItem::Points, true, false, 5_000);
+        let fallback_targets = (0..201)
+            .map(|index| {
+                test_spatial_color_target(
+                    index,
+                    201,
+                    (index % 100) as f32 / 99.0,
+                    (index / 100) as f32 / 2.0,
+                )
+            })
+            .collect::<Vec<_>>();
+        let fallback = CompiledDaslightBounce::compile_for_targets(&request, &fallback_targets)
+            .unwrap()
+            .unwrap();
+        assert!(fallback.precomputed_frames.is_none());
+        let pointers = fallback.storage_pointers();
+        for target in fallback_targets.iter().take(20) {
+            let _ = fallback.sample_at_phase(63.25 / 125.0, target.x, target.z);
+        }
+        assert_eq!(
+            fallback.cache_state(),
+            (Some(63), 1),
+            "same generation rebuilds once"
+        );
+        let full = CompiledDaslightBounce::compile(&request).unwrap().unwrap();
+        for target in fallback_targets.iter().take(20) {
+            assert_eq!(
+                fallback.sample_at_phase(63.25 / 125.0, target.x, target.z),
+                full.sample_at_phase(63.25 / 125.0, target.x, target.z)
+            );
+        }
+        let _ = fallback.sample_at_phase(64.25 / 125.0, 0.0, 0.0);
+        assert_eq!(fallback.cache_state(), (Some(64), 2));
+        assert_eq!(
+            fallback.storage_pointers(),
+            pointers,
+            "fallback must not reallocate"
+        );
+    }
+
+    #[test]
+    fn color_mappings_bounce_palette_later_wins_qgray_and_validation_are_exact() {
+        let mut request =
+            test_bounce_request(ColorEffectSpatialBounceItem::Shape, false, false, 5_000);
+        let mut compiled = CompiledDaslightBounce::compile(&request).unwrap().unwrap();
+        compiled.number = 2;
+        compiled.size = 100.0;
+        let overlapping = CompiledDaslightBounceState {
+            x: vec![50.0, 50.0],
+            y: vec![50.0, 50.0],
+            vx: vec![0.0; 2],
+            vy: vec![0.0; 2],
+        };
+        let color = compiled.sampled_color(&overlapping, 20, 50);
+        assert_eq!(
+            color, compiled.palette[2],
+            "later item must win and use 1+i%(N-1)"
+        );
+        compiled.grayscale = true;
+        assert_eq!(
+            compiled.sampled_color(&overlapping, 20, 50),
+            daslight_grayscale_color(color)
+        );
+
+        validate_color_effect_request(&request).unwrap();
+        if let ColorEffectSpatialRecipe::Bounce { item, shape, .. } =
+            &mut request.spatial_pattern.as_mut().unwrap().recipe
+        {
+            *item = ColorEffectSpatialBounceItem::Shape;
+            *shape = 1;
+        }
+        assert_eq!(
+            validate_color_effect_request(&request).unwrap_err(),
+            "Bounce supports only XEEL glyph Shape 0"
+        );
+        if let ColorEffectSpatialRecipe::Bounce { item, shape, .. } =
+            &mut request.spatial_pattern.as_mut().unwrap().recipe
+        {
+            *item = ColorEffectSpatialBounceItem::Points;
+            *shape = 28;
+        }
+        validate_color_effect_request(&request).unwrap();
+        request.stops.truncate(1);
+        assert_eq!(
+            validate_color_effect_request(&request).unwrap_err(),
+            "Bounce requires between 2 and 255 palette stops"
+        );
+    }
+
+    #[test]
+    fn color_mappings_bounce_cue_transition_shares_supported_backing_storage() {
+        fn request(seed: u32) -> ColorEffectRequest {
+            let mut request =
+                test_bounce_request(ColorEffectSpatialBounceItem::Shape, false, true, 5_000);
+            let pattern = request.spatial_pattern.as_mut().unwrap();
+            let ColorEffectSpatialRecipe::Bounce { rng_seed, .. } = &mut pattern.recipe else {
+                unreachable!();
+            };
+            *rng_seed = seed;
+            pattern.placement.as_mut().unwrap().target_coordinates[0] =
+                protocol::ColorEffectSpatialPlacementTarget {
+                    fixture_id: 1,
+                    beam_index: 0,
+                    patch_x: 50,
+                    patch_y: 50,
+                };
+            request
+        }
+        fn bounce(effect: &RuntimeEffect) -> &CompiledDaslightBounce {
+            let RuntimeEffectKind::Color(color) = &effect.kind else {
+                panic!("expected Color transition effect");
+            };
+            color
+                .spatial
+                .as_ref()
+                .unwrap()
+                .daslight_bounce
+                .as_ref()
+                .unwrap()
+        }
+
+        let mut runtime = runtime_with_mixed_effect_fixtures(1);
+        let created_at = Instant::now();
+        let make_effect = |runtime: &mut EngineRuntime, seed| RuntimeEffect {
+            id: 21,
+            kind: RuntimeEffectKind::Color(
+                runtime.resolve_color_effect_request(request(seed)).unwrap(),
+            ),
+            enabled: true,
+            created_at,
+        };
+        let outgoing = make_effect(&mut runtime, 0x21AC_0001);
+        let incoming = make_effect(&mut runtime, 0x21AC_0002);
+        runtime.effect_activations = vec![
+            RuntimeEffectActivation {
+                effect: outgoing,
+                key: Some(RuntimeEffectActivationKey::CueList {
+                    cue_list_id: DEFAULT_CUE_LIST_ID,
+                    cue_id: 1,
+                }),
+                rate: 1.0,
+                source_loop_fill: None,
+                transition_ms: None,
+                transition: None,
+            },
+            RuntimeEffectActivation {
+                effect: incoming,
+                key: None,
+                rate: 1.0,
+                source_loop_fill: None,
+                transition_ms: Some(1_000),
+                transition: None,
+            },
+        ];
+        runtime.active_effect_activation_indices = vec![0];
+
+        let outgoing = bounce(&runtime.effect_activations[0].effect);
+        let pointers = outgoing.storage_pointers();
+        assert_eq!(Arc::strong_count(&outgoing.random_a), 1);
+        assert_eq!(Arc::strong_count(&outgoing.palette), 1);
+        assert_eq!(
+            Arc::strong_count(outgoing.precomputed_frames.as_ref().unwrap()),
+            1
+        );
+        let sources = runtime.cue_list_effect_transition_sources(DEFAULT_CUE_LIST_ID);
+        let source = bounce(&sources[0].0);
+        assert_eq!(source.storage_pointers(), pointers);
+        assert_eq!(Arc::strong_count(&source.random_a), 2);
+        assert_eq!(Arc::strong_count(&source.palette), 2);
+        assert_eq!(
+            Arc::strong_count(source.precomputed_frames.as_ref().unwrap()),
+            2
+        );
+        runtime.activate_cue_effect_range_with_transitions(
+            RuntimeEffectActivationRange { start: 1, len: 1 },
+            RuntimeEffectActivationKey::CueList {
+                cue_list_id: DEFAULT_CUE_LIST_ID,
+                cue_id: 2,
+            },
+            created_at,
+            &sources,
+        );
+        let transition = bounce(
+            &runtime.effect_activations[1]
+                .transition
+                .as_ref()
+                .unwrap()
+                .from,
+        );
+        assert_eq!(transition.storage_pointers(), pointers);
+        assert_eq!(Arc::strong_count(&transition.random_a), 3);
+        assert_eq!(Arc::strong_count(&transition.palette), 3);
+        assert_eq!(
+            Arc::strong_count(transition.precomputed_frames.as_ref().unwrap()),
+            3
+        );
+    }
+
     #[test]
     fn color_mappings_particle_sample_mask_matches_reference_row_spans_bit_exact() {
         let background = test_color(777, 1_234, 4_321);
@@ -60204,6 +61388,267 @@ mod tests {
         eprintln!(
             "Fire64 x200 (4 stops, 100x100, max Flames=100 Width=200 Height=100 Hotspot=255, period=5000/F125, Grayscale=1 Transform=2 Rotation=360, runtime rebuilds=0): compile={}ms p95={}us p99={}us max={}us",
             compile_elapsed.as_millis(),
+            p95.as_micros(),
+            p99.as_micros(),
+            max.as_micros(),
+        );
+        assert_release_gate_percentiles(p95, p99, max);
+    }
+
+    #[test]
+    fn max_bounce_release_stack_meets_44hz_budget() {
+        const BOUNCE_EFFECTS: usize = 64;
+        const SHAPE_EFFECTS: usize = 32;
+        const POINT_EFFECTS: usize = 32;
+        const PALETTE_STOPS: usize = 255;
+        const PERIOD_MS: u64 = 30_000;
+        const SOURCE_FRAMES: usize = 750;
+        const NUMBER: u16 = 20;
+        const SIZE: u16 = 100;
+        const SPEED: u16 = 10;
+        const POINTS: u16 = 10;
+        const ROTATION: f32 = 360.0;
+
+        assert_eq!(BOUNCE_EFFECTS, RELEASE_GATE_EFFECT_COUNT);
+        assert_eq!(SHAPE_EFFECTS + POINT_EFFECTS, BOUNCE_EFFECTS);
+        assert_eq!(RELEASE_GATE_FIXTURE_COUNT, 200);
+        assert_eq!(RELEASE_GATE_HZ, 44);
+        assert_eq!(PERIOD_MS / 40, SOURCE_FRAMES as u64);
+        assert_eq!(
+            RELEASE_GATE_SAMPLES,
+            if cfg!(debug_assertions) { 20 } else { 1_000 }
+        );
+        assert_eq!(RELEASE_GATE_P95_LIMIT, Duration::from_millis(5));
+        assert_eq!(RELEASE_GATE_P99_LIMIT, Duration::from_millis(8));
+        assert_eq!(RELEASE_GATE_MAX_LIMIT, Duration::from_millis(12));
+
+        let mut runtime = runtime_with_mixed_effect_fixtures(RELEASE_GATE_FIXTURE_COUNT as u64);
+        let fixture_ids = (1..=RELEASE_GATE_FIXTURE_COUNT as u64).collect::<Vec<_>>();
+        let beam_targets = fixture_ids
+            .iter()
+            .enumerate()
+            .map(
+                |(selection_index, fixture_id)| protocol::ColorEffectBeamTarget {
+                    fixture_id: *fixture_id,
+                    beam_index: 0,
+                    selection_index: selection_index as u32,
+                    feature_attribute: None,
+                },
+            )
+            .collect::<Vec<_>>();
+        let target_coordinates = fixture_ids
+            .iter()
+            .enumerate()
+            .map(
+                |(index, fixture_id)| protocol::ColorEffectSpatialPlacementTarget {
+                    fixture_id: *fixture_id,
+                    beam_index: 0,
+                    patch_x: 25 + (index % 50) as i64,
+                    patch_y: 25 + (index / 50) as i64,
+                },
+            )
+            .collect::<Vec<_>>();
+        assert_eq!(
+            target_coordinates
+                .iter()
+                .map(|target| (target.patch_x, target.patch_y))
+                .collect::<HashSet<_>>()
+                .len(),
+            RELEASE_GATE_FIXTURE_COUNT,
+            "Bounce release gate must author 200 distinct target pixels"
+        );
+        let palette = (0..PALETTE_STOPS)
+            .map(|index| protocol::ColorEffectStop {
+                position: index as f32 / (PALETTE_STOPS - 1) as f32,
+                color: test_color(
+                    (index as u16).wrapping_mul(257),
+                    (PALETTE_STOPS as u16 - 1 - index as u16).wrapping_mul(257),
+                    (index as u16).wrapping_mul(997),
+                ),
+            })
+            .collect::<Vec<_>>();
+        let created_at = Instant::now();
+        let compile_started = Instant::now();
+        for index in 0..BOUNCE_EFFECTS {
+            let item = if index < SHAPE_EFFECTS {
+                ColorEffectSpatialBounceItem::Shape
+            } else {
+                ColorEffectSpatialBounceItem::Points
+            };
+            let fill = item == ColorEffectSpatialBounceItem::Points
+                && index >= SHAPE_EFFECTS + POINT_EFFECTS / 2;
+            let mut request = test_bounce_request(
+                item,
+                fill,
+                item == ColorEffectSpatialBounceItem::Shape,
+                PERIOD_MS,
+            );
+            request.fixture_ids = fixture_ids.clone();
+            request.stops = palette.clone();
+            request.phase = index as f32 / BOUNCE_EFFECTS as f32;
+            let pattern = request.spatial_pattern.as_mut().unwrap();
+            pattern.beam_targets = beam_targets.clone();
+            let ColorEffectSpatialRecipe::Bounce {
+                grayscale,
+                rng_seed,
+                shape,
+                number,
+                size,
+                speed,
+                collide,
+                points,
+                ..
+            } = &mut pattern.recipe
+            else {
+                unreachable!();
+            };
+            *grayscale = true;
+            *rng_seed = 0x2100_0000 ^ index as u32;
+            *shape = if item == ColorEffectSpatialBounceItem::Points {
+                28
+            } else {
+                0
+            };
+            *number = NUMBER;
+            *size = SIZE;
+            *speed = SPEED;
+            *collide = item == ColorEffectSpatialBounceItem::Shape;
+            *points = POINTS;
+            let placement = pattern.placement.as_mut().unwrap();
+            placement.horizontal_symmetry = true;
+            placement.raster_rotation_degrees = ROTATION;
+            placement.target_coordinates = target_coordinates.clone();
+            validate_color_effect_request(&request).unwrap();
+            runtime.effects.push(RuntimeEffect {
+                id: index as EffectId + 1,
+                kind: RuntimeEffectKind::Color(
+                    runtime
+                        .resolve_color_effect_request(request)
+                        .expect("maximum Bounce request must compile"),
+                ),
+                enabled: true,
+                created_at,
+            });
+        }
+        let compile_elapsed = compile_started.elapsed();
+        assert_eq!(runtime.effects.len(), BOUNCE_EFFECTS);
+        assert_eq!(runtime.fixtures.len(), RELEASE_GATE_FIXTURE_COUNT);
+
+        let before_storage = runtime
+            .effects
+            .iter()
+            .enumerate()
+            .map(|(index, effect)| {
+                let RuntimeEffectKind::Color(color) = &effect.kind else {
+                    unreachable!();
+                };
+                assert_eq!(color.request.fixture_ids.len(), RELEASE_GATE_FIXTURE_COUNT);
+                assert_eq!(color.request.stops.len(), PALETTE_STOPS);
+                let pattern = color.request.spatial_pattern.as_ref().unwrap();
+                let ColorEffectSpatialRecipe::Bounce {
+                    grayscale: true,
+                    item,
+                    shape,
+                    number: NUMBER,
+                    size: SIZE,
+                    speed: SPEED,
+                    collide,
+                    fill,
+                    points: POINTS,
+                    ..
+                } = pattern.recipe
+                else {
+                    panic!("release effect {index} must retain maximum Bounce literals");
+                };
+                if index < SHAPE_EFFECTS {
+                    assert_eq!(item, ColorEffectSpatialBounceItem::Shape);
+                    assert_eq!(shape, 0);
+                    assert!(collide);
+                    assert!(!fill);
+                } else {
+                    assert_eq!(item, ColorEffectSpatialBounceItem::Points);
+                    assert_eq!(shape, 28, "Points inactive Shape maximum must remain legal");
+                    assert!(!collide);
+                    assert_eq!(fill, index >= SHAPE_EFFECTS + POINT_EFFECTS / 2);
+                }
+                let placement = pattern.placement.as_ref().unwrap();
+                assert!(placement.horizontal_symmetry);
+                assert_eq!(placement.raster_rotation_degrees, ROTATION);
+                assert_eq!(
+                    placement.target_coordinates.len(),
+                    RELEASE_GATE_FIXTURE_COUNT
+                );
+                let spatial = color.spatial.as_ref().unwrap();
+                assert_eq!(spatial.targets.len(), RELEASE_GATE_FIXTURE_COUNT);
+                let compiled = spatial.daslight_bounce.as_ref().unwrap();
+                assert_eq!(compiled.rendered_frame_count, SOURCE_FRAMES);
+                assert_eq!(compiled.cache_state(), (None, 0));
+                assert!(compiled.raster_cache.is_none());
+                let frames = compiled.precomputed_frames.as_ref().unwrap();
+                assert!((1..=RELEASE_GATE_FIXTURE_COUNT).contains(&frames.sampled_pixel_count));
+                assert_eq!(frames.red.len(), SOURCE_FRAMES * frames.sampled_pixel_count);
+                assert_eq!(frames.green.len(), frames.red.len());
+                assert_eq!(frames.blue.len(), frames.red.len());
+                compiled.storage_pointers()
+            })
+            .collect::<Vec<_>>();
+
+        let visited_generations = runtime
+            .effects
+            .iter()
+            .flat_map(|effect| {
+                let RuntimeEffectKind::Color(color) = &effect.kind else {
+                    unreachable!();
+                };
+                (0..RELEASE_GATE_SAMPLES).map(move |sample| {
+                    let elapsed = DMX_TICK_INTERVAL * (sample as u32 + 1);
+                    ((elapsed.as_secs_f64() / (PERIOD_MS as f64 / 1_000.0)
+                        + f64::from(color.request.phase))
+                    .rem_euclid(1.0)
+                        * SOURCE_FRAMES as f64)
+                        .floor() as usize
+                })
+            })
+            .collect::<HashSet<_>>();
+        assert!(visited_generations.contains(&0));
+        assert!(visited_generations
+            .iter()
+            .any(|generation| *generation >= 700));
+        if !cfg!(debug_assertions) {
+            assert_eq!(visited_generations.len(), SOURCE_FRAMES);
+        }
+
+        let (p95, p99, max) =
+            measure_release_gate(created_at, |at| {
+                runtime.fixtures.iter().fold(0_u64, |checksum, fixture| {
+                    checksum.wrapping_add(runtime.apply_effects_with_transition_policy(
+                        fixture, "ColorRed", 16_384, at, false,
+                    ) as u64)
+                })
+            });
+        let after_storage = runtime
+            .effects
+            .iter()
+            .map(|effect| {
+                let RuntimeEffectKind::Color(color) = &effect.kind else {
+                    unreachable!();
+                };
+                let compiled = color
+                    .spatial
+                    .as_ref()
+                    .unwrap()
+                    .daslight_bounce
+                    .as_ref()
+                    .unwrap();
+                assert_eq!(compiled.cache_state(), (None, 0));
+                compiled.storage_pointers()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(after_storage, before_storage);
+        eprintln!(
+            "Bounce32ShapeCollide+32PointsFillSplit x200 (255 stops, 100x100, Number20 Size100 Speed10 Points10, period30000/F750, Grayscale1 Transform2 Rotation360, runtime rebuilds=0): compile={}ms generations={} p95={}us p99={}us max={}us",
+            compile_elapsed.as_millis(),
+            visited_generations.len(),
             p95.as_micros(),
             p99.as_micros(),
             max.as_micros(),
@@ -61596,6 +63041,9 @@ mod tests {
         let daslight_grid_lines = CompiledDaslightGridLines::compile(request).unwrap();
         let daslight_graph = CompiledDaslightGraph::compile(request).unwrap();
         let daslight_rain = CompiledDaslightRain::compile(request).unwrap();
+        let daslight_bounce =
+            CompiledDaslightBounce::compile_for_targets(request, std::slice::from_ref(&target))
+                .unwrap();
         evaluate_color_spatial_sample_at_rate(
             request,
             &target,
@@ -61607,6 +63055,7 @@ mod tests {
             daslight_grid_lines.as_ref(),
             daslight_graph.as_ref(),
             daslight_rain.as_ref(),
+            daslight_bounce.as_ref(),
             None,
             None,
             97,
@@ -63987,6 +65436,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
                 97,
                 created_at,
                 now,
@@ -64179,6 +65629,7 @@ mod tests {
                 None,
                 None,
                 Some(&compiled),
+                None,
                 None,
                 None,
                 None,

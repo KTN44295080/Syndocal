@@ -2323,6 +2323,14 @@ pub enum ColorEffectSpatialSparkleRasterMode {
     TubeFullRasterHeight,
 }
 
+/// Item primitive selected by Daslight COLOR MAPPINGS Bounce ID 21.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ColorEffectSpatialBounceItem {
+    #[default]
+    Shape,
+    Points,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ColorEffectSpatialRecipe {
     KnightRider {
@@ -2510,6 +2518,23 @@ pub enum ColorEffectSpatialRecipe {
         height: u16,
         number: u16,
         trail: u16,
+    },
+    /// Daslight COLOR MAPPINGS ID 21's corrected retained bounce raster.
+    Bounce {
+        #[serde(default, skip_serializing_if = "is_false")]
+        grayscale: bool,
+        /// Stable replacement for the source process-global qrand history.
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
+        rng_seed: u32,
+        item: ColorEffectSpatialBounceItem,
+        /// TYPE7 Shape index. The imported runtime route supports Shape 0 only.
+        shape: u8,
+        number: u16,
+        size: u16,
+        speed: u16,
+        collide: bool,
+        fill: bool,
+        points: u16,
     },
     /// Daslight COLOR MAPPINGS ID 29's corrected fixed fire raster.
     Fire {
@@ -5519,6 +5544,35 @@ mod tests {
             .unwrap(),
             fire,
             "Fire must round-trip at its validated maxima"
+        );
+        let legacy_bounce: super::ColorEffectSpatialRecipe = serde_json::from_str(
+            r#"{"Bounce":{"item":"Points","shape":28,"number":6,"size":40,"speed":1,"collide":false,"fill":true,"points":3}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_string(&legacy_bounce).unwrap(),
+            r#"{"Bounce":{"item":"Points","shape":28,"number":6,"size":40,"speed":1,"collide":false,"fill":true,"points":3}}"#,
+            "default Bounce Grayscale and RNG seed must remain omitted"
+        );
+        let bounce = super::ColorEffectSpatialRecipe::Bounce {
+            grayscale: true,
+            rng_seed: u32::MAX,
+            item: super::ColorEffectSpatialBounceItem::Shape,
+            shape: 0,
+            number: 20,
+            size: 100,
+            speed: 10,
+            collide: true,
+            fill: false,
+            points: 10,
+        };
+        assert_eq!(
+            serde_json::from_str::<super::ColorEffectSpatialRecipe>(
+                &serde_json::to_string(&bounce).unwrap()
+            )
+            .unwrap(),
+            bounce,
+            "Bounce must round-trip at its validated maxima"
         );
         let legacy_explosion: super::ColorEffectSpatialRecipe = serde_json::from_str(
             r#"{"Explosion":{"shape":0,"explosion_number":5,"explosion_size":5,"particle_number":10,"particle_size":10,"particle_life":0.0,"trail_size":10,"gravity":0.0}}"#,

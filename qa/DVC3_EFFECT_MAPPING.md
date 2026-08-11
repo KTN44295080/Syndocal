@@ -108,6 +108,10 @@ Daslight実機のdropdownを最下端まで観測した。追加で確定した�
   9 Square / 10 Strobe / 11 Tangeant / 12 Triangle / 13 Custom。
 - MAPPINGSは521–530の10種、COLOR MAPPINGSは既記の21種で完全。
 
+2026-08-12、最後のCOLOR MAPPINGS Bounce ID21をstrict NB=12 / stable q15 / fixed 100x100
+`SyndocalCorrected` evaluatorへrouteし、converter coverageは68/68、未routeは0となった。Shape0 XEELと
+Points closed pathを対象とし、active Shape1..28、Qt antialias edge、対象ありnative specimenは明示境界に残す。
+
 全IDのcreator/constructor/RTTI/vtable/evaluator入口、serialized TYPE/ID/default/domain、
 実機UI順、STEPS/SUPER SCENEの専用保存形は`qa/DVC_FULL_FX_CATALOG_PARITY.md`を正本とする。
 factoryにないCOLOR FXの122–126/132は現バイナリの未登録空隙であり、予約/廃止までは断言しない。
