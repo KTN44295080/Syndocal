@@ -2177,6 +2177,7 @@ fn parse_scene_effects(
                 (Some(5), Some(3), Some(33)) => Some("Media"),
                 (Some(5), Some(3), Some(34)) => Some("Plasma"),
                 (Some(5), Some(3), Some(35)) => Some("Rain"),
+                (Some(5), Some(3), Some(29)) => Some("Fire"),
                 (Some(5), Some(3), Some(36)) => Some("Rainbow"),
                 (Some(5), Some(3), Some(40)) => Some("Sparkle"),
                 (Some(5), Some(3), Some(41)) => Some("Tube"),
@@ -2411,7 +2412,7 @@ fn convert_dvc_effect(
             profiles,
             fixture_refs,
         ),
-        (5, 3, 22 | 23 | 30 | 31 | 32 | 33 | 34 | 35 | 36 | 37 | 40 | 41 | 42 | 44 | 47 | 48 | 49 | 50)
+        (5, 3, 22 | 23 | 29 | 30 | 31 | 32 | 33 | 34 | 35 | 36 | 37 | 40 | 41 | 42 | 44 | 47 | 48 | 49 | 50)
         | (2, 2, 121 | 127 | 128 | 129 | 130 | 131 | 133 | 134)
         | (6, 8, 521..=530) => {
             convert_dvc_color_spatial_effect(
@@ -3248,6 +3249,7 @@ fn convert_dvc_color_spatial_effect(
     let generator = match generator_id {
         22 => "Burst",
         23 => "Butterfly",
+        29 => "Fire",
         30 => "Knight Rider",
         31 => "Lines",
         32 => "Perlin",
@@ -3290,7 +3292,24 @@ fn convert_dvc_color_spatial_effect(
     };
     let source_is_color_mappings = matches!(
         generator_id,
-        22 | 23 | 30 | 31 | 32 | 33 | 34 | 35 | 36 | 37 | 40 | 41 | 42 | 44 | 47 | 48 | 49 | 50
+        22 | 23
+            | 29
+            | 30
+            | 31
+            | 32
+            | 33
+            | 34
+            | 35
+            | 36
+            | 37
+            | 40
+            | 41
+            | 42
+            | 44
+            | 47
+            | 48
+            | 49
+            | 50
     );
     let shared_mapping_generator_id = match generator_id {
         22 => 523,
@@ -3476,6 +3495,37 @@ fn convert_dvc_color_spatial_effect(
     };
     let generator_approximations = Vec::new();
     let mut recipe = match shared_mapping_generator_id {
+        29 => {
+            require_exact_dvc_mapping_recipe_schema(
+                effect,
+                &params,
+                true,
+                &[(10, 0), (11, 0), (12, 0), (13, 0)],
+            )?;
+            if !(2..=4).contains(&stops.len()) {
+                return Err(format!(
+                    "COLOR MAPPINGS Fire ID=29 palette requires 2..4 colors, found {}",
+                    stops.len()
+                ));
+            }
+            ColorEffectSpatialRecipe::Fire {
+                grayscale: dvc_binary_param(&params, 2, "COLOR MAPPINGS Fire Grayscale")?,
+                rng_seed: dvc_corrected_rng_seed(scene, rack, effect, generator_id),
+                flames: dvc_integer_range_param(&params, 10, "COLOR MAPPINGS Fire Flames", 1, 100)?
+                    as u16,
+                width: dvc_integer_range_param(&params, 11, "COLOR MAPPINGS Fire Width", 10, 200)?
+                    as u16,
+                height: dvc_integer_range_param(&params, 12, "COLOR MAPPINGS Fire Height", 1, 100)?
+                    as u16,
+                hotspot: dvc_integer_range_param(
+                    &params,
+                    13,
+                    "COLOR MAPPINGS Fire Hotspot",
+                    10,
+                    255,
+                )? as u16,
+            }
+        }
         31 => {
             require_exact_dvc_mapping_recipe_schema(effect, &params, true, &[(10, 0)])?;
             if !(2..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS).contains(&stops.len()) {
@@ -4412,13 +4462,13 @@ fn convert_dvc_color_spatial_effect(
             dvc_mapping_rectangle(
                 rack,
                 &placement_label,
-                matches!(generator_id, 31 | 35 | 36 | 41 | 47 | 48 | 49 | 50)
+                matches!(generator_id, 29 | 31 | 35 | 36 | 41 | 47 | 48 | 49 | 50)
                     || shared_mapping_generator_id == 530,
             )
         })
         .transpose()?;
     let source_mapping_rectangle = mapping_rectangle;
-    if matches!(generator_id, 31 | 35 | 41 | 47 | 48 | 49 | 50) {
+    if matches!(generator_id, 29 | 31 | 35 | 41 | 47 | 48 | 49 | 50) {
         let beam_containers = element_children(rack)
             .filter(|node| node.has_tag_name("BEAMS"))
             .collect::<Vec<_>>();
@@ -4503,7 +4553,8 @@ fn convert_dvc_color_spatial_effect(
     }
     let omitted_spatial_targets =
         retain_dvc_color_spatial_targets(&mut targets, fixture_refs, source_is_mappings);
-    if matches!(generator_id, 31 | 35 | 41 | 47 | 48 | 49 | 50) && omitted_spatial_targets > 0 {
+    if matches!(generator_id, 29 | 31 | 35 | 41 | 47 | 48 | 49 | 50) && omitted_spatial_targets > 0
+    {
         return Err(format!(
             "COLOR MAPPINGS {generator} ID={generator_id} requires every owned BEAMS target to expose a verified color segment; omitted {omitted_spatial_targets} target(s)"
         ));
@@ -4523,7 +4574,7 @@ fn convert_dvc_color_spatial_effect(
     }
     let (period_ms, period_note) = if matches!(
         generator_id,
-        31 | 35 | 37 | 41 | 47 | 48 | 49 | 50 | 121 | 127 | 128 | 131 | 133 | 134
+        29 | 31 | 35 | 37 | 41 | 47 | 48 | 49 | 50 | 121 | 127 | 128 | 131 | 133 | 134
     ) || shared_mapping_generator_id == 530
     {
         let period_source_family = if source_is_color_mappings {
@@ -4744,6 +4795,17 @@ fn convert_dvc_color_spatial_effect(
             "implementation=SyndocalCorrected; evaluator=CRainEffect/0x140365660 recovered fixed 100x100 falling-particle raster; unavailable_qrand=stable_source_seed; rng_seed={rng_seed}; Grayscale={}; Speed={speed}; Width={width}; Height={height}; Number={number}; Trail={trail}; particle_table=first_100_pairs; vertical_wrap=true; horizontal_wrap=false; paint_order=later-wins_replacement; time=continuous; qGray=post-raster",
             u8::from(*grayscale)
         ),
+        ColorEffectSpatialRecipe::Fire {
+            grayscale,
+            rng_seed,
+            flames,
+            width,
+            height,
+            hotspot,
+        } => format!(
+            "implementation=SyndocalCorrected; evaluator=CFireEffect recovered 102-row in-place heat raster; unavailable_qrand=stable_source_seed; rng_seed={rng_seed}; Grayscale={}; Flames={flames}; Width={width}; source_Height={height}; source_Height_evaluator_dead=true; corrected_Height_mode=live_heat_cutoff_rescale; Hotspot={hotspot}; random_table=q15_even_lanes_5000; injection=row1; diffusion=x-major_y-ascending_flattened_edge_spill; output_y=101-y; palette_lut=authored_nonwrapping_256; qGray=post-lut",
+            u8::from(*grayscale)
+        ),
         ColorEffectSpatialRecipe::Explosion {
             grayscale,
             rng_seed,
@@ -4782,7 +4844,7 @@ fn convert_dvc_color_spatial_effect(
             )
         })
         .transpose()?;
-    if matches!(generator_id, 31 | 35 | 37 | 41 | 47 | 48 | 49 | 50)
+    if matches!(generator_id, 29 | 31 | 35 | 37 | 41 | 47 | 48 | 49 | 50)
         || matches!(shared_mapping_generator_id, 522..=529)
     {
         let transform = dvc_param(&params, 3, &format!("{mapping_family_label} Transform"))?;
@@ -11536,6 +11598,132 @@ mod tests {
     }
 
     #[test]
+    fn dvc_color_mappings_fire_imports_strict_owned_raster_and_rejects_mutations() {
+        let source = |palette_count: usize, beams: &str| {
+            let color = r#"<COLOR VAL="1/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>"#;
+            format!(
+                r#"<SCENE DASUID="fire-scene" NAME="Fire Scene" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="5"><EFFECT TYPE="3" ID="29" DURATION="5000"><PARAMS NB="8"><PARAM TYPE="4" ID="1"><COLORS NB="{palette_count}">{}</COLORS></PARAM><PARAM TYPE="2" ID="2" VAL="1"/><PARAM TYPE="6" ID="3" VAL="2"/><PARAM TYPE="0" ID="4" VAL="360"/><PARAM TYPE="0" ID="10" VAL="100"/><PARAM TYPE="0" ID="11" VAL="200"/><PARAM TYPE="0" ID="12" VAL="100"/><PARAM TYPE="0" ID="13" VAL="255"/></PARAMS></EFFECT><MAPPING NAME="Rectangle" DASUID="fire" TYPE="0" X="0" Y="0" SX="200" SY="100" ANGLE="30" LOCKED="0"/>{beams}</RACK></RACKS></SCENE>"#,
+                color.repeat(palette_count)
+            )
+        };
+        let convert = |xml: &str, rack_type: u16, effect_type: u16| {
+            let document = Document::parse(xml).unwrap();
+            let scene = document.root_element();
+            let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+            let effect = direct_child(rack, "EFFECT").unwrap();
+            convert_dvc_effect(
+                scene,
+                "COLOR MAPPINGS Fire",
+                rack,
+                effect,
+                rack_type,
+                effect_type,
+                29,
+                1,
+                &effect_test_profiles(),
+                &effect_test_fixture_refs(),
+            )
+        };
+        let owned = r#"<BEAMS NB="2"><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="2"/></BEAMS>"#;
+        let valid = source(4, owned);
+        let converted = convert(&valid, 5, 3).unwrap();
+        assert!(converted.approximations.is_empty());
+        assert!(converted.note.contains("evaluator=CFireEffect"));
+        assert!(converted.note.contains("source_Height_evaluator_dead=true"));
+        assert!(converted
+            .note
+            .contains("corrected_Height_mode=live_heat_cutoff_rescale"));
+        let Some(EffectParamsSnapshot::Color(request)) =
+            converted.target.expect("owned Fire target").params
+        else {
+            panic!("Fire must create Color params");
+        };
+        assert_eq!(request.fixture_ids, vec![2, 1]);
+        assert_eq!(request.stops.len(), 4);
+        assert_eq!(request.period_ms, 5_000);
+        assert_eq!(request.blend_mode, EffectBlendMode::Override);
+        let pattern = request.spatial_pattern.unwrap();
+        assert!(matches!(
+            pattern.recipe,
+            ColorEffectSpatialRecipe::Fire {
+                grayscale: true,
+                flames: 100,
+                width: 200,
+                height: 100,
+                hotspot: 255,
+                rng_seed,
+            } if rng_seed != 0
+        ));
+        let placement = pattern.placement.unwrap();
+        assert!(placement.horizontal_symmetry);
+        assert_eq!(placement.raster_rotation_degrees, 360.0);
+
+        for (invalid, expected) in [
+            (
+                valid.replacen(r#"<PARAMS NB="8">"#, r#"<PARAMS NB="7">"#, 1),
+                "PARAMS declares 7 entries but contains 8",
+            ),
+            (
+                valid.replacen(r#"TYPE="0" ID="13""#, r#"TYPE="1" ID="13""#, 1),
+                "expected PARAM 13 TYPE=0",
+            ),
+            (
+                valid.replacen(r#"ID="10" VAL="100""#, r#"ID="10" VAL="0""#, 1),
+                "integer within 1..100",
+            ),
+            (
+                valid.replacen(r#"ID="11" VAL="200""#, r#"ID="11" VAL="201""#, 1),
+                "integer within 10..200",
+            ),
+            (
+                valid.replacen(r#"ID="12" VAL="100""#, r#"ID="12" VAL="0""#, 1),
+                "integer within 1..100",
+            ),
+            (
+                valid.replacen(r#"ID="13" VAL="255""#, r#"ID="13" VAL="9""#, 1),
+                "integer within 10..255",
+            ),
+            (
+                valid.replacen(r#"ID="3" VAL="2""#, r#"ID="3" VAL="3""#, 1),
+                "Transform PARAM 3",
+            ),
+            (
+                valid.replacen(r#"ID="4" VAL="360""#, r#"ID="4" VAL="361""#, 1),
+                "integer within 0..360",
+            ),
+            (
+                valid.replacen("<BEAMS NB=", "<SELECTIONS/><BEAMS NB=", 1),
+                "external SELECTIONS remain fail-closed",
+            ),
+        ] {
+            let error = convert(&invalid, 5, 3).unwrap_err();
+            assert!(
+                error.contains(expected),
+                "expected {expected:?}, found {error:?}"
+            );
+        }
+        for palette_count in [1, 5] {
+            let error = convert(&source(palette_count, owned), 5, 3).unwrap_err();
+            assert!(error.contains("palette requires 2..4"), "{error}");
+        }
+        for (rack_type, effect_type) in [(2, 3), (5, 2)] {
+            let error = convert(&valid, rack_type, effect_type).unwrap_err();
+            assert!(
+                error.contains("is not confirmed for DVC-3b"),
+                "wrong family must fail closed: {error}"
+            );
+        }
+        let native_empty = source(4, r#"<BEAMS NB="0"/>"#).replacen(
+            r#"SX="200" SY="100" ANGLE="30""#,
+            r#"SX="-1" SY="-1" ANGLE="0""#,
+            1,
+        );
+        let no_op = convert(&native_empty, 5, 3).unwrap();
+        assert!(no_op.target.is_none());
+        assert!(no_op.note.contains("source no-op preserved"));
+    }
+
+    #[test]
     fn dvc_color_mappings_explosion_starfield_import_strict_owned_particles_and_mutations() {
         let source = |generator_id: u16, palette_count: usize, shape: u8, beams: &str| {
             let color = r#"<COLOR VAL="1/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>"#;
@@ -13939,6 +14127,7 @@ mod tests {
                             ColorEffectSpatialRecipe::Lines { .. } => 31,
                             ColorEffectSpatialRecipe::Graph { .. } => 49,
                             ColorEffectSpatialRecipe::Rain { .. } => 35,
+                            ColorEffectSpatialRecipe::Fire { .. } => 29,
                             ColorEffectSpatialRecipe::Explosion { .. } => 47,
                             ColorEffectSpatialRecipe::Starfield { .. } => 48,
                         }),
@@ -15394,6 +15583,97 @@ mod tests {
         assert!(converted.note.contains("source no-op preserved"));
         assert!(converted.note.contains("Rectangle=(0,0,-1,-1,0)"));
         assert!(converted.note.contains("evaluator=CRainEffect/0x140365660"));
+        assert!(converted.approximations.is_empty());
+    }
+
+    #[test]
+    fn dvc_local_golden_color_mappings_fire_from_remaining7_specimen() {
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../qa/specimens/ColorMappings-Remaining7.dvc"
+        ));
+        let source = fs::read_to_string(path).unwrap();
+        let document = Document::parse(&source).unwrap();
+        let rack = document
+            .descendants()
+            .find(|node| {
+                node.has_tag_name("RACK")
+                    && node.attribute("TYPE") == Some("5")
+                    && direct_child(*node, "EFFECT")
+                        .is_some_and(|effect| effect.attribute("ID") == Some("29"))
+            })
+            .expect("Remaining7 must contain Fire ID=29");
+        let effect = direct_child(rack, "EFFECT").unwrap();
+        let params = direct_child(effect, "PARAMS").unwrap();
+        assert_eq!(params.attribute("NB"), Some("8"));
+        assert_eq!(
+            element_children(params)
+                .map(|param| (
+                    param.attribute("TYPE").unwrap(),
+                    param.attribute("ID").unwrap(),
+                    param.attribute("VAL"),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("4", "1", None),
+                ("2", "2", Some("0")),
+                ("6", "3", Some("0")),
+                ("0", "4", Some("0")),
+                ("0", "10", Some("20")),
+                ("0", "11", Some("20")),
+                ("0", "12", Some("50")),
+                ("0", "13", Some("250")),
+            ]
+        );
+        let palette = element_children(
+            element_children(params)
+                .find(|param| param.attribute("ID") == Some("1"))
+                .unwrap(),
+        )
+        .find(|node| node.has_tag_name("COLORS"))
+        .unwrap();
+        assert_eq!(palette.attribute("NB"), Some("4"));
+        let mapping = direct_child(rack, "MAPPING").unwrap();
+        assert_eq!(
+            (
+                mapping.attribute("X"),
+                mapping.attribute("Y"),
+                mapping.attribute("SX"),
+                mapping.attribute("SY"),
+                mapping.attribute("ANGLE"),
+            ),
+            (Some("0"), Some("0"), Some("-1"), Some("-1"), Some("0"))
+        );
+        let beams = direct_child(rack, "BEAMS").unwrap();
+        assert_eq!(beams.attribute("NB"), Some("0"));
+        assert_eq!(element_children(beams).count(), 0);
+        let scene = rack
+            .ancestors()
+            .find(|node| node.has_tag_name("SCENE"))
+            .unwrap();
+        assert_eq!(
+            dvc_corrected_rng_seed(scene, rack, effect, 29),
+            0xDCE5_15F0,
+            "Remaining7 Fire identity seed must stay stable"
+        );
+        let converted = convert_dvc_effect(
+            scene,
+            "Remaining7 Fire",
+            rack,
+            effect,
+            5,
+            3,
+            29,
+            1,
+            &effect_test_profiles(),
+            &effect_test_fixture_refs(),
+        )
+        .unwrap();
+        assert!(converted.target.is_none());
+        assert!(converted.note.contains("source no-op preserved"));
+        assert!(converted.note.contains("Rectangle=(0,0,-1,-1,0)"));
+        assert!(converted.note.contains("evaluator=CFireEffect"));
+        assert!(converted.note.contains("rng_seed=3706000880"));
         assert!(converted.approximations.is_empty());
     }
 

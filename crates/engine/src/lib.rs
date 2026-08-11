@@ -3679,6 +3679,10 @@ struct RuntimeColorSpatialState {
     /// particle table and palette colors are compiled once; sampling preserves
     /// the recovered replacement paint order without allocating a QImage.
     daslight_rain: Option<CompiledDaslightRain>,
+    /// COLOR MAPPINGS ID 29 Fire fixed 100x100 output over the recovered
+    /// 102-row in-place heat buffer. Supported target sets precompute every
+    /// sampled source generation; larger sets retain a preallocated fallback.
+    daslight_fire: Option<CompiledDaslightFire>,
     /// COLOR MAPPINGS ID 47 Explosion / ID 48 Starfield fixed 100x100
     /// retained-particle raster. Supported target sets precompute every
     /// sampled generation; larger permissive sets retain one dynamic
@@ -6284,6 +6288,360 @@ impl CompiledDaslightRain {
         } else {
             color
         }
+    }
+}
+
+const DASLIGHT_FIRE_RASTER_WIDTH: usize = 100;
+const DASLIGHT_FIRE_BUFFER_HEIGHT: usize = 102;
+const DASLIGHT_FIRE_BUFFER_PIXELS: usize = DASLIGHT_FIRE_RASTER_WIDTH * DASLIGHT_FIRE_BUFFER_HEIGHT;
+const DASLIGHT_FIRE_RANDOM_COUNT: usize = 5_000;
+const DASLIGHT_FIRE_FRAME_CAP: usize = 750;
+
+#[derive(Clone, Copy, Default)]
+struct CompiledDaslightFireSampleRow {
+    x_mask: u128,
+    slot_start: usize,
+}
+
+#[derive(Clone)]
+struct CompiledDaslightFireFrames {
+    heat: Vec<u8>,
+    sampled_pixel_count: usize,
+}
+
+#[derive(Clone)]
+struct CompiledDaslightFireRasterCache {
+    generation: Option<usize>,
+    image: Box<[u8; DASLIGHT_FIRE_BUFFER_PIXELS]>,
+    sampled_heat: Vec<u8>,
+    #[cfg(test)]
+    rebuild_count: u64,
+}
+
+impl CompiledDaslightFireRasterCache {
+    fn new(sampled_pixel_count: usize) -> Self {
+        Self {
+            generation: None,
+            image: Box::new([0; DASLIGHT_FIRE_BUFFER_PIXELS]),
+            sampled_heat: vec![0; sampled_pixel_count],
+            #[cfg(test)]
+            rebuild_count: 0,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct CompiledDaslightFire {
+    random_q15: Arc<[u16; DASLIGHT_FIRE_RANDOM_COUNT]>,
+    palette_lut: Arc<[ColorEffectColor; 256]>,
+    flames: f32,
+    width: usize,
+    hotspot: u8,
+    rendered_frame_count: usize,
+    sampled_rows: [CompiledDaslightFireSampleRow; DASLIGHT_FIRE_RASTER_WIDTH],
+    precomputed_frames: Option<Arc<CompiledDaslightFireFrames>>,
+    raster_cache: Option<RefCell<CompiledDaslightFireRasterCache>>,
+}
+
+impl CompiledDaslightFire {
+    #[cfg(test)]
+    fn compile(request: &ColorEffectRequest) -> Result<Option<Self>, String> {
+        Self::compile_with_sampled_rows(
+            request,
+            [(1_u128 << DASLIGHT_FIRE_RASTER_WIDTH) - 1; DASLIGHT_FIRE_RASTER_WIDTH],
+            false,
+        )
+    }
+
+    fn compile_for_targets(
+        request: &ColorEffectRequest,
+        targets: &[RuntimeColorSpatialTarget],
+    ) -> Result<Option<Self>, String> {
+        let mut sampled_rows = [0_u128; DASLIGHT_FIRE_RASTER_WIDTH];
+        for target in targets {
+            let pixel_x = Self::raster_pixel(target.x);
+            let pixel_y = Self::raster_pixel(target.z);
+            sampled_rows[pixel_y] |= 1_u128 << pixel_x;
+        }
+        Self::compile_with_sampled_rows(
+            request,
+            sampled_rows,
+            targets.len() <= SUPPORTED_EFFECT_ENVELOPE_FIXTURES,
+        )
+    }
+
+    fn compile_with_sampled_rows(
+        request: &ColorEffectRequest,
+        sampled_rows: [u128; DASLIGHT_FIRE_RASTER_WIDTH],
+        precompute_supported_frames: bool,
+    ) -> Result<Option<Self>, String> {
+        let Some(pattern) = request.spatial_pattern.as_ref() else {
+            return Ok(None);
+        };
+        let ColorEffectSpatialRecipe::Fire {
+            grayscale,
+            rng_seed,
+            flames,
+            width,
+            height,
+            hotspot,
+        } = &pattern.recipe
+        else {
+            return Ok(None);
+        };
+        if !(2..=4).contains(&request.stops.len()) {
+            return Err("Fire requires between 2 and 4 palette stops".to_string());
+        }
+        if !(1..=100).contains(flames)
+            || !(10..=200).contains(width)
+            || !(1..=100).contains(height)
+            || !(10..=255).contains(hotspot)
+        {
+            return Err(
+                "Fire Flames must be within 1..100, Width within 10..200, Height within 1..100, and Hotspot within 10..255"
+                    .to_string(),
+            );
+        }
+        let random_q15 = Arc::new(std::array::from_fn(|index| {
+            let even_key = (index as u64 * 2).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            let odd_key = (index as u64 * 2 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            let a = (splitmix64(u64::from(*rng_seed) ^ even_key) >> 49) as u16;
+            let _discarded_b = (splitmix64(u64::from(*rng_seed) ^ odd_key) >> 49) as u16;
+            a
+        }));
+        let cutoff = 100_u8 - *height as u8;
+        let palette_lut = Arc::new(std::array::from_fn(|heat| {
+            let color = if heat < usize::from(cutoff) {
+                request.stops[0].color
+            } else {
+                let position = (heat as f32 - f32::from(cutoff)) / (255.0 - f32::from(cutoff));
+                Self::nonwrapping_palette_color(request, position)
+            };
+            if *grayscale {
+                daslight_grayscale_color(color)
+            } else {
+                color
+            }
+        }));
+        let mut sampled_pixel_count = 0;
+        let sampled_rows = sampled_rows.map(|x_mask| {
+            let row = CompiledDaslightFireSampleRow {
+                x_mask,
+                slot_start: sampled_pixel_count,
+            };
+            sampled_pixel_count += x_mask.count_ones() as usize;
+            row
+        });
+        let rendered_frame_count = (request.period_ms as usize / 40)
+            .max(1)
+            .min(DASLIGHT_FIRE_FRAME_CAP);
+        let mut compiled = Self {
+            random_q15,
+            palette_lut,
+            flames: f32::from(*flames),
+            width: usize::from(*width),
+            hotspot: *hotspot as u8,
+            rendered_frame_count,
+            sampled_rows,
+            precomputed_frames: None,
+            raster_cache: None,
+        };
+        if precompute_supported_frames {
+            compiled.precompute_frames(sampled_pixel_count);
+        } else {
+            compiled.raster_cache = Some(RefCell::new(CompiledDaslightFireRasterCache::new(
+                sampled_pixel_count,
+            )));
+        }
+        Ok(Some(compiled))
+    }
+
+    fn nonwrapping_palette_color(request: &ColorEffectRequest, position: f32) -> ColorEffectColor {
+        let position = position.clamp(0.0, 1.0);
+        let upper = request
+            .stops
+            .partition_point(|stop| stop.position < position);
+        if upper == 0 {
+            return request.stops[0].color;
+        }
+        if upper >= request.stops.len() {
+            return request.stops[request.stops.len() - 1].color;
+        }
+        let left = &request.stops[upper - 1];
+        let right = &request.stops[upper];
+        let amount =
+            (position - left.position) / (right.position - left.position).max(f32::EPSILON);
+        interpolate_color_effect_color(
+            left.color,
+            right.color,
+            amount,
+            ColorEffectInterpolation::Rgb,
+        )
+    }
+
+    #[inline(always)]
+    fn raster_pixel(normalized: f32) -> usize {
+        (normalized.clamp(0.0, 1.0) * DASLIGHT_FIRE_RASTER_WIDTH as f32)
+            .floor()
+            .min((DASLIGHT_FIRE_RASTER_WIDTH - 1) as f32) as usize
+    }
+
+    fn advance_image(&self, image: &mut [u8; DASLIGHT_FIRE_BUFFER_PIXELS], generation: usize) {
+        image[DASLIGHT_FIRE_RASTER_WIDTH..DASLIGHT_FIRE_RASTER_WIDTH * 2].fill(0);
+        let mut x = 0;
+        while x < DASLIGHT_FIRE_RASTER_WIDTH {
+            let random = self.random_q15
+                [(x + DASLIGHT_FIRE_RASTER_WIDTH * generation) % DASLIGHT_FIRE_RANDOM_COUNT];
+            let a = f32::from(random) / 32_767.0;
+            if 100.0 * a < self.flames {
+                let run = (((self.width - 1) as f32 * a + 1.0).trunc() as usize)
+                    .min(DASLIGHT_FIRE_RASTER_WIDTH - x);
+                image[DASLIGHT_FIRE_RASTER_WIDTH + x..DASLIGHT_FIRE_RASTER_WIDTH + x + run]
+                    .fill(self.hotspot);
+                x += run;
+            } else {
+                x += 1;
+            }
+        }
+        // The source walks X first and Y=1..100 second while updating the
+        // flattened buffer in place. X edge neighbours intentionally spill
+        // into adjacent flattened rows; replacing them with clamping changes
+        // both the flame outline and every later dependent cell.
+        for x in 0..DASLIGHT_FIRE_RASTER_WIDTH {
+            for y in 1..=100 {
+                let center = y * DASLIGHT_FIRE_RASTER_WIDTH + x;
+                let sum = u16::from(image[center - DASLIGHT_FIRE_RASTER_WIDTH])
+                    + u16::from(image[center - 2])
+                    + u16::from(image[center - 1])
+                    + u16::from(image[center])
+                    + u16::from(image[center + 1])
+                    + u16::from(image[center + 2])
+                    + u16::from(image[center + DASLIGHT_FIRE_RASTER_WIDTH]);
+                image[center + DASLIGHT_FIRE_RASTER_WIDTH] = (sum / 7) as u8;
+            }
+        }
+    }
+
+    fn copy_sampled_heat(&self, image: &[u8; DASLIGHT_FIRE_BUFFER_PIXELS], destination: &mut [u8]) {
+        for (pixel_y, row) in self.sampled_rows.iter().enumerate() {
+            let mut pending = row.x_mask;
+            while pending != 0 {
+                let pixel_x = pending.trailing_zeros() as usize;
+                let preceding = row.x_mask & ((1_u128 << pixel_x) - 1);
+                let slot = row.slot_start + preceding.count_ones() as usize;
+                destination[slot] = image[(101 - pixel_y) * DASLIGHT_FIRE_RASTER_WIDTH + pixel_x];
+                pending &= pending - 1;
+            }
+        }
+    }
+
+    fn precompute_frames(&mut self, sampled_pixel_count: usize) {
+        let mut image = Box::new([0; DASLIGHT_FIRE_BUFFER_PIXELS]);
+        let mut frames = CompiledDaslightFireFrames {
+            heat: vec![0; self.rendered_frame_count * sampled_pixel_count],
+            sampled_pixel_count,
+        };
+        for generation in 0..self.rendered_frame_count {
+            self.advance_image(&mut image, generation);
+            let start = generation * sampled_pixel_count;
+            self.copy_sampled_heat(&image, &mut frames.heat[start..start + sampled_pixel_count]);
+        }
+        self.precomputed_frames = Some(Arc::new(frames));
+    }
+
+    fn generation(&self, time_phase: f64) -> usize {
+        ((time_phase.rem_euclid(1.0) * self.rendered_frame_count as f64).floor() as usize)
+            .min(self.rendered_frame_count - 1)
+    }
+
+    fn prepare_generation(&self, generation: usize) {
+        if self.precomputed_frames.is_some() {
+            return;
+        }
+        let mut cache = self
+            .raster_cache
+            .as_ref()
+            .expect("dynamic Fire evaluator must retain a raster cache")
+            .borrow_mut();
+        if cache.generation == Some(generation) {
+            return;
+        }
+        let first_generation = if cache
+            .generation
+            .is_some_and(|previous| previous + 1 == generation)
+        {
+            generation
+        } else {
+            cache.image.fill(0);
+            0
+        };
+        for next in first_generation..=generation {
+            self.advance_image(&mut cache.image, next);
+        }
+        let mut sampled_heat = std::mem::take(&mut cache.sampled_heat);
+        self.copy_sampled_heat(&cache.image, &mut sampled_heat);
+        cache.sampled_heat = sampled_heat;
+        cache.generation = Some(generation);
+        #[cfg(test)]
+        {
+            cache.rebuild_count += 1;
+        }
+    }
+
+    fn sample_at_phase(
+        &self,
+        time_phase: f64,
+        normalized_x: f32,
+        normalized_y: f32,
+    ) -> ColorEffectColor {
+        let generation = self.generation(time_phase);
+        let pixel_x = Self::raster_pixel(normalized_x);
+        let pixel_y = Self::raster_pixel(normalized_y);
+        let row = self.sampled_rows[pixel_y];
+        debug_assert_ne!(row.x_mask & (1_u128 << pixel_x), 0);
+        let preceding = row.x_mask & ((1_u128 << pixel_x) - 1);
+        let slot = row.slot_start + preceding.count_ones() as usize;
+        let heat = if let Some(frames) = &self.precomputed_frames {
+            frames.heat[generation * frames.sampled_pixel_count + slot]
+        } else {
+            self.prepare_generation(generation);
+            self.raster_cache
+                .as_ref()
+                .expect("dynamic Fire evaluator must retain a raster cache")
+                .borrow()
+                .sampled_heat[slot]
+        };
+        self.palette_lut[usize::from(heat)]
+    }
+
+    #[cfg(test)]
+    fn storage_pointers(&self) -> (usize, usize, usize, usize, usize) {
+        let frames = self
+            .precomputed_frames
+            .as_ref()
+            .map_or(0, |frames| frames.heat.as_ptr() as usize);
+        let (image, sampled) = self.raster_cache.as_ref().map_or((0, 0), |cache| {
+            let cache = cache.borrow();
+            (
+                cache.image.as_ptr() as usize,
+                cache.sampled_heat.as_ptr() as usize,
+            )
+        });
+        (
+            self.random_q15.as_ptr() as usize,
+            self.palette_lut.as_ptr() as usize,
+            frames,
+            image,
+            sampled,
+        )
+    }
+
+    #[cfg(test)]
+    fn cache_state(&self) -> (Option<usize>, u64) {
+        self.raster_cache.as_ref().map_or((None, 0), |cache| {
+            let cache = cache.borrow();
+            (cache.generation, cache.rebuild_count)
+        })
     }
 }
 
@@ -29871,6 +30229,17 @@ fn validate_runtime_color_effect_request(request: &ColorEffectRequest) -> Result
                     return Err("Rain requires Override blend mode".to_string());
                 }
             }
+            ColorEffectSpatialRecipe::Fire { .. } => {
+                if !(2..=4).contains(&request.stops.len()) {
+                    return Err("Fire requires between 2 and 4 palette stops".to_string());
+                }
+                if pattern.placement.is_none() {
+                    return Err("Fire requires a placed 100x100 spatial raster".to_string());
+                }
+                if request.blend_mode != EffectBlendMode::Override {
+                    return Err("Fire requires Override blend mode".to_string());
+                }
+            }
             ColorEffectSpatialRecipe::Explosion { .. }
             | ColorEffectSpatialRecipe::Starfield { .. } => {
                 if !(2..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS).contains(&request.stops.len())
@@ -30256,6 +30625,27 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
             }
             if !(1..=30).contains(trail) {
                 return Err("Rain Trail must be within 1..30".to_string());
+            }
+            Ok(())
+        }
+        ColorEffectSpatialRecipe::Fire {
+            flames,
+            width,
+            height,
+            hotspot,
+            ..
+        } => {
+            if !(1..=100).contains(flames) {
+                return Err("Fire Flames must be within 1..100".to_string());
+            }
+            if !(10..=200).contains(width) {
+                return Err("Fire Width must be within 10..200".to_string());
+            }
+            if !(1..=100).contains(height) {
+                return Err("Fire Height must be within 1..100".to_string());
+            }
+            if !(10..=255).contains(hotspot) {
+                return Err("Fire Hotspot must be within 10..255".to_string());
             }
             Ok(())
         }
@@ -31025,11 +31415,12 @@ pub fn validate_value_effect_request(request: &ValueEffectRequest) -> Result<(),
                 | ColorEffectSpatialRecipe::Lines { .. }
                 | ColorEffectSpatialRecipe::Graph { .. }
                 | ColorEffectSpatialRecipe::Rain { .. }
+                | ColorEffectSpatialRecipe::Fire { .. }
                 | ColorEffectSpatialRecipe::Explosion { .. }
                 | ColorEffectSpatialRecipe::Starfield { .. }
         ) {
             return Err(
-                "Graph, Grid, Lines, Rain, Explosion, and Starfield spatial recipes are supported only by Color effects"
+                "Fire, Graph, Grid, Lines, Rain, Explosion, and Starfield spatial recipes are supported only by Color effects"
                     .to_string(),
             );
         }
@@ -32999,6 +33390,7 @@ fn runtime_color_effect_from_request(
         let daslight_grid_lines = CompiledDaslightGridLines::compile(&request)?;
         let daslight_graph = CompiledDaslightGraph::compile(&request)?;
         let daslight_rain = CompiledDaslightRain::compile(&request)?;
+        let daslight_fire = CompiledDaslightFire::compile_for_targets(&request, &targets)?;
         let daslight_particles =
             CompiledDaslightParticles::compile_for_targets(&request, &targets)?;
         let dense_fixture_targets =
@@ -33015,6 +33407,7 @@ fn runtime_color_effect_from_request(
             daslight_grid_lines,
             daslight_graph,
             daslight_rain,
+            daslight_fire,
             daslight_particles,
         }))
     } else {
@@ -34284,6 +34677,7 @@ fn evaluate_runtime_color_spatial_attribute_at_rate(
                 spatial.daslight_grid_lines.as_ref(),
                 spatial.daslight_graph.as_ref(),
                 spatial.daslight_rain.as_ref(),
+                spatial.daslight_fire.as_ref(),
                 spatial.daslight_particles.as_ref(),
                 effect_id,
                 created_at,
@@ -34572,6 +34966,7 @@ fn evaluate_color_spatial_sample_at_rate(
     daslight_grid_lines: Option<&CompiledDaslightGridLines>,
     daslight_graph: Option<&CompiledDaslightGraph>,
     daslight_rain: Option<&CompiledDaslightRain>,
+    daslight_fire: Option<&CompiledDaslightFire>,
     daslight_particles: Option<&CompiledDaslightParticles>,
     effect_id: EffectId,
     created_at: Instant,
@@ -34617,6 +35012,16 @@ fn evaluate_color_spatial_sample_at_rate(
     if let Some(daslight_rain) = daslight_rain {
         return RuntimeColorSpatialSample {
             color: daslight_rain.sample_at_phase(
+                time_phase_for_continuous_spatial(request, created_at, now, clock, rate),
+                target.x,
+                target.z,
+            ),
+            opacity: 1.0,
+        };
+    }
+    if let Some(daslight_fire) = daslight_fire {
+        return RuntimeColorSpatialSample {
+            color: daslight_fire.sample_at_phase(
                 time_phase_for_continuous_spatial(request, created_at, now, clock, rate),
                 target.x,
                 target.z,
@@ -34722,6 +35127,7 @@ fn evaluate_color_spatial_sample_at_rate(
         | ColorEffectSpatialRecipe::Lines { .. }
         | ColorEffectSpatialRecipe::Graph { .. }
         | ColorEffectSpatialRecipe::Rain { .. }
+        | ColorEffectSpatialRecipe::Fire { .. }
         | ColorEffectSpatialRecipe::Explosion { .. }
         | ColorEffectSpatialRecipe::Starfield { .. } => {
             unreachable!("unified spatial recipes are evaluated by their compiled analytic route")
@@ -59579,6 +59985,233 @@ mod tests {
     }
 
     #[test]
+    fn max_fire_release_stack_meets_44hz_budget() {
+        const FIRE_EFFECTS: usize = 64;
+        const PALETTE_STOPS: usize = 4;
+        const FLAMES: u16 = 100;
+        const WIDTH: u16 = 200;
+        const HEIGHT: u16 = 100;
+        const HOTSPOT: u16 = 255;
+        const PERIOD_MS: u64 = 5_000;
+        const SOURCE_FRAMES: usize = 125;
+        const RASTER_SIZE: i64 = 100;
+        const TRANSFORM: u8 = 2;
+        const ROTATION: f32 = 360.0;
+
+        assert_eq!(FIRE_EFFECTS, RELEASE_GATE_EFFECT_COUNT);
+        assert_eq!(RELEASE_GATE_EFFECT_COUNT, 64);
+        assert_eq!(RELEASE_GATE_FIXTURE_COUNT, 200);
+        assert_eq!(RELEASE_GATE_HZ, 44);
+        assert_eq!(PALETTE_STOPS, 4);
+        assert_eq!((FLAMES, WIDTH, HEIGHT, HOTSPOT), (100, 200, 100, 255));
+        assert_eq!(PERIOD_MS / 40, SOURCE_FRAMES as u64);
+        assert_eq!(TRANSFORM, 2);
+        assert_eq!(ROTATION, 360.0);
+        assert_eq!(RELEASE_GATE_P95_LIMIT, Duration::from_millis(5));
+        assert_eq!(RELEASE_GATE_P99_LIMIT, Duration::from_millis(8));
+        assert_eq!(RELEASE_GATE_MAX_LIMIT, Duration::from_millis(12));
+        assert_eq!(
+            1_000_000 / DMX_TICK_INTERVAL.as_micros(),
+            u128::from(RELEASE_GATE_HZ)
+        );
+
+        let mut runtime = runtime_with_mixed_effect_fixtures(RELEASE_GATE_FIXTURE_COUNT as u64);
+        let fixture_ids = (1..=RELEASE_GATE_FIXTURE_COUNT as u64).collect::<Vec<_>>();
+        let beam_targets = fixture_ids
+            .iter()
+            .enumerate()
+            .map(
+                |(selection_index, fixture_id)| protocol::ColorEffectBeamTarget {
+                    fixture_id: *fixture_id,
+                    beam_index: 0,
+                    selection_index: selection_index as u32,
+                    feature_attribute: None,
+                },
+            )
+            .collect::<Vec<_>>();
+        let target_coordinates = fixture_ids
+            .iter()
+            .enumerate()
+            .map(
+                |(selection_index, fixture_id)| protocol::ColorEffectSpatialPlacementTarget {
+                    fixture_id: *fixture_id,
+                    beam_index: 0,
+                    // Keep all 200 authored pixels strictly inside the finite
+                    // raster. At the legal 360-degree maximum, f32-to-radian
+                    // rounding can rotate exact edge coordinates a fraction
+                    // outside the transparent boundary.
+                    patch_x: 25 + (selection_index % 50) as i64,
+                    patch_y: 25 + (selection_index / 50) as i64,
+                },
+            )
+            .collect::<Vec<_>>();
+        assert_eq!(
+            target_coordinates
+                .iter()
+                .map(|target| (target.patch_x, target.patch_y))
+                .collect::<HashSet<_>>()
+                .len(),
+            RELEASE_GATE_FIXTURE_COUNT,
+            "the authored max Fire target set must contain 200 distinct patch pixels"
+        );
+        let palette = [
+            test_color(0, 0, 0),
+            test_color(u16::MAX, 0, 0),
+            test_color(u16::MAX, 32_768, 0),
+            test_color(u16::MAX, u16::MAX, u16::MAX),
+        ];
+        let created_at = Instant::now();
+        let compile_started = Instant::now();
+        for index in 0..FIRE_EFFECTS {
+            let mut request = test_fire_request(
+                true,
+                0x2900_0000 ^ index as u32,
+                FLAMES,
+                WIDTH,
+                HEIGHT,
+                HOTSPOT,
+                PERIOD_MS,
+            );
+            request.fixture_ids = fixture_ids.clone();
+            request.stops = palette
+                .iter()
+                .enumerate()
+                .map(|(stop, color)| protocol::ColorEffectStop {
+                    position: stop as f32 / (PALETTE_STOPS - 1) as f32,
+                    color: *color,
+                })
+                .collect();
+            let pattern = request.spatial_pattern.as_mut().unwrap();
+            pattern.beam_targets = beam_targets.clone();
+            let placement = pattern.placement.as_mut().unwrap();
+            placement.sx = RASTER_SIZE;
+            placement.sy = RASTER_SIZE;
+            placement.horizontal_symmetry = TRANSFORM == 2;
+            placement.raster_rotation_degrees = ROTATION;
+            placement.target_coordinates = target_coordinates.clone();
+            validate_color_effect_request(&request).unwrap();
+            runtime.effects.push(RuntimeEffect {
+                id: index as EffectId + 1,
+                kind: RuntimeEffectKind::Color(
+                    runtime
+                        .resolve_color_effect_request(request)
+                        .expect("maximum Fire request must compile"),
+                ),
+                enabled: true,
+                created_at,
+            });
+        }
+        let compile_elapsed = compile_started.elapsed();
+        assert_eq!(runtime.effects.len(), FIRE_EFFECTS);
+        assert_eq!(runtime.fixtures.len(), RELEASE_GATE_FIXTURE_COUNT);
+
+        let before_storage = runtime
+            .effects
+            .iter()
+            .map(|effect| {
+                let RuntimeEffectKind::Color(color) = &effect.kind else {
+                    unreachable!();
+                };
+                assert_eq!(color.request.fixture_ids.len(), RELEASE_GATE_FIXTURE_COUNT);
+                assert_eq!(color.request.stops.len(), PALETTE_STOPS);
+                let pattern = color.request.spatial_pattern.as_ref().unwrap();
+                assert!(matches!(
+                    pattern.recipe,
+                    ColorEffectSpatialRecipe::Fire {
+                        grayscale: true,
+                        flames: FLAMES,
+                        width: WIDTH,
+                        height: HEIGHT,
+                        hotspot: HOTSPOT,
+                        ..
+                    }
+                ));
+                let placement = pattern.placement.as_ref().unwrap();
+                assert!(placement.horizontal_symmetry);
+                assert_eq!(placement.raster_rotation_degrees, ROTATION);
+                assert_eq!(
+                    placement.target_coordinates.len(),
+                    RELEASE_GATE_FIXTURE_COUNT
+                );
+                let spatial = color.spatial.as_ref().unwrap();
+                assert_eq!(spatial.targets.len(), RELEASE_GATE_FIXTURE_COUNT);
+                let compiled = spatial
+                    .daslight_fire
+                    .as_ref()
+                    .expect("Fire must compile the corrected heat raster");
+                assert_eq!(compiled.random_q15.len(), 5_000);
+                assert_eq!(compiled.rendered_frame_count, SOURCE_FRAMES);
+                assert_eq!(compiled.cache_state(), (None, 0));
+                assert!(compiled.raster_cache.is_none());
+                let frames = compiled.precomputed_frames.as_ref().unwrap();
+                assert!((1..=RELEASE_GATE_FIXTURE_COUNT).contains(&frames.sampled_pixel_count));
+                assert_eq!(
+                    frames.heat.len(),
+                    SOURCE_FRAMES * frames.sampled_pixel_count
+                );
+                compiled.storage_pointers()
+            })
+            .collect::<Vec<_>>();
+
+        let visited_generations = (0..RELEASE_GATE_SAMPLES)
+            .map(|sample| {
+                let elapsed = DMX_TICK_INTERVAL * (sample as u32 + 1);
+                ((elapsed.as_secs_f64() / (PERIOD_MS as f64 / 1_000.0)).rem_euclid(1.0)
+                    * SOURCE_FRAMES as f64)
+                    .floor() as usize
+            })
+            .collect::<HashSet<_>>();
+        if cfg!(debug_assertions) {
+            assert_eq!(visited_generations, (0..=11).collect::<HashSet<_>>());
+        } else {
+            assert_eq!(
+                visited_generations,
+                (0..SOURCE_FRAMES).collect::<HashSet<_>>(),
+                "the release schedule must visit all 125 precomputed Fire generations"
+            );
+        }
+
+        let (p95, p99, max) =
+            measure_release_gate(created_at, |at| {
+                runtime.fixtures.iter().fold(0_u64, |checksum, fixture| {
+                    checksum.wrapping_add(runtime.apply_effects_with_transition_policy(
+                        fixture, "ColorRed", 16_384, at, false,
+                    ) as u64)
+                })
+            });
+        let after_storage = runtime
+            .effects
+            .iter()
+            .map(|effect| {
+                let RuntimeEffectKind::Color(color) = &effect.kind else {
+                    unreachable!();
+                };
+                let compiled = color
+                    .spatial
+                    .as_ref()
+                    .unwrap()
+                    .daslight_fire
+                    .as_ref()
+                    .unwrap();
+                assert_eq!(compiled.cache_state(), (None, 0));
+                compiled.storage_pointers()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            after_storage, before_storage,
+            "Fire's supported 44 Hz path must retain q15, LUT, and frame backing storage"
+        );
+        eprintln!(
+            "Fire64 x200 (4 stops, 100x100, max Flames=100 Width=200 Height=100 Hotspot=255, period=5000/F125, Grayscale=1 Transform=2 Rotation=360, runtime rebuilds=0): compile={}ms p95={}us p99={}us max={}us",
+            compile_elapsed.as_millis(),
+            p95.as_micros(),
+            p99.as_micros(),
+            max.as_micros(),
+        );
+        assert_release_gate_percentiles(p95, p99, max);
+    }
+
+    #[test]
     fn deep_explosion_starfield_release_stack_meets_44hz_budget() {
         const EXPLOSION_EFFECTS: usize = 32;
         const MAX_PALETTE_STOPS: usize = 255;
@@ -60528,6 +61161,401 @@ mod tests {
         }
     }
 
+    fn test_fire_request(
+        grayscale: bool,
+        rng_seed: u32,
+        flames: u16,
+        width: u16,
+        height: u16,
+        hotspot: u16,
+        period_ms: u64,
+    ) -> ColorEffectRequest {
+        let mut request = test_grid_lines_request(
+            ColorEffectSpatialRecipe::Fire {
+                grayscale,
+                rng_seed,
+                flames,
+                width,
+                height,
+                hotspot,
+            },
+            &[0, 21_845, 43_690, 65_535],
+        );
+        request.stops[0].color = test_color(0, 0, 0);
+        request.stops[1].color = test_color(65_535, 0, 0);
+        request.stops[2].color = test_color(65_535, 32_768, 0);
+        request.stops[3].color = test_color(65_535, 65_535, 65_535);
+        request.period_ms = period_ms;
+        let pattern = request.spatial_pattern.as_mut().unwrap();
+        pattern.beam_targets = vec![protocol::ColorEffectBeamTarget {
+            fixture_id: 1,
+            beam_index: 0,
+            selection_index: 0,
+            feature_attribute: None,
+        }];
+        pattern.placement.as_mut().unwrap().target_coordinates =
+            vec![protocol::ColorEffectSpatialPlacementTarget {
+                fixture_id: 1,
+                beam_index: 0,
+                patch_x: 0,
+                patch_y: 0,
+            }];
+        request
+    }
+
+    fn reference_fire_q15(seed: u32, lane: usize) -> u16 {
+        let key = (lane as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        (splitmix64(u64::from(seed) ^ key) >> 49) as u16
+    }
+
+    fn reference_fire_step(
+        image: &mut [u8; DASLIGHT_FIRE_BUFFER_PIXELS],
+        seed: u32,
+        generation: usize,
+        flames: u16,
+        width: u16,
+        hotspot: u16,
+    ) {
+        image[100..200].fill(0);
+        let mut x = 0;
+        while x < 100 {
+            let random = reference_fire_q15(seed, 2 * ((x + 100 * generation) % 5_000));
+            let a = f32::from(random) / 32_767.0;
+            if 100.0 * a < f32::from(flames) {
+                let run =
+                    (((usize::from(width) - 1) as f32 * a + 1.0).trunc() as usize).min(100 - x);
+                image[100 + x..100 + x + run].fill(hotspot as u8);
+                x += run;
+            } else {
+                x += 1;
+            }
+        }
+        for x in 0..100 {
+            for y in 1..=100 {
+                let center = y * 100 + x;
+                image[center + 100] = ((u16::from(image[center - 100])
+                    + u16::from(image[center - 2])
+                    + u16::from(image[center - 1])
+                    + u16::from(image[center])
+                    + u16::from(image[center + 1])
+                    + u16::from(image[center + 2])
+                    + u16::from(image[center + 100]))
+                    / 7) as u8;
+            }
+        }
+    }
+
+    #[test]
+    fn color_mappings_fire_q15_injection_diffusion_and_y_flip_are_exact() {
+        const SEED: u32 = 0xDCE5_15F0;
+        assert_eq!(
+            (0..6)
+                .map(|index| reference_fire_q15(SEED, index * 2))
+                .collect::<Vec<_>>(),
+            [16_650, 26_834, 3_970, 3_050, 6_255, 15_119]
+        );
+        assert_ne!(
+            reference_fire_q15(SEED, 0),
+            reference_fire_q15(SEED, 1),
+            "the discarded B lane is distinct and must not replace A"
+        );
+
+        let request = test_fire_request(false, SEED, 37, 71, 50, 250, 5_000);
+        let compiled = CompiledDaslightFire::compile(&request).unwrap().unwrap();
+        assert_eq!(
+            &compiled.random_q15[..6],
+            &[16_650, 26_834, 3_970, 3_050, 6_255, 15_119]
+        );
+        let mut actual = [0_u8; DASLIGHT_FIRE_BUFFER_PIXELS];
+        let mut reference = [0_u8; DASLIGHT_FIRE_BUFFER_PIXELS];
+        for generation in [0_usize, 1, 2, 17, 124] {
+            if generation != 0 {
+                actual.fill(0);
+                reference.fill(0);
+            }
+            for frame in 0..=generation {
+                compiled.advance_image(&mut actual, frame);
+                reference_fire_step(&mut reference, SEED, frame, 37, 71, 250);
+            }
+            assert_eq!(actual, reference, "generation={generation}");
+        }
+        assert_ne!(
+            actual[2 * 100],
+            actual[2 * 100 + 99],
+            "flattened X-edge spill must remain observable"
+        );
+        let mut sampled = vec![0_u8; 10_000];
+        compiled.copy_sampled_heat(&actual, &mut sampled);
+        for y in 0..100 {
+            for x in 0..100 {
+                assert_eq!(
+                    sampled[y * 100 + x],
+                    actual[(101 - y) * 100 + x],
+                    "output y flip x={x} y={y}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn color_mappings_fire_lut_height_qgray_and_runtime_validation_are_exact() {
+        let request = test_fire_request(false, 0x29A1, 100, 200, 50, 255, 5_000);
+        validate_color_effect_request(&request).unwrap();
+        let fire = CompiledDaslightFire::compile(&request).unwrap().unwrap();
+        assert_eq!(fire.palette_lut[49], request.stops[0].color);
+        assert_eq!(fire.palette_lut[50], request.stops[0].color);
+        let expected_mid = CompiledDaslightFire::nonwrapping_palette_color(
+            &request,
+            (128.0 - 50.0) / (255.0 - 50.0),
+        );
+        assert_eq!(fire.palette_lut[128], expected_mid);
+        assert_eq!(fire.palette_lut[255], request.stops.last().unwrap().color);
+
+        let grayscale = test_fire_request(true, 0x29A1, 100, 200, 50, 255, 5_000);
+        let grayscale = CompiledDaslightFire::compile(&grayscale).unwrap().unwrap();
+        let gray = grayscale.palette_lut[128];
+        assert_eq!(gray.red, gray.green);
+        assert_eq!(gray.green, gray.blue);
+        assert_eq!(gray, daslight_grayscale_color(expected_mid));
+
+        for (flames, width, height, hotspot, expected) in [
+            (0, 200, 100, 255, "Fire Flames must be within 1..100"),
+            (100, 9, 100, 255, "Fire Width must be within 10..200"),
+            (100, 200, 0, 255, "Fire Height must be within 1..100"),
+            (100, 200, 100, 9, "Fire Hotspot must be within 10..255"),
+        ] {
+            let invalid = test_fire_request(false, 1, flames, width, height, hotspot, 5_000);
+            assert_eq!(
+                validate_color_effect_request(&invalid).unwrap_err(),
+                expected
+            );
+        }
+        let mut one_stop = request.clone();
+        one_stop.stops.truncate(1);
+        assert_eq!(
+            validate_color_effect_request(&one_stop).unwrap_err(),
+            "Fire requires between 2 and 4 palette stops"
+        );
+        let mut five_stops = request.clone();
+        five_stops.stops.push(protocol::ColorEffectStop {
+            position: 1.0,
+            color: test_color(1, 2, 3),
+        });
+        five_stops.stops[3].position = 0.75;
+        assert_eq!(
+            validate_color_effect_request(&five_stops).unwrap_err(),
+            "Fire requires between 2 and 4 palette stops"
+        );
+        let mut unplaced = request.clone();
+        unplaced.spatial_pattern.as_mut().unwrap().placement = None;
+        assert_eq!(
+            validate_color_effect_request(&unplaced).unwrap_err(),
+            "Fire requires a placed 100x100 spatial raster"
+        );
+        let mut additive = request;
+        additive.blend_mode = EffectBlendMode::Add;
+        assert_eq!(
+            validate_color_effect_request(&additive).unwrap_err(),
+            "Fire requires Override blend mode"
+        );
+    }
+
+    #[test]
+    fn color_mappings_fire_supported_frames_and_permissive_fallback_are_bit_exact() {
+        let request = test_fire_request(true, 0xDCE5_15F0, 100, 200, 100, 255, 5_000);
+        let targets = test_particle_mask_targets();
+        let supported = CompiledDaslightFire::compile_for_targets(&request, &targets)
+            .unwrap()
+            .unwrap();
+        assert!(supported.raster_cache.is_none());
+        assert_eq!(supported.rendered_frame_count, 125);
+        let frames = supported.precomputed_frames.as_ref().unwrap();
+        assert_eq!(frames.sampled_pixel_count, 200);
+        assert_eq!(frames.heat.len(), 125 * 200);
+        assert_eq!(supported.cache_state(), (None, 0));
+        assert_eq!(Arc::strong_count(&supported.random_q15), 1);
+        assert_eq!(Arc::strong_count(&supported.palette_lut), 1);
+        assert_eq!(
+            Arc::strong_count(supported.precomputed_frames.as_ref().unwrap()),
+            1
+        );
+        let supported_pointers = supported.storage_pointers();
+        let supported_clone = supported.clone();
+        assert_eq!(supported_clone.storage_pointers(), supported_pointers);
+        assert_eq!(Arc::strong_count(&supported.random_q15), 2);
+        assert_eq!(Arc::strong_count(&supported.palette_lut), 2);
+        assert_eq!(
+            Arc::strong_count(supported.precomputed_frames.as_ref().unwrap()),
+            2
+        );
+        let clone_deep = supported_clone.sample_at_phase(124.25 / 125.0, 0.0, 0.0);
+        assert_eq!(
+            clone_deep,
+            supported.sample_at_phase(124.25 / 125.0, 0.0, 0.0)
+        );
+        assert_eq!(supported_clone.storage_pointers(), supported_pointers);
+
+        let mut capped_request = request.clone();
+        capped_request.period_ms = 40_000;
+        let capped = CompiledDaslightFire::compile(&capped_request)
+            .unwrap()
+            .unwrap();
+        assert_eq!(capped.rendered_frame_count, DASLIGHT_FIRE_FRAME_CAP);
+        assert_eq!(capped.generation(0.5), DASLIGHT_FIRE_FRAME_CAP / 2);
+
+        let full = CompiledDaslightFire::compile(&request).unwrap().unwrap();
+        for generation in [0_usize, 1, 63, 124] {
+            let phase = (generation as f64 + 0.25) / 125.0;
+            for target in &targets {
+                assert_eq!(
+                    supported.sample_at_phase(phase, target.x, target.z),
+                    full.sample_at_phase(phase, target.x, target.z),
+                    "generation={generation} target=({}, {})",
+                    target.x,
+                    target.z
+                );
+            }
+        }
+
+        let fallback_targets = (0..201)
+            .map(|index| {
+                test_spatial_color_target(
+                    index,
+                    201,
+                    (index % 100) as f32 / 99.0,
+                    (index / 100) as f32 / 2.0,
+                )
+            })
+            .collect::<Vec<_>>();
+        let fallback = CompiledDaslightFire::compile_for_targets(&request, &fallback_targets)
+            .unwrap()
+            .unwrap();
+        assert!(fallback.precomputed_frames.is_none());
+        assert!(fallback.raster_cache.is_some());
+        let pointers = fallback.storage_pointers();
+        let _first = fallback.sample_at_phase(0.25 / 125.0, 0.0, 0.0);
+        let _second = fallback.sample_at_phase(1.25 / 125.0, 0.0, 0.0);
+        assert_eq!(fallback.storage_pointers(), pointers);
+        assert_eq!(fallback.cache_state(), (Some(1), 2));
+    }
+
+    #[test]
+    fn color_mappings_fire_cue_transition_shares_all_supported_backing_storage() {
+        fn request(seed: u32) -> ColorEffectRequest {
+            let mut request = test_fire_request(true, seed, 100, 200, 100, 255, 5_000);
+            request
+                .spatial_pattern
+                .as_mut()
+                .unwrap()
+                .placement
+                .as_mut()
+                .unwrap()
+                .target_coordinates[0] = protocol::ColorEffectSpatialPlacementTarget {
+                fixture_id: 1,
+                beam_index: 0,
+                patch_x: 50,
+                patch_y: 50,
+            };
+            request
+        }
+        fn fire(effect: &RuntimeEffect) -> &CompiledDaslightFire {
+            let RuntimeEffectKind::Color(color) = &effect.kind else {
+                panic!("expected Color transition effect");
+            };
+            color
+                .spatial
+                .as_ref()
+                .unwrap()
+                .daslight_fire
+                .as_ref()
+                .unwrap()
+        }
+
+        let mut runtime = runtime_with_mixed_effect_fixtures(1);
+        let created_at = Instant::now();
+        let make_effect = |runtime: &mut EngineRuntime, seed| RuntimeEffect {
+            id: 29,
+            kind: RuntimeEffectKind::Color(
+                runtime.resolve_color_effect_request(request(seed)).unwrap(),
+            ),
+            enabled: true,
+            created_at,
+        };
+        let outgoing = make_effect(&mut runtime, 0x29AC_0001);
+        let incoming = make_effect(&mut runtime, 0x29AC_0002);
+        runtime.effect_activations = vec![
+            RuntimeEffectActivation {
+                effect: outgoing,
+                key: Some(RuntimeEffectActivationKey::CueList {
+                    cue_list_id: DEFAULT_CUE_LIST_ID,
+                    cue_id: 1,
+                }),
+                rate: 1.0,
+                source_loop_fill: None,
+                transition_ms: None,
+                transition: None,
+            },
+            RuntimeEffectActivation {
+                effect: incoming,
+                key: None,
+                rate: 1.0,
+                source_loop_fill: None,
+                transition_ms: Some(1_000),
+                transition: None,
+            },
+        ];
+        runtime.active_effect_activation_indices = vec![0];
+
+        let outgoing_fire = fire(&runtime.effect_activations[0].effect);
+        assert!(outgoing_fire.raster_cache.is_none());
+        assert_eq!(Arc::strong_count(&outgoing_fire.random_q15), 1);
+        assert_eq!(Arc::strong_count(&outgoing_fire.palette_lut), 1);
+        assert_eq!(
+            Arc::strong_count(outgoing_fire.precomputed_frames.as_ref().unwrap()),
+            1
+        );
+        let pointers = outgoing_fire.storage_pointers();
+        let deep_sample = outgoing_fire.sample_at_phase(124.25 / 125.0, 0.5, 0.5);
+
+        let sources = runtime.cue_list_effect_transition_sources(DEFAULT_CUE_LIST_ID);
+        let source_fire = fire(&sources[0].0);
+        assert_eq!(source_fire.storage_pointers(), pointers);
+        assert_eq!(Arc::strong_count(&source_fire.random_q15), 2);
+        assert_eq!(Arc::strong_count(&source_fire.palette_lut), 2);
+        assert_eq!(
+            Arc::strong_count(source_fire.precomputed_frames.as_ref().unwrap()),
+            2
+        );
+
+        runtime.activate_cue_effect_range_with_transitions(
+            RuntimeEffectActivationRange { start: 1, len: 1 },
+            RuntimeEffectActivationKey::CueList {
+                cue_list_id: DEFAULT_CUE_LIST_ID,
+                cue_id: 2,
+            },
+            created_at,
+            &sources,
+        );
+        let transition_fire = fire(
+            &runtime.effect_activations[1]
+                .transition
+                .as_ref()
+                .unwrap()
+                .from,
+        );
+        assert_eq!(transition_fire.storage_pointers(), pointers);
+        assert_eq!(Arc::strong_count(&transition_fire.random_q15), 3);
+        assert_eq!(Arc::strong_count(&transition_fire.palette_lut), 3);
+        assert_eq!(
+            Arc::strong_count(transition_fire.precomputed_frames.as_ref().unwrap()),
+            3
+        );
+        assert_eq!(
+            transition_fire.sample_at_phase(124.25 / 125.0, 0.5, 0.5),
+            deep_sample
+        );
+    }
+
     fn evaluate_test_spatial_color(
         request: &ColorEffectRequest,
         target: &RuntimeColorSpatialTarget,
@@ -60579,6 +61607,7 @@ mod tests {
             daslight_grid_lines.as_ref(),
             daslight_graph.as_ref(),
             daslight_rain.as_ref(),
+            None,
             None,
             97,
             created_at,
@@ -62957,6 +63986,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
                 97,
                 created_at,
                 now,
@@ -63149,6 +64179,7 @@ mod tests {
                 None,
                 None,
                 Some(&compiled),
+                None,
                 None,
                 None,
                 None,

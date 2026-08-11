@@ -2511,6 +2511,19 @@ pub enum ColorEffectSpatialRecipe {
         number: u16,
         trail: u16,
     },
+    /// Daslight COLOR MAPPINGS ID 29's corrected fixed fire raster.
+    Fire {
+        #[serde(default, skip_serializing_if = "is_false")]
+        grayscale: bool,
+        /// Stable replacement for the source process-global qrand history.
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
+        rng_seed: u32,
+        flames: u16,
+        width: u16,
+        /// Corrected live heat cutoff; the source LUT ignored this parameter.
+        height: u16,
+        hotspot: u16,
+    },
     /// Daslight COLOR MAPPINGS ID 47's retained explosion-particle raster.
     Explosion {
         #[serde(default, skip_serializing_if = "is_false")]
@@ -5482,6 +5495,30 @@ mod tests {
             .unwrap(),
             rain,
             "Rain must round-trip at its validated maxima"
+        );
+        let legacy_fire: super::ColorEffectSpatialRecipe =
+            serde_json::from_str(r#"{"Fire":{"flames":20,"width":20,"height":50,"hotspot":250}}"#)
+                .unwrap();
+        assert_eq!(
+            serde_json::to_string(&legacy_fire).unwrap(),
+            r#"{"Fire":{"flames":20,"width":20,"height":50,"hotspot":250}}"#,
+            "default Fire Grayscale and RNG seed must remain omitted"
+        );
+        let fire = super::ColorEffectSpatialRecipe::Fire {
+            grayscale: true,
+            rng_seed: u32::MAX,
+            flames: 100,
+            width: 200,
+            height: 100,
+            hotspot: 255,
+        };
+        assert_eq!(
+            serde_json::from_str::<super::ColorEffectSpatialRecipe>(
+                &serde_json::to_string(&fire).unwrap()
+            )
+            .unwrap(),
+            fire,
+            "Fire must round-trip at its validated maxima"
         );
         let legacy_explosion: super::ColorEffectSpatialRecipe = serde_json::from_str(
             r#"{"Explosion":{"shape":0,"explosion_number":5,"explosion_size":5,"particle_number":10,"particle_size":10,"particle_life":0.0,"trail_size":10,"gravity":0.0}}"#,
