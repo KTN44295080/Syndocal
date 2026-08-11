@@ -12978,9 +12978,6 @@ async function readPatchZoningState(client) {
       verifiedProfileFootprints: visibleMatches(
         '[data-patch-profile-row][data-profile-source="verified"]'
       ).map((row) => Number(row.getAttribute('data-profile-footprint'))),
-      verifiedSingleModeProfileRowCount: visibleMatches(
-        '[data-patch-profile-row][data-profile-source="verified"][data-profile-single-mode="true"]'
-      ).length,
       verifiedModeProfileRowCount: visibleMatches(
         '[data-patch-profile-row][data-profile-source="verified"][data-profile-tree-item="mode"]'
       ).length,
@@ -13183,8 +13180,7 @@ async function checkPatchZoning(client) {
       footprintFiltered.verifiedFixtureExpandedValues.every((value) => value === "true") &&
       footprintFiltered.verifiedProfileRowCount === 3 &&
       JSON.stringify(footprintFiltered.verifiedProfileFootprints) === JSON.stringify([25, 25, 25]) &&
-      footprintFiltered.verifiedSingleModeProfileRowCount === 1 &&
-      footprintFiltered.verifiedModeProfileRowCount === 2,
+      footprintFiltered.verifiedModeProfileRowCount === 3,
     clearedSearchRecollapsesVerifiedCategories:
       searchCleared.footprintFilterValue === "" &&
       searchCleared.verifiedSectionCountText === String(verifiedGenericProfileCount) &&
@@ -14212,9 +14208,7 @@ async function runPatchGdtfShareViewport(client, viewport) {
       manufacturerGroups: [...(shareTree?.querySelectorAll('[data-profile-tree-manufacturer]') ?? [])].map((group) => ({
         manufacturer: group.getAttribute('data-profile-tree-manufacturer'),
         expanded: group.querySelector('[data-profile-tree-item="manufacturer"]')?.getAttribute('aria-expanded'),
-        fixtureCount: group.querySelectorAll(
-          '[data-profile-tree-item="fixture"], [data-profile-tree-item="fixture-mode"]'
-        ).length,
+        fixtureCount: group.querySelectorAll('[data-profile-tree-item="fixture"]').length,
         rowCount: group.querySelectorAll('[data-patch-profile-row][data-profile-source="share"]').length,
       })),
       manufacturerBatches: [...(shareTree?.querySelectorAll('[data-share-manufacturer-batch-state]') ?? [])].map((batch) => ({
@@ -14246,7 +14240,6 @@ async function runPatchGdtfShareViewport(client, viewport) {
         item: row.getAttribute('data-profile-tree-item'),
         level: row.getAttribute('aria-level'),
         expanded: row.getAttribute('aria-expanded'),
-        single: row.getAttribute('data-profile-single-mode'),
         text: (row.textContent || '').replace(/\\s+/g, ' ').trim(),
         height: Math.round(row.getBoundingClientRect().height),
       })),
@@ -14254,7 +14247,6 @@ async function runPatchGdtfShareViewport(client, viewport) {
         item: row.getAttribute('data-profile-tree-item'),
         level: row.getAttribute('aria-level'),
         expanded: row.getAttribute('aria-expanded'),
-        single: row.getAttribute('data-profile-single-mode'),
         text: (row.textContent || '').replace(/\\s+/g, ' ').trim(),
         height: Math.round(row.getBoundingClientRect().height),
       })),
@@ -14262,7 +14254,6 @@ async function runPatchGdtfShareViewport(client, viewport) {
         key: row.getAttribute('data-share-profile-key'),
         item: row.getAttribute('data-profile-tree-item'),
         level: row.getAttribute('aria-level'),
-        single: row.getAttribute('data-profile-single-mode'),
         mode: row.getAttribute('data-profile-mode-name'),
         text: (row.textContent || '').replace(/\\s+/g, ' ').trim(),
         cached: row.getAttribute('data-profile-cached'),
@@ -14275,7 +14266,6 @@ async function runPatchGdtfShareViewport(client, viewport) {
       cacheRows: cacheRows.map((row) => ({
         item: row.getAttribute('data-profile-tree-item'),
         level: row.getAttribute('aria-level'),
-        single: row.getAttribute('data-profile-single-mode'),
         mode: row.getAttribute('data-profile-mode-name'),
         text: (row.textContent || '').replace(/\\s+/g, ' ').trim(),
         pressed: row.getAttribute('aria-pressed'),
@@ -14465,11 +14455,16 @@ async function runPatchGdtfShareViewport(client, viewport) {
   const modeSearch = await searchTree("Direct", "mode-search");
   const fixtureSearch = await searchTree("ColorSource Spot V", "fixture-search");
 
-  await client.evaluate(`document.querySelector(
-    '[data-patch-profile-tree="cache"] [data-profile-single-mode="true"]'
-  )?.click()`);
+  await client.evaluate(`(() => {
+    const fixture = document.querySelector(
+      '[data-patch-profile-tree="cache"] [data-profile-tree-item="fixture"]'
+    );
+    if (!(fixture instanceof HTMLButtonElement)) return;
+    if (fixture.getAttribute('aria-expanded') !== 'true') fixture.click();
+    fixture.parentElement?.querySelector('[data-profile-tree-item="mode"]')?.click();
+  })()`);
   await sleep(80);
-  const singleModeArmed = await readState("single-mode-armed");
+  const singleModeContainedChildArmed = await readState("single-mode-contained-child-armed");
 
   await client.evaluate(`(() => {
     const input = document.querySelector('[data-patch-profile-search]');
@@ -14704,9 +14699,10 @@ async function runPatchGdtfShareViewport(client, viewport) {
       fixtureSearch.manufacturerGroups.length === 1 &&
       fixtureSearch.manufacturerGroups[0].manufacturer === "ETC" &&
       fixtureSearch.shareRows.length === 1 &&
-      fixtureSearch.shareRows[0].item === "fixture-mode" &&
-      fixtureSearch.shareRows[0].single === "true" &&
+      fixtureSearch.shareRows[0].item === "mode" &&
+      fixtureSearch.shareRows[0].level === "3" &&
       fixtureSearch.shareRows[0].mode === "Standard" &&
+      fixtureSearch.shareTreeItems.some((item) => item.item === "fixture" && item.expanded === "true") &&
       modeSearch.manufacturerGroups.length === 1 &&
       modeSearch.manufacturerGroups[0].manufacturer === "ETC" &&
       modeSearch.shareRows.length === 1 &&
@@ -14731,15 +14727,17 @@ async function runPatchGdtfShareViewport(client, viewport) {
       manufacturerArrowLeftCollapsed.cacheTreeItems.length === 1 &&
       manufacturerArrowLeftCollapsed.cacheTreeItems[0].expanded === "false" &&
       manufacturerArrowRightExpanded.cacheTreeItems[0].expanded === "true",
-    singleModeFixtureRowDirectlyArmsAndStaysDraggable:
-      singleModeArmed.mock?.importCalls?.length === 2 &&
-      singleModeArmed.cacheRows.length === 1 &&
-      singleModeArmed.cacheRows[0].item === "fixture-mode" &&
-      singleModeArmed.cacheRows[0].single === "true" &&
-      singleModeArmed.cacheRows[0].mode === "Standard" &&
-      singleModeArmed.cacheRows[0].selected === "true" &&
-      singleModeArmed.cacheRows[0].draggable === "true" &&
-      singleModeArmed.patchButtonDisabled === false,
+    singleModeFixtureContainedChildArmsAndStaysDraggable:
+      singleModeContainedChildArmed.mock?.importCalls?.length === 2 &&
+      singleModeContainedChildArmed.cacheRows.length === 1 &&
+      singleModeContainedChildArmed.cacheTreeItems.some((item) =>
+        item.item === "fixture" && item.expanded === "true") &&
+      singleModeContainedChildArmed.cacheRows[0].item === "mode" &&
+      singleModeContainedChildArmed.cacheRows[0].level === "3" &&
+      singleModeContainedChildArmed.cacheRows[0].mode === "Standard" &&
+      singleModeContainedChildArmed.cacheRows[0].selected === "true" &&
+      singleModeContainedChildArmed.cacheRows[0].draggable === "true" &&
+      singleModeContainedChildArmed.patchButtonDisabled === false,
     inlineDownloadBusyStaysOnTriggeredModeRow:
       downloading.shareRows.some((row) =>
         row.key === "share:rid:7101::standard" && row.disabled && row.text.includes("Downloading")) &&
@@ -14856,7 +14854,7 @@ async function runPatchGdtfShareViewport(client, viewport) {
     manufacturerSearch,
     fixtureSearch,
     modeSearch,
-    singleModeArmed,
+    singleModeContainedChildArmed,
     clearedSearch,
     manufacturerEnterExpanded,
     fixtureArrowRightExpanded,
@@ -15108,7 +15106,6 @@ async function runPatchEmptyStateViewport(client, viewport) {
       )].map((row) => row.getAttribute('aria-expanded')),
       rowFootprints: rows.map((row) => Number(row.getAttribute('data-profile-footprint'))),
       rowHeights: rows.map((row) => Math.round(row.getBoundingClientRect().height)),
-      singleModeRows: rows.filter((row) => row.getAttribute('data-profile-single-mode') === 'true').length,
       modeRows: rows.filter((row) => row.getAttribute('data-profile-tree-item') === 'mode').length,
     };
   })()`);
@@ -15248,8 +15245,7 @@ async function runPatchEmptyStateViewport(client, viewport) {
       footprintFilterMetrics.categoryExpandedValues.every((value) => value === 'true') &&
       footprintFilterMetrics.fixtureExpandedValues.every((value) => value === 'true') &&
       JSON.stringify(footprintFilterMetrics.rowFootprints) === JSON.stringify([25, 25, 25]) &&
-      footprintFilterMetrics.singleModeRows === 1 &&
-      footprintFilterMetrics.modeRows === 2,
+      footprintFilterMetrics.modeRows === 3,
     qlcSupplementSearchShowsProvenanceAndFailsClosedWithoutBackend:
       qlcSupplementMetrics.rowCount === 1 &&
       qlcSupplementMetrics.modeKeys.every((key) => key?.startsWith('bundled:qlc:')) &&

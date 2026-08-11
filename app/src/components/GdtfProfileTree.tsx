@@ -263,62 +263,9 @@ export function GdtfProfileTree(props: GdtfProfileTreeProps) {
                 <div class="patchProfileTreeGroup" role="group">
                   <For each={group.fixtures}>
                     {(fixture) => {
-                      const singleMode = fixture.modeCount === 1;
                       const expandedFixture = () => fixtureExpanded(fixture.key);
                       return (
-                        <Show
-                          when={!singleMode}
-                          fallback={(() => {
-                            const mode = fixture.modes[0];
-                            return mode ? (
-                              <button
-                                type="button"
-                                class={`patchProfileRow patchProfileTreeRow patchProfileTreeFixtureModeRow${props.source === "share" ? " patchShareProfileRow" : ""}`}
-                                role="treeitem"
-                                aria-level="2"
-                                aria-selected={props.selected(fixture, mode)}
-                                aria-pressed={props.selected(fixture, mode)}
-                                title={mode.description}
-                                data-patch-profile-row
-                                data-profile-source={props.source}
-                                data-profile-tree-item="fixture-mode"
-                                data-profile-single-mode="true"
-                                data-profile-fixture-key={fixture.key}
-                                data-profile-mode-key={mode.key}
-                                data-profile-mode-name={mode.modeName ?? ""}
-                                data-profile-footprint={mode.footprint}
-                                data-profile-cached={props.cached?.(fixture, mode) ? "true" : props.source === "share" ? "false" : undefined}
-                                data-share-profile-key={props.source === "share" ? mode.key : undefined}
-                                draggable={props.draggable(fixture, mode)}
-                                disabled={props.disabled(fixture, mode)}
-                                onClick={() => props.onActivate(fixture, mode)}
-                                onDragStart={(event) => props.onDragStart(event, fixture, mode)}
-                                onDragEnd={props.onDragEnd}
-                              >
-                                <strong data-no-localize>{fixture.fixture}</strong>
-                                <span>
-                                  <Show when={props.downloading?.(fixture, mode)} fallback={(
-                                    <>
-                                      <Show when={props.source === "verified"}>
-                                        <i class="patchVerifiedChip">Verified</i>
-                                      </Show>
-                                      <b data-no-localize>{mode.name}{mode.footprint > 0 ? ` · ${mode.footprint}ch` : ""}</b>
-                                      <Show when={fixture.revision}>
-                                        <i><span>Rev.</span>{" "}<span data-no-localize>{fixture.revision}</span></i>
-                                      </Show>
-                                      <Show when={fixture.provenance}>
-                                        <i data-profile-provenance data-no-localize>{fixture.provenance}</i>
-                                      </Show>
-                                    </>
-                                  )}>
-                                    <i>Downloading…</i>
-                                  </Show>
-                                </span>
-                              </button>
-                            ) : null;
-                          })()}
-                        >
-                          <div class="patchProfileTreeFixture" data-profile-tree-fixture={fixture.key}>
+                        <div class="patchProfileTreeFixture" data-profile-tree-fixture={fixture.key}>
                             <button
                               type="button"
                               class="patchProfileTreeBranchRow patchProfileTreeFixtureRow"
@@ -393,8 +340,7 @@ export function GdtfProfileTree(props: GdtfProfileTreeProps) {
                                 </For>
                               </div>
                             </Show>
-                          </div>
-                        </Show>
+                        </div>
                       );
                     }}
                   </For>
