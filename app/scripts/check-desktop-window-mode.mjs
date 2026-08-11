@@ -10,6 +10,10 @@ const capability = JSON.parse(
   await readFile(new URL("../src-tauri/capabilities/main.json", import.meta.url), "utf8"),
 );
 const source = await readFile(new URL("../src/desktopWindowMode.ts", import.meta.url), "utf8");
+const keyboardController = await readFile(
+  new URL("../src/createAppKeyboardController.ts", import.meta.url),
+  "utf8",
+);
 const controller = await readFile(
   new URL("../src/components/DesktopWindowModeController.tsx", import.meta.url),
   "utf8",
@@ -20,12 +24,59 @@ const workspaceChrome = await readFile(
 );
 const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
 const main = await readFile(new URL("../src/main.tsx", import.meta.url), "utf8");
+const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const uiLocalization = await readFile(new URL("../src/uiLocalization.ts", import.meta.url), "utf8");
 const backend = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 const nativeAcceptance = await readFile(
   new URL("./check-native-window-acceptance.ps1", import.meta.url),
   "utf8",
 );
+const mainRuntimeActiveStart = app.indexOf("  const mainRuntimeActive = (current: EngineSnapshot) => {");
+const protectedCloseRequestStart = app.indexOf(
+  "  const protectedCloseRequestForCurrentState = (current: EngineSnapshot = latestEngineSnapshot): ProtectedCloseRequest | null => {",
+);
+const protectedCloseUnknownRequestStart = app.indexOf(
+  "  const protectedCloseUnknownRequest = (): MainProtectedCloseRequest => ({",
+);
+const closeProtectionRequiredStart = app.indexOf("  const closeProtectionRequired = () =>");
+const protectedCloseMainDetailStart = app.indexOf(
+  "  const protectedCloseMainDetail = (request: MainProtectedCloseRequest) => {",
+);
+const protectedCloseCopyStart = app.indexOf("  const protectedCloseCopy = () => {");
+const scheduleApprovedNativeCloseStart = app.indexOf("  const scheduleApprovedNativeClose = () => {");
+const protectedCloseRefreshStart = app.indexOf(
+  "  const refreshSnapshotForProtectedClose = async (): Promise<EngineSnapshot | null> => {",
+);
+const protectedCloseCleanupStart = app.indexOf("  onCleanup(() => {", protectedCloseCopyStart);
+const protectedCloseCleanupEnd = app.indexOf("  });", protectedCloseCleanupStart);
+assert.ok(
+  mainRuntimeActiveStart >= 0 &&
+    protectedCloseRequestStart > mainRuntimeActiveStart &&
+    protectedCloseUnknownRequestStart > protectedCloseRequestStart &&
+    closeProtectionRequiredStart > mainRuntimeActiveStart &&
+    protectedCloseMainDetailStart > closeProtectionRequiredStart &&
+    protectedCloseCopyStart > protectedCloseMainDetailStart &&
+    scheduleApprovedNativeCloseStart > protectedCloseCopyStart &&
+    protectedCloseRefreshStart > protectedCloseCopyStart &&
+    protectedCloseCleanupStart > protectedCloseRefreshStart &&
+    protectedCloseCleanupEnd > protectedCloseCleanupStart,
+  "protected-close predicates must remain statically discoverable",
+);
+const mainRuntimeActiveSource = app.slice(mainRuntimeActiveStart, closeProtectionRequiredStart);
+const protectedCloseRequestSource = app.slice(protectedCloseRequestStart, closeProtectionRequiredStart);
+const protectedCloseUnknownRequestSource = app.slice(protectedCloseUnknownRequestStart, closeProtectionRequiredStart);
+const closeProtectionRequiredSource = app.slice(closeProtectionRequiredStart, protectedCloseMainDetailStart);
+const protectedCloseMainDetailSource = app.slice(protectedCloseMainDetailStart, protectedCloseCopyStart);
+const protectedCloseCopySource = app.slice(protectedCloseCopyStart, protectedCloseCleanupStart);
+const scheduleApprovedNativeCloseSource = app.slice(scheduleApprovedNativeCloseStart, protectedCloseRefreshStart);
+const protectedCloseRefreshSource = app.slice(protectedCloseRefreshStart, protectedCloseCleanupStart);
+const protectedCloseCleanupSource = app.slice(protectedCloseCleanupStart, protectedCloseCleanupEnd + "  });".length);
+const protectedCloseSource = app.slice(mainRuntimeActiveStart, protectedCloseCleanupStart);
+const closeRequestedStart = app.indexOf("      .onCloseRequested(async (event) => {");
+const closeRequestedEnd = app.indexOf("      .then((unlisten)", closeRequestedStart);
+assert.ok(closeRequestedStart >= 0 && closeRequestedEnd > closeRequestedStart, "CloseRequested source must remain discoverable");
+const closeRequestedSource = app.slice(closeRequestedStart, closeRequestedEnd);
 
 assert.equal(config.app.windows[0].maximized, true, "the primary desktop window must start maximized");
 assert.equal(config.app.windows[0].decorations, false, "the primary desktop window must be frameless");
@@ -49,6 +100,12 @@ assert.ok(
   packageJson.scripts["check:release-ui"].includes("check:native-window"),
   "the primary release UI gate must include real native maximized/fullscreen acceptance",
 );
+assert.ok(
+  keyboardController.includes("const hasMappingInteraction =") &&
+    keyboardController.includes('options.mappingStageTool() !== "select"') &&
+    keyboardController.includes("if (!hasMappingInteraction) return"),
+  "an idle Setup workspace must leave Escape available to exit fullscreen",
+);
 assert.ok(nativeAcceptance.includes('[string]$MinimumMaximizedClient = "1920x1000"'));
 assert.ok(nativeAcceptance.includes('[string]$ExpectedFullscreen = "1920x1080"'));
 assert.ok(nativeAcceptance.includes("-VirtualKey 0x7A"), "native acceptance must exercise F11");
@@ -65,9 +122,17 @@ assert.ok(
     backend.includes("args.SetHandled(true)") &&
     backend.includes("physical.WasKeyDown.as_bool()") &&
     backend.includes("shortcut_window") &&
-    backend.includes(".emit(DESKTOP_FULLSCREEN_SHORTCUT_EVENT, ())") &&
-    backend.includes(".emit(DESKTOP_ESCAPE_SHORTCUT_EVENT, ())"),
-  "Windows must synchronously own WebView2 accelerators, reject repeats, and forward F11/Escape arbitration to the DOM",
+    backend.includes(".is_fullscreen()") &&
+    backend.includes("event_window.unmaximize()") &&
+    backend.includes("event_window.set_fullscreen(true)") &&
+    backend.includes("event_window.set_fullscreen(false)") &&
+    backend.includes("event_window.maximize()") &&
+    backend.includes("DESKTOP_ESCAPE_SHORTCUT_EVENT") &&
+    backend.includes("shortcut_webview.ExecuteScript(") &&
+    backend.includes("detail.consumed") &&
+    backend.includes('if result != "true"') &&
+    backend.includes("fallback_window.maximize()"),
+  "Windows must own WebView2 F11/Escape, reject repeats, preserve real DOM Escape consumers, and restore maximized mode through a native fallback",
 );
 assert.ok(
   !nativeAcceptance.includes("AppActivate") && nativeAcceptance.includes("GetForegroundWindow() -ne $Handle"),
@@ -115,18 +180,16 @@ assert.match(
   "video output routes must render App directly, outside DesktopWindowModeController",
 );
 assert.ok(controller.includes("appWindow.setFullscreen(next)"), "fullscreen changes must use the Tauri window API");
+assert.ok(controller.includes("if (!next) await appWindow.maximize()"), "leaving fullscreen must restore the maximized operator workspace");
 assert.ok(
-  controller.includes(".listen(DESKTOP_FULLSCREEN_SHORTCUT_EVENT") &&
-    controller.includes(".listen(DESKTOP_ESCAPE_SHORTCUT_EVENT, forwardNativeEscape)") &&
+  controller.includes('window.addEventListener(DESKTOP_ESCAPE_SHORTCUT_EVENT, handleNativeEscape)') &&
     controller.includes('querySelectorAll<HTMLDialogElement>("dialog[open]")') &&
-    controller.includes('new Event("cancel", { cancelable: true })') &&
-    controller.includes("if (dialog.dispatchEvent(cancelEvent)) dialog.close()") &&
-    controller.includes("if (closeOpenDialogForNativeEscape()) return") &&
-    controller.includes('new KeyboardEvent("keydown"') &&
-    controller.includes("document.activeElement ?? window") &&
-    controller.includes("unlistenNativeFullscreen?.()") &&
-    controller.includes("unlistenNativeEscape?.()"),
-  "the DOM controller must own native F11/Escape arbitration and clean up both listeners",
+    controller.includes("forwardingNativeEscape = true") &&
+    controller.includes('if (forwardingNativeEscape && event.code === "Escape") return') &&
+    controller.includes("detail.consumed = true") &&
+    controller.includes("detail.consumed = keyEvent.defaultPrevented") &&
+    controller.includes('window.removeEventListener(DESKTOP_ESCAPE_SHORTCUT_EVENT, handleNativeEscape)'),
+  "the DOM controller must arbitrate native Escape in dialog, editor, then fullscreen order without recursive handling",
 );
 assert.ok(
   controller.includes("await appWindow.maximize()"),
@@ -135,6 +198,237 @@ assert.ok(
 assert.ok(controller.includes('window.addEventListener("resize"'), "native window-mode changes must be resynchronized");
 assert.ok(controller.includes('window.removeEventListener("keydown"'), "the global shortcut listener must be cleaned up");
 assert.ok(controller.includes('aria-live="polite"'), "window-mode feedback must be announced accessibly");
+assert.ok(
+  app.includes("data-protected-close-dialog") &&
+    app.includes("event.preventDefault()") &&
+    app.includes("approveNativeCloseOnce()") &&
+    app.includes("await getCurrentWindow().close()") &&
+    app.includes("const consumeNativeCloseApproval =") &&
+    app.includes("protectedCloseCompletionInFlight") &&
+    !app.includes("const confirmProtectedClose =") &&
+    !protectedCloseSource.includes("snapshot()") &&
+    !protectedCloseSource.includes("UNSAVED SESSION"),
+  "protected native close requests must use the operator-styled in-app dialog and reissue one approved close",
+);
+assert.match(
+  closeRequestedSource,
+  /\.onCloseRequested\(async \(event\) => \{\s*if \(consumeNativeCloseApproval\(\)\) \{\s*return;\s*\}\s*if \(paneWindow === "timeline"\) \{[\s\S]*?event\.preventDefault\(\);\s*setProtectedCloseRequest\(closeRequest\);\s*return;\s*\}\s*if \(protectedCloseRefreshInFlight \|\| protectedCloseRequest\(\) !== null\) \{\s*event\.preventDefault\(\);\s*return;\s*\}\s*event\.preventDefault\(\);\s*const freshSnapshot = await refreshSnapshotForProtectedClose\(\);/,
+  "an approved native close must bypass the listener, keep timeline synchronous, suppress duplicate main checks, and prevent the main close before awaiting a bounded fresh snapshot",
+);
+assert.ok(
+  closeRequestedSource.includes("protectedCloseRefreshInFlight") &&
+    closeRequestedSource.includes("protectedCloseRequest() !== null") &&
+    !closeRequestedSource.includes("await refreshSnapshot(false, false)") &&
+    closeRequestedSource.includes("await refreshSnapshotForProtectedClose()"),
+  "main CloseRequested must reject the old unbounded refresh await and suppress repeated checks while one is pending",
+);
+assert.ok(
+  app.includes("const PROTECTED_CLOSE_REFRESH_TIMEOUT_MS = 2_000") &&
+    protectedCloseRefreshSource.includes("PROTECTED_CLOSE_REFRESH_TIMEOUT_MS") &&
+    protectedCloseRefreshSource.includes("protectedCloseRefreshInFlight") &&
+    protectedCloseRefreshSource.includes("refreshSnapshot(false, false)") &&
+    protectedCloseRefreshSource.includes("window.setTimeout") &&
+    protectedCloseRefreshSource.includes(".then(settle)") &&
+    protectedCloseRefreshSource.includes(".catch(() => settle(null))") &&
+    protectedCloseRefreshSource.includes("protectedCloseRefreshInFlight = false"),
+  "close-specific refresh must be bounded, fail closed on rejection/timeout, and release its duplicate-check guard",
+);
+const closeRefreshIndex = closeRequestedSource.indexOf("await refreshSnapshotForProtectedClose()");
+const closePreventIndex = closeRequestedSource.lastIndexOf("event.preventDefault();", closeRefreshIndex);
+assert.ok(
+  closePreventIndex >= 0 && closeRefreshIndex > closePreventIndex,
+  "main CloseRequested must prevent the initial close before awaiting its bounded fresh snapshot",
+);
+assert.ok(
+  closeRequestedSource.includes("protectedCloseRequestForCurrentState(freshSnapshot)") &&
+    !closeRequestedSource.includes("protectedCloseRequestForCurrentState(latestEngineSnapshot)") &&
+    closeRequestedSource.includes("setProtectedCloseRequest(protectedCloseUnknownRequest())"),
+  "main CloseRequested must capture from the fresh snapshot and fail closed with an unknown-output request",
+);
+assert.ok(
+  closeRequestedSource.includes("scheduleApprovedNativeClose()") &&
+    scheduleApprovedNativeCloseSource.includes("window.setTimeout(() =>") &&
+    protectedCloseSource.includes("void completeProtectedClose();"),
+  "a fresh clean close must schedule the approved reissue on a later task",
+);
+assert.ok(
+  scheduleApprovedNativeCloseSource.includes("protectedCloseRefreshInFlight") &&
+    scheduleApprovedNativeCloseSource.includes("closeRequestListenerDisposed") &&
+    scheduleApprovedNativeCloseSource.includes("protectedCloseRequest() !== null") &&
+    !scheduleApprovedNativeCloseSource.match(/if \(protectedCloseRequest\(\) !== null\) return;/),
+  "the scheduled approved close must not bypass a newer refresh check and must guard unmount",
+);
+assert.ok(
+  protectedCloseRefreshSource.includes("protectedCloseRefreshTimeoutId") &&
+    protectedCloseRefreshSource.includes("let cancelRefresh: (() => void) | undefined") &&
+    protectedCloseRefreshSource.includes("cancelRefresh = () => settle(null)") &&
+    protectedCloseRefreshSource.includes("protectedCloseRefreshCancel = cancelRefresh") &&
+    protectedCloseRefreshSource.includes("protectedCloseRefreshCancel === cancelRefresh") &&
+    protectedCloseRefreshSource.includes("if (closeRequestListenerDisposed)") &&
+    protectedCloseCleanupSource.includes("protectedCloseRefreshCancel?.()") &&
+    protectedCloseCleanupSource.includes("window.clearTimeout(scheduledApprovedNativeCloseTimer)") &&
+    protectedCloseCleanupSource.includes("window.clearTimeout(protectedCloseRefreshTimeoutId)") &&
+    closeRequestedSource.includes("const freshSnapshot = await refreshSnapshotForProtectedClose();") &&
+    closeRequestedSource.includes("if (closeRequestListenerDisposed) return;"),
+  "close timers and post-await work must be owned and stopped when the close listener is disposed",
+);
+assert.equal(
+  (app.match(/await getCurrentWindow\(\)\.close\(\)/g) ?? []).length,
+  1,
+  "protected close confirmation must issue exactly one native close call",
+);
+assert.ok(
+  app.includes("let latestEngineSnapshot = initialEngineSnapshot;") &&
+    protectedCloseRequestSource.includes("mainRuntimeActive(current)") &&
+    protectedCloseRequestSource.includes("current: EngineSnapshot = latestEngineSnapshot") &&
+    closeProtectionRequiredSource.includes("protectedCloseRequestForCurrentState() !== null") &&
+    !mainRuntimeActiveSource.includes("createMemo") &&
+    mainRuntimeActiveSource.includes("timelineExecutionIsLive(") &&
+    mainRuntimeActiveSource.includes("current.timeline.playing") &&
+    mainRuntimeActiveSource.includes("current.clock.source") &&
+    mainRuntimeActiveSource.includes("current.clock.external_sync_locked") &&
+    mainRuntimeActiveSource.includes("current.clock.external_sync_age_ms") &&
+    mainRuntimeActiveSource.includes("current.direct_child_timeline_transports?.some(") &&
+    mainRuntimeActiveSource.includes("transport.playing") &&
+    mainRuntimeActiveSource.includes("Boolean(current.active_fade)") &&
+    mainRuntimeActiveSource.includes("current.active_cue_id !== null") &&
+    mainRuntimeActiveSource.includes("current.active_cue_id !== undefined") &&
+    mainRuntimeActiveSource.includes("Object.keys(current.active_group_cue_ids ?? {}).length > 0") &&
+    mainRuntimeActiveSource.includes("current.video.layers.some((layer) => layer.state.playing)") &&
+    mainRuntimeActiveSource.includes("current.effects.some((effect) => effect.enabled)") &&
+    mainRuntimeActiveSource.includes("current.programmer.enabled") &&
+    mainRuntimeActiveSource.includes("!current.programmer.blind") &&
+    mainRuntimeActiveSource.includes("current.programmer.values.length > 0") &&
+    !mainRuntimeActiveSource.includes("dmx_outputs") &&
+    !mainRuntimeActiveSource.includes("current.output") &&
+    !mainRuntimeActiveSource.includes("current.video.outputs"),
+  "main runtime activity must use latest authoritative snapshot signals, including timeline clock freshness, video/effects/programmer activity, not configured output routes",
+);
+assert.ok(
+  app.includes("type ProtectedCloseRequest =") &&
+    app.includes('reason: "timeline-dirty"') &&
+    app.includes('reason: "dirty-only" | "runtime-only" | "dirty-and-runtime" | "output-state-unknown"') &&
+    app.includes("projectDirty: boolean") &&
+    app.includes("timelineDirty: boolean") &&
+    app.includes("runtimeActive: boolean | null") &&
+    protectedCloseRequestSource.includes("const projectIsDirty = projectDirty()") &&
+    protectedCloseRequestSource.includes("const timelineIsDirty = timelineEditorDirty()") &&
+    protectedCloseRequestSource.includes("const runtimeIsActive = mainRuntimeActive(current)") &&
+    app.includes("setProtectedCloseRequest(closeRequest)"),
+  "protected close must capture a discriminated dirty/runtime reason object from the latest snapshot",
+);
+assert.ok(
+  protectedCloseUnknownRequestSource.includes('reason: "output-state-unknown"') &&
+    protectedCloseUnknownRequestSource.includes("projectDirty: projectDirty()") &&
+    protectedCloseUnknownRequestSource.includes("timelineDirty: timelineEditorDirty()") &&
+    protectedCloseUnknownRequestSource.includes("runtimeActive: null"),
+  "refresh failure must capture dirty flags without pretending that runtime is inactive",
+);
+assert.match(
+  protectedCloseRequestSource,
+  /if \(paneWindow === "timeline"\) \{[\s\S]*?return timelineEditorDirty\(\)\s*\?\s*\{ pane: "timeline", reason: "timeline-dirty" \}\s*:\s*null;/,
+  "timeline child-pane close protection must remain dirty-only",
+);
+assert.ok(
+  !protectedCloseMainDetailSource.includes("projectDirty()") &&
+    !protectedCloseMainDetailSource.includes("timelineEditorDirty()") &&
+    !protectedCloseMainDetailSource.includes("mainRuntimeActive(") &&
+    !protectedCloseCopySource.includes("projectDirty()") &&
+    !protectedCloseCopySource.includes("timelineEditorDirty()") &&
+    !protectedCloseCopySource.includes("mainRuntimeActive("),
+  "protected-close copy must use captured request fields and cannot drift from live state while open",
+);
+for (const copy of [
+  "OUTPUT STATE UNKNOWN",
+  "Close Anyway",
+  "Discard and Close Anyway",
+  "LIVE OUTPUT ACTIVE",
+  "Playback/live output is active. Stop and close?",
+  "Stop and Close",
+  "UNSAVED CHANGES",
+  "Discard and Close",
+  "UNSAVED CHANGES + LIVE OUTPUT",
+  "Discard, Stop and Close",
+  "Project changes will be discarded.",
+  "Timeline edits will be discarded.",
+  "Project changes and Timeline edits will be discarded.",
+  "Project changes will be discarded. Playback/live output will stop.",
+  "Timeline edits will be discarded. Playback/live output will stop.",
+  "Project changes and Timeline edits will be discarded. Playback/live output will stop.",
+  "Playback/live output state could not be verified before closing. Keep Syndocal open to avoid an unsafe shutdown.",
+  "Project changes will be discarded. Playback/live output state could not be verified before closing.",
+  "Timeline edits will be discarded. Playback/live output state could not be verified before closing.",
+  "Project changes and Timeline edits will be discarded. Playback/live output state could not be verified before closing.",
+]) {
+  assert.ok(protectedCloseSource.includes(`\"${copy}\"`), `protected-close copy must cover ${copy}`);
+}
+assert.ok(
+  protectedCloseCopySource.includes('if (request.reason === "output-state-unknown")') &&
+    protectedCloseCopySource.includes('eyebrow: translateUiText("OUTPUT STATE UNKNOWN"') &&
+    protectedCloseCopySource.includes('translateUiText("Close Anyway"') &&
+    protectedCloseCopySource.includes('translateUiText("Discard and Close Anyway"') &&
+    protectedCloseCopySource.includes('if (request.reason === "runtime-only")') &&
+    protectedCloseCopySource.includes('eyebrow: translateUiText("LIVE OUTPUT ACTIVE"') &&
+    protectedCloseCopySource.includes('confirm: translateUiText("Stop and Close"') &&
+    protectedCloseCopySource.includes('if (request.reason === "dirty-and-runtime")') &&
+    protectedCloseCopySource.includes('eyebrow: translateUiText("UNSAVED CHANGES + LIVE OUTPUT"') &&
+    protectedCloseCopySource.includes('confirm: translateUiText("Discard, Stop and Close"') &&
+    protectedCloseCopySource.includes('eyebrow: translateUiText("UNSAVED CHANGES"') &&
+    protectedCloseCopySource.includes('confirm: translateUiText("Discard and Close"'),
+  "protected-close copy must expose distinct runtime-only, dirty-only, and combined eyebrow/action cases",
+);
+assert.ok(
+  protectedCloseMainDetailSource.includes("Playback/live output state could not be verified before closing.") &&
+    protectedCloseMainDetailSource.includes("Keep Syndocal open to avoid an unsafe shutdown.") &&
+  protectedCloseMainDetailSource.includes("Playback/live output is active. Stop and close?") &&
+    protectedCloseMainDetailSource.includes("Playback/live output will stop.") &&
+    protectedCloseMainDetailSource.includes("request.projectDirty") &&
+    protectedCloseMainDetailSource.includes("request.timelineDirty") &&
+    protectedCloseMainDetailSource.includes("request.runtimeActive") &&
+    !protectedCloseMainDetailSource.includes("Live DMX output"),
+  "protected-close detail must capture unknown, runtime-only, dirty-only, and combined consequences with generic playback/live wording",
+);
+const unknownCopyStart = protectedCloseCopySource.indexOf('if (request.reason === "output-state-unknown")');
+const runtimeOnlyCopyStart = protectedCloseCopySource.indexOf('if (request.reason === "runtime-only")');
+const dirtyAndRuntimeCopyStart = protectedCloseCopySource.indexOf('if (request.reason === "dirty-and-runtime")');
+const dirtyOnlyCopyStart = protectedCloseCopySource.indexOf('return {\n      eyebrow: translateUiText("UNSAVED CHANGES"');
+assert.ok(unknownCopyStart >= 0 && runtimeOnlyCopyStart > unknownCopyStart && dirtyAndRuntimeCopyStart > runtimeOnlyCopyStart && dirtyOnlyCopyStart > dirtyAndRuntimeCopyStart);
+const unknownCopySource = protectedCloseCopySource.slice(unknownCopyStart, runtimeOnlyCopyStart);
+const runtimeOnlyCopySource = protectedCloseCopySource.slice(runtimeOnlyCopyStart, dirtyAndRuntimeCopyStart);
+const dirtyOnlyCopySource = protectedCloseCopySource.slice(dirtyOnlyCopyStart);
+assert.ok(
+  !unknownCopySource.includes("UNSAVED SESSION") &&
+    !unknownCopySource.includes("UNSAVED CHANGES") &&
+  !runtimeOnlyCopySource.includes("UNSAVED SESSION") &&
+    !runtimeOnlyCopySource.includes("Close Without Saving") &&
+    !dirtyOnlyCopySource.toLowerCase().includes("output"),
+  "runtime-only copy must not claim unsaved-session state, and dirty-only copy must not mention output",
+);
+for (const [english, japanese] of [
+  ["OUTPUT STATE UNKNOWN", "出力状態不明"],
+  ["Close Anyway", "確認せずに閉じる"],
+  ["Discard and Close Anyway", "破棄して確認せずに閉じる"],
+  ["LIVE OUTPUT ACTIVE", "ライブ出力中"],
+  ["Stop and Close", "停止して閉じる"],
+  ["Discard and Close", "破棄して閉じる"],
+  ["Discard, Stop and Close", "破棄して停止して閉じる"],
+  ["UNSAVED CHANGES", "未保存の変更"],
+  ["UNSAVED CHANGES + LIVE OUTPUT", "未保存の変更 + ライブ出力中"],
+  ["Playback/live output is active. Stop and close?", "再生／ライブ出力が有効です。停止して閉じますか？"],
+  ["Playback/live output will stop.", "再生／ライブ出力は停止します。"],
+  ["Playback/live output state could not be verified before closing. Keep Syndocal open to avoid an unsafe shutdown.", "閉じる前に再生／ライブ出力の状態を確認できませんでした。安全のためSyndocalを開いたままにしてください。"],
+  ["Project changes will be discarded. Playback/live output state could not be verified before closing.", "プロジェクトの変更は破棄されます。閉じる前に再生／ライブ出力の状態を確認できませんでした。"],
+  ["Timeline edits will be discarded. Playback/live output state could not be verified before closing.", "タイムライン編集は破棄されます。閉じる前に再生／ライブ出力の状態を確認できませんでした。"],
+  ["Project changes and Timeline edits will be discarded. Playback/live output state could not be verified before closing.", "プロジェクトの変更とタイムライン編集は破棄されます。閉じる前に再生／ライブ出力の状態を確認できませんでした。"],
+]) {
+  assert.ok(uiLocalization.includes(english) && uiLocalization.includes(japanese), `localization must cover ${english}`);
+}
+assert.ok(
+  styles.includes(".protectedCloseDialog") &&
+    styles.includes(".protectedCloseMark") &&
+    styles.includes(".protectedCloseActions button.danger"),
+  "protected close must use the dedicated console-style visual hierarchy",
+);
 assert.ok(
   controller.includes("DESKTOP_RESIZE_DIRECTIONS") &&
     controller.includes("await appWindow.startResizeDragging(direction)") &&

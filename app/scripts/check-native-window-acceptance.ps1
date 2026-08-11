@@ -75,6 +75,18 @@ public static class SyndocalNativeWindow {
   public static extern bool SetForegroundWindow(IntPtr hWnd);
 
   [DllImport("user32.dll")]
+  public static extern IntPtr SetFocus(IntPtr hWnd);
+
+  [DllImport("user32.dll")]
+  public static extern bool GetCursorPos(out POINT point);
+
+  [DllImport("user32.dll")]
+  public static extern bool SetCursorPos(int x, int y);
+
+  [DllImport("user32.dll")]
+  public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
+
+  [DllImport("user32.dll")]
   public static extern IntPtr GetForegroundWindow();
 
   [DllImport("user32.dll")]
@@ -275,6 +287,7 @@ function Send-NativeKey {
 
     [void][SyndocalNativeWindow]::BringWindowToTop($Handle)
     [void][SyndocalNativeWindow]::SetForegroundWindow($Handle)
+    [void][SyndocalNativeWindow]::SetFocus($Handle)
   } finally {
     for ($index = $attachedThreads.Count - 1; $index -ge 0; $index -= 1) {
       [void][SyndocalNativeWindow]::AttachThreadInput(
@@ -289,6 +302,34 @@ function Send-NativeKey {
   if ([SyndocalNativeWindow]::GetForegroundWindow() -ne $Handle) {
     throw "Refusing to inject a key because the exact isolated native QA window is not foreground."
   }
+
+  # Foregrounding the top-level HWND does not guarantee that WebView2 owns the
+  # keyboard focus on a freshly started frameless window. Click a known inert
+  # point in the center of the drag-only top bar, then restore the user's cursor.
+  $clientRect = [SyndocalNativeWindow+RECT]::new()
+  if (-not [SyndocalNativeWindow]::GetClientRect($Handle, [ref]$clientRect)) {
+    throw "GetClientRect failed while focusing the native QA WebView."
+  }
+  $clientOrigin = [SyndocalNativeWindow+POINT]::new()
+  if (-not [SyndocalNativeWindow]::ClientToScreen($Handle, [ref]$clientOrigin)) {
+    throw "ClientToScreen failed while focusing the native QA WebView."
+  }
+  $savedCursor = [SyndocalNativeWindow+POINT]::new()
+  if (-not [SyndocalNativeWindow]::GetCursorPos([ref]$savedCursor)) {
+    throw "GetCursorPos failed before focusing the native QA WebView."
+  }
+  $focusX = $clientOrigin.X + [int](($clientRect.Right - $clientRect.Left) / 2)
+  $focusY = $clientOrigin.Y + 15
+  try {
+    if (-not [SyndocalNativeWindow]::SetCursorPos($focusX, $focusY)) {
+      throw "SetCursorPos failed while focusing the native QA WebView."
+    }
+    [SyndocalNativeWindow]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+    [SyndocalNativeWindow]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+  } finally {
+    [void][SyndocalNativeWindow]::SetCursorPos($savedCursor.X, $savedCursor.Y)
+  }
+  Start-Sleep -Milliseconds 100
   [SyndocalNativeWindow]::keybd_event([byte]$VirtualKey, 0, 0, [UIntPtr]::Zero)
   Start-Sleep -Milliseconds 40
   [SyndocalNativeWindow]::keybd_event([byte]$VirtualKey, 0, 2, [UIntPtr]::Zero)

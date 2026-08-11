@@ -17759,6 +17759,7 @@ export default function App() {
     setMappingHotkeyHelpOpen,
     applyMappingSelectionManagementAction,
     duplicateSelectedMappingFixtures,
+    mappingStageTool,
     setMappingStageTool,
     toggleMappingLayer,
     toggleMappingSelectionFlag,
@@ -17767,8 +17768,11 @@ export default function App() {
     normalizedMappingSnapSize,
     nudgeSelectedMappingFixtures,
     removeSelectedMappingFixtures,
+    mappingDrag,
     setMappingDrag,
+    mappingMarquee,
     setMappingMarquee,
+    mappingViewportPanDrag,
     setMappingViewportPanDrag,
     snapshot,
     triggerPreviousCue,
@@ -17829,27 +17833,281 @@ export default function App() {
   };
 
   let nativeCloseApproved = false;
+  let nativeCloseApprovalResetTimer: number | undefined;
+  let protectedCloseCompletionInFlight = false;
+  const PROTECTED_CLOSE_REFRESH_TIMEOUT_MS = 2_000;
+  let protectedCloseRefreshInFlight = false;
+  let protectedCloseRefreshTimeoutId: number | undefined;
+  let protectedCloseRefreshCancel: (() => void) | undefined;
+  let scheduledApprovedNativeCloseTimer: number | undefined;
   let closeRequestListenerDisposed = false;
   let unlistenCloseRequested: (() => void) | undefined;
+  type ProtectedCloseRequest =
+    | { pane: "timeline"; reason: "timeline-dirty" }
+    | {
+        pane: "main";
+        reason: "dirty-only" | "runtime-only" | "dirty-and-runtime" | "output-state-unknown";
+        projectDirty: boolean;
+        timelineDirty: boolean;
+        runtimeActive: boolean | null;
+      };
+  type MainProtectedCloseRequest = Extract<ProtectedCloseRequest, { pane: "main" }>;
+  const [protectedCloseRequest, setProtectedCloseRequest] = createSignal<ProtectedCloseRequest | null>(null);
+  const clearNativeCloseApproval = () => {
+    nativeCloseApproved = false;
+    if (nativeCloseApprovalResetTimer !== undefined) {
+      window.clearTimeout(nativeCloseApprovalResetTimer);
+      nativeCloseApprovalResetTimer = undefined;
+    }
+  };
   const approveNativeCloseOnce = () => {
+    clearNativeCloseApproval();
     nativeCloseApproved = true;
-    window.setTimeout(() => {
+    nativeCloseApprovalResetTimer = window.setTimeout(() => {
+      nativeCloseApprovalResetTimer = undefined;
       nativeCloseApproved = false;
     }, 1000);
   };
+  const consumeNativeCloseApproval = () => {
+    if (!nativeCloseApproved) return false;
+    clearNativeCloseApproval();
+    return true;
+  };
 
-  const closeProtectedEditsDirty = () => paneWindow === "timeline"
-    ? timelineEditorDirty()
-    : !paneWindow && (projectDirty() || timelineEditorDirty());
-  const confirmProtectedClose = () => paneWindow === "timeline"
-    ? window.confirm(translateUiText(
-        "Discard unsaved Timeline edits and close Timeline window?",
+  const mainRuntimeActive = (current: EngineSnapshot) => {
+    const timelineIsLive = timelineExecutionIsLive(
+      current.timeline.playing,
+      current.clock.source,
+      current.clock.external_sync_locked,
+      current.clock.external_sync_age_ms,
+    );
+    const directChildTimelineIsLive = current.direct_child_timeline_transports?.some(
+      (transport) => transport.playing,
+    ) === true;
+    const videoLayerIsPlaying = current.video.layers.some((layer) => layer.state.playing);
+    const runtimeEffectIsEnabled = current.effects.some((effect) => effect.enabled);
+    const liveProgrammerValues = current.programmer.enabled
+      && !current.programmer.blind
+      && current.programmer.values.length > 0;
+    return timelineIsLive
+      || directChildTimelineIsLive
+      || Boolean(current.active_fade)
+      || (current.active_cue_id !== null && current.active_cue_id !== undefined)
+      || Object.keys(current.active_group_cue_ids ?? {}).length > 0
+      || videoLayerIsPlaying
+      || runtimeEffectIsEnabled
+      || liveProgrammerValues;
+  };
+  const protectedCloseRequestForCurrentState = (current: EngineSnapshot = latestEngineSnapshot): ProtectedCloseRequest | null => {
+    if (paneWindow === "timeline") {
+      return timelineEditorDirty()
+        ? { pane: "timeline", reason: "timeline-dirty" }
+        : null;
+    }
+    if (paneWindow) return null;
+    const projectIsDirty = projectDirty();
+    const timelineIsDirty = timelineEditorDirty();
+    const runtimeIsActive = mainRuntimeActive(current);
+    if (!projectIsDirty && !timelineIsDirty && !runtimeIsActive) return null;
+    const reason: MainProtectedCloseRequest["reason"] = runtimeIsActive
+      ? projectIsDirty || timelineIsDirty ? "dirty-and-runtime" : "runtime-only"
+      : "dirty-only";
+    return {
+      pane: "main",
+      reason,
+      projectDirty: projectIsDirty,
+      timelineDirty: timelineIsDirty,
+      runtimeActive: runtimeIsActive,
+    };
+  };
+  const protectedCloseUnknownRequest = (): MainProtectedCloseRequest => ({
+    pane: "main",
+    reason: "output-state-unknown",
+    projectDirty: projectDirty(),
+    timelineDirty: timelineEditorDirty(),
+    runtimeActive: null,
+  });
+  const closeProtectionRequired = () => protectedCloseRequestForCurrentState() !== null;
+  const protectedCloseMainDetail = (request: MainProtectedCloseRequest) => {
+    if (request.reason === "output-state-unknown") {
+      if (request.projectDirty && request.timelineDirty) {
+        return translateUiText(
+          "Project changes and Timeline edits will be discarded. Playback/live output state could not be verified before closing.",
+          uiLocale(),
+        );
+      }
+      if (request.timelineDirty) {
+        return translateUiText(
+          "Timeline edits will be discarded. Playback/live output state could not be verified before closing.",
+          uiLocale(),
+        );
+      }
+      if (request.projectDirty) {
+        return translateUiText(
+          "Project changes will be discarded. Playback/live output state could not be verified before closing.",
+          uiLocale(),
+        );
+      }
+      return translateUiText(
+        "Playback/live output state could not be verified before closing. Keep Syndocal open to avoid an unsafe shutdown.",
         uiLocale(),
-      ))
-    : confirmDiscardProjectChanges("close Syndocal");
+      );
+    }
+    if (request.runtimeActive) {
+      if (request.projectDirty && request.timelineDirty) {
+        return translateUiText(
+          "Project changes and Timeline edits will be discarded. Playback/live output will stop.",
+          uiLocale(),
+        );
+      }
+      if (request.timelineDirty) {
+        return translateUiText("Timeline edits will be discarded. Playback/live output will stop.", uiLocale());
+      }
+      if (request.projectDirty) {
+        return translateUiText("Project changes will be discarded. Playback/live output will stop.", uiLocale());
+      }
+      return translateUiText("Playback/live output is active. Stop and close?", uiLocale());
+    }
+    if (request.projectDirty && request.timelineDirty) {
+      return translateUiText("Project changes and Timeline edits will be discarded.", uiLocale());
+    }
+    if (request.timelineDirty) {
+      return translateUiText("Timeline edits will be discarded.", uiLocale());
+    }
+    if (request.projectDirty) {
+      return translateUiText("Project changes will be discarded.", uiLocale());
+    }
+    return translateUiText("Playback/live output is active. Stop and close?", uiLocale());
+  };
+  const protectedCloseCopy = () => {
+    const request = protectedCloseRequest();
+    if (!request || request.pane === "timeline") {
+      return {
+        eyebrow: translateUiText("UNSAVED TIMELINE", uiLocale()),
+        title: translateUiText("Close Timeline window?", uiLocale()),
+        detail: translateUiText("Timeline edits will be discarded.", uiLocale()),
+        cancel: translateUiText("Keep Timeline Open", uiLocale()),
+        confirm: translateUiText("Discard and Close", uiLocale()),
+      };
+    }
+    if (request.reason === "output-state-unknown") {
+      return {
+        eyebrow: translateUiText("OUTPUT STATE UNKNOWN", uiLocale()),
+        title: translateUiText("Close Syndocal?", uiLocale()),
+        detail: protectedCloseMainDetail(request),
+        cancel: translateUiText("Keep Syndocal Open", uiLocale()),
+        confirm: request.projectDirty || request.timelineDirty
+          ? translateUiText("Discard and Close Anyway", uiLocale())
+          : translateUiText("Close Anyway", uiLocale()),
+      };
+    }
+    if (request.reason === "runtime-only") {
+      return {
+        eyebrow: translateUiText("LIVE OUTPUT ACTIVE", uiLocale()),
+        title: translateUiText("Close Syndocal?", uiLocale()),
+        detail: protectedCloseMainDetail(request),
+        cancel: translateUiText("Keep Syndocal Open", uiLocale()),
+        confirm: translateUiText("Stop and Close", uiLocale()),
+      };
+    }
+    if (request.reason === "dirty-and-runtime") {
+      return {
+        eyebrow: translateUiText("UNSAVED CHANGES + LIVE OUTPUT", uiLocale()),
+        title: translateUiText("Close Syndocal?", uiLocale()),
+        detail: protectedCloseMainDetail(request),
+        cancel: translateUiText("Keep Syndocal Open", uiLocale()),
+        confirm: translateUiText("Discard, Stop and Close", uiLocale()),
+      };
+    }
+    return {
+      eyebrow: translateUiText("UNSAVED CHANGES", uiLocale()),
+      title: translateUiText("Close Syndocal?", uiLocale()),
+      detail: protectedCloseMainDetail(request),
+      cancel: translateUiText("Keep Syndocal Open", uiLocale()),
+      confirm: translateUiText("Discard and Close", uiLocale()),
+    };
+  };
+  const cancelProtectedClose = () => {
+    setProtectedCloseRequest(null);
+    setMessage("Close canceled.");
+  };
+  const completeProtectedClose = async () => {
+    if (protectedCloseCompletionInFlight) return;
+    protectedCloseCompletionInFlight = true;
+    setProtectedCloseRequest(null);
+    approveNativeCloseOnce();
+    try {
+      await getCurrentWindow().close();
+    } catch (error) {
+      clearNativeCloseApproval();
+      protectedCloseCompletionInFlight = false;
+      setMessage(String(error));
+    }
+  };
+  const scheduleApprovedNativeClose = () => {
+    if (closeRequestListenerDisposed || protectedCloseRefreshInFlight) return;
+    if (scheduledApprovedNativeCloseTimer !== undefined) {
+      window.clearTimeout(scheduledApprovedNativeCloseTimer);
+    }
+    scheduledApprovedNativeCloseTimer = window.setTimeout(() => {
+      scheduledApprovedNativeCloseTimer = undefined;
+      if (
+        closeRequestListenerDisposed ||
+        protectedCloseRefreshInFlight ||
+        protectedCloseRequest() !== null
+      ) return;
+      void completeProtectedClose();
+    }, 0);
+  };
+  const refreshSnapshotForProtectedClose = async (): Promise<EngineSnapshot | null> => {
+    if (closeRequestListenerDisposed || protectedCloseRefreshInFlight) return null;
+    protectedCloseRefreshInFlight = true;
+    try {
+      return await new Promise<EngineSnapshot | null>((resolve) => {
+        let settled = false;
+        let timeoutId: number | undefined;
+        let cancelRefresh: (() => void) | undefined;
+        const clearOwnedTimeout = () => {
+          if (timeoutId === undefined) return;
+          if (protectedCloseRefreshTimeoutId === timeoutId) {
+            window.clearTimeout(timeoutId);
+            protectedCloseRefreshTimeoutId = undefined;
+          }
+          timeoutId = undefined;
+        };
+        const settle = (next: EngineSnapshot | null) => {
+          if (settled) return;
+          settled = true;
+          if (protectedCloseRefreshCancel === cancelRefresh) {
+            protectedCloseRefreshCancel = undefined;
+          }
+          clearOwnedTimeout();
+          resolve(next);
+        };
+        cancelRefresh = () => settle(null);
+        protectedCloseRefreshCancel = cancelRefresh;
+        timeoutId = window.setTimeout(() => {
+          if (protectedCloseRefreshTimeoutId === timeoutId) {
+            protectedCloseRefreshTimeoutId = undefined;
+          }
+          if (closeRequestListenerDisposed) {
+            settle(null);
+            return;
+          }
+          settle(null);
+        }, PROTECTED_CLOSE_REFRESH_TIMEOUT_MS);
+        protectedCloseRefreshTimeoutId = timeoutId;
+        void refreshSnapshot(false, false)
+          .then(settle)
+          .catch(() => settle(null));
+      });
+    } finally {
+      protectedCloseRefreshInFlight = false;
+    }
+  };
 
   const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-    if (nativeCloseApproved || !closeProtectedEditsDirty()) {
+    if (nativeCloseApproved || !closeProtectionRequired()) {
       return;
     }
     event.preventDefault();
@@ -17863,16 +18121,36 @@ export default function App() {
   }
   if (isTauriRuntime() && (!paneWindow || paneWindow === "timeline")) {
     void getCurrentWindow()
-      .onCloseRequested((event) => {
-        if (!closeProtectedEditsDirty()) {
+      .onCloseRequested(async (event) => {
+        if (consumeNativeCloseApproval()) {
           return;
         }
-        if (confirmProtectedClose()) {
-          approveNativeCloseOnce();
+        if (paneWindow === "timeline") {
+          const closeRequest = protectedCloseRequestForCurrentState();
+          if (!closeRequest) {
+            return;
+          }
+          event.preventDefault();
+          setProtectedCloseRequest(closeRequest);
+          return;
+        }
+        if (protectedCloseRefreshInFlight || protectedCloseRequest() !== null) {
+          event.preventDefault();
           return;
         }
         event.preventDefault();
-        setMessage("Close canceled.");
+        const freshSnapshot = await refreshSnapshotForProtectedClose();
+        if (closeRequestListenerDisposed) return;
+        if (freshSnapshot) {
+          const closeRequest = protectedCloseRequestForCurrentState(freshSnapshot);
+          if (closeRequest) {
+            setProtectedCloseRequest(closeRequest);
+          } else {
+            scheduleApprovedNativeClose();
+          }
+          return;
+        }
+        setProtectedCloseRequest(protectedCloseUnknownRequest());
       })
       .then((unlisten) => {
         if (closeRequestListenerDisposed) {
@@ -17885,6 +18163,15 @@ export default function App() {
   }
   onCleanup(() => {
     closeRequestListenerDisposed = true;
+    if (scheduledApprovedNativeCloseTimer !== undefined) {
+      window.clearTimeout(scheduledApprovedNativeCloseTimer);
+      scheduledApprovedNativeCloseTimer = undefined;
+    }
+    protectedCloseRefreshCancel?.();
+    if (protectedCloseRefreshTimeoutId !== undefined) {
+      window.clearTimeout(protectedCloseRefreshTimeoutId);
+      protectedCloseRefreshTimeoutId = undefined;
+    }
     unlistenCloseRequested?.();
     window.removeEventListener("keydown", handleAppKeyDown);
     window.removeEventListener("contextmenu", handleAppContextMenu, true);
@@ -18008,6 +18295,55 @@ export default function App() {
       />
       <Show when={dvcImportReport()}>
         {(report) => <DvcImportReportPanel report={report()} onClose={() => setDvcImportReport(null)} />}
+      </Show>
+      <Show when={protectedCloseRequest()}>
+        <dialog
+          ref={(dialog) => queueMicrotask(() => {
+            if (!dialog.open) dialog.showModal();
+            dialog.querySelector<HTMLButtonElement>("[data-protected-close-cancel]")?.focus();
+          })}
+          class="protectedCloseDialog"
+          data-protected-close-dialog
+          role="alertdialog"
+          aria-labelledby="protected-close-title"
+          aria-describedby="protected-close-detail"
+          onCancel={(event) => {
+            event.preventDefault();
+            cancelProtectedClose();
+          }}
+          onClose={() => setProtectedCloseRequest(null)}
+        >
+          <section class="protectedCloseFrame">
+            <header>
+              <span>{protectedCloseCopy().eyebrow}</span>
+              <strong>{translateUiText("SYNDOCAL", uiLocale())}</strong>
+            </header>
+            <div class="protectedCloseBody">
+              <div class="protectedCloseMark" aria-hidden="true">!</div>
+              <div>
+                <h2 id="protected-close-title" class="textBalance">{protectedCloseCopy().title}</h2>
+                <p id="protected-close-detail" class="textPretty">{protectedCloseCopy().detail}</p>
+              </div>
+            </div>
+            <div class="protectedCloseActions">
+              <button
+                type="button"
+                data-protected-close-cancel
+                onClick={cancelProtectedClose}
+              >
+                {protectedCloseCopy().cancel}
+              </button>
+              <button
+                type="button"
+                class="danger"
+                data-protected-close-confirm
+                onClick={() => void completeProtectedClose()}
+              >
+                {protectedCloseCopy().confirm}
+              </button>
+            </div>
+          </section>
+        </dialog>
       </Show>
       <Show when={pendingPatchGroupRegistration()}>
         {(pending) => (

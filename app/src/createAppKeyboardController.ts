@@ -42,6 +42,7 @@ interface AppKeyboardControllerOptions {
   setMappingHotkeyHelpOpen: Setter<boolean>;
   applyMappingSelectionManagementAction: (action: NonNullable<ReturnType<typeof mappingSelectionManagementActionFromHotkey>>) => void;
   duplicateSelectedMappingFixtures: () => MaybePromise;
+  mappingStageTool: Accessor<MappingStageTool>;
   setMappingStageTool: Setter<MappingStageTool>;
   toggleMappingLayer: (layer: NonNullable<ReturnType<typeof mappingLayerToggleFromHotkey>>) => void;
   toggleMappingSelectionFlag: (flag: NonNullable<ReturnType<typeof mappingSelectionFlagFromHotkey>>) => void;
@@ -50,8 +51,11 @@ interface AppKeyboardControllerOptions {
   normalizedMappingSnapSize: Accessor<number>;
   nudgeSelectedMappingFixtures: (deltaX: number, deltaZ: number) => MaybePromise;
   removeSelectedMappingFixtures: () => MaybePromise;
+  mappingDrag: Accessor<MappingDragState | null>;
   setMappingDrag: Setter<MappingDragState | null>;
+  mappingMarquee: Accessor<MappingMarqueeState | null>;
   setMappingMarquee: Setter<MappingMarqueeState | null>;
+  mappingViewportPanDrag: Accessor<MappingViewportPanDragState | null>;
   setMappingViewportPanDrag: Setter<MappingViewportPanDragState | null>;
   snapshot: Accessor<EngineSnapshot>;
   triggerPreviousCue: () => MaybePromise;
@@ -188,6 +192,12 @@ export function createAppKeyboardController(options: AppKeyboardControllerOption
         return;
       }
       if (event.code === "Escape") {
+        const hasMappingInteraction =
+          options.mappingStageTool() !== "select" ||
+          options.mappingDrag() !== null ||
+          options.mappingMarquee() !== null ||
+          options.mappingViewportPanDrag() !== null;
+        if (!hasMappingInteraction) return;
         event.preventDefault();
         options.setMappingStageTool("select");
         options.setMappingDrag(null);

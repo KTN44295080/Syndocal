@@ -79,7 +79,6 @@ type AppVideoPreviewRenderer = video::VideoPreviewRenderer<
 >;
 
 const APP_NAME: &str = "Syndocal";
-const DESKTOP_FULLSCREEN_SHORTCUT_EVENT: &str = "desktop-window-toggle-fullscreen";
 const DESKTOP_ESCAPE_SHORTCUT_EVENT: &str = "desktop-window-forward-escape";
 const PROJECT_FILE_VERSION: u32 = 1;
 const PHASE1_SAMPLE_PROJECT_LABEL: &str = "samples/phase1-mini-show.sdc";
@@ -44088,12 +44087,12 @@ fn main() {
                 let shortcut_window = main_window.clone();
                 main_window.with_webview(move |webview| unsafe {
                     use webview2_com::{
-                        AcceleratorKeyPressedEventHandler,
+                        AcceleratorKeyPressedEventHandler, ExecuteScriptCompletedHandler,
                         Microsoft::Web::WebView2::Win32::{
                             ICoreWebView2Settings3, COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
                         },
                     };
-                    use windows::core::Interface;
+                    use windows::core::{HSTRING, Interface};
                     use windows::Win32::UI::Input::KeyboardAndMouse::{
                         GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
                     };
@@ -44104,6 +44103,7 @@ fn main() {
                         let settings = core_webview.Settings()?;
                         let settings3: ICoreWebView2Settings3 = settings.cast()?;
                         settings3.SetAreBrowserAcceleratorKeysEnabled(false)?;
+                        let shortcut_webview = core_webview.clone();
 
                         let handler = AcceleratorKeyPressedEventHandler::create(Box::new(
                             move |_, args| {
@@ -44134,31 +44134,56 @@ fn main() {
                                 args.VirtualKey(&mut virtual_key)?;
                                 match virtual_key {
                                     0x7a => {
-                                        // WebView2 owns F11 before the DOM sees it. Forward a
-                                        // non-blocking event to the existing DOM controller instead
-                                        // of calling a synchronous window getter from this UI-thread
-                                        // callback (which would deadlock the wry dispatcher).
+                                        // WebView2 owns F11 before the DOM sees it. Toggle the native
+                                        // window only after this UI-thread callback returns; querying
+                                        // the window synchronously here can deadlock wry's dispatcher.
                                         args.SetHandled(true)?;
-                                        if let Err(error) = shortcut_window
-                                            .emit(DESKTOP_FULLSCREEN_SHORTCUT_EVENT, ())
-                                        {
-                                            eprintln!(
-                                                "unable to forward the main window fullscreen shortcut: {error}"
-                                            );
-                                        }
+                                        let event_window = shortcut_window.clone();
+                                        tauri::async_runtime::spawn(async move {
+                                            let result = event_window.is_fullscreen().and_then(|fullscreen| {
+                                                if fullscreen {
+                                                    event_window.set_fullscreen(false)?;
+                                                    event_window.maximize()
+                                                } else {
+                                                    event_window.unmaximize()?;
+                                                    event_window.set_fullscreen(true)
+                                                }
+                                            });
+                                            if let Err(error) = result {
+                                                eprintln!(
+                                                    "unable to toggle the main window fullscreen mode: {error}"
+                                                );
+                                            }
+                                        });
                                     }
                                     0x1b => {
-                                        // WebView2 also owns physical Escape at this layer. Forward
-                                        // it to the DOM so editors/help/drag cancellation can consume
-                                        // it before the window controller decides to leave fullscreen.
+                                        // Escape arbitration stays in the DOM so dialogs and editor
+                                        // surfaces can consume it before fullscreen is released.
                                         args.SetHandled(true)?;
-                                        if let Err(error) =
-                                            shortcut_window.emit(DESKTOP_ESCAPE_SHORTCUT_EVENT, ())
-                                        {
-                                            eprintln!(
-                                                "unable to forward the main window Escape shortcut: {error}"
-                                            );
-                                        }
+                                        let escape_script = HSTRING::from(format!(
+                                            "(() => {{ const detail = {{ consumed: false }}; window.dispatchEvent(new CustomEvent({DESKTOP_ESCAPE_SHORTCUT_EVENT:?}, {{ detail }})); return detail.consumed; }})()"
+                                        ));
+                                        let fallback_window = shortcut_window.clone();
+                                        shortcut_webview.ExecuteScript(
+                                            &escape_script,
+                                            &ExecuteScriptCompletedHandler::create(Box::new(
+                                                move |_, result| {
+                                                    if result != "true" {
+                                                        tauri::async_runtime::spawn(async move {
+                                                            let restore_result = fallback_window
+                                                                .set_fullscreen(false)
+                                                                .and_then(|_| fallback_window.maximize());
+                                                            if let Err(error) = restore_result {
+                                                                eprintln!(
+                                                                    "unable to leave the main window fullscreen mode: {error}"
+                                                                );
+                                                            }
+                                                        });
+                                                    }
+                                                    Ok(())
+                                                },
+                                            )),
+                                        )?;
                                     }
                                     _ => {}
                                 }

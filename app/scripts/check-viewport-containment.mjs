@@ -11861,9 +11861,12 @@ async function runOperatorVjAcceptanceViewport(client, viewport, locale) {
     `(() => {
       const root = document.querySelector('[data-video-isf-layer-id="1"]');
       const toggle = root?.querySelector('[data-video-isf-stage-index="1"] [data-video-isf-action="toggle-stage"]');
+      const focused = document.activeElement;
       return root?.querySelector('[data-video-isf-action="advanced"]')?.getAttribute('aria-expanded') === 'true' &&
         root.querySelector('.videoIsfStackRow.selected')?.getAttribute('data-video-isf-stage-index') === '1' &&
         toggle?.getAttribute('aria-pressed') === 'true' &&
+        focused?.getAttribute('data-video-isf-action') === 'toggle-stage' &&
+        focused?.closest('[data-video-isf-stage-index]')?.getAttribute('data-video-isf-stage-index') === '1' &&
         window.__syndocalOperatorVjMock?.snapshotReadCount >= 1 &&
         window.__syndocalOperatorVjMock?.diagnosticsReadCount >= 2;
     })()`,
@@ -11880,9 +11883,12 @@ async function runOperatorVjAcceptanceViewport(client, viewport, locale) {
     `(() => {
       const root = document.querySelector('[data-video-isf-layer-id="1"]');
       const toggle = root?.querySelector('[data-video-isf-stage-index="1"] [data-video-isf-action="toggle-stage"]');
+      const focused = document.activeElement;
       return root?.querySelector('[data-video-isf-action="advanced"]')?.getAttribute('aria-expanded') === 'true' &&
         root.querySelector('.videoIsfStackRow.selected')?.getAttribute('data-video-isf-stage-index') === '1' &&
         toggle?.getAttribute('aria-pressed') === 'false' &&
+        focused?.getAttribute('data-video-isf-action') === 'toggle-stage' &&
+        focused?.closest('[data-video-isf-stage-index]')?.getAttribute('data-video-isf-stage-index') === '1' &&
         window.__syndocalOperatorVjMock?.snapshotReadCount >= 2 &&
         window.__syndocalOperatorVjMock?.diagnosticsReadCount >= 3;
     })()`,
@@ -14490,7 +14496,8 @@ async function runPatchGdtfShareViewport(client, viewport) {
     return await readState(label);
   };
   const manufacturerSelector = '[data-patch-profile-tree="cache"] [data-profile-tree-item="manufacturer"]';
-  const fixtureSelector = '[data-patch-profile-tree="cache"] [data-profile-tree-item="fixture"]';
+  const fixtureSelector = '[data-patch-profile-tree="cache"] [data-profile-tree-item="fixture"]' +
+    '[data-profile-fixture-key="C:/viewport-gdtf-cache/ETC-Source Four LED Series 3-1.2.gdtf"]';
   const manufacturerEnterExpanded = await sendCacheTreeKey(manufacturerSelector, "Enter", "manufacturer-enter");
   const fixtureArrowRightExpanded = await sendCacheTreeKey(fixtureSelector, "ArrowRight", "fixture-arrow-right");
   const fixtureArrowLeftCollapsed = await sendCacheTreeKey(fixtureSelector, "ArrowLeft", "fixture-arrow-left");
@@ -29075,10 +29082,15 @@ async function main() {
                 },
                 layout: result.layoutPhases.map((phase) => ({
                   overflow: phase.unsafeOverflowCount,
+                  unsafeNames: phase.containers
+                    .filter((entry) => !entry.found || entry.unsafeX || entry.unsafeY)
+                    .map((entry) => entry.name),
                   outside: phase.outsideRectCount,
                   outsideNames: phase.rectContainment
                     .filter((entry) => !entry.contained)
                     .map((entry) => entry.name),
+                  programPane: phase.containers.find((entry) => entry.name === "programPane")?.rect,
+                  outputDetail: phase.rectContainment.find((entry) => entry.name === "outputDetail")?.rect,
                 })),
               }),
           );

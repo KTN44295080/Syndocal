@@ -54,6 +54,14 @@ generated signature content rather than a path.
    all rejected.
 6. Confirm Windows Authenticode and macOS signing/notarization independently;
    updater minisign verification does not replace platform code signing.
+7. Retain the signed version N installer before publishing N+1. After the N+1
+   acceptance run, reinstall N, restore the automatic `before update N+1`
+   project backup, and confirm both the application version and restored
+   project hash. Record this as the supported rollback procedure; replacing an
+   executable without restoring the matching project backup is not a pass.
+8. Return the machine to N+1 through the signed production channel and confirm
+   the same project opens again. Attach the N installer hash, backup hash,
+   restored-project hash, version screenshots, and install/update logs.
 
 The public release endpoint, signing key custody, Authenticode certificate, and
 Apple notarization credentials are external release-operations inputs and are

@@ -11,7 +11,6 @@ import "../desktopWindowMode.css";
 
 const NOTICE_DURATION_MS = 4_000;
 const RESIZE_SETTLE_MS = 120;
-const DESKTOP_FULLSCREEN_SHORTCUT_EVENT = "desktop-window-toggle-fullscreen";
 const DESKTOP_ESCAPE_SHORTCUT_EVENT = "desktop-window-forward-escape";
 const DESKTOP_RESIZE_DIRECTIONS = [
   "North",
@@ -73,10 +72,10 @@ export const DesktopWindowModeController: ParentComponent = (props) => {
   const [noticeVisible, setNoticeVisible] = createSignal(false);
   let noticeTimer: number | undefined;
   let resizeTimer: number | undefined;
-  let unlistenNativeFullscreen: (() => void) | undefined;
-  let unlistenNativeEscape: (() => void) | undefined;
+  let handleNativeEscape: ((event: Event) => void) | undefined;
   let handleKeyDown: ((event: KeyboardEvent) => void) | undefined;
   let handleResize: (() => void) | undefined;
+  let forwardingNativeEscape = false;
   let transitionInFlight = false;
   let disposed = false;
 
@@ -101,8 +100,9 @@ export const DesktopWindowModeController: ParentComponent = (props) => {
       disposed = true;
       window.clearTimeout(noticeTimer);
       window.clearTimeout(resizeTimer);
-      unlistenNativeFullscreen?.();
-      unlistenNativeEscape?.();
+      if (handleNativeEscape) {
+        window.removeEventListener(DESKTOP_ESCAPE_SHORTCUT_EVENT, handleNativeEscape);
+      }
       if (handleKeyDown) window.removeEventListener("keydown", handleKeyDown);
       if (handleResize) window.removeEventListener("resize", handleResize);
       if (hadPreviousWindowMode) {
@@ -161,11 +161,13 @@ export const DesktopWindowModeController: ParentComponent = (props) => {
         const next = nextFullscreen ?? !currentFullscreen;
         if (currentFullscreen !== next) {
           await appWindow.setFullscreen(next);
+          if (!next) await appWindow.maximize();
         }
         if (disposed) return;
         updateMode(await readMode());
         showNotice();
-      } catch {
+      } catch (error) {
+        console.error("Unable to change desktop fullscreen mode", error);
         if (disposed) return;
         updateMode("error");
         showNotice();
@@ -175,6 +177,7 @@ export const DesktopWindowModeController: ParentComponent = (props) => {
     };
 
     handleKeyDown = (event: KeyboardEvent) => {
+      if (forwardingNativeEscape && event.code === "Escape") return;
       const action = desktopWindowShortcutAction(
         {
           code: event.code,
@@ -209,47 +212,29 @@ export const DesktopWindowModeController: ParentComponent = (props) => {
       return true;
     };
 
-    const forwardNativeEscape = () => {
-      if (closeOpenDialogForNativeEscape()) return;
+    handleNativeEscape = (event) => {
+      const detail = (event as CustomEvent<{ consumed: boolean }>).detail;
+      if (closeOpenDialogForNativeEscape()) {
+        detail.consumed = true;
+        return;
+      }
       const target = document.activeElement ?? window;
-      target.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: "Escape",
-          code: "Escape",
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
+      const keyEvent = new KeyboardEvent("keydown", {
+        key: "Escape",
+        code: "Escape",
+        bubbles: true,
+        cancelable: true,
+      });
+      forwardingNativeEscape = true;
+      try {
+        target.dispatchEvent(keyEvent);
+      } finally {
+        forwardingNativeEscape = false;
+      }
+      detail.consumed = keyEvent.defaultPrevented;
     };
 
-    void appWindow
-      .listen(DESKTOP_FULLSCREEN_SHORTCUT_EVENT, () => void setFullscreen())
-      .then((unlisten) => {
-        if (disposed) {
-          unlisten();
-          return;
-        }
-        unlistenNativeFullscreen = unlisten;
-      })
-      .catch(() => {
-        if (disposed) return;
-        updateMode("error");
-        showNotice();
-      });
-    void appWindow
-      .listen(DESKTOP_ESCAPE_SHORTCUT_EVENT, forwardNativeEscape)
-      .then((unlisten) => {
-        if (disposed) {
-          unlisten();
-          return;
-        }
-        unlistenNativeEscape = unlisten;
-      })
-      .catch(() => {
-        if (disposed) return;
-        updateMode("error");
-        showNotice();
-      });
+    window.addEventListener(DESKTOP_ESCAPE_SHORTCUT_EVENT, handleNativeEscape);
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("resize", handleResize, { passive: true });
     void enterOperationalWindowMode();
