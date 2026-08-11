@@ -9,6 +9,13 @@ importer. The former `daslight_exact` and `syndocal_corrected` fields are accept
 v1 load input and are removed by deterministic load migration; they are no longer protocol fields,
 runtime dispatch inputs, or editor controls. Existing `source_*` fields remain provenance only.
 
+Update: 2026-08-11 — COLOR MAPPINGS ID31 Lines and ID50 Grid use
+`implementation=SyndocalCorrected`: the recovered fixed 100x100 paint grammar, integer
+stride branch, float fallback, palette order, overlap order, placement, and qGray are
+preserved, while the unavailable 40ms QImage work cache is replaced by continuous analytic
+sampling at the authored duration. This is an implementation-artifact correction, not a
+change to authored parameters or target identity.
+
 ## Product rule
 
 Syndocal imports the authored show, not Daslight's accidental implementation defects. The

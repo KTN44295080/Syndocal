@@ -82,6 +82,11 @@ feature束縛UXを解明（**フェーダーチャンネルアイコン右上の
    （どのジェネレータでも可。複数シーンで別ジェネレータを入れると更に良い）。
 2. 保存。→ family/type `5/3` の実保存bodyが初めて確定する。
 
+補足（2026-08-11）: family 5/3のRainbow標本は取得済みだが、専用classのLines ID31 / Grid ID50
+native保存bodyは未取得。今回のrouteはbinary/static evidenceとsynthetic strict fixtureに限定する。
+将来再採取する場合はLinesとGridを各1 scene、palette/Size/Width/Transform/Rotationを非defaultにし、
+対象ありと`BEAMS NB=0`を分けて保存するとnative serializerの最終goldenになる。
+
 ### 標本4: Move FXのBEAMID>0（`MoveBeamId.dvc`）
 
 1. マルチビームのムービング系灯体を1台パッチし、**一部のビームだけ**を選択。

@@ -3563,6 +3563,9 @@ struct RuntimeColorSpatialState {
     /// cosine-noise evaluator. It preserves the recovered procedural character
     /// without the 40 ms table, Qt raster rotation or integer palette cache.
     daslight_perlin: Option<CompiledDaslightPerlin>,
+    /// COLOR MAPPINGS ID 50 Grid / ID 31 Lines fixed 100x100 raster
+    /// constants and palette. Sampling is analytic and allocation-free.
+    daslight_grid_lines: Option<CompiledDaslightGridLines>,
 }
 
 #[derive(Clone)]
@@ -5341,6 +5344,210 @@ fn compile_daslight_perlin(
         )
         .map(Some),
         _ => Ok(None),
+    }
+}
+
+#[derive(Clone)]
+enum CompiledDaslightGridLines {
+    Grid {
+        palette: Vec<ColorEffectColor>,
+        grayscale: bool,
+        spacing: i32,
+        layer_count: i32,
+        travel: f64,
+        line_width: f64,
+        half_width: f64,
+    },
+    Lines {
+        palette: Vec<ColorEffectColor>,
+        grayscale: bool,
+        stride: f64,
+        line_width: f64,
+    },
+}
+
+impl CompiledDaslightGridLines {
+    const RASTER_SIZE: i32 = 100;
+
+    fn compile(request: &ColorEffectRequest) -> Result<Option<Self>, String> {
+        let Some(pattern) = request.spatial_pattern.as_ref() else {
+            return Ok(None);
+        };
+        let palette = || {
+            request
+                .stops
+                .iter()
+                .map(|stop| stop.color)
+                .collect::<Vec<_>>()
+        };
+        match &pattern.recipe {
+            ColorEffectSpatialRecipe::Grid {
+                grayscale,
+                size,
+                width,
+            } => {
+                if !(2..=5).contains(&request.stops.len()) {
+                    return Err("Grid requires between 2 and 5 palette stops".to_string());
+                }
+                if !(1..=5).contains(size) || !(2..=20).contains(width) {
+                    return Err("Grid Size must be within 1..5 and Width within 2..20".to_string());
+                }
+                let spacing = (Self::RASTER_SIZE / 2) / i32::from(*size);
+                let layer_count = (Self::RASTER_SIZE / spacing) / 2;
+                let line_width = f64::from(*width);
+                Ok(Some(Self::Grid {
+                    palette: palette(),
+                    grayscale: *grayscale,
+                    spacing,
+                    layer_count,
+                    travel: f64::from((Self::RASTER_SIZE - i32::from(*width) + 1) / 2),
+                    line_width,
+                    half_width: f64::from(*width / 2),
+                }))
+            }
+            ColorEffectSpatialRecipe::Lines { grayscale, size } => {
+                if !(2..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS).contains(&request.stops.len())
+                {
+                    return Err("Lines requires between 2 and 255 palette stops".to_string());
+                }
+                if !(2..=20).contains(size) {
+                    return Err("Lines Size must be within 2..20".to_string());
+                }
+                let intervals = (request.stops.len() - 1) as f64;
+                let available = f64::from(Self::RASTER_SIZE - i32::from(*size));
+                let integer_stride = (available / intervals).floor();
+                let stride = if integer_stride >= 1.0 {
+                    integer_stride
+                } else {
+                    available / intervals
+                };
+                Ok(Some(Self::Lines {
+                    palette: palette(),
+                    grayscale: *grayscale,
+                    stride,
+                    line_width: f64::from(*size),
+                }))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn finish_color(
+        palette: &[ColorEffectColor],
+        grayscale: bool,
+        palette_index: usize,
+    ) -> ColorEffectColor {
+        let color = palette[palette_index];
+        if grayscale {
+            daslight_grayscale_color(color)
+        } else {
+            color
+        }
+    }
+
+    fn raster_pixel(normalized: f32) -> f64 {
+        f64::from(normalized.clamp(0.0, 1.0) * Self::RASTER_SIZE as f32)
+            .floor()
+            .min(f64::from(Self::RASTER_SIZE - 1))
+    }
+
+    fn sample_at_phase(
+        &self,
+        time_phase: f64,
+        normalized_x: f32,
+        normalized_y: f32,
+    ) -> ColorEffectColor {
+        let x = Self::raster_pixel(normalized_x);
+        let y = Self::raster_pixel(normalized_y);
+        let motion = (2.0 * time_phase).rem_euclid(1.0);
+        match self {
+            Self::Grid {
+                palette,
+                grayscale,
+                spacing,
+                layer_count,
+                travel,
+                line_width,
+                half_width,
+            } => {
+                let mut palette_index = 0;
+                for layer in 0..*layer_count {
+                    let q = (*travel * motion + f64::from(layer * *spacing)).rem_euclid(*travel);
+                    let color_index = 1 + layer as usize % (palette.len() - 1);
+                    let left = q - *half_width;
+                    let right = f64::from(Self::RASTER_SIZE) - *half_width - q;
+                    let top = q - *half_width;
+                    let bottom = f64::from(Self::RASTER_SIZE) - *half_width - q;
+                    // This is the source paint order. Assigning on every hit
+                    // preserves later-wins overlap exactly without a raster.
+                    if x >= left && x < left + *line_width {
+                        palette_index = color_index;
+                    }
+                    if x >= right && x < right + *line_width {
+                        palette_index = color_index;
+                    }
+                    if y >= top && y < top + *line_width {
+                        palette_index = color_index;
+                    }
+                    if y >= bottom && y < bottom + *line_width {
+                        palette_index = color_index;
+                    }
+                }
+                Self::finish_color(palette, *grayscale, palette_index)
+            }
+            Self::Lines {
+                palette,
+                grayscale,
+                stride,
+                line_width,
+            } => {
+                let q = *stride * motion;
+                let last = palette.len() - 2;
+                let greatest_cover = |second_train: bool| -> Option<usize> {
+                    if *stride <= 0.0 {
+                        return None;
+                    }
+                    let start_at = |index: usize| {
+                        if second_train {
+                            (index + 1) as f64 * *stride - q
+                        } else {
+                            index as f64 * *stride + q
+                        }
+                    };
+                    let base = if second_train {
+                        ((x + q) / *stride).floor() as i64 - 1
+                    } else {
+                        ((x - q) / *stride).floor() as i64
+                    };
+                    // Division can round across an integer boundary. Check a
+                    // constant five-index neighbourhood, but evaluate every
+                    // start with that train's original operation order and the
+                    // strict half-open source predicate. No epsilon is used.
+                    let mut previous = None;
+                    let mut greatest = None;
+                    for delta in -2_i64..=2 {
+                        let candidate = (base + delta).clamp(0, last as i64) as usize;
+                        if previous == Some(candidate) {
+                            continue;
+                        }
+                        previous = Some(candidate);
+                        let start = start_at(candidate);
+                        if x >= start && x < start + *line_width {
+                            greatest = Some(candidate);
+                        }
+                    }
+                    greatest
+                };
+                let first = greatest_cover(false);
+                let second = greatest_cover(true);
+                let palette_index = match (first, second) {
+                    (Some(first), Some(second)) => 1 + first.max(second),
+                    (Some(index), None) | (None, Some(index)) => 1 + index,
+                    (None, None) => 0,
+                };
+                Self::finish_color(palette, *grayscale, palette_index)
+            }
+        }
     }
 }
 
@@ -27792,6 +27999,32 @@ fn validate_runtime_color_effect_request(request: &ColorEffectRequest) -> Result
             ));
         }
         validate_color_spatial_recipe(&pattern.recipe)?;
+        match &pattern.recipe {
+            ColorEffectSpatialRecipe::Grid { .. } => {
+                if !(2..=5).contains(&request.stops.len()) {
+                    return Err("Grid requires between 2 and 5 palette stops".to_string());
+                }
+                if pattern.placement.is_none() {
+                    return Err("Grid requires a placed 100x100 spatial raster".to_string());
+                }
+                if request.blend_mode != EffectBlendMode::Override {
+                    return Err("Grid requires Override blend mode".to_string());
+                }
+            }
+            ColorEffectSpatialRecipe::Lines { .. } => {
+                if !(2..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS).contains(&request.stops.len())
+                {
+                    return Err("Lines requires between 2 and 255 palette stops".to_string());
+                }
+                if pattern.placement.is_none() {
+                    return Err("Lines requires a placed 100x100 spatial raster".to_string());
+                }
+                if request.blend_mode != EffectBlendMode::Override {
+                    return Err("Lines requires Override blend mode".to_string());
+                }
+            }
+            _ => {}
+        }
         if pattern.placement.is_some() {
             if let ColorEffectSpatialRecipe::RandomFill {
                 point_width,
@@ -28035,6 +28268,21 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
                 );
             }
             percent("amplitude", *amplitude)
+        }
+        ColorEffectSpatialRecipe::Grid { size, width, .. } => {
+            if !(1..=5).contains(size) {
+                return Err("Grid Size must be within 1..5".to_string());
+            }
+            if !(2..=20).contains(width) {
+                return Err("Grid Width must be within 2..20".to_string());
+            }
+            Ok(())
+        }
+        ColorEffectSpatialRecipe::Lines { size, .. } => {
+            if !(2..=20).contains(size) {
+                return Err("Lines Size must be within 2..20".to_string());
+            }
+            Ok(())
         }
     }
 }
@@ -28734,6 +28982,14 @@ pub fn validate_value_effect_request(request: &ValueEffectRequest) -> Result<(),
     }
     if let Some(pattern) = &request.spatial_pattern {
         validate_color_spatial_recipe(&pattern.recipe)?;
+        if matches!(
+            &pattern.recipe,
+            ColorEffectSpatialRecipe::Grid { .. } | ColorEffectSpatialRecipe::Lines { .. }
+        ) {
+            return Err(
+                "Grid and Lines spatial recipes are supported only by Color effects".to_string(),
+            );
+        }
         let feature_attributes = if request.features.is_empty() {
             HashSet::from([normalize_chaser_attribute(&request.attribute)])
         } else {
@@ -30694,6 +30950,7 @@ fn runtime_color_effect_from_request(
         let daslight_sweep = compile_daslight_sweep(&request, strip_count)?;
         let syndocal_random_fx = CompiledSyndocalRandomFx::compile(&request, strip_count)?;
         let daslight_perlin = compile_daslight_perlin(&request, &targets)?;
+        let daslight_grid_lines = CompiledDaslightGridLines::compile(&request)?;
         let dense_fixture_targets =
             RuntimeColorSpatialDenseFixtureTargets::compile(&targets, &attribute_indices);
         Some(Box::new(RuntimeColorSpatialState {
@@ -30705,6 +30962,7 @@ fn runtime_color_effect_from_request(
             daslight_sweep,
             syndocal_random_fx,
             daslight_perlin,
+            daslight_grid_lines,
         }))
     } else {
         None
@@ -31970,6 +32228,7 @@ fn evaluate_runtime_color_spatial_attribute_at_rate(
                 spatial.daslight_sweep.as_ref(),
                 spatial.syndocal_random_fx.as_ref(),
                 spatial.daslight_perlin.as_ref(),
+                spatial.daslight_grid_lines.as_ref(),
                 effect_id,
                 created_at,
                 now,
@@ -32254,6 +32513,7 @@ fn evaluate_color_spatial_sample_at_rate(
     daslight_sweep: Option<&CompiledDaslightSweep>,
     syndocal_random_fx: Option<&CompiledSyndocalRandomFx>,
     daslight_perlin: Option<&CompiledDaslightPerlin>,
+    daslight_grid_lines: Option<&CompiledDaslightGridLines>,
     effect_id: EffectId,
     created_at: Instant,
     now: Instant,
@@ -32275,6 +32535,16 @@ fn evaluate_color_spatial_sample_at_rate(
             opacity: 1.0,
         };
     };
+    if let Some(daslight_grid_lines) = daslight_grid_lines {
+        return RuntimeColorSpatialSample {
+            color: daslight_grid_lines.sample_at_phase(
+                time_phase_for_continuous_spatial(request, created_at, now, clock, rate),
+                target.x,
+                target.z,
+            ),
+            opacity: 1.0,
+        };
+    }
     if let Some(daslight_knight_rider) = daslight_knight_rider {
         return RuntimeColorSpatialSample {
             color: evaluate_daslight_knight_rider_color_at_rate(
@@ -32358,7 +32628,9 @@ fn evaluate_color_spatial_sample_at_rate(
         | ColorEffectSpatialRecipe::Burst { .. }
         | ColorEffectSpatialRecipe::RandomFill { .. }
         | ColorEffectSpatialRecipe::Sparkle { .. }
-        | ColorEffectSpatialRecipe::Perlin { .. } => {
+        | ColorEffectSpatialRecipe::Perlin { .. }
+        | ColorEffectSpatialRecipe::Grid { .. }
+        | ColorEffectSpatialRecipe::Lines { .. } => {
             unreachable!("unified spatial recipes are evaluated by their compiled analytic route")
         }
         ColorEffectSpatialRecipe::Spiral {
@@ -56015,6 +56287,300 @@ mod tests {
         }
     }
 
+    fn test_grid_lines_request(
+        recipe: ColorEffectSpatialRecipe,
+        palette_red: &[u16],
+    ) -> ColorEffectRequest {
+        let mut request = test_spatial_color_request(recipe);
+        request.blend_mode = EffectBlendMode::Override;
+        request.stops = palette_red
+            .iter()
+            .enumerate()
+            .map(|(index, red)| protocol::ColorEffectStop {
+                position: if palette_red.len() == 1 {
+                    0.0
+                } else {
+                    index as f32 / (palette_red.len() - 1) as f32
+                },
+                color: test_color(*red, 0, 0),
+            })
+            .collect();
+        request.spatial_pattern.as_mut().unwrap().placement =
+            Some(test_patch_canvas_placement(0, 0, 100, 100, 0.0));
+        request
+    }
+
+    #[test]
+    fn color_mappings_grid_constants_anchors_overlap_background_and_continuity() {
+        for (size, expected_spacing, expected_layers) in
+            [(1, 50, 1), (2, 25, 2), (3, 16, 3), (4, 12, 4), (5, 10, 5)]
+        {
+            let request = test_grid_lines_request(
+                ColorEffectSpatialRecipe::Grid {
+                    grayscale: false,
+                    size,
+                    width: 2,
+                },
+                &[1_000, 2_000, 3_000, 4_000, 5_000],
+            );
+            let Some(CompiledDaslightGridLines::Grid {
+                spacing,
+                layer_count,
+                ..
+            }) = CompiledDaslightGridLines::compile(&request).unwrap()
+            else {
+                panic!("Grid must compile its dedicated raster state");
+            };
+            assert_eq!((spacing, layer_count), (expected_spacing, expected_layers));
+        }
+
+        let request = test_grid_lines_request(
+            ColorEffectSpatialRecipe::Grid {
+                grayscale: false,
+                size: 3,
+                width: 2,
+            },
+            &[1_000, 2_000, 3_000, 4_000],
+        );
+        let compiled = CompiledDaslightGridLines::compile(&request)
+            .unwrap()
+            .unwrap();
+        assert_eq!(compiled.sample_at_phase(0.0, 0.0, 0.50).red, 2_000);
+        assert_eq!(compiled.sample_at_phase(0.0, 0.50, 0.50).red, 1_000);
+        assert_eq!(compiled.sample_at_phase(0.0, 0.0, 0.15).red, 3_000);
+        assert_eq!(compiled.sample_at_phase(0.0, 1.0, 0.50).red, 2_000);
+        assert_eq!(
+            compiled.sample_at_phase(0.100_0, 0.33, 0.67),
+            compiled.sample_at_phase(0.100_1, 0.33, 0.67),
+            "continuous close phases must not jump unless a moving half-open edge crosses the pixel"
+        );
+    }
+
+    #[test]
+    fn color_mappings_grid_lines_validators_enforce_class_contracts() {
+        let grid_one_stop = test_grid_lines_request(
+            ColorEffectSpatialRecipe::Grid {
+                grayscale: false,
+                size: 5,
+                width: 20,
+            },
+            &[1_000],
+        );
+        assert_eq!(
+            validate_color_effect_request(&grid_one_stop).unwrap_err(),
+            "Grid requires between 2 and 5 palette stops"
+        );
+        let grid_six_stops = test_grid_lines_request(
+            ColorEffectSpatialRecipe::Grid {
+                grayscale: false,
+                size: 5,
+                width: 20,
+            },
+            &[1, 2, 3, 4, 5, 6],
+        );
+        assert_eq!(
+            validate_color_effect_request(&grid_six_stops).unwrap_err(),
+            "Grid requires between 2 and 5 palette stops"
+        );
+        let invalid_grid_size = test_grid_lines_request(
+            ColorEffectSpatialRecipe::Grid {
+                grayscale: false,
+                size: 0,
+                width: 20,
+            },
+            &[1, 2],
+        );
+        assert_eq!(
+            validate_color_effect_request(&invalid_grid_size).unwrap_err(),
+            "Grid Size must be within 1..5"
+        );
+        let mut lines_one_stop = test_grid_lines_request(
+            ColorEffectSpatialRecipe::Lines {
+                grayscale: false,
+                size: 20,
+            },
+            &[1_000],
+        );
+        assert_eq!(
+            validate_color_effect_request(&lines_one_stop).unwrap_err(),
+            "Lines requires between 2 and 255 palette stops"
+        );
+        lines_one_stop.stops = vec![
+            protocol::ColorEffectStop {
+                position: 0.0,
+                color: test_color(1, 0, 0),
+            },
+            protocol::ColorEffectStop {
+                position: 1.0,
+                color: test_color(2, 0, 0),
+            },
+        ];
+        lines_one_stop.spatial_pattern.as_mut().unwrap().placement = None;
+        assert_eq!(
+            validate_color_effect_request(&lines_one_stop).unwrap_err(),
+            "Lines requires a placed 100x100 spatial raster"
+        );
+        let mut grid_wrong_blend = test_grid_lines_request(
+            ColorEffectSpatialRecipe::Grid {
+                grayscale: false,
+                size: 5,
+                width: 20,
+            },
+            &[1, 2],
+        );
+        grid_wrong_blend.blend_mode = EffectBlendMode::Multiply;
+        assert_eq!(
+            validate_color_effect_request(&grid_wrong_blend).unwrap_err(),
+            "Grid requires Override blend mode"
+        );
+    }
+
+    #[test]
+    fn color_mappings_lines_integer_and_float_stride_preserve_later_wins() {
+        let integer_request = test_grid_lines_request(
+            ColorEffectSpatialRecipe::Lines {
+                grayscale: false,
+                size: 2,
+            },
+            &[1_000, 2_000, 3_000, 4_000],
+        );
+        let integer = CompiledDaslightGridLines::compile(&integer_request)
+            .unwrap()
+            .unwrap();
+        assert_eq!(integer.sample_at_phase(0.0, 0.00, 0.5).red, 2_000);
+        assert_eq!(integer.sample_at_phase(0.0, 0.32, 0.5).red, 3_000);
+        assert_eq!(integer.sample_at_phase(0.0, 0.64, 0.5).red, 4_000);
+        assert_eq!(integer.sample_at_phase(0.0, 0.50, 0.5).red, 1_000);
+
+        let palette = (0..255).map(|index| index as u16 * 257).collect::<Vec<_>>();
+        let float_request = test_grid_lines_request(
+            ColorEffectSpatialRecipe::Lines {
+                grayscale: false,
+                size: 20,
+            },
+            &palette,
+        );
+        let float = CompiledDaslightGridLines::compile(&float_request)
+            .unwrap()
+            .unwrap();
+        let CompiledDaslightGridLines::Lines { stride, .. } = &float else {
+            unreachable!();
+        };
+        assert!(
+            *stride > 0.0 && *stride < 1.0,
+            "B=0 must retain the corrected float stride"
+        );
+        assert_eq!(float.sample_at_phase(0.0, 0.00, 0.5).red, 257);
+        assert_eq!(float.sample_at_phase(0.0, 0.19, 0.5).red, 61 * 257);
+        assert_eq!(float.sample_at_phase(0.0, 0.99, 0.5).red, 254 * 257);
+        let rounding_counterexample = test_grid_lines_request(
+            ColorEffectSpatialRecipe::Lines {
+                grayscale: false,
+                size: 2,
+            },
+            &(0..104).map(|index| index as u16 * 257).collect::<Vec<_>>(),
+        );
+        let rounding_counterexample = CompiledDaslightGridLines::compile(&rounding_counterexample)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            rounding_counterexample
+                .sample_at_phase(0.25, 0.4925, 0.5)
+                .red
+                / 257,
+            52,
+            "S=2 N=104 phase=.25 pixel x=49 must correct the 50.999999 quotient and retain source-order palette 52"
+        );
+        assert_eq!(
+            float.sample_at_phase(0.200_0, 0.42, 0.5),
+            float.sample_at_phase(0.200_1, 0.42, 0.5)
+        );
+    }
+
+    #[test]
+    fn color_mappings_lines_fast_cover_matches_naive_source_order_for_full_domain() {
+        let naive_palette_index = |palette_count: usize, size: u16, phase: f64, pixel_x: usize| {
+            let available = f64::from(100 - i32::from(size));
+            let intervals = (palette_count - 1) as f64;
+            let integer_stride = (available / intervals).floor();
+            let stride = if integer_stride >= 1.0 {
+                integer_stride
+            } else {
+                available / intervals
+            };
+            let q = stride * (2.0 * phase).rem_euclid(1.0);
+            let x = pixel_x as f64;
+            for index in (0..palette_count - 1).rev() {
+                let first = index as f64 * stride + q;
+                let second = (index + 1) as f64 * stride - q;
+                if (x >= first && x < first + f64::from(size))
+                    || (x >= second && x < second + f64::from(size))
+                {
+                    return index + 1;
+                }
+            }
+            0
+        };
+        let phases = [0.0, 0.125, 0.25, 0.499];
+
+        for palette_count in 2..=255 {
+            let palette = (0..palette_count)
+                .map(|index| index as u16 * 257)
+                .collect::<Vec<_>>();
+            for size in 2..=20 {
+                let request = test_grid_lines_request(
+                    ColorEffectSpatialRecipe::Lines {
+                        grayscale: false,
+                        size,
+                    },
+                    &palette,
+                );
+                let compiled = CompiledDaslightGridLines::compile(&request)
+                    .unwrap()
+                    .unwrap();
+                for phase in phases {
+                    for pixel_x in 0..100 {
+                        // Sample safely inside the requested integer pixel so
+                        // the f32 normalized input cannot round onto its lower
+                        // boundary before the production floor/clamp step.
+                        let normalized_x = (pixel_x as f32 + 0.25) / 100.0;
+                        let fast = usize::from(
+                            compiled.sample_at_phase(phase, normalized_x, 0.5).red / 257,
+                        );
+                        let naive = naive_palette_index(palette_count, size, phase, pixel_x);
+                        assert_eq!(
+                            fast, naive,
+                            "palette={palette_count} size={size} phase={phase} x={pixel_x}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn color_mappings_grid_lines_apply_corrected_placement_then_qgray() {
+        let mut placement = test_patch_canvas_placement(10, 20, 100, 100, 0.0);
+        placement.vertical_symmetry = true;
+        placement.raster_rotation_degrees = 90.0;
+        let sample = CompiledColorSpatialPlacement::compile(&placement)
+            .unwrap()
+            .sample(10, 20)
+            .unwrap();
+        let request = test_grid_lines_request(
+            ColorEffectSpatialRecipe::Lines {
+                grayscale: true,
+                size: 20,
+            },
+            &[0, u16::MAX],
+        );
+        let compiled = CompiledDaslightGridLines::compile(&request)
+            .unwrap()
+            .unwrap();
+        let color = compiled.sample_at_phase(0.0, sample.normalized_x, sample.normalized_y);
+        assert_eq!(color, test_color(87 * 257, 87 * 257, 87 * 257));
+    }
+
     fn evaluate_test_spatial_color(
         request: &ColorEffectRequest,
         target: &RuntimeColorSpatialTarget,
@@ -56052,6 +56618,7 @@ mod tests {
             CompiledSyndocalRandomFx::compile(request, compiled_strip_count).unwrap();
         let daslight_perlin =
             compile_daslight_perlin(request, std::slice::from_ref(&target)).unwrap();
+        let daslight_grid_lines = CompiledDaslightGridLines::compile(request).unwrap();
         evaluate_color_spatial_sample_at_rate(
             request,
             &target,
@@ -56060,6 +56627,7 @@ mod tests {
             daslight_sweep.as_ref(),
             syndocal_random_fx.as_ref(),
             daslight_perlin.as_ref(),
+            daslight_grid_lines.as_ref(),
             97,
             created_at,
             created_at + Duration::from_millis(elapsed_ms),
@@ -57848,6 +58416,7 @@ mod tests {
                 None,
                 Some(compiled),
                 None,
+                None,
                 97,
                 created_at,
                 now,
@@ -58040,6 +58609,7 @@ mod tests {
                 None,
                 None,
                 Some(&compiled),
+                None,
                 None,
                 97,
                 created_at,
@@ -64968,6 +65538,180 @@ mod tests {
             });
         eprintln!(
             "Max placed RandomFill 64x200 (255 stops, 100x100, Point 1x1): p95={}us p99={}us max={}us",
+            p95.as_micros(),
+            p99.as_micros(),
+            max.as_micros()
+        );
+        assert_release_gate_percentiles(p95, p99, max);
+    }
+
+    #[test]
+    fn max_grid_lines_release_stack_meets_44hz_budget() {
+        const GRID_EFFECTS: usize = 32;
+        const LINES_EFFECTS: usize = 32;
+        const GRID_MAX_STOPS: usize = 5;
+        const LINES_MAX_STOPS: usize = 255;
+        const GRID_MAX_SIZE: u16 = 5;
+        const GRID_MAX_WIDTH: u16 = 20;
+        const LINES_MAX_SIZE: u16 = 20;
+        const RASTER_WIDTH: i64 = 100;
+        const RASTER_HEIGHT: i64 = 100;
+
+        assert_eq!(GRID_EFFECTS + LINES_EFFECTS, RELEASE_GATE_EFFECT_COUNT);
+        assert_eq!(RELEASE_GATE_EFFECT_COUNT, 64);
+        assert_eq!(RELEASE_GATE_FIXTURE_COUNT, 200);
+        assert_eq!(RELEASE_GATE_HZ, 44);
+        assert_eq!(
+            RELEASE_GATE_SAMPLES,
+            if cfg!(debug_assertions) { 20 } else { 1_000 }
+        );
+        assert_eq!(GRID_MAX_STOPS, 5);
+        assert_eq!(LINES_MAX_STOPS, 255);
+        assert_eq!((GRID_MAX_SIZE, GRID_MAX_WIDTH), (5, 20));
+        assert_eq!(LINES_MAX_SIZE, 20);
+        assert_eq!((RASTER_WIDTH, RASTER_HEIGHT), (100, 100));
+        assert_eq!(RELEASE_GATE_P95_LIMIT, Duration::from_millis(5));
+        assert_eq!(RELEASE_GATE_P99_LIMIT, Duration::from_millis(8));
+        assert_eq!(RELEASE_GATE_MAX_LIMIT, Duration::from_millis(12));
+        assert_eq!(
+            1_000_000 / DMX_TICK_INTERVAL.as_micros(),
+            u128::from(RELEASE_GATE_HZ)
+        );
+
+        let mut runtime = runtime_with_mixed_effect_fixtures(RELEASE_GATE_FIXTURE_COUNT as u64);
+        let fixture_ids = (1..=RELEASE_GATE_FIXTURE_COUNT as u64).collect::<Vec<_>>();
+        let beam_targets = fixture_ids
+            .iter()
+            .enumerate()
+            .map(
+                |(selection_index, fixture_id)| protocol::ColorEffectBeamTarget {
+                    fixture_id: *fixture_id,
+                    beam_index: 0,
+                    selection_index: selection_index as u32,
+                    feature_attribute: None,
+                },
+            )
+            .collect::<Vec<_>>();
+        let target_coordinates = fixture_ids
+            .iter()
+            .enumerate()
+            .map(
+                |(selection_index, fixture_id)| protocol::ColorEffectSpatialPlacementTarget {
+                    fixture_id: *fixture_id,
+                    beam_index: 0,
+                    patch_x: (selection_index % RASTER_WIDTH as usize) as i64,
+                    patch_y: if selection_index < RASTER_WIDTH as usize {
+                        0
+                    } else {
+                        RASTER_HEIGHT - 1
+                    },
+                },
+            )
+            .collect::<Vec<_>>();
+        assert_eq!(fixture_ids.len(), RELEASE_GATE_FIXTURE_COUNT);
+        assert_eq!(beam_targets.len(), RELEASE_GATE_FIXTURE_COUNT);
+        assert_eq!(target_coordinates.len(), RELEASE_GATE_FIXTURE_COUNT);
+
+        let make_request = |recipe, stop_count: usize| {
+            let mut request = test_grid_lines_request(
+                recipe,
+                &(0..stop_count)
+                    .map(|index| index as u16 * 257)
+                    .collect::<Vec<_>>(),
+            );
+            request.fixture_ids = fixture_ids.clone();
+            request.period_ms = 1_000;
+            let pattern = request.spatial_pattern.as_mut().unwrap();
+            pattern.beam_targets = beam_targets.clone();
+            pattern.placement.as_mut().unwrap().target_coordinates = target_coordinates.clone();
+            validate_color_effect_request(&request).unwrap();
+            request
+        };
+        let grid = make_request(
+            ColorEffectSpatialRecipe::Grid {
+                grayscale: true,
+                size: GRID_MAX_SIZE,
+                width: GRID_MAX_WIDTH,
+            },
+            GRID_MAX_STOPS,
+        );
+        let lines = make_request(
+            ColorEffectSpatialRecipe::Lines {
+                grayscale: true,
+                size: LINES_MAX_SIZE,
+            },
+            LINES_MAX_STOPS,
+        );
+        let created_at = Instant::now();
+        for index in 0..RELEASE_GATE_EFFECT_COUNT {
+            let mut request = if index < GRID_EFFECTS {
+                grid.clone()
+            } else {
+                lines.clone()
+            };
+            request.phase = index as f32 / RELEASE_GATE_EFFECT_COUNT as f32;
+            let kind = RuntimeEffectKind::Color(
+                runtime
+                    .resolve_color_effect_request(request)
+                    .expect("maximum Grid/Lines request must compile"),
+            );
+            runtime.effects.push(RuntimeEffect {
+                id: index as EffectId + 1,
+                kind,
+                enabled: true,
+                created_at,
+            });
+        }
+        assert_eq!(runtime.effects.len(), RELEASE_GATE_EFFECT_COUNT);
+        let mut grid_count = 0;
+        let mut lines_count = 0;
+        for effect in &runtime.effects {
+            let RuntimeEffectKind::Color(color) = &effect.kind else {
+                unreachable!();
+            };
+            assert_eq!(color.request.fixture_ids.len(), RELEASE_GATE_FIXTURE_COUNT);
+            let spatial = color.spatial.as_ref().unwrap();
+            assert_eq!(spatial.targets.len(), RELEASE_GATE_FIXTURE_COUNT);
+            match spatial.daslight_grid_lines.as_ref().unwrap() {
+                CompiledDaslightGridLines::Grid {
+                    palette,
+                    spacing,
+                    layer_count,
+                    travel,
+                    line_width,
+                    half_width,
+                    ..
+                } => {
+                    grid_count += 1;
+                    assert_eq!(palette.len(), GRID_MAX_STOPS);
+                    assert_eq!((*spacing, *layer_count), (10, 5));
+                    assert_eq!((*travel, *line_width, *half_width), (40.0, 20.0, 10.0));
+                }
+                CompiledDaslightGridLines::Lines {
+                    palette,
+                    stride,
+                    line_width,
+                    ..
+                } => {
+                    lines_count += 1;
+                    assert_eq!(palette.len(), LINES_MAX_STOPS);
+                    assert!(*stride > 0.0 && *stride < 1.0);
+                    assert_eq!(*line_width, 20.0);
+                }
+            }
+        }
+        assert_eq!((grid_count, lines_count), (GRID_EFFECTS, LINES_EFFECTS));
+
+        let (p95, p99, max) =
+            measure_release_gate(created_at, |at| {
+                runtime.fixtures.iter().fold(0_u64, |checksum, fixture| {
+                    checksum.wrapping_add(runtime.apply_effects_with_transition_policy(
+                        fixture, "ColorRed", 16_384, at, false,
+                    ) as u64)
+                })
+            });
+        eprintln!(
+            "Max Grid/Lines 32+32 x 200 (Grid 5 stops Size 5 Width 20; Lines 255 stops Size 20; 100x100): p95={}us p99={}us max={}us",
             p95.as_micros(),
             p99.as_micros(),
             max.as_micros()

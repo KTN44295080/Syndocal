@@ -29,7 +29,7 @@ export interface ColorEffectEditorPanelProps {
   onSpatialPattern: (pattern: ColorEffectSpatialPattern | null) => void;
 }
 
-type ColorSpatialKind = "PaletteFlow" | "KnightRider" | "Burst" | "Sweep" | "RandomFill" | "Sparkle" | "Spiral" | "Butterfly" | "Plasma" | "ColorRainbow" | "Rainbow" | "Perlin";
+type ColorSpatialKind = "PaletteFlow" | "KnightRider" | "Burst" | "Sweep" | "RandomFill" | "Sparkle" | "Spiral" | "Butterfly" | "Plasma" | "ColorRainbow" | "Rainbow" | "Grid" | "Lines" | "Perlin";
 
 export const defaultColorEffectStops: ColorEffectStop[] = [
   { position: 0, color: { red: 65_535, green: 0, blue: 0 } },
@@ -209,6 +209,7 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
       props.onSpatialPattern(null);
       return;
     }
+    if ((kind === "Grid" || kind === "Lines") && props.spatialPattern?.placement === undefined) return;
     const recipe = defaultSpatialRecipe(kind);
     if (kind === "RandomFill" && props.spatialPattern?.placement && "RandomFill" in recipe) {
       recipe.RandomFill.source_point_height = 1;
@@ -254,7 +255,7 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
   };
   const placedSharedRaster = createMemo(() =>
     props.spatialPattern?.placement !== undefined
-      && ["KnightRider", "Burst", "Sweep", "RandomFill", "Sparkle", "Spiral", "Butterfly", "Plasma"].includes(spatialKind()),
+      && ["KnightRider", "Burst", "Sweep", "RandomFill", "Sparkle", "Spiral", "Butterfly", "Plasma", "Grid", "Lines"].includes(spatialKind()),
   );
   const placementTransform = () => props.spatialPattern?.placement?.vertical_symmetry
     ? "vertical"
@@ -525,6 +526,8 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
               <option value="Plasma">Plasma</option>
               <option value="ColorRainbow">Rainbow strip</option>
               <option value="Rainbow">Rainbow mapping</option>
+              <option value="Grid" disabled={props.spatialPattern?.placement === undefined}>Grid mapping</option>
+              <option value="Lines" disabled={props.spatialPattern?.placement === undefined}>Lines mapping</option>
               <option value="Perlin">Perlin mapping</option>
             </select>
           </label>
@@ -635,6 +638,19 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
             <label>Color width %<input type="number" min="0" max="100" step="1" value={spatialNumber("color_width")} onInput={(event) => patchSpatialValues({ color_width: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
             <label>Gradient %<input type="number" min="0" max="100" step="1" value={spatialNumber("gradient", 100)} onInput={(event) => patchSpatialValues({ gradient: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
             <label>Transform<select value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical", horizontal_symmetry: event.currentTarget.value === "horizontal" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option><option value="horizontal">Horizontal symmetry</option></select></label>
+          </div>
+        </Show>
+        <Show when={spatialKind() === "Grid"}>
+          <div class="colorEffectModeGrid" data-color-grid-controls>
+            <label><input type="checkbox" checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
+            <label>Grid size<input data-color-grid-size type="number" min="1" max="5" step="1" value={spatialNumber("size", 1)} onInput={(event) => patchSpatialValues({ size: clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 5) })} /></label>
+            <label>Grid width<input data-color-grid-width type="number" min="2" max="20" step="1" value={spatialNumber("width", 2)} onInput={(event) => patchSpatialValues({ width: clamp(Math.round(Number(event.currentTarget.value) || 2), 2, 20) })} /></label>
+          </div>
+        </Show>
+        <Show when={spatialKind() === "Lines"}>
+          <div class="colorEffectModeGrid" data-color-lines-controls>
+            <label><input type="checkbox" checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
+            <label>Line size<input data-color-lines-size type="number" min="2" max="20" step="1" value={spatialNumber("size", 2)} onInput={(event) => patchSpatialValues({ size: clamp(Math.round(Number(event.currentTarget.value) || 2), 2, 20) })} /></label>
           </div>
         </Show>
         <Show when={spatialKind() === "Perlin"}>

@@ -14,6 +14,8 @@ export type SpatialRecipeKind =
   | "Plasma"
   | "ColorRainbow"
   | "Rainbow"
+  | "Grid"
+  | "Lines"
   | "Perlin";
 
 /** Authored starting body for a beam-space recipe kind. */
@@ -39,6 +41,10 @@ export const defaultSpatialRecipe = (kind: SpatialRecipeKind): ColorEffectSpatia
       return { ColorRainbow: { grayscale: false, vertical_symmetry: false, color_width: 0, angle_degrees: 0, gradient: 100 } };
     case "Rainbow":
       return { Rainbow: { grayscale: false, vertical_symmetry: false, horizontal_symmetry: false, rotation_degrees: 0, color_width: 0, angle_degrees: 0, gradient: 100 } };
+    case "Grid":
+      return { Grid: { grayscale: false, size: 1, width: 2 } };
+    case "Lines":
+      return { Lines: { grayscale: false, size: 2 } };
     case "Perlin":
       return { Perlin: { grayscale: false, vertical_symmetry: false, horizontal_symmetry: false, rotation_degrees: 0, octaves: 5, zoom: 0.5, direction_degrees: 0, speed: 1, amplitude: 100 } };
   }

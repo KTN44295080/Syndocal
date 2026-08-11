@@ -1537,6 +1537,11 @@ const japaneseText: Record<string, string> = {
   "Rainbow strip": "Rainbowストリップ",
   Rainbow: "Rainbow",
   "Rainbow mapping": "レインボーマッピング",
+  "Grid mapping": "グリッドマッピング",
+  "Grid size": "グリッドサイズ",
+  "Grid width": "グリッド幅",
+  "Lines mapping": "ラインマッピング",
+  "Line size": "ラインサイズ",
   "Perlin mapping": "Perlinマッピング",
   "Beam targets follow fixture profile channel order.":
     "ビームターゲットは灯体プロファイルのチャンネル順に従います。",

@@ -47,6 +47,11 @@ assert.equal(localization.translateUiText("Audio feature input level", "ja"), "�
 assert.equal(localization.translateUiText("Open Scene FX", "ja"), "シーンFXを開く");
 assert.equal(localization.translateUiText("Mapping transform", "ja"), "マッピング変形");
 assert.equal(localization.translateUiText("Mapping rotation °", "ja"), "マッピング回転（°）");
+assert.equal(localization.translateUiText("Grid mapping", "ja"), "グリッドマッピング");
+assert.equal(localization.translateUiText("Grid size", "ja"), "グリッドサイズ");
+assert.equal(localization.translateUiText("Grid width", "ja"), "グリッド幅");
+assert.equal(localization.translateUiText("Lines mapping", "ja"), "ラインマッピング");
+assert.equal(localization.translateUiText("Line size", "ja"), "ラインサイズ");
 assert.equal(
   localization.translateUiText(
     "Enabled effects 65 / supported 64. Output timing is no longer guaranteed.",
@@ -502,6 +507,11 @@ for (const [sourceText, expectedJapaneseDisplay] of [
   ["Direction change", "方向を交互に変更"],
   ["Plasma", "プラズマ"],
   ["Rainbow strip", "Rainbowストリップ"],
+  ["Grid mapping", "グリッドマッピング"],
+  ["Grid size", "グリッドサイズ"],
+  ["Grid width", "グリッド幅"],
+  ["Lines mapping", "ラインマッピング"],
+  ["Line size", "ラインサイズ"],
   ["Simultaneous particles created per 40 ms generation", "40 msごとの生成で同時に作られるパーティクル数"],
   ["Effect-time milliseconds, scaling with clock sync and BPM speed", "エフェクト時間のミリ秒。クロック同期とBPM速度に応じて伸縮します"],
   ["Perlin mapping", "Perlinマッピング"],

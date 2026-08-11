@@ -2451,6 +2451,19 @@ pub enum ColorEffectSpatialRecipe {
         speed: f32,
         amplitude: f32,
     },
+    /// Daslight COLOR MAPPINGS ID 50's four-sided moving grid raster.
+    Grid {
+        #[serde(default, skip_serializing_if = "is_false")]
+        grayscale: bool,
+        size: u16,
+        width: u16,
+    },
+    /// Daslight COLOR MAPPINGS ID 31's paired moving line raster.
+    Lines {
+        #[serde(default, skip_serializing_if = "is_false")]
+        grayscale: bool,
+        size: u16,
+    },
 }
 
 /// Coordinate frame used by an imported spatial generator placement.
@@ -5227,6 +5240,34 @@ mod tests {
             serde_json::to_string(&legacy_mapping_rainbow).unwrap(),
             legacy_mapping_rainbow_json,
             "default Grayscale must not change an existing Rainbow byte shape"
+        );
+
+        let legacy_grid: super::ColorEffectSpatialRecipe =
+            serde_json::from_str(r#"{"Grid":{"size":5,"width":20}}"#).unwrap();
+        assert_eq!(
+            legacy_grid,
+            super::ColorEffectSpatialRecipe::Grid {
+                grayscale: false,
+                size: 5,
+                width: 20,
+            }
+        );
+        assert_eq!(
+            serde_json::to_string(&legacy_grid).unwrap(),
+            r#"{"Grid":{"size":5,"width":20}}"#,
+            "default Grid Grayscale must remain omitted"
+        );
+        let lines = super::ColorEffectSpatialRecipe::Lines {
+            grayscale: true,
+            size: 20,
+        };
+        assert_eq!(
+            serde_json::from_str::<super::ColorEffectSpatialRecipe>(
+                &serde_json::to_string(&lines).unwrap()
+            )
+            .unwrap(),
+            lines,
+            "Lines must round-trip without changing its parameter model"
         );
 
         let placed_rainbow = super::ColorEffectSpatialPattern {

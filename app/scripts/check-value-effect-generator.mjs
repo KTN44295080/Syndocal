@@ -59,6 +59,44 @@ for (const generator of [
     `VALUE generator ${generator} must have an authored default recipe`,
   );
 }
+for (const [kind, defaultRecipe] of [
+  ["Grid", "Grid: { grayscale: false, size: 1, width: 2 }"],
+  ["Lines", "Lines: { grayscale: false, size: 2 }"],
+]) {
+  assert.ok(
+    spatialCompatibilitySource.includes(`case "${kind}":`) && spatialCompatibilitySource.includes(defaultRecipe),
+    `COLOR MAPPINGS ${kind} must keep its exact authored default recipe`,
+  );
+}
+assert.match(typesSource, /\| \{ Grid: \{ grayscale: boolean; size: number; width: number \} \}/);
+assert.match(typesSource, /\| \{ Lines: \{ grayscale: boolean; size: number \} \}/);
+assert.ok(
+  colorEditorSource.includes('<option value="Grid" disabled={props.spatialPattern?.placement === undefined}>Grid mapping</option>')
+    && colorEditorSource.includes('<option value="Lines" disabled={props.spatialPattern?.placement === undefined}>Lines mapping</option>')
+    && colorEditorSource.includes('data-color-grid-controls')
+    && colorEditorSource.includes('data-color-grid-size')
+    && colorEditorSource.includes('data-color-grid-width')
+    && colorEditorSource.includes('data-color-lines-controls')
+    && colorEditorSource.includes('data-color-lines-size'),
+  "COLOR MAPPINGS Grid and Lines must remain selectable with their dedicated controls",
+);
+assert.ok(
+  colorEditorSource.includes('if ((kind === "Grid" || kind === "Lines") && props.spatialPattern?.placement === undefined) return;'),
+  "COLOR MAPPINGS Grid and Lines must reject unplaced editor selection before generating a recipe",
+);
+assert.ok(
+  colorEditorSource.includes('["KnightRider", "Burst", "Sweep", "RandomFill", "Sparkle", "Spiral", "Butterfly", "Plasma", "Grid", "Lines"]')
+    && colorEditorSource.includes('min="1" max="5" step="1" value={spatialNumber("size", 1)}')
+    && colorEditorSource.includes('min="2" max="20" step="1" value={spatialNumber("width", 2)}')
+    && colorEditorSource.includes('min="2" max="20" step="1" value={spatialNumber("size", 2)}'),
+  "placed COLOR MAPPINGS Grid and Lines must reuse placement Transform/Rotation and preserve their integer domains",
+);
+const gridControls = colorEditorSource.match(/<Show when=\{spatialKind\(\) === "Grid"\}>([\s\S]*?)<\/Show>/)?.[1] ?? "";
+const linesControls = colorEditorSource.match(/<Show when=\{spatialKind\(\) === "Lines"\}>([\s\S]*?)<\/Show>/)?.[1] ?? "";
+for (const [kind, controls] of [["Grid", gridControls], ["Lines", linesControls]]) {
+  assert.match(controls, /checked=\{spatialBoolean\("grayscale"\)\}/, `COLOR MAPPINGS ${kind} must expose Grayscale`);
+  assert.doesNotMatch(controls, /<label>Transform/, `COLOR MAPPINGS ${kind} must not duplicate placed Mapping Transform`);
+}
 for (const consolidatedEditorSource of [editorSource, colorEditorSource]) {
   assert.ok(
     consolidatedEditorSource.includes('from "../spatialRecipeCompatibility"')
@@ -72,7 +110,7 @@ assert.ok(
   "placed COLOR Perlin must gate horizontal symmetry and rotation on real mapping placement",
 );
 assert.ok(
-  colorEditorSource.includes('["KnightRider", "Burst", "Sweep", "RandomFill", "Sparkle", "Spiral", "Butterfly", "Plasma"]')
+  colorEditorSource.includes('["KnightRider", "Burst", "Sweep", "RandomFill", "Sparkle", "Spiral", "Butterfly", "Plasma", "Grid", "Lines"]')
     && colorEditorSource.includes("data-color-random-fill-point-height")
     && colorEditorSource.includes('<Show when={props.spatialPattern?.placement}><label>Point height %')
     && colorEditorSource.includes('min="1" max="10" step="1" value={spatialNumber("source_point_height", 1)}')

@@ -138,4 +138,10 @@ live only when placement is present; unplaced legacy recipes keep height as
 evaluator-dead provenance. Nonserialized qrand/history is replaced by a stable
 source-family/generator-aware seed. No family-5 native saved specimen exists, so this
 claim is limited to constructor/static evidence and synthetic strict-schema tests.
-The remaining family-specific COLOR MAPPINGS classes stay for later tranches.
+COLOR MAPPINGS 31 Lines and 50 Grid are now separate family-specific corrected
+extensions over the same placement compiler. They sample fixed 100x100 rasters after
+inverse Rectangle Transform then inverse Rotation, preserve owned-color target order and
+Override merge, and apply the common qGray post-process. Their class grammars are analytic
+and allocation-free at tick time; they do not reuse a MAPPINGS-family class. The remaining
+family-specific COLOR MAPPINGS classes stay for later tranches. No native Lines/Grid saved
+specimen is present, so these two claims are static/binary plus synthetic-regression only.
