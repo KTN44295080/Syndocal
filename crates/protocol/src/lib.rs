@@ -2498,6 +2498,37 @@ pub enum ColorEffectSpatialRecipe {
         amplitude: f32,
         offset: f32,
     },
+    /// Daslight COLOR MAPPINGS ID 47's retained explosion-particle raster.
+    Explosion {
+        #[serde(default, skip_serializing_if = "is_false")]
+        grayscale: bool,
+        /// Stable replacement for the source process-global qrand history.
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
+        rng_seed: u32,
+        /// TYPE7 Shape index. The imported runtime route supports Shape 0 only.
+        shape: u8,
+        explosion_number: u16,
+        explosion_size: u16,
+        particle_number: u16,
+        particle_size: u16,
+        particle_life: f32,
+        trail_size: u16,
+        gravity: f32,
+    },
+    /// Daslight COLOR MAPPINGS ID 48's retained radial star-particle raster.
+    Starfield {
+        #[serde(default, skip_serializing_if = "is_false")]
+        grayscale: bool,
+        /// Stable replacement for the source process-global qrand history.
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
+        rng_seed: u32,
+        /// TYPE7 Shape index. The imported runtime route supports Shape 0 only.
+        shape: u8,
+        particles: u16,
+        size: u16,
+        trail: u16,
+        rotation: f32,
+    },
 }
 
 /// Coordinate frame used by an imported spatial generator placement.
@@ -5412,6 +5443,41 @@ mod tests {
             .unwrap(),
             graph,
             "Graph must round-trip at its validated maxima"
+        );
+        let legacy_explosion: super::ColorEffectSpatialRecipe = serde_json::from_str(
+            r#"{"Explosion":{"shape":0,"explosion_number":5,"explosion_size":5,"particle_number":10,"particle_size":10,"particle_life":0.0,"trail_size":10,"gravity":0.0}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            &legacy_explosion,
+            super::ColorEffectSpatialRecipe::Explosion {
+                grayscale: false,
+                rng_seed: 0,
+                shape: 0,
+                ..
+            }
+        ));
+        assert_eq!(
+            serde_json::to_string(&legacy_explosion).unwrap(),
+            r#"{"Explosion":{"shape":0,"explosion_number":5,"explosion_size":5,"particle_number":10,"particle_size":10,"particle_life":0.0,"trail_size":10,"gravity":0.0}}"#,
+            "default Explosion Grayscale and RNG seed must remain omitted"
+        );
+        let starfield = super::ColorEffectSpatialRecipe::Starfield {
+            grayscale: true,
+            rng_seed: u32::MAX,
+            shape: 0,
+            particles: 10,
+            size: 100,
+            trail: 25,
+            rotation: -5.0,
+        };
+        assert_eq!(
+            serde_json::from_str::<super::ColorEffectSpatialRecipe>(
+                &serde_json::to_string(&starfield).unwrap()
+            )
+            .unwrap(),
+            starfield,
+            "Starfield must round-trip at its validated maxima"
         );
 
         let placed_rainbow = super::ColorEffectSpatialPattern {

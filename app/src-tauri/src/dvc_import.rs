@@ -2181,6 +2181,8 @@ fn parse_scene_effects(
                 (Some(5), Some(3), Some(41)) => Some("Tube"),
                 (Some(5), Some(3), Some(42)) => Some("Spiral"),
                 (Some(5), Some(3), Some(44)) => Some("Sweep"),
+                (Some(5), Some(3), Some(47)) => Some("Explosion"),
+                (Some(5), Some(3), Some(48)) => Some("Starfield"),
                 (Some(5), Some(3), Some(49)) => Some("Graph"),
                 (Some(5), Some(3), Some(50)) => Some("Grid"),
                 (Some(8), Some(5), Some(3)) => Some("Inverse Ramp"),
@@ -2408,7 +2410,7 @@ fn convert_dvc_effect(
             profiles,
             fixture_refs,
         ),
-        (5, 3, 22 | 23 | 30 | 31 | 32 | 33 | 34 | 36 | 37 | 40 | 41 | 42 | 44 | 49 | 50)
+        (5, 3, 22 | 23 | 30 | 31 | 32 | 33 | 34 | 36 | 37 | 40 | 41 | 42 | 44 | 47 | 48 | 49 | 50)
         | (2, 2, 121 | 127 | 128 | 129 | 130 | 131 | 133 | 134)
         | (6, 8, 521..=530) => {
             convert_dvc_color_spatial_effect(
@@ -3256,6 +3258,8 @@ fn convert_dvc_color_spatial_effect(
         41 => "Tube",
         42 => "Spiral",
         44 => "Sweep",
+        47 => "Explosion",
+        48 => "Starfield",
         49 => "Graph",
         50 => "Grid",
         121 => "Burst",
@@ -3284,7 +3288,7 @@ fn convert_dvc_color_spatial_effect(
     };
     let source_is_color_mappings = matches!(
         generator_id,
-        22 | 23 | 30 | 31 | 32 | 33 | 34 | 36 | 37 | 40 | 41 | 42 | 44 | 49 | 50
+        22 | 23 | 30 | 31 | 32 | 33 | 34 | 36 | 37 | 40 | 41 | 42 | 44 | 47 | 48 | 49 | 50
     );
     let shared_mapping_generator_id = match generator_id {
         22 => 523,
@@ -3481,6 +3485,137 @@ fn convert_dvc_color_spatial_effect(
                 grayscale: dvc_binary_param(&params, 2, "COLOR MAPPINGS Lines Grayscale")?,
                 size: dvc_integer_range_param(&params, 10, "COLOR MAPPINGS Lines Size", 2, 20)?
                     as u16,
+            }
+        }
+        47 => {
+            require_exact_dvc_mapping_recipe_schema(
+                effect,
+                &params,
+                true,
+                &[
+                    (10, 7),
+                    (11, 0),
+                    (12, 0),
+                    (13, 0),
+                    (14, 0),
+                    (15, 1),
+                    (16, 0),
+                    (17, 1),
+                ],
+            )?;
+            if !(2..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS).contains(&stops.len()) {
+                return Err(format!(
+                    "COLOR MAPPINGS Explosion ID=47 palette requires 2..255 colors, found {}",
+                    stops.len()
+                ));
+            }
+            ColorEffectSpatialRecipe::Explosion {
+                grayscale: dvc_binary_param(&params, 2, "COLOR MAPPINGS Explosion Grayscale")?,
+                rng_seed: dvc_corrected_rng_seed(scene, rack, effect, generator_id),
+                shape: dvc_integer_range_param(
+                    &params,
+                    10,
+                    "COLOR MAPPINGS Explosion Shape",
+                    0,
+                    29,
+                )? as u8,
+                explosion_number: dvc_integer_range_param(
+                    &params,
+                    11,
+                    "COLOR MAPPINGS Explosion Number",
+                    1,
+                    50,
+                )? as u16,
+                explosion_size: dvc_integer_range_param(
+                    &params,
+                    12,
+                    "COLOR MAPPINGS Explosion Size",
+                    0,
+                    100,
+                )? as u16,
+                particle_number: dvc_integer_range_param(
+                    &params,
+                    13,
+                    "COLOR MAPPINGS Explosion Particles",
+                    1,
+                    100,
+                )? as u16,
+                particle_size: dvc_integer_range_param(
+                    &params,
+                    14,
+                    "COLOR MAPPINGS Explosion Particle Size",
+                    1,
+                    100,
+                )? as u16,
+                particle_life: dvc_finite_range_param(
+                    &params,
+                    15,
+                    "COLOR MAPPINGS Explosion Life",
+                    0.0,
+                    0.9,
+                )?,
+                trail_size: dvc_integer_range_param(
+                    &params,
+                    16,
+                    "COLOR MAPPINGS Explosion Trail",
+                    1,
+                    25,
+                )? as u16,
+                gravity: dvc_finite_range_param(
+                    &params,
+                    17,
+                    "COLOR MAPPINGS Explosion Gravity",
+                    0.0,
+                    10.0,
+                )?,
+            }
+        }
+        48 => {
+            require_exact_dvc_mapping_recipe_schema(
+                effect,
+                &params,
+                true,
+                &[(10, 7), (11, 0), (12, 0), (13, 0), (14, 1)],
+            )?;
+            if !(2..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS).contains(&stops.len()) {
+                return Err(format!(
+                    "COLOR MAPPINGS Starfield ID=48 palette requires 2..255 colors, found {}",
+                    stops.len()
+                ));
+            }
+            ColorEffectSpatialRecipe::Starfield {
+                grayscale: dvc_binary_param(&params, 2, "COLOR MAPPINGS Starfield Grayscale")?,
+                rng_seed: dvc_corrected_rng_seed(scene, rack, effect, generator_id),
+                shape: dvc_integer_range_param(
+                    &params,
+                    10,
+                    "COLOR MAPPINGS Starfield Shape",
+                    0,
+                    29,
+                )? as u8,
+                particles: dvc_integer_range_param(
+                    &params,
+                    11,
+                    "COLOR MAPPINGS Starfield Particles",
+                    1,
+                    10,
+                )? as u16,
+                size: dvc_integer_range_param(&params, 12, "COLOR MAPPINGS Starfield Size", 1, 100)?
+                    as u16,
+                trail: dvc_integer_range_param(
+                    &params,
+                    13,
+                    "COLOR MAPPINGS Starfield Trail",
+                    1,
+                    25,
+                )? as u16,
+                rotation: dvc_finite_range_param(
+                    &params,
+                    14,
+                    "COLOR MAPPINGS Starfield Rotation",
+                    -5.0,
+                    5.0,
+                )?,
             }
         }
         49 => {
@@ -4243,13 +4378,13 @@ fn convert_dvc_color_spatial_effect(
             dvc_mapping_rectangle(
                 rack,
                 &placement_label,
-                matches!(generator_id, 31 | 36 | 41 | 49 | 50)
+                matches!(generator_id, 31 | 36 | 41 | 47 | 48 | 49 | 50)
                     || shared_mapping_generator_id == 530,
             )
         })
         .transpose()?;
     let source_mapping_rectangle = mapping_rectangle;
-    if matches!(generator_id, 31 | 41 | 49 | 50) {
+    if matches!(generator_id, 31 | 41 | 47 | 48 | 49 | 50) {
         let beam_containers = element_children(rack)
             .filter(|node| node.has_tag_name("BEAMS"))
             .collect::<Vec<_>>();
@@ -4311,6 +4446,22 @@ fn convert_dvc_color_spatial_effect(
     if targets.beam_targets.is_empty() && !source_noop {
         return Err(format!("BEAMS resolved to no {generator} beam targets"));
     }
+    if !source_noop {
+        let unsupported_shape = match &recipe {
+            ColorEffectSpatialRecipe::Explosion { shape, .. }
+            | ColorEffectSpatialRecipe::Starfield { shape, .. }
+                if *shape != 0 =>
+            {
+                Some(*shape)
+            }
+            _ => None,
+        };
+        if let Some(shape) = unsupported_shape {
+            return Err(format!(
+                "COLOR MAPPINGS {generator} ID={generator_id} populated Shape {shape} is a proprietary glyph; only filled-ellipse Shape 0 is confirmed"
+            ));
+        }
+    }
     if source_is_mappings {
         for target in &mut targets.beam_targets {
             target.feature_attribute = Some("Dimmer".to_string());
@@ -4318,7 +4469,7 @@ fn convert_dvc_color_spatial_effect(
     }
     let omitted_spatial_targets =
         retain_dvc_color_spatial_targets(&mut targets, fixture_refs, source_is_mappings);
-    if matches!(generator_id, 31 | 41 | 49 | 50) && omitted_spatial_targets > 0 {
+    if matches!(generator_id, 31 | 41 | 47 | 48 | 49 | 50) && omitted_spatial_targets > 0 {
         return Err(format!(
             "COLOR MAPPINGS {generator} ID={generator_id} requires every owned BEAMS target to expose a verified color segment; omitted {omitted_spatial_targets} target(s)"
         ));
@@ -4338,7 +4489,7 @@ fn convert_dvc_color_spatial_effect(
     }
     let (period_ms, period_note) = if matches!(
         generator_id,
-        31 | 37 | 41 | 49 | 50 | 121 | 127 | 128 | 131 | 133 | 134
+        31 | 37 | 41 | 47 | 48 | 49 | 50 | 121 | 127 | 128 | 131 | 133 | 134
     ) || shared_mapping_generator_id == 530
     {
         let period_source_family = if source_is_color_mappings {
@@ -4547,6 +4698,33 @@ fn convert_dvc_color_spatial_effect(
             "implementation=SyndocalCorrected; evaluator=CGraphEffect/0x1403638A0 recovered allocation-free analytic 100x100 raster; Grayscale={}; Height={height}; Width={width}; Pitch={pitch}; Frequency={frequency}; Amplitude={amplitude}; Offset={offset}; Height1=corrected_opaque_row; background=palette0; paint_order=later-wins; time=continuous",
             u8::from(*grayscale)
         ),
+        ColorEffectSpatialRecipe::Explosion {
+            grayscale,
+            rng_seed,
+            shape,
+            explosion_number,
+            explosion_size,
+            particle_number,
+            particle_size,
+            particle_life,
+            trail_size,
+            gravity,
+        } => format!(
+            "implementation=SyndocalCorrected; evaluator=CExplosionEffect retained-particle 100x100 raster; Grayscale={}; rng_seed={rng_seed}; Shape={shape}; ExplosionNumber={explosion_number}; ExplosionSize={explosion_size}; Particles={particle_number}; ParticleSize={particle_size}; Life={particle_life}; Trail={trail_size}; Gravity={gravity}; source_green_lifetime_corrected_to_alpha=true; children_before_parent=true; random_pairs=5000; frame_cap=750; qGray=post-raster",
+            u8::from(*grayscale)
+        ),
+        ColorEffectSpatialRecipe::Starfield {
+            grayscale,
+            rng_seed,
+            shape,
+            particles,
+            size,
+            trail,
+            rotation,
+        } => format!(
+            "implementation=SyndocalCorrected; evaluator=CStarfieldEffect retained-particle 100x100 raster; Grayscale={}; rng_seed={rng_seed}; Shape={shape}; Particles={particles}; Size={size}; Trail={trail}; Rotation={rotation}; palette_endpoint_clamp=true; source_green_lifetime_corrected_to_alpha=true; children_before_parent=true; random_pairs=5000; frame_cap=750; qGray=post-raster",
+            u8::from(*grayscale)
+        ),
     };
     let mut placement = mapping_rectangle
         .map(|rectangle| {
@@ -4558,7 +4736,7 @@ fn convert_dvc_color_spatial_effect(
             )
         })
         .transpose()?;
-    if matches!(generator_id, 31 | 37 | 41 | 49 | 50)
+    if matches!(generator_id, 31 | 37 | 41 | 47 | 48 | 49 | 50)
         || matches!(shared_mapping_generator_id, 522..=529)
     {
         let transform = dvc_param(&params, 3, &format!("{mapping_family_label} Transform"))?;
@@ -11187,6 +11365,257 @@ mod tests {
     }
 
     #[test]
+    fn dvc_color_mappings_explosion_starfield_import_strict_owned_particles_and_mutations() {
+        let source = |generator_id: u16, palette_count: usize, shape: u8, beams: &str| {
+            let color = r#"<COLOR VAL="1/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>"#;
+            let (specific, nb) = match generator_id {
+                47 => (
+                    format!(
+                        r#"<PARAM TYPE="7" ID="10" VAL="{shape}"/><PARAM TYPE="0" ID="11" VAL="5"/><PARAM TYPE="0" ID="12" VAL="5"/><PARAM TYPE="0" ID="13" VAL="10"/><PARAM TYPE="0" ID="14" VAL="10"/><PARAM TYPE="1" ID="15" VAL="0"/><PARAM TYPE="0" ID="16" VAL="10"/><PARAM TYPE="1" ID="17" VAL="0"/>"#
+                    ),
+                    12,
+                ),
+                48 => (
+                    format!(
+                        r#"<PARAM TYPE="7" ID="10" VAL="{shape}"/><PARAM TYPE="0" ID="11" VAL="1"/><PARAM TYPE="0" ID="12" VAL="10"/><PARAM TYPE="0" ID="13" VAL="10"/><PARAM TYPE="1" ID="14" VAL="0"/>"#
+                    ),
+                    9,
+                ),
+                _ => unreachable!(),
+            };
+            format!(
+                r#"<SCENE DASUID="particle-scene" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="5" DASUID="particle-rack"><EFFECT TYPE="3" ID="{generator_id}" DASUID="particle-effect" DURATION="5000"><PARAMS NB="{nb}"><PARAM TYPE="4" ID="1"><COLORS NB="{palette_count}">{}</COLORS></PARAM><PARAM TYPE="2" ID="2" VAL="1"/><PARAM TYPE="6" ID="3" VAL="0"/><PARAM TYPE="0" ID="4" VAL="0"/>{specific}</PARAMS></EFFECT><MAPPING NAME="Rectangle" DASUID="particles" TYPE="0" X="0" Y="0" SX="100" SY="100" ANGLE="0" LOCKED="0"/>{beams}</RACK></RACKS></SCENE>"#,
+                color.repeat(palette_count)
+            )
+        };
+        let convert = |xml: &str, generator_id: u16| {
+            let document = Document::parse(xml).unwrap();
+            let scene = document.root_element();
+            let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+            let effect = direct_child(rack, "EFFECT").unwrap();
+            convert_dvc_effect(
+                scene,
+                "COLOR MAPPINGS particles",
+                rack,
+                effect,
+                5,
+                3,
+                generator_id,
+                1,
+                &effect_test_profiles(),
+                &effect_test_fixture_refs(),
+            )
+        };
+        let owned =
+            r#"<BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS>"#;
+
+        for (generator_id, maximum_palette) in [(47, 255), (48, 255)] {
+            for palette_count in [2, maximum_palette] {
+                let converted =
+                    convert(&source(generator_id, palette_count, 0, owned), generator_id).unwrap();
+                assert_eq!(
+                    converted.generator,
+                    if generator_id == 47 {
+                        "Explosion"
+                    } else {
+                        "Starfield"
+                    }
+                );
+                assert!(converted.approximations.is_empty());
+                assert!(converted.note.contains("implementation=SyndocalCorrected"));
+                assert!(converted.note.contains("children_before_parent=true"));
+                assert!(converted.note.contains("random_pairs=5000"));
+                let Some(EffectParamsSnapshot::Color(request)) =
+                    converted.target.expect("populated particle mapping").params
+                else {
+                    panic!("particle mapping must create a Color request");
+                };
+                assert_eq!(request.period_ms, 5_000);
+                assert_eq!(request.stops.len(), palette_count);
+                let pattern = request.spatial_pattern.unwrap();
+                assert_eq!(pattern.beam_targets.len(), 1);
+                assert_eq!(
+                    (
+                        pattern.placement.as_ref().unwrap().sx,
+                        pattern.placement.as_ref().unwrap().sy
+                    ),
+                    (100, 100)
+                );
+                match (generator_id, pattern.recipe) {
+                    (
+                        47,
+                        ColorEffectSpatialRecipe::Explosion {
+                            grayscale: true,
+                            shape: 0,
+                            explosion_number: 5,
+                            explosion_size: 5,
+                            particle_number: 10,
+                            particle_size: 10,
+                            particle_life: 0.0,
+                            trail_size: 10,
+                            gravity: 0.0,
+                            rng_seed,
+                        },
+                    ) => assert_ne!(rng_seed, 0),
+                    (
+                        48,
+                        ColorEffectSpatialRecipe::Starfield {
+                            grayscale: true,
+                            shape: 0,
+                            particles: 1,
+                            size: 10,
+                            trail: 10,
+                            rotation: 0.0,
+                            rng_seed,
+                        },
+                    ) => assert_ne!(rng_seed, 0),
+                    (_, recipe) => panic!("unexpected particle recipe: {recipe:?}"),
+                }
+            }
+        }
+
+        for generator_id in [47, 48] {
+            for palette_count in [1, 256] {
+                let error = convert(&source(generator_id, palette_count, 0, owned), generator_id)
+                    .unwrap_err();
+                let expected = if palette_count == 1 {
+                    "palette requires 2..255"
+                } else {
+                    "palette requires 1..255"
+                };
+                assert!(error.contains(expected), "{error}");
+            }
+            let populated_shape =
+                convert(&source(generator_id, 2, 1, owned), generator_id).unwrap_err();
+            assert!(populated_shape.contains("populated Shape 1 is a proprietary glyph"));
+            let shape_out_of_schema =
+                convert(&source(generator_id, 2, 30, owned), generator_id).unwrap_err();
+            assert!(shape_out_of_schema.contains("integer within 0..29"));
+
+            let native_empty = source(generator_id, 2, 29, r#"<BEAMS NB="0"/>"#).replacen(
+                r#"SX="100" SY="100""#,
+                r#"SX="-1" SY="-1""#,
+                1,
+            );
+            let no_op = convert(&native_empty, generator_id).unwrap();
+            assert!(no_op.target.is_none());
+            assert!(no_op.note.contains("source no-op preserved"));
+            assert!(no_op.note.contains("Rectangle=(0,0,-1,-1,0)"));
+            assert!(convert(
+                &source(generator_id, 2, 0, owned).replacen(
+                    r#"SX="100" SY="100""#,
+                    r#"SX="-1" SY="-1""#,
+                    1
+                ),
+                generator_id,
+            )
+            .unwrap_err()
+            .contains("native empty Rectangle sentinel is valid only with zero owned BEAMS"));
+
+            let valid = source(generator_id, 2, 0, owned);
+            for (invalid, expected) in [
+                (
+                    valid.replacen(r#"TYPE="7" ID="10""#, r#"TYPE="0" ID="10""#, 1),
+                    "expected PARAM 10 TYPE=7",
+                ),
+                (
+                    valid.replacen("<BEAMS NB=", "<SELECTIONS/><BEAMS NB=", 1),
+                    "external SELECTIONS remain fail-closed",
+                ),
+                (
+                    valid.replacen(r#"<BEAMS NB="1">"#, r#"<BEAMS NB="2">"#, 1),
+                    "BEAMS declares 2 entries but contains 1",
+                ),
+                (
+                    valid.replacen("</RACK>", r#"<BEAMS NB="0"/></RACK>"#, 1),
+                    "expected exactly one direct BEAMS container, found 2",
+                ),
+                (
+                    valid.replacen("</PARAMS>", "<UNEXPECTED/></PARAMS>", 1),
+                    "PARAMS contains unexpected <UNEXPECTED> element",
+                ),
+            ] {
+                let error = convert(&invalid, generator_id).unwrap_err();
+                assert!(
+                    error.contains(expected),
+                    "expected {expected:?}, found {error:?}"
+                );
+            }
+        }
+
+        let valid_explosion = source(47, 2, 0, owned);
+        for (from, to, expected) in [
+            (
+                r#"ID="11" VAL="5""#,
+                r#"ID="11" VAL="0""#,
+                "integer within 1..50",
+            ),
+            (
+                r#"ID="12" VAL="5""#,
+                r#"ID="12" VAL="101""#,
+                "integer within 0..100",
+            ),
+            (
+                r#"ID="13" VAL="10""#,
+                r#"ID="13" VAL="0""#,
+                "integer within 1..100",
+            ),
+            (
+                r#"ID="14" VAL="10""#,
+                r#"ID="14" VAL="101""#,
+                "integer within 1..100",
+            ),
+            (
+                r#"ID="15" VAL="0""#,
+                r#"ID="15" VAL="0.91""#,
+                "within 0..0.9",
+            ),
+            (
+                r#"ID="16" VAL="10""#,
+                r#"ID="16" VAL="0""#,
+                "integer within 1..25",
+            ),
+            (
+                r#"ID="17" VAL="0""#,
+                r#"ID="17" VAL="10.1""#,
+                "within 0..10",
+            ),
+        ] {
+            let error = convert(&valid_explosion.replacen(from, to, 1), 47).unwrap_err();
+            assert!(
+                error.contains(expected),
+                "expected {expected:?}, found {error:?}"
+            );
+        }
+
+        let valid_starfield = source(48, 2, 0, owned);
+        for (from, to, expected) in [
+            (
+                r#"ID="11" VAL="1""#,
+                r#"ID="11" VAL="11""#,
+                "integer within 1..10",
+            ),
+            (
+                r#"ID="12" VAL="10""#,
+                r#"ID="12" VAL="0""#,
+                "integer within 1..100",
+            ),
+            (
+                r#"ID="13" VAL="10""#,
+                r#"ID="13" VAL="26""#,
+                "integer within 1..25",
+            ),
+            (r#"ID="14" VAL="0""#, r#"ID="14" VAL="5.1""#, "within -5..5"),
+        ] {
+            let error = convert(&valid_starfield.replacen(from, to, 1), 48).unwrap_err();
+            assert!(
+                error.contains(expected),
+                "expected {expected:?}, found {error:?}"
+            );
+        }
+    }
+
+    #[test]
     fn dvc_color_mappings_media_empty_path_is_strict_noop_and_nonempty_fails_closed() {
         let source = |path: &str| {
             format!(
@@ -13338,6 +13767,8 @@ mod tests {
                             ColorEffectSpatialRecipe::Grid { .. } => 50,
                             ColorEffectSpatialRecipe::Lines { .. } => 31,
                             ColorEffectSpatialRecipe::Graph { .. } => 49,
+                            ColorEffectSpatialRecipe::Explosion { .. } => 47,
+                            ColorEffectSpatialRecipe::Starfield { .. } => 48,
                         }),
                     _ => None,
                 })
@@ -14714,6 +15145,158 @@ mod tests {
                 "profile PRESET 69bdd010-d626-11ea-b9df-7da99bfefe5c-3afb4fbb:33:0 -> type 4",
             ) && detail.message.contains("generic PRESET type 4")
         }));
+    }
+
+    #[test]
+    fn dvc_local_golden_color_mappings_explosion_starfield_from_remaining7_specimen() {
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../qa/specimens/ColorMappings-Remaining7.dvc"
+        ));
+        assert!(
+            path.is_file(),
+            "particle specimen must exist at {}",
+            path.display()
+        );
+        let source = fs::read_to_string(path).unwrap();
+        let document = Document::parse(&source).unwrap();
+        for (generator_id, expected) in [
+            (
+                "47",
+                vec![
+                    ("4", "1", None),
+                    ("2", "2", Some("0")),
+                    ("6", "3", Some("0")),
+                    ("0", "4", Some("0")),
+                    ("7", "10", Some("0")),
+                    ("0", "11", Some("5")),
+                    ("0", "12", Some("5")),
+                    ("0", "13", Some("10")),
+                    ("0", "14", Some("10")),
+                    ("1", "15", Some("0")),
+                    ("0", "16", Some("10")),
+                    ("1", "17", Some("0")),
+                ],
+            ),
+            (
+                "48",
+                vec![
+                    ("4", "1", None),
+                    ("2", "2", Some("0")),
+                    ("6", "3", Some("0")),
+                    ("0", "4", Some("0")),
+                    ("7", "10", Some("0")),
+                    ("0", "11", Some("1")),
+                    ("0", "12", Some("10")),
+                    ("0", "13", Some("10")),
+                    ("1", "14", Some("0")),
+                ],
+            ),
+        ] {
+            let rack = document
+                .descendants()
+                .find(|node| {
+                    node.has_tag_name("RACK")
+                        && node.attribute("TYPE") == Some("5")
+                        && direct_child(*node, "EFFECT")
+                            .is_some_and(|effect| effect.attribute("ID") == Some(generator_id))
+                })
+                .unwrap_or_else(|| panic!("Remaining7 must contain ID={generator_id}"));
+            let scene = rack
+                .ancestors()
+                .find(|node| node.has_tag_name("SCENE"))
+                .expect("particle rack must belong to a SCENE");
+            let effect = direct_child(rack, "EFFECT").unwrap();
+            let params = direct_child(effect, "PARAMS").unwrap();
+            assert_eq!(
+                params.attribute("NB").unwrap().parse::<usize>().unwrap(),
+                expected.len()
+            );
+            assert_eq!(
+                element_children(params)
+                    .map(|param| (
+                        param.attribute("TYPE").unwrap(),
+                        param.attribute("ID").unwrap(),
+                        param.attribute("VAL")
+                    ))
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            let mapping = direct_child(rack, "MAPPING").unwrap();
+            assert_eq!(
+                (
+                    mapping.attribute("NAME"),
+                    mapping.attribute("TYPE"),
+                    mapping.attribute("X"),
+                    mapping.attribute("Y"),
+                    mapping.attribute("SX"),
+                    mapping.attribute("SY"),
+                    mapping.attribute("ANGLE"),
+                    mapping.attribute("LOCKED"),
+                ),
+                (
+                    Some("Rectangle"),
+                    Some("0"),
+                    Some("0"),
+                    Some("0"),
+                    Some("-1"),
+                    Some("-1"),
+                    Some("0"),
+                    Some("0"),
+                )
+            );
+            let beams = direct_child(rack, "BEAMS").unwrap();
+            assert_eq!(beams.attribute("NB"), Some("0"));
+            assert_eq!(element_children(beams).count(), 0);
+            assert_eq!(
+                element_children(rack)
+                    .filter(|node| node.has_tag_name("SELECTIONS"))
+                    .count(),
+                0
+            );
+            let converted = convert_dvc_effect(
+                scene,
+                "Remaining7 particles",
+                rack,
+                effect,
+                5,
+                3,
+                generator_id.parse().unwrap(),
+                1,
+                &effect_test_profiles(),
+                &effect_test_fixture_refs(),
+            )
+            .unwrap();
+            assert!(
+                converted.target.is_none(),
+                "saved empty rack allocates no runtime effect"
+            );
+            assert!(converted.note.contains("source no-op preserved"));
+            assert!(converted.note.contains("Rectangle=(0,0,-1,-1,0)"));
+            assert!(converted.approximations.is_empty());
+            let report_path = path.display().to_string();
+            let mut report = DvcImportReport::new(&report_path, document.root_element());
+            let mut next_effect_id = 1;
+            let parsed = parse_scene_effects(
+                scene,
+                scene.attribute("NAME").unwrap_or("Remaining7"),
+                &effect_test_profiles(),
+                &effect_test_fixture_refs(),
+                &mut next_effect_id,
+                &mut report,
+            );
+            assert!(parsed.targets.is_empty());
+            assert_eq!(next_effect_id, 1, "source no-ops allocate no runtime IDs");
+            let generator = if generator_id == "47" {
+                "Explosion"
+            } else {
+                "Starfield"
+            };
+            assert!(report.converted.details.iter().any(|detail| {
+                detail.item.ends_with(&format!("({generator})"))
+                    && detail.message.contains("source no-op preserved")
+            }));
+        }
     }
 
     #[test]

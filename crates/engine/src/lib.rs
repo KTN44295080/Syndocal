@@ -3675,6 +3675,11 @@ struct RuntimeColorSpatialState {
     /// Sampling reconstructs the last covering tile analytically and allocates
     /// nothing in the tick path.
     daslight_graph: Option<CompiledDaslightGraph>,
+    /// COLOR MAPPINGS ID 47 Explosion / ID 48 Starfield fixed 100x100
+    /// retained-particle raster. Supported target sets precompute every
+    /// sampled generation; larger permissive sets retain one dynamic
+    /// generation cache. Both paths reuse one immutable random table.
+    daslight_particles: Option<CompiledDaslightParticles>,
 }
 
 #[derive(Clone)]
@@ -6082,6 +6087,989 @@ impl CompiledDaslightGraph {
             return self.finish_color(color);
         }
         self.finish_color(background)
+    }
+}
+
+const DASLIGHT_PARTICLE_RASTER_SIZE: usize = 100;
+#[cfg(test)]
+const DASLIGHT_PARTICLE_RASTER_PIXELS: usize =
+    DASLIGHT_PARTICLE_RASTER_SIZE * DASLIGHT_PARTICLE_RASTER_SIZE;
+const SYNDOCAL_PARTICLE_RANDOM_PAIR_COUNT: usize = 5_000;
+const SYNDOCAL_PARTICLE_FRAME_CAP: usize = 750;
+const DASLIGHT_PARTICLE_MAX_LAYERS: usize = 26;
+
+#[derive(Clone, Copy)]
+enum CompiledDaslightParticleRecipe {
+    Explosion {
+        explosion_number: usize,
+        explosion_size: f32,
+        particle_number: usize,
+        particle_size: f32,
+        particle_life: f32,
+        trail_size: usize,
+        gravity: f32,
+    },
+    Starfield {
+        particles: usize,
+        size: f32,
+        trail: usize,
+        rotation: f32,
+    },
+}
+
+#[derive(Clone)]
+struct CompiledDaslightParticleRasterCache {
+    generation: Option<usize>,
+    red: Vec<u16>,
+    green: Vec<u16>,
+    blue: Vec<u16>,
+    #[cfg(test)]
+    rebuild_count: u64,
+}
+
+impl CompiledDaslightParticleRasterCache {
+    fn new(background: ColorEffectColor, sampled_pixel_count: usize) -> Self {
+        Self {
+            generation: None,
+            red: vec![background.red; sampled_pixel_count],
+            green: vec![background.green; sampled_pixel_count],
+            blue: vec![background.blue; sampled_pixel_count],
+            #[cfg(test)]
+            rebuild_count: 0,
+        }
+    }
+
+    fn fill(&mut self, background: ColorEffectColor) {
+        self.red.fill(background.red);
+        self.green.fill(background.green);
+        self.blue.fill(background.blue);
+    }
+
+    fn color(&self, slot: usize) -> ColorEffectColor {
+        ColorEffectColor {
+            red: self.red[slot],
+            green: self.green[slot],
+            blue: self.blue[slot],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct CompiledDaslightParticleSampleRow {
+    x_mask: u128,
+    slot_start: usize,
+}
+
+#[derive(Clone)]
+struct CompiledDaslightParticleFrames {
+    red: Vec<u16>,
+    green: Vec<u16>,
+    blue: Vec<u16>,
+    sampled_pixel_count: usize,
+}
+
+#[derive(Clone)]
+struct CompiledDaslightParticles {
+    palette: Arc<[ColorEffectColor]>,
+    grayscale: bool,
+    source_frame_count: usize,
+    rendered_frame_count: usize,
+    random_pairs: Arc<[(f32, f32); SYNDOCAL_PARTICLE_RANDOM_PAIR_COUNT]>,
+    sampled_rows: [CompiledDaslightParticleSampleRow; DASLIGHT_PARTICLE_RASTER_SIZE],
+    sampled_y_rows: u128,
+    recipe: CompiledDaslightParticleRecipe,
+    raster_cache: Option<RefCell<CompiledDaslightParticleRasterCache>>,
+    precomputed_frames: Option<Arc<CompiledDaslightParticleFrames>>,
+}
+
+impl CompiledDaslightParticles {
+    #[cfg(test)]
+    fn compile(request: &ColorEffectRequest) -> Result<Option<Self>, String> {
+        Self::compile_with_sampled_rows(
+            request,
+            [(1_u128 << DASLIGHT_PARTICLE_RASTER_SIZE) - 1; DASLIGHT_PARTICLE_RASTER_SIZE],
+            false,
+        )
+    }
+
+    fn compile_for_targets(
+        request: &ColorEffectRequest,
+        targets: &[RuntimeColorSpatialTarget],
+    ) -> Result<Option<Self>, String> {
+        let mut sampled_rows = [0_u128; DASLIGHT_PARTICLE_RASTER_SIZE];
+        for target in targets {
+            let pixel_x = Self::raster_pixel(target.x);
+            let pixel_y = Self::raster_pixel(target.z);
+            sampled_rows[pixel_y] |= 1_u128 << pixel_x;
+        }
+        Self::compile_with_sampled_rows(
+            request,
+            sampled_rows,
+            targets.len() <= SUPPORTED_EFFECT_ENVELOPE_FIXTURES,
+        )
+    }
+
+    fn compile_with_sampled_rows(
+        request: &ColorEffectRequest,
+        sampled_rows: [u128; DASLIGHT_PARTICLE_RASTER_SIZE],
+        precompute_supported_frames: bool,
+    ) -> Result<Option<Self>, String> {
+        let Some(pattern) = request.spatial_pattern.as_ref() else {
+            return Ok(None);
+        };
+        let (grayscale, rng_seed, recipe) = match &pattern.recipe {
+            ColorEffectSpatialRecipe::Explosion {
+                grayscale,
+                rng_seed,
+                shape,
+                explosion_number,
+                explosion_size,
+                particle_number,
+                particle_size,
+                particle_life,
+                trail_size,
+                gravity,
+            } => {
+                if *shape != 0 {
+                    return Err("Explosion supports only filled-ellipse Shape 0".to_string());
+                }
+                (
+                    *grayscale,
+                    *rng_seed,
+                    CompiledDaslightParticleRecipe::Explosion {
+                        explosion_number: usize::from(*explosion_number),
+                        explosion_size: f32::from(*explosion_size) / 10.0,
+                        particle_number: usize::from(*particle_number),
+                        particle_size: f32::from(*particle_size),
+                        particle_life: *particle_life,
+                        trail_size: usize::from(*trail_size),
+                        gravity: *gravity,
+                    },
+                )
+            }
+            ColorEffectSpatialRecipe::Starfield {
+                grayscale,
+                rng_seed,
+                shape,
+                particles,
+                size,
+                trail,
+                rotation,
+            } => {
+                if *shape != 0 {
+                    return Err("Starfield supports only filled-ellipse Shape 0".to_string());
+                }
+                (
+                    *grayscale,
+                    *rng_seed,
+                    CompiledDaslightParticleRecipe::Starfield {
+                        particles: usize::from(*particles),
+                        size: f32::from(*size),
+                        trail: usize::from(*trail),
+                        rotation: *rotation,
+                    },
+                )
+            }
+            _ => return Ok(None),
+        };
+        if !(2..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS).contains(&request.stops.len()) {
+            return Err(
+                "Explosion and Starfield require between 2 and 255 palette stops".to_string(),
+            );
+        }
+        let source_frame_count = (request.period_ms as usize / 40).max(1);
+        let rendered_frame_count = source_frame_count.min(SYNDOCAL_PARTICLE_FRAME_CAP);
+        let random_pairs = Arc::new(std::array::from_fn(|index| {
+            let index = index as u64;
+            (
+                syndocal_sparkle_unit_fraction(
+                    u64::from(rng_seed) ^ index.wrapping_mul(0xA24B_AED4_963E_E407),
+                ),
+                syndocal_sparkle_unit_fraction(
+                    u64::from(rng_seed)
+                        ^ 0xC6BC_2796_92B5_CC83
+                        ^ index.wrapping_mul(0x9E37_79B9_7F4A_7C15),
+                ),
+            )
+        }));
+        let palette = request
+            .stops
+            .iter()
+            .map(|stop| stop.color)
+            .collect::<Arc<[_]>>();
+        let mut sampled_pixel_count = 0;
+        let sampled_rows = sampled_rows.map(|x_mask| {
+            let row = CompiledDaslightParticleSampleRow {
+                x_mask,
+                slot_start: sampled_pixel_count,
+            };
+            sampled_pixel_count += x_mask.count_ones() as usize;
+            row
+        });
+        let raster_cache = (!precompute_supported_frames).then(|| {
+            RefCell::new(CompiledDaslightParticleRasterCache::new(
+                palette[0],
+                sampled_pixel_count,
+            ))
+        });
+        let sampled_y_rows = sampled_rows
+            .iter()
+            .enumerate()
+            .fold(0_u128, |mask, (row, sampled)| {
+                mask | (u128::from(sampled.x_mask != 0) << row)
+            });
+        let mut compiled = Self {
+            palette,
+            grayscale,
+            source_frame_count,
+            rendered_frame_count,
+            random_pairs,
+            sampled_rows,
+            sampled_y_rows,
+            recipe,
+            raster_cache,
+            precomputed_frames: None,
+        };
+        if precompute_supported_frames {
+            compiled.precompute_frames(sampled_pixel_count);
+        }
+        Ok(Some(compiled))
+    }
+
+    fn random_pair(&self, index: usize) -> (f32, f32) {
+        self.random_pairs[index % SYNDOCAL_PARTICLE_RANDOM_PAIR_COUNT]
+    }
+
+    fn raster_pixel(normalized: f32) -> usize {
+        (normalized.clamp(0.0, 1.0) * DASLIGHT_PARTICLE_RASTER_SIZE as f32)
+            .floor()
+            .min((DASLIGHT_PARTICLE_RASTER_SIZE - 1) as f32) as usize
+    }
+
+    fn generation(&self, time_phase: f64) -> usize {
+        (time_phase.rem_euclid(1.0) * self.rendered_frame_count as f64)
+            .floor()
+            .min((self.rendered_frame_count - 1) as f64) as usize
+    }
+
+    fn sampled_slot(&self, pixel_x: usize, pixel_y: usize) -> Option<usize> {
+        let row = self.sampled_rows[pixel_y];
+        let pixel_bit = 1_u128 << pixel_x;
+        if row.x_mask & pixel_bit == 0 {
+            return None;
+        }
+        let lower_bits = pixel_bit - 1;
+        Some(row.slot_start + (row.x_mask & lower_bits).count_ones() as usize)
+    }
+
+    fn source_over_ellipse_sampled(
+        sampled_rows: &[CompiledDaslightParticleSampleRow; DASLIGHT_PARTICLE_RASTER_SIZE],
+        sampled_y_rows: u128,
+        cache: &mut CompiledDaslightParticleRasterCache,
+        x: f64,
+        y: f64,
+        size: f64,
+        color: ColorEffectColor,
+        opacity: f32,
+    ) {
+        let opacity = opacity.clamp(0.0, 1.0);
+        if opacity <= 0.0 || size <= 0.0 {
+            return;
+        }
+        let minimum_x = x.floor().max(0.0) as i32;
+        let minimum_y = y.floor().max(0.0) as i32;
+        let maximum_x = (x + size).ceil().min(DASLIGHT_PARTICLE_RASTER_SIZE as f64) as i32;
+        let maximum_y = (y + size).ceil().min(DASLIGHT_PARTICLE_RASTER_SIZE as f64) as i32;
+        if minimum_x >= maximum_x || minimum_y >= maximum_y {
+            return;
+        }
+        let radius = size * 0.5;
+        let center_x = x + radius;
+        let center_y = y + radius;
+        let inverse_radius = 1.0 / radius;
+        let y_span_width = (maximum_y - minimum_y) as u32;
+        let y_span_mask = ((1_u128 << y_span_width) - 1) << minimum_y;
+        let mut pending_y = sampled_y_rows & y_span_mask;
+        while pending_y != 0 {
+            let pixel_y = pending_y.trailing_zeros() as i32;
+            pending_y &= pending_y - 1;
+            let row = sampled_rows[pixel_y as usize];
+            let normalized_y = (f64::from(pixel_y) + 0.5 - center_y) * inverse_radius;
+            let remaining = 1.0 - normalized_y * normalized_y;
+            if remaining < 0.0 {
+                continue;
+            }
+            let half_span = radius * remaining.sqrt();
+            let row_minimum = (center_x - half_span - 0.5)
+                .ceil()
+                .max(f64::from(minimum_x)) as i32;
+            let row_maximum = (center_x + half_span - 0.5)
+                .floor()
+                .min(f64::from(maximum_x - 1)) as i32;
+            if row_minimum > row_maximum {
+                continue;
+            }
+            let span_width = (row_maximum - row_minimum + 1) as u32;
+            let span_mask = ((1_u128 << span_width) - 1) << row_minimum;
+            let mut pending = row.x_mask & span_mask;
+            while pending != 0 {
+                let run_x = pending.trailing_zeros() as usize;
+                let run_len = (pending >> run_x).trailing_ones() as usize;
+                let run_mask = ((1_u128 << run_len) - 1) << run_x;
+                pending &= !run_mask;
+                let lower_bits = (1_u128 << run_x) - 1;
+                let slot_start = row.slot_start + (row.x_mask & lower_bits).count_ones() as usize;
+                let slot_range = slot_start..slot_start + run_len;
+                if opacity >= 1.0 {
+                    cache.red[slot_range.clone()].fill(color.red);
+                    cache.green[slot_range.clone()].fill(color.green);
+                    cache.blue[slot_range].fill(color.blue);
+                } else {
+                    syndocal_tube_blend_channel_slice(
+                        &mut cache.red[slot_range.clone()],
+                        color.red,
+                        opacity,
+                    );
+                    syndocal_tube_blend_channel_slice(
+                        &mut cache.green[slot_range.clone()],
+                        color.green,
+                        opacity,
+                    );
+                    syndocal_tube_blend_channel_slice(
+                        &mut cache.blue[slot_range],
+                        color.blue,
+                        opacity,
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn source_over_ellipse_masked(
+        sampled_rows: &[u128; DASLIGHT_PARTICLE_RASTER_SIZE],
+        sampled_y_rows: u128,
+        raster: &mut [ColorEffectColor; DASLIGHT_PARTICLE_RASTER_PIXELS],
+        x: f64,
+        y: f64,
+        size: f64,
+        color: ColorEffectColor,
+        opacity: f32,
+    ) {
+        let opacity = opacity.clamp(0.0, 1.0);
+        if opacity <= 0.0 || size <= 0.0 {
+            return;
+        }
+        let minimum_x = x.floor().max(0.0) as i32;
+        let minimum_y = y.floor().max(0.0) as i32;
+        let maximum_x = (x + size).ceil().min(DASLIGHT_PARTICLE_RASTER_SIZE as f64) as i32;
+        let maximum_y = (y + size).ceil().min(DASLIGHT_PARTICLE_RASTER_SIZE as f64) as i32;
+        if minimum_x >= maximum_x || minimum_y >= maximum_y {
+            return;
+        }
+        let radius = size * 0.5;
+        let center_x = x + radius;
+        let center_y = y + radius;
+        let inverse_radius = 1.0 / radius;
+        let y_span_width = (maximum_y - minimum_y) as u32;
+        let y_span_mask = ((1_u128 << y_span_width) - 1) << minimum_y;
+        let mut pending_y = sampled_y_rows & y_span_mask;
+        while pending_y != 0 {
+            let pixel_y = pending_y.trailing_zeros() as i32;
+            pending_y &= pending_y - 1;
+            let sampled_row = sampled_rows[pixel_y as usize];
+            let normalized_y = (f64::from(pixel_y) + 0.5 - center_y) * inverse_radius;
+            let remaining = 1.0 - normalized_y * normalized_y;
+            if remaining < 0.0 {
+                continue;
+            }
+            let half_span = radius * remaining.sqrt();
+            let row_minimum = (center_x - half_span - 0.5)
+                .ceil()
+                .max(f64::from(minimum_x)) as i32;
+            let row_maximum = (center_x + half_span - 0.5)
+                .floor()
+                .min(f64::from(maximum_x - 1)) as i32;
+            if row_minimum > row_maximum {
+                continue;
+            }
+            let row = pixel_y as usize * DASLIGHT_PARTICLE_RASTER_SIZE;
+            let span_width = (row_maximum - row_minimum + 1) as u32;
+            let span_mask = ((1_u128 << span_width) - 1) << row_minimum;
+            let mut pending = sampled_row & span_mask;
+            while pending != 0 {
+                let pixel_x = pending.trailing_zeros() as usize;
+                let destination = &mut raster[row + pixel_x as usize];
+                if opacity >= 1.0 {
+                    *destination = color;
+                } else if *destination != color {
+                    *destination = interpolate_color_effect_color(
+                        *destination,
+                        color,
+                        opacity,
+                        ColorEffectInterpolation::Rgb,
+                    );
+                }
+                pending &= pending - 1;
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn source_over_ellipse(
+        raster: &mut [ColorEffectColor; DASLIGHT_PARTICLE_RASTER_PIXELS],
+        x: f64,
+        y: f64,
+        size: f64,
+        color: ColorEffectColor,
+        opacity: f32,
+    ) {
+        Self::source_over_ellipse_masked(
+            &[(1_u128 << DASLIGHT_PARTICLE_RASTER_SIZE) - 1; DASLIGHT_PARTICLE_RASTER_SIZE],
+            (1_u128 << DASLIGHT_PARTICLE_RASTER_SIZE) - 1,
+            raster,
+            x,
+            y,
+            size,
+            color,
+            opacity,
+        );
+    }
+
+    #[cfg(test)]
+    fn source_over_ellipse_reference(
+        raster: &mut [ColorEffectColor; DASLIGHT_PARTICLE_RASTER_PIXELS],
+        x: f64,
+        y: f64,
+        size: f64,
+        color: ColorEffectColor,
+        opacity: f32,
+    ) {
+        let opacity = opacity.clamp(0.0, 1.0);
+        if opacity <= 0.0 || size <= 0.0 {
+            return;
+        }
+        let minimum_x = x.floor().max(0.0) as i32;
+        let minimum_y = y.floor().max(0.0) as i32;
+        let maximum_x = (x + size).ceil().min(DASLIGHT_PARTICLE_RASTER_SIZE as f64) as i32;
+        let maximum_y = (y + size).ceil().min(DASLIGHT_PARTICLE_RASTER_SIZE as f64) as i32;
+        if minimum_x >= maximum_x || minimum_y >= maximum_y {
+            return;
+        }
+        let radius = size * 0.5;
+        let center_x = x + radius;
+        let center_y = y + radius;
+        let inverse_radius = 1.0 / radius;
+        for pixel_y in minimum_y..maximum_y {
+            let normalized_y = (f64::from(pixel_y) + 0.5 - center_y) * inverse_radius;
+            let remaining = 1.0 - normalized_y * normalized_y;
+            if remaining < 0.0 {
+                continue;
+            }
+            let half_span = radius * remaining.sqrt();
+            let row_minimum = (center_x - half_span - 0.5)
+                .ceil()
+                .max(f64::from(minimum_x)) as i32;
+            let row_maximum = (center_x + half_span - 0.5)
+                .floor()
+                .min(f64::from(maximum_x - 1)) as i32;
+            if row_minimum > row_maximum {
+                continue;
+            }
+            let row = pixel_y as usize * DASLIGHT_PARTICLE_RASTER_SIZE;
+            for pixel_x in row_minimum..=row_maximum {
+                let destination = &mut raster[row + pixel_x as usize];
+                *destination = interpolate_color_effect_color(
+                    *destination,
+                    color,
+                    opacity,
+                    ColorEffectInterpolation::Rgb,
+                );
+            }
+        }
+    }
+
+    fn paint_layers_masked(
+        &self,
+        cache: &mut CompiledDaslightParticleRasterCache,
+        layers: &[(f64, f64, f64, ColorEffectColor, f32)],
+    ) {
+        for &(x, y, size, color, opacity) in layers {
+            Self::source_over_ellipse_sampled(
+                &self.sampled_rows,
+                self.sampled_y_rows,
+                cache,
+                x,
+                y,
+                size,
+                color,
+                opacity,
+            );
+        }
+    }
+
+    #[cfg(test)]
+    fn paint_layers(
+        raster: &mut [ColorEffectColor; DASLIGHT_PARTICLE_RASTER_PIXELS],
+        layers: &[(f64, f64, f64, ColorEffectColor, f32)],
+    ) {
+        for &(x, y, size, color, opacity) in layers {
+            Self::source_over_ellipse(raster, x, y, size, color, opacity);
+        }
+    }
+
+    #[cfg(test)]
+    fn explosion_position(
+        center_x: f32,
+        center_y: f32,
+        velocity_x: f32,
+        velocity_y: f32,
+        motion: f32,
+        gravity: f32,
+        age: usize,
+    ) -> (f32, f32) {
+        let (x, y, _) = Self::explosion_trajectory(
+            center_x, center_y, velocity_x, velocity_y, motion, gravity, age,
+        );
+        (x, y)
+    }
+
+    fn explosion_trajectory(
+        center_x: f32,
+        center_y: f32,
+        velocity_x: f32,
+        velocity_y: f32,
+        motion: f32,
+        gravity: f32,
+        age: usize,
+    ) -> (f32, f32, f32) {
+        let mut x = center_x;
+        let mut y = center_y;
+        let mut velocity_y = velocity_y;
+        for _ in 0..age {
+            Self::advance_explosion_trajectory(
+                &mut x,
+                &mut y,
+                velocity_x,
+                &mut velocity_y,
+                motion,
+                gravity,
+            );
+        }
+        (x, y, velocity_y)
+    }
+
+    fn advance_explosion_trajectory(
+        x: &mut f32,
+        y: &mut f32,
+        velocity_x: f32,
+        velocity_y: &mut f32,
+        motion: f32,
+        gravity: f32,
+    ) {
+        *x += velocity_x * motion;
+        *y += *velocity_y * motion;
+        *velocity_y += gravity / 50.0;
+    }
+
+    #[cfg(test)]
+    fn explosion_position_reference(
+        center_x: f32,
+        center_y: f32,
+        velocity_x: f32,
+        velocity_y: f32,
+        motion: f32,
+        gravity: f32,
+        age: usize,
+    ) -> (f32, f32) {
+        let mut x = center_x;
+        let mut y = center_y;
+        let mut velocity_y = velocity_y;
+        for _ in 0..age {
+            x += velocity_x * motion;
+            y += velocity_y * motion;
+            velocity_y += gravity / 50.0;
+        }
+        (x, y)
+    }
+
+    fn explosion_spawn_period(rendered_frame_count: usize, explosion_number: usize) -> usize {
+        (rendered_frame_count / explosion_number).max(1)
+    }
+
+    #[cfg(test)]
+    fn explosion_spawn_count(
+        rendered_frame_count: usize,
+        explosion_number: usize,
+        generation: usize,
+    ) -> usize {
+        generation / Self::explosion_spawn_period(rendered_frame_count, explosion_number) + 1
+    }
+
+    #[cfg(test)]
+    fn starfield_position(angle: f32, rotation: f32, radius: f32, age: usize) -> (f32, f32) {
+        let (x, y, _, _) = Self::starfield_trajectory(angle, rotation, radius, age);
+        (x, y)
+    }
+
+    fn starfield_trajectory(
+        angle: f32,
+        rotation: f32,
+        radius: f32,
+        age: usize,
+    ) -> (f32, f32, f32, f32) {
+        let initial_angle = angle.to_radians();
+        let initial_x = (initial_angle.cos() * radius).trunc();
+        let initial_y = (initial_angle.sin() * radius).trunc();
+        let mut angle = angle;
+        let mut radius = initial_x.hypot(initial_y);
+        let mut x = (DASLIGHT_PARTICLE_RASTER_SIZE / 2) as f32 + initial_x;
+        let mut y = (DASLIGHT_PARTICLE_RASTER_SIZE / 2) as f32 + initial_y;
+        for _ in 0..age {
+            Self::advance_starfield_trajectory(&mut x, &mut y, &mut radius, &mut angle, rotation);
+        }
+        (x, y, radius, angle)
+    }
+
+    fn advance_starfield_trajectory(
+        x: &mut f32,
+        y: &mut f32,
+        radius: &mut f32,
+        angle: &mut f32,
+        rotation: f32,
+    ) {
+        *radius += 1.0;
+        let radians = angle.to_radians();
+        *x = (DASLIGHT_PARTICLE_RASTER_SIZE / 2) as f32 + radians.cos() * *radius;
+        *y = (DASLIGHT_PARTICLE_RASTER_SIZE / 2) as f32 + radians.sin() * *radius;
+        *angle += rotation;
+    }
+
+    #[cfg(test)]
+    fn starfield_position_reference(
+        angle: f32,
+        rotation: f32,
+        radius: f32,
+        age: usize,
+    ) -> (f32, f32) {
+        let initial_angle = angle.to_radians();
+        let initial_x = (initial_angle.cos() * radius).trunc();
+        let initial_y = (initial_angle.sin() * radius).trunc();
+        if age == 0 {
+            return (
+                (DASLIGHT_PARTICLE_RASTER_SIZE / 2) as f32 + initial_x,
+                (DASLIGHT_PARTICLE_RASTER_SIZE / 2) as f32 + initial_y,
+            );
+        }
+        let mut angle = angle;
+        let mut radius = initial_x.hypot(initial_y);
+        let mut x = (DASLIGHT_PARTICLE_RASTER_SIZE / 2) as f32 + initial_x;
+        let mut y = (DASLIGHT_PARTICLE_RASTER_SIZE / 2) as f32 + initial_y;
+        for _ in 0..age {
+            radius += 1.0;
+            let radians = angle.to_radians();
+            x = (DASLIGHT_PARTICLE_RASTER_SIZE / 2) as f32 + radians.cos() * radius;
+            y = (DASLIGHT_PARTICLE_RASTER_SIZE / 2) as f32 + radians.sin() * radius;
+            angle += rotation;
+        }
+        (x, y)
+    }
+
+    fn render_explosion(
+        &self,
+        cache: &mut CompiledDaslightParticleRasterCache,
+        generation: usize,
+        explosion_number: usize,
+        explosion_size: f32,
+        particle_number: usize,
+        particle_size: f32,
+        particle_life: f32,
+        trail_size: usize,
+        gravity: f32,
+    ) {
+        let spawn_period =
+            Self::explosion_spawn_period(self.rendered_frame_count, explosion_number);
+        let decay = (1.0 - particle_life) * 0.05;
+        let lower = (DASLIGHT_PARTICLE_RASTER_SIZE / 6) as f32;
+        let upper = (DASLIGHT_PARTICLE_RASTER_SIZE * 5 / 6) as f32;
+        for spawn_frame in (0..=generation).step_by(spawn_period) {
+            let (center_random_x, center_random_y) = self.random_pair(spawn_frame);
+            let center_x = lower + center_random_x * (upper - lower);
+            let center_y = lower + center_random_y * (upper - lower);
+            let color_index = 1 + (spawn_frame / spawn_period) % (self.palette.len() - 1);
+            let color = self.palette[color_index];
+            let age = generation - spawn_frame;
+            let parent_opacity = 1.0 - decay * age as f32;
+            if parent_opacity <= 0.0 {
+                continue;
+            }
+            for particle_index in 0..particle_number {
+                let (random_x, random_y) = self.random_pair(spawn_frame + particle_index);
+                let velocity_x = 4.0 * random_x - 2.0;
+                let velocity_y = 4.0 * random_y - 2.0;
+                let child_count = age.min(trail_size).min(DASLIGHT_PARTICLE_MAX_LAYERS - 1);
+                let mut layers =
+                    [(0.0, 0.0, 0.0, self.palette[0], 0.0); DASLIGHT_PARTICLE_MAX_LAYERS];
+                let first_age = age - child_count;
+                let (mut x, mut y, mut trajectory_velocity_y) = Self::explosion_trajectory(
+                    center_x,
+                    center_y,
+                    velocity_x,
+                    velocity_y,
+                    explosion_size,
+                    gravity,
+                    first_age,
+                );
+                if child_count > 0 {
+                    let previous_opacity = 1.0 - decay * (age - 1) as f32;
+                    for oldest_index in 0..child_count {
+                        let newest_index = child_count - 1 - oldest_index;
+                        let child_opacity =
+                            previous_opacity * (1.0 - newest_index as f32 / trail_size as f32);
+                        layers[oldest_index] = (
+                            f64::from(x),
+                            f64::from(y),
+                            f64::from(particle_size),
+                            color,
+                            child_opacity,
+                        );
+                        Self::advance_explosion_trajectory(
+                            &mut x,
+                            &mut y,
+                            velocity_x,
+                            &mut trajectory_velocity_y,
+                            explosion_size,
+                            gravity,
+                        );
+                    }
+                }
+                layers[child_count] = (
+                    f64::from(x),
+                    f64::from(y),
+                    f64::from(particle_size),
+                    color,
+                    parent_opacity,
+                );
+                self.paint_layers_masked(cache, &layers[..=child_count]);
+            }
+        }
+    }
+
+    fn render_starfield(
+        &self,
+        cache: &mut CompiledDaslightParticleRasterCache,
+        generation: usize,
+        particles: usize,
+        size: f32,
+        trail: usize,
+        rotation: f32,
+    ) {
+        let spawn_interval = 12 - particles;
+        let decay = 1.0 / self.source_frame_count as f32;
+        for spawn_frame in (0..=generation).step_by(spawn_interval) {
+            let (random_x, random_y) = self.random_pair(spawn_frame);
+            let palette_index = (1 + ((self.palette.len() - 1) as f32 * random_x).trunc() as usize)
+                .min(self.palette.len() - 1);
+            let color = self.palette[palette_index];
+            let radius = (random_x * 10.0 + 5.0).trunc();
+            let angle = random_y * 360.0;
+            let age = generation - spawn_frame;
+            let parent_opacity = 1.0 - decay * age as f32;
+            if parent_opacity <= 0.0 {
+                continue;
+            }
+            let child_count = age.min(trail).min(DASLIGHT_PARTICLE_MAX_LAYERS - 1);
+            let mut layers = [(0.0, 0.0, 0.0, self.palette[0], 0.0); DASLIGHT_PARTICLE_MAX_LAYERS];
+            let first_age = age - child_count;
+            let (mut x, mut y, mut trajectory_radius, mut trajectory_angle) =
+                Self::starfield_trajectory(angle, rotation, radius, first_age);
+            if child_count > 0 {
+                let previous_opacity = 1.0 - decay * (age - 1) as f32;
+                for oldest_index in 0..child_count {
+                    let newest_index = child_count - 1 - oldest_index;
+                    let child_opacity =
+                        previous_opacity * (1.0 - newest_index as f32 / trail as f32);
+                    layers[oldest_index] = (
+                        f64::from(x),
+                        f64::from(y),
+                        f64::from(size),
+                        color,
+                        child_opacity,
+                    );
+                    Self::advance_starfield_trajectory(
+                        &mut x,
+                        &mut y,
+                        &mut trajectory_radius,
+                        &mut trajectory_angle,
+                        rotation,
+                    );
+                }
+            }
+            layers[child_count] = (
+                f64::from(x),
+                f64::from(y),
+                f64::from(size),
+                color,
+                parent_opacity,
+            );
+            self.paint_layers_masked(cache, &layers[..=child_count]);
+        }
+    }
+
+    fn render_generation_into(
+        &self,
+        cache: &mut CompiledDaslightParticleRasterCache,
+        generation: usize,
+    ) {
+        cache.fill(self.palette[0]);
+        match self.recipe {
+            CompiledDaslightParticleRecipe::Explosion {
+                explosion_number,
+                explosion_size,
+                particle_number,
+                particle_size,
+                particle_life,
+                trail_size,
+                gravity,
+            } => self.render_explosion(
+                cache,
+                generation,
+                explosion_number,
+                explosion_size,
+                particle_number,
+                particle_size,
+                particle_life,
+                trail_size,
+                gravity,
+            ),
+            CompiledDaslightParticleRecipe::Starfield {
+                particles,
+                size,
+                trail,
+                rotation,
+            } => self.render_starfield(cache, generation, particles, size, trail, rotation),
+        }
+    }
+
+    fn precompute_frames(&mut self, sampled_pixel_count: usize) {
+        let color_count = self.rendered_frame_count * sampled_pixel_count;
+        let mut frames = CompiledDaslightParticleFrames {
+            red: Vec::with_capacity(color_count),
+            green: Vec::with_capacity(color_count),
+            blue: Vec::with_capacity(color_count),
+            sampled_pixel_count,
+        };
+        let mut generation_cache =
+            CompiledDaslightParticleRasterCache::new(self.palette[0], sampled_pixel_count);
+        for generation in 0..self.rendered_frame_count {
+            self.render_generation_into(&mut generation_cache, generation);
+            frames.red.extend_from_slice(&generation_cache.red);
+            frames.green.extend_from_slice(&generation_cache.green);
+            frames.blue.extend_from_slice(&generation_cache.blue);
+        }
+        self.precomputed_frames = Some(Arc::new(frames));
+    }
+
+    fn prepare_generation(&self, generation: usize) {
+        if self.precomputed_frames.is_some() {
+            return;
+        }
+        let mut cache = self
+            .raster_cache
+            .as_ref()
+            .expect("dynamic particle evaluator must retain a generation cache")
+            .borrow_mut();
+        if cache.generation == Some(generation) {
+            return;
+        }
+        self.render_generation_into(&mut cache, generation);
+        cache.generation = Some(generation);
+        #[cfg(test)]
+        {
+            cache.rebuild_count += 1;
+        }
+    }
+
+    fn sample_at_phase(
+        &self,
+        time_phase: f64,
+        normalized_x: f32,
+        normalized_y: f32,
+    ) -> ColorEffectColor {
+        let generation = self.generation(time_phase);
+        self.prepare_generation(generation);
+        let pixel_x = Self::raster_pixel(normalized_x);
+        let pixel_y = Self::raster_pixel(normalized_y);
+        let slot = self
+            .sampled_slot(pixel_x, pixel_y)
+            .expect("compiled particle target mask must contain every sampled runtime pixel");
+        let color = if let Some(frames) = &self.precomputed_frames {
+            let index = generation * frames.sampled_pixel_count + slot;
+            ColorEffectColor {
+                red: frames.red[index],
+                green: frames.green[index],
+                blue: frames.blue[index],
+            }
+        } else {
+            self.raster_cache
+                .as_ref()
+                .expect("dynamic particle evaluator must retain a generation cache")
+                .borrow()
+                .color(slot)
+        };
+        if self.grayscale {
+            daslight_grayscale_color(color)
+        } else {
+            color
+        }
+    }
+
+    #[cfg(test)]
+    fn cache_state(&self) -> (Option<usize>, u64) {
+        self.raster_cache
+            .as_ref()
+            .map(|cache| {
+                let cache = cache.borrow();
+                (cache.generation, cache.rebuild_count)
+            })
+            .unwrap_or((None, 0))
+    }
+
+    #[cfg(test)]
+    fn storage_pointers(&self) -> (usize, usize, usize, usize, usize, usize, usize, usize) {
+        let (cache_red, cache_green, cache_blue) = self
+            .raster_cache
+            .as_ref()
+            .map(|cache| {
+                let cache = cache.borrow();
+                (
+                    cache.red.as_ptr() as usize,
+                    cache.green.as_ptr() as usize,
+                    cache.blue.as_ptr() as usize,
+                )
+            })
+            .unwrap_or_default();
+        let (frames_red, frames_green, frames_blue) = self
+            .precomputed_frames
+            .as_ref()
+            .map(|frames| {
+                (
+                    frames.red.as_ptr() as usize,
+                    frames.green.as_ptr() as usize,
+                    frames.blue.as_ptr() as usize,
+                )
+            })
+            .unwrap_or_default();
+        (
+            self.palette.as_ptr() as usize,
+            self.random_pairs.as_ptr() as usize,
+            cache_red,
+            cache_green,
+            cache_blue,
+            frames_red,
+            frames_green,
+            frames_blue,
+        )
     }
 }
 
@@ -28672,6 +29660,25 @@ fn validate_runtime_color_effect_request(request: &ColorEffectRequest) -> Result
                     return Err("Graph requires Override blend mode".to_string());
                 }
             }
+            ColorEffectSpatialRecipe::Explosion { .. }
+            | ColorEffectSpatialRecipe::Starfield { .. } => {
+                if !(2..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS).contains(&request.stops.len())
+                {
+                    return Err(
+                        "Explosion and Starfield require between 2 and 255 palette stops"
+                            .to_string(),
+                    );
+                }
+                if pattern.placement.is_none() {
+                    return Err(
+                        "Explosion and Starfield require a placed 100x100 spatial raster"
+                            .to_string(),
+                    );
+                }
+                if request.blend_mode != EffectBlendMode::Override {
+                    return Err("Explosion and Starfield require Override blend mode".to_string());
+                }
+            }
             ColorEffectSpatialRecipe::Sparkle {
                 raster_mode: ColorEffectSpatialSparkleRasterMode::TubeFullRasterHeight,
                 vertical_symmetry,
@@ -29013,6 +30020,68 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
             }
             if !offset.is_finite() || !(-1.0..=1.0).contains(offset) {
                 return Err("Graph Offset must be finite and within -1..1".to_string());
+            }
+            Ok(())
+        }
+        ColorEffectSpatialRecipe::Explosion {
+            shape,
+            explosion_number,
+            explosion_size,
+            particle_number,
+            particle_size,
+            particle_life,
+            trail_size,
+            gravity,
+            ..
+        } => {
+            if *shape != 0 {
+                return Err("Explosion supports only filled-ellipse Shape 0".to_string());
+            }
+            if !(1..=50).contains(explosion_number) {
+                return Err("Explosion Number must be within 1..50".to_string());
+            }
+            if *explosion_size > 100 {
+                return Err("Explosion Size must be within 0..100".to_string());
+            }
+            if !(1..=100).contains(particle_number) {
+                return Err("Explosion Particles must be within 1..100".to_string());
+            }
+            if !(1..=100).contains(particle_size) {
+                return Err("Explosion Particle Size must be within 1..100".to_string());
+            }
+            if !particle_life.is_finite() || !(0.0..=0.9).contains(particle_life) {
+                return Err("Explosion Life must be finite and within 0..0.9".to_string());
+            }
+            if !(1..=25).contains(trail_size) {
+                return Err("Explosion Trail must be within 1..25".to_string());
+            }
+            if !gravity.is_finite() || !(0.0..=10.0).contains(gravity) {
+                return Err("Explosion Gravity must be finite and within 0..10".to_string());
+            }
+            Ok(())
+        }
+        ColorEffectSpatialRecipe::Starfield {
+            shape,
+            particles,
+            size,
+            trail,
+            rotation,
+            ..
+        } => {
+            if *shape != 0 {
+                return Err("Starfield supports only filled-ellipse Shape 0".to_string());
+            }
+            if !(1..=10).contains(particles) {
+                return Err("Starfield Particles must be within 1..10".to_string());
+            }
+            if !(1..=100).contains(size) {
+                return Err("Starfield Size must be within 1..100".to_string());
+            }
+            if !(1..=25).contains(trail) {
+                return Err("Starfield Trail must be within 1..25".to_string());
+            }
+            if !rotation.is_finite() || !(-5.0..=5.0).contains(rotation) {
+                return Err("Starfield Rotation must be finite and within -5..5".to_string());
             }
             Ok(())
         }
@@ -29719,9 +30788,11 @@ pub fn validate_value_effect_request(request: &ValueEffectRequest) -> Result<(),
             ColorEffectSpatialRecipe::Grid { .. }
                 | ColorEffectSpatialRecipe::Lines { .. }
                 | ColorEffectSpatialRecipe::Graph { .. }
+                | ColorEffectSpatialRecipe::Explosion { .. }
+                | ColorEffectSpatialRecipe::Starfield { .. }
         ) {
             return Err(
-                "Graph, Grid, and Lines spatial recipes are supported only by Color effects"
+                "Graph, Grid, Lines, Explosion, and Starfield spatial recipes are supported only by Color effects"
                     .to_string(),
             );
         }
@@ -31690,6 +32761,8 @@ fn runtime_color_effect_from_request(
         let daslight_perlin = compile_daslight_perlin(&request, &targets)?;
         let daslight_grid_lines = CompiledDaslightGridLines::compile(&request)?;
         let daslight_graph = CompiledDaslightGraph::compile(&request)?;
+        let daslight_particles =
+            CompiledDaslightParticles::compile_for_targets(&request, &targets)?;
         let dense_fixture_targets =
             RuntimeColorSpatialDenseFixtureTargets::compile(&targets, &attribute_indices);
         Some(Box::new(RuntimeColorSpatialState {
@@ -31703,6 +32776,7 @@ fn runtime_color_effect_from_request(
             daslight_perlin,
             daslight_grid_lines,
             daslight_graph,
+            daslight_particles,
         }))
     } else {
         None
@@ -32970,6 +34044,7 @@ fn evaluate_runtime_color_spatial_attribute_at_rate(
                 spatial.daslight_perlin.as_ref(),
                 spatial.daslight_grid_lines.as_ref(),
                 spatial.daslight_graph.as_ref(),
+                spatial.daslight_particles.as_ref(),
                 effect_id,
                 created_at,
                 now,
@@ -33256,6 +34331,7 @@ fn evaluate_color_spatial_sample_at_rate(
     daslight_perlin: Option<&CompiledDaslightPerlin>,
     daslight_grid_lines: Option<&CompiledDaslightGridLines>,
     daslight_graph: Option<&CompiledDaslightGraph>,
+    daslight_particles: Option<&CompiledDaslightParticles>,
     effect_id: EffectId,
     created_at: Instant,
     now: Instant,
@@ -33290,6 +34366,16 @@ fn evaluate_color_spatial_sample_at_rate(
     if let Some(daslight_graph) = daslight_graph {
         return RuntimeColorSpatialSample {
             color: daslight_graph.sample_at_phase(
+                time_phase_for_continuous_spatial(request, created_at, now, clock, rate),
+                target.x,
+                target.z,
+            ),
+            opacity: 1.0,
+        };
+    }
+    if let Some(daslight_particles) = daslight_particles {
+        return RuntimeColorSpatialSample {
+            color: daslight_particles.sample_at_phase(
                 time_phase_for_continuous_spatial(request, created_at, now, clock, rate),
                 target.x,
                 target.z,
@@ -33383,7 +34469,9 @@ fn evaluate_color_spatial_sample_at_rate(
         | ColorEffectSpatialRecipe::Perlin { .. }
         | ColorEffectSpatialRecipe::Grid { .. }
         | ColorEffectSpatialRecipe::Lines { .. }
-        | ColorEffectSpatialRecipe::Graph { .. } => {
+        | ColorEffectSpatialRecipe::Graph { .. }
+        | ColorEffectSpatialRecipe::Explosion { .. }
+        | ColorEffectSpatialRecipe::Starfield { .. } => {
             unreachable!("unified spatial recipes are evaluated by their compiled analytic route")
         }
         ColorEffectSpatialRecipe::Spiral {
@@ -57345,6 +58433,1142 @@ mod tests {
         request
     }
 
+    fn test_particle_request(
+        recipe: ColorEffectSpatialRecipe,
+        period_ms: u64,
+    ) -> ColorEffectRequest {
+        let mut request = test_grid_lines_request(recipe, &[0, u16::MAX, 0]);
+        request.period_ms = period_ms;
+        request.stops[1].color = test_color(u16::MAX, 0, 0);
+        request.stops[2].color = test_color(0, u16::MAX, 0);
+        request
+    }
+
+    fn test_explosion_recipe(rng_seed: u32) -> ColorEffectSpatialRecipe {
+        ColorEffectSpatialRecipe::Explosion {
+            grayscale: false,
+            rng_seed,
+            shape: 0,
+            explosion_number: 5,
+            explosion_size: 5,
+            particle_number: 10,
+            particle_size: 10,
+            particle_life: 0.0,
+            trail_size: 10,
+            gravity: 0.0,
+        }
+    }
+
+    fn test_starfield_recipe(rng_seed: u32) -> ColorEffectSpatialRecipe {
+        ColorEffectSpatialRecipe::Starfield {
+            grayscale: false,
+            rng_seed,
+            shape: 0,
+            particles: 1,
+            size: 10,
+            trail: 10,
+            rotation: 0.0,
+        }
+    }
+
+    fn test_particle_mask_targets() -> Vec<RuntimeColorSpatialTarget> {
+        (0..200)
+            .map(|index| {
+                test_spatial_color_target(
+                    index,
+                    200,
+                    (index % 100) as f32 / 99.0,
+                    if index < 100 { 0.0 } else { 1.0 },
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn color_mappings_particle_sample_mask_matches_reference_row_spans_bit_exact() {
+        let background = test_color(777, 1_234, 4_321);
+        let mut reference = [background; DASLIGHT_PARTICLE_RASTER_PIXELS];
+        let mut masked = [background; DASLIGHT_PARTICLE_RASTER_PIXELS];
+        let mut sampled_rows = [0_u128; DASLIGHT_PARTICLE_RASTER_SIZE];
+        for y in 0..DASLIGHT_PARTICLE_RASTER_SIZE {
+            for x in 0..DASLIGHT_PARTICLE_RASTER_SIZE {
+                if x == 0 || x == 99 || y == 0 || y == 99 || (x * 17 + y * 31) % 47 == 0 {
+                    sampled_rows[y] |= 1_u128 << x;
+                }
+            }
+        }
+        let sampled_y_rows = sampled_rows
+            .iter()
+            .enumerate()
+            .fold(0_u128, |mask, (row, sampled)| {
+                mask | (u128::from(*sampled != 0) << row)
+            });
+        let mut sampled_pixel_count = 0;
+        let sampled_descriptors = sampled_rows.map(|x_mask| {
+            let row = CompiledDaslightParticleSampleRow {
+                x_mask,
+                slot_start: sampled_pixel_count,
+            };
+            sampled_pixel_count += x_mask.count_ones() as usize;
+            row
+        });
+        let mut compact = CompiledDaslightParticleRasterCache::new(background, sampled_pixel_count);
+        let cases = [
+            (-50.25, -20.75, 100.0, test_color(65_535, 0, 0), 1.0),
+            (-0.5, 0.25, 1.0, test_color(0, 65_535, 0), 0.5),
+            (0.0, 0.0, 4.0, test_color(0, 0, 65_535), 0.25),
+            (
+                16.125,
+                83.875,
+                10.0,
+                test_color(12_345, 54_321, 2_222),
+                0.995,
+            ),
+            (49.5, 49.5, 100.0, test_color(30_000, 30_000, 30_000), 0.0),
+            (98.75, 98.25, 100.0, test_color(65_535, 65_535, 0), 0.9),
+            (100.25, 100.75, 5.0, test_color(0, 65_535, 65_535), 1.0),
+        ];
+        for (x, y, size, color, opacity) in cases {
+            CompiledDaslightParticles::source_over_ellipse_reference(
+                &mut reference,
+                x,
+                y,
+                size,
+                color,
+                opacity,
+            );
+            CompiledDaslightParticles::source_over_ellipse_masked(
+                &sampled_rows,
+                sampled_y_rows,
+                &mut masked,
+                x,
+                y,
+                size,
+                color,
+                opacity,
+            );
+            CompiledDaslightParticles::source_over_ellipse_sampled(
+                &sampled_descriptors,
+                sampled_y_rows,
+                &mut compact,
+                x,
+                y,
+                size,
+                color,
+                opacity,
+            );
+        }
+        for index in 0..256_u64 {
+            let x = f64::from(syndocal_sparkle_unit_fraction(index ^ 0xA5A5)) * 160.0 - 30.0;
+            let y = f64::from(syndocal_sparkle_unit_fraction(index ^ 0x5A5A)) * 160.0 - 30.0;
+            let size = f64::from(syndocal_sparkle_unit_fraction(index ^ 0xC3C3)) * 99.0 + 1.0;
+            let opacity = syndocal_sparkle_unit_fraction(index ^ 0x3C3C);
+            let color = test_color(
+                index.wrapping_mul(257) as u16,
+                index.wrapping_mul(997) as u16,
+                index.wrapping_mul(4_093) as u16,
+            );
+            CompiledDaslightParticles::source_over_ellipse_reference(
+                &mut reference,
+                x,
+                y,
+                size,
+                color,
+                opacity,
+            );
+            CompiledDaslightParticles::source_over_ellipse_masked(
+                &sampled_rows,
+                sampled_y_rows,
+                &mut masked,
+                x,
+                y,
+                size,
+                color,
+                opacity,
+            );
+            CompiledDaslightParticles::source_over_ellipse_sampled(
+                &sampled_descriptors,
+                sampled_y_rows,
+                &mut compact,
+                x,
+                y,
+                size,
+                color,
+                opacity,
+            );
+        }
+        for y in 0..DASLIGHT_PARTICLE_RASTER_SIZE {
+            for x in 0..DASLIGHT_PARTICLE_RASTER_SIZE {
+                let index = y * DASLIGHT_PARTICLE_RASTER_SIZE + x;
+                if sampled_rows[y] & (1_u128 << x) != 0 {
+                    assert_eq!(masked[index], reference[index], "masked pixel ({x},{y})");
+                    let row = sampled_descriptors[y];
+                    let slot =
+                        row.slot_start + (row.x_mask & ((1_u128 << x) - 1)).count_ones() as usize;
+                    assert_eq!(
+                        compact.color(slot),
+                        reference[index],
+                        "compact SoA pixel ({x},{y})"
+                    );
+                } else {
+                    assert_eq!(masked[index], background, "unobserved pixel ({x},{y})");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn color_mappings_particle_target_mask_and_full_effect_generations_are_bit_exact() {
+        let targets = test_particle_mask_targets();
+        for recipe in [test_explosion_recipe(0x47A5), test_starfield_recipe(0x48A5)] {
+            let mut request = test_particle_request(recipe, 5_000);
+            match &mut request.spatial_pattern.as_mut().unwrap().recipe {
+                ColorEffectSpatialRecipe::Explosion { grayscale, .. }
+                | ColorEffectSpatialRecipe::Starfield { grayscale, .. } => *grayscale = true,
+                _ => unreachable!(),
+            }
+            let full = CompiledDaslightParticles::compile(&request)
+                .unwrap()
+                .unwrap();
+            let masked = CompiledDaslightParticles::compile_for_targets(&request, &targets)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                masked
+                    .sampled_rows
+                    .iter()
+                    .map(|row| row.x_mask.count_ones())
+                    .sum::<u32>(),
+                200
+            );
+            assert_eq!(masked.sampled_rows[0].x_mask, (1_u128 << 100) - 1);
+            assert_eq!(masked.sampled_rows[99].x_mask, (1_u128 << 100) - 1);
+            assert!(masked.sampled_rows[1..99].iter().all(|row| row.x_mask == 0));
+
+            for generation in 0..125_usize {
+                let phase = generation as f64 / 125.0;
+                for target in &targets {
+                    assert_eq!(
+                        masked.sample_at_phase(phase, target.x, target.z),
+                        full.sample_at_phase(phase, target.x, target.z),
+                        "generation={generation} target=({}, {})",
+                        target.x,
+                        target.z
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn color_mappings_particle_deep_generation_goldens() {
+        let targets = vec![
+            test_spatial_color_target(0, 3, 0.0, 0.0),
+            test_spatial_color_target(1, 3, 0.5, 0.5),
+            test_spatial_color_target(2, 3, 1.0, 1.0),
+        ];
+        let recipes = [
+            ColorEffectSpatialRecipe::Explosion {
+                grayscale: false,
+                rng_seed: 0x47DE_E749,
+                shape: 0,
+                explosion_number: 50,
+                explosion_size: 10,
+                particle_number: 1,
+                particle_size: 100,
+                particle_life: 0.9,
+                trail_size: 25,
+                gravity: 10.0,
+            },
+            ColorEffectSpatialRecipe::Starfield {
+                grayscale: false,
+                rng_seed: 0x48DE_E749,
+                shape: 0,
+                particles: 10,
+                size: 10,
+                trail: 25,
+                rotation: 0.125,
+            },
+        ];
+        for (recipe_index, recipe) in recipes.into_iter().enumerate() {
+            let request = test_particle_request(recipe, 30_000);
+            let compiled = CompiledDaslightParticles::compile_for_targets(&request, &targets)
+                .unwrap()
+                .unwrap();
+            let values = [124_usize, 125, 749]
+                .into_iter()
+                .map(|generation| {
+                    let phase = (generation as f64 + 0.25) / 750.0;
+                    targets
+                        .iter()
+                        .map(|target| compiled.sample_at_phase(phase, target.x, target.z))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let expected = if recipe_index == 0 {
+                vec![
+                    vec![
+                        test_color(0, 0, 0),
+                        test_color(0, 0, 0),
+                        test_color(65_535, 0, 0),
+                    ],
+                    vec![
+                        test_color(0, 0, 0),
+                        test_color(0, 0, 0),
+                        test_color(65_535, 0, 0),
+                    ],
+                    vec![
+                        test_color(0, 0, 0),
+                        test_color(0, 0, 0),
+                        test_color(1_018, 64_251, 0),
+                    ],
+                ]
+            } else {
+                vec![
+                    vec![
+                        test_color(0, 0, 0),
+                        test_color(17_651, 25_690, 0),
+                        test_color(0, 65_534, 0),
+                    ],
+                    vec![
+                        test_color(0, 0, 0),
+                        test_color(16_248, 23_089, 0),
+                        test_color(0, 65_535, 0),
+                    ],
+                    vec![
+                        test_color(0, 0, 0),
+                        test_color(65_526, 6, 0),
+                        test_color(0, 0, 0),
+                    ],
+                ]
+            };
+            assert_eq!(values, expected);
+        }
+    }
+
+    #[test]
+    fn color_mappings_particle_one_pass_trajectory_matches_age_zero_replay_bit_exact() {
+        for case in 0..64_u64 {
+            let first = syndocal_sparkle_unit_fraction(case ^ 0x4711);
+            let second = syndocal_sparkle_unit_fraction(case ^ 0x4722);
+            let third = syndocal_sparkle_unit_fraction(case ^ 0x4733);
+            let fourth = syndocal_sparkle_unit_fraction(case ^ 0x4744);
+            let center_x = 16.0 + first * 67.0;
+            let center_y = 16.0 + second * 67.0;
+            let velocity_x = 4.0 * third - 2.0;
+            let velocity_y = 4.0 * fourth - 2.0;
+            let motion = first * 10.0;
+            let gravity = second * 10.0;
+            let angle = second * 360.0;
+            let rotation = third * 10.0 - 5.0;
+            let radius = (fourth * 10.0 + 5.0).trunc();
+            let random_age = (splitmix64(case ^ 0x47A6_E749) % 750) as usize;
+            for age in [0, 1, 2, 24, 25, 26, 124, 125, 374, 749, random_age] {
+                let actual = CompiledDaslightParticles::explosion_position(
+                    center_x, center_y, velocity_x, velocity_y, motion, gravity, age,
+                );
+                let reference = CompiledDaslightParticles::explosion_position_reference(
+                    center_x, center_y, velocity_x, velocity_y, motion, gravity, age,
+                );
+                assert_eq!(
+                    (actual.0.to_bits(), actual.1.to_bits()),
+                    (reference.0.to_bits(), reference.1.to_bits())
+                );
+
+                let actual =
+                    CompiledDaslightParticles::starfield_position(angle, rotation, radius, age);
+                let reference = CompiledDaslightParticles::starfield_position_reference(
+                    angle, rotation, radius, age,
+                );
+                assert_eq!(
+                    (actual.0.to_bits(), actual.1.to_bits()),
+                    (reference.0.to_bits(), reference.1.to_bits())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn color_mappings_particles_constants_rng_frame_cap_and_motion_are_exact() {
+        let compiled = CompiledDaslightParticles::compile(&test_particle_request(
+            test_explosion_recipe(0x1234_5678),
+            30_040,
+        ))
+        .unwrap()
+        .unwrap();
+        let compiled_again = CompiledDaslightParticles::compile(&test_particle_request(
+            test_explosion_recipe(0x1234_5678),
+            30_040,
+        ))
+        .unwrap()
+        .unwrap();
+        let different_seed = CompiledDaslightParticles::compile(&test_particle_request(
+            test_explosion_recipe(0x1234_5679),
+            30_040,
+        ))
+        .unwrap()
+        .unwrap();
+        assert_eq!(compiled.source_frame_count, 751);
+        assert_eq!(compiled.rendered_frame_count, 750);
+        assert_eq!(compiled.random_pairs.len(), 5_000);
+        assert_eq!(compiled.random_pairs, compiled_again.random_pairs);
+        assert_ne!(compiled.random_pairs, different_seed.random_pairs);
+        assert_eq!(compiled.generation(0.0), 0);
+        assert_eq!(compiled.generation(1.0 - f64::EPSILON), 749);
+        assert_eq!(
+            CompiledDaslightParticles::explosion_spawn_period(125, 50),
+            2
+        );
+        assert_eq!(
+            CompiledDaslightParticles::explosion_spawn_count(125, 50, 124),
+            63,
+            "source integer period deliberately permits more spawns than ExplosionNumber"
+        );
+
+        let explosion_position =
+            CompiledDaslightParticles::explosion_position(10.0, 20.0, 2.0, -1.0, 0.5, 10.0, 3);
+        assert!((explosion_position.0 - 13.0).abs() < 1.0e-5);
+        assert!((explosion_position.1 - 18.8).abs() < 1.0e-5);
+        assert_eq!(
+            CompiledDaslightParticles::starfield_position(0.0, 90.0, 5.0, 0),
+            (55.0, 50.0)
+        );
+        assert_eq!(
+            CompiledDaslightParticles::starfield_position(0.0, 90.0, 5.0, 1),
+            (56.0, 50.0)
+        );
+        let generation_two = CompiledDaslightParticles::starfield_position(0.0, 90.0, 5.0, 2);
+        assert!((generation_two.0 - 50.0).abs() < 1.0e-5);
+        assert!((generation_two.1 - 57.0).abs() < 1.0e-5);
+        assert_eq!(
+            CompiledDaslightParticles::starfield_position(45.0, 0.0, 5.0, 0),
+            (53.0, 53.0),
+            "Starfield initial placement uses trunc(cos/sin * radius)"
+        );
+        let fractional_rotation =
+            CompiledDaslightParticles::starfield_position(37.25, 0.125, 14.0, 17);
+        assert_eq!(fractional_rotation, (73.697_556, 69.361_71));
+    }
+
+    #[test]
+    fn color_mappings_particles_use_top_left_ellipse_children_before_parent_and_qgray_last() {
+        let black = test_color(0, 0, 0);
+        let red = test_color(u16::MAX, 0, 0);
+        let green = test_color(0, u16::MAX, 0);
+        let mut raster = [black; DASLIGHT_PARTICLE_RASTER_PIXELS];
+        CompiledDaslightParticles::source_over_ellipse(&mut raster, 10.0, 20.0, 4.0, red, 1.0);
+        assert_eq!(
+            raster[20 * 100 + 10],
+            black,
+            "ellipse corner remains unpainted"
+        );
+        assert_eq!(raster[20 * 100 + 11], red);
+        assert_eq!(raster[23 * 100 + 12], red);
+        assert_eq!(raster[24 * 100 + 12], black);
+
+        raster.fill(black);
+        CompiledDaslightParticles::paint_layers(
+            &mut raster,
+            &[(10.0, 20.0, 4.0, red, 0.5), (10.0, 20.0, 4.0, green, 0.5)],
+        );
+        let child_then_parent = raster[20 * 100 + 11];
+        raster.fill(black);
+        CompiledDaslightParticles::paint_layers(
+            &mut raster,
+            &[(10.0, 20.0, 4.0, green, 0.5), (10.0, 20.0, 4.0, red, 0.5)],
+        );
+        assert_ne!(child_then_parent, raster[20 * 100 + 11]);
+        assert!(child_then_parent.green > child_then_parent.red);
+
+        let final_gray = daslight_grayscale_color(child_then_parent);
+        raster.fill(black);
+        CompiledDaslightParticles::paint_layers(
+            &mut raster,
+            &[
+                (10.0, 20.0, 4.0, daslight_grayscale_color(red), 0.5),
+                (10.0, 20.0, 4.0, daslight_grayscale_color(green), 0.5),
+            ],
+        );
+        assert_ne!(
+            final_gray,
+            raster[20 * 100 + 11],
+            "qGray is applied to the completed RGB raster, not individual layers"
+        );
+    }
+
+    #[test]
+    fn color_mappings_particles_validate_maxima_dynamic_fallback_and_clamp_endpoint() {
+        let explosion = ColorEffectSpatialRecipe::Explosion {
+            grayscale: true,
+            rng_seed: u32::MAX,
+            shape: 0,
+            explosion_number: 50,
+            explosion_size: 100,
+            particle_number: 100,
+            particle_size: 100,
+            particle_life: 0.9,
+            trail_size: 25,
+            gravity: 10.0,
+        };
+        let starfield = ColorEffectSpatialRecipe::Starfield {
+            grayscale: true,
+            rng_seed: u32::MAX,
+            shape: 0,
+            particles: 10,
+            size: 100,
+            trail: 25,
+            rotation: 5.0,
+        };
+        validate_color_spatial_recipe(&explosion).unwrap();
+        validate_color_spatial_recipe(&starfield).unwrap();
+        let mut invalid = starfield.clone();
+        if let ColorEffectSpatialRecipe::Starfield { shape, .. } = &mut invalid {
+            *shape = 1;
+        }
+        assert!(validate_color_spatial_recipe(&invalid)
+            .unwrap_err()
+            .contains("Shape 0"));
+
+        let compiled = CompiledDaslightParticles::compile(&test_particle_request(
+            test_starfield_recipe(7),
+            5_000,
+        ))
+        .unwrap()
+        .unwrap();
+        compiled.sample_at_phase(0.0, 0.5, 0.5);
+        compiled.sample_at_phase(0.0, 0.6, 0.5);
+        assert_eq!(compiled.cache_state(), (Some(0), 1));
+        compiled.sample_at_phase(0.5, 0.5, 0.5);
+        assert_eq!(compiled.cache_state(), (Some(62), 2));
+
+        let mut fallback_targets = test_particle_mask_targets();
+        fallback_targets.push(fallback_targets[0].clone());
+        let fallback = CompiledDaslightParticles::compile_for_targets(
+            &test_particle_request(test_starfield_recipe(8), 5_000),
+            &fallback_targets,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(fallback.precomputed_frames.is_none());
+        fallback.sample_at_phase(0.0, fallback_targets[0].x, fallback_targets[0].z);
+        assert_eq!(fallback.cache_state(), (Some(0), 1));
+
+        let palette_count = 3_usize;
+        let endpoint =
+            (1 + ((palette_count - 1) as f64 * 1.0_f64).trunc() as usize).min(palette_count - 1);
+        assert_eq!(endpoint, palette_count - 1);
+    }
+
+    #[test]
+    fn color_mappings_particle_cue_transition_shares_all_supported_backing_storage() {
+        fn particle_request(rng_seed: u32) -> ColorEffectRequest {
+            let mut request = test_particle_request(test_starfield_recipe(rng_seed), 30_000);
+            request.fixture_ids = vec![1];
+            let pattern = request.spatial_pattern.as_mut().unwrap();
+            pattern.beam_targets = vec![protocol::ColorEffectBeamTarget {
+                fixture_id: 1,
+                beam_index: 0,
+                selection_index: 0,
+                feature_attribute: None,
+            }];
+            let placement = pattern.placement.as_mut().unwrap();
+            placement.target_coordinates = vec![protocol::ColorEffectSpatialPlacementTarget {
+                fixture_id: 1,
+                beam_index: 0,
+                patch_x: 50,
+                patch_y: 50,
+            }];
+            request
+        }
+
+        fn particles(effect: &RuntimeEffect) -> &CompiledDaslightParticles {
+            let RuntimeEffectKind::Color(color) = &effect.kind else {
+                panic!("expected Color transition effect");
+            };
+            color
+                .spatial
+                .as_ref()
+                .unwrap()
+                .daslight_particles
+                .as_ref()
+                .unwrap()
+        }
+
+        let mut runtime = runtime_with_mixed_effect_fixtures(1);
+        let created_at = Instant::now();
+        let outgoing = RuntimeEffect {
+            id: 47,
+            kind: RuntimeEffectKind::Color(
+                runtime
+                    .resolve_color_effect_request(particle_request(0x47AC_0001))
+                    .unwrap(),
+            ),
+            enabled: true,
+            created_at,
+        };
+        let incoming = RuntimeEffect {
+            id: 47,
+            kind: RuntimeEffectKind::Color(
+                runtime
+                    .resolve_color_effect_request(particle_request(0x47AC_0002))
+                    .unwrap(),
+            ),
+            enabled: true,
+            created_at,
+        };
+        runtime.effect_activations = vec![
+            RuntimeEffectActivation {
+                effect: outgoing,
+                key: Some(RuntimeEffectActivationKey::CueList {
+                    cue_list_id: DEFAULT_CUE_LIST_ID,
+                    cue_id: 1,
+                }),
+                rate: 1.0,
+                source_loop_fill: None,
+                transition_ms: None,
+                transition: None,
+            },
+            RuntimeEffectActivation {
+                effect: incoming,
+                key: None,
+                rate: 1.0,
+                source_loop_fill: None,
+                transition_ms: Some(1_000),
+                transition: None,
+            },
+        ];
+        runtime.active_effect_activation_indices = vec![0];
+
+        let outgoing_particles = particles(&runtime.effect_activations[0].effect);
+        assert!(outgoing_particles.raster_cache.is_none());
+        assert_eq!(Arc::strong_count(&outgoing_particles.palette), 1);
+        assert_eq!(Arc::strong_count(&outgoing_particles.random_pairs), 1);
+        assert_eq!(
+            Arc::strong_count(outgoing_particles.precomputed_frames.as_ref().unwrap()),
+            1
+        );
+        let outgoing_pointers = outgoing_particles.storage_pointers();
+        assert_eq!(outgoing_pointers.2, 0);
+        assert_eq!(outgoing_pointers.3, 0);
+        assert_eq!(outgoing_pointers.4, 0);
+        let outgoing_sample = outgoing_particles.sample_at_phase(749.25 / 750.0, 0.5, 0.5);
+
+        let sources = runtime.cue_list_effect_transition_sources(DEFAULT_CUE_LIST_ID);
+        assert_eq!(sources.len(), 1);
+        let source_particles = particles(&sources[0].0);
+        assert_eq!(source_particles.storage_pointers(), outgoing_pointers);
+        assert_eq!(Arc::strong_count(&source_particles.palette), 2);
+        assert_eq!(Arc::strong_count(&source_particles.random_pairs), 2);
+        assert_eq!(
+            Arc::strong_count(source_particles.precomputed_frames.as_ref().unwrap()),
+            2
+        );
+
+        runtime.activate_cue_effect_range_with_transitions(
+            RuntimeEffectActivationRange { start: 1, len: 1 },
+            RuntimeEffectActivationKey::CueList {
+                cue_list_id: DEFAULT_CUE_LIST_ID,
+                cue_id: 2,
+            },
+            created_at,
+            &sources,
+        );
+        let transition = runtime.effect_activations[1].transition.as_ref().unwrap();
+        let transition_particles = particles(&transition.from);
+        assert!(transition_particles.raster_cache.is_none());
+        assert_eq!(transition_particles.storage_pointers(), outgoing_pointers);
+        assert_eq!(Arc::strong_count(&transition_particles.palette), 3);
+        assert_eq!(Arc::strong_count(&transition_particles.random_pairs), 3);
+        assert_eq!(
+            Arc::strong_count(transition_particles.precomputed_frames.as_ref().unwrap()),
+            3
+        );
+        assert_eq!(
+            transition_particles.sample_at_phase(749.25 / 750.0, 0.5, 0.5),
+            outgoing_sample
+        );
+        drop(sources);
+        let outgoing_particles = particles(&runtime.effect_activations[0].effect);
+        assert_eq!(Arc::strong_count(&outgoing_particles.palette), 2);
+        assert_eq!(Arc::strong_count(&outgoing_particles.random_pairs), 2);
+        assert_eq!(
+            Arc::strong_count(outgoing_particles.precomputed_frames.as_ref().unwrap()),
+            2
+        );
+    }
+
+    #[test]
+    fn max_explosion_starfield_release_stack_meets_44hz_budget() {
+        const EXPLOSION_EFFECTS: usize = 32;
+        const STARFIELD_EFFECTS: usize = 32;
+        const MAX_PALETTE_STOPS: usize = 255;
+        const RASTER_WIDTH: i64 = 100;
+        const RASTER_HEIGHT: i64 = 100;
+        const MINIMUM_GENERATION_EXERCISING_PERIOD_MS: u64 = 80;
+
+        assert_eq!(
+            EXPLOSION_EFFECTS + STARFIELD_EFFECTS,
+            RELEASE_GATE_EFFECT_COUNT
+        );
+        assert_eq!(RELEASE_GATE_EFFECT_COUNT, 64);
+        assert_eq!(RELEASE_GATE_FIXTURE_COUNT, 200);
+        assert_eq!(RELEASE_GATE_HZ, 44);
+        assert_eq!(
+            RELEASE_GATE_SAMPLES,
+            if cfg!(debug_assertions) { 20 } else { 1_000 }
+        );
+        assert_eq!(MAX_PALETTE_STOPS, 255);
+        assert_eq!((RASTER_WIDTH, RASTER_HEIGHT), (100, 100));
+        assert_eq!(RELEASE_GATE_P95_LIMIT, Duration::from_millis(5));
+        assert_eq!(RELEASE_GATE_P99_LIMIT, Duration::from_millis(8));
+        assert_eq!(RELEASE_GATE_MAX_LIMIT, Duration::from_millis(12));
+        assert_eq!(
+            1_000_000 / DMX_TICK_INTERVAL.as_micros(),
+            u128::from(RELEASE_GATE_HZ)
+        );
+
+        let mut runtime = runtime_with_mixed_effect_fixtures(RELEASE_GATE_FIXTURE_COUNT as u64);
+        let fixture_ids = (1..=RELEASE_GATE_FIXTURE_COUNT as u64).collect::<Vec<_>>();
+        let beam_targets = fixture_ids
+            .iter()
+            .enumerate()
+            .map(
+                |(selection_index, fixture_id)| protocol::ColorEffectBeamTarget {
+                    fixture_id: *fixture_id,
+                    beam_index: 0,
+                    selection_index: selection_index as u32,
+                    feature_attribute: None,
+                },
+            )
+            .collect::<Vec<_>>();
+        let target_coordinates = fixture_ids
+            .iter()
+            .enumerate()
+            .map(
+                |(selection_index, fixture_id)| protocol::ColorEffectSpatialPlacementTarget {
+                    fixture_id: *fixture_id,
+                    beam_index: 0,
+                    patch_x: (selection_index % RASTER_WIDTH as usize) as i64,
+                    patch_y: if selection_index < RASTER_WIDTH as usize {
+                        0
+                    } else {
+                        RASTER_HEIGHT - 1
+                    },
+                },
+            )
+            .collect::<Vec<_>>();
+        assert_eq!(fixture_ids.len(), RELEASE_GATE_FIXTURE_COUNT);
+        assert_eq!(beam_targets.len(), RELEASE_GATE_FIXTURE_COUNT);
+        assert_eq!(target_coordinates.len(), RELEASE_GATE_FIXTURE_COUNT);
+
+        let palette = (0..MAX_PALETTE_STOPS)
+            .map(|stop| protocol::ColorEffectStop {
+                position: stop as f32 / (MAX_PALETTE_STOPS - 1) as f32,
+                color: test_color(
+                    stop as u16 * 257,
+                    u16::MAX - stop as u16 * 257,
+                    stop as u16 * 193,
+                ),
+            })
+            .collect::<Vec<_>>();
+        let created_at = Instant::now();
+        let compile_started = Instant::now();
+        for index in 0..RELEASE_GATE_EFFECT_COUNT {
+            let recipe = if index < EXPLOSION_EFFECTS {
+                ColorEffectSpatialRecipe::Explosion {
+                    grayscale: true,
+                    rng_seed: 0x4700_0000 ^ index as u32,
+                    shape: 0,
+                    explosion_number: 50,
+                    explosion_size: 100,
+                    particle_number: 100,
+                    particle_size: 100,
+                    particle_life: 0.9,
+                    trail_size: 25,
+                    gravity: 10.0,
+                }
+            } else {
+                ColorEffectSpatialRecipe::Starfield {
+                    grayscale: true,
+                    rng_seed: 0x4800_0000 ^ index as u32,
+                    shape: 0,
+                    particles: 10,
+                    size: 100,
+                    trail: 25,
+                    rotation: 5.0,
+                }
+            };
+            let mut request = test_spatial_color_request(recipe);
+            request.fixture_ids = fixture_ids.clone();
+            request.stops = palette.clone();
+            request.period_ms = MINIMUM_GENERATION_EXERCISING_PERIOD_MS;
+            let mut placement = test_patch_canvas_placement(0, 0, RASTER_WIDTH, RASTER_HEIGHT, 0.0);
+            placement.target_coordinates = target_coordinates.clone();
+            let pattern = request.spatial_pattern.as_mut().unwrap();
+            pattern.beam_targets = beam_targets.clone();
+            pattern.placement = Some(placement);
+            validate_color_effect_request(&request).unwrap();
+            let kind = RuntimeEffectKind::Color(
+                runtime
+                    .resolve_color_effect_request(request)
+                    .expect("maximum particle request must compile"),
+            );
+            runtime.effects.push(RuntimeEffect {
+                id: index as EffectId + 1,
+                kind,
+                enabled: true,
+                created_at,
+            });
+        }
+        let compile_elapsed = compile_started.elapsed();
+        assert_eq!(runtime.effects.len(), RELEASE_GATE_EFFECT_COUNT);
+        assert_eq!(runtime.fixtures.len(), RELEASE_GATE_FIXTURE_COUNT);
+
+        let before_storage = runtime
+            .effects
+            .iter()
+            .map(|effect| {
+                let RuntimeEffectKind::Color(color) = &effect.kind else {
+                    unreachable!();
+                };
+                assert_eq!(color.request.fixture_ids.len(), RELEASE_GATE_FIXTURE_COUNT);
+                assert_eq!(color.request.stops.len(), MAX_PALETTE_STOPS);
+                let pattern = color.request.spatial_pattern.as_ref().unwrap();
+                assert_eq!(pattern.beam_targets.len(), RELEASE_GATE_FIXTURE_COUNT);
+                assert_eq!(
+                    (
+                        pattern.placement.as_ref().unwrap().sx,
+                        pattern.placement.as_ref().unwrap().sy,
+                    ),
+                    (RASTER_WIDTH, RASTER_HEIGHT)
+                );
+                let compiled = color
+                    .spatial
+                    .as_ref()
+                    .unwrap()
+                    .daslight_particles
+                    .as_ref()
+                    .expect("particle recipe must compile the retained raster");
+                assert_eq!(compiled.random_pairs.len(), 5_000);
+                assert_eq!(compiled.rendered_frame_count, 2);
+                assert_eq!(compiled.cache_state(), (None, 0));
+                let frames = compiled
+                    .precomputed_frames
+                    .as_ref()
+                    .expect("supported 200-target shape must precompute every generation");
+                let unique_sampled_pixels = compiled
+                    .sampled_rows
+                    .iter()
+                    .map(|row| row.x_mask.count_ones() as usize)
+                    .sum::<usize>();
+                assert!((1..=RELEASE_GATE_FIXTURE_COUNT).contains(&unique_sampled_pixels));
+                assert_eq!(frames.sampled_pixel_count, unique_sampled_pixels);
+                assert_eq!(frames.red.len(), 2 * unique_sampled_pixels);
+                compiled.storage_pointers()
+            })
+            .collect::<Vec<_>>();
+
+        let mut expected_rebuild_count = 0_u64;
+        let mut previous_generation = None;
+        for sample in 0..RELEASE_GATE_SAMPLES {
+            let elapsed = DMX_TICK_INTERVAL * (sample as u32 + 1);
+            let phase =
+                elapsed.as_secs_f64() / (MINIMUM_GENERATION_EXERCISING_PERIOD_MS as f64 / 1_000.0);
+            let generation = (phase.rem_euclid(1.0) * 2.0).floor() as usize;
+            if previous_generation != Some(generation) {
+                expected_rebuild_count += 1;
+                previous_generation = Some(generation);
+            }
+        }
+
+        let (p95, p99, max) =
+            measure_release_gate(created_at, |at| {
+                runtime.fixtures.iter().fold(0_u64, |checksum, fixture| {
+                    checksum.wrapping_add(runtime.apply_effects_with_transition_policy(
+                        fixture, "ColorRed", 16_384, at, false,
+                    ) as u64)
+                })
+            });
+        let after_storage = runtime
+            .effects
+            .iter()
+            .map(|effect| {
+                let RuntimeEffectKind::Color(color) = &effect.kind else {
+                    unreachable!();
+                };
+                let compiled = color
+                    .spatial
+                    .as_ref()
+                    .unwrap()
+                    .daslight_particles
+                    .as_ref()
+                    .unwrap();
+                assert_eq!(
+                    compiled.cache_state(),
+                    (None, 0),
+                    "precomputed supported-target frames never rebuild on the 44 Hz path"
+                );
+                compiled.storage_pointers()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            after_storage, before_storage,
+            "the 44 Hz path retains random, fallback SoA, and precomputed RGB allocations per effect"
+        );
+        eprintln!(
+            "Explosion32+Starfield32 x200 (255 stops, 100x100, max recipe literals, R=F=2 frequent generation transitions={} with realized child_count<=1, runtime rebuilds=0): compile={}ms p95={}us p99={}us max={}us",
+            expected_rebuild_count,
+            compile_elapsed.as_millis(),
+            p95.as_micros(),
+            p99.as_micros(),
+            max.as_micros(),
+        );
+        assert_release_gate_percentiles(p95, p99, max);
+    }
+
+    #[test]
+    fn deep_explosion_starfield_release_stack_meets_44hz_budget() {
+        const EXPLOSION_EFFECTS: usize = 32;
+        const MAX_PALETTE_STOPS: usize = 255;
+        const RASTER_SIZE: i64 = 100;
+        const CAPTURED_PERIOD_MS: u64 = 5_000;
+        const SOURCE_FRAMES: usize = 125;
+        const FIRST_DEEP_GENERATION: usize = 93;
+
+        assert_eq!(RELEASE_GATE_EFFECT_COUNT, 64);
+        assert_eq!(RELEASE_GATE_FIXTURE_COUNT, 200);
+        assert_eq!(RELEASE_GATE_HZ, 44);
+        assert_eq!(RELEASE_GATE_P95_LIMIT, Duration::from_millis(5));
+        assert_eq!(RELEASE_GATE_P99_LIMIT, Duration::from_millis(8));
+        assert_eq!(RELEASE_GATE_MAX_LIMIT, Duration::from_millis(12));
+        assert_eq!(FIRST_DEEP_GENERATION, 93);
+        assert_eq!(FIRST_DEEP_GENERATION + EXPLOSION_EFFECTS - 1, 124);
+
+        let mut runtime = runtime_with_mixed_effect_fixtures(RELEASE_GATE_FIXTURE_COUNT as u64);
+        let fixture_ids = (1..=RELEASE_GATE_FIXTURE_COUNT as u64).collect::<Vec<_>>();
+        let beam_targets = fixture_ids
+            .iter()
+            .enumerate()
+            .map(
+                |(selection_index, fixture_id)| protocol::ColorEffectBeamTarget {
+                    fixture_id: *fixture_id,
+                    beam_index: 0,
+                    selection_index: selection_index as u32,
+                    feature_attribute: None,
+                },
+            )
+            .collect::<Vec<_>>();
+        let target_coordinates = fixture_ids
+            .iter()
+            .enumerate()
+            .map(
+                |(selection_index, fixture_id)| protocol::ColorEffectSpatialPlacementTarget {
+                    fixture_id: *fixture_id,
+                    beam_index: 0,
+                    patch_x: (selection_index % RASTER_SIZE as usize) as i64,
+                    patch_y: if selection_index < RASTER_SIZE as usize {
+                        0
+                    } else {
+                        RASTER_SIZE - 1
+                    },
+                },
+            )
+            .collect::<Vec<_>>();
+        let palette = (0..MAX_PALETTE_STOPS)
+            .map(|stop| protocol::ColorEffectStop {
+                position: stop as f32 / (MAX_PALETTE_STOPS - 1) as f32,
+                color: test_color(
+                    stop as u16 * 257,
+                    u16::MAX - stop as u16 * 257,
+                    stop as u16 * 193,
+                ),
+            })
+            .collect::<Vec<_>>();
+        let created_at = Instant::now();
+        let compile_started = Instant::now();
+        for index in 0..RELEASE_GATE_EFFECT_COUNT {
+            let local_index = index % EXPLOSION_EFFECTS;
+            let recipe = if index < EXPLOSION_EFFECTS {
+                ColorEffectSpatialRecipe::Explosion {
+                    grayscale: true,
+                    rng_seed: 0x47D0_0000 ^ index as u32,
+                    shape: 0,
+                    explosion_number: 50,
+                    explosion_size: 100,
+                    particle_number: 100,
+                    particle_size: 100,
+                    particle_life: 0.9,
+                    trail_size: 25,
+                    gravity: 10.0,
+                }
+            } else {
+                ColorEffectSpatialRecipe::Starfield {
+                    grayscale: true,
+                    rng_seed: 0x48D0_0000 ^ index as u32,
+                    shape: 0,
+                    particles: 10,
+                    size: 100,
+                    trail: 25,
+                    rotation: 5.0,
+                }
+            };
+            let mut request = test_spatial_color_request(recipe);
+            request.fixture_ids = fixture_ids.clone();
+            request.stops = palette.clone();
+            request.period_ms = CAPTURED_PERIOD_MS;
+            request.phase = (FIRST_DEEP_GENERATION + local_index) as f32 / SOURCE_FRAMES as f32;
+            let mut placement = test_patch_canvas_placement(0, 0, RASTER_SIZE, RASTER_SIZE, 0.0);
+            placement.target_coordinates = target_coordinates.clone();
+            let pattern = request.spatial_pattern.as_mut().unwrap();
+            pattern.beam_targets = beam_targets.clone();
+            pattern.placement = Some(placement);
+            validate_color_effect_request(&request).unwrap();
+            runtime.effects.push(RuntimeEffect {
+                id: index as EffectId + 1,
+                kind: RuntimeEffectKind::Color(
+                    runtime
+                        .resolve_color_effect_request(request)
+                        .expect("deep maximum particle request must compile"),
+                ),
+                enabled: true,
+                created_at,
+            });
+        }
+        let compile_elapsed = compile_started.elapsed();
+
+        let before_storage = runtime
+            .effects
+            .iter()
+            .map(|effect| {
+                let RuntimeEffectKind::Color(color) = &effect.kind else {
+                    unreachable!();
+                };
+                assert_eq!(color.request.fixture_ids.len(), RELEASE_GATE_FIXTURE_COUNT);
+                assert_eq!(color.request.stops.len(), MAX_PALETTE_STOPS);
+                let spatial = color.spatial.as_ref().unwrap();
+                assert_eq!(spatial.targets.len(), RELEASE_GATE_FIXTURE_COUNT);
+                let compiled = spatial.daslight_particles.as_ref().unwrap();
+                assert_eq!(compiled.source_frame_count, SOURCE_FRAMES);
+                assert_eq!(compiled.rendered_frame_count, SOURCE_FRAMES);
+                let frames = compiled
+                    .precomputed_frames
+                    .as_ref()
+                    .expect("supported 200-target shape must precompute every generation");
+                let mut expected_rows = [0_u128; DASLIGHT_PARTICLE_RASTER_SIZE];
+                for target in &spatial.targets {
+                    let pixel_x = CompiledDaslightParticles::raster_pixel(target.x);
+                    let pixel_y = CompiledDaslightParticles::raster_pixel(target.z);
+                    expected_rows[pixel_y] |= 1_u128 << pixel_x;
+                }
+                assert_eq!(
+                    compiled
+                        .sampled_rows
+                        .iter()
+                        .map(|row| row.x_mask)
+                        .collect::<Vec<_>>(),
+                    expected_rows
+                );
+                let unique_sampled_pixels = expected_rows
+                    .iter()
+                    .map(|row| row.count_ones() as usize)
+                    .sum::<usize>();
+                assert!((1..=RELEASE_GATE_FIXTURE_COUNT).contains(&unique_sampled_pixels));
+                assert_eq!(frames.sampled_pixel_count, unique_sampled_pixels);
+                assert_eq!(frames.red.len(), SOURCE_FRAMES * unique_sampled_pixels);
+                compiled.storage_pointers()
+            })
+            .collect::<Vec<_>>();
+
+        let expected_rebuilds_and_deep_hits = runtime
+            .effects
+            .iter()
+            .map(|effect| {
+                let RuntimeEffectKind::Color(color) = &effect.kind else {
+                    unreachable!();
+                };
+                let mut rebuilds = 0_u64;
+                let mut deep_hits = 0_u64;
+                let mut previous = None;
+                for sample in 0..RELEASE_GATE_SAMPLES {
+                    let elapsed = DMX_TICK_INTERVAL * (sample as u32 + 1);
+                    let phase = (elapsed.as_secs_f64() / (CAPTURED_PERIOD_MS as f64 / 1_000.0)
+                        + f64::from(color.request.phase))
+                    .rem_euclid(1.0);
+                    let generation = (phase * SOURCE_FRAMES as f64).floor() as usize;
+                    deep_hits += u64::from(generation == SOURCE_FRAMES - 1);
+                    if previous != Some(generation) {
+                        rebuilds += 1;
+                        previous = Some(generation);
+                    }
+                }
+                (rebuilds, deep_hits)
+            })
+            .collect::<Vec<_>>();
+        if cfg!(debug_assertions) {
+            assert!(
+                expected_rebuilds_and_deep_hits
+                    .iter()
+                    .map(|(_, deep_hits)| *deep_hits)
+                    .sum::<u64>()
+                    > 0,
+                "the reduced 20-sample debug gate must still reach generation 124"
+            );
+        } else {
+            assert!(
+                expected_rebuilds_and_deep_hits
+                    .iter()
+                    .all(|(_, deep_hits)| *deep_hits > 0),
+                "the 1000-sample release gate must reach generation 124 for every effect"
+            );
+        }
+
+        let (p95, p99, max) =
+            measure_release_gate(created_at, |at| {
+                runtime.fixtures.iter().fold(0_u64, |checksum, fixture| {
+                    checksum.wrapping_add(runtime.apply_effects_with_transition_policy(
+                        fixture, "ColorRed", 16_384, at, false,
+                    ) as u64)
+                })
+            });
+        let after_storage = runtime
+            .effects
+            .iter()
+            .zip(&expected_rebuilds_and_deep_hits)
+            .map(|(effect, (expected_rebuilds, _))| {
+                let RuntimeEffectKind::Color(color) = &effect.kind else {
+                    unreachable!();
+                };
+                let compiled = color
+                    .spatial
+                    .as_ref()
+                    .unwrap()
+                    .daslight_particles
+                    .as_ref()
+                    .unwrap();
+                assert!(*expected_rebuilds > 0);
+                assert_eq!(
+                    compiled.cache_state(),
+                    (None, 0),
+                    "precomputed supported-target frames never rebuild on the 44 Hz path"
+                );
+                compiled.storage_pointers()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(after_storage, before_storage);
+        eprintln!(
+            "Deep Explosion32+Starfield32 x200 (255 stops, 100x100, max recipe literals, captured period 5000/F125, staggered gen93..124 incl Trail25, runtime rebuilds=0): compile={}ms p95={}us p99={}us max={}us deep_gen124_hits={}",
+            compile_elapsed.as_millis(),
+            p95.as_micros(),
+            p99.as_micros(),
+            max.as_micros(),
+            expected_rebuilds_and_deep_hits
+                .iter()
+                .map(|(_, hits)| *hits)
+                .sum::<u64>()
+        );
+        assert_release_gate_percentiles(p95, p99, max);
+    }
+
     #[test]
     fn color_mappings_grid_constants_anchors_overlap_background_and_continuity() {
         for (size, expected_spacing, expected_layers) in
@@ -57911,6 +60135,7 @@ mod tests {
             daslight_perlin.as_ref(),
             daslight_grid_lines.as_ref(),
             daslight_graph.as_ref(),
+            None,
             97,
             created_at,
             created_at + Duration::from_millis(elapsed_ms),
@@ -60286,6 +62511,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
                 97,
                 created_at,
                 now,
@@ -60478,6 +62704,7 @@ mod tests {
                 None,
                 None,
                 Some(&compiled),
+                None,
                 None,
                 None,
                 None,

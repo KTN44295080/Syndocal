@@ -292,10 +292,10 @@ Mediaの旧表記`T2/10`はcatalog転記誤りだった。`CMediaEffect` constru
 
 ## 現行Syndocal importerとの逆照合
 
-68 IDのうち現行converter coverageは62 ID（うちMAPPINGS 526とCOLOR MAPPINGS 33、COLOR MAPPINGS 41の空targetは
-source no-op）、random-state由来のprecise fail-closedは0、残る6 IDは未routeでgeneric
+68 IDのうち現行converter coverageは64 ID（うちMAPPINGS 526とCOLOR MAPPINGS 33、COLOR MAPPINGS 41/47/48の空targetは
+source no-op）、random-state由来のprecise fail-closedは0、残る4 IDは未routeでgeneric
 `Skipped`になる。Media 33/526のnon-empty pathはroute内でprecise fail-closedを維持する。
-62 routeはfull-domain完成数ではなく、
+64 routeはfull-domain完成数ではなく、
 strict/exactを別に監査した。
 
 | route群 | 現在の境界 |
@@ -304,6 +304,7 @@ strict/exactを別に監査した。
 | COLOR MAPPINGS 22/23/30/32/34/36/37/40/42/44 | strict PARAM ID/TYPE/domain、palette 1..255、Rectangle、owned COLOR beam target、Override mergeを保持。外部`SELECTIONS`はprecise fail-closed。23/37/42も共通qGray post-processを通る。37は100x100のflat-cell no-replacement permutationをstable source seedで生成するCorrected route |
 | COLOR MAPPINGS 31/49/50 | Lines/Graph/Grid専用classをstrict route。共通base、class固有parameter、owned COLOR target順、Rectangle/Patch、Transform後Rotation、Override、qGrayを保持する。Lines palette 2..255、Graph palette 2..10、Grid palette 2..5をclass域として検証し、固定100x100 rasterを連続解析samplingするSyndocalCorrected実装。GraphはHeight=1のsource invisible defectだけを一行opaqueへ訂正する |
 | COLOR MAPPINGS 41 Tube | strict NB=7（T4/1、T2/2、T6/3、T0/4、T0/10 Number 1..10、T1/11 LifeSpan 0..0.9、T0/12 Width 1..90）。shared Sparkle retained stateを`TubeFullRasterHeight`で区別し、fixed 100x100/full-height、qGray、owned COLOR target、Overrideを保持する。paletteはTube固有の2..255。BEAMS=0は全schema後のsource no-opで、native unset Rectangle sentinelはempty targetだけplacement Noneとして許可する |
+| COLOR MAPPINGS 47/48 Explosion/Starfield | strict NB=12/NB=9、palette 2..255、TYPE7 Shape 0..29、class固有domain、owned COLOR target、fixed 100x100、Overrideを保持する。populated Shape 0だけを共通filled ellipseとしてrouteし、Shape 1..29はproprietary glyph未回収のためprecise fail-closed。BEAMS=0 + native unset Rectangleは全schema後のsource no-op。非serialize qrand table、source green lifetime defect、Starfield palette endpointは`SyndocalCorrected`で安定seed/alpha/clampへ訂正する。supported 200 target以下はsampled-only RGB全世代table、超過時は同じSoA generation cacheへfallbackし、いずれもtick allocationなし。supported routeのpalette/random/framesはArc共有、dynamic cache不在のためcue transition cloneもparticle backing allocationなし |
 | COLOR MAPPINGS 33 | ctorで確定したNB=6（T4/1、T2/2、T6/3、T0/4、T8/10、T1/11）をstrict検証。空Media Pathだけsource no-op、non-empty pathはprecise fail-closed |
 | MOVE 221–225 | strict。5 distinct geometry、authored DURATION、continuous Phasing/Symmetry、ordered beam targetを保持。Pointsのみ等時間vertex hold |
 | COLOR 129/130 | strict schemaと証明済みevaluator式を実装 |
@@ -490,7 +491,7 @@ strict/exactを別に監査した。
   含むstable seedへ置換するため`SyndocalCorrected`であり、process-history exactとは主張しない。
   placementなしの旧JSONは、`source_point_height`が存在しても従来どおり1D/evaluator-deadである。
   family 5の実保存specimenは存在しないため、constructor/static evidenceとsynthetic strict importer
-  fixtureだけを根拠とする。専用classの残りは21/29/35/41/45/47/48、別schemaは
+  fixtureだけを根拠とする。当時の専用classの残りは21/29/35/41/45/47/48、別schemaは
   CURVE Custom 13である。
 - ID31 Lines / ID49 Graph / ID50 Gridはbinary 5.0.6.2のclass bodyから回収した固定100x100
   grammarをallocation-free analytic evaluatorへ移した。全routeとも`implementation=SyndocalCorrected`で、
@@ -510,6 +511,12 @@ strict/exactを別に監査した。
   fail-closedにする。64 effect x 200 fixture、255 palette、Number 10、LifeSpan .9、Width 90のrelease gateは
   5/8/12 msをassertする。
 - Tube追加でruntime-convertは61→62、未routeは7→6となる。
+- Explosion/Starfield追加でruntime-convertは62→64、未routeは6→4となる。実保存
+  `ColorMappings-Remaining7.dvc`のempty sentinel/no-targetをstrict source no-opとして固定し、populated
+  Shape 0はretained-particle evaluatorへrouteする。32+32 effect x 200 fixture、255 paletteのrelease gateは
+  Arc transition修正後の再走でfrequent F2がp95/p99/max 0.894/1.062/1.977 ms、Trail 25を含むdeep F125が
+  1.557/1.807/2.332 msとなり、5/8/12 msを維持する。正本は
+  `qa/DVC_COLOR_MAPPINGS_EXPLOSION_STARFIELD_PARITY.md`。
 
 ### DVC-CURVE Custom 13（2026-08-11）
 
@@ -534,8 +541,8 @@ strict/exactを別に監査した。
 2. CHASER #3/#4は式と対称pair topologyを回収し、実保存specimen付きでroute済み。実灯体の
    photometryとdevice latencyだけは物理受入に残る。
 3. MAPPINGS 521–530は全route済み。COLOR MAPPINGSの共有class
-   22/23/30/31/32/34/36/37/40/41/42/44/49/50もroute済み。Media 33/526は空sourceだけno-op、non-empty sourceは
-   decode/timing証明待ち。COLOR MAPPINGS専用class 21/29/35/45/47/48は
+   22/23/30/31/32/34/36/37/40/41/42/44/47/48/49/50もroute済み。Media 33/526は空sourceだけno-op、non-empty sourceは
+   decode/timing証明待ち。COLOR MAPPINGS専用class 21/29/35/45は
    引き続きraster algorithm bodyまたは2D stateの意味論回収が必要。
 4. `TYPE7 Shape`のserialized glyph表現と`TYPE10 Text Direction`の合法enum域は未証明。
 5. Sparkle/Random fillの外部per-thread qrand履歴そのものはreplay不能だが、作者が保存した
