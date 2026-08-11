@@ -4054,18 +4054,105 @@ impl SyndocalSparkleState {
     }
 }
 
+fn daslight_mapping_raster_pixel(coordinate: f32) -> usize {
+    ((coordinate.clamp(0.0, 1.0) * 100.0) as usize).min(99)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SyndocalRandomFillAffinePermutation {
+    multiplier: u32,
+    offset: u32,
+}
+
+impl SyndocalRandomFillAffinePermutation {
+    fn compile(rng_seed: u32, transition: usize, cell_count: usize) -> Self {
+        let modulus = u32::try_from(cell_count)
+            .expect("Random Fill's fixed 100x100 raster cell count fits u32");
+        if modulus == 1 {
+            return Self {
+                multiplier: 0,
+                offset: 0,
+            };
+        }
+        let transition_key =
+            u64::from(rng_seed) ^ (transition as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        let mut multiplier =
+            (splitmix64(transition_key ^ 0xA076_1D64_78BD_642F) % u64::from(modulus)) as u32;
+        if multiplier == 0 {
+            multiplier = 1;
+        }
+        while greatest_common_divisor_u32(multiplier, modulus) != 1 {
+            multiplier += 1;
+            if multiplier == modulus {
+                multiplier = 1;
+            }
+        }
+        let offset =
+            (splitmix64(transition_key ^ 0xE703_7ED1_A0B4_28DB) % u64::from(modulus)) as u32;
+        Self { multiplier, offset }
+    }
+
+    fn rank(self, cell: usize, cell_count: usize) -> usize {
+        debug_assert!(cell < cell_count);
+        let modulus = cell_count as u64;
+        ((u64::from(self.multiplier) * cell as u64 + u64::from(self.offset)) % modulus) as usize
+    }
+}
+
+fn greatest_common_divisor_u32(mut left: u32, mut right: u32) -> u32 {
+    while right != 0 {
+        let remainder = left % right;
+        left = right;
+        right = remainder;
+    }
+    left
+}
+
+#[derive(Clone)]
+enum SyndocalRandomFillRankOrder {
+    /// Preserve the established one-dimensional stable shuffle byte-for-byte.
+    DenseOneDimensional(Arc<[u32]>),
+    /// One spatially scrambled base bijection plus a coprime affine bijection
+    /// per palette transition. This keeps placed 2D memory
+    /// O(raster cells + palette) instead of O(raster cells * palette), while
+    /// avoiding the visible row-major stripes of a bare affine permutation.
+    AffineTwoDimensional {
+        base_ranks: Arc<[u32]>,
+        permutations: Arc<[SyndocalRandomFillAffinePermutation]>,
+    },
+}
+
+impl SyndocalRandomFillRankOrder {
+    fn rank(&self, transition: usize, cell: usize, cell_count: usize) -> usize {
+        match self {
+            Self::DenseOneDimensional(ranks) => {
+                usize::try_from(ranks[transition * cell_count + cell]).unwrap_or_default()
+            }
+            Self::AffineTwoDimensional {
+                base_ranks,
+                permutations,
+            } => permutations[transition].rank(base_ranks[cell] as usize, cell_count),
+        }
+    }
+}
+
 #[derive(Clone)]
 enum CompiledSyndocalRandomFx {
     RandomFill {
         point_width: usize,
+        /// Present only for a placed 100x100 Random Fill raster. Unplaced
+        /// recipes deliberately remain on the legacy-compatible one-row path.
+        point_height: Option<usize>,
+        cell_columns: usize,
         cell_count: usize,
         grayscale: bool,
         vertical_symmetry: bool,
         palette: Arc<[ColorEffectColor]>,
-        /// One deterministic no-replacement rank per palette transition and
-        /// source cell. This replaces Qt's unavailable process-global qrand
-        /// history while preserving Random fill's authored visual grammar.
-        ranks: Arc<[u32]>,
+        /// Deterministic no-replacement ranks replacing Qt's unavailable
+        /// process-global qrand history. The 1D route retains its exact dense
+        /// legacy-compatible table; placed 2D uses one scrambled base table
+        /// plus compact affine bijections.
+        rank_order: SyndocalRandomFillRankOrder,
     },
     Sparkle {
         number: usize,
@@ -4108,36 +4195,80 @@ impl CompiledSyndocalRandomFx {
                 vertical_symmetry,
                 rng_seed,
                 point_width,
-                ..
+                source_point_height,
             } => {
-                let point_width = ((*point_width / 100.0) * strip_count.max(1) as f32)
+                let point_height = if pattern.placement.is_some() {
+                    source_point_height.map(usize::from)
+                } else {
+                    None
+                };
+                let source_width = if point_height.is_some() {
+                    100
+                } else {
+                    strip_count.max(1)
+                };
+                let point_width = ((*point_width / 100.0) * source_width as f32)
                     .round()
                     .max(1.0) as usize;
-                let cell_count = strip_count.max(1).div_ceil(point_width).max(1);
-                let mut ranks = vec![0_u32; cell_count * palette.len()];
-                let mut ordered = (0..cell_count).collect::<Vec<_>>();
-                for transition in 0..palette.len() {
+                let cell_columns = source_width.div_ceil(point_width).max(1);
+                let cell_count = point_height
+                    .map(|height| cell_columns * 100_usize.div_ceil(height).max(1))
+                    .unwrap_or(cell_columns);
+                let rank_order = if point_height.is_some() {
+                    let mut base_ranks = vec![0_u32; cell_count];
+                    let mut ordered = (0..cell_count).collect::<Vec<_>>();
                     ordered.sort_unstable_by_key(|cell| {
                         (
                             splitmix64(
                                 u64::from(*rng_seed)
-                                    ^ (transition as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
                                     ^ (*cell as u64).wrapping_mul(0xD1B5_4A32_D192_ED03),
                             ),
                             *cell,
                         )
                     });
                     for (rank, cell) in ordered.iter().copied().enumerate() {
-                        ranks[transition * cell_count + cell] = rank as u32;
+                        base_ranks[cell] = rank as u32;
                     }
-                }
+                    SyndocalRandomFillRankOrder::AffineTwoDimensional {
+                        base_ranks: base_ranks.into(),
+                        permutations: (0..palette.len())
+                            .map(|transition| {
+                                SyndocalRandomFillAffinePermutation::compile(
+                                    *rng_seed, transition, cell_count,
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .into(),
+                    }
+                } else {
+                    let mut ranks = vec![0_u32; cell_count * palette.len()];
+                    let mut ordered = (0..cell_count).collect::<Vec<_>>();
+                    for transition in 0..palette.len() {
+                        ordered.sort_unstable_by_key(|cell| {
+                            (
+                                splitmix64(
+                                    u64::from(*rng_seed)
+                                        ^ (transition as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                                        ^ (*cell as u64).wrapping_mul(0xD1B5_4A32_D192_ED03),
+                                ),
+                                *cell,
+                            )
+                        });
+                        for (rank, cell) in ordered.iter().copied().enumerate() {
+                            ranks[transition * cell_count + cell] = rank as u32;
+                        }
+                    }
+                    SyndocalRandomFillRankOrder::DenseOneDimensional(ranks.into())
+                };
                 Ok(Some(Self::RandomFill {
                     point_width,
+                    point_height,
+                    cell_columns,
                     cell_count,
                     grayscale: *grayscale,
                     vertical_symmetry: *vertical_symmetry,
                     palette,
-                    ranks: ranks.into(),
+                    rank_order,
                 }))
             }
             ColorEffectSpatialRecipe::Sparkle {
@@ -4195,26 +4326,38 @@ impl CompiledSyndocalRandomFx {
         match self {
             Self::RandomFill {
                 point_width,
+                point_height,
+                cell_columns,
                 cell_count,
                 grayscale,
                 vertical_symmetry,
                 palette,
-                ranks,
+                rank_order,
             } => {
-                let source_index = if *vertical_symmetry {
-                    daslight_vertical_fold_source_index(destination_index, strip_count)
+                let cell = if let Some(point_height) = point_height {
+                    // Daslight's fixed mapping raster uses truncation after
+                    // scaling normalized Patch coordinates by 100. Clamp the
+                    // inclusive right/bottom edges back onto pixel 99.
+                    let source_x = daslight_mapping_raster_pixel(target_x);
+                    let source_y = daslight_mapping_raster_pixel(target_y);
+                    let column = (source_x / *point_width).min(cell_columns.saturating_sub(1));
+                    let row = source_y / *point_height;
+                    (row * *cell_columns + column).min(cell_count.saturating_sub(1))
                 } else {
-                    Some(destination_index.min(strip_count.saturating_sub(1)))
+                    let source_index = if *vertical_symmetry {
+                        daslight_vertical_fold_source_index(destination_index, strip_count)
+                    } else {
+                        Some(destination_index.min(strip_count.saturating_sub(1)))
+                    };
+                    let Some(source_index) = source_index else {
+                        return black_color();
+                    };
+                    (source_index / *point_width).min(cell_count.saturating_sub(1))
                 };
-                let Some(source_index) = source_index else {
-                    return black_color();
-                };
-                let cell = (source_index / *point_width).min(cell_count.saturating_sub(1));
                 let scaled = time_phase.rem_euclid(1.0) * palette.len() as f64;
                 let transition = scaled.floor() as usize % palette.len();
                 let progress = scaled.fract();
-                let rank =
-                    usize::try_from(ranks[transition * *cell_count + cell]).unwrap_or_default();
+                let rank = rank_order.rank(transition, cell, *cell_count);
                 let amount = (progress * *cell_count as f64 - rank as f64).clamp(0.0, 1.0);
                 let mut color = interpolate_color_effect_color(
                     palette[transition],
@@ -27649,6 +27792,24 @@ fn validate_runtime_color_effect_request(request: &ColorEffectRequest) -> Result
             ));
         }
         validate_color_spatial_recipe(&pattern.recipe)?;
+        if pattern.placement.is_some() {
+            if let ColorEffectSpatialRecipe::RandomFill {
+                point_width,
+                source_point_height: Some(_),
+                ..
+            } = &pattern.recipe
+            {
+                if !point_width.is_finite()
+                    || point_width.fract().abs() > f32::EPSILON
+                    || !(1.0..=10.0).contains(point_width)
+                {
+                    return Err(
+                        "Placed Random fill point width must be an integer within 1..10"
+                            .to_string(),
+                    );
+                }
+            }
+        }
         let mut beam_targets = HashSet::new();
         for target in &pattern.beam_targets {
             if !request.fixture_ids.contains(&target.fixture_id) {
@@ -57140,10 +57301,15 @@ mod tests {
             .unwrap()
             .unwrap();
         let CompiledSyndocalRandomFx::RandomFill {
-            cell_count, ranks, ..
+            cell_count,
+            rank_order,
+            ..
         } = &compiled
         else {
             panic!("corrected Random fill must compile its rank table");
+        };
+        let SyndocalRandomFillRankOrder::DenseOneDimensional(ranks) = rank_order else {
+            panic!("unplaced Random Fill must preserve its dense 1D rank table");
         };
         assert_eq!(*cell_count, 6, "div_ceil must retain the one-cell tail");
         for transition in ranks.chunks_exact(*cell_count) {
@@ -57151,6 +57317,11 @@ mod tests {
             sorted.sort_unstable();
             assert_eq!(sorted, (0..*cell_count as u32).collect::<Vec<_>>());
         }
+        assert_eq!(
+            ranks.as_ref(),
+            &[0, 2, 5, 1, 4, 3, 0, 3, 4, 1, 5, 2],
+            "the existing one-dimensional stable order is a compatibility golden"
+        );
         let repeated = CompiledSyndocalRandomFx::compile(&request_for_seed(0x1234_5678), 11)
             .unwrap()
             .unwrap();
@@ -57158,11 +57329,37 @@ mod tests {
             .unwrap()
             .unwrap();
         let ranks_of = |compiled: &CompiledSyndocalRandomFx| match compiled {
-            CompiledSyndocalRandomFx::RandomFill { ranks, .. } => ranks.to_vec(),
+            CompiledSyndocalRandomFx::RandomFill {
+                rank_order: SyndocalRandomFillRankOrder::DenseOneDimensional(ranks),
+                ..
+            } => ranks.to_vec(),
             _ => unreachable!(),
         };
         assert_eq!(ranks_of(&compiled), ranks_of(&repeated));
         assert_ne!(ranks_of(&compiled), ranks_of(&changed));
+
+        let mut without_provenance_height = request.clone();
+        let ColorEffectSpatialRecipe::RandomFill {
+            source_point_height,
+            ..
+        } = &mut without_provenance_height
+            .spatial_pattern
+            .as_mut()
+            .unwrap()
+            .recipe
+        else {
+            unreachable!();
+        };
+        *source_point_height = None;
+        let without_provenance_height =
+            CompiledSyndocalRandomFx::compile(&without_provenance_height, 11)
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            ranks_of(&compiled),
+            ranks_of(&without_provenance_height),
+            "unplaced source PointHeight must remain evaluator-dead"
+        );
 
         let cell = ranks[..*cell_count]
             .iter()
@@ -57181,6 +57378,295 @@ mod tests {
             black_color(),
             "Random fill must transition palette-to-palette without a black reset"
         );
+        for phase in [0.0, 0.1, 0.37, 0.9] {
+            for index in 0..11 {
+                assert_eq!(
+                    compiled.sample_at_time(phase, index, 11, at, at),
+                    without_provenance_height.sample_at_time(phase, index, 11, at, at),
+                    "legacy one-dimensional output changed at phase {phase}, index {index}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn placed_random_fill_uses_one_stable_two_dimensional_cell_ranking() {
+        assert_eq!(daslight_mapping_raster_pixel(0.0), 0);
+        assert_eq!(daslight_mapping_raster_pixel(0.0099), 0);
+        assert_eq!(daslight_mapping_raster_pixel(0.01), 1);
+        assert_eq!(daslight_mapping_raster_pixel(0.99), 99);
+        assert_eq!(daslight_mapping_raster_pixel(1.0), 99);
+
+        let request_for = |rng_seed, point_width, point_height| {
+            let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::RandomFill {
+                grayscale: false,
+                vertical_symmetry: false,
+                rng_seed,
+                point_width,
+                source_point_height: Some(point_height),
+            });
+            request.spatial_pattern.as_mut().unwrap().placement =
+                Some(test_patch_canvas_placement(0, 0, 100, 100, 0.0));
+            request
+        };
+        for invalid_width in [0.5, 11.0] {
+            assert!(
+                validate_color_effect_request(&request_for(1, invalid_width, 1))
+                    .unwrap_err()
+                    .contains("integer within 1..10")
+            );
+        }
+        let mut legacy_unplaced = request_for(1, 0.5, 7);
+        legacy_unplaced.spatial_pattern.as_mut().unwrap().placement = None;
+        validate_color_effect_request(&legacy_unplaced)
+            .expect("unplaced legacy width and provenance height must keep their prior domain");
+        let request = request_for(0x372D, 10.0, 10);
+        let compiled = CompiledSyndocalRandomFx::compile(&request, 100)
+            .unwrap()
+            .unwrap();
+        let CompiledSyndocalRandomFx::RandomFill {
+            point_width,
+            point_height,
+            cell_columns,
+            cell_count,
+            rank_order,
+            ..
+        } = &compiled
+        else {
+            unreachable!();
+        };
+        assert_eq!(
+            (*point_width, *point_height, *cell_columns, *cell_count),
+            (10, Some(10), 10, 100)
+        );
+        let SyndocalRandomFillRankOrder::AffineTwoDimensional {
+            base_ranks,
+            permutations,
+        } = rank_order
+        else {
+            panic!(
+                "placed Random Fill must compile a scrambled base plus compact affine permutations"
+            );
+        };
+        assert_eq!(base_ranks.len(), *cell_count);
+        assert_eq!(permutations.len(), request.stops.len());
+        let mut sorted_base = base_ranks.to_vec();
+        sorted_base.sort_unstable();
+        assert_eq!(sorted_base, (0..*cell_count as u32).collect::<Vec<_>>());
+        assert_eq!(
+            &base_ranks[..16],
+            &[72, 12, 63, 22, 57, 9, 53, 2, 60, 1, 98, 44, 55, 87, 59, 24],
+            "the splitmix base rank keeps a deterministic spatial-scramble golden"
+        );
+        for permutation in permutations.iter().copied() {
+            assert_eq!(
+                greatest_common_divisor_u32(permutation.multiplier, *cell_count as u32),
+                1,
+                "the affine multiplier must be coprime to the cell count"
+            );
+            let mut sorted = (0..*cell_count)
+                .map(|cell| permutation.rank(base_ranks[cell] as usize, *cell_count))
+                .collect::<Vec<_>>();
+            sorted.sort_unstable();
+            assert_eq!(sorted, (0..*cell_count).collect::<Vec<_>>());
+        }
+        let repeated = CompiledSyndocalRandomFx::compile(&request_for(0x372D, 10.0, 10), 100)
+            .unwrap()
+            .unwrap();
+        let changed = CompiledSyndocalRandomFx::compile(&request_for(0x372E, 10.0, 10), 100)
+            .unwrap()
+            .unwrap();
+        let compact_order_of = |compiled: &CompiledSyndocalRandomFx| match compiled {
+            CompiledSyndocalRandomFx::RandomFill {
+                rank_order:
+                    SyndocalRandomFillRankOrder::AffineTwoDimensional {
+                        base_ranks,
+                        permutations,
+                    },
+                ..
+            } => (base_ranks.to_vec(), permutations.to_vec()),
+            _ => unreachable!(),
+        };
+        assert_eq!(compact_order_of(&compiled), compact_order_of(&repeated));
+        assert_ne!(compact_order_of(&compiled), compact_order_of(&changed));
+
+        let at = Instant::now();
+        let separating_phase = |first_cell: usize, second_cell: usize| {
+            (rank_order
+                .rank(0, first_cell, *cell_count)
+                .min(rank_order.rank(0, second_cell, *cell_count)) as f64
+                + 0.5)
+                / *cell_count as f64
+                / 2.0
+        };
+        assert_ne!(
+            compiled.sample_at_mapping_time(separating_phase(0, 1), 0, 100, 0.0, 0.0, at, at,),
+            compiled.sample_at_mapping_time(separating_phase(0, 1), 0, 100, 0.1, 0.0, at, at,),
+            "changing X must select a different flat cell rank"
+        );
+        assert_ne!(
+            compiled.sample_at_mapping_time(separating_phase(0, 10), 0, 100, 0.0, 0.0, at, at,),
+            compiled.sample_at_mapping_time(separating_phase(0, 10), 0, 100, 0.0, 0.1, at, at,),
+            "changing Y must select a different flat cell rank"
+        );
+
+        let partial = CompiledSyndocalRandomFx::compile(&request_for(0x372D, 6.0, 6), 100)
+            .unwrap()
+            .unwrap();
+        let CompiledSyndocalRandomFx::RandomFill {
+            cell_columns,
+            cell_count,
+            rank_order,
+            ..
+        } = &partial
+        else {
+            unreachable!();
+        };
+        assert_eq!((*cell_columns, *cell_count), (17, 17 * 17));
+        let tail_cell = 16 * *cell_columns + 16;
+        let tail_phase =
+            (rank_order.rank(0, tail_cell, *cell_count) as f64 + 0.5) / *cell_count as f64 / 2.0;
+        assert_ne!(
+            partial.sample_at_mapping_time(tail_phase, 0, 100, 1.0, 1.0, at, at),
+            black_color(),
+            "the partial right/bottom cell covering source pixel 99 must be sampled"
+        );
+
+        let mut maximum = request_for(0x37FF, 1.0, 1);
+        maximum.stops = (0..255)
+            .map(|stop| protocol::ColorEffectStop {
+                position: stop as f32 / 254.0,
+                color: test_color(stop as u16 * 257, 0, u16::MAX - stop as u16 * 257),
+            })
+            .collect();
+        let maximum = CompiledSyndocalRandomFx::compile(&maximum, 100)
+            .unwrap()
+            .unwrap();
+        let CompiledSyndocalRandomFx::RandomFill {
+            cell_count,
+            rank_order:
+                SyndocalRandomFillRankOrder::AffineTwoDimensional {
+                    base_ranks,
+                    permutations,
+                },
+            ..
+        } = &maximum
+        else {
+            panic!("maximum placed Random Fill must remain compact");
+        };
+        assert_eq!(*cell_count, 10_000);
+        assert_eq!(base_ranks.len(), 10_000);
+        assert_eq!(permutations.len(), 255);
+        assert_eq!(
+            base_ranks.len() * std::mem::size_of::<u32>()
+                + permutations.len() * std::mem::size_of::<SyndocalRandomFillAffinePermutation>(),
+            42_040
+        );
+        assert!(42_040 < 10_200_000);
+        let mut seen = vec![false; *cell_count];
+        for permutation in permutations.iter().copied() {
+            assert_eq!(
+                greatest_common_divisor_u32(permutation.multiplier, *cell_count as u32),
+                1
+            );
+            seen.fill(false);
+            for cell in 0..*cell_count {
+                let rank = permutation.rank(base_ranks[cell] as usize, *cell_count);
+                assert!(!seen[rank], "compact transition repeated rank {rank}");
+                seen[rank] = true;
+            }
+            assert!(seen.iter().all(|rank| *rank));
+        }
+    }
+
+    #[test]
+    fn placed_random_fill_consumes_placement_transform_rotation_and_qgray() {
+        let request_for = |grayscale| {
+            let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::RandomFill {
+                grayscale,
+                vertical_symmetry: false,
+                rng_seed: 0x372D,
+                point_width: 10.0,
+                source_point_height: Some(10),
+            });
+            request.stops[0].color = test_color(u16::MAX, 0, 0);
+            request.stops[1].color = test_color(0, 0, u16::MAX);
+            request.spatial_pattern.as_mut().unwrap().placement =
+                Some(test_patch_canvas_placement(0, 0, 100, 100, 0.0));
+            request
+        };
+        let request = request_for(false);
+        let compiled = CompiledSyndocalRandomFx::compile(&request, 100)
+            .unwrap()
+            .unwrap();
+        let CompiledSyndocalRandomFx::RandomFill {
+            cell_columns,
+            cell_count,
+            rank_order,
+            ..
+        } = &compiled
+        else {
+            unreachable!();
+        };
+        let cell_for = |sample: CompiledColorSpatialPlacementSample| {
+            let (x, y) = sample.normalized();
+            (daslight_mapping_raster_pixel(y) / 10) * *cell_columns
+                + daslight_mapping_raster_pixel(x) / 10
+        };
+        let mut placement = test_patch_canvas_placement(0, 0, 100, 100, 0.0);
+        let plain = CompiledColorSpatialPlacement::compile(&placement)
+            .unwrap()
+            .sample(25, 50)
+            .unwrap();
+        let rotation_plain = CompiledColorSpatialPlacement::compile(&placement)
+            .unwrap()
+            .sample(75, 50)
+            .unwrap();
+        placement.vertical_symmetry = true;
+        let transformed = CompiledColorSpatialPlacement::compile(&placement)
+            .unwrap()
+            .sample(25, 50)
+            .unwrap();
+        placement.vertical_symmetry = false;
+        placement.raster_rotation_degrees = 90.0;
+        let rotated = CompiledColorSpatialPlacement::compile(&placement)
+            .unwrap()
+            .sample(75, 50)
+            .unwrap();
+        assert_ne!(cell_for(plain), cell_for(transformed));
+        assert_ne!(cell_for(rotation_plain), cell_for(rotated));
+
+        let at = Instant::now();
+        let assert_samples_differ =
+            |first: CompiledColorSpatialPlacementSample,
+             second: CompiledColorSpatialPlacementSample| {
+                let first_cell = cell_for(first);
+                let second_cell = cell_for(second);
+                let phase = (rank_order
+                    .rank(0, first_cell, *cell_count)
+                    .min(rank_order.rank(0, second_cell, *cell_count))
+                    as f64
+                    + 0.5)
+                    / *cell_count as f64
+                    / 2.0;
+                let (first_x, first_y) = first.normalized();
+                let (second_x, second_y) = second.normalized();
+                assert_ne!(
+                    compiled.sample_at_mapping_time(phase, 0, 100, first_x, first_y, at, at,),
+                    compiled.sample_at_mapping_time(phase, 0, 100, second_x, second_y, at, at,)
+                );
+            };
+        assert_samples_differ(plain, transformed);
+        assert_samples_differ(rotation_plain, rotated);
+
+        let phase = 0.173;
+        let (x, y) = transformed.normalized();
+        let color = compiled.sample_at_mapping_time(phase, 0, 100, x, y, at, at);
+        let grayscale = CompiledSyndocalRandomFx::compile(&request_for(true), 100)
+            .unwrap()
+            .unwrap()
+            .sample_at_mapping_time(phase, 0, 100, x, y, at, at);
+        assert_eq!(grayscale, daslight_grayscale_color(color));
     }
 
     #[test]
@@ -64293,6 +64779,200 @@ mod tests {
             assert!(p99 <= Duration::from_millis(8), "p99 was {p99:?}");
             assert!(max <= Duration::from_millis(12), "max was {max:?}");
         }
+    }
+
+    #[test]
+    fn max_placed_random_fill_release_stack_meets_44hz_budget() {
+        const MAX_PALETTE_STOPS: usize = 255;
+        const MAX_TARGET_COUNT: usize = 200;
+        const MAX_RASTER_WIDTH: i64 = 100;
+        const MAX_RASTER_HEIGHT: i64 = 100;
+        const MAX_CELL_COUNT: usize = 10_000;
+        const MAX_CELL_POINT_WIDTH_PERCENT: f32 = 1.0;
+        const MAX_CELL_POINT_HEIGHT_PERCENT: u16 = 1;
+        const MAX_COMPACT_RANK_BYTES: usize = 42_040;
+        const DENSE_PER_TRANSITION_RANK_BYTES: usize = 10_200_000;
+
+        assert_eq!(RELEASE_GATE_EFFECT_COUNT, 64);
+        assert_eq!(RELEASE_GATE_FIXTURE_COUNT, 200);
+        assert_eq!(RELEASE_GATE_HZ, 44);
+        assert_eq!(MAX_PALETTE_STOPS, 255);
+        assert_eq!(MAX_TARGET_COUNT, 200);
+        assert_eq!(MAX_RASTER_WIDTH, 100);
+        assert_eq!(MAX_RASTER_HEIGHT, 100);
+        assert_eq!(MAX_CELL_COUNT, 10_000);
+        assert_eq!(MAX_CELL_POINT_WIDTH_PERCENT, 1.0);
+        assert_eq!(MAX_CELL_POINT_HEIGHT_PERCENT, 1);
+        assert_eq!(MAX_COMPACT_RANK_BYTES, 42_040);
+        assert_eq!(DENSE_PER_TRANSITION_RANK_BYTES, 10_200_000);
+        assert_eq!(RELEASE_GATE_P95_LIMIT, Duration::from_millis(5));
+        assert_eq!(RELEASE_GATE_P99_LIMIT, Duration::from_millis(8));
+        assert_eq!(RELEASE_GATE_MAX_LIMIT, Duration::from_millis(12));
+        assert_eq!(
+            1_000_000 / DMX_TICK_INTERVAL.as_micros(),
+            u128::from(RELEASE_GATE_HZ)
+        );
+
+        let mut runtime = runtime_with_mixed_effect_fixtures(RELEASE_GATE_FIXTURE_COUNT as u64);
+        let fixture_ids = (1..=RELEASE_GATE_FIXTURE_COUNT as u64).collect::<Vec<_>>();
+        let beam_targets = fixture_ids
+            .iter()
+            .enumerate()
+            .map(
+                |(selection_index, fixture_id)| protocol::ColorEffectBeamTarget {
+                    fixture_id: *fixture_id,
+                    beam_index: 0,
+                    selection_index: selection_index as u32,
+                    feature_attribute: None,
+                },
+            )
+            .collect::<Vec<_>>();
+        let target_coordinates = fixture_ids
+            .iter()
+            .enumerate()
+            .map(
+                |(selection_index, fixture_id)| protocol::ColorEffectSpatialPlacementTarget {
+                    fixture_id: *fixture_id,
+                    beam_index: 0,
+                    patch_x: (selection_index % MAX_RASTER_WIDTH as usize) as i64,
+                    patch_y: if selection_index < MAX_RASTER_WIDTH as usize {
+                        0
+                    } else {
+                        MAX_RASTER_HEIGHT - 1
+                    },
+                },
+            )
+            .collect::<Vec<_>>();
+        assert_eq!(fixture_ids.len(), MAX_TARGET_COUNT);
+        assert_eq!(beam_targets.len(), MAX_TARGET_COUNT);
+        assert_eq!(target_coordinates.len(), MAX_TARGET_COUNT);
+
+        let mut base = test_spatial_color_request(ColorEffectSpatialRecipe::RandomFill {
+            grayscale: false,
+            vertical_symmetry: false,
+            rng_seed: 0x37FF_0000,
+            point_width: MAX_CELL_POINT_WIDTH_PERCENT,
+            source_point_height: Some(MAX_CELL_POINT_HEIGHT_PERCENT),
+        });
+        base.fixture_ids = fixture_ids;
+        base.period_ms = 1_000;
+        base.stops = (0..MAX_PALETTE_STOPS)
+            .map(|stop| protocol::ColorEffectStop {
+                position: stop as f32 / (MAX_PALETTE_STOPS - 1) as f32,
+                color: test_color(
+                    stop as u16 * 257,
+                    u16::MAX - stop as u16 * 257,
+                    stop as u16 * 193,
+                ),
+            })
+            .collect();
+        let mut placement =
+            test_patch_canvas_placement(0, 0, MAX_RASTER_WIDTH, MAX_RASTER_HEIGHT, 0.0);
+        placement.target_coordinates = target_coordinates;
+        let pattern = base.spatial_pattern.as_mut().unwrap();
+        pattern.beam_targets = beam_targets;
+        pattern.placement = Some(placement);
+        validate_color_effect_request(&base).unwrap();
+        assert_eq!(base.stops.len(), MAX_PALETTE_STOPS);
+
+        let created_at = Instant::now();
+        for index in 0..RELEASE_GATE_EFFECT_COUNT {
+            let mut request = base.clone();
+            let ColorEffectSpatialRecipe::RandomFill { rng_seed, .. } =
+                &mut request.spatial_pattern.as_mut().unwrap().recipe
+            else {
+                unreachable!();
+            };
+            *rng_seed ^= index as u32;
+            request.phase = index as f32 / RELEASE_GATE_EFFECT_COUNT as f32;
+            let kind = RuntimeEffectKind::Color(
+                runtime
+                    .resolve_color_effect_request(request)
+                    .expect("maximum placed Random Fill request must compile"),
+            );
+            runtime.effects.push(RuntimeEffect {
+                id: index as EffectId + 1,
+                kind,
+                enabled: true,
+                created_at,
+            });
+        }
+        assert_eq!(runtime.effects.len(), RELEASE_GATE_EFFECT_COUNT);
+        assert_eq!(
+            runtime
+                .effects
+                .iter()
+                .filter(|effect| effect.enabled)
+                .count(),
+            64
+        );
+        assert_eq!(runtime.fixtures.len(), RELEASE_GATE_FIXTURE_COUNT);
+
+        for effect in &runtime.effects {
+            let RuntimeEffectKind::Color(color) = &effect.kind else {
+                unreachable!("maximum placed Random Fill gate contains only Color effects");
+            };
+            assert_eq!(color.request.fixture_ids.len(), MAX_TARGET_COUNT);
+            assert_eq!(color.request.stops.len(), MAX_PALETTE_STOPS);
+            let pattern = color.request.spatial_pattern.as_ref().unwrap();
+            assert!(matches!(
+                pattern.recipe,
+                ColorEffectSpatialRecipe::RandomFill {
+                    point_width: 1.0,
+                    source_point_height: Some(1),
+                    ..
+                }
+            ));
+            assert_eq!(pattern.beam_targets.len(), MAX_TARGET_COUNT);
+            let placement = pattern.placement.as_ref().unwrap();
+            assert_eq!((placement.sx, placement.sy), (100, 100));
+            assert_eq!(placement.target_coordinates.len(), MAX_TARGET_COUNT);
+            let spatial = color.spatial.as_ref().unwrap();
+            assert_eq!(spatial.targets.len(), MAX_TARGET_COUNT);
+            let Some(CompiledSyndocalRandomFx::RandomFill {
+                point_width,
+                point_height,
+                cell_columns,
+                cell_count,
+                rank_order:
+                    SyndocalRandomFillRankOrder::AffineTwoDimensional {
+                        base_ranks,
+                        permutations,
+                    },
+                ..
+            }) = spatial.syndocal_random_fx.as_ref()
+            else {
+                panic!(
+                    "maximum placed Random Fill must use a scrambled base plus compact affine ranks"
+                );
+            };
+            assert_eq!(
+                (*point_width, *point_height, *cell_columns, *cell_count),
+                (1, Some(1), 100, MAX_CELL_COUNT)
+            );
+            assert_eq!(base_ranks.len(), MAX_CELL_COUNT);
+            assert_eq!(permutations.len(), MAX_PALETTE_STOPS);
+            let compact_rank_bytes = base_ranks.len() * std::mem::size_of::<u32>()
+                + permutations.len() * std::mem::size_of::<SyndocalRandomFillAffinePermutation>();
+            assert_eq!(compact_rank_bytes, MAX_COMPACT_RANK_BYTES);
+            assert!(compact_rank_bytes < DENSE_PER_TRANSITION_RANK_BYTES);
+        }
+
+        let (p95, p99, max) =
+            measure_release_gate(created_at, |at| {
+                runtime.fixtures.iter().fold(0_u64, |checksum, fixture| {
+                    checksum.wrapping_add(runtime.apply_effects_with_transition_policy(
+                        fixture, "ColorRed", 16_384, at, false,
+                    ) as u64)
+                })
+            });
+        eprintln!(
+            "Max placed RandomFill 64x200 (255 stops, 100x100, Point 1x1): p95={}us p99={}us max={}us",
+            p95.as_micros(),
+            p99.as_micros(),
+            max.as_micros()
+        );
+        assert_release_gate_percentiles(p95, p99, max);
     }
 
     #[test]

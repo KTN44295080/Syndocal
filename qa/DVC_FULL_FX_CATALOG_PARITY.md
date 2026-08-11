@@ -292,16 +292,16 @@ Mediaの旧表記`T2/10`はcatalog転記誤りだった。`CMediaEffect` constru
 
 ## 現行Syndocal importerとの逆照合
 
-68 IDのうち現行converter coverageは56 ID（うちMAPPINGS 526とCOLOR MAPPINGS 33の空パスは
-source no-op）、random-state由来のprecise fail-closedは0、残る12 IDは未routeでgeneric
+68 IDのうち現行converter coverageは57 ID（うちMAPPINGS 526とCOLOR MAPPINGS 33の空パスは
+source no-op）、random-state由来のprecise fail-closedは0、残る11 IDは未routeでgeneric
 `Skipped`になる。Media 33/526のnon-empty pathはroute内でprecise fail-closedを維持する。
-56 routeはfull-domain完成数ではなく、
+57 routeはfull-domain完成数ではなく、
 strict/exactを別に監査した。
 
 | route群 | 現在の境界 |
 |---|---|
 | VALUE 621–628 | strict。626/627はstable source seed、628はcontinuous fixed-hash/cosine/analytic palette/active DirectionのCorrected evaluator。対象ゼロのno-opもschema検証後に成立 |
-| COLOR MAPPINGS 22/23/30/32/34/36/40/42/44 | strict PARAM ID/TYPE/domain、palette 1..255、Rectangle、owned COLOR beam target、Override mergeを保持。外部`SELECTIONS`はprecise fail-closed。23/42も共通qGray post-processを通る |
+| COLOR MAPPINGS 22/23/30/32/34/36/37/40/42/44 | strict PARAM ID/TYPE/domain、palette 1..255、Rectangle、owned COLOR beam target、Override mergeを保持。外部`SELECTIONS`はprecise fail-closed。23/37/42も共通qGray post-processを通る。37は100x100のflat-cell no-replacement permutationをstable source seedで生成するCorrected route |
 | COLOR MAPPINGS 33 | ctorで確定したNB=6（T4/1、T2/2、T6/3、T0/4、T8/10、T1/11）をstrict検証。空Media Pathだけsource no-op、non-empty pathはprecise fail-closed |
 | MOVE 221–225 | strict。5 distinct geometry、authored DURATION、continuous Phasing/Symmetry、ordered beam targetを保持。Pointsのみ等時間vertex hold |
 | COLOR 129/130 | strict schemaと証明済みevaluator式を実装 |
@@ -479,9 +479,16 @@ strict/exactを別に監査した。
   empty pathはRectangleと全base/domainを検証したsource no-op、non-empty pathはembedded-media decode
   証明待ちのprecise fail-closedである。COLOR MAPPINGS family 5の実保存specimenは存在しないため、
   native保存互換を主張せずsynthetic strict-schema regressionだけを追加した。
-- ID37 Random fillは現engineのplaced raster stateが1D/height-deadで、共有MAPPINGS evaluatorがない。
-  2D state extensionを伴う別トランシェまで未routeを維持する。専用classの残りは
-  21/29/31/35/37/41/45/47/48/49/50、別schemaはCURVE Custom 13である。
+- ID37 Random fillはstrict NB=6（共通base + T0/10 Point Width 1..10 + T0/11 Point Height
+  1..10）でrouteした。Rectangle配置と`source_point_height=Some`が同時にある場合だけ、高さをliveに
+  使う100x100の2D evaluatorとなる。X/Yを`floor(normalized*100)`（99へclamp）でpixel化し、
+  `div_ceil`した全2D cellへ独立axis shuffleではなく一つのflat rank permutationを割り当てる。
+  右端・下端のpartial tailもcoverageへ含む。非serialize qrand/historyはsource familyとgenerator IDを
+  含むstable seedへ置換するため`SyndocalCorrected`であり、process-history exactとは主張しない。
+  placementなしの旧JSONは、`source_point_height`が存在しても従来どおり1D/evaluator-deadである。
+  family 5の実保存specimenは存在しないため、constructor/static evidenceとsynthetic strict importer
+  fixtureだけを根拠とする。専用classの残りは21/29/31/35/41/45/47/48/49/50、別schemaは
+  CURVE Custom 13である。
 
 ## 未実装・未証明境界
 
@@ -492,8 +499,8 @@ strict/exactを別に監査した。
 2. CHASER #3/#4は式と対称pair topologyを回収し、実保存specimen付きでroute済み。実灯体の
    photometryとdevice latencyだけは物理受入に残る。
 3. MAPPINGS 521–530は全route済み。COLOR MAPPINGSの共有class
-   22/23/30/32/34/36/40/42/44もroute済み。Media 33/526は空sourceだけno-op、non-empty sourceは
-   decode/timing証明待ち。COLOR MAPPINGS専用class 21/29/31/35/37/41/45/47/48/49/50は
+   22/23/30/32/34/36/37/40/42/44もroute済み。Media 33/526は空sourceだけno-op、non-empty sourceは
+   decode/timing証明待ち。COLOR MAPPINGS専用class 21/29/31/35/41/45/47/48/49/50は
    引き続きraster algorithm bodyまたは2D stateの意味論回収が必要。
 4. `TYPE7 Shape`のserialized glyph表現と`TYPE10 Text Direction`の合法enum域は未証明。
 5. Sparkle/Random fillの外部per-thread qrand履歴そのものはreplay不能だが、作者が保存した

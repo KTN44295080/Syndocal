@@ -209,8 +209,12 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
       props.onSpatialPattern(null);
       return;
     }
+    const recipe = defaultSpatialRecipe(kind);
+    if (kind === "RandomFill" && props.spatialPattern?.placement && "RandomFill" in recipe) {
+      recipe.RandomFill.source_point_height = 1;
+    }
     props.onSpatialPattern({
-      recipe: defaultSpatialRecipe(kind),
+      recipe,
       parameter_model_version: 1,
       beam_targets: props.spatialPattern?.beam_targets ?? [],
       ...(props.spatialPattern?.placement
@@ -250,7 +254,7 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
   };
   const placedSharedRaster = createMemo(() =>
     props.spatialPattern?.placement !== undefined
-      && ["KnightRider", "Burst", "Sweep", "Sparkle", "Spiral", "Butterfly", "Plasma"].includes(spatialKind()),
+      && ["KnightRider", "Burst", "Sweep", "RandomFill", "Sparkle", "Spiral", "Butterfly", "Plasma"].includes(spatialKind()),
   );
   const placementTransform = () => props.spatialPattern?.placement?.vertical_symmetry
     ? "vertical"
@@ -565,10 +569,13 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
           </div>
         </Show>
         <Show when={spatialKind() === "RandomFill"}>
-          <div class="colorEffectModeGrid">
+          <div class="colorEffectModeGrid" data-color-random-fill-controls>
             <label><input type="checkbox" checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
             <Show when={!placedSharedRaster()}><label>Transform<select value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label></Show>
-            <label>Point width %<input type="number" min="0.01" max="100000" step="0.1" value={spatialNumber("point_width", 10)} onInput={(event) => patchSpatialValues({ point_width: clamp(Number(event.currentTarget.value) || 0.01, 0.01, 100000) })} /></label>
+            <Show when={props.spatialPattern?.placement} fallback={<label>Point width %<input data-color-random-fill-point-width-1d type="number" min="0.01" max="100000" step="0.1" value={spatialNumber("point_width", 10)} onInput={(event) => patchSpatialValues({ point_width: clamp(Number(event.currentTarget.value) || 0.01, 0.01, 100000) })} /></label>}>
+              <label>Point width %<input data-color-random-fill-point-width-2d type="number" min="1" max="10" step="1" value={spatialNumber("point_width", 1)} onInput={(event) => patchSpatialValues({ point_width: clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 10) })} /></label>
+            </Show>
+            <Show when={props.spatialPattern?.placement}><label>Point height %<input data-color-random-fill-point-height type="number" min="1" max="10" step="1" value={spatialNumber("source_point_height", 1)} onInput={(event) => patchSpatialValues({ source_point_height: clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 10) })} /></label></Show>
             <label>Seed<input type="number" min="0" max="4294967295" step="1" value={spatialNumber("rng_seed", 0)} onInput={(event) => patchSpatialValues({ rng_seed: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 4_294_967_295) })} /></label>
           </div>
         </Show>

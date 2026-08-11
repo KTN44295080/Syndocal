@@ -2352,8 +2352,11 @@ pub enum ColorEffectSpatialRecipe {
         rng_seed: u32,
         /// Filled cell width as a percentage of the ordered target strip.
         point_width: f32,
-        /// VALUE family 7 serializes Point Height even though its one-row
-        /// evaluator does not consume it. COLOR family 2 omits the field.
+        /// Point Height is live only when the same recipe also has a Rectangle
+        /// placement, where it selects the corrected 100x100 two-dimensional
+        /// evaluator. Unplaced VALUE-family recipes retain this as provenance
+        /// and their one-row evaluator deliberately does not consume it.
+        /// Unplaced COLOR-family recipes omit the field.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source_point_height: Option<u16>,
     },
@@ -5429,10 +5432,21 @@ mod tests {
         let fill_json = serde_json::to_string(&corrected_fill).unwrap();
         assert!(!fill_json.contains("syndocal_corrected"));
         assert!(fill_json.contains(r#""rng_seed":305419896"#));
+        assert!(fill_json.contains(r#""source_point_height":7"#));
         assert_eq!(
             serde_json::from_str::<super::ColorEffectSpatialRecipe>(&fill_json).unwrap(),
             corrected_fill
         );
+        let unplaced_color_fill = super::ColorEffectSpatialRecipe::RandomFill {
+            grayscale: false,
+            vertical_symmetry: false,
+            rng_seed: 0,
+            point_width: 2.0,
+            source_point_height: None,
+        };
+        assert!(!serde_json::to_string(&unplaced_color_fill)
+            .unwrap()
+            .contains("source_point_height"));
 
         let legacy_sparkle_json =
             r#"{"Sparkle":{"syndocal_corrected":false,"number":5,"lifespan":25.0,"width":1}}"#;

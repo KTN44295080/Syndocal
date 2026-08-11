@@ -128,4 +128,14 @@ T1/ID11 Colorize. Only an empty path is a source no-op; non-empty media remains
 precise fail-closed. No family-5 COLOR MAPPINGS saved specimen exists in the
 repository, so this extension is constructor- and synthetic-schema-proven only;
 the real specimen claim at the top of this document remains limited to MAPPINGS
-522–529. Family-specific COLOR MAPPINGS classes remain for later tranches.
+522–529.
+
+COLOR MAPPINGS 37 Random fill is a separate family-specific corrected extension. It
+uses Point Width/Height `1..10` to partition a fixed 100x100 raster with two-axis
+`div_ceil`, ranks every flattened cell once per palette transition, and samples X/Y
+after the same inverse Rectangle Transform/Rotation. The serialized height becomes
+live only when placement is present; unplaced legacy recipes keep height as
+evaluator-dead provenance. Nonserialized qrand/history is replaced by a stable
+source-family/generator-aware seed. No family-5 native saved specimen exists, so this
+claim is limited to constructor/static evidence and synthetic strict-schema tests.
+The remaining family-specific COLOR MAPPINGS classes stay for later tranches.

@@ -34,9 +34,9 @@ Daslight 5.0.6.2 / FileVersion `25.0905.165.111`の実機dropdown全項目とfac
 | CHASER | 321 #1, 322 #2, 323 #3, 324 #4, 325 random | **321–325全5種**（323/324は回収済み対称pair topologyをCorrected連続clockへ変換） | なし |
 | CURVE | 3–13（11種） | **3–12全10種**（6 Randomだけstable source seedのCorrected RNG） | Custom 13だけ未route・別schema |
 | MAPPINGS | 521–530（10種） | **521–530全10種**（526 Mediaは検証済み空パスno-op、529 Sparkleはstable source seedのCorrected RNG） | non-empty Media pathのみprecise fail-closed |
-| COLOR MAPPINGS | 21,22,23,29–37,40–42,44,45,47–50（21種） | **22/23/30/32/34/36/40/42/44**、33 Media空パスno-op | 33 non-empty Media pathはprecise fail-closed。残11種未route |
+| COLOR MAPPINGS | 21,22,23,29–37,40–42,44,45,47–50（21種） | **22/23/30/32/34/36/37/40/42/44**、33 Media空パスno-op（37はstable source seedのCorrected 2D Random Fill） | 33 non-empty Media pathはprecise fail-closed。残10種未route |
 
-現行converter routeは56/68 ID、random-state由来のprecise fail-closedは0、未routeは12。
+現行converter routeは57/68 ID、random-state由来のprecise fail-closedは0、未routeは11。
 Media 33/526のnon-empty pathはroute内でprecise fail-closedを維持する。
 626/627/131/133、CURVE 6、CHASER 323/324は明示Corrected、CHASER 325も既存stable permutationをCorrectedとして報告する。これはID単位の入口coverageであり、共有raster classの再利用度や
 STEPS/SUPER SCENEなど非generator構造を含む「製品完成率」ではない。未routeをUI名だけで近似せず、
@@ -119,9 +119,11 @@ strict-core数を製品全域のexact完成数とは呼ばない。
    **新規IDトランシェ進捗**: CURVE 5/6/8/11/12、CHASER 323/324、MAPPINGS 521–530
    （Spiral/Butterflyの回収済み解析geometry、共有2D raster、Sparkleの2D retained state、
    Media 526空パスno-opを含む）は完了。COLOR MAPPINGS共有class
-   22/23/30/32/34/40/42/44と、strict NB=6でempty pathだけno-opの33も完了した。次は専用class
-   21/29/31/35/37/41/45/47/48/49/50、その後に別schemaのCURVE Custom 13を回収する。
-   ID37 Random fillはplaced 2D state extensionが必要であり、本共有トランシェには含めない。
+   22/23/30/32/34/40/42/44と、strict NB=6でempty pathだけno-opの33も完了した。さらに専用class
+   ID37 Random fillは100x100 placed 2D state、single flat-cell permutation、two-axis partial-tail
+   coverage、placement Transform/Rotation、qGrayまでCorrected route化した。family 5の実保存specimenは
+   ないためconstructor/static evidenceとsynthetic strict fixtureに限定する。次は専用class
+   21/29/31/35/41/45/47/48/49/50、その後に別schemaのCURVE Custom 13を回収する。
 10. **DVC-RNG-CORRECTED（完了）**: VALUE 626/627とCOLOR 131/133をstrict schemaでrouteし、
    非serialize qrand履歴だけをsource identity由来のstable u32 seedへ置換した。Random fillは
    no-replacement rank、palette-to-palette連続遷移、端セルcoverage、Sparkleはretained population、

@@ -1558,6 +1558,7 @@ const japaneseText: Record<string, string> = {
   "Speed Y": "速度 Y",
   "Param SY": "パラメータ SY",
   "Point width %": "ポイント幅（%）",
+  "Point height %": "ポイント高さ（%）",
   "Sparkle number": "スパークル数",
   "Sparkle height %": "スパークル高さ（%）",
   "Spiral mapping": "スパイラルマッピング",

@@ -357,6 +357,7 @@ assert.ok(
 );
 assert.equal(localization.translateUiText("Size %", "ja"), "サイズ（%）");
 assert.equal(localization.translateUiText("Point width %", "ja"), "ポイント幅（%）");
+assert.equal(localization.translateUiText("Point height %", "ja"), "ポイント高さ（%）");
 assert.equal(localization.translateUiText("Sparkle width %", "ja"), "スパークル幅（%）");
 for (const editorSource of [valueEffectEditorSource, colorEffectEditorSource]) {
   assert.doesNotMatch(

@@ -2394,7 +2394,7 @@ fn convert_dvc_effect(
             profiles,
             fixture_refs,
         ),
-        (5, 3, 22 | 23 | 30 | 32 | 33 | 34 | 36 | 40 | 42 | 44)
+        (5, 3, 22 | 23 | 30 | 32 | 33 | 34 | 36 | 37 | 40 | 42 | 44)
         | (2, 2, 121 | 127 | 128 | 129 | 130 | 131 | 133 | 134)
         | (6, 8, 521..=530) => {
             convert_dvc_color_spatial_effect(
@@ -3222,6 +3222,7 @@ fn convert_dvc_color_spatial_effect(
         33 => "Media",
         34 => "Plasma",
         36 => "Rainbow",
+        37 => "Random fill",
         40 => "Sparkle",
         42 => "Spiral",
         44 => "Sweep",
@@ -3251,7 +3252,7 @@ fn convert_dvc_color_spatial_effect(
     };
     let source_is_color_mappings = matches!(
         generator_id,
-        22 | 23 | 30 | 32 | 33 | 34 | 36 | 40 | 42 | 44
+        22 | 23 | 30 | 32 | 33 | 34 | 36 | 37 | 40 | 42 | 44
     );
     let shared_mapping_generator_id = match generator_id {
         22 => 523,
@@ -3462,6 +3463,30 @@ fn convert_dvc_color_spatial_effect(
                     360,
                 )?,
                 gradient: dvc_unit_param(&params, 12, "COLOR MAPPINGS Rainbow Gradient")? * 100.0,
+            }
+        }
+        37 => {
+            require_exact_dvc_mapping_recipe_schema(effect, &params, true, &[(10, 0), (11, 0)])?;
+            ColorEffectSpatialRecipe::RandomFill {
+                grayscale: dvc_binary_param(&params, 2, "COLOR MAPPINGS Random fill Grayscale")?,
+                // COLOR MAPPINGS Transform and Rotation are placement-space
+                // operations populated below, not one-dimensional strip flags.
+                vertical_symmetry: false,
+                rng_seed: dvc_corrected_rng_seed(scene, rack, effect, generator_id),
+                point_width: dvc_integer_range_param(
+                    &params,
+                    10,
+                    "COLOR MAPPINGS Random fill Point Width",
+                    1,
+                    10,
+                )?,
+                source_point_height: Some(dvc_integer_range_param(
+                    &params,
+                    11,
+                    "COLOR MAPPINGS Random fill Point Height",
+                    1,
+                    10,
+                )? as u16),
             }
         }
         127 => {
@@ -4115,7 +4140,7 @@ fn convert_dvc_color_spatial_effect(
             "{omitted_spatial_targets} beam target(s) without a verified color segment or Dimmer attribute were omitted"
         ));
     }
-    let (period_ms, period_note) = if matches!(generator_id, 121 | 127 | 128 | 131 | 133 | 134)
+    let (period_ms, period_note) = if matches!(generator_id, 37 | 121 | 127 | 128 | 131 | 133 | 134)
         || shared_mapping_generator_id == 530
     {
         let period_source_family = if source_is_color_mappings {
@@ -4174,7 +4199,17 @@ fn convert_dvc_color_spatial_effect(
             source_point_height,
             ..
         } => {
-            format!("implementation=SyndocalCorrected; evaluator=CRandomFillEffect recovered no-replacement grammar; unavailable_qrand=stable_source_seed; rng_seed={rng_seed}; Grayscale={}; Transform={}; PointWidth={point_width}; source_PointHeight={source_point_height:?}; cell_partition=div_ceil; end_coverage=partial_tail_included; transition=continuous_palette_to_palette", u8::from(*grayscale), if *vertical_symmetry { "Vertical symmetry" } else { "None" })
+            if generator_id == 37 {
+                let transform = match params.get(&3).copied() {
+                    Some(1.0) => "Vertical symmetry",
+                    Some(2.0) => "Horizontal symmetry",
+                    _ => "None",
+                };
+                let rotation = params.get(&4).copied().unwrap_or_default();
+                format!("implementation=SyndocalCorrected; evaluator=CRandomFillEffect recovered no-replacement grammar; unavailable_qrand=stable_source_seed; rng_seed={rng_seed}; Grayscale={}; Transform={transform}; Rotation={rotation}; PointWidth={point_width}; source_PointHeight={source_point_height:?}; PointHeight_mode=placed_2d_live; source_raster=100x100; cell_ranking=single_flat_permutation; cell_partition=div_ceil; end_coverage=partial_right_and_bottom_tails_included; transition=continuous_palette_to_palette", u8::from(*grayscale))
+            } else {
+                format!("implementation=SyndocalCorrected; evaluator=CRandomFillEffect recovered no-replacement grammar; unavailable_qrand=stable_source_seed; rng_seed={rng_seed}; Grayscale={}; Transform={}; PointWidth={point_width}; source_PointHeight={source_point_height:?}; cell_partition=div_ceil; end_coverage=partial_tail_included; transition=continuous_palette_to_palette", u8::from(*grayscale), if *vertical_symmetry { "Vertical symmetry" } else { "None" })
+            }
         }
         ColorEffectSpatialRecipe::Sparkle {
             grayscale,
@@ -4284,7 +4319,7 @@ fn convert_dvc_color_spatial_effect(
             )
         })
         .transpose()?;
-    if matches!(shared_mapping_generator_id, 522..=529) {
+    if generator_id == 37 || matches!(shared_mapping_generator_id, 522..=529) {
         let transform = dvc_param(&params, 3, &format!("{mapping_family_label} Transform"))?;
         if !matches!(transform, 0.0 | 1.0 | 2.0) {
             return Err(format!(
@@ -9973,6 +10008,151 @@ mod tests {
     }
 
     #[test]
+    fn dvc_color_mappings_random_fill_routes_exact_2d_and_rejects_schema_drift() {
+        let source = || {
+            r#"<SCENE DASUID="random-fill-scene" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="5" DASUID="random-fill-rack"><EFFECT TYPE="3" ID="37" DASUID="random-fill-effect" DURATION="1000"><PARAMS NB="6"><PARAM TYPE="4" ID="1"><COLORS NB="2"><COLOR VAL="1/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0/0/1/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/></COLORS></PARAM><PARAM TYPE="2" ID="2" VAL="1"/><PARAM TYPE="6" ID="3" VAL="2"/><PARAM TYPE="0" ID="4" VAL="90"/><PARAM TYPE="0" ID="10" VAL="6"/><PARAM TYPE="0" ID="11" VAL="7"/></PARAMS></EFFECT><MAPPING NAME="Rectangle" DASUID="color-mappings-random-fill" TYPE="0" X="0" Y="0" SX="200" SY="100" ANGLE="30" LOCKED="0"/><BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS></RACK></RACKS></SCENE>"#.to_string()
+        };
+        let convert = |xml: &str| {
+            let document = Document::parse(xml).unwrap();
+            let scene = document.root_element();
+            let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+            let effect = direct_child(rack, "EFFECT").unwrap();
+            convert_dvc_effect(
+                scene,
+                "COLOR MAPPINGS Random fill",
+                rack,
+                effect,
+                5,
+                3,
+                37,
+                1,
+                &effect_test_profiles(),
+                &effect_test_fixture_refs(),
+            )
+        };
+
+        let first = convert(&source()).unwrap();
+        let repeated = convert(&source()).unwrap();
+        assert!(first.approximations.is_empty());
+        assert!(first.note.contains("source_family=Color Mappings;"));
+        assert!(first.note.contains("implementation=SyndocalCorrected"));
+        assert!(first.note.contains("unavailable_qrand=stable_source_seed"));
+        assert!(first.note.contains("PointHeight_mode=placed_2d_live"));
+        assert!(first.note.contains("source_raster=100x100"));
+        assert!(first
+            .note
+            .contains("Transform=Horizontal symmetry; Rotation=90"));
+        let first_target = first.target.unwrap();
+        let repeated_target = repeated.target.unwrap();
+        assert_eq!(
+            serde_json::to_value(&repeated_target).unwrap(),
+            serde_json::to_value(&first_target).unwrap(),
+            "the source-family/generator-aware seed must be reload-stable"
+        );
+        let Some(EffectParamsSnapshot::Color(request)) = first_target.params else {
+            panic!("COLOR MAPPINGS 37 must create an owned Color target");
+        };
+        assert_eq!(request.fixture_ids, vec![1]);
+        assert_eq!(request.blend_mode, EffectBlendMode::Override);
+        assert_eq!(request.stops.len(), 2);
+        assert_eq!(request.period_ms, 1_000);
+        let pattern = request.spatial_pattern.unwrap();
+        assert_eq!(pattern.beam_targets.len(), 1);
+        assert_eq!(pattern.beam_targets[0].feature_attribute, None);
+        assert!(matches!(
+            pattern.recipe,
+            ColorEffectSpatialRecipe::RandomFill {
+                grayscale: true,
+                vertical_symmetry: false,
+                point_width: 6.0,
+                source_point_height: Some(7),
+                rng_seed,
+            } if rng_seed != 0
+        ));
+        let placement = pattern.placement.unwrap();
+        assert_eq!(placement.mapping_angle_degrees, 30.0);
+        assert!(!placement.vertical_symmetry);
+        assert!(placement.horizontal_symmetry);
+        assert_eq!(placement.raster_rotation_degrees, 90.0);
+        assert_eq!(
+            placement.target_coordinates,
+            vec![ColorEffectSpatialPlacementTarget {
+                fixture_id: 1,
+                beam_index: 0,
+                patch_x: 10,
+                patch_y: 20,
+            }]
+        );
+        let valid = source();
+        for (case, invalid, expected_error) in [
+            (
+                "missing PARAM2",
+                valid
+                    .replacen(r#"<PARAM TYPE="2" ID="2" VAL="1"/>"#, "", 1)
+                    .replacen(r#"<PARAMS NB="6">"#, r#"<PARAMS NB="5">"#, 1),
+                "expected PARAM IDs [2, 3, 4, 10, 11]",
+            ),
+            (
+                "PARAMS NB mismatch",
+                valid.replacen(r#"<PARAMS NB="6">"#, r#"<PARAMS NB="5">"#, 1),
+                "PARAMS declares 5 entries but contains 6",
+            ),
+            (
+                "wrong PointHeight TYPE",
+                valid.replacen(r#"TYPE="0" ID="11""#, r#"TYPE="1" ID="11""#, 1),
+                "expected PARAM 11 TYPE=0, found TYPE=1",
+            ),
+            (
+                "malformed palette child",
+                valid.replacen("</COLORS></PARAM>", "</COLORS><EXTRA/></PARAM>", 1),
+                "palette PARAM 1 must contain exactly one direct COLORS element",
+            ),
+            (
+                "COLORS NB mismatch",
+                valid.replacen(r#"<COLORS NB="2">"#, r#"<COLORS NB="1">"#, 1),
+                "COLORS declares 1 entries but contains 2",
+            ),
+        ] {
+            let error = convert(&invalid).unwrap_err();
+            assert!(
+                error.contains(expected_error),
+                "{case}: expected {expected_error:?}, found {error:?}"
+            );
+        }
+
+        for (attribute, invalid_value, expected_error) in [
+            (r#"ID="2" VAL="1""#, r#"ID="2" VAL="2""#, "must be 0 or 1"),
+            (r#"ID="3" VAL="2""#, r#"ID="3" VAL="3""#, "must be None(0)"),
+            (
+                r#"ID="4" VAL="90""#,
+                r#"ID="4" VAL="90.5""#,
+                "integer within 0..360",
+            ),
+            (
+                r#"ID="10" VAL="6""#,
+                r#"ID="10" VAL="0""#,
+                "integer within 1..10",
+            ),
+            (
+                r#"ID="11" VAL="7""#,
+                r#"ID="11" VAL="11""#,
+                "integer within 1..10",
+            ),
+        ] {
+            let error = convert(&valid.replacen(attribute, invalid_value, 1)).unwrap_err();
+            assert!(
+                error.contains(expected_error),
+                "expected {expected_error:?}, found {error:?}"
+            );
+        }
+
+        let external_selection = valid.replacen("<BEAMS NB=", "<SELECTIONS/><BEAMS NB=", 1);
+        assert!(convert(&external_selection)
+            .unwrap_err()
+            .contains("external SELECTIONS remain fail-closed"));
+    }
+
+    #[test]
     fn dvc_color_mappings_media_empty_path_is_strict_noop_and_nonempty_fails_closed() {
         let source = |path: &str| {
             format!(
@@ -10114,13 +10294,13 @@ mod tests {
             effect,
             5,
             3,
-            37,
+            35,
             1,
             &effect_test_profiles(),
             &effect_test_fixture_refs(),
         )
         .unwrap_err();
-        assert!(unknown.contains("RACK TYPE=5 EFFECT TYPE=3 ID=37 is not confirmed"));
+        assert!(unknown.contains("RACK TYPE=5 EFFECT TYPE=3 ID=35 is not confirmed"));
     }
 
     #[test]

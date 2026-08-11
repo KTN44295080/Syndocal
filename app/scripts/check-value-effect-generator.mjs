@@ -71,6 +71,28 @@ assert.ok(
     && colorEditorSource.includes("props.spatialPattern?.placement !== undefined"),
   "placed COLOR Perlin must gate horizontal symmetry and rotation on real mapping placement",
 );
+assert.ok(
+  colorEditorSource.includes('["KnightRider", "Burst", "Sweep", "RandomFill", "Sparkle", "Spiral", "Butterfly", "Plasma"]')
+    && colorEditorSource.includes("data-color-random-fill-point-height")
+    && colorEditorSource.includes('<Show when={props.spatialPattern?.placement}><label>Point height %')
+    && colorEditorSource.includes('min="1" max="10" step="1" value={spatialNumber("source_point_height", 1)}')
+    && colorEditorSource.includes("data-color-random-fill-point-width-2d")
+    && colorEditorSource.includes('min="1" max="10" step="1" value={spatialNumber("point_width", 1)}')
+    && colorEditorSource.includes("data-color-random-fill-point-width-1d")
+    && colorEditorSource.includes('min="0.01" max="100000" step="0.1" value={spatialNumber("point_width", 10)}')
+    && colorEditorSource.includes("recipe.RandomFill.source_point_height = 1"),
+  "placed COLOR Random Fill must expose its integer 1..10 width/height while preserving the unplaced width domain",
+);
+assert.match(
+  typesSource,
+  /RandomFill: \{[^}]*source_point_height\?: number \| null/,
+  "Random Fill Point height must remain an additive optional field for legacy unplaced JSON",
+);
+assert.ok(
+  colorEditorSource.includes("recipe: { [kind]: { ...spatialValues(), ...patch } }")
+    && colorEditorSource.includes("source_point_height: clamp"),
+  "editing placed Random Fill must preserve an imported height until that field is explicitly changed",
+);
 assert.doesNotMatch(
   editorSource,
   /horizontal_symmetry|rotation_degrees/,

@@ -2,7 +2,8 @@
 
 ## Scope
 
-This tranche routes VALUE 626/627 and COLOR 131/133. The Daslight 5.0.6.2
+This tranche routes VALUE 626/627 and COLOR 131/133; the 2026-08-11 extension also
+routes COLOR MAPPINGS 37. The Daslight 5.0.6.2
 schemas and evaluator structure are recovered exactly, but the per-thread Qt/CRT
 `qrand` state and prior draw history are not serialized in `.dvc`. Syndocal therefore
 preserves the authored controls and visible generator grammar while replacing only that
@@ -14,6 +15,7 @@ unavailable process history with a stable deterministic stream.
 | 627 | VALUE / `CRandomFillEffect` | `4/1, 6/3, 0/10 Point Width, 0/11 Point Height` | palette-to-palette no-replacement fill; Height retained as evaluator-dead provenance |
 | 131 | COLOR / `CRandomFillEffect` | `4/1, 2/2 Grayscale, 6/3 Transform, 0/10 Point Width` | same corrected fill plus qGray and Transform fold |
 | 133 | COLOR / `CSparklesEffect` | `4/1, 2/2 Grayscale, 6/3 Transform, 0/10 Number, 1/11 LifeSpan, 0/12 Width` | same corrected particles plus qGray and Transform fold |
+| 37 | COLOR MAPPINGS / `CRandomFillEffect` | `4/1, 2/2 Grayscale, 6/3 Transform, 0/4 Rotation, 0/10 Point Width, 0/11 Point Height` | stable flat-cell no-replacement fill on a placed 100x100 raster plus qGray |
 
 The recovered evaluator addresses remain `CRandomFillEffect@0x140365C70` and
 `CSparklesEffect@0x1403660F0`. Exact process-history replay is intentionally not claimed.
@@ -28,20 +30,33 @@ The report records `implementation=SyndocalCorrected`, the numeric seed, and
 `Approximate` warning.
 
 Native authoring uses the same deterministic evaluator with editable `rng_seed`. Additive
-`serde(default)` fields keep old `.sdc` recipes valid. `syndocal_corrected=false` retains
-the prior native RandomFill/Sparkle evaluator, and all new authoring/imported recipes set
-it true.
+`serde(default)` fields keep old `.sdc` recipes valid. Obsolete `syndocal_corrected`
+route fields are accepted and dropped on reserialization; the current product has one
+shared corrected evaluator instead of parallel legacy/corrected runtime routes.
 
 ## Random fill
 
 - Point Width remains integer `1..10`; VALUE Point Height remains integer `1..10` in
   `source_point_height` but does not affect the one-row evaluator.
+- The additive wire rule is exact: only `placement.is_some()` together with
+  `source_point_height.is_some()` activates the 100x100 2D evaluator. An unplaced legacy
+  JSON recipe never changes meaning, even when its provenance height is present; a placed
+  recipe without height also remains on the former 1D path.
+- COLOR MAPPINGS 37 divides both raster axes with `div_ceil`, including partial right and
+  bottom tails. `floor(normalized*100)` clamped to pixel 99 selects X/Y; one permutation
+  ranks flattened `(row * columns + column)` cells, so the axes are never shuffled
+  independently.
 - The strip is partitioned with `div_ceil`, correcting Daslight's unpainted remainder.
 - Each palette transition compiles one seeded permutation of all cells. Every rank occurs
   exactly once, so selection is deterministic and without replacement.
 - Runtime moves continuously from current palette stop to next palette stop in rank order.
   It never clears unfilled cells to black and does not hash an unrelated color per cell.
-- Transform uses the shared discrete fold; COLOR grayscale runs after the completed color.
+- Unplaced Transform uses the shared discrete fold. Placed Transform and Rotation use the
+  shared inverse Rectangle placement before cell lookup; COLOR grayscale runs after the
+  completed color.
+- ID37 remains `SyndocalCorrected`: nonserialized qrand/history is replaced by a stable
+  source-family/generator-aware seed. No family-5 COLOR MAPPINGS native saved specimen is
+  available, so the route is constructor/static- and synthetic-schema-proven only.
 
 ## Sparkle (corrected state machine, 2026-08-10 redesign)
 
@@ -108,13 +123,15 @@ zero-pixel targets) are separate and unchanged.
 ## Focused acceptance
 
 - protocol JSON: legacy byte shape plus corrected RandomFill/Sparkle round trips;
-- engine: unique compiled ranks, tail-cell coverage, continuous palette transition,
+- engine: unique compiled ranks, 1D and 2D golden order, two-axis tail-cell coverage,
+  100-cell coordinate boundaries, placement Transform/Rotation/qGray, continuous palette transition,
   seed repeat/change behavior, continuous retained-particle fade, width/lifetime domains,
   and one-stop palette safety;
 - importer: VALUE 626/627 strict schema/range/no-op behavior, stable source seed and raw
-  provenance; synthetic COLOR 131/133 conversion (`6 converted / 0 skipped`);
-- UI: both editors expose Corrected/Legacy, seed, transform, grayscale where applicable,
-  and corrected lifetime milliseconds; localization remains 100%.
+  provenance; synthetic COLOR 131/133 conversion and strict synthetic COLOR MAPPINGS 37
+  schema/domain/selection coverage;
+- UI: the existing COLOR editor exposes placed Point height beside Point width, preserves
+  imported height, and retains the unplaced 1D width behavior; localization remains 100%.
 
-This document supersedes earlier status text that described these four IDs as permanently
+This document supersedes earlier status text that described these five IDs as permanently
 fail-closed solely because process-global qrand history was unavailable.
