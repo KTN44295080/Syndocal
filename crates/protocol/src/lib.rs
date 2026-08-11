@@ -2498,6 +2498,19 @@ pub enum ColorEffectSpatialRecipe {
         amplitude: f32,
         offset: f32,
     },
+    /// Daslight COLOR MAPPINGS ID 35's falling rain raster.
+    Rain {
+        #[serde(default, skip_serializing_if = "is_false")]
+        grayscale: bool,
+        /// Stable replacement for the source process-global qrand history.
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
+        rng_seed: u32,
+        speed: u16,
+        width: u16,
+        height: u16,
+        number: u16,
+        trail: u16,
+    },
     /// Daslight COLOR MAPPINGS ID 47's retained explosion-particle raster.
     Explosion {
         #[serde(default, skip_serializing_if = "is_false")]
@@ -5443,6 +5456,32 @@ mod tests {
             .unwrap(),
             graph,
             "Graph must round-trip at its validated maxima"
+        );
+        let legacy_rain: super::ColorEffectSpatialRecipe = serde_json::from_str(
+            r#"{"Rain":{"speed":1,"width":5,"height":10,"number":50,"trail":10}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_string(&legacy_rain).unwrap(),
+            r#"{"Rain":{"speed":1,"width":5,"height":10,"number":50,"trail":10}}"#,
+            "default Rain Grayscale and RNG seed must remain omitted"
+        );
+        let rain = super::ColorEffectSpatialRecipe::Rain {
+            grayscale: true,
+            rng_seed: u32::MAX,
+            speed: 10,
+            width: 10,
+            height: 30,
+            number: 100,
+            trail: 30,
+        };
+        assert_eq!(
+            serde_json::from_str::<super::ColorEffectSpatialRecipe>(
+                &serde_json::to_string(&rain).unwrap()
+            )
+            .unwrap(),
+            rain,
+            "Rain must round-trip at its validated maxima"
         );
         let legacy_explosion: super::ColorEffectSpatialRecipe = serde_json::from_str(
             r#"{"Explosion":{"shape":0,"explosion_number":5,"explosion_size":5,"particle_number":10,"particle_size":10,"particle_life":0.0,"trail_size":10,"gravity":0.0}}"#,

@@ -517,6 +517,14 @@ strict/exactを別に監査した。
   Arc transition修正後の再走でfrequent F2がp95/p99/max 0.894/1.062/1.977 ms、Trail 25を含むdeep F125が
   1.557/1.807/2.332 msとなり、5/8/12 msを維持する。正本は
   `qa/DVC_COLOR_MAPPINGS_EXPLOSION_STARFIELD_PARITY.md`。
+- Rain ID35追加でruntime-convertは64→65、未routeは4→3となる。実保存
+  `ColorMappings-Remaining7.dvc`のNB=9、PARAM順、empty Rectangle sentinel、BEAMS=0をgoldenへ固定した。
+  runtimeはstable qrand互換tableの先頭100 particle、continuous authored-period fall、downward
+  Height+Trail paint、right-edge clip、vertical wrap、later-wins replacement、palette mix後qGrayをfixed
+  100x100 rasterとして評価する。64 effect x 200 fixture、palette 255、Number 100、Speed 10、Width 10、
+  Height 30、Trail 30のrelease gateはallocation-free column mask / phase cache後に
+  p95/p99/max 4.046/4.397/4.797 msで5/8/12 msを通過した。正本は
+  `qa/DVC_COLOR_MAPPINGS_RAIN_PARITY.md`。
 
 ### DVC-CURVE Custom 13（2026-08-11）
 
@@ -541,8 +549,8 @@ strict/exactを別に監査した。
 2. CHASER #3/#4は式と対称pair topologyを回収し、実保存specimen付きでroute済み。実灯体の
    photometryとdevice latencyだけは物理受入に残る。
 3. MAPPINGS 521–530は全route済み。COLOR MAPPINGSの共有class
-   22/23/30/31/32/34/36/37/40/41/42/44/47/48/49/50もroute済み。Media 33/526は空sourceだけno-op、non-empty sourceは
-   decode/timing証明待ち。COLOR MAPPINGS専用class 21/29/35/45は
+   22/23/30/31/32/34/35/36/37/40/41/42/44/47/48/49/50もroute済み。Media 33/526は空sourceだけno-op、non-empty sourceは
+   decode/timing証明待ち。COLOR MAPPINGS専用class 21/29/45は
    引き続きraster algorithm bodyまたは2D stateの意味論回収が必要。
 4. `TYPE7 Shape`のserialized glyph表現と`TYPE10 Text Direction`の合法enum域は未証明。
 5. Sparkle/Random fillの外部per-thread qrand履歴そのものはreplay不能だが、作者が保存した

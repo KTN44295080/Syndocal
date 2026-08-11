@@ -3675,6 +3675,10 @@ struct RuntimeColorSpatialState {
     /// Sampling reconstructs the last covering tile analytically and allocates
     /// nothing in the tick path.
     daslight_graph: Option<CompiledDaslightGraph>,
+    /// COLOR MAPPINGS ID 35 Rain fixed 100x100 raster. The stable source
+    /// particle table and palette colors are compiled once; sampling preserves
+    /// the recovered replacement paint order without allocating a QImage.
+    daslight_rain: Option<CompiledDaslightRain>,
     /// COLOR MAPPINGS ID 47 Explosion / ID 48 Starfield fixed 100x100
     /// retained-particle raster. Supported target sets precompute every
     /// sampled generation; larger permissive sets retain one dynamic
@@ -6087,6 +6091,199 @@ impl CompiledDaslightGraph {
             return self.finish_color(color);
         }
         self.finish_color(background)
+    }
+}
+
+const DASLIGHT_RAIN_PARTICLE_COUNT: usize = 100;
+
+#[derive(Clone, Copy)]
+struct CompiledDaslightRainParticle {
+    start_x: f32,
+    start_y: f32,
+    fall: f32,
+    color: ColorEffectColor,
+}
+
+#[derive(Clone)]
+struct CompiledDaslightRainPhaseCache {
+    phase_bits: Option<u32>,
+    current_y: [i32; DASLIGHT_RAIN_PARTICLE_COUNT],
+}
+
+impl Default for CompiledDaslightRainPhaseCache {
+    fn default() -> Self {
+        Self {
+            phase_bits: None,
+            current_y: [0; DASLIGHT_RAIN_PARTICLE_COUNT],
+        }
+    }
+}
+
+#[derive(Clone)]
+struct CompiledDaslightRain {
+    background: ColorEffectColor,
+    grayscale: bool,
+    speed: f32,
+    #[cfg(test)]
+    width: i32,
+    height: i32,
+    trail: i32,
+    particles: [CompiledDaslightRainParticle; DASLIGHT_RAIN_PARTICLE_COUNT],
+    number: usize,
+    /// Compile-time column coverage keeps the hot sampler on only the
+    /// particles that can write the requested X pixel. A u128 is sufficient
+    /// for Rain's validated maximum of 100 particles and preserves ascending
+    /// source order, including later-wins replacement.
+    x_particle_masks: [u128; 100],
+    /// All targets of one effect observe the same phase in a tick. Cache the
+    /// recovered f32/truncation Y update once per particle without allocating
+    /// on the tick path.
+    phase_cache: RefCell<CompiledDaslightRainPhaseCache>,
+}
+
+impl CompiledDaslightRain {
+    const RASTER_SIZE: i32 = 100;
+
+    fn compile(request: &ColorEffectRequest) -> Result<Option<Self>, String> {
+        let Some(pattern) = request.spatial_pattern.as_ref() else {
+            return Ok(None);
+        };
+        let ColorEffectSpatialRecipe::Rain {
+            grayscale,
+            rng_seed,
+            speed,
+            width,
+            height,
+            number,
+            trail,
+        } = &pattern.recipe
+        else {
+            return Ok(None);
+        };
+        if !(protocol::DASLIGHT_COLOR_PALETTE_MIN_STOPS
+            ..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS)
+            .contains(&request.stops.len())
+        {
+            return Err("Rain requires between 1 and 255 palette stops".to_string());
+        }
+        if *speed > 10
+            || !(5..=10).contains(width)
+            || !(10..=30).contains(height)
+            || !(1..=100).contains(number)
+            || !(1..=30).contains(trail)
+        {
+            return Err(
+                "Rain Speed must be within 0..10, Width within 5..10, Height within 10..30, Number within 1..100, and Trail within 1..30"
+                    .to_string(),
+            );
+        }
+        let random_pairs = syndocal_tube_random_pairs(*rng_seed);
+        let particles = std::array::from_fn(|index| {
+            let (random_x, random_y) = random_pairs[index];
+            let palette_word = (1_u32 + (u16::MAX as f32 * random_y).trunc() as u32) as u16;
+            CompiledDaslightRainParticle {
+                start_x: (Self::RASTER_SIZE as f32 * random_x).floor(),
+                start_y: (Self::RASTER_SIZE as f32 * random_y).floor(),
+                fall: 1.0 + random_x,
+                color: spatial_palette_color(
+                    request,
+                    f32::from(palette_word) / u16::MAX as f32,
+                    100.0,
+                ),
+            }
+        });
+        let number = usize::from(*number);
+        let width = i32::from(*width);
+        let mut x_particle_masks = [0_u128; 100];
+        for (particle_index, particle) in particles[..number].iter().enumerate() {
+            let start_x = particle.start_x as i32;
+            for pixel_x in start_x..(start_x + width).min(Self::RASTER_SIZE) {
+                x_particle_masks[pixel_x as usize] |= 1_u128 << particle_index;
+            }
+        }
+        Ok(Some(Self {
+            background: request.stops[0].color,
+            grayscale: *grayscale,
+            speed: f32::from(*speed),
+            #[cfg(test)]
+            width,
+            height: i32::from(*height),
+            trail: i32::from(*trail),
+            particles,
+            number,
+            x_particle_masks,
+            phase_cache: RefCell::new(CompiledDaslightRainPhaseCache::default()),
+        }))
+    }
+
+    #[inline(always)]
+    fn raster_pixel(normalized: f32) -> i32 {
+        (normalized.clamp(0.0, 1.0) * Self::RASTER_SIZE as f32)
+            .floor()
+            .min((Self::RASTER_SIZE - 1) as f32) as i32
+    }
+
+    fn prepare_phase_cache(&self, time_phase: f64) {
+        let time_phase = time_phase as f32;
+        let phase_bits = time_phase.to_bits();
+        let mut cache = self.phase_cache.borrow_mut();
+        if cache.phase_bits == Some(phase_bits) {
+            return;
+        }
+        for (particle_index, particle) in self.particles[..self.number].iter().enumerate() {
+            // Corrected continuous form of the recovered source update:
+            // floor(y0 + (100/F)*Speed*(1+qx)*frame) % 100, with frame/F
+            // replaced by authored-period phase. Keep the f32 multiplication
+            // order explicit because truncation boundaries are observable.
+            let travel_per_period = (Self::RASTER_SIZE as f32 * self.speed) * particle.fall;
+            cache.current_y[particle_index] = (particle.start_y + travel_per_period * time_phase)
+                .floor()
+                .rem_euclid(Self::RASTER_SIZE as f32)
+                as i32;
+        }
+        cache.phase_bits = Some(phase_bits);
+    }
+
+    fn sample_at_phase(
+        &self,
+        time_phase: f64,
+        normalized_x: f32,
+        normalized_y: f32,
+    ) -> ColorEffectColor {
+        let pixel_x = Self::raster_pixel(normalized_x);
+        let pixel_y = Self::raster_pixel(normalized_y);
+        let mut color = self.background;
+        self.prepare_phase_cache(time_phase);
+        let cache = self.phase_cache.borrow();
+        let mut particle_mask = self.x_particle_masks[pixel_x as usize];
+        while particle_mask != 0 {
+            let particle_index = particle_mask.trailing_zeros() as usize;
+            particle_mask &= particle_mask - 1;
+            let particle = &self.particles[particle_index];
+            let row = (cache.current_y[particle_index] - pixel_y).rem_euclid(Self::RASTER_SIZE);
+            if row >= self.height + self.trail {
+                continue;
+            }
+            // The source writes every covered pixel, including the final
+            // zero-alpha trail row, so a later particle replaces rather than
+            // composites over an earlier particle.
+            let weight = if row < self.height {
+                1.0
+            } else {
+                1.0 - (row - self.height + 1) as f32 / self.trail as f32
+            };
+            color = interpolate_color_effect_color(
+                self.background,
+                particle.color,
+                weight,
+                ColorEffectInterpolation::Rgb,
+            );
+        }
+        if self.grayscale {
+            daslight_grayscale_color(color)
+        } else {
+            color
+        }
     }
 }
 
@@ -29660,6 +29857,20 @@ fn validate_runtime_color_effect_request(request: &ColorEffectRequest) -> Result
                     return Err("Graph requires Override blend mode".to_string());
                 }
             }
+            ColorEffectSpatialRecipe::Rain { .. } => {
+                if !(protocol::DASLIGHT_COLOR_PALETTE_MIN_STOPS
+                    ..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS)
+                    .contains(&request.stops.len())
+                {
+                    return Err("Rain requires between 1 and 255 palette stops".to_string());
+                }
+                if pattern.placement.is_none() {
+                    return Err("Rain requires a placed 100x100 spatial raster".to_string());
+                }
+                if request.blend_mode != EffectBlendMode::Override {
+                    return Err("Rain requires Override blend mode".to_string());
+                }
+            }
             ColorEffectSpatialRecipe::Explosion { .. }
             | ColorEffectSpatialRecipe::Starfield { .. } => {
                 if !(2..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS).contains(&request.stops.len())
@@ -30020,6 +30231,31 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
             }
             if !offset.is_finite() || !(-1.0..=1.0).contains(offset) {
                 return Err("Graph Offset must be finite and within -1..1".to_string());
+            }
+            Ok(())
+        }
+        ColorEffectSpatialRecipe::Rain {
+            speed,
+            width,
+            height,
+            number,
+            trail,
+            ..
+        } => {
+            if *speed > 10 {
+                return Err("Rain Speed must be within 0..10".to_string());
+            }
+            if !(5..=10).contains(width) {
+                return Err("Rain Width must be within 5..10".to_string());
+            }
+            if !(10..=30).contains(height) {
+                return Err("Rain Height must be within 10..30".to_string());
+            }
+            if !(1..=100).contains(number) {
+                return Err("Rain Number must be within 1..100".to_string());
+            }
+            if !(1..=30).contains(trail) {
+                return Err("Rain Trail must be within 1..30".to_string());
             }
             Ok(())
         }
@@ -30788,11 +31024,12 @@ pub fn validate_value_effect_request(request: &ValueEffectRequest) -> Result<(),
             ColorEffectSpatialRecipe::Grid { .. }
                 | ColorEffectSpatialRecipe::Lines { .. }
                 | ColorEffectSpatialRecipe::Graph { .. }
+                | ColorEffectSpatialRecipe::Rain { .. }
                 | ColorEffectSpatialRecipe::Explosion { .. }
                 | ColorEffectSpatialRecipe::Starfield { .. }
         ) {
             return Err(
-                "Graph, Grid, Lines, Explosion, and Starfield spatial recipes are supported only by Color effects"
+                "Graph, Grid, Lines, Rain, Explosion, and Starfield spatial recipes are supported only by Color effects"
                     .to_string(),
             );
         }
@@ -32761,6 +32998,7 @@ fn runtime_color_effect_from_request(
         let daslight_perlin = compile_daslight_perlin(&request, &targets)?;
         let daslight_grid_lines = CompiledDaslightGridLines::compile(&request)?;
         let daslight_graph = CompiledDaslightGraph::compile(&request)?;
+        let daslight_rain = CompiledDaslightRain::compile(&request)?;
         let daslight_particles =
             CompiledDaslightParticles::compile_for_targets(&request, &targets)?;
         let dense_fixture_targets =
@@ -32776,6 +33014,7 @@ fn runtime_color_effect_from_request(
             daslight_perlin,
             daslight_grid_lines,
             daslight_graph,
+            daslight_rain,
             daslight_particles,
         }))
     } else {
@@ -34044,6 +34283,7 @@ fn evaluate_runtime_color_spatial_attribute_at_rate(
                 spatial.daslight_perlin.as_ref(),
                 spatial.daslight_grid_lines.as_ref(),
                 spatial.daslight_graph.as_ref(),
+                spatial.daslight_rain.as_ref(),
                 spatial.daslight_particles.as_ref(),
                 effect_id,
                 created_at,
@@ -34331,6 +34571,7 @@ fn evaluate_color_spatial_sample_at_rate(
     daslight_perlin: Option<&CompiledDaslightPerlin>,
     daslight_grid_lines: Option<&CompiledDaslightGridLines>,
     daslight_graph: Option<&CompiledDaslightGraph>,
+    daslight_rain: Option<&CompiledDaslightRain>,
     daslight_particles: Option<&CompiledDaslightParticles>,
     effect_id: EffectId,
     created_at: Instant,
@@ -34366,6 +34607,16 @@ fn evaluate_color_spatial_sample_at_rate(
     if let Some(daslight_graph) = daslight_graph {
         return RuntimeColorSpatialSample {
             color: daslight_graph.sample_at_phase(
+                time_phase_for_continuous_spatial(request, created_at, now, clock, rate),
+                target.x,
+                target.z,
+            ),
+            opacity: 1.0,
+        };
+    }
+    if let Some(daslight_rain) = daslight_rain {
+        return RuntimeColorSpatialSample {
+            color: daslight_rain.sample_at_phase(
                 time_phase_for_continuous_spatial(request, created_at, now, clock, rate),
                 target.x,
                 target.z,
@@ -34470,6 +34721,7 @@ fn evaluate_color_spatial_sample_at_rate(
         | ColorEffectSpatialRecipe::Grid { .. }
         | ColorEffectSpatialRecipe::Lines { .. }
         | ColorEffectSpatialRecipe::Graph { .. }
+        | ColorEffectSpatialRecipe::Rain { .. }
         | ColorEffectSpatialRecipe::Explosion { .. }
         | ColorEffectSpatialRecipe::Starfield { .. } => {
             unreachable!("unified spatial recipes are evaluated by their compiled analytic route")
@@ -60086,6 +60338,196 @@ mod tests {
         }
     }
 
+    #[test]
+    fn color_mappings_rain_matches_recovered_replacement_raster_for_full_domain() {
+        let mut request = test_grid_lines_request(
+            ColorEffectSpatialRecipe::Rain {
+                grayscale: false,
+                rng_seed: 0x35A1_0001,
+                speed: 10,
+                width: 10,
+                height: 30,
+                number: 100,
+                trail: 30,
+            },
+            &[1_000, 31_000, 61_000],
+        );
+        request.stops[1].color = test_color(31_000, 7_000, 13_000);
+        request.stops[2].color = test_color(61_000, 23_000, 47_000);
+        let compiled = CompiledDaslightRain::compile(&request)
+            .unwrap()
+            .expect("Rain must compile its fixed particle table");
+        assert_eq!(compiled.number, 100);
+        let first_pair = syndocal_tube_random_pairs(0x35A1_0001)[0];
+        assert_eq!(
+            compiled.particles[0].start_x,
+            (100.0 * first_pair.0).floor()
+        );
+        assert_eq!(
+            compiled.particles[0].start_y,
+            (100.0 * first_pair.1).floor()
+        );
+        assert_eq!(compiled.particles[0].fall, 1.0 + first_pair.0);
+        let palette_word = (1_u32 + (u16::MAX as f32 * first_pair.1).trunc() as u32) as u16;
+        assert_eq!(
+            compiled.particles[0].color,
+            spatial_palette_color(&request, f32::from(palette_word) / u16::MAX as f32, 100.0)
+        );
+
+        for phase in [0.0_f64, 0.001, 0.125, 0.499, 1.25] {
+            let mut reference = vec![compiled.background; 100 * 100];
+            for particle in &compiled.particles[..compiled.number] {
+                let travel = (100.0_f32 * compiled.speed) * particle.fall;
+                let current_y = (particle.start_y + travel * phase as f32)
+                    .floor()
+                    .rem_euclid(100.0) as i32;
+                for row in 0..compiled.height + compiled.trail {
+                    let y = (current_y - row).rem_euclid(100);
+                    let weight = if row < compiled.height {
+                        1.0
+                    } else {
+                        1.0 - (row - compiled.height + 1) as f32 / compiled.trail as f32
+                    };
+                    let painted = interpolate_color_effect_color(
+                        compiled.background,
+                        particle.color,
+                        weight,
+                        ColorEffectInterpolation::Rgb,
+                    );
+                    for x in
+                        particle.start_x as i32..(particle.start_x as i32 + compiled.width).min(100)
+                    {
+                        reference[y as usize * 100 + x as usize] = painted;
+                    }
+                }
+            }
+            for y in 0..100 {
+                for x in 0..100 {
+                    let actual = compiled.sample_at_phase(
+                        phase,
+                        (x as f32 + 0.25) / 100.0,
+                        (y as f32 + 0.25) / 100.0,
+                    );
+                    assert_eq!(actual, reference[y * 100 + x], "phase={phase} x={x} y={y}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn color_mappings_rain_is_continuous_applies_qgray_and_validates_maxima() {
+        let recipe =
+            |grayscale, speed, width, height, number, trail| ColorEffectSpatialRecipe::Rain {
+                grayscale,
+                rng_seed: 0x35A1_0002,
+                speed,
+                width,
+                height,
+                number,
+                trail,
+            };
+        let mut request = test_grid_lines_request(recipe(true, 10, 10, 30, 100, 30), &[0, 65_535]);
+        request.stops[1].color = test_color(u16::MAX, 0, 0);
+        let pattern = request.spatial_pattern.as_mut().unwrap();
+        pattern.beam_targets = vec![protocol::ColorEffectBeamTarget {
+            fixture_id: 1,
+            beam_index: 0,
+            selection_index: 0,
+            feature_attribute: None,
+        }];
+        pattern.placement.as_mut().unwrap().target_coordinates =
+            vec![protocol::ColorEffectSpatialPlacementTarget {
+                fixture_id: 1,
+                beam_index: 0,
+                patch_x: 0,
+                patch_y: 0,
+            }];
+        validate_color_effect_request(&request).unwrap();
+        let rain = CompiledDaslightRain::compile(&request).unwrap().unwrap();
+        let colored = rain
+            .particles
+            .iter()
+            .enumerate()
+            .find_map(|(index, particle)| {
+                (particle.color != rain.background).then_some((index, *particle))
+            })
+            .unwrap();
+        let phase = 0.125_f64;
+        let y = (colored.1.start_y + (100.0 * rain.speed) * colored.1.fall * phase as f32)
+            .floor()
+            .rem_euclid(100.0) as i32;
+        let color = rain.sample_at_phase(
+            phase,
+            (colored.1.start_x + 0.25) / 100.0,
+            (y as f32 + 0.25) / 100.0,
+        );
+        assert_eq!(color.red, color.green);
+        assert_eq!(color.green, color.blue);
+        assert!(colored.0 < 100);
+        let first = rain.particles[0];
+        let row_at = |phase: f32| {
+            (first.start_y + (100.0 * rain.speed) * first.fall * phase)
+                .floor()
+                .rem_euclid(100.0) as i32
+        };
+        assert_ne!(
+            row_at(0.125),
+            row_at(0.126),
+            "corrected Rain must consume continuous authored-period phase rather than a 40 ms work frame"
+        );
+
+        let mut single_color = request.clone();
+        single_color.stops.truncate(1);
+        validate_color_effect_request(&single_color).unwrap();
+        let single_rain = CompiledDaslightRain::compile(&single_color)
+            .unwrap()
+            .unwrap();
+        assert!(single_rain
+            .particles
+            .iter()
+            .all(|particle| particle.color == single_color.stops[0].color));
+        assert_eq!(
+            single_rain.sample_at_phase(0.375, 0.5, 0.5),
+            single_color.stops[0].color,
+            "a legal single-color palette must remain constant"
+        );
+        let mut empty_palette = request.clone();
+        empty_palette.stops.clear();
+        assert_eq!(
+            CompiledDaslightRain::compile(&empty_palette).err().unwrap(),
+            "Rain requires between 1 and 255 palette stops"
+        );
+
+        for (invalid, expected) in [
+            (
+                recipe(false, 11, 10, 30, 100, 30),
+                "Rain Speed must be within 0..10",
+            ),
+            (
+                recipe(false, 10, 4, 30, 100, 30),
+                "Rain Width must be within 5..10",
+            ),
+            (
+                recipe(false, 10, 10, 31, 100, 30),
+                "Rain Height must be within 10..30",
+            ),
+            (
+                recipe(false, 10, 10, 30, 0, 30),
+                "Rain Number must be within 1..100",
+            ),
+            (
+                recipe(false, 10, 10, 30, 100, 31),
+                "Rain Trail must be within 1..30",
+            ),
+        ] {
+            let invalid = test_grid_lines_request(invalid, &[0, u16::MAX]);
+            assert_eq!(
+                validate_color_effect_request(&invalid).unwrap_err(),
+                expected
+            );
+        }
+    }
+
     fn evaluate_test_spatial_color(
         request: &ColorEffectRequest,
         target: &RuntimeColorSpatialTarget,
@@ -60125,6 +60567,7 @@ mod tests {
             compile_daslight_perlin(request, std::slice::from_ref(&target)).unwrap();
         let daslight_grid_lines = CompiledDaslightGridLines::compile(request).unwrap();
         let daslight_graph = CompiledDaslightGraph::compile(request).unwrap();
+        let daslight_rain = CompiledDaslightRain::compile(request).unwrap();
         evaluate_color_spatial_sample_at_rate(
             request,
             &target,
@@ -60135,6 +60578,7 @@ mod tests {
             daslight_perlin.as_ref(),
             daslight_grid_lines.as_ref(),
             daslight_graph.as_ref(),
+            daslight_rain.as_ref(),
             None,
             97,
             created_at,
@@ -62512,6 +62956,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
                 97,
                 created_at,
                 now,
@@ -62704,6 +63149,7 @@ mod tests {
                 None,
                 None,
                 Some(&compiled),
+                None,
                 None,
                 None,
                 None,
@@ -70158,6 +70604,146 @@ mod tests {
             });
         eprintln!(
             "Max Graph 64x200 (10 stops, Height 100 Width 100 Pitch 100 Frequency 10 Amplitude 2 Offset 1; 100x100): p95={}us p99={}us max={}us",
+            p95.as_micros(),
+            p99.as_micros(),
+            max.as_micros()
+        );
+        assert_release_gate_percentiles(p95, p99, max);
+    }
+
+    #[test]
+    fn max_rain_release_stack_meets_44hz_budget() {
+        const MAX_PALETTE_STOPS: usize = 255;
+        const MAX_SPEED: u16 = 10;
+        const MAX_WIDTH: u16 = 10;
+        const MAX_HEIGHT: u16 = 30;
+        const MAX_NUMBER: u16 = 100;
+        const MAX_TRAIL: u16 = 30;
+        const RASTER_SIZE: i64 = 100;
+
+        assert_eq!(RELEASE_GATE_EFFECT_COUNT, 64);
+        assert_eq!(RELEASE_GATE_FIXTURE_COUNT, 200);
+        assert_eq!(RELEASE_GATE_HZ, 44);
+        assert_eq!(
+            MAX_PALETTE_STOPS,
+            protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS
+        );
+        assert_eq!(
+            (MAX_SPEED, MAX_WIDTH, MAX_HEIGHT, MAX_NUMBER, MAX_TRAIL),
+            (10, 10, 30, 100, 30)
+        );
+        assert_eq!(RASTER_SIZE, 100);
+        assert_eq!(RELEASE_GATE_P95_LIMIT, Duration::from_millis(5));
+        assert_eq!(RELEASE_GATE_P99_LIMIT, Duration::from_millis(8));
+        assert_eq!(RELEASE_GATE_MAX_LIMIT, Duration::from_millis(12));
+
+        let mut runtime = runtime_with_mixed_effect_fixtures(RELEASE_GATE_FIXTURE_COUNT as u64);
+        let fixture_ids = (1..=RELEASE_GATE_FIXTURE_COUNT as u64).collect::<Vec<_>>();
+        let beam_targets = fixture_ids
+            .iter()
+            .enumerate()
+            .map(
+                |(selection_index, fixture_id)| protocol::ColorEffectBeamTarget {
+                    fixture_id: *fixture_id,
+                    beam_index: 0,
+                    selection_index: selection_index as u32,
+                    feature_attribute: None,
+                },
+            )
+            .collect::<Vec<_>>();
+        let target_coordinates = fixture_ids
+            .iter()
+            .enumerate()
+            .map(
+                |(selection_index, fixture_id)| protocol::ColorEffectSpatialPlacementTarget {
+                    fixture_id: *fixture_id,
+                    beam_index: 0,
+                    patch_x: (selection_index % RASTER_SIZE as usize) as i64,
+                    patch_y: if selection_index < RASTER_SIZE as usize {
+                        0
+                    } else {
+                        RASTER_SIZE - 1
+                    },
+                },
+            )
+            .collect::<Vec<_>>();
+        assert_eq!(fixture_ids.len(), RELEASE_GATE_FIXTURE_COUNT);
+        assert_eq!(beam_targets.len(), RELEASE_GATE_FIXTURE_COUNT);
+        assert_eq!(target_coordinates.len(), RELEASE_GATE_FIXTURE_COUNT);
+
+        let mut request = test_grid_lines_request(
+            ColorEffectSpatialRecipe::Rain {
+                grayscale: true,
+                rng_seed: 0x35A1_0044,
+                speed: MAX_SPEED,
+                width: MAX_WIDTH,
+                height: MAX_HEIGHT,
+                number: MAX_NUMBER,
+                trail: MAX_TRAIL,
+            },
+            &(0..MAX_PALETTE_STOPS)
+                .map(|index| index as u16 * 257)
+                .collect::<Vec<_>>(),
+        );
+        request.fixture_ids = fixture_ids;
+        request.period_ms = 5_000;
+        let pattern = request.spatial_pattern.as_mut().unwrap();
+        pattern.beam_targets = beam_targets;
+        pattern.placement.as_mut().unwrap().target_coordinates = target_coordinates;
+        validate_color_effect_request(&request).unwrap();
+
+        let created_at = Instant::now();
+        for index in 0..RELEASE_GATE_EFFECT_COUNT {
+            let mut request = request.clone();
+            let ColorEffectSpatialRecipe::Rain { rng_seed, .. } =
+                &mut request.spatial_pattern.as_mut().unwrap().recipe
+            else {
+                unreachable!();
+            };
+            *rng_seed ^= index as u32;
+            request.phase = index as f32 / RELEASE_GATE_EFFECT_COUNT as f32;
+            let kind = RuntimeEffectKind::Color(
+                runtime
+                    .resolve_color_effect_request(request)
+                    .expect("maximum Rain request must compile"),
+            );
+            runtime.effects.push(RuntimeEffect {
+                id: index as EffectId + 1,
+                kind,
+                enabled: true,
+                created_at,
+            });
+        }
+        assert_eq!(runtime.effects.len(), RELEASE_GATE_EFFECT_COUNT);
+        assert_eq!(runtime.fixtures.len(), RELEASE_GATE_FIXTURE_COUNT);
+        for effect in &runtime.effects {
+            let RuntimeEffectKind::Color(color) = &effect.kind else {
+                unreachable!();
+            };
+            assert_eq!(color.request.fixture_ids.len(), RELEASE_GATE_FIXTURE_COUNT);
+            assert_eq!(color.request.stops.len(), MAX_PALETTE_STOPS);
+            let spatial = color.spatial.as_ref().unwrap();
+            assert_eq!(spatial.targets.len(), RELEASE_GATE_FIXTURE_COUNT);
+            let rain = spatial.daslight_rain.as_ref().unwrap();
+            assert_eq!(rain.number, usize::from(MAX_NUMBER));
+            assert_eq!(rain.speed, f32::from(MAX_SPEED));
+            assert_eq!(
+                (rain.height, rain.trail),
+                (i32::from(MAX_HEIGHT), i32::from(MAX_TRAIL))
+            );
+            assert!(rain.grayscale);
+        }
+
+        let (p95, p99, max) =
+            measure_release_gate(created_at, |at| {
+                runtime.fixtures.iter().fold(0_u64, |checksum, fixture| {
+                    checksum.wrapping_add(runtime.apply_effects_with_transition_policy(
+                        fixture, "ColorRed", 16_384, at, false,
+                    ) as u64)
+                })
+            });
+        eprintln!(
+            "Max Rain 64x200 (255 stops, Speed 10 Width 10 Height 30 Number 100 Trail 30; 100x100): p95={}us p99={}us max={}us",
             p95.as_micros(),
             p99.as_micros(),
             max.as_micros()

@@ -2176,6 +2176,7 @@ fn parse_scene_effects(
                 (Some(5), Some(3), Some(32)) => Some("Perlin"),
                 (Some(5), Some(3), Some(33)) => Some("Media"),
                 (Some(5), Some(3), Some(34)) => Some("Plasma"),
+                (Some(5), Some(3), Some(35)) => Some("Rain"),
                 (Some(5), Some(3), Some(36)) => Some("Rainbow"),
                 (Some(5), Some(3), Some(40)) => Some("Sparkle"),
                 (Some(5), Some(3), Some(41)) => Some("Tube"),
@@ -2410,7 +2411,7 @@ fn convert_dvc_effect(
             profiles,
             fixture_refs,
         ),
-        (5, 3, 22 | 23 | 30 | 31 | 32 | 33 | 34 | 36 | 37 | 40 | 41 | 42 | 44 | 47 | 48 | 49 | 50)
+        (5, 3, 22 | 23 | 30 | 31 | 32 | 33 | 34 | 35 | 36 | 37 | 40 | 41 | 42 | 44 | 47 | 48 | 49 | 50)
         | (2, 2, 121 | 127 | 128 | 129 | 130 | 131 | 133 | 134)
         | (6, 8, 521..=530) => {
             convert_dvc_color_spatial_effect(
@@ -3252,6 +3253,7 @@ fn convert_dvc_color_spatial_effect(
         32 => "Perlin",
         33 => "Media",
         34 => "Plasma",
+        35 => "Rain",
         36 => "Rainbow",
         37 => "Random fill",
         40 => "Sparkle",
@@ -3288,7 +3290,7 @@ fn convert_dvc_color_spatial_effect(
     };
     let source_is_color_mappings = matches!(
         generator_id,
-        22 | 23 | 30 | 31 | 32 | 33 | 34 | 36 | 37 | 40 | 41 | 42 | 44 | 47 | 48 | 49 | 50
+        22 | 23 | 30 | 31 | 32 | 33 | 34 | 35 | 36 | 37 | 40 | 41 | 42 | 44 | 47 | 48 | 49 | 50
     );
     let shared_mapping_generator_id = match generator_id {
         22 => 523,
@@ -3297,6 +3299,7 @@ fn convert_dvc_color_spatial_effect(
         32 => 530,
         33 => 526,
         34 => 525,
+        35 => 35,
         40 => 529,
         42 => 522,
         44 => 528,
@@ -3484,6 +3487,37 @@ fn convert_dvc_color_spatial_effect(
             ColorEffectSpatialRecipe::Lines {
                 grayscale: dvc_binary_param(&params, 2, "COLOR MAPPINGS Lines Grayscale")?,
                 size: dvc_integer_range_param(&params, 10, "COLOR MAPPINGS Lines Size", 2, 20)?
+                    as u16,
+            }
+        }
+        35 => {
+            require_exact_dvc_mapping_recipe_schema(
+                effect,
+                &params,
+                true,
+                &[(10, 0), (11, 0), (12, 0), (13, 0), (14, 0)],
+            )?;
+            if !(protocol::DASLIGHT_COLOR_PALETTE_MIN_STOPS
+                ..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS)
+                .contains(&stops.len())
+            {
+                return Err(format!(
+                    "COLOR MAPPINGS Rain ID=35 palette requires 1..255 colors, found {}",
+                    stops.len()
+                ));
+            }
+            ColorEffectSpatialRecipe::Rain {
+                grayscale: dvc_binary_param(&params, 2, "COLOR MAPPINGS Rain Grayscale")?,
+                rng_seed: dvc_corrected_rng_seed(scene, rack, effect, generator_id),
+                speed: dvc_integer_range_param(&params, 10, "COLOR MAPPINGS Rain Speed", 0, 10)?
+                    as u16,
+                width: dvc_integer_range_param(&params, 11, "COLOR MAPPINGS Rain Width", 5, 10)?
+                    as u16,
+                height: dvc_integer_range_param(&params, 12, "COLOR MAPPINGS Rain Height", 10, 30)?
+                    as u16,
+                number: dvc_integer_range_param(&params, 13, "COLOR MAPPINGS Rain Number", 1, 100)?
+                    as u16,
+                trail: dvc_integer_range_param(&params, 14, "COLOR MAPPINGS Rain Trail", 1, 30)?
                     as u16,
             }
         }
@@ -4378,13 +4412,13 @@ fn convert_dvc_color_spatial_effect(
             dvc_mapping_rectangle(
                 rack,
                 &placement_label,
-                matches!(generator_id, 31 | 36 | 41 | 47 | 48 | 49 | 50)
+                matches!(generator_id, 31 | 35 | 36 | 41 | 47 | 48 | 49 | 50)
                     || shared_mapping_generator_id == 530,
             )
         })
         .transpose()?;
     let source_mapping_rectangle = mapping_rectangle;
-    if matches!(generator_id, 31 | 41 | 47 | 48 | 49 | 50) {
+    if matches!(generator_id, 31 | 35 | 41 | 47 | 48 | 49 | 50) {
         let beam_containers = element_children(rack)
             .filter(|node| node.has_tag_name("BEAMS"))
             .collect::<Vec<_>>();
@@ -4469,7 +4503,7 @@ fn convert_dvc_color_spatial_effect(
     }
     let omitted_spatial_targets =
         retain_dvc_color_spatial_targets(&mut targets, fixture_refs, source_is_mappings);
-    if matches!(generator_id, 31 | 41 | 47 | 48 | 49 | 50) && omitted_spatial_targets > 0 {
+    if matches!(generator_id, 31 | 35 | 41 | 47 | 48 | 49 | 50) && omitted_spatial_targets > 0 {
         return Err(format!(
             "COLOR MAPPINGS {generator} ID={generator_id} requires every owned BEAMS target to expose a verified color segment; omitted {omitted_spatial_targets} target(s)"
         ));
@@ -4489,7 +4523,7 @@ fn convert_dvc_color_spatial_effect(
     }
     let (period_ms, period_note) = if matches!(
         generator_id,
-        31 | 37 | 41 | 47 | 48 | 49 | 50 | 121 | 127 | 128 | 131 | 133 | 134
+        31 | 35 | 37 | 41 | 47 | 48 | 49 | 50 | 121 | 127 | 128 | 131 | 133 | 134
     ) || shared_mapping_generator_id == 530
     {
         let period_source_family = if source_is_color_mappings {
@@ -4698,6 +4732,18 @@ fn convert_dvc_color_spatial_effect(
             "implementation=SyndocalCorrected; evaluator=CGraphEffect/0x1403638A0 recovered allocation-free analytic 100x100 raster; Grayscale={}; Height={height}; Width={width}; Pitch={pitch}; Frequency={frequency}; Amplitude={amplitude}; Offset={offset}; Height1=corrected_opaque_row; background=palette0; paint_order=later-wins; time=continuous",
             u8::from(*grayscale)
         ),
+        ColorEffectSpatialRecipe::Rain {
+            grayscale,
+            rng_seed,
+            speed,
+            width,
+            height,
+            number,
+            trail,
+        } => format!(
+            "implementation=SyndocalCorrected; evaluator=CRainEffect/0x140365660 recovered fixed 100x100 falling-particle raster; unavailable_qrand=stable_source_seed; rng_seed={rng_seed}; Grayscale={}; Speed={speed}; Width={width}; Height={height}; Number={number}; Trail={trail}; particle_table=first_100_pairs; vertical_wrap=true; horizontal_wrap=false; paint_order=later-wins_replacement; time=continuous; qGray=post-raster",
+            u8::from(*grayscale)
+        ),
         ColorEffectSpatialRecipe::Explosion {
             grayscale,
             rng_seed,
@@ -4736,7 +4782,7 @@ fn convert_dvc_color_spatial_effect(
             )
         })
         .transpose()?;
-    if matches!(generator_id, 31 | 37 | 41 | 47 | 48 | 49 | 50)
+    if matches!(generator_id, 31 | 35 | 37 | 41 | 47 | 48 | 49 | 50)
         || matches!(shared_mapping_generator_id, 522..=529)
     {
         let transform = dvc_param(&params, 3, &format!("{mapping_family_label} Transform"))?;
@@ -11365,6 +11411,131 @@ mod tests {
     }
 
     #[test]
+    fn dvc_color_mappings_rain_imports_strict_owned_raster_and_rejects_mutations() {
+        let source = |palette_count: usize, beams: &str| {
+            let color = r#"<COLOR VAL="1/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>"#;
+            format!(
+                r#"<SCENE DASUID="rain-scene" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="5" DASUID="rain-rack"><EFFECT TYPE="3" ID="35" DASUID="rain-effect" DURATION="5000"><PARAMS NB="9"><PARAM TYPE="4" ID="1"><COLORS NB="{palette_count}">{}</COLORS></PARAM><PARAM TYPE="2" ID="2" VAL="1"/><PARAM TYPE="6" ID="3" VAL="2"/><PARAM TYPE="0" ID="4" VAL="90"/><PARAM TYPE="0" ID="13" VAL="100"/><PARAM TYPE="0" ID="10" VAL="10"/><PARAM TYPE="0" ID="11" VAL="10"/><PARAM TYPE="0" ID="12" VAL="30"/><PARAM TYPE="0" ID="14" VAL="30"/></PARAMS></EFFECT><MAPPING NAME="Rectangle" DASUID="rain" TYPE="0" X="0" Y="0" SX="200" SY="100" ANGLE="30" LOCKED="0"/>{beams}</RACK></RACKS></SCENE>"#,
+                color.repeat(palette_count)
+            )
+        };
+        let convert = |xml: &str| {
+            let document = Document::parse(xml).unwrap();
+            let scene = document.root_element();
+            let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+            let effect = direct_child(rack, "EFFECT").unwrap();
+            convert_dvc_effect(
+                scene,
+                "COLOR MAPPINGS Rain",
+                rack,
+                effect,
+                5,
+                3,
+                35,
+                1,
+                &effect_test_profiles(),
+                &effect_test_fixture_refs(),
+            )
+        };
+        let owned = r#"<BEAMS NB="2"><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="2"/></BEAMS>"#;
+        let valid = source(255, owned);
+        let converted = convert(&valid).unwrap();
+        assert!(converted.approximations.is_empty());
+        assert!(converted.note.contains("evaluator=CRainEffect/0x140365660"));
+        assert!(converted
+            .note
+            .contains("paint_order=later-wins_replacement"));
+        let Some(EffectParamsSnapshot::Color(request)) =
+            converted.target.expect("owned Rain target").params
+        else {
+            panic!("Rain must create Color params");
+        };
+        assert_eq!(request.fixture_ids, vec![2, 1]);
+        assert_eq!(request.stops.len(), 255);
+        assert_eq!(request.period_ms, 5000);
+        assert_eq!(request.blend_mode, EffectBlendMode::Override);
+        let pattern = request.spatial_pattern.unwrap();
+        match pattern.recipe {
+            ColorEffectSpatialRecipe::Rain {
+                grayscale: true,
+                speed: 10,
+                width: 10,
+                height: 30,
+                number: 100,
+                trail: 30,
+                rng_seed,
+            } => assert_ne!(rng_seed, 0),
+            recipe => panic!("unexpected Rain recipe: {recipe:?}"),
+        }
+        let placement = pattern.placement.unwrap();
+        assert!(placement.horizontal_symmetry);
+        assert_eq!(placement.raster_rotation_degrees, 90.0);
+
+        for (invalid, expected) in [
+            (
+                valid.replacen(r#"<PARAMS NB="9">"#, r#"<PARAMS NB="8">"#, 1),
+                "PARAMS declares 8 entries but contains 9",
+            ),
+            (
+                valid.replacen(r#"TYPE="0" ID="14""#, r#"TYPE="1" ID="14""#, 1),
+                "expected PARAM 14 TYPE=0",
+            ),
+            (
+                valid.replacen(r#"ID="10" VAL="10""#, r#"ID="10" VAL="11""#, 1),
+                "integer within 0..10",
+            ),
+            (
+                valid.replacen(r#"ID="11" VAL="10""#, r#"ID="11" VAL="4""#, 1),
+                "integer within 5..10",
+            ),
+            (
+                valid.replacen(r#"ID="12" VAL="30""#, r#"ID="12" VAL="31""#, 1),
+                "integer within 10..30",
+            ),
+            (
+                valid.replacen(r#"ID="13" VAL="100""#, r#"ID="13" VAL="0""#, 1),
+                "integer within 1..100",
+            ),
+            (
+                valid.replacen(r#"ID="14" VAL="30""#, r#"ID="14" VAL="31""#, 1),
+                "integer within 1..30",
+            ),
+            (
+                valid.replacen("<BEAMS NB=", "<SELECTIONS/><BEAMS NB=", 1),
+                "external SELECTIONS remain fail-closed",
+            ),
+        ] {
+            let error = convert(&invalid).unwrap_err();
+            assert!(
+                error.contains(expected),
+                "expected {expected:?}, found {error:?}"
+            );
+        }
+        let single_color = convert(&source(1, owned)).unwrap();
+        let Some(EffectParamsSnapshot::Color(single_color)) = single_color
+            .target
+            .expect("single-color Rain target")
+            .params
+        else {
+            panic!("single-color Rain must create Color params");
+        };
+        assert_eq!(single_color.stops.len(), 1);
+        for palette_count in [0, 256] {
+            let error = convert(&source(palette_count, owned)).unwrap_err();
+            let expected = "palette requires 1..255";
+            assert!(error.contains(expected), "{error}");
+        }
+        let native_empty = source(2, r#"<BEAMS NB="0"/>"#).replacen(
+            r#"SX="200" SY="100" ANGLE="30""#,
+            r#"SX="-1" SY="-1" ANGLE="0""#,
+            1,
+        );
+        let no_op = convert(&native_empty).unwrap();
+        assert!(no_op.target.is_none());
+        assert!(no_op.note.contains("source no-op preserved"));
+    }
+
+    #[test]
     fn dvc_color_mappings_explosion_starfield_import_strict_owned_particles_and_mutations() {
         let source = |generator_id: u16, palette_count: usize, shape: u8, beams: &str| {
             let color = r#"<COLOR VAL="1/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>"#;
@@ -11757,13 +11928,13 @@ mod tests {
             effect,
             5,
             3,
-            35,
+            999,
             1,
             &effect_test_profiles(),
             &effect_test_fixture_refs(),
         )
         .unwrap_err();
-        assert!(unknown.contains("RACK TYPE=5 EFFECT TYPE=3 ID=35 is not confirmed"));
+        assert!(unknown.contains("RACK TYPE=5 EFFECT TYPE=3 ID=999 is not confirmed"));
     }
 
     #[test]
@@ -13767,6 +13938,7 @@ mod tests {
                             ColorEffectSpatialRecipe::Grid { .. } => 50,
                             ColorEffectSpatialRecipe::Lines { .. } => 31,
                             ColorEffectSpatialRecipe::Graph { .. } => 49,
+                            ColorEffectSpatialRecipe::Rain { .. } => 35,
                             ColorEffectSpatialRecipe::Explosion { .. } => 47,
                             ColorEffectSpatialRecipe::Starfield { .. } => 48,
                         }),
@@ -15145,6 +15317,84 @@ mod tests {
                 "profile PRESET 69bdd010-d626-11ea-b9df-7da99bfefe5c-3afb4fbb:33:0 -> type 4",
             ) && detail.message.contains("generic PRESET type 4")
         }));
+    }
+
+    #[test]
+    fn dvc_local_golden_color_mappings_rain_from_remaining7_specimen() {
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../qa/specimens/ColorMappings-Remaining7.dvc"
+        ));
+        let source = fs::read_to_string(path).unwrap();
+        let document = Document::parse(&source).unwrap();
+        let rack = document
+            .descendants()
+            .find(|node| {
+                node.has_tag_name("RACK")
+                    && node.attribute("TYPE") == Some("5")
+                    && direct_child(*node, "EFFECT")
+                        .is_some_and(|effect| effect.attribute("ID") == Some("35"))
+            })
+            .expect("Remaining7 must contain Rain ID=35");
+        let effect = direct_child(rack, "EFFECT").unwrap();
+        let params = direct_child(effect, "PARAMS").unwrap();
+        assert_eq!(params.attribute("NB"), Some("9"));
+        assert_eq!(
+            element_children(params)
+                .map(|param| (
+                    param.attribute("TYPE").unwrap(),
+                    param.attribute("ID").unwrap(),
+                    param.attribute("VAL"),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("4", "1", None),
+                ("2", "2", Some("0")),
+                ("6", "3", Some("0")),
+                ("0", "4", Some("0")),
+                ("0", "13", Some("50")),
+                ("0", "10", Some("1")),
+                ("0", "11", Some("5")),
+                ("0", "12", Some("10")),
+                ("0", "14", Some("10")),
+            ]
+        );
+        let mapping = direct_child(rack, "MAPPING").unwrap();
+        assert_eq!(
+            (
+                mapping.attribute("X"),
+                mapping.attribute("Y"),
+                mapping.attribute("SX"),
+                mapping.attribute("SY"),
+                mapping.attribute("ANGLE"),
+            ),
+            (Some("0"), Some("0"), Some("-1"), Some("-1"), Some("0"))
+        );
+        let beams = direct_child(rack, "BEAMS").unwrap();
+        assert_eq!(beams.attribute("NB"), Some("0"));
+        assert_eq!(element_children(beams).count(), 0);
+        let scene = rack
+            .ancestors()
+            .find(|node| node.has_tag_name("SCENE"))
+            .unwrap();
+        let converted = convert_dvc_effect(
+            scene,
+            "Remaining7 Rain",
+            rack,
+            effect,
+            5,
+            3,
+            35,
+            1,
+            &effect_test_profiles(),
+            &effect_test_fixture_refs(),
+        )
+        .unwrap();
+        assert!(converted.target.is_none());
+        assert!(converted.note.contains("source no-op preserved"));
+        assert!(converted.note.contains("Rectangle=(0,0,-1,-1,0)"));
+        assert!(converted.note.contains("evaluator=CRainEffect/0x140365660"));
+        assert!(converted.approximations.is_empty());
     }
 
     #[test]
