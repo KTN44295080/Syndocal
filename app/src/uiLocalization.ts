@@ -1546,6 +1546,7 @@ const japaneseText: Record<string, string> = {
   "Go outside": "範囲外へ移動",
   "Size %": "サイズ（%）",
   "Color width %": "Color幅（%）",
+  "Color width °": "Color幅（°）",
   "Color width": "Color幅",
   "Lifetime ms": "寿命（ms）",
   "Size X": "サイズ X",
@@ -1558,6 +1559,11 @@ const japaneseText: Record<string, string> = {
   "Param SY": "パラメータ SY",
   "Point width %": "ポイント幅（%）",
   "Sparkle number": "スパークル数",
+  "Sparkle height %": "スパークル高さ（%）",
+  "Spiral mapping": "スパイラルマッピング",
+  "Butterfly mapping": "バタフライマッピング",
+  "Arms": "アーム数",
+  "Clockwise": "時計回り",
   "Simultaneous particles created per 40 ms generation":
     "40 msごとの生成で同時に作られるパーティクル数",
   "Effect-time milliseconds, scaling with clock sync and BPM speed":
@@ -1568,6 +1574,8 @@ const japaneseText: Record<string, string> = {
   Grayscale: "グレースケール",
   "Vertical symmetry": "上下対称",
   "Horizontal symmetry": "左右対称",
+  "Mapping transform": "マッピング変形",
+  "Mapping rotation °": "マッピング回転（°）",
   Octaves: "オクターブ",
   "Direction °": "方向（°）",
   "Amplitude %": "振幅（%）",

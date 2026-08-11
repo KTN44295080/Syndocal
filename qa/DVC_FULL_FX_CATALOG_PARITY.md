@@ -287,8 +287,9 @@ Explosion / Starfield / Graph / Lines / Grid。21項目を最下端Gridまで観
 
 ## 現行Syndocal importerとの逆照合
 
-68 IDのうち現行は39 IDがruntime targetを作れるconverter route、random-state由来のprecise
-fail-closedは0、残る29 IDは未routeでgeneric `Skipped`になる。39 routeはfull-domain完成数ではなく、
+68 IDのうち現行converter coverageは47 ID（うちMAPPINGS 526空パスはsource no-op）、
+random-state由来のprecise fail-closedは0、残る21 IDは未routeでgeneric `Skipped`になる。
+47 routeはfull-domain完成数ではなく、
 strict/exactを別に監査した。
 
 | route群 | 現在の境界 |
@@ -305,6 +306,10 @@ strict/exactを別に監査した。
 | CHASER 321–325 | 323/324はstrict schemaと回収済み対称pair topologyをCorrected連続clockへ変換。321はcompatibility、325の既存stable permutationはCorrectedとして報告 |
 | CURVE 3–12 | strict factory schemaと回収式をCorrected continuous evaluatorで実装。6 Randomだけ非serialize qrand履歴をstable source seedへ置換 |
 | MAPPINGS 521 | strict schema、unit→percent、Rectangle placementを実装 |
+| MAPPINGS 522/524 | strict schema、回収済みconical ring / opposite-sector geometryを連続解析evaluatorで実装 |
+| MAPPINGS 523/525/527/528 | strict schema、100x100 Rectangle-local 2D placement、共通Burst/Plasma/Knight/Sweep corrected evaluatorを実装 |
+| MAPPINGS 526 | 実保存の空Media Pathをsource no-opとして保持。non-empty pathは埋め込みmedia decode証明待ちでprecise fail-closed |
+| MAPPINGS 529 | strict schema、100x100 retained-particle state、Width/Height、stable source seedのCorrected evaluatorを実装 |
 | MAPPINGS 530 | strict schema、Rectangle placement、固有Perlin evaluator、穴のない解析的0..360度inverse rotationを実装 |
 
 この監査により、DVC-ENUM直後の条件付きstrict-coreは6 ID、要correctness routeは16 IDだった。
@@ -460,8 +465,8 @@ strict/exactを別に監査した。
    evaluatorの補間・端点意味論を確定してから実装する。
 2. CHASER #3/#4は式と対称pair topologyを回収し、実保存specimen付きでroute済み。実灯体の
    photometryとdevice latencyだけは物理受入に残る。
-3. Spiral/Butterfly/MediaとCOLOR MAPPINGS専用13 classはschema/evaluator入口までで、
-   raster algorithm bodyの意味論が未復元。
+3. MAPPINGS 521–530は全route済み。Mediaは空sourceだけno-op、non-empty sourceはdecode/timing証明待ち。
+   COLOR MAPPINGS専用classは引き続きraster algorithm bodyの意味論回収が必要。
 4. `TYPE7 Shape`のserialized glyph表現と`TYPE10 Text Direction`の合法enum域は未証明。
 5. Sparkle/Random fillの外部per-thread qrand履歴そのものはreplay不能だが、作者が保存した
    schemaと演出grammarをstable source seedでCorrected実装済み。正本は

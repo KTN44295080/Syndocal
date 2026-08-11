@@ -1926,7 +1926,9 @@ export type ColorEffectSpatialRecipe =
   | { Sweep: { grayscale?: boolean; vertical_symmetry?: boolean; direction_change: boolean } }
   | { Burst: { grayscale?: boolean; vertical_symmetry?: boolean; color_width: number; gradient: number } }
   | { RandomFill: { grayscale?: boolean; vertical_symmetry?: boolean; rng_seed?: number; point_width: number; source_point_height?: number | null } }
-  | { Sparkle: { grayscale?: boolean; vertical_symmetry?: boolean; rng_seed?: number; number: number; lifetime_ms?: number | null; source_lifespan?: number | null; width: number } }
+  | { Sparkle: { grayscale?: boolean; vertical_symmetry?: boolean; rng_seed?: number; number: number; lifetime_ms?: number | null; source_lifespan?: number | null; width: number; height?: number | null } }
+  | { Spiral: { radius: number; arms: number; gradient: number } }
+  | { Butterfly: { color_width: number; gradient: number; clockwise: boolean } }
   | { Plasma: { grayscale: boolean; vertical_symmetry: boolean; size_x: number; param_x: number; size_y: number; param_y: number; speed_x: number; param_sx: number; speed_y: number; param_sy: number } }
   | { ColorRainbow: { grayscale: boolean; vertical_symmetry: boolean; color_width: number; angle_degrees: number; gradient: number } }
   | { Rainbow: { grayscale: boolean; vertical_symmetry: boolean; horizontal_symmetry: boolean; rotation_degrees: number; color_width: number; angle_degrees: number; gradient: number } }
@@ -1954,6 +1956,9 @@ export interface ColorEffectSpatialPlacement {
   sy: number;
   mapping_angle_degrees: number;
   sampling_rule: ColorEffectSpatialSamplingRule;
+  vertical_symmetry?: boolean;
+  horizontal_symmetry?: boolean;
+  raster_rotation_degrees?: number;
   target_coordinates?: ColorEffectSpatialPlacementTarget[];
 }
 

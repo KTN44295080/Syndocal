@@ -3710,6 +3710,10 @@ impl CompiledDaslightSweep {
             self.strip_count,
             self.vertical_symmetry,
         );
+        self.sample_at_phase_position(time_phase, source_position)
+    }
+
+    fn sample_at_phase_position(&self, time_phase: f64, source_position: f64) -> ColorEffectColor {
         let palette_count = self.palette.len();
         let scaled = time_phase.rem_euclid(1.0) * palette_count as f64;
         let transition_index = scaled.floor() as usize % palette_count;
@@ -3736,7 +3740,8 @@ struct SyndocalSparkleParticle {
     generation_epoch: u64,
     particle_index: usize,
     born_visual_ms: f64,
-    start: usize,
+    start_x: usize,
+    start_y: usize,
     particle_seed: u64,
 }
 
@@ -3754,6 +3759,8 @@ impl SyndocalSparkleParticle {
 struct SyndocalSparkleState {
     particles: Vec<SyndocalSparkleParticle>,
     strip: Vec<ColorEffectColor>,
+    source_width: usize,
+    source_height: usize,
     last_created_at: Option<Instant>,
     last_now: Option<Instant>,
     last_visual_ms: f64,
@@ -3772,6 +3779,8 @@ impl Clone for SyndocalSparkleState {
             // authored population in every copied activation.
             particles: self.particles.clone(),
             strip: self.strip.clone(),
+            source_width: self.source_width,
+            source_height: self.source_height,
             last_created_at: self.last_created_at,
             last_now: self.last_now,
             last_visual_ms: self.last_visual_ms,
@@ -3786,7 +3795,9 @@ impl Clone for SyndocalSparkleState {
 }
 
 impl SyndocalSparkleState {
-    fn new(strip_count: usize, number: usize, lifetime_ms: f64) -> Self {
+    fn new(source_width: usize, source_height: usize, number: usize, lifetime_ms: f64) -> Self {
+        let source_width = source_width.max(1);
+        let source_height = source_height.max(1);
         let max_particles = number.saturating_mul(
             usize::try_from(Self::lifetime_generations(lifetime_ms))
                 .unwrap_or(usize::MAX)
@@ -3794,7 +3805,9 @@ impl SyndocalSparkleState {
         );
         Self {
             particles: Vec::with_capacity(max_particles),
-            strip: vec![black_color(); strip_count.max(1)],
+            strip: vec![black_color(); source_width.saturating_mul(source_height)],
+            source_width,
+            source_height,
             last_created_at: None,
             last_now: None,
             last_visual_ms: 0.0,
@@ -3851,11 +3864,13 @@ impl SyndocalSparkleState {
         loop_epochs: u64,
         number: usize,
         width: usize,
+        height: usize,
         rng_seed: u32,
     ) {
-        let source_width = self.strip.len().max(1);
-        let sparkle_width = width.min(source_width);
-        let start_count = source_width.saturating_sub(sparkle_width) + 1;
+        let sparkle_width = width.min(self.source_width);
+        let sparkle_height = height.min(self.source_height);
+        let start_x_count = self.source_width.saturating_sub(sparkle_width) + 1;
+        let start_y_count = self.source_height.saturating_sub(sparkle_height) + 1;
         // DVC repeats its discrete floor(period/40) frame grid. Absolute
         // epochs keep cadence and particle identity monotonic while only the
         // seed epoch wraps to repeat placement and palette choices.
@@ -3870,7 +3885,9 @@ impl SyndocalSparkleState {
                 generation_epoch,
                 particle_index,
                 born_visual_ms,
-                start: (particle_seed % start_count as u64) as usize,
+                start_x: (particle_seed % start_x_count as u64) as usize,
+                start_y: (splitmix64(particle_seed ^ 0xC6BC_2796_92B5_CC83) % start_y_count as u64)
+                    as usize,
                 particle_seed,
             });
         }
@@ -3886,6 +3903,7 @@ impl SyndocalSparkleState {
         lifetime_ms: f64,
         period_ms: f64,
         width: usize,
+        height: usize,
         rng_seed: u32,
     ) {
         self.particles.clear();
@@ -3903,6 +3921,7 @@ impl SyndocalSparkleState {
                 loop_epochs,
                 number,
                 width,
+                height,
                 rng_seed,
             );
         }
@@ -3928,6 +3947,7 @@ impl SyndocalSparkleState {
         lifetime_ms: f64,
         period_ms: f64,
         width: usize,
+        height: usize,
         grayscale: bool,
         rng_seed: u32,
         palette: &[ColorEffectColor],
@@ -3968,6 +3988,7 @@ impl SyndocalSparkleState {
                 lifetime_ms,
                 period_ms,
                 width,
+                height,
                 rng_seed,
             );
         } else {
@@ -3985,6 +4006,7 @@ impl SyndocalSparkleState {
                         loop_epochs,
                         number,
                         width,
+                        height,
                         rng_seed,
                     );
                 }
@@ -3998,7 +4020,8 @@ impl SyndocalSparkleState {
         }
 
         self.strip.fill(black_color());
-        let sparkle_width = width.min(self.strip.len());
+        let sparkle_width = width.min(self.source_width);
+        let sparkle_height = height.min(self.source_height);
         for particle in &self.particles {
             let age_ms = visual_ms - particle.born_visual_ms;
             if age_ms >= lifetime_ms {
@@ -4006,13 +4029,16 @@ impl SyndocalSparkleState {
             }
             let alpha = (1.0 - age_ms / lifetime_ms).clamp(0.0, 1.0) as f32;
             let particle_color = palette[particle.palette_index_for_count(palette.len())];
-            for color in &mut self.strip[particle.start..particle.start + sparkle_width] {
-                *color = interpolate_color_effect_color(
-                    *color,
-                    particle_color,
-                    alpha,
-                    ColorEffectInterpolation::Rgb,
-                );
+            for y in particle.start_y..particle.start_y + sparkle_height {
+                let row_start = y * self.source_width + particle.start_x;
+                for color in &mut self.strip[row_start..row_start + sparkle_width] {
+                    *color = interpolate_color_effect_color(
+                        *color,
+                        particle_color,
+                        alpha,
+                        ColorEffectInterpolation::Rgb,
+                    );
+                }
             }
         }
         if grayscale {
@@ -4045,6 +4071,7 @@ enum CompiledSyndocalRandomFx {
         number: usize,
         lifetime_ms: f64,
         width: usize,
+        height: usize,
         grayscale: bool,
         vertical_symmetry: bool,
         rng_seed: u32,
@@ -4058,8 +4085,10 @@ struct PreservedSyndocalSparkleState {
     number: usize,
     lifetime_ms: f64,
     width: usize,
+    height: usize,
     rng_seed: u32,
-    strip_count: usize,
+    source_width: usize,
+    source_height: usize,
     state: RefCell<SyndocalSparkleState>,
 }
 
@@ -4120,33 +4149,46 @@ impl CompiledSyndocalRandomFx {
                 // Validated import provenance only; runtime uses lifetime_ms.
                 source_lifespan: _,
                 width,
+                height,
                 ..
-            } => Ok(Some(Self::Sparkle {
-                number: usize::from(*number),
-                lifetime_ms: f64::from(*lifetime_ms),
-                width: ((*width / 100.0) * strip_count.max(1) as f32)
-                    .round()
-                    .max(1.0) as usize,
-                grayscale: *grayscale,
-                vertical_symmetry: *vertical_symmetry,
-                rng_seed: *rng_seed,
-                period_ms: request.period_ms.max(10) as f64,
-                palette,
-                state: RefCell::new(SyndocalSparkleState::new(
-                    strip_count,
-                    usize::from(*number),
-                    f64::from(*lifetime_ms),
-                )),
-            })),
+            } => {
+                let source_height = if pattern.placement.is_some() { 100 } else { 1 };
+                let compiled_height = height
+                    .map(|height| {
+                        ((height / 100.0) * source_height as f32).round().max(1.0) as usize
+                    })
+                    .unwrap_or(1);
+                Ok(Some(Self::Sparkle {
+                    number: usize::from(*number),
+                    lifetime_ms: f64::from(*lifetime_ms),
+                    width: ((*width / 100.0) * strip_count.max(1) as f32)
+                        .round()
+                        .max(1.0) as usize,
+                    height: compiled_height,
+                    grayscale: *grayscale,
+                    vertical_symmetry: *vertical_symmetry,
+                    rng_seed: *rng_seed,
+                    period_ms: request.period_ms.max(10) as f64,
+                    palette,
+                    state: RefCell::new(SyndocalSparkleState::new(
+                        strip_count,
+                        source_height,
+                        usize::from(*number),
+                        f64::from(*lifetime_ms),
+                    )),
+                }))
+            }
             _ => Ok(None),
         }
     }
 
-    fn sample_at_time(
+    fn sample_at_mapping_time(
         &self,
         time_phase: f64,
         destination_index: usize,
         strip_count: usize,
+        target_x: f32,
+        target_y: f32,
         created_at: Instant,
         now: Instant,
     ) -> ColorEffectColor {
@@ -4189,6 +4231,7 @@ impl CompiledSyndocalRandomFx {
                 number,
                 lifetime_ms,
                 width,
+                height,
                 grayscale,
                 vertical_symmetry,
                 rng_seed,
@@ -4196,7 +4239,17 @@ impl CompiledSyndocalRandomFx {
                 palette,
                 state,
             } => {
-                let source_index = if *vertical_symmetry {
+                let mut state = state.borrow_mut();
+                let source_index = if state.source_height > 1 {
+                    if !(0.0..=1.0).contains(&target_x) || !(0.0..=1.0).contains(&target_y) {
+                        return black_color();
+                    }
+                    let x =
+                        (target_x * state.source_width.saturating_sub(1) as f32).round() as usize;
+                    let y =
+                        (target_y * state.source_height.saturating_sub(1) as f32).round() as usize;
+                    Some(y * state.source_width + x)
+                } else if *vertical_symmetry {
                     daslight_vertical_fold_source_index(destination_index, strip_count)
                 } else {
                     Some(destination_index.min(strip_count.saturating_sub(1)))
@@ -4204,7 +4257,6 @@ impl CompiledSyndocalRandomFx {
                 let Some(source_index) = source_index else {
                     return black_color();
                 };
-                let mut state = state.borrow_mut();
                 state.update(
                     time_phase * *period_ms,
                     created_at,
@@ -4213,6 +4265,7 @@ impl CompiledSyndocalRandomFx {
                     *lifetime_ms,
                     *period_ms,
                     *width,
+                    *height,
                     *grayscale,
                     *rng_seed,
                     palette,
@@ -4226,6 +4279,26 @@ impl CompiledSyndocalRandomFx {
         }
     }
 
+    #[cfg(test)]
+    fn sample_at_time(
+        &self,
+        time_phase: f64,
+        destination_index: usize,
+        strip_count: usize,
+        created_at: Instant,
+        now: Instant,
+    ) -> ColorEffectColor {
+        self.sample_at_mapping_time(
+            time_phase,
+            destination_index,
+            strip_count,
+            0.0,
+            0.0,
+            created_at,
+            now,
+        )
+    }
+
     fn clear_runtime_state(&self) {
         if let Self::Sparkle { state, .. } = self {
             state.borrow_mut().clear();
@@ -4237,6 +4310,7 @@ impl CompiledSyndocalRandomFx {
             number,
             lifetime_ms,
             width,
+            height,
             rng_seed,
             state,
             ..
@@ -4244,17 +4318,21 @@ impl CompiledSyndocalRandomFx {
         else {
             return None;
         };
-        let strip_count = state.get_mut().strip.len();
+        let source_width = state.get_mut().source_width;
+        let source_height = state.get_mut().source_height;
         Some(PreservedSyndocalSparkleState {
             number: *number,
             lifetime_ms: *lifetime_ms,
             width: *width,
+            height: *height,
             rng_seed: *rng_seed,
-            strip_count,
+            source_width,
+            source_height,
             state: std::mem::replace(
                 state,
                 RefCell::new(SyndocalSparkleState::new(
-                    strip_count,
+                    source_width,
+                    source_height,
                     *number,
                     *lifetime_ms,
                 )),
@@ -4267,6 +4345,7 @@ impl CompiledSyndocalRandomFx {
             number,
             lifetime_ms,
             width,
+            height,
             rng_seed,
             state,
             ..
@@ -4277,8 +4356,10 @@ impl CompiledSyndocalRandomFx {
         if *number != preserved.number
             || *lifetime_ms != preserved.lifetime_ms
             || *width != preserved.width
+            || *height != preserved.height
             || *rng_seed != preserved.rng_seed
-            || state.get_mut().strip.len() != preserved.strip_count
+            || state.get_mut().source_width != preserved.source_width
+            || state.get_mut().source_height != preserved.source_height
         {
             return false;
         }
@@ -4835,6 +4916,10 @@ impl CompiledDaslightKnightRider {
             self.strip_count,
             self.vertical_symmetry,
         );
+        self.sample_at_phase_position(time_phase, source_position)
+    }
+
+    fn sample_at_phase_position(&self, time_phase: f64, source_position: f64) -> ColorEffectColor {
         let phase_bits = time_phase.to_bits();
         if self.cached_motion_phase.get() != Some(phase_bits) {
             let mut cached_lane_motion = self.cached_lane_motion.borrow_mut();
@@ -4948,6 +5033,14 @@ impl CompiledDaslightBurst {
         ((pixel_center - raster_center).abs() / self.color_width).clamp(0.0, 1.0)
     }
 
+    fn radial_coordinate_2d(&self, normalized_x: f32, normalized_y: f32) -> f64 {
+        let source_last = self.strip_count.saturating_sub(1) as f64;
+        let x = f64::from(normalized_x) * source_last + 0.5;
+        let y = f64::from(normalized_y) * source_last + 0.5;
+        let center = self.strip_count as f64 * 0.5;
+        (((x - center).powi(2) + (y - center).powi(2)).sqrt() / self.color_width).clamp(0.0, 1.0)
+    }
+
     fn palette_color(&self, coordinate: f64) -> DaslightKnightColor {
         let scaled = coordinate.rem_euclid(1.0) * self.palette.len() as f64;
         let first_index = scaled.floor() as usize % self.palette.len();
@@ -4965,8 +5058,23 @@ impl CompiledDaslightBurst {
     }
 
     fn sample_at_phase(&self, time_phase: f64, destination_index: usize) -> ColorEffectColor {
-        let palette_coordinate =
-            (self.radial_coordinate(destination_index) - time_phase).rem_euclid(1.0);
+        self.sample_at_phase_coordinate(time_phase, self.radial_coordinate(destination_index))
+    }
+
+    fn sample_at_mapping_phase(
+        &self,
+        time_phase: f64,
+        normalized_x: f32,
+        normalized_y: f32,
+    ) -> ColorEffectColor {
+        self.sample_at_phase_coordinate(
+            time_phase,
+            self.radial_coordinate_2d(normalized_x, normalized_y),
+        )
+    }
+
+    fn sample_at_phase_coordinate(&self, time_phase: f64, coordinate: f64) -> ColorEffectColor {
+        let palette_coordinate = (coordinate - time_phase).rem_euclid(1.0);
         let color = self.palette_color(palette_coordinate);
         if self.grayscale {
             daslight_grayscale_color(color.into_color())
@@ -5376,6 +5484,10 @@ struct CompiledColorSpatialPlacement {
     mask_half_height: f64,
     mask_cosine: f64,
     mask_sine: f64,
+    vertical_symmetry: bool,
+    horizontal_symmetry: bool,
+    raster_cosine: f64,
+    raster_sine: f64,
 }
 
 impl CompiledColorSpatialPlacement {
@@ -5399,12 +5511,19 @@ impl CompiledColorSpatialPlacement {
         if !placement.mapping_angle_degrees.is_finite() {
             return Err("Color spatial placement angle must be finite".to_string());
         }
+        if !placement.raster_rotation_degrees.is_finite() {
+            return Err("Color spatial placement raster rotation must be finite".to_string());
+        }
+        if placement.vertical_symmetry && placement.horizontal_symmetry {
+            return Err("Color spatial placement supports at most one Transform axis".to_string());
+        }
 
         let mask_half_width = placement.sx as f64 * 0.5;
         let mask_half_height = placement.sy as f64 * 0.5;
         let radians = f64::from(placement.mapping_angle_degrees).to_radians();
         let mask_cosine = radians.cos();
         let mask_sine = radians.sin();
+        let raster_radians = f64::from(placement.raster_rotation_degrees).to_radians();
         // Daslight rotates the scaled Rectangle about its centre, then moves
         // the rotated AABB's top-left back to the authored raw X/Y.
         let rotated_aabb_width =
@@ -5419,6 +5538,10 @@ impl CompiledColorSpatialPlacement {
             mask_half_height,
             mask_cosine,
             mask_sine,
+            vertical_symmetry: placement.vertical_symmetry,
+            horizontal_symmetry: placement.horizontal_symmetry,
+            raster_cosine: raster_radians.cos(),
+            raster_sine: raster_radians.sin(),
         })
     }
 
@@ -5436,10 +5559,29 @@ impl CompiledColorSpatialPlacement {
             return None;
         }
 
-        let normalized_x =
+        let mut normalized_x =
             ((mask_x + self.mask_half_width) / (self.mask_half_width * 2.0)).clamp(0.0, 1.0);
-        let normalized_y =
+        let mut normalized_y =
             ((mask_y + self.mask_half_height) / (self.mask_half_height * 2.0)).clamp(0.0, 1.0);
+
+        if self.vertical_symmetry {
+            normalized_x = f64::from(daslight_symmetry_coordinate(normalized_x as f32));
+        }
+        if self.horizontal_symmetry {
+            normalized_y = f64::from(daslight_symmetry_coordinate(normalized_y as f32));
+        }
+        let delta_x = normalized_x - 0.5;
+        let delta_y = normalized_y - 0.5;
+        normalized_x = delta_x * self.raster_cosine + delta_y * self.raster_sine + 0.5;
+        normalized_y = -delta_x * self.raster_sine + delta_y * self.raster_cosine + 0.5;
+
+        // Raster rotation is applied inside the authored Rectangle. Pixels
+        // rotated outside that finite image are transparent in Daslight, so
+        // do not let downstream samplers clamp or integer-cast them back onto
+        // an edge colour.
+        if !(0.0..=1.0).contains(&normalized_x) || !(0.0..=1.0).contains(&normalized_y) {
+            return None;
+        }
 
         Some(CompiledColorSpatialPlacementSample {
             normalized_x: normalized_x as f32,
@@ -27599,6 +27741,7 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
             lifetime_ms,
             source_lifespan,
             width,
+            height,
             ..
         } => {
             if *number == 0 || !width.is_finite() || *width <= 0.0 {
@@ -27615,7 +27758,30 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
             {
                 return Err("Sparkle source lifespan must be within 0..0.9".to_string());
             }
+            if height.is_some_and(|height| !height.is_finite() || !(0.0..=100.0).contains(&height))
+            {
+                return Err("Sparkle height must be finite and within 0..100 percent".to_string());
+            }
             Ok(())
+        }
+        ColorEffectSpatialRecipe::Spiral {
+            radius,
+            arms,
+            gradient,
+        } => {
+            integer_range("Spiral radius", *radius, 0.0, 200.0)?;
+            if !(1..=10).contains(arms) {
+                return Err("Spiral arms must be within 1..10".to_string());
+            }
+            percent("Spiral gradient", *gradient)
+        }
+        ColorEffectSpatialRecipe::Butterfly {
+            color_width,
+            gradient,
+            ..
+        } => {
+            integer_range("Butterfly color width", *color_width, 1.0, 100.0)?;
+            percent("Butterfly gradient", *gradient)
         }
         ColorEffectSpatialRecipe::Plasma {
             size_x,
@@ -30349,10 +30515,18 @@ fn runtime_color_effect_from_request(
     let spatial = if request.spatial_pattern.is_some() {
         let (targets, attribute_indices) =
             runtime_color_spatial_targets(&request, fixtures, &targets)?;
-        let strip_count = targets
-            .first()
-            .map(|target| target.strip_count)
-            .unwrap_or(1);
+        let strip_count = if request
+            .spatial_pattern
+            .as_ref()
+            .is_some_and(|pattern| pattern.placement.is_some())
+        {
+            100
+        } else {
+            targets
+                .first()
+                .map(|target| target.strip_count)
+                .unwrap_or(1)
+        };
         let daslight_knight_rider = compile_daslight_value_spatial(&request, strip_count)?;
         let daslight_burst = compile_daslight_burst(&request, strip_count)?;
         let daslight_sweep = compile_daslight_sweep(&request, strip_count)?;
@@ -31805,10 +31979,16 @@ fn evaluate_daslight_knight_rider_color_at_rate(
     clock: &ClockSnapshot,
     rate: f32,
 ) -> ColorEffectColor {
-    compiled.sample_at_phase(
-        time_phase_for_continuous_spatial(request, created_at, now, clock, rate),
-        target.strip_index,
-    )
+    let time_phase = time_phase_for_continuous_spatial(request, created_at, now, clock, rate);
+    if request
+        .spatial_pattern
+        .as_ref()
+        .is_some_and(|pattern| pattern.placement.is_some())
+    {
+        compiled.sample_at_phase_position(time_phase, f64::from(target.x) * 99.0)
+    } else {
+        compiled.sample_at_phase(time_phase, target.strip_index)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -31821,10 +32001,16 @@ fn evaluate_daslight_burst_color_at_rate(
     clock: &ClockSnapshot,
     rate: f32,
 ) -> ColorEffectColor {
-    compiled.sample_at_phase(
-        time_phase_for_continuous_spatial(request, created_at, now, clock, rate),
-        target.strip_index,
-    )
+    let time_phase = time_phase_for_continuous_spatial(request, created_at, now, clock, rate);
+    if request
+        .spatial_pattern
+        .as_ref()
+        .is_some_and(|pattern| pattern.placement.is_some())
+    {
+        compiled.sample_at_mapping_phase(time_phase, target.x, target.z)
+    } else {
+        compiled.sample_at_phase(time_phase, target.strip_index)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -31837,10 +32023,16 @@ fn evaluate_daslight_sweep_color_at_rate(
     clock: &ClockSnapshot,
     rate: f32,
 ) -> ColorEffectColor {
-    compiled.sample_at_phase(
-        time_phase_for_continuous_spatial(request, created_at, now, clock, rate),
-        target.strip_index,
-    )
+    let time_phase = time_phase_for_continuous_spatial(request, created_at, now, clock, rate);
+    if request
+        .spatial_pattern
+        .as_ref()
+        .is_some_and(|pattern| pattern.placement.is_some())
+    {
+        compiled.sample_at_phase_position(time_phase, f64::from(target.x) * 99.0)
+    } else {
+        compiled.sample_at_phase(time_phase, target.strip_index)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -31965,10 +32157,12 @@ fn evaluate_color_spatial_sample_at_rate(
     }
     if let Some(syndocal_random_fx) = syndocal_random_fx {
         return RuntimeColorSpatialSample {
-            color: syndocal_random_fx.sample_at_time(
+            color: syndocal_random_fx.sample_at_mapping_time(
                 time_phase_for_continuous_spatial(request, created_at, now, clock, rate),
                 target.strip_index,
                 target.strip_count,
+                target.x,
+                target.z,
                 created_at,
                 now,
             ),
@@ -32005,6 +32199,49 @@ fn evaluate_color_spatial_sample_at_rate(
         | ColorEffectSpatialRecipe::Perlin { .. } => {
             unreachable!("unified spatial recipes are evaluated by their compiled analytic route")
         }
+        ColorEffectSpatialRecipe::Spiral {
+            radius,
+            arms,
+            gradient,
+        } => {
+            let delta_x = f64::from(target.x) * 99.0 + 0.5 - 50.0;
+            let delta_y = 50.0 - (f64::from(target.z) * 99.0 + 0.5);
+            let polar_degrees = delta_y.atan2(delta_x).to_degrees().rem_euclid(360.0);
+            // CSpiralEffect advances its QConicalGradient by 360 degrees per
+            // authored period and then by floor(Radius / 10) degrees for each
+            // one-pixel annulus. This continuous sampler preserves that
+            // recovered geometry without the source QImage cache.
+            let radial_pixel = delta_x.hypot(delta_y).floor();
+            let ring_rotation = radial_pixel * f64::from((*radius as i32) / 10);
+            let gradient_angle = time_phase.rem_euclid(1.0) * 360.0 + ring_rotation;
+            let position = (((polar_degrees - gradient_angle) / 360.0) * f64::from(*arms))
+                .rem_euclid(1.0) as f32;
+            spatial_palette_color(request, position, *gradient)
+        }
+        ColorEffectSpatialRecipe::Butterfly {
+            color_width,
+            gradient,
+            clockwise,
+        } => {
+            let delta_x = f64::from(target.x) * 99.0 + 0.5 - 50.0;
+            let delta_y = 50.0 - (f64::from(target.z) * 99.0 + 0.5);
+            let polar_degrees = delta_y.atan2(delta_x).to_degrees().rem_euclid(360.0);
+            let direction = if *clockwise { -1.0 } else { 1.0 };
+            let sector_angle = (direction * time_phase.rem_euclid(1.0) * 360.0).rem_euclid(360.0);
+            // CButterflyEffect fills one conical sector and a second sector at
+            // +180 degrees, then crops the doubled raster back to the mapping
+            // rectangle. Sampling modulo 180 is the analytic equivalent.
+            let sector_progress = (polar_degrees - sector_angle).rem_euclid(180.0);
+            if sector_progress > f64::from(*color_width) {
+                black_color()
+            } else {
+                spatial_palette_color(
+                    request,
+                    (sector_progress / f64::from(*color_width)).clamp(0.0, 1.0) as f32,
+                    *gradient,
+                )
+            }
+        }
         ColorEffectSpatialRecipe::Plasma {
             grayscale,
             vertical_symmetry,
@@ -32018,16 +32255,22 @@ fn evaluate_color_spatial_sample_at_rate(
             param_sy,
         } => {
             let phase = (time_phase.rem_euclid(1.0) * 128.0).trunc() as u8;
-            // COLOR FX is a profile-order strip in every imported DVC sample.
-            // Daslight's evaluator still runs its two-dimensional byte formula;
-            // the unrepresented Y axis is therefore zero, not a mirrored X.
-            let x = if *vertical_symmetry {
+            let mapping_raster = pattern.placement.is_some();
+            // COLOR FX is a profile-order strip. Placed MAPPINGS samples the
+            // recovered two-dimensional byte formula in Rectangle-local space.
+            let x = if mapping_raster {
+                (target.x * 99.0).round() as u8
+            } else if *vertical_symmetry {
                 let transformed = daslight_symmetry_coordinate(strip_position);
                 (transformed * strip_count.saturating_sub(1) as f32).round() as usize as u8
             } else {
                 target.strip_index as u8
             };
-            let y = 0_u8;
+            let y = if mapping_raster {
+                (target.z * 99.0).round() as u8
+            } else {
+                0_u8
+            };
             let value = daslight_plasma_palette_byte(
                 phase,
                 x,
@@ -55591,6 +55834,9 @@ mod tests {
             mapping_angle_degrees,
             sampling_rule:
                 protocol::ColorEffectSpatialSamplingRule::RotatedInclusionMaskAxisAlignedRaster,
+            vertical_symmetry: false,
+            horizontal_symmetry: false,
+            raster_rotation_degrees: 0.0,
             target_coordinates: Vec::new(),
         }
     }
@@ -55615,12 +55861,21 @@ mod tests {
             .as_ref()
             .and_then(|pattern| CompiledRainbowProjection::compile(&pattern.recipe))
             .map(|projection| projection.project(target.x, target.z));
+        let compiled_strip_count = if request
+            .spatial_pattern
+            .as_ref()
+            .is_some_and(|pattern| pattern.placement.is_some())
+        {
+            100
+        } else {
+            target.strip_count
+        };
         let daslight_knight_rider =
-            compile_daslight_value_spatial(request, target.strip_count).unwrap();
-        let daslight_burst = compile_daslight_burst(request, target.strip_count).unwrap();
-        let daslight_sweep = compile_daslight_sweep(request, target.strip_count).unwrap();
+            compile_daslight_value_spatial(request, compiled_strip_count).unwrap();
+        let daslight_burst = compile_daslight_burst(request, compiled_strip_count).unwrap();
+        let daslight_sweep = compile_daslight_sweep(request, compiled_strip_count).unwrap();
         let syndocal_random_fx =
-            CompiledSyndocalRandomFx::compile(request, target.strip_count).unwrap();
+            CompiledSyndocalRandomFx::compile(request, compiled_strip_count).unwrap();
         let daslight_perlin =
             compile_daslight_perlin(request, std::slice::from_ref(&target)).unwrap();
         evaluate_color_spatial_sample_at_rate(
@@ -55656,6 +55911,7 @@ mod tests {
             lifetime_ms: Some(lifetime_ms),
             source_lifespan: Some(0.0),
             width,
+            height: None,
         });
         request.stops[0].color = black_color();
         request.stops[1].color = test_color(u16::MAX, 32_768, 0);
@@ -55976,6 +56232,225 @@ mod tests {
         let sample = placement.sample(9, 251).unwrap();
         assert!((sample.normalized_x - 0.009).abs() < 1.0e-6);
         assert!((sample.normalized_y - 0.502).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn mapping_placement_applies_transform_and_raster_rotation_in_local_space() {
+        let mut placement = test_patch_canvas_placement(0, 0, 100, 100, 0.0);
+        placement.vertical_symmetry = true;
+        let vertical = CompiledColorSpatialPlacement::compile(&placement).unwrap();
+        assert_eq!(
+            vertical.sample(25, 75).unwrap(),
+            CompiledColorSpatialPlacementSample {
+                normalized_x: 0.5,
+                normalized_y: 0.75,
+            }
+        );
+
+        placement.vertical_symmetry = false;
+        placement.horizontal_symmetry = true;
+        let horizontal = CompiledColorSpatialPlacement::compile(&placement).unwrap();
+        assert_eq!(
+            horizontal.sample(25, 75).unwrap(),
+            CompiledColorSpatialPlacementSample {
+                normalized_x: 0.25,
+                normalized_y: 0.5,
+            }
+        );
+
+        placement.horizontal_symmetry = false;
+        placement.raster_rotation_degrees = 90.0;
+        let rotated = CompiledColorSpatialPlacement::compile(&placement).unwrap();
+        let sample = rotated.sample(75, 50).unwrap();
+        assert!((sample.normalized_x - 0.5).abs() < 1.0e-6);
+        assert!((sample.normalized_y - 0.25).abs() < 1.0e-6);
+
+        placement.vertical_symmetry = true;
+        placement.horizontal_symmetry = true;
+        assert!(CompiledColorSpatialPlacement::compile(&placement)
+            .unwrap_err()
+            .contains("at most one Transform axis"));
+    }
+
+    #[test]
+    fn mapping_raster_rotation_clips_pixels_outside_the_finite_rectangle() {
+        let mut placement = test_patch_canvas_placement(0, 0, 100, 100, 0.0);
+        placement.raster_rotation_degrees = 45.0;
+        let rotated = CompiledColorSpatialPlacement::compile(&placement).unwrap();
+
+        assert!(rotated.sample(50, 50).is_some());
+        assert_eq!(rotated.sample(0, 0), None);
+        assert_eq!(rotated.sample(100, 100), None);
+    }
+
+    #[test]
+    fn shared_mapping_rasters_use_2d_coordinates_without_changing_1d_sampling() {
+        let burst = test_daslight_burst_request(
+            1_000,
+            50.0,
+            100.0,
+            false,
+            false,
+            &[black_color(), test_color(u16::MAX, 0, 0)],
+        );
+        let compiled =
+            CompiledDaslightBurst::compile(&burst, 100, 50.0, 100.0, false, false).unwrap();
+        for index in 0..100 {
+            assert_eq!(
+                compiled.sample_at_phase(0.25, index),
+                compiled.sample_at_phase_coordinate(0.25, compiled.radial_coordinate(index)),
+            );
+        }
+        assert_ne!(
+            compiled.sample_at_mapping_phase(0.25, 0.5, 0.5),
+            compiled.sample_at_mapping_phase(0.25, 0.5, 1.0),
+            "placed Burst must use radial Y distance, not collapse to a strip"
+        );
+
+        let mut plasma = test_spatial_color_request(ColorEffectSpatialRecipe::Plasma {
+            grayscale: false,
+            vertical_symmetry: false,
+            size_x: 1.0,
+            param_x: 2.0,
+            size_y: 1.0,
+            param_y: 2.0,
+            speed_x: -1.0,
+            param_sx: 2.0,
+            speed_y: 1.0,
+            param_sy: -1.0,
+        });
+        plasma.spatial_pattern.as_mut().unwrap().placement =
+            Some(test_patch_canvas_placement(0, 0, 100, 100, 0.0));
+        let low_y =
+            evaluate_test_spatial_color(&plasma, &test_spatial_color_target(0, 1, 0.25, 0.1), 321);
+        let high_y =
+            evaluate_test_spatial_color(&plasma, &test_spatial_color_target(0, 1, 0.25, 0.9), 321);
+        assert_ne!(
+            low_y, high_y,
+            "placed Plasma must consume its authored Y axis"
+        );
+    }
+
+    #[test]
+    fn spiral_mapping_uses_radius_rings_arms_and_periodic_rotation() {
+        let mut spiral = test_spatial_color_request(ColorEffectSpatialRecipe::Spiral {
+            radius: 30.0,
+            arms: 1,
+            gradient: 100.0,
+        });
+        spiral.spatial_pattern.as_mut().unwrap().placement =
+            Some(test_patch_canvas_placement(0, 0, 100, 100, 0.0));
+        let inner = test_spatial_color_target(0, 1, 0.6, 0.5);
+        let outer = test_spatial_color_target(0, 1, 1.0, 0.5);
+        assert_ne!(
+            evaluate_test_spatial_color(&spiral, &inner, 0),
+            evaluate_test_spatial_color(&spiral, &outer, 0),
+            "Radius must advance the conical gradient independently per annulus"
+        );
+        assert_eq!(
+            evaluate_test_spatial_color(&spiral, &inner, 0),
+            evaluate_test_spatial_color(&spiral, &inner, 1_000),
+            "Spiral must repeat after its authored period"
+        );
+
+        if let ColorEffectSpatialRecipe::Spiral { radius, .. } =
+            &mut spiral.spatial_pattern.as_mut().unwrap().recipe
+        {
+            *radius = 10.0;
+        }
+        assert_eq!(
+            evaluate_test_spatial_color(&spiral, &outer, 0),
+            spatial_palette_color(&spiral, (-49.0_f32 / 360.0).rem_euclid(1.0), 100.0),
+            "Spiral annuli must use the 100x100 raster's pixel-centre radius"
+        );
+
+        let top = test_spatial_color_target(0, 1, 0.5, 0.0);
+        let one_arm = evaluate_test_spatial_color(&spiral, &top, 0);
+        if let ColorEffectSpatialRecipe::Spiral { arms, .. } =
+            &mut spiral.spatial_pattern.as_mut().unwrap().recipe
+        {
+            *arms = 2;
+        }
+        assert_ne!(
+            one_arm,
+            evaluate_test_spatial_color(&spiral, &top, 0),
+            "Arms must repeat the palette around the conical gradient"
+        );
+    }
+
+    #[test]
+    fn butterfly_mapping_has_opposite_sectors_and_clockwise_direction() {
+        let mut butterfly = test_spatial_color_request(ColorEffectSpatialRecipe::Butterfly {
+            color_width: 50.0,
+            gradient: 100.0,
+            clockwise: true,
+        });
+        butterfly.spatial_pattern.as_mut().unwrap().placement =
+            Some(test_patch_canvas_placement(0, 0, 100, 100, 0.0));
+        let right = test_spatial_color_target(0, 1, 1.0, 0.5);
+        let left = test_spatial_color_target(0, 1, 0.0, 0.5);
+        let top = test_spatial_color_target(0, 1, 0.5, 0.0);
+        assert_eq!(
+            evaluate_test_spatial_color(&butterfly, &right, 0),
+            evaluate_test_spatial_color(&butterfly, &left, 0),
+            "Butterfly must repeat its conical sector 180 degrees apart"
+        );
+        assert_eq!(
+            evaluate_test_spatial_color(&butterfly, &top, 0),
+            black_color()
+        );
+
+        if let ColorEffectSpatialRecipe::Butterfly {
+            color_width,
+            clockwise,
+            ..
+        } = &mut butterfly.spatial_pattern.as_mut().unwrap().recipe
+        {
+            *color_width = 100.0;
+            *clockwise = false;
+        }
+        let counter_clockwise = evaluate_test_spatial_color(&butterfly, &right, 125);
+        if let ColorEffectSpatialRecipe::Butterfly { clockwise, .. } =
+            &mut butterfly.spatial_pattern.as_mut().unwrap().recipe
+        {
+            *clockwise = true;
+        }
+        assert_ne!(
+            counter_clockwise,
+            evaluate_test_spatial_color(&butterfly, &right, 125),
+            "Clockwise must reverse the rotating sector direction"
+        );
+    }
+
+    #[test]
+    fn placed_sparkle_renders_a_deterministic_two_dimensional_rectangle() {
+        let mut sparkle = test_corrected_sparkle_request(0x529, 1, 1_000, 50.0, false, false);
+        let pattern = sparkle.spatial_pattern.as_mut().unwrap();
+        pattern.placement = Some(test_patch_canvas_placement(0, 0, 100, 100, 0.0));
+        let ColorEffectSpatialRecipe::Sparkle { height, .. } = &mut pattern.recipe else {
+            unreachable!();
+        };
+        *height = Some(50.0);
+
+        let compiled = CompiledSyndocalRandomFx::compile(&sparkle, 100)
+            .unwrap()
+            .unwrap();
+        let created_at = Instant::now();
+        compiled.sample_at_mapping_time(0.0, 0, 100, 0.0, 0.0, created_at, created_at);
+        let state = compiled_sparkle_state(&compiled).borrow();
+        assert_eq!((state.source_width, state.source_height), (100, 100));
+        assert_eq!(state.particles.len(), 1);
+        assert!(state.particles[0].start_x <= 50);
+        assert!(state.particles[0].start_y <= 50);
+        assert_eq!(
+            state
+                .strip
+                .iter()
+                .filter(|color| **color != black_color())
+                .count(),
+            50 * 50,
+            "Sparkle width and height must fill an authored 2D rectangle"
+        );
     }
 
     #[test]
@@ -56662,6 +57137,7 @@ mod tests {
                 lifetime_ms: Some(lifetime_ms),
                 source_lifespan: Some(0.0),
                 width,
+                height: None,
             });
             request.stops[0].color = black_color();
             request.stops[1].color = test_color(u16::MAX, u16::MAX, u16::MAX);
@@ -57143,7 +57619,7 @@ mod tests {
                 .map(|particle| {
                     (
                         particle.particle_index,
-                        particle.start,
+                        particle.start_x,
                         particle.particle_seed,
                     )
                 })
@@ -57481,7 +57957,7 @@ mod tests {
         let width_strip = (0..8)
             .map(|index| width.sample_at_time(0.0, index, 8, created_at, created_at))
             .collect::<Vec<_>>();
-        let particle_start = compiled_sparkle_state(&width).borrow().particles[0].start;
+        let particle_start = compiled_sparkle_state(&width).borrow().particles[0].start_x;
         assert_eq!(
             width_strip
                 .iter()
@@ -57527,6 +58003,7 @@ mod tests {
             lifetime_ms: None,
             source_lifespan: Some(0.0),
             width: 1.0,
+            height: None,
         });
         assert!(validate_color_effect_request(&missing_lifetime)
             .unwrap_err()
@@ -63240,6 +63717,9 @@ mod tests {
                                 sy: 1,
                                 mapping_angle_degrees: 0.0,
                                 sampling_rule: ColorEffectSpatialSamplingRule::RotatedInclusionMaskAxisAlignedRaster,
+                                vertical_symmetry: false,
+                                horizontal_symmetry: false,
+                                raster_rotation_degrees: 0.0,
                                 target_coordinates,
                             }),
                             },
@@ -63473,6 +63953,7 @@ mod tests {
                             100 + (recipe_ordinal % 5) as u16 * 100
                         }),
                         source_lifespan: Some((recipe_ordinal % 10) as f32 / 10.0),
+                        height: None,
                         width: if recipe_ordinal < 2 {
                             9_000.0 / strip_count
                         } else {

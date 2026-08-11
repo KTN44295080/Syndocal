@@ -29,7 +29,7 @@ export interface ColorEffectEditorPanelProps {
   onSpatialPattern: (pattern: ColorEffectSpatialPattern | null) => void;
 }
 
-type ColorSpatialKind = "PaletteFlow" | "KnightRider" | "Burst" | "Sweep" | "RandomFill" | "Sparkle" | "Plasma" | "ColorRainbow" | "Rainbow" | "Perlin";
+type ColorSpatialKind = "PaletteFlow" | "KnightRider" | "Burst" | "Sweep" | "RandomFill" | "Sparkle" | "Spiral" | "Butterfly" | "Plasma" | "ColorRainbow" | "Rainbow" | "Perlin";
 
 export const defaultColorEffectStops: ColorEffectStop[] = [
   { position: 0, color: { red: 65_535, green: 0, blue: 0 } },
@@ -126,7 +126,7 @@ const colorQuickLooks: ColorQuickLook[] = [
     ],
     algorithm: "Cycle",
     interpolation: "Rgb",
-    recipe: { Sparkle: { grayscale: false, vertical_symmetry: false, rng_seed: 1, number: 8, lifetime_ms: 250, source_lifespan: null, width: 10 } },
+    recipe: { Sparkle: { grayscale: false, vertical_symmetry: false, rng_seed: 1, number: 8, lifetime_ms: 250, source_lifespan: null, width: 10, height: null } },
     beats: 0.5,
   },
 ];
@@ -213,6 +213,9 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
       recipe: defaultSpatialRecipe(kind),
       parameter_model_version: 1,
       beam_targets: props.spatialPattern?.beam_targets ?? [],
+      ...(props.spatialPattern?.placement
+        ? { placement: structuredClone(props.spatialPattern.placement) }
+        : {}),
     });
   };
   const applyQuickLook = (look: ColorQuickLook) => {
@@ -237,6 +240,23 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
       recipe: { [kind]: { ...spatialValues(), ...patch } } as ColorEffectSpatialRecipe,
     });
   };
+  const patchPlacementValues = (patch: Record<string, number | boolean>) => {
+    const pattern = props.spatialPattern;
+    if (!pattern?.placement) return;
+    props.onSpatialPattern({
+      ...pattern,
+      placement: { ...pattern.placement, ...patch },
+    });
+  };
+  const placedSharedRaster = createMemo(() =>
+    props.spatialPattern?.placement !== undefined
+      && ["KnightRider", "Burst", "Sweep", "Sparkle", "Spiral", "Butterfly", "Plasma"].includes(spatialKind()),
+  );
+  const placementTransform = () => props.spatialPattern?.placement?.vertical_symmetry
+    ? "vertical"
+    : props.spatialPattern?.placement?.horizontal_symmetry
+      ? "horizontal"
+      : "none";
   const stopError = createMemo(() => {
     if (props.stops.length < DASLIGHT_FX_PALETTE_MIN_STOPS || props.stops.length > DASLIGHT_FX_PALETTE_MAX_STOPS) {
       return "A color effect requires 1 to 255 palette stops.";
@@ -496,6 +516,8 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
               <option value="Sweep">Sweep</option>
               <option value="RandomFill">Random fill</option>
               <option value="Sparkle">Sparkle</option>
+              <option value="Spiral">Spiral mapping</option>
+              <option value="Butterfly">Butterfly mapping</option>
               <option value="Plasma">Plasma</option>
               <option value="ColorRainbow">Rainbow strip</option>
               <option value="Rainbow">Rainbow mapping</option>
@@ -510,10 +532,16 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
             </div>
           </Show>
         </div>
+        <Show when={placedSharedRaster()}>
+          <div class="colorEffectModeGrid" data-color-mapping-placement-controls>
+            <label>Mapping transform<select value={placementTransform()} onInput={(event) => patchPlacementValues({ vertical_symmetry: event.currentTarget.value === "vertical", horizontal_symmetry: event.currentTarget.value === "horizontal" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option><option value="horizontal">Horizontal symmetry</option></select></label>
+            <label>Mapping rotation °<input class="tabularNums" type="number" min="0" max="360" step="1" value={props.spatialPattern?.placement?.raster_rotation_degrees ?? 0} onInput={(event) => patchPlacementValues({ raster_rotation_degrees: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 360) })} /></label>
+          </div>
+        </Show>
         <Show when={spatialKind() === "KnightRider"}>
           <div class="colorEffectModeGrid">
             <label><input type="checkbox" checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
-            <label>Transform<select value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
+            <Show when={!placedSharedRaster()}><label>Transform<select value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label></Show>
             <label>Size %<input type="number" min="0.01" max="100000" step="0.1" value={spatialNumber("size", 8)} onInput={(event) => patchSpatialValues({ size: clamp(Number(event.currentTarget.value) || 0.01, 0.01, 100000) })} /></label>
             <label>Gradient %<input type="number" min="0" max="100" step="1" value={spatialNumber("gradient", 50)} onInput={(event) => patchSpatialValues({ gradient: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
             <label><input type="checkbox" checked={spatialBoolean("one_way")} onInput={(event) => patchSpatialValues({ one_way: event.currentTarget.checked })} /> One way only</label>
@@ -524,7 +552,7 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
         <Show when={spatialKind() === "Burst"}>
           <div class="colorEffectModeGrid">
             <label><input type="checkbox" checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
-            <label>Transform<select value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
+            <Show when={!placedSharedRaster()}><label>Transform<select value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label></Show>
             <label>Color width %<input type="number" min="0.01" max="100000" step="0.1" value={spatialNumber("color_width", 50)} onInput={(event) => patchSpatialValues({ color_width: clamp(Number(event.currentTarget.value) || 0.01, 0.01, 100000) })} /></label>
             <label>Gradient %<input type="number" min="0" max="100" step="0.1" value={spatialNumber("gradient", 100)} onInput={(event) => patchSpatialValues({ gradient: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
           </div>
@@ -532,14 +560,14 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
         <Show when={spatialKind() === "Sweep"}>
           <div class="colorEffectModeGrid" data-color-sweep-controls>
             <label><input type="checkbox" data-color-sweep-grayscale checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
-            <label>Transform<select data-color-sweep-transform value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
+            <Show when={!placedSharedRaster()}><label>Transform<select data-color-sweep-transform value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label></Show>
             <label><input type="checkbox" data-color-sweep-direction-change checked={spatialBoolean("direction_change")} onInput={(event) => patchSpatialValues({ direction_change: event.currentTarget.checked })} /> Direction change</label>
           </div>
         </Show>
         <Show when={spatialKind() === "RandomFill"}>
           <div class="colorEffectModeGrid">
             <label><input type="checkbox" checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
-            <label>Transform<select value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
+            <Show when={!placedSharedRaster()}><label>Transform<select value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label></Show>
             <label>Point width %<input type="number" min="0.01" max="100000" step="0.1" value={spatialNumber("point_width", 10)} onInput={(event) => patchSpatialValues({ point_width: clamp(Number(event.currentTarget.value) || 0.01, 0.01, 100000) })} /></label>
             <label>Seed<input type="number" min="0" max="4294967295" step="1" value={spatialNumber("rng_seed", 0)} onInput={(event) => patchSpatialValues({ rng_seed: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 4_294_967_295) })} /></label>
           </div>
@@ -551,13 +579,28 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
             <label>Sparkle number<input type="number" min="1" max="10" step="1" title="Simultaneous particles created per 40 ms generation" value={spatialNumber("number", 5)} onInput={(event) => patchSpatialValues({ number: clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 10) })} /></label>
             <label>Lifetime ms<input type="number" min="100" max="1000" step="1" title="Effect-time milliseconds, scaling with clock sync and BPM speed" value={spatialNumber("lifetime_ms", 250)} onInput={(event) => patchSpatialValues({ lifetime_ms: clamp(Math.round(Number(event.currentTarget.value) || 100), 100, 1000) })} /></label>
             <label>Sparkle width %<input type="number" min="0.01" max="100000" step="0.1" value={spatialNumber("width", 10)} onInput={(event) => patchSpatialValues({ width: clamp(Number(event.currentTarget.value) || 0.01, 0.01, 100000) })} /></label>
+            <Show when={props.spatialPattern?.placement}><label>Sparkle height %<input type="number" min="1" max="90" step="1" value={spatialNumber("height", 1)} onInput={(event) => patchSpatialValues({ height: clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 90) })} /></label></Show>
             <label>Seed<input type="number" min="0" max="4294967295" step="1" value={spatialNumber("rng_seed", 0)} onInput={(event) => patchSpatialValues({ rng_seed: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 4_294_967_295) })} /></label>
+          </div>
+        </Show>
+        <Show when={spatialKind() === "Spiral"}>
+          <div class="colorEffectModeGrid">
+            <label>Radius<input type="number" min="0" max="200" step="1" value={spatialNumber("radius", 30)} onInput={(event) => patchSpatialValues({ radius: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 200) })} /></label>
+            <label>Arms<input type="number" min="1" max="10" step="1" value={spatialNumber("arms", 1)} onInput={(event) => patchSpatialValues({ arms: clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 10) })} /></label>
+            <label>Gradient %<input type="number" min="0" max="100" step="1" value={spatialNumber("gradient", 100)} onInput={(event) => patchSpatialValues({ gradient: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
+          </div>
+        </Show>
+        <Show when={spatialKind() === "Butterfly"}>
+          <div class="colorEffectModeGrid">
+            <label>Color width °<input type="number" min="1" max="100" step="1" value={spatialNumber("color_width", 100)} onInput={(event) => patchSpatialValues({ color_width: clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 100) })} /></label>
+            <label>Gradient %<input type="number" min="0" max="100" step="1" value={spatialNumber("gradient", 50)} onInput={(event) => patchSpatialValues({ gradient: clamp(Number(event.currentTarget.value), 0, 100) })} /></label>
+            <label><input type="checkbox" checked={spatialBoolean("clockwise")} onInput={(event) => patchSpatialValues({ clockwise: event.currentTarget.checked })} /> Clockwise</label>
           </div>
         </Show>
         <Show when={spatialKind() === "Plasma"}>
           <div class="colorEffectModeGrid">
             <label><input type="checkbox" checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
-            <label>Transform<select value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label>
+            <Show when={!placedSharedRaster()}><label>Transform<select value={spatialTransform()} onInput={(event) => patchSpatialValues({ vertical_symmetry: event.currentTarget.value === "vertical" })}><option value="none">None</option><option value="vertical">Vertical symmetry</option></select></label></Show>
             <label>Size X<input type="number" min="0" max="20" step="1" value={spatialNumber("size_x", 1)} onInput={(event) => patchSpatialValues({ size_x: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 20) })} /></label>
             <label>Param X<input type="number" min="0" max="20" step="1" value={spatialNumber("param_x", 2)} onInput={(event) => patchSpatialValues({ param_x: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 20) })} /></label>
             <label>Size Y<input type="number" min="0" max="20" step="1" value={spatialNumber("size_y", 1)} onInput={(event) => patchSpatialValues({ size_y: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 20) })} /></label>

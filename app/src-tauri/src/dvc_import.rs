@@ -2196,6 +2196,14 @@ fn parse_scene_effects(
                 (Some(7), Some(7), Some(627)) => Some("Random fill"),
                 (Some(7), Some(7), Some(628)) => Some("Perlin"),
                 (Some(6), Some(8), Some(521)) => Some("Rainbow"),
+                (Some(6), Some(8), Some(522)) => Some("Spiral"),
+                (Some(6), Some(8), Some(523)) => Some("Burst"),
+                (Some(6), Some(8), Some(524)) => Some("Butterfly"),
+                (Some(6), Some(8), Some(525)) => Some("Plasma"),
+                (Some(6), Some(8), Some(526)) => Some("Media"),
+                (Some(6), Some(8), Some(527)) => Some("Knight Rider"),
+                (Some(6), Some(8), Some(528)) => Some("Sweep"),
+                (Some(6), Some(8), Some(529)) => Some("Sparkle"),
                 (Some(6), Some(8), Some(530)) => Some("Perlin"),
                 _ => None,
             };
@@ -2379,7 +2387,7 @@ fn convert_dvc_effect(
         ),
         (5, 3, 36)
         | (2, 2, 121 | 127 | 128 | 129 | 130 | 131 | 133 | 134)
-        | (6, 8, 521 | 530) => {
+        | (6, 8, 521..=530) => {
             convert_dvc_color_spatial_effect(
                 scene,
                 scene_name,
@@ -2538,6 +2546,9 @@ fn dvc_color_spatial_placement(
         sy: rectangle.sy,
         mapping_angle_degrees: rectangle.angle_degrees,
         sampling_rule: ColorEffectSpatialSamplingRule::RotatedInclusionMaskAxisAlignedRaster,
+        vertical_symmetry: false,
+        horizontal_symmetry: false,
+        raster_rotation_degrees: 0.0,
         target_coordinates,
     })
 }
@@ -2681,11 +2692,12 @@ fn dvc_corrected_random_evaluator_note(
                 lifetime_ms,
                 source_lifespan,
                 width,
+                height,
                 ..
             },
             626 | 133,
         ) => Some(format!(
-            "evaluator=CSparklesEffect recovered retained-particle grammar; implementation=SyndocalCorrected; unavailable_qrand=stable_source_seed; rng_seed={rng_seed}; Number={number}; source_LifeSpan={source_lifespan:?}; lifetime_ms={lifetime_ms:?}; Width={width}; population=retained; spawn_rate_units=particles_per_40ms; fade=continuous; time_units=milliseconds"
+            "evaluator=CSparklesEffect recovered retained-particle grammar; implementation=SyndocalCorrected; unavailable_qrand=stable_source_seed; rng_seed={rng_seed}; Number={number}; source_LifeSpan={source_lifespan:?}; lifetime_ms={lifetime_ms:?}; Width={width}; Height={height:?}; population=retained; spawn_rate_units=particles_per_40ms; fade=continuous; time_units=milliseconds"
         )),
         (
             ColorEffectSpatialRecipe::RandomFill {
@@ -2708,23 +2720,27 @@ fn normalize_dvc_spatial_recipe(
     mapping_raster: bool,
 ) {
     let strip_count = strip_count.max(1) as f32;
+    let source_width = if mapping_raster { 100.0 } else { strip_count };
     match recipe {
         ColorEffectSpatialRecipe::KnightRider { size, .. } => {
-            *size = *size * 100.0 / strip_count;
+            *size = *size * 100.0 / source_width;
         }
         ColorEffectSpatialRecipe::Burst {
             color_width,
             gradient,
             ..
         } => {
-            *color_width = *color_width * 100.0 / strip_count;
+            *color_width = *color_width * 100.0 / source_width;
             *gradient *= 100.0;
         }
         ColorEffectSpatialRecipe::RandomFill { point_width, .. } => {
-            *point_width = *point_width * 100.0 / strip_count;
+            *point_width = *point_width * 100.0 / source_width;
         }
-        ColorEffectSpatialRecipe::Sparkle { width, .. } => {
-            *width = *width * 100.0 / strip_count;
+        ColorEffectSpatialRecipe::Sparkle { width, height, .. } => {
+            *width = *width * 100.0 / source_width;
+            if let Some(height) = height {
+                *height = *height * 100.0 / if mapping_raster { 100.0 } else { 1.0 };
+            }
         }
         ColorEffectSpatialRecipe::Perlin {
             octaves,
@@ -2899,6 +2915,7 @@ fn convert_dvc_value_effect(
                 lifetime_ms: Some(lifetime_ms),
                 source_lifespan: Some(source_lifespan),
                 width: f32::from(width),
+                height: None,
             }
         }
         627 => {
@@ -3125,6 +3142,14 @@ fn convert_dvc_color_spatial_effect(
         133 => "Sparkle",
         134 => "Sweep",
         521 => "Rainbow",
+        522 => "Spiral",
+        523 => "Burst",
+        524 => "Butterfly",
+        525 => "Plasma",
+        526 => "Media",
+        527 => "Knight Rider",
+        528 => "Sweep",
+        529 => "Sparkle",
         530 => "Perlin",
         _ => {
             return Err(format!(
@@ -3132,6 +3157,76 @@ fn convert_dvc_color_spatial_effect(
             ))
         }
     };
+    if generator_id == 526 {
+        let params_node = direct_child(effect, "PARAMS")
+            .ok_or_else(|| "MAPPINGS Media ID=526 is missing PARAMS".to_string())?;
+        if params_node.attribute("NB") != Some("3") {
+            return Err(format!(
+                "MAPPINGS Media ID=526 expected PARAMS NB=3, found {}",
+                params_node.attribute("NB").unwrap_or("missing")
+            ));
+        }
+        let param_nodes = element_children(params_node)
+            .filter(|node| node.has_tag_name("PARAM"))
+            .collect::<Vec<_>>();
+        let mut ids = param_nodes
+            .iter()
+            .map(|param| {
+                required_attribute(*param, "ID", "PARAM")?
+                    .parse::<u16>()
+                    .map_err(|error| format!("PARAM ID is invalid: {error}"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        ids.sort_unstable();
+        if ids != [3, 4, 10] {
+            return Err(format!(
+                "MAPPINGS Media ID=526 expected PARAM IDs [3, 4, 10], found {ids:?}"
+            ));
+        }
+        require_exact_dvc_param_types(effect, &[(3, 6), (4, 0), (10, 8)])?;
+        let numeric = |id: u16, label: &str| {
+            let param = param_nodes
+                .iter()
+                .find(|param| {
+                    param
+                        .attribute("ID")
+                        .and_then(|value| value.parse::<u16>().ok())
+                        == Some(id)
+                })
+                .ok_or_else(|| format!("{label} is missing PARAM {id}"))?;
+            required_attribute(*param, "VAL", "PARAM")?
+                .parse::<f64>()
+                .map_err(|error| format!("{label} value is invalid: {error}"))
+        };
+        let transform = numeric(3, "MAPPINGS Media Transform")?;
+        if !matches!(transform, 0.0 | 1.0 | 2.0) {
+            return Err(format!(
+                "MAPPINGS Media Transform PARAM 3 must be None(0), Vertical symmetry(1), or Horizontal symmetry(2), found {transform}"
+            ));
+        }
+        let rotation = numeric(4, "MAPPINGS Media Rotation")?;
+        if rotation.fract().abs() > f64::EPSILON || !(0.0..=360.0).contains(&rotation) {
+            return Err(format!(
+                "MAPPINGS Media Rotation must be an integer within 0..360, found {rotation}"
+            ));
+        }
+        let path = param_nodes
+            .iter()
+            .find(|param| param.attribute("ID") == Some("10"))
+            .and_then(|param| param.attribute("VAL"))
+            .unwrap_or_default();
+        if !path.is_empty() {
+            return Err("MAPPINGS Media ID=526 non-empty media paths require decoded embedded-media evidence and remain fail-closed".to_string());
+        }
+        dvc_mapping_rectangle(rack, "MAPPINGS Media ID=526", false)?;
+        return Ok(ConvertedDvcEffect {
+            target: None,
+            generator,
+            note: "source_family=Mappings; implementation=source-no-op; evaluator=CMediaEffect/0x140364940; MediaPath is empty; no runtime effect was created".to_string(),
+            approximations: Vec::new(),
+            warnings: Vec::new(),
+        });
+    }
     if generator_id == 36 {
         let params_node = direct_child(effect, "PARAMS")
             .ok_or_else(|| "COLOR MAPPINGS Rainbow ID=36 is missing PARAMS".to_string())?;
@@ -3317,6 +3412,7 @@ fn convert_dvc_color_spatial_effect(
                 lifetime_ms: Some((100.0 / (1.0 - source_lifespan)).round() as u16),
                 source_lifespan: Some(source_lifespan),
                 width: dvc_integer_range_param(&params, 12, "COLOR FX Sparkle Width", 1, 90)?,
+                height: None,
             }
         }
         134 => {
@@ -3421,6 +3517,149 @@ fn convert_dvc_color_spatial_effect(
                 gradient: dvc_unit_param(&params, 12, "Gradient")? * 100.0,
             }
         }
+        522 => {
+            require_exact_dvc_params(&params, &[3, 4, 10, 11, 12])?;
+            require_exact_dvc_param_types(
+                effect,
+                &[(1, 4), (3, 6), (4, 0), (10, 0), (11, 0), (12, 1)],
+            )?;
+            ColorEffectSpatialRecipe::Spiral {
+                radius: dvc_integer_range_param(&params, 10, "MAPPINGS Spiral Radius", 0, 200)?,
+                arms: dvc_integer_range_param(&params, 11, "MAPPINGS Spiral Arms", 1, 10)? as u16,
+                gradient: dvc_unit_param(&params, 12, "MAPPINGS Spiral Gradient")? * 100.0,
+            }
+        }
+        523 => {
+            require_exact_dvc_params(&params, &[3, 4, 10, 11])?;
+            require_exact_dvc_param_types(effect, &[(1, 4), (3, 6), (4, 0), (10, 0), (11, 1)])?;
+            ColorEffectSpatialRecipe::Burst {
+                grayscale: false,
+                vertical_symmetry: false,
+                color_width: dvc_integer_range_param(
+                    &params,
+                    10,
+                    "MAPPINGS Burst Color Width",
+                    10,
+                    900,
+                )?,
+                gradient: dvc_unit_param(&params, 11, "MAPPINGS Burst Gradient")?,
+            }
+        }
+        524 => {
+            require_exact_dvc_params(&params, &[3, 4, 10, 11, 12])?;
+            require_exact_dvc_param_types(
+                effect,
+                &[(1, 4), (3, 6), (4, 0), (10, 0), (11, 1), (12, 2)],
+            )?;
+            ColorEffectSpatialRecipe::Butterfly {
+                color_width: dvc_integer_range_param(
+                    &params,
+                    10,
+                    "MAPPINGS Butterfly Color Width",
+                    1,
+                    100,
+                )?,
+                gradient: dvc_unit_param(&params, 11, "MAPPINGS Butterfly Gradient")? * 100.0,
+                clockwise: dvc_binary_param(&params, 12, "MAPPINGS Butterfly Clockwise")?,
+            }
+        }
+        525 => {
+            require_exact_dvc_params(&params, &[3, 4, 10, 11, 12, 13, 14, 15, 16, 17])?;
+            require_exact_dvc_param_types(
+                effect,
+                &[
+                    (1, 4),
+                    (3, 6),
+                    (4, 0),
+                    (10, 0),
+                    (11, 0),
+                    (12, 0),
+                    (13, 0),
+                    (14, 0),
+                    (15, 0),
+                    (16, 0),
+                    (17, 0),
+                ],
+            )?;
+            ColorEffectSpatialRecipe::Plasma {
+                grayscale: false,
+                vertical_symmetry: false,
+                size_x: dvc_integer_range_param(&params, 10, "MAPPINGS Plasma Size X", 0, 20)?,
+                param_x: dvc_integer_range_param(&params, 11, "MAPPINGS Plasma Param X", 0, 20)?,
+                size_y: dvc_integer_range_param(&params, 12, "MAPPINGS Plasma Size Y", 0, 20)?,
+                param_y: dvc_integer_range_param(&params, 13, "MAPPINGS Plasma Param Y", 0, 20)?,
+                speed_x: dvc_integer_range_param(&params, 14, "MAPPINGS Plasma Speed X", -5, 5)?,
+                param_sx: dvc_integer_range_param(&params, 15, "MAPPINGS Plasma Param SX", -5, 5)?,
+                speed_y: dvc_integer_range_param(&params, 16, "MAPPINGS Plasma Speed Y", -5, 5)?,
+                param_sy: dvc_integer_range_param(&params, 17, "MAPPINGS Plasma Param SY", -5, 5)?,
+            }
+        }
+        527 => {
+            require_exact_dvc_params(&params, &[3, 4, 10, 11, 12, 13, 14])?;
+            require_exact_dvc_param_types(
+                effect,
+                &[
+                    (1, 4),
+                    (3, 6),
+                    (4, 0),
+                    (10, 0),
+                    (11, 2),
+                    (12, 2),
+                    (13, 2),
+                    (14, 0),
+                ],
+            )?;
+            ColorEffectSpatialRecipe::KnightRider {
+                grayscale: false,
+                vertical_symmetry: false,
+                size: dvc_integer_range_param(&params, 10, "MAPPINGS Knight Rider Size", 1, 100)?,
+                one_way: dvc_binary_param(&params, 11, "MAPPINGS Knight Rider One Way")?,
+                fading: dvc_binary_param(&params, 12, "MAPPINGS Knight Rider Fading")?,
+                go_outside: dvc_binary_param(&params, 13, "MAPPINGS Knight Rider Go Outside")?,
+                gradient: dvc_integer_range_param(
+                    &params,
+                    14,
+                    "MAPPINGS Knight Rider Gradient",
+                    0,
+                    100,
+                )?,
+            }
+        }
+        528 => {
+            require_exact_dvc_params(&params, &[3, 4, 10])?;
+            require_exact_dvc_param_types(effect, &[(1, 4), (3, 6), (4, 0), (10, 2)])?;
+            ColorEffectSpatialRecipe::Sweep {
+                grayscale: false,
+                vertical_symmetry: false,
+                direction_change: dvc_binary_param(&params, 10, "MAPPINGS Sweep Direction Change")?,
+            }
+        }
+        529 => {
+            require_exact_dvc_params(&params, &[3, 4, 10, 11, 12, 13])?;
+            require_exact_dvc_param_types(
+                effect,
+                &[(1, 4), (3, 6), (4, 0), (10, 0), (11, 1), (12, 0), (13, 0)],
+            )?;
+            let source_lifespan =
+                dvc_finite_range_param(&params, 11, "MAPPINGS Sparkle LifeSpan", 0.0, 0.9)?;
+            ColorEffectSpatialRecipe::Sparkle {
+                grayscale: false,
+                vertical_symmetry: false,
+                rng_seed: dvc_corrected_rng_seed(scene, rack, effect, generator_id),
+                number: dvc_integer_range_param(&params, 10, "MAPPINGS Sparkle Number", 1, 10)?
+                    as u16,
+                lifetime_ms: Some((100.0 / (1.0 - source_lifespan)).round() as u16),
+                source_lifespan: Some(source_lifespan),
+                width: dvc_integer_range_param(&params, 12, "MAPPINGS Sparkle Width", 1, 90)?,
+                height: Some(dvc_integer_range_param(
+                    &params,
+                    13,
+                    "MAPPINGS Sparkle Height",
+                    1,
+                    90,
+                )?),
+            }
+        }
         530 => {
             require_exact_dvc_params(&params, &[3, 4, 10, 11, 12, 13, 14])?;
             require_exact_dvc_param_types(
@@ -3471,13 +3710,20 @@ fn convert_dvc_color_spatial_effect(
         }
         _ => unreachable!(),
     };
-    let mapping_rectangle = matches!(generator_id, 36 | 521 | 530)
+    let mapping_rectangle = matches!(generator_id, 36 | 521..=530)
         .then(|| {
             dvc_mapping_rectangle(
                 rack,
                 match generator_id {
                     36 => "COLOR MAPPINGS Rainbow ID=36",
                     521 => "MAPPINGS Rainbow ID=521",
+                    522 => "MAPPINGS Spiral ID=522",
+                    523 => "MAPPINGS Burst ID=523",
+                    524 => "MAPPINGS Butterfly ID=524",
+                    525 => "MAPPINGS Plasma ID=525",
+                    527 => "MAPPINGS Knight Rider ID=527",
+                    528 => "MAPPINGS Sweep ID=528",
+                    529 => "MAPPINGS Sparkle ID=529",
                     530 => "MAPPINGS Perlin ID=530",
                     _ => unreachable!(),
                 },
@@ -3507,7 +3753,7 @@ fn convert_dvc_color_spatial_effect(
     if targets.beam_targets.is_empty() && !source_noop {
         return Err(format!("BEAMS resolved to no {generator} beam targets"));
     }
-    if matches!(generator_id, 521 | 530) {
+    if matches!(generator_id, 521..=530) {
         for target in &mut targets.beam_targets {
             target.feature_attribute = Some("Dimmer".to_string());
         }
@@ -3515,7 +3761,7 @@ fn convert_dvc_color_spatial_effect(
     let omitted_spatial_targets = retain_dvc_color_spatial_targets(
         &mut targets,
         fixture_refs,
-        matches!(generator_id, 521 | 530),
+        matches!(generator_id, 521..=530),
     );
     if targets.beam_targets.is_empty() && !source_noop {
         return Err(format!(
@@ -3591,8 +3837,24 @@ fn convert_dvc_color_spatial_effect(
             lifetime_ms,
             source_lifespan,
             width,
+            height,
             ..
-        } => format!("implementation=SyndocalCorrected; evaluator=CSparklesEffect recovered retained-particle grammar; unavailable_qrand=stable_source_seed; rng_seed={rng_seed}; Grayscale={}; Transform={}; Number={number}; source_LifeSpan={source_lifespan:?}; lifetime_ms={lifetime_ms:?}; Width={width}; population=retained; spawn_rate_units=particles_per_40ms; fade=continuous; time_units=milliseconds", u8::from(*grayscale), if *vertical_symmetry { "Vertical symmetry" } else { "None" }),
+        } => format!("implementation=SyndocalCorrected; evaluator=CSparklesEffect recovered retained-particle grammar; unavailable_qrand=stable_source_seed; rng_seed={rng_seed}; Grayscale={}; Transform={}; Number={number}; source_LifeSpan={source_lifespan:?}; lifetime_ms={lifetime_ms:?}; Width={width}; Height={height:?}; population=retained; spawn_rate_units=particles_per_40ms; fade=continuous; time_units=milliseconds", u8::from(*grayscale), if *vertical_symmetry { "Vertical symmetry" } else { "None" }),
+        ColorEffectSpatialRecipe::Spiral {
+            radius,
+            arms,
+            gradient,
+        } => format!(
+            "implementation=SyndocalCorrected; evaluator=CSpiralEffect/0x140366240 recovered conical angular phase and per-radius rotation; Radius={radius}; Arms={arms}; Gradient={gradient}"
+        ),
+        ColorEffectSpatialRecipe::Butterfly {
+            color_width,
+            gradient,
+            clockwise,
+        } => format!(
+            "implementation=SyndocalCorrected; evaluator=CButterflyEffect/0x140362EB0 recovered paired 180-degree conical sectors; ColorWidth={color_width}; Gradient={gradient}; Clockwise={}",
+            u8::from(*clockwise)
+        ),
         ColorEffectSpatialRecipe::Plasma {
             grayscale,
             vertical_symmetry,
@@ -3661,13 +3923,20 @@ fn convert_dvc_color_spatial_effect(
             }
         ),
     };
-    let placement = mapping_rectangle
+    let mut placement = mapping_rectangle
         .map(|rectangle| {
             dvc_color_spatial_placement(
                 rectangle,
                 match generator_id {
                     36 => "COLOR MAPPINGS Rainbow ID=36",
                     521 => "MAPPINGS Rainbow ID=521",
+                    522 => "MAPPINGS Spiral ID=522",
+                    523 => "MAPPINGS Burst ID=523",
+                    524 => "MAPPINGS Butterfly ID=524",
+                    525 => "MAPPINGS Plasma ID=525",
+                    527 => "MAPPINGS Knight Rider ID=527",
+                    528 => "MAPPINGS Sweep ID=528",
+                    529 => "MAPPINGS Sparkle ID=529",
                     530 => "MAPPINGS Perlin ID=530",
                     _ => unreachable!(),
                 },
@@ -3676,7 +3945,22 @@ fn convert_dvc_color_spatial_effect(
             )
         })
         .transpose()?;
-    let mapping_recipe = matches!(generator_id, 521 | 530);
+    if matches!(generator_id, 522..=529) {
+        let transform = dvc_param(&params, 3, "MAPPINGS Transform")?;
+        if !matches!(transform, 0.0 | 1.0 | 2.0) {
+            return Err(format!(
+                "MAPPINGS Transform PARAM 3 must be None(0), Vertical symmetry(1), or Horizontal symmetry(2), found {transform}"
+            ));
+        }
+        let rotation = dvc_integer_range_param(&params, 4, "MAPPINGS Rotation", 0, 360)?;
+        let placement = placement
+            .as_mut()
+            .expect("placed MAPPINGS generators always construct a Rectangle placement");
+        placement.vertical_symmetry = transform == 1.0;
+        placement.horizontal_symmetry = transform == 2.0;
+        placement.raster_rotation_degrees = rotation;
+    }
+    let mapping_recipe = matches!(generator_id, 521..=530);
     let source_family = if generator_id == 36 {
         "Color Mappings"
     } else if mapping_recipe {
@@ -7831,6 +8115,9 @@ mod tests {
                 mapping_angle_degrees: 17.5,
                 sampling_rule:
                     ColorEffectSpatialSamplingRule::RotatedInclusionMaskAxisAlignedRaster,
+                vertical_symmetry: false,
+                horizontal_symmetry: false,
+                raster_rotation_degrees: 0.0,
                 target_coordinates: vec![
                     ColorEffectSpatialPlacementTarget {
                         fixture_id: 1,
@@ -8792,6 +9079,9 @@ mod tests {
                 mapping_angle_degrees: 0.0,
                 sampling_rule:
                     ColorEffectSpatialSamplingRule::RotatedInclusionMaskAxisAlignedRaster,
+                vertical_symmetry: false,
+                horizontal_symmetry: false,
+                raster_rotation_degrees: 0.0,
                 target_coordinates: vec![ColorEffectSpatialPlacementTarget {
                     fixture_id: 1,
                     beam_index: 0,
@@ -8966,6 +9256,9 @@ mod tests {
                 mapping_angle_degrees: 30.0,
                 sampling_rule:
                     ColorEffectSpatialSamplingRule::RotatedInclusionMaskAxisAlignedRaster,
+                vertical_symmetry: false,
+                horizontal_symmetry: false,
+                raster_rotation_degrees: 0.0,
                 target_coordinates: vec![
                     ColorEffectSpatialPlacementTarget {
                         fixture_id: 1,
@@ -11069,6 +11362,8 @@ mod tests {
                             ColorEffectSpatialRecipe::Plasma { .. } => 129,
                             ColorEffectSpatialRecipe::ColorRainbow { .. } => 130,
                             ColorEffectSpatialRecipe::Rainbow { .. } => 521,
+                            ColorEffectSpatialRecipe::Spiral { .. } => 522,
+                            ColorEffectSpatialRecipe::Butterfly { .. } => 524,
                             ColorEffectSpatialRecipe::Perlin { .. } => 530,
                         }),
                     _ => None,
@@ -11741,6 +12036,172 @@ mod tests {
                 .details
                 .iter()
                 .any(|detail| detail.item.contains(generator)));
+        }
+    }
+
+    #[test]
+    fn dvc_local_golden_mapping_catalog_routes_shared_2d_rasters_and_empty_media_noop() {
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../qa/specimens/MappingCatalog-522-529.dvc"
+        ));
+        assert!(path.is_file(), "repo-portable MAPPINGS specimen is missing");
+        let outcome = import_path(path).unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+
+        let requests = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .flat_map(|cue| &cue.effect_targets)
+            .filter_map(|target| match target.params.as_ref() {
+                Some(EffectParamsSnapshot::Color(request))
+                    if request.spatial_pattern.as_ref().is_some_and(|pattern| {
+                        pattern.placement.is_some()
+                            && matches!(
+                                pattern.recipe,
+                                ColorEffectSpatialRecipe::Rainbow { .. }
+                                    | ColorEffectSpatialRecipe::Burst { .. }
+                                    | ColorEffectSpatialRecipe::Spiral { .. }
+                                    | ColorEffectSpatialRecipe::Butterfly { .. }
+                                    | ColorEffectSpatialRecipe::Plasma { .. }
+                                    | ColorEffectSpatialRecipe::KnightRider { .. }
+                                    | ColorEffectSpatialRecipe::Sweep { .. }
+                                    | ColorEffectSpatialRecipe::Sparkle { .. }
+                            )
+                    }) =>
+                {
+                    Some(request)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            requests.len(),
+            9,
+            "all placed MAPPINGS raster routes must import"
+        );
+
+        for request in &requests {
+            assert_eq!(request.blend_mode, EffectBlendMode::Multiply);
+            let pattern = request.spatial_pattern.as_ref().unwrap();
+            let placement = pattern.placement.as_ref().unwrap();
+            assert_eq!(
+                placement.mapping_shape,
+                ColorEffectSpatialMappingShape::Rectangle
+            );
+            assert!(!placement.target_coordinates.is_empty());
+            assert!(!placement.vertical_symmetry);
+            assert!(!placement.horizontal_symmetry);
+            assert_eq!(placement.raster_rotation_degrees, 0.0);
+            assert!(pattern
+                .beam_targets
+                .iter()
+                .all(|target| target.feature_attribute.as_deref() == Some("Dimmer")));
+        }
+
+        let recipes = requests
+            .iter()
+            .map(|request| &request.spatial_pattern.as_ref().unwrap().recipe)
+            .collect::<Vec<_>>();
+        assert!(recipes.iter().any(|recipe| matches!(
+            recipe,
+            ColorEffectSpatialRecipe::Burst {
+                grayscale: false,
+                vertical_symmetry: false,
+                color_width,
+                gradient,
+            } if *color_width == 50.0 && *gradient == 100.0
+        )));
+        assert!(recipes.iter().any(|recipe| matches!(
+            recipe,
+            ColorEffectSpatialRecipe::Spiral {
+                radius,
+                arms: 1,
+                gradient,
+            } if *radius == 30.0 && *gradient == 100.0
+        )));
+        assert!(recipes.iter().any(|recipe| matches!(
+            recipe,
+            ColorEffectSpatialRecipe::Butterfly {
+                color_width,
+                gradient,
+                clockwise: true,
+            } if *color_width == 100.0 && *gradient == 50.0
+        )));
+        assert!(
+            recipes.iter().any(|recipe| matches!(
+                recipe,
+                ColorEffectSpatialRecipe::Sparkle {
+                    grayscale: false,
+                    vertical_symmetry: false,
+                    number: 5,
+                    lifetime_ms: Some(100),
+                    source_lifespan: Some(source_lifespan),
+                    width,
+                    height: Some(height),
+                    ..
+                } if *source_lifespan == 0.0 && *width == 1.0 && *height == 1.0
+            )),
+            "imported recipes: {recipes:#?}; report: {:#?}",
+            outcome.report
+        );
+        assert!(recipes.iter().any(|recipe| matches!(
+            recipe,
+            ColorEffectSpatialRecipe::Plasma {
+                grayscale: false,
+                vertical_symmetry: false,
+                size_x,
+                param_x,
+                size_y,
+                param_y,
+                speed_x,
+                param_sx,
+                speed_y,
+                param_sy,
+            } if *size_x == 1.0
+                && *param_x == 2.0
+                && *size_y == 1.0
+                && *param_y == 2.0
+                && *speed_x == -1.0
+                && *param_sx == 2.0
+                && *speed_y == 1.0
+                && *param_sy == -1.0
+        )));
+        assert!(recipes.iter().any(|recipe| matches!(
+            recipe,
+            ColorEffectSpatialRecipe::KnightRider {
+                grayscale: false,
+                vertical_symmetry: false,
+                size,
+                one_way: false,
+                fading: true,
+                go_outside: false,
+                gradient,
+            } if *size == 1.0 && *gradient == 50.0
+        )));
+        assert!(recipes.iter().any(|recipe| matches!(
+            recipe,
+            ColorEffectSpatialRecipe::Sweep {
+                grayscale: false,
+                vertical_symmetry: false,
+                direction_change: false,
+            }
+        )));
+
+        assert!(outcome.report.converted.details.iter().any(|detail| {
+            detail.item.contains("Media")
+                && detail.message.contains("source-no-op")
+                && detail.message.contains("MediaPath is empty")
+        }));
+        for implemented in ["ID=522", "ID=524", "ID=529"] {
+            assert!(!outcome
+                .report
+                .skipped
+                .details
+                .iter()
+                .any(|detail| detail.message.contains(implemented)));
         }
     }
 

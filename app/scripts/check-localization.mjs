@@ -45,6 +45,8 @@ assert.equal(localization.translateUiText("Clear Pending", "ja"), "クリア待�
 assert.equal(localization.translateUiText("Audio Reactive", "ja"), "オーディオリアクティブ");
 assert.equal(localization.translateUiText("Audio feature input level", "ja"), "音声特徴量の入力レベル");
 assert.equal(localization.translateUiText("Open Scene FX", "ja"), "シーンFXを開く");
+assert.equal(localization.translateUiText("Mapping transform", "ja"), "マッピング変形");
+assert.equal(localization.translateUiText("Mapping rotation °", "ja"), "マッピング回転（°）");
 assert.equal(
   localization.translateUiText(
     "Enabled effects 65 / supported 64. Output timing is no longer guaranteed.",
@@ -505,6 +507,13 @@ for (const [sourceText, expectedJapaneseDisplay] of [
   ["Grayscale", "グレースケール"],
   ["Horizontal symmetry", "左右対称"],
   ["Color width %", "Color幅（%）"],
+  ["Color width °", "Color幅（°）"],
+  ["Sparkle height %", "スパークル高さ（%）"],
+  ["Spiral mapping", "スパイラルマッピング"],
+  ["Butterfly mapping", "バタフライマッピング"],
+  ["Radius", "半径"],
+  ["Arms", "アーム数"],
+  ["Clockwise", "時計回り"],
   ["Color width", "Color幅"],
   ["Size X", "サイズ X"],
   ["Param X", "パラメータ X"],

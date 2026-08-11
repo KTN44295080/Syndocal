@@ -116,7 +116,7 @@ const valueQuickLooks: ValueQuickLook[] = [
   },
   {
     label: "Sparkle Rain",
-    recipe: { Sparkle: { grayscale: false, vertical_symmetry: false, rng_seed: 1, number: 6, lifetime_ms: 400, source_lifespan: null, width: 10 } },
+    recipe: { Sparkle: { grayscale: false, vertical_symmetry: false, rng_seed: 1, number: 6, lifetime_ms: 400, source_lifespan: null, width: 10, height: null } },
     points: quickLookRampPoints,
     beats: 1,
   },

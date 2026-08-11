@@ -2373,6 +2373,22 @@ pub enum ColorEffectSpatialRecipe {
         source_lifespan: Option<f32>,
         /// Particle width as a percentage of the ordered target strip.
         width: f32,
+        /// Optional particle height for two-dimensional MAPPINGS/COLOR
+        /// MAPPINGS rasters. Legacy strip recipes omit it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        height: Option<f32>,
+    },
+    /// Daslight's two-dimensional conical spiral raster.
+    Spiral {
+        radius: f32,
+        arms: u16,
+        gradient: f32,
+    },
+    /// Daslight's paired rotating conical-sector raster.
+    Butterfly {
+        color_width: f32,
+        gradient: f32,
+        clockwise: bool,
     },
     Plasma {
         #[serde(default)]
@@ -2474,6 +2490,17 @@ pub struct ColorEffectSpatialPlacement {
     pub sy: i64,
     pub mapping_angle_degrees: f32,
     pub sampling_rule: ColorEffectSpatialSamplingRule,
+    /// Daslight MAPPINGS `Transform=1`: fold the generator raster's X axis.
+    /// Kept on placement so shared one-dimensional COLOR/VALUE recipes retain
+    /// their legacy wire shape while placed 2D variants use the same recipe.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub vertical_symmetry: bool,
+    /// Daslight MAPPINGS `Transform=2`: fold the generator raster's Y axis.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub horizontal_symmetry: bool,
+    /// Generator-raster rotation applied after Rectangle-local sampling.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub raster_rotation_degrees: f32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub target_coordinates: Vec<ColorEffectSpatialPlacementTarget>,
 }
@@ -5221,6 +5248,9 @@ mod tests {
                 mapping_angle_degrees: 17.5,
                 sampling_rule:
                     super::ColorEffectSpatialSamplingRule::RotatedInclusionMaskAxisAlignedRaster,
+                vertical_symmetry: false,
+                horizontal_symmetry: false,
+                raster_rotation_degrees: 0.0,
                 target_coordinates: vec![super::ColorEffectSpatialPlacementTarget {
                     fixture_id: 8,
                     beam_index: 3,
@@ -5232,9 +5262,27 @@ mod tests {
         let placed_json = serde_json::to_string(&placed_rainbow).unwrap();
         assert!(placed_json.contains(r#""grayscale":true"#));
         assert!(placed_json.contains(r#""placement""#));
+        assert!(!placed_json.contains(r#""raster_rotation_degrees""#));
+        assert_eq!(
+            placed_json.matches(r#""horizontal_symmetry":true"#).count(),
+            1,
+            "default placement fields stay omitted; the one match belongs to the Rainbow recipe"
+        );
         assert_eq!(
             serde_json::from_str::<super::ColorEffectSpatialPattern>(&placed_json).unwrap(),
             placed_rainbow
+        );
+
+        let mut transformed_placement = placed_rainbow.clone();
+        let placement = transformed_placement.placement.as_mut().unwrap();
+        placement.horizontal_symmetry = true;
+        placement.raster_rotation_degrees = 90.0;
+        let transformed_json = serde_json::to_string(&transformed_placement).unwrap();
+        assert!(transformed_json.contains(r#""horizontal_symmetry":true"#));
+        assert!(transformed_json.contains(r#""raster_rotation_degrees":90.0"#));
+        assert_eq!(
+            serde_json::from_str::<super::ColorEffectSpatialPattern>(&transformed_json).unwrap(),
+            transformed_placement
         );
 
         let legacy_pattern_json = r#"{"recipe":{"Perlin":{"octaves":5,"zoom":20.0,"direction_degrees":1.0,"speed":1.0,"amplitude":100.0}}}"#;
@@ -5362,6 +5410,7 @@ mod tests {
             lifetime_ms: Some(250),
             source_lifespan: Some(0.6),
             width: 30.0,
+            height: None,
         };
         let sparkle_json = serde_json::to_string(&corrected_sparkle).unwrap();
         assert!(sparkle_json.contains(r#""lifetime_ms":250"#));

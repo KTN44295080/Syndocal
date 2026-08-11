@@ -125,6 +125,22 @@ try {
   assert.match(engineSource, /fn daslight_symmetry_coordinate[\s\S]*1\.0 - \(coordinate \* 2\.0 - 1\.0\)\.abs\(\)/);
   assert.match(dvcSource, /Plasma Transform PARAM 3 must be None\(0\) or Vertical symmetry\(1\)/);
   assert.match(dvcSource, /Horizontal symmetry\(2\)/);
+  assert.ok(
+    editorSource.includes("data-color-mapping-placement-controls")
+      && editorSource.includes("Mapping transform")
+      && editorSource.includes("Mapping rotation °"),
+    "placed shared MAPPINGS recipes must expose common Transform and Rotation controls",
+  );
+  assert.match(
+    protocolSource,
+    /pub struct ColorEffectSpatialPlacement \{[\s\S]*?pub vertical_symmetry: bool,[\s\S]*?pub horizontal_symmetry: bool,[\s\S]*?pub raster_rotation_degrees: f32/,
+    "placed shared rasters must persist the common MAPPINGS base fields",
+  );
+  assert.match(
+    editorSource,
+    /selectSpatialKind[\s\S]*?placement: structuredClone\(props\.spatialPattern\.placement\)/,
+    "changing a placed MAPPINGS generator must preserve its imported Rectangle and target coordinates",
+  );
 
   console.log(
     `pass FX color palettes builtIn=${builtinFxColorPalettes.length} ` +
