@@ -292,10 +292,10 @@ Mediaの旧表記`T2/10`はcatalog転記誤りだった。`CMediaEffect` constru
 
 ## 現行Syndocal importerとの逆照合
 
-68 IDのうち現行converter coverageは60 ID（うちMAPPINGS 526とCOLOR MAPPINGS 33の空パスは
-source no-op）、random-state由来のprecise fail-closedは0、残る8 IDは未routeでgeneric
+68 IDのうち現行converter coverageは61 ID（うちMAPPINGS 526とCOLOR MAPPINGS 33の空パスは
+source no-op）、random-state由来のprecise fail-closedは0、残る7 IDは未routeでgeneric
 `Skipped`になる。Media 33/526のnon-empty pathはroute内でprecise fail-closedを維持する。
-60 routeはfull-domain完成数ではなく、
+61 routeはfull-domain完成数ではなく、
 strict/exactを別に監査した。
 
 | route群 | 現在の境界 |
@@ -313,6 +313,7 @@ strict/exactを別に監査した。
 | COLOR 131/133 | strict schema、recovered random grammar、stable source seed、qGray/TransformをCorrected evaluatorで実装 |
 | CHASER 321–325 | 323/324はstrict schemaと回収済み対称pair topologyをCorrected連続clockへ変換。321はcompatibility、325の既存stable permutationはCorrectedとして報告 |
 | CURVE 3–12 | strict factory schemaと回収式をCorrected continuous evaluatorで実装。6 Randomだけ非serialize qrand履歴をstable source seedへ置換 |
+| CURVE 13 | 別schemaのTYPE5 Points 2..255とPhasingをstrict route。raw X/Yと右点easingを保持し、adjacent-target lagを専用sourceで表現。40ms sampled approximationとDURATION remainder lossだけをcontinuous evaluatorで訂正。実保存32-beam specimenあり。正本は`qa/DVC_CUSTOM_CURVE_SOURCE_PARITY.md` |
 | MAPPINGS 521 | strict schema、unit→percent、Rectangle placementを実装 |
 | MAPPINGS 522/524 | strict schema、回収済みconical ring / opposite-sector geometryを連続解析evaluatorで実装 |
 | MAPPINGS 523/525/527/528 | strict schema、100x100 Rectangle-local 2D placement、共通Burst/Plasma/Knight/Sweep corrected evaluatorを実装 |
@@ -499,12 +500,26 @@ strict/exactを別に監査した。
   evidenceとsynthetic strict importer/runtime regressionに限定する。正本は
   `qa/DVC_COLOR_MAPPINGS_GRID_LINES_GRAPH_PARITY.md`。
 
+### DVC-CURVE Custom 13（2026-08-11）
+
+- 別schemaの`TYPE5/ID1 Points=2..255`と`TYPE1/ID2 Phasing=0..1`、raw Y decadeに埋め込まれた
+  5種のright-point cubic easing、source-order interval、last-point fallback、adjacent-target lagを
+  pinned binaryから回収した。
+- 実保存`qa/specimens/CurveCatalog-Custom.dvc`のdefault 2点とordered 32-beam Dimmer targetをstrict
+  importer regressionへ固定した。duplicate container、unknown attribute、external/missing selection、
+  invalid point/easing/duration、同一fixture内のdropped beamもfail-closedにする。
+- runtimeはraw point orderを保存したままcommand/rebuild時にdecodeし、`partition_point`でallocation-free
+  lookupする。40ms sampled approximationとDURATION remainder lossだけをcontinuous exact-easingへ訂正した。
+  専用255-point / 64-effect / 200-fixture release gateは5/8/12ms閾値を維持する。正本は
+  `qa/DVC_CUSTOM_CURVE_SOURCE_PARITY.md`。現行routeは60→61、未routeは8→7、条件付きexact-coreは
+  25→26となる。
+
 ## 未実装・未証明境界
 
 カタログ列挙は完了したが、次は別軸で残る。
 
-1. CURVE 3–12は評価式を回収してroute済み。別schemaのCustom 13だけはserialized pointsと
-   evaluatorの補間・端点意味論を確定してから実装する。
+1. CURVE 3–13は全route済み。Custom 13は別schema、raw point/easing、adjacent-target Phasing、
+   実保存specimenを`qa/DVC_CUSTOM_CURVE_SOURCE_PARITY.md`で固定した。
 2. CHASER #3/#4は式と対称pair topologyを回収し、実保存specimen付きでroute済み。実灯体の
    photometryとdevice latencyだけは物理受入に残る。
 3. MAPPINGS 521–530は全route済み。COLOR MAPPINGSの共有class

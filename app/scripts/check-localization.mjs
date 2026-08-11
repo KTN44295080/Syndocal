@@ -312,6 +312,23 @@ assert.equal(localization.translateUiText("TIMELINE", "ja"), "TIMELINE");
 assert.equal(localization.translateUiText("Current effect waveform preview", "ja"), "現在のエフェクト波形プレビュー");
 assert.equal(localization.translateUiText("Move graphical preview", "ja"), "ムーブのグラフィカルプレビュー");
 assert.equal(localization.translateUiText("Value graphical preview", "ja"), "バリューのグラフィカルプレビュー");
+assert.equal(localization.translateUiText("Imported Daslight Custom CURVE", "ja"), "インポート済みDaslightカスタムCURVE");
+assert.equal(localization.translateUiText("Custom CURVE", "ja"), "カスタムCURVE");
+assert.equal(localization.translateUiText("Daslight import", "ja"), "Daslightインポート");
+assert.equal(localization.translateUiText("Phasing", "ja"), "フェージング");
+assert.equal(localization.translateUiText("points · Daslight order", "ja"), "ポイント・Daslight順序");
+assert.equal(
+  localization.translateUiText("Imported source; point values and easing remain read-only.", "ja"),
+  "インポート元です。ポイント値とイージングは読み取り専用です。",
+);
+assert.equal(
+  localization.translateUiText("Explicit beam targets are preserved without retargeting.", "ja"),
+  "明示的なビームターゲットは再ターゲットせず保持されます。",
+);
+assert.equal(
+  localization.translateUiText("explicit beam / segment targets", "ja"),
+  "明示的なビーム／セグメントターゲット",
+);
 assert.equal(localization.translateUiText("REL @ 50%", "ja"), "相対 @ 50%");
 assert.equal(
   localization.translateUiText("Output preview · neutral 50% base", "ja"),

@@ -5395,6 +5395,68 @@ progress {
   stroke: #a9d59b;
 }
 
+.daslightCustomCurvePanel {
+  display: grid;
+  grid-template-columns: minmax(96px, 1fr) minmax(0, 1fr);
+  gap: 4px 7px;
+  min-width: 0;
+  border: 1px solid #45433a;
+  background: #141411;
+  padding: 4px;
+}
+
+.daslightCustomCurvePanel > header,
+.daslightCustomCurvePanel > p {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  color: #a6a08e;
+  font-size: 9px;
+  line-height: 1.15;
+}
+
+.daslightCustomCurvePanel > header strong {
+  color: #e4d6ae;
+  font-size: 10px;
+}
+
+.daslightCustomCurvePanel > svg {
+  display: block;
+  width: 100%;
+  min-width: 96px;
+  height: 34px;
+}
+
+.daslightCustomCurvePanel svg line {
+  stroke: #3b3931;
+  stroke-width: 0.7;
+  vector-effect: non-scaling-stroke;
+}
+
+.daslightCustomCurvePanel svg path {
+  fill: none;
+  stroke: #e0bd6d;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.daslightCustomCurveReadout {
+  display: grid;
+  align-content: center;
+  justify-items: end;
+  min-width: 0;
+  gap: 1px;
+  color: #a6a08e;
+  font-size: 9px;
+  line-height: 1.15;
+  text-align: right;
+  white-space: normal;
+}
+
 .effectActualWavePreview > span,
 .effectGraphicalReadout {
   display: grid;

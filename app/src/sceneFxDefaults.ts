@@ -242,6 +242,10 @@ export const previewSceneFxFixtures = (
 ) => {
   if ("Lfo" in params) {
     const request = params.Lfo;
+    // Custom CURVE phases ordered beam targets. This fixture-only preview has
+    // neither beam identity nor its authored order, so it must not render an
+    // approximate overlay.
+    if (request.daslight_custom_curve) return fixtures;
     const targetIds = new Set(request.fixture_ids);
     const progress = cycleProgress(elapsedMs, request.period_ms);
     const source = request.daslight_curve;

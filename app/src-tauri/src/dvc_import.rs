@@ -14,18 +14,18 @@ use protocol::{
     ColorEffectRequest, ColorEffectSpatialCoordinateFrame, ColorEffectSpatialMappingShape,
     ColorEffectSpatialPattern, ColorEffectSpatialPlacement, ColorEffectSpatialPlacementTarget,
     ColorEffectSpatialRecipe, ColorEffectSpatialSamplingRule, ColorEffectStop, CueEffectTarget,
-    CueFixtureTarget, CueListSummary, CueSummary, DaslightCurveSource, DmxControlAction,
-    DmxControlMapping, DmxModeSummary, DmxOutputConfig, DmxUniversePreview, EffectBeamTarget,
-    EffectBlendMode, EffectClockSync, EffectParamsSnapshot, EngineSnapshot, FixtureProfileSummary,
-    GeometrySummary, LfoEffectRequest, LfoShape, MidiControlAction, MidiControlFeedback,
-    MidiControlMapping, MidiControlMessage, MidiFeedbackMessage, MoveCoordinateMode, MoveDirection,
-    MoveEffectBeamTarget, MoveEffectRequest, MoveInterpolation, MovePathPoint,
-    PatchedFixtureSummary, ProjectFile, Rotation3, StageMapConfig, TimelineAudioClipSummary,
-    TimelineCueEventSummary, TimelineLayerKind, TimelineLayerSummary, TimelineTrackKind,
-    TouchControlBinding, TouchControlKind, TouchControlSummary, TouchFeaturePresetTarget,
-    TouchPageSummary, TouchSurfaceSummary, ValueEffectDirection, ValueEffectInterpolation,
-    ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3,
-    COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
+    CueFixtureTarget, CueListSummary, CueSummary, DaslightCurveSource, DaslightCustomCurvePoint,
+    DaslightCustomCurveSource, DmxControlAction, DmxControlMapping, DmxModeSummary,
+    DmxOutputConfig, DmxUniversePreview, EffectBeamTarget, EffectBlendMode, EffectClockSync,
+    EffectParamsSnapshot, EngineSnapshot, FixtureProfileSummary, GeometrySummary, LfoEffectRequest,
+    LfoShape, MidiControlAction, MidiControlFeedback, MidiControlMapping, MidiControlMessage,
+    MidiFeedbackMessage, MoveCoordinateMode, MoveDirection, MoveEffectBeamTarget,
+    MoveEffectRequest, MoveInterpolation, MovePathPoint, PatchedFixtureSummary, ProjectFile,
+    Rotation3, StageMapConfig, TimelineAudioClipSummary, TimelineCueEventSummary,
+    TimelineLayerKind, TimelineLayerSummary, TimelineTrackKind, TouchControlBinding,
+    TouchControlKind, TouchControlSummary, TouchFeaturePresetTarget, TouchPageSummary,
+    TouchSurfaceSummary, ValueEffectDirection, ValueEffectInterpolation, ValueEffectMode,
+    ValueEffectPoint, ValueEffectRequest, Vec3, COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
 };
 use roxmltree::{Document, Node};
 use serde::Serialize;
@@ -2191,6 +2191,7 @@ fn parse_scene_effects(
                 (Some(8), Some(5), Some(10)) => Some("Strobe"),
                 (Some(8), Some(5), Some(11)) => Some("Tangeant"),
                 (Some(8), Some(5), Some(12)) => Some("Triangle"),
+                (Some(8), Some(5), Some(13)) => Some("Custom"),
                 (Some(2), Some(2), Some(121)) => Some("Burst"),
                 (Some(2), Some(2), Some(127)) => Some("Knight Rider"),
                 (Some(2), Some(2), Some(129)) => Some("Plasma"),
@@ -2380,6 +2381,14 @@ fn convert_dvc_effect(
             fixture_refs,
         ),
         (8, 5, 10) => convert_dvc_strobe_effect(
+            scene,
+            scene_name,
+            rack,
+            effect,
+            effect_id,
+            fixture_refs,
+        ),
+        (8, 5, 13) => convert_dvc_custom_curve_effect(
             scene,
             scene_name,
             rack,
@@ -4890,6 +4899,327 @@ fn dvc_symmetric_chaser_beam_steps(
     paired_steps
 }
 
+fn convert_dvc_custom_curve_effect(
+    scene: Node<'_, '_>,
+    scene_name: &str,
+    rack: Node<'_, '_>,
+    effect: Node<'_, '_>,
+    effect_id: u64,
+    fixture_refs: &HashMap<String, FixtureImportRef>,
+) -> Result<ConvertedDvcEffect, String> {
+    require_exact_custom_attributes(effect, &["TYPE", "ID", "DURATION"], "Custom EFFECT")?;
+    let (points, phasing) = dvc_custom_curve_params(effect)?;
+    let duration_text = required_attribute(effect, "DURATION", "Custom EFFECT")?;
+    let period_ms = duration_text
+        .parse::<u32>()
+        .map_err(|error| format!("Custom DURATION must be an unsigned 32-bit integer: {error}"))?;
+    if period_ms < u32::from(DASLIGHT_CURVE_SAMPLE_MS) {
+        return Err(format!(
+            "Custom DURATION must be within {}..{}, found {period_ms}",
+            DASLIGHT_CURVE_SAMPLE_MS,
+            u32::MAX
+        ));
+    }
+
+    if element_children(rack).any(|node| node.has_tag_name("SELECTIONS")) {
+        return Err("Custom external SELECTIONS remain fail-closed".to_string());
+    }
+    let direct_beams = element_children(rack)
+        .filter(|node| node.has_tag_name("BEAMS"))
+        .collect::<Vec<_>>();
+    if direct_beams.len() != 1 {
+        return Err(format!(
+            "Custom generator rack must contain exactly one direct BEAMS container, found {}",
+            direct_beams.len()
+        ));
+    }
+    let beams = direct_beams[0];
+    require_exact_custom_attributes(beams, &["NB"], "Custom BEAMS")?;
+    let beam_nodes = element_children(beams).collect::<Vec<_>>();
+    if let Some(unexpected) = beam_nodes.iter().find(|node| !node.has_tag_name("BEAM")) {
+        return Err(format!(
+            "Custom BEAMS contains unexpected <{}> element",
+            unexpected.tag_name().name()
+        ));
+    }
+    let declared_beams = required_attribute(beams, "NB", "BEAMS")?
+        .parse::<usize>()
+        .map_err(|error| format!("Custom BEAMS NB is invalid: {error}"))?;
+    if declared_beams != beam_nodes.len() {
+        return Err(format!(
+            "Custom BEAMS declares {declared_beams} entries but contains {}",
+            beam_nodes.len()
+        ));
+    }
+    for (index, beam) in beam_nodes.iter().enumerate() {
+        require_exact_custom_attributes(
+            *beam,
+            &["FIXTURE", "BEAMID", "IDSELECTION"],
+            &format!("Custom BEAM {}", index + 1),
+        )?;
+        required_attribute(*beam, "IDSELECTION", "Custom BEAM")?
+            .parse::<u32>()
+            .map_err(|error| {
+                format!("Custom BEAM {} IDSELECTION is invalid: {error}", index + 1)
+            })?;
+    }
+
+    let mut targets = dvc_rack_targets(rack, fixture_refs)?;
+    let authored_beam_count = targets.beam_targets.len();
+    let incompatible_targets = retain_dvc_dimmer_targets(&mut targets, fixture_refs);
+    let dropped_beam_count = authored_beam_count.saturating_sub(targets.beam_targets.len());
+    if incompatible_targets > 0 || dropped_beam_count > 0 {
+        return Err(format!(
+            "Custom BEAMS include {dropped_beam_count} beam target(s) across {incompatible_targets} fixture target(s) without a confirmed Dimmer attribute"
+        ));
+    }
+    if targets.fixture_ids.is_empty() {
+        return Err("BEAMS resolved to no Custom Dimmer fixture targets".to_string());
+    }
+    let beam_targets = dvc_effect_beam_targets(&targets, "Dimmer");
+    if beam_targets.is_empty() {
+        return Err("Custom requires explicit ordered Dimmer BEAMS".to_string());
+    }
+
+    let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
+    let mut approximations = vec![
+        "Syndocal evaluates the recovered right-point easing directly at continuous authored progress, removing Daslight's 40 ms storage/timer granularity and duration-remainder loss while preserving point order, values, easing, and adjacent-target lag"
+            .to_string(),
+    ];
+    if let Some(clock_warning) = clock_warning {
+        approximations.push(clock_warning);
+    }
+    let request = LfoEffectRequest {
+        label: format!("{scene_name} (Custom)"),
+        fixture_ids: targets.fixture_ids,
+        target_group_ids: Vec::new(),
+        attribute: "Dimmer".to_string(),
+        video_targets: Vec::new(),
+        shape: LfoShape::DaslightCustom,
+        period_ms: u64::from(period_ms),
+        clock_sync,
+        low: 0,
+        high: u16::MAX,
+        phase: 0.0,
+        fixture_spread: 0.0,
+        beam_targets,
+        blend_mode: EffectBlendMode::Override,
+        daslight_curve: None,
+        daslight_custom_curve: Some(DaslightCustomCurveSource {
+            points,
+            phasing,
+            sample_ms: DASLIGHT_CURVE_SAMPLE_MS,
+        }),
+    };
+    engine::validate_lfo_effect_request(&request)
+        .map_err(|error| format!("confirmed Custom parameters are not representable: {error}"))?;
+    let note = format!(
+        "feature=Dimmer; shape=Custom; evaluator=CCustomCurveEffect@0x14036F1F0; implementation=SyndocalCorrected; duration_ms={period_ms}; recovered_sample_ms={DASLIGHT_CURVE_SAMPLE_MS}; runtime_time=continuous; points={}; right_point_easing=Linear|InCubic|OutCubic|InOutCubic|OutInCubic; fixture_lag=index*{phasing}; correction_reason=storage/timer granularity and duration remainder must not alter authored progress; {clock_note}",
+        request
+            .daslight_custom_curve
+            .as_ref()
+            .map_or(0, |source| source.points.len())
+    );
+    Ok(ConvertedDvcEffect {
+        target: Some(CueEffectTarget {
+            effect_id,
+            enabled: true,
+            params: Some(EffectParamsSnapshot::Lfo(request)),
+            transition_ms: None,
+        }),
+        generator: "Custom",
+        note,
+        approximations,
+        warnings: Vec::new(),
+    })
+}
+
+fn dvc_custom_curve_params(
+    effect: Node<'_, '_>,
+) -> Result<(Vec<DaslightCustomCurvePoint>, f32), String> {
+    let direct_params = element_children(effect)
+        .filter(|node| node.has_tag_name("PARAMS"))
+        .collect::<Vec<_>>();
+    if direct_params.len() != 1 {
+        return Err(format!(
+            "Custom generator must contain exactly one direct PARAMS container, found {}",
+            direct_params.len()
+        ));
+    }
+    let params_node = direct_params[0];
+    require_exact_custom_attributes(params_node, &["NB"], "Custom PARAMS")?;
+    let param_nodes = element_children(params_node).collect::<Vec<_>>();
+    if let Some(unexpected) = param_nodes.iter().find(|node| !node.has_tag_name("PARAM")) {
+        return Err(format!(
+            "Custom PARAMS contains unexpected <{}> element",
+            unexpected.tag_name().name()
+        ));
+    }
+    let declared = required_attribute(params_node, "NB", "PARAMS")?
+        .parse::<usize>()
+        .map_err(|error| format!("PARAMS NB is invalid: {error}"))?;
+    if declared != 2 || param_nodes.len() != 2 {
+        return Err(format!(
+            "Custom PARAMS must declare and contain exactly 2 entries, found NB={declared} and {} entries",
+            param_nodes.len()
+        ));
+    }
+
+    let mut points = None;
+    let mut phasing = None;
+    let mut seen = HashSet::new();
+    for param in param_nodes {
+        let id = required_attribute(param, "ID", "PARAM")?
+            .parse::<u16>()
+            .map_err(|error| format!("PARAM ID is invalid: {error}"))?;
+        if !seen.insert(id) {
+            return Err(format!("Custom PARAM {id} is duplicated"));
+        }
+        let param_type = required_attribute(param, "TYPE", "PARAM")?
+            .parse::<u16>()
+            .map_err(|error| format!("Custom PARAM {id} TYPE is invalid: {error}"))?;
+        match id {
+            1 => {
+                require_exact_custom_attributes(param, &["TYPE", "ID"], "Custom Points PARAM 1")?;
+                if param_type != 5 {
+                    return Err(format!(
+                        "Custom Points PARAM 1 must use TYPE=5, found TYPE={param_type}"
+                    ));
+                }
+                if param.attribute("VAL").is_some() {
+                    return Err("Custom Points PARAM 1 must not contain VAL".to_string());
+                }
+                let children = element_children(param).collect::<Vec<_>>();
+                if children.len() != 1 || !children[0].has_tag_name("POINTS") {
+                    return Err(
+                        "Custom Points PARAM 1 must contain exactly one POINTS element".to_string(),
+                    );
+                }
+                let points_node = children[0];
+                require_exact_custom_attributes(points_node, &["NB"], "Custom POINTS")?;
+                let point_nodes = element_children(points_node).collect::<Vec<_>>();
+                if let Some(unexpected) =
+                    point_nodes.iter().find(|node| !node.has_tag_name("POINT"))
+                {
+                    return Err(format!(
+                        "Custom POINTS contains unexpected <{}> element",
+                        unexpected.tag_name().name()
+                    ));
+                }
+                let declared_points = required_attribute(points_node, "NB", "POINTS")?
+                    .parse::<usize>()
+                    .map_err(|error| format!("Custom POINTS NB is invalid: {error}"))?;
+                if declared_points != point_nodes.len() || !(2..=255).contains(&declared_points) {
+                    return Err(format!(
+                        "Custom POINTS must declare and contain between 2 and 255 points, found NB={declared_points} and {} points",
+                        point_nodes.len()
+                    ));
+                }
+                let mut parsed = Vec::with_capacity(point_nodes.len());
+                let mut previous_x = None;
+                for (index, point) in point_nodes.into_iter().enumerate() {
+                    require_exact_custom_attributes(
+                        point,
+                        &["X", "Y"],
+                        &format!("Custom POINT {}", index + 1),
+                    )?;
+                    if element_children(point).next().is_some() {
+                        return Err(format!(
+                            "Custom POINT {} must not contain child elements",
+                            index + 1
+                        ));
+                    }
+                    let x = required_attribute(point, "X", "POINT")?
+                        .parse::<f32>()
+                        .map_err(|error| {
+                            format!("Custom POINT {} X is invalid: {error}", index + 1)
+                        })?;
+                    let raw_y = required_attribute(point, "Y", "POINT")?
+                        .parse::<f32>()
+                        .map_err(|error| {
+                            format!("Custom POINT {} Y is invalid: {error}", index + 1)
+                        })?;
+                    if !x.is_finite() || !(0.0..=1.0).contains(&x) {
+                        return Err(format!(
+                            "Custom POINT {} X must be finite and within 0..1, found {x}",
+                            index + 1
+                        ));
+                    }
+                    if previous_x.is_some_and(|previous| x <= previous) {
+                        return Err(
+                            "Custom POINT X values must be strictly increasing in source order"
+                                .to_string(),
+                        );
+                    }
+                    let easing_code = (raw_y / 10.0).floor();
+                    let value = raw_y - easing_code * 10.0;
+                    if !raw_y.is_finite()
+                        || !(0.0..=4.0).contains(&easing_code)
+                        || easing_code.fract() != 0.0
+                        || !(0.0..=1.0).contains(&value)
+                    {
+                        return Err(format!(
+                            "Custom POINT {} Y must encode easing 0..4 and normalized value, found {raw_y}",
+                            index + 1
+                        ));
+                    }
+                    parsed.push(DaslightCustomCurvePoint { x, raw_y });
+                    previous_x = Some(x);
+                }
+                points = Some(parsed);
+            }
+            2 => {
+                require_exact_custom_attributes(
+                    param,
+                    &["TYPE", "ID", "VAL"],
+                    "Custom Phasing PARAM 2",
+                )?;
+                if param_type != 1 || element_children(param).next().is_some() {
+                    return Err(format!(
+                        "Custom Phasing PARAM 2 must use TYPE=1 without child elements, found TYPE={param_type}"
+                    ));
+                }
+                let value = required_attribute(param, "VAL", "PARAM 2")?
+                    .parse::<f32>()
+                    .map_err(|error| format!("Custom Phasing is invalid: {error}"))?;
+                if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                    return Err(format!("Custom Phasing must be within 0..1, found {value}"));
+                }
+                phasing = Some(value);
+            }
+            _ => {
+                return Err(format!(
+                    "Custom expected PARAM IDs [1, 2], found unexpected ID {id}"
+                ))
+            }
+        }
+    }
+    if seen != HashSet::from([1, 2]) {
+        return Err("Custom requires PARAM IDs [1, 2]".to_string());
+    }
+    Ok((points.unwrap_or_default(), phasing.unwrap_or_default()))
+}
+
+fn require_exact_custom_attributes(
+    node: Node<'_, '_>,
+    expected: &[&str],
+    label: &str,
+) -> Result<(), String> {
+    let mut actual = node
+        .attributes()
+        .map(|attribute| attribute.name())
+        .collect::<Vec<_>>();
+    actual.sort_unstable();
+    let mut expected = expected.to_vec();
+    expected.sort_unstable();
+    if actual != expected {
+        return Err(format!(
+            "{label} attributes must be exactly {expected:?}, found {actual:?}"
+        ));
+    }
+    Ok(())
+}
+
 fn convert_dvc_additional_curve_effect(
     scene: Node<'_, '_>,
     scene_name: &str,
@@ -5016,6 +5346,7 @@ fn convert_dvc_additional_curve_effect(
             sample_ms: DASLIGHT_CURVE_SAMPLE_MS,
             rng_seed,
         }),
+        daslight_custom_curve: None,
     };
     let evaluator_detail = match generator_id {
         5 => "centered=(Rate/2*progress-Phase)-floor(Rate/2*progress-Phase+0.5); source=clamp(Offset+centered*Size+Size-0.5,0,1)",
@@ -5127,6 +5458,7 @@ fn convert_dvc_inverse_ramp_effect(
             sample_ms: DASLIGHT_CURVE_SAMPLE_MS,
             rng_seed: None,
         }),
+        daslight_custom_curve: None,
     };
     let note = format!(
         "feature=Dimmer; implementation=SyndocalCorrected; duration_ms={period_ms}; recovered_sample_ms={DASLIGHT_CURVE_SAMPLE_MS}; runtime_time=continuous; correction_reason=timer granularity must not stair-step output; rate={rate}; descending_ramp=Saw directed from low-field {low} to high-field {high}; source_range={raw_low:.3}..{raw_high:.3} with native 0..1 clamp; source_phase={phase}; fixture_spread={phasing}; size={size}; offset={offset}; {clock_note}"
@@ -5221,6 +5553,7 @@ fn convert_dvc_pulse_effect(
             sample_ms: DASLIGHT_CURVE_SAMPLE_MS,
             rng_seed: None,
         }),
+        daslight_custom_curve: None,
     };
     let note = format!(
         "feature=Dimmer; shape=Pulse; source_evaluator=CPulseEffect@0x14036F8D0; implementation=SyndocalCorrected; duration_ms={period_ms}; recovered_sample_ms={DASLIGHT_CURVE_SAMPLE_MS}; recovered_sample_count={sample_count}; runtime_time=continuous; rate={rate}; carrier=sin(TAU*(2*Rate*progress-Phase)); Daslight_fixed_window_slope=0.005; Syndocal_window=1-abs(2*progress-1); correction_reason=DURATION must not scale authored Size and timer granularity must not stair-step output; source_range=clamp(Offset+0.5+carrier*Size*window,0,1); source_phase={phase}; fixture_spread={phasing}; size={size}; offset={offset}; {clock_note}"
@@ -5315,6 +5648,7 @@ fn convert_dvc_sinus_effect(
             sample_ms: DASLIGHT_CURVE_SAMPLE_MS,
             rng_seed: None,
         }),
+        daslight_custom_curve: None,
     };
     let note = format!(
         "feature=Dimmer; implementation=SyndocalCorrected; duration_ms={period_ms}; recovered_sample_ms={DASLIGHT_CURVE_SAMPLE_MS}; runtime_time=continuous; correction_reason=timer granularity must not stair-step output; rate={rate}; low={low}; high={high}; source_range={raw_low:.3}..{raw_high:.3} with native 0..1 clamp; source_phase={phase}; fixture_spread={phasing}; offset={offset}; {clock_note}"
@@ -5407,6 +5741,7 @@ fn convert_dvc_square_effect(
             sample_ms: DASLIGHT_CURVE_SAMPLE_MS,
             rng_seed: None,
         }),
+        daslight_custom_curve: None,
     };
     let note = format!(
         "feature=Dimmer; shape=Square; evaluator=CSquareEffect@0x140370420; implementation=SyndocalCorrected; duration_ms={period_ms}; recovered_sample_ms={DASLIGHT_CURVE_SAMPLE_MS}; runtime_time=continuous; recovered_grid_cells=400; recovered_half_period_cells=floor(400/Rate); Syndocal_band=floor(fract(progress-Phase)*Rate); correction_reason=timer granularity and integer residue must not change authored bands; rate={rate}; even_band=high; low={low}; high={high}; source_phase={phase}; fixture_spread={phasing}; size={size}; offset={offset}; {clock_note}"
@@ -5503,6 +5838,7 @@ fn convert_dvc_strobe_effect(
             sample_ms: DASLIGHT_CURVE_SAMPLE_MS,
             rng_seed: None,
         }),
+        daslight_custom_curve: None,
     };
     let note = format!(
         "feature=Dimmer; shape=Strobe; implementation=SyndocalCorrected; duration_ms={period_ms}; recovered_sample_ms={DASLIGHT_CURVE_SAMPLE_MS}; runtime_time=continuous; recovered_interval=floor(25/Rate); Syndocal_interval_seconds=1/Rate; Syndocal_base_duty=0.2; extended_duty=max(0.2,Phase/2); correction_reason=integer timer division and one-sample flash width must not change authored Rate or duty; rate={rate}; low={low}; high={high}; source_phase={phase}; fixture_spread={phasing}; size={size}; offset={offset}; {clock_note}"
@@ -13282,6 +13618,277 @@ mod tests {
                 .iter()
                 .any(|detail| detail.item.contains(&format!("({generator})"))));
         }
+    }
+
+    #[test]
+    fn dvc_local_golden_custom_curve_preserves_saved_points_and_beam_order() {
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../qa/specimens/CurveCatalog-Custom.dvc"
+        ));
+        assert!(
+            path.is_file(),
+            "repo-portable Custom Curve specimen is missing"
+        );
+        let outcome = import_path(path).unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+
+        let request = outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .flat_map(|cue| &cue.effect_targets)
+            .filter_map(|target| match target.params.as_ref() {
+                Some(EffectParamsSnapshot::Lfo(request))
+                    if request.shape == LfoShape::DaslightCustom =>
+                {
+                    Some(request)
+                }
+                _ => None,
+            })
+            .next()
+            .unwrap_or_else(|| {
+                panic!(
+                    "captured Custom generator must import; skipped={:?}",
+                    outcome.report.skipped.details
+                )
+            });
+        assert_eq!(request.label, "New Scene (Custom)");
+        assert_eq!(request.attribute, "Dimmer");
+        assert_eq!(request.period_ms, 5_000);
+        assert_eq!(request.phase, 0.0);
+        assert_eq!(request.fixture_spread, 0.0);
+        assert!(request.video_targets.is_empty());
+        assert!(request.daslight_curve.is_none());
+        let source = request
+            .daslight_custom_curve
+            .as_ref()
+            .expect("Custom source profile must be retained");
+        assert_eq!(source.sample_ms, 40);
+        assert_eq!(source.phasing, 0.0);
+        assert_eq!(
+            source.points,
+            vec![
+                DaslightCustomCurvePoint { x: 0.0, raw_y: 0.5 },
+                DaslightCustomCurvePoint { x: 1.0, raw_y: 0.5 },
+            ]
+        );
+        assert_eq!(request.beam_targets.len(), 32);
+        assert_eq!(
+            request
+                .beam_targets
+                .iter()
+                .map(|target| target.selection_index)
+                .collect::<Vec<_>>(),
+            (0..32).collect::<Vec<_>>()
+        );
+        assert!(request
+            .beam_targets
+            .iter()
+            .all(|target| target.feature_attribute == "Dimmer"));
+        assert!(outcome.report.converted.details.iter().any(|detail| {
+            detail.item.contains("Custom")
+                && detail.message.contains("CCustomCurveEffect@0x14036F1F0")
+                && detail.message.contains("right_point_easing")
+        }));
+        assert!(!outcome
+            .report
+            .skipped
+            .details
+            .iter()
+            .any(|detail| detail.item.contains("Custom")));
+    }
+
+    #[test]
+    fn dvc_custom_curve_real_schema_mutations_fail_closed() {
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../qa/specimens/CurveCatalog-Custom.dvc"
+        ));
+        let source = fs::read_to_string(path).unwrap();
+        let mutate_custom = |needle: &str, replacement: &str| {
+            let start = source
+                .find(r#"<EFFECT TYPE="5" ID="13""#)
+                .expect("saved Custom effect");
+            let (prefix, custom_and_rest) = source.split_at(start);
+            format!(
+                "{prefix}{}",
+                custom_and_rest.replacen(needle, replacement, 1)
+            )
+        };
+        let custom_skip = |label: &str, mutated: String| {
+            let outcome = import_bytes(mutated.as_bytes(), "mutated-custom.dvc").unwrap();
+            outcome
+                .report
+                .skipped
+                .details
+                .iter()
+                .find(|detail| detail.item.contains("Custom"))
+                .map(|detail| detail.message.clone())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{label}: mutated Custom must be skipped; converted={:?}",
+                        outcome.report.converted.details
+                    )
+                })
+        };
+
+        assert!(custom_skip(
+            "missing selection",
+            mutate_custom(r#" IDSELECTION="1""#, "")
+        )
+        .contains("IDSELECTION"));
+        assert!(custom_skip(
+            "external selections",
+            mutate_custom(r#"<BEAMS NB="32">"#, r#"<SELECTIONS/><BEAMS NB="32">"#)
+        )
+        .contains("external SELECTIONS"));
+        assert!(custom_skip(
+            "short duration",
+            mutate_custom(r#"ID="13" DURATION="5000""#, r#"ID="13" DURATION="39""#,)
+        )
+        .contains("within 40"));
+        assert!(custom_skip(
+            "overflow duration",
+            mutate_custom(
+                r#"ID="13" DURATION="5000""#,
+                r#"ID="13" DURATION="4294967296""#,
+            )
+        )
+        .contains("unsigned 32-bit"));
+        assert!(custom_skip(
+            "duplicate params",
+            mutate_custom("</PARAMS>", "</PARAMS><PARAMS NB=\"0\"/>")
+        )
+        .contains("exactly one direct PARAMS"));
+        assert!(custom_skip(
+            "duplicate beams",
+            mutate_custom(r#"<BEAMS NB="32">"#, r#"<BEAMS NB="0"/><BEAMS NB="32">"#,)
+        )
+        .contains("exactly one direct BEAMS"));
+        for (label, needle, replacement) in [
+            (
+                "effect attribute",
+                r#"<EFFECT TYPE="5" ID="13" DURATION="5000">"#,
+                r#"<EFFECT TYPE="5" ID="13" DURATION="5000" EXTRA="1">"#,
+            ),
+            (
+                "params attribute",
+                r#"<PARAMS NB="2">"#,
+                r#"<PARAMS NB="2" EXTRA="1">"#,
+            ),
+            (
+                "points param attribute",
+                r#"<PARAM TYPE="5" ID="1">"#,
+                r#"<PARAM TYPE="5" ID="1" EXTRA="1">"#,
+            ),
+            (
+                "points attribute",
+                r#"<POINTS NB="2">"#,
+                r#"<POINTS NB="2" EXTRA="1">"#,
+            ),
+            (
+                "point attribute",
+                r#"<POINT X="0" Y="0.5"/>"#,
+                r#"<POINT X="0" Y="0.5" EXTRA="1"/>"#,
+            ),
+            (
+                "phasing attribute",
+                r#"<PARAM TYPE="1" ID="2" VAL="0"/>"#,
+                r#"<PARAM TYPE="1" ID="2" VAL="0" EXTRA="1"/>"#,
+            ),
+            (
+                "beams attribute",
+                r#"<BEAMS NB="32">"#,
+                r#"<BEAMS NB="32" EXTRA="1">"#,
+            ),
+            (
+                "beam attribute",
+                r#"BEAMID="0" IDSELECTION="1"/>"#,
+                r#"BEAMID="0" IDSELECTION="1" EXTRA="1"/>"#,
+            ),
+        ] {
+            assert!(
+                custom_skip(label, mutate_custom(needle, replacement))
+                    .contains("attributes must be exactly"),
+                "{label} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn dvc_custom_curve_schema_rejects_malformed_point_lists() {
+        let parse = |body: &str| {
+            let xml = format!(
+                r#"<EFFECT><PARAMS NB="2"><PARAM TYPE="5" ID="1"><POINTS NB="2">{body}</POINTS></PARAM><PARAM TYPE="1" ID="2" VAL="0.25"/></PARAMS></EFFECT>"#
+            );
+            let document = Document::parse(&xml).unwrap();
+            dvc_custom_curve_params(document.root_element()).unwrap_err()
+        };
+        assert!(parse(r#"<POINT X="0.5" Y="0"/><POINT X="0.5" Y="1"/>"#)
+            .contains("strictly increasing"));
+        assert!(
+            parse(r#"<POINT X="0" Y="0"/><POINT X="1" Y="11.5"/>"#).contains("must encode easing")
+        );
+        assert!(
+            parse(r#"<POINT X="0" Y="0"><EXTRA/></POINT><POINT X="1" Y="1"/>"#)
+                .contains("must not contain child")
+        );
+
+        let document = Document::parse(
+            r#"<EFFECT><PARAMS NB="2"><PARAM TYPE="5" ID="1"><POINTS NB="3"><POINT X="0" Y="0"/><POINT X="1" Y="1"/></POINTS></PARAM><PARAM TYPE="1" ID="2" VAL="0"/></PARAMS></EFFECT>"#,
+        )
+        .unwrap();
+        assert!(dvc_custom_curve_params(document.root_element())
+            .unwrap_err()
+            .contains("declare and contain"));
+
+        let points_xml = (0..255)
+            .map(|index| {
+                let progress = index as f32 / 254.0;
+                format!(
+                    r#"<POINT X="{progress}" Y="{}"/>"#,
+                    (index % 5) as f32 * 10.0 + progress
+                )
+            })
+            .collect::<String>();
+        let xml = format!(
+            r#"<EFFECT><PARAMS NB="2"><PARAM TYPE="5" ID="1"><POINTS NB="255">{points_xml}</POINTS></PARAM><PARAM TYPE="1" ID="2" VAL="1"/></PARAMS></EFFECT>"#
+        );
+        let document = Document::parse(&xml).unwrap();
+        let (points, phasing) = dvc_custom_curve_params(document.root_element()).unwrap();
+        assert_eq!(points.len(), 255);
+        assert_eq!(points.first().unwrap().x, 0.0);
+        assert_eq!(points.last().unwrap().x, 1.0);
+        assert_eq!(points.last().unwrap().raw_y, 41.0);
+        assert_eq!(phasing, 1.0);
+    }
+
+    #[test]
+    fn dvc_custom_curve_rejects_a_dropped_beam_inside_a_retained_fixture() {
+        let document = Document::parse(
+            r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACK TYPE="8"><EFFECT TYPE="5" ID="13" DURATION="1000"><PARAMS NB="2"><PARAM TYPE="5" ID="1"><POINTS NB="2"><POINT X="0" Y="0"/><POINT X="1" Y="1"/></POINTS></PARAM><PARAM TYPE="1" ID="2" VAL="0"/></PARAMS></EFFECT><BEAMS NB="2"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-1" BEAMID="1" IDSELECTION="2"/></BEAMS></RACK></SCENE>"#,
+        )
+        .unwrap();
+        let scene = document.root_element();
+        let rack = direct_child(scene, "RACK").unwrap();
+        let effect = direct_child(rack, "EFFECT").unwrap();
+        let fixture_refs = HashMap::from([(
+            "fixture-1".to_string(),
+            FixtureImportRef {
+                fixture_id: 1,
+                fixture_index: 0,
+                profile_index: 0,
+                supports_dimmer: false,
+                color_beam_count: 1,
+                patch_beam_positions: HashMap::new(),
+            },
+        )]);
+        let error =
+            convert_dvc_custom_curve_effect(scene, "Mixed beam", rack, effect, 1, &fixture_refs)
+                .unwrap_err();
+        assert!(error.contains("1 beam target(s) across 0 fixture target(s)"));
     }
 
     // Real saved Daslight 5.0.6.2 specimen authored on 2026-08-11. Both

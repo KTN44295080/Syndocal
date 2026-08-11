@@ -3,6 +3,7 @@ import type {
   ColorEffectInterpolation,
   ColorEffectStop,
   CurveEffectPoint,
+  DaslightCustomCurveSource,
   DaslightCurveSource,
   LfoShape,
   MoveEffectRequest,
@@ -63,6 +64,9 @@ export const evaluateLfoShape = (shape: LfoShape, phase: number): number => {
     }
     case "Tangeant":
       return clampUnit(Math.tan(normalized * Math.PI * 2) * 0.5 + 0.5);
+    // Import-only; it is evaluated through `evaluateDaslightCustomCurveSource`.
+    case "DaslightCustom":
+      return 0;
   }
 };
 
@@ -140,6 +144,82 @@ export const evaluateDaslightCurveSource = (
       value = evaluateLfoShape(shape, position + phase);
   }
   return clampUnit(value);
+};
+
+export type DaslightCustomCurveEasing = "Linear" | "InCubic" | "OutCubic" | "InOutCubic" | "OutInCubic";
+
+/** Mirrors the Custom CURVE `raw_y` value decoder recovered from Daslight. */
+export const decodeDaslightCustomRawY = (rawY: number): { value: number; easing: DaslightCustomCurveEasing } => {
+  const finite = Number.isFinite(rawY) ? rawY : 0;
+  const floor = Math.floor(finite);
+  const fractional = finite - floor;
+  const value = fractional === 0 ? (Math.abs(floor) % 10 === 0 ? 0 : 1) : fractional;
+  const easingCode = Math.trunc(finite / 10);
+  const easing: DaslightCustomCurveEasing = easingCode === 1
+    ? "InCubic"
+    : easingCode === 2
+      ? "OutCubic"
+      : easingCode === 3
+        ? "InOutCubic"
+        : easingCode === 4
+          ? "OutInCubic"
+          : "Linear";
+  return { value, easing };
+};
+
+export const easeDaslightCustomCurve = (easing: DaslightCustomCurveEasing, progress: number): number => {
+  const u = clampUnit(progress);
+  switch (easing) {
+    case "InCubic": return u ** 3;
+    case "OutCubic": return 1 - (1 - u) ** 3;
+    case "InOutCubic": return u < 0.5 ? 4 * u ** 3 : 1 - (-2 * u + 2) ** 3 / 2;
+    case "OutInCubic": return u < 0.5 ? (1 - (1 - 2 * u) ** 3) / 2 : ((2 * u - 1) ** 3 + 1) / 2;
+    default: return u;
+  }
+};
+
+/**
+ * Mirrors Custom CURVE's first-in-source-order matching segment. This is a
+ * defensive rendering path for legacy/malformed snapshots; the importer and
+ * engine only accept strict, increasing Daslight point order. The
+ * destination/right point supplies the easing family.
+ */
+export const evaluateDaslightCustomCurveSource = (
+  source: DaslightCustomCurveSource,
+  phase: number,
+): number => {
+  const points = source.points;
+  if (points.length === 0) return 0;
+  const position = normalizePhase(phase);
+  for (let index = 0; index + 1 < points.length; index += 1) {
+    const left = points[index];
+    const right = points[index + 1];
+    if (left.x <= position && position < right.x) {
+      const leftValue = decodeDaslightCustomRawY(left.raw_y).value;
+      const rightDecoded = decodeDaslightCustomRawY(right.raw_y);
+      const progress = (position - left.x) / (right.x - left.x);
+      return leftValue + (rightDecoded.value - leftValue)
+        * easeDaslightCustomCurve(rightDecoded.easing, progress);
+    }
+  }
+  return decodeDaslightCustomRawY(points[points.length - 1].raw_y).value;
+};
+
+export const buildDaslightCustomCurvePreviewPath = (
+  source: DaslightCustomCurveSource,
+  phase = 0,
+  width = 100,
+  height = 32,
+  samples = 96,
+): string => {
+  const count = Math.max(2, Math.round(samples));
+  const segments: string[] = [];
+  for (let index = 0; index <= count; index += 1) {
+    const progress = index / count;
+    const value = evaluateDaslightCustomCurveSource(source, progress + phase);
+    segments.push(`${index === 0 ? "M" : "L"} ${pathNumber(progress * width)} ${pathNumber((1 - value) * height)}`);
+  }
+  return segments.join(" ");
 };
 
 const hashUnitFloat = (seed: number): number => {

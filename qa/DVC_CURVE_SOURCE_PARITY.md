@@ -156,6 +156,10 @@ field and continues to deserialize with `None`.
 - Native responsive-window acceptance is run separately; it is not inferred from the successful
   release build.
 
+Custom ID13 is now closed as a separate schema/evaluator tranche. Its raw point/easing encoding,
+adjacent-target Phasing, saved native specimen, corrected continuous runtime, and 255-point release
+gate are documented in `qa/DVC_CUSTOM_CURVE_SOURCE_PARITY.md`.
+
 ## Real saved specimen: unrouted CURVE generators (2026-08-11, Fable native capture)
 
 ### Capture context
@@ -218,7 +222,7 @@ target/binding fixed while only the generator selection changed.
 
 None. `DVC_FULL_FX_CATALOG_PARITY.md`'s CURVE FX table (`## CURVE FX -- family/type 5`) already
 listed `5 Ramp`, `6 Random`, `8 Sinus3`, `11 Tangeant`, `12 Triangle` from static factory/ctor/
-vtable recovery, and states its remaining 8 rows (of which these 5 are a subset) have exact
+vtable recovery, and at capture time stated its remaining 8 rows (of which these 5 are a subset) have exact
 factory/schema recovery but no decompiled formula yet. This specimen corroborated the ID/name
 assignment for exactly the 5 generators captured here via an independent live-authoring path.
 The evaluator formulas are now independently recovered from the pinned executable at the

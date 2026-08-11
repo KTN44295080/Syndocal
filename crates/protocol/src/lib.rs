@@ -2026,6 +2026,9 @@ pub enum LfoShape {
     Sinus3,
     /// Daslight Curve ID 11. The spelling preserves the Daslight UI label.
     Tangeant,
+    /// Daslight Curve ID 13. This shape requires a
+    /// `DaslightCustomCurveSource`; its point order is semantically relevant.
+    DaslightCustom,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -2591,6 +2594,37 @@ pub struct DaslightCurveSource {
     pub rng_seed: Option<u32>,
 }
 
+/// One source-order point from Daslight Curve ID 13 Custom.
+///
+/// `raw_y` preserves both the normalized value and the easing code stored in
+/// the integer decade: `0..=1` Linear, `10..=11` InCubic, `20..=21`
+/// OutCubic, `30..=31` InOutCubic, and `40..=41` OutInCubic. The destination
+/// (right) point selects the easing for its incoming segment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DaslightCustomCurvePoint {
+    pub x: f32,
+    pub raw_y: f32,
+}
+
+/// Daslight Curve ID 13 Custom source profile.
+///
+/// Points deliberately remain in authored source order. Daslight neither
+/// sorts them nor requires increasing X values, and its evaluator selects the
+/// first source-order interval containing the current phase.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DaslightCustomCurveSource {
+    pub points: Vec<DaslightCustomCurvePoint>,
+    /// Adjacent-target phase lag. Target `i` evaluates
+    /// `fract(progress - i * phasing)`; this is not the distributed native
+    /// Syndocal `fixture_spread` convention.
+    pub phasing: f32,
+    /// Source buffer cadence recovered from Daslight 5.0.6.2. Retained as
+    /// provenance only; corrected runtime evaluates the exact easing
+    /// continuously instead of its 40 ms sampled approximation.
+    #[serde(default = "default_daslight_curve_sample_ms")]
+    pub sample_ms: u16,
+}
+
 fn default_daslight_curve_sample_ms() -> u16 {
     40
 }
@@ -2622,6 +2656,10 @@ pub struct LfoEffectRequest {
     /// Native Syndocal LFOs leave this absent and retain their existing behavior.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daslight_curve: Option<DaslightCurveSource>,
+    /// Preserves the source-order point/easing semantics of Daslight Curve ID
+    /// 13 Custom. Native Syndocal LFOs leave this absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daslight_custom_curve: Option<DaslightCustomCurveSource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -4614,6 +4652,7 @@ mod tests {
                 }],
                 blend_mode: super::EffectBlendMode::Override,
                 daslight_curve: None,
+                daslight_custom_curve: None,
             })),
             transition_ms: Some(900),
         };
@@ -4635,6 +4674,11 @@ mod tests {
         assert!(
             serde_json::from_str::<serde_json::Value>(&encoded).unwrap()["params"]["Lfo"]
                 .get("daslight_curve")
+                .is_none()
+        );
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&encoded).unwrap()["params"]["Lfo"]
+                .get("daslight_custom_curve")
                 .is_none()
         );
 
@@ -4664,6 +4708,37 @@ mod tests {
                 ["daslight_curve"]
                 .get("rng_seed")
                 .is_none()
+        );
+
+        let mut custom = target.clone();
+        let Some(super::EffectParamsSnapshot::Lfo(custom_request)) = custom.params.as_mut() else {
+            panic!("Custom target must contain LFO params");
+        };
+        custom_request.shape = super::LfoShape::DaslightCustom;
+        custom_request.phase = 0.0;
+        custom_request.fixture_spread = 0.0;
+        custom_request.daslight_custom_curve = Some(super::DaslightCustomCurveSource {
+            points: vec![
+                super::DaslightCustomCurvePoint { x: 0.0, raw_y: 0.5 },
+                super::DaslightCustomCurvePoint {
+                    x: 1.0,
+                    raw_y: 31.0,
+                },
+            ],
+            phasing: 0.25,
+            sample_ms: 40,
+        });
+        let custom_encoded = serde_json::to_string(&custom).unwrap();
+        let custom_decoded: super::CueEffectTarget = serde_json::from_str(&custom_encoded).unwrap();
+        assert_eq!(custom_decoded, custom);
+        let custom_json = serde_json::from_str::<serde_json::Value>(&custom_encoded).unwrap();
+        assert_eq!(
+            custom_json["params"]["Lfo"]["daslight_custom_curve"]["points"][1]["raw_y"],
+            31.0
+        );
+        assert_eq!(
+            custom_json["params"]["Lfo"]["daslight_custom_curve"]["phasing"],
+            0.25
         );
 
         let mut imported_random = imported.clone();

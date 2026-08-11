@@ -41,6 +41,19 @@ const sceneSettingsSource = await readFile(
   new URL("../src/components/SceneSettingsPane.tsx", import.meta.url),
   "utf8",
 );
+const daslightCustomCurvePanelSource = await readFile(
+  new URL("../src/components/DaslightCustomCurvePanel.tsx", import.meta.url),
+  "utf8",
+);
+const stylesSource = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
+const effectGraphicalPreviewSource = await readFile(
+  new URL("../src/components/EffectGraphicalPreview.tsx", import.meta.url),
+  "utf8",
+);
+const sceneEffectTargetEditorSource = await readFile(
+  new URL("../src/components/SceneEffectTargetEditor.tsx", import.meta.url),
+  "utf8",
+);
 const sceneFxDefaultsSource = await readFile(
   new URL("../src/sceneFxDefaults.ts", import.meta.url),
   "utf8",
@@ -158,6 +171,218 @@ closeTo(
   visualization.evaluateLfoShape("Perlin", 0.03125),
   0.10378926745995164,
   "Perlin must use the engine's eased periodic interpolation",
+);
+const customRawYVectors = [
+  [0, { value: 0, easing: "Linear" }],
+  [0.25, { value: 0.25, easing: "Linear" }],
+  [11, { value: 1, easing: "InCubic" }],
+  [20, { value: 0, easing: "OutCubic" }],
+  [30.5, { value: 0.5, easing: "InOutCubic" }],
+  [41, { value: 1, easing: "OutInCubic" }],
+];
+for (const [rawY, expected] of customRawYVectors) {
+  assert.deepEqual(
+    visualization.decodeDaslightCustomRawY(rawY),
+    expected,
+    `Custom CURVE raw_y ${rawY} must preserve the recovered value/easing encoding`,
+  );
+}
+closeTo(
+  visualization.easeDaslightCustomCurve("InCubic", 0.5),
+  0.125,
+  "Custom CURVE InCubic must follow the recovered destination-point easing",
+);
+closeTo(
+  visualization.easeDaslightCustomCurve("OutCubic", 0.5),
+  0.875,
+  "Custom CURVE OutCubic must follow the recovered destination-point easing",
+);
+closeTo(
+  visualization.easeDaslightCustomCurve("InOutCubic", 0.25),
+  0.0625,
+  "Custom CURVE InOutCubic must retain its continuous midpoint branch",
+);
+closeTo(
+  visualization.easeDaslightCustomCurve("OutInCubic", 0.75),
+  0.5625,
+  "Custom CURVE OutInCubic must retain its continuous midpoint branch",
+);
+const customCurveSource = {
+  points: [
+    { x: 0, raw_y: 0 },
+    { x: 0.5, raw_y: 11 },
+    { x: 1, raw_y: 20 },
+  ],
+  phasing: 0.25,
+  sample_ms: 40,
+};
+closeTo(
+  visualization.evaluateDaslightCustomCurveSource(customCurveSource, 0.25),
+  0.125,
+  "Custom CURVE must use the right point's InCubic easing on its first segment",
+);
+closeTo(
+  visualization.evaluateDaslightCustomCurveSource(customCurveSource, 0.75),
+  0.125,
+  "Custom CURVE must use the right point's OutCubic easing on its second segment",
+);
+const sourceOrderedCustomCurve = {
+  points: [
+    { x: 0.8, raw_y: 0 },
+    { x: 1, raw_y: 11 },
+    { x: 0, raw_y: 20 },
+  ],
+  phasing: 0,
+  sample_ms: 40,
+};
+closeTo(
+  visualization.evaluateDaslightCustomCurveSource(sourceOrderedCustomCurve, 0.9),
+  0.125,
+  "Custom CURVE preview must defensively retain first-interval behavior for malformed legacy snapshots",
+);
+closeTo(
+  visualization.evaluateDaslightCustomCurveSource(sourceOrderedCustomCurve, 0.25),
+  0,
+  "Custom CURVE preview must defensively fall back for malformed legacy snapshots",
+);
+assert.match(
+  visualization.buildDaslightCustomCurvePreviewPath(customCurveSource),
+  /^M 0 32 L 1\.042 /,
+  "Custom CURVE preview must sample continuously instead of drawing only control-point chords",
+);
+assert.match(
+  appSource,
+  /daslight_custom_curve: lfoDaslightCustomCurveSource\(\) \?\? undefined/,
+  "Custom CURVE source must survive an LFO draft save",
+);
+assert.match(
+  appSource,
+  /effect\.lfo\?\.daslight_custom_curve \?\? null/,
+  "Custom CURVE source must rehydrate when a saved effect is edited",
+);
+assert.match(
+  appSource,
+  /setLfoImportedBase\(effect\.effect_type === "Lfo"[\s\S]*?effect\.lfo\?\.beam_targets\?\.length/,
+  "all imported LFOs with explicit beam targets must retain an immutable draft base",
+);
+assert.match(
+  appSource,
+  /\.\.\.\(lfoImportedBase\(\) \?\? requestBase\)/,
+  "imported LFO save must retain its label and targeting tuple independently of global selection",
+);
+assert.match(
+  appSource,
+  /const importedLfo = effectType\(\) === "Lfo" && lfoImportedBase\(\);[\s\S]*?if \(importedLfo\)[\s\S]*?effectPeriod\(\)[\s\S]*?effectLow\(\)[\s\S]*?effectHigh\(\)[\s\S]*?return false/,
+  "imported LFO submit enablement must retain period/range/source validation while bypassing live target selection",
+);
+assert.match(
+  appSource,
+  /const preservesImportedLfoTargets = effectType\(\) === "Lfo" && lfoImportedBase\(\) !== null;[\s\S]*?!preservesImportedLfoTargets[\s\S]*?targetMode === "fixture"[\s\S]*?!preservesImportedLfoTargets[\s\S]*?targetMode === "selection"/,
+  "imported LFO request construction must bypass only generic fixture/selection target preconditions",
+);
+assert.match(
+  appSource,
+  /beam_targets: lfoImportedBase\(\)\?\.beam_targets\?\.map/,
+  "imported LFO save must preserve beam selection_index and source order",
+);
+assert.ok(
+  (appSource.match(/setLfoImportedBase\(null\)/g) ?? []).length >= 2,
+  "imported LFO target state must clear on type change and draft reset",
+);
+assert.match(
+  appSource,
+  /effect\.lfo\?\.daslight_custom_curve \? 0 : effect\.phase/,
+  "Custom CURVE draft rehydration must discard generic Phase",
+);
+assert.match(
+  appSource,
+  /fixture_spread: lfoDaslightCustomCurveSource\(\)[\s\S]*?\? 0[\s\S]*?lfoImportedBase\(\)\?\.fixture_spread \?\? lfoFixtureSpread\(\)/,
+  "Custom CURVE must not be routed through generic fixture spread",
+);
+assert.match(
+  appSource,
+  /phase: lfoDaslightCustomCurveSource\(\) \? 0 : lfoImportedBase\(\)\?\.phase \?\? requestBase\.phase/,
+  "Custom CURVE save must force the imported fixed phase instead of exposing generic Phase",
+);
+assert.match(
+  appSource,
+  /showPhase:[\s\S]*?!lfoDaslightCustomCurveSource\(\)/,
+  "Custom CURVE editor must hide generic Phase",
+);
+assert.match(
+  appSource,
+  /showPhase:[\s\S]*?!lfoImportedBase\(\)/,
+  "all imported LFOs with preserved beam ordering must hide generic Phase",
+);
+assert.match(
+  appSource,
+  /showFixtureSpread:[\s\S]*?!lfoImportedBase\(\)/,
+  "all imported LFOs with preserved beam ordering must hide generic Fixture phasing",
+);
+assert.match(
+  sceneFxDefaultsSource,
+  /if \(request\.daslight_custom_curve\) return fixtures/,
+  "fixture-only scene preview must skip Custom CURVE instead of approximating ordered beam targets",
+);
+assert.match(
+  sceneSettingsSource,
+  /DaslightCustomCurvePanel[\s\S]*?daslightCustomCurve\.source/,
+  "Scene Settings must render the imported Custom CURVE card only when source data exists",
+);
+assert.match(
+  sceneSettingsSource,
+  /\["Lfo", "PositionWave"\]\.includes\(props\.editor\.effectType\) && !props\.editor\.target\.readOnly/,
+  "imported LFO target lock must also hide the attribute control whose edits would be discarded",
+);
+assert.match(
+  appSource,
+  /readOnly: Boolean\(lfoImportedBase\(\)\)/,
+  "LFOs with preserved explicit beam targets must lock target mutation",
+);
+assert.match(
+  appSource,
+  /fixtures \$\{lfoImportedBase\(\)!\.fixture_ids\.join/,
+  "locked imported LFO target UI must display preserved target identity",
+);
+assert.match(
+  daslightCustomCurvePanelSource,
+  /data-source-order=\{sourceOrder\(\)\}[\s\S]*?Phasing[\s\S]*?read-only/,
+  "Custom CURVE card must disclose source order, source Phasing, and its read-only contract",
+);
+assert.doesNotMatch(
+  daslightCustomCurvePanelSource,
+  /<(?:input|button|select)\b|on(?:Input|Change|Click)=/,
+  "Custom CURVE card must not expose an editor for strictly imported point data",
+);
+assert.match(
+  stylesSource,
+  /\.daslightCustomCurvePanel\s*\{[\s\S]*?grid-template-columns:\s*minmax\(96px, 1fr\) minmax\(0, 1fr\)/,
+  "Custom CURVE card must reserve graph width without letting the readout force horizontal overflow",
+);
+assert.match(
+  stylesSource,
+  /\.daslightCustomCurveReadout\s*\{[\s\S]*?min-width:\s*0;[\s\S]*?white-space:\s*normal/,
+  "Custom CURVE easing summaries must wrap inside the narrow Scene Settings rail",
+);
+assert.match(
+  effectGraphicalPreviewSource,
+  /daslightCustomCurve[\s\S]*?Phasing \{Math\.round\(source\(\)\.phasing \* 100\)\}%/,
+  "Custom CURVE graphical preview must show source Phasing instead of generic Phase",
+);
+assert.match(
+  effectGraphicalPreviewSource,
+  /<b>\{current\(\)\.daslightCustomCurve \? "Custom CURVE" : current\(\)\.shape\}<\/b>/,
+  "Custom CURVE graphical preview must replace the raw enum label instead of duplicating it",
+);
+assert.doesNotMatch(
+  effectGraphicalPreviewSource,
+  /daslightCustomCurve\}><span>Custom CURVE<\/span>/,
+  "Custom CURVE graphical preview must not render a duplicate secondary label",
+);
+assert.match(
+  sceneEffectTargetEditorSource,
+  /<Show when=\{props\.readOnly\}>[\s\S]*?explicit beam \/ segment targets[\s\S]*?<Show when=\{!props\.readOnly\}>/,
+  "locked target editor must show its explicit beam summary while withholding mutation controls",
 );
 assert.equal(
   visualization.buildLfoPreviewPath("Saw", 0.25, 100, 100, 4),

@@ -38,11 +38,12 @@ use protocol::{
     CueFixtureTarget, CueId, CueIfcbTiming, CueListId, CueListSummary, CueLiveDirection,
     CueLiveModifierSettings, CueLiveModifierState, CueNodeGraphTarget, CuePaletteTarget,
     CuePartSummary, CueStepSummary, CueSummary, CurveEffectPoint, CurveEffectRequest,
-    DaslightCurveSource, DirectChildTimelineTransportSummary, DmxMergeMode, DmxModeSummary,
-    DmxOutputConfig, DmxOutputProtocol, DmxOutputRouteTelemetry, DmxUniversePreview,
-    EffectBeamTarget, EffectBlendMode, EffectClockSync, EffectId, EffectKind, EffectParamsSnapshot,
-    EffectSummary, EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId,
-    FixtureId, FixtureLimits, FixtureProfileSummary, LfoEffectRequest, LfoShape, LiveAudioFrame,
+    DaslightCurveSource, DaslightCustomCurvePoint, DaslightCustomCurveSource,
+    DirectChildTimelineTransportSummary, DmxMergeMode, DmxModeSummary, DmxOutputConfig,
+    DmxOutputProtocol, DmxOutputRouteTelemetry, DmxUniversePreview, EffectBeamTarget,
+    EffectBlendMode, EffectClockSync, EffectId, EffectKind, EffectParamsSnapshot, EffectSummary,
+    EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId, FixtureId,
+    FixtureLimits, FixtureProfileSummary, LfoEffectRequest, LfoShape, LiveAudioFrame,
     LiveAudioReactiveFeatures, MappingEffectDirection, MappingEffectRequest, MoveCoordinateMode,
     MoveDirection, MoveEffectRequest, MovePathPoint, NodeGraphAudioRuntimeStatus, NodeGraphId,
     NodeGraphNodeKind, NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId,
@@ -3299,10 +3300,114 @@ fn clear_runtime_color_effect_caches(runtime: &RuntimeColorEffect, clear_sparkle
 #[derive(Debug, Clone)]
 struct RuntimeLfoEffect {
     request: LfoEffectRequest,
+    custom_curve: Option<CompiledDaslightCustomCurve>,
     targets: Vec<RuntimeLfoTarget>,
     target_indices: HashMap<FixtureId, usize>,
     beam_targets: Vec<RuntimeLfoBeamTarget>,
     beam_attribute_indices: HashMap<FixtureId, HashMap<String, usize>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DaslightCustomEasing {
+    Linear,
+    InCubic,
+    OutCubic,
+    InOutCubic,
+    OutInCubic,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CompiledDaslightCustomPoint {
+    x: f32,
+    value: f32,
+    easing: DaslightCustomEasing,
+}
+
+/// A validated source-order point array supports allocation-free binary
+/// lookup without sorting or otherwise rewriting the authored points.
+#[derive(Debug, Clone)]
+struct CompiledDaslightCustomCurve {
+    points: Vec<CompiledDaslightCustomPoint>,
+}
+
+impl CompiledDaslightCustomCurve {
+    fn compile(source: &DaslightCustomCurveSource) -> Self {
+        Self {
+            points: source
+                .points
+                .iter()
+                .map(|point| {
+                    let (value, easing) = decode_daslight_custom_raw_y(point.raw_y)
+                        .expect("validated Daslight Custom point must decode");
+                    CompiledDaslightCustomPoint {
+                        x: point.x,
+                        value,
+                        easing,
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    fn sample(&self, phase: f32) -> f32 {
+        let phase = phase.rem_euclid(1.0);
+        let right = self.points.partition_point(|point| point.x <= phase);
+        if right == 0 || right >= self.points.len() {
+            return self.points.last().map_or(0.0, |point| point.value);
+        }
+        let left = self.points[right - 1];
+        let right = self.points[right];
+        let span = right.x - left.x;
+        if span <= f32::EPSILON {
+            return self.points.last().map_or(0.0, |point| point.value);
+        }
+        let progress = ((phase - left.x) / span).clamp(0.0, 1.0);
+        left.value
+            + (right.value - left.value) * evaluate_daslight_custom_easing(right.easing, progress)
+    }
+}
+
+fn decode_daslight_custom_raw_y(raw_y: f32) -> Option<(f32, DaslightCustomEasing)> {
+    if !raw_y.is_finite() || raw_y < 0.0 {
+        return None;
+    }
+    let code = (raw_y / 10.0).floor() as u8;
+    let base = f32::from(code) * 10.0;
+    let value = raw_y - base;
+    if !(0.0..=1.0).contains(&value) {
+        return None;
+    }
+    let easing = match code {
+        0 => DaslightCustomEasing::Linear,
+        1 => DaslightCustomEasing::InCubic,
+        2 => DaslightCustomEasing::OutCubic,
+        3 => DaslightCustomEasing::InOutCubic,
+        4 => DaslightCustomEasing::OutInCubic,
+        _ => return None,
+    };
+    Some((value, easing))
+}
+
+fn evaluate_daslight_custom_easing(easing: DaslightCustomEasing, progress: f32) -> f32 {
+    match easing {
+        DaslightCustomEasing::Linear => progress,
+        DaslightCustomEasing::InCubic => progress.powi(3),
+        DaslightCustomEasing::OutCubic => 1.0 - (1.0 - progress).powi(3),
+        DaslightCustomEasing::InOutCubic => {
+            if progress < 0.5 {
+                4.0 * progress.powi(3)
+            } else {
+                1.0 - (-2.0 * progress + 2.0).powi(3) * 0.5
+            }
+        }
+        DaslightCustomEasing::OutInCubic => {
+            if progress < 0.5 {
+                (1.0 - (1.0 - 2.0 * progress).powi(3)) * 0.5
+            } else {
+                ((2.0 * progress - 1.0).powi(3) + 1.0) * 0.5
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -17305,6 +17410,9 @@ impl EngineRuntime {
         &self,
         mut request: PositionWaveEffectRequest,
     ) -> Result<PositionWaveEffectRequest, String> {
+        if request.shape == LfoShape::DaslightCustom {
+            return Err("Daslight Custom shape is only valid for imported LFO effects".to_string());
+        }
         let light_attribute = self.resolve_effect_light_targets(
             &mut request.fixture_ids,
             &mut request.target_group_ids,
@@ -27235,6 +27343,12 @@ fn validate_node_graph_lfo_node(
             graph.label, node.id
         ));
     };
+    if lfo.shape == LfoShape::DaslightCustom {
+        return Err(format!(
+            "Node graph '{}' LFO node {} cannot use the import-only Daslight Custom shape",
+            graph.label, node.id
+        ));
+    }
     if lfo.period_ms < 10 {
         return Err(format!(
             "Node graph '{}' LFO node {} period must be at least 10ms",
@@ -27278,6 +27392,12 @@ fn validate_node_graph_position_wave_node(
             graph.label, node.id
         ));
     };
+    if wave.shape == LfoShape::DaslightCustom {
+        return Err(format!(
+            "Node graph '{}' position wave node {} cannot use the import-only Daslight Custom shape",
+            graph.label, node.id
+        ));
+    }
     if !wave.origin.x.is_finite()
         || !wave.origin.y.is_finite()
         || !wave.origin.z.is_finite()
@@ -27789,9 +27909,15 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
                     beam_targets: Vec::new(),
                     blend_mode: effect.blend_mode.clone(),
                     daslight_curve: None,
+                    daslight_custom_curve: None,
                 }
             };
+            validate_lfo_effect_request(&request).ok()?;
             RuntimeEffectKind::Lfo(RuntimeLfoEffect {
+                custom_curve: request
+                    .daslight_custom_curve
+                    .as_ref()
+                    .map(CompiledDaslightCustomCurve::compile),
                 request,
                 targets: Vec::new(),
                 target_indices: HashMap::new(),
@@ -27799,23 +27925,28 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
                 beam_attribute_indices: HashMap::new(),
             })
         }
-        EffectKind::PositionWave => RuntimeEffectKind::PositionWave(PositionWaveEffectRequest {
-            label: effect.label.clone(),
-            fixture_ids: effect.fixture_ids.clone(),
-            target_group_ids: effect.target_group_ids.clone(),
-            attribute: effect.attribute.clone(),
-            video_targets: effect.video_targets.clone(),
-            shape: effect.shape.clone(),
-            origin: effect.origin?,
-            direction: effect.direction?,
-            speed: effect.speed?,
-            wavelength: effect.wavelength?,
-            clock_sync: effect.clock_sync,
-            low: effect.low,
-            high: effect.high,
-            phase: effect.phase,
-            blend_mode: effect.blend_mode.clone(),
-        }),
+        EffectKind::PositionWave => {
+            if effect.shape == LfoShape::DaslightCustom {
+                return None;
+            }
+            RuntimeEffectKind::PositionWave(PositionWaveEffectRequest {
+                label: effect.label.clone(),
+                fixture_ids: effect.fixture_ids.clone(),
+                target_group_ids: effect.target_group_ids.clone(),
+                attribute: effect.attribute.clone(),
+                video_targets: effect.video_targets.clone(),
+                shape: effect.shape.clone(),
+                origin: effect.origin?,
+                direction: effect.direction?,
+                speed: effect.speed?,
+                wavelength: effect.wavelength?,
+                clock_sync: effect.clock_sync,
+                low: effect.low,
+                high: effect.high,
+                phase: effect.phase,
+                blend_mode: effect.blend_mode.clone(),
+            })
+        }
         EffectKind::Color => RuntimeEffectKind::Color(RuntimeColorEffect {
             request: effect.color.clone()?,
             targets: Vec::new(),
@@ -27898,7 +28029,7 @@ fn runtime_effect_from_summary(effect: &EffectSummary, now: Instant) -> Option<R
     })
 }
 
-fn validate_lfo_effect_request(request: &LfoEffectRequest) -> Result<(), String> {
+pub fn validate_lfo_effect_request(request: &LfoEffectRequest) -> Result<(), String> {
     if request.label.trim().is_empty() {
         return Err("LFO effect label is required".to_string());
     }
@@ -27917,6 +28048,66 @@ fn validate_lfo_effect_request(request: &LfoEffectRequest) -> Result<(), String>
     }
     if !(0.0..=1.0).contains(&request.fixture_spread) {
         return Err("LFO effect fixture spread must be within 0..1".to_string());
+    }
+    if request.shape == LfoShape::DaslightCustom && request.daslight_custom_curve.is_none() {
+        return Err("Daslight Custom requires its dedicated source profile".to_string());
+    }
+    if request.shape != LfoShape::DaslightCustom && request.daslight_custom_curve.is_some() {
+        return Err(
+            "Daslight Custom source is only valid for the DaslightCustom shape".to_string(),
+        );
+    }
+    if request.daslight_curve.is_some() && request.daslight_custom_curve.is_some() {
+        return Err("Daslight Curve source profiles are mutually exclusive".to_string());
+    }
+    if let Some(source) = &request.daslight_custom_curve {
+        if request.daslight_curve.is_some()
+            || request.phase != 0.0
+            || request.fixture_spread != 0.0
+            || !request.video_targets.is_empty()
+        {
+            return Err(
+                "Daslight Custom requires phase=0, fixture_spread=0, no ordinary Curve source, and no video targets"
+                    .to_string(),
+            );
+        }
+        if request.period_ms < u64::from(source.sample_ms)
+            || request.period_ms > u64::from(u32::MAX)
+            || source.sample_ms != 40
+        {
+            return Err(
+                "Daslight Custom duration must be within 40..4294967295 ms with 40 ms source provenance"
+                    .to_string(),
+            );
+        }
+        if !source.phasing.is_finite() || !(0.0..=1.0).contains(&source.phasing) {
+            return Err("Daslight Custom Phasing must be finite and within 0..1".to_string());
+        }
+        if !(2..=255).contains(&source.points.len()) {
+            return Err("Daslight Custom requires between 2 and 255 points".to_string());
+        }
+        let mut previous_x = None;
+        for (index, point) in source.points.iter().enumerate() {
+            if !point.x.is_finite() || !(0.0..=1.0).contains(&point.x) {
+                return Err(format!(
+                    "Daslight Custom point {} X must be finite and within 0..1",
+                    index + 1
+                ));
+            }
+            if previous_x.is_some_and(|previous| point.x <= previous) {
+                return Err(
+                    "Daslight Custom point X values must be strictly increasing in source order"
+                        .to_string(),
+                );
+            }
+            if decode_daslight_custom_raw_y(point.raw_y).is_none() {
+                return Err(format!(
+                    "Daslight Custom point {} Y must encode easing 0..4 and a normalized value",
+                    index + 1
+                ));
+            }
+            previous_x = Some(point.x);
+        }
     }
     if matches!(
         request.shape,
@@ -28012,6 +28203,15 @@ fn runtime_lfo_effect_from_request(
     request: LfoEffectRequest,
     fixtures: &[RuntimeFixture],
 ) -> Result<RuntimeLfoEffect, String> {
+    validate_lfo_effect_request(&request)?;
+    let custom_curve = request
+        .daslight_custom_curve
+        .as_ref()
+        .map(CompiledDaslightCustomCurve::compile);
+    let custom_phasing = request
+        .daslight_custom_curve
+        .as_ref()
+        .map_or(0.0, |source| source.phasing);
     let mut fixture_ids = Vec::new();
     let mut seen = HashSet::new();
     for fixture_id in &request.fixture_ids {
@@ -28038,7 +28238,11 @@ fn runtime_lfo_effect_from_request(
         .enumerate()
         .map(|(index, fixture_id)| RuntimeLfoTarget {
             fixture_id,
-            phase_offset: index as f32 / count * request.fixture_spread,
+            phase_offset: if custom_curve.is_some() {
+                -(index as f32) * custom_phasing
+            } else {
+                index as f32 / count * request.fixture_spread
+            },
         })
         .collect::<Vec<_>>();
     let target_indices = targets
@@ -28093,13 +28297,18 @@ fn runtime_lfo_effect_from_request(
                 }
             }
             beam_targets.push(RuntimeLfoBeamTarget {
-                phase_offset: selection_rank as f32 / selection_count * request.fixture_spread,
+                phase_offset: if custom_curve.is_some() {
+                    -(selection_rank as f32) * custom_phasing
+                } else {
+                    selection_rank as f32 / selection_count * request.fixture_spread
+                },
                 virtual_intensity,
             });
         }
     }
     Ok(RuntimeLfoEffect {
         request,
+        custom_curve,
         targets,
         target_indices,
         beam_targets,
@@ -29951,6 +30160,9 @@ pub fn validate_mapping_effect_request(request: &MappingEffectRequest) -> Result
     validate_scalar_effect_features("Mapping", &request.attribute, &request.features)?;
     if request.fixture_ids.is_empty() && request.target_group_ids.is_empty() {
         return Err("Mapping effect must target at least one fixture or group".to_string());
+    }
+    if request.shape == LfoShape::DaslightCustom {
+        return Err("Mapping effect cannot use the import-only Daslight Custom shape".to_string());
     }
     if request.period_ms < 10 {
         return Err("Mapping effect period must be at least 10 ms".to_string());
@@ -33490,8 +33702,8 @@ fn evaluate_runtime_lfo_attribute_at_rate(
     Some(scale_effect_u16_directed(
         runtime.request.low,
         runtime.request.high,
-        evaluate_lfo_effect_normalized_with_offset(
-            &runtime.request,
+        evaluate_runtime_lfo_effect_normalized_with_offset(
+            runtime,
             target.phase_offset,
             created_at,
             now,
@@ -33519,8 +33731,8 @@ fn evaluate_runtime_lfo_beam_attribute_at_rate(
     let value = scale_effect_u16_directed(
         runtime.request.low,
         runtime.request.high,
-        evaluate_lfo_effect_normalized_with_offset(
-            &runtime.request,
+        evaluate_runtime_lfo_effect_normalized_with_offset(
+            runtime,
             target.phase_offset,
             created_at,
             now,
@@ -33578,6 +33790,11 @@ fn evaluate_lfo_effect_normalized_with_offset(
     rate: f32,
 ) -> f32 {
     let rate = f64::from(valid_effect_rate(rate));
+    if let Some(source) = &request.daslight_custom_curve {
+        let phase =
+            lfo_continuous_phase(request, fixture_phase_offset, created_at, now, clock, rate);
+        return evaluate_daslight_custom_points(&source.points, phase);
+    }
     if let Some(source) = &request.daslight_curve {
         return evaluate_daslight_curve_normalized_with_offset(
             request,
@@ -33604,6 +33821,77 @@ fn evaluate_lfo_effect_normalized_with_offset(
         (elapsed * rate / period + f64::from(request.phase) + f64::from(fixture_phase_offset))
             .rem_euclid(1.0);
     evaluate_lfo_shape(&request.shape, phase as f32)
+}
+
+fn evaluate_runtime_lfo_effect_normalized_with_offset(
+    runtime: &RuntimeLfoEffect,
+    fixture_phase_offset: f32,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f32,
+) -> f32 {
+    if let Some(curve) = &runtime.custom_curve {
+        let phase = lfo_continuous_phase(
+            &runtime.request,
+            fixture_phase_offset,
+            created_at,
+            now,
+            clock,
+            f64::from(valid_effect_rate(rate)),
+        );
+        return curve.sample(phase);
+    }
+    evaluate_lfo_effect_normalized_with_offset(
+        &runtime.request,
+        fixture_phase_offset,
+        created_at,
+        now,
+        clock,
+        rate,
+    )
+}
+
+fn lfo_continuous_phase(
+    request: &LfoEffectRequest,
+    fixture_phase_offset: f32,
+    created_at: Instant,
+    now: Instant,
+    clock: &ClockSnapshot,
+    rate: f64,
+) -> f32 {
+    let cycle = if let Some(clock_sync) = request.clock_sync {
+        let beats = f64::from(clock_sync.beats.max(0.000_1));
+        let beat_position = clock.beat_counter as f64 + f64::from(clock.beat_phase);
+        beat_position / beats * rate
+    } else {
+        let period = request.period_ms.max(10) as f64 / 1_000.0;
+        now.saturating_duration_since(created_at).as_secs_f64() * rate / period
+    };
+    (cycle + f64::from(fixture_phase_offset)).rem_euclid(1.0) as f32
+}
+
+fn evaluate_daslight_custom_points(points: &[DaslightCustomCurvePoint], phase: f32) -> f32 {
+    let phase = phase.rem_euclid(1.0);
+    for pair in points.windows(2) {
+        let left = &pair[0];
+        let right = &pair[1];
+        if left.x <= phase && phase < right.x {
+            let Some((left_value, _)) = decode_daslight_custom_raw_y(left.raw_y) else {
+                return 0.0;
+            };
+            let Some((right_value, easing)) = decode_daslight_custom_raw_y(right.raw_y) else {
+                return 0.0;
+            };
+            let progress = (phase - left.x) / (right.x - left.x);
+            return left_value
+                + (right_value - left_value) * evaluate_daslight_custom_easing(easing, progress);
+        }
+    }
+    points
+        .last()
+        .and_then(|point| decode_daslight_custom_raw_y(point.raw_y))
+        .map_or(0.0, |(value, _)| value)
 }
 
 fn evaluate_daslight_curve_normalized_with_offset(
@@ -34616,6 +34904,9 @@ fn evaluate_lfo_shape(shape: &LfoShape, phase: f32) -> f32 {
             (carrier.powi(3) + 1.0) * 0.5
         }
         LfoShape::Tangeant => ((phase * std::f32::consts::TAU).tan() * 0.5 + 0.5).clamp(0.0, 1.0),
+        // Valid Custom requests are evaluated through their dedicated compiled
+        // source. Keep a deterministic fallback for malformed legacy data.
+        LfoShape::DaslightCustom => 0.0,
     }
 }
 
@@ -37132,6 +37423,7 @@ mod tests {
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                     daslight_curve: None,
+                    daslight_custom_curve: None,
                 },
             });
             runtime.apply_command(EngineCommand::SetEffectEnabled {
@@ -37479,6 +37771,7 @@ mod tests {
             beam_targets: Vec::new(),
             blend_mode,
             daslight_curve: None,
+            daslight_custom_curve: None,
         }
     }
 
@@ -37498,6 +37791,24 @@ mod tests {
             offset: 0.0,
             sample_ms: 40,
             rng_seed,
+        });
+        request
+    }
+
+    fn test_daslight_custom_request(points: Vec<DaslightCustomCurvePoint>) -> LfoEffectRequest {
+        let mut request = test_lfo_request(
+            "Imported Custom",
+            LfoShape::DaslightCustom,
+            1_000,
+            0.0,
+            EffectBlendMode::Override,
+            0,
+            u16::MAX,
+        );
+        request.daslight_custom_curve = Some(DaslightCustomCurveSource {
+            points,
+            phasing: 0.0,
+            sample_ms: 40,
         });
         request
     }
@@ -42002,6 +42313,7 @@ mod tests {
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                     daslight_curve: None,
+                    daslight_custom_curve: None,
                 },
             })
             .unwrap();
@@ -42448,6 +42760,7 @@ mod tests {
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                     daslight_curve: None,
+                    daslight_custom_curve: None,
                 },
             })
             .unwrap();
@@ -52439,6 +52752,7 @@ mod tests {
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                     daslight_curve: None,
+                    daslight_custom_curve: None,
                 },
             })
             .unwrap();
@@ -52753,6 +53067,7 @@ mod tests {
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                     daslight_curve: None,
+                    daslight_custom_curve: None,
                 },
             })
             .unwrap();
@@ -53297,6 +53612,7 @@ mod tests {
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                     daslight_curve: None,
+                    daslight_custom_curve: None,
                 },
             })
             .unwrap();
@@ -53339,6 +53655,7 @@ mod tests {
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                     daslight_curve: None,
+                    daslight_custom_curve: None,
                 },
             })
             .unwrap();
@@ -53406,6 +53723,7 @@ mod tests {
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                     daslight_curve: None,
+                    daslight_custom_curve: None,
                 },
             })
             .unwrap();
@@ -53445,6 +53763,7 @@ mod tests {
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                     daslight_curve: None,
+                    daslight_custom_curve: None,
                 },
             })
             .unwrap();
@@ -53483,6 +53802,7 @@ mod tests {
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                     daslight_curve: None,
+                    daslight_custom_curve: None,
                 },
             })
             .unwrap();
@@ -53550,6 +53870,7 @@ mod tests {
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                     daslight_curve: None,
+                    daslight_custom_curve: None,
                 },
             })
             .unwrap();
@@ -53594,6 +53915,7 @@ mod tests {
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                     daslight_curve: None,
+                    daslight_custom_curve: None,
                 },
             })
             .unwrap();
@@ -53726,6 +54048,7 @@ mod tests {
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                     daslight_curve: None,
+                    daslight_custom_curve: None,
                 },
             })
             .unwrap();
@@ -53817,6 +54140,7 @@ mod tests {
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                     daslight_curve: None,
+                    daslight_custom_curve: None,
                 },
             })
             .unwrap();
@@ -53901,6 +54225,7 @@ mod tests {
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                     daslight_curve: None,
+                    daslight_custom_curve: None,
                 },
             })
             .unwrap();
@@ -53975,6 +54300,7 @@ mod tests {
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                     daslight_curve: None,
+                    daslight_custom_curve: None,
                 },
             })
             .unwrap();
@@ -54370,6 +54696,7 @@ mod tests {
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                     daslight_curve: None,
+                    daslight_custom_curve: None,
                 },
             })
             .unwrap();
@@ -54460,6 +54787,7 @@ mod tests {
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                     daslight_curve: None,
+                    daslight_custom_curve: None,
                 },
             })
             .unwrap();
@@ -54532,6 +54860,7 @@ mod tests {
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                     daslight_curve: None,
+                    daslight_custom_curve: None,
                 },
             })
             .unwrap();
@@ -54618,6 +54947,7 @@ mod tests {
                         beam_targets: Vec::new(),
                         blend_mode: EffectBlendMode::Override,
                         daslight_curve: None,
+                        daslight_custom_curve: None,
                     },
                 })
                 .unwrap();
@@ -54662,6 +54992,7 @@ mod tests {
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Add,
                     daslight_curve: None,
+                    daslight_custom_curve: None,
                 },
             })
             .unwrap();
@@ -54886,6 +55217,7 @@ mod tests {
                         beam_targets: Vec::new(),
                         blend_mode,
                         daslight_curve: None,
+                        daslight_custom_curve: None,
                     },
                 })
                 .unwrap();
@@ -54982,6 +55314,7 @@ mod tests {
                     beam_targets: Vec::new(),
                     blend_mode: EffectBlendMode::Override,
                     daslight_curve: None,
+                    daslight_custom_curve: None,
                 },
             })
             .unwrap();
@@ -55740,6 +56073,161 @@ mod tests {
     }
 
     #[test]
+    fn daslight_custom_uses_the_right_point_easing_continuously() {
+        let started = Instant::now();
+        let clock = ClockSnapshot::default();
+        let expected_at_quarter = [0.25, 0.015_625, 0.578_125, 0.0625, 0.4375];
+        for (code, expected) in expected_at_quarter.into_iter().enumerate() {
+            let request = test_daslight_custom_request(vec![
+                DaslightCustomCurvePoint { x: 0.0, raw_y: 0.0 },
+                DaslightCustomCurvePoint {
+                    x: 1.0,
+                    raw_y: code as f32 * 10.0 + 1.0,
+                },
+            ]);
+            validate_lfo_effect_request(&request).unwrap();
+            let actual = evaluate_lfo_effect_normalized(
+                &request,
+                started,
+                started + Duration::from_millis(250),
+                &clock,
+                1.0,
+            );
+            assert!(
+                (actual - expected).abs() < 0.000_01,
+                "easing code {code}: expected {expected}, got {actual}"
+            );
+        }
+
+        let request = test_daslight_custom_request(vec![
+            DaslightCustomCurvePoint {
+                x: 0.2,
+                raw_y: 0.25,
+            },
+            DaslightCustomCurvePoint {
+                x: 0.8,
+                raw_y: 0.75,
+            },
+        ]);
+        assert_eq!(
+            evaluate_lfo_effect_normalized(&request, started, started, &clock, 1.0),
+            0.75,
+            "phases outside all intervals must use the decoded last point"
+        );
+    }
+
+    #[test]
+    fn daslight_custom_adjacent_targets_lag_by_the_full_authored_phasing() {
+        let runtime = runtime_with_move_fixtures(3);
+        let mut request = test_daslight_custom_request(vec![
+            DaslightCustomCurvePoint { x: 0.0, raw_y: 0.0 },
+            DaslightCustomCurvePoint { x: 1.0, raw_y: 1.0 },
+        ]);
+        request.fixture_ids = vec![1, 2, 3];
+        request.daslight_custom_curve.as_mut().unwrap().phasing = 0.25;
+        let compiled = runtime.resolve_lfo_effect_request(request).unwrap();
+        assert_eq!(
+            compiled
+                .targets
+                .iter()
+                .map(|target| target.phase_offset)
+                .collect::<Vec<_>>(),
+            vec![0.0, -0.25, -0.5]
+        );
+
+        let started = Instant::now();
+        let clock = ClockSnapshot::default();
+        let now = started + Duration::from_millis(500);
+        let values = [1, 2, 3].map(|fixture_id| {
+            evaluate_runtime_lfo_attribute_at_rate(
+                &compiled, fixture_id, "Dimmer", 0, started, now, &clock, 1.0,
+            )
+            .unwrap()
+        });
+        assert_eq!(values, [32_768, 16_384, 0]);
+    }
+
+    #[test]
+    fn daslight_custom_validation_rejects_unrepresentable_sources_and_cross_family_use() {
+        let points = vec![
+            DaslightCustomCurvePoint { x: 0.0, raw_y: 0.0 },
+            DaslightCustomCurvePoint {
+                x: 1.0,
+                raw_y: 41.0,
+            },
+        ];
+        let mut request = test_daslight_custom_request(points.clone());
+        validate_lfo_effect_request(&request).unwrap();
+
+        request.video_targets.push(VideoEffectTarget {
+            layer_ids: vec![1],
+            param: VideoParam::Opacity,
+            low: 0.0,
+            high: 1.0,
+            position: None,
+        });
+        assert!(validate_lfo_effect_request(&request)
+            .unwrap_err()
+            .contains("no video targets"));
+        request.video_targets.clear();
+
+        request.daslight_custom_curve.as_mut().unwrap().points[1].x = 0.0;
+        assert!(validate_lfo_effect_request(&request)
+            .unwrap_err()
+            .contains("strictly increasing"));
+        request.daslight_custom_curve.as_mut().unwrap().points = points;
+        request.daslight_custom_curve.as_mut().unwrap().points[1].raw_y = 11.5;
+        assert!(validate_lfo_effect_request(&request)
+            .unwrap_err()
+            .contains("must encode easing"));
+        request.daslight_custom_curve.as_mut().unwrap().points[1].raw_y = 41.0;
+        request
+            .daslight_custom_curve
+            .as_mut()
+            .unwrap()
+            .points
+            .truncate(1);
+        assert!(validate_lfo_effect_request(&request)
+            .unwrap_err()
+            .contains("between 2 and 255"));
+
+        let mut mapping = test_mapping_request(&[1]);
+        mapping.shape = LfoShape::DaslightCustom;
+        assert!(validate_mapping_effect_request(&mapping)
+            .unwrap_err()
+            .contains("import-only"));
+        let mut wave = PositionWaveEffectRequest {
+            label: "Invalid Custom Wave".to_string(),
+            fixture_ids: vec![1],
+            target_group_ids: Vec::new(),
+            attribute: "Dimmer".to_string(),
+            video_targets: Vec::new(),
+            shape: LfoShape::DaslightCustom,
+            origin: Vec3::default(),
+            direction: Vec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            speed: 1.0,
+            wavelength: 1.0,
+            clock_sync: None,
+            low: 0,
+            high: u16::MAX,
+            phase: 0.0,
+            blend_mode: EffectBlendMode::Override,
+        };
+        assert!(runtime_with_move_fixtures(1)
+            .resolve_position_wave_effect_request(wave.clone())
+            .unwrap_err()
+            .contains("only valid for imported LFO"));
+        wave.shape = LfoShape::Sine;
+        assert!(runtime_with_move_fixtures(1)
+            .resolve_position_wave_effect_request(wave)
+            .is_ok());
+    }
+
+    #[test]
     fn daslight_curve_profile_rejects_unrepresentable_source_parameters() {
         let mut request = test_lfo_request(
             "Imported Curve",
@@ -56006,6 +56494,7 @@ mod tests {
             beam_targets: Vec::new(),
             blend_mode: EffectBlendMode::Override,
             daslight_curve: None,
+            daslight_custom_curve: None,
         };
         let clock = ClockSnapshot {
             bpm: 120.0,
@@ -56064,6 +56553,7 @@ mod tests {
                 beam_targets: Vec::new(),
                 blend_mode: EffectBlendMode::Override,
                 daslight_curve: None,
+                daslight_custom_curve: None,
             },
         });
         assert_eq!(runtime.last_error, None);
@@ -60176,6 +60666,7 @@ mod tests {
             }],
             blend_mode: EffectBlendMode::Override,
             daslight_curve: None,
+            daslight_custom_curve: None,
         };
         let now = Instant::now();
         let effect = RuntimeEffect {
@@ -63648,6 +64139,7 @@ mod tests {
                         beam_targets: Vec::new(),
                         blend_mode: EffectBlendMode::Override,
                         daslight_curve: None,
+                        daslight_custom_curve: None,
                     },
                     &runtime.fixtures,
                 )
@@ -66979,6 +67471,7 @@ mod tests {
             beam_targets: Vec::new(),
             blend_mode: EffectBlendMode::Override,
             daslight_curve: None,
+            daslight_custom_curve: None,
         };
         validate_lfo_effect_request(&base).unwrap();
         assert_eq!(base.fixture_ids.len(), RELEASE_GATE_FIXTURE_COUNT);
@@ -67012,6 +67505,102 @@ mod tests {
         });
         eprintln!(
             "Max-target LFO 64x200 (200 fixture targets, Perlin): p95={}us p99={}us max={}us",
+            p95.as_micros(),
+            p99.as_micros(),
+            max.as_micros()
+        );
+        assert_release_gate_percentiles(p95, p99, max);
+    }
+
+    #[test]
+    fn max_parameter_daslight_custom_release_stack_meets_44hz_budget() {
+        const MAX_CUSTOM_POINTS: usize = 255;
+        const MAX_CUSTOM_DURATION_MS: u64 = u32::MAX as u64;
+        const MAX_CUSTOM_PHASING: f32 = 1.0;
+
+        let mut runtime = runtime_with_move_fixtures(RELEASE_GATE_FIXTURE_COUNT as u64);
+        let fixture_ids = (1..=RELEASE_GATE_FIXTURE_COUNT as u64).collect::<Vec<_>>();
+        let points = (0..MAX_CUSTOM_POINTS)
+            .map(|index| {
+                let progress = index as f32 / (MAX_CUSTOM_POINTS - 1) as f32;
+                DaslightCustomCurvePoint {
+                    x: progress,
+                    raw_y: (index % 5) as f32 * 10.0 + 0.5 + progress * 0.5,
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut base = test_daslight_custom_request(points);
+        base.label = "Max Daslight Custom".to_string();
+        base.fixture_ids = fixture_ids;
+        base.period_ms = MAX_CUSTOM_DURATION_MS;
+        base.daslight_custom_curve.as_mut().unwrap().phasing = MAX_CUSTOM_PHASING;
+        validate_lfo_effect_request(&base).unwrap();
+        assert_eq!(
+            base.daslight_custom_curve.as_ref().unwrap().points.len(),
+            MAX_CUSTOM_POINTS
+        );
+        let max_source = base.daslight_custom_curve.as_ref().unwrap();
+        assert_eq!(max_source.points.first().unwrap().x, 0.0);
+        assert_eq!(max_source.points.last().unwrap().x, 1.0);
+        assert!(max_source
+            .points
+            .windows(2)
+            .all(|pair| pair[0].x < pair[1].x));
+        assert!(max_source.points.iter().any(|point| point.raw_y == 41.0));
+        assert_eq!(base.fixture_ids.len(), RELEASE_GATE_FIXTURE_COUNT);
+        assert_eq!(base.period_ms, MAX_CUSTOM_DURATION_MS);
+        assert_eq!(
+            base.daslight_custom_curve.as_ref().unwrap().phasing,
+            MAX_CUSTOM_PHASING
+        );
+        assert_eq!(
+            RELEASE_GATE_EFFECT_COUNT,
+            SUPPORTED_EFFECT_ENVELOPE_ENABLED_EFFECTS
+        );
+        assert_eq!(
+            RELEASE_GATE_FIXTURE_COUNT,
+            SUPPORTED_EFFECT_ENVELOPE_FIXTURES
+        );
+        assert_eq!(RELEASE_GATE_HZ, SUPPORTED_EFFECT_ENVELOPE_HZ);
+        assert_eq!(
+            RELEASE_GATE_SAMPLES,
+            if cfg!(debug_assertions) { 20 } else { 1_000 }
+        );
+        assert_eq!(RELEASE_GATE_P95_LIMIT, Duration::from_millis(5));
+        assert_eq!(RELEASE_GATE_P99_LIMIT, Duration::from_millis(8));
+        assert_eq!(RELEASE_GATE_MAX_LIMIT, Duration::from_millis(12));
+
+        let created_at = Instant::now();
+        for index in 0..RELEASE_GATE_EFFECT_COUNT {
+            let kind =
+                RuntimeEffectKind::Lfo(runtime.resolve_lfo_effect_request(base.clone()).unwrap());
+            runtime.effects.push(RuntimeEffect {
+                id: index as EffectId + 1,
+                kind,
+                enabled: true,
+                created_at,
+            });
+        }
+        assert!(runtime.effects.iter().all(|effect| matches!(
+            &effect.kind,
+            RuntimeEffectKind::Lfo(lfo)
+                if lfo.targets.len() == RELEASE_GATE_FIXTURE_COUNT
+                    && lfo.custom_curve.as_ref().is_some_and(|curve| curve.points.len() == MAX_CUSTOM_POINTS)
+        )));
+        assert_eq!(runtime.effects.len(), RELEASE_GATE_EFFECT_COUNT);
+
+        let (p95, p99, max) = measure_release_gate(created_at, |at| {
+            runtime.fixtures.iter().fold(0_u64, |checksum, fixture| {
+                checksum.wrapping_add(
+                    runtime
+                        .apply_effects_with_transition_policy(fixture, "Dimmer", 16_384, at, false)
+                        as u64,
+                )
+            })
+        });
+        eprintln!(
+            "Max Daslight Custom 64x200 (255 points, duration={}ms, Phasing=1): p95={}us p99={}us max={}us",
+            MAX_CUSTOM_DURATION_MS,
             p95.as_micros(),
             p99.as_micros(),
             max.as_micros()

@@ -9,6 +9,7 @@ import type {
   CueLiveModifierSettings,
   CueLiveModifierState,
   CueSummary,
+  DaslightCustomCurveSource,
   EffectKind,
   EffectSummary,
 } from "../types";
@@ -17,6 +18,7 @@ import { ColorEffectEditorPanel } from "./ColorEffectEditorPanel";
 import { ColorMappingEffectEditorPanel } from "./ColorMappingEffectEditorPanel";
 import { CueLiveModifierStrip } from "./CueLiveModifierStrip";
 import { CurveEffectEditorPanel } from "./CurveEffectEditorPanel";
+import { DaslightCustomCurvePanel } from "./DaslightCustomCurvePanel";
 import { EffectActionControlsPanel } from "./EffectActionControlsPanel";
 import { EffectFeatureEditorPanel } from "./EffectFeatureEditorPanel";
 import { FxColorPaletteLibraryPanel } from "./FxColorPaletteLibraryPanel";
@@ -43,6 +45,9 @@ export interface SceneEffectEditorModel {
   curve: ComponentProps<typeof CurveEffectEditorPanel>;
   mapping: ComponentProps<typeof MappingEffectEditorPanel>;
   colorMapping: ComponentProps<typeof ColorMappingEffectEditorPanel>;
+  daslightCustomCurve: {
+    source: DaslightCustomCurveSource | null;
+  };
   features: ComponentProps<typeof EffectFeatureEditorPanel>;
   target: ComponentProps<typeof SceneEffectTargetEditor>;
   palette: ComponentProps<typeof FxColorPaletteLibraryPanel>;
@@ -437,9 +442,12 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
                     <span>{props.editor.effectType}</span>
                   </header>
                   <SceneEffectTargetEditor {...props.editor.target} />
+                  <Show when={props.editor.effectType === "Lfo" && props.editor.daslightCustomCurve.source}>
+                    <DaslightCustomCurvePanel {...props.editor.daslightCustomCurve} />
+                  </Show>
                   <FxColorPaletteLibraryPanel {...props.editor.palette} />
                   <Show
-                    when={["Lfo", "PositionWave"].includes(props.editor.effectType)}
+                    when={["Lfo", "PositionWave"].includes(props.editor.effectType) && !props.editor.target.readOnly}
                   >
                     <label class="sceneSettingsAttribute">
                       Attribute

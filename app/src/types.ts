@@ -279,7 +279,7 @@ export interface RemoteControlStatus {
 }
 
 export type ClockSource = "Manual" | "Tap" | "MidiClock" | "MidiTimecode" | "Ltc" | "AbletonLink";
-export type LfoShape = "Sine" | "Cosine" | "Pulse" | "Triangle" | "Ramp" | "Saw" | "Square" | "Strobe" | "Random" | "Perlin" | "Sinus3" | "Tangeant";
+export type LfoShape = "Sine" | "Cosine" | "Pulse" | "Triangle" | "Ramp" | "Saw" | "Square" | "Strobe" | "Random" | "Perlin" | "Sinus3" | "Tangeant" | "DaslightCustom";
 export type EffectKind = "Lfo" | "PositionWave" | "Color" | "Chaser" | "Move" | "Value" | "Curve" | "Mapping" | "ColorMapping";
 export type EffectBlendMode = "Override" | "Add" | "Multiply";
 export type ColorEffectAlgorithm = "Cycle" | "Bounce" | "Sequence" | "Random";
@@ -1881,6 +1881,23 @@ export interface DaslightCurveSource {
   rng_seed?: number | null;
 }
 
+/**
+ * Imported Daslight Custom CURVE source. `raw_y` deliberately retains the
+ * source encoding: the integer tens digit is the easing code and the
+ * fractional part is the output value. Point order is semantic and must not
+ * be sorted by an editor or preview.
+ */
+export interface DaslightCustomCurvePoint {
+  x: number;
+  raw_y: number;
+}
+
+export interface DaslightCustomCurveSource {
+  points: DaslightCustomCurvePoint[];
+  phasing: number;
+  sample_ms: number;
+}
+
 export interface LfoEffectRequest {
   label: string;
   fixture_ids: number[];
@@ -1897,6 +1914,7 @@ export interface LfoEffectRequest {
   beam_targets?: EffectBeamTarget[];
   blend_mode: EffectBlendMode;
   daslight_curve?: DaslightCurveSource | null;
+  daslight_custom_curve?: DaslightCustomCurveSource | null;
 }
 
 export interface EffectClockSync {

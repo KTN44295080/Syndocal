@@ -22,6 +22,7 @@ export interface SceneEffectTargetEditorProps {
   activeFixtureId: number | null;
   fixtureOptions: SceneEffectTargetFixtureOption[];
   groupOptions: SceneEffectTargetGroupOption[];
+  readOnly?: boolean;
   onMode: (mode: Exclude<SceneEffectTargetMode, "video">) => void;
   onActiveFixture: (fixtureId: number) => void;
   onToggleFixture: (fixtureId: number) => void;
@@ -35,15 +36,23 @@ export function SceneEffectTargetEditor(props: SceneEffectTargetEditorProps) {
   return (
     <fieldset class="sceneEffectTargetEditor" data-scene-effect-target-mode={props.mode}>
       <legend>Beams / fixtures</legend>
-      <div class="sceneEffectTargetModes" role="group" aria-label="FX target scope">
-        <button type="button" classList={{ active: props.mode === "fixture" }} aria-pressed={props.mode === "fixture"} onClick={() => props.onMode("fixture")}>Fixture</button>
-        <button type="button" classList={{ active: props.mode === "selection" }} aria-pressed={props.mode === "selection"} onClick={() => props.onMode("selection")}>Selection</button>
-        <button type="button" classList={{ active: props.mode === "group" }} aria-pressed={props.mode === "group"} onClick={() => props.onMode("group")}>Groups</button>
-      </div>
-      <div class="sceneEffectTargetSummary">
-        <strong data-no-localize>{props.summary}</strong>
-        <span>{props.explicitBeamCount > 0 ? `${props.explicitBeamCount} explicit beam / segment targets` : "Fixture attributes resolve through the patched profile."}</span>
-      </div>
+      <Show when={props.readOnly}>
+        <p class="sceneEffectTargetNotice">Explicit beam targets are preserved without retargeting.</p>
+        <div class="sceneEffectTargetSummary">
+          <strong data-no-localize>{props.summary}</strong>
+          <span>{props.explicitBeamCount} explicit beam / segment targets</span>
+        </div>
+      </Show>
+      <Show when={!props.readOnly}>
+        <div class="sceneEffectTargetModes" role="group" aria-label="FX target scope">
+          <button type="button" classList={{ active: props.mode === "fixture" }} aria-pressed={props.mode === "fixture"} onClick={() => props.onMode("fixture")}>Fixture</button>
+          <button type="button" classList={{ active: props.mode === "selection" }} aria-pressed={props.mode === "selection"} onClick={() => props.onMode("selection")}>Selection</button>
+          <button type="button" classList={{ active: props.mode === "group" }} aria-pressed={props.mode === "group"} onClick={() => props.onMode("group")}>Groups</button>
+        </div>
+        <div class="sceneEffectTargetSummary">
+          <strong data-no-localize>{props.summary}</strong>
+          <span>{props.explicitBeamCount > 0 ? `${props.explicitBeamCount} explicit beam / segment targets` : "Fixture attributes resolve through the patched profile."}</span>
+        </div>
 
       <Show when={props.mode === "fixture"}>
         <label class="sceneEffectTargetFixtureSelect">
@@ -106,6 +115,7 @@ export function SceneEffectTargetEditor(props: SceneEffectTargetEditorProps) {
 
       <Show when={props.mode === "video"}>
         <p class="sceneEffectTargetNotice">This legacy FX currently targets video. Choose a lighting target above to retarget it.</p>
+      </Show>
       </Show>
     </fieldset>
   );

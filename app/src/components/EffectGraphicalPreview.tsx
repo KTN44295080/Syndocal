@@ -2,6 +2,7 @@ import { createMemo, For, Show } from "solid-js";
 import {
   buildColorGradient,
   buildCurvePreviewPath,
+  buildDaslightCustomCurvePreviewPath,
   buildLfoPreviewPath,
   buildPointPath,
   buildValuePreviewPath,
@@ -15,6 +16,7 @@ import type {
   ColorEffectRequest,
   ColorMappingEffectRequest,
   CurveEffectRequest,
+  DaslightCustomCurveSource,
   DaslightCurveSource,
   EffectKind,
   EffectParamsSnapshot,
@@ -39,6 +41,7 @@ interface PreviewModel {
   phase?: number;
   periodMs?: number;
   daslightCurve?: DaslightCurveSource | null;
+  daslightCustomCurve?: DaslightCustomCurveSource | null;
   color?: ColorEffectRequest | null;
   chaser?: ChaserEffectRequest | null;
   move?: MoveEffectRequest | null;
@@ -59,6 +62,7 @@ const modelFromParams = (params: EffectParamsSnapshot): PreviewModel => {
       phase: params.Lfo.phase,
       periodMs: params.Lfo.period_ms,
       daslightCurve: params.Lfo.daslight_curve,
+      daslightCustomCurve: params.Lfo.daslight_custom_curve,
     };
   }
   if ("PositionWave" in params) {
@@ -97,6 +101,7 @@ const modelFromEffect = (effect: EffectSummary): PreviewModel => ({
   phase: effect.phase,
   periodMs: effect.period_ms ?? undefined,
   daslightCurve: effect.lfo?.daslight_curve,
+  daslightCustomCurve: effect.lfo?.daslight_custom_curve,
   color: effect.color,
   chaser: effect.chaser,
   move: effect.move_effect,
@@ -140,6 +145,15 @@ export function EffectGraphicalPreview(props: EffectGraphicalPreviewProps) {
           current.kind === "Lfo",
           current.daslightCurve,
           current.periodMs,
+        )
+      : "";
+  });
+  const daslightCustomCurvePath = createMemo(() => {
+    const current = model();
+    return current?.daslightCustomCurve
+      ? buildDaslightCustomCurvePreviewPath(
+          current.daslightCustomCurve,
+          current.phase ?? 0,
         )
       : "";
   });
@@ -194,19 +208,25 @@ export function EffectGraphicalPreview(props: EffectGraphicalPreviewProps) {
               data-lfo-high={current().high}
               data-lfo-phase={current().phase}
               data-daslight-curve={current().daslightCurve ? current().shape : undefined}
+              data-daslight-custom-curve={current().daslightCustomCurve?.points.length}
               data-mapping-direction={current().mapping?.direction}
               data-mapping-repetitions={current().mapping?.repetitions}
               data-mapping-fixture-order={current().mapping?.fixture_ids.join(",")}
               aria-hidden="true"
             >
               <line x1="0" y1="16" x2="100" y2="16" />
-              <path d={lfoPath()} />
+              <path d={current().daslightCustomCurve ? daslightCustomCurvePath() : lfoPath()} />
             </svg>
             <span class="effectGraphicalReadout tabularNums">
-              <b>{current().shape}</b>
+              <b>{current().daslightCustomCurve ? "Custom CURVE" : current().shape}</b>
               <Show when={current().daslightCurve}><span>DVC source</span></Show>
               <span>{Math.round(current().low ?? 0)}–{Math.round(current().high ?? 0)}</span>
-              <span>φ {Math.round((current().phase ?? 0) * 100)}%</span>
+              <Show
+                when={current().daslightCustomCurve}
+                fallback={<span>φ {Math.round((current().phase ?? 0) * 100)}%</span>}
+              >
+                {(source) => <span>Phasing {Math.round(source().phasing * 100)}%</span>}
+              </Show>
               <Show when={current().mapping}>
                 {(mapping) => <span>{mapping().repetitions.toFixed(2)}× order</span>}
               </Show>

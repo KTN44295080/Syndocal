@@ -20534,6 +20534,7 @@ fn effect_summary_to_preset(effect: &EffectSummary) -> Result<EffectPreset, Stri
                     beam_targets: Vec::new(),
                     blend_mode: effect.blend_mode.clone(),
                     daslight_curve: None,
+                    daslight_custom_curve: None,
                 }
             };
             Ok(EffectPreset {
@@ -38378,6 +38379,7 @@ f 1 2 3
             beam_targets: Vec::new(),
             blend_mode: protocol::EffectBlendMode::Override,
             daslight_curve: None,
+            daslight_custom_curve: None,
         }
     }
 
@@ -38884,6 +38886,7 @@ f 1 2 3
                 }],
                 blend_mode: protocol::EffectBlendMode::Override,
                 daslight_curve: None,
+                daslight_custom_curve: None,
             }),
             color: None,
             chaser: None,
@@ -40840,6 +40843,7 @@ f 1 2 3
                     beam_targets: Vec::new(),
                     blend_mode: protocol::EffectBlendMode::Add,
                     daslight_curve: None,
+                    daslight_custom_curve: None,
                 }),
                 position_wave: None,
                 color: None,

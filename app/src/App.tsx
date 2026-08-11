@@ -238,6 +238,7 @@ import type {
   DmxOutputConfig,
   DvcImportReport,
   DmxControlMapping,
+  DaslightCustomCurveSource,
   DaslightCurveSource,
   DmxInputConfig,
   DmxInputStatus,
@@ -1850,6 +1851,10 @@ export default function App() {
   const [lfoFixtureSpread, setLfoFixtureSpread] = createSignal(0);
   const [lfoDaslightCurveSource, setLfoDaslightCurveSource] =
     createSignal<DaslightCurveSource | null>(null);
+  const [lfoDaslightCustomCurveSource, setLfoDaslightCustomCurveSource] =
+    createSignal<DaslightCustomCurveSource | null>(null);
+  const [lfoImportedBase, setLfoImportedBase] =
+    createSignal<LfoEffectRequest | null>(null);
   const [colorEffectStops, setColorEffectStops] = createSignal<ColorEffectStop[]>(
     defaultColorEffectStops.map((stop) => ({ ...stop, color: { ...stop.color } })),
   );
@@ -5087,6 +5092,8 @@ export default function App() {
     setEffectType(nextType);
     if (nextType !== previousType) {
       setLfoDaslightCurveSource(null);
+      setLfoDaslightCustomCurveSource(null);
+      setLfoImportedBase(null);
     }
     if (!preserveChooserFamily) {
       const family = chooserFamilyForEffectType(nextType);
@@ -15962,6 +15969,19 @@ export default function App() {
   });
   const effectSubmitDisabled = createMemo(() => {
     const linkedVideoMissing = effectVideoTargetLinked() && selectedEffectVideoLayerId() === null;
+    const importedLfo = effectType() === "Lfo" && lfoImportedBase();
+    if (importedLfo) {
+      const customSource = lfoDaslightCustomCurveSource();
+      if (!Number.isFinite(effectPeriod()) || effectPeriod() < 10
+        || !Number.isFinite(effectLow()) || effectLow() < 0 || effectLow() > 65_535
+        || !Number.isFinite(effectHigh()) || effectHigh() < 0 || effectHigh() > 65_535
+        || (effectShape() === "DaslightCustom" && !customSource)
+        || (effectShape() !== "DaslightCustom" && customSource)
+        || (lfoDaslightCurveSource() && customSource)) {
+        return true;
+      }
+      return false;
+    }
     if (effectType() === "Lfo"
       && (!Number.isFinite(lfoFixtureSpread()) || lfoFixtureSpread() < 0 || lfoFixtureSpread() > 1)) {
       return true;
@@ -16085,6 +16105,7 @@ export default function App() {
     const chaserEffect = effectType() === "Chaser";
     const moveEffect = effectType() === "Move";
     const multiFeatureEffect = ["Value", "Curve", "Mapping"].includes(effectType());
+    const preservesImportedLfoTargets = effectType() === "Lfo" && lfoImportedBase() !== null;
     if (moveEffect) {
       const error = currentMoveDraftError();
       if (error) {
@@ -16154,34 +16175,44 @@ export default function App() {
       };
     }
     const includesVideoTarget = !wholeFixtureColorEffect && (isVideoTarget || effectVideoTargetLinked());
-    if (wholeFixtureColorEffect && (isVideoTarget || effectVideoTargetLinked())) {
+    if (!preservesImportedLfoTargets && wholeFixtureColorEffect && (isVideoTarget || effectVideoTargetLinked())) {
       setMessage("Color and Colour Mapping effects target complete lighting fixtures and cannot link a video parameter.");
       return null;
     }
-    if (targetMode === "fixture" && (!fixture || (!wholeFixtureColorEffect && !multiFeatureEffect && !attribute))) {
+    if (!preservesImportedLfoTargets
+      && targetMode === "fixture"
+      && (!fixture || (!wholeFixtureColorEffect && !multiFeatureEffect && !attribute))) {
       setMessage("Select a fixture and attribute first.");
       return null;
     }
     const selectedMapFixtureIds = selectedMappingFixtures().map((candidate) => candidate.id);
-    if (targetMode === "selection" && selectedMapFixtureIds.length === 0) {
+    if (!preservesImportedLfoTargets && targetMode === "selection" && selectedMapFixtureIds.length === 0) {
       setMessage("Select one or more fixtures on the 2D mapping stage first.");
       return null;
     }
-    if (!wholeFixtureColorEffect && !multiFeatureEffect && targetMode === "selection" && !attribute) {
+    if (!preservesImportedLfoTargets
+      && !wholeFixtureColorEffect
+      && !multiFeatureEffect
+      && targetMode === "selection"
+      && !attribute) {
       setMessage("Select a fixture profile attribute before targeting a map selection.");
       return null;
     }
     const targetGroupIds = parseGroupIds(effectTargetGroups());
-    if (targetMode === "group" && targetGroupIds.length === 0) {
+    if (!preservesImportedLfoTargets && targetMode === "group" && targetGroupIds.length === 0) {
       setMessage("Enter at least one target group.");
       return null;
     }
-    if (!wholeFixtureColorEffect && !multiFeatureEffect && targetMode === "group" && !attribute) {
+    if (!preservesImportedLfoTargets
+      && !wholeFixtureColorEffect
+      && !multiFeatureEffect
+      && targetMode === "group"
+      && !attribute) {
       setMessage("Select a fixture profile attribute before targeting a group.");
       return null;
     }
     const videoLayerId = selectedEffectVideoLayerId();
-    if (includesVideoTarget && videoLayerId === null) {
+    if (!preservesImportedLfoTargets && includesVideoTarget && videoLayerId === null) {
       setMessage(isVideoTarget ? "Add a video layer before adding a video effect." : "Add a video layer before linking video to this effect.");
       return null;
     }
@@ -16374,10 +16405,18 @@ export default function App() {
       return {
         effectType: "Lfo",
         request: {
-          ...requestBase,
+          ...(lfoImportedBase() ?? requestBase),
           period_ms: effectPeriod(),
-          fixture_spread: lfoFixtureSpread(),
+          low: effectLow(),
+          high: effectHigh(),
+          blend_mode: effectBlendMode(),
+          phase: lfoDaslightCustomCurveSource() ? 0 : lfoImportedBase()?.phase ?? requestBase.phase,
+          fixture_spread: lfoDaslightCustomCurveSource()
+            ? 0
+            : lfoImportedBase()?.fixture_spread ?? lfoFixtureSpread(),
+          beam_targets: lfoImportedBase()?.beam_targets?.map((target) => ({ ...target })),
           daslight_curve: lfoDaslightCurveSource() ?? undefined,
+          daslight_custom_curve: lfoDaslightCustomCurveSource() ?? undefined,
         },
       };
     }
@@ -16506,6 +16545,22 @@ export default function App() {
     setLfoDaslightCurveSource(
       effect.effect_type === "Lfo" ? effect.lfo?.daslight_curve ?? null : null,
     );
+    setLfoDaslightCustomCurveSource(
+      effect.effect_type === "Lfo" ? effect.lfo?.daslight_custom_curve ?? null : null,
+    );
+    setLfoImportedBase(effect.effect_type === "Lfo"
+      && (effect.lfo?.daslight_custom_curve || effect.lfo?.beam_targets?.length)
+      ? {
+          ...effect.lfo,
+          fixture_ids: [...effect.lfo.fixture_ids],
+          target_group_ids: [...effect.lfo.target_group_ids],
+          video_targets: effect.lfo.video_targets.map((target) => ({
+            ...target,
+            layer_ids: [...target.layer_ids],
+          })),
+          beam_targets: effect.lfo.beam_targets?.map((target) => ({ ...target })),
+        }
+      : null);
     const effectFamily = chooserFamilyForEffectType(effect.effect_type);
     setEffectChooserFamily(effectFamily);
     if (effect.effect_type === "Chaser") {
@@ -16685,7 +16740,9 @@ export default function App() {
     }
     setEffectLow(effect.low);
     setEffectHigh(effect.high);
-    setEffectPhase(effect.phase);
+    setEffectPhase(
+      effect.effect_type === "Lfo" && effect.lfo?.daslight_custom_curve ? 0 : effect.phase,
+    );
     if (effect.effect_type === "Lfo") {
       setLfoFixtureSpread(effect.fixture_spread ?? 0);
     }
@@ -16806,6 +16863,8 @@ export default function App() {
       ?? "";
     setEditingEffectId(null);
     setLfoDaslightCurveSource(null);
+    setLfoDaslightCustomCurveSource(null);
+    setLfoImportedBase(null);
     setEffectVideoTargetLinked(false);
     setSelectedMappingFixtureIds(fixtureIds);
     if (fixtureIds.length > 0) {
@@ -17347,6 +17406,9 @@ export default function App() {
       onWrapMode: setColorMappingWrapMode,
       onSampling: setColorMappingSampling,
     },
+    daslightCustomCurve: {
+      source: lfoDaslightCustomCurveSource(),
+    },
     features: {
       effectLabel: effectType(),
       features: scalarEffectFeatures(),
@@ -17356,7 +17418,9 @@ export default function App() {
     },
     target: {
       mode: effectTargetMode(),
-      summary: effectTargetSummary(),
+      summary: lfoImportedBase()
+        ? `${lfoImportedBase()!.attribute || "—"} · fixtures ${lfoImportedBase()!.fixture_ids.join(",") || "—"} · groups ${lfoImportedBase()!.target_group_ids.join(",") || "—"}`
+        : effectTargetSummary(),
       explicitBeamCount: explicitBeamTargetCount(selectedSceneEffects()
         .find((effect) => effect.id === selectedSceneEffectId()) ?? null),
       activeFixtureId: selectedFixtureId(),
@@ -17371,6 +17435,7 @@ export default function App() {
         count: group.count,
         selected: parseGroupIds(effectTargetGroups()).includes(group.groupId),
       })),
+      readOnly: Boolean(lfoImportedBase()),
       onMode: setSceneEffectTargetScope,
       onActiveFixture: setSceneEffectActiveFixture,
       onToggleFixture: toggleSceneEffectFixture,
@@ -17387,8 +17452,13 @@ export default function App() {
     action: {
       showLightRange: effectTargetMode() !== "video"
         && !["Color", "ColorMapping", "Chaser", "Move", "Value", "Curve", "Mapping"].includes(effectType()),
-      showPhase: !["Move", "Value", "Curve", "Mapping", "ColorMapping"].includes(effectType()),
-      showFixtureSpread: effectType() === "Lfo" && effectTargetMode() !== "video",
+      showPhase: !["Move", "Value", "Curve", "Mapping", "ColorMapping"].includes(effectType())
+        && !lfoDaslightCustomCurveSource()
+        && !lfoImportedBase(),
+      showFixtureSpread: effectType() === "Lfo"
+        && effectTargetMode() !== "video"
+        && !lfoDaslightCustomCurveSource()
+        && !lfoImportedBase(),
       lockBlendMode: effectType() === "Move",
       low: effectLow(),
       high: effectHigh(),
