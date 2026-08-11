@@ -29,7 +29,46 @@ export interface ColorEffectEditorPanelProps {
   onSpatialPattern: (pattern: ColorEffectSpatialPattern | null) => void;
 }
 
-type ColorSpatialKind = "PaletteFlow" | "KnightRider" | "Burst" | "Sweep" | "RandomFill" | "Sparkle" | "Spiral" | "Butterfly" | "Plasma" | "ColorRainbow" | "Rainbow" | "Grid" | "Lines" | "Perlin";
+type ColorSpatialKind = "PaletteFlow" | "KnightRider" | "Burst" | "Sweep" | "RandomFill" | "Sparkle" | "Spiral" | "Butterfly" | "Plasma" | "ColorRainbow" | "Rainbow" | "Grid" | "Lines" | "Graph" | "Perlin";
+
+interface ColorPalettePolicy {
+  minStops: number;
+  maxStops: number;
+  requiresPlacement: boolean;
+  countError: string;
+}
+
+const genericColorPalettePolicy: ColorPalettePolicy = {
+  minStops: DASLIGHT_FX_PALETTE_MIN_STOPS,
+  maxStops: DASLIGHT_FX_PALETTE_MAX_STOPS,
+  requiresPlacement: false,
+  countError: "A color effect requires 1 to 255 palette stops.",
+};
+const gridColorPalettePolicy: ColorPalettePolicy = {
+  minStops: 2,
+  maxStops: 5,
+  requiresPlacement: true,
+  countError: "Grid mapping requires 2 to 5 palette stops.",
+};
+const placedColorPalettePolicy: ColorPalettePolicy = {
+  minStops: 2,
+  maxStops: DASLIGHT_FX_PALETTE_MAX_STOPS,
+  requiresPlacement: true,
+  countError: "This mapping requires 2 to 255 palette stops.",
+};
+const graphColorPalettePolicy: ColorPalettePolicy = {
+  minStops: 2,
+  maxStops: 10,
+  requiresPlacement: true,
+  countError: "Graph mapping requires 2 to 10 palette stops.",
+};
+
+const palettePolicyForSpatialKind = (kind: ColorSpatialKind): ColorPalettePolicy => {
+  if (kind === "Grid") return gridColorPalettePolicy;
+  if (kind === "Graph") return graphColorPalettePolicy;
+  if (kind === "Lines") return placedColorPalettePolicy;
+  return genericColorPalettePolicy;
+};
 
 export const defaultColorEffectStops: ColorEffectStop[] = [
   { position: 0, color: { red: 65_535, green: 0, blue: 0 } },
@@ -196,6 +235,15 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
     return typeof value === "number" && Number.isFinite(value) ? value : fallback;
   };
   const spatialBoolean = (key: string) => spatialValues()[key] === true;
+  const currentPalettePolicy = createMemo(() => palettePolicyForSpatialKind(spatialKind()));
+  const spatialKindUnavailable = (kind: ColorSpatialKind) => {
+    const policy = palettePolicyForSpatialKind(kind);
+    return policy.requiresPlacement && (
+      props.spatialPattern?.placement === undefined
+      || props.stops.length < policy.minStops
+      || props.stops.length > policy.maxStops
+    );
+  };
   const perlinHasMappingPlacement = createMemo(() =>
     spatialKind() === "Perlin" && props.spatialPattern?.placement !== undefined,
   );
@@ -209,7 +257,7 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
       props.onSpatialPattern(null);
       return;
     }
-    if ((kind === "Grid" || kind === "Lines") && props.spatialPattern?.placement === undefined) return;
+    if (spatialKindUnavailable(kind)) return;
     const recipe = defaultSpatialRecipe(kind);
     if (kind === "RandomFill" && props.spatialPattern?.placement && "RandomFill" in recipe) {
       recipe.RandomFill.source_point_height = 1;
@@ -255,7 +303,7 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
   };
   const placedSharedRaster = createMemo(() =>
     props.spatialPattern?.placement !== undefined
-      && ["KnightRider", "Burst", "Sweep", "RandomFill", "Sparkle", "Spiral", "Butterfly", "Plasma", "Grid", "Lines"].includes(spatialKind()),
+      && ["KnightRider", "Burst", "Sweep", "RandomFill", "Sparkle", "Spiral", "Butterfly", "Plasma", "Grid", "Lines", "Graph"].includes(spatialKind()),
   );
   const placementTransform = () => props.spatialPattern?.placement?.vertical_symmetry
     ? "vertical"
@@ -263,8 +311,9 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
       ? "horizontal"
       : "none";
   const stopError = createMemo(() => {
-    if (props.stops.length < DASLIGHT_FX_PALETTE_MIN_STOPS || props.stops.length > DASLIGHT_FX_PALETTE_MAX_STOPS) {
-      return "A color effect requires 1 to 255 palette stops.";
+    const policy = currentPalettePolicy();
+    if (props.stops.length < policy.minStops || props.stops.length > policy.maxStops) {
+      return policy.countError;
     }
     if (
       props.stops.some(
@@ -333,13 +382,13 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
   };
 
   const removeStop = (index: number) => {
-    if (orderedStops().length <= DASLIGHT_FX_PALETTE_MIN_STOPS) return;
+    if (orderedStops().length <= currentPalettePolicy().minStops) return;
     publishStops(orderedStops().filter((_, candidateIndex) => candidateIndex !== index));
   };
 
   const addStop = () => {
     const stops = orderedStops();
-    if (stops.length >= DASLIGHT_FX_PALETTE_MAX_STOPS) return;
+    if (stops.length >= currentPalettePolicy().maxStops) return;
     if (stops.length === 0) {
       publishStops(defaultColorEffectStops.slice(0, 2).map((stop) => ({ ...stop, color: { ...stop.color } })));
       return;
@@ -485,7 +534,7 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
                     class="colorEffectStopAction remove"
                     aria-label={`Remove palette stop ${stopNumber()}`}
                     title="Remove stop"
-                    disabled={orderedStops().length <= DASLIGHT_FX_PALETTE_MIN_STOPS}
+                    disabled={orderedStops().length <= currentPalettePolicy().minStops}
                     onClick={() => removeStop(index())}
                   >
                     ×
@@ -496,8 +545,8 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
           </For>
         </div>
         <div class="colorEffectPaletteFooter">
-          <span class="tabularNums">{orderedStops().length} / 255 stops</span>
-          <button type="button" onClick={addStop} disabled={orderedStops().length >= DASLIGHT_FX_PALETTE_MAX_STOPS}>Add stop</button>
+          <span class="tabularNums">{orderedStops().length} / {currentPalettePolicy().maxStops} stops</span>
+          <button type="button" onClick={addStop} disabled={orderedStops().length >= currentPalettePolicy().maxStops}>Add stop</button>
         </div>
         <Show when={stopError()}>
           {(error) => <p class="fieldError textPretty" role="alert">{error()}</p>}
@@ -526,8 +575,9 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
               <option value="Plasma">Plasma</option>
               <option value="ColorRainbow">Rainbow strip</option>
               <option value="Rainbow">Rainbow mapping</option>
-              <option value="Grid" disabled={props.spatialPattern?.placement === undefined}>Grid mapping</option>
-              <option value="Lines" disabled={props.spatialPattern?.placement === undefined}>Lines mapping</option>
+              <option value="Grid" disabled={spatialKindUnavailable("Grid")}>Grid mapping</option>
+              <option value="Lines" disabled={spatialKindUnavailable("Lines")}>Lines mapping</option>
+              <option value="Graph" disabled={spatialKindUnavailable("Graph")}>Graph mapping</option>
               <option value="Perlin">Perlin mapping</option>
             </select>
           </label>
@@ -651,6 +701,17 @@ export function ColorEffectEditorPanel(props: ColorEffectEditorPanelProps) {
           <div class="colorEffectModeGrid" data-color-lines-controls>
             <label><input type="checkbox" checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
             <label>Line size<input data-color-lines-size type="number" min="2" max="20" step="1" value={spatialNumber("size", 2)} onInput={(event) => patchSpatialValues({ size: clamp(Math.round(Number(event.currentTarget.value) || 2), 2, 20) })} /></label>
+          </div>
+        </Show>
+        <Show when={spatialKind() === "Graph"}>
+          <div class="colorEffectModeGrid" data-color-graph-controls>
+            <label><input type="checkbox" checked={spatialBoolean("grayscale")} onInput={(event) => patchSpatialValues({ grayscale: event.currentTarget.checked })} /> Grayscale</label>
+            <label>Graph height<input data-color-graph-height type="number" min="1" max="100" step="1" value={spatialNumber("height", 10)} onInput={(event) => patchSpatialValues({ height: clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 100) })} /></label>
+            <label>Graph width<input data-color-graph-width type="number" min="1" max="100" step="1" value={spatialNumber("width", 10)} onInput={(event) => patchSpatialValues({ width: clamp(Math.round(Number(event.currentTarget.value) || 1), 1, 100) })} /></label>
+            <label>Graph pitch<input data-color-graph-pitch type="number" min="0" max="100" step="1" value={spatialNumber("pitch", 10)} onInput={(event) => patchSpatialValues({ pitch: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 100) })} /></label>
+            <label>Graph frequency<input data-color-graph-frequency type="number" min="0" max="10" step="1" value={spatialNumber("frequency", 2)} onInput={(event) => patchSpatialValues({ frequency: clamp(Math.round(Number(event.currentTarget.value) || 0), 0, 10) })} /></label>
+            <label>Graph amplitude<input data-color-graph-amplitude type="number" min="0" max="2" step="0.1" value={spatialNumber("amplitude", 1)} onInput={(event) => patchSpatialValues({ amplitude: clamp(Number(event.currentTarget.value), 0, 2) })} /></label>
+            <label>Graph offset<input data-color-graph-offset type="number" min="-1" max="1" step="0.1" value={spatialNumber("offset", 0)} onInput={(event) => patchSpatialValues({ offset: clamp(Number(event.currentTarget.value), -1, 1) })} /></label>
           </div>
         </Show>
         <Show when={spatialKind() === "Perlin"}>

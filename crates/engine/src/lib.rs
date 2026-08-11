@@ -3566,6 +3566,10 @@ struct RuntimeColorSpatialState {
     /// COLOR MAPPINGS ID 50 Grid / ID 31 Lines fixed 100x100 raster
     /// constants and palette. Sampling is analytic and allocation-free.
     daslight_grid_lines: Option<CompiledDaslightGridLines>,
+    /// COLOR MAPPINGS ID 49 Graph fixed 100x100 raster constants and palette.
+    /// Sampling reconstructs the last covering tile analytically and allocates
+    /// nothing in the tick path.
+    daslight_graph: Option<CompiledDaslightGraph>,
 }
 
 #[derive(Clone)]
@@ -5548,6 +5552,205 @@ impl CompiledDaslightGridLines {
                 Self::finish_color(palette, *grayscale, palette_index)
             }
         }
+    }
+}
+
+#[derive(Clone)]
+struct CompiledDaslightGraphPhaseCache {
+    phase_bits: Option<u64>,
+    anchor_count: usize,
+    tile_y: [i32; 100],
+    #[cfg(test)]
+    rebuild_count: u64,
+    #[cfg(test)]
+    anchor_evaluation_count: u64,
+}
+
+impl Default for CompiledDaslightGraphPhaseCache {
+    fn default() -> Self {
+        Self {
+            phase_bits: None,
+            anchor_count: 0,
+            tile_y: [0; 100],
+            #[cfg(test)]
+            rebuild_count: 0,
+            #[cfg(test)]
+            anchor_evaluation_count: 0,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct CompiledDaslightGraph {
+    palette: Vec<ColorEffectColor>,
+    grayscale: bool,
+    height: i32,
+    width: i32,
+    pitch: i32,
+    frequency: f64,
+    amplitude: f64,
+    offset: f64,
+    source_pixel_phase: f64,
+    /// Fixed-size per-effect work image equivalent. The runtime evaluates one
+    /// Graph phase for every target in a tick, so cache the at-most-100 Y
+    /// anchors once without allocating in the tick path.
+    phase_cache: RefCell<CompiledDaslightGraphPhaseCache>,
+}
+
+impl CompiledDaslightGraph {
+    const RASTER_SIZE: i32 = 100;
+    const SOURCE_PIXEL_MS: f64 = 40.0;
+
+    fn compile(request: &ColorEffectRequest) -> Result<Option<Self>, String> {
+        let Some(pattern) = request.spatial_pattern.as_ref() else {
+            return Ok(None);
+        };
+        let ColorEffectSpatialRecipe::Graph {
+            grayscale,
+            height,
+            width,
+            pitch,
+            frequency,
+            amplitude,
+            offset,
+        } = &pattern.recipe
+        else {
+            return Ok(None);
+        };
+        if !(2..=10).contains(&request.stops.len()) {
+            return Err("Graph requires between 2 and 10 palette stops".to_string());
+        }
+        if !(1..=100).contains(height)
+            || !(1..=100).contains(width)
+            || *pitch > 100
+            || *frequency > 10
+            || !amplitude.is_finite()
+            || !(0.0..=2.0).contains(amplitude)
+            || !offset.is_finite()
+            || !(-1.0..=1.0).contains(offset)
+        {
+            return Err(
+                "Graph requires Height and Width 1..100, Pitch 0..100, Frequency 0..10, Amplitude 0..2, and Offset -1..1"
+                    .to_string(),
+            );
+        }
+        Ok(Some(Self {
+            palette: request.stops.iter().map(|stop| stop.color).collect(),
+            grayscale: *grayscale,
+            height: i32::from(*height),
+            width: i32::from(*width),
+            pitch: i32::from((*pitch).max(1)),
+            frequency: f64::from(*frequency),
+            amplitude: f64::from(*amplitude),
+            offset: f64::from(*offset),
+            source_pixel_phase: Self::SOURCE_PIXEL_MS / request.period_ms.max(10) as f64,
+            phase_cache: RefCell::new(CompiledDaslightGraphPhaseCache::default()),
+        }))
+    }
+
+    fn raster_pixel(normalized: f32) -> i32 {
+        (normalized.clamp(0.0, 1.0) * Self::RASTER_SIZE as f32)
+            .floor()
+            .min((Self::RASTER_SIZE - 1) as f32) as i32
+    }
+
+    fn finish_color(&self, color: ColorEffectColor) -> ColorEffectColor {
+        if self.grayscale {
+            daslight_grayscale_color(color)
+        } else {
+            color
+        }
+    }
+
+    fn prepare_phase_cache(&self, time_phase: f64) {
+        let phase_bits = time_phase.to_bits();
+        let mut cache = self.phase_cache.borrow_mut();
+        if cache.phase_bits == Some(phase_bits) {
+            return;
+        }
+
+        let anchor_count = ((Self::RASTER_SIZE - 1) / self.pitch + 1) as usize;
+        for anchor_index in 0..anchor_count {
+            let origin_x = anchor_index as i32 * self.pitch;
+            let theta = std::f64::consts::TAU
+                * self.frequency
+                * (time_phase + f64::from(origin_x) * self.source_pixel_phase);
+            let wave = 0.5 * theta.sin();
+            let center = (self.amplitude * wave - self.offset + 0.5) * f64::from(Self::RASTER_SIZE);
+            cache.tile_y[anchor_index] = (center - f64::from(self.height / 2)).trunc() as i32;
+        }
+        cache.phase_bits = Some(phase_bits);
+        cache.anchor_count = anchor_count;
+        #[cfg(test)]
+        {
+            cache.rebuild_count += 1;
+            cache.anchor_evaluation_count += anchor_count as u64;
+        }
+    }
+
+    #[cfg(test)]
+    fn phase_cache_stats(&self) -> (u64, u64, usize) {
+        let cache = self.phase_cache.borrow();
+        (
+            cache.rebuild_count,
+            cache.anchor_evaluation_count,
+            cache.anchor_count,
+        )
+    }
+
+    fn sample_at_phase(
+        &self,
+        time_phase: f64,
+        normalized_x: f32,
+        normalized_y: f32,
+    ) -> ColorEffectColor {
+        let pixel_x = Self::raster_pixel(normalized_x);
+        let pixel_y = Self::raster_pixel(normalized_y);
+        let background = self.palette[0];
+        let first_origin = (pixel_x - self.width + 1).max(0);
+        let first_index = (first_origin + self.pitch - 1) / self.pitch;
+        let last_index = (pixel_x / self.pitch).min((Self::RASTER_SIZE - 1) / self.pitch);
+        if first_index > last_index {
+            return self.finish_color(background);
+        }
+
+        self.prepare_phase_cache(time_phase);
+        let phase_cache = self.phase_cache.borrow();
+        debug_assert!(last_index < phase_cache.anchor_count as i32);
+
+        // Graph paints anchors in increasing X order. Search backwards so the
+        // first tile containing this pixel is the exact last-wins source tile;
+        // even a zero-weight edge row overwrites an earlier tile with palette0.
+        for anchor_index in (first_index..=last_index).rev() {
+            let tile_y = phase_cache.tile_y[anchor_index as usize];
+            if pixel_y < tile_y || pixel_y >= tile_y + self.height {
+                continue;
+            }
+            let row = pixel_y - tile_y;
+            let weight = if self.height == 1 {
+                // Daslight's Height=1 tile computes 1/0 and leaves its sole row
+                // transparent. The corrected route keeps the authored minimum
+                // visible as one fully opaque row.
+                1.0
+            } else {
+                let half = self.height / 2;
+                let ramp = f64::from(row) / f64::from(half);
+                if ramp <= 1.0 {
+                    ramp
+                } else {
+                    2.0 - ramp
+                }
+            } as f32;
+            let foreground = self.palette[1 + anchor_index as usize % (self.palette.len() - 1)];
+            let color = interpolate_color_effect_color(
+                background,
+                foreground,
+                weight,
+                ColorEffectInterpolation::Rgb,
+            );
+            return self.finish_color(color);
+        }
+        self.finish_color(background)
     }
 }
 
@@ -28023,6 +28226,17 @@ fn validate_runtime_color_effect_request(request: &ColorEffectRequest) -> Result
                     return Err("Lines requires Override blend mode".to_string());
                 }
             }
+            ColorEffectSpatialRecipe::Graph { .. } => {
+                if !(2..=10).contains(&request.stops.len()) {
+                    return Err("Graph requires between 2 and 10 palette stops".to_string());
+                }
+                if pattern.placement.is_none() {
+                    return Err("Graph requires a placed 100x100 spatial raster".to_string());
+                }
+                if request.blend_mode != EffectBlendMode::Override {
+                    return Err("Graph requires Override blend mode".to_string());
+                }
+            }
             _ => {}
         }
         if pattern.placement.is_some() {
@@ -28281,6 +28495,35 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
         ColorEffectSpatialRecipe::Lines { size, .. } => {
             if !(2..=20).contains(size) {
                 return Err("Lines Size must be within 2..20".to_string());
+            }
+            Ok(())
+        }
+        ColorEffectSpatialRecipe::Graph {
+            height,
+            width,
+            pitch,
+            frequency,
+            amplitude,
+            offset,
+            ..
+        } => {
+            if !(1..=100).contains(height) {
+                return Err("Graph Height must be within 1..100".to_string());
+            }
+            if !(1..=100).contains(width) {
+                return Err("Graph Width must be within 1..100".to_string());
+            }
+            if *pitch > 100 {
+                return Err("Graph Pitch must be within 0..100".to_string());
+            }
+            if *frequency > 10 {
+                return Err("Graph Frequency must be within 0..10".to_string());
+            }
+            if !amplitude.is_finite() || !(0.0..=2.0).contains(amplitude) {
+                return Err("Graph Amplitude must be finite and within 0..2".to_string());
+            }
+            if !offset.is_finite() || !(-1.0..=1.0).contains(offset) {
+                return Err("Graph Offset must be finite and within -1..1".to_string());
             }
             Ok(())
         }
@@ -28984,10 +29227,13 @@ pub fn validate_value_effect_request(request: &ValueEffectRequest) -> Result<(),
         validate_color_spatial_recipe(&pattern.recipe)?;
         if matches!(
             &pattern.recipe,
-            ColorEffectSpatialRecipe::Grid { .. } | ColorEffectSpatialRecipe::Lines { .. }
+            ColorEffectSpatialRecipe::Grid { .. }
+                | ColorEffectSpatialRecipe::Lines { .. }
+                | ColorEffectSpatialRecipe::Graph { .. }
         ) {
             return Err(
-                "Grid and Lines spatial recipes are supported only by Color effects".to_string(),
+                "Graph, Grid, and Lines spatial recipes are supported only by Color effects"
+                    .to_string(),
             );
         }
         let feature_attributes = if request.features.is_empty() {
@@ -30951,6 +31197,7 @@ fn runtime_color_effect_from_request(
         let syndocal_random_fx = CompiledSyndocalRandomFx::compile(&request, strip_count)?;
         let daslight_perlin = compile_daslight_perlin(&request, &targets)?;
         let daslight_grid_lines = CompiledDaslightGridLines::compile(&request)?;
+        let daslight_graph = CompiledDaslightGraph::compile(&request)?;
         let dense_fixture_targets =
             RuntimeColorSpatialDenseFixtureTargets::compile(&targets, &attribute_indices);
         Some(Box::new(RuntimeColorSpatialState {
@@ -30963,6 +31210,7 @@ fn runtime_color_effect_from_request(
             syndocal_random_fx,
             daslight_perlin,
             daslight_grid_lines,
+            daslight_graph,
         }))
     } else {
         None
@@ -32229,6 +32477,7 @@ fn evaluate_runtime_color_spatial_attribute_at_rate(
                 spatial.syndocal_random_fx.as_ref(),
                 spatial.daslight_perlin.as_ref(),
                 spatial.daslight_grid_lines.as_ref(),
+                spatial.daslight_graph.as_ref(),
                 effect_id,
                 created_at,
                 now,
@@ -32514,6 +32763,7 @@ fn evaluate_color_spatial_sample_at_rate(
     syndocal_random_fx: Option<&CompiledSyndocalRandomFx>,
     daslight_perlin: Option<&CompiledDaslightPerlin>,
     daslight_grid_lines: Option<&CompiledDaslightGridLines>,
+    daslight_graph: Option<&CompiledDaslightGraph>,
     effect_id: EffectId,
     created_at: Instant,
     now: Instant,
@@ -32538,6 +32788,16 @@ fn evaluate_color_spatial_sample_at_rate(
     if let Some(daslight_grid_lines) = daslight_grid_lines {
         return RuntimeColorSpatialSample {
             color: daslight_grid_lines.sample_at_phase(
+                time_phase_for_continuous_spatial(request, created_at, now, clock, rate),
+                target.x,
+                target.z,
+            ),
+            opacity: 1.0,
+        };
+    }
+    if let Some(daslight_graph) = daslight_graph {
+        return RuntimeColorSpatialSample {
+            color: daslight_graph.sample_at_phase(
                 time_phase_for_continuous_spatial(request, created_at, now, clock, rate),
                 target.x,
                 target.z,
@@ -32630,7 +32890,8 @@ fn evaluate_color_spatial_sample_at_rate(
         | ColorEffectSpatialRecipe::Sparkle { .. }
         | ColorEffectSpatialRecipe::Perlin { .. }
         | ColorEffectSpatialRecipe::Grid { .. }
-        | ColorEffectSpatialRecipe::Lines { .. } => {
+        | ColorEffectSpatialRecipe::Lines { .. }
+        | ColorEffectSpatialRecipe::Graph { .. } => {
             unreachable!("unified spatial recipes are evaluated by their compiled analytic route")
         }
         ColorEffectSpatialRecipe::Spiral {
@@ -56581,6 +56842,252 @@ mod tests {
         assert_eq!(color, test_color(87 * 257, 87 * 257, 87 * 257));
     }
 
+    #[test]
+    fn color_mappings_graph_anchors_triangle_overlap_pitch_zero_and_height_one_correction() {
+        let request = test_grid_lines_request(
+            ColorEffectSpatialRecipe::Graph {
+                grayscale: false,
+                height: 5,
+                width: 20,
+                pitch: 10,
+                frequency: 0,
+                amplitude: 0.0,
+                offset: 0.0,
+            },
+            &[1_000, 11_000, 21_000],
+        );
+        let graph = CompiledDaslightGraph::compile(&request)
+            .unwrap()
+            .expect("Graph must compile its dedicated raster state");
+        assert_eq!(graph.sample_at_phase(0.0, 0.00, 0.50).red, 11_000);
+        assert_eq!(graph.sample_at_phase(0.0, 0.00, 0.49).red, 6_000);
+        assert_eq!(graph.sample_at_phase(0.0, 0.00, 0.48).red, 1_000);
+        assert_eq!(graph.sample_at_phase(0.0, 0.10, 0.50).red, 21_000);
+        assert_eq!(graph.sample_at_phase(0.0, 0.20, 0.50).red, 11_000);
+        assert_eq!(graph.sample_at_phase(0.0, 0.99, 0.50).red, 21_000);
+        assert_eq!(graph.sample_at_phase(0.0, 0.00, 0.53).red, 1_000);
+
+        let zero_edge_overlap = test_grid_lines_request(
+            ColorEffectSpatialRecipe::Graph {
+                grayscale: false,
+                height: 100,
+                width: 20,
+                pitch: 10,
+                frequency: 1,
+                amplitude: 1.0,
+                offset: 0.0,
+            },
+            &[1_000, 11_000, 21_000],
+        );
+        let zero_edge_overlap = CompiledDaslightGraph::compile(&zero_edge_overlap)
+            .unwrap()
+            .unwrap();
+        assert!(zero_edge_overlap.sample_at_phase(0.0, 0.0, 0.29).red > 1_000);
+        assert_eq!(
+            zero_edge_overlap.sample_at_phase(0.0, 0.10, 0.29).red,
+            1_000,
+            "a later tile's zero-weight edge must overwrite an earlier nonzero row with palette0"
+        );
+
+        let pitch_zero = test_grid_lines_request(
+            ColorEffectSpatialRecipe::Graph {
+                grayscale: false,
+                height: 5,
+                width: 100,
+                pitch: 0,
+                frequency: 0,
+                amplitude: 0.0,
+                offset: 0.0,
+            },
+            &[1_000, 11_000, 21_000],
+        );
+        let pitch_zero = CompiledDaslightGraph::compile(&pitch_zero)
+            .unwrap()
+            .unwrap();
+        assert_eq!(pitch_zero.pitch, 1, "Pitch=0 must compile to step 1");
+        assert_eq!(pitch_zero.sample_at_phase(0.0, 0.02, 0.50).red, 11_000);
+
+        let height_one = test_grid_lines_request(
+            ColorEffectSpatialRecipe::Graph {
+                grayscale: false,
+                height: 1,
+                width: 1,
+                pitch: 100,
+                frequency: 0,
+                amplitude: 0.0,
+                offset: 0.0,
+            },
+            &[1_000, 11_000],
+        );
+        let height_one = CompiledDaslightGraph::compile(&height_one)
+            .unwrap()
+            .unwrap();
+        assert_eq!(height_one.sample_at_phase(0.0, 0.0, 0.50).red, 11_000);
+        assert_eq!(height_one.sample_at_phase(0.0, 0.0, 0.49).red, 1_000);
+    }
+
+    #[test]
+    fn color_mappings_graph_is_continuous_and_applies_placement_before_qgray() {
+        let mut request = test_grid_lines_request(
+            ColorEffectSpatialRecipe::Graph {
+                grayscale: true,
+                height: 1,
+                width: 100,
+                pitch: 100,
+                frequency: 10,
+                amplitude: 1.0,
+                offset: 0.0,
+            },
+            &[0, u16::MAX],
+        );
+        request.stops[1].color = test_color(u16::MAX, 0, 0);
+        let graph = CompiledDaslightGraph::compile(&request).unwrap().unwrap();
+        assert_eq!(
+            graph.sample_at_phase(0.0, 0.0, 0.50),
+            test_color(87 * 257, 87 * 257, 87 * 257)
+        );
+        assert_eq!(
+            graph.sample_at_phase(0.001, 0.0, 0.50),
+            black_color(),
+            "a 1ms phase delta at 10Hz must move the corrected graph instead of holding a 40ms frame"
+        );
+
+        let mut placement = test_patch_canvas_placement(10, 20, 100, 100, 0.0);
+        placement.vertical_symmetry = true;
+        placement.raster_rotation_degrees = 180.0;
+        let sample = CompiledColorSpatialPlacement::compile(&placement)
+            .unwrap()
+            .sample(10, 70)
+            .unwrap();
+        assert!((sample.normalized_x - 1.0).abs() < f32::EPSILON);
+        assert!((sample.normalized_y - 0.5).abs() < f32::EPSILON);
+        assert_eq!(
+            graph.sample_at_phase(0.0, sample.normalized_x, sample.normalized_y),
+            test_color(87 * 257, 87 * 257, 87 * 257)
+        );
+    }
+
+    #[test]
+    fn color_mappings_graph_phase_cache_reuses_fixed_anchor_rows_and_clones_independently() {
+        let request = test_grid_lines_request(
+            ColorEffectSpatialRecipe::Graph {
+                grayscale: false,
+                height: 100,
+                width: 100,
+                pitch: 0,
+                frequency: 10,
+                amplitude: 2.0,
+                offset: 1.0,
+            },
+            &[1_000, 11_000],
+        );
+        let graph = CompiledDaslightGraph::compile(&request).unwrap().unwrap();
+        assert_eq!(graph.phase_cache_stats(), (0, 0, 0));
+
+        for target in 0..200 {
+            let x = (target % 100) as f32 / 100.0;
+            let y = if target < 100 { 0.0 } else { 0.99 };
+            std::hint::black_box(graph.sample_at_phase(0.25, x, y));
+        }
+        assert_eq!(
+            graph.phase_cache_stats(),
+            (1, 100, 100),
+            "one phase must compute each of the maximum 100 anchors exactly once"
+        );
+
+        let cloned = graph.clone();
+        assert_eq!(cloned.phase_cache_stats(), (1, 100, 100));
+        std::hint::black_box(graph.sample_at_phase(0.250_000_001, 0.5, 0.5));
+        assert_eq!(graph.phase_cache_stats(), (2, 200, 100));
+        assert_eq!(
+            cloned.phase_cache_stats(),
+            (1, 100, 100),
+            "cloned effects must own independent fixed phase caches"
+        );
+        std::hint::black_box(cloned.sample_at_phase(0.25, 0.5, 0.5));
+        assert_eq!(cloned.phase_cache_stats(), (1, 100, 100));
+    }
+
+    #[test]
+    fn color_mappings_graph_validators_enforce_class_contracts() {
+        let recipe =
+            |height, width, pitch, frequency, amplitude, offset| ColorEffectSpatialRecipe::Graph {
+                grayscale: false,
+                height,
+                width,
+                pitch,
+                frequency,
+                amplitude,
+                offset,
+            };
+        let valid_recipe = || recipe(10, 10, 10, 2, 1.0, 0.0);
+        let one_stop = test_grid_lines_request(valid_recipe(), &[1_000]);
+        assert_eq!(
+            validate_color_effect_request(&one_stop).unwrap_err(),
+            "Graph requires between 2 and 10 palette stops"
+        );
+        let eleven_stops = test_grid_lines_request(
+            valid_recipe(),
+            &[
+                1_000, 2_000, 3_000, 4_000, 5_000, 6_000, 7_000, 8_000, 9_000, 10_000, 11_000,
+            ],
+        );
+        assert_eq!(
+            validate_color_effect_request(&eleven_stops).unwrap_err(),
+            "Graph requires between 2 and 10 palette stops"
+        );
+
+        let mut missing_placement = test_grid_lines_request(valid_recipe(), &[1_000, 2_000]);
+        missing_placement
+            .spatial_pattern
+            .as_mut()
+            .unwrap()
+            .placement = None;
+        assert_eq!(
+            validate_color_effect_request(&missing_placement).unwrap_err(),
+            "Graph requires a placed 100x100 spatial raster"
+        );
+        let mut wrong_blend = test_grid_lines_request(valid_recipe(), &[1_000, 2_000]);
+        wrong_blend.blend_mode = EffectBlendMode::Multiply;
+        assert_eq!(
+            validate_color_effect_request(&wrong_blend).unwrap_err(),
+            "Graph requires Override blend mode"
+        );
+
+        for (invalid, expected) in [
+            (
+                recipe(0, 10, 10, 2, 1.0, 0.0),
+                "Graph Height must be within 1..100",
+            ),
+            (
+                recipe(10, 101, 10, 2, 1.0, 0.0),
+                "Graph Width must be within 1..100",
+            ),
+            (
+                recipe(10, 10, 101, 2, 1.0, 0.0),
+                "Graph Pitch must be within 0..100",
+            ),
+            (
+                recipe(10, 10, 10, 11, 1.0, 0.0),
+                "Graph Frequency must be within 0..10",
+            ),
+            (
+                recipe(10, 10, 10, 2, f32::NAN, 0.0),
+                "Graph Amplitude must be finite and within 0..2",
+            ),
+            (
+                recipe(10, 10, 10, 2, 1.0, 1.01),
+                "Graph Offset must be finite and within -1..1",
+            ),
+        ] {
+            let request = test_grid_lines_request(invalid, &[1_000, 2_000]);
+            assert_eq!(
+                validate_color_effect_request(&request).unwrap_err(),
+                expected
+            );
+        }
+    }
+
     fn evaluate_test_spatial_color(
         request: &ColorEffectRequest,
         target: &RuntimeColorSpatialTarget,
@@ -56619,6 +57126,7 @@ mod tests {
         let daslight_perlin =
             compile_daslight_perlin(request, std::slice::from_ref(&target)).unwrap();
         let daslight_grid_lines = CompiledDaslightGridLines::compile(request).unwrap();
+        let daslight_graph = CompiledDaslightGraph::compile(request).unwrap();
         evaluate_color_spatial_sample_at_rate(
             request,
             &target,
@@ -56628,6 +57136,7 @@ mod tests {
             syndocal_random_fx.as_ref(),
             daslight_perlin.as_ref(),
             daslight_grid_lines.as_ref(),
+            daslight_graph.as_ref(),
             97,
             created_at,
             created_at + Duration::from_millis(elapsed_ms),
@@ -58417,6 +58926,7 @@ mod tests {
                 Some(compiled),
                 None,
                 None,
+                None,
                 97,
                 created_at,
                 now,
@@ -58609,6 +59119,7 @@ mod tests {
                 None,
                 None,
                 Some(&compiled),
+                None,
                 None,
                 None,
                 97,
@@ -65712,6 +66223,284 @@ mod tests {
             });
         eprintln!(
             "Max Grid/Lines 32+32 x 200 (Grid 5 stops Size 5 Width 20; Lines 255 stops Size 20; 100x100): p95={}us p99={}us max={}us",
+            p95.as_micros(),
+            p99.as_micros(),
+            max.as_micros()
+        );
+        assert_release_gate_percentiles(p95, p99, max);
+    }
+
+    #[test]
+    fn max_graph_release_stack_meets_44hz_budget() {
+        const GRAPH_MAX_STOPS: usize = 10;
+        const GRAPH_MAX_HEIGHT: u16 = 100;
+        const GRAPH_MAX_WIDTH: u16 = 100;
+        const GRAPH_MAX_PITCH: u16 = 100;
+        const GRAPH_MAX_FREQUENCY: u16 = 10;
+        const GRAPH_MAX_AMPLITUDE: f32 = 2.0;
+        const GRAPH_MAX_OFFSET: f32 = 1.0;
+        const RASTER_WIDTH: i64 = 100;
+        const RASTER_HEIGHT: i64 = 100;
+
+        assert_eq!(RELEASE_GATE_EFFECT_COUNT, 64);
+        assert_eq!(RELEASE_GATE_FIXTURE_COUNT, 200);
+        assert_eq!(RELEASE_GATE_HZ, 44);
+        assert_eq!(
+            RELEASE_GATE_SAMPLES,
+            if cfg!(debug_assertions) { 20 } else { 1_000 }
+        );
+        assert_eq!(GRAPH_MAX_STOPS, 10);
+        assert_eq!((GRAPH_MAX_HEIGHT, GRAPH_MAX_WIDTH), (100, 100));
+        assert_eq!((GRAPH_MAX_PITCH, GRAPH_MAX_FREQUENCY), (100, 10));
+        assert_eq!((GRAPH_MAX_AMPLITUDE, GRAPH_MAX_OFFSET), (2.0, 1.0));
+        assert_eq!((RASTER_WIDTH, RASTER_HEIGHT), (100, 100));
+        assert_eq!(RELEASE_GATE_P95_LIMIT, Duration::from_millis(5));
+        assert_eq!(RELEASE_GATE_P99_LIMIT, Duration::from_millis(8));
+        assert_eq!(RELEASE_GATE_MAX_LIMIT, Duration::from_millis(12));
+        assert_eq!(
+            1_000_000 / DMX_TICK_INTERVAL.as_micros(),
+            u128::from(RELEASE_GATE_HZ)
+        );
+
+        let mut runtime = runtime_with_mixed_effect_fixtures(RELEASE_GATE_FIXTURE_COUNT as u64);
+        let fixture_ids = (1..=RELEASE_GATE_FIXTURE_COUNT as u64).collect::<Vec<_>>();
+        let beam_targets = fixture_ids
+            .iter()
+            .enumerate()
+            .map(
+                |(selection_index, fixture_id)| protocol::ColorEffectBeamTarget {
+                    fixture_id: *fixture_id,
+                    beam_index: 0,
+                    selection_index: selection_index as u32,
+                    feature_attribute: None,
+                },
+            )
+            .collect::<Vec<_>>();
+        let target_coordinates = fixture_ids
+            .iter()
+            .enumerate()
+            .map(
+                |(selection_index, fixture_id)| protocol::ColorEffectSpatialPlacementTarget {
+                    fixture_id: *fixture_id,
+                    beam_index: 0,
+                    patch_x: (selection_index % RASTER_WIDTH as usize) as i64,
+                    patch_y: if selection_index < RASTER_WIDTH as usize {
+                        0
+                    } else {
+                        RASTER_HEIGHT - 1
+                    },
+                },
+            )
+            .collect::<Vec<_>>();
+        assert_eq!(fixture_ids.len(), RELEASE_GATE_FIXTURE_COUNT);
+        assert_eq!(beam_targets.len(), RELEASE_GATE_FIXTURE_COUNT);
+        assert_eq!(target_coordinates.len(), RELEASE_GATE_FIXTURE_COUNT);
+
+        let mut request = test_grid_lines_request(
+            ColorEffectSpatialRecipe::Graph {
+                grayscale: true,
+                height: GRAPH_MAX_HEIGHT,
+                width: GRAPH_MAX_WIDTH,
+                pitch: GRAPH_MAX_PITCH,
+                frequency: GRAPH_MAX_FREQUENCY,
+                amplitude: GRAPH_MAX_AMPLITUDE,
+                offset: GRAPH_MAX_OFFSET,
+            },
+            &(0..GRAPH_MAX_STOPS)
+                .map(|index| (index as u16 + 1) * 5_000)
+                .collect::<Vec<_>>(),
+        );
+        request.fixture_ids = fixture_ids;
+        request.period_ms = 1_000;
+        let pattern = request.spatial_pattern.as_mut().unwrap();
+        pattern.beam_targets = beam_targets;
+        pattern.placement.as_mut().unwrap().target_coordinates = target_coordinates;
+        validate_color_effect_request(&request).unwrap();
+
+        let created_at = Instant::now();
+        for index in 0..RELEASE_GATE_EFFECT_COUNT {
+            let mut request = request.clone();
+            request.phase = index as f32 / RELEASE_GATE_EFFECT_COUNT as f32;
+            let kind = RuntimeEffectKind::Color(
+                runtime
+                    .resolve_color_effect_request(request)
+                    .expect("maximum Graph request must compile"),
+            );
+            runtime.effects.push(RuntimeEffect {
+                id: index as EffectId + 1,
+                kind,
+                enabled: true,
+                created_at,
+            });
+        }
+        assert_eq!(runtime.effects.len(), RELEASE_GATE_EFFECT_COUNT);
+        for effect in &runtime.effects {
+            let RuntimeEffectKind::Color(color) = &effect.kind else {
+                unreachable!();
+            };
+            assert_eq!(color.request.fixture_ids.len(), RELEASE_GATE_FIXTURE_COUNT);
+            let spatial = color.spatial.as_ref().unwrap();
+            assert_eq!(spatial.targets.len(), RELEASE_GATE_FIXTURE_COUNT);
+            let graph = spatial.daslight_graph.as_ref().unwrap();
+            assert_eq!(graph.palette.len(), GRAPH_MAX_STOPS);
+            assert!(graph.grayscale);
+            assert_eq!((graph.height, graph.width), (100, 100));
+            assert_eq!((graph.pitch, graph.frequency), (100, 10.0));
+            assert_eq!((graph.amplitude, graph.offset), (2.0, 1.0));
+            assert_eq!(graph.source_pixel_phase, 0.04);
+        }
+
+        let (p95, p99, max) =
+            measure_release_gate(created_at, |at| {
+                runtime.fixtures.iter().fold(0_u64, |checksum, fixture| {
+                    checksum.wrapping_add(runtime.apply_effects_with_transition_policy(
+                        fixture, "ColorRed", 16_384, at, false,
+                    ) as u64)
+                })
+            });
+        eprintln!(
+            "Max Graph 64x200 (10 stops, Height 100 Width 100 Pitch 100 Frequency 10 Amplitude 2 Offset 1; 100x100): p95={}us p99={}us max={}us",
+            p95.as_micros(),
+            p99.as_micros(),
+            max.as_micros()
+        );
+        assert_release_gate_percentiles(p95, p99, max);
+    }
+
+    #[test]
+    fn minimum_pitch_graph_release_stack_meets_44hz_budget() {
+        const GRAPH_MAX_STOPS: usize = 10;
+        const GRAPH_MAX_HEIGHT: u16 = 100;
+        const GRAPH_MAX_WIDTH: u16 = 100;
+        const GRAPH_MIN_PITCH: u16 = 0;
+        const GRAPH_MAX_FREQUENCY: u16 = 10;
+        const GRAPH_MAX_AMPLITUDE: f32 = 2.0;
+        const GRAPH_MAX_OFFSET: f32 = 1.0;
+        const RASTER_WIDTH: i64 = 100;
+        const RASTER_HEIGHT: i64 = 100;
+
+        assert_eq!(RELEASE_GATE_EFFECT_COUNT, 64);
+        assert_eq!(RELEASE_GATE_FIXTURE_COUNT, 200);
+        assert_eq!(RELEASE_GATE_HZ, 44);
+        assert_eq!(
+            RELEASE_GATE_SAMPLES,
+            if cfg!(debug_assertions) { 20 } else { 1_000 }
+        );
+        assert_eq!(GRAPH_MAX_STOPS, 10);
+        assert_eq!((GRAPH_MAX_HEIGHT, GRAPH_MAX_WIDTH), (100, 100));
+        assert_eq!((GRAPH_MIN_PITCH, GRAPH_MAX_FREQUENCY), (0, 10));
+        assert_eq!((GRAPH_MAX_AMPLITUDE, GRAPH_MAX_OFFSET), (2.0, 1.0));
+        assert_eq!((RASTER_WIDTH, RASTER_HEIGHT), (100, 100));
+        assert_eq!(RELEASE_GATE_P95_LIMIT, Duration::from_millis(5));
+        assert_eq!(RELEASE_GATE_P99_LIMIT, Duration::from_millis(8));
+        assert_eq!(RELEASE_GATE_MAX_LIMIT, Duration::from_millis(12));
+        assert_eq!(
+            1_000_000 / DMX_TICK_INTERVAL.as_micros(),
+            u128::from(RELEASE_GATE_HZ)
+        );
+
+        let mut runtime = runtime_with_mixed_effect_fixtures(RELEASE_GATE_FIXTURE_COUNT as u64);
+        let fixture_ids = (1..=RELEASE_GATE_FIXTURE_COUNT as u64).collect::<Vec<_>>();
+        let beam_targets = fixture_ids
+            .iter()
+            .enumerate()
+            .map(
+                |(selection_index, fixture_id)| protocol::ColorEffectBeamTarget {
+                    fixture_id: *fixture_id,
+                    beam_index: 0,
+                    selection_index: selection_index as u32,
+                    feature_attribute: None,
+                },
+            )
+            .collect::<Vec<_>>();
+        let target_coordinates = fixture_ids
+            .iter()
+            .enumerate()
+            .map(
+                |(selection_index, fixture_id)| protocol::ColorEffectSpatialPlacementTarget {
+                    fixture_id: *fixture_id,
+                    beam_index: 0,
+                    patch_x: (selection_index % RASTER_WIDTH as usize) as i64,
+                    patch_y: if selection_index < RASTER_WIDTH as usize {
+                        0
+                    } else {
+                        RASTER_HEIGHT - 1
+                    },
+                },
+            )
+            .collect::<Vec<_>>();
+        assert_eq!(fixture_ids.len(), RELEASE_GATE_FIXTURE_COUNT);
+        assert_eq!(beam_targets.len(), RELEASE_GATE_FIXTURE_COUNT);
+        assert_eq!(target_coordinates.len(), RELEASE_GATE_FIXTURE_COUNT);
+
+        let mut request = test_grid_lines_request(
+            ColorEffectSpatialRecipe::Graph {
+                grayscale: true,
+                height: GRAPH_MAX_HEIGHT,
+                width: GRAPH_MAX_WIDTH,
+                pitch: GRAPH_MIN_PITCH,
+                frequency: GRAPH_MAX_FREQUENCY,
+                amplitude: GRAPH_MAX_AMPLITUDE,
+                offset: GRAPH_MAX_OFFSET,
+            },
+            &(0..GRAPH_MAX_STOPS)
+                .map(|index| (index as u16 + 1) * 5_000)
+                .collect::<Vec<_>>(),
+        );
+        request.fixture_ids = fixture_ids;
+        request.period_ms = 1_000;
+        let pattern = request.spatial_pattern.as_mut().unwrap();
+        pattern.beam_targets = beam_targets;
+        pattern.placement.as_mut().unwrap().target_coordinates = target_coordinates;
+        validate_color_effect_request(&request).unwrap();
+
+        let created_at = Instant::now();
+        for index in 0..RELEASE_GATE_EFFECT_COUNT {
+            let mut request = request.clone();
+            request.phase = index as f32 / RELEASE_GATE_EFFECT_COUNT as f32;
+            let kind = RuntimeEffectKind::Color(
+                runtime
+                    .resolve_color_effect_request(request)
+                    .expect("minimum-Pitch maximum-shape Graph request must compile"),
+            );
+            runtime.effects.push(RuntimeEffect {
+                id: index as EffectId + 1,
+                kind,
+                enabled: true,
+                created_at,
+            });
+        }
+        assert_eq!(runtime.effects.len(), RELEASE_GATE_EFFECT_COUNT);
+        for effect in &runtime.effects {
+            let RuntimeEffectKind::Color(color) = &effect.kind else {
+                unreachable!();
+            };
+            assert_eq!(color.request.fixture_ids.len(), RELEASE_GATE_FIXTURE_COUNT);
+            let spatial = color.spatial.as_ref().unwrap();
+            assert_eq!(spatial.targets.len(), RELEASE_GATE_FIXTURE_COUNT);
+            let graph = spatial.daslight_graph.as_ref().unwrap();
+            assert_eq!(graph.palette.len(), GRAPH_MAX_STOPS);
+            assert!(graph.grayscale);
+            assert_eq!((graph.height, graph.width), (100, 100));
+            assert_eq!(
+                graph.pitch, 1,
+                "Pitch=0 must compile to the source step of 1"
+            );
+            assert_eq!(graph.frequency, 10.0);
+            assert_eq!((graph.amplitude, graph.offset), (2.0, 1.0));
+            assert_eq!(graph.source_pixel_phase, 0.04);
+        }
+
+        let (p95, p99, max) =
+            measure_release_gate(created_at, |at| {
+                runtime.fixtures.iter().fold(0_u64, |checksum, fixture| {
+                    checksum.wrapping_add(runtime.apply_effects_with_transition_policy(
+                        fixture, "ColorRed", 16_384, at, false,
+                    ) as u64)
+                })
+            });
+        eprintln!(
+            "Minimum-Pitch Graph 64x200 (10 stops, Height 100 Width 100 Pitch 0->step1 Frequency 10 Amplitude 2 Offset 1; 100x100): p95={}us p99={}us max={}us",
             p95.as_micros(),
             p99.as_micros(),
             max.as_micros()

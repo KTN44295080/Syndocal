@@ -2179,6 +2179,7 @@ fn parse_scene_effects(
                 (Some(5), Some(3), Some(40)) => Some("Sparkle"),
                 (Some(5), Some(3), Some(42)) => Some("Spiral"),
                 (Some(5), Some(3), Some(44)) => Some("Sweep"),
+                (Some(5), Some(3), Some(49)) => Some("Graph"),
                 (Some(5), Some(3), Some(50)) => Some("Grid"),
                 (Some(8), Some(5), Some(3)) => Some("Inverse Ramp"),
                 (Some(8), Some(5), Some(4)) => Some("Pulse"),
@@ -2396,7 +2397,7 @@ fn convert_dvc_effect(
             profiles,
             fixture_refs,
         ),
-        (5, 3, 22 | 23 | 30 | 31 | 32 | 33 | 34 | 36 | 37 | 40 | 42 | 44 | 50)
+        (5, 3, 22 | 23 | 30 | 31 | 32 | 33 | 34 | 36 | 37 | 40 | 42 | 44 | 49 | 50)
         | (2, 2, 121 | 127 | 128 | 129 | 130 | 131 | 133 | 134)
         | (6, 8, 521..=530) => {
             convert_dvc_color_spatial_effect(
@@ -3229,6 +3230,7 @@ fn convert_dvc_color_spatial_effect(
         40 => "Sparkle",
         42 => "Spiral",
         44 => "Sweep",
+        49 => "Graph",
         50 => "Grid",
         121 => "Burst",
         127 => "Knight Rider",
@@ -3256,7 +3258,7 @@ fn convert_dvc_color_spatial_effect(
     };
     let source_is_color_mappings = matches!(
         generator_id,
-        22 | 23 | 30 | 31 | 32 | 33 | 34 | 36 | 37 | 40 | 42 | 44 | 50
+        22 | 23 | 30 | 31 | 32 | 33 | 34 | 36 | 37 | 40 | 42 | 44 | 49 | 50
     );
     let shared_mapping_generator_id = match generator_id {
         22 => 523,
@@ -3444,6 +3446,50 @@ fn convert_dvc_color_spatial_effect(
                 grayscale: dvc_binary_param(&params, 2, "COLOR MAPPINGS Lines Grayscale")?,
                 size: dvc_integer_range_param(&params, 10, "COLOR MAPPINGS Lines Size", 2, 20)?
                     as u16,
+            }
+        }
+        49 => {
+            require_exact_dvc_mapping_recipe_schema(
+                effect,
+                &params,
+                true,
+                &[(10, 0), (11, 0), (12, 0), (13, 0), (14, 1), (15, 1)],
+            )?;
+            if !(2..=10).contains(&stops.len()) {
+                return Err(format!(
+                    "COLOR MAPPINGS Graph ID=49 palette requires 2..10 colors, found {}",
+                    stops.len()
+                ));
+            }
+            ColorEffectSpatialRecipe::Graph {
+                grayscale: dvc_binary_param(&params, 2, "COLOR MAPPINGS Graph Grayscale")?,
+                height: dvc_integer_range_param(&params, 10, "COLOR MAPPINGS Graph Height", 1, 100)?
+                    as u16,
+                width: dvc_integer_range_param(&params, 11, "COLOR MAPPINGS Graph Width", 1, 100)?
+                    as u16,
+                pitch: dvc_integer_range_param(&params, 12, "COLOR MAPPINGS Graph Pitch", 0, 100)?
+                    as u16,
+                frequency: dvc_integer_range_param(
+                    &params,
+                    13,
+                    "COLOR MAPPINGS Graph Frequency",
+                    0,
+                    10,
+                )? as u16,
+                amplitude: dvc_finite_range_param(
+                    &params,
+                    14,
+                    "COLOR MAPPINGS Graph Amplitude",
+                    0.0,
+                    2.0,
+                )?,
+                offset: dvc_finite_range_param(
+                    &params,
+                    15,
+                    "COLOR MAPPINGS Graph Offset",
+                    -1.0,
+                    1.0,
+                )?,
             }
         }
         50 => {
@@ -4128,11 +4174,11 @@ fn convert_dvc_color_spatial_effect(
             dvc_mapping_rectangle(
                 rack,
                 &placement_label,
-                matches!(generator_id, 31 | 36 | 50) || shared_mapping_generator_id == 530,
+                matches!(generator_id, 31 | 36 | 49 | 50) || shared_mapping_generator_id == 530,
             )
         })
         .transpose()?;
-    if matches!(generator_id, 31 | 50) {
+    if matches!(generator_id, 31 | 49 | 50) {
         let beam_containers = element_children(rack)
             .filter(|node| node.has_tag_name("BEAMS"))
             .collect::<Vec<_>>();
@@ -4190,7 +4236,7 @@ fn convert_dvc_color_spatial_effect(
     }
     let omitted_spatial_targets =
         retain_dvc_color_spatial_targets(&mut targets, fixture_refs, source_is_mappings);
-    if matches!(generator_id, 31 | 50) && omitted_spatial_targets > 0 {
+    if matches!(generator_id, 31 | 49 | 50) && omitted_spatial_targets > 0 {
         return Err(format!(
             "COLOR MAPPINGS {generator} ID={generator_id} requires every owned BEAMS target to expose a verified color segment; omitted {omitted_spatial_targets} target(s)"
         ));
@@ -4210,7 +4256,7 @@ fn convert_dvc_color_spatial_effect(
     }
     let (period_ms, period_note) = if matches!(
         generator_id,
-        31 | 37 | 50 | 121 | 127 | 128 | 131 | 133 | 134
+        31 | 37 | 49 | 50 | 121 | 127 | 128 | 131 | 133 | 134
     ) || shared_mapping_generator_id == 530
     {
         let period_source_family = if source_is_color_mappings {
@@ -4390,6 +4436,18 @@ fn convert_dvc_color_spatial_effect(
             "implementation=SyndocalCorrected; evaluator=CLinesEffect recovered allocation-free analytic 100x100 raster; Grayscale={}; Size={size}; integer_stride_retained_when_B_ge_1=true; B_zero=float_fallback; background=palette0; paint_order=later-wins; time=continuous",
             u8::from(*grayscale)
         ),
+        ColorEffectSpatialRecipe::Graph {
+            grayscale,
+            height,
+            width,
+            pitch,
+            frequency,
+            amplitude,
+            offset,
+        } => format!(
+            "implementation=SyndocalCorrected; evaluator=CGraphEffect/0x1403638A0 recovered allocation-free analytic 100x100 raster; Grayscale={}; Height={height}; Width={width}; Pitch={pitch}; Frequency={frequency}; Amplitude={amplitude}; Offset={offset}; Height1=corrected_opaque_row; background=palette0; paint_order=later-wins; time=continuous",
+            u8::from(*grayscale)
+        ),
     };
     let mut placement = mapping_rectangle
         .map(|rectangle| {
@@ -4401,7 +4459,8 @@ fn convert_dvc_color_spatial_effect(
             )
         })
         .transpose()?;
-    if matches!(generator_id, 31 | 37 | 50) || matches!(shared_mapping_generator_id, 522..=529) {
+    if matches!(generator_id, 31 | 37 | 49 | 50) || matches!(shared_mapping_generator_id, 522..=529)
+    {
         let transform = dvc_param(&params, 3, &format!("{mapping_family_label} Transform"))?;
         if !matches!(transform, 0.0 | 1.0 | 2.0) {
             return Err(format!(
@@ -10235,17 +10294,22 @@ mod tests {
     }
 
     #[test]
-    fn dvc_color_mappings_grid_lines_import_strict_owned_placed_rasters() {
+    fn dvc_color_mappings_graph_grid_lines_import_strict_owned_placed_rasters() {
         let source = |generator_id: u16, palette_count: usize, beams: &str| {
             let color = r#"<COLOR VAL="1/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>"#;
-            let specific = if generator_id == 50 {
-                r#"<PARAM TYPE="0" ID="10" VAL="5"/><PARAM TYPE="0" ID="11" VAL="20"/>"#
-            } else {
-                r#"<PARAM TYPE="0" ID="10" VAL="20"/>"#
+            let (specific, nb) = match generator_id {
+                49 => (
+                    r#"<PARAM TYPE="0" ID="10" VAL="100"/><PARAM TYPE="0" ID="11" VAL="100"/><PARAM TYPE="0" ID="12" VAL="100"/><PARAM TYPE="0" ID="13" VAL="10"/><PARAM TYPE="1" ID="14" VAL="2"/><PARAM TYPE="1" ID="15" VAL="1"/>"#,
+                    10,
+                ),
+                50 => (
+                    r#"<PARAM TYPE="0" ID="10" VAL="5"/><PARAM TYPE="0" ID="11" VAL="20"/>"#,
+                    6,
+                ),
+                _ => (r#"<PARAM TYPE="0" ID="10" VAL="20"/>"#, 5),
             };
-            let nb = if generator_id == 50 { 6 } else { 5 };
             format!(
-                r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="5"><EFFECT TYPE="3" ID="{generator_id}" DURATION="1"><PARAMS NB="{nb}"><PARAM TYPE="4" ID="1"><COLORS NB="{palette_count}">{}</COLORS></PARAM><PARAM TYPE="2" ID="2" VAL="1"/><PARAM TYPE="6" ID="3" VAL="2"/><PARAM TYPE="0" ID="4" VAL="90"/>{specific}</PARAMS></EFFECT><MAPPING NAME="Rectangle" DASUID="grid-lines" TYPE="0" X="0" Y="0" SX="200" SY="100" ANGLE="30" LOCKED="0"/>{beams}</RACK></RACKS></SCENE>"#,
+                r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="5"><EFFECT TYPE="3" ID="{generator_id}" DURATION="1"><PARAMS NB="{nb}"><PARAM TYPE="4" ID="1"><COLORS NB="{palette_count}">{}</COLORS></PARAM><PARAM TYPE="2" ID="2" VAL="1"/><PARAM TYPE="6" ID="3" VAL="2"/><PARAM TYPE="0" ID="4" VAL="90"/>{specific}</PARAMS></EFFECT><MAPPING NAME="Rectangle" DASUID="graph-grid-lines" TYPE="0" X="0" Y="0" SX="200" SY="100" ANGLE="30" LOCKED="0"/>{beams}</RACK></RACKS></SCENE>"#,
                 color.repeat(palette_count)
             )
         };
@@ -10257,7 +10321,7 @@ mod tests {
                 let effect = direct_child(rack, "EFFECT").unwrap();
                 convert_dvc_effect(
                     scene,
-                    "COLOR MAPPINGS Grid/Lines",
+                    "COLOR MAPPINGS Graph/Grid/Lines",
                     rack,
                     effect,
                     5,
@@ -10271,7 +10335,7 @@ mod tests {
         let refs = effect_test_fixture_refs();
         let beams = r#"<BEAMS NB="2"><BEAM FIXTURE="fixture-2" BEAMID="0" IDSELECTION="1"/><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="2"/></BEAMS>"#;
 
-        for (generator_id, palette_count) in [(50, 5), (31, 255)] {
+        for (generator_id, palette_count) in [(50, 5), (31, 255), (49, 10)] {
             let xml = source(generator_id, palette_count, beams);
             let converted = convert_with_refs(&xml, generator_id, &refs).unwrap();
             assert!(converted.approximations.is_empty());
@@ -10322,7 +10386,19 @@ mod tests {
                         size: 20,
                     },
                 ) => {}
-                (_, recipe) => panic!("unexpected Grid/Lines recipe: {recipe:?}"),
+                (
+                    49,
+                    ColorEffectSpatialRecipe::Graph {
+                        grayscale: true,
+                        height: 100,
+                        width: 100,
+                        pitch: 100,
+                        frequency: 10,
+                        amplitude: 2.0,
+                        offset: 1.0,
+                    },
+                ) => {}
+                (_, recipe) => panic!("unexpected Graph/Grid/Lines recipe: {recipe:?}"),
             }
             let placement = pattern.placement.unwrap();
             assert_eq!(placement.mapping_angle_degrees, 30.0);
@@ -10352,6 +10428,8 @@ mod tests {
             (50, 1, "Grid ID=50 palette requires 2..5"),
             (50, 6, "Grid ID=50 palette requires 2..5"),
             (31, 1, "Lines ID=31 palette requires 2..255"),
+            (49, 1, "Graph ID=49 palette requires 2..10"),
+            (49, 11, "Graph ID=49 palette requires 2..10"),
         ] {
             let error = convert_with_refs(
                 &source(generator_id, palette_count, beams),
@@ -10399,7 +10477,49 @@ mod tests {
             );
         }
 
-        for (generator_id, palette_count) in [(50, 5), (31, 2)] {
+        let valid_graph = source(49, 10, beams);
+        for (invalid, expected) in [
+            (
+                valid_graph.replacen(r#"TYPE="1" ID="14""#, r#"TYPE="0" ID="14""#, 1),
+                "expected PARAM 14 TYPE=1",
+            ),
+            (
+                valid_graph.replacen(r#"ID="10" VAL="100""#, r#"ID="10" VAL="0""#, 1),
+                "integer within 1..100",
+            ),
+            (
+                valid_graph.replacen(r#"ID="11" VAL="100""#, r#"ID="11" VAL="101""#, 1),
+                "integer within 1..100",
+            ),
+            (
+                valid_graph.replacen(r#"ID="12" VAL="100""#, r#"ID="12" VAL="-1""#, 1),
+                "integer within 0..100",
+            ),
+            (
+                valid_graph.replacen(r#"ID="13" VAL="10""#, r#"ID="13" VAL="11""#, 1),
+                "integer within 0..10",
+            ),
+            (
+                valid_graph.replacen(r#"ID="14" VAL="2""#, r#"ID="14" VAL="2.1""#, 1),
+                "within 0..2",
+            ),
+            (
+                valid_graph.replacen(r#"ID="15" VAL="1""#, r#"ID="15" VAL="1.1""#, 1),
+                "within -1..1",
+            ),
+            (
+                valid_graph.replacen(r#"LOCKED="0""#, r#"LOCKED="0" EXTRA="1""#, 1),
+                "expected Rectangle attributes",
+            ),
+        ] {
+            let error = convert_with_refs(&invalid, 49, &refs).unwrap_err();
+            assert!(
+                error.contains(expected),
+                "expected {expected:?}, found {error:?}"
+            );
+        }
+
+        for (generator_id, palette_count) in [(50, 5), (31, 2), (49, 2)] {
             let valid_empty = source(generator_id, palette_count, r#"<BEAMS NB="0"/>"#);
             let no_op = convert_with_refs(&valid_empty, generator_id, &refs).unwrap();
             assert!(no_op.target.is_none());
@@ -10444,6 +10564,8 @@ mod tests {
             .color_beam_count = 0;
         let error = convert_with_refs(&valid_grid, 50, &refs_without_color).unwrap_err();
         assert!(error.contains("Grid ID=50 requires every owned BEAMS target"));
+        let error = convert_with_refs(&valid_graph, 49, &refs_without_color).unwrap_err();
+        assert!(error.contains("Graph ID=49 requires every owned BEAMS target"));
     }
 
     #[test]
@@ -12597,6 +12719,7 @@ mod tests {
                             ColorEffectSpatialRecipe::Perlin { .. } => 530,
                             ColorEffectSpatialRecipe::Grid { .. } => 50,
                             ColorEffectSpatialRecipe::Lines { .. } => 31,
+                            ColorEffectSpatialRecipe::Graph { .. } => 49,
                         }),
                     _ => None,
                 })

@@ -1934,6 +1934,7 @@ export type ColorEffectSpatialRecipe =
   | { Rainbow: { grayscale: boolean; vertical_symmetry: boolean; horizontal_symmetry: boolean; rotation_degrees: number; color_width: number; angle_degrees: number; gradient: number } }
   | { Grid: { grayscale: boolean; size: number; width: number } }
   | { Lines: { grayscale: boolean; size: number } }
+  | { Graph: { grayscale: boolean; height: number; width: number; pitch: number; frequency: number; amplitude: number; offset: number } }
   | { Perlin: { grayscale?: boolean; vertical_symmetry?: boolean; horizontal_symmetry?: boolean; rotation_degrees?: number; octaves: number; zoom: number; direction_degrees: number; speed: number; amplitude: number } };
 
 export type ColorEffectSpatialCoordinateFrame = "DaslightPatchCanvas";

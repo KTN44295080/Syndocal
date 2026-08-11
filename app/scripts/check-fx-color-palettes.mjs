@@ -87,8 +87,9 @@ try {
   assert.match(editorSource, /<option value="Plasma">Plasma<\/option>/);
   assert.match(editorSource, /<option value="Sweep">Sweep<\/option>/);
   assert.match(editorSource, /<option value="ColorRainbow">Rainbow strip<\/option>/);
-  assert.match(editorSource, /<option value="Grid" disabled=\{props\.spatialPattern\?\.placement === undefined\}>Grid mapping<\/option>/);
-  assert.match(editorSource, /<option value="Lines" disabled=\{props\.spatialPattern\?\.placement === undefined\}>Lines mapping<\/option>/);
+  assert.match(editorSource, /<option value="Grid" disabled=\{spatialKindUnavailable\("Grid"\)\}>Grid mapping<\/option>/);
+  assert.match(editorSource, /<option value="Lines" disabled=\{spatialKindUnavailable\("Lines"\)\}>Lines mapping<\/option>/);
+  assert.match(editorSource, /<option value="Graph" disabled=\{spatialKindUnavailable\("Graph"\)\}>Graph mapping<\/option>/);
   assert.match(editorSource, /min="0" max="20" step="1" value=\{spatialNumber\("size_x", 1\)\}/);
   assert.match(editorSource, /min="-5" max="5" step="1" value=\{spatialNumber\("speed_x", -1\)\}/);
   assert.match(editorSource, /min="0" max="1" step="0\.01" value=\{spatialNumber\("color_width"\)\}/);
@@ -127,6 +128,11 @@ try {
     /(?:^|\r?\n)    Lines \{[\s\S]*?serde\(default, skip_serializing_if = "is_false"\)[\s\S]*?grayscale: bool,[\s\S]*?size: u16,/,
     "COLOR MAPPINGS Lines must preserve optional Grayscale and its exact integer field",
   );
+  assert.match(
+    protocolSource,
+    /(?:^|\r?\n)    Graph \{[\s\S]*?serde\(default, skip_serializing_if = "is_false"\)[\s\S]*?grayscale: bool,[\s\S]*?height:[\s\S]*?width:[\s\S]*?pitch:[\s\S]*?frequency:[\s\S]*?amplitude:[\s\S]*?offset:/,
+    "COLOR MAPPINGS Graph must preserve its optional Grayscale and exact field shape",
+  );
   assert.match(protocolSource, /serde\(default, skip_serializing_if = "Vec::is_empty"\)[\s\S]*pub color_stops: Vec<ColorEffectStop>/);
   assert.match(editorSource, /DASLIGHT_FX_PALETTE_MAX_STOPS/);
   assert.match(protocolSource, /DASLIGHT_COLOR_PALETTE_MIN_STOPS: usize = 1/);
@@ -144,14 +150,20 @@ try {
     "placed shared MAPPINGS recipes must expose common Transform and Rotation controls",
   );
   assert.ok(
-    editorSource.includes('["KnightRider", "Burst", "Sweep", "RandomFill", "Sparkle", "Spiral", "Butterfly", "Plasma", "Grid", "Lines"]'),
-    "placed Grid and Lines must reuse the shared MAPPINGS Transform and Rotation controls",
+    editorSource.includes('["KnightRider", "Burst", "Sweep", "RandomFill", "Sparkle", "Spiral", "Butterfly", "Plasma", "Grid", "Lines", "Graph"]'),
+    "placed Grid, Lines, and Graph must reuse the shared MAPPINGS Transform and Rotation controls",
   );
-  assert.match(editorSource, /const stopError = createMemo\(\(\) => \{[\s\S]*?DASLIGHT_FX_PALETTE_MIN_STOPS[\s\S]*?DASLIGHT_FX_PALETTE_MAX_STOPS/);
   assert.ok(
-    editorSource.indexOf("const stopError") < editorSource.indexOf('spatialKind() === "Grid"')
-      && editorSource.indexOf("const stopError") < editorSource.indexOf('spatialKind() === "Lines"'),
-    "Grid and Lines must retain the editor-wide 1..255 palette-stop policy; stricter backend classes remain backend validation",
+    editorSource.includes("const palettePolicyForSpatialKind")
+      && editorSource.includes("minStops: DASLIGHT_FX_PALETTE_MIN_STOPS")
+      && editorSource.includes("maxStops: DASLIGHT_FX_PALETTE_MAX_STOPS")
+      && editorSource.includes("minStops: 2,\n  maxStops: 5,")
+      && editorSource.includes("minStops: 2,\n  maxStops: 10,")
+      && editorSource.includes("minStops: 2,\n  maxStops: DASLIGHT_FX_PALETTE_MAX_STOPS,")
+      && editorSource.includes("if (spatialKindUnavailable(kind)) return;")
+      && editorSource.includes("orderedStops().length <= currentPalettePolicy().minStops")
+      && editorSource.includes("orderedStops().length >= currentPalettePolicy().maxStops"),
+    "one recipe-aware helper must preserve generic 1..255, Grid 2..5, Graph 2..10, and Lines 2..255 across selection and editing",
   );
   assert.match(
     protocolSource,

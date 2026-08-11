@@ -52,6 +52,16 @@ assert.equal(localization.translateUiText("Grid size", "ja"), "グリッドサ�
 assert.equal(localization.translateUiText("Grid width", "ja"), "グリッド幅");
 assert.equal(localization.translateUiText("Lines mapping", "ja"), "ラインマッピング");
 assert.equal(localization.translateUiText("Line size", "ja"), "ラインサイズ");
+assert.equal(localization.translateUiText("Graph mapping", "ja"), "グラフマッピング");
+assert.equal(localization.translateUiText("Graph height", "ja"), "グラフ高さ");
+assert.equal(localization.translateUiText("Graph width", "ja"), "グラフ幅");
+assert.equal(localization.translateUiText("Graph pitch", "ja"), "グラフピッチ");
+assert.equal(localization.translateUiText("Graph frequency", "ja"), "グラフ周波数");
+assert.equal(localization.translateUiText("Graph amplitude", "ja"), "グラフ振幅");
+assert.equal(localization.translateUiText("Graph offset", "ja"), "グラフオフセット");
+assert.equal(localization.translateUiText("Grid mapping requires 2 to 5 palette stops.", "ja"), "グリッドマッピングには2～5個のパレットストップが必要です。");
+assert.equal(localization.translateUiText("Graph mapping requires 2 to 10 palette stops.", "ja"), "グラフマッピングには2～10個のパレットストップが必要です。");
+assert.equal(localization.translateUiText("This mapping requires 2 to 255 palette stops.", "ja"), "このマッピングには2～255個のパレットストップが必要です。");
 assert.equal(
   localization.translateUiText(
     "Enabled effects 65 / supported 64. Output timing is no longer guaranteed.",
@@ -512,6 +522,16 @@ for (const [sourceText, expectedJapaneseDisplay] of [
   ["Grid width", "グリッド幅"],
   ["Lines mapping", "ラインマッピング"],
   ["Line size", "ラインサイズ"],
+  ["Graph mapping", "グラフマッピング"],
+  ["Graph height", "グラフ高さ"],
+  ["Graph width", "グラフ幅"],
+  ["Graph pitch", "グラフピッチ"],
+  ["Graph frequency", "グラフ周波数"],
+  ["Graph amplitude", "グラフ振幅"],
+  ["Graph offset", "グラフオフセット"],
+  ["Grid mapping requires 2 to 5 palette stops.", "グリッドマッピングには2～5個のパレットストップが必要です。"],
+  ["Graph mapping requires 2 to 10 palette stops.", "グラフマッピングには2～10個のパレットストップが必要です。"],
+  ["This mapping requires 2 to 255 palette stops.", "このマッピングには2～255個のパレットストップが必要です。"],
   ["Simultaneous particles created per 40 ms generation", "40 msごとの生成で同時に作られるパーティクル数"],
   ["Effect-time milliseconds, scaling with clock sync and BPM speed", "エフェクト時間のミリ秒。クロック同期とBPM速度に応じて伸縮します"],
   ["Perlin mapping", "Perlinマッピング"],

@@ -2464,6 +2464,17 @@ pub enum ColorEffectSpatialRecipe {
         grayscale: bool,
         size: u16,
     },
+    /// Daslight COLOR MAPPINGS ID 49's moving sinusoidal graph raster.
+    Graph {
+        #[serde(default, skip_serializing_if = "is_false")]
+        grayscale: bool,
+        height: u16,
+        width: u16,
+        pitch: u16,
+        frequency: u16,
+        amplitude: f32,
+        offset: f32,
+    },
 }
 
 /// Coordinate frame used by an imported spatial generator placement.
@@ -5268,6 +5279,44 @@ mod tests {
             .unwrap(),
             lines,
             "Lines must round-trip without changing its parameter model"
+        );
+        let legacy_graph: super::ColorEffectSpatialRecipe = serde_json::from_str(
+            r#"{"Graph":{"height":10,"width":10,"pitch":10,"frequency":2,"amplitude":1.0,"offset":0.0}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            legacy_graph,
+            super::ColorEffectSpatialRecipe::Graph {
+                grayscale: false,
+                height: 10,
+                width: 10,
+                pitch: 10,
+                frequency: 2,
+                amplitude: 1.0,
+                offset: 0.0,
+            }
+        );
+        assert_eq!(
+            serde_json::to_string(&legacy_graph).unwrap(),
+            r#"{"Graph":{"height":10,"width":10,"pitch":10,"frequency":2,"amplitude":1.0,"offset":0.0}}"#,
+            "default Graph Grayscale must remain omitted"
+        );
+        let graph = super::ColorEffectSpatialRecipe::Graph {
+            grayscale: true,
+            height: 100,
+            width: 100,
+            pitch: 100,
+            frequency: 10,
+            amplitude: 2.0,
+            offset: 1.0,
+        };
+        assert_eq!(
+            serde_json::from_str::<super::ColorEffectSpatialRecipe>(
+                &serde_json::to_string(&graph).unwrap()
+            )
+            .unwrap(),
+            graph,
+            "Graph must round-trip at its validated maxima"
         );
 
         let placed_rainbow = super::ColorEffectSpatialPattern {
