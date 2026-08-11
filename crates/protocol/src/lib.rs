@@ -1304,6 +1304,10 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+fn is_standard_sparkle_raster_mode(value: &ColorEffectSpatialSparkleRasterMode) -> bool {
+    *value == ColorEffectSpatialSparkleRasterMode::Sparkle
+}
+
 fn is_zero_usize(value: &usize) -> bool {
     *value == 0
 }
@@ -2307,6 +2311,18 @@ pub struct EffectBeamTarget {
 
 pub const COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION: u8 = 1;
 
+/// The source raster height consumed by the shared retained-particle evaluator.
+///
+/// Legacy and ordinary Sparkle recipes use the authored particle height (or one
+/// strip row when absent). COLOR MAPPINGS Tube has no Height PARAM: it paints
+/// every row of its fixed 100-row raster instead.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ColorEffectSpatialSparkleRasterMode {
+    #[default]
+    Sparkle,
+    TubeFullRasterHeight,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ColorEffectSpatialRecipe {
     KnightRider {
@@ -2368,6 +2384,10 @@ pub enum ColorEffectSpatialRecipe {
         grayscale: bool,
         #[serde(default, skip_serializing_if = "is_false")]
         vertical_symmetry: bool,
+        /// Explicitly distinguishes Tube's full 100-row raster from ordinary
+        /// Sparkle while retaining the common deterministic particle model.
+        #[serde(default, skip_serializing_if = "is_standard_sparkle_raster_mode")]
+        raster_mode: ColorEffectSpatialSparkleRasterMode,
         /// Stable source-derived seed. Zero is a valid deterministic seed.
         #[serde(default, skip_serializing_if = "is_zero_u32")]
         rng_seed: u32,
@@ -5624,6 +5644,7 @@ mod tests {
         let corrected_sparkle = super::ColorEffectSpatialRecipe::Sparkle {
             grayscale: true,
             vertical_symmetry: true,
+            raster_mode: super::ColorEffectSpatialSparkleRasterMode::Sparkle,
             rng_seed: 7,
             number: 5,
             lifetime_ms: Some(250),
@@ -5634,9 +5655,28 @@ mod tests {
         let sparkle_json = serde_json::to_string(&corrected_sparkle).unwrap();
         assert!(sparkle_json.contains(r#""lifetime_ms":250"#));
         assert!(sparkle_json.contains(r#""source_lifespan":0.6"#));
+        assert!(!sparkle_json.contains("raster_mode"));
         assert_eq!(
             serde_json::from_str::<super::ColorEffectSpatialRecipe>(&sparkle_json).unwrap(),
             corrected_sparkle
+        );
+
+        let tube = super::ColorEffectSpatialRecipe::Sparkle {
+            grayscale: true,
+            vertical_symmetry: true,
+            raster_mode: super::ColorEffectSpatialSparkleRasterMode::TubeFullRasterHeight,
+            rng_seed: 7,
+            number: 5,
+            lifetime_ms: Some(250),
+            source_lifespan: Some(0.6),
+            width: 30.0,
+            height: None,
+        };
+        let tube_json = serde_json::to_string(&tube).unwrap();
+        assert!(tube_json.contains(r#""raster_mode":"TubeFullRasterHeight""#));
+        assert_eq!(
+            serde_json::from_str::<super::ColorEffectSpatialRecipe>(&tube_json).unwrap(),
+            tube
         );
     }
 

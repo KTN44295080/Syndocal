@@ -13,19 +13,20 @@ use protocol::{
     ColorEffectAlgorithm, ColorEffectBeamTarget, ColorEffectColor, ColorEffectInterpolation,
     ColorEffectRequest, ColorEffectSpatialCoordinateFrame, ColorEffectSpatialMappingShape,
     ColorEffectSpatialPattern, ColorEffectSpatialPlacement, ColorEffectSpatialPlacementTarget,
-    ColorEffectSpatialRecipe, ColorEffectSpatialSamplingRule, ColorEffectStop, CueEffectTarget,
-    CueFixtureTarget, CueListSummary, CueSummary, DaslightCurveSource, DaslightCustomCurvePoint,
-    DaslightCustomCurveSource, DmxControlAction, DmxControlMapping, DmxModeSummary,
-    DmxOutputConfig, DmxUniversePreview, EffectBeamTarget, EffectBlendMode, EffectClockSync,
-    EffectParamsSnapshot, EngineSnapshot, FixtureProfileSummary, GeometrySummary, LfoEffectRequest,
-    LfoShape, MidiControlAction, MidiControlFeedback, MidiControlMapping, MidiControlMessage,
-    MidiFeedbackMessage, MoveCoordinateMode, MoveDirection, MoveEffectBeamTarget,
-    MoveEffectRequest, MoveInterpolation, MovePathPoint, PatchedFixtureSummary, ProjectFile,
-    Rotation3, StageMapConfig, TimelineAudioClipSummary, TimelineCueEventSummary,
-    TimelineLayerKind, TimelineLayerSummary, TimelineTrackKind, TouchControlBinding,
-    TouchControlKind, TouchControlSummary, TouchFeaturePresetTarget, TouchPageSummary,
-    TouchSurfaceSummary, ValueEffectDirection, ValueEffectInterpolation, ValueEffectMode,
-    ValueEffectPoint, ValueEffectRequest, Vec3, COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
+    ColorEffectSpatialRecipe, ColorEffectSpatialSamplingRule, ColorEffectSpatialSparkleRasterMode,
+    ColorEffectStop, CueEffectTarget, CueFixtureTarget, CueListSummary, CueSummary,
+    DaslightCurveSource, DaslightCustomCurvePoint, DaslightCustomCurveSource, DmxControlAction,
+    DmxControlMapping, DmxModeSummary, DmxOutputConfig, DmxUniversePreview, EffectBeamTarget,
+    EffectBlendMode, EffectClockSync, EffectParamsSnapshot, EngineSnapshot, FixtureProfileSummary,
+    GeometrySummary, LfoEffectRequest, LfoShape, MidiControlAction, MidiControlFeedback,
+    MidiControlMapping, MidiControlMessage, MidiFeedbackMessage, MoveCoordinateMode, MoveDirection,
+    MoveEffectBeamTarget, MoveEffectRequest, MoveInterpolation, MovePathPoint,
+    PatchedFixtureSummary, ProjectFile, Rotation3, StageMapConfig, TimelineAudioClipSummary,
+    TimelineCueEventSummary, TimelineLayerKind, TimelineLayerSummary, TimelineTrackKind,
+    TouchControlBinding, TouchControlKind, TouchControlSummary, TouchFeaturePresetTarget,
+    TouchPageSummary, TouchSurfaceSummary, ValueEffectDirection, ValueEffectInterpolation,
+    ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3,
+    COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
 };
 use roxmltree::{Document, Node};
 use serde::Serialize;
@@ -2177,6 +2178,7 @@ fn parse_scene_effects(
                 (Some(5), Some(3), Some(34)) => Some("Plasma"),
                 (Some(5), Some(3), Some(36)) => Some("Rainbow"),
                 (Some(5), Some(3), Some(40)) => Some("Sparkle"),
+                (Some(5), Some(3), Some(41)) => Some("Tube"),
                 (Some(5), Some(3), Some(42)) => Some("Spiral"),
                 (Some(5), Some(3), Some(44)) => Some("Sweep"),
                 (Some(5), Some(3), Some(49)) => Some("Graph"),
@@ -2406,7 +2408,7 @@ fn convert_dvc_effect(
             profiles,
             fixture_refs,
         ),
-        (5, 3, 22 | 23 | 30 | 31 | 32 | 33 | 34 | 36 | 37 | 40 | 42 | 44 | 49 | 50)
+        (5, 3, 22 | 23 | 30 | 31 | 32 | 33 | 34 | 36 | 37 | 40 | 41 | 42 | 44 | 49 | 50)
         | (2, 2, 121 | 127 | 128 | 129 | 130 | 131 | 133 | 134)
         | (6, 8, 521..=530) => {
             convert_dvc_color_spatial_effect(
@@ -2432,6 +2434,10 @@ struct DvcMappingRectangle {
     sx: i64,
     sy: i64,
     angle_degrees: f32,
+    /// Daslight serializes a not-yet-authored COLOR MAPPINGS Rectangle as
+    /// `(0,0,-1,-1,0,LOCKED=0)`. It is accepted only for source-noop racks
+    /// and never reaches a runtime placement.
+    native_empty_sentinel: bool,
 }
 
 fn dvc_mapping_rectangle(
@@ -2490,11 +2496,6 @@ fn dvc_mapping_rectangle(
     let y = parse_integer("Y")?;
     let sx = parse_integer("SX")?;
     let sy = parse_integer("SY")?;
-    if sx <= 0 || sy <= 0 {
-        return Err(format!(
-            "{generator} Rectangle SX and SY must be positive, found {sx} and {sy}"
-        ));
-    }
     let angle_degrees = required_attribute(mapping, "ANGLE", "MAPPING Rectangle")?
         .parse::<f32>()
         .map_err(|error| format!("{generator} Rectangle ANGLE is invalid: {error}"))?;
@@ -2503,7 +2504,8 @@ fn dvc_mapping_rectangle(
             "{generator} Rectangle ANGLE must be finite, found {angle_degrees}"
         ));
     }
-    match required_attribute(mapping, "LOCKED", "MAPPING Rectangle")? {
+    let locked = required_attribute(mapping, "LOCKED", "MAPPING Rectangle")?;
+    match locked {
         "0" | "1" => {}
         value => {
             return Err(format!(
@@ -2511,12 +2513,20 @@ fn dvc_mapping_rectangle(
             ))
         }
     }
+    let native_empty_sentinel =
+        x == 0 && y == 0 && sx == -1 && sy == -1 && angle_degrees == 0.0 && locked == "0";
+    if (sx <= 0 || sy <= 0) && !native_empty_sentinel {
+        return Err(format!(
+            "{generator} Rectangle SX and SY must be positive, found {sx} and {sy}"
+        ));
+    }
     Ok(DvcMappingRectangle {
         x,
         y,
         sx,
         sy,
         angle_degrees,
+        native_empty_sentinel,
     })
 }
 
@@ -2526,6 +2536,11 @@ fn dvc_color_spatial_placement(
     beam_targets: &[ColorEffectBeamTarget],
     fixture_refs: &HashMap<String, FixtureImportRef>,
 ) -> Result<ColorEffectSpatialPlacement, String> {
+    if rectangle.native_empty_sentinel {
+        return Err(format!(
+            "{generator} native empty Rectangle sentinel is valid only with zero owned BEAMS"
+        ));
+    }
     let fixture_refs_by_id = fixture_refs
         .values()
         .map(|fixture_ref| (fixture_ref.fixture_id, fixture_ref))
@@ -3005,6 +3020,7 @@ fn convert_dvc_value_effect(
             ColorEffectSpatialRecipe::Sparkle {
                 grayscale: false,
                 vertical_symmetry,
+                raster_mode: ColorEffectSpatialSparkleRasterMode::Sparkle,
                 rng_seed: dvc_corrected_rng_seed(scene, rack, effect, generator_id),
                 number,
                 lifetime_ms: Some(lifetime_ms),
@@ -3237,6 +3253,7 @@ fn convert_dvc_color_spatial_effect(
         36 => "Rainbow",
         37 => "Random fill",
         40 => "Sparkle",
+        41 => "Tube",
         42 => "Spiral",
         44 => "Sweep",
         49 => "Graph",
@@ -3267,7 +3284,7 @@ fn convert_dvc_color_spatial_effect(
     };
     let source_is_color_mappings = matches!(
         generator_id,
-        22 | 23 | 30 | 31 | 32 | 33 | 34 | 36 | 37 | 40 | 42 | 44 | 49 | 50
+        22 | 23 | 30 | 31 | 32 | 33 | 34 | 36 | 37 | 40 | 41 | 42 | 44 | 49 | 50
     );
     let shared_mapping_generator_id = match generator_id {
         22 => 523,
@@ -3392,7 +3409,7 @@ fn convert_dvc_color_spatial_effect(
                 "{label} non-empty media paths require decoded embedded-media evidence and remain fail-closed"
             ));
         }
-        if generator_id == 33 {
+        let color_mapping_targets = if generator_id == 33 {
             let selections = element_children(rack)
                 .filter(|node| node.has_tag_name("SELECTIONS"))
                 .count();
@@ -3406,9 +3423,18 @@ fn convert_dvc_color_spatial_effect(
             if beams.attribute("NB").is_none() {
                 return Err(format!("{label} BEAMS is missing NB"));
             }
-            dvc_rack_targets(rack, fixture_refs)?;
-        }
+            Some(dvc_rack_targets(rack, fixture_refs)?)
+        } else {
+            None
+        };
         let rectangle = dvc_mapping_rectangle(rack, &label, false)?;
+        if rectangle.native_empty_sentinel
+            && color_mapping_targets.is_some_and(|targets| !targets.beam_targets.is_empty())
+        {
+            return Err(format!(
+                "{label} native empty Rectangle sentinel is valid only with zero owned BEAMS"
+            ));
+        }
         return Ok(ConvertedDvcEffect {
             target: None,
             generator,
@@ -3700,6 +3726,7 @@ fn convert_dvc_color_spatial_effect(
             ColorEffectSpatialRecipe::Sparkle {
                 grayscale: dvc_binary_param(&params, 2, "COLOR FX Sparkle Grayscale")?,
                 vertical_symmetry: dvc_binary_param(&params, 3, "COLOR FX Sparkle Transform")?,
+                raster_mode: ColorEffectSpatialSparkleRasterMode::Sparkle,
                 rng_seed: dvc_corrected_rng_seed(scene, rack, effect, generator_id),
                 number: dvc_integer_range_param(&params, 10, "COLOR FX Sparkle Number", 1, 10)?
                     as u16,
@@ -4073,6 +4100,7 @@ fn convert_dvc_color_spatial_effect(
                     false
                 },
                 vertical_symmetry: false,
+                raster_mode: ColorEffectSpatialSparkleRasterMode::Sparkle,
                 rng_seed: dvc_corrected_rng_seed(scene, rack, effect, generator_id),
                 number: dvc_integer_range_param(
                     &params,
@@ -4097,6 +4125,38 @@ fn convert_dvc_color_spatial_effect(
                     1,
                     90,
                 )?),
+            }
+        }
+        41 => {
+            require_exact_dvc_mapping_recipe_schema(
+                effect,
+                &params,
+                true,
+                &[(10, 0), (11, 1), (12, 0)],
+            )?;
+            if !(2..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS).contains(&stops.len()) {
+                return Err(format!(
+                    "COLOR MAPPINGS Tube ID=41 palette requires 2..255 colors, found {}",
+                    stops.len()
+                ));
+            }
+            let source_lifespan =
+                dvc_finite_range_param(&params, 11, "COLOR MAPPINGS Tube LifeSpan", 0.0, 0.9)?;
+            ColorEffectSpatialRecipe::Sparkle {
+                grayscale: dvc_binary_param(&params, 2, "COLOR MAPPINGS Tube Grayscale")?,
+                // COLOR MAPPINGS Transform and Rotation are placement-space
+                // operations populated below, not one-dimensional strip flags.
+                vertical_symmetry: false,
+                raster_mode: ColorEffectSpatialSparkleRasterMode::TubeFullRasterHeight,
+                rng_seed: dvc_corrected_rng_seed(scene, rack, effect, generator_id),
+                number: dvc_integer_range_param(&params, 10, "COLOR MAPPINGS Tube Number", 1, 10)?
+                    as u16,
+                lifetime_ms: Some((100.0 / (1.0 - source_lifespan)).round() as u16),
+                source_lifespan: Some(source_lifespan),
+                width: dvc_integer_range_param(&params, 12, "COLOR MAPPINGS Tube Width", 1, 90)?,
+                // Tube has no Height PARAM: the shared retained-particle
+                // evaluator paints all 100 mapping rows.
+                height: None,
             }
         }
         530 => {
@@ -4178,16 +4238,18 @@ fn convert_dvc_color_spatial_effect(
     } else {
         format!("MAPPINGS {generator} ID={generator_id}")
     };
-    let mapping_rectangle = placed_spatial_recipe
+    let mut mapping_rectangle = placed_spatial_recipe
         .then(|| {
             dvc_mapping_rectangle(
                 rack,
                 &placement_label,
-                matches!(generator_id, 31 | 36 | 49 | 50) || shared_mapping_generator_id == 530,
+                matches!(generator_id, 31 | 36 | 41 | 49 | 50)
+                    || shared_mapping_generator_id == 530,
             )
         })
         .transpose()?;
-    if matches!(generator_id, 31 | 49 | 50) {
+    let source_mapping_rectangle = mapping_rectangle;
+    if matches!(generator_id, 31 | 41 | 49 | 50) {
         let beam_containers = element_children(rack)
             .filter(|node| node.has_tag_name("BEAMS"))
             .collect::<Vec<_>>();
@@ -4235,6 +4297,17 @@ fn convert_dvc_color_spatial_effect(
         }
     }
     let source_noop = source_is_color_mappings && targets.beam_targets.is_empty();
+    if mapping_rectangle.is_some_and(|rectangle| rectangle.native_empty_sentinel) {
+        if source_noop {
+            // Native COLOR MAPPINGS serializes an unset Rectangle this way.
+            // It is a verified source no-op, not an invalid runtime geometry.
+            mapping_rectangle = None;
+        } else {
+            return Err(format!(
+                "{placement_label} native empty Rectangle sentinel is valid only with zero owned BEAMS"
+            ));
+        }
+    }
     if targets.beam_targets.is_empty() && !source_noop {
         return Err(format!("BEAMS resolved to no {generator} beam targets"));
     }
@@ -4245,7 +4318,7 @@ fn convert_dvc_color_spatial_effect(
     }
     let omitted_spatial_targets =
         retain_dvc_color_spatial_targets(&mut targets, fixture_refs, source_is_mappings);
-    if matches!(generator_id, 31 | 49 | 50) && omitted_spatial_targets > 0 {
+    if matches!(generator_id, 31 | 41 | 49 | 50) && omitted_spatial_targets > 0 {
         return Err(format!(
             "COLOR MAPPINGS {generator} ID={generator_id} requires every owned BEAMS target to expose a verified color segment; omitted {omitted_spatial_targets} target(s)"
         ));
@@ -4265,7 +4338,7 @@ fn convert_dvc_color_spatial_effect(
     }
     let (period_ms, period_note) = if matches!(
         generator_id,
-        31 | 37 | 49 | 50 | 121 | 127 | 128 | 131 | 133 | 134
+        31 | 37 | 41 | 49 | 50 | 121 | 127 | 128 | 131 | 133 | 134
     ) || shared_mapping_generator_id == 530
     {
         let period_source_family = if source_is_color_mappings {
@@ -4339,6 +4412,7 @@ fn convert_dvc_color_spatial_effect(
         ColorEffectSpatialRecipe::Sparkle {
             grayscale,
             vertical_symmetry,
+            raster_mode,
             rng_seed,
             number,
             lifetime_ms,
@@ -4346,7 +4420,23 @@ fn convert_dvc_color_spatial_effect(
             width,
             height,
             ..
-        } => format!("implementation=SyndocalCorrected; evaluator=CSparklesEffect recovered retained-particle grammar; unavailable_qrand=stable_source_seed; rng_seed={rng_seed}; Grayscale={}; Transform={}; Number={number}; source_LifeSpan={source_lifespan:?}; lifetime_ms={lifetime_ms:?}; Width={width}; Height={height:?}; population=retained; spawn_rate_units=particles_per_40ms; fade=continuous; time_units=milliseconds", u8::from(*grayscale), if *vertical_symmetry { "Vertical symmetry" } else { "None" }),
+        } => {
+            let evaluator = if *raster_mode
+                == ColorEffectSpatialSparkleRasterMode::TubeFullRasterHeight
+            {
+                "CTubeEffect shared retained-particle grammar"
+            } else {
+                "CSparklesEffect recovered retained-particle grammar"
+            };
+            let raster_height = if *raster_mode
+                == ColorEffectSpatialSparkleRasterMode::TubeFullRasterHeight
+            {
+                "full_100_rows"
+            } else {
+                "authored_or_strip"
+            };
+            format!("implementation=SyndocalCorrected; evaluator={evaluator}; unavailable_qrand=stable_source_seed; rng_seed={rng_seed}; Grayscale={}; Transform={}; Number={number}; source_LifeSpan={source_lifespan:?}; lifetime_ms={lifetime_ms:?}; Width={width}; Height={height:?}; raster_height={raster_height}; population=retained; spawn_rate_units=particles_per_40ms; fade=continuous; time_units=milliseconds", u8::from(*grayscale), if *vertical_symmetry { "Vertical symmetry" } else { "None" })
+        }
         ColorEffectSpatialRecipe::Spiral {
             grayscale,
             radius,
@@ -4468,7 +4558,8 @@ fn convert_dvc_color_spatial_effect(
             )
         })
         .transpose()?;
-    if matches!(generator_id, 31 | 37 | 49 | 50) || matches!(shared_mapping_generator_id, 522..=529)
+    if matches!(generator_id, 31 | 37 | 41 | 49 | 50)
+        || matches!(shared_mapping_generator_id, 522..=529)
     {
         let transform = dvc_param(&params, 3, &format!("{mapping_family_label} Transform"))?;
         if !matches!(transform, 0.0 | 1.0 | 2.0) {
@@ -4483,12 +4574,15 @@ fn convert_dvc_color_spatial_effect(
             0,
             360,
         )?;
-        let placement = placement
-            .as_mut()
-            .expect("placed MAPPINGS generators always construct a Rectangle placement");
-        placement.vertical_symmetry = transform == 1.0;
-        placement.horizontal_symmetry = transform == 2.0;
-        placement.raster_rotation_degrees = rotation;
+        if let Some(placement) = placement.as_mut() {
+            placement.vertical_symmetry = transform == 1.0;
+            placement.horizontal_symmetry = transform == 2.0;
+            placement.raster_rotation_degrees = rotation;
+        } else if !source_noop {
+            return Err(format!(
+                "{placement_label} requires a positive Rectangle placement for owned BEAMS"
+            ));
+        }
     }
     let mapping_recipe = source_is_mappings;
     let source_family = if source_is_color_mappings {
@@ -4499,7 +4593,7 @@ fn convert_dvc_color_spatial_effect(
         "Colour FX"
     };
     if source_noop {
-        let rectangle = placement
+        let rectangle = source_mapping_rectangle
             .as_ref()
             .expect("COLOR MAPPINGS always parses its Rectangle before preserving a no-op");
         return Ok(ConvertedDvcEffect {
@@ -4512,7 +4606,7 @@ fn convert_dvc_color_spatial_effect(
                 rectangle.y,
                 rectangle.sx,
                 rectangle.sy,
-                rectangle.mapping_angle_degrees,
+                rectangle.angle_degrees,
             ),
             approximations,
             warnings: Vec::new(),
@@ -10485,6 +10579,194 @@ mod tests {
     }
 
     #[test]
+    fn dvc_color_mappings_tube_is_full_height_shared_sparkle_and_fails_closed() {
+        let source = || {
+            r#"<SCENE DASUID="tube-scene" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="5" DASUID="tube-rack"><EFFECT TYPE="3" ID="41" DASUID="tube-effect" DURATION="1000"><PARAMS NB="7"><PARAM TYPE="4" ID="1"><COLORS NB="2"><COLOR VAL="1/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0/0/1/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/></COLORS></PARAM><PARAM TYPE="2" ID="2" VAL="1"/><PARAM TYPE="6" ID="3" VAL="2"/><PARAM TYPE="0" ID="4" VAL="90"/><PARAM TYPE="0" ID="10" VAL="5"/><PARAM TYPE="1" ID="11" VAL="0"/><PARAM TYPE="0" ID="12" VAL="1"/></PARAMS></EFFECT><MAPPING NAME="Rectangle" DASUID="tube-rectangle" TYPE="0" X="0" Y="0" SX="200" SY="100" ANGLE="30" LOCKED="0"/><BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS></RACK></RACKS></SCENE>"#.to_string()
+        };
+        let convert = |xml: &str| {
+            let document = Document::parse(xml).unwrap();
+            let scene = document.root_element();
+            let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+            let effect = direct_child(rack, "EFFECT").unwrap();
+            convert_dvc_effect(
+                scene,
+                "COLOR MAPPINGS Tube",
+                rack,
+                effect,
+                5,
+                3,
+                41,
+                1,
+                &effect_test_profiles(),
+                &effect_test_fixture_refs(),
+            )
+        };
+
+        let valid = source();
+        let first = convert(&valid).unwrap();
+        let repeated = convert(&valid).unwrap();
+        assert!(first.approximations.is_empty());
+        assert!(first.note.contains("source_family=Color Mappings;"));
+        assert!(first
+            .note
+            .contains("evaluator=CTubeEffect shared retained-particle grammar"));
+        assert!(first.note.contains("raster_height=full_100_rows"));
+        assert_eq!(
+            serde_json::to_value(&first.target).unwrap(),
+            serde_json::to_value(&repeated.target).unwrap(),
+            "Tube's corrected source-family seed must be reload-stable"
+        );
+        let Some(EffectParamsSnapshot::Color(request)) =
+            first.target.expect("owned Tube target").params
+        else {
+            panic!("COLOR MAPPINGS 41 must create an owned Color target");
+        };
+        assert_eq!(request.fixture_ids, vec![1]);
+        assert_eq!(request.stops.len(), 2);
+        assert_eq!(request.period_ms, 1_000);
+        assert_eq!(request.blend_mode, EffectBlendMode::Override);
+        let pattern = request.spatial_pattern.expect("Tube spatial pattern");
+        assert_eq!(pattern.beam_targets.len(), 1);
+        assert_eq!(pattern.beam_targets[0].feature_attribute, None);
+        assert!(matches!(
+            pattern.recipe,
+            ColorEffectSpatialRecipe::Sparkle {
+                grayscale: true,
+                vertical_symmetry: false,
+                raster_mode: ColorEffectSpatialSparkleRasterMode::TubeFullRasterHeight,
+                number: 5,
+                lifetime_ms: Some(100),
+                source_lifespan: Some(0.0),
+                width: 1.0,
+                height: None,
+                ..
+            }
+        ));
+        let placement = pattern.placement.expect("positive Rectangle placement");
+        assert_eq!(placement.mapping_angle_degrees, 30.0);
+        assert!(!placement.vertical_symmetry);
+        assert!(placement.horizontal_symmetry);
+        assert_eq!(placement.raster_rotation_degrees, 90.0);
+        assert_eq!(
+            placement.target_coordinates,
+            vec![ColorEffectSpatialPlacementTarget {
+                fixture_id: 1,
+                beam_index: 0,
+                patch_x: 10,
+                patch_y: 20,
+            }]
+        );
+
+        let importer_precision =
+            convert(&valid.replacen(r#"ID="11" VAL="0""#, r#"ID="11" VAL="0.0049751224""#, 1))
+                .unwrap();
+        let Some(EffectParamsSnapshot::Color(precision_request)) = importer_precision
+            .target
+            .expect("precision Tube target")
+            .params
+        else {
+            unreachable!();
+        };
+        assert!(matches!(
+            precision_request
+                .spatial_pattern
+                .as_ref()
+                .map(|pattern| &pattern.recipe),
+            Some(ColorEffectSpatialRecipe::Sparkle {
+                lifetime_ms: Some(101),
+                source_lifespan: Some(value),
+                ..
+            }) if value.to_bits() == 0x3BA3_065A
+        ));
+
+        for (case, invalid, expected_error) in [
+            (
+                "PARAMS NB mismatch",
+                valid.replacen(r#"<PARAMS NB="7">"#, r#"<PARAMS NB="6">"#, 1),
+                "PARAMS declares 6 entries but contains 7",
+            ),
+            (
+                "Number TYPE",
+                valid.replacen(r#"TYPE="0" ID="10""#, r#"TYPE="1" ID="10""#, 1),
+                "expected PARAM 10 TYPE=0, found TYPE=1",
+            ),
+            (
+                "Number range",
+                valid.replacen(r#"ID="10" VAL="5""#, r#"ID="10" VAL="11""#, 1),
+                "integer within 1..10",
+            ),
+            (
+                "LifeSpan range",
+                valid.replacen(r#"ID="11" VAL="0""#, r#"ID="11" VAL="0.91""#, 1),
+                "within 0..0.9",
+            ),
+            (
+                "Width range",
+                valid.replacen(r#"ID="12" VAL="1""#, r#"ID="12" VAL="91""#, 1),
+                "integer within 1..90",
+            ),
+            (
+                "minimum palette",
+                valid
+                    .replacen(r#"COLORS NB="2""#, r#"COLORS NB="1""#, 1)
+                    .replacen(
+                        r#"<COLOR VAL="0/0/1/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>"#,
+                        "",
+                        1,
+                    ),
+                "palette requires 2..255 colors",
+            ),
+            (
+                "strict Rectangle attributes",
+                valid.replacen(r#"LOCKED="0"/>"#, r#"LOCKED="0" EXTRA="1"/>"#, 1),
+                "expected Rectangle attributes",
+            ),
+            (
+                "external selection",
+                valid.replacen("<BEAMS NB=", "<SELECTIONS/><BEAMS NB=", 1),
+                "external SELECTIONS remain fail-closed",
+            ),
+        ] {
+            let error = convert(&invalid).unwrap_err();
+            assert!(
+                error.contains(expected_error),
+                "{case}: expected {expected_error:?}, found {error:?}"
+            );
+        }
+
+        let positive_empty = valid
+            .replacen(r#"<BEAMS NB="1">"#, r#"<BEAMS NB="0">"#, 1)
+            .replacen(
+                r#"<BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/>"#,
+                "",
+                1,
+            );
+        let no_op = convert(&positive_empty).unwrap();
+        assert!(no_op.target.is_none());
+        assert!(no_op.note.contains("source no-op preserved"));
+        assert!(no_op.note.contains("Rectangle=(0,0,200,100,30)"));
+
+        let native_empty = positive_empty.replacen(
+            r#"SX="200" SY="100" ANGLE="30""#,
+            r#"SX="-1" SY="-1" ANGLE="0""#,
+            1,
+        );
+        let native_no_op = convert(&native_empty).unwrap();
+        assert!(native_no_op.target.is_none());
+        assert!(native_no_op.note.contains("source no-op preserved"));
+        assert!(native_no_op.note.contains("Rectangle=(0,0,-1,-1,0)"));
+
+        let nonempty_native_empty = native_empty.replacen(
+            r#"<BEAMS NB="0"></BEAMS>"#,
+            r#"<BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS>"#,
+            1,
+        );
+        assert!(convert(&nonempty_native_empty)
+            .unwrap_err()
+            .contains("native empty Rectangle sentinel is valid only with zero owned BEAMS"));
+    }
+
+    #[test]
     fn dvc_color_mappings_random_fill_routes_exact_2d_and_rejects_schema_drift() {
         let source = || {
             r#"<SCENE DASUID="random-fill-scene" SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="5" DASUID="random-fill-rack"><EFFECT TYPE="3" ID="37" DASUID="random-fill-effect" DURATION="1000"><PARAMS NB="6"><PARAM TYPE="4" ID="1"><COLORS NB="2"><COLOR VAL="1/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0/0/1/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/></COLORS></PARAM><PARAM TYPE="2" ID="2" VAL="1"/><PARAM TYPE="6" ID="3" VAL="2"/><PARAM TYPE="0" ID="4" VAL="90"/><PARAM TYPE="0" ID="10" VAL="6"/><PARAM TYPE="0" ID="11" VAL="7"/></PARAMS></EFFECT><MAPPING NAME="Rectangle" DASUID="color-mappings-random-fill" TYPE="0" X="0" Y="0" SX="200" SY="100" ANGLE="30" LOCKED="0"/><BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS></RACK></RACKS></SCENE>"#.to_string()
@@ -14432,6 +14714,142 @@ mod tests {
                 "profile PRESET 69bdd010-d626-11ea-b9df-7da99bfefe5c-3afb4fbb:33:0 -> type 4",
             ) && detail.message.contains("generic PRESET type 4")
         }));
+    }
+
+    #[test]
+    fn dvc_local_golden_color_mappings_tube_from_remaining7_specimen() {
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../qa/specimens/ColorMappings-Remaining7.dvc"
+        ));
+        assert!(
+            path.is_file(),
+            "repo-portable Tube specimen must exist at {}",
+            path.display()
+        );
+
+        let source = fs::read_to_string(path).unwrap();
+        let document = Document::parse(&source).unwrap();
+        let rack = document
+            .descendants()
+            .find(|node| {
+                node.has_tag_name("RACK")
+                    && node.attribute("TYPE") == Some("5")
+                    && direct_child(*node, "EFFECT").is_some_and(|effect| {
+                        effect.attribute("TYPE") == Some("3")
+                            && effect.attribute("ID") == Some("41")
+                    })
+            })
+            .expect("saved specimen must contain COLOR MAPPINGS 5/3/41 Tube");
+        let effect = direct_child(rack, "EFFECT").expect("Tube must contain EFFECT");
+        let params = direct_child(effect, "PARAMS").expect("Tube must contain PARAMS");
+        assert_eq!(params.attribute("NB"), Some("7"));
+        assert_eq!(
+            element_children(params)
+                .filter(|param| param.has_tag_name("PARAM"))
+                .map(|param| {
+                    (
+                        param.attribute("TYPE").unwrap(),
+                        param.attribute("ID").unwrap(),
+                        param.attribute("VAL"),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                ("4", "1", None),
+                ("2", "2", Some("0")),
+                ("6", "3", Some("0")),
+                ("0", "4", Some("0")),
+                ("0", "10", Some("5")),
+                ("1", "11", Some("0")),
+                ("0", "12", Some("1")),
+            ],
+            "saved Tube PARAM schema must remain byte-semantic"
+        );
+        let palette_param = element_children(params)
+            .find(|param| param.has_tag_name("PARAM") && param.attribute("ID") == Some("1"))
+            .expect("Tube must contain palette PARAM 1");
+        let palette =
+            direct_child(palette_param, "COLORS").expect("Tube palette must contain COLORS");
+        assert_eq!(palette.attribute("NB"), Some("2"));
+        assert_eq!(
+            element_children(palette)
+                .filter(|color| color.has_tag_name("COLOR"))
+                .count(),
+            2
+        );
+        let rectangle = direct_child(rack, "MAPPING").expect("Tube must contain Rectangle");
+        assert_eq!(rectangle.attribute("NAME"), Some("Rectangle"));
+        assert_eq!(rectangle.attribute("TYPE"), Some("0"));
+        assert_eq!(rectangle.attribute("X"), Some("1994"));
+        assert_eq!(rectangle.attribute("Y"), Some("166"));
+        assert_eq!(rectangle.attribute("SX"), Some("513"));
+        assert_eq!(rectangle.attribute("SY"), Some("52"));
+        assert_eq!(rectangle.attribute("ANGLE"), Some("0"));
+        assert_eq!(rectangle.attribute("LOCKED"), Some("0"));
+        let beams = direct_child(rack, "BEAMS").expect("Tube must contain BEAMS");
+        assert_eq!(beams.attribute("NB"), Some("0"));
+        assert_eq!(
+            element_children(beams)
+                .filter(|beam| beam.has_tag_name("BEAM"))
+                .count(),
+            0
+        );
+        assert!(
+            direct_child(rack, "SELECTIONS").is_none(),
+            "Tube source must not invent external selections"
+        );
+
+        let outcome = import_path(path).unwrap();
+        crate::validate_project_file(&outcome.project).unwrap();
+        assert_eq!(
+            outcome
+                .report
+                .converted
+                .details
+                .iter()
+                .filter(|detail| {
+                    detail.item == "Effect: New Scene (Tube)"
+                        && detail.message.contains("source_family=Color Mappings;")
+                        && detail.message.contains("source no-op preserved")
+                        && detail.message.contains("palette_colors=2")
+                        && detail.message.contains("Rectangle=(1994,166,513,52,0)")
+                        && detail
+                            .message
+                            .contains("evaluator=CTubeEffect shared retained-particle grammar")
+                        && detail.message.contains("raster_height=full_100_rows")
+                        && detail.message.contains("no runtime effect was created")
+                })
+                .count(),
+            1,
+            "saved empty Tube rack must validate as one source no-op"
+        );
+        assert!(outcome
+            .report
+            .skipped
+            .details
+            .iter()
+            .all(|detail| { !detail.message.contains("RACK TYPE=5 EFFECT TYPE=3 ID=41") }));
+        assert!(outcome
+            .project
+            .snapshot
+            .cues
+            .iter()
+            .flat_map(|cue| &cue.effect_targets)
+            .all(|target| !matches!(
+                target
+                    .params
+                    .as_ref()
+                    .and_then(|params| match params {
+                        EffectParamsSnapshot::Color(request) => request.spatial_pattern.as_ref(),
+                        _ => None,
+                    })
+                    .map(|pattern| &pattern.recipe),
+                Some(ColorEffectSpatialRecipe::Sparkle {
+                    raster_mode: ColorEffectSpatialSparkleRasterMode::TubeFullRasterHeight,
+                    ..
+                })
+            )));
     }
 
     #[test]

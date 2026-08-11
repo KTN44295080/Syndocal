@@ -32,18 +32,18 @@ use protocol::{
     ChildTimelineTransportRootSummary, ChildTimelineTransportRuntimeSummary, ClockSnapshot,
     ClockSource, ColorEffectAlgorithm, ColorEffectColor, ColorEffectInterpolation,
     ColorEffectRequest, ColorEffectSpatialCoordinateFrame, ColorEffectSpatialMappingShape,
-    ColorEffectSpatialRecipe, ColorEffectSpatialSamplingRule, ColorEffectStop,
-    ColorMappingCellTarget, ColorMappingEffectRequest, ColorMappingPlaybackDirection,
-    ColorMappingSampling, ColorMappingWrapMode, CompositionId, CompositionSummary, CueEffectTarget,
-    CueFixtureTarget, CueId, CueIfcbTiming, CueListId, CueListSummary, CueLiveDirection,
-    CueLiveModifierSettings, CueLiveModifierState, CueNodeGraphTarget, CuePaletteTarget,
-    CuePartSummary, CueStepSummary, CueSummary, CurveEffectPoint, CurveEffectRequest,
-    DaslightCurveSource, DaslightCustomCurvePoint, DaslightCustomCurveSource,
-    DirectChildTimelineTransportSummary, DmxMergeMode, DmxModeSummary, DmxOutputConfig,
-    DmxOutputProtocol, DmxOutputRouteTelemetry, DmxUniversePreview, EffectBeamTarget,
-    EffectBlendMode, EffectClockSync, EffectId, EffectKind, EffectParamsSnapshot, EffectSummary,
-    EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId, FixtureId,
-    FixtureLimits, FixtureProfileSummary, LfoEffectRequest, LfoShape, LiveAudioFrame,
+    ColorEffectSpatialRecipe, ColorEffectSpatialSamplingRule, ColorEffectSpatialSparkleRasterMode,
+    ColorEffectStop, ColorMappingCellTarget, ColorMappingEffectRequest,
+    ColorMappingPlaybackDirection, ColorMappingSampling, ColorMappingWrapMode, CompositionId,
+    CompositionSummary, CueEffectTarget, CueFixtureTarget, CueId, CueIfcbTiming, CueListId,
+    CueListSummary, CueLiveDirection, CueLiveModifierSettings, CueLiveModifierState,
+    CueNodeGraphTarget, CuePaletteTarget, CuePartSummary, CueStepSummary, CueSummary,
+    CurveEffectPoint, CurveEffectRequest, DaslightCurveSource, DaslightCustomCurvePoint,
+    DaslightCustomCurveSource, DirectChildTimelineTransportSummary, DmxMergeMode, DmxModeSummary,
+    DmxOutputConfig, DmxOutputProtocol, DmxOutputRouteTelemetry, DmxUniversePreview,
+    EffectBeamTarget, EffectBlendMode, EffectClockSync, EffectId, EffectKind, EffectParamsSnapshot,
+    EffectSummary, EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, ExecutorId,
+    FixtureId, FixtureLimits, FixtureProfileSummary, LfoEffectRequest, LfoShape, LiveAudioFrame,
     LiveAudioReactiveFeatures, MappingEffectDirection, MappingEffectRequest, MoveCoordinateMode,
     MoveDirection, MoveEffectRequest, MovePathPoint, NodeGraphAudioRuntimeStatus, NodeGraphId,
     NodeGraphNodeKind, NodeGraphNodeSummary, NodeGraphSummary, NodeGraphTransformOp, PaletteId,
@@ -3867,10 +3867,108 @@ impl SyndocalSparkleParticle {
     }
 }
 
+fn syndocal_sparkle_unit_fraction(seed: u64) -> f32 {
+    // Keep the generated fraction strictly below one, then explicitly clamp
+    // its scaled pixel position. This makes the corrected RNG deterministic
+    // without dropping the source raster's inclusive right-edge behavior.
+    ((splitmix64(seed) >> 11) as f64 / (1_u64 << 53) as f64) as f32
+}
+
+fn syndocal_tube_random_pairs(rng_seed: u32) -> [(f32, f32); 100] {
+    // Tube's source keeps a 100-pair table and indexes its second lane for X.
+    // The original qrand history is unavailable, so this is a stable local
+    // replacement for those pair values; the table/index grammar stays intact.
+    std::array::from_fn(|index| {
+        let index = index as u64;
+        (
+            syndocal_sparkle_unit_fraction(
+                u64::from(rng_seed) ^ index.wrapping_mul(0xA24B_AED4_963E_E407),
+            ),
+            syndocal_sparkle_unit_fraction(
+                u64::from(rng_seed)
+                    ^ 0xC6BC_2796_92B5_CC83
+                    ^ index.wrapping_mul(0x9E37_79B9_7F4A_7C15),
+            ),
+        )
+    })
+}
+
+#[inline(always)]
+fn syndocal_tube_blend_channel(from: u16, to: u16, alpha: f32) -> u16 {
+    // This is f32::round()'s non-negative, half-away-from-zero result without
+    // invoking the scalar round intrinsic. RGB endpoints and alpha are already
+    // validated, so the shared interpolation result is finite in 0..=65535.
+    let value = from as f32 + (to as f32 - from as f32) * alpha;
+    let base = value as u16;
+    if value - base as f32 >= 0.5 {
+        base.saturating_add(1)
+    } else {
+        base
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+fn syndocal_tube_blend_channel_slice(values: &mut [u16], to: u16, alpha: f32) {
+    use std::arch::x86_64::{
+        __m128i, _mm_add_ps, _mm_castps_si128, _mm_cmpge_ps, _mm_cvtepi32_ps, _mm_cvttps_epi32,
+        _mm_loadu_si128, _mm_mul_ps, _mm_packs_epi32, _mm_set1_epi32, _mm_set1_ps,
+        _mm_setzero_si128, _mm_storeu_si128, _mm_sub_epi32, _mm_sub_ps, _mm_unpackhi_epi16,
+        _mm_unpacklo_epi16, _mm_xor_si128,
+    };
+
+    let mut chunks = values.chunks_exact_mut(8);
+    // SAFETY: SSE2 is part of the x86_64 baseline. Each load/store stays
+    // within the current eight-u16 chunk, and the intrinsics accept unaligned
+    // pointers. The instruction sequence mirrors syndocal_tube_blend_channel:
+    // f32 conversion, subtract, multiply, add, truncate, then frac >= 0.5.
+    unsafe {
+        let zero = _mm_setzero_si128();
+        let to = _mm_set1_ps(to as f32);
+        let alpha = _mm_set1_ps(alpha);
+        let half = _mm_set1_ps(0.5);
+        let bias32 = _mm_set1_epi32(32_768);
+        let bias16 = _mm_set1_epi32(0x8000_8000_u32 as i32);
+        for chunk in &mut chunks {
+            let packed = _mm_loadu_si128(chunk.as_ptr().cast::<__m128i>());
+            let low = _mm_unpacklo_epi16(packed, zero);
+            let high = _mm_unpackhi_epi16(packed, zero);
+
+            let blend_four = |from: __m128i| {
+                let from = _mm_cvtepi32_ps(from);
+                let value = _mm_add_ps(from, _mm_mul_ps(_mm_sub_ps(to, from), alpha));
+                let base = _mm_cvttps_epi32(value);
+                let fraction = _mm_sub_ps(value, _mm_cvtepi32_ps(base));
+                let increment = _mm_castps_si128(_mm_cmpge_ps(fraction, half));
+                // A true comparison lane is -1, so subtracting it adds one.
+                _mm_sub_epi32(base, increment)
+            };
+            let low = _mm_sub_epi32(blend_four(low), bias32);
+            let high = _mm_sub_epi32(blend_four(high), bias32);
+            // SSE2 only has signed i32 -> i16 saturation. Bias into the signed
+            // range before packing, then restore the unsigned bit pattern.
+            let packed = _mm_xor_si128(_mm_packs_epi32(low, high), bias16);
+            _mm_storeu_si128(chunk.as_mut_ptr().cast::<__m128i>(), packed);
+        }
+    }
+    for value in chunks.into_remainder() {
+        *value = syndocal_tube_blend_channel(*value, to, alpha);
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+#[inline(always)]
+fn syndocal_tube_blend_channel_slice(values: &mut [u16], to: u16, alpha: f32) {
+    for value in values {
+        *value = syndocal_tube_blend_channel(*value, to, alpha);
+    }
+}
+
 #[derive(Debug)]
 struct SyndocalSparkleState {
     particles: Vec<SyndocalSparkleParticle>,
     strip: Vec<ColorEffectColor>,
+    tube_channels: Option<Box<[[u16; 100]; 3]>>,
     source_width: usize,
     source_height: usize,
     last_created_at: Option<Instant>,
@@ -3878,6 +3976,7 @@ struct SyndocalSparkleState {
     last_visual_ms: f64,
     rendered_visual_ms: Option<f64>,
     max_particles: usize,
+    tube_random_pairs: [(f32, f32); 100],
     #[cfg(test)]
     render_count: usize,
     #[cfg(test)]
@@ -3891,6 +3990,7 @@ impl Clone for SyndocalSparkleState {
             // authored population in every copied activation.
             particles: self.particles.clone(),
             strip: self.strip.clone(),
+            tube_channels: self.tube_channels.clone(),
             source_width: self.source_width,
             source_height: self.source_height,
             last_created_at: self.last_created_at,
@@ -3898,6 +3998,7 @@ impl Clone for SyndocalSparkleState {
             last_visual_ms: self.last_visual_ms,
             rendered_visual_ms: self.rendered_visual_ms,
             max_particles: self.max_particles,
+            tube_random_pairs: self.tube_random_pairs,
             #[cfg(test)]
             render_count: self.render_count,
             #[cfg(test)]
@@ -3907,7 +4008,14 @@ impl Clone for SyndocalSparkleState {
 }
 
 impl SyndocalSparkleState {
-    fn new(source_width: usize, source_height: usize, number: usize, lifetime_ms: f64) -> Self {
+    fn new(
+        source_width: usize,
+        source_height: usize,
+        number: usize,
+        lifetime_ms: f64,
+        rng_seed: u32,
+        tube_full_raster_height: bool,
+    ) -> Self {
         let source_width = source_width.max(1);
         let source_height = source_height.max(1);
         let max_particles = number.saturating_mul(
@@ -3917,7 +4025,18 @@ impl SyndocalSparkleState {
         );
         Self {
             particles: Vec::with_capacity(max_particles),
-            strip: vec![black_color(); source_width.saturating_mul(source_height)],
+            // Tube's source coordinate domain remains 100x100, but every row
+            // is identical. Retain one hot row; sampling maps each logical Y
+            // to that row and ordinary Sparkle keeps its full raster buffer.
+            strip: vec![
+                black_color();
+                if tube_full_raster_height {
+                    source_width
+                } else {
+                    source_width.saturating_mul(source_height)
+                }
+            ],
+            tube_channels: tube_full_raster_height.then(|| Box::new([[0; 100]; 3])),
             source_width,
             source_height,
             last_created_at: None,
@@ -3925,6 +4044,7 @@ impl SyndocalSparkleState {
             last_visual_ms: 0.0,
             rendered_visual_ms: None,
             max_particles,
+            tube_random_pairs: syndocal_tube_random_pairs(rng_seed),
             #[cfg(test)]
             render_count: 0,
             #[cfg(test)]
@@ -3939,6 +4059,9 @@ impl SyndocalSparkleState {
         self.last_visual_ms = 0.0;
         self.rendered_visual_ms = None;
         self.strip.fill(black_color());
+        if let Some(channels) = self.tube_channels.as_deref_mut() {
+            channels.fill([0; 100]);
+        }
     }
 
     fn invalidate_rendered_strip(&mut self) {
@@ -3978,6 +4101,7 @@ impl SyndocalSparkleState {
         width: usize,
         height: usize,
         rng_seed: u32,
+        tube_full_raster_height: bool,
     ) {
         let sparkle_width = width.min(self.source_width);
         let sparkle_height = height.min(self.source_height);
@@ -3988,18 +4112,37 @@ impl SyndocalSparkleState {
         // seed epoch wraps to repeat placement and palette choices.
         let seed_epoch = generation_epoch % loop_epochs;
         for particle_index in 0..number {
-            let particle_seed = splitmix64(
-                u64::from(rng_seed)
-                    ^ seed_epoch.wrapping_mul(0xA24B_AED4_963E_E407)
-                    ^ (particle_index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
-            );
+            let (particle_seed, start_x, start_y) = if tube_full_raster_height {
+                let particle_seed = splitmix64(
+                    u64::from(rng_seed)
+                        ^ (particle_index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+                );
+                let q_i = self.tube_random_pairs[particle_index % 100].0;
+                let table_index =
+                    ((100.0 * f64::from(q_i) * seed_epoch as f64).trunc() as u64 % 100) as usize;
+                let start_x = ((self.source_width as f32 * self.tube_random_pairs[table_index].1)
+                    .trunc() as usize)
+                    .min(self.source_width.saturating_sub(1));
+                (particle_seed, start_x, 0)
+            } else {
+                let particle_seed = splitmix64(
+                    u64::from(rng_seed)
+                        ^ seed_epoch.wrapping_mul(0xA24B_AED4_963E_E407)
+                        ^ (particle_index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+                );
+                (
+                    particle_seed,
+                    (particle_seed % start_x_count as u64) as usize,
+                    (splitmix64(particle_seed ^ 0xC6BC_2796_92B5_CC83) % start_y_count as u64)
+                        as usize,
+                )
+            };
             self.particles.push(SyndocalSparkleParticle {
                 generation_epoch,
                 particle_index,
                 born_visual_ms,
-                start_x: (particle_seed % start_x_count as u64) as usize,
-                start_y: (splitmix64(particle_seed ^ 0xC6BC_2796_92B5_CC83) % start_y_count as u64)
-                    as usize,
+                start_x,
+                start_y,
                 particle_seed,
             });
         }
@@ -4017,6 +4160,7 @@ impl SyndocalSparkleState {
         width: usize,
         height: usize,
         rng_seed: u32,
+        tube_full_raster_height: bool,
     ) {
         self.particles.clear();
         let current_epoch = Self::generation_epoch(visual_ms);
@@ -4035,6 +4179,7 @@ impl SyndocalSparkleState {
                 width,
                 height,
                 rng_seed,
+                tube_full_raster_height,
             );
         }
         self.particles
@@ -4062,6 +4207,7 @@ impl SyndocalSparkleState {
         height: usize,
         grayscale: bool,
         rng_seed: u32,
+        tube_full_raster_height: bool,
         palette: &[ColorEffectColor],
     ) {
         let visual_ms = if visual_ms.is_finite() {
@@ -4102,6 +4248,7 @@ impl SyndocalSparkleState {
                 width,
                 height,
                 rng_seed,
+                tube_full_raster_height,
             );
         } else {
             self.particles
@@ -4120,6 +4267,7 @@ impl SyndocalSparkleState {
                         width,
                         height,
                         rng_seed,
+                        tube_full_raster_height,
                     );
                 }
             }
@@ -4131,7 +4279,9 @@ impl SyndocalSparkleState {
             self.last_visual_ms = visual_ms;
         }
 
-        self.strip.fill(black_color());
+        if !tube_full_raster_height {
+            self.strip.fill(black_color());
+        }
         let sparkle_width = width.min(self.source_width);
         let sparkle_height = height.min(self.source_height);
         for particle in &self.particles {
@@ -4140,20 +4290,63 @@ impl SyndocalSparkleState {
                 continue;
             }
             let alpha = (1.0 - age_ms / lifetime_ms).clamp(0.0, 1.0) as f32;
-            let particle_color = palette[particle.palette_index_for_count(palette.len())];
-            for y in particle.start_y..particle.start_y + sparkle_height {
-                let row_start = y * self.source_width + particle.start_x;
-                for color in &mut self.strip[row_start..row_start + sparkle_width] {
-                    *color = interpolate_color_effect_color(
-                        *color,
-                        particle_color,
-                        alpha,
-                        ColorEffectInterpolation::Rgb,
-                    );
+            let particle_color = if tube_full_raster_height {
+                // Tube's source selects only its non-black color lanes in
+                // particle order. Its corrected RNG owns positions/history,
+                // not palette choice.
+                palette[1 + particle.particle_index % (palette.len() - 1)]
+            } else {
+                palette[particle.palette_index_for_count(palette.len())]
+            };
+            if let Some(channels) = self.tube_channels.as_deref_mut() {
+                let end_x = particle.start_x.saturating_add(sparkle_width).min(100);
+                let range = particle.start_x.min(100)..end_x;
+                syndocal_tube_blend_channel_slice(
+                    &mut channels[0][range.clone()],
+                    particle_color.red,
+                    alpha,
+                );
+                syndocal_tube_blend_channel_slice(
+                    &mut channels[1][range.clone()],
+                    particle_color.green,
+                    alpha,
+                );
+                syndocal_tube_blend_channel_slice(
+                    &mut channels[2][range],
+                    particle_color.blue,
+                    alpha,
+                );
+            } else {
+                for y in particle.start_y..particle.start_y + sparkle_height {
+                    let row_start = y * self.source_width + particle.start_x;
+                    for color in &mut self.strip[row_start..row_start + sparkle_width] {
+                        *color = interpolate_color_effect_color(
+                            *color,
+                            particle_color,
+                            alpha,
+                            ColorEffectInterpolation::Rgb,
+                        );
+                    }
                 }
             }
         }
-        if grayscale {
+        if let Some(channels) = self.tube_channels.as_deref_mut() {
+            for (index, color) in self.strip.iter_mut().enumerate() {
+                let rendered = ColorEffectColor {
+                    red: channels[0][index],
+                    green: channels[1][index],
+                    blue: channels[2][index],
+                };
+                *color = if grayscale {
+                    daslight_grayscale_color(rendered)
+                } else {
+                    rendered
+                };
+                channels[0][index] = 0;
+                channels[1][index] = 0;
+                channels[2][index] = 0;
+            }
+        } else if grayscale {
             for color in &mut self.strip {
                 *color = daslight_grayscale_color(*color);
             }
@@ -4271,6 +4464,7 @@ enum CompiledSyndocalRandomFx {
         lifetime_ms: f64,
         width: usize,
         height: usize,
+        tube_full_raster_height: bool,
         grayscale: bool,
         vertical_symmetry: bool,
         rng_seed: u32,
@@ -4285,6 +4479,7 @@ struct PreservedSyndocalSparkleState {
     lifetime_ms: f64,
     width: usize,
     height: usize,
+    tube_full_raster_height: bool,
     rng_seed: u32,
     source_width: usize,
     source_height: usize,
@@ -4386,6 +4581,7 @@ impl CompiledSyndocalRandomFx {
             ColorEffectSpatialRecipe::Sparkle {
                 grayscale,
                 vertical_symmetry,
+                raster_mode,
                 rng_seed,
                 number,
                 lifetime_ms: Some(lifetime_ms),
@@ -4395,29 +4591,44 @@ impl CompiledSyndocalRandomFx {
                 height,
                 ..
             } => {
+                let tube_full_raster_height =
+                    *raster_mode == ColorEffectSpatialSparkleRasterMode::TubeFullRasterHeight;
                 let source_height = if pattern.placement.is_some() { 100 } else { 1 };
-                let compiled_height = height
-                    .map(|height| {
-                        ((height / 100.0) * source_height as f32).round().max(1.0) as usize
-                    })
-                    .unwrap_or(1);
+                let source_width = if tube_full_raster_height {
+                    // Tube is always a fixed source 100x100 mapping raster;
+                    // target count only changes destination sampling.
+                    100
+                } else {
+                    strip_count.max(1)
+                };
+                let compiled_height = match raster_mode {
+                    ColorEffectSpatialSparkleRasterMode::Sparkle => height
+                        .map(|height| {
+                            ((height / 100.0) * source_height as f32).round().max(1.0) as usize
+                        })
+                        .unwrap_or(1),
+                    // Tube has no Height PARAM. Its shared Sparkle evaluator
+                    // therefore paints the complete fixed mapping raster.
+                    ColorEffectSpatialSparkleRasterMode::TubeFullRasterHeight => source_height,
+                };
                 Ok(Some(Self::Sparkle {
                     number: usize::from(*number),
                     lifetime_ms: f64::from(*lifetime_ms),
-                    width: ((*width / 100.0) * strip_count.max(1) as f32)
-                        .round()
-                        .max(1.0) as usize,
+                    width: ((*width / 100.0) * source_width as f32).round().max(1.0) as usize,
                     height: compiled_height,
+                    tube_full_raster_height,
                     grayscale: *grayscale,
                     vertical_symmetry: *vertical_symmetry,
                     rng_seed: *rng_seed,
                     period_ms: request.period_ms.max(10) as f64,
                     palette,
                     state: RefCell::new(SyndocalSparkleState::new(
-                        strip_count,
+                        source_width,
                         source_height,
                         usize::from(*number),
                         f64::from(*lifetime_ms),
+                        *rng_seed,
+                        tube_full_raster_height,
                     )),
                 }))
             }
@@ -4487,6 +4698,7 @@ impl CompiledSyndocalRandomFx {
                 lifetime_ms,
                 width,
                 height,
+                tube_full_raster_height,
                 grayscale,
                 vertical_symmetry,
                 rng_seed,
@@ -4503,7 +4715,14 @@ impl CompiledSyndocalRandomFx {
                         (target_x * state.source_width.saturating_sub(1) as f32).round() as usize;
                     let y =
                         (target_y * state.source_height.saturating_sub(1) as f32).round() as usize;
-                    Some(y * state.source_width + x)
+                    Some(if *tube_full_raster_height {
+                        // Tube logically paints all 100 rows with the same
+                        // retained full-height row. Keep one row hot and
+                        // preserve the 100x100 placement coordinate domain.
+                        x
+                    } else {
+                        y * state.source_width + x
+                    })
                 } else if *vertical_symmetry {
                     daslight_vertical_fold_source_index(destination_index, strip_count)
                 } else {
@@ -4523,6 +4742,7 @@ impl CompiledSyndocalRandomFx {
                     *height,
                     *grayscale,
                     *rng_seed,
+                    *tube_full_raster_height,
                     palette,
                 );
                 state
@@ -4566,6 +4786,7 @@ impl CompiledSyndocalRandomFx {
             lifetime_ms,
             width,
             height,
+            tube_full_raster_height,
             rng_seed,
             state,
             ..
@@ -4580,6 +4801,7 @@ impl CompiledSyndocalRandomFx {
             lifetime_ms: *lifetime_ms,
             width: *width,
             height: *height,
+            tube_full_raster_height: *tube_full_raster_height,
             rng_seed: *rng_seed,
             source_width,
             source_height,
@@ -4590,6 +4812,8 @@ impl CompiledSyndocalRandomFx {
                     source_height,
                     *number,
                     *lifetime_ms,
+                    *rng_seed,
+                    *tube_full_raster_height,
                 )),
             ),
         })
@@ -4601,6 +4825,7 @@ impl CompiledSyndocalRandomFx {
             lifetime_ms,
             width,
             height,
+            tube_full_raster_height,
             rng_seed,
             state,
             ..
@@ -4612,6 +4837,7 @@ impl CompiledSyndocalRandomFx {
             || *lifetime_ms != preserved.lifetime_ms
             || *width != preserved.width
             || *height != preserved.height
+            || *tube_full_raster_height != preserved.tube_full_raster_height
             || *rng_seed != preserved.rng_seed
             || state.get_mut().source_width != preserved.source_width
             || state.get_mut().source_height != preserved.source_height
@@ -28446,6 +28672,52 @@ fn validate_runtime_color_effect_request(request: &ColorEffectRequest) -> Result
                     return Err("Graph requires Override blend mode".to_string());
                 }
             }
+            ColorEffectSpatialRecipe::Sparkle {
+                raster_mode: ColorEffectSpatialSparkleRasterMode::TubeFullRasterHeight,
+                vertical_symmetry,
+                number,
+                lifetime_ms,
+                source_lifespan,
+                width,
+                height,
+                ..
+            } => {
+                if !(2..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS).contains(&request.stops.len())
+                {
+                    return Err("Tube requires between 2 and 255 palette stops".to_string());
+                }
+                if pattern.placement.is_none() {
+                    return Err("Tube requires a placed 100x100 spatial raster".to_string());
+                }
+                if request.blend_mode != EffectBlendMode::Override {
+                    return Err("Tube requires Override blend mode".to_string());
+                }
+                if *vertical_symmetry {
+                    return Err(
+                        "Tube requires placement-owned Transform, not vertical symmetry"
+                            .to_string(),
+                    );
+                }
+                if !(1..=10).contains(number) {
+                    return Err("Tube number must be an integer within 1..10".to_string());
+                }
+                if !width.is_finite() || width.fract() != 0.0 || !(1.0..=90.0).contains(width) {
+                    return Err("Tube width must be an integer within 1..90".to_string());
+                }
+                let source_lifespan = source_lifespan
+                    .ok_or_else(|| "Tube source lifespan provenance is required".to_string())?;
+                let expected_lifetime_ms = (100.0_f32 / (1.0_f32 - source_lifespan)).round() as u16;
+                if *lifetime_ms != Some(expected_lifetime_ms) {
+                    return Err(format!(
+                        "Tube lifetime must equal round(100 / (1 - source_lifespan)) = {expected_lifetime_ms} ms"
+                    ));
+                }
+                if height.is_some() {
+                    return Err(
+                        "Tube full-raster-height mode must not carry a Sparkle height".to_string(),
+                    );
+                }
+            }
             _ => {}
         }
         if pattern.placement.is_some() {
@@ -28559,6 +28831,7 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
             source_lifespan,
             width,
             height,
+            raster_mode,
             ..
         } => {
             if *number == 0 || !width.is_finite() || *width <= 0.0 {
@@ -28578,6 +28851,13 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
             if height.is_some_and(|height| !height.is_finite() || !(0.0..=100.0).contains(&height))
             {
                 return Err("Sparkle height must be finite and within 0..100 percent".to_string());
+            }
+            if *raster_mode == ColorEffectSpatialSparkleRasterMode::TubeFullRasterHeight
+                && height.is_some()
+            {
+                return Err(
+                    "Tube full-raster-height mode must not carry a Sparkle height".to_string(),
+                );
             }
             Ok(())
         }
@@ -47333,6 +47613,10 @@ mod tests {
         assert_eq!(RELEASE_GATE_FIXTURE_COUNT, 200);
         assert_eq!(RELEASE_GATE_HZ, 44);
         assert_eq!(
+            RELEASE_GATE_SAMPLES,
+            if cfg!(debug_assertions) { 20 } else { 1_000 }
+        );
+        assert_eq!(
             RELEASE_GATE_EFFECT_COUNT,
             SUPPORTED_EFFECT_ENVELOPE_ENABLED_EFFECTS
         );
@@ -57647,6 +57931,7 @@ mod tests {
         let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::Sparkle {
             grayscale,
             vertical_symmetry,
+            raster_mode: ColorEffectSpatialSparkleRasterMode::Sparkle,
             rng_seed,
             number,
             lifetime_ms: Some(lifetime_ms),
@@ -57656,6 +57941,31 @@ mod tests {
         });
         request.stops[0].color = black_color();
         request.stops[1].color = test_color(u16::MAX, 32_768, 0);
+        request
+    }
+
+    fn test_tube_request() -> ColorEffectRequest {
+        let mut request = test_corrected_sparkle_request(0x41, 5, 100, 1.0, true, false);
+        request.blend_mode = EffectBlendMode::Override;
+        let pattern = request.spatial_pattern.as_mut().unwrap();
+        let ColorEffectSpatialRecipe::Sparkle { raster_mode, .. } = &mut pattern.recipe else {
+            unreachable!();
+        };
+        *raster_mode = ColorEffectSpatialSparkleRasterMode::TubeFullRasterHeight;
+        pattern.beam_targets = vec![protocol::ColorEffectBeamTarget {
+            fixture_id: 1,
+            beam_index: 0,
+            selection_index: 0,
+            feature_attribute: None,
+        }];
+        let mut placement = test_patch_canvas_placement(0, 0, 100, 100, 0.0);
+        placement.target_coordinates = vec![protocol::ColorEffectSpatialPlacementTarget {
+            fixture_id: 1,
+            beam_index: 0,
+            patch_x: 50,
+            patch_y: 50,
+        }];
+        pattern.placement = Some(placement);
         request
     }
 
@@ -58235,6 +58545,564 @@ mod tests {
                 .count(),
             50 * 50,
             "Sparkle width and height must fill an authored 2D rectangle"
+        );
+    }
+
+    #[test]
+    fn tube_uses_full_raster_height_qgray_and_rejects_untrusted_domain_drift() {
+        let request = test_tube_request();
+        validate_color_effect_request(&request).unwrap();
+        let compiled = CompiledSyndocalRandomFx::compile(&request, 100)
+            .unwrap()
+            .expect("Tube must reuse the compiled Sparkle state");
+        let CompiledSyndocalRandomFx::Sparkle {
+            height,
+            tube_full_raster_height,
+            state,
+            ..
+        } = &compiled
+        else {
+            unreachable!();
+        };
+        assert_eq!(*height, 100, "Tube must paint every mapping-raster row");
+        assert!(*tube_full_raster_height);
+        let created_at = Instant::now();
+        let first = compiled.sample_at_mapping_time(0.0, 0, 100, 0.5, 0.5, created_at, created_at);
+        let initial_particle_capacity = state.borrow().particles.capacity();
+        let strip_capacity = state.borrow().strip.capacity();
+        for epoch in 1..=8 {
+            let now = created_at + Duration::from_millis(epoch * 40);
+            let _ = compiled.sample_at_mapping_time(
+                epoch as f64 * 0.04,
+                0,
+                100,
+                0.5,
+                0.5,
+                created_at,
+                now,
+            );
+        }
+        let state = state.borrow();
+        assert_eq!((state.source_width, state.source_height), (100, 100));
+        assert_eq!(state.particles.capacity(), initial_particle_capacity);
+        assert_eq!(state.strip.capacity(), strip_capacity);
+        let (source_width, source_height) = (state.source_width, state.source_height);
+        drop(state);
+        let final_now = created_at + Duration::from_millis(8 * 40);
+        for column in 0..source_width {
+            let color = compiled.sample_at_mapping_time(
+                8.0 * 0.04,
+                0,
+                100,
+                column as f32 / (source_width - 1) as f32,
+                0.0,
+                created_at,
+                final_now,
+            );
+            assert_eq!(color.red, color.green, "qGray red/green column={column}");
+            assert_eq!(color.green, color.blue, "qGray green/blue column={column}");
+            for row in 1..source_height {
+                assert_eq!(
+                    compiled.sample_at_mapping_time(
+                        8.0 * 0.04,
+                        0,
+                        100,
+                        column as f32 / (source_width - 1) as f32,
+                        row as f32 / (source_height - 1) as f32,
+                        created_at,
+                        final_now,
+                    ),
+                    color,
+                    "Tube full-height sample column={column} row={row}"
+                );
+            }
+        }
+        assert_eq!(first.red, first.green);
+        assert_eq!(first.green, first.blue);
+
+        let invalid = |mutate: fn(&mut ColorEffectRequest), expected: &str| {
+            let mut request = test_tube_request();
+            mutate(&mut request);
+            let error = validate_color_effect_request(&request).unwrap_err();
+            assert!(
+                error.contains(expected),
+                "expected {expected:?}, found {error:?}"
+            );
+        };
+        invalid(
+            |request| request.stops.truncate(1),
+            "Tube requires between 2 and 255 palette stops",
+        );
+        invalid(
+            |request| request.spatial_pattern.as_mut().unwrap().placement = None,
+            "Tube requires a placed 100x100 spatial raster",
+        );
+        invalid(
+            |request| request.blend_mode = EffectBlendMode::Multiply,
+            "Tube requires Override blend mode",
+        );
+        invalid(
+            |request| {
+                let ColorEffectSpatialRecipe::Sparkle {
+                    vertical_symmetry, ..
+                } = &mut request.spatial_pattern.as_mut().unwrap().recipe
+                else {
+                    unreachable!();
+                };
+                *vertical_symmetry = true;
+            },
+            "Tube requires placement-owned Transform",
+        );
+        invalid(
+            |request| {
+                let ColorEffectSpatialRecipe::Sparkle { number, .. } =
+                    &mut request.spatial_pattern.as_mut().unwrap().recipe
+                else {
+                    unreachable!();
+                };
+                *number = 11;
+            },
+            "Tube number must be an integer within 1..10",
+        );
+        invalid(
+            |request| {
+                let ColorEffectSpatialRecipe::Sparkle { width, .. } =
+                    &mut request.spatial_pattern.as_mut().unwrap().recipe
+                else {
+                    unreachable!();
+                };
+                *width = 90.5;
+            },
+            "Tube width must be an integer within 1..90",
+        );
+        invalid(
+            |request| {
+                let ColorEffectSpatialRecipe::Sparkle { width, .. } =
+                    &mut request.spatial_pattern.as_mut().unwrap().recipe
+                else {
+                    unreachable!();
+                };
+                *width = 1.000_000_1;
+            },
+            "Tube width must be an integer within 1..90",
+        );
+        invalid(
+            |request| {
+                let ColorEffectSpatialRecipe::Sparkle {
+                    source_lifespan, ..
+                } = &mut request.spatial_pattern.as_mut().unwrap().recipe
+                else {
+                    unreachable!();
+                };
+                *source_lifespan = None;
+            },
+            "Tube source lifespan provenance is required",
+        );
+        invalid(
+            |request| {
+                let ColorEffectSpatialRecipe::Sparkle { lifetime_ms, .. } =
+                    &mut request.spatial_pattern.as_mut().unwrap().recipe
+                else {
+                    unreachable!();
+                };
+                *lifetime_ms = Some(101);
+            },
+            "Tube lifetime must equal",
+        );
+        invalid(
+            |request| {
+                let ColorEffectSpatialRecipe::Sparkle { height, .. } =
+                    &mut request.spatial_pattern.as_mut().unwrap().recipe
+                else {
+                    unreachable!();
+                };
+                *height = Some(1.0);
+            },
+            "Tube full-raster-height mode must not carry a Sparkle height",
+        );
+
+        let lifespan = f32::from_bits(0x3BA3_065A);
+        let mut importer_precision = test_tube_request();
+        let ColorEffectSpatialRecipe::Sparkle {
+            lifetime_ms,
+            source_lifespan,
+            ..
+        } = &mut importer_precision.spatial_pattern.as_mut().unwrap().recipe
+        else {
+            unreachable!();
+        };
+        *source_lifespan = Some(lifespan);
+        *lifetime_ms = Some((100.0_f32 / (1.0_f32 - lifespan)).round() as u16);
+        assert_eq!(*lifetime_ms, Some(101));
+        validate_color_effect_request(&importer_precision).unwrap();
+    }
+
+    #[test]
+    fn tube_keeps_recovered_pair_indexing_right_edge_clipping_and_palette_lanes() {
+        let mut edge_request = test_tube_request();
+        let ColorEffectSpatialRecipe::Sparkle {
+            grayscale,
+            number,
+            lifetime_ms,
+            source_lifespan,
+            width,
+            ..
+        } = &mut edge_request.spatial_pattern.as_mut().unwrap().recipe
+        else {
+            unreachable!();
+        };
+        *grayscale = false;
+        *number = 10;
+        *lifetime_ms = Some(1_000);
+        *source_lifespan = Some(0.9);
+        *width = 90.0;
+        validate_color_effect_request(&edge_request).unwrap();
+        let compiled = CompiledSyndocalRandomFx::compile(&edge_request, 200)
+            .unwrap()
+            .expect("Tube must compile with a target-count-independent source raster");
+        let CompiledSyndocalRandomFx::Sparkle { state, .. } = &compiled else {
+            unreachable!();
+        };
+        let created_at = Instant::now();
+        let sample_epoch = |epoch: u64| {
+            compiled.sample_at_mapping_time(
+                epoch as f64 * 0.04,
+                0,
+                200,
+                0.0,
+                0.0,
+                created_at,
+                created_at + Duration::from_millis(epoch * 40),
+            )
+        };
+        let _ = sample_epoch(0);
+        let epoch_zero_start_x = {
+            let state = state.borrow();
+            let particle = state
+                .particles
+                .iter()
+                .find(|particle| particle.generation_epoch == 0 && particle.particle_index == 0)
+                .unwrap();
+            let expected_table_index = 0;
+            let expected_start_x = ((state.source_width as f32
+                * state.tube_random_pairs[expected_table_index].1)
+                .trunc() as usize)
+                .min(state.source_width - 1);
+            assert_eq!(particle.start_x, expected_start_x);
+            particle.start_x
+        };
+        let _ = sample_epoch(1);
+        {
+            let state = state.borrow();
+            let particle = state
+                .particles
+                .iter()
+                .find(|particle| particle.generation_epoch == 1 && particle.particle_index == 0)
+                .unwrap();
+            let q_i = state.tube_random_pairs[0].0;
+            let expected_table_index = ((100.0 * f64::from(q_i)).trunc() as u64 % 100) as usize;
+            let expected_start_x = ((state.source_width as f32
+                * state.tube_random_pairs[expected_table_index].1)
+                .trunc() as usize)
+                .min(state.source_width - 1);
+            assert_eq!(particle.start_x, expected_start_x);
+        }
+        for epoch in 2..=25 {
+            let _ = sample_epoch(epoch);
+        }
+        let state = state.borrow();
+        assert_eq!((state.source_width, state.source_height), (100, 100));
+        assert_eq!(
+            state
+                .particles
+                .iter()
+                .find(|particle| particle.generation_epoch == 25 && particle.particle_index == 0)
+                .unwrap()
+                .start_x,
+            epoch_zero_start_x,
+            "Tube pair lookup must repeat at floor(period_ms / 40) epochs"
+        );
+        let clipped = state
+            .particles
+            .iter()
+            .find(|particle| particle.start_x + 90 > state.source_width)
+            .expect("the fixed corrected Tube table must exercise right-edge clipping");
+        assert!(clipped.start_x < state.source_width);
+        assert_ne!(state.strip[state.source_width - 1], black_color());
+
+        let palette = [
+            black_color(),
+            test_color(u16::MAX, 0, 0),
+            test_color(0, u16::MAX, 0),
+            test_color(0, 0, u16::MAX),
+        ];
+        for number in 1..=3_u16 {
+            let mut request = test_tube_request();
+            request.stops = palette
+                .iter()
+                .enumerate()
+                .map(|(index, color)| protocol::ColorEffectStop {
+                    position: index as f32 / 3.0,
+                    color: *color,
+                })
+                .collect();
+            let ColorEffectSpatialRecipe::Sparkle {
+                grayscale,
+                number: recipe_number,
+                width,
+                ..
+            } = &mut request.spatial_pattern.as_mut().unwrap().recipe
+            else {
+                unreachable!();
+            };
+            *grayscale = false;
+            *recipe_number = number;
+            *width = 1.0;
+            validate_color_effect_request(&request).unwrap();
+            let compiled = CompiledSyndocalRandomFx::compile(&request, 100)
+                .unwrap()
+                .expect("Tube palette lane request must compile");
+            let CompiledSyndocalRandomFx::Sparkle { state, .. } = &compiled else {
+                unreachable!();
+            };
+            let _ = compiled.sample_at_mapping_time(0.0, 0, 100, 0.0, 0.0, created_at, created_at);
+            let start_x = {
+                let state = state.borrow();
+                assert!(state
+                    .particles
+                    .iter()
+                    .all(|particle| particle.start_x == state.particles[0].start_x));
+                state.particles[0].start_x
+            };
+            let rendered = compiled.sample_at_mapping_time(
+                0.0,
+                0,
+                100,
+                start_x as f32 / 99.0,
+                0.0,
+                created_at,
+                created_at,
+            );
+            assert_eq!(
+                rendered, palette[number as usize],
+                "Tube lane {number} must use (particle_index % (palette_count - 1)) + 1"
+            );
+        }
+    }
+
+    #[test]
+    fn tube_simd_channel_blend_matches_shared_rgb_on_boundaries_and_property_sweep() {
+        let boundaries = [
+            0_u16,
+            1,
+            2,
+            127,
+            128,
+            255,
+            256,
+            32_767,
+            32_768,
+            65_534,
+            u16::MAX,
+        ];
+        for from in boundaries {
+            for to in boundaries {
+                for fixed_alpha in (0_u32..=u16::MAX as u32).step_by(257) {
+                    let alpha = fixed_alpha as f32 / f32::from(u16::MAX);
+                    let mut actual = vec![from; 17];
+                    let expected = actual
+                        .iter()
+                        .map(|value| interpolate_u16(*value, to, alpha))
+                        .collect::<Vec<_>>();
+                    syndocal_tube_blend_channel_slice(&mut actual, to, alpha);
+                    assert_eq!(actual, expected, "from={from} to={to} alpha={fixed_alpha}");
+                }
+            }
+        }
+        for alpha in [
+            0.0,
+            f32::from_bits(0x3eff_ffff),
+            0.5,
+            f32::from_bits(0x3f00_0001),
+            f32::from_bits(0x3f7f_ffff),
+            1.0,
+        ] {
+            let mut actual = (0_u64..103)
+                .map(|lane| splitmix64(lane ^ 0xD1B5_4A32_D192_ED03) as u16)
+                .collect::<Vec<_>>();
+            let expected = actual
+                .iter()
+                .map(|value| interpolate_u16(*value, 65_534, alpha))
+                .collect::<Vec<_>>();
+            syndocal_tube_blend_channel_slice(&mut actual, 65_534, alpha);
+            assert_eq!(actual, expected, "alpha_bits={:#010x}", alpha.to_bits());
+        }
+        for batch in 0_u64..1_000 {
+            let to = splitmix64(batch ^ 0x9E37_79B9_7F4A_7C15) as u16;
+            let fixed_alpha = (splitmix64(batch ^ 0xC6BC_2796_92B5_CC83) >> 48) as u32;
+            let alpha = fixed_alpha as f32 / f32::from(u16::MAX);
+            let mut actual = (0_u64..103)
+                .map(|lane| splitmix64(batch * 103 + lane ^ 0xA24B_AED4_963E_E407) as u16)
+                .collect::<Vec<_>>();
+            let expected = actual
+                .iter()
+                .map(|value| interpolate_u16(*value, to, alpha))
+                .collect::<Vec<_>>();
+            syndocal_tube_blend_channel_slice(&mut actual, to, alpha);
+            assert_eq!(actual, expected, "property batch={batch}");
+        }
+    }
+
+    #[test]
+    fn tube_simd_renderer_is_bit_exact_to_shared_sparkle_arithmetic_and_golden_rows() {
+        let mut request = test_tube_request();
+        request.stops = vec![
+            protocol::ColorEffectStop {
+                position: 0.0,
+                color: black_color(),
+            },
+            protocol::ColorEffectStop {
+                position: 0.25,
+                color: test_color(1, 32_768, u16::MAX),
+            },
+            protocol::ColorEffectStop {
+                position: 0.5,
+                color: test_color(u16::MAX, 1, 32_768),
+            },
+            protocol::ColorEffectStop {
+                position: 0.75,
+                color: test_color(32_768, u16::MAX, 1),
+            },
+            protocol::ColorEffectStop {
+                position: 1.0,
+                color: test_color(257, 65_534, 12_345),
+            },
+        ];
+        let ColorEffectSpatialRecipe::Sparkle {
+            grayscale,
+            number,
+            lifetime_ms,
+            source_lifespan,
+            width,
+            ..
+        } = &mut request.spatial_pattern.as_mut().unwrap().recipe
+        else {
+            unreachable!();
+        };
+        *grayscale = true;
+        *number = 10;
+        *lifetime_ms = Some(1_000);
+        *source_lifespan = Some(0.9);
+        *width = 90.0;
+        validate_color_effect_request(&request).unwrap();
+
+        let compiled = CompiledSyndocalRandomFx::compile(&request, 200)
+            .unwrap()
+            .expect("Tube equivalence fixture must compile");
+        let CompiledSyndocalRandomFx::Sparkle {
+            lifetime_ms,
+            width,
+            grayscale,
+            period_ms,
+            palette,
+            state,
+            ..
+        } = &compiled
+        else {
+            unreachable!();
+        };
+        let created_at = Instant::now();
+        let mut golden_hashes = Vec::new();
+        for elapsed_ms in [0_u64, 217, 743] {
+            let phase = elapsed_ms as f64 / *period_ms;
+            let now = created_at + Duration::from_millis(elapsed_ms);
+            let _ = compiled.sample_at_mapping_time(phase, 0, 200, 0.0, 0.0, created_at, now);
+            let state = state.borrow();
+            let visual_ms = phase * *period_ms;
+            let mut expected = vec![black_color(); state.source_width];
+            for particle in &state.particles {
+                let age_ms = visual_ms - particle.born_visual_ms;
+                if age_ms >= *lifetime_ms {
+                    continue;
+                }
+                let alpha = (1.0 - age_ms / *lifetime_ms).clamp(0.0, 1.0) as f32;
+                let particle_color = palette[1 + particle.particle_index % (palette.len() - 1)];
+                let end_x = particle
+                    .start_x
+                    .saturating_add(*width)
+                    .min(state.source_width);
+                for color in &mut expected[particle.start_x..end_x] {
+                    *color = interpolate_color_effect_color(
+                        *color,
+                        particle_color,
+                        alpha,
+                        ColorEffectInterpolation::Rgb,
+                    );
+                }
+            }
+            if *grayscale {
+                for color in &mut expected {
+                    *color = daslight_grayscale_color(*color);
+                }
+            }
+            assert_eq!(state.strip, expected, "elapsed_ms={elapsed_ms}");
+
+            let hash = state
+                .strip
+                .iter()
+                .fold(0xcbf2_9ce4_8422_2325_u64, |hash, color| {
+                    [color.red, color.green, color.blue]
+                        .into_iter()
+                        .fold(hash, |hash, channel| {
+                            (hash ^ u64::from(channel)).wrapping_mul(0x0000_0100_0000_01b3)
+                        })
+                });
+            golden_hashes.push(hash);
+        }
+        assert_eq!(
+            golden_hashes,
+            [
+                0x15e9_3eae_b8c6_f3b7,
+                0xb312_4280_2675_6363,
+                0xd0a2_97c3_acdd_ef0b,
+            ]
+        );
+    }
+
+    #[test]
+    fn ordinary_sparkle_height_100_retains_legacy_full_fit_2d_behavior() {
+        let mut sparkle = test_corrected_sparkle_request(0x529, 1, 1_000, 50.0, false, false);
+        let pattern = sparkle.spatial_pattern.as_mut().unwrap();
+        pattern.placement = Some(test_patch_canvas_placement(0, 0, 100, 100, 0.0));
+        let ColorEffectSpatialRecipe::Sparkle { height, .. } = &mut pattern.recipe else {
+            unreachable!();
+        };
+        *height = Some(100.0);
+        let compiled = CompiledSyndocalRandomFx::compile(&sparkle, 100)
+            .unwrap()
+            .expect("ordinary Sparkle must compile");
+        let CompiledSyndocalRandomFx::Sparkle {
+            tube_full_raster_height,
+            state,
+            ..
+        } = &compiled
+        else {
+            unreachable!();
+        };
+        assert!(!*tube_full_raster_height);
+        let created_at = Instant::now();
+        let _ = compiled.sample_at_mapping_time(0.0, 0, 100, 0.0, 0.0, created_at, created_at);
+        let state = state.borrow();
+        assert_eq!(state.particles.len(), 1);
+        assert!(state.particles[0].start_x <= 50);
+        assert_eq!(
+            state
+                .strip
+                .iter()
+                .filter(|color| **color != black_color())
+                .count(),
+            50 * 100,
+            "ordinary Height=100 Sparkle must retain its existing full-fit rectangle"
         );
     }
 
@@ -59242,6 +60110,7 @@ mod tests {
             let mut request = test_spatial_color_request(ColorEffectSpatialRecipe::Sparkle {
                 grayscale: false,
                 vertical_symmetry: false,
+                raster_mode: ColorEffectSpatialSparkleRasterMode::Sparkle,
                 rng_seed,
                 number: 1,
                 lifetime_ms: Some(lifetime_ms),
@@ -60112,6 +60981,7 @@ mod tests {
         let missing_lifetime = test_spatial_color_request(ColorEffectSpatialRecipe::Sparkle {
             grayscale: false,
             vertical_symmetry: false,
+            raster_mode: ColorEffectSpatialSparkleRasterMode::Sparkle,
             rng_seed: 1,
             number: 1,
             lifetime_ms: None,
@@ -66057,6 +66927,7 @@ mod tests {
                     _ => ColorEffectSpatialRecipe::Sparkle {
                         grayscale: recipe_ordinal % 3 == 1,
                         vertical_symmetry: recipe_ordinal % 2 == 1,
+                        raster_mode: ColorEffectSpatialSparkleRasterMode::Sparkle,
                         rng_seed: 0x5A5A_0000 ^ index as u32,
                         number: if recipe_ordinal < 2 {
                             10
@@ -66369,6 +67240,10 @@ mod tests {
         assert_eq!(RELEASE_GATE_EFFECT_COUNT, 64);
         assert_eq!(RELEASE_GATE_FIXTURE_COUNT, 200);
         assert_eq!(RELEASE_GATE_HZ, 44);
+        assert_eq!(
+            RELEASE_GATE_SAMPLES,
+            if cfg!(debug_assertions) { 20 } else { 1_000 }
+        );
         assert_eq!(MAX_PALETTE_STOPS, 255);
         assert_eq!(MAX_TARGET_COUNT, 200);
         assert_eq!(MAX_RASTER_WIDTH, 100);
@@ -66541,6 +67416,210 @@ mod tests {
             });
         eprintln!(
             "Max placed RandomFill 64x200 (255 stops, 100x100, Point 1x1): p95={}us p99={}us max={}us",
+            p95.as_micros(),
+            p99.as_micros(),
+            max.as_micros()
+        );
+        assert_release_gate_percentiles(p95, p99, max);
+    }
+
+    #[test]
+    fn max_placed_tube_release_stack_meets_44hz_budget() {
+        const MAX_PALETTE_STOPS: usize = 255;
+        const MAX_TARGET_COUNT: usize = 200;
+        const RASTER_WIDTH: i64 = 100;
+        const RASTER_HEIGHT: i64 = 100;
+        const MAX_NUMBER: u16 = 10;
+        const MAX_SOURCE_LIFESPAN: f32 = 0.9;
+        const DERIVED_LIFETIME_MS: u16 = 1_000;
+        const MAX_WIDTH: f32 = 90.0;
+        const MAX_PARTICLES: usize = 260;
+
+        assert_eq!(RELEASE_GATE_EFFECT_COUNT, 64);
+        assert_eq!(RELEASE_GATE_FIXTURE_COUNT, 200);
+        assert_eq!(RELEASE_GATE_HZ, 44);
+        assert_eq!(
+            RELEASE_GATE_SAMPLES,
+            if cfg!(debug_assertions) { 20 } else { 1_000 }
+        );
+        assert_eq!(MAX_PALETTE_STOPS, 255);
+        assert_eq!(MAX_TARGET_COUNT, 200);
+        assert_eq!((RASTER_WIDTH, RASTER_HEIGHT), (100, 100));
+        assert_eq!(MAX_NUMBER, 10);
+        assert_eq!(MAX_SOURCE_LIFESPAN, 0.9);
+        assert_eq!(DERIVED_LIFETIME_MS, 1_000);
+        assert_eq!(MAX_WIDTH, 90.0);
+        assert_eq!(MAX_PARTICLES, 260);
+        assert_eq!(RELEASE_GATE_P95_LIMIT, Duration::from_millis(5));
+        assert_eq!(RELEASE_GATE_P99_LIMIT, Duration::from_millis(8));
+        assert_eq!(RELEASE_GATE_MAX_LIMIT, Duration::from_millis(12));
+        assert_eq!(
+            1_000_000 / DMX_TICK_INTERVAL.as_micros(),
+            u128::from(RELEASE_GATE_HZ)
+        );
+
+        let mut runtime = runtime_with_mixed_effect_fixtures(RELEASE_GATE_FIXTURE_COUNT as u64);
+        let fixture_ids = (1..=RELEASE_GATE_FIXTURE_COUNT as u64).collect::<Vec<_>>();
+        let beam_targets = fixture_ids
+            .iter()
+            .enumerate()
+            .map(
+                |(selection_index, fixture_id)| protocol::ColorEffectBeamTarget {
+                    fixture_id: *fixture_id,
+                    beam_index: 0,
+                    selection_index: selection_index as u32,
+                    feature_attribute: None,
+                },
+            )
+            .collect::<Vec<_>>();
+        let target_coordinates = fixture_ids
+            .iter()
+            .enumerate()
+            .map(
+                |(selection_index, fixture_id)| protocol::ColorEffectSpatialPlacementTarget {
+                    fixture_id: *fixture_id,
+                    beam_index: 0,
+                    patch_x: (selection_index % RASTER_WIDTH as usize) as i64,
+                    patch_y: if selection_index < RASTER_WIDTH as usize {
+                        0
+                    } else {
+                        RASTER_HEIGHT - 1
+                    },
+                },
+            )
+            .collect::<Vec<_>>();
+        assert_eq!(fixture_ids.len(), MAX_TARGET_COUNT);
+        assert_eq!(beam_targets.len(), MAX_TARGET_COUNT);
+        assert_eq!(target_coordinates.len(), MAX_TARGET_COUNT);
+
+        let mut base = test_spatial_color_request(ColorEffectSpatialRecipe::Sparkle {
+            grayscale: true,
+            vertical_symmetry: false,
+            raster_mode: ColorEffectSpatialSparkleRasterMode::TubeFullRasterHeight,
+            rng_seed: 0x41FF_0000,
+            number: MAX_NUMBER,
+            lifetime_ms: Some(DERIVED_LIFETIME_MS),
+            source_lifespan: Some(MAX_SOURCE_LIFESPAN),
+            width: MAX_WIDTH,
+            height: None,
+        });
+        base.fixture_ids = fixture_ids;
+        base.period_ms = 1_000;
+        base.stops = (0..MAX_PALETTE_STOPS)
+            .map(|stop| protocol::ColorEffectStop {
+                position: stop as f32 / (MAX_PALETTE_STOPS - 1) as f32,
+                color: test_color(
+                    stop as u16 * 257,
+                    u16::MAX - stop as u16 * 257,
+                    stop as u16 * 193,
+                ),
+            })
+            .collect();
+        let mut placement = test_patch_canvas_placement(0, 0, RASTER_WIDTH, RASTER_HEIGHT, 0.0);
+        placement.target_coordinates = target_coordinates;
+        let pattern = base.spatial_pattern.as_mut().unwrap();
+        pattern.beam_targets = beam_targets;
+        pattern.placement = Some(placement);
+        validate_color_effect_request(&base).unwrap();
+        assert_eq!(base.stops.len(), MAX_PALETTE_STOPS);
+        assert_eq!(base.blend_mode, EffectBlendMode::Override);
+
+        let created_at = Instant::now();
+        for index in 0..RELEASE_GATE_EFFECT_COUNT {
+            let mut request = base.clone();
+            let ColorEffectSpatialRecipe::Sparkle { rng_seed, .. } =
+                &mut request.spatial_pattern.as_mut().unwrap().recipe
+            else {
+                unreachable!();
+            };
+            *rng_seed ^= index as u32;
+            request.phase = index as f32 / RELEASE_GATE_EFFECT_COUNT as f32;
+            let kind = RuntimeEffectKind::Color(
+                runtime
+                    .resolve_color_effect_request(request)
+                    .expect("maximum Tube request must compile"),
+            );
+            runtime.effects.push(RuntimeEffect {
+                id: index as EffectId + 1,
+                kind,
+                enabled: true,
+                created_at,
+            });
+        }
+        assert_eq!(runtime.effects.len(), RELEASE_GATE_EFFECT_COUNT);
+        assert_eq!(
+            runtime
+                .effects
+                .iter()
+                .filter(|effect| effect.enabled)
+                .count(),
+            RELEASE_GATE_EFFECT_COUNT
+        );
+        assert_eq!(runtime.fixtures.len(), RELEASE_GATE_FIXTURE_COUNT);
+
+        for effect in &runtime.effects {
+            let RuntimeEffectKind::Color(color) = &effect.kind else {
+                unreachable!("maximum Tube gate contains only Color effects");
+            };
+            assert_eq!(color.request.fixture_ids.len(), MAX_TARGET_COUNT);
+            assert_eq!(color.request.stops.len(), MAX_PALETTE_STOPS);
+            assert_eq!(color.request.blend_mode, EffectBlendMode::Override);
+            let pattern = color.request.spatial_pattern.as_ref().unwrap();
+            assert!(matches!(
+                pattern.recipe,
+                ColorEffectSpatialRecipe::Sparkle {
+                    raster_mode: ColorEffectSpatialSparkleRasterMode::TubeFullRasterHeight,
+                    number: MAX_NUMBER,
+                    lifetime_ms: Some(DERIVED_LIFETIME_MS),
+                    source_lifespan: Some(MAX_SOURCE_LIFESPAN),
+                    width: MAX_WIDTH,
+                    height: None,
+                    ..
+                }
+            ));
+            assert_eq!(pattern.beam_targets.len(), MAX_TARGET_COUNT);
+            let placement = pattern.placement.as_ref().unwrap();
+            assert_eq!((placement.sx, placement.sy), (RASTER_WIDTH, RASTER_HEIGHT));
+            assert_eq!(placement.target_coordinates.len(), MAX_TARGET_COUNT);
+            let spatial = color.spatial.as_ref().unwrap();
+            assert_eq!(spatial.targets.len(), MAX_TARGET_COUNT);
+            let Some(CompiledSyndocalRandomFx::Sparkle {
+                number,
+                lifetime_ms,
+                width,
+                height,
+                grayscale,
+                palette,
+                state,
+                ..
+            }) = spatial.syndocal_random_fx.as_ref()
+            else {
+                panic!("maximum Tube must use the shared compiled Sparkle state");
+            };
+            assert_eq!(
+                (*number, *lifetime_ms, *width, *height),
+                (10, 1_000.0, 90, 100)
+            );
+            assert!(*grayscale);
+            assert_eq!(palette.len(), MAX_PALETTE_STOPS);
+            let state = state.borrow();
+            assert_eq!((state.source_width, state.source_height), (100, 100));
+            assert_eq!(state.max_particles, MAX_PARTICLES);
+            assert_eq!(state.particles.capacity(), MAX_PARTICLES);
+            assert_eq!(state.strip.len(), 100);
+            assert!(state.strip.capacity() >= state.strip.len());
+        }
+
+        let (p95, p99, max) =
+            measure_release_gate(created_at, |at| {
+                runtime.fixtures.iter().fold(0_u64, |checksum, fixture| {
+                    checksum.wrapping_add(runtime.apply_effects_with_transition_policy(
+                        fixture, "ColorRed", 16_384, at, false,
+                    ) as u64)
+                })
+            });
+        eprintln!(
+            "Max placed Tube 64x200 (255 stops, 100x100 full-height, Number 10, LifeSpan 0.9, Width 90): p95={}us p99={}us max={}us",
             p95.as_micros(),
             p99.as_micros(),
             max.as_micros()
