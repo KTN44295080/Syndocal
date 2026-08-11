@@ -282,7 +282,7 @@ Explosion / Starfield / Graph / Lines / Grid。21項目を最下端Gridまで観
 | Spiral | `T0/10 Radius=30[0..200]`; `11 Arms=1[1..10]`; `T1/12 Gradient=1[0..1]` |
 | Starfield | `T7/10 Shape`; `T0/11 Particles=1[1..10]`; `12 Size=10[1..100]`; `13 Trail=10[1..25]`; `T1/14 Rotation=0[-5..5]` |
 | Sweep | `T2/10 Direction Change=false` |
-| Text | `T3/10 Text="Text"`; `T0/11 Size=8[5..80]`; `T2/12 Anti Alias=false`; `T10/13 Direction=1`; `T2/14 Vertical=false`; `T0/15 Vertical Offset=0[-100..100]`; `16 Horizontal Offset=0[-100..100]` |
+| Text | `T3/10 Text="Text"`; `T0/11 Size=8[5..80]`; `T2/12 Anti Alias=false`; `T10/13 Direction=1[0..8]`; `T2/14 Write Vertically=false`; `T0/15 Vertical Offset=0[-100..100]`; `16 Horizontal Offset=0[-100..100]` |
 | Tube | 固有PARAMなし |
 
 Mediaの旧表記`T2/10`はcatalog転記誤りだった。`CMediaEffect` constructor
@@ -292,10 +292,10 @@ Mediaの旧表記`T2/10`はcatalog転記誤りだった。`CMediaEffect` constru
 
 ## 現行Syndocal importerとの逆照合
 
-68 IDのうち現行converter coverageは66 ID（うちMAPPINGS 526とCOLOR MAPPINGS 29/33/35/41/47/48の空targetは
-source no-op）、random-state由来のprecise fail-closedは0、残る2 IDは未routeでgeneric
-`Skipped`になる。Media 33/526のnon-empty pathはroute内でprecise fail-closedを維持する。
-66 routeはfull-domain完成数ではなく、
+68 IDのうち現行converter coverageは67 ID（うちMAPPINGS 526とCOLOR MAPPINGS 29/33/35/41/45/47/48の空targetは
+source no-op）、random-state由来のprecise fail-closedは0、残る1 IDは未routeでgeneric
+`Skipped`になる。Media 33/526のnon-empty pathとText 45のpopulated targetはroute内でprecise fail-closedを維持する。
+67 routeはfull-domain完成数ではなく、
 strict/exactを別に監査した。
 
 | route群 | 現在の境界 |
@@ -307,6 +307,7 @@ strict/exactを別に監査した。
 | COLOR MAPPINGS 47/48 Explosion/Starfield | strict NB=12/NB=9、palette 2..255、TYPE7 Shape 0..29、class固有domain、owned COLOR target、fixed 100x100、Overrideを保持する。populated Shape 0だけを共通filled ellipseとしてrouteし、Shape 1..29はproprietary glyph未回収のためprecise fail-closed。BEAMS=0 + native unset Rectangleは全schema後のsource no-op。非serialize qrand table、source green lifetime defect、Starfield palette endpointは`SyndocalCorrected`で安定seed/alpha/clampへ訂正する。supported 200 target以下はsampled-only RGB全世代table、超過時は同じSoA generation cacheへfallbackし、いずれもtick allocationなし。supported routeのpalette/random/framesはArc共有、dynamic cache不在のためcue transition cloneもparticle backing allocationなし |
 | COLOR MAPPINGS 29 Fire | strict NB=8、palette 2..4、Flames 1..100、Width 10..200、Height 1..100、Hotspot 10..255、owned COLOR target、fixed 100x100、Overrideを保持する。stable q15 even-lane table、row1 injection、flattened edge-spill / x-major / y-ascending in-place diffusion、Y flipを`SyndocalCorrected`で固定する。sourceでdeadだったHeightはlive cutoff/rescale、defective LUTはauthored nonwrapping 256 LUTへ訂正しqGrayを最後に適用する。supported 200 target以下は全F sampled heat frameをArc共有し、超過時もpreallocated dynamic fallbackでpermissive、tick allocationなし |
 | COLOR MAPPINGS 33 | ctorで確定したNB=6（T4/1、T2/2、T6/3、T0/4、T8/10、T1/11）をstrict検証。空Media Pathだけsource no-op、non-empty pathはprecise fail-closed |
+| COLOR MAPPINGS 45 Text | strict NB=11（T4/1、T2/2、T6/3、T0/4、T3/10、T0/11、T2/12、T10/13、T2/14、T0/15、T0/16）と全domain、DURATION、Rectangle、BEAMS、外部SELECTIONS不在を検証。TYPE3 Textは専用文字列parserで空文字・長いUnicodeも上限をinventせず保持する。owned BEAMS=0だけSourceExactBoundary no-op、populated targetは決定論的font/fallbackとsupported text-length/raster envelope未裁定のprecise fail-closed |
 | MOVE 221–225 | strict。5 distinct geometry、authored DURATION、continuous Phasing/Symmetry、ordered beam targetを保持。Pointsのみ等時間vertex hold |
 | COLOR 129/130 | strict schemaと証明済みevaluator式を実装 |
 | COLOR 127 | strict schema、authored DURATIONを保持。合成後qGray、Transform foldと内部40 ms tableはlegacy互換 evaluatorに残る |
@@ -534,6 +535,12 @@ strict/exactを別に監査した。
   permissiveに保つ。64 effect x 200 fixture、palette 4、全固有parameter最大、period 5000/F125のrelease
   gateのroot最終再走はp95/p99/max 1.281/1.806/2.152 msで5/8/12 msを通過した。正本は
   `qa/DVC_COLOR_MAPPINGS_FIRE_PARITY.md`。
+- Text ID45追加でconverter routeは66→67、未routeは2→1となる。実保存
+  `ColorMappings-Remaining7.dvc`のNB=11、TYPE3 `Text="Text"`、factory label `Anti Alias` / `Write Vertically` /
+  `Vertical Offset` / `Horizontal Offset`、empty sentinel、BEAMS=0をSourceExactBoundary goldenへ固定した。
+  empty/positive Rectangleのowned BEAMS=0だけvalidated source no-opとし、populated targetは決定論的font/fallbackと
+  supported text-length/raster envelopeの2製品裁定待ちでprecise fail-closedにする。runtime effectを生成せずvalidated
+  maximumも未裁定なので44 Hz gateは追加しない。正本は`qa/DVC_COLOR_MAPPINGS_TEXT_SOURCE_NOOP_PARITY.md`。
 
 ### DVC-CURVE Custom 13（2026-08-11）
 
@@ -559,9 +566,9 @@ strict/exactを別に監査した。
    photometryとdevice latencyだけは物理受入に残る。
 3. MAPPINGS 521–530は全route済み。COLOR MAPPINGSの共有class
    22/23/29/30/31/32/34/35/36/37/40/41/42/44/47/48/49/50もroute済み。Media 33/526は空sourceだけno-op、non-empty sourceは
-   decode/timing証明待ち。COLOR MAPPINGS専用class 21/45は
-   引き続きraster algorithm bodyまたは2D stateの意味論回収が必要。
-4. `TYPE7 Shape`のserialized glyph表現と`TYPE10 Text Direction`の合法enum域は未証明。
+   decode/timing証明待ち。Text 45はowned BEAMS=0だけSourceExactBoundary no-op、populated sourceはfont/fallbackと
+   text-length/raster envelope裁定待ち。残るCOLOR MAPPINGS専用class 21はraster algorithm bodyまたは2D stateの意味論回収が必要。
+4. `TYPE7 Shape`のserialized glyph表現は未証明。`TYPE10 Text Direction`の合法enum域はstatic recoveryでinteger 0..8と確定した。
 5. Sparkle/Random fillの外部per-thread qrand履歴そのものはreplay不能だが、作者が保存した
    schemaと演出grammarをstable source seedでCorrected実装済み。正本は
    `qa/DVC_RANDOM_CORRECTED_PARITY.md`。

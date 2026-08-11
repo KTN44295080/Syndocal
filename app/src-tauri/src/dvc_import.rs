@@ -2183,6 +2183,7 @@ fn parse_scene_effects(
                 (Some(5), Some(3), Some(41)) => Some("Tube"),
                 (Some(5), Some(3), Some(42)) => Some("Spiral"),
                 (Some(5), Some(3), Some(44)) => Some("Sweep"),
+                (Some(5), Some(3), Some(45)) => Some("Text"),
                 (Some(5), Some(3), Some(47)) => Some("Explosion"),
                 (Some(5), Some(3), Some(48)) => Some("Starfield"),
                 (Some(5), Some(3), Some(49)) => Some("Graph"),
@@ -2412,6 +2413,7 @@ fn convert_dvc_effect(
             profiles,
             fixture_refs,
         ),
+        (5, 3, 45) => convert_dvc_text_source_noop(rack, effect, fixture_refs),
         (5, 3, 22 | 23 | 29 | 30 | 31 | 32 | 33 | 34 | 35 | 36 | 37 | 40 | 41 | 42 | 44 | 47 | 48 | 49 | 50)
         | (2, 2, 121 | 127 | 128 | 129 | 130 | 131 | 133 | 134)
         | (6, 8, 521..=530) => {
@@ -2429,6 +2431,262 @@ fn convert_dvc_effect(
             "RACK TYPE={rack_type} EFFECT TYPE={effect_type} ID={generator_id} is not confirmed for DVC-3b"
         )),
     }
+}
+
+fn convert_dvc_text_source_noop(
+    rack: Node<'_, '_>,
+    effect: Node<'_, '_>,
+    fixture_refs: &HashMap<String, FixtureImportRef>,
+) -> Result<ConvertedDvcEffect, String> {
+    const LABEL: &str = "COLOR MAPPINGS Text ID=45";
+    const EXPECTED_TYPES: &[(u16, u16)] = &[
+        (1, 4),
+        (2, 2),
+        (3, 6),
+        (4, 0),
+        (10, 3),
+        (11, 0),
+        (12, 2),
+        (13, 10),
+        (14, 2),
+        (15, 0),
+        (16, 0),
+    ];
+
+    require_exact_custom_attributes(rack, &["EXPAND_RACK", "TYPE"], &format!("{LABEL} RACK"))?;
+    if rack.attribute("EXPAND_RACK") != Some("1") {
+        return Err(format!(
+            "{LABEL} RACK EXPAND_RACK must be 1, found {}",
+            rack.attribute("EXPAND_RACK").unwrap_or("missing")
+        ));
+    }
+    if rack.attribute("TYPE") != Some("5") {
+        return Err(format!(
+            "{LABEL} RACK TYPE must be 5, found {}",
+            rack.attribute("TYPE").unwrap_or("missing")
+        ));
+    }
+    require_exact_custom_attributes(
+        effect,
+        &["DURATION", "ID", "TYPE"],
+        &format!("{LABEL} EFFECT"),
+    )?;
+    if effect.attribute("TYPE") != Some("3") || effect.attribute("ID") != Some("45") {
+        return Err(format!(
+            "{LABEL} EFFECT must use TYPE=3 ID=45, found TYPE={} ID={}",
+            effect.attribute("TYPE").unwrap_or("missing"),
+            effect.attribute("ID").unwrap_or("missing")
+        ));
+    }
+
+    let selections = element_children(rack)
+        .filter(|node| node.has_tag_name("SELECTIONS"))
+        .count();
+    if selections != 0 {
+        return Err(format!(
+            "{LABEL} external SELECTIONS remain fail-closed; found {selections} SELECTIONS container(s)"
+        ));
+    }
+    let rack_children = element_children(rack).collect::<Vec<_>>();
+    for (name, expected_count) in [("EFFECT", 1_usize), ("MAPPING", 1), ("BEAMS", 1)] {
+        let actual_count = rack_children
+            .iter()
+            .filter(|node| node.has_tag_name(name))
+            .count();
+        if actual_count != expected_count {
+            return Err(format!(
+                "{LABEL} expected exactly one direct {name} container, found {actual_count}"
+            ));
+        }
+    }
+    if let Some(unexpected) = rack_children.iter().find(|node| {
+        !node.has_tag_name("EFFECT") && !node.has_tag_name("MAPPING") && !node.has_tag_name("BEAMS")
+    }) {
+        return Err(format!(
+            "{LABEL} RACK contains unexpected <{}> element",
+            unexpected.tag_name().name()
+        ));
+    }
+
+    let effect_children = element_children(effect).collect::<Vec<_>>();
+    if effect_children.len() != 1 || !effect_children[0].has_tag_name("PARAMS") {
+        return Err(format!(
+            "{LABEL} EFFECT must contain exactly one direct PARAMS element"
+        ));
+    }
+    let params_node = effect_children[0];
+    require_exact_custom_attributes(params_node, &["NB"], &format!("{LABEL} PARAMS"))?;
+    let declared = required_attribute(params_node, "NB", "PARAMS")?
+        .parse::<usize>()
+        .map_err(|error| format!("{LABEL} PARAMS NB is invalid: {error}"))?;
+    let param_nodes = element_children(params_node).collect::<Vec<_>>();
+    if let Some(unexpected) = param_nodes.iter().find(|node| !node.has_tag_name("PARAM")) {
+        return Err(format!(
+            "{LABEL} PARAMS contains unexpected <{}> element",
+            unexpected.tag_name().name()
+        ));
+    }
+    if declared != EXPECTED_TYPES.len() || param_nodes.len() != EXPECTED_TYPES.len() {
+        return Err(format!(
+            "{LABEL} expected PARAMS NB={} with {} PARAM elements, found NB={declared} with {}",
+            EXPECTED_TYPES.len(),
+            EXPECTED_TYPES.len(),
+            param_nodes.len()
+        ));
+    }
+
+    let mut params = HashMap::<u16, Node<'_, '_>>::new();
+    for param in param_nodes {
+        let id = required_attribute(param, "ID", "PARAM")?
+            .parse::<u16>()
+            .map_err(|error| format!("{LABEL} PARAM ID is invalid: {error}"))?;
+        if params.insert(id, param).is_some() {
+            return Err(format!("{LABEL} PARAM {id} is duplicated"));
+        }
+    }
+    let mut actual_ids = params.keys().copied().collect::<Vec<_>>();
+    actual_ids.sort_unstable();
+    let mut expected_ids = EXPECTED_TYPES.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+    expected_ids.sort_unstable();
+    if actual_ids != expected_ids {
+        return Err(format!(
+            "{LABEL} expected PARAM IDs {expected_ids:?}, found {actual_ids:?}"
+        ));
+    }
+    require_exact_dvc_param_types(effect, EXPECTED_TYPES)?;
+
+    for (&id, param) in &params {
+        let expected_attributes: &[&str] = if id == 1 {
+            &["ID", "TYPE"]
+        } else {
+            &["ID", "TYPE", "VAL"]
+        };
+        require_exact_custom_attributes(
+            *param,
+            expected_attributes,
+            &format!("{LABEL} PARAM {id}"),
+        )?;
+    }
+
+    let palette_param = params[&1];
+    require_strict_dvc_palette_shape(palette_param)?;
+    let colors = direct_child(palette_param, "COLORS")
+        .expect("strict palette shape established one COLORS child");
+    require_exact_custom_attributes(colors, &["NB"], &format!("{LABEL} COLORS"))?;
+    for (index, color) in element_children(colors).enumerate() {
+        require_exact_custom_attributes(color, &["VAL"], &format!("{LABEL} COLOR {index}"))?;
+    }
+    let palette = dvc_color_palette_stops(palette_param)?;
+    if !(2..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS).contains(&palette.len()) {
+        return Err(format!(
+            "{LABEL} palette requires 2..255 colors, found {}",
+            palette.len()
+        ));
+    }
+
+    let text = params[&10]
+        .attribute("VAL")
+        .ok_or_else(|| format!("{LABEL} Text PARAM 10 is missing VAL"))?;
+    let numeric = |id: u16, parameter: &str| -> Result<f64, String> {
+        let raw = params[&id]
+            .attribute("VAL")
+            .ok_or_else(|| format!("{LABEL} {parameter} PARAM {id} is missing VAL"))?;
+        let value = raw
+            .parse::<f64>()
+            .map_err(|error| format!("{LABEL} {parameter} PARAM {id} is invalid: {error}"))?;
+        if !value.is_finite() {
+            return Err(format!(
+                "{LABEL} {parameter} PARAM {id} must be finite, found {value}"
+            ));
+        }
+        Ok(value)
+    };
+    let integer_range = |id: u16, parameter: &str, low: i64, high: i64| -> Result<i64, String> {
+        let value = numeric(id, parameter)?;
+        if value.fract().abs() > f64::EPSILON || value < low as f64 || value > high as f64 {
+            return Err(format!(
+                "{LABEL} {parameter} PARAM {id} must be an integer within {low}..{high}, found {value}"
+            ));
+        }
+        Ok(value as i64)
+    };
+    let binary = |id: u16, parameter: &str| -> Result<bool, String> {
+        match integer_range(id, parameter, 0, 1)? {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => unreachable!(),
+        }
+    };
+
+    let grayscale = binary(2, "Grayscale")?;
+    let transform = integer_range(3, "Transform", 0, 2)?;
+    let rotation = integer_range(4, "Rotation", 0, 360)?;
+    let size = integer_range(11, "Size", 5, 80)?;
+    let anti_alias = binary(12, "Anti Alias")?;
+    let direction = integer_range(13, "Direction", 0, 8)?;
+    let write_vertically = binary(14, "Write Vertically")?;
+    let vertical_offset = integer_range(15, "Vertical Offset", -100, 100)?;
+    let horizontal_offset = integer_range(16, "Horizontal Offset", -100, 100)?;
+    let (period_ms, period_note) = dvc_exact_generator_period(effect, "COLOR MAPPINGS", "Text")?;
+
+    let rectangle = dvc_mapping_rectangle(rack, LABEL, true)?;
+    let beams = direct_child(rack, "BEAMS").expect("strict rack shape established one BEAMS child");
+    require_exact_custom_attributes(beams, &["NB"], &format!("{LABEL} BEAMS"))?;
+    let beam_children = element_children(beams).collect::<Vec<_>>();
+    if let Some(unexpected) = beam_children.iter().find(|node| !node.has_tag_name("BEAM")) {
+        return Err(format!(
+            "{LABEL} BEAMS contains unexpected <{}> element",
+            unexpected.tag_name().name()
+        ));
+    }
+    let declared_beams = required_attribute(beams, "NB", "BEAMS")?
+        .parse::<usize>()
+        .map_err(|error| format!("{LABEL} BEAMS NB is invalid: {error}"))?;
+    if declared_beams != beam_children.len() {
+        return Err(format!(
+            "{LABEL} BEAMS declares {declared_beams} entries but contains {}",
+            beam_children.len()
+        ));
+    }
+    for (index, beam) in beam_children.iter().enumerate() {
+        require_exact_custom_attributes(
+            *beam,
+            &["BEAMID", "FIXTURE", "IDSELECTION"],
+            &format!("{LABEL} BEAM {index}"),
+        )?;
+    }
+    let targets = dvc_rack_targets(rack, fixture_refs)?;
+    if rectangle.native_empty_sentinel && !targets.beam_targets.is_empty() {
+        return Err(format!(
+            "{LABEL} native empty Rectangle sentinel is valid only with zero owned BEAMS"
+        ));
+    }
+    if !targets.beam_targets.is_empty() {
+        return Err(format!(
+            "{LABEL} populated Text requires unresolved deterministic font and supported text-raster envelope"
+        ));
+    }
+
+    Ok(ConvertedDvcEffect {
+        target: None,
+        generator: "Text",
+        note: format!(
+            "source_family=Color Mappings; implementation=SourceExactBoundary; evaluator=CTextEffect/0x140366940; source no-op preserved: Daslight BEAMS contains zero owned targets and no external SELECTIONS; palette_colors={}; Grayscale={}; Transform={transform}; Rotation={rotation}; TextEmpty={}; TextUtf8Bytes={}; Size={size}; Anti Alias={}; Direction={direction}; Write Vertically={}; Vertical Offset={vertical_offset}; Horizontal Offset={horizontal_offset}; Rectangle=({},{},{},{},{}); period_ms={period_ms}; {period_note}; no runtime effect was created",
+            palette.len(),
+            u8::from(grayscale),
+            u8::from(text.is_empty()),
+            text.len(),
+            u8::from(anti_alias),
+            u8::from(write_vertically),
+            rectangle.x,
+            rectangle.y,
+            rectangle.sx,
+            rectangle.sy,
+            rectangle.angle_degrees,
+        ),
+        approximations: Vec::new(),
+        warnings: Vec::new(),
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -15584,6 +15842,452 @@ mod tests {
         assert!(converted.note.contains("Rectangle=(0,0,-1,-1,0)"));
         assert!(converted.note.contains("evaluator=CRainEffect/0x140365660"));
         assert!(converted.approximations.is_empty());
+    }
+
+    #[test]
+    fn dvc_color_mappings_text_source_noop_is_strict_and_populated_text_fails_closed() {
+        const COLOR: &str = r#"<COLOR VAL="0/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>"#;
+        const PALETTE_2: &str = r#"<PARAM TYPE="4" ID="1"><COLORS NB="2"><COLOR VAL="0/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="1/1/1/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/></COLORS></PARAM>"#;
+        const CLASS_PARAMS: &str = r#"<PARAM TYPE="2" ID="2" VAL="0"/><PARAM TYPE="6" ID="3" VAL="0"/><PARAM TYPE="0" ID="4" VAL="0"/><PARAM TYPE="3" ID="10" VAL="Text"/><PARAM TYPE="0" ID="11" VAL="8"/><PARAM TYPE="2" ID="12" VAL="0"/><PARAM TYPE="10" ID="13" VAL="1"/><PARAM TYPE="2" ID="14" VAL="0"/><PARAM TYPE="0" ID="15" VAL="0"/><PARAM TYPE="0" ID="16" VAL="0"/>"#;
+        const REORDERED_CLASS_PARAMS: &str = r#"<PARAM TYPE="0" ID="16" VAL="0"/><PARAM TYPE="0" ID="11" VAL="8"/><PARAM TYPE="3" ID="10" VAL="Text"/><PARAM TYPE="2" ID="14" VAL="0"/><PARAM TYPE="0" ID="15" VAL="0"/><PARAM TYPE="10" ID="13" VAL="1"/><PARAM TYPE="2" ID="12" VAL="0"/><PARAM TYPE="0" ID="4" VAL="0"/><PARAM TYPE="6" ID="3" VAL="0"/><PARAM TYPE="2" ID="2" VAL="0"/>"#;
+        const POSITIVE_MAPPING: &str = r#"<MAPPING NAME="Rectangle" DASUID="text-mapping" TYPE="0" X="0" Y="0" SX="100" SY="100" ANGLE="0" LOCKED="0"/>"#;
+        const SENTINEL_MAPPING: &str = r#"<MAPPING NAME="Rectangle" DASUID="text-mapping" TYPE="0" X="0" Y="0" SX="-1" SY="-1" ANGLE="0" LOCKED="0"/>"#;
+        const EMPTY_BEAMS: &str = r#"<BEAMS NB="0"/>"#;
+        const POPULATED_BEAMS: &str =
+            r#"<BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS>"#;
+
+        let source = |palette: &str, class_params: &str, mapping: &str, beams: &str| {
+            format!(
+                r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK EXPAND_RACK="1" TYPE="5"><EFFECT TYPE="3" ID="45" DURATION="5000"><PARAMS NB="11">{palette}{class_params}</PARAMS></EFFECT>{mapping}{beams}</RACK></RACKS></SCENE>"#
+            )
+        };
+        let convert = |xml: &str| {
+            let document = Document::parse(xml).unwrap();
+            let scene = document.root_element();
+            let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+            let effect = direct_child(rack, "EFFECT").unwrap();
+            convert_dvc_effect(
+                scene,
+                "Text source boundary",
+                rack,
+                effect,
+                5,
+                3,
+                45,
+                1,
+                &effect_test_profiles(),
+                &effect_test_fixture_refs(),
+            )
+        };
+
+        let baseline = source(PALETTE_2, CLASS_PARAMS, POSITIVE_MAPPING, EMPTY_BEAMS);
+        let converted = convert(&baseline).unwrap();
+        assert!(converted.target.is_none());
+        assert!(converted.approximations.is_empty());
+        assert!(converted
+            .note
+            .contains("implementation=SourceExactBoundary"));
+        assert!(converted.note.contains("source no-op preserved"));
+        assert!(converted.note.contains("TextEmpty=0"));
+        assert!(converted.note.contains("Anti Alias=0"));
+        assert!(converted.note.contains("Write Vertically=0"));
+        assert!(convert(&source(
+            PALETTE_2,
+            REORDERED_CLASS_PARAMS,
+            SENTINEL_MAPPING,
+            EMPTY_BEAMS
+        ))
+        .is_ok());
+        assert!(convert(&baseline.replace(r#"VAL="Text""#, r#"VAL="""#)).is_ok());
+        let long_unicode = "照明".repeat(2049);
+        assert!(convert(&baseline.replace("Text", &long_unicode)).is_ok());
+        assert!(convert(
+            &source(PALETTE_2, CLASS_PARAMS, SENTINEL_MAPPING, EMPTY_BEAMS).replacen(
+                r#"ID="11" VAL="8""#,
+                r#"ID="11" VAL="81""#,
+                1
+            )
+        )
+        .is_err());
+
+        let palette_1 =
+            format!(r#"<PARAM TYPE="4" ID="1"><COLORS NB="1">{COLOR}</COLORS></PARAM>"#);
+        let palette_256 = format!(
+            r#"<PARAM TYPE="4" ID="1"><COLORS NB="256">{}</COLORS></PARAM>"#,
+            COLOR.repeat(256)
+        );
+        let palette_255 = format!(
+            r#"<PARAM TYPE="4" ID="1"><COLORS NB="255">{}</COLORS></PARAM>"#,
+            COLOR.repeat(255)
+        );
+        let maximum_params = CLASS_PARAMS
+            .replace(r#"ID="2" VAL="0""#, r#"ID="2" VAL="1""#)
+            .replace(r#"ID="3" VAL="0""#, r#"ID="3" VAL="2""#)
+            .replace(r#"ID="4" VAL="0""#, r#"ID="4" VAL="360""#)
+            .replace(r#"ID="11" VAL="8""#, r#"ID="11" VAL="80""#)
+            .replace(r#"ID="12" VAL="0""#, r#"ID="12" VAL="1""#)
+            .replace(r#"ID="13" VAL="1""#, r#"ID="13" VAL="8""#)
+            .replace(r#"ID="14" VAL="0""#, r#"ID="14" VAL="1""#)
+            .replace(r#"ID="15" VAL="0""#, r#"ID="15" VAL="100""#)
+            .replace(r#"ID="16" VAL="0""#, r#"ID="16" VAL="100""#);
+        assert!(convert(&source(
+            &palette_255,
+            &maximum_params,
+            POSITIVE_MAPPING,
+            EMPTY_BEAMS
+        ))
+        .is_ok());
+        let minimum_params = CLASS_PARAMS
+            .replace(r#"ID="11" VAL="8""#, r#"ID="11" VAL="5""#)
+            .replace(r#"ID="13" VAL="1""#, r#"ID="13" VAL="0""#)
+            .replace(r#"ID="15" VAL="0""#, r#"ID="15" VAL="-100""#)
+            .replace(r#"ID="16" VAL="0""#, r#"ID="16" VAL="-100""#);
+        assert!(convert(&source(
+            PALETTE_2,
+            &minimum_params,
+            SENTINEL_MAPPING,
+            EMPTY_BEAMS
+        ))
+        .is_ok());
+        let invalid = vec![
+            (
+                "NB",
+                baseline.replacen(r#"PARAMS NB="11""#, r#"PARAMS NB="10""#, 1),
+            ),
+            ("wrong ID", baseline.replacen(r#"ID="16""#, r#"ID="17""#, 1)),
+            (
+                "duplicate ID",
+                baseline.replacen(r#"ID="16""#, r#"ID="15""#, 1),
+            ),
+            (
+                "wrong Text TYPE",
+                baseline.replacen(r#"TYPE="3" ID="10""#, r#"TYPE="0" ID="10""#, 1),
+            ),
+            (
+                "missing Text TYPE",
+                baseline.replacen(r#"TYPE="3" ID="10""#, r#"ID="10""#, 1),
+            ),
+            (
+                "missing Text VAL",
+                baseline.replacen(r#" ID="10" VAL="Text""#, r#" ID="10""#, 1),
+            ),
+            (
+                "palette 1",
+                source(&palette_1, CLASS_PARAMS, POSITIVE_MAPPING, EMPTY_BEAMS),
+            ),
+            (
+                "palette 256",
+                source(&palette_256, CLASS_PARAMS, POSITIVE_MAPPING, EMPTY_BEAMS),
+            ),
+            (
+                "size 4",
+                baseline.replacen(r#"ID="11" VAL="8""#, r#"ID="11" VAL="4""#, 1),
+            ),
+            (
+                "size 81",
+                baseline.replacen(r#"ID="11" VAL="8""#, r#"ID="11" VAL="81""#, 1),
+            ),
+            (
+                "direction -1",
+                baseline.replacen(r#"ID="13" VAL="1""#, r#"ID="13" VAL="-1""#, 1),
+            ),
+            (
+                "direction 9",
+                baseline.replacen(r#"ID="13" VAL="1""#, r#"ID="13" VAL="9""#, 1),
+            ),
+            (
+                "vertical offset -101",
+                baseline.replacen(r#"ID="15" VAL="0""#, r#"ID="15" VAL="-101""#, 1),
+            ),
+            (
+                "vertical offset 101",
+                baseline.replacen(r#"ID="15" VAL="0""#, r#"ID="15" VAL="101""#, 1),
+            ),
+            (
+                "horizontal offset -101",
+                baseline.replacen(r#"ID="16" VAL="0""#, r#"ID="16" VAL="-101""#, 1),
+            ),
+            (
+                "horizontal offset 101",
+                baseline.replacen(r#"ID="16" VAL="0""#, r#"ID="16" VAL="101""#, 1),
+            ),
+            (
+                "grayscale",
+                baseline.replacen(r#"ID="2" VAL="0""#, r#"ID="2" VAL="2""#, 1),
+            ),
+            (
+                "anti alias",
+                baseline.replacen(r#"ID="12" VAL="0""#, r#"ID="12" VAL="2""#, 1),
+            ),
+            (
+                "vertical",
+                baseline.replacen(r#"ID="14" VAL="0""#, r#"ID="14" VAL="2""#, 1),
+            ),
+            (
+                "transform",
+                baseline.replacen(r#"ID="3" VAL="0""#, r#"ID="3" VAL="3""#, 1),
+            ),
+            (
+                "rotation negative",
+                baseline.replacen(r#"ID="4" VAL="0""#, r#"ID="4" VAL="-1""#, 1),
+            ),
+            (
+                "rotation high",
+                baseline.replacen(r#"ID="4" VAL="0""#, r#"ID="4" VAL="361""#, 1),
+            ),
+            (
+                "nonfinite numeric",
+                baseline.replacen(r#"ID="11" VAL="8""#, r#"ID="11" VAL="NaN""#, 1),
+            ),
+            (
+                "missing mapping",
+                source(PALETTE_2, CLASS_PARAMS, "", EMPTY_BEAMS),
+            ),
+            (
+                "duplicate mapping",
+                source(
+                    PALETTE_2,
+                    CLASS_PARAMS,
+                    &format!("{POSITIVE_MAPPING}{POSITIVE_MAPPING}"),
+                    EMPTY_BEAMS,
+                ),
+            ),
+            (
+                "mapping attrs",
+                baseline.replacen(r#"NAME="Rectangle""#, r#"NAME="Rectangle" EXTRA="1""#, 1),
+            ),
+            (
+                "invalid rectangle",
+                baseline.replacen(r#"SX="100""#, r#"SX="0""#, 1),
+            ),
+            (
+                "missing beams",
+                source(PALETTE_2, CLASS_PARAMS, POSITIVE_MAPPING, ""),
+            ),
+            (
+                "beams NB",
+                baseline.replacen(r#"BEAMS NB="0""#, r#"BEAMS NB="1""#, 1),
+            ),
+            (
+                "beams body",
+                baseline.replacen(r#"<BEAMS NB="0"/>"#, r#"<BEAMS NB="1"><NOPE/></BEAMS>"#, 1),
+            ),
+            (
+                "duplicate beams",
+                source(
+                    PALETTE_2,
+                    CLASS_PARAMS,
+                    POSITIVE_MAPPING,
+                    &format!("{EMPTY_BEAMS}{EMPTY_BEAMS}"),
+                ),
+            ),
+            (
+                "external selections",
+                baseline.replacen(EMPTY_BEAMS, &format!("<SELECTIONS/>{EMPTY_BEAMS}"), 1),
+            ),
+            (
+                "duration missing",
+                baseline.replacen(r#" DURATION="5000""#, "", 1),
+            ),
+            (
+                "duration zero",
+                baseline.replacen(r#"DURATION="5000""#, r#"DURATION="0""#, 1),
+            ),
+            (
+                "duration fractional",
+                baseline.replacen(r#"DURATION="5000""#, r#"DURATION="1.5""#, 1),
+            ),
+            (
+                "rack attrs",
+                baseline.replacen(
+                    r#"EXPAND_RACK="1" TYPE="5""#,
+                    r#"EXPAND_RACK="1" TYPE="5" EXTRA="1""#,
+                    1,
+                ),
+            ),
+            (
+                "rack expand value",
+                baseline.replacen(r#"EXPAND_RACK="1""#, r#"EXPAND_RACK="0""#, 1),
+            ),
+            (
+                "rack type value",
+                baseline.replacen(r#"TYPE="5""#, r#"TYPE="6""#, 1),
+            ),
+            (
+                "effect attrs",
+                baseline.replacen(
+                    r#"ID="45" DURATION="5000""#,
+                    r#"ID="45" DURATION="5000" EXTRA="1""#,
+                    1,
+                ),
+            ),
+            (
+                "effect type value",
+                baseline.replacen(r#"EFFECT TYPE="3""#, r#"EFFECT TYPE="4""#, 1),
+            ),
+            (
+                "effect ID value",
+                baseline.replacen(r#"ID="45""#, r#"ID="44""#, 1),
+            ),
+            (
+                "params attrs",
+                baseline.replacen(r#"PARAMS NB="11""#, r#"PARAMS NB="11" EXTRA="1""#, 1),
+            ),
+            (
+                "param attrs",
+                baseline.replacen(
+                    r#"TYPE="3" ID="10" VAL="Text""#,
+                    r#"TYPE="3" ID="10" VAL="Text" EXTRA="1""#,
+                    1,
+                ),
+            ),
+        ];
+        for (case, xml) in invalid {
+            assert!(
+                convert(&xml).is_err(),
+                "Text source accepted invalid {case}"
+            );
+        }
+
+        let populated_error = convert(&source(
+            PALETTE_2,
+            CLASS_PARAMS,
+            POSITIVE_MAPPING,
+            POPULATED_BEAMS,
+        ))
+        .unwrap_err();
+        assert_eq!(
+            populated_error,
+            "COLOR MAPPINGS Text ID=45 populated Text requires unresolved deterministic font and supported text-raster envelope"
+        );
+        let sentinel_error = convert(&source(
+            PALETTE_2,
+            CLASS_PARAMS,
+            SENTINEL_MAPPING,
+            POPULATED_BEAMS,
+        ))
+        .unwrap_err();
+        assert!(sentinel_error
+            .contains("native empty Rectangle sentinel is valid only with zero owned BEAMS"));
+    }
+
+    #[test]
+    fn dvc_local_golden_color_mappings_text_from_remaining7_specimen() {
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../qa/specimens/ColorMappings-Remaining7.dvc"
+        ));
+        let source = fs::read_to_string(path).unwrap();
+        let document = Document::parse(&source).unwrap();
+        let rack = document
+            .descendants()
+            .find(|node| {
+                node.has_tag_name("RACK")
+                    && node.attribute("TYPE") == Some("5")
+                    && direct_child(*node, "EFFECT")
+                        .is_some_and(|effect| effect.attribute("ID") == Some("45"))
+            })
+            .expect("Remaining7 must contain Text ID=45");
+        assert_eq!(rack.attribute("EXPAND_RACK"), Some("1"));
+        let effect = direct_child(rack, "EFFECT").unwrap();
+        let params = direct_child(effect, "PARAMS").unwrap();
+        assert_eq!(params.attribute("NB"), Some("11"));
+        assert_eq!(
+            element_children(params)
+                .map(|param| (
+                    param.attribute("TYPE").unwrap(),
+                    param.attribute("ID").unwrap(),
+                    param.attribute("VAL"),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("4", "1", None),
+                ("2", "2", Some("0")),
+                ("6", "3", Some("0")),
+                ("0", "4", Some("0")),
+                ("3", "10", Some("Text")),
+                ("0", "11", Some("8")),
+                ("2", "12", Some("0")),
+                ("10", "13", Some("1")),
+                ("2", "14", Some("0")),
+                ("0", "15", Some("0")),
+                ("0", "16", Some("0")),
+            ]
+        );
+        let mapping = direct_child(rack, "MAPPING").unwrap();
+        assert_eq!(
+            (
+                mapping.attribute("NAME"),
+                mapping.attribute("X"),
+                mapping.attribute("Y"),
+                mapping.attribute("SX"),
+                mapping.attribute("SY"),
+                mapping.attribute("ANGLE"),
+                mapping.attribute("LOCKED"),
+            ),
+            (
+                Some("Rectangle"),
+                Some("0"),
+                Some("0"),
+                Some("-1"),
+                Some("-1"),
+                Some("0"),
+                Some("0"),
+            )
+        );
+        let beams = direct_child(rack, "BEAMS").unwrap();
+        assert_eq!(beams.attribute("NB"), Some("0"));
+        assert_eq!(element_children(beams).count(), 0);
+
+        let scene = rack
+            .ancestors()
+            .find(|node| node.has_tag_name("SCENE"))
+            .unwrap();
+        let converted = convert_dvc_effect(
+            scene,
+            "Remaining7 Text",
+            rack,
+            effect,
+            5,
+            3,
+            45,
+            1,
+            &effect_test_profiles(),
+            &effect_test_fixture_refs(),
+        )
+        .unwrap();
+        assert!(converted.target.is_none());
+        assert!(converted.note.contains("source no-op preserved"));
+        assert!(converted.note.contains("TextEmpty=0"));
+        assert!(converted.note.contains("Anti Alias=0"));
+        assert!(converted.note.contains("Write Vertically=0"));
+        assert!(converted.note.contains("Vertical Offset=0"));
+        assert!(converted.note.contains("Horizontal Offset=0"));
+        assert!(converted.note.contains("Rectangle=(0,0,-1,-1,0)"));
+        assert!(converted.approximations.is_empty());
+
+        let mut report = DvcImportReport::new(path.to_str().unwrap(), document.root_element());
+        let mut next_effect_id = 1;
+        let parsed = parse_scene_effects(
+            scene,
+            scene.attribute("NAME").unwrap_or("Remaining7"),
+            &effect_test_profiles(),
+            &effect_test_fixture_refs(),
+            &mut next_effect_id,
+            &mut report,
+        );
+        assert!(parsed.targets.is_empty());
+        assert_eq!(next_effect_id, 1);
+        assert!(report.converted.details.iter().any(|detail| {
+            detail.item.ends_with("(Text)")
+                && detail
+                    .message
+                    .contains("implementation=SourceExactBoundary")
+                && detail.message.contains("source no-op preserved")
+        }));
+        assert!(!report.skipped.details.iter().any(|detail| {
+            detail.item.ends_with("(Text)") && detail.message.contains("not confirmed for DVC-3b")
+        }));
     }
 
     #[test]
