@@ -2380,12 +2380,18 @@ pub enum ColorEffectSpatialRecipe {
     },
     /// Daslight's two-dimensional conical spiral raster.
     Spiral {
+        /// Apply the COLOR MAPPINGS Grayscale post-process after rasterization.
+        #[serde(default, skip_serializing_if = "is_false")]
+        grayscale: bool,
         radius: f32,
         arms: u16,
         gradient: f32,
     },
     /// Daslight's paired rotating conical-sector raster.
     Butterfly {
+        /// Apply the COLOR MAPPINGS Grayscale post-process after rasterization.
+        #[serde(default, skip_serializing_if = "is_false")]
+        grayscale: bool,
         color_width: f32,
         gradient: f32,
         clockwise: bool,
@@ -5294,6 +5300,40 @@ mod tests {
             legacy_pattern_json,
             "a missing placement stays omitted and preserves the legacy byte shape"
         );
+    }
+
+    #[test]
+    fn spiral_and_butterfly_grayscale_roundtrip_without_legacy_shape_drift() {
+        for legacy_json in [
+            r#"{"Spiral":{"radius":30.0,"arms":1,"gradient":100.0}}"#,
+            r#"{"Butterfly":{"color_width":100.0,"gradient":50.0,"clockwise":true}}"#,
+        ] {
+            let legacy: super::ColorEffectSpatialRecipe =
+                serde_json::from_str(legacy_json).unwrap();
+            assert_eq!(serde_json::to_string(&legacy).unwrap(), legacy_json);
+        }
+
+        for recipe in [
+            super::ColorEffectSpatialRecipe::Spiral {
+                grayscale: true,
+                radius: 30.0,
+                arms: 1,
+                gradient: 100.0,
+            },
+            super::ColorEffectSpatialRecipe::Butterfly {
+                grayscale: true,
+                color_width: 100.0,
+                gradient: 50.0,
+                clockwise: true,
+            },
+        ] {
+            let json = serde_json::to_string(&recipe).unwrap();
+            assert!(json.contains(r#""grayscale":true"#));
+            assert_eq!(
+                serde_json::from_str::<super::ColorEffectSpatialRecipe>(&json).unwrap(),
+                recipe
+            );
+        }
     }
 
     #[test]

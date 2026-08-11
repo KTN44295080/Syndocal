@@ -353,8 +353,9 @@ The owning release gates passed on 2026-08-10:
 
 The repo-portable golden test consumes the committed specimen and pins:
 
-- exact ID36 NB=7 parameter types/defaults, eight palette entries, Rectangle values,
-  and empty BEAMS/no SELECTIONS;
+- exact ID36 NB=7 parameter types/defaults and Rectangle values; the saved specimen
+  still pins its eight entries, while the route regression accepts legal 1/8/255-entry
+  palettes and rejects 0/256; empty BEAMS/no SELECTIONS remains pinned;
 - ID36 is reported once as a converted `source no-op preserved`, is absent from the
   skipped report, and creates no cue-owned runtime effect target;
 - exact ID221 NB=3 parameter types/defaults and four saved points;

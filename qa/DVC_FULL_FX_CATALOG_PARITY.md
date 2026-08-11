@@ -272,7 +272,7 @@ Explosion / Starfield / Graph / Lines / Grid。21項目を最下端Gridまで観
 | Grid | `T0/10 Size=1[1..5]`; `11 Width=2[2..20]` |
 | Knight Rider | `T0/10 Size=1[1..100]`; `T2/11 One Way=false`; `12 Fading=true`; `13 Go Outside=false`; `T0/14 Gradient=50[0..100]` |
 | Lines | `T0/10 Size=2[2..20]` |
-| Media | `T2/10 Media Path=true`; `T1/11 Colorize=0[0..1]` |
+| Media | `T8/10 Media Path`; COLOR MAPPINGSはさらに`T1/11 Colorize=0[0..1]` |
 | Perlin | `T0/10 Octaves=4[2..10]`; `11 Zoom=75[1..100]`; `12 Direction=2[1..100]`; `13 Speed=1[1..10]`; `14 Amplitude=70[5..100]` |
 | Plasma | `T0/10..17 Size X=1, Param X=2, Size Y=1, Param Y=2, Speed X=-1, Param SX=2, Speed Y=1, Param SY=-1`; domains `0..20` / `-5..5` |
 | Rain | `T0/10 Speed=1[0..10]`; `11 Width=5[5..10]`; `12 Height=10[10..30]`; `13 Number=50[1..100]`; `14 Trail=10[1..30]` |
@@ -285,17 +285,24 @@ Explosion / Starfield / Graph / Lines / Grid。21項目を最下端Gridまで観
 | Text | `T3/10 Text="Text"`; `T0/11 Size=8[5..80]`; `T2/12 Anti Alias=false`; `T10/13 Direction=1`; `T2/14 Vertical=false`; `T0/15 Vertical Offset=0[-100..100]`; `16 Horizontal Offset=0[-100..100]` |
 | Tube | 固有PARAMなし |
 
+Mediaの旧表記`T2/10`はcatalog転記誤りだった。`CMediaEffect` constructor
+`0x140353840`はID10を生成後、`0x14034F590`経由でTYPE8へ設定する。COLOR MAPPINGS側は
+共通baseとColorizeを加えたNB=6になる。family 5の実保存specimenはまだないため、ID33 routeは
+このconstructor schemaをsynthetic importer fixtureで固定し、Media Pathが空の場合だけno-opとする。
+
 ## 現行Syndocal importerとの逆照合
 
-68 IDのうち現行converter coverageは47 ID（うちMAPPINGS 526空パスはsource no-op）、
-random-state由来のprecise fail-closedは0、残る21 IDは未routeでgeneric `Skipped`になる。
-47 routeはfull-domain完成数ではなく、
+68 IDのうち現行converter coverageは56 ID（うちMAPPINGS 526とCOLOR MAPPINGS 33の空パスは
+source no-op）、random-state由来のprecise fail-closedは0、残る12 IDは未routeでgeneric
+`Skipped`になる。Media 33/526のnon-empty pathはroute内でprecise fail-closedを維持する。
+56 routeはfull-domain完成数ではなく、
 strict/exactを別に監査した。
 
 | route群 | 現在の境界 |
 |---|---|
 | VALUE 621–628 | strict。626/627はstable source seed、628はcontinuous fixed-hash/cosine/analytic palette/active DirectionのCorrected evaluator。対象ゼロのno-opもschema検証後に成立 |
-| COLOR MAPPINGS 36 | strict。外部`SELECTIONS`参照はprecise fail-closed |
+| COLOR MAPPINGS 22/23/30/32/34/36/40/42/44 | strict PARAM ID/TYPE/domain、palette 1..255、Rectangle、owned COLOR beam target、Override mergeを保持。外部`SELECTIONS`はprecise fail-closed。23/42も共通qGray post-processを通る |
+| COLOR MAPPINGS 33 | ctorで確定したNB=6（T4/1、T2/2、T6/3、T0/4、T8/10、T1/11）をstrict検証。空Media Pathだけsource no-op、non-empty pathはprecise fail-closed |
 | MOVE 221–225 | strict。5 distinct geometry、authored DURATION、continuous Phasing/Symmetry、ordered beam targetを保持。Pointsのみ等時間vertex hold |
 | COLOR 129/130 | strict schemaと証明済みevaluator式を実装 |
 | COLOR 127 | strict schema、authored DURATIONを保持。合成後qGray、Transform foldと内部40 ms tableはlegacy互換 evaluatorに残る |
@@ -457,6 +464,25 @@ strict/exactを別に監査した。
 - runtime-convertは26→27、未routeは38→37、条件付きexact-coreは24→25。precise fail-closed 4と
   明示compatibility 2は不変。
 
+### DVC-COLOR-MAPPINGS shared evaluator tranche（2026-08-11）
+
+- COLOR MAPPINGS 22 Burst / 23 Butterfly / 30 Knight Rider / 32 Perlin / 34 Plasma /
+  40 Sparkle / 42 Spiral / 44 Sweepを、対応するMAPPINGS 523/524/527/530/525/529/522/528の
+  共通recipe/evaluatorへrouteした。familyは`Color Mappings`、beam targetはowned COLOR segment、
+  mergeは`Override`であり、MAPPINGS側のDimmer target / `Multiply`へ変換しない。
+- 全routeはCOLOR MAPPINGS baseのT4/1 palette、T2/2 Grayscale、T6/3 Transform、T0/4 Rotation、
+  class固有ID/TYPE/domain、positive Rectangle、Patch-canvas beam座標をstrict検証する。paletteは
+  factory域1/8/255を受理し、0/256を拒否する。外部`SELECTIONS`はsilent fallbackせずfail-closed。
+- Spiral / Butterflyへdefault false・false時omitのGrayscale wire fieldを加え、旧`.sdc` JSON shapeを
+  保持した。両evaluatorともpalette/geometry合成後に共通qGrayを適用する。
+- ID33 Mediaはconstructorで確定したT8/10 Media PathとT1/11 Colorizeを含むNB=6だけを認識する。
+  empty pathはRectangleと全base/domainを検証したsource no-op、non-empty pathはembedded-media decode
+  証明待ちのprecise fail-closedである。COLOR MAPPINGS family 5の実保存specimenは存在しないため、
+  native保存互換を主張せずsynthetic strict-schema regressionだけを追加した。
+- ID37 Random fillは現engineのplaced raster stateが1D/height-deadで、共有MAPPINGS evaluatorがない。
+  2D state extensionを伴う別トランシェまで未routeを維持する。専用classの残りは
+  21/29/31/35/37/41/45/47/48/49/50、別schemaはCURVE Custom 13である。
+
 ## 未実装・未証明境界
 
 カタログ列挙は完了したが、次は別軸で残る。
@@ -465,8 +491,10 @@ strict/exactを別に監査した。
    evaluatorの補間・端点意味論を確定してから実装する。
 2. CHASER #3/#4は式と対称pair topologyを回収し、実保存specimen付きでroute済み。実灯体の
    photometryとdevice latencyだけは物理受入に残る。
-3. MAPPINGS 521–530は全route済み。Mediaは空sourceだけno-op、non-empty sourceはdecode/timing証明待ち。
-   COLOR MAPPINGS専用classは引き続きraster algorithm bodyの意味論回収が必要。
+3. MAPPINGS 521–530は全route済み。COLOR MAPPINGSの共有class
+   22/23/30/32/34/36/40/42/44もroute済み。Media 33/526は空sourceだけno-op、non-empty sourceは
+   decode/timing証明待ち。COLOR MAPPINGS専用class 21/29/31/35/37/41/45/47/48/49/50は
+   引き続きraster algorithm bodyまたは2D stateの意味論回収が必要。
 4. `TYPE7 Shape`のserialized glyph表現と`TYPE10 Text Direction`の合法enum域は未証明。
 5. Sparkle/Random fillの外部per-thread qrand履歴そのものはreplay不能だが、作者が保存した
    schemaと演出grammarをstable source seedでCorrected実装済み。正本は

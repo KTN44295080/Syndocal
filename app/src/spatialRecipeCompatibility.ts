@@ -30,9 +30,9 @@ export const defaultSpatialRecipe = (kind: SpatialRecipeKind): ColorEffectSpatia
     case "Sparkle":
       return { Sparkle: { grayscale: false, vertical_symmetry: false, rng_seed: 1, number: 5, lifetime_ms: 250, source_lifespan: null, width: 10, height: null } };
     case "Spiral":
-      return { Spiral: { radius: 30, arms: 1, gradient: 100 } };
+      return { Spiral: { grayscale: false, radius: 30, arms: 1, gradient: 100 } };
     case "Butterfly":
-      return { Butterfly: { color_width: 100, gradient: 50, clockwise: true } };
+      return { Butterfly: { grayscale: false, color_width: 100, gradient: 50, clockwise: true } };
     case "Plasma":
       return { Plasma: { grayscale: false, vertical_symmetry: false, size_x: 1, param_x: 2, size_y: 1, param_y: 2, speed_x: -1, param_sx: 2, speed_y: 1, param_sy: -1 } };
     case "ColorRainbow":

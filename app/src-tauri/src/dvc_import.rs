@@ -2168,7 +2168,16 @@ fn parse_scene_effects(
                 (Some(4), Some(4), Some(221)) => Some("Circle"),
                 (Some(4), Some(4), Some(223)) => Some("Line"),
                 (Some(4), Some(4), Some(224)) => Some("Polygon"),
+                (Some(5), Some(3), Some(22)) => Some("Burst"),
+                (Some(5), Some(3), Some(23)) => Some("Butterfly"),
+                (Some(5), Some(3), Some(30)) => Some("Knight Rider"),
+                (Some(5), Some(3), Some(32)) => Some("Perlin"),
+                (Some(5), Some(3), Some(33)) => Some("Media"),
+                (Some(5), Some(3), Some(34)) => Some("Plasma"),
                 (Some(5), Some(3), Some(36)) => Some("Rainbow"),
+                (Some(5), Some(3), Some(40)) => Some("Sparkle"),
+                (Some(5), Some(3), Some(42)) => Some("Spiral"),
+                (Some(5), Some(3), Some(44)) => Some("Sweep"),
                 (Some(8), Some(5), Some(3)) => Some("Inverse Ramp"),
                 (Some(8), Some(5), Some(4)) => Some("Pulse"),
                 (Some(8), Some(5), Some(5)) => Some("Ramp"),
@@ -2385,7 +2394,7 @@ fn convert_dvc_effect(
             profiles,
             fixture_refs,
         ),
-        (5, 3, 36)
+        (5, 3, 22 | 23 | 30 | 32 | 33 | 34 | 36 | 40 | 42 | 44)
         | (2, 2, 121 | 127 | 128 | 129 | 130 | 131 | 133 | 134)
         | (6, 8, 521..=530) => {
             convert_dvc_color_spatial_effect(
@@ -2551,6 +2560,80 @@ fn dvc_color_spatial_placement(
         raster_rotation_degrees: 0.0,
         target_coordinates,
     })
+}
+
+fn require_exact_dvc_mapping_recipe_schema(
+    effect: Node<'_, '_>,
+    params: &HashMap<u16, f64>,
+    color_mappings: bool,
+    recipe_types: &[(u16, u16)],
+) -> Result<(), String> {
+    let mut expected_ids = Vec::with_capacity(recipe_types.len() + 3);
+    if color_mappings {
+        expected_ids.push(2);
+    }
+    expected_ids.extend([3, 4]);
+    expected_ids.extend(recipe_types.iter().map(|(id, _)| *id));
+    require_exact_dvc_params(params, &expected_ids)?;
+
+    let mut expected_types = Vec::with_capacity(recipe_types.len() + 4);
+    expected_types.push((1, 4));
+    if color_mappings {
+        expected_types.push((2, 2));
+    }
+    expected_types.extend([(3, 6), (4, 0)]);
+    expected_types.extend_from_slice(recipe_types);
+    let params_node = direct_child(effect, "PARAMS")
+        .ok_or_else(|| "confirmed mapping generator is missing PARAMS".to_string())?;
+    let param_nodes = element_children(params_node).collect::<Vec<_>>();
+    if let Some(unexpected) = param_nodes.iter().find(|node| !node.has_tag_name("PARAM")) {
+        return Err(format!(
+            "confirmed mapping generator PARAMS contains unexpected <{}> element",
+            unexpected.tag_name().name()
+        ));
+    }
+    let declared = required_attribute(params_node, "NB", "PARAMS")?
+        .parse::<usize>()
+        .map_err(|error| format!("PARAMS NB is invalid: {error}"))?;
+    if declared != expected_types.len() || param_nodes.len() != expected_types.len() {
+        return Err(format!(
+            "confirmed mapping generator expected PARAMS NB={} with {} PARAM elements, found NB={declared} with {}",
+            expected_types.len(),
+            expected_types.len(),
+            param_nodes.len()
+        ));
+    }
+    require_exact_dvc_param_types(effect, &expected_types)?;
+    let palette = param_nodes
+        .iter()
+        .find(|param| param.attribute("ID") == Some("1"))
+        .ok_or_else(|| "confirmed mapping generator is missing palette PARAM 1".to_string())?;
+    require_strict_dvc_palette_shape(*palette)
+}
+
+fn require_strict_dvc_palette_shape(param: Node<'_, '_>) -> Result<(), String> {
+    let palette_children = element_children(param).collect::<Vec<_>>();
+    if palette_children.len() != 1 || !palette_children[0].has_tag_name("COLORS") {
+        return Err("palette PARAM 1 must contain exactly one direct COLORS element".to_string());
+    }
+    let colors = palette_children[0];
+    let color_nodes = element_children(colors).collect::<Vec<_>>();
+    if let Some(unexpected) = color_nodes.iter().find(|node| !node.has_tag_name("COLOR")) {
+        return Err(format!(
+            "palette COLORS contains unexpected <{}> element",
+            unexpected.tag_name().name()
+        ));
+    }
+    let declared = required_attribute(colors, "NB", "COLORS")?
+        .parse::<usize>()
+        .map_err(|error| format!("COLORS NB is invalid: {error}"))?;
+    if declared != color_nodes.len() {
+        return Err(format!(
+            "COLORS declares {declared} entries but contains {}",
+            color_nodes.len()
+        ));
+    }
+    Ok(())
 }
 
 fn convert_dvc_move_exact_effect(
@@ -3132,7 +3215,16 @@ fn convert_dvc_color_spatial_effect(
     fixture_refs: &HashMap<String, FixtureImportRef>,
 ) -> Result<ConvertedDvcEffect, String> {
     let generator = match generator_id {
+        22 => "Burst",
+        23 => "Butterfly",
+        30 => "Knight Rider",
+        32 => "Perlin",
+        33 => "Media",
+        34 => "Plasma",
         36 => "Rainbow",
+        40 => "Sparkle",
+        42 => "Spiral",
+        44 => "Sweep",
         121 => "Burst",
         127 => "Knight Rider",
         128 => "Perlin",
@@ -3157,18 +3249,45 @@ fn convert_dvc_color_spatial_effect(
             ))
         }
     };
-    if generator_id == 526 {
-        let params_node = direct_child(effect, "PARAMS")
-            .ok_or_else(|| "MAPPINGS Media ID=526 is missing PARAMS".to_string())?;
-        if params_node.attribute("NB") != Some("3") {
+    let source_is_color_mappings = matches!(
+        generator_id,
+        22 | 23 | 30 | 32 | 33 | 34 | 36 | 40 | 42 | 44
+    );
+    let shared_mapping_generator_id = match generator_id {
+        22 => 523,
+        23 => 524,
+        30 => 527,
+        32 => 530,
+        33 => 526,
+        34 => 525,
+        40 => 529,
+        42 => 522,
+        44 => 528,
+        _ => generator_id,
+    };
+    if matches!(generator_id, 33 | 526) {
+        let source_family = if generator_id == 33 {
+            "Color Mappings"
+        } else {
+            "Mappings"
+        };
+        let label = format!("{source_family} Media ID={generator_id}");
+        let params_node =
+            direct_child(effect, "PARAMS").ok_or_else(|| format!("{label} is missing PARAMS"))?;
+        let expected_nb = if generator_id == 33 { "6" } else { "3" };
+        if params_node.attribute("NB") != Some(expected_nb) {
             return Err(format!(
-                "MAPPINGS Media ID=526 expected PARAMS NB=3, found {}",
+                "{label} expected PARAMS NB={expected_nb}, found {}",
                 params_node.attribute("NB").unwrap_or("missing")
             ));
         }
-        let param_nodes = element_children(params_node)
-            .filter(|node| node.has_tag_name("PARAM"))
-            .collect::<Vec<_>>();
+        let param_nodes = element_children(params_node).collect::<Vec<_>>();
+        if let Some(unexpected) = param_nodes.iter().find(|node| !node.has_tag_name("PARAM")) {
+            return Err(format!(
+                "{label} PARAMS contains unexpected <{}> element",
+                unexpected.tag_name().name()
+            ));
+        }
         let mut ids = param_nodes
             .iter()
             .map(|param| {
@@ -3178,12 +3297,24 @@ fn convert_dvc_color_spatial_effect(
             })
             .collect::<Result<Vec<_>, _>>()?;
         ids.sort_unstable();
-        if ids != [3, 4, 10] {
+        let expected_ids: &[u16] = if generator_id == 33 {
+            &[1, 2, 3, 4, 10, 11]
+        } else {
+            &[3, 4, 10]
+        };
+        if ids.as_slice() != expected_ids {
             return Err(format!(
-                "MAPPINGS Media ID=526 expected PARAM IDs [3, 4, 10], found {ids:?}"
+                "{label} expected PARAM IDs {expected_ids:?}, found {ids:?}"
             ));
         }
-        require_exact_dvc_param_types(effect, &[(3, 6), (4, 0), (10, 8)])?;
+        if generator_id == 33 {
+            require_exact_dvc_param_types(
+                effect,
+                &[(1, 4), (2, 2), (3, 6), (4, 0), (10, 8), (11, 1)],
+            )?;
+        } else {
+            require_exact_dvc_param_types(effect, &[(3, 6), (4, 0), (10, 8)])?;
+        }
         let numeric = |id: u16, label: &str| {
             let param = param_nodes
                 .iter()
@@ -3198,31 +3329,81 @@ fn convert_dvc_color_spatial_effect(
                 .parse::<f64>()
                 .map_err(|error| format!("{label} value is invalid: {error}"))
         };
-        let transform = numeric(3, "MAPPINGS Media Transform")?;
+        let transform = numeric(3, &format!("{label} Transform"))?;
         if !matches!(transform, 0.0 | 1.0 | 2.0) {
             return Err(format!(
-                "MAPPINGS Media Transform PARAM 3 must be None(0), Vertical symmetry(1), or Horizontal symmetry(2), found {transform}"
+                "{label} Transform PARAM 3 must be None(0), Vertical symmetry(1), or Horizontal symmetry(2), found {transform}"
             ));
         }
-        let rotation = numeric(4, "MAPPINGS Media Rotation")?;
+        let rotation = numeric(4, &format!("{label} Rotation"))?;
         if rotation.fract().abs() > f64::EPSILON || !(0.0..=360.0).contains(&rotation) {
             return Err(format!(
-                "MAPPINGS Media Rotation must be an integer within 0..360, found {rotation}"
+                "{label} Rotation must be an integer within 0..360, found {rotation}"
             ));
         }
-        let path = param_nodes
+        let (palette_colors, grayscale, colorize) = if generator_id == 33 {
+            let palette_param = param_nodes
+                .iter()
+                .find(|param| param.attribute("ID") == Some("1"))
+                .ok_or_else(|| format!("{label} is missing palette PARAM 1"))?;
+            require_strict_dvc_palette_shape(*palette_param)?;
+            let palette = dvc_color_palette_stops(*palette_param)?;
+            let grayscale = numeric(2, &format!("{label} Grayscale"))?;
+            if !matches!(grayscale, 0.0 | 1.0) {
+                return Err(format!(
+                    "{label} Grayscale PARAM 2 must be 0 or 1, found {grayscale}"
+                ));
+            }
+            let colorize = numeric(11, &format!("{label} Colorize"))?;
+            if !colorize.is_finite() || !(0.0..=1.0).contains(&colorize) {
+                return Err(format!(
+                    "{label} Colorize PARAM 11 must be finite and within 0..1, found {colorize}"
+                ));
+            }
+            (Some(palette.len()), Some(grayscale as u8), Some(colorize))
+        } else {
+            (None, None, None)
+        };
+        let path_param = param_nodes
             .iter()
             .find(|param| param.attribute("ID") == Some("10"))
-            .and_then(|param| param.attribute("VAL"))
-            .unwrap_or_default();
+            .ok_or_else(|| format!("{label} is missing Media Path PARAM 10"))?;
+        let path = path_param
+            .attribute("VAL")
+            .ok_or_else(|| format!("{label} Media Path PARAM 10 is missing VAL"))?;
         if !path.is_empty() {
-            return Err("MAPPINGS Media ID=526 non-empty media paths require decoded embedded-media evidence and remain fail-closed".to_string());
+            return Err(format!(
+                "{label} non-empty media paths require decoded embedded-media evidence and remain fail-closed"
+            ));
         }
-        dvc_mapping_rectangle(rack, "MAPPINGS Media ID=526", false)?;
+        if generator_id == 33 {
+            let selections = element_children(rack)
+                .filter(|node| node.has_tag_name("SELECTIONS"))
+                .count();
+            if selections != 0 {
+                return Err(format!(
+                    "{label} external SELECTIONS remain fail-closed; found {selections} SELECTIONS container(s)"
+                ));
+            }
+            let beams =
+                direct_child(rack, "BEAMS").ok_or_else(|| format!("{label} is missing BEAMS"))?;
+            if beams.attribute("NB").is_none() {
+                return Err(format!("{label} BEAMS is missing NB"));
+            }
+            dvc_rack_targets(rack, fixture_refs)?;
+        }
+        let rectangle = dvc_mapping_rectangle(rack, &label, false)?;
         return Ok(ConvertedDvcEffect {
             target: None,
             generator,
-            note: "source_family=Mappings; implementation=source-no-op; evaluator=CMediaEffect/0x140364940; MediaPath is empty; no runtime effect was created".to_string(),
+            note: format!(
+                "source_family={source_family}; implementation=source-no-op; evaluator=CMediaEffect/0x140364940; MediaPath is empty; palette_colors={palette_colors:?}; Grayscale={grayscale:?}; Transform={transform}; Rotation={rotation}; Colorize={colorize:?}; Rectangle=({},{},{},{},{}); timing=not-applicable; no runtime effect was created",
+                rectangle.x,
+                rectangle.y,
+                rectangle.sx,
+                rectangle.sy,
+                rectangle.angle_degrees,
+            ),
             approximations: Vec::new(),
             warnings: Vec::new(),
         });
@@ -3238,21 +3419,20 @@ fn convert_dvc_color_spatial_effect(
         }
     }
     let (params, stops) = dvc_color_palette_and_params(effect)?;
-    if generator_id == 36 {
-        if stops.len() != 8 {
-            return Err(format!(
-                "confirmed COLOR MAPPINGS Rainbow ID=36 expected 8 palette colors, found {}",
-                stops.len()
-            ));
-        }
-    }
+    let shared_color_mappings = source_is_color_mappings && generator_id != 36;
+    let mapping_family_label = if shared_color_mappings {
+        "COLOR MAPPINGS"
+    } else {
+        "MAPPINGS"
+    };
     let generator_approximations = Vec::new();
-    let mut recipe = match generator_id {
+    let mut recipe = match shared_mapping_generator_id {
         36 => {
-            require_exact_dvc_params(&params, &[2, 3, 4, 10, 11, 12])?;
-            require_exact_dvc_param_types(
+            require_exact_dvc_mapping_recipe_schema(
                 effect,
-                &[(1, 4), (2, 2), (3, 6), (4, 0), (10, 1), (11, 0), (12, 1)],
+                &params,
+                true,
+                &[(10, 1), (11, 0), (12, 1)],
             )?;
             let grayscale = dvc_binary_param(&params, 2, "COLOR MAPPINGS Rainbow Grayscale")?;
             let transform = dvc_param(&params, 3, "COLOR MAPPINGS Rainbow Transform")?;
@@ -3518,59 +3698,105 @@ fn convert_dvc_color_spatial_effect(
             }
         }
         522 => {
-            require_exact_dvc_params(&params, &[3, 4, 10, 11, 12])?;
-            require_exact_dvc_param_types(
+            require_exact_dvc_mapping_recipe_schema(
                 effect,
-                &[(1, 4), (3, 6), (4, 0), (10, 0), (11, 0), (12, 1)],
+                &params,
+                shared_color_mappings,
+                &[(10, 0), (11, 0), (12, 1)],
             )?;
             ColorEffectSpatialRecipe::Spiral {
-                radius: dvc_integer_range_param(&params, 10, "MAPPINGS Spiral Radius", 0, 200)?,
-                arms: dvc_integer_range_param(&params, 11, "MAPPINGS Spiral Arms", 1, 10)? as u16,
-                gradient: dvc_unit_param(&params, 12, "MAPPINGS Spiral Gradient")? * 100.0,
+                grayscale: if shared_color_mappings {
+                    dvc_binary_param(&params, 2, "COLOR MAPPINGS Spiral Grayscale")?
+                } else {
+                    false
+                },
+                radius: dvc_integer_range_param(
+                    &params,
+                    10,
+                    &format!("{mapping_family_label} Spiral Radius"),
+                    0,
+                    200,
+                )?,
+                arms: dvc_integer_range_param(
+                    &params,
+                    11,
+                    &format!("{mapping_family_label} Spiral Arms"),
+                    1,
+                    10,
+                )? as u16,
+                gradient: dvc_unit_param(
+                    &params,
+                    12,
+                    &format!("{mapping_family_label} Spiral Gradient"),
+                )? * 100.0,
             }
         }
         523 => {
-            require_exact_dvc_params(&params, &[3, 4, 10, 11])?;
-            require_exact_dvc_param_types(effect, &[(1, 4), (3, 6), (4, 0), (10, 0), (11, 1)])?;
+            require_exact_dvc_mapping_recipe_schema(
+                effect,
+                &params,
+                shared_color_mappings,
+                &[(10, 0), (11, 1)],
+            )?;
             ColorEffectSpatialRecipe::Burst {
-                grayscale: false,
+                grayscale: if shared_color_mappings {
+                    dvc_binary_param(&params, 2, "COLOR MAPPINGS Burst Grayscale")?
+                } else {
+                    false
+                },
                 vertical_symmetry: false,
                 color_width: dvc_integer_range_param(
                     &params,
                     10,
-                    "MAPPINGS Burst Color Width",
+                    &format!("{mapping_family_label} Burst Color Width"),
                     10,
                     900,
                 )?,
-                gradient: dvc_unit_param(&params, 11, "MAPPINGS Burst Gradient")?,
+                gradient: dvc_unit_param(
+                    &params,
+                    11,
+                    &format!("{mapping_family_label} Burst Gradient"),
+                )?,
             }
         }
         524 => {
-            require_exact_dvc_params(&params, &[3, 4, 10, 11, 12])?;
-            require_exact_dvc_param_types(
+            require_exact_dvc_mapping_recipe_schema(
                 effect,
-                &[(1, 4), (3, 6), (4, 0), (10, 0), (11, 1), (12, 2)],
+                &params,
+                shared_color_mappings,
+                &[(10, 0), (11, 1), (12, 2)],
             )?;
             ColorEffectSpatialRecipe::Butterfly {
+                grayscale: if shared_color_mappings {
+                    dvc_binary_param(&params, 2, "COLOR MAPPINGS Butterfly Grayscale")?
+                } else {
+                    false
+                },
                 color_width: dvc_integer_range_param(
                     &params,
                     10,
-                    "MAPPINGS Butterfly Color Width",
+                    &format!("{mapping_family_label} Butterfly Color Width"),
                     1,
                     100,
                 )?,
-                gradient: dvc_unit_param(&params, 11, "MAPPINGS Butterfly Gradient")? * 100.0,
-                clockwise: dvc_binary_param(&params, 12, "MAPPINGS Butterfly Clockwise")?,
+                gradient: dvc_unit_param(
+                    &params,
+                    11,
+                    &format!("{mapping_family_label} Butterfly Gradient"),
+                )? * 100.0,
+                clockwise: dvc_binary_param(
+                    &params,
+                    12,
+                    &format!("{mapping_family_label} Butterfly Clockwise"),
+                )?,
             }
         }
         525 => {
-            require_exact_dvc_params(&params, &[3, 4, 10, 11, 12, 13, 14, 15, 16, 17])?;
-            require_exact_dvc_param_types(
+            require_exact_dvc_mapping_recipe_schema(
                 effect,
+                &params,
+                shared_color_mappings,
                 &[
-                    (1, 4),
-                    (3, 6),
-                    (4, 0),
                     (10, 0),
                     (11, 0),
                     (12, 0),
@@ -3582,127 +3808,248 @@ fn convert_dvc_color_spatial_effect(
                 ],
             )?;
             ColorEffectSpatialRecipe::Plasma {
-                grayscale: false,
+                grayscale: if shared_color_mappings {
+                    dvc_binary_param(&params, 2, "COLOR MAPPINGS Plasma Grayscale")?
+                } else {
+                    false
+                },
                 vertical_symmetry: false,
-                size_x: dvc_integer_range_param(&params, 10, "MAPPINGS Plasma Size X", 0, 20)?,
-                param_x: dvc_integer_range_param(&params, 11, "MAPPINGS Plasma Param X", 0, 20)?,
-                size_y: dvc_integer_range_param(&params, 12, "MAPPINGS Plasma Size Y", 0, 20)?,
-                param_y: dvc_integer_range_param(&params, 13, "MAPPINGS Plasma Param Y", 0, 20)?,
-                speed_x: dvc_integer_range_param(&params, 14, "MAPPINGS Plasma Speed X", -5, 5)?,
-                param_sx: dvc_integer_range_param(&params, 15, "MAPPINGS Plasma Param SX", -5, 5)?,
-                speed_y: dvc_integer_range_param(&params, 16, "MAPPINGS Plasma Speed Y", -5, 5)?,
-                param_sy: dvc_integer_range_param(&params, 17, "MAPPINGS Plasma Param SY", -5, 5)?,
+                size_x: dvc_integer_range_param(
+                    &params,
+                    10,
+                    &format!("{mapping_family_label} Plasma Size X"),
+                    0,
+                    20,
+                )?,
+                param_x: dvc_integer_range_param(
+                    &params,
+                    11,
+                    &format!("{mapping_family_label} Plasma Param X"),
+                    0,
+                    20,
+                )?,
+                size_y: dvc_integer_range_param(
+                    &params,
+                    12,
+                    &format!("{mapping_family_label} Plasma Size Y"),
+                    0,
+                    20,
+                )?,
+                param_y: dvc_integer_range_param(
+                    &params,
+                    13,
+                    &format!("{mapping_family_label} Plasma Param Y"),
+                    0,
+                    20,
+                )?,
+                speed_x: dvc_integer_range_param(
+                    &params,
+                    14,
+                    &format!("{mapping_family_label} Plasma Speed X"),
+                    -5,
+                    5,
+                )?,
+                param_sx: dvc_integer_range_param(
+                    &params,
+                    15,
+                    &format!("{mapping_family_label} Plasma Param SX"),
+                    -5,
+                    5,
+                )?,
+                speed_y: dvc_integer_range_param(
+                    &params,
+                    16,
+                    &format!("{mapping_family_label} Plasma Speed Y"),
+                    -5,
+                    5,
+                )?,
+                param_sy: dvc_integer_range_param(
+                    &params,
+                    17,
+                    &format!("{mapping_family_label} Plasma Param SY"),
+                    -5,
+                    5,
+                )?,
             }
         }
         527 => {
-            require_exact_dvc_params(&params, &[3, 4, 10, 11, 12, 13, 14])?;
-            require_exact_dvc_param_types(
+            require_exact_dvc_mapping_recipe_schema(
                 effect,
-                &[
-                    (1, 4),
-                    (3, 6),
-                    (4, 0),
-                    (10, 0),
-                    (11, 2),
-                    (12, 2),
-                    (13, 2),
-                    (14, 0),
-                ],
+                &params,
+                shared_color_mappings,
+                &[(10, 0), (11, 2), (12, 2), (13, 2), (14, 0)],
             )?;
             ColorEffectSpatialRecipe::KnightRider {
-                grayscale: false,
+                grayscale: if shared_color_mappings {
+                    dvc_binary_param(&params, 2, "COLOR MAPPINGS Knight Rider Grayscale")?
+                } else {
+                    false
+                },
                 vertical_symmetry: false,
-                size: dvc_integer_range_param(&params, 10, "MAPPINGS Knight Rider Size", 1, 100)?,
-                one_way: dvc_binary_param(&params, 11, "MAPPINGS Knight Rider One Way")?,
-                fading: dvc_binary_param(&params, 12, "MAPPINGS Knight Rider Fading")?,
-                go_outside: dvc_binary_param(&params, 13, "MAPPINGS Knight Rider Go Outside")?,
+                size: dvc_integer_range_param(
+                    &params,
+                    10,
+                    &format!("{mapping_family_label} Knight Rider Size"),
+                    1,
+                    100,
+                )?,
+                one_way: dvc_binary_param(
+                    &params,
+                    11,
+                    &format!("{mapping_family_label} Knight Rider One Way"),
+                )?,
+                fading: dvc_binary_param(
+                    &params,
+                    12,
+                    &format!("{mapping_family_label} Knight Rider Fading"),
+                )?,
+                go_outside: dvc_binary_param(
+                    &params,
+                    13,
+                    &format!("{mapping_family_label} Knight Rider Go Outside"),
+                )?,
                 gradient: dvc_integer_range_param(
                     &params,
                     14,
-                    "MAPPINGS Knight Rider Gradient",
+                    &format!("{mapping_family_label} Knight Rider Gradient"),
                     0,
                     100,
                 )?,
             }
         }
         528 => {
-            require_exact_dvc_params(&params, &[3, 4, 10])?;
-            require_exact_dvc_param_types(effect, &[(1, 4), (3, 6), (4, 0), (10, 2)])?;
+            require_exact_dvc_mapping_recipe_schema(
+                effect,
+                &params,
+                shared_color_mappings,
+                &[(10, 2)],
+            )?;
             ColorEffectSpatialRecipe::Sweep {
-                grayscale: false,
+                grayscale: if shared_color_mappings {
+                    dvc_binary_param(&params, 2, "COLOR MAPPINGS Sweep Grayscale")?
+                } else {
+                    false
+                },
                 vertical_symmetry: false,
-                direction_change: dvc_binary_param(&params, 10, "MAPPINGS Sweep Direction Change")?,
+                direction_change: dvc_binary_param(
+                    &params,
+                    10,
+                    &format!("{mapping_family_label} Sweep Direction Change"),
+                )?,
             }
         }
         529 => {
-            require_exact_dvc_params(&params, &[3, 4, 10, 11, 12, 13])?;
-            require_exact_dvc_param_types(
+            require_exact_dvc_mapping_recipe_schema(
                 effect,
-                &[(1, 4), (3, 6), (4, 0), (10, 0), (11, 1), (12, 0), (13, 0)],
+                &params,
+                shared_color_mappings,
+                &[(10, 0), (11, 1), (12, 0), (13, 0)],
             )?;
-            let source_lifespan =
-                dvc_finite_range_param(&params, 11, "MAPPINGS Sparkle LifeSpan", 0.0, 0.9)?;
+            let source_lifespan = dvc_finite_range_param(
+                &params,
+                11,
+                &format!("{mapping_family_label} Sparkle LifeSpan"),
+                0.0,
+                0.9,
+            )?;
             ColorEffectSpatialRecipe::Sparkle {
-                grayscale: false,
+                grayscale: if shared_color_mappings {
+                    dvc_binary_param(&params, 2, "COLOR MAPPINGS Sparkle Grayscale")?
+                } else {
+                    false
+                },
                 vertical_symmetry: false,
                 rng_seed: dvc_corrected_rng_seed(scene, rack, effect, generator_id),
-                number: dvc_integer_range_param(&params, 10, "MAPPINGS Sparkle Number", 1, 10)?
-                    as u16,
+                number: dvc_integer_range_param(
+                    &params,
+                    10,
+                    &format!("{mapping_family_label} Sparkle Number"),
+                    1,
+                    10,
+                )? as u16,
                 lifetime_ms: Some((100.0 / (1.0 - source_lifespan)).round() as u16),
                 source_lifespan: Some(source_lifespan),
-                width: dvc_integer_range_param(&params, 12, "MAPPINGS Sparkle Width", 1, 90)?,
+                width: dvc_integer_range_param(
+                    &params,
+                    12,
+                    &format!("{mapping_family_label} Sparkle Width"),
+                    1,
+                    90,
+                )?,
                 height: Some(dvc_integer_range_param(
                     &params,
                     13,
-                    "MAPPINGS Sparkle Height",
+                    &format!("{mapping_family_label} Sparkle Height"),
                     1,
                     90,
                 )?),
             }
         }
         530 => {
-            require_exact_dvc_params(&params, &[3, 4, 10, 11, 12, 13, 14])?;
-            require_exact_dvc_param_types(
+            require_exact_dvc_mapping_recipe_schema(
                 effect,
-                &[
-                    (1, 4),
-                    (3, 6),
-                    (4, 0),
-                    (10, 0),
-                    (11, 0),
-                    (12, 0),
-                    (13, 0),
-                    (14, 0),
-                ],
+                &params,
+                shared_color_mappings,
+                &[(10, 0), (11, 0), (12, 0), (13, 0), (14, 0)],
             )?;
-            let transform = dvc_param(&params, 3, "MAPPINGS Perlin Transform")?;
+            let transform = dvc_param(
+                &params,
+                3,
+                &format!("{mapping_family_label} Perlin Transform"),
+            )?;
             if !matches!(transform, 0.0 | 1.0 | 2.0) {
                 return Err(format!(
-                    "MAPPINGS Perlin Transform PARAM 3 must be None(0), Vertical symmetry(1), or Horizontal symmetry(2), found {transform}"
+                    "{mapping_family_label} Perlin Transform PARAM 3 must be None(0), Vertical symmetry(1), or Horizontal symmetry(2), found {transform}"
                 ));
             }
-            let rotation_degrees =
-                dvc_integer_range_param(&params, 4, "MAPPINGS Perlin Rotation", 0, 360)?;
+            let rotation_degrees = dvc_integer_range_param(
+                &params,
+                4,
+                &format!("{mapping_family_label} Perlin Rotation"),
+                0,
+                360,
+            )?;
             ColorEffectSpatialRecipe::Perlin {
-                grayscale: false,
+                grayscale: if shared_color_mappings {
+                    dvc_binary_param(&params, 2, "COLOR MAPPINGS Perlin Grayscale")?
+                } else {
+                    false
+                },
                 vertical_symmetry: transform == 1.0,
                 horizontal_symmetry: transform == 2.0,
                 rotation_degrees,
-                octaves: dvc_integer_range_param(&params, 10, "MAPPINGS Perlin Octaves", 2, 10)?
-                    as u8,
-                zoom: dvc_integer_range_param(&params, 11, "MAPPINGS Perlin Zoom", 1, 100)?,
-                direction_degrees: dvc_integer_range_param(
+                octaves: dvc_integer_range_param(
                     &params,
-                    12,
-                    "MAPPINGS Perlin Direction",
+                    10,
+                    &format!("{mapping_family_label} Perlin Octaves"),
+                    2,
+                    10,
+                )? as u8,
+                zoom: dvc_integer_range_param(
+                    &params,
+                    11,
+                    &format!("{mapping_family_label} Perlin Zoom"),
                     1,
                     100,
                 )?,
-                speed: dvc_integer_range_param(&params, 13, "MAPPINGS Perlin Speed", 1, 10)?,
+                direction_degrees: dvc_integer_range_param(
+                    &params,
+                    12,
+                    &format!("{mapping_family_label} Perlin Direction"),
+                    1,
+                    100,
+                )?,
+                speed: dvc_integer_range_param(
+                    &params,
+                    13,
+                    &format!("{mapping_family_label} Perlin Speed"),
+                    1,
+                    10,
+                )?,
                 amplitude: dvc_integer_range_param(
                     &params,
                     14,
-                    "MAPPINGS Perlin Amplitude",
+                    &format!("{mapping_family_label} Perlin Amplitude"),
                     5,
                     100,
                 )?,
@@ -3710,59 +4057,51 @@ fn convert_dvc_color_spatial_effect(
         }
         _ => unreachable!(),
     };
-    let mapping_rectangle = matches!(generator_id, 36 | 521..=530)
+    let source_is_mappings = matches!(generator_id, 521..=530);
+    let placed_spatial_recipe = source_is_color_mappings || source_is_mappings;
+    let placement_label = if source_is_color_mappings {
+        format!("COLOR MAPPINGS {generator} ID={generator_id}")
+    } else {
+        format!("MAPPINGS {generator} ID={generator_id}")
+    };
+    let mapping_rectangle = placed_spatial_recipe
         .then(|| {
             dvc_mapping_rectangle(
                 rack,
-                match generator_id {
-                    36 => "COLOR MAPPINGS Rainbow ID=36",
-                    521 => "MAPPINGS Rainbow ID=521",
-                    522 => "MAPPINGS Spiral ID=522",
-                    523 => "MAPPINGS Burst ID=523",
-                    524 => "MAPPINGS Butterfly ID=524",
-                    525 => "MAPPINGS Plasma ID=525",
-                    527 => "MAPPINGS Knight Rider ID=527",
-                    528 => "MAPPINGS Sweep ID=528",
-                    529 => "MAPPINGS Sparkle ID=529",
-                    530 => "MAPPINGS Perlin ID=530",
-                    _ => unreachable!(),
-                },
-                matches!(generator_id, 36 | 530),
+                &placement_label,
+                generator_id == 36 || shared_mapping_generator_id == 530,
             )
         })
         .transpose()?;
-    if generator_id == 36 {
+    if source_is_color_mappings {
         let beams = direct_child(rack, "BEAMS")
-            .ok_or_else(|| "COLOR MAPPINGS Rainbow ID=36 is missing BEAMS".to_string())?;
+            .ok_or_else(|| format!("{placement_label} is missing BEAMS"))?;
         if beams.attribute("NB").is_none() {
-            return Err("COLOR MAPPINGS Rainbow ID=36 BEAMS is missing NB".to_string());
+            return Err(format!("{placement_label} BEAMS is missing NB"));
         }
     }
     let mut targets = dvc_rack_targets(rack, fixture_refs)?;
-    if generator_id == 36 {
+    if source_is_color_mappings {
         let selections = element_children(rack)
             .filter(|node| node.has_tag_name("SELECTIONS"))
             .count();
         if selections != 0 {
             return Err(format!(
-                "COLOR MAPPINGS Rainbow ID=36 external SELECTIONS remain fail-closed; found {selections} SELECTIONS container(s)"
+                "{placement_label} external SELECTIONS remain fail-closed; found {selections} SELECTIONS container(s)"
             ));
         }
     }
-    let source_noop = generator_id == 36 && targets.beam_targets.is_empty();
+    let source_noop = source_is_color_mappings && targets.beam_targets.is_empty();
     if targets.beam_targets.is_empty() && !source_noop {
         return Err(format!("BEAMS resolved to no {generator} beam targets"));
     }
-    if matches!(generator_id, 521..=530) {
+    if source_is_mappings {
         for target in &mut targets.beam_targets {
             target.feature_attribute = Some("Dimmer".to_string());
         }
     }
-    let omitted_spatial_targets = retain_dvc_color_spatial_targets(
-        &mut targets,
-        fixture_refs,
-        matches!(generator_id, 521..=530),
-    );
+    let omitted_spatial_targets =
+        retain_dvc_color_spatial_targets(&mut targets, fixture_refs, source_is_mappings);
     if targets.beam_targets.is_empty() && !source_noop {
         return Err(format!(
             "BEAMS resolved to no {generator} targets with a verified color segment or Dimmer feature"
@@ -3776,12 +4115,20 @@ fn convert_dvc_color_spatial_effect(
             "{omitted_spatial_targets} beam target(s) without a verified color segment or Dimmer attribute were omitted"
         ));
     }
-    let (period_ms, period_note) =
-        if matches!(generator_id, 121 | 127 | 128 | 131 | 133 | 134 | 530) {
-            dvc_exact_generator_period(effect, "COLOR FX", generator)?
+    let (period_ms, period_note) = if matches!(generator_id, 121 | 127 | 128 | 131 | 133 | 134)
+        || shared_mapping_generator_id == 530
+    {
+        let period_source_family = if source_is_color_mappings {
+            "COLOR MAPPINGS"
+        } else if source_is_mappings {
+            "MAPPINGS"
         } else {
-            dvc_move_period(effect, scene, generator, &mut approximations)?
+            "COLOR FX"
         };
+        dvc_exact_generator_period(effect, period_source_family, generator)?
+    } else {
+        dvc_move_period(effect, scene, generator, &mut approximations)?
+    };
     let (clock_sync, clock_note, clock_warning) = dvc_scene_clock_sync(scene);
     if let Some(clock_warning) = clock_warning {
         approximations.push(clock_warning);
@@ -3841,18 +4188,22 @@ fn convert_dvc_color_spatial_effect(
             ..
         } => format!("implementation=SyndocalCorrected; evaluator=CSparklesEffect recovered retained-particle grammar; unavailable_qrand=stable_source_seed; rng_seed={rng_seed}; Grayscale={}; Transform={}; Number={number}; source_LifeSpan={source_lifespan:?}; lifetime_ms={lifetime_ms:?}; Width={width}; Height={height:?}; population=retained; spawn_rate_units=particles_per_40ms; fade=continuous; time_units=milliseconds", u8::from(*grayscale), if *vertical_symmetry { "Vertical symmetry" } else { "None" }),
         ColorEffectSpatialRecipe::Spiral {
+            grayscale,
             radius,
             arms,
             gradient,
         } => format!(
-            "implementation=SyndocalCorrected; evaluator=CSpiralEffect/0x140366240 recovered conical angular phase and per-radius rotation; Radius={radius}; Arms={arms}; Gradient={gradient}"
+            "implementation=SyndocalCorrected; evaluator=CSpiralEffect/0x140366240 recovered conical angular phase and per-radius rotation; Grayscale={}; Radius={radius}; Arms={arms}; Gradient={gradient}",
+            u8::from(*grayscale)
         ),
         ColorEffectSpatialRecipe::Butterfly {
+            grayscale,
             color_width,
             gradient,
             clockwise,
         } => format!(
-            "implementation=SyndocalCorrected; evaluator=CButterflyEffect/0x140362EB0 recovered paired 180-degree conical sectors; ColorWidth={color_width}; Gradient={gradient}; Clockwise={}",
+            "implementation=SyndocalCorrected; evaluator=CButterflyEffect/0x140362EB0 recovered paired 180-degree conical sectors; Grayscale={}; ColorWidth={color_width}; Gradient={gradient}; Clockwise={}",
+            u8::from(*grayscale),
             u8::from(*clockwise)
         ),
         ColorEffectSpatialRecipe::Plasma {
@@ -3927,32 +4278,26 @@ fn convert_dvc_color_spatial_effect(
         .map(|rectangle| {
             dvc_color_spatial_placement(
                 rectangle,
-                match generator_id {
-                    36 => "COLOR MAPPINGS Rainbow ID=36",
-                    521 => "MAPPINGS Rainbow ID=521",
-                    522 => "MAPPINGS Spiral ID=522",
-                    523 => "MAPPINGS Burst ID=523",
-                    524 => "MAPPINGS Butterfly ID=524",
-                    525 => "MAPPINGS Plasma ID=525",
-                    527 => "MAPPINGS Knight Rider ID=527",
-                    528 => "MAPPINGS Sweep ID=528",
-                    529 => "MAPPINGS Sparkle ID=529",
-                    530 => "MAPPINGS Perlin ID=530",
-                    _ => unreachable!(),
-                },
+                &placement_label,
                 &targets.beam_targets,
                 fixture_refs,
             )
         })
         .transpose()?;
-    if matches!(generator_id, 522..=529) {
-        let transform = dvc_param(&params, 3, "MAPPINGS Transform")?;
+    if matches!(shared_mapping_generator_id, 522..=529) {
+        let transform = dvc_param(&params, 3, &format!("{mapping_family_label} Transform"))?;
         if !matches!(transform, 0.0 | 1.0 | 2.0) {
             return Err(format!(
-                "MAPPINGS Transform PARAM 3 must be None(0), Vertical symmetry(1), or Horizontal symmetry(2), found {transform}"
+                "{mapping_family_label} Transform PARAM 3 must be None(0), Vertical symmetry(1), or Horizontal symmetry(2), found {transform}"
             ));
         }
-        let rotation = dvc_integer_range_param(&params, 4, "MAPPINGS Rotation", 0, 360)?;
+        let rotation = dvc_integer_range_param(
+            &params,
+            4,
+            &format!("{mapping_family_label} Rotation"),
+            0,
+            360,
+        )?;
         let placement = placement
             .as_mut()
             .expect("placed MAPPINGS generators always construct a Rectangle placement");
@@ -3960,8 +4305,8 @@ fn convert_dvc_color_spatial_effect(
         placement.horizontal_symmetry = transform == 2.0;
         placement.raster_rotation_degrees = rotation;
     }
-    let mapping_recipe = matches!(generator_id, 521..=530);
-    let source_family = if generator_id == 36 {
+    let mapping_recipe = source_is_mappings;
+    let source_family = if source_is_color_mappings {
         "Color Mappings"
     } else if mapping_recipe {
         "Mappings"
@@ -3971,7 +4316,7 @@ fn convert_dvc_color_spatial_effect(
     if source_noop {
         let rectangle = placement
             .as_ref()
-            .expect("ID36 always parses its Rectangle before preserving a no-op");
+            .expect("COLOR MAPPINGS always parses its Rectangle before preserving a no-op");
         return Ok(ConvertedDvcEffect {
             target: None,
             generator,
@@ -5046,6 +5391,77 @@ fn dvc_curve_effect_params(
     Ok(params)
 }
 
+fn dvc_color_palette_stops(param: Node<'_, '_>) -> Result<Vec<ColorEffectStop>, String> {
+    if param.attribute("TYPE") != Some("4") {
+        return Err(format!(
+            "palette PARAM 1 must have TYPE=4, found {}",
+            param.attribute("TYPE").unwrap_or("missing")
+        ));
+    }
+    let colors = direct_child(param, "COLORS")
+        .ok_or_else(|| "palette PARAM TYPE=4 ID=1 is missing COLORS".to_string())?;
+    let color_nodes = element_children(colors)
+        .filter(|node| node.has_tag_name("COLOR"))
+        .collect::<Vec<_>>();
+    let declared_colors = colors
+        .attribute("NB")
+        .and_then(|value| value.parse::<usize>().ok());
+    if declared_colors.is_some_and(|count| count != color_nodes.len()) {
+        return Err(format!(
+            "COLORS declares {} entries but contains {}",
+            declared_colors.unwrap_or_default(),
+            color_nodes.len()
+        ));
+    }
+    if !(protocol::DASLIGHT_COLOR_PALETTE_MIN_STOPS..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS)
+        .contains(&color_nodes.len())
+    {
+        return Err(format!(
+            "palette requires 1..255 COLOR entries, found {}",
+            color_nodes.len()
+        ));
+    }
+    let color_count = color_nodes.len();
+    let mut stops = Vec::with_capacity(color_count);
+    for (index, color) in color_nodes.into_iter().enumerate() {
+        let raw = required_attribute(color, "VAL", "COLOR")?;
+        let components = raw.split('/').collect::<Vec<_>>();
+        if components.len() != 18 {
+            return Err(format!(
+                "palette COLOR {index} requires the verified 18-component VAL, found {}",
+                components.len()
+            ));
+        }
+        let mut rgb = [0_u16; 3];
+        for (component_index, output) in rgb.iter_mut().enumerate() {
+            let value = components[component_index]
+                .parse::<f64>()
+                .map_err(|error| {
+                    format!("palette COLOR {index} component {component_index} is invalid: {error}")
+                })?;
+            if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                return Err(format!(
+                    "palette COLOR {index} component {component_index} must be within 0..1, found {value}"
+                ));
+            }
+            *output = (value * u16::MAX as f64).round() as u16;
+        }
+        stops.push(ColorEffectStop {
+            position: if color_count == 1 {
+                0.0
+            } else {
+                index as f32 / (color_count - 1) as f32
+            },
+            color: ColorEffectColor {
+                red: rgb[0],
+                green: rgb[1],
+                blue: rgb[2],
+            },
+        });
+    }
+    Ok(stops)
+}
+
 fn dvc_color_palette_and_params(
     effect: Node<'_, '_>,
 ) -> Result<(HashMap<u16, f64>, Vec<ColorEffectStop>), String> {
@@ -5075,73 +5491,7 @@ fn dvc_color_palette_and_params(
             return Err(format!("PARAM {id} is duplicated"));
         }
         if id == 1 {
-            if param.attribute("TYPE") != Some("4") {
-                return Err(format!(
-                    "palette PARAM 1 must have TYPE=4, found {}",
-                    param.attribute("TYPE").unwrap_or("missing")
-                ));
-            }
-            let colors = direct_child(param, "COLORS")
-                .ok_or_else(|| "palette PARAM TYPE=4 ID=1 is missing COLORS".to_string())?;
-            let color_nodes = element_children(colors)
-                .filter(|node| node.has_tag_name("COLOR"))
-                .collect::<Vec<_>>();
-            let declared_colors = colors
-                .attribute("NB")
-                .and_then(|value| value.parse::<usize>().ok());
-            if declared_colors.is_some_and(|count| count != color_nodes.len()) {
-                return Err(format!(
-                    "COLORS declares {} entries but contains {}",
-                    declared_colors.unwrap_or_default(),
-                    color_nodes.len()
-                ));
-            }
-            if !(protocol::DASLIGHT_COLOR_PALETTE_MIN_STOPS
-                ..=protocol::DASLIGHT_COLOR_PALETTE_MAX_STOPS)
-                .contains(&color_nodes.len())
-            {
-                return Err(format!(
-                    "palette requires 1..255 COLOR entries, found {}",
-                    color_nodes.len()
-                ));
-            }
-            let color_count = color_nodes.len();
-            let mut stops = Vec::with_capacity(color_count);
-            for (index, color) in color_nodes.into_iter().enumerate() {
-                let raw = required_attribute(color, "VAL", "COLOR")?;
-                let components = raw.split('/').collect::<Vec<_>>();
-                if components.len() != 18 {
-                    return Err(format!(
-                        "palette COLOR {index} requires the verified 18-component VAL, found {}",
-                        components.len()
-                    ));
-                }
-                let mut rgb = [0_u16; 3];
-                for (component_index, output) in rgb.iter_mut().enumerate() {
-                    let value = components[component_index].parse::<f64>().map_err(|error| {
-                        format!("palette COLOR {index} component {component_index} is invalid: {error}")
-                    })?;
-                    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
-                        return Err(format!(
-                            "palette COLOR {index} component {component_index} must be within 0..1, found {value}"
-                        ));
-                    }
-                    *output = (value * u16::MAX as f64).round() as u16;
-                }
-                stops.push(ColorEffectStop {
-                    position: if color_count == 1 {
-                        0.0
-                    } else {
-                        index as f32 / (color_count - 1) as f32
-                    },
-                    color: ColorEffectColor {
-                        red: rgb[0],
-                        green: rgb[1],
-                        blue: rgb[2],
-                    },
-                });
-            }
-            palette = Some(stops);
+            palette = Some(dvc_color_palette_stops(param)?);
         } else {
             let value = required_attribute(param, "VAL", "PARAM")?
                 .parse::<f64>()
@@ -9276,19 +9626,57 @@ mod tests {
             })
         );
 
-        let seven_color_xml = xml
-            .replacen("<COLORS NB=\"8\">", "<COLORS NB=\"7\">", 1)
-            .replacen(
-                r#"<COLOR VAL="0/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>"#,
-                "",
+        let palette_variant = |count: usize| {
+            let start_marker = "<COLORS NB=\"8\">";
+            let start = xml.find(start_marker).unwrap();
+            let content_start = start + start_marker.len();
+            let end = content_start + xml[content_start..].find("</COLORS>").unwrap();
+            let color = r#"<COLOR VAL="1/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/>"#;
+            format!(
+                "{}<COLORS NB=\"{count}\">{}</COLORS>{}",
+                &xml[..start],
+                color.repeat(count),
+                &xml[end + "</COLORS>".len()..]
+            )
+        };
+        let convert_palette = |source: &str| {
+            let document = Document::parse(source).unwrap();
+            let scene = document.root_element();
+            let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+            let effect = direct_child(rack, "EFFECT").unwrap();
+            convert_dvc_effect(
+                scene,
+                "COLOR MAPPINGS palette boundary",
+                rack,
+                effect,
+                5,
+                3,
+                36,
                 1,
+                &effect_test_profiles(),
+                &effect_test_fixture_refs(),
+            )
+        };
+        for count in [1, 8, 255] {
+            let converted = convert_palette(&palette_variant(count)).unwrap();
+            let Some(EffectParamsSnapshot::Color(request)) = converted.target.unwrap().params
+            else {
+                panic!("COLOR MAPPINGS 36 must preserve a legal {count}-color palette");
+            };
+            assert_eq!(request.stops.len(), count);
+        }
+        for count in [0, 256] {
+            let error = convert_palette(&palette_variant(count)).unwrap_err();
+            assert!(
+                error.contains("palette requires 1..255"),
+                "expected palette boundary error for {count}, found {error:?}"
             );
+        }
         for (invalid_xml, expected_error) in [
             (
                 xml.replacen("<PARAMS NB=\"7\">", "<PARAMS NB=\"8\">", 1),
                 "expected PARAMS NB=7",
             ),
-            (seven_color_xml, "expected 8 palette colors"),
             (
                 xml.replacen(
                     "LOCKED=\"0\"/>",
@@ -9324,6 +9712,374 @@ mod tests {
                 error.contains(expected_error),
                 "expected {expected_error:?}, found {error:?}"
             );
+        }
+    }
+
+    #[test]
+    fn dvc_color_mappings_shared_classes_use_owned_color_targets_and_shared_placement() {
+        let palette = r#"<PARAM TYPE="4" ID="1"><COLORS NB="2"><COLOR VAL="1/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0/0/1/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/></COLORS></PARAM>"#;
+        let common = r#"<PARAM TYPE="2" ID="2" VAL="1"/><PARAM TYPE="6" ID="3" VAL="2"/><PARAM TYPE="0" ID="4" VAL="90"/>"#;
+        let mapping = r#"<MAPPING NAME="Rectangle" DASUID="color-mappings-shared" TYPE="0" X="0" Y="0" SX="200" SY="100" ANGLE="30" LOCKED="0"/>"#;
+        let source = |generator_id: u16, specific: &str, beams: &str| {
+            let params = format!("{common}{specific}");
+            format!(
+                r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="5"><EFFECT TYPE="3" ID="{generator_id}" DURATION="1000"><PARAMS NB="{}">{palette}{params}</PARAMS></EFFECT>{mapping}{beams}</RACK></RACKS></SCENE>"#,
+                params.matches("<PARAM ").count() + 1
+            )
+        };
+        let convert = |xml: &str, generator_id: u16| {
+            let document = Document::parse(xml).unwrap();
+            let scene = document.root_element();
+            let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+            let effect = direct_child(rack, "EFFECT").unwrap();
+            convert_dvc_effect(
+                scene,
+                "COLOR MAPPINGS shared class",
+                rack,
+                effect,
+                5,
+                3,
+                generator_id,
+                1,
+                &effect_test_profiles(),
+                &effect_test_fixture_refs(),
+            )
+        };
+        let beams =
+            r#"<BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS>"#;
+        let cases = [
+            (
+                22,
+                r#"<PARAM TYPE="0" ID="10" VAL="50"/><PARAM TYPE="1" ID="11" VAL="1"/>"#,
+            ),
+            (
+                23,
+                r#"<PARAM TYPE="0" ID="10" VAL="100"/><PARAM TYPE="1" ID="11" VAL="0.5"/><PARAM TYPE="2" ID="12" VAL="1"/>"#,
+            ),
+            (
+                30,
+                r#"<PARAM TYPE="0" ID="10" VAL="1"/><PARAM TYPE="2" ID="11" VAL="0"/><PARAM TYPE="2" ID="12" VAL="1"/><PARAM TYPE="2" ID="13" VAL="0"/><PARAM TYPE="0" ID="14" VAL="50"/>"#,
+            ),
+            (
+                32,
+                r#"<PARAM TYPE="0" ID="10" VAL="4"/><PARAM TYPE="0" ID="11" VAL="75"/><PARAM TYPE="0" ID="12" VAL="2"/><PARAM TYPE="0" ID="13" VAL="1"/><PARAM TYPE="0" ID="14" VAL="70"/>"#,
+            ),
+            (
+                34,
+                r#"<PARAM TYPE="0" ID="10" VAL="1"/><PARAM TYPE="0" ID="11" VAL="2"/><PARAM TYPE="0" ID="12" VAL="1"/><PARAM TYPE="0" ID="13" VAL="2"/><PARAM TYPE="0" ID="14" VAL="-1"/><PARAM TYPE="0" ID="15" VAL="2"/><PARAM TYPE="0" ID="16" VAL="1"/><PARAM TYPE="0" ID="17" VAL="-1"/>"#,
+            ),
+            (
+                40,
+                r#"<PARAM TYPE="0" ID="10" VAL="5"/><PARAM TYPE="1" ID="11" VAL="0"/><PARAM TYPE="0" ID="12" VAL="1"/><PARAM TYPE="0" ID="13" VAL="1"/>"#,
+            ),
+            (
+                42,
+                r#"<PARAM TYPE="0" ID="10" VAL="30"/><PARAM TYPE="0" ID="11" VAL="1"/><PARAM TYPE="1" ID="12" VAL="1"/>"#,
+            ),
+            (44, r#"<PARAM TYPE="2" ID="10" VAL="0"/>"#),
+        ];
+
+        for (generator_id, specific) in cases {
+            let converted = convert(&source(generator_id, specific, beams), generator_id).unwrap();
+            assert!(converted.approximations.is_empty());
+            assert!(converted.note.contains("source_family=Color Mappings;"));
+            let Some(EffectParamsSnapshot::Color(request)) =
+                converted.target.expect("owned color target").params
+            else {
+                panic!("COLOR MAPPINGS {generator_id} must convert to Color params");
+            };
+            assert_eq!(request.fixture_ids, vec![1]);
+            assert_eq!(request.stops.len(), 2);
+            assert_eq!(request.blend_mode, EffectBlendMode::Override);
+            let pattern = request.spatial_pattern.expect("shared spatial pattern");
+            assert_eq!(pattern.beam_targets.len(), 1);
+            assert_eq!(pattern.beam_targets[0].feature_attribute, None);
+            let placement = pattern.placement.expect("Rectangle placement");
+            assert_eq!(
+                placement.target_coordinates,
+                vec![ColorEffectSpatialPlacementTarget {
+                    fixture_id: 1,
+                    beam_index: 0,
+                    patch_x: 10,
+                    patch_y: 20,
+                }]
+            );
+            assert_eq!(placement.mapping_angle_degrees, 30.0);
+
+            let grayscale = match &pattern.recipe {
+                ColorEffectSpatialRecipe::Burst { grayscale, .. }
+                | ColorEffectSpatialRecipe::Butterfly { grayscale, .. }
+                | ColorEffectSpatialRecipe::KnightRider { grayscale, .. }
+                | ColorEffectSpatialRecipe::Perlin { grayscale, .. }
+                | ColorEffectSpatialRecipe::Plasma { grayscale, .. }
+                | ColorEffectSpatialRecipe::Sparkle { grayscale, .. }
+                | ColorEffectSpatialRecipe::Spiral { grayscale, .. }
+                | ColorEffectSpatialRecipe::Sweep { grayscale, .. } => *grayscale,
+                _ => false,
+            };
+            assert!(grayscale, "COLOR MAPPINGS {generator_id} lost Grayscale");
+            match generator_id {
+                22 => assert!(matches!(
+                    pattern.recipe,
+                    ColorEffectSpatialRecipe::Burst { .. }
+                )),
+                23 => assert!(matches!(
+                    pattern.recipe,
+                    ColorEffectSpatialRecipe::Butterfly { .. }
+                )),
+                30 => assert!(matches!(
+                    pattern.recipe,
+                    ColorEffectSpatialRecipe::KnightRider { .. }
+                )),
+                32 => assert!(matches!(
+                    pattern.recipe,
+                    ColorEffectSpatialRecipe::Perlin {
+                        horizontal_symmetry: true,
+                        rotation_degrees: 90.0,
+                        ..
+                    }
+                )),
+                34 => assert!(matches!(
+                    pattern.recipe,
+                    ColorEffectSpatialRecipe::Plasma { .. }
+                )),
+                40 => assert!(matches!(
+                    pattern.recipe,
+                    ColorEffectSpatialRecipe::Sparkle { .. }
+                )),
+                42 => assert!(matches!(
+                    pattern.recipe,
+                    ColorEffectSpatialRecipe::Spiral { .. }
+                )),
+                44 => assert!(matches!(
+                    pattern.recipe,
+                    ColorEffectSpatialRecipe::Sweep { .. }
+                )),
+                _ => unreachable!(),
+            }
+            if generator_id == 32 {
+                assert!(!placement.vertical_symmetry);
+                assert!(!placement.horizontal_symmetry);
+                assert_eq!(placement.raster_rotation_degrees, 0.0);
+            } else {
+                assert!(!placement.vertical_symmetry);
+                assert!(placement.horizontal_symmetry);
+                assert_eq!(placement.raster_rotation_degrees, 90.0);
+            }
+        }
+
+        for (generator_id, invalid_specific) in [
+            (
+                22,
+                r#"<PARAM TYPE="0" ID="10" VAL="9"/><PARAM TYPE="1" ID="11" VAL="1"/>"#,
+            ),
+            (
+                23,
+                r#"<PARAM TYPE="0" ID="10" VAL="0"/><PARAM TYPE="1" ID="11" VAL="0.5"/><PARAM TYPE="2" ID="12" VAL="1"/>"#,
+            ),
+            (
+                30,
+                r#"<PARAM TYPE="0" ID="10" VAL="0"/><PARAM TYPE="2" ID="11" VAL="0"/><PARAM TYPE="2" ID="12" VAL="1"/><PARAM TYPE="2" ID="13" VAL="0"/><PARAM TYPE="0" ID="14" VAL="50"/>"#,
+            ),
+            (
+                32,
+                r#"<PARAM TYPE="0" ID="10" VAL="1"/><PARAM TYPE="0" ID="11" VAL="75"/><PARAM TYPE="0" ID="12" VAL="2"/><PARAM TYPE="0" ID="13" VAL="1"/><PARAM TYPE="0" ID="14" VAL="70"/>"#,
+            ),
+            (
+                34,
+                r#"<PARAM TYPE="0" ID="10" VAL="21"/><PARAM TYPE="0" ID="11" VAL="2"/><PARAM TYPE="0" ID="12" VAL="1"/><PARAM TYPE="0" ID="13" VAL="2"/><PARAM TYPE="0" ID="14" VAL="-1"/><PARAM TYPE="0" ID="15" VAL="2"/><PARAM TYPE="0" ID="16" VAL="1"/><PARAM TYPE="0" ID="17" VAL="-1"/>"#,
+            ),
+            (
+                40,
+                r#"<PARAM TYPE="0" ID="10" VAL="11"/><PARAM TYPE="1" ID="11" VAL="0"/><PARAM TYPE="0" ID="12" VAL="1"/><PARAM TYPE="0" ID="13" VAL="1"/>"#,
+            ),
+            (
+                42,
+                r#"<PARAM TYPE="0" ID="10" VAL="201"/><PARAM TYPE="0" ID="11" VAL="1"/><PARAM TYPE="1" ID="12" VAL="1"/>"#,
+            ),
+            (44, r#"<PARAM TYPE="2" ID="10" VAL="2"/>"#),
+        ] {
+            assert!(
+                convert(&source(generator_id, invalid_specific, beams), generator_id).is_err(),
+                "COLOR MAPPINGS {generator_id} accepted an out-of-domain class parameter"
+            );
+        }
+
+        let burst = source(22, cases[0].1, beams);
+        for invalid in [
+            burst.replacen(r#"TYPE="2" ID="2""#, r#"TYPE="0" ID="2""#, 1),
+            burst.replacen(r#"ID="2" VAL="1""#, r#"ID="2" VAL="2""#, 1),
+            burst.replacen(r#"ID="3" VAL="2""#, r#"ID="3" VAL="3""#, 1),
+            burst.replacen(r#"ID="4" VAL="90""#, r#"ID="4" VAL="361""#, 1),
+        ] {
+            assert!(convert(&invalid, 22).is_err());
+        }
+
+        let missing_grayscale = burst
+            .replacen(r#"<PARAM TYPE="2" ID="2" VAL="1"/>"#, "", 1)
+            .replacen(r#"<PARAMS NB="6">"#, r#"<PARAMS NB="5">"#, 1);
+        for (case, invalid, expected_error) in [
+            (
+                "missing PARAM 2",
+                missing_grayscale,
+                "expected PARAM IDs [2, 3, 4, 10, 11]",
+            ),
+            (
+                "PARAMS NB mismatch",
+                burst.replacen(r#"<PARAMS NB="6">"#, r#"<PARAMS NB="5">"#, 1),
+                "PARAMS declares 5 entries but contains 6",
+            ),
+            (
+                "unexpected palette child",
+                burst.replacen(r#"<COLORS NB="2">"#, r#"<COLORS NB="2"><NOT_COLOR/>"#, 1),
+                "palette COLORS contains unexpected <NOT_COLOR> element",
+            ),
+            (
+                "COLORS NB mismatch",
+                burst.replacen(r#"<COLORS NB="2">"#, r#"<COLORS NB="1">"#, 1),
+                "COLORS declares 1 entries but contains 2",
+            ),
+        ] {
+            let error = convert(&invalid, 22).unwrap_err();
+            assert!(
+                error.contains(expected_error),
+                "{case}: expected {expected_error:?}, found {error:?}"
+            );
+        }
+
+        let extra_rectangle_attribute = |generator_id, specific| {
+            source(generator_id, specific, beams).replacen(
+                r#"LOCKED="0"/>"#,
+                r#"LOCKED="0" SOURCEEXTRA="unexpected"/>"#,
+                1,
+            )
+        };
+        let perlin_error = convert(&extra_rectangle_attribute(32, cases[3].1), 32).unwrap_err();
+        assert!(perlin_error.contains("expected Rectangle attributes"));
+        assert!(
+            convert(&extra_rectangle_attribute(22, cases[0].1), 22).is_ok(),
+            "only the shared Perlin/530 strict Rectangle mode should reject extra source attributes"
+        );
+
+        let empty = source(22, cases[0].1, r#"<BEAMS NB="0"/>"#);
+        let no_op = convert(&empty, 22).unwrap();
+        assert!(no_op.target.is_none());
+        assert!(no_op.note.contains("source no-op preserved"));
+
+        let external_selection = burst.replacen("<BEAMS NB=", "<SELECTIONS/><BEAMS NB=", 1);
+        assert!(convert(&external_selection, 22)
+            .unwrap_err()
+            .contains("external SELECTIONS remain fail-closed"));
+    }
+
+    #[test]
+    fn dvc_color_mappings_media_empty_path_is_strict_noop_and_nonempty_fails_closed() {
+        let source = |path: &str| {
+            format!(
+                r#"<SCENE SPEED="1" PLAY_TRIGGER="0" PLAY_DIVISION="1"><RACKS><RACK TYPE="5"><EFFECT TYPE="3" ID="33" DURATION="1000"><PARAMS NB="6"><PARAM TYPE="4" ID="1"><COLORS NB="2"><COLOR VAL="1/0/0/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/><COLOR VAL="0/0/1/0/0/0/0/0/1/1/1/1/0/0/0/0/0/1"/></COLORS></PARAM><PARAM TYPE="2" ID="2" VAL="1"/><PARAM TYPE="6" ID="3" VAL="2"/><PARAM TYPE="0" ID="4" VAL="90"/><PARAM TYPE="8" ID="10" VAL="{path}"/><PARAM TYPE="1" ID="11" VAL="0.5"/></PARAMS></EFFECT><MAPPING NAME="Rectangle" DASUID="color-mappings-media" TYPE="0" X="0" Y="0" SX="200" SY="100" ANGLE="30" LOCKED="0"/><BEAMS NB="1"><BEAM FIXTURE="fixture-1" BEAMID="0" IDSELECTION="1"/></BEAMS></RACK></RACKS></SCENE>"#
+            )
+        };
+        let convert = |xml: &str| {
+            let document = Document::parse(xml).unwrap();
+            let scene = document.root_element();
+            let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+            let effect = direct_child(rack, "EFFECT").unwrap();
+            convert_dvc_effect(
+                scene,
+                "COLOR MAPPINGS Media",
+                rack,
+                effect,
+                5,
+                3,
+                33,
+                1,
+                &effect_test_profiles(),
+                &effect_test_fixture_refs(),
+            )
+        };
+
+        let empty = source("");
+        let converted = convert(&empty).unwrap();
+        assert!(converted.target.is_none());
+        assert!(converted.approximations.is_empty());
+        assert!(converted.note.contains("source_family=Color Mappings;"));
+        assert!(converted.note.contains("palette_colors=Some(2)"));
+        assert!(converted.note.contains("Grayscale=Some(1)"));
+        assert!(converted.note.contains("Colorize=Some(0.5)"));
+        assert!(converted.note.contains("MediaPath is empty"));
+        assert!(converted.note.contains("timing=not-applicable"));
+
+        let non_runtime_timing = empty
+            .replacen(r#"SPEED="1""#, r#"SPEED="not-a-speed""#, 1)
+            .replacen(r#"DURATION="1000""#, r#"DURATION="not-a-duration""#, 1);
+        let timing_opaque_noop = convert(&non_runtime_timing).unwrap();
+        assert!(timing_opaque_noop.target.is_none());
+        assert!(timing_opaque_noop.approximations.is_empty());
+        assert!(timing_opaque_noop.note.contains("timing=not-applicable"));
+
+        assert!(convert(&source("embedded/image.png"))
+            .unwrap_err()
+            .contains("non-empty media paths"));
+        assert!(
+            convert(&empty.replacen(r#" ID="10" VAL="""#, r#" ID="10""#, 1))
+                .unwrap_err()
+                .contains("Media Path PARAM 10 is missing VAL")
+        );
+        assert!(
+            convert(&empty.replacen(r#"TYPE="8" ID="10""#, r#"TYPE="2" ID="10""#, 1))
+                .unwrap_err()
+                .contains("expected PARAM 10 TYPE=8")
+        );
+        for invalid in [
+            empty.replacen(r#"ID="2" VAL="1""#, r#"ID="2" VAL="2""#, 1),
+            empty.replacen(r#"ID="3" VAL="2""#, r#"ID="3" VAL="3""#, 1),
+            empty.replacen(r#"ID="4" VAL="90""#, r#"ID="4" VAL="90.5""#, 1),
+            empty.replacen(r#"ID="11" VAL="0.5""#, r#"ID="11" VAL="1.1""#, 1),
+        ] {
+            assert!(convert(&invalid).is_err());
+        }
+        assert!(
+            convert(&empty.replacen("<BEAMS NB=", "<SELECTIONS/><BEAMS NB=", 1))
+                .unwrap_err()
+                .contains("external SELECTIONS remain fail-closed")
+        );
+    }
+
+    #[test]
+    fn dvc_mappings_media_empty_path_preserves_legacy_non_runtime_timing_acceptance() {
+        let source = |duration: &str, speed: &str| {
+            format!(
+                r#"<SCENE SPEED="{speed}" PLAY_TRIGGER="not-a-trigger" PLAY_DIVISION="0"><RACKS><RACK TYPE="6"><EFFECT TYPE="8" ID="526" DURATION="{duration}"><PARAMS NB="3"><PARAM TYPE="6" ID="3" VAL="0"/><PARAM TYPE="0" ID="4" VAL="0"/><PARAM TYPE="8" ID="10" VAL=""/></PARAMS></EFFECT><MAPPING NAME="Rectangle" DASUID="mappings-media" TYPE="0" X="0" Y="0" SX="100" SY="100" ANGLE="0" LOCKED="0"/><BEAMS NB="0"/></RACK></RACKS></SCENE>"#
+            )
+        };
+        let convert = |xml: &str| {
+            let document = Document::parse(xml).unwrap();
+            let scene = document.root_element();
+            let rack = direct_child(direct_child(scene, "RACKS").unwrap(), "RACK").unwrap();
+            let effect = direct_child(rack, "EFFECT").unwrap();
+            convert_dvc_effect(
+                scene,
+                "MAPPINGS Media timing",
+                rack,
+                effect,
+                6,
+                8,
+                526,
+                1,
+                &effect_test_profiles(),
+                &effect_test_fixture_refs(),
+            )
+        };
+
+        for (case, duration, speed) in [
+            ("malformed", "not-a-duration", "not-a-speed"),
+            ("zero and negative", "0", "-999"),
+        ] {
+            let converted = convert(&source(duration, speed)).unwrap();
+            assert!(converted.target.is_none(), "{case}");
+            assert!(converted.approximations.is_empty(), "{case}");
+            assert!(converted.note.contains("source_family=Mappings;"), "{case}");
+            assert!(converted.note.contains("timing=not-applicable"), "{case}");
         }
     }
 
@@ -12117,6 +12873,7 @@ mod tests {
         assert!(recipes.iter().any(|recipe| matches!(
             recipe,
             ColorEffectSpatialRecipe::Spiral {
+                grayscale: false,
                 radius,
                 arms: 1,
                 gradient,
@@ -12125,6 +12882,7 @@ mod tests {
         assert!(recipes.iter().any(|recipe| matches!(
             recipe,
             ColorEffectSpatialRecipe::Butterfly {
+                grayscale: false,
                 color_width,
                 gradient,
                 clockwise: true,

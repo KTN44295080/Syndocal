@@ -27768,6 +27768,7 @@ fn validate_color_spatial_recipe(recipe: &ColorEffectSpatialRecipe) -> Result<()
             radius,
             arms,
             gradient,
+            ..
         } => {
             integer_range("Spiral radius", *radius, 0.0, 200.0)?;
             if !(1..=10).contains(arms) {
@@ -32200,6 +32201,7 @@ fn evaluate_color_spatial_sample_at_rate(
             unreachable!("unified spatial recipes are evaluated by their compiled analytic route")
         }
         ColorEffectSpatialRecipe::Spiral {
+            grayscale,
             radius,
             arms,
             gradient,
@@ -32216,9 +32218,15 @@ fn evaluate_color_spatial_sample_at_rate(
             let gradient_angle = time_phase.rem_euclid(1.0) * 360.0 + ring_rotation;
             let position = (((polar_degrees - gradient_angle) / 360.0) * f64::from(*arms))
                 .rem_euclid(1.0) as f32;
-            spatial_palette_color(request, position, *gradient)
+            let color = spatial_palette_color(request, position, *gradient);
+            if *grayscale {
+                daslight_grayscale_color(color)
+            } else {
+                color
+            }
         }
         ColorEffectSpatialRecipe::Butterfly {
+            grayscale,
             color_width,
             gradient,
             clockwise,
@@ -32232,7 +32240,7 @@ fn evaluate_color_spatial_sample_at_rate(
             // +180 degrees, then crops the doubled raster back to the mapping
             // rectangle. Sampling modulo 180 is the analytic equivalent.
             let sector_progress = (polar_degrees - sector_angle).rem_euclid(180.0);
-            if sector_progress > f64::from(*color_width) {
+            let color = if sector_progress > f64::from(*color_width) {
                 black_color()
             } else {
                 spatial_palette_color(
@@ -32240,6 +32248,11 @@ fn evaluate_color_spatial_sample_at_rate(
                     (sector_progress / f64::from(*color_width)).clamp(0.0, 1.0) as f32,
                     *gradient,
                 )
+            };
+            if *grayscale {
+                daslight_grayscale_color(color)
+            } else {
+                color
             }
         }
         ColorEffectSpatialRecipe::Plasma {
@@ -56334,6 +56347,7 @@ mod tests {
     #[test]
     fn spiral_mapping_uses_radius_rings_arms_and_periodic_rotation() {
         let mut spiral = test_spatial_color_request(ColorEffectSpatialRecipe::Spiral {
+            grayscale: false,
             radius: 30.0,
             arms: 1,
             gradient: 100.0,
@@ -56381,6 +56395,7 @@ mod tests {
     #[test]
     fn butterfly_mapping_has_opposite_sectors_and_clockwise_direction() {
         let mut butterfly = test_spatial_color_request(ColorEffectSpatialRecipe::Butterfly {
+            grayscale: false,
             color_width: 50.0,
             gradient: 100.0,
             clockwise: true,
@@ -56420,6 +56435,48 @@ mod tests {
             evaluate_test_spatial_color(&butterfly, &right, 125),
             "Clockwise must reverse the rotating sector direction"
         );
+    }
+
+    #[test]
+    fn color_mappings_spiral_and_butterfly_apply_grayscale_postprocess() {
+        let target = test_spatial_color_target(0, 1, 0.85, 0.5);
+        for mut request in [
+            test_spatial_color_request(ColorEffectSpatialRecipe::Spiral {
+                grayscale: false,
+                radius: 30.0,
+                arms: 2,
+                gradient: 100.0,
+            }),
+            test_spatial_color_request(ColorEffectSpatialRecipe::Butterfly {
+                grayscale: false,
+                color_width: 100.0,
+                gradient: 100.0,
+                clockwise: true,
+            }),
+        ] {
+            request.stops = vec![
+                protocol::ColorEffectStop {
+                    position: 0.0,
+                    color: test_color(u16::MAX, 0, 0),
+                },
+                protocol::ColorEffectStop {
+                    position: 1.0,
+                    color: test_color(0, 0, u16::MAX),
+                },
+            ];
+            request.spatial_pattern.as_mut().unwrap().placement =
+                Some(test_patch_canvas_placement(0, 0, 100, 100, 0.0));
+            let color = evaluate_test_spatial_color(&request, &target, 125);
+            match &mut request.spatial_pattern.as_mut().unwrap().recipe {
+                ColorEffectSpatialRecipe::Spiral { grayscale, .. }
+                | ColorEffectSpatialRecipe::Butterfly { grayscale, .. } => *grayscale = true,
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                evaluate_test_spatial_color(&request, &target, 125),
+                daslight_grayscale_color(color)
+            );
+        }
     }
 
     #[test]

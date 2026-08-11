@@ -114,5 +114,18 @@ a source no-op only for the verified empty path. Spiral and Butterfly are report
 sampling rather than Qt gradient quantization and QImage frame caches. Sparkle is
 also `SyndocalCorrected` because Daslight's process-global qrand history is not
 serialized; its saved population grammar and true 2D footprint are preserved with a
-stable source seed. COLOR MAPPINGS counterparts and family-specific classes remain
-in the next tranche, using this same placement contract where applicable.
+stable source seed.
+
+The 2026-08-11 shared COLOR MAPPINGS tranche now routes counterparts 22 Burst,
+23 Butterfly, 30 Knight Rider, 32 Perlin, 34 Plasma, 40 Sparkle, 42 Spiral, and
+44 Sweep through these recipes and evaluators. Their source family remains Color
+Mappings: they target owned color segments with Override merge, preserve T2/ID2
+Grayscale, and reject external SELECTIONS. Spiral and Butterfly apply Grayscale in
+the common post-process after their recovered geometry is sampled.
+
+COLOR MAPPINGS 33 Media is separately strict NB=6 with T8/ID10 Media Path and
+T1/ID11 Colorize. Only an empty path is a source no-op; non-empty media remains
+precise fail-closed. No family-5 COLOR MAPPINGS saved specimen exists in the
+repository, so this extension is constructor- and synthetic-schema-proven only;
+the real specimen claim at the top of this document remains limited to MAPPINGS
+522–529. Family-specific COLOR MAPPINGS classes remain for later tranches.
