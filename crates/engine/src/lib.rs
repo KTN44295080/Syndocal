@@ -23,12 +23,13 @@ use io::{
 #[cfg(test)]
 use protocol::StageObjectKind;
 use protocol::{
-    set_video_output_mapping_field_value, ActiveFadeSummary, AttributeControl, AttributeResolution,
-    AttributeValueSummary, AudioAnalysisSummary, AudioReactiveCurve, AudioReactiveFeature,
-    AudioSpectrumBand, AudioSpectrumPoint, AudioSpectrumSource, AutoVjAction, AutoVjConfig,
-    AutoVjMode, AutoVjRhythmSource, AutoVjSnapshot, AutoVjStatus, AutoVjTrigger, AutomationId,
-    AutomationInterpolation, AutomationKeyframeSummary, ChaserDirection, ChaserEffectRequest,
-    ChaserFeature, ChildTimelineSummary, ChildTimelineTransportPathSegment,
+    normalize_legacy_video_media_assets, set_video_output_mapping_field_value,
+    validate_engine_ready_video_media_assets, ActiveFadeSummary, AttributeControl,
+    AttributeResolution, AttributeValueSummary, AudioAnalysisSummary, AudioReactiveCurve,
+    AudioReactiveFeature, AudioSpectrumBand, AudioSpectrumPoint, AudioSpectrumSource, AutoVjAction,
+    AutoVjConfig, AutoVjMode, AutoVjRhythmSource, AutoVjSnapshot, AutoVjStatus, AutoVjTrigger,
+    AutomationId, AutomationInterpolation, AutomationKeyframeSummary, ChaserDirection,
+    ChaserEffectRequest, ChaserFeature, ChildTimelineSummary, ChildTimelineTransportPathSegment,
     ChildTimelineTransportRootSummary, ChildTimelineTransportRuntimeSummary, ClockSnapshot,
     ClockSource, ColorEffectAlgorithm, ColorEffectColor, ColorEffectInterpolation,
     ColorEffectRequest, ColorEffectSpatialBounceItem, ColorEffectSpatialCoordinateFrame,
@@ -44,10 +45,12 @@ use protocol::{
     DmxUniversePreview, EffectBeamTarget, EffectBlendMode, EffectClockSync, EffectId, EffectKind,
     EffectParamsSnapshot, EffectSummary, EngineSnapshot, EngineTelemetry,
     ExclusiveVideoTakeRequest, ExecutorId, FixtureId, FixtureLimits, FixtureProfileSummary,
-    LfoEffectRequest, LfoShape, LiveAudioFrame, LiveAudioReactiveFeatures, MappingEffectDirection,
-    MappingEffectRequest, MoveCoordinateMode, MoveDirection, MoveEffectRequest, MovePathPoint,
+    LfoEffectRequest, LfoShape, LiveAudioFrame, LiveAudioReactiveFeatures, MachineOutputRole,
+    MappingEffectDirection, MappingEffectRequest, MediaAssetId, MediaAssetSummary,
+    MoveCoordinateMode, MoveDirection, MoveEffectRequest, MovePathPoint,
     NodeGraphAudioRuntimeStatus, NodeGraphId, NodeGraphNodeKind, NodeGraphNodeSummary,
-    NodeGraphSummary, NodeGraphTransformOp, PaletteId, PatchFixtureRequest, PatchedFixtureSummary,
+    NodeGraphSummary, NodeGraphTransformOp, OutputOwnershipReason, OutputOwnershipState,
+    OutputOwnershipStatus, PaletteId, PatchFixtureRequest, PatchedFixtureSummary,
     PlaybackExecutorSummary, PositionWaveEffectRequest, ProgrammerSnapshot, ProgrammerValueSummary,
     RecallMode, ReferencePaletteSummary, Rotation3, StageMapConfig, StageMapPresetSummary,
     StageObjectId, StageObjectSummary, SubmasterSummary, TimelineAudioClipId,
@@ -89,6 +92,907 @@ pub const VIDEO_ISF_PROJECT_SOURCE_MAX_BYTES: usize = 16 * 1024 * 1024;
 pub const SUPPORTED_EFFECT_ENVELOPE_ENABLED_EFFECTS: usize = 64;
 pub const SUPPORTED_EFFECT_ENVELOPE_FIXTURES: usize = 200;
 pub const SUPPORTED_EFFECT_ENVELOPE_HZ: u32 = 44;
+/// Maximum time the synchronous project snapshot load waits for the runtime
+/// to admit the replacement snapshot. Once admitted, the caller waits for the
+/// definitive publication acknowledgement rather than synthesizing a timeout.
+pub const PROJECT_SNAPSHOT_LOAD_ACK_TIMEOUT: Duration = Duration::from_secs(3);
+
+const OUTPUT_OWNERSHIP_TRANSITION_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// A physical output operation must hold one of these permits from immediately
+/// before the operation through its completion.  The permit is intentionally
+/// separate from the status snapshot: a transition fences new permits and
+/// waits for existing permits before it tears down an output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputCapability {
+    Lighting,
+    Video,
+}
+
+#[derive(Debug)]
+struct OutputOwnershipGateState {
+    status: OutputOwnershipStatus,
+    in_flight: usize,
+    transition_active: bool,
+}
+
+#[derive(Debug)]
+struct OutputOwnershipGateInner {
+    state: Mutex<OutputOwnershipGateState>,
+    changed: Condvar,
+}
+
+/// Shared local capability gate used by the engine and app-owned output
+/// transports. It is local-only by design; authenticated peer leases are a
+/// future capability that can be combined with this gate.
+#[derive(Debug, Clone)]
+pub struct OutputOwnershipGate {
+    inner: Arc<OutputOwnershipGateInner>,
+}
+
+#[derive(Debug)]
+pub struct OutputOwnershipPermit {
+    inner: Arc<OutputOwnershipGateInner>,
+}
+
+/// Lease held by a physical output teardown until the underlying SDK/device
+/// has actually released its resource. Unlike an output frame permit, this
+/// lease may be acquired while the gate is already fenced. That lets a
+/// transition account for asynchronous SDK cleanup without allowing a later
+/// transition to overlap the old resource.
+#[derive(Debug)]
+pub struct OutputOwnershipTeardownLease {
+    inner: Arc<OutputOwnershipGateInner>,
+}
+
+/// Admission for creating an external output resource. This is separate from
+/// the per-frame permit: resource creation must be serialized with the
+/// ownership transition that authorizes it, not merely fenced on the first
+/// frame.
+#[derive(Debug, Clone)]
+pub struct OutputOwnershipActivation {
+    inner: Arc<OutputOwnershipGateInner>,
+    role: MachineOutputRole,
+    epoch: u64,
+    transition_owned: bool,
+}
+
+/// RAII admission held from immediately before an external resource
+/// constructor through publication or physical retirement. It deliberately
+/// uses the gate's in-flight count instead of holding the gate mutex across a
+/// potentially blocking SDK/window call.
+#[derive(Debug)]
+pub struct OutputOwnershipCreationLease {
+    inner: Arc<OutputOwnershipGateInner>,
+    role: MachineOutputRole,
+    epoch: u64,
+    transition_owned: bool,
+    released: bool,
+}
+
+#[derive(Debug)]
+pub struct OutputOwnershipTransition {
+    gate: OutputOwnershipGate,
+    target: MachineOutputRole,
+    pre_transition_desired_role: MachineOutputRole,
+    pre_transition_persisted_role: Option<MachineOutputRole>,
+    finished: bool,
+}
+
+impl OutputOwnershipGate {
+    pub fn startup_denied() -> Self {
+        Self::with_status(OutputOwnershipStatus::failed(
+            MachineOutputRole::Standby,
+            None,
+            0,
+            0,
+            OutputOwnershipReason::StartupDenied,
+            "Machine output ownership has not been initialized".to_string(),
+        ))
+    }
+
+    pub fn for_role(role: MachineOutputRole) -> Self {
+        Self::with_status(OutputOwnershipStatus::for_role(role))
+    }
+
+    fn with_status(status: OutputOwnershipStatus) -> Self {
+        Self {
+            inner: Arc::new(OutputOwnershipGateInner {
+                state: Mutex::new(OutputOwnershipGateState {
+                    status,
+                    in_flight: 0,
+                    transition_active: false,
+                }),
+                changed: Condvar::new(),
+            }),
+        }
+    }
+
+    pub fn status(&self) -> OutputOwnershipStatus {
+        self.inner
+            .state
+            .lock()
+            .map(|state| state.status.clone())
+            .unwrap_or_else(|_| {
+                OutputOwnershipStatus::failed(
+                    MachineOutputRole::Standby,
+                    None,
+                    0,
+                    0,
+                    OutputOwnershipReason::TransitionFailed,
+                    "Output ownership gate lock was poisoned".to_string(),
+                )
+            })
+    }
+
+    pub fn acquire(&self, capability: OutputCapability) -> Result<OutputOwnershipPermit, String> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| "Output ownership gate lock was poisoned".to_string())?;
+        if state.transition_active || state.status.state != OutputOwnershipState::Ready {
+            return Err(output_capability_blocked_message(
+                capability,
+                state.status.clone(),
+            ));
+        }
+        let allowed = match capability {
+            OutputCapability::Lighting => state.status.lighting_allowed,
+            OutputCapability::Video => state.status.video_allowed,
+        };
+        if !allowed {
+            return Err(output_capability_blocked_message(
+                capability,
+                state.status.clone(),
+            ));
+        }
+        state.in_flight = state.in_flight.saturating_add(1);
+        Ok(OutputOwnershipPermit {
+            inner: Arc::clone(&self.inner),
+        })
+    }
+
+    fn acquire_teardown_lease(&self) -> Result<OutputOwnershipTeardownLease, String> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| "Output ownership gate lock was poisoned".to_string())?;
+        if !state.transition_active
+            || !matches!(
+                state.status.state,
+                OutputOwnershipState::Transitioning
+                    | OutputOwnershipState::Activating
+                    | OutputOwnershipState::Failed
+            )
+        {
+            return Err(
+                "Output teardown lease requires an active all-deny ownership transition"
+                    .to_string(),
+            );
+        }
+        state.in_flight = state.in_flight.saturating_add(1);
+        Ok(OutputOwnershipTeardownLease {
+            inner: Arc::clone(&self.inner),
+        })
+    }
+
+    /// Atomically fence the local output capability after an output worker
+    /// detects a physical send/render failure. The returned lease is passed to
+    /// the SDK/device cleanup path and keeps the failed fence active until
+    /// that cleanup is acknowledged. Recovering a poisoned mutex here is
+    /// intentional: failure handling must still be able to account for the
+    /// resource that is about to be torn down.
+    fn begin_failure_fence(&self, error: impl Into<String>) -> OutputOwnershipTeardownLease {
+        let mut state = match self.inner.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let epoch = state.status.epoch.saturating_add(1);
+        let status = OutputOwnershipStatus::failed(
+            state.status.desired_role,
+            state.status.persisted_role,
+            state.status.generation,
+            epoch,
+            OutputOwnershipReason::TransitionFailed,
+            error.into(),
+        );
+        state.status = status;
+        state.transition_active = true;
+        state.in_flight = state.in_flight.saturating_add(1);
+        self.inner.changed.notify_all();
+        OutputOwnershipTeardownLease {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+
+    pub fn begin_transition(
+        &self,
+        target: MachineOutputRole,
+    ) -> Result<OutputOwnershipTransition, String> {
+        self.begin_transition_with_timeout(target, OUTPUT_OWNERSHIP_TRANSITION_TIMEOUT)
+    }
+
+    #[cfg(test)]
+    fn begin_transition_with_test_timeout(
+        &self,
+        target: MachineOutputRole,
+        timeout: Duration,
+    ) -> Result<OutputOwnershipTransition, String> {
+        self.begin_transition_with_timeout(target, timeout)
+    }
+
+    fn begin_transition_with_timeout(
+        &self,
+        target: MachineOutputRole,
+        timeout: Duration,
+    ) -> Result<OutputOwnershipTransition, String> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| "Output ownership gate lock was poisoned".to_string())?;
+        if state.transition_active {
+            return Err("Output ownership transition is already in progress".to_string());
+        }
+        let pre_transition_desired_role = state.status.desired_role;
+        let pre_transition_persisted_role = state.status.persisted_role;
+        let next_epoch = state.status.epoch.saturating_add(1);
+        let generation = state.status.generation;
+        let persisted_role = state.status.persisted_role;
+        state.transition_active = true;
+        state.status =
+            OutputOwnershipStatus::transitioning(target, persisted_role, generation, next_epoch);
+        self.inner.changed.notify_all();
+
+        let deadline = Instant::now() + timeout;
+        while state.in_flight != 0 {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                let error =
+                    "Output ownership transition timed out waiting for an in-flight output operation"
+                        .to_string();
+                // Keep the transition fence authoritative while the old
+                // physical operation drains. Returning here would permit a
+                // later role change to overlap the operation that timed out.
+                state.status = OutputOwnershipStatus::failed(
+                    target,
+                    state.status.persisted_role,
+                    generation,
+                    next_epoch,
+                    OutputOwnershipReason::TransitionFailed,
+                    error.clone(),
+                );
+                state.transition_active = true;
+                self.inner.changed.notify_all();
+                // Return the timeout to the caller without dropping the
+                // fence. The last physical permit releases only this failed
+                // transition fence; an explicit retry is still required to
+                // reach Ready.
+                return Err(error);
+            }
+            state = match self.inner.changed.wait_timeout(state, remaining) {
+                Ok((state, _)) => state,
+                Err(poisoned) => {
+                    let (mut state, _) = poisoned.into_inner();
+                    state.status = OutputOwnershipStatus::failed(
+                        target,
+                        state.status.persisted_role,
+                        generation,
+                        next_epoch,
+                        OutputOwnershipReason::TransitionFailed,
+                        "Output ownership gate wait was poisoned".to_string(),
+                    );
+                    // Poison is also a hard fence. Drain the real permits
+                    // before allowing any later recovery transition. The
+                    // poisoned lock remains fail-closed even after permits
+                    // drop, so return without attempting to rearm it.
+                    state.transition_active = true;
+                    self.inner.changed.notify_all();
+                    return Err(
+                        "Output ownership gate wait was poisoned; outputs remain Standby"
+                            .to_string(),
+                    );
+                }
+            };
+        }
+
+        Ok(OutputOwnershipTransition {
+            gate: self.clone(),
+            target,
+            pre_transition_desired_role,
+            pre_transition_persisted_role,
+            finished: false,
+        })
+    }
+
+    fn admit_ready_activation(
+        &self,
+        role: MachineOutputRole,
+    ) -> Result<OutputOwnershipActivation, String> {
+        let state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| "Output ownership gate lock was poisoned".to_string())?;
+        if state.transition_active
+            || state.status.state != OutputOwnershipState::Ready
+            || state.status.effective_role != role
+            || !role.video_allowed()
+        {
+            return Err(format!(
+                "External video resource activation is not admitted for machine role {role:?}"
+            ));
+        }
+        Ok(OutputOwnershipActivation {
+            inner: Arc::clone(&self.inner),
+            role,
+            epoch: state.status.epoch,
+            transition_owned: false,
+        })
+    }
+
+    fn admit_transition_activation(
+        &self,
+        target: MachineOutputRole,
+    ) -> Result<OutputOwnershipActivation, String> {
+        let state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| "Output ownership gate lock was poisoned".to_string())?;
+        if !state.transition_active
+            || state.status.state != OutputOwnershipState::Activating
+            || state.status.desired_role != target
+            || !target.video_allowed()
+        {
+            return Err(format!(
+                "External video resource preparation is not admitted for machine role {target:?}"
+            ));
+        }
+        Ok(OutputOwnershipActivation {
+            inner: Arc::clone(&self.inner),
+            role: target,
+            epoch: state.status.epoch,
+            transition_owned: true,
+        })
+    }
+
+    fn admit_resource_creation(
+        &self,
+        activation: &OutputOwnershipActivation,
+    ) -> Result<OutputOwnershipCreationLease, String> {
+        if !activation.role.video_allowed() {
+            return Err(format!(
+                "External video resource creation role mismatch for {:?}",
+                activation.role
+            ));
+        }
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| "Output ownership gate lock was poisoned".to_string())?;
+        if !Arc::ptr_eq(&activation.inner, &self.inner) || state.status.epoch != activation.epoch {
+            return Err("External video resource creation activation epoch is stale".to_string());
+        }
+        if activation.transition_owned {
+            if !state.transition_active
+                || state.status.state != OutputOwnershipState::Activating
+                || state.status.desired_role != activation.role
+            {
+                return Err(
+                    "External video resource creation preparation fence is no longer active"
+                        .to_string(),
+                );
+            }
+        } else if state.transition_active
+            || state.status.state != OutputOwnershipState::Ready
+            || state.status.effective_role != activation.role
+        {
+            return Err("External video resource creation fence is no longer ready".to_string());
+        }
+        state.in_flight = state.in_flight.saturating_add(1);
+        Ok(OutputOwnershipCreationLease {
+            inner: Arc::clone(&self.inner),
+            role: activation.role,
+            epoch: activation.epoch,
+            transition_owned: activation.transition_owned,
+            released: false,
+        })
+    }
+
+    fn can_publish_resource_creation(
+        &self,
+        lease: &OutputOwnershipCreationLease,
+    ) -> Result<(), String> {
+        let state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| "Output ownership gate lock was poisoned".to_string())?;
+        if state.status.epoch != lease.epoch {
+            return Err("External video resource creation lease epoch is stale".to_string());
+        }
+        if lease.transition_owned {
+            if !state.transition_active
+                || state.status.state != OutputOwnershipState::Activating
+                || state.status.desired_role != lease.role
+            {
+                return Err(
+                    "External video resource creation preparation fence was invalidated"
+                        .to_string(),
+                );
+            }
+        } else if state.transition_active
+            || state.status.state != OutputOwnershipState::Ready
+            || state.status.effective_role != lease.role
+        {
+            return Err("External video resource creation fence was invalidated".to_string());
+        }
+        Ok(())
+    }
+
+    fn begin_activation(&self, target: MachineOutputRole) -> Result<(), String> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| "Output ownership gate lock was poisoned".to_string())?;
+        if !state.transition_active
+            || state.status.state != OutputOwnershipState::Transitioning
+            || state.status.desired_role != target
+            || !target.video_allowed()
+        {
+            return Err(format!(
+                "External video activation phase is not available for machine role {target:?}"
+            ));
+        }
+        state.status = OutputOwnershipStatus::activating(
+            target,
+            state.status.persisted_role,
+            state.status.generation,
+            state.status.epoch,
+        );
+        self.inner.changed.notify_all();
+        Ok(())
+    }
+
+    fn validate_activation(
+        &self,
+        activation: &OutputOwnershipActivation,
+        role: MachineOutputRole,
+    ) -> Result<(), String> {
+        if activation.role != role || !role.video_allowed() {
+            return Err(format!(
+                "External video resource activation role mismatch for {role:?}"
+            ));
+        }
+        let state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| "Output ownership gate lock was poisoned".to_string())?;
+        if !Arc::ptr_eq(&activation.inner, &self.inner) || state.status.epoch != activation.epoch {
+            return Err("External video resource activation epoch is stale".to_string());
+        }
+        if activation.transition_owned {
+            if !state.transition_active
+                || state.status.state != OutputOwnershipState::Activating
+                || state.status.desired_role != role
+            {
+                return Err(
+                    "External video resource preparation fence is no longer active".to_string(),
+                );
+            }
+        } else if state.transition_active
+            || state.status.state != OutputOwnershipState::Ready
+            || state.status.effective_role != role
+        {
+            return Err("External video resource activation fence is no longer ready".to_string());
+        }
+        Ok(())
+    }
+
+    fn record_persisted_role_without_transition(
+        &self,
+        role: MachineOutputRole,
+    ) -> Result<(), String> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| "Output ownership gate lock was poisoned".to_string())?;
+        state.status.persisted_role = Some(role);
+        Ok(())
+    }
+
+    fn update_persisted_role(&self, role: MachineOutputRole) -> Result<(), String> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| "Output ownership gate lock was poisoned".to_string())?;
+        if !state.transition_active {
+            return Err("Output ownership is not transitioning".to_string());
+        }
+        state.status.persisted_role = Some(role);
+        Ok(())
+    }
+
+    fn complete_transition(
+        &self,
+        target: MachineOutputRole,
+    ) -> Result<OutputOwnershipStatus, String> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| "Output ownership gate lock was poisoned".to_string())?;
+        if !state.transition_active {
+            return Err("Output ownership transition is not active".to_string());
+        }
+        if state.in_flight != 0 {
+            return Err(
+                "Output ownership cannot become Ready while an output operation is in flight"
+                    .to_string(),
+            );
+        }
+        let generation = state.status.generation.saturating_add(1);
+        let epoch = state.status.epoch;
+        let persisted_role = state.status.persisted_role.or(Some(target));
+        state.status = OutputOwnershipStatus::ready(target, persisted_role, generation, epoch);
+        state.transition_active = false;
+        self.inner.changed.notify_all();
+        Ok(state.status.clone())
+    }
+
+    fn complete_project_swap_disarmed(
+        &self,
+        desired_role: MachineOutputRole,
+        persisted_role: Option<MachineOutputRole>,
+    ) -> Result<OutputOwnershipStatus, String> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| "Output ownership gate lock was poisoned".to_string())?;
+        if !state.transition_active {
+            return Err("Output ownership transition is not active".to_string());
+        }
+        if !matches!(
+            state.status.state,
+            OutputOwnershipState::Transitioning | OutputOwnershipState::Activating
+        ) {
+            return Err("Output ownership transition is not in progress".to_string());
+        }
+        if state.in_flight != 0 {
+            return Err(
+                "Project swap output ownership cannot disarm while an output operation is in flight"
+                    .to_string(),
+            );
+        }
+        let generation = state.status.generation.saturating_add(1);
+        let epoch = state.status.epoch;
+        state.status = OutputOwnershipStatus::project_swap_disarmed(
+            desired_role,
+            persisted_role,
+            generation,
+            epoch,
+        );
+        state.transition_active = false;
+        self.inner.changed.notify_all();
+        Ok(state.status.clone())
+    }
+
+    fn fail_transition(&self, target: MachineOutputRole, error: String) -> OutputOwnershipStatus {
+        match self.inner.state.lock() {
+            Ok(mut state) => {
+                let status = OutputOwnershipStatus::failed(
+                    target,
+                    state.status.persisted_role,
+                    state.status.generation,
+                    state.status.epoch,
+                    OutputOwnershipReason::TransitionFailed,
+                    error,
+                );
+                state.status = status.clone();
+                state.transition_active = state.in_flight != 0;
+                self.inner.changed.notify_all();
+                status
+            }
+            Err(_) => OutputOwnershipStatus::failed(
+                MachineOutputRole::Standby,
+                None,
+                0,
+                0,
+                OutputOwnershipReason::TransitionFailed,
+                "Output ownership gate lock was poisoned while recording transition failure"
+                    .to_string(),
+            ),
+        }
+    }
+
+    pub fn mark_startup_failure(&self, error: impl Into<String>) -> OutputOwnershipStatus {
+        match self.inner.state.lock() {
+            Ok(mut state) => {
+                let status = OutputOwnershipStatus::failed(
+                    MachineOutputRole::Standby,
+                    state.status.persisted_role,
+                    state.status.generation,
+                    state.status.epoch,
+                    OutputOwnershipReason::StartupDenied,
+                    error.into(),
+                );
+                state.status = status.clone();
+                state.transition_active = state.in_flight != 0;
+                self.inner.changed.notify_all();
+                status
+            }
+            Err(_) => OutputOwnershipStatus::failed(
+                MachineOutputRole::Standby,
+                None,
+                0,
+                0,
+                OutputOwnershipReason::StartupDenied,
+                "Output ownership gate lock was poisoned while recording startup failure"
+                    .to_string(),
+            ),
+        }
+    }
+
+    pub fn publish_startup_preference(
+        &self,
+        preferred_role: MachineOutputRole,
+    ) -> Result<OutputOwnershipStatus, String> {
+        match self.inner.state.lock() {
+            Ok(mut state) => {
+                if state.transition_active || state.in_flight != 0 {
+                    return Err(
+                        "Cannot publish a startup ownership preference while outputs are active"
+                            .to_string(),
+                    );
+                }
+                let status = OutputOwnershipStatus::failed(
+                    preferred_role,
+                    Some(preferred_role),
+                    state.status.generation,
+                    state.status.epoch,
+                    OutputOwnershipReason::StartupDenied,
+                    format!(
+                        "Startup is fail-closed; explicitly arm machine output role {preferred_role:?}"
+                    ),
+                );
+                state.status = status.clone();
+                state.transition_active = false;
+                self.inner.changed.notify_all();
+                Ok(status)
+            }
+            Err(_) => Err("Output ownership gate lock was poisoned".to_string()),
+        }
+    }
+
+    pub fn mark_transition_failure(&self, error: impl Into<String>) -> OutputOwnershipStatus {
+        match self.inner.state.lock() {
+            Ok(mut state) => {
+                let desired_role = state.status.desired_role;
+                let status = OutputOwnershipStatus::failed(
+                    desired_role,
+                    state.status.persisted_role,
+                    state.status.generation,
+                    state.status.epoch,
+                    OutputOwnershipReason::TransitionFailed,
+                    error.into(),
+                );
+                state.status = status.clone();
+                state.transition_active = state.in_flight != 0;
+                self.inner.changed.notify_all();
+                status
+            }
+            Err(_) => OutputOwnershipStatus::failed(
+                MachineOutputRole::Standby,
+                None,
+                0,
+                0,
+                OutputOwnershipReason::TransitionFailed,
+                "Output ownership gate lock was poisoned while recording transition failure"
+                    .to_string(),
+            ),
+        }
+    }
+
+    pub fn mark_durable_standby_failure(
+        &self,
+        desired_role: MachineOutputRole,
+        error: impl Into<String>,
+    ) -> OutputOwnershipStatus {
+        match self.inner.state.lock() {
+            Ok(mut state) => {
+                let status = OutputOwnershipStatus::failed(
+                    desired_role,
+                    Some(MachineOutputRole::Standby),
+                    state.status.generation,
+                    state.status.epoch,
+                    OutputOwnershipReason::TransitionFailed,
+                    error.into(),
+                );
+                state.status = status.clone();
+                state.transition_active = state.in_flight != 0;
+                self.inner.changed.notify_all();
+                status
+            }
+            Err(_) => OutputOwnershipStatus::failed(
+                MachineOutputRole::Standby,
+                Some(MachineOutputRole::Standby),
+                0,
+                0,
+                OutputOwnershipReason::TransitionFailed,
+                "Output ownership gate lock was poisoned while recording durable Standby failure"
+                    .to_string(),
+            ),
+        }
+    }
+
+    /// Runtime-only publication hook used by the engine after a test/runtime
+    /// role mutation. Production role changes use `OutputOwnershipTransition`.
+    fn publish_runtime_role(&self, role: MachineOutputRole) {
+        if let Ok(mut state) = self.inner.state.lock() {
+            if !state.transition_active {
+                let generation = state.status.generation;
+                let epoch = state.status.epoch;
+                let persisted_role = state.status.persisted_role.or(Some(role));
+                state.status =
+                    OutputOwnershipStatus::ready(role, persisted_role, generation, epoch);
+                self.inner.changed.notify_all();
+            }
+        }
+    }
+}
+
+impl OutputOwnershipTransition {
+    pub fn target(&self) -> MachineOutputRole {
+        self.target
+    }
+
+    pub fn record_persisted_role(&mut self, role: MachineOutputRole) -> Result<(), String> {
+        if role != self.target {
+            return Err(format!(
+                "Persisted output ownership role {role:?} does not match transition target {:?}",
+                self.target
+            ));
+        }
+        self.gate.update_persisted_role(role)
+    }
+
+    pub fn admit_output_activation(&self) -> Result<OutputOwnershipActivation, String> {
+        self.gate.admit_transition_activation(self.target)
+    }
+
+    pub fn begin_activation(&mut self) -> Result<(), String> {
+        self.gate.begin_activation(self.target)
+    }
+
+    pub fn complete(mut self) -> Result<OutputOwnershipStatus, String> {
+        let status = self.gate.complete_transition(self.target)?;
+        self.finished = true;
+        Ok(status)
+    }
+
+    pub fn complete_project_swap_disarmed(mut self) -> Result<OutputOwnershipStatus, String> {
+        let status = self.gate.complete_project_swap_disarmed(
+            self.pre_transition_desired_role,
+            self.pre_transition_persisted_role,
+        )?;
+        self.finished = true;
+        Ok(status)
+    }
+
+    pub fn fail(mut self, error: impl Into<String>) -> OutputOwnershipStatus {
+        let status = self.gate.fail_transition(self.target, error.into());
+        self.finished = true;
+        status
+    }
+}
+
+impl OutputOwnershipActivation {
+    /// Atomically revalidate this activation and admit the physical resource
+    /// constructor. The returned lease must remain live until the resource is
+    /// published or retired.
+    pub fn admit_resource_creation(&self) -> Result<OutputOwnershipCreationLease, String> {
+        OutputOwnershipGate {
+            inner: Arc::clone(&self.inner),
+        }
+        .admit_resource_creation(self)
+    }
+}
+
+impl OutputOwnershipCreationLease {
+    /// Publish the resource after its owner has made it reachable for normal
+    /// teardown. If a fence or role transition won the race, return the lease
+    /// so the caller can retire the resource while it is still accounted as
+    /// in-flight.
+    pub fn publish(mut self) -> Result<(), Self> {
+        let gate = OutputOwnershipGate {
+            inner: Arc::clone(&self.inner),
+        };
+        if gate.can_publish_resource_creation(&self).is_err() {
+            return Err(self);
+        }
+        self.released = true;
+        release_output_ownership_in_flight(&self.inner);
+        Ok(())
+    }
+
+    /// Make the retirement acknowledgement explicit at call sites. Dropping
+    /// the lease is the acknowledgement because resource-specific cleanup has
+    /// already completed before this method is called.
+    pub fn retire(self) {}
+}
+
+impl Drop for OutputOwnershipTransition {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = self.gate.fail_transition(
+                self.target,
+                "Output ownership transition was abandoned before completion".to_string(),
+            );
+        }
+    }
+}
+
+impl Drop for OutputOwnershipPermit {
+    fn drop(&mut self) {
+        release_output_ownership_in_flight(&self.inner);
+    }
+}
+
+impl Drop for OutputOwnershipTeardownLease {
+    fn drop(&mut self) {
+        release_output_ownership_in_flight(&self.inner);
+    }
+}
+
+impl Drop for OutputOwnershipCreationLease {
+    fn drop(&mut self) {
+        if !self.released {
+            release_output_ownership_in_flight(&self.inner);
+        }
+    }
+}
+
+fn release_output_ownership_in_flight(inner: &Arc<OutputOwnershipGateInner>) {
+    let mut state = match inner.state.lock() {
+        Ok(state) => state,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    state.in_flight = state.in_flight.saturating_sub(1);
+    if state.in_flight == 0
+        && state.transition_active
+        && state.status.state == OutputOwnershipState::Failed
+    {
+        // A failed transition remains fenced while physical teardown is
+        // pending. Once the last lease acknowledges completion, release only
+        // the transition mutex fence; the Failed status still requires an
+        // explicit operator retry before re-arming.
+        state.transition_active = false;
+    }
+    inner.changed.notify_all();
+}
+
+fn output_capability_blocked_message(
+    capability: OutputCapability,
+    status: OutputOwnershipStatus,
+) -> String {
+    let (label, reason) = match capability {
+        OutputCapability::Lighting => ("Lighting", status.lighting_reason),
+        OutputCapability::Video => ("Video", status.video_reason),
+    };
+    if let Some(error) = status.error {
+        return format!("{label} output is blocked: {error}");
+    }
+    format!("{label} output is blocked ({reason:?})")
+}
 
 struct ChaserAttributeHasher(u64);
 
@@ -200,6 +1104,134 @@ mod realtime_thread {
 pub enum EngineError {
     #[error("engine command queue is full")]
     QueueFull,
+    #[error("{0}")]
+    InvalidAllocatorCapacity(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AllocatorDomain {
+    Fixtures,
+    Effects,
+    Cues,
+    CueLists,
+    Palettes,
+    PlaybackExecutors,
+    TimelineEvents,
+    TimelineLayers,
+    TimelineAudioClips,
+    Automations,
+    MediaAssets,
+    VideoLayers,
+    Compositions,
+    VideoOutputs,
+    NodeGraphs,
+    StageObjects,
+}
+
+impl AllocatorDomain {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Fixtures => "fixtures",
+            Self::Effects => "effects",
+            Self::Cues => "cues",
+            Self::CueLists => "cue lists",
+            Self::Palettes => "palettes",
+            Self::PlaybackExecutors => "playback executors",
+            Self::TimelineEvents => "timeline events",
+            Self::TimelineLayers => "timeline layers",
+            Self::TimelineAudioClips => "timeline audio clips",
+            Self::Automations => "automations",
+            Self::MediaAssets => "media assets",
+            Self::VideoLayers => "video layers",
+            Self::Compositions => "compositions",
+            Self::VideoOutputs => "video outputs",
+            Self::NodeGraphs => "node graphs",
+            Self::StageObjects => "stage objects",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProjectSnapshotLoadAdmissionState {
+    Queued,
+    Admitted,
+    Cancelled,
+}
+
+/// Shared request state whose transition is the linearization point for a
+/// project snapshot load. The caller can cancel only `Queued`; the runtime
+/// can admit only `Queued` before its deadline. Whichever transition acquires
+/// the mutex first owns the request's outcome.
+#[derive(Debug, Clone)]
+#[doc(hidden)]
+pub struct ProjectSnapshotLoadAdmission {
+    state: Arc<Mutex<ProjectSnapshotLoadAdmissionState>>,
+}
+
+impl ProjectSnapshotLoadAdmission {
+    fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(ProjectSnapshotLoadAdmissionState::Queued)),
+        }
+    }
+
+    fn try_admit_before(&self, deadline: Instant) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *state != ProjectSnapshotLoadAdmissionState::Queued {
+            return false;
+        }
+        if Instant::now() >= deadline {
+            *state = ProjectSnapshotLoadAdmissionState::Cancelled;
+            return false;
+        }
+        *state = ProjectSnapshotLoadAdmissionState::Admitted;
+        true
+    }
+
+    fn cancel_if_queued(&self) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *state == ProjectSnapshotLoadAdmissionState::Queued {
+            *state = ProjectSnapshotLoadAdmissionState::Cancelled;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+fn receive_project_snapshot_load_ack(
+    receiver: mpsc::Receiver<Result<(), String>>,
+    admission: &ProjectSnapshotLoadAdmission,
+    deadline: Instant,
+    timeout: Duration,
+) -> Result<(), String> {
+    match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            if admission.cancel_if_queued() {
+                Err(format!(
+                    "project snapshot load acknowledgement timed out after {} ms",
+                    timeout.as_millis()
+                ))
+            } else {
+                // Admission won the race with cancellation. A timeout is no
+                // longer a valid caller outcome: wait for the runtime to
+                // publish or report its definitive failure.
+                receiver.recv().map_err(|_| {
+                    "project snapshot load acknowledgement failed: engine disconnected".to_string()
+                })?
+            }
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err("project snapshot load acknowledgement failed: engine disconnected".to_string())
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,6 +1240,44 @@ pub enum FixtureFlagClearKind {
     Solo,
     Park,
     All,
+}
+
+/// One complete fixture patch prepared by the frontend after GDTF/profile
+/// validation. `PatchFixturesPublished` validates every candidate before it
+/// mutates the runtime, so a multi-fixture PATCH is one project publication
+/// rather than a sequence of individually visible fixture additions.
+#[derive(Debug, Clone)]
+pub struct FixturePatchCandidate {
+    pub fixture_id: FixtureId,
+    pub request: PatchFixtureRequest,
+    pub profile: FixtureProfileSummary,
+}
+
+/// One prepared catalog import. `layers` is deliberately separate from
+/// `assets`: normal Media Library import is asset-only, while compatibility
+/// wrappers and later direct layer assignment can publish paired rows through
+/// the same acknowledgement-bearing transaction.
+#[derive(Debug, Clone, Default)]
+pub struct MediaAssetImportCandidate {
+    pub assets: Vec<MediaAssetSummary>,
+    pub layers: Vec<VideoLayerSummary>,
+}
+
+/// The only engine-side mutation forms for catalog identity. A replacement
+/// asset updates every compatibility-projection layer source atomically.
+#[derive(Debug, Clone)]
+pub enum MediaAssetTransaction {
+    Import(MediaAssetImportCandidate),
+    /// First-run VJ setup is a catalog publication too: local files are
+    /// already content-finalized by the backend, so the layer/asset rows and
+    /// the deliberately-safe Program output must cross one acknowledged
+    /// runtime boundary.  A raw `BootstrapVjShow` cannot carry that content
+    /// identity and is therefore retained only as a legacy engine route.
+    BootstrapVjShow {
+        candidate: MediaAssetImportCandidate,
+        output: VideoOutputSummary,
+    },
+    Update(MediaAssetSummary),
 }
 
 #[derive(Debug)]
@@ -240,6 +1310,28 @@ pub enum EngineCommand {
         fixture_id: FixtureId,
         request: PatchFixtureRequest,
         profile: FixtureProfileSummary,
+    },
+    /// A definitive, acknowledgement-bearing atomic fixture PATCH.  The
+    /// admission protocol is intentionally identical to project replacement:
+    /// a caller can cancel only while queued; once admitted it waits for the
+    /// publication result and never observes a timeout followed by late B.
+    PatchFixturesPublished {
+        candidates: Vec<FixturePatchCandidate>,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    /// A definitive, acknowledgement-bearing profile repair for an existing
+    /// fixture. Validation is complete before B mutates the runtime; once
+    /// admitted, acknowledgement means the repaired profile was published to
+    /// the shared snapshot or the complete A fixture state was restored.
+    RepairFixtureProfilePublished {
+        fixture_id: FixtureId,
+        profile: FixtureProfileSummary,
+        mode_name: Option<String>,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
     },
     ReplaceFixtureProfile {
         fixture_id: FixtureId,
@@ -324,6 +1416,17 @@ pub enum EngineCommand {
         fixture_id: FixtureId,
         group_ids: Vec<String>,
     },
+    /// Atomically replace every fixture's authored group assignment together
+    /// with the project group-color map.  This is intentionally an
+    /// acknowledgement-bearing publication barrier: callers must never see a
+    /// partially-applied create/delete/recolor sequence.
+    ApplyFixtureGroupStatePublished {
+        assignments: Vec<(FixtureId, Vec<String>)>,
+        group_colors: BTreeMap<String, String>,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     SetFixtureHighlight {
         fixture_id: FixtureId,
         enabled: bool,
@@ -342,6 +1445,12 @@ pub enum EngineCommand {
         values: Vec<AttributeValueSummary>,
     },
     LoadProjectSnapshot(EngineSnapshot),
+    LoadProjectSnapshotPublished {
+        snapshot: EngineSnapshot,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     RequestPersistenceSnapshot {
         response: mpsc::SyncSender<EngineSnapshot>,
     },
@@ -356,6 +1465,15 @@ pub enum EngineCommand {
         config: StageMapConfig,
         stage_objects: Option<Vec<StageObjectSummary>>,
     },
+    /// A definitive, acknowledgement-bearing upsert of a saved stage-map
+    /// preset. It never changes the live map or live objects; the complete
+    /// sanitized preset list becomes visible only with shared publication.
+    UpsertStageMapPresetPublished {
+        preset: StageMapPresetSummary,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     ApplyStageMapPreset {
         label: String,
     },
@@ -366,6 +1484,20 @@ pub enum EngineCommand {
     RemoveStageObject(StageObjectId),
     SetOutput(DmxOutputConfig),
     SetDmxOutputs(Vec<DmxOutputConfig>),
+    SetOutputOwnershipRole {
+        role: MachineOutputRole,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    FenceOutputOwnership {
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    PrepareOutputOwnershipRole {
+        role: MachineOutputRole,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     SetDmxInputFrame {
         universe: u16,
         values: Box<[u8; 512]>,
@@ -962,6 +2094,16 @@ pub enum EngineCommand {
         label: String,
         source: VideoSourceSummary,
     },
+    /// Internal enqueue form for the wire-compatible `AddVideoLayer` route.
+    /// The asset ID is allocated independently under the shared allocator
+    /// gate; callers should use the legacy form or MediaAssetTransaction.
+    #[doc(hidden)]
+    AddVideoLayerWithAllocatedAsset {
+        layer_id: VideoLayerId,
+        asset_id: MediaAssetId,
+        label: String,
+        source: VideoSourceSummary,
+    },
     DuplicateVideoLayer {
         source_layer_id: VideoLayerId,
         new_layer_id: VideoLayerId,
@@ -982,6 +2124,15 @@ pub enum EngineCommand {
     SetVideoLayerSource {
         layer_id: VideoLayerId,
         source: VideoSourceSummary,
+    },
+    /// Acknowledged all-or-nothing catalog import/update. The caller may
+    /// cancel only before runtime admission; after admission this reports the
+    /// definitive publish-or-rollback result.
+    MediaAssetTransactionPublished {
+        transaction: MediaAssetTransaction,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
     },
     SetVideoLayerIsfEffect {
         layer_id: VideoLayerId,
@@ -1082,6 +2233,15 @@ pub enum EngineCommand {
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
+    /// Internal counterpart of `BootstrapVjShow` with separately allocated
+    /// catalog identities for every compatibility layer.
+    #[doc(hidden)]
+    BootstrapVjShowWithAllocatedAssets {
+        layers: Vec<(VideoLayerId, MediaAssetId, String, VideoSourceSummary)>,
+        output: VideoOutputSummary,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     AddVideoOutput(VideoOutputSummary),
     RemoveVideoOutput(VideoOutputId),
     SetVideoOutputConfig {
@@ -1138,11 +2298,62 @@ pub enum EngineCommand {
 }
 
 impl EngineCommand {
+    /// Whether enqueueing this command can change the canonical project image
+    /// returned by [`EngineHandle::persistence_snapshot`].  External-input
+    /// authority polling uses this narrow classification as a seqlock: live
+    /// clock/DMX/cue-transport traffic must not starve a persistence read,
+    /// while every command not proven runtime-only remains conservatively
+    /// treated as authored/persistent.
+    ///
+    /// Keep the default conservative (`true`) so a newly added command cannot
+    /// silently evade project-coordinator reconciliation. The explicit false
+    /// set is limited to state that `build_persistence_snapshot` removes or
+    /// that never belongs to an EngineSnapshot.
+    pub fn mutates_persistence_snapshot(&self) -> bool {
+        !matches!(
+            self,
+            EngineCommand::RequestPersistenceSnapshot { .. }
+                | EngineCommand::SetOutputOwnershipRole { .. }
+                | EngineCommand::FenceOutputOwnership { .. }
+                | EngineCommand::PrepareOutputOwnershipRole { .. }
+                | EngineCommand::SetDmxInputFrame { .. }
+                | EngineCommand::ClearDmxInput(_)
+                | EngineCommand::MidiClockPulse
+                | EngineCommand::MidiSongPositionPointer(_)
+                | EngineCommand::ResetTelemetry
+                | EngineCommand::TriggerCue(_)
+                | EngineCommand::TriggerCueWithDirection { .. }
+                | EngineCommand::TriggerNextCue
+                | EngineCommand::TriggerPreviousCue
+                | EngineCommand::TriggerCueListNext(_)
+                | EngineCommand::TriggerCueListPrevious(_)
+                | EngineCommand::ReleaseCue(_)
+                | EngineCommand::SetCueLiveModifier { .. }
+                | EngineCommand::ClearCueLiveModifier(_)
+                | EngineCommand::SetCueFadePaused(_)
+                | EngineCommand::SetLiveAudioSpectrum(_)
+                | EngineCommand::PublishLiveAudioFrame { .. }
+                | EngineCommand::ClearLiveAudioInput { .. }
+                | EngineCommand::ClearLiveAudioInputPublished { .. }
+                | EngineCommand::ReportLiveAudioOnset { .. }
+                | EngineCommand::SetTimelinePlaying(_)
+                | EngineCommand::SeekTimeline(_)
+                | EngineCommand::SetDirectChildTimelinePlaying { .. }
+                | EngineCommand::SeekDirectChildTimeline { .. }
+                | EngineCommand::SeekTimelineBeat { .. }
+                | EngineCommand::SyncTimelineTimecode { .. }
+                | EngineCommand::PulseVideoLayerIsfEvent { .. }
+        )
+    }
+
     fn requests_low_latency_dmx_tick(&self) -> bool {
         matches!(
             self,
             EngineCommand::PatchFixture { .. }
+                | EngineCommand::PatchFixturesPublished { .. }
+                | EngineCommand::RepairFixtureProfilePublished { .. }
                 | EngineCommand::ReplaceFixtureProfile { .. }
+                | EngineCommand::UpsertStageMapPresetPublished { .. }
                 | EngineCommand::RemoveFixture(_)
                 | EngineCommand::SetAttribute { .. }
                 | EngineCommand::SetFixtureAttributeBatch { .. }
@@ -1162,14 +2373,19 @@ impl EngineCommand {
                 | EngineCommand::SetFixturePatch { .. }
                 | EngineCommand::SetFixtureLimits { .. }
                 | EngineCommand::SetFixtureGroups { .. }
+                | EngineCommand::ApplyFixtureGroupStatePublished { .. }
                 | EngineCommand::SetFixtureHighlight { .. }
                 | EngineCommand::SetFixtureSolo { .. }
                 | EngineCommand::SetFixturePark { .. }
                 | EngineCommand::ClearFixtureFlags(_)
                 | EngineCommand::ApplyAttributeValues { .. }
                 | EngineCommand::LoadProjectSnapshot(_)
+                | EngineCommand::LoadProjectSnapshotPublished { .. }
                 | EngineCommand::SetOutput(_)
                 | EngineCommand::SetDmxOutputs(_)
+                | EngineCommand::SetOutputOwnershipRole { .. }
+                | EngineCommand::FenceOutputOwnership { .. }
+                | EngineCommand::PrepareOutputOwnershipRole { .. }
                 | EngineCommand::SetDmxInputFrame { .. }
                 | EngineCommand::ClearDmxInput(_)
                 | EngineCommand::Blackout(_)
@@ -1266,6 +2482,12 @@ pub struct EngineHandle {
     wake: Arc<EngineWake>,
     shared_telemetry: Arc<EngineSharedTelemetry>,
     snapshot: Arc<RwLock<EngineSnapshot>>,
+    output_ownership_gate: OutputOwnershipGate,
+    /// Serializes public ID allocation with candidate snapshot reservation.
+    /// Reservation is a monotonic commit at command enqueue time, so a
+    /// cancelled or rejected candidate may leave a skipped range but can
+    /// never lower a counter or race an allocator below the candidate max.
+    allocator_gate: Arc<Mutex<()>>,
     next_fixture_id: Arc<AtomicU64>,
     next_effect_id: Arc<AtomicU64>,
     next_cue_id: Arc<AtomicU64>,
@@ -1276,6 +2498,7 @@ pub struct EngineHandle {
     next_timeline_layer_id: Arc<AtomicU32>,
     next_timeline_audio_clip_id: Arc<AtomicU64>,
     next_automation_id: Arc<AtomicU64>,
+    next_media_asset_id: Arc<AtomicU64>,
     next_video_layer_id: Arc<AtomicU64>,
     next_composition_id: Arc<AtomicU64>,
     next_video_output_id: Arc<AtomicU64>,
@@ -1455,6 +2678,20 @@ impl EngineWake {
 
 impl EngineHandle {
     pub fn start(output: DmxOutputConfig) -> Self {
+        Self::start_with_output_ownership(output, OutputOwnershipGate::startup_denied())
+    }
+
+    pub fn start_for_tests(output: DmxOutputConfig) -> Self {
+        Self::start_with_output_ownership(
+            output,
+            OutputOwnershipGate::for_role(MachineOutputRole::Both),
+        )
+    }
+
+    fn start_with_output_ownership(
+        output: DmxOutputConfig,
+        output_ownership_gate: OutputOwnershipGate,
+    ) -> Self {
         let queue = Arc::new(ArrayQueue::new(ENGINE_QUEUE_CAPACITY));
         let wake = Arc::new(EngineWake::new());
         let shared_telemetry = Arc::new(EngineSharedTelemetry::new());
@@ -1472,24 +2709,30 @@ impl EngineHandle {
         let next_timeline_layer_id = Arc::new(AtomicU32::new(2));
         let next_timeline_audio_clip_id = Arc::new(AtomicU64::new(1));
         let next_automation_id = Arc::new(AtomicU64::new(1));
+        let next_media_asset_id = Arc::new(AtomicU64::new(1));
         let next_video_layer_id = Arc::new(AtomicU64::new(1));
         let next_composition_id = Arc::new(AtomicU64::new(2));
         let next_video_output_id = Arc::new(AtomicU64::new(1));
         let next_node_graph_id = Arc::new(AtomicU64::new(1));
         let next_stage_object_id = Arc::new(AtomicU64::new(1));
+        let allocator_gate = Arc::new(Mutex::new(()));
         let lifetime = Arc::new(EngineLifetime::new(Arc::clone(&wake)));
 
         let runtime_queue = Arc::clone(&queue);
         let runtime_wake = Arc::clone(&wake);
         let runtime_shared_telemetry = Arc::clone(&shared_telemetry);
+        let runtime_output_ownership_gate = output_ownership_gate.clone();
         let runtime_snapshot = Arc::clone(&snapshot);
         let runtime_lifetime = Arc::downgrade(&lifetime);
         let runtime_thread = thread::Builder::new()
             .name("syndocal-engine".to_string())
             .spawn(move || {
                 let _realtime_guard = realtime_thread::configure();
-                let mut runtime =
-                    EngineRuntime::new_with_shared_telemetry(output, runtime_shared_telemetry);
+                let mut runtime = EngineRuntime::new_with_shared_telemetry_and_ownership(
+                    output,
+                    runtime_shared_telemetry,
+                    runtime_output_ownership_gate,
+                );
                 runtime.run(
                     runtime_queue,
                     runtime_wake,
@@ -1506,6 +2749,8 @@ impl EngineHandle {
             wake,
             shared_telemetry,
             snapshot,
+            output_ownership_gate,
+            allocator_gate,
             next_fixture_id,
             next_effect_id,
             next_cue_id,
@@ -1516,6 +2761,7 @@ impl EngineHandle {
             next_timeline_layer_id,
             next_timeline_audio_clip_id,
             next_automation_id,
+            next_media_asset_id,
             next_video_layer_id,
             next_composition_id,
             next_video_output_id,
@@ -1525,60 +2771,72 @@ impl EngineHandle {
     }
 
     pub fn allocate_fixture_id(&self) -> FixtureId {
-        self.next_fixture_id.fetch_add(1, Ordering::Relaxed)
+        self.allocate_u64_id(&self.next_fixture_id, AllocatorDomain::Fixtures)
     }
 
     pub fn allocate_effect_id(&self) -> EffectId {
-        self.next_effect_id.fetch_add(1, Ordering::Relaxed)
+        self.allocate_u64_id(&self.next_effect_id, AllocatorDomain::Effects)
     }
 
     pub fn allocate_cue_id(&self) -> CueId {
-        self.next_cue_id.fetch_add(1, Ordering::Relaxed)
+        self.allocate_u64_id(&self.next_cue_id, AllocatorDomain::Cues)
     }
 
     pub fn allocate_cue_list_id(&self) -> CueListId {
-        self.next_cue_list_id.fetch_add(1, Ordering::Relaxed)
+        self.allocate_u64_id(&self.next_cue_list_id, AllocatorDomain::CueLists)
     }
 
     pub fn allocate_palette_id(&self) -> PaletteId {
-        self.next_palette_id.fetch_add(1, Ordering::Relaxed)
+        self.allocate_u64_id(&self.next_palette_id, AllocatorDomain::Palettes)
     }
 
     pub fn allocate_executor_id(&self) -> ExecutorId {
-        self.next_executor_id.fetch_add(1, Ordering::Relaxed)
+        self.allocate_u64_id(&self.next_executor_id, AllocatorDomain::PlaybackExecutors)
     }
 
     pub fn allocate_timeline_event_id(&self) -> TimelineEventId {
-        self.next_timeline_event_id.fetch_add(1, Ordering::Relaxed)
+        self.allocate_u64_id(
+            &self.next_timeline_event_id,
+            AllocatorDomain::TimelineEvents,
+        )
     }
 
     pub fn allocate_timeline_layer_id(&self) -> u32 {
-        self.next_timeline_layer_id.fetch_add(1, Ordering::Relaxed)
+        self.allocate_u32_id(
+            &self.next_timeline_layer_id,
+            AllocatorDomain::TimelineLayers,
+        )
     }
 
     pub fn allocate_timeline_audio_clip_id(&self) -> TimelineAudioClipId {
-        self.next_timeline_audio_clip_id
-            .fetch_add(1, Ordering::Relaxed)
+        self.allocate_u64_id(
+            &self.next_timeline_audio_clip_id,
+            AllocatorDomain::TimelineAudioClips,
+        )
     }
 
     pub fn allocate_automation_id(&self) -> AutomationId {
-        self.next_automation_id.fetch_add(1, Ordering::Relaxed)
+        self.allocate_u64_id(&self.next_automation_id, AllocatorDomain::Automations)
+    }
+
+    pub fn allocate_media_asset_id(&self) -> MediaAssetId {
+        self.allocate_u64_id(&self.next_media_asset_id, AllocatorDomain::MediaAssets)
     }
 
     pub fn allocate_video_layer_id(&self) -> VideoLayerId {
-        self.next_video_layer_id.fetch_add(1, Ordering::Relaxed)
+        self.allocate_u64_id(&self.next_video_layer_id, AllocatorDomain::VideoLayers)
     }
 
     pub fn allocate_composition_id(&self) -> CompositionId {
-        self.next_composition_id.fetch_add(1, Ordering::Relaxed)
+        self.allocate_u64_id(&self.next_composition_id, AllocatorDomain::Compositions)
     }
 
     pub fn allocate_video_output_id(&self) -> VideoOutputId {
-        self.next_video_output_id.fetch_add(1, Ordering::Relaxed)
+        self.allocate_u64_id(&self.next_video_output_id, AllocatorDomain::VideoOutputs)
     }
 
     pub fn allocate_node_graph_id(&self) -> NodeGraphId {
-        self.next_node_graph_id.fetch_add(1, Ordering::Relaxed)
+        self.allocate_u64_id(&self.next_node_graph_id, AllocatorDomain::NodeGraphs)
     }
 
     pub fn upsert_node_graph(&self, graph: NodeGraphSummary) -> Result<(), String> {
@@ -1626,16 +2884,74 @@ impl EngineHandle {
     }
 
     pub fn allocate_stage_object_id(&self) -> StageObjectId {
-        self.next_stage_object_id.fetch_add(1, Ordering::Relaxed)
+        self.allocate_u64_id(&self.next_stage_object_id, AllocatorDomain::StageObjects)
+    }
+
+    fn allocate_u64_id(&self, counter: &AtomicU64, domain: AllocatorDomain) -> u64 {
+        let _allocator_guard = self
+            .allocator_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut current = counter.load(Ordering::Relaxed);
+        loop {
+            if current == 0 {
+                panic!(
+                    "allocator domain '{}' attempted to issue reserved ID 0",
+                    domain.label()
+                );
+            }
+            if current >= u64::MAX {
+                panic!(
+                    "allocator domain '{}' exhausted at {}",
+                    domain.label(),
+                    u64::MAX
+                );
+            }
+            let next = current + 1;
+            match counter.compare_exchange(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => return current,
+                Err(observed) => current = observed,
+            }
+        }
+    }
+
+    fn allocate_u32_id(&self, counter: &AtomicU32, domain: AllocatorDomain) -> u32 {
+        let _allocator_guard = self
+            .allocator_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut current = counter.load(Ordering::Relaxed);
+        loop {
+            if current == 0 {
+                panic!(
+                    "allocator domain '{}' attempted to issue reserved ID 0",
+                    domain.label()
+                );
+            }
+            if current >= u32::MAX {
+                panic!(
+                    "allocator domain '{}' exhausted at {}",
+                    domain.label(),
+                    u32::MAX
+                );
+            }
+            let next = current + 1;
+            match counter.compare_exchange(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => return current,
+                Err(observed) => current = observed,
+            }
+        }
     }
 
     pub fn send(&self, command: EngineCommand) -> Result<(), EngineError> {
+        let command = self
+            .prepare_command_for_enqueue(command)
+            .map_err(EngineError::InvalidAllocatorCapacity)?;
         if let EngineCommand::ClearLiveAudioInput { generation }
         | EngineCommand::ClearLiveAudioInputPublished { generation, .. } = &command
         {
             self.shared_telemetry.request_live_audio_clear(*generation);
         }
-        self.sync_allocator_counters_for_command(&command);
         match self.queue.push(QueuedEngineCommand {
             command,
             queued_at: Instant::now(),
@@ -1647,6 +2963,84 @@ impl EngineHandle {
             Err(_) => {
                 self.shared_telemetry.record_queue_push_failure();
                 Err(EngineError::QueueFull)
+            }
+        }
+    }
+
+    /// Allocate compatibility asset identities and reserve all explicit IDs
+    /// under one shared gate. A rejected explicit candidate therefore cannot
+    /// race a concurrent importer below it, while a failed/queued legacy
+    /// creator may leave a monotonic allocator gap but never reuse an ID.
+    fn prepare_command_for_enqueue(&self, command: EngineCommand) -> Result<EngineCommand, String> {
+        let _allocator_guard = self
+            .allocator_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        // Validate caller-provided candidates before allocating a compatibility
+        // asset. This keeps invalid explicit layer/output IDs from consuming a
+        // separate asset identity.
+        let provided_maxima = self.allocator_maximums_for_command(&command)?;
+        provided_maxima.validate()?;
+
+        let command = match command {
+            EngineCommand::AddVideoLayer {
+                layer_id,
+                label,
+                source,
+            } => EngineCommand::AddVideoLayerWithAllocatedAsset {
+                layer_id,
+                asset_id: self.allocate_legacy_media_asset_id_locked()?,
+                label,
+                source,
+            },
+            EngineCommand::BootstrapVjShow {
+                layers,
+                output,
+                expires_at,
+                ack,
+            } => {
+                let mut allocated_layers = Vec::with_capacity(layers.len());
+                for (layer_id, label, source) in layers {
+                    let asset_id = self.allocate_legacy_media_asset_id_locked()?;
+                    allocated_layers.push((layer_id, asset_id, label, source));
+                }
+                EngineCommand::BootstrapVjShowWithAllocatedAssets {
+                    layers: allocated_layers,
+                    output,
+                    expires_at,
+                    ack,
+                }
+            }
+            command => command,
+        };
+
+        let maxima = self.allocator_maximums_for_command(&command)?;
+        maxima.validate()?;
+        maxima
+            .reserve_into(self)
+            .map_err(|error| format!("allocator reservation failed: {error}"))?;
+        Ok(command)
+    }
+
+    fn allocate_legacy_media_asset_id_locked(&self) -> Result<MediaAssetId, String> {
+        let mut current = self.next_media_asset_id.load(Ordering::Relaxed);
+        loop {
+            if current == 0 {
+                return Err("media asset allocator attempted to issue reserved ID 0".to_string());
+            }
+            if current >= u64::MAX {
+                return Err("media asset allocator is exhausted".to_string());
+            }
+            let next = current + 1;
+            match self.next_media_asset_id.compare_exchange(
+                current,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Ok(current),
+                Err(observed) => current = observed,
             }
         }
     }
@@ -2173,6 +3567,146 @@ impl EngineHandle {
             .map_err(|error| format!("Group color acknowledgement failed: {error}"))?
     }
 
+    /// Publish a complete fixture-group membership/color candidate as one
+    /// atomic runtime change.  The admission handshake is the same definitive
+    /// protocol used by project snapshot replacement: a caller timeout may
+    /// cancel only before the runtime admits the candidate; after admission it
+    /// waits for the shared-snapshot publication acknowledgement.
+    pub fn apply_fixture_group_state_published(
+        &self,
+        assignments: Vec<(FixtureId, Vec<String>)>,
+        group_colors: BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        self.apply_fixture_group_state_published_with_timeout(
+            assignments,
+            group_colors,
+            PROJECT_SNAPSHOT_LOAD_ACK_TIMEOUT,
+        )
+    }
+
+    fn apply_fixture_group_state_published_with_timeout(
+        &self,
+        assignments: Vec<(FixtureId, Vec<String>)>,
+        group_colors: BTreeMap<String, String>,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        let deadline = Instant::now() + timeout;
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::ApplyFixtureGroupStatePublished {
+            assignments,
+            group_colors,
+            expires_at: deadline,
+            admission: admission.clone(),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receive_project_snapshot_load_ack(receiver, &admission, deadline, timeout)
+    }
+
+    /// Patch a complete GDTF/PATCH batch as one admitted and published
+    /// runtime change. The bounded timeout covers admission only; after the
+    /// runtime admits the candidate this waits for definitive shared-snapshot
+    /// publication or a rollback error.
+    pub fn patch_fixtures_published(
+        &self,
+        candidates: Vec<FixturePatchCandidate>,
+    ) -> Result<(), String> {
+        self.patch_fixtures_published_with_timeout(candidates, PROJECT_SNAPSHOT_LOAD_ACK_TIMEOUT)
+    }
+
+    #[doc(hidden)]
+    pub fn patch_fixtures_published_with_timeout(
+        &self,
+        candidates: Vec<FixturePatchCandidate>,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        let deadline = Instant::now() + timeout;
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::PatchFixturesPublished {
+            candidates,
+            expires_at: deadline,
+            admission: admission.clone(),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receive_project_snapshot_load_ack(receiver, &admission, deadline, timeout)
+    }
+
+    /// Repair an already-patched fixture profile as one admitted and
+    /// acknowledged shared-snapshot publication. The layout must exactly
+    /// match the fixture's active mode, so controls and authored values keep
+    /// their identity across the profile metadata repair.
+    pub fn repair_fixture_profile_published(
+        &self,
+        fixture_id: FixtureId,
+        profile: FixtureProfileSummary,
+        mode_name: Option<String>,
+    ) -> Result<(), String> {
+        self.repair_fixture_profile_published_with_timeout(
+            fixture_id,
+            profile,
+            mode_name,
+            PROJECT_SNAPSHOT_LOAD_ACK_TIMEOUT,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn repair_fixture_profile_published_with_timeout(
+        &self,
+        fixture_id: FixtureId,
+        profile: FixtureProfileSummary,
+        mode_name: Option<String>,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        let deadline = Instant::now() + timeout;
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::RepairFixtureProfilePublished {
+            fixture_id,
+            profile,
+            mode_name,
+            expires_at: deadline,
+            admission: admission.clone(),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receive_project_snapshot_load_ack(receiver, &admission, deadline, timeout)
+    }
+
+    /// Upsert a saved stage-map preset as one admitted, definitive shared
+    /// snapshot publication. The active stage map and stage objects are not
+    /// applied by this operation.
+    pub fn upsert_stage_map_preset_published(
+        &self,
+        preset: StageMapPresetSummary,
+    ) -> Result<(), String> {
+        self.upsert_stage_map_preset_published_with_timeout(
+            preset,
+            PROJECT_SNAPSHOT_LOAD_ACK_TIMEOUT,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn upsert_stage_map_preset_published_with_timeout(
+        &self,
+        preset: StageMapPresetSummary,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        let deadline = Instant::now() + timeout;
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::UpsertStageMapPresetPublished {
+            preset,
+            expires_at: deadline,
+            admission: admission.clone(),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receive_project_snapshot_load_ack(receiver, &admission, deadline, timeout)
+    }
+
     pub fn remove_cue_published(&self, cue_id: CueId) -> Result<(), String> {
         let (ack, receiver) = mpsc::sync_channel(1);
         self.send(EngineCommand::RemoveCuePublished {
@@ -2512,6 +4046,27 @@ impl EngineHandle {
             .map_err(|error| format!("VJ setup engine acknowledgement failed: {error}"))?
     }
 
+    /// Publish a complete media catalog change. The transaction is validated
+    /// in the runtime against the current catalog and its acknowledgement is
+    /// coupled to shared-snapshot publication, never a best-effort queue poll.
+    pub fn media_asset_transaction_published(
+        &self,
+        transaction: MediaAssetTransaction,
+    ) -> Result<(), String> {
+        let timeout = PROJECT_SNAPSHOT_LOAD_ACK_TIMEOUT;
+        let deadline = Instant::now() + timeout;
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::MediaAssetTransactionPublished {
+            transaction,
+            expires_at: deadline,
+            admission: admission.clone(),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receive_project_snapshot_load_ack(receiver, &admission, deadline, timeout)
+    }
+
     pub fn exclusive_video_take(&self, request: ExclusiveVideoTakeRequest) -> Result<(), String> {
         let (ack, receiver) = mpsc::sync_channel(1);
         self.send(EngineCommand::ExclusiveVideoTake {
@@ -2639,8 +4194,36 @@ impl EngineHandle {
     }
 
     pub fn load_project_snapshot(&self, snapshot: EngineSnapshot) -> Result<(), EngineError> {
-        self.sync_allocator_counters(&snapshot);
         self.send(EngineCommand::LoadProjectSnapshot(snapshot))
+    }
+
+    /// Queue a project replacement and return only after the runtime has
+    /// validated it and published the resulting snapshot. The bounded wait is
+    /// only the admission window. Once the runtime admits this request, the
+    /// caller waits for the definitive publish-or-fail acknowledgement.
+    pub fn load_project_snapshot_and_wait(&self, snapshot: EngineSnapshot) -> Result<(), String> {
+        self.load_project_snapshot_and_wait_with_timeout(
+            snapshot,
+            PROJECT_SNAPSHOT_LOAD_ACK_TIMEOUT,
+        )
+    }
+
+    fn load_project_snapshot_and_wait_with_timeout(
+        &self,
+        snapshot: EngineSnapshot,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        let deadline = Instant::now() + timeout;
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::LoadProjectSnapshotPublished {
+            snapshot,
+            expires_at: deadline,
+            admission: admission.clone(),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receive_project_snapshot_load_ack(receiver, &admission, deadline, timeout)
     }
 
     pub fn snapshot(&self) -> EngineSnapshot {
@@ -2648,6 +4231,145 @@ impl EngineHandle {
             .read()
             .map(|snapshot| snapshot.clone())
             .unwrap_or_default()
+    }
+
+    pub fn output_ownership_status(&self) -> OutputOwnershipStatus {
+        self.output_ownership_gate.status()
+    }
+
+    pub fn mark_output_ownership_startup_failure(&self, error: impl Into<String>) {
+        self.output_ownership_gate.mark_startup_failure(error);
+    }
+
+    pub fn mark_output_ownership_transition_failure(&self, error: impl Into<String>) {
+        self.output_ownership_gate.mark_transition_failure(error);
+    }
+
+    pub fn mark_output_ownership_durable_standby_failure(
+        &self,
+        desired_role: MachineOutputRole,
+        error: impl Into<String>,
+    ) {
+        self.output_ownership_gate
+            .mark_durable_standby_failure(desired_role, error);
+    }
+
+    pub fn record_output_ownership_persisted_role(
+        &self,
+        role: MachineOutputRole,
+    ) -> Result<(), String> {
+        self.output_ownership_gate
+            .record_persisted_role_without_transition(role)
+    }
+
+    pub fn admit_output_activation(
+        &self,
+        role: MachineOutputRole,
+    ) -> Result<OutputOwnershipActivation, String> {
+        self.output_ownership_gate.admit_ready_activation(role)
+    }
+
+    pub fn validate_output_activation(
+        &self,
+        activation: &OutputOwnershipActivation,
+        role: MachineOutputRole,
+    ) -> Result<(), String> {
+        self.output_ownership_gate
+            .validate_activation(activation, role)
+    }
+
+    pub fn admit_output_resource_creation(
+        &self,
+        activation: &OutputOwnershipActivation,
+    ) -> Result<OutputOwnershipCreationLease, String> {
+        self.output_ownership_gate
+            .admit_resource_creation(activation)
+    }
+
+    pub fn set_output_ownership_role(&self, role: MachineOutputRole) -> Result<(), String> {
+        if role != MachineOutputRole::Standby {
+            return Err(
+                "Non-Standby output ownership changes require the coordinated app transition"
+                    .to_string(),
+            );
+        }
+        let transition = self.begin_output_ownership_transition(role)?;
+        self.fence_output_ownership()?;
+        transition.complete().map(|_| ())
+    }
+
+    pub fn acquire_lighting_output(&self) -> Result<OutputOwnershipPermit, String> {
+        self.output_ownership_gate
+            .acquire(OutputCapability::Lighting)
+    }
+
+    pub fn acquire_video_output(&self) -> Result<OutputOwnershipPermit, String> {
+        self.output_ownership_gate.acquire(OutputCapability::Video)
+    }
+
+    pub fn publish_output_ownership_startup_preference(
+        &self,
+        preferred_role: MachineOutputRole,
+    ) -> Result<OutputOwnershipStatus, String> {
+        self.output_ownership_gate
+            .publish_startup_preference(preferred_role)
+    }
+
+    pub fn begin_output_ownership_teardown(&self) -> Result<OutputOwnershipTeardownLease, String> {
+        self.output_ownership_gate.acquire_teardown_lease()
+    }
+
+    pub fn begin_output_ownership_failure_fence(
+        &self,
+        error: impl Into<String>,
+    ) -> OutputOwnershipTeardownLease {
+        self.output_ownership_gate.begin_failure_fence(error)
+    }
+
+    pub fn begin_output_ownership_transition(
+        &self,
+        role: MachineOutputRole,
+    ) -> Result<OutputOwnershipTransition, String> {
+        self.output_ownership_gate.begin_transition(role)
+    }
+
+    pub fn fence_output_ownership(&self) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::FenceOutputOwnership {
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Output ownership fence acknowledgement failed: {error}"))?
+    }
+
+    pub fn prepare_output_ownership_role(&self, role: MachineOutputRole) -> Result<(), String> {
+        let status = self.output_ownership_status();
+        if status.state != OutputOwnershipState::Transitioning {
+            return Err(
+                "Output ownership sender preparation requires an active transition".to_string(),
+            );
+        }
+        if status.desired_role != role {
+            return Err(format!(
+                "Output ownership sender preparation role {role:?} does not match transition target {:?}",
+                status.desired_role
+            ));
+        }
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::PrepareOutputOwnershipRole {
+            role,
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| {
+                format!("Output ownership sender preparation acknowledgement failed: {error}")
+            })?
     }
 
     pub fn inspect_snapshot<T>(
@@ -2749,250 +4471,869 @@ impl EngineHandle {
             .unwrap_or_default()
     }
 
-    fn sync_allocator_counters(&self, snapshot: &EngineSnapshot) {
-        store_next_id(
-            &self.next_fixture_id,
-            snapshot
-                .fixtures
-                .iter()
-                .map(|fixture| fixture.id)
-                .max()
-                .unwrap_or(0)
-                .saturating_add(1),
-        );
-        store_next_id(
-            &self.next_effect_id,
-            snapshot
-                .effects
-                .iter()
-                .map(|effect| effect.id)
-                .chain(
-                    snapshot
-                        .cues
-                        .iter()
-                        .flat_map(|cue| cue.effect_targets.iter().map(|target| target.effect_id)),
-                )
-                .max()
-                .unwrap_or(0)
-                .saturating_add(1),
-        );
-        store_next_id(
-            &self.next_cue_id,
-            snapshot
-                .cues
-                .iter()
-                .map(|cue| cue.id)
-                .max()
-                .unwrap_or(0)
-                .saturating_add(1),
-        );
-        store_next_id(
-            &self.next_cue_list_id,
-            snapshot
-                .cue_lists
-                .iter()
-                .map(|cue_list| cue_list.id)
-                .max()
-                .unwrap_or(DEFAULT_CUE_LIST_ID)
-                .saturating_add(1),
-        );
-        store_next_id(
-            &self.next_palette_id,
-            snapshot
-                .palettes
-                .iter()
-                .map(|palette| palette.id)
-                .max()
-                .unwrap_or(0)
-                .saturating_add(1),
-        );
-        store_next_id(
-            &self.next_executor_id,
-            snapshot
-                .playback_executors
-                .iter()
-                .map(|executor| executor.id)
-                .max()
-                .unwrap_or(0)
-                .saturating_add(1),
-        );
-        store_next_id(
-            &self.next_timeline_event_id,
-            snapshot
-                .timeline
-                .events
-                .iter()
-                .map(|event| event.id)
-                .max()
-                .unwrap_or(0)
-                .saturating_add(1),
-        );
-        let authored_next_timeline_layer_id = snapshot
-            .timeline
-            .layers
-            .iter()
-            .map(|layer| layer.id)
-            .max()
-            .unwrap_or(1)
-            .saturating_add(1)
-            .max(2);
-        let derived_audio_next_timeline_layer_id = (snapshot.timeline.audio.is_some()
-            && snapshot.timeline.audio_clips.is_empty()
-            && first_timeline_audio_layer_id(&snapshot.timeline.layers).is_none())
-        .then(|| {
-            next_timeline_audio_layer_id(&snapshot.timeline.layers)
-                .saturating_add(1)
-                .max(2)
-        })
-        .unwrap_or(2);
-        self.next_timeline_layer_id.store(
-            authored_next_timeline_layer_id.max(derived_audio_next_timeline_layer_id),
-            Ordering::Relaxed,
-        );
-        store_next_id(
-            &self.next_timeline_audio_clip_id,
-            snapshot
-                .timeline
-                .audio_clips
-                .iter()
-                .map(|clip| clip.id)
-                .max()
-                .unwrap_or(0)
-                .saturating_add(1),
-        );
-        let max_automation_id = snapshot
-            .timeline
-            .automations
-            .iter()
-            .map(|automation| automation.id)
-            .chain(
-                snapshot
-                    .timeline
-                    .video_automations
-                    .iter()
-                    .map(|automation| automation.id),
-            )
-            .max()
-            .unwrap_or(0);
-        store_next_id(
-            &self.next_automation_id,
-            max_automation_id.saturating_add(1),
-        );
-        store_next_id(
-            &self.next_video_layer_id,
-            snapshot
-                .video
-                .layers
-                .iter()
-                .map(|layer| layer.id)
-                .max()
-                .unwrap_or(0)
-                .saturating_add(1),
-        );
-        store_next_id(
-            &self.next_composition_id,
-            snapshot
-                .video
-                .compositions
-                .iter()
-                .map(|composition| composition.id)
-                .max()
-                .unwrap_or(0)
-                .saturating_add(1),
-        );
-        store_next_id(
-            &self.next_video_output_id,
-            snapshot
-                .video
-                .outputs
-                .iter()
-                .map(|output| output.id)
-                .max()
-                .unwrap_or(0)
-                .saturating_add(1),
-        );
-        store_next_id(
-            &self.next_node_graph_id,
-            snapshot
-                .node_graphs
-                .iter()
-                .map(|graph| graph.id)
-                .max()
-                .unwrap_or(0)
-                .saturating_add(1),
-        );
-        store_next_id(
-            &self.next_stage_object_id,
-            snapshot
-                .stage_objects
-                .iter()
-                .map(|object| object.id)
-                .max()
-                .unwrap_or(0)
-                .saturating_add(1),
-        );
-    }
+    /// Collect every allocator candidate carried by a command before either
+    /// validation or reservation. This match is intentionally exhaustive:
+    /// adding an EngineCommand variant requires an explicit candidate or
+    /// non-candidate routing decision here.
+    fn allocator_maximums_for_command(
+        &self,
+        command: &EngineCommand,
+    ) -> Result<AllocatorMaximums, String> {
+        let mut maxima = AllocatorMaximums::default();
 
-    fn sync_allocator_counters_for_command(&self, command: &EngineCommand) {
         match command {
-            EngineCommand::LoadProjectSnapshot(snapshot) => self.sync_allocator_counters(snapshot),
-            EngineCommand::UpsertCueList { cue_list_id, .. } => {
-                store_next_id(&self.next_cue_list_id, cue_list_id.saturating_add(1));
+            EngineCommand::LoadProjectSnapshot(snapshot)
+            | EngineCommand::LoadProjectSnapshotPublished { snapshot, .. } => {
+                let snapshot = normalized_engine_snapshot_video_media_assets(snapshot.clone())?;
+                observe_project_snapshot_allocator_sources(&mut maxima, &snapshot)?;
+            }
+            EngineCommand::PatchFixture { fixture_id, .. }
+            | EngineCommand::RepairFixtureProfilePublished { fixture_id, .. }
+            | EngineCommand::ReplaceFixtureProfile { fixture_id, .. } => {
+                maxima.observe_u64(AllocatorDomain::Fixtures, *fixture_id);
+            }
+            EngineCommand::PatchFixturesPublished { candidates, .. } => {
+                for candidate in candidates {
+                    maxima.observe_u64(AllocatorDomain::Fixtures, candidate.fixture_id);
+                }
+            }
+            EngineCommand::AddLfoEffect { effect_id, .. }
+            | EngineCommand::AddPositionWaveEffect { effect_id, .. }
+            | EngineCommand::AddColorEffect { effect_id, .. }
+            | EngineCommand::AddChaserEffect { effect_id, .. }
+            | EngineCommand::AddMoveEffect { effect_id, .. }
+            | EngineCommand::AddValueEffect { effect_id, .. }
+            | EngineCommand::AddCurveEffect { effect_id, .. }
+            | EngineCommand::AddMappingEffect { effect_id, .. }
+            | EngineCommand::AddColorMappingEffect { effect_id, .. }
+            | EngineCommand::UpdateLfoEffect { effect_id, .. }
+            | EngineCommand::UpdatePositionWaveEffect { effect_id, .. }
+            | EngineCommand::UpdateColorEffect { effect_id, .. }
+            | EngineCommand::UpdateChaserEffect { effect_id, .. }
+            | EngineCommand::UpdateMoveEffect { effect_id, .. }
+            | EngineCommand::UpdateValueEffect { effect_id, .. }
+            | EngineCommand::UpdateCurveEffect { effect_id, .. }
+            | EngineCommand::UpdateMappingEffect { effect_id, .. }
+            | EngineCommand::UpdateColorMappingEffect { effect_id, .. } => {
+                maxima.observe_u64(AllocatorDomain::Effects, *effect_id);
+            }
+            EngineCommand::UpsertNodeGraph(graph)
+            | EngineCommand::UpsertNodeGraphPublished { graph, .. } => {
+                maxima.observe_u64(AllocatorDomain::NodeGraphs, graph.id);
+            }
+            EngineCommand::CreateCue {
+                cue_id,
+                effect_targets,
+                ..
+            }
+            | EngineCommand::UpdateCue {
+                cue_id,
+                effect_targets,
+                ..
+            }
+            | EngineCommand::UpdateCuePublished {
+                cue_id,
+                effect_targets,
+                ..
+            } => {
+                maxima.observe_u64(AllocatorDomain::Cues, *cue_id);
+                observe_effect_target_allocator_sources(&mut maxima, effect_targets);
+            }
+            EngineCommand::CreateCuePublished {
+                cue_id,
+                cue_list_id,
+                effect_targets,
+                ..
+            } => {
+                maxima.observe_u64(AllocatorDomain::Cues, *cue_id);
+                maxima.observe_u64(AllocatorDomain::CueLists, *cue_list_id);
+                observe_effect_target_allocator_sources(&mut maxima, effect_targets);
+            }
+            EngineCommand::SetCueEffectTargetsPublished { effect_targets, .. } => {
+                observe_effect_target_allocator_sources(&mut maxima, effect_targets);
+            }
+            EngineCommand::SetCueChildTimeline {
+                child_timeline: Some(child_timeline),
+                ..
+            } => {
+                observe_child_timeline_allocator_sources(&mut maxima, child_timeline);
+            }
+            EngineCommand::SetCueChildTimeline {
+                child_timeline: None,
+                ..
+            } => {}
+            EngineCommand::DuplicateCue { cue_id, .. } => {
+                maxima.observe_u64(AllocatorDomain::Cues, *cue_id);
+            }
+            EngineCommand::UpsertCueList { cue_list_id, .. }
+            | EngineCommand::SetCueList { cue_list_id, .. } => {
+                maxima.observe_u64(AllocatorDomain::CueLists, *cue_list_id);
             }
             EngineCommand::UpsertPalette(palette) => {
-                store_next_id(&self.next_palette_id, palette.id.saturating_add(1));
+                maxima.observe_u64(AllocatorDomain::Palettes, palette.id);
             }
             EngineCommand::UpsertPlaybackExecutor(executor) => {
-                store_next_id(&self.next_executor_id, executor.id.saturating_add(1));
+                maxima.observe_u64(AllocatorDomain::PlaybackExecutors, executor.id);
             }
-            EngineCommand::AddTimelineLayer { layer, .. } => {
-                self.next_timeline_layer_id
-                    .fetch_max(layer.id.saturating_add(1).max(2), Ordering::Relaxed);
+            EngineCommand::AddTimelineCueEvent {
+                event_id, cue_id, ..
             }
-            EngineCommand::AddTimelineAudioClip { clip, .. } => {
-                store_next_id(&self.next_timeline_audio_clip_id, clip.id.saturating_add(1));
+            | EngineCommand::SetTimelineCueEvent {
+                event_id, cue_id, ..
+            }
+            | EngineCommand::AddTimelineCueEventPublished {
+                event_id, cue_id, ..
+            }
+            | EngineCommand::SetTimelineCueEventPublished {
+                event_id, cue_id, ..
+            } => {
+                observe_timeline_event_allocator_sources(&mut maxima, *event_id, *cue_id, None);
+            }
+            EngineCommand::AddTimelineSceneBlockPublished {
+                event_id,
+                cue_id,
+                jump_to_event_id,
+                ..
+            }
+            | EngineCommand::SetTimelineSceneBlockPublished {
+                event_id,
+                cue_id,
+                jump_to_event_id,
+                ..
+            } => {
+                observe_timeline_event_allocator_sources(
+                    &mut maxima,
+                    *event_id,
+                    *cue_id,
+                    *jump_to_event_id,
+                );
+            }
+            EngineCommand::AddTimelineLayer { layer, .. }
+            | EngineCommand::UpdateTimelineLayer { layer, .. } => {
+                maxima.observe_u32(AllocatorDomain::TimelineLayers, layer.id);
+            }
+            EngineCommand::AddTimelineAudioClip { clip, .. }
+            | EngineCommand::UpdateTimelineAudioClip { clip, .. } => {
+                maxima.observe_u64(AllocatorDomain::TimelineAudioClips, clip.id);
+            }
+            EngineCommand::AddTimelineAutomation {
+                automation_id,
+                fixture_id,
+                ..
+            }
+            | EngineCommand::SetTimelineAutomation {
+                automation_id,
+                fixture_id,
+                ..
+            } => {
+                maxima.observe_u64(AllocatorDomain::Automations, *automation_id);
+                maxima.observe_u64(AllocatorDomain::Fixtures, *fixture_id);
+            }
+            EngineCommand::AddTimelineVideoAutomation {
+                automation_id,
+                layer_id,
+                ..
+            }
+            | EngineCommand::SetTimelineVideoAutomation {
+                automation_id,
+                layer_id,
+                ..
+            } => {
+                maxima.observe_u64(AllocatorDomain::Automations, *automation_id);
+                maxima.observe_u64(AllocatorDomain::VideoLayers, *layer_id);
+            }
+            EngineCommand::SetTimelineAutomationEnabled { automation_id, .. } => {
+                maxima.observe_u64(AllocatorDomain::Automations, *automation_id);
+            }
+            EngineCommand::SetTimelineAudio(Some(_)) => {
+                let snapshot = self.snapshot();
+                if snapshot.timeline.audio.is_some() && snapshot.timeline.audio_clips.is_empty() {
+                    observe_derived_legacy_audio_layer_allocator_source(
+                        &mut maxima,
+                        &snapshot.timeline.layers,
+                    )?;
+                }
+            }
+            EngineCommand::SetTimelineAudio(None) => {}
+            EngineCommand::AddVideoLayer { layer_id, .. } => {
+                maxima.observe_u64(AllocatorDomain::VideoLayers, *layer_id);
+            }
+            EngineCommand::AddVideoLayerWithAllocatedAsset {
+                layer_id, asset_id, ..
+            } => {
+                maxima.observe_u64(AllocatorDomain::VideoLayers, *layer_id);
+                maxima.observe_u64(AllocatorDomain::MediaAssets, *asset_id);
+            }
+            EngineCommand::DuplicateVideoLayer {
+                new_layer_id: layer_id,
+                ..
+            }
+            | EngineCommand::DuplicateVideoLayerPublished {
+                new_layer_id: layer_id,
+                ..
+            } => {
+                maxima.observe_u64(AllocatorDomain::VideoLayers, *layer_id);
+            }
+            EngineCommand::MediaAssetTransactionPublished { transaction, .. } => {
+                match transaction {
+                    MediaAssetTransaction::Import(candidate) => {
+                        for asset in &candidate.assets {
+                            maxima.observe_u64(AllocatorDomain::MediaAssets, asset.id);
+                        }
+                        for layer in &candidate.layers {
+                            maxima.observe_u64(AllocatorDomain::VideoLayers, layer.id);
+                            if let Some(asset_id) = layer.media_asset_id {
+                                maxima.observe_u64(AllocatorDomain::MediaAssets, asset_id);
+                            }
+                        }
+                    }
+                    MediaAssetTransaction::BootstrapVjShow { candidate, output } => {
+                        for asset in &candidate.assets {
+                            maxima.observe_u64(AllocatorDomain::MediaAssets, asset.id);
+                        }
+                        for layer in &candidate.layers {
+                            maxima.observe_u64(AllocatorDomain::VideoLayers, layer.id);
+                            if let Some(asset_id) = layer.media_asset_id {
+                                maxima.observe_u64(AllocatorDomain::MediaAssets, asset_id);
+                            }
+                        }
+                        maxima.observe_u64(AllocatorDomain::VideoOutputs, output.id);
+                    }
+                    MediaAssetTransaction::Update(asset) => {
+                        maxima.observe_u64(AllocatorDomain::MediaAssets, asset.id);
+                    }
+                }
+            }
+            EngineCommand::AddVideoComposition(composition) => {
+                maxima.observe_u64(AllocatorDomain::Compositions, composition.id);
+            }
+            EngineCommand::BootstrapVjShow { layers, output, .. } => {
+                for (layer_id, _, _) in layers {
+                    maxima.observe_u64(AllocatorDomain::VideoLayers, *layer_id);
+                }
+                maxima.observe_u64(AllocatorDomain::VideoOutputs, output.id);
+            }
+            EngineCommand::BootstrapVjShowWithAllocatedAssets { layers, output, .. } => {
+                for (layer_id, asset_id, _, _) in layers {
+                    maxima.observe_u64(AllocatorDomain::VideoLayers, *layer_id);
+                    maxima.observe_u64(AllocatorDomain::MediaAssets, *asset_id);
+                }
+                maxima.observe_u64(AllocatorDomain::VideoOutputs, output.id);
+            }
+            EngineCommand::AddVideoOutput(output) => {
+                maxima.observe_u64(AllocatorDomain::VideoOutputs, output.id);
             }
             EngineCommand::UpsertStageObject(object) => {
-                self.sync_stage_object_allocator(std::slice::from_ref(object));
+                maxima.observe_u64(AllocatorDomain::StageObjects, object.id);
             }
             EngineCommand::SaveStageMapPreset {
                 stage_objects: Some(stage_objects),
                 ..
             } => {
-                self.sync_stage_object_allocator(stage_objects);
+                observe_stage_object_allocator_sources(&mut maxima, stage_objects);
             }
+            EngineCommand::UpsertStageMapPresetPublished { preset, .. } => {
+                if let Some(stage_objects) = &preset.stage_objects {
+                    observe_stage_object_allocator_sources(&mut maxima, stage_objects);
+                }
+            }
+            EngineCommand::SaveStageMapPreset {
+                stage_objects: None,
+                ..
+            } => {}
             EngineCommand::ApplyStageMapPreset { label } => {
                 let label = label.trim();
-                if label.is_empty() {
-                    return;
-                }
-                let snapshot = self.snapshot();
-                if let Some(stage_objects) = snapshot
-                    .stage_map_presets
-                    .iter()
-                    .find(|preset| preset.label == label)
-                    .and_then(|preset| preset.stage_objects.as_deref())
-                {
-                    self.sync_stage_object_allocator(stage_objects);
+                if !label.is_empty() {
+                    if let Some(stage_objects) = self
+                        .snapshot()
+                        .stage_map_presets
+                        .iter()
+                        .find(|preset| preset.label == label)
+                        .and_then(|preset| preset.stage_objects.as_deref())
+                    {
+                        observe_stage_object_allocator_sources(&mut maxima, stage_objects);
+                    }
                 }
             }
-            _ => {}
+            EngineCommand::RemoveFixture(_)
+            | EngineCommand::SetAttribute { .. }
+            | EngineCommand::SetFixtureAttributeBatch { .. }
+            | EngineCommand::SetGroupAttribute { .. }
+            | EngineCommand::SetProgrammerMode { .. }
+            | EngineCommand::SetProgrammerAttribute { .. }
+            | EngineCommand::SetProgrammerFixtureAttributeBatch { .. }
+            | EngineCommand::SetProgrammerGroupAttribute { .. }
+            | EngineCommand::ClearProgrammer
+            | EngineCommand::CommitProgrammer { .. }
+            | EngineCommand::SetGroupHighlight { .. }
+            | EngineCommand::SetGroupSolo { .. }
+            | EngineCommand::SetGroupStrobe { .. }
+            | EngineCommand::SetGroupPark { .. }
+            | EngineCommand::SetGroupFixtureLimits { .. }
+            | EngineCommand::SetFixtureTransform { .. }
+            | EngineCommand::SetFixturePatch { .. }
+            | EngineCommand::SetFixtureLimits { .. }
+            | EngineCommand::SetFixtureGroups { .. }
+            | EngineCommand::ApplyFixtureGroupStatePublished { .. }
+            | EngineCommand::SetFixtureHighlight { .. }
+            | EngineCommand::SetFixtureSolo { .. }
+            | EngineCommand::SetFixturePark { .. }
+            | EngineCommand::ClearFixtureFlags(_)
+            | EngineCommand::ApplyAttributeValues { .. }
+            | EngineCommand::RequestPersistenceSnapshot { .. }
+            | EngineCommand::SetTouchSurface { .. }
+            | EngineCommand::SetStageMapConfig(_)
+            | EngineCommand::RemoveStageMapPreset { .. }
+            | EngineCommand::RemoveStageObject(_)
+            | EngineCommand::SetOutput(_)
+            | EngineCommand::SetDmxOutputs(_)
+            | EngineCommand::SetOutputOwnershipRole { .. }
+            | EngineCommand::FenceOutputOwnership { .. }
+            | EngineCommand::PrepareOutputOwnershipRole { .. }
+            | EngineCommand::SetDmxInputFrame { .. }
+            | EngineCommand::ClearDmxInput(_)
+            | EngineCommand::Blackout(_)
+            | EngineCommand::SetAllBlackout(_)
+            | EngineCommand::SetLightingMaster(_)
+            | EngineCommand::SetGroupSubmaster { .. }
+            | EngineCommand::SetBpm(_)
+            | EngineCommand::TapBpm
+            | EngineCommand::MidiClockPulse
+            | EngineCommand::SyncExternalClock { .. }
+            | EngineCommand::MidiSongPositionPointer(_)
+            | EngineCommand::ResetTelemetry
+            | EngineCommand::SetEffectEnabled { .. }
+            | EngineCommand::SetEffectEnabledPublished { .. }
+            | EngineCommand::SetEffectVideoTargetPosition { .. }
+            | EngineCommand::MoveEffect { .. }
+            | EngineCommand::RemoveEffect(_)
+            | EngineCommand::SetNodeGraphEnabled { .. }
+            | EngineCommand::SetNodeGraphEnabledPublished { .. }
+            | EngineCommand::RemoveNodeGraph(_)
+            | EngineCommand::RemoveNodeGraphPublished { .. }
+            | EngineCommand::SetCueStepsPublished { .. }
+            | EngineCommand::SetCueDetailsPublished { .. }
+            | EngineCommand::SetCueColor { .. }
+            | EngineCommand::SetGroupColor { .. }
+            | EngineCommand::SetCueMetadata { .. }
+            | EngineCommand::SetCueParts { .. }
+            | EngineCommand::SetCueMark { .. }
+            | EngineCommand::SetCueMibFixtureIds { .. }
+            | EngineCommand::RemovePalette(_)
+            | EngineCommand::ApplyPalette { .. }
+            | EngineCommand::SetCuePaletteTargets { .. }
+            | EngineCommand::MoveCue { .. }
+            | EngineCommand::RemoveCueList(_)
+            | EngineCommand::RemovePlaybackExecutor(_)
+            | EngineCommand::SetPlaybackExecutorLevel { .. }
+            | EngineCommand::SetPlaybackMaster(_)
+            | EngineCommand::TriggerPlaybackExecutorNext(_)
+            | EngineCommand::TriggerPlaybackExecutorPrevious(_)
+            | EngineCommand::TriggerCue(_)
+            | EngineCommand::TriggerCueWithDirection { .. }
+            | EngineCommand::TriggerNextCue
+            | EngineCommand::TriggerPreviousCue
+            | EngineCommand::TriggerCueListNext(_)
+            | EngineCommand::TriggerCueListPrevious(_)
+            | EngineCommand::ReleaseCue(_)
+            | EngineCommand::SetCueLiveModifier { .. }
+            | EngineCommand::ClearCueLiveModifier(_)
+            | EngineCommand::SetCueLiveModifierDefaults { .. }
+            | EngineCommand::SetCueFadePaused(_)
+            | EngineCommand::RemoveCue(_)
+            | EngineCommand::RemoveCuePublished { .. }
+            | EngineCommand::RemoveTimelineEvent(_)
+            | EngineCommand::RemoveTimelineEventPublished { .. }
+            | EngineCommand::RemoveTimelineSceneBlockPublished { .. }
+            | EngineCommand::SnapTimelineItemsPublished { .. }
+            | EngineCommand::ReconformTimelineToBpm { .. }
+            | EngineCommand::RemoveTimelineLayer { .. }
+            | EngineCommand::ReorderTimelineLayers { .. }
+            | EngineCommand::RemoveTimelineAudioClip { .. }
+            | EngineCommand::SetTimelineAudioMaster { .. }
+            | EngineCommand::RemoveTimelineAutomation(_)
+            | EngineCommand::SetTimelineMetronome { .. }
+            | EngineCommand::SetLiveAudioSpectrum(_)
+            | EngineCommand::PublishLiveAudioFrame { .. }
+            | EngineCommand::ClearLiveAudioInput { .. }
+            | EngineCommand::ClearLiveAudioInputPublished { .. }
+            | EngineCommand::ReportLiveAudioOnset { .. }
+            | EngineCommand::SetTimelinePlaying(_)
+            | EngineCommand::SeekTimeline(_)
+            | EngineCommand::SetDirectChildTimelinePlaying { .. }
+            | EngineCommand::SeekDirectChildTimeline { .. }
+            | EngineCommand::SeekTimelineBeat { .. }
+            | EngineCommand::SyncTimelineTimecode { .. }
+            | EngineCommand::SetAutoVjConfig(_)
+            | EngineCommand::SetAutoVjArmed(_)
+            | EngineCommand::SetAutoVjHold(_)
+            | EngineCommand::SetAutoVjConfigPublished { .. }
+            | EngineCommand::SetAutoVjArmedPublished { .. }
+            | EngineCommand::SetAutoVjHoldPublished { .. }
+            | EngineCommand::RemoveVideoLayer(_)
+            | EngineCommand::SetVideoLayerOrder(_)
+            | EngineCommand::SetVideoLayerLabel { .. }
+            | EngineCommand::SetVideoLayerSource { .. }
+            | EngineCommand::SetVideoLayerIsfEffect { .. }
+            | EngineCommand::SetVideoLayerIsfEffectPublished { .. }
+            | EngineCommand::MutateVideoLayerIsfStack { .. }
+            | EngineCommand::PulseVideoLayerIsfEvent { .. }
+            | EngineCommand::SetVideoLayerState { .. }
+            | EngineCommand::ExclusiveVideoTake { .. }
+            | EngineCommand::SetVideoLayerParam { .. }
+            | EngineCommand::FadeVideoLayerOpacity { .. }
+            | EngineCommand::SetVideoLayerEnabled { .. }
+            | EngineCommand::SetVideoLayerSolo { .. }
+            | EngineCommand::SetVideoLayerPlaying { .. }
+            | EngineCommand::SetVideoLayerLoop { .. }
+            | EngineCommand::AddVideoCuePoint { .. }
+            | EngineCommand::RemoveVideoCuePoint { .. }
+            | EngineCommand::SetVideoCuePoint { .. }
+            | EngineCommand::JumpVideoCuePoint { .. }
+            | EngineCommand::JumpVideoCuePointRelative { .. }
+            | EngineCommand::SetVideoLayerBlendMode { .. }
+            | EngineCommand::SetVideoMasterOpacity(_)
+            | EngineCommand::SetVideoBlackout(_)
+            | EngineCommand::RemoveVideoComposition(_)
+            | EngineCommand::SetVideoCompositionLayers { .. }
+            | EngineCommand::RemoveVideoOutput(_)
+            | EngineCommand::SetVideoOutputConfig { .. }
+            | EngineCommand::SetVideoOutputEnabled { .. }
+            | EngineCommand::SetVideoOutputRouting { .. }
+            | EngineCommand::SetVideoOutputOpacity { .. }
+            | EngineCommand::FadeVideoOutputOpacity { .. }
+            | EngineCommand::SetVideoOutputBlackout { .. }
+            | EngineCommand::SetVideoOutputMapping { .. }
+            | EngineCommand::SetVideoOutputMappingField { .. }
+            | EngineCommand::SaveVideoOutputMappingPreset { .. }
+            | EngineCommand::ApplyVideoOutputMappingPreset { .. }
+            | EngineCommand::RemoveVideoOutputMappingPreset { .. } => {}
         }
-    }
 
-    fn sync_stage_object_allocator(&self, objects: &[StageObjectSummary]) {
-        store_next_id(
-            &self.next_stage_object_id,
-            objects
-                .iter()
-                .map(|object| object.id)
-                .max()
-                .unwrap_or(0)
-                .saturating_add(1),
-        );
+        Ok(maxima)
     }
 }
 
+#[derive(Debug, Default)]
+struct AllocatorMaximums {
+    fixtures: Option<u64>,
+    effects: Option<u64>,
+    cues: Option<u64>,
+    cue_lists: Option<u64>,
+    palettes: Option<u64>,
+    playback_executors: Option<u64>,
+    timeline_events: Option<u64>,
+    timeline_layers: Option<u32>,
+    timeline_audio_clips: Option<u64>,
+    automations: Option<u64>,
+    media_assets: Option<u64>,
+    video_layers: Option<u64>,
+    compositions: Option<u64>,
+    video_outputs: Option<u64>,
+    node_graphs: Option<u64>,
+    stage_objects: Option<u64>,
+}
+
+impl AllocatorMaximums {
+    fn observe_u64(&mut self, domain: AllocatorDomain, value: u64) {
+        let slot = match domain {
+            AllocatorDomain::Fixtures => &mut self.fixtures,
+            AllocatorDomain::Effects => &mut self.effects,
+            AllocatorDomain::Cues => &mut self.cues,
+            AllocatorDomain::CueLists => &mut self.cue_lists,
+            AllocatorDomain::Palettes => &mut self.palettes,
+            AllocatorDomain::PlaybackExecutors => &mut self.playback_executors,
+            AllocatorDomain::TimelineEvents => &mut self.timeline_events,
+            AllocatorDomain::TimelineAudioClips => &mut self.timeline_audio_clips,
+            AllocatorDomain::Automations => &mut self.automations,
+            AllocatorDomain::MediaAssets => &mut self.media_assets,
+            AllocatorDomain::VideoLayers => &mut self.video_layers,
+            AllocatorDomain::Compositions => &mut self.compositions,
+            AllocatorDomain::VideoOutputs => &mut self.video_outputs,
+            AllocatorDomain::NodeGraphs => &mut self.node_graphs,
+            AllocatorDomain::StageObjects => &mut self.stage_objects,
+            AllocatorDomain::TimelineLayers => return,
+        };
+        if slot.map_or(true, |current| value > current) {
+            *slot = Some(value);
+        }
+    }
+
+    fn observe_u32(&mut self, domain: AllocatorDomain, value: u32) {
+        debug_assert!(matches!(domain, AllocatorDomain::TimelineLayers));
+        if self.timeline_layers.map_or(true, |current| value > current) {
+            self.timeline_layers = Some(value);
+        }
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        for (domain, maximum) in [
+            (AllocatorDomain::Fixtures, self.fixtures),
+            (AllocatorDomain::Effects, self.effects),
+            (AllocatorDomain::Cues, self.cues),
+            (AllocatorDomain::CueLists, self.cue_lists),
+            (AllocatorDomain::Palettes, self.palettes),
+            (AllocatorDomain::PlaybackExecutors, self.playback_executors),
+            (AllocatorDomain::TimelineEvents, self.timeline_events),
+            (
+                AllocatorDomain::TimelineAudioClips,
+                self.timeline_audio_clips,
+            ),
+            (AllocatorDomain::Automations, self.automations),
+            (AllocatorDomain::MediaAssets, self.media_assets),
+            (AllocatorDomain::VideoLayers, self.video_layers),
+            (AllocatorDomain::Compositions, self.compositions),
+            (AllocatorDomain::VideoOutputs, self.video_outputs),
+            (AllocatorDomain::NodeGraphs, self.node_graphs),
+            (AllocatorDomain::StageObjects, self.stage_objects),
+        ] {
+            if let Some(maximum) = maximum {
+                validate_allocator_u64_candidate(domain, maximum)?;
+            }
+        }
+        if let Some(maximum) = self.timeline_layers {
+            validate_allocator_u32_candidate(AllocatorDomain::TimelineLayers, maximum)?;
+        }
+        Ok(())
+    }
+
+    fn reserve_into(&self, engine: &EngineHandle) -> Result<(), String> {
+        if let Some(maximum) = self.fixtures {
+            store_next_id(
+                &engine.next_fixture_id,
+                checked_next_allocator_u64_after_max(maximum, AllocatorDomain::Fixtures)?,
+            );
+        }
+        if let Some(maximum) = self.effects {
+            store_next_id(
+                &engine.next_effect_id,
+                checked_next_allocator_u64_after_max(maximum, AllocatorDomain::Effects)?,
+            );
+        }
+        if let Some(maximum) = self.cues {
+            store_next_id(
+                &engine.next_cue_id,
+                checked_next_allocator_u64_after_max(maximum, AllocatorDomain::Cues)?,
+            );
+        }
+        if let Some(maximum) = self.cue_lists {
+            store_next_id(
+                &engine.next_cue_list_id,
+                checked_next_allocator_u64_after_max(maximum, AllocatorDomain::CueLists)?,
+            );
+        }
+        if let Some(maximum) = self.palettes {
+            store_next_id(
+                &engine.next_palette_id,
+                checked_next_allocator_u64_after_max(maximum, AllocatorDomain::Palettes)?,
+            );
+        }
+        if let Some(maximum) = self.playback_executors {
+            store_next_id(
+                &engine.next_executor_id,
+                checked_next_allocator_u64_after_max(maximum, AllocatorDomain::PlaybackExecutors)?,
+            );
+        }
+        if let Some(maximum) = self.timeline_events {
+            store_next_id(
+                &engine.next_timeline_event_id,
+                checked_next_allocator_u64_after_max(maximum, AllocatorDomain::TimelineEvents)?,
+            );
+        }
+        if let Some(maximum) = self.timeline_audio_clips {
+            store_next_id(
+                &engine.next_timeline_audio_clip_id,
+                checked_next_allocator_u64_after_max(maximum, AllocatorDomain::TimelineAudioClips)?,
+            );
+        }
+        if let Some(maximum) = self.automations {
+            store_next_id(
+                &engine.next_automation_id,
+                checked_next_allocator_u64_after_max(maximum, AllocatorDomain::Automations)?,
+            );
+        }
+        if let Some(maximum) = self.media_assets {
+            store_next_id(
+                &engine.next_media_asset_id,
+                checked_next_allocator_u64_after_max(maximum, AllocatorDomain::MediaAssets)?,
+            );
+        }
+        if let Some(maximum) = self.video_layers {
+            store_next_id(
+                &engine.next_video_layer_id,
+                checked_next_allocator_u64_after_max(maximum, AllocatorDomain::VideoLayers)?,
+            );
+        }
+        if let Some(maximum) = self.compositions {
+            store_next_id(
+                &engine.next_composition_id,
+                checked_next_allocator_u64_after_max(maximum, AllocatorDomain::Compositions)?,
+            );
+        }
+        if let Some(maximum) = self.video_outputs {
+            store_next_id(
+                &engine.next_video_output_id,
+                checked_next_allocator_u64_after_max(maximum, AllocatorDomain::VideoOutputs)?,
+            );
+        }
+        if let Some(maximum) = self.node_graphs {
+            store_next_id(
+                &engine.next_node_graph_id,
+                checked_next_allocator_u64_after_max(maximum, AllocatorDomain::NodeGraphs)?,
+            );
+        }
+        if let Some(maximum) = self.stage_objects {
+            store_next_id(
+                &engine.next_stage_object_id,
+                checked_next_allocator_u64_after_max(maximum, AllocatorDomain::StageObjects)?,
+            );
+        }
+        if let Some(maximum) = self.timeline_layers {
+            store_next_id_u32(
+                &engine.next_timeline_layer_id,
+                checked_next_allocator_u32_after_max(maximum, AllocatorDomain::TimelineLayers)?
+                    .max(2),
+            );
+        }
+        Ok(())
+    }
+}
+
+fn allocator_capacity_error(domain: AllocatorDomain, maximum: impl std::fmt::Display) -> String {
+    format!(
+        "allocator domain '{}' cannot reserve a valid next ID after maximum {maximum}",
+        domain.label()
+    )
+}
+
+fn validate_allocator_u64_candidate(domain: AllocatorDomain, candidate: u64) -> Result<(), String> {
+    if candidate >= u64::MAX - 1 {
+        Err(allocator_capacity_error(domain, candidate))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_allocator_u32_candidate(domain: AllocatorDomain, candidate: u32) -> Result<(), String> {
+    if candidate >= u32::MAX - 1 {
+        Err(allocator_capacity_error(domain, candidate))
+    } else {
+        Ok(())
+    }
+}
+
+fn checked_next_allocator_u64_after_max(
+    maximum: u64,
+    domain: AllocatorDomain,
+) -> Result<u64, String> {
+    validate_allocator_u64_candidate(domain, maximum)?;
+    Ok(maximum + 1)
+}
+
+fn checked_next_allocator_u32_after_max(
+    maximum: u32,
+    domain: AllocatorDomain,
+) -> Result<u32, String> {
+    validate_allocator_u32_candidate(domain, maximum)?;
+    Ok(maximum + 1)
+}
+
+fn observe_effect_target_allocator_sources(
+    maxima: &mut AllocatorMaximums,
+    targets: &[CueEffectTarget],
+) {
+    for target in targets {
+        maxima.observe_u64(AllocatorDomain::Effects, target.effect_id);
+    }
+}
+
+fn observe_timeline_event_allocator_sources(
+    maxima: &mut AllocatorMaximums,
+    event_id: TimelineEventId,
+    cue_id: CueId,
+    jump_to_event_id: Option<TimelineEventId>,
+) {
+    maxima.observe_u64(AllocatorDomain::TimelineEvents, event_id);
+    maxima.observe_u64(AllocatorDomain::Cues, cue_id);
+    if let Some(jump_to_event_id) = jump_to_event_id {
+        maxima.observe_u64(AllocatorDomain::TimelineEvents, jump_to_event_id);
+    }
+}
+
+fn observe_stage_object_allocator_sources(
+    maxima: &mut AllocatorMaximums,
+    objects: &[StageObjectSummary],
+) {
+    for object in objects {
+        maxima.observe_u64(AllocatorDomain::StageObjects, object.id);
+    }
+}
+
+fn observe_child_timeline_allocator_sources(
+    maxima: &mut AllocatorMaximums,
+    child: &ChildTimelineSummary,
+) {
+    for layer in &child.layers {
+        maxima.observe_u32(AllocatorDomain::TimelineLayers, layer.id);
+    }
+    for event in &child.events {
+        observe_timeline_event_allocator_sources(
+            maxima,
+            event.id,
+            event.cue_id,
+            event.jump_to_event_id,
+        );
+    }
+    for clip in &child.audio_clips {
+        maxima.observe_u64(AllocatorDomain::TimelineAudioClips, clip.id);
+    }
+    for automation in &child.automations {
+        maxima.observe_u64(AllocatorDomain::Automations, automation.id);
+        maxima.observe_u64(AllocatorDomain::Fixtures, automation.fixture_id);
+    }
+    for automation in &child.video_automations {
+        maxima.observe_u64(AllocatorDomain::Automations, automation.id);
+        maxima.observe_u64(AllocatorDomain::VideoLayers, automation.layer_id);
+    }
+}
+
+fn observe_video_allocator_sources(maxima: &mut AllocatorMaximums, video: &VideoSnapshot) {
+    for asset in &video.media_assets {
+        maxima.observe_u64(AllocatorDomain::MediaAssets, asset.id);
+    }
+    for layer in &video.layers {
+        maxima.observe_u64(AllocatorDomain::VideoLayers, layer.id);
+    }
+    for composition in &video.compositions {
+        maxima.observe_u64(AllocatorDomain::Compositions, composition.id);
+    }
+    for output in &video.outputs {
+        maxima.observe_u64(AllocatorDomain::VideoOutputs, output.id);
+    }
+}
+
+/// Apply the wire-compatible legacy migration to the authored image before a
+/// command reserves allocator capacity. This mirrors the runtime load path so
+/// a direct queue send cannot reserve below IDs that will materialize during
+/// installation.
+fn normalized_engine_snapshot_video_media_assets(
+    mut snapshot: EngineSnapshot,
+) -> Result<EngineSnapshot, String> {
+    if let Some(authored_video) = snapshot.authored_video.take() {
+        snapshot.video = authored_video;
+    }
+    normalize_legacy_video_media_assets(&mut snapshot.video)?;
+    validate_engine_ready_video_media_assets(&snapshot.video)?;
+    Ok(snapshot)
+}
+
+fn observe_derived_legacy_audio_layer_allocator_source(
+    maxima: &mut AllocatorMaximums,
+    layers: &[TimelineLayerSummary],
+) -> Result<(), String> {
+    if first_timeline_audio_layer_id(layers).is_none() {
+        let derived_audio_layer_id = checked_next_timeline_audio_layer_id(layers)?;
+        maxima.observe_u32(AllocatorDomain::TimelineLayers, derived_audio_layer_id);
+    }
+    Ok(())
+}
+
+fn observe_project_snapshot_allocator_sources(
+    maxima: &mut AllocatorMaximums,
+    snapshot: &EngineSnapshot,
+) -> Result<(), String> {
+    for fixture in &snapshot.fixtures {
+        maxima.observe_u64(AllocatorDomain::Fixtures, fixture.id);
+    }
+    for effect in &snapshot.effects {
+        maxima.observe_u64(AllocatorDomain::Effects, effect.id);
+    }
+    for cue_list in &snapshot.cue_lists {
+        maxima.observe_u64(AllocatorDomain::CueLists, cue_list.id);
+    }
+    for palette in &snapshot.palettes {
+        maxima.observe_u64(AllocatorDomain::Palettes, palette.id);
+    }
+    for executor in &snapshot.playback_executors {
+        maxima.observe_u64(AllocatorDomain::PlaybackExecutors, executor.id);
+    }
+    for cue in &snapshot.cues {
+        maxima.observe_u64(AllocatorDomain::Cues, cue.id);
+        maxima.observe_u64(AllocatorDomain::CueLists, cue.cue_list_id);
+        observe_effect_target_allocator_sources(maxima, &cue.effect_targets);
+        if let Some(child_timeline) = &cue.child_timeline {
+            observe_child_timeline_allocator_sources(maxima, child_timeline);
+        }
+    }
+    for event in &snapshot.timeline.events {
+        observe_timeline_event_allocator_sources(
+            maxima,
+            event.id,
+            event.cue_id,
+            event.jump_to_event_id,
+        );
+    }
+    for layer in &snapshot.timeline.layers {
+        maxima.observe_u32(AllocatorDomain::TimelineLayers, layer.id);
+    }
+    for clip in &snapshot.timeline.audio_clips {
+        maxima.observe_u64(AllocatorDomain::TimelineAudioClips, clip.id);
+    }
+    for automation in &snapshot.timeline.automations {
+        maxima.observe_u64(AllocatorDomain::Automations, automation.id);
+        maxima.observe_u64(AllocatorDomain::Fixtures, automation.fixture_id);
+    }
+    for automation in &snapshot.timeline.video_automations {
+        maxima.observe_u64(AllocatorDomain::Automations, automation.id);
+        maxima.observe_u64(AllocatorDomain::VideoLayers, automation.layer_id);
+    }
+    observe_video_allocator_sources(maxima, &snapshot.video);
+    if let Some(authored_video) = &snapshot.authored_video {
+        observe_video_allocator_sources(maxima, authored_video);
+    }
+    for graph in &snapshot.node_graphs {
+        maxima.observe_u64(AllocatorDomain::NodeGraphs, graph.id);
+    }
+    for object in &snapshot.stage_objects {
+        maxima.observe_u64(AllocatorDomain::StageObjects, object.id);
+    }
+    for preset in &snapshot.stage_map_presets {
+        if let Some(objects) = &preset.stage_objects {
+            observe_stage_object_allocator_sources(maxima, objects);
+        }
+    }
+    if snapshot.timeline.audio.is_some()
+        && snapshot.timeline.audio_clips.is_empty()
+        && first_timeline_audio_layer_id(&snapshot.timeline.layers).is_none()
+    {
+        observe_derived_legacy_audio_layer_allocator_source(maxima, &snapshot.timeline.layers)?;
+    }
+    Ok(())
+}
+
+/// Validate all authored IDs that the reservation path consumes before it can
+/// mutate a counter or enqueue a project-load command. MAX is the allocator's
+/// exhausted sentinel; the validator rejects >= MAX - 1, so MAX - 2 is the
+/// last admissible authored maximum.
+fn validate_project_snapshot_allocator_capacity(snapshot: &EngineSnapshot) -> Result<(), String> {
+    let mut maxima = AllocatorMaximums::default();
+    observe_project_snapshot_allocator_sources(&mut maxima, snapshot)?;
+    maxima.validate()
+}
+
+fn checked_next_timeline_audio_layer_id(layers: &[TimelineLayerSummary]) -> Result<u32, String> {
+    let maximum = layers
+        .iter()
+        .map(|layer| layer.id)
+        .max()
+        .unwrap_or(LEGACY_VIDEO_TIMELINE_LAYER_ID);
+    Ok(
+        checked_next_allocator_u32_after_max(maximum, AllocatorDomain::TimelineLayers)?
+            .max(LEGACY_AUDIO_TIMELINE_LAYER_ID),
+    )
+}
+
+#[derive(Clone)]
 struct RuntimeFixture {
     id: FixtureId,
     request: PatchFixtureRequest,
@@ -3000,6 +5341,22 @@ struct RuntimeFixture {
     mode_index: usize,
     limits: FixtureLimits,
     color_binding: Option<RuntimeColorBinding>,
+}
+
+/// Fully validated fixture runtimes and their authored default values. This
+/// is deliberately built without touching `EngineRuntime`, making batch
+/// validation a true precondition of the later one-step apply.
+struct PreparedFixturePatchBatch {
+    fixtures: Vec<RuntimeFixture>,
+    default_values: HashMap<(FixtureId, String), u16>,
+}
+
+/// A replacement runtime fixture built from an existing fixture without
+/// touching A. This keeps profile repair validation separate from the later
+/// admitted publication mutation.
+struct PreparedFixtureProfileRepair {
+    fixture_index: usize,
+    fixture: RuntimeFixture,
 }
 
 #[derive(Clone, Debug)]
@@ -9095,6 +11452,7 @@ struct RuntimeVideoLayer {
     id: VideoLayerId,
     label: String,
     source: VideoSourceSummary,
+    media_asset_id: MediaAssetId,
     blend_mode: VideoBlendMode,
     state: VideoLayerState,
     isf_effect: Option<VideoIsfEffectSummary>,
@@ -9133,6 +11491,7 @@ struct PendingCommandAck {
 #[derive(Clone)]
 enum PendingCommandRollback {
     KeepApplied,
+    ProjectSnapshotApplied,
     RestoreTouchSurface {
         touch_surface: TouchSurfaceSummary,
         last_error: Option<String>,
@@ -9168,6 +11527,15 @@ enum PendingCommandRollback {
         video_compositions: Vec<RuntimeVideoComposition>,
         last_error: Option<String>,
     },
+    RestoreMediaAssetTransaction {
+        media_assets: Vec<MediaAssetSummary>,
+        video_layers: Vec<RuntimeVideoLayer>,
+        video_compositions: Vec<RuntimeVideoComposition>,
+        video_layer_fades: Vec<RuntimeVideoLayerFade>,
+        video_outputs: Vec<RuntimeVideoOutput>,
+        video_output_fades: Vec<RuntimeVideoOutputFade>,
+        last_error: Option<String>,
+    },
     RestoreVideoLayerIsfEffect {
         layer_id: VideoLayerId,
         effect: Option<VideoIsfEffectSummary>,
@@ -9186,6 +11554,23 @@ enum PendingCommandRollback {
     },
     RestoreGroupColors {
         group_colors: BTreeMap<String, String>,
+        last_error: Option<String>,
+    },
+    RestoreFixtureGroupState {
+        assignments: Vec<(FixtureId, Vec<String>)>,
+        group_colors: BTreeMap<String, String>,
+        last_error: Option<String>,
+    },
+    RestoreFixturePatchBatch {
+        fixtures: Vec<RuntimeFixture>,
+        values: HashMap<(FixtureId, String), u16>,
+        highlighted_fixtures: HashSet<FixtureId>,
+        soloed_fixtures: HashSet<FixtureId>,
+        parked_fixture_values: HashMap<FixtureId, HashMap<String, u16>>,
+        last_error: Option<String>,
+    },
+    RestoreStageMapPresets {
+        stage_map_presets: Vec<StageMapPresetSummary>,
         last_error: Option<String>,
     },
     RestoreCueRemoval {
@@ -9255,9 +11640,12 @@ impl PendingCommandRollback {
                 | Self::RestoreNodeGraphs { .. }
                 | Self::RestoreExclusiveVideoTake { .. }
                 | Self::RestoreVideoLayersAndCompositions { .. }
+                | Self::RestoreMediaAssetTransaction { .. }
                 | Self::RestoreVideoLayerIsfEffect { .. }
                 | Self::RestoreVideoLayerIsfEffectAndCancelEventPulse { .. }
                 | Self::RestoreAutoVj { .. }
+                | Self::RestoreFixturePatchBatch { .. }
+                | Self::RestoreStageMapPresets { .. }
                 | Self::RestoreCueRemoval { .. }
                 | Self::RestoreTimelineEvents { .. }
                 | Self::RestoreTimelineItems { .. }
@@ -9324,6 +11712,11 @@ struct RuntimeAutoVj {
 struct EngineRuntime {
     shared_telemetry: Arc<EngineSharedTelemetry>,
     pending_command_acks: Vec<PendingCommandAck>,
+    /// Test-only deterministic seam for publication rollback coverage. The
+    /// production definitive barrier blocks for the shared snapshot instead
+    /// of manufacturing a timeout/failure under normal lock contention.
+    #[cfg(test)]
+    fail_next_pending_publication: bool,
     pending_video_isf_event_resets: Vec<PendingVideoIsfEventReset>,
     next_video_isf_event_pulse_id: u64,
     fixtures: Vec<RuntimeFixture>,
@@ -9391,6 +11784,7 @@ struct EngineRuntime {
     timeline_due_cues: Vec<TimelineCueOccurrence>,
     #[cfg(test)]
     timeline_reconform_count: u64,
+    media_assets: Vec<MediaAssetSummary>,
     video_layers: Vec<RuntimeVideoLayer>,
     video_layer_fades: Vec<RuntimeVideoLayerFade>,
     video_compositions: Vec<RuntimeVideoComposition>,
@@ -9423,6 +11817,8 @@ struct EngineRuntime {
     pending_cues: VecDeque<PendingCueTrigger>,
     output: DmxOutputConfig,
     additional_dmx_outputs: Vec<RuntimeDmxOutput>,
+    output_ownership_role: MachineOutputRole,
+    output_ownership_gate: OutputOwnershipGate,
     dmx_input_frames: HashMap<u16, RuntimeDmxInputFrame>,
     blackout: bool,
     clock: BpmClock,
@@ -9487,8 +11883,8 @@ enum DmxSender {
 }
 
 impl RuntimeDmxOutput {
-    fn new(config: DmxOutputConfig) -> Self {
-        let sender_result = create_enabled_dmx_sender(&config);
+    fn new_with_lighting_allowed(config: DmxOutputConfig, lighting_allowed: bool) -> Self {
+        let sender_result = create_enabled_dmx_sender(&config, lighting_allowed);
         let mut recovery = DmxRouteRecovery::default();
         if let Err(error) = &sender_result {
             recovery.record_failure(error.clone(), Instant::now());
@@ -9500,8 +11896,11 @@ impl RuntimeDmxOutput {
         }
     }
 
-    fn new_with_error(config: DmxOutputConfig) -> (Self, Option<String>) {
-        let sender_result = create_enabled_dmx_sender(&config);
+    fn new_with_error_and_lighting_allowed(
+        config: DmxOutputConfig,
+        lighting_allowed: bool,
+    ) -> (Self, Option<String>) {
+        let sender_result = create_enabled_dmx_sender(&config, lighting_allowed);
         let error = sender_result.as_ref().err().cloned();
         (
             Self {
@@ -9526,16 +11925,33 @@ impl EngineRuntime {
         Self::new_with_shared_telemetry(output, Arc::new(EngineSharedTelemetry::new()))
     }
 
+    #[cfg(test)]
     fn new_with_shared_telemetry(
         output: DmxOutputConfig,
         shared_telemetry: Arc<EngineSharedTelemetry>,
     ) -> Self {
-        let dmx_sender_result = create_enabled_dmx_sender(&output);
+        Self::new_with_shared_telemetry_and_ownership(
+            output,
+            shared_telemetry,
+            OutputOwnershipGate::for_role(MachineOutputRole::Both),
+        )
+    }
+
+    fn new_with_shared_telemetry_and_ownership(
+        output: DmxOutputConfig,
+        shared_telemetry: Arc<EngineSharedTelemetry>,
+        output_ownership_gate: OutputOwnershipGate,
+    ) -> Self {
+        let output_ownership_role = output_ownership_gate.status().effective_role;
+        let dmx_sender_result =
+            create_enabled_dmx_sender(&output, output_ownership_role.lighting_allowed());
         let last_error = dmx_sender_result.as_ref().err().cloned();
         let dmx_sender = dmx_sender_result.ok().flatten();
         Self {
             shared_telemetry,
             pending_command_acks: Vec::new(),
+            #[cfg(test)]
+            fail_next_pending_publication: false,
             pending_video_isf_event_resets: Vec::new(),
             next_video_isf_event_pulse_id: 1,
             fixtures: Vec::new(),
@@ -9598,6 +12014,7 @@ impl EngineRuntime {
             timeline_due_cues: Vec::with_capacity(64),
             #[cfg(test)]
             timeline_reconform_count: 0,
+            media_assets: Vec::new(),
             video_layers: Vec::new(),
             video_layer_fades: Vec::new(),
             video_compositions: Vec::new(),
@@ -9630,6 +12047,8 @@ impl EngineRuntime {
             pending_cues: VecDeque::with_capacity(64),
             output,
             additional_dmx_outputs: Vec::new(),
+            output_ownership_role,
+            output_ownership_gate,
             dmx_input_frames: HashMap::new(),
             blackout: false,
             clock: BpmClock::new(120.0, Instant::now()),
@@ -9693,29 +12112,352 @@ impl EngineRuntime {
         }
     }
 
-    fn load_project_snapshot(&mut self, mut snapshot: EngineSnapshot) {
+    fn publish_output_ownership_status(&self) {
+        self.output_ownership_gate
+            .publish_runtime_role(self.output_ownership_role);
+    }
+
+    fn drop_all_dmx_senders(&mut self) {
+        self.dmx_sender = None;
+        self.dmx_sender_recovery = DmxRouteRecovery::default();
+        for output in &mut self.additional_dmx_outputs {
+            output.sender = None;
+            output.recovery = DmxRouteRecovery::default();
+        }
+    }
+
+    fn effective_lighting_allowed(&self) -> bool {
+        let status = self.output_ownership_gate.status();
+        status.state == OutputOwnershipState::Ready && status.lighting_allowed
+    }
+
+    fn refresh_dmx_senders_for_ownership(&mut self) -> Option<String> {
+        let lighting_allowed = self.output_ownership_role.lighting_allowed();
+        let primary_sender_result = create_enabled_dmx_sender(&self.output, lighting_allowed);
+        self.dmx_sender_recovery = DmxRouteRecovery::default();
+        if let Err(error) = &primary_sender_result {
+            self.dmx_sender_recovery
+                .record_failure(error.clone(), Instant::now());
+        }
+        let mut first_error = primary_sender_result
+            .as_ref()
+            .err()
+            .map(|error| format!("DMX output route 0: {error}"));
+        self.dmx_sender = primary_sender_result.ok().flatten();
+        for (index, output) in self.additional_dmx_outputs.iter_mut().enumerate() {
+            let sender_result = create_enabled_dmx_sender(&output.config, lighting_allowed);
+            output.recovery = DmxRouteRecovery::default();
+            if let Err(error) = &sender_result {
+                output
+                    .recovery
+                    .record_failure(error.clone(), Instant::now());
+                if first_error.is_none() {
+                    first_error = Some(format!("DMX output route {}: {error}", index + 1));
+                }
+            }
+            output.sender = sender_result.ok().flatten();
+        }
+        first_error
+    }
+
+    /// Validate the complete candidate before mutating any runtime fixture.
+    /// Group editing used to queue one command per fixture followed by a color
+    /// command, which allowed a late error to leave a half-applied project.
+    /// Keeping validation and the swap together makes the acknowledged command
+    /// below a real all-or-nothing operation.
+    fn apply_fixture_group_state(
+        &mut self,
+        assignments: Vec<(FixtureId, Vec<String>)>,
+        group_colors: BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        let mut normalized_assignments = HashMap::with_capacity(assignments.len());
+        for (fixture_id, group_ids) in assignments {
+            if !self.fixtures.iter().any(|fixture| fixture.id == fixture_id) {
+                return Err(format!("Fixture {fixture_id} was not found"));
+            }
+            if normalized_assignments
+                .insert(fixture_id, normalize_runtime_group_ids(group_ids)?)
+                .is_some()
+            {
+                return Err(format!(
+                    "Fixture {fixture_id} appears more than once in the group-state candidate"
+                ));
+            }
+        }
+        if normalized_assignments.len() != self.fixtures.len() {
+            return Err("Fixture-group state must include every current fixture".to_string());
+        }
+
+        let mut normalized_colors = BTreeMap::new();
+        for (group_id, color) in group_colors {
+            let group_id = normalize_runtime_group_id(&group_id)?;
+            let color = normalize_runtime_fixture_group_color(&color)
+                .ok_or_else(|| format!("Group color for '{group_id}' must be a #rrggbb value"))?;
+            if normalized_colors.insert(group_id.clone(), color).is_some() {
+                return Err(format!(
+                    "Group color candidate contains duplicate normalized group id '{group_id}'"
+                ));
+            }
+        }
+
+        for fixture in &mut self.fixtures {
+            fixture.request.group_ids = normalized_assignments
+                .remove(&fixture.id)
+                .expect("fixture coverage was validated before the atomic swap");
+        }
+        self.group_colors = normalized_colors;
+        self.rebuild_fixture_group_effect_targets();
+        Ok(())
+    }
+
+    /// Build every fixture and its defaults before mutating the runtime.
+    /// Candidates are restricted to a practical PATCH batch size and must be
+    /// non-zero, unique, absent from the current runtime, individually valid,
+    /// and conflict-free both against A and earlier staged B candidates.
+    fn prepare_fixture_patch_batch(
+        &self,
+        candidates: Vec<FixturePatchCandidate>,
+    ) -> Result<PreparedFixturePatchBatch, String> {
+        if candidates.is_empty() || candidates.len() > 256 {
+            return Err("Fixture PATCH batch must contain from 1 to 256 candidates".to_string());
+        }
+
+        let existing_ids = self
+            .fixtures
+            .iter()
+            .map(|fixture| fixture.id)
+            .collect::<HashSet<_>>();
+        let mut seen_ids = HashSet::with_capacity(candidates.len());
+        let mut occupied = self.fixtures.clone();
+        let mut prepared = Vec::with_capacity(candidates.len());
+        let mut default_values = HashMap::new();
+
+        for FixturePatchCandidate {
+            fixture_id,
+            mut request,
+            profile,
+        } in candidates
+        {
+            if fixture_id == 0 {
+                return Err("Fixture PATCH candidate IDs must be non-zero".to_string());
+            }
+            if !seen_ids.insert(fixture_id) {
+                return Err(format!(
+                    "Fixture PATCH candidate {fixture_id} appears more than once"
+                ));
+            }
+            if existing_ids.contains(&fixture_id) {
+                return Err(format!("Fixture {fixture_id} already exists"));
+            }
+            validate_runtime_fixture_patch(&request.label, request.address)?;
+            let mode_index = select_mode_index(&profile, request.mode_name.as_deref())
+                .ok_or_else(|| selected_mode_error(&profile, request.mode_name.as_deref()))?;
+            let range = validate_runtime_patch_footprint(&request, &profile, mode_index)?;
+            validate_runtime_patch_conflicts(&occupied, None, request.universe, range)?;
+            request.group_ids = normalize_runtime_group_ids(request.group_ids)?;
+
+            let color_binding = profile
+                .dmx_modes
+                .get(mode_index)
+                .and_then(|mode| compile_runtime_color_binding(&mode.controls));
+            seed_default_values(fixture_id, &profile, mode_index, &mut default_values);
+            let runtime_fixture = RuntimeFixture {
+                id: fixture_id,
+                request,
+                profile,
+                mode_index,
+                limits: FixtureLimits::default(),
+                color_binding,
+            };
+            occupied.push(runtime_fixture.clone());
+            prepared.push(runtime_fixture);
+        }
+
+        Ok(PreparedFixturePatchBatch {
+            fixtures: prepared,
+            default_values,
+        })
+    }
+
+    fn apply_fixture_patch_batch(
+        &mut self,
+        candidates: Vec<FixturePatchCandidate>,
+    ) -> Result<(), String> {
+        let prepared = self.prepare_fixture_patch_batch(candidates)?;
+        self.fixtures.extend(prepared.fixtures);
+        self.values.extend(prepared.default_values);
+        self.rebuild_fixture_group_effect_targets();
+        Ok(())
+    }
+
+    /// Validate a profile repair completely while A is still intact. The
+    /// result carries a replacement `RuntimeFixture`, including the old
+    /// limits and all authored identity not owned by the profile, so applying
+    /// it is a single assignment after admission.
+    fn prepare_fixture_profile_repair(
+        &self,
+        fixture_id: FixtureId,
+        profile: FixtureProfileSummary,
+        mode_name: Option<String>,
+    ) -> Result<PreparedFixtureProfileRepair, String> {
+        let fixture_index = self
+            .fixtures
+            .iter()
+            .position(|fixture| fixture.id == fixture_id)
+            .ok_or_else(|| format!("Fixture {fixture_id} was not found"))?;
+        let profile_path = profile.source_path.trim();
+        if profile_path.is_empty() {
+            return Err("Replacement fixture profile path is required".to_string());
+        }
+        let mode_index = select_mode_index(&profile, mode_name.as_deref())
+            .ok_or_else(|| selected_mode_error(&profile, mode_name.as_deref()))?;
+        let current = self
+            .fixtures
+            .get(fixture_index)
+            .expect("fixture index was resolved from the current runtime");
+        let current_mode = current
+            .profile
+            .dmx_modes
+            .get(current.mode_index)
+            .ok_or_else(|| format!("Fixture {fixture_id} has no active DMX mode to repair"))?;
+        if current.profile.manufacturer != profile.manufacturer
+            || current.profile.name != profile.name
+        {
+            return Err(format!(
+                "Replacement profile identity '{}' / '{}' does not match fixture {fixture_id}'s '{}' / '{}'",
+                profile.manufacturer,
+                profile.name,
+                current.profile.manufacturer,
+                current.profile.name,
+            ));
+        }
+        let replacement_mode = profile
+            .dmx_modes
+            .get(mode_index)
+            .expect("selected mode index was validated from the replacement profile");
+        if !fixture_profile_repair_controls_match(
+            &current_mode.controls,
+            &replacement_mode.controls,
+        ) {
+            return Err(format!(
+                "Replacement profile mode '{}' does not exactly match fixture {fixture_id}'s attribute, geometry, offset and resolution layout",
+                replacement_mode.name
+            ));
+        }
+
+        let mut fixture = current.clone();
+        fixture.request.profile_path = profile_path.to_string();
+        fixture.request.mode_name = Some(replacement_mode.name.clone());
+        let range = validate_runtime_patch_footprint(&fixture.request, &profile, mode_index)?;
+        validate_runtime_patch_conflicts(
+            &self.fixtures,
+            Some(fixture_id),
+            fixture.request.universe,
+            range,
+        )?;
+        fixture.color_binding = compile_runtime_color_binding(&replacement_mode.controls);
+        fixture.profile = profile;
+        fixture.mode_index = mode_index;
+
+        Ok(PreparedFixtureProfileRepair {
+            fixture_index,
+            fixture,
+        })
+    }
+
+    fn apply_fixture_profile_repair(
+        &mut self,
+        fixture_id: FixtureId,
+        profile: FixtureProfileSummary,
+        mode_name: Option<String>,
+    ) -> Result<(), String> {
+        let prepared = self.prepare_fixture_profile_repair(fixture_id, profile, mode_name)?;
+        self.fixtures[prepared.fixture_index] = prepared.fixture;
+        self.rebuild_fixture_group_effect_targets();
+        Ok(())
+    }
+
+    /// Sanitize the whole preset before the admitted operation is allowed to
+    /// replace any entry. The established stage-map compatibility policy is
+    /// retained: non-finite/invalid bounds become the default config and
+    /// invalid or duplicate nested objects are dropped; an empty label is a
+    /// hard validation failure.
+    fn prepare_stage_map_preset_upsert(
+        &self,
+        preset: StageMapPresetSummary,
+    ) -> Result<StageMapPresetSummary, String> {
+        sanitize_stage_map_preset(preset)
+            .ok_or_else(|| "Stage map preset label is required".to_string())
+    }
+
+    fn apply_stage_map_preset_upsert(
+        &mut self,
+        preset: StageMapPresetSummary,
+    ) -> Result<(), String> {
+        let preset = self.prepare_stage_map_preset_upsert(preset)?;
+        self.stage_map_presets
+            .retain(|candidate| candidate.label != preset.label);
+        self.stage_map_presets.push(preset);
+        self.stage_map_presets
+            .sort_by(|left, right| left.label.cmp(&right.label));
+        Ok(())
+    }
+
+    fn rebuild_fixture_group_effect_targets(&mut self) {
+        self.rebuild_lfo_effect_targets();
+        self.rebuild_color_effect_targets();
+        self.rebuild_chaser_effect_targets();
+        self.rebuild_move_effect_targets();
+        self.rebuild_value_effect_targets();
+        self.rebuild_curve_effect_targets();
+        self.rebuild_mapping_effect_targets();
+        self.rebuild_color_mapping_effect_targets();
+        self.rebuild_group_strobe_effects();
+    }
+
+    fn load_project_snapshot(&mut self, snapshot: EngineSnapshot) {
+        if let Err(error) = self.load_project_snapshot_checked(snapshot) {
+            self.last_error = Some(error);
+        }
+    }
+
+    fn load_project_snapshot_checked(
+        &mut self,
+        mut snapshot: EngineSnapshot,
+    ) -> Result<(), String> {
+        // Persisted projects may carry a rendered `video` projection plus an
+        // authored image. Choose authored first, then deterministically
+        // materialize legacy catalog refs before *any* capacity/project
+        // validation or runtime installation.
+        if let Some(authored_video) = snapshot.authored_video.take() {
+            snapshot.video = authored_video;
+        }
+        normalize_legacy_video_media_assets(&mut snapshot.video)?;
+        validate_engine_ready_video_media_assets(&snapshot.video)?;
+        validate_project_snapshot_allocator_capacity(&snapshot)?;
         if let Err(error) = normalize_and_validate_timeline_layers(
             &mut snapshot.timeline.layers,
             &snapshot.timeline.events,
         ) {
-            self.last_error = Some(error);
-            return;
+            self.last_error = Some(error.clone());
+            return Err(error);
         }
         if let Err(error) = normalize_and_validate_timeline_audio_clips(
             &snapshot.timeline.layers,
             &mut snapshot.timeline.audio_clips,
         ) {
-            self.last_error = Some(error);
-            return;
-        }
-        if let Some(authored_video) = snapshot.authored_video.take() {
-            snapshot.video = authored_video;
+            self.last_error = Some(error.clone());
+            return Err(error);
         }
         let source_budget_result = video_isf_project_summary_source_bytes(&snapshot.video.layers)
             .and_then(validate_video_isf_project_source_budget);
         if let Err(error) = source_budget_result {
-            self.last_error = Some(error);
-            return;
+            self.last_error = Some(error.clone());
+            return Err(error);
+        }
+        if let Err(error) = self.validate_project_snapshot_load(&snapshot) {
+            self.last_error = Some(error.clone());
+            return Err(error);
         }
         self.effect_activations.clear();
         self.active_effect_activation_indices.clear();
@@ -9811,8 +12553,10 @@ impl EngineRuntime {
             .iter()
             .map(runtime_timeline_event_from_summary)
             .collect();
-        self.recompute_timeline_event_layers()
-            .expect("validated timeline layer references must resolve");
+        if let Err(error) = self.recompute_timeline_event_layers() {
+            self.last_error = Some(error.clone());
+            return Err(error);
+        }
         self.timeline_automations = snapshot
             .timeline
             .automations
@@ -9857,6 +12601,10 @@ impl EngineRuntime {
         self.timeline_external_sync_source = None;
         self.timeline_due_cues.clear();
 
+        // `load_project_snapshot_checked` has already normalized and
+        // validated this image, so catalog entries (including legal orphans)
+        // are retained verbatim through authored/rendered/persistence paths.
+        self.media_assets = snapshot.video.media_assets.clone();
         self.video_layers = sanitize_loaded_video_layers(&snapshot.video.layers);
         self.video_compositions =
             sanitize_loaded_video_compositions(&snapshot.video.compositions, &self.video_layers);
@@ -9904,8 +12652,8 @@ impl EngineRuntime {
         self.cue_lists = sanitize_cue_lists(&self.cue_lists, &self.cues);
         if self.timeline_has_conformed_events() {
             if let Err(error) = self.reconform_timeline_events_to_bpm(snapshot.clock.bpm) {
-                self.last_error = Some(error);
-                return;
+                self.last_error = Some(error.clone());
+                return Err(error);
             }
         } else {
             self.sort_timeline_events();
@@ -9916,14 +12664,22 @@ impl EngineRuntime {
             snapshot.dmx_outputs.clone()
         };
         self.output = outputs.remove(0);
-        let primary_sender_result = create_enabled_dmx_sender(&self.output);
+        let lighting_permit = self
+            .output_ownership_gate
+            .acquire(OutputCapability::Lighting)
+            .ok();
+        let lighting_allowed = lighting_permit.is_some();
+        let primary_sender_result = create_enabled_dmx_sender(&self.output, lighting_allowed);
         self.dmx_sender_recovery = DmxRouteRecovery::default();
         if let Err(error) = &primary_sender_result {
             self.dmx_sender_recovery
                 .record_failure(error.clone(), Instant::now());
         }
         self.dmx_sender = primary_sender_result.ok().flatten();
-        self.additional_dmx_outputs = outputs.into_iter().map(RuntimeDmxOutput::new).collect();
+        self.additional_dmx_outputs = outputs
+            .into_iter()
+            .map(|output| RuntimeDmxOutput::new_with_lighting_allowed(output, lighting_allowed))
+            .collect();
         self.dmx_input_frames.clear();
         self.lighting_master = if snapshot.lighting_master.is_finite() {
             snapshot.lighting_master.clamp(0.0, 1.0)
@@ -10087,6 +12843,113 @@ impl EngineRuntime {
         } else {
             None
         };
+        Ok(())
+    }
+
+    /// Run every fallible part of project-load preparation against staged
+    /// runtime state before the real replacement mutates the current show.
+    /// Snapshot loading historically performed the timeline reconform late in
+    /// the replacement, so an invalid conformed event could leave a partially
+    /// loaded runtime behind its old published snapshot. The staged fields
+    /// mirror the load path's dependencies and are restored before returning.
+    fn validate_project_snapshot_load(&mut self, snapshot: &EngineSnapshot) -> Result<(), String> {
+        let now = Instant::now();
+        let (loaded_fixtures, _, _) = runtime_fixtures_from_snapshot(&snapshot.fixtures);
+        let loaded_video_layers = sanitize_loaded_video_layers(&snapshot.video.layers);
+        let loaded_video_compositions =
+            sanitize_loaded_video_compositions(&snapshot.video.compositions, &loaded_video_layers);
+        let loaded_video_outputs =
+            sanitize_loaded_video_outputs(&snapshot.video.outputs, &loaded_video_compositions);
+        let loaded_effects = snapshot
+            .effects
+            .iter()
+            .filter_map(|effect| runtime_effect_from_summary(effect, now))
+            .collect();
+        let loaded_node_graphs = sanitize_node_graphs(&snapshot.node_graphs)
+            .into_iter()
+            .map(|summary| runtime_node_graph_from_summary(summary, now))
+            .collect();
+
+        let previous_fixtures = std::mem::replace(&mut self.fixtures, loaded_fixtures);
+        let previous_palettes = std::mem::replace(
+            &mut self.palettes,
+            sanitize_loaded_palettes(&snapshot.palettes),
+        );
+        let previous_cues = std::mem::replace(
+            &mut self.cues,
+            snapshot.cues.iter().map(runtime_cue_from_summary).collect(),
+        );
+        let previous_cue_lists = std::mem::replace(
+            &mut self.cue_lists,
+            sanitize_cue_lists(&snapshot.cue_lists, &self.cues),
+        );
+        let previous_timeline_layers =
+            std::mem::replace(&mut self.timeline_layers, snapshot.timeline.layers.clone());
+        let previous_timeline_events = std::mem::replace(
+            &mut self.timeline_events,
+            snapshot
+                .timeline
+                .events
+                .iter()
+                .map(runtime_timeline_event_from_summary)
+                .collect(),
+        );
+        let previous_timeline_automations = std::mem::replace(
+            &mut self.timeline_automations,
+            snapshot
+                .timeline
+                .automations
+                .iter()
+                .map(runtime_timeline_automation_from_summary)
+                .collect(),
+        );
+        let previous_timeline_video_automations = std::mem::replace(
+            &mut self.timeline_video_automations,
+            snapshot
+                .timeline
+                .video_automations
+                .iter()
+                .map(runtime_timeline_video_automation_from_summary)
+                .collect(),
+        );
+        let previous_video_layers = std::mem::replace(&mut self.video_layers, loaded_video_layers);
+        let previous_video_compositions =
+            std::mem::replace(&mut self.video_compositions, loaded_video_compositions);
+        let previous_video_outputs =
+            std::mem::replace(&mut self.video_outputs, loaded_video_outputs);
+        let previous_effects = std::mem::replace(&mut self.effects, loaded_effects);
+        let previous_node_graphs = std::mem::replace(&mut self.node_graphs, loaded_node_graphs);
+        let previous_timeline_due_cues = std::mem::replace(&mut self.timeline_due_cues, Vec::new());
+        let previous_pending_cues = std::mem::replace(&mut self.pending_cues, VecDeque::new());
+
+        let result = (|| {
+            self.recompute_timeline_event_layers()?;
+            self.sanitize_loaded_show_references(now);
+            self.cue_lists = sanitize_cue_lists(&self.cue_lists, &self.cues);
+            if self.timeline_has_conformed_events() {
+                self.resolve_timeline_events_for_bpm(snapshot.clock.bpm)
+                    .map(|_| ())?;
+            }
+            Ok(())
+        })();
+
+        self.fixtures = previous_fixtures;
+        self.palettes = previous_palettes;
+        self.cues = previous_cues;
+        self.cue_lists = previous_cue_lists;
+        self.timeline_layers = previous_timeline_layers;
+        self.timeline_events = previous_timeline_events;
+        self.timeline_automations = previous_timeline_automations;
+        self.timeline_video_automations = previous_timeline_video_automations;
+        self.video_layers = previous_video_layers;
+        self.video_compositions = previous_video_compositions;
+        self.video_outputs = previous_video_outputs;
+        self.effects = previous_effects;
+        self.node_graphs = previous_node_graphs;
+        self.timeline_due_cues = previous_timeline_due_cues;
+        self.pending_cues = previous_pending_cues;
+
+        result
     }
 
     fn sanitize_loaded_show_references(&mut self, now: Instant) {
@@ -10453,6 +13316,13 @@ impl EngineRuntime {
             let publication_barrier = matches!(
                 queued_command.command,
                 EngineCommand::BootstrapVjShow { .. }
+                    | EngineCommand::BootstrapVjShowWithAllocatedAssets { .. }
+                    | EngineCommand::MediaAssetTransactionPublished { .. }
+                    | EngineCommand::LoadProjectSnapshotPublished { .. }
+                    | EngineCommand::ApplyFixtureGroupStatePublished { .. }
+                    | EngineCommand::PatchFixturesPublished { .. }
+                    | EngineCommand::RepairFixtureProfilePublished { .. }
+                    | EngineCommand::UpsertStageMapPresetPublished { .. }
                     | EngineCommand::SetTouchSurface { .. }
                     | EngineCommand::ExclusiveVideoTake { .. }
                     | EngineCommand::ClearLiveAudioInputPublished { .. }
@@ -10601,6 +13471,86 @@ impl EngineRuntime {
                 self.rebuild_color_mapping_effect_targets();
                 self.rebuild_group_strobe_effects();
                 self.last_error = None;
+            }
+            EngineCommand::PatchFixturesPublished {
+                candidates,
+                expires_at,
+                admission,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreFixturePatchBatch {
+                    fixtures: self.fixtures.clone(),
+                    values: self.values.clone(),
+                    highlighted_fixtures: self.highlighted_fixtures.clone(),
+                    soloed_fixtures: self.soloed_fixtures.clone(),
+                    parked_fixture_values: self.parked_fixture_values.clone(),
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if admission.try_admit_before(expires_at) {
+                    self.apply_fixture_patch_batch(candidates)
+                } else {
+                    Err(
+                        "Fixture PATCH batch expired or was cancelled before engine admission"
+                            .to_string(),
+                    )
+                };
+                // A validation failure is a no-op, including the previous
+                // diagnostic. A successful runtime apply clears it only once
+                // B receives its definitive shared-snapshot publication.
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Fixture PATCH batch could not publish an acknowledged snapshot",
+                });
+            }
+            EngineCommand::RepairFixtureProfilePublished {
+                fixture_id,
+                profile,
+                mode_name,
+                expires_at,
+                admission,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreFixturePatchBatch {
+                    fixtures: self.fixtures.clone(),
+                    values: self.values.clone(),
+                    highlighted_fixtures: self.highlighted_fixtures.clone(),
+                    soloed_fixtures: self.soloed_fixtures.clone(),
+                    parked_fixture_values: self.parked_fixture_values.clone(),
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if admission.try_admit_before(expires_at) {
+                    self.apply_fixture_profile_repair(fixture_id, profile, mode_name)
+                } else {
+                    Err(
+                        "Fixture profile repair expired or was cancelled before engine admission"
+                            .to_string(),
+                    )
+                };
+                // The prepared repair either becomes B atomically at shared
+                // snapshot publication or leaves every A field, including a
+                // pre-existing diagnostic, intact.
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Fixture profile repair could not publish an acknowledged snapshot",
+                });
             }
             EngineCommand::ReplaceFixtureProfile {
                 fixture_id,
@@ -11019,6 +13969,43 @@ impl EngineRuntime {
                     self.last_error = Some(format!("Fixture {fixture_id} was not found"));
                 }
             }
+            EngineCommand::ApplyFixtureGroupStatePublished {
+                assignments,
+                group_colors,
+                expires_at,
+                admission,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreFixtureGroupState {
+                    assignments: self
+                        .fixtures
+                        .iter()
+                        .map(|fixture| (fixture.id, fixture.request.group_ids.clone()))
+                        .collect(),
+                    group_colors: self.group_colors.clone(),
+                    last_error: previous_last_error.clone(),
+                };
+                let admitted = admission.try_admit_before(expires_at);
+                let result = if !admitted {
+                    Err("Fixture-group state update expired or was cancelled before engine admission"
+                        .to_string())
+                } else {
+                    self.apply_fixture_group_state(assignments, group_colors)
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Fixture-group state update could not publish an acknowledged snapshot",
+                });
+            }
             EngineCommand::SetFixtureHighlight {
                 fixture_id,
                 enabled,
@@ -11092,6 +14079,33 @@ impl EngineRuntime {
             EngineCommand::LoadProjectSnapshot(snapshot) => {
                 self.load_project_snapshot(snapshot);
             }
+            EngineCommand::LoadProjectSnapshotPublished {
+                snapshot,
+                expires_at,
+                admission,
+                ack,
+            } => {
+                let admitted = admission.try_admit_before(expires_at);
+                let result =
+                    if !admitted {
+                        Err("Project snapshot load expired or was cancelled before engine admission"
+                            .to_string())
+                    } else {
+                        self.load_project_snapshot_checked(snapshot)
+                    };
+                let rollback = if admitted && result.is_ok() {
+                    PendingCommandRollback::ProjectSnapshotApplied
+                } else {
+                    PendingCommandRollback::KeepApplied
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Project snapshot load could not publish an acknowledged snapshot",
+                });
+            }
             EngineCommand::RequestPersistenceSnapshot { response } => {
                 let _ = response.send(self.build_persistence_snapshot());
             }
@@ -11150,6 +14164,40 @@ impl EngineRuntime {
                     self.last_error = Some("Stage map preset label is required".to_string());
                 }
             }
+            EngineCommand::UpsertStageMapPresetPublished {
+                preset,
+                expires_at,
+                admission,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreStageMapPresets {
+                    stage_map_presets: self.stage_map_presets.clone(),
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if admission.try_admit_before(expires_at) {
+                    self.apply_stage_map_preset_upsert(preset)
+                } else {
+                    Err(
+                        "Stage map preset upsert expired or was cancelled before engine admission"
+                            .to_string(),
+                    )
+                };
+                // A validation error and a queued cancellation leave the
+                // saved-preset list and its previous diagnostic untouched.
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Stage map preset upsert could not publish an acknowledged snapshot",
+                });
+            }
             EngineCommand::ApplyStageMapPreset { label } => {
                 let label = label.trim();
                 if label.is_empty() {
@@ -11202,10 +14250,99 @@ impl EngineRuntime {
                     self.last_error = None;
                 }
             }
+            EngineCommand::SetOutputOwnershipRole {
+                role,
+                expires_at,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let expired = Instant::now() > expires_at;
+                let result = if expired {
+                    Err("Output ownership role update expired before engine execution".to_string())
+                } else if role != MachineOutputRole::Standby {
+                    Err("Non-Standby output ownership changes require the coordinated app transition".to_string())
+                } else {
+                    self.output_ownership_role = role;
+                    self.drop_all_dmx_senders();
+                    self.publish_output_ownership_status();
+                    Ok(())
+                };
+                self.last_error = if expired {
+                    previous_last_error
+                } else if result.is_err() {
+                    result.as_ref().err().cloned()
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback: PendingCommandRollback::KeepApplied,
+                    publication_error:
+                        "Output ownership role could not publish an acknowledged snapshot",
+                });
+            }
+            EngineCommand::FenceOutputOwnership { expires_at, ack } => {
+                let result = if Instant::now() > expires_at {
+                    Err("Output ownership fence expired before engine execution".to_string())
+                } else {
+                    self.output_ownership_role = MachineOutputRole::Standby;
+                    self.drop_all_dmx_senders();
+                    self.last_error = None;
+                    Ok(())
+                };
+                if let Err(error) = &result {
+                    self.last_error = Some(error.clone());
+                }
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback: PendingCommandRollback::KeepApplied,
+                    publication_error:
+                        "Output ownership fence could not publish an acknowledged snapshot",
+                });
+            }
+            EngineCommand::PrepareOutputOwnershipRole {
+                role,
+                expires_at,
+                ack,
+            } => {
+                let previous_role = self.output_ownership_role;
+                let result = if Instant::now() > expires_at {
+                    Err(
+                        "Output ownership sender preparation expired before engine execution"
+                            .to_string(),
+                    )
+                } else {
+                    self.output_ownership_role = role;
+                    self.refresh_dmx_senders_for_ownership().map_or(Ok(()), Err)
+                };
+                if let Err(error) = &result {
+                    self.output_ownership_role = MachineOutputRole::Standby;
+                    self.drop_all_dmx_senders();
+                    self.last_error = Some(error.clone());
+                } else {
+                    self.last_error = None;
+                }
+                if result.is_err() && previous_role != MachineOutputRole::Standby {
+                    self.drop_all_dmx_senders();
+                }
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback: PendingCommandRollback::KeepApplied,
+                    publication_error:
+                        "Output ownership sender preparation could not publish an acknowledged snapshot",
+                });
+            }
             EngineCommand::SetOutput(output) => {
                 self.output = output;
                 self.dmx_sender_recovery = DmxRouteRecovery::default();
-                match create_enabled_dmx_sender(&self.output) {
+                let lighting_permit = self
+                    .output_ownership_gate
+                    .acquire(OutputCapability::Lighting)
+                    .ok();
+                match create_enabled_dmx_sender(&self.output, lighting_permit.is_some()) {
                     Ok(sender) => {
                         self.dmx_sender = sender;
                         self.last_error = None;
@@ -11226,7 +14363,13 @@ impl EngineRuntime {
                     });
                 }
                 self.output = outputs.remove(0);
-                let primary_sender_result = create_enabled_dmx_sender(&self.output);
+                let lighting_permit = self
+                    .output_ownership_gate
+                    .acquire(OutputCapability::Lighting)
+                    .ok();
+                let lighting_allowed = lighting_permit.is_some();
+                let primary_sender_result =
+                    create_enabled_dmx_sender(&self.output, lighting_allowed);
                 let mut first_error = primary_sender_result
                     .as_ref()
                     .err()
@@ -11241,7 +14384,11 @@ impl EngineRuntime {
                     .into_iter()
                     .enumerate()
                     .map(|(index, output)| {
-                        let (runtime_output, error) = RuntimeDmxOutput::new_with_error(output);
+                        let (runtime_output, error) =
+                            RuntimeDmxOutput::new_with_error_and_lighting_allowed(
+                                output,
+                                lighting_allowed,
+                            );
                         if first_error.is_none() {
                             first_error = error
                                 .map(|error| format!("DMX output route {}: {error}", index + 1));
@@ -14653,18 +17800,23 @@ impl EngineRuntime {
                 label,
                 source,
             } => {
-                self.video_layers.retain(|layer| layer.id != layer_id);
-                self.video_layer_fades
-                    .retain(|fade| fade.layer_id != layer_id);
-                self.video_layers.push(RuntimeVideoLayer {
-                    id: layer_id,
-                    label: sanitize_video_layer_label(label, layer_id),
-                    source,
-                    blend_mode: VideoBlendMode::Normal,
-                    state: VideoLayerState::default(),
-                    isf_effect: None,
+                // Direct runtime tests can call `apply_command` without an
+                // EngineHandle. Production `send` always converts this to the
+                // independently allocated form below.
+                let asset_id = self.next_runtime_legacy_media_asset_id();
+                let result = asset_id.and_then(|asset_id| {
+                    self.add_video_layer_with_asset(layer_id, asset_id, label, source)
                 });
-                self.last_error = None;
+                self.last_error = result.err();
+            }
+            EngineCommand::AddVideoLayerWithAllocatedAsset {
+                layer_id,
+                asset_id,
+                label,
+                source,
+            } => {
+                let result = self.add_video_layer_with_asset(layer_id, asset_id, label, source);
+                self.last_error = result.err();
             }
             EngineCommand::DuplicateVideoLayer {
                 source_layer_id,
@@ -14717,16 +17869,42 @@ impl EngineRuntime {
                 }
             }
             EngineCommand::SetVideoLayerSource { layer_id, source } => {
-                if let Some(layer) = self
-                    .video_layers
-                    .iter_mut()
-                    .find(|layer| layer.id == layer_id)
-                {
-                    layer.source = source;
-                    self.last_error = None;
+                let _ = source;
+                self.last_error = Some(format!(
+                    "Video layer {layer_id} source is owned by its media asset; use an acknowledged media asset update"
+                ));
+            }
+            EngineCommand::MediaAssetTransactionPublished {
+                transaction,
+                expires_at,
+                admission,
+                ack,
+            } => {
+                let rollback = PendingCommandRollback::RestoreMediaAssetTransaction {
+                    media_assets: self.media_assets.clone(),
+                    video_layers: self.video_layers.clone(),
+                    video_compositions: self.video_compositions.clone(),
+                    video_layer_fades: self.video_layer_fades.clone(),
+                    video_outputs: self.video_outputs.clone(),
+                    video_output_fades: self.video_output_fades.clone(),
+                    last_error: self.last_error.clone(),
+                };
+                let result = if admission.try_admit_before(expires_at) {
+                    self.apply_media_asset_transaction(transaction)
                 } else {
-                    self.last_error = Some(format!("Video layer {layer_id} was not found"));
-                }
+                    Err(
+                        "Media asset transaction expired or was cancelled before engine admission"
+                            .to_string(),
+                    )
+                };
+                self.last_error = result.as_ref().err().cloned();
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; media asset transaction was rolled back",
+                });
             }
             EngineCommand::SetVideoLayerIsfEffect { layer_id, effect } => {
                 let result = self.set_video_layer_isf_effect(layer_id, effect);
@@ -15199,64 +18377,34 @@ impl EngineRuntime {
                 ack,
             } => {
                 let result = (|| -> Result<(), String> {
-                    if Instant::now() > expires_at {
-                        return Err(
-                            "First-run VJ setup expired before engine execution".to_string()
-                        );
+                    let mut next_asset_id = self.next_runtime_legacy_media_asset_id()?;
+                    let mut allocated_layers = Vec::with_capacity(layers.len());
+                    for (layer_id, label, source) in layers {
+                        let asset_id = next_asset_id;
+                        next_asset_id = asset_id
+                            .checked_add(1)
+                            .filter(|id| *id != 0)
+                            .ok_or_else(|| "Media asset ID allocation overflow".to_string())?;
+                        allocated_layers.push((layer_id, asset_id, label, source));
                     }
-                    if !self.video_layers.is_empty()
-                        || !self.video_outputs.is_empty()
-                        || !self.video_compositions.is_empty()
-                    {
-                        return Err("First-run VJ setup requires an empty video show".to_string());
-                    }
-                    if layers.is_empty() {
-                        return Err(
-                            "First-run VJ setup requires at least one media layer".to_string()
-                        );
-                    }
-                    if layers.iter().any(|(_, _, source)| {
-                        source.kind != protocol::VideoSourceKind::File || source.path.is_none()
-                    }) {
-                        return Err("First-run VJ setup only accepts local File layers".to_string());
-                    }
-                    if output.id == 0
-                        || output.kind != VideoOutputKind::Display
-                        || output.composition_id != 1
-                        || output.enabled
-                        || !output.blackout
-                        || output.fullscreen
-                    {
-                        return Err(
-                            "First-run VJ output must be a disabled, blacked-out windowed Display routed to Main"
-                                .to_string(),
-                        );
-                    }
-                    let mut layer_ids = HashSet::new();
-                    if layers
-                        .iter()
-                        .any(|(layer_id, _, _)| *layer_id == 0 || !layer_ids.insert(*layer_id))
-                    {
-                        return Err("First-run VJ layers must have unique non-zero IDs".to_string());
-                    }
-                    let next_layers = layers
-                        .into_iter()
-                        .map(|(layer_id, label, source)| RuntimeVideoLayer {
-                            id: layer_id,
-                            label: sanitize_video_layer_label(label, layer_id),
-                            source,
-                            blend_mode: VideoBlendMode::Normal,
-                            state: VideoLayerState::default(),
-                            isf_effect: None,
-                        })
-                        .collect::<Vec<_>>();
-                    let output = sanitize_video_output(output);
-                    self.video_layers = next_layers;
-                    self.video_layer_fades.clear();
-                    self.video_outputs = vec![RuntimeVideoOutput { summary: output }];
-                    self.video_output_fades.clear();
-                    Ok(())
+                    self.bootstrap_vj_show_with_assets(allocated_layers, output, expires_at)
                 })();
+                self.last_error = result.as_ref().err().cloned();
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack,
+                    result,
+                    rollback: PendingCommandRollback::ClearBootstrappedVjShow,
+                    publication_error:
+                        "Engine snapshot was busy; first-run VJ setup was rolled back",
+                });
+            }
+            EngineCommand::BootstrapVjShowWithAllocatedAssets {
+                layers,
+                output,
+                expires_at,
+                ack,
+            } => {
+                let result = self.bootstrap_vj_show_with_assets(layers, output, expires_at);
                 self.last_error = result.as_ref().err().cloned();
                 self.pending_command_acks.push(PendingCommandAck {
                     ack,
@@ -15505,18 +18653,52 @@ impl EngineRuntime {
         }
         let pending = std::mem::take(&mut self.pending_command_acks);
         let requires_publication = pending.iter().any(|pending| pending.result.is_ok());
+        let waits_for_definitive_publication = pending.iter().any(|pending| {
+            pending.result.is_ok()
+                && matches!(
+                    &pending.rollback,
+                    PendingCommandRollback::ProjectSnapshotApplied
+                        | PendingCommandRollback::RestoreFixtureGroupState { .. }
+                        | PendingCommandRollback::RestoreFixturePatchBatch { .. }
+                        | PendingCommandRollback::RestoreStageMapPresets { .. }
+                        | PendingCommandRollback::RestoreMediaAssetTransaction { .. }
+                )
+        });
+        #[cfg(test)]
+        let force_publication_failure = std::mem::take(&mut self.fail_next_pending_publication);
+        #[cfg(not(test))]
+        let force_publication_failure = false;
         let published = if requires_publication {
-            let deadline = Instant::now() + Duration::from_millis(5);
-            loop {
-                match snapshot.try_write() {
-                    Ok(mut guard) => {
-                        *guard = self.build_snapshot(queue_depth);
-                        break true;
+            if force_publication_failure {
+                false
+            } else {
+                if waits_for_definitive_publication {
+                    // A project load has already committed its complete runtime
+                    // replacement. It therefore cannot be rolled back through an
+                    // EngineSnapshot if the shared publication lock is busy: that
+                    // snapshot omits runtime-only state. Hold the publication
+                    // barrier until the authoritative replacement is visible.
+                    let mut guard = snapshot
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    *guard = self.build_snapshot(queue_depth);
+                    true
+                } else {
+                    let deadline = Instant::now() + Duration::from_millis(5);
+                    loop {
+                        match snapshot.try_write() {
+                            Ok(mut guard) => {
+                                *guard = self.build_snapshot(queue_depth);
+                                break true;
+                            }
+                            Err(std::sync::TryLockError::WouldBlock)
+                                if Instant::now() < deadline =>
+                            {
+                                std::thread::yield_now();
+                            }
+                            Err(_) => break false,
+                        }
                     }
-                    Err(std::sync::TryLockError::WouldBlock) if Instant::now() < deadline => {
-                        std::thread::yield_now();
-                    }
-                    Err(_) => break false,
                 }
             }
         } else {
@@ -15539,7 +18721,9 @@ impl EngineRuntime {
                     .map(|pending| pending.publication_error.to_string());
             }
         }
-        self.rebuild_effect_activations(Instant::now());
+        if pending.iter().any(|pending| pending.result.is_ok()) {
+            self.rebuild_effect_activations(Instant::now());
+        }
         for pending in pending {
             let result = if pending.result.is_ok() && !published {
                 Err(pending.publication_error.to_string())
@@ -15552,7 +18736,8 @@ impl EngineRuntime {
 
     fn rollback_pending_command(&mut self, rollback: PendingCommandRollback) {
         match rollback {
-            PendingCommandRollback::KeepApplied => {}
+            PendingCommandRollback::KeepApplied
+            | PendingCommandRollback::ProjectSnapshotApplied => {}
             PendingCommandRollback::RestoreTouchSurface {
                 touch_surface,
                 last_error,
@@ -15561,6 +18746,7 @@ impl EngineRuntime {
                 self.last_error = last_error;
             }
             PendingCommandRollback::ClearBootstrappedVjShow => {
+                self.media_assets.clear();
                 self.video_layers.clear();
                 self.video_layer_fades.clear();
                 self.video_outputs.clear();
@@ -15640,6 +18826,23 @@ impl EngineRuntime {
                 self.video_compositions = video_compositions;
                 self.last_error = last_error;
             }
+            PendingCommandRollback::RestoreMediaAssetTransaction {
+                media_assets,
+                video_layers,
+                video_compositions,
+                video_layer_fades,
+                video_outputs,
+                video_output_fades,
+                last_error,
+            } => {
+                self.media_assets = media_assets;
+                self.video_layers = video_layers;
+                self.video_compositions = video_compositions;
+                self.video_layer_fades = video_layer_fades;
+                self.video_outputs = video_outputs;
+                self.video_output_fades = video_output_fades;
+                self.last_error = last_error;
+            }
             PendingCommandRollback::RestoreVideoLayerIsfEffect {
                 layer_id,
                 effect,
@@ -15685,6 +18888,47 @@ impl EngineRuntime {
                 last_error,
             } => {
                 self.group_colors = group_colors;
+                self.last_error = last_error;
+            }
+            PendingCommandRollback::RestoreFixtureGroupState {
+                assignments,
+                group_colors,
+                last_error,
+            } => {
+                let assignments = assignments.into_iter().collect::<HashMap<_, _>>();
+                for fixture in &mut self.fixtures {
+                    if let Some(group_ids) = assignments.get(&fixture.id) {
+                        fixture.request.group_ids = group_ids.clone();
+                    }
+                }
+                self.group_colors = group_colors;
+                self.rebuild_fixture_group_effect_targets();
+                self.last_error = last_error;
+            }
+            PendingCommandRollback::RestoreFixturePatchBatch {
+                fixtures,
+                values,
+                highlighted_fixtures,
+                soloed_fixtures,
+                parked_fixture_values,
+                last_error,
+            } => {
+                self.fixtures = fixtures;
+                self.values = values;
+                self.highlighted_fixtures = highlighted_fixtures;
+                self.soloed_fixtures = soloed_fixtures;
+                self.parked_fixture_values = parked_fixture_values;
+                // Derived target caches contain fixture-index and group
+                // membership projections. They are rebuilt from restored A
+                // instead of trying to undo partial B cache mutations.
+                self.rebuild_fixture_group_effect_targets();
+                self.last_error = last_error;
+            }
+            PendingCommandRollback::RestoreStageMapPresets {
+                stage_map_presets,
+                last_error,
+            } => {
+                self.stage_map_presets = stage_map_presets;
                 self.last_error = last_error;
             }
             PendingCommandRollback::RestoreCueRemoval {
@@ -16100,6 +19344,9 @@ impl EngineRuntime {
     }
 
     fn enabled_dmx_outputs_are_network_only(&self) -> bool {
+        if !self.effective_lighting_allowed() {
+            return true;
+        }
         let main_is_network = !self.output.enabled
             || matches!(
                 self.output.protocol,
@@ -16116,11 +19363,12 @@ impl EngineRuntime {
     }
 
     fn has_enabled_dmx_output(&self) -> bool {
-        self.output.enabled
-            || self
-                .additional_dmx_outputs
-                .iter()
-                .any(|output| output.config.enabled)
+        self.effective_lighting_allowed()
+            && (self.output.enabled
+                || self
+                    .additional_dmx_outputs
+                    .iter()
+                    .any(|output| output.config.enabled))
     }
 
     fn set_auto_vj_config(&mut self, config: AutoVjConfig) -> Result<(), String> {
@@ -16757,8 +20005,13 @@ impl EngineRuntime {
         self.last_dmx_send_success_count = 0;
         self.last_dmx_send_failure_count = 0;
         self.last_dmx_route_results.clear();
+        let lighting_permit = self
+            .output_ownership_gate
+            .acquire(OutputCapability::Lighting)
+            .ok();
+        let lighting_allowed = lighting_permit.is_some();
         let main_output = self.output.clone();
-        if main_output.enabled {
+        if main_output.enabled && lighting_allowed {
             let outcome = send_output_frame_with_recovery(
                 &mut self.dmx_sender,
                 &mut self.dmx_sender_recovery,
@@ -16766,9 +20019,13 @@ impl EngineRuntime {
                 main_output.universe,
                 &frame,
                 now,
+                lighting_allowed,
             );
             let recovery = self.dmx_sender_recovery.clone();
             self.record_dmx_route_send_outcome(0, main_output.universe, outcome, &recovery, now);
+        } else if main_output.enabled && !lighting_allowed {
+            self.dmx_sender = None;
+            self.record_dmx_route_blocked(0, main_output.universe);
         } else {
             self.record_dmx_route_skipped(
                 0,
@@ -16788,6 +20045,11 @@ impl EngineRuntime {
                 self.record_dmx_route_skipped(route_index, config.universe, &recovery, now);
                 continue;
             }
+            if !lighting_allowed {
+                self.additional_dmx_outputs[index].sender = None;
+                self.record_dmx_route_blocked(route_index, config.universe);
+                continue;
+            }
             let output = &mut self.additional_dmx_outputs[index];
             let outcome = send_output_frame_with_recovery(
                 &mut output.sender,
@@ -16796,6 +20058,7 @@ impl EngineRuntime {
                 config.universe,
                 &frame,
                 now,
+                lighting_allowed,
             );
             let recovery = output.recovery.clone();
             self.record_dmx_route_send_outcome(
@@ -16846,6 +20109,26 @@ impl EngineRuntime {
             reconnecting: recovery.next_retry_at.is_some(),
             retry_in_ms: recovery.retry_in_ms(now),
             last_success_unix_ms: recovery.last_success_unix_ms,
+        });
+    }
+
+    fn record_dmx_route_blocked(&mut self, index: usize, universe: u16) {
+        let ownership = self.output_ownership_gate.status();
+        let error = ownership.error.unwrap_or_else(|| {
+            format!("Lighting output blocked ({:?})", ownership.lighting_reason)
+        });
+        self.last_dmx_route_results.push(DmxOutputRouteTelemetry {
+            index,
+            universe,
+            attempted: false,
+            success: false,
+            bytes: 0,
+            error: Some(error),
+            consecutive_failures: 0,
+            reconnect_attempts: 0,
+            reconnecting: false,
+            retry_in_ms: None,
+            last_success_unix_ms: None,
         });
     }
 
@@ -21441,7 +24724,10 @@ impl EngineRuntime {
         Ok(event)
     }
 
-    fn reconform_timeline_events_to_bpm(&mut self, bpm: f32) -> Result<(), String> {
+    fn resolve_timeline_events_for_bpm(
+        &self,
+        bpm: f32,
+    ) -> Result<Vec<RuntimeTimelineEvent>, String> {
         let mut next_events = Vec::with_capacity(self.timeline_events.len());
         for event in &self.timeline_events {
             let mut resolved = if event.conform_to_tempo {
@@ -21481,6 +24767,11 @@ impl EngineRuntime {
             }
             next_events.push(resolved);
         }
+        Ok(next_events)
+    }
+
+    fn reconform_timeline_events_to_bpm(&mut self, bpm: f32) -> Result<(), String> {
+        let next_events = self.resolve_timeline_events_for_bpm(bpm)?;
         // BPM re-conform is a transport-wide operation, not an operator edit. Deliberately do
         // not consult layer locks: conformed blocks on locked layers move with the show tempo.
         self.timeline_events = next_events;
@@ -25246,6 +28537,7 @@ impl EngineRuntime {
                 .iter()
                 .map(|layer| self.video_layer_summary_with_effects(layer, now))
                 .collect(),
+            media_assets: self.media_assets.clone(),
             compositions,
             outputs,
             mapping_presets: self.video_output_mapping_presets.clone(),
@@ -25261,6 +28553,7 @@ impl EngineRuntime {
     fn authored_video_snapshot_from_rendered(&self, rendered: &VideoSnapshot) -> VideoSnapshot {
         VideoSnapshot {
             layers: self.video_layers.iter().map(video_layer_summary).collect(),
+            media_assets: self.media_assets.clone(),
             compositions: rendered.compositions.clone(),
             outputs: rendered.outputs.clone(),
             mapping_presets: rendered.mapping_presets.clone(),
@@ -25276,6 +28569,286 @@ impl EngineRuntime {
                 .video_compositions
                 .iter()
                 .any(|composition| composition.summary.id == composition_id)
+    }
+
+    fn next_runtime_legacy_media_asset_id(&self) -> Result<MediaAssetId, String> {
+        self.media_assets
+            .iter()
+            .map(|asset| asset.id)
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .filter(|id| *id != 0)
+            .ok_or_else(|| "Media asset ID allocation overflow".to_string())
+    }
+
+    fn add_video_layer_with_asset(
+        &mut self,
+        layer_id: VideoLayerId,
+        asset_id: MediaAssetId,
+        label: String,
+        source: VideoSourceSummary,
+    ) -> Result<(), String> {
+        if layer_id == 0 {
+            return Err("Video layer IDs must be non-zero".to_string());
+        }
+        if asset_id == 0 || self.media_assets.iter().any(|asset| asset.id == asset_id) {
+            return Err(format!(
+                "Media asset {asset_id} already exists or is invalid"
+            ));
+        }
+        let label = sanitize_video_layer_label(label, layer_id);
+        self.video_layers.retain(|layer| layer.id != layer_id);
+        self.video_layer_fades
+            .retain(|fade| fade.layer_id != layer_id);
+        self.media_assets.push(MediaAssetSummary {
+            id: asset_id,
+            label: label.clone(),
+            source: source.clone(),
+            content_hash: None,
+            byte_size: None,
+        });
+        self.video_layers.push(RuntimeVideoLayer {
+            id: layer_id,
+            label,
+            source,
+            media_asset_id: asset_id,
+            blend_mode: VideoBlendMode::Normal,
+            state: VideoLayerState::default(),
+            isf_effect: None,
+        });
+        Ok(())
+    }
+
+    fn bootstrap_vj_show_with_assets(
+        &mut self,
+        layers: Vec<(VideoLayerId, MediaAssetId, String, VideoSourceSummary)>,
+        output: VideoOutputSummary,
+        expires_at: Instant,
+    ) -> Result<(), String> {
+        if Instant::now() > expires_at {
+            return Err("First-run VJ setup expired before engine execution".to_string());
+        }
+        if !self.video_layers.is_empty()
+            || !self.media_assets.is_empty()
+            || !self.video_outputs.is_empty()
+            || !self.video_compositions.is_empty()
+        {
+            return Err("First-run VJ setup requires an empty video show".to_string());
+        }
+        if layers.is_empty() {
+            return Err("First-run VJ setup requires at least one media layer".to_string());
+        }
+        if layers.iter().any(|(_, _, _, source)| {
+            source.kind != protocol::VideoSourceKind::File || source.path.is_none()
+        }) {
+            return Err("First-run VJ setup only accepts local File layers".to_string());
+        }
+        if output.id == 0
+            || output.kind != VideoOutputKind::Display
+            || output.composition_id != 1
+            || output.enabled
+            || !output.blackout
+            || output.fullscreen
+        {
+            return Err(
+                "First-run VJ output must be a disabled, blacked-out windowed Display routed to Main"
+                    .to_string(),
+            );
+        }
+        let mut layer_ids = HashSet::new();
+        let mut asset_ids = HashSet::new();
+        if layers.iter().any(|(layer_id, asset_id, _, _)| {
+            *layer_id == 0
+                || *asset_id == 0
+                || !layer_ids.insert(*layer_id)
+                || !asset_ids.insert(*asset_id)
+        }) {
+            return Err(
+                "First-run VJ layers and media assets must have unique non-zero IDs".to_string(),
+            );
+        }
+        let next_assets = layers
+            .iter()
+            .map(|(_, asset_id, label, source)| MediaAssetSummary {
+                id: *asset_id,
+                label: label.clone(),
+                source: source.clone(),
+                content_hash: None,
+                byte_size: None,
+            })
+            .collect::<Vec<_>>();
+        let next_layers = layers
+            .into_iter()
+            .map(|(layer_id, asset_id, label, source)| RuntimeVideoLayer {
+                id: layer_id,
+                label: sanitize_video_layer_label(label, layer_id),
+                source,
+                media_asset_id: asset_id,
+                blend_mode: VideoBlendMode::Normal,
+                state: VideoLayerState::default(),
+                isf_effect: None,
+            })
+            .collect::<Vec<_>>();
+        let output = sanitize_video_output(output);
+        self.media_assets = next_assets;
+        self.video_layers = next_layers;
+        self.video_layer_fades.clear();
+        self.video_outputs = vec![RuntimeVideoOutput { summary: output }];
+        self.video_output_fades.clear();
+        Ok(())
+    }
+
+    fn apply_media_asset_transaction(
+        &mut self,
+        transaction: MediaAssetTransaction,
+    ) -> Result<(), String> {
+        let mut next_assets = self.media_assets.clone();
+        let mut next_layers = self.video_layers.clone();
+
+        match transaction {
+            MediaAssetTransaction::Import(candidate) => {
+                if candidate.assets.is_empty() && candidate.layers.is_empty() {
+                    // A dedupe-only prepared import still needs the same
+                    // acknowledged publication boundary before its opaque
+                    // token can be consumed. It intentionally leaves the
+                    // catalog byte-identical while preserving that contract.
+                    return Ok(());
+                }
+                let existing_asset_ids = next_assets
+                    .iter()
+                    .map(|asset| asset.id)
+                    .collect::<HashSet<_>>();
+                let existing_layer_ids = next_layers
+                    .iter()
+                    .map(|layer| layer.id)
+                    .collect::<HashSet<_>>();
+                let mut candidate_asset_ids = HashSet::new();
+                for asset in &candidate.assets {
+                    if existing_asset_ids.contains(&asset.id)
+                        || !candidate_asset_ids.insert(asset.id)
+                    {
+                        return Err(format!("Media asset {} already exists", asset.id));
+                    }
+                }
+                let mut candidate_layer_ids = HashSet::new();
+                for layer in &candidate.layers {
+                    if existing_layer_ids.contains(&layer.id)
+                        || !candidate_layer_ids.insert(layer.id)
+                    {
+                        return Err(format!("Video layer {} already exists", layer.id));
+                    }
+                }
+                next_assets.extend(candidate.assets);
+                let mut candidate_layer_summaries = next_layers
+                    .iter()
+                    .map(video_layer_summary)
+                    .collect::<Vec<_>>();
+                candidate_layer_summaries.extend(candidate.layers);
+                let candidate_video = VideoSnapshot {
+                    layers: candidate_layer_summaries.clone(),
+                    media_assets: next_assets.clone(),
+                    ..VideoSnapshot::default()
+                };
+                validate_engine_ready_video_media_assets(&candidate_video)?;
+                next_layers.extend(
+                    candidate_layer_summaries
+                        .iter()
+                        .skip(self.video_layers.len())
+                        .map(runtime_video_layer_from_summary),
+                );
+            }
+            MediaAssetTransaction::BootstrapVjShow { candidate, output } => {
+                // First-run setup is intentionally stricter than a normal
+                // catalog import.  It creates an operator-safe output only
+                // when the show contains no pre-existing VJ state, while
+                // retaining the same engine-ready asset/layer invariant as
+                // every other MediaAsset publication.
+                if !self.video_layers.is_empty()
+                    || !self.media_assets.is_empty()
+                    || !self.video_outputs.is_empty()
+                    || !self.video_compositions.is_empty()
+                {
+                    return Err("First-run VJ setup requires an empty video show".to_string());
+                }
+                if candidate.layers.is_empty() {
+                    return Err("First-run VJ setup requires at least one media layer".to_string());
+                }
+                if candidate.layers.iter().any(|layer| {
+                    layer.source.kind != protocol::VideoSourceKind::File
+                        || layer.source.path.as_deref().is_none_or(str::is_empty)
+                }) {
+                    return Err("First-run VJ setup only accepts local File layers".to_string());
+                }
+                if output.id == 0
+                    || output.kind != VideoOutputKind::Display
+                    || output.composition_id != 1
+                    || output.enabled
+                    || !output.blackout
+                    || output.fullscreen
+                {
+                    return Err(
+                        "First-run VJ output must be a disabled, blacked-out windowed Display routed to Main"
+                            .to_string(),
+                    );
+                }
+
+                let mut candidate_asset_ids = HashSet::new();
+                for asset in &candidate.assets {
+                    if !candidate_asset_ids.insert(asset.id) {
+                        return Err(format!("Media asset {} already exists", asset.id));
+                    }
+                }
+                let mut candidate_layer_ids = HashSet::new();
+                for layer in &candidate.layers {
+                    if !candidate_layer_ids.insert(layer.id) {
+                        return Err(format!("Video layer {} already exists", layer.id));
+                    }
+                }
+                let candidate_video = VideoSnapshot {
+                    layers: candidate.layers.clone(),
+                    media_assets: candidate.assets.clone(),
+                    ..VideoSnapshot::default()
+                };
+                validate_engine_ready_video_media_assets(&candidate_video)?;
+                let next_layers = candidate_video
+                    .layers
+                    .iter()
+                    .map(runtime_video_layer_from_summary)
+                    .collect::<Vec<_>>();
+                let output = sanitize_video_output(output);
+                self.media_assets = candidate_video.media_assets;
+                self.video_layers = next_layers;
+                self.video_layer_fades.clear();
+                self.video_outputs = vec![RuntimeVideoOutput { summary: output }];
+                self.video_output_fades.clear();
+                return Ok(());
+            }
+            MediaAssetTransaction::Update(asset) => {
+                let Some(asset_index) = next_assets
+                    .iter()
+                    .position(|current| current.id == asset.id)
+                else {
+                    return Err(format!("Media asset {} was not found", asset.id));
+                };
+                next_assets[asset_index] = asset.clone();
+                for layer in &mut next_layers {
+                    if layer.media_asset_id == asset.id {
+                        layer.source = asset.source.clone();
+                    }
+                }
+                let candidate_video = VideoSnapshot {
+                    layers: next_layers.iter().map(video_layer_summary).collect(),
+                    media_assets: next_assets.clone(),
+                    ..VideoSnapshot::default()
+                };
+                validate_engine_ready_video_media_assets(&candidate_video)?;
+            }
+        }
+
+        self.media_assets = next_assets;
+        self.video_layers = next_layers;
+        Ok(())
     }
 
     fn duplicate_video_layer(
@@ -26226,10 +29799,14 @@ fn engine_command_rebuilds_effect_activations(command: &EngineCommand) -> bool {
     matches!(
         command,
         EngineCommand::PatchFixture { .. }
+            | EngineCommand::PatchFixturesPublished { .. }
+            | EngineCommand::RepairFixtureProfilePublished { .. }
             | EngineCommand::ReplaceFixtureProfile { .. }
             | EngineCommand::RemoveFixture(_)
             | EngineCommand::SetFixtureGroups { .. }
+            | EngineCommand::ApplyFixtureGroupStatePublished { .. }
             | EngineCommand::LoadProjectSnapshot(_)
+            | EngineCommand::LoadProjectSnapshotPublished { .. }
             | EngineCommand::SetBpm(_)
             | EngineCommand::TapBpm
             | EngineCommand::CreateCue { .. }
@@ -27237,6 +30814,7 @@ fn video_layer_summary(layer: &RuntimeVideoLayer) -> VideoLayerSummary {
         id: layer.id,
         label: layer.label.clone(),
         source: layer.source.clone(),
+        media_asset_id: Some(layer.media_asset_id),
         blend_mode: layer.blend_mode.clone(),
         state: layer.state.clone(),
         isf_effect: layer.isf_effect.clone(),
@@ -27252,6 +30830,9 @@ fn runtime_video_layer_from_summary(layer: &VideoLayerSummary) -> RuntimeVideoLa
         id: layer.id,
         label: sanitize_video_layer_label(layer.label.clone(), layer.id),
         source: layer.source.clone(),
+        media_asset_id: layer
+            .media_asset_id
+            .expect("engine-ready video layers require a media asset ID"),
         blend_mode: layer.blend_mode.clone(),
         state: video::sanitize_layer_state(layer.state.clone()),
         isf_effect,
@@ -27318,13 +30899,7 @@ fn first_timeline_audio_layer_id(layers: &[TimelineLayerSummary]) -> Option<u32>
 }
 
 fn next_timeline_audio_layer_id(layers: &[TimelineLayerSummary]) -> u32 {
-    layers
-        .iter()
-        .map(|layer| layer.id)
-        .max()
-        .unwrap_or(LEGACY_VIDEO_TIMELINE_LAYER_ID)
-        .saturating_add(1)
-        .max(LEGACY_AUDIO_TIMELINE_LAYER_ID)
+    checked_next_timeline_audio_layer_id(layers).unwrap_or_else(|error| panic!("{error}"))
 }
 
 fn legacy_timeline_audio_clip(
@@ -38486,7 +42061,15 @@ fn send_output_frame_with_recovery(
     universe: u16,
     frame: &[u8; 512],
     now: Instant,
+    lighting_allowed: bool,
 ) -> DmxRouteSendOutcome {
+    if !lighting_allowed {
+        *sender = None;
+        return DmxRouteSendOutcome {
+            attempted: false,
+            result: Err("Lighting output blocked by machine output role".to_string()),
+        };
+    }
     if recovery
         .next_retry_at
         .is_some_and(|retry_at| now < retry_at)
@@ -38535,8 +42118,11 @@ fn send_output_frame_with_recovery(
     }
 }
 
-fn create_enabled_dmx_sender(output: &DmxOutputConfig) -> Result<Option<DmxSender>, String> {
-    if output.enabled {
+fn create_enabled_dmx_sender(
+    output: &DmxOutputConfig,
+    lighting_allowed: bool,
+) -> Result<Option<DmxSender>, String> {
+    if output.enabled && lighting_allowed {
         create_dmx_sender(output).map(Some)
     } else {
         Ok(None)
@@ -38563,6 +42149,16 @@ impl DmxSender {
 }
 
 fn store_next_id(counter: &AtomicU64, next_id: u64) {
+    let mut current = counter.load(Ordering::Relaxed);
+    while current < next_id {
+        match counter.compare_exchange(current, next_id, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+fn store_next_id_u32(counter: &AtomicU32, next_id: u32) {
     let mut current = counter.load(Ordering::Relaxed);
     while current < next_id {
         match counter.compare_exchange(current, next_id, Ordering::Relaxed, Ordering::Relaxed) {
@@ -38732,6 +42328,13 @@ fn normalize_runtime_group_id(group_id: &str) -> Result<String, String> {
         return Err("Group path segments must not be empty".to_string());
     }
     Ok(segments.join("/"))
+}
+
+fn normalize_runtime_fixture_group_color(color: &str) -> Option<String> {
+    let trimmed = color.trim();
+    let hex = trimmed.strip_prefix('#')?;
+    (hex.len() == 6 && hex.chars().all(|character| character.is_ascii_hexdigit()))
+        .then(|| format!("#{}", hex.to_ascii_lowercase()))
 }
 
 fn group_matches(fixture_group_id: &str, requested_group_id: &str) -> bool {
@@ -39177,6 +42780,38 @@ mod tests {
     const _: () = assert!(RELEASE_GATE_EFFECT_COUNT == 64);
     const _: () = assert!(RELEASE_GATE_FIXTURE_COUNT == 200);
     const _: () = assert!(RELEASE_GATE_HZ == 44);
+
+    #[test]
+    fn external_command_persistence_classification_is_conservative() {
+        // Continuous input/transport traffic must not make a read-only
+        // authority poll retry forever.
+        assert!(!EngineCommand::MidiClockPulse.mutates_persistence_snapshot());
+        assert!(!EngineCommand::SetDmxInputFrame {
+            universe: 1,
+            values: Box::new([0; 512]),
+            merge_mode: DmxMergeMode::Htp,
+        }
+        .mutates_persistence_snapshot());
+        assert!(!EngineCommand::TriggerCue(1).mutates_persistence_snapshot());
+        assert!(!EngineCommand::SeekTimeline(120).mutates_persistence_snapshot());
+
+        // Authored output mapping changes are exactly the kind of external
+        // edit a coordinator poll must reconcile. Unknown/new variants
+        // default to this conservative branch too.
+        assert!(EngineCommand::SetVideoOutputMappingField {
+            output_id: 1,
+            field: "keystone_x".to_string(),
+            value: 0.25,
+        }
+        .mutates_persistence_snapshot());
+        assert!(EngineCommand::SetBpm(128.0).mutates_persistence_snapshot());
+        assert!(EngineCommand::SyncExternalClock {
+            bpm: 128.0,
+            beat_phase: 0.5,
+            source: ClockSource::MidiClock,
+        }
+        .mutates_persistence_snapshot());
+    }
 
     fn measure_release_gate(
         created_at: Instant,
@@ -39720,7 +43355,7 @@ mod tests {
 
     #[test]
     fn live_audio_clear_handle_returns_only_after_the_generation_is_published() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -39912,7 +43547,7 @@ mod tests {
 
     #[test]
     fn auto_vj_handle_waits_for_published_snapshot_and_returns_validation_errors() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -40166,6 +43801,26 @@ mod tests {
             position: Vec3::default(),
             rotation: Default::default(),
         }
+    }
+
+    fn sample_fixture_patch_candidate(
+        fixture_id: FixtureId,
+        label: &str,
+        address: u16,
+    ) -> FixturePatchCandidate {
+        FixturePatchCandidate {
+            fixture_id,
+            request: sample_patch_request(label, address),
+            profile: sample_profile(),
+        }
+    }
+
+    fn sample_repaired_fixture_profile() -> FixtureProfileSummary {
+        let mut profile = sample_profile();
+        profile.source_path = "memory://fixture-repaired.gdtf".to_string();
+        profile.short_name = Some("Mini Spot repaired metadata".to_string());
+        profile.warnings = vec!["Repaired source metadata".to_string()];
+        profile
     }
 
     fn runtime_with_lfo_effects(states: &[(EffectId, bool)]) -> EngineRuntime {
@@ -41250,7 +44905,7 @@ mod tests {
 
     #[test]
     fn fixture_limits_clamp_swap_and_invert_rendered_values() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -41362,7 +45017,7 @@ mod tests {
             serial_port: String::new(),
             serial_baud_rate: 57_600,
         };
-        let engine = EngineHandle::start(output);
+        let engine = EngineHandle::start_for_tests(output);
         let fixture_id = engine.allocate_fixture_id();
         engine
             .send(EngineCommand::PatchFixture {
@@ -41414,6 +45069,476 @@ mod tests {
         assert_eq!(snapshot.telemetry.last_dmx_send_success_count, 1);
         assert_eq!(snapshot.telemetry.last_dmx_send_failure_count, 0);
         assert!(snapshot.telemetry.total_dmx_send_success_count >= 1);
+    }
+
+    #[test]
+    fn machine_output_role_blocks_artnet_before_the_sender_boundary() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        receiver
+            .set_read_timeout(Some(Duration::from_millis(150)))
+            .unwrap();
+        let output = DmxOutputConfig {
+            enabled: true,
+            protocol: DmxOutputProtocol::ArtNet,
+            target_ip: "127.0.0.1".to_string(),
+            port: receiver.local_addr().unwrap().port(),
+            ..DmxOutputConfig::default()
+        };
+        let mut runtime = EngineRuntime::new(output);
+        runtime.output_ownership_role = MachineOutputRole::Video;
+        runtime.publish_output_ownership_status();
+        let snapshot = RwLock::new(EngineSnapshot::default());
+
+        runtime.tick(0, &snapshot);
+
+        let mut packet = [0_u8; 600];
+        let error = receiver.recv_from(&mut packet).unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        ));
+        assert_eq!(runtime.last_dmx_output_count, 0);
+        assert_eq!(runtime.last_dmx_send_success_count, 0);
+        assert_eq!(runtime.last_dmx_send_failure_count, 0);
+        assert_eq!(runtime.last_dmx_route_results.len(), 1);
+        assert!(!runtime.last_dmx_route_results[0].attempted);
+        assert!(runtime.last_dmx_route_results[0]
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("blocked")));
+    }
+
+    #[test]
+    fn standby_role_loads_authored_dmx_config_without_arming_output() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        receiver
+            .set_read_timeout(Some(Duration::from_millis(150)))
+            .unwrap();
+        let output = DmxOutputConfig {
+            enabled: true,
+            protocol: DmxOutputProtocol::ArtNet,
+            target_ip: "127.0.0.1".to_string(),
+            port: receiver.local_addr().unwrap().port(),
+            ..DmxOutputConfig::default()
+        };
+        let mut runtime = EngineRuntime::new(output.clone());
+        runtime.output_ownership_role = MachineOutputRole::Standby;
+        runtime.publish_output_ownership_status();
+        let mut authored = EngineSnapshot::default();
+        authored.output = output.clone();
+        authored.dmx_outputs = vec![output];
+        runtime.load_project_snapshot(authored);
+        let snapshot = RwLock::new(EngineSnapshot::default());
+
+        runtime.tick(0, &snapshot);
+
+        assert!(runtime.output.enabled);
+        assert!(runtime.dmx_sender.is_none());
+        assert_eq!(runtime.last_dmx_output_count, 0);
+        let mut packet = [0_u8; 600];
+        let error = receiver.recv_from(&mut packet).unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        ));
+    }
+
+    #[test]
+    fn machine_output_role_is_runtime_only_and_preserves_persistence_bytes() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let before = engine.persistence_snapshot().unwrap();
+        let before_authored_output_bytes = serde_json::to_vec(&(
+            before.output.clone(),
+            before.dmx_outputs.clone(),
+            before.video.outputs.clone(),
+        ))
+        .unwrap();
+        assert_eq!(
+            engine.output_ownership_status().role,
+            MachineOutputRole::Both
+        );
+
+        engine
+            .set_output_ownership_role(MachineOutputRole::Standby)
+            .unwrap();
+
+        let after = engine.persistence_snapshot().unwrap();
+        let after_authored_output_bytes =
+            serde_json::to_vec(&(after.output, after.dmx_outputs, after.video.outputs)).unwrap();
+        assert_eq!(before_authored_output_bytes, after_authored_output_bytes);
+        let status = engine.output_ownership_status();
+        assert_eq!(status.role, MachineOutputRole::Standby);
+        assert!(!status.lighting_allowed);
+        assert!(!status.video_allowed);
+    }
+
+    #[test]
+    fn output_ownership_gate_fences_in_flight_operations_without_deadlock() {
+        let gate = OutputOwnershipGate::for_role(MachineOutputRole::Both);
+        let permit = gate.acquire(OutputCapability::Lighting).unwrap();
+        let transition_gate = gate.clone();
+        let (ready, receiver) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            let transition = transition_gate
+                .begin_transition(MachineOutputRole::Standby)
+                .unwrap();
+            ready.send(transition).unwrap();
+        });
+
+        thread::sleep(Duration::from_millis(25));
+        assert_eq!(gate.status().state, OutputOwnershipState::Transitioning);
+        assert!(gate.acquire(OutputCapability::Lighting).is_err());
+        drop(permit);
+        let transition = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        worker.join().unwrap();
+        transition.complete().unwrap();
+
+        let status = gate.status();
+        assert_eq!(status.effective_role, MachineOutputRole::Standby);
+        assert!(!status.lighting_allowed);
+        assert!(gate.acquire(OutputCapability::Lighting).is_err());
+    }
+
+    #[test]
+    fn output_ownership_gate_poison_during_transition_fails_closed() {
+        let gate = OutputOwnershipGate::for_role(MachineOutputRole::Both);
+        let permit = gate.acquire(OutputCapability::Lighting).unwrap();
+        let transition_gate = gate.clone();
+        let (result_sender, result_receiver) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            result_sender
+                .send(transition_gate.begin_transition(MachineOutputRole::Standby))
+                .unwrap();
+        });
+
+        for _ in 0..20 {
+            if gate.status().state == OutputOwnershipState::Transitioning {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        thread::sleep(Duration::from_millis(25));
+        let poison_gate = gate.clone();
+        let poisoner = thread::spawn(move || {
+            let _guard = poison_gate.inner.state.lock().unwrap();
+            poison_gate.inner.changed.notify_all();
+            panic!("injected output ownership gate poison");
+        });
+        assert!(poisoner.join().is_err());
+
+        drop(permit);
+        let result = result_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("poisoned transition did not fail closed");
+        assert!(result.is_err());
+        worker.join().unwrap();
+
+        let status = gate.status();
+        assert_eq!(status.state, OutputOwnershipState::Failed);
+        assert_eq!(status.effective_role, MachineOutputRole::Standby);
+        assert_eq!(
+            status.lighting_reason,
+            OutputOwnershipReason::TransitionFailed
+        );
+        assert!(!status.lighting_allowed);
+        assert!(!status.video_allowed);
+    }
+
+    #[test]
+    fn output_ownership_gate_timeout_keeps_fence_until_permit_drains() {
+        let gate = OutputOwnershipGate::for_role(MachineOutputRole::Both);
+        let permit = gate.acquire(OutputCapability::Lighting).unwrap();
+        let transition_gate = gate.clone();
+        let (result_sender, result_receiver) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            result_sender
+                .send(
+                    transition_gate
+                        .begin_transition_with_test_timeout(
+                            MachineOutputRole::Standby,
+                            Duration::from_millis(5),
+                        )
+                        .map(|_| ()),
+                )
+                .unwrap();
+        });
+
+        for _ in 0..50 {
+            if gate.status().state == OutputOwnershipState::Failed {
+                break;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(gate.status().state, OutputOwnershipState::Failed);
+        assert!(gate.acquire(OutputCapability::Video).is_err());
+        assert!(gate.begin_transition(MachineOutputRole::Video).is_err());
+
+        let result = result_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("timed-out transition did not return promptly");
+        assert!(result.is_err());
+        assert!(gate.begin_transition(MachineOutputRole::Both).is_err());
+        drop(permit);
+        worker.join().unwrap();
+
+        let recovery = gate.begin_transition(MachineOutputRole::Both).unwrap();
+        recovery.complete().unwrap();
+        assert!(gate.acquire(OutputCapability::Lighting).is_ok());
+    }
+
+    #[test]
+    fn output_ownership_teardown_lease_blocks_rearm_until_cleanup_ack() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let transition = engine
+            .begin_output_ownership_transition(MachineOutputRole::Video)
+            .unwrap();
+        let teardown = engine.begin_output_ownership_teardown().unwrap();
+        transition.fail("injected slow NDI teardown");
+
+        assert!(engine
+            .begin_output_ownership_transition(MachineOutputRole::Both)
+            .is_err());
+        assert!(engine.acquire_video_output().is_err());
+
+        drop(teardown);
+        assert_eq!(
+            engine.output_ownership_status().state,
+            OutputOwnershipState::Failed
+        );
+        let retry = engine
+            .begin_output_ownership_transition(MachineOutputRole::Both)
+            .unwrap();
+        retry.complete().unwrap();
+        assert!(engine.acquire_video_output().is_ok());
+    }
+
+    #[test]
+    fn output_worker_failure_fence_blocks_rearm_until_teardown_ack() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let teardown = engine.begin_output_ownership_failure_fence(
+            "injected NDI worker send failure; teardown pending",
+        );
+        let status = engine.output_ownership_status();
+        assert_eq!(status.state, OutputOwnershipState::Failed);
+        assert_eq!(status.effective_role, MachineOutputRole::Standby);
+        assert_eq!(status.epoch, 1);
+        assert!(!status.video_allowed);
+        assert!(status
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("NDI worker send failure")));
+        assert!(engine
+            .begin_output_ownership_transition(MachineOutputRole::Video)
+            .is_err());
+        assert!(engine.acquire_video_output().is_err());
+
+        drop(teardown);
+        let retry = engine
+            .begin_output_ownership_transition(MachineOutputRole::Video)
+            .unwrap();
+        retry.complete().unwrap();
+        assert!(engine.acquire_video_output().is_ok());
+    }
+
+    #[test]
+    fn output_ownership_activation_requires_fenced_activation_phase() {
+        let gate = OutputOwnershipGate::for_role(MachineOutputRole::Both);
+        let mut transition = gate.begin_transition(MachineOutputRole::Video).unwrap();
+        assert!(gate
+            .admit_ready_activation(MachineOutputRole::Video)
+            .is_err());
+        transition.begin_activation().unwrap();
+        assert_eq!(gate.status().state, OutputOwnershipState::Activating);
+        assert!(gate.acquire(OutputCapability::Video).is_err());
+        let activation = transition.admit_output_activation().unwrap();
+        gate.validate_activation(&activation, MachineOutputRole::Video)
+            .unwrap();
+        activation
+            .admit_resource_creation()
+            .unwrap()
+            .publish()
+            .unwrap();
+        transition.complete().unwrap();
+        assert!(gate
+            .admit_ready_activation(MachineOutputRole::Video)
+            .is_ok());
+    }
+
+    #[test]
+    fn output_resource_creation_admission_rechecks_activation_before_constructor() {
+        let gate = OutputOwnershipGate::for_role(MachineOutputRole::Both);
+        let activation = gate
+            .admit_ready_activation(MachineOutputRole::Both)
+            .unwrap();
+        gate.validate_activation(&activation, MachineOutputRole::Both)
+            .unwrap();
+        let failure = gate.begin_failure_fence("injected fence before constructor admission");
+        let mut constructor_attempts = 0;
+
+        let lease = gate.admit_resource_creation(&activation);
+        if let Ok(lease) = lease {
+            constructor_attempts += 1;
+            lease.retire();
+        }
+
+        assert!(
+            gate.admit_resource_creation(&activation).is_err(),
+            "a failure fence must win before any constructor admission"
+        );
+        assert_eq!(constructor_attempts, 0);
+        drop(failure);
+    }
+
+    #[test]
+    fn output_resource_creation_lease_blocks_retry_until_resource_retirement() {
+        let gate = OutputOwnershipGate::for_role(MachineOutputRole::Both);
+        let activation = gate
+            .admit_ready_activation(MachineOutputRole::Both)
+            .unwrap();
+        let creation = activation.admit_resource_creation().unwrap();
+        let failure = gate.begin_failure_fence("injected fence during resource creation");
+        let creation = creation
+            .publish()
+            .expect_err("a fence that wins publication must retain the creation lease");
+
+        assert!(gate.begin_transition(MachineOutputRole::Both).is_err());
+        drop(failure);
+        assert!(gate.begin_transition(MachineOutputRole::Both).is_err());
+
+        creation.retire();
+        let retry = gate.begin_transition(MachineOutputRole::Both).unwrap();
+        retry.complete().unwrap();
+    }
+
+    #[test]
+    fn output_resource_creation_lease_rejects_stale_epoch_and_role() {
+        let gate = OutputOwnershipGate::for_role(MachineOutputRole::Video);
+        let activation = gate
+            .admit_ready_activation(MachineOutputRole::Video)
+            .unwrap();
+        assert!(gate
+            .validate_activation(&activation, MachineOutputRole::Lighting)
+            .is_err());
+
+        let failure = gate.begin_failure_fence("injected stale creation epoch");
+        assert!(activation.admit_resource_creation().is_err());
+        drop(failure);
+    }
+
+    #[test]
+    fn fail_closed_engine_start_has_no_initial_output_capability() {
+        let engine = EngineHandle::start(DmxOutputConfig::default());
+        let status = engine.output_ownership_status();
+        assert_eq!(status.effective_role, MachineOutputRole::Standby);
+        assert_eq!(status.state, OutputOwnershipState::Failed);
+        assert_eq!(status.lighting_reason, OutputOwnershipReason::StartupDenied);
+        assert!(engine.acquire_lighting_output().is_err());
+        assert!(engine.acquire_video_output().is_err());
+    }
+
+    #[test]
+    fn project_swap_disarmed_preserves_desired_role_for_explicit_rearm() {
+        let gate = OutputOwnershipGate::for_role(MachineOutputRole::Both);
+        let transition = gate.begin_transition(MachineOutputRole::Standby).unwrap();
+        let status = transition.complete_project_swap_disarmed().unwrap();
+
+        assert_eq!(status.role, MachineOutputRole::Standby);
+        assert_eq!(status.effective_role, MachineOutputRole::Standby);
+        assert_eq!(status.desired_role, MachineOutputRole::Both);
+        assert_eq!(status.persisted_role, Some(MachineOutputRole::Both));
+        assert_eq!(status.state, OutputOwnershipState::Ready);
+        assert_eq!(status.generation, 1);
+        assert_eq!(status.epoch, 1);
+        assert!(!status.lighting_allowed);
+        assert!(!status.video_allowed);
+        assert_eq!(
+            status.lighting_reason,
+            OutputOwnershipReason::ProjectSwapDisarmed
+        );
+        assert_eq!(
+            status.video_reason,
+            OutputOwnershipReason::ProjectSwapDisarmed
+        );
+        assert_eq!(status.error, None);
+        assert!(gate.acquire(OutputCapability::Lighting).is_err());
+        assert!(gate.acquire(OutputCapability::Video).is_err());
+
+        let rearm = gate.begin_transition(status.desired_role).unwrap();
+        let rearmed = rearm.complete().unwrap();
+        assert_eq!(rearmed.effective_role, MachineOutputRole::Both);
+        assert_eq!(rearmed.desired_role, MachineOutputRole::Both);
+        assert_eq!(rearmed.persisted_role, Some(MachineOutputRole::Both));
+        assert!(gate.acquire(OutputCapability::Lighting).is_ok());
+        assert!(gate.acquire(OutputCapability::Video).is_ok());
+    }
+
+    #[test]
+    fn fail_closed_engine_start_emits_no_artnet_before_initialization() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        receiver
+            .set_read_timeout(Some(Duration::from_millis(150)))
+            .unwrap();
+        let engine = EngineHandle::start(DmxOutputConfig {
+            enabled: true,
+            protocol: DmxOutputProtocol::ArtNet,
+            target_ip: "127.0.0.1".to_string(),
+            port: receiver.local_addr().unwrap().port(),
+            ..DmxOutputConfig::default()
+        });
+
+        let mut packet = [0_u8; 700];
+        let error = receiver.recv_from(&mut packet).unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        ));
+        assert_eq!(
+            engine.output_ownership_status().effective_role,
+            MachineOutputRole::Standby
+        );
+        assert!(!engine.output_ownership_status().lighting_allowed);
+    }
+
+    #[test]
+    fn output_sender_preparation_failure_stays_failed_and_all_denied() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine
+            .send(EngineCommand::SetOutput(DmxOutputConfig {
+                enabled: true,
+                protocol: DmxOutputProtocol::EnttecOpenDmx,
+                serial_port: "Syndocal-invalid-output-port".to_string(),
+                ..DmxOutputConfig::default()
+            }))
+            .unwrap();
+        thread::sleep(Duration::from_millis(30));
+
+        let transition = engine
+            .begin_output_ownership_transition(MachineOutputRole::Both)
+            .unwrap();
+        engine.fence_output_ownership().unwrap();
+        let error = engine
+            .prepare_output_ownership_role(MachineOutputRole::Both)
+            .unwrap_err();
+        assert!(!error.is_empty());
+        transition.fail(error);
+
+        let status = engine.output_ownership_status();
+        assert_eq!(status.state, OutputOwnershipState::Failed);
+        assert_eq!(status.effective_role, MachineOutputRole::Standby);
+        assert!(!status.lighting_allowed);
+        assert!(!status.video_allowed);
     }
 
     /// Physical serial rig demo/acceptance: drives the operator's 121ch rig
@@ -41497,7 +45622,7 @@ mod tests {
             serial_port,
             serial_baud_rate: 250_000,
         };
-        let engine = EngineHandle::start(output);
+        let engine = EngineHandle::start_for_tests(output);
 
         let master_id = engine.allocate_fixture_id();
         engine
@@ -41637,7 +45762,7 @@ mod tests {
             .unwrap();
         let port_a = receiver_a.local_addr().unwrap().port();
         let port_b = receiver_b.local_addr().unwrap().port();
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -41758,7 +45883,7 @@ mod tests {
 
     #[test]
     fn engine_sustains_one_tick_across_128_enabled_artnet_universes() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -41806,7 +45931,7 @@ mod tests {
             .unwrap();
         let artnet_port = artnet_receiver.local_addr().unwrap().port();
         let sacn_port = sacn_receiver.local_addr().unwrap().port();
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -41908,8 +46033,75 @@ mod tests {
     }
 
     #[test]
+    fn output_ownership_role_matrix_blocks_and_reenables_artnet_and_sacn_loopback() {
+        for protocol in [DmxOutputProtocol::ArtNet, DmxOutputProtocol::Sacn] {
+            let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+            receiver
+                .set_read_timeout(Some(Duration::from_millis(150)))
+                .unwrap();
+            let output = DmxOutputConfig {
+                enabled: true,
+                protocol: protocol.clone(),
+                target_ip: "127.0.0.1".to_string(),
+                port: receiver.local_addr().unwrap().port(),
+                universe: if protocol == DmxOutputProtocol::Sacn {
+                    2
+                } else {
+                    0
+                },
+                ..DmxOutputConfig::default()
+            };
+            let engine = EngineHandle::start_for_tests(output);
+
+            let mut packet = [0_u8; 700];
+            let (received, _) = receiver.recv_from(&mut packet).unwrap();
+            assert!(
+                received > 0,
+                "{protocol:?} did not send while Both was ready"
+            );
+            receiver.set_nonblocking(true).unwrap();
+            while receiver.recv_from(&mut packet).is_ok() {}
+            receiver.set_nonblocking(false).unwrap();
+            receiver
+                .set_read_timeout(Some(Duration::from_millis(150)))
+                .unwrap();
+
+            let mut demotion = engine
+                .begin_output_ownership_transition(MachineOutputRole::Video)
+                .unwrap();
+            assert!(engine
+                .begin_output_ownership_transition(MachineOutputRole::Both)
+                .is_err());
+            engine.fence_output_ownership().unwrap();
+            demotion
+                .record_persisted_role(MachineOutputRole::Video)
+                .unwrap();
+            engine
+                .prepare_output_ownership_role(MachineOutputRole::Video)
+                .unwrap();
+            demotion.complete().unwrap();
+            thread::sleep(Duration::from_millis(60));
+            assert!(receiver.recv_from(&mut packet).is_err());
+
+            let mut promotion = engine
+                .begin_output_ownership_transition(MachineOutputRole::Both)
+                .unwrap();
+            engine.fence_output_ownership().unwrap();
+            promotion
+                .record_persisted_role(MachineOutputRole::Both)
+                .unwrap();
+            engine
+                .prepare_output_ownership_role(MachineOutputRole::Both)
+                .unwrap();
+            promotion.complete().unwrap();
+            let (received, _) = receiver.recv_from(&mut packet).unwrap();
+            assert!(received > 0, "{protocol:?} did not resume after re-enable");
+        }
+    }
+
+    #[test]
     fn project_snapshot_load_restores_core_show_state_and_advances_ids() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -42045,6 +46237,7 @@ mod tests {
                         codec: None,
                         metadata: None,
                     },
+                    media_asset_id: None,
                     blend_mode: VideoBlendMode::Add,
                     state: VideoLayerState {
                         opacity: 0.5,
@@ -42052,6 +46245,7 @@ mod tests {
                     },
                     isf_effect: None,
                 }],
+                media_assets: Vec::new(),
                 compositions: vec![CompositionSummary {
                     id: 45,
                     label: "Loaded Comp".to_string(),
@@ -42208,7 +46402,7 @@ mod tests {
 
     #[test]
     fn node_graphs_can_be_saved_and_pruned_with_fixture_targets() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -42253,7 +46447,7 @@ mod tests {
 
     #[test]
     fn cue_can_toggle_node_graph_enabled_state_and_prunes_removed_graphs() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -42327,7 +46521,7 @@ mod tests {
 
     #[test]
     fn node_graphs_drive_lighting_and_video_outputs() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -42429,7 +46623,7 @@ mod tests {
 
     #[test]
     fn audio_node_graph_interpolates_fft_band_at_timeline_position() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -42496,7 +46690,7 @@ mod tests {
 
     #[test]
     fn node_graph_handle_returns_only_after_published_state_is_visible() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -42611,7 +46805,7 @@ mod tests {
 
     #[test]
     fn unverified_legacy_live_audio_cannot_drive_node_graph() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -43112,7 +47306,7 @@ mod tests {
 
     #[test]
     fn node_graph_position_wave_uses_fixture_and_video_positions() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -43238,6 +47432,7 @@ mod tests {
                         id: 2,
                         label: " Layer 1 ".to_string(),
                         source: source.clone(),
+                        media_asset_id: None,
                         blend_mode: VideoBlendMode::Normal,
                         state: VideoLayerState::default(),
                         isf_effect: None,
@@ -43246,6 +47441,7 @@ mod tests {
                         id: 2,
                         label: "Duplicate Layer".to_string(),
                         source: source.clone(),
+                        media_asset_id: None,
                         blend_mode: VideoBlendMode::Add,
                         state: VideoLayerState::default(),
                         isf_effect: None,
@@ -43254,6 +47450,7 @@ mod tests {
                         id: 0,
                         label: "Invalid Layer".to_string(),
                         source,
+                        media_asset_id: None,
                         blend_mode: VideoBlendMode::Normal,
                         state: VideoLayerState::default(),
                         isf_effect: None,
@@ -43319,7 +47516,7 @@ mod tests {
 
     #[test]
     fn project_snapshot_load_drops_invalid_show_references_and_canonicalizes_targets() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -43548,6 +47745,7 @@ mod tests {
                         codec: Some("H264".to_string()),
                         metadata: None,
                     },
+                    media_asset_id: None,
                     blend_mode: VideoBlendMode::Normal,
                     state: VideoLayerState::default(),
                     isf_effect: None,
@@ -43958,7 +48156,7 @@ mod tests {
 
     #[test]
     fn timeline_audio_command_updates_snapshot_duration() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -44008,7 +48206,7 @@ mod tests {
 
     #[test]
     fn seek_timeline_beat_uses_audio_beats_and_bpm_fallback() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -44087,7 +48285,7 @@ mod tests {
 
     #[test]
     fn video_source_metadata_extends_timeline_duration() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -44139,7 +48337,7 @@ mod tests {
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
         let port = receiver.local_addr().unwrap().port();
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: true,
             protocol: DmxOutputProtocol::Sacn,
             target_ip: "127.0.0.1".to_string(),
@@ -44203,7 +48401,7 @@ mod tests {
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
         let port = receiver.local_addr().unwrap().port();
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: true,
             protocol: DmxOutputProtocol::ArtNet,
             target_ip: "127.0.0.1".to_string(),
@@ -44297,7 +48495,7 @@ mod tests {
 
     #[test]
     fn set_attribute_rejects_unknown_fixture_or_attribute_without_mutating_snapshot() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -44406,7 +48604,7 @@ mod tests {
 
     #[test]
     fn apply_attribute_values_rejects_unknown_attribute_without_partial_update() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -44487,7 +48685,7 @@ mod tests {
 
     #[test]
     fn touch_surface_acknowledges_and_roundtrips_through_persistence_snapshot() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -44519,7 +48717,7 @@ mod tests {
 
     #[test]
     fn set_fixture_transform_updates_snapshot_position_and_rotation() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -44594,7 +48792,7 @@ mod tests {
 
     #[test]
     fn set_stage_map_config_updates_snapshot() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -44621,9 +48819,2688 @@ mod tests {
         assert_eq!(snapshot.stage_map, config);
     }
 
+    fn snapshot_with_allocator_ids(id: u64) -> (EngineSnapshot, u32) {
+        let fixture_id = id;
+        let cue_id = id;
+        let cue_list_id = id;
+        let layer_id = u32::try_from(id).expect("allocator test id fits timeline layers");
+        let audio_layer_id = layer_id.saturating_add(1);
+        let mut snapshot = EngineSnapshot::default();
+
+        snapshot.fixtures = vec![sample_patched_fixture(fixture_id, "Reserved Fixture", 1)];
+        snapshot.cue_lists = vec![
+            CueListSummary::default(),
+            CueListSummary {
+                id: cue_list_id,
+                label: "Reserved Cue List".to_string(),
+                active_cue_id: Some(cue_id),
+            },
+        ];
+        snapshot.cues = vec![CueSummary {
+            id: cue_id,
+            cue_list_id,
+            label: "Reserved Cue".to_string(),
+            targets: vec![CueFixtureTarget {
+                fixture_id,
+                values: vec![AttributeValueSummary {
+                    attribute: "Dimmer".to_string(),
+                    value: 65_535,
+                }],
+            }],
+            palette_targets: vec![CuePaletteTarget {
+                palette_id: id,
+                fixture_ids: vec![fixture_id],
+            }],
+            effect_targets: vec![CueEffectTarget {
+                effect_id: id,
+                enabled: true,
+                params: None,
+                transition_ms: None,
+            }],
+            ..CueSummary::default()
+        }];
+        snapshot.active_cue_id = Some(cue_id);
+        snapshot.palettes = vec![ReferencePaletteSummary {
+            id,
+            label: "Reserved Palette".to_string(),
+            kind: protocol::PaletteKind::Intensity,
+            values: vec![AttributeValueSummary {
+                attribute: "Dimmer".to_string(),
+                value: 65_535,
+            }],
+            color_stops: Vec::new(),
+        }];
+        snapshot.playback_executors = vec![
+            PlaybackExecutorSummary::default(),
+            PlaybackExecutorSummary {
+                id,
+                label: "Reserved Executor".to_string(),
+                cue_list_id,
+                page: 2,
+                slot: 1,
+                level: 1.0,
+            },
+        ];
+        snapshot.timeline.layers = vec![
+            TimelineLayerSummary {
+                id: layer_id,
+                label: "Reserved Lighting".to_string(),
+                order: 0,
+                muted: false,
+                locked: false,
+                solo: false,
+                expanded: true,
+                kind: TimelineLayerKind::Lighting,
+            },
+            TimelineLayerSummary {
+                id: audio_layer_id,
+                label: "Reserved Audio".to_string(),
+                order: 1,
+                muted: false,
+                locked: false,
+                solo: false,
+                expanded: true,
+                kind: TimelineLayerKind::Audio,
+            },
+        ];
+        snapshot.timeline.events = vec![TimelineCueEventSummary {
+            id,
+            cue_id,
+            track: TimelineTrackKind::Lighting,
+            layer_id: Some(layer_id),
+            ..TimelineCueEventSummary::default()
+        }];
+        snapshot.timeline.automations = vec![TimelineAutomationSummary {
+            id,
+            fixture_id,
+            attribute: "Dimmer".to_string(),
+            track: TimelineTrackKind::Lighting,
+            keyframes: vec![
+                AutomationKeyframeSummary {
+                    time_ms: 0,
+                    value: 0,
+                    interpolation: AutomationInterpolation::Linear,
+                },
+                AutomationKeyframeSummary {
+                    time_ms: 1_000,
+                    value: 65_535,
+                    interpolation: AutomationInterpolation::Linear,
+                },
+            ],
+            enabled: true,
+        }];
+        snapshot.timeline.audio_clips = vec![TimelineAudioClipSummary {
+            id,
+            layer_id: audio_layer_id,
+            path: "memory://reserved-audio.wav".to_string(),
+            duration_ms: 1_000,
+            ..TimelineAudioClipSummary::default()
+        }];
+        snapshot.cues[0].child_timeline = Some(ChildTimelineSummary {
+            layers: vec![TimelineLayerSummary {
+                id: audio_layer_id,
+                label: "Reserved Child Audio".to_string(),
+                order: 0,
+                muted: false,
+                locked: false,
+                solo: false,
+                expanded: true,
+                kind: TimelineLayerKind::Audio,
+            }],
+            automations: vec![TimelineAutomationSummary {
+                id,
+                fixture_id,
+                attribute: "Dimmer".to_string(),
+                track: TimelineTrackKind::Lighting,
+                keyframes: vec![AutomationKeyframeSummary {
+                    time_ms: 0,
+                    value: 0,
+                    interpolation: AutomationInterpolation::Linear,
+                }],
+                enabled: true,
+            }],
+            video_automations: vec![TimelineVideoAutomationSummary {
+                id,
+                layer_id: id,
+                param: VideoParam::Opacity,
+                track: TimelineTrackKind::Video,
+                keyframes: vec![VideoAutomationKeyframeSummary {
+                    time_ms: 0,
+                    value: 1.0,
+                    interpolation: AutomationInterpolation::Linear,
+                }],
+                enabled: true,
+            }],
+            audio_clips: vec![TimelineAudioClipSummary {
+                id,
+                layer_id: audio_layer_id,
+                path: "memory://reserved-child-audio.wav".to_string(),
+                duration_ms: 1_000,
+                ..TimelineAudioClipSummary::default()
+            }],
+            ..ChildTimelineSummary::default()
+        });
+        snapshot.video.layers = vec![VideoLayerSummary {
+            id,
+            label: "Reserved Layer".to_string(),
+            source: VideoSourceSummary {
+                kind: VideoSourceKind::StillImage,
+                path: Some("memory://reserved-still.png".to_string()),
+                name: None,
+                codec: None,
+                metadata: None,
+            },
+            media_asset_id: None,
+            blend_mode: VideoBlendMode::Normal,
+            state: VideoLayerState::default(),
+            isf_effect: None,
+        }];
+        snapshot.video.compositions = vec![CompositionSummary {
+            id,
+            label: "Reserved Composition".to_string(),
+            layer_ids: vec![id],
+            output_ids: vec![id],
+        }];
+        snapshot.video.outputs = vec![VideoOutputSummary {
+            id,
+            label: "Reserved Output".to_string(),
+            kind: VideoOutputKind::Display,
+            enabled: false,
+            composition_id: id,
+            fullscreen: false,
+            monitor_id: None,
+            width: 640,
+            height: 480,
+            endpoint_name: None,
+            opacity: 1.0,
+            blackout: false,
+            mapping: Default::default(),
+        }];
+        snapshot.authored_video = Some(snapshot.video.clone());
+        snapshot.video = VideoSnapshot::default();
+        snapshot.effects = vec![EffectSummary {
+            id,
+            label: "Reserved Effect".to_string(),
+            effect_type: EffectKind::Lfo,
+            fixture_ids: vec![fixture_id],
+            target_group_ids: Vec::new(),
+            attribute: "Dimmer".to_string(),
+            video_targets: Vec::new(),
+            shape: LfoShape::Sine,
+            period_ms: Some(1_000),
+            clock_sync: None,
+            low: 0,
+            high: 65_535,
+            phase: 0.0,
+            fixture_spread: 0.0,
+            blend_mode: EffectBlendMode::Override,
+            origin: None,
+            direction: None,
+            speed: None,
+            wavelength: None,
+            enabled: false,
+            lfo: None,
+            color: None,
+            chaser: None,
+            move_effect: None,
+            value: None,
+            curve: None,
+            mapping: None,
+            color_mapping: None,
+        }];
+        snapshot.node_graphs = vec![sample_node_graph(id, fixture_id)];
+        snapshot.stage_map_presets = vec![StageMapPresetSummary {
+            label: "Reserved Stage Layout".to_string(),
+            config: StageMapConfig::default(),
+            stage_objects: Some(vec![StageObjectSummary {
+                id,
+                label: "Reserved Stage Object".to_string(),
+                kind: StageObjectKind::Stage,
+                x: 0.0,
+                z: 0.0,
+                width: 8.0,
+                depth: 5.0,
+                rotation_deg: 0.0,
+                color: None,
+            }]),
+        }];
+
+        (snapshot, audio_layer_id)
+    }
+
+    fn snapshot_with_allocator_candidate(
+        domain: AllocatorDomain,
+        candidate: u64,
+    ) -> EngineSnapshot {
+        let mut snapshot = EngineSnapshot::default();
+        match domain {
+            AllocatorDomain::Fixtures => {
+                snapshot.fixtures = vec![sample_patched_fixture(candidate, "Boundary", 1)];
+            }
+            AllocatorDomain::Effects => {
+                let mut cue = CueSummary::default();
+                cue.id = 1;
+                cue.effect_targets = vec![CueEffectTarget {
+                    effect_id: candidate,
+                    enabled: false,
+                    params: None,
+                    transition_ms: None,
+                }];
+                snapshot.cues = vec![cue];
+            }
+            AllocatorDomain::Cues => {
+                snapshot.cues = vec![CueSummary {
+                    id: candidate,
+                    ..CueSummary::default()
+                }];
+            }
+            AllocatorDomain::CueLists => {
+                snapshot.cue_lists = vec![CueListSummary {
+                    id: candidate,
+                    label: "Boundary".to_string(),
+                    active_cue_id: None,
+                }];
+            }
+            AllocatorDomain::Palettes => {
+                snapshot.palettes = vec![ReferencePaletteSummary {
+                    id: candidate,
+                    label: "Boundary".to_string(),
+                    kind: protocol::PaletteKind::Intensity,
+                    values: Vec::new(),
+                    color_stops: Vec::new(),
+                }];
+            }
+            AllocatorDomain::PlaybackExecutors => {
+                snapshot.playback_executors = vec![PlaybackExecutorSummary {
+                    id: candidate,
+                    label: "Boundary".to_string(),
+                    cue_list_id: DEFAULT_CUE_LIST_ID,
+                    page: 1,
+                    slot: 1,
+                    level: 1.0,
+                }];
+            }
+            AllocatorDomain::TimelineEvents => {
+                snapshot.timeline.events = vec![TimelineCueEventSummary {
+                    id: candidate,
+                    ..TimelineCueEventSummary::default()
+                }];
+            }
+            AllocatorDomain::TimelineLayers => {
+                snapshot.timeline.layers = vec![TimelineLayerSummary {
+                    id: u32::try_from(candidate).expect("timeline boundary fits u32"),
+                    label: "Boundary".to_string(),
+                    order: 0,
+                    muted: false,
+                    locked: false,
+                    solo: false,
+                    expanded: false,
+                    kind: TimelineLayerKind::Lighting,
+                }];
+            }
+            AllocatorDomain::TimelineAudioClips => {
+                snapshot.timeline.audio_clips = vec![TimelineAudioClipSummary {
+                    id: candidate,
+                    ..TimelineAudioClipSummary::default()
+                }];
+            }
+            AllocatorDomain::Automations => {
+                snapshot.timeline.automations = vec![TimelineAutomationSummary {
+                    id: candidate,
+                    fixture_id: 1,
+                    attribute: "Dimmer".to_string(),
+                    track: TimelineTrackKind::Lighting,
+                    keyframes: Vec::new(),
+                    enabled: false,
+                }];
+            }
+            AllocatorDomain::MediaAssets => {
+                snapshot.video.media_assets = vec![MediaAssetSummary {
+                    id: candidate,
+                    label: "Boundary asset".to_string(),
+                    source: allocator_video_source(candidate),
+                    content_hash: None,
+                    byte_size: None,
+                }];
+            }
+            AllocatorDomain::VideoLayers => {
+                let source = allocator_video_source(candidate);
+                snapshot.video.media_assets = vec![MediaAssetSummary {
+                    id: 1,
+                    label: "Boundary layer asset".to_string(),
+                    source: source.clone(),
+                    content_hash: None,
+                    byte_size: None,
+                }];
+                snapshot.video.layers = vec![VideoLayerSummary {
+                    id: candidate,
+                    label: "Boundary".to_string(),
+                    source,
+                    media_asset_id: Some(1),
+                    blend_mode: VideoBlendMode::Normal,
+                    state: VideoLayerState::default(),
+                    isf_effect: None,
+                }];
+            }
+            AllocatorDomain::Compositions => {
+                snapshot.video.compositions = vec![CompositionSummary {
+                    id: candidate,
+                    label: "Boundary".to_string(),
+                    layer_ids: Vec::new(),
+                    output_ids: Vec::new(),
+                }];
+            }
+            AllocatorDomain::VideoOutputs => {
+                snapshot.video.outputs = vec![VideoOutputSummary {
+                    id: candidate,
+                    label: "Boundary".to_string(),
+                    kind: VideoOutputKind::Display,
+                    enabled: false,
+                    composition_id: 1,
+                    fullscreen: false,
+                    monitor_id: None,
+                    width: 640,
+                    height: 480,
+                    endpoint_name: None,
+                    opacity: 1.0,
+                    blackout: false,
+                    mapping: Default::default(),
+                }];
+            }
+            AllocatorDomain::NodeGraphs => {
+                snapshot.node_graphs = vec![sample_node_graph(candidate, 1)];
+            }
+            AllocatorDomain::StageObjects => {
+                snapshot.stage_objects = vec![StageObjectSummary {
+                    id: candidate,
+                    label: "Boundary".to_string(),
+                    kind: StageObjectKind::Stage,
+                    x: 0.0,
+                    z: 0.0,
+                    width: 1.0,
+                    depth: 1.0,
+                    rotation_deg: 0.0,
+                    color: None,
+                }];
+            }
+        }
+        snapshot
+    }
+
+    fn allocator_value(engine: &EngineHandle, domain: AllocatorDomain) -> u64 {
+        match domain {
+            AllocatorDomain::Fixtures => engine.allocate_fixture_id(),
+            AllocatorDomain::Effects => engine.allocate_effect_id(),
+            AllocatorDomain::Cues => engine.allocate_cue_id(),
+            AllocatorDomain::CueLists => engine.allocate_cue_list_id(),
+            AllocatorDomain::Palettes => engine.allocate_palette_id(),
+            AllocatorDomain::PlaybackExecutors => engine.allocate_executor_id(),
+            AllocatorDomain::TimelineEvents => engine.allocate_timeline_event_id(),
+            AllocatorDomain::TimelineLayers => engine.allocate_timeline_layer_id() as u64,
+            AllocatorDomain::TimelineAudioClips => engine.allocate_timeline_audio_clip_id(),
+            AllocatorDomain::Automations => engine.allocate_automation_id(),
+            AllocatorDomain::MediaAssets => engine.allocate_media_asset_id(),
+            AllocatorDomain::VideoLayers => engine.allocate_video_layer_id(),
+            AllocatorDomain::Compositions => engine.allocate_composition_id(),
+            AllocatorDomain::VideoOutputs => engine.allocate_video_output_id(),
+            AllocatorDomain::NodeGraphs => engine.allocate_node_graph_id(),
+            AllocatorDomain::StageObjects => engine.allocate_stage_object_id(),
+        }
+    }
+
+    fn allocator_counter_value(engine: &EngineHandle, domain: AllocatorDomain) -> u64 {
+        match domain {
+            AllocatorDomain::Fixtures => engine.next_fixture_id.load(Ordering::Relaxed),
+            AllocatorDomain::Effects => engine.next_effect_id.load(Ordering::Relaxed),
+            AllocatorDomain::Cues => engine.next_cue_id.load(Ordering::Relaxed),
+            AllocatorDomain::CueLists => engine.next_cue_list_id.load(Ordering::Relaxed),
+            AllocatorDomain::Palettes => engine.next_palette_id.load(Ordering::Relaxed),
+            AllocatorDomain::PlaybackExecutors => engine.next_executor_id.load(Ordering::Relaxed),
+            AllocatorDomain::TimelineEvents => {
+                engine.next_timeline_event_id.load(Ordering::Relaxed)
+            }
+            AllocatorDomain::TimelineLayers => {
+                engine.next_timeline_layer_id.load(Ordering::Relaxed) as u64
+            }
+            AllocatorDomain::TimelineAudioClips => {
+                engine.next_timeline_audio_clip_id.load(Ordering::Relaxed)
+            }
+            AllocatorDomain::Automations => engine.next_automation_id.load(Ordering::Relaxed),
+            AllocatorDomain::MediaAssets => engine.next_media_asset_id.load(Ordering::Relaxed),
+            AllocatorDomain::VideoLayers => engine.next_video_layer_id.load(Ordering::Relaxed),
+            AllocatorDomain::Compositions => engine.next_composition_id.load(Ordering::Relaxed),
+            AllocatorDomain::VideoOutputs => engine.next_video_output_id.load(Ordering::Relaxed),
+            AllocatorDomain::NodeGraphs => engine.next_node_graph_id.load(Ordering::Relaxed),
+            AllocatorDomain::StageObjects => engine.next_stage_object_id.load(Ordering::Relaxed),
+        }
+    }
+
+    fn allocator_test_handle(snapshot: Arc<RwLock<EngineSnapshot>>) -> EngineHandle {
+        let queue = Arc::new(ArrayQueue::new(ENGINE_QUEUE_CAPACITY));
+        let wake = Arc::new(EngineWake::new());
+        let shared_telemetry = Arc::new(EngineSharedTelemetry::new());
+        EngineHandle {
+            _lifetime: Arc::new(EngineLifetime::new(Arc::clone(&wake))),
+            queue,
+            wake,
+            shared_telemetry,
+            snapshot,
+            output_ownership_gate: OutputOwnershipGate::for_role(MachineOutputRole::Both),
+            allocator_gate: Arc::new(Mutex::new(())),
+            next_fixture_id: Arc::new(AtomicU64::new(1)),
+            next_effect_id: Arc::new(AtomicU64::new(1)),
+            next_cue_id: Arc::new(AtomicU64::new(1)),
+            next_cue_list_id: Arc::new(AtomicU64::new(2)),
+            next_palette_id: Arc::new(AtomicU64::new(1)),
+            next_executor_id: Arc::new(AtomicU64::new(2)),
+            next_timeline_event_id: Arc::new(AtomicU64::new(1)),
+            next_timeline_layer_id: Arc::new(AtomicU32::new(2)),
+            next_timeline_audio_clip_id: Arc::new(AtomicU64::new(1)),
+            next_automation_id: Arc::new(AtomicU64::new(1)),
+            next_media_asset_id: Arc::new(AtomicU64::new(1)),
+            next_video_layer_id: Arc::new(AtomicU64::new(1)),
+            next_composition_id: Arc::new(AtomicU64::new(2)),
+            next_video_output_id: Arc::new(AtomicU64::new(1)),
+            next_node_graph_id: Arc::new(AtomicU64::new(1)),
+            next_stage_object_id: Arc::new(AtomicU64::new(1)),
+        }
+    }
+
+    fn wait_for_project_snapshot_admission(admission: &ProjectSnapshotLoadAdmission) {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let state = *admission
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match state {
+                ProjectSnapshotLoadAdmissionState::Admitted => return,
+                ProjectSnapshotLoadAdmissionState::Cancelled => {
+                    panic!("project snapshot load was cancelled before the test barrier")
+                }
+                ProjectSnapshotLoadAdmissionState::Queued => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "project snapshot load was not admitted before the test deadline"
+                    );
+                    std::thread::yield_now();
+                }
+            }
+        }
+    }
+
+    fn concurrent_allocator_results(engine: &EngineHandle) -> Vec<(&'static str, u64)> {
+        let start = Arc::new(Barrier::new(17));
+        macro_rules! worker {
+            ($label:literal, $method:ident) => {{
+                let start = Arc::clone(&start);
+                let engine = engine.clone();
+                thread::spawn(move || {
+                    start.wait();
+                    ($label, engine.$method() as u64)
+                })
+            }};
+        }
+
+        let workers = vec![
+            worker!("fixture", allocate_fixture_id),
+            worker!("effect", allocate_effect_id),
+            worker!("cue", allocate_cue_id),
+            worker!("cue list", allocate_cue_list_id),
+            worker!("palette", allocate_palette_id),
+            worker!("executor", allocate_executor_id),
+            worker!("timeline event", allocate_timeline_event_id),
+            worker!("timeline layer", allocate_timeline_layer_id),
+            worker!("timeline audio clip", allocate_timeline_audio_clip_id),
+            worker!("automation", allocate_automation_id),
+            worker!("media asset", allocate_media_asset_id),
+            worker!("video layer", allocate_video_layer_id),
+            worker!("composition", allocate_composition_id),
+            worker!("video output", allocate_video_output_id),
+            worker!("node graph", allocate_node_graph_id),
+            worker!("stage object", allocate_stage_object_id),
+        ];
+        start.wait();
+        workers
+            .into_iter()
+            .map(|worker| worker.join().expect("allocator worker panicked"))
+            .collect()
+    }
+
+    fn assert_allocator_results_above(
+        results: &[(&'static str, u64)],
+        minimum: u64,
+        timeline_layer_minimum: u32,
+    ) {
+        assert_eq!(results.len(), 16);
+        for (domain, id) in results {
+            let minimum = if *domain == "timeline layer" {
+                u64::from(timeline_layer_minimum)
+            } else {
+                minimum
+            };
+            assert!(
+                *id > minimum,
+                "{domain} allocator returned {id}, not above candidate maximum {minimum}"
+            );
+        }
+    }
+
+    struct AllocatorCommandCase {
+        name: &'static str,
+        domain: AllocatorDomain,
+        make: Box<dyn Fn(u64) -> EngineCommand>,
+        setup: Option<Box<dyn Fn(&EngineHandle, u64)>>,
+    }
+
+    fn allocator_ack() -> mpsc::SyncSender<Result<(), String>> {
+        let (ack, _receiver) = mpsc::sync_channel(1);
+        ack
+    }
+
+    fn allocator_expiry() -> Instant {
+        Instant::now() + Duration::from_secs(1)
+    }
+
+    fn allocator_position_wave_request() -> PositionWaveEffectRequest {
+        PositionWaveEffectRequest {
+            label: "Allocator Position Wave".to_string(),
+            fixture_ids: vec![1],
+            target_group_ids: Vec::new(),
+            attribute: "Dimmer".to_string(),
+            video_targets: Vec::new(),
+            shape: LfoShape::Sine,
+            origin: Vec3::default(),
+            direction: Vec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            speed: 1.0,
+            wavelength: 1.0,
+            clock_sync: None,
+            low: 0,
+            high: u16::MAX,
+            phase: 0.0,
+            blend_mode: EffectBlendMode::Override,
+        }
+    }
+
+    fn allocator_video_source(id: u64) -> VideoSourceSummary {
+        VideoSourceSummary {
+            kind: protocol::VideoSourceKind::StillImage,
+            path: Some(format!("memory://allocator-{id}.png")),
+            name: None,
+            codec: None,
+            metadata: None,
+        }
+    }
+
+    fn allocator_video_output(id: u64) -> VideoOutputSummary {
+        VideoOutputSummary {
+            id,
+            label: format!("Allocator Output {id}"),
+            kind: VideoOutputKind::Display,
+            enabled: false,
+            composition_id: 1,
+            fullscreen: false,
+            monitor_id: None,
+            width: 640,
+            height: 480,
+            endpoint_name: None,
+            opacity: 1.0,
+            blackout: false,
+            mapping: Default::default(),
+        }
+    }
+
+    fn allocator_stage_object(id: u64) -> StageObjectSummary {
+        StageObjectSummary {
+            id,
+            label: format!("Allocator Stage Object {id}"),
+            kind: StageObjectKind::Stage,
+            x: 0.0,
+            z: 0.0,
+            width: 1.0,
+            depth: 1.0,
+            rotation_deg: 0.0,
+            color: None,
+        }
+    }
+
+    fn published_stage_map_preset(label: &str, object_id: StageObjectId) -> StageMapPresetSummary {
+        StageMapPresetSummary {
+            label: label.to_string(),
+            config: StageMapConfig {
+                locked: true,
+                min_x: -20.0,
+                max_x: 20.0,
+                min_z: -10.0,
+                max_z: 10.0,
+            },
+            stage_objects: Some(vec![allocator_stage_object(object_id)]),
+        }
+    }
+
+    fn allocator_child_timeline_with_candidate(
+        domain: AllocatorDomain,
+        id: u64,
+    ) -> ChildTimelineSummary {
+        let mut child = ChildTimelineSummary::default();
+        match domain {
+            AllocatorDomain::Cues => {
+                child.events = vec![TimelineCueEventSummary {
+                    id: 1,
+                    cue_id: id,
+                    ..TimelineCueEventSummary::default()
+                }];
+            }
+            AllocatorDomain::TimelineEvents => {
+                child.events = vec![TimelineCueEventSummary {
+                    id,
+                    cue_id: 1,
+                    ..TimelineCueEventSummary::default()
+                }];
+            }
+            AllocatorDomain::TimelineLayers => {
+                child.layers = vec![timeline_test_layer(
+                    u32::try_from(id).expect("timeline layer candidate fits u32"),
+                    0,
+                    false,
+                    false,
+                    false,
+                    TimelineLayerKind::Lighting,
+                )];
+            }
+            AllocatorDomain::TimelineAudioClips => {
+                child.audio_clips = vec![timeline_test_audio_clip(id, 1)];
+            }
+            AllocatorDomain::Automations => {
+                child.automations = vec![TimelineAutomationSummary {
+                    id,
+                    fixture_id: 1,
+                    attribute: "Dimmer".to_string(),
+                    track: TimelineTrackKind::Lighting,
+                    keyframes: Vec::new(),
+                    enabled: true,
+                }];
+            }
+            AllocatorDomain::Fixtures => {
+                child.automations = vec![TimelineAutomationSummary {
+                    id: 1,
+                    fixture_id: id,
+                    attribute: "Dimmer".to_string(),
+                    track: TimelineTrackKind::Lighting,
+                    keyframes: Vec::new(),
+                    enabled: true,
+                }];
+            }
+            AllocatorDomain::VideoLayers => {
+                child.video_automations = vec![TimelineVideoAutomationSummary {
+                    id: 1,
+                    layer_id: id,
+                    param: VideoParam::Opacity,
+                    track: TimelineTrackKind::Video,
+                    keyframes: Vec::new(),
+                    enabled: true,
+                }];
+            }
+            _ => {}
+        }
+        child
+    }
+
+    fn allocator_child_timeline_jump_candidate(id: u64) -> ChildTimelineSummary {
+        ChildTimelineSummary {
+            events: vec![TimelineCueEventSummary {
+                id: 1,
+                cue_id: 1,
+                jump_to_event_id: Some(id),
+                ..TimelineCueEventSummary::default()
+            }],
+            ..ChildTimelineSummary::default()
+        }
+    }
+
+    fn allocator_set_cue_child_timeline(child_timeline: ChildTimelineSummary) -> EngineCommand {
+        EngineCommand::SetCueChildTimeline {
+            cue_id: 1,
+            child_timeline: Some(child_timeline),
+            expires_at: allocator_expiry(),
+            ack: allocator_ack(),
+        }
+    }
+
+    fn allocator_stage_preset_setup(engine: &EngineHandle, id: u64) {
+        let mut snapshot = engine.snapshot();
+        snapshot.stage_map_presets = vec![StageMapPresetSummary {
+            label: "Allocator Stage Layout".to_string(),
+            config: StageMapConfig::default(),
+            stage_objects: Some(vec![allocator_stage_object(id)]),
+        }];
+        *engine
+            .snapshot
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = snapshot;
+    }
+
+    fn allocator_command_cases() -> Vec<AllocatorCommandCase> {
+        let lfo = || {
+            test_lfo_request(
+                "Allocator LFO",
+                LfoShape::Sine,
+                1_000,
+                0.0,
+                EffectBlendMode::Override,
+                0,
+                u16::MAX,
+            )
+        };
+        let color = || test_color_request(vec![1], test_color(255, 0, 0));
+        let deadline_case = |name: &'static str,
+                             domain: AllocatorDomain,
+                             make: Box<dyn Fn(u64) -> EngineCommand>| {
+            AllocatorCommandCase {
+                name,
+                domain,
+                make,
+                setup: None,
+            }
+        };
+        let mut cases = vec![
+            deadline_case(
+                "PatchFixture",
+                AllocatorDomain::Fixtures,
+                Box::new(|id| EngineCommand::PatchFixture {
+                    fixture_id: id,
+                    request: sample_patch_request("Allocator Fixture", 1),
+                    profile: sample_profile(),
+                }),
+            ),
+            deadline_case(
+                "ReplaceFixtureProfile",
+                AllocatorDomain::Fixtures,
+                Box::new(|id| EngineCommand::ReplaceFixtureProfile {
+                    fixture_id: id,
+                    profile_path: "memory://replacement.gdtf".to_string(),
+                    mode_name: Some("Standard".to_string()),
+                    profile: sample_profile(),
+                }),
+            ),
+            deadline_case(
+                "AddLfoEffect",
+                AllocatorDomain::Effects,
+                Box::new(move |id| EngineCommand::AddLfoEffect {
+                    effect_id: id,
+                    request: lfo(),
+                }),
+            ),
+            deadline_case(
+                "UpdateLfoEffect",
+                AllocatorDomain::Effects,
+                Box::new(move |id| EngineCommand::UpdateLfoEffect {
+                    effect_id: id,
+                    request: lfo(),
+                }),
+            ),
+            deadline_case(
+                "AddPositionWaveEffect",
+                AllocatorDomain::Effects,
+                Box::new(|id| EngineCommand::AddPositionWaveEffect {
+                    effect_id: id,
+                    request: allocator_position_wave_request(),
+                }),
+            ),
+            deadline_case(
+                "UpdatePositionWaveEffect",
+                AllocatorDomain::Effects,
+                Box::new(|id| EngineCommand::UpdatePositionWaveEffect {
+                    effect_id: id,
+                    request: allocator_position_wave_request(),
+                }),
+            ),
+            deadline_case(
+                "AddColorEffectPublished",
+                AllocatorDomain::Effects,
+                Box::new(move |id| EngineCommand::AddColorEffect {
+                    effect_id: id,
+                    request: color(),
+                    enabled: true,
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "UpdateColorEffectPublished",
+                AllocatorDomain::Effects,
+                Box::new(move |id| EngineCommand::UpdateColorEffect {
+                    effect_id: id,
+                    request: color(),
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "AddChaserEffectPublished",
+                AllocatorDomain::Effects,
+                Box::new(|id| EngineCommand::AddChaserEffect {
+                    effect_id: id,
+                    request: test_chaser_request(&[1]),
+                    enabled: true,
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "UpdateChaserEffectPublished",
+                AllocatorDomain::Effects,
+                Box::new(|id| EngineCommand::UpdateChaserEffect {
+                    effect_id: id,
+                    request: test_chaser_request(&[1]),
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "AddMoveEffectPublished",
+                AllocatorDomain::Effects,
+                Box::new(|id| EngineCommand::AddMoveEffect {
+                    effect_id: id,
+                    request: test_move_request(&[1]),
+                    enabled: true,
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "UpdateMoveEffectPublished",
+                AllocatorDomain::Effects,
+                Box::new(|id| EngineCommand::UpdateMoveEffect {
+                    effect_id: id,
+                    request: test_move_request(&[1]),
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "AddValueEffectPublished",
+                AllocatorDomain::Effects,
+                Box::new(|id| EngineCommand::AddValueEffect {
+                    effect_id: id,
+                    request: test_value_request(&[1]),
+                    enabled: true,
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "UpdateValueEffectPublished",
+                AllocatorDomain::Effects,
+                Box::new(|id| EngineCommand::UpdateValueEffect {
+                    effect_id: id,
+                    request: test_value_request(&[1]),
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "AddCurveEffectPublished",
+                AllocatorDomain::Effects,
+                Box::new(|id| EngineCommand::AddCurveEffect {
+                    effect_id: id,
+                    request: test_curve_request(&[1]),
+                    enabled: true,
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "UpdateCurveEffectPublished",
+                AllocatorDomain::Effects,
+                Box::new(|id| EngineCommand::UpdateCurveEffect {
+                    effect_id: id,
+                    request: test_curve_request(&[1]),
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "AddMappingEffectPublished",
+                AllocatorDomain::Effects,
+                Box::new(|id| EngineCommand::AddMappingEffect {
+                    effect_id: id,
+                    request: test_mapping_request(&[1]),
+                    enabled: true,
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "UpdateMappingEffectPublished",
+                AllocatorDomain::Effects,
+                Box::new(|id| EngineCommand::UpdateMappingEffect {
+                    effect_id: id,
+                    request: test_mapping_request(&[1]),
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "AddColorMappingEffectPublished",
+                AllocatorDomain::Effects,
+                Box::new(|id| EngineCommand::AddColorMappingEffect {
+                    effect_id: id,
+                    request: test_color_mapping_request(vec![1]),
+                    enabled: true,
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "UpdateColorMappingEffectPublished",
+                AllocatorDomain::Effects,
+                Box::new(|id| EngineCommand::UpdateColorMappingEffect {
+                    effect_id: id,
+                    request: test_color_mapping_request(vec![1]),
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "UpsertNodeGraph",
+                AllocatorDomain::NodeGraphs,
+                Box::new(|id| EngineCommand::UpsertNodeGraph(sample_node_graph(id, 1))),
+            ),
+            deadline_case(
+                "UpsertNodeGraphPublished",
+                AllocatorDomain::NodeGraphs,
+                Box::new(|id| EngineCommand::UpsertNodeGraphPublished {
+                    graph: sample_node_graph(id, 1),
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "CreateCue",
+                AllocatorDomain::Cues,
+                Box::new(|id| EngineCommand::CreateCue {
+                    cue_id: id,
+                    label: "Allocator Cue".to_string(),
+                    fade_ms: 0,
+                    authored_beats: None,
+                    targets: Vec::new(),
+                    video_targets: Vec::new(),
+                    video_output_targets: Vec::new(),
+                    node_graph_targets: Vec::new(),
+                    effect_targets: Vec::new(),
+                }),
+            ),
+            deadline_case(
+                "CreateCuePublished",
+                AllocatorDomain::Cues,
+                Box::new(|id| EngineCommand::CreateCuePublished {
+                    cue_id: id,
+                    cue_list_id: 1,
+                    label: "Allocator Cue".to_string(),
+                    group_id: None,
+                    recall_mode: RecallMode::Coexist,
+                    fade_ms: 0,
+                    authored_beats: None,
+                    targets: Vec::new(),
+                    video_targets: Vec::new(),
+                    video_output_targets: Vec::new(),
+                    node_graph_targets: Vec::new(),
+                    effect_targets: Vec::new(),
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "CreateCuePublishedCueList",
+                AllocatorDomain::CueLists,
+                Box::new(|id| EngineCommand::CreateCuePublished {
+                    cue_id: 1,
+                    cue_list_id: id,
+                    label: "Allocator Cue".to_string(),
+                    group_id: None,
+                    recall_mode: RecallMode::Coexist,
+                    fade_ms: 0,
+                    authored_beats: None,
+                    targets: Vec::new(),
+                    video_targets: Vec::new(),
+                    video_output_targets: Vec::new(),
+                    node_graph_targets: Vec::new(),
+                    effect_targets: Vec::new(),
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "UpdateCue",
+                AllocatorDomain::Cues,
+                Box::new(|id| EngineCommand::UpdateCue {
+                    cue_id: id,
+                    label: "Allocator Cue".to_string(),
+                    fade_ms: 0,
+                    targets: Vec::new(),
+                    video_targets: Vec::new(),
+                    video_output_targets: Vec::new(),
+                    node_graph_targets: Vec::new(),
+                    effect_targets: Vec::new(),
+                }),
+            ),
+            deadline_case(
+                "UpdateCuePublished",
+                AllocatorDomain::Cues,
+                Box::new(|id| EngineCommand::UpdateCuePublished {
+                    cue_id: id,
+                    label: "Allocator Cue".to_string(),
+                    fade_ms: 0,
+                    targets: Vec::new(),
+                    video_targets: Vec::new(),
+                    video_output_targets: Vec::new(),
+                    node_graph_targets: Vec::new(),
+                    effect_targets: Vec::new(),
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "SetCueEffectTargetsPublished",
+                AllocatorDomain::Effects,
+                Box::new(|id| EngineCommand::SetCueEffectTargetsPublished {
+                    cue_id: 1,
+                    effect_targets: vec![CueEffectTarget {
+                        effect_id: id,
+                        enabled: true,
+                        params: None,
+                        transition_ms: None,
+                    }],
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "DuplicateCue",
+                AllocatorDomain::Cues,
+                Box::new(|id| EngineCommand::DuplicateCue {
+                    source_cue_id: 1,
+                    cue_id: id,
+                    label: "Allocator Duplicate".to_string(),
+                }),
+            ),
+            deadline_case(
+                "UpsertCueList",
+                AllocatorDomain::CueLists,
+                Box::new(|id| EngineCommand::UpsertCueList {
+                    cue_list_id: id,
+                    label: "Allocator Cue List".to_string(),
+                }),
+            ),
+            deadline_case(
+                "SetCueList",
+                AllocatorDomain::CueLists,
+                Box::new(|id| EngineCommand::SetCueList {
+                    cue_id: 1,
+                    cue_list_id: id,
+                }),
+            ),
+            deadline_case(
+                "UpsertPalette",
+                AllocatorDomain::Palettes,
+                Box::new(|id| {
+                    EngineCommand::UpsertPalette(ReferencePaletteSummary {
+                        id,
+                        label: "Allocator Palette".to_string(),
+                        kind: protocol::PaletteKind::Intensity,
+                        values: Vec::new(),
+                        color_stops: Vec::new(),
+                    })
+                }),
+            ),
+            deadline_case(
+                "UpsertPlaybackExecutor",
+                AllocatorDomain::PlaybackExecutors,
+                Box::new(|id| {
+                    EngineCommand::UpsertPlaybackExecutor(PlaybackExecutorSummary {
+                        id,
+                        label: "Allocator Executor".to_string(),
+                        cue_list_id: DEFAULT_CUE_LIST_ID,
+                        page: 1,
+                        slot: 1,
+                        level: 1.0,
+                    })
+                }),
+            ),
+            deadline_case(
+                "AddTimelineCueEvent",
+                AllocatorDomain::TimelineEvents,
+                Box::new(|id| EngineCommand::AddTimelineCueEvent {
+                    event_id: id,
+                    cue_id: 1,
+                    time_ms: 0,
+                    time_beats: None,
+                    track: TimelineTrackKind::Lighting,
+                    layer_id: None,
+                }),
+            ),
+            deadline_case(
+                "AddTimelineCueEventCue",
+                AllocatorDomain::Cues,
+                Box::new(|id| EngineCommand::AddTimelineCueEvent {
+                    event_id: 1,
+                    cue_id: id,
+                    time_ms: 0,
+                    time_beats: None,
+                    track: TimelineTrackKind::Lighting,
+                    layer_id: None,
+                }),
+            ),
+            deadline_case(
+                "SetTimelineCueEvent",
+                AllocatorDomain::TimelineEvents,
+                Box::new(|id| EngineCommand::SetTimelineCueEvent {
+                    event_id: id,
+                    cue_id: 1,
+                    time_ms: 0,
+                    time_beats: None,
+                    track: TimelineTrackKind::Lighting,
+                    layer_id: None,
+                }),
+            ),
+            deadline_case(
+                "SetTimelineCueEventCue",
+                AllocatorDomain::Cues,
+                Box::new(|id| EngineCommand::SetTimelineCueEvent {
+                    event_id: 1,
+                    cue_id: id,
+                    time_ms: 0,
+                    time_beats: None,
+                    track: TimelineTrackKind::Lighting,
+                    layer_id: None,
+                }),
+            ),
+            deadline_case(
+                "AddTimelineCueEventPublished",
+                AllocatorDomain::TimelineEvents,
+                Box::new(|id| EngineCommand::AddTimelineCueEventPublished {
+                    event_id: id,
+                    cue_id: 1,
+                    time_ms: 0,
+                    time_beats: None,
+                    track: TimelineTrackKind::Lighting,
+                    layer_id: None,
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "AddTimelineCueEventPublishedCue",
+                AllocatorDomain::Cues,
+                Box::new(|id| EngineCommand::AddTimelineCueEventPublished {
+                    event_id: 1,
+                    cue_id: id,
+                    time_ms: 0,
+                    time_beats: None,
+                    track: TimelineTrackKind::Lighting,
+                    layer_id: None,
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "SetTimelineCueEventPublished",
+                AllocatorDomain::TimelineEvents,
+                Box::new(|id| EngineCommand::SetTimelineCueEventPublished {
+                    event_id: id,
+                    cue_id: 1,
+                    time_ms: 0,
+                    time_beats: None,
+                    track: TimelineTrackKind::Lighting,
+                    layer_id: None,
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "SetTimelineCueEventPublishedCue",
+                AllocatorDomain::Cues,
+                Box::new(|id| EngineCommand::SetTimelineCueEventPublished {
+                    event_id: 1,
+                    cue_id: id,
+                    time_ms: 0,
+                    time_beats: None,
+                    track: TimelineTrackKind::Lighting,
+                    layer_id: None,
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "AddTimelineSceneBlockPublished",
+                AllocatorDomain::TimelineEvents,
+                Box::new(|id| allocator_timeline_scene_block_command(id, 1, None)),
+            ),
+            deadline_case(
+                "AddTimelineSceneBlockPublishedCue",
+                AllocatorDomain::Cues,
+                Box::new(|id| allocator_timeline_scene_block_command(1, id, None)),
+            ),
+            deadline_case(
+                "AddTimelineSceneBlockPublishedJump",
+                AllocatorDomain::TimelineEvents,
+                Box::new(|id| allocator_timeline_scene_block_command(1, 1, Some(id))),
+            ),
+            deadline_case(
+                "SetTimelineSceneBlockPublished",
+                AllocatorDomain::TimelineEvents,
+                Box::new(|id| allocator_set_timeline_scene_block_command(id, 1, None)),
+            ),
+            deadline_case(
+                "SetTimelineSceneBlockPublishedCue",
+                AllocatorDomain::Cues,
+                Box::new(|id| allocator_set_timeline_scene_block_command(1, id, None)),
+            ),
+            deadline_case(
+                "SetTimelineSceneBlockPublishedJump",
+                AllocatorDomain::TimelineEvents,
+                Box::new(|id| allocator_set_timeline_scene_block_command(1, 1, Some(id))),
+            ),
+            deadline_case(
+                "AddTimelineLayer",
+                AllocatorDomain::TimelineLayers,
+                Box::new(|id| EngineCommand::AddTimelineLayer {
+                    layer: timeline_test_layer(
+                        u32::try_from(id).expect("timeline layer candidate fits u32"),
+                        0,
+                        false,
+                        false,
+                        false,
+                        TimelineLayerKind::Lighting,
+                    ),
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "UpdateTimelineLayer",
+                AllocatorDomain::TimelineLayers,
+                Box::new(|id| EngineCommand::UpdateTimelineLayer {
+                    layer: timeline_test_layer(
+                        u32::try_from(id).expect("timeline layer candidate fits u32"),
+                        0,
+                        false,
+                        false,
+                        false,
+                        TimelineLayerKind::Lighting,
+                    ),
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "AddTimelineAudioClip",
+                AllocatorDomain::TimelineAudioClips,
+                Box::new(|id| EngineCommand::AddTimelineAudioClip {
+                    clip: timeline_test_audio_clip(id, 1),
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "UpdateTimelineAudioClip",
+                AllocatorDomain::TimelineAudioClips,
+                Box::new(|id| EngineCommand::UpdateTimelineAudioClip {
+                    clip: timeline_test_audio_clip(id, 1),
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "AddTimelineAutomation",
+                AllocatorDomain::Automations,
+                Box::new(|id| EngineCommand::AddTimelineAutomation {
+                    automation_id: id,
+                    fixture_id: 1,
+                    attribute: "Dimmer".to_string(),
+                    keyframes: Vec::new(),
+                }),
+            ),
+            deadline_case(
+                "AddTimelineAutomationFixture",
+                AllocatorDomain::Fixtures,
+                Box::new(|id| EngineCommand::AddTimelineAutomation {
+                    automation_id: 1,
+                    fixture_id: id,
+                    attribute: "Dimmer".to_string(),
+                    keyframes: Vec::new(),
+                }),
+            ),
+            deadline_case(
+                "SetTimelineAutomation",
+                AllocatorDomain::Automations,
+                Box::new(|id| EngineCommand::SetTimelineAutomation {
+                    automation_id: id,
+                    fixture_id: 1,
+                    attribute: "Dimmer".to_string(),
+                    keyframes: Vec::new(),
+                }),
+            ),
+            deadline_case(
+                "SetTimelineAutomationFixture",
+                AllocatorDomain::Fixtures,
+                Box::new(|id| EngineCommand::SetTimelineAutomation {
+                    automation_id: 1,
+                    fixture_id: id,
+                    attribute: "Dimmer".to_string(),
+                    keyframes: Vec::new(),
+                }),
+            ),
+            deadline_case(
+                "AddTimelineVideoAutomation",
+                AllocatorDomain::Automations,
+                Box::new(|id| EngineCommand::AddTimelineVideoAutomation {
+                    automation_id: id,
+                    layer_id: 1,
+                    param: VideoParam::Opacity,
+                    keyframes: Vec::new(),
+                }),
+            ),
+            deadline_case(
+                "AddTimelineVideoAutomationLayer",
+                AllocatorDomain::VideoLayers,
+                Box::new(|id| EngineCommand::AddTimelineVideoAutomation {
+                    automation_id: 1,
+                    layer_id: id,
+                    param: VideoParam::Opacity,
+                    keyframes: Vec::new(),
+                }),
+            ),
+            deadline_case(
+                "SetTimelineVideoAutomation",
+                AllocatorDomain::Automations,
+                Box::new(|id| EngineCommand::SetTimelineVideoAutomation {
+                    automation_id: id,
+                    layer_id: 1,
+                    param: VideoParam::Opacity,
+                    keyframes: Vec::new(),
+                }),
+            ),
+            deadline_case(
+                "SetTimelineVideoAutomationLayer",
+                AllocatorDomain::VideoLayers,
+                Box::new(|id| EngineCommand::SetTimelineVideoAutomation {
+                    automation_id: 1,
+                    layer_id: id,
+                    param: VideoParam::Opacity,
+                    keyframes: Vec::new(),
+                }),
+            ),
+            deadline_case(
+                "SetTimelineAutomationEnabled",
+                AllocatorDomain::Automations,
+                Box::new(|id| EngineCommand::SetTimelineAutomationEnabled {
+                    automation_id: id,
+                    enabled: true,
+                }),
+            ),
+            deadline_case(
+                "AddVideoLayer",
+                AllocatorDomain::VideoLayers,
+                Box::new(|id| EngineCommand::AddVideoLayer {
+                    layer_id: id,
+                    label: format!("Allocator Layer {id}"),
+                    source: allocator_video_source(id),
+                }),
+            ),
+            deadline_case(
+                "DuplicateVideoLayer",
+                AllocatorDomain::VideoLayers,
+                Box::new(|id| EngineCommand::DuplicateVideoLayer {
+                    source_layer_id: 1,
+                    new_layer_id: id,
+                    label: format!("Allocator Duplicate {id}"),
+                }),
+            ),
+            deadline_case(
+                "DuplicateVideoLayerPublished",
+                AllocatorDomain::VideoLayers,
+                Box::new(|id| EngineCommand::DuplicateVideoLayerPublished {
+                    source_layer_id: 1,
+                    new_layer_id: id,
+                    label: format!("Allocator Duplicate {id}"),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "AddVideoComposition",
+                AllocatorDomain::Compositions,
+                Box::new(|id| {
+                    EngineCommand::AddVideoComposition(CompositionSummary {
+                        id,
+                        label: format!("Allocator Composition {id}"),
+                        layer_ids: vec![1],
+                        output_ids: vec![1],
+                    })
+                }),
+            ),
+            deadline_case(
+                "BootstrapVjShowLayer",
+                AllocatorDomain::VideoLayers,
+                Box::new(|id| EngineCommand::BootstrapVjShow {
+                    layers: vec![(
+                        id,
+                        format!("Allocator Layer {id}"),
+                        allocator_video_source(id),
+                    )],
+                    output: allocator_video_output(1),
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "BootstrapVjShowOutput",
+                AllocatorDomain::VideoOutputs,
+                Box::new(|id| EngineCommand::BootstrapVjShow {
+                    layers: vec![(1, "Allocator Layer".to_string(), allocator_video_source(1))],
+                    output: allocator_video_output(id),
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+            deadline_case(
+                "AddVideoOutput",
+                AllocatorDomain::VideoOutputs,
+                Box::new(|id| EngineCommand::AddVideoOutput(allocator_video_output(id))),
+            ),
+            deadline_case(
+                "UpsertStageObject",
+                AllocatorDomain::StageObjects,
+                Box::new(|id| EngineCommand::UpsertStageObject(allocator_stage_object(id))),
+            ),
+            deadline_case(
+                "SaveStageMapPreset",
+                AllocatorDomain::StageObjects,
+                Box::new(|id| EngineCommand::SaveStageMapPreset {
+                    label: "Allocator Stage Layout".to_string(),
+                    config: StageMapConfig::default(),
+                    stage_objects: Some(vec![allocator_stage_object(id)]),
+                }),
+            ),
+            deadline_case(
+                "UpsertStageMapPresetPublished",
+                AllocatorDomain::StageObjects,
+                Box::new(|id| EngineCommand::UpsertStageMapPresetPublished {
+                    preset: published_stage_map_preset("Allocator Stage Layout", id),
+                    expires_at: allocator_expiry(),
+                    admission: ProjectSnapshotLoadAdmission::new(),
+                    ack: allocator_ack(),
+                }),
+            ),
+        ];
+
+        for (name, domain) in [
+            ("SetCueChildTimelineLayers", AllocatorDomain::TimelineLayers),
+            ("SetCueChildTimelineEvents", AllocatorDomain::TimelineEvents),
+            ("SetCueChildTimelineCues", AllocatorDomain::Cues),
+            (
+                "SetCueChildTimelineAudioClips",
+                AllocatorDomain::TimelineAudioClips,
+            ),
+            (
+                "SetCueChildTimelineAutomations",
+                AllocatorDomain::Automations,
+            ),
+            ("SetCueChildTimelineFixtures", AllocatorDomain::Fixtures),
+            (
+                "SetCueChildTimelineVideoLayers",
+                AllocatorDomain::VideoLayers,
+            ),
+        ] {
+            cases.push(AllocatorCommandCase {
+                name,
+                domain,
+                make: Box::new(move |id| {
+                    allocator_set_cue_child_timeline(allocator_child_timeline_with_candidate(
+                        domain, id,
+                    ))
+                }),
+                setup: None,
+            });
+        }
+        cases.push(AllocatorCommandCase {
+            name: "SetCueChildTimelineJumpTargets",
+            domain: AllocatorDomain::TimelineEvents,
+            make: Box::new(|id| {
+                allocator_set_cue_child_timeline(allocator_child_timeline_jump_candidate(id))
+            }),
+            setup: None,
+        });
+        cases.push(AllocatorCommandCase {
+            name: "ApplyStageMapPreset",
+            domain: AllocatorDomain::StageObjects,
+            make: Box::new(|_| EngineCommand::ApplyStageMapPreset {
+                label: "Allocator Stage Layout".to_string(),
+            }),
+            setup: Some(Box::new(allocator_stage_preset_setup)),
+        });
+        cases
+    }
+
+    fn allocator_timeline_scene_block_command(
+        event_id: TimelineEventId,
+        cue_id: CueId,
+        jump_to_event_id: Option<TimelineEventId>,
+    ) -> EngineCommand {
+        EngineCommand::AddTimelineSceneBlockPublished {
+            event_id,
+            cue_id,
+            time_ms: 0,
+            time_beats: None,
+            track: TimelineTrackKind::Lighting,
+            layer_id: None,
+            duration_ms: 1_000,
+            duration_beats: None,
+            conform_to_tempo: false,
+            loop_fill: false,
+            source_offset_ms: 0,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+            loop_count: 1,
+            jump_to_event_id,
+            expires_at: allocator_expiry(),
+            ack: allocator_ack(),
+        }
+    }
+
+    fn allocator_set_timeline_scene_block_command(
+        event_id: TimelineEventId,
+        cue_id: CueId,
+        jump_to_event_id: Option<TimelineEventId>,
+    ) -> EngineCommand {
+        EngineCommand::SetTimelineSceneBlockPublished {
+            event_id,
+            cue_id,
+            time_ms: 0,
+            time_beats: None,
+            track: TimelineTrackKind::Lighting,
+            layer_id: None,
+            duration_ms: 1_000,
+            duration_beats: None,
+            conform_to_tempo: false,
+            loop_fill: false,
+            source_offset_ms: 0,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+            loop_count: 1,
+            jump_to_event_id,
+            expires_at: allocator_expiry(),
+            ack: allocator_ack(),
+        }
+    }
+
+    fn allocator_domain_maximum(domain: AllocatorDomain) -> u64 {
+        if domain == AllocatorDomain::TimelineLayers {
+            u64::from(u32::MAX)
+        } else {
+            u64::MAX
+        }
+    }
+
+    fn allocator_domains() -> [AllocatorDomain; 16] {
+        [
+            AllocatorDomain::Fixtures,
+            AllocatorDomain::Effects,
+            AllocatorDomain::Cues,
+            AllocatorDomain::CueLists,
+            AllocatorDomain::Palettes,
+            AllocatorDomain::PlaybackExecutors,
+            AllocatorDomain::TimelineEvents,
+            AllocatorDomain::TimelineLayers,
+            AllocatorDomain::TimelineAudioClips,
+            AllocatorDomain::Automations,
+            AllocatorDomain::MediaAssets,
+            AllocatorDomain::VideoLayers,
+            AllocatorDomain::Compositions,
+            AllocatorDomain::VideoOutputs,
+            AllocatorDomain::NodeGraphs,
+            AllocatorDomain::StageObjects,
+        ]
+    }
+
+    fn allocator_counter_values(engine: &EngineHandle) -> Vec<u64> {
+        allocator_domains()
+            .into_iter()
+            .map(|domain| allocator_counter_value(engine, domain))
+            .collect()
+    }
+
+    fn allocator_audio_summary() -> AudioAnalysisSummary {
+        AudioAnalysisSummary {
+            path: "memory://allocator-audio.wav".to_string(),
+            sample_rate: 48_000,
+            channels: 2,
+            duration_ms: 1_000,
+            estimated_bpm: None,
+            waveform: Vec::new(),
+            spectrum: Vec::new(),
+            beats: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn allocator_command_inventory_covers_all_domains_and_is_exhaustively_routed() {
+        let cases = allocator_command_cases();
+        assert_eq!(cases.len(), 79);
+        for domain in allocator_domains() {
+            assert!(
+                cases.iter().any(|case| case.domain == domain),
+                "allocator inventory omitted {domain:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_explicit_allocator_command_reserves_before_the_next_allocation() {
+        for case in allocator_command_cases() {
+            let engine = allocator_test_handle(Arc::new(RwLock::new(EngineSnapshot::default())));
+            if let Some(setup) = &case.setup {
+                setup(&engine, 1);
+            }
+            engine
+                .send((case.make)(1))
+                .unwrap_or_else(|error| panic!("{} was rejected: {error}", case.name));
+            let allocated = allocator_value(&engine, case.domain);
+            assert!(
+                allocated > 1,
+                "{} left {:?} allocator at {allocated}",
+                case.name,
+                case.domain
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_allocator_capacity_errors_are_pre_enqueue_and_state_preserving() {
+        for case in allocator_command_cases() {
+            let maximum = allocator_domain_maximum(case.domain);
+            for candidate in [maximum - 1, maximum] {
+                let engine =
+                    allocator_test_handle(Arc::new(RwLock::new(EngineSnapshot::default())));
+                if let Some(setup) = &case.setup {
+                    setup(&engine, candidate);
+                }
+                let authoritative = engine.snapshot();
+                let counters_before = allocator_counter_values(&engine);
+                let error = engine
+                    .send((case.make)(candidate))
+                    .expect_err("capacity-invalid explicit command was queued");
+                match error {
+                    EngineError::InvalidAllocatorCapacity(message) => assert_eq!(
+                        message,
+                        allocator_capacity_error(case.domain, candidate),
+                        "wrong allocator error for {}",
+                        case.name
+                    ),
+                    other => panic!("{} returned unexpected error: {other}", case.name),
+                }
+                assert!(
+                    engine.queue.pop().is_none(),
+                    "{} changed the queue",
+                    case.name
+                );
+                assert_eq!(
+                    engine.snapshot(),
+                    authoritative,
+                    "{} changed snapshot",
+                    case.name
+                );
+                assert_eq!(allocator_counter_values(&engine), counters_before);
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_allocator_max_minus_two_issues_only_max_minus_one_then_exhausts() {
+        for case in allocator_command_cases() {
+            let maximum = allocator_domain_maximum(case.domain);
+            let authored_maximum = maximum - 2;
+            let engine = allocator_test_handle(Arc::new(RwLock::new(EngineSnapshot::default())));
+            if let Some(setup) = &case.setup {
+                setup(&engine, authored_maximum);
+            }
+            engine
+                .send((case.make)(authored_maximum))
+                .unwrap_or_else(|error| panic!("{} was not accepted: {error}", case.name));
+            let issued = allocator_value(&engine, case.domain);
+            assert_eq!(
+                issued,
+                maximum - 1,
+                "{} issued the wrong final ID",
+                case.name
+            );
+            assert_ne!(issued, 0);
+            assert_ne!(issued, maximum);
+            let exhausted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                allocator_value(&engine, case.domain)
+            }));
+            assert!(
+                exhausted.is_err(),
+                "{} allocator did not fail closed",
+                case.name
+            );
+            assert_eq!(allocator_counter_value(&engine, case.domain), maximum);
+        }
+    }
+
+    #[test]
+    fn explicit_command_enqueue_races_are_linearized_with_allocation() {
+        let cases: [(
+            &str,
+            AllocatorDomain,
+            Arc<dyn Fn(u64) -> EngineCommand + Send + Sync>,
+        ); 5] = [
+            (
+                "node graph",
+                AllocatorDomain::NodeGraphs,
+                Arc::new(|id| EngineCommand::UpsertNodeGraph(sample_node_graph(id, 1))),
+            ),
+            (
+                "effect",
+                AllocatorDomain::Effects,
+                Arc::new(|id| EngineCommand::AddLfoEffect {
+                    effect_id: id,
+                    request: test_lfo_request(
+                        "Race Effect",
+                        LfoShape::Sine,
+                        1_000,
+                        0.0,
+                        EffectBlendMode::Override,
+                        0,
+                        u16::MAX,
+                    ),
+                }),
+            ),
+            (
+                "cue",
+                AllocatorDomain::Cues,
+                Arc::new(|id| EngineCommand::CreateCue {
+                    cue_id: id,
+                    label: "Race Cue".to_string(),
+                    fade_ms: 0,
+                    authored_beats: None,
+                    targets: Vec::new(),
+                    video_targets: Vec::new(),
+                    video_output_targets: Vec::new(),
+                    node_graph_targets: Vec::new(),
+                    effect_targets: Vec::new(),
+                }),
+            ),
+            (
+                "video layer",
+                AllocatorDomain::VideoLayers,
+                Arc::new(|id| EngineCommand::AddVideoLayer {
+                    layer_id: id,
+                    label: "Race Layer".to_string(),
+                    source: allocator_video_source(id),
+                }),
+            ),
+            (
+                "timeline layer",
+                AllocatorDomain::TimelineLayers,
+                Arc::new(|id| EngineCommand::AddTimelineLayer {
+                    layer: timeline_test_layer(
+                        u32::try_from(id).expect("race layer candidate fits u32"),
+                        0,
+                        false,
+                        false,
+                        false,
+                        TimelineLayerKind::Lighting,
+                    ),
+                    expires_at: allocator_expiry(),
+                    ack: allocator_ack(),
+                }),
+            ),
+        ];
+
+        for (label, domain, make) in cases {
+            let engine = Arc::new(allocator_test_handle(Arc::new(RwLock::new(
+                EngineSnapshot::default(),
+            ))));
+            let candidate = 10_000;
+            let start = Arc::new(Barrier::new(2));
+            let enqueue_engine = Arc::clone(&engine);
+            let enqueue_start = Arc::clone(&start);
+            let enqueue_make = Arc::clone(&make);
+            let enqueue = thread::spawn(move || {
+                enqueue_start.wait();
+                enqueue_engine.send(enqueue_make(candidate))
+            });
+            let allocate_engine = Arc::clone(&engine);
+            let allocate_start = Arc::clone(&start);
+            let allocate = thread::spawn(move || {
+                allocate_start.wait();
+                allocator_value(&allocate_engine, domain)
+            });
+            let enqueue_result = enqueue.join().expect("enqueue thread panicked");
+            assert!(
+                enqueue_result.is_ok(),
+                "{label} explicit command was rejected"
+            );
+            let raced_id = allocate.join().expect("allocator thread panicked");
+            let initial_id = if domain == AllocatorDomain::TimelineLayers {
+                2
+            } else {
+                1
+            };
+            assert!(
+                raced_id == initial_id || raced_id > candidate,
+                "{label} race allocated duplicate/interior ID {raced_id}"
+            );
+            let after_race = allocator_value(&engine, domain);
+            assert!(
+                after_race > candidate,
+                "{label} post-race allocation {after_race} did not clear candidate {candidate}"
+            );
+            assert!(
+                engine.queue.pop().is_some(),
+                "{label} command was not queued"
+            );
+        }
+    }
+
+    #[test]
+    fn set_timeline_audio_reserves_its_derived_legacy_layer_candidate() {
+        let engine = allocator_test_handle(Arc::new(RwLock::new(EngineSnapshot::default())));
+        let mut current = engine.snapshot();
+        current.timeline.audio = Some(allocator_audio_summary());
+        *engine
+            .snapshot
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = current;
+
+        engine
+            .send(EngineCommand::SetTimelineAudio(Some(
+                allocator_audio_summary(),
+            )))
+            .unwrap();
+        assert_eq!(allocator_value(&engine, AllocatorDomain::TimelineLayers), 3);
+
+        let engine = allocator_test_handle(Arc::new(RwLock::new(EngineSnapshot::default())));
+        let mut current = engine.snapshot();
+        current.timeline.audio = Some(allocator_audio_summary());
+        current.timeline.layers = vec![timeline_test_layer(
+            u32::MAX - 2,
+            0,
+            false,
+            false,
+            false,
+            TimelineLayerKind::Lighting,
+        )];
+        *engine
+            .snapshot
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = current;
+        let authoritative = engine.snapshot();
+        let counters_before = allocator_counter_values(&engine);
+        let error = engine
+            .send(EngineCommand::SetTimelineAudio(Some(
+                allocator_audio_summary(),
+            )))
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            allocator_capacity_error(AllocatorDomain::TimelineLayers, u64::from(u32::MAX - 1))
+        );
+        assert!(engine.queue.pop().is_none());
+        assert_eq!(engine.snapshot(), authoritative);
+        assert_eq!(allocator_counter_values(&engine), counters_before);
+    }
+
+    #[test]
+    fn project_snapshot_load_reserves_all_allocator_domains_before_publication_and_ack() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let published = Arc::new(RwLock::new(runtime.build_snapshot(0)));
+        let engine = allocator_test_handle(Arc::clone(&published));
+        let candidate_id = 100_000;
+        let (candidate, timeline_layer_maximum) = snapshot_with_allocator_ids(candidate_id);
+        let read_guard = published.read().unwrap();
+        let old_snapshot = read_guard.clone();
+
+        let loader_engine = engine.clone();
+        let loader = thread::spawn(move || {
+            loader_engine
+                .load_project_snapshot_and_wait_with_timeout(candidate, Duration::from_secs(1))
+        });
+        let queue_deadline = Instant::now() + Duration::from_secs(1);
+        let queued_command = loop {
+            if let Some(queued) = engine.queue.pop() {
+                break queued.command;
+            }
+            assert!(
+                Instant::now() < queue_deadline,
+                "snapshot load did not reach the manual runtime queue"
+            );
+            std::thread::yield_now();
+        };
+        let admission = match &queued_command {
+            EngineCommand::LoadProjectSnapshotPublished { admission, .. } => admission.clone(),
+            _ => panic!("loader queued an unexpected engine command"),
+        };
+        runtime.apply_command(queued_command);
+        wait_for_project_snapshot_admission(&admission);
+        let before_publication = concurrent_allocator_results(&engine);
+        assert_allocator_results_above(&before_publication, candidate_id, timeline_layer_maximum);
+        assert_eq!(*read_guard, old_snapshot);
+
+        let publisher_snapshot = Arc::clone(&published);
+        let publisher = thread::spawn(move || {
+            runtime.publish_pending_command_acks(0, &publisher_snapshot);
+        });
+        drop(read_guard);
+        publisher.join().expect("snapshot publisher panicked");
+        assert_eq!(loader.join().expect("snapshot loader panicked"), Ok(()));
+        let published_snapshot = published.read().unwrap().clone();
+        assert!(published_snapshot
+            .fixtures
+            .iter()
+            .any(|fixture| fixture.id == candidate_id));
+        assert!(published_snapshot
+            .effects
+            .iter()
+            .any(|effect| effect.id == candidate_id));
+        assert!(published_snapshot
+            .cues
+            .iter()
+            .any(|cue| cue.id == candidate_id));
+        assert!(published_snapshot
+            .cue_lists
+            .iter()
+            .any(|cue_list| cue_list.id == candidate_id));
+        assert!(published_snapshot
+            .palettes
+            .iter()
+            .any(|palette| palette.id == candidate_id));
+        assert!(published_snapshot
+            .playback_executors
+            .iter()
+            .any(|executor| executor.id == candidate_id));
+        assert!(published_snapshot
+            .timeline
+            .events
+            .iter()
+            .any(|event| event.id == candidate_id));
+        assert!(published_snapshot
+            .timeline
+            .layers
+            .iter()
+            .any(|layer| layer.id == timeline_layer_maximum));
+        assert!(published_snapshot
+            .timeline
+            .audio_clips
+            .iter()
+            .any(|clip| clip.id == candidate_id));
+        assert!(published_snapshot
+            .timeline
+            .automations
+            .iter()
+            .any(|automation| automation.id == candidate_id));
+        let child_timeline = published_snapshot.cues[0]
+            .child_timeline
+            .as_ref()
+            .expect("reserved child timeline was not published");
+        assert!(child_timeline
+            .layers
+            .iter()
+            .any(|layer| layer.id == timeline_layer_maximum));
+        assert!(child_timeline
+            .audio_clips
+            .iter()
+            .any(|clip| clip.id == candidate_id));
+        assert!(child_timeline
+            .automations
+            .iter()
+            .any(|automation| automation.id == candidate_id));
+        assert!(child_timeline
+            .video_automations
+            .iter()
+            .any(|automation| automation.id == candidate_id));
+        assert!(published_snapshot
+            .video
+            .layers
+            .iter()
+            .any(|layer| layer.id == candidate_id));
+        assert!(published_snapshot
+            .video
+            .compositions
+            .iter()
+            .any(|composition| composition.id == candidate_id));
+        assert!(published_snapshot
+            .video
+            .outputs
+            .iter()
+            .any(|output| output.id == candidate_id));
+        assert!(published_snapshot
+            .node_graphs
+            .iter()
+            .any(|graph| graph.id == candidate_id));
+        assert!(published_snapshot.stage_map_presets.iter().any(|preset| {
+            preset
+                .stage_objects
+                .as_ref()
+                .is_some_and(|objects| objects.iter().any(|object| object.id == candidate_id))
+        }));
+
+        let after_ack = concurrent_allocator_results(&engine);
+        assert_allocator_results_above(&after_ack, candidate_id, timeline_layer_maximum);
+    }
+
+    #[test]
+    fn project_snapshot_load_cancellation_and_rejection_keep_allocator_reservations_monotonic() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let previous = engine.snapshot();
+        let assert_authoritative_previous = || {
+            let current = engine.snapshot();
+            assert_eq!(current.stage_map, previous.stage_map);
+            assert_eq!(current.fixtures, previous.fixtures);
+            assert_eq!(current.cues, previous.cues);
+            assert_eq!(current.video.layers, previous.video.layers);
+            assert_eq!(current.video.outputs, previous.video.outputs);
+            assert_eq!(
+                current.video.mapping_presets,
+                previous.video.mapping_presets
+            );
+            assert_eq!(current.video.master_opacity, previous.video.master_opacity);
+            assert_eq!(current.video.blackout, previous.video.blackout);
+            assert_eq!(current.video.auto_vj.config, previous.video.auto_vj.config);
+            assert_eq!(current.effects, previous.effects);
+            assert_eq!(current.node_graphs, previous.node_graphs);
+            assert_eq!(current.stage_objects, previous.stage_objects);
+        };
+        let cancelled_id = 100_000;
+        let (cancelled, cancelled_layer_maximum) = snapshot_with_allocator_ids(cancelled_id);
+
+        let timeout_error = engine
+            .load_project_snapshot_and_wait_with_timeout(cancelled, Duration::ZERO)
+            .unwrap_err();
+        assert!(
+            timeout_error.contains("timed out"),
+            "unexpected error: {timeout_error}"
+        );
+        std::thread::sleep(Duration::from_millis(30));
+        assert_authoritative_previous();
+
+        let rejected_id = 42;
+        let (mut rejected, _) = snapshot_with_allocator_ids(rejected_id);
+        rejected.timeline.layers = vec![TimelineLayerSummary {
+            id: u32::try_from(rejected_id).unwrap(),
+            label: "Audio only".to_string(),
+            order: 0,
+            muted: false,
+            locked: false,
+            solo: false,
+            expanded: true,
+            kind: TimelineLayerKind::Audio,
+        }];
+        rejected.timeline.events[0].layer_id = Some(u32::try_from(rejected_id).unwrap());
+        let rejection_error = engine
+            .load_project_snapshot_and_wait_with_timeout(rejected, Duration::from_secs(1))
+            .unwrap_err();
+        assert!(
+            rejection_error.contains("invalid layer"),
+            "unexpected error: {rejection_error}"
+        );
+        assert_authoritative_previous();
+
+        let allocations = concurrent_allocator_results(&engine);
+        assert_allocator_results_above(&allocations, cancelled_id, cancelled_layer_maximum);
+    }
+
+    #[test]
+    fn project_snapshot_allocator_capacity_rejects_max_and_immediate_exhaustion_before_enqueue() {
+        let domains = [
+            AllocatorDomain::Fixtures,
+            AllocatorDomain::Effects,
+            AllocatorDomain::Cues,
+            AllocatorDomain::CueLists,
+            AllocatorDomain::Palettes,
+            AllocatorDomain::PlaybackExecutors,
+            AllocatorDomain::TimelineEvents,
+            AllocatorDomain::TimelineLayers,
+            AllocatorDomain::TimelineAudioClips,
+            AllocatorDomain::Automations,
+            AllocatorDomain::MediaAssets,
+            AllocatorDomain::VideoLayers,
+            AllocatorDomain::Compositions,
+            AllocatorDomain::VideoOutputs,
+            AllocatorDomain::NodeGraphs,
+            AllocatorDomain::StageObjects,
+        ];
+
+        for domain in domains {
+            for immediate_maximum in [false, true] {
+                let candidate = if domain == AllocatorDomain::TimelineLayers {
+                    if immediate_maximum {
+                        u64::from(u32::MAX - 1)
+                    } else {
+                        u64::from(u32::MAX)
+                    }
+                } else if immediate_maximum {
+                    u64::MAX - 1
+                } else {
+                    u64::MAX
+                };
+                let expected = allocator_capacity_error(domain, candidate);
+                let snapshot = snapshot_with_allocator_candidate(domain, candidate);
+
+                let acknowledged = EngineHandle::start_for_tests(DmxOutputConfig {
+                    enabled: false,
+                    ..DmxOutputConfig::default()
+                });
+                let authoritative_a = acknowledged.snapshot();
+                let acknowledged_error = acknowledged
+                    .load_project_snapshot_and_wait(snapshot.clone())
+                    .unwrap_err();
+                assert_eq!(acknowledged_error, expected);
+                assert_eq!(acknowledged.snapshot(), authoritative_a);
+                let acknowledged_id = allocator_value(&acknowledged, domain);
+                assert_ne!(acknowledged_id, 0);
+                assert_ne!(acknowledged_id, candidate);
+
+                let direct =
+                    allocator_test_handle(Arc::new(RwLock::new(EngineSnapshot::default())));
+                let authoritative_a = direct.snapshot();
+                let direct_error = direct
+                    .send(EngineCommand::LoadProjectSnapshot(snapshot))
+                    .unwrap_err();
+                assert_eq!(direct_error.to_string(), expected);
+                assert!(direct.queue.pop().is_none());
+                assert_eq!(direct.snapshot(), authoritative_a);
+                let direct_id = allocator_value(&direct, domain);
+                assert_ne!(direct_id, 0);
+                assert_ne!(direct_id, candidate);
+            }
+        }
+    }
+
+    #[test]
+    fn allocator_nearest_accepted_boundary_issues_only_last_id_then_fails_closed() {
+        let domains = [
+            AllocatorDomain::Fixtures,
+            AllocatorDomain::Effects,
+            AllocatorDomain::Cues,
+            AllocatorDomain::CueLists,
+            AllocatorDomain::Palettes,
+            AllocatorDomain::PlaybackExecutors,
+            AllocatorDomain::TimelineEvents,
+            AllocatorDomain::TimelineLayers,
+            AllocatorDomain::TimelineAudioClips,
+            AllocatorDomain::Automations,
+            AllocatorDomain::MediaAssets,
+            AllocatorDomain::VideoLayers,
+            AllocatorDomain::Compositions,
+            AllocatorDomain::VideoOutputs,
+            AllocatorDomain::NodeGraphs,
+            AllocatorDomain::StageObjects,
+        ];
+
+        for domain in domains {
+            let maximum = if domain == AllocatorDomain::TimelineLayers {
+                u64::from(u32::MAX)
+            } else {
+                u64::MAX
+            };
+            let authored_maximum = maximum - 2;
+            let engine = allocator_test_handle(Arc::new(RwLock::new(EngineSnapshot::default())));
+            assert!(engine
+                .send(EngineCommand::LoadProjectSnapshot(
+                    snapshot_with_allocator_candidate(domain, authored_maximum)
+                ))
+                .is_ok());
+
+            let issued = allocator_value(&engine, domain);
+            assert_eq!(issued, maximum - 1, "{domain:?} issued the wrong final ID");
+            assert_ne!(issued, 0);
+            let exhausted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                allocator_value(&engine, domain)
+            }));
+            assert!(
+                exhausted.is_err(),
+                "{domain:?} allocator wrapped instead of failing"
+            );
+            assert_eq!(allocator_counter_value(&engine, domain), maximum);
+            let panic_text = exhausted
+                .err()
+                .and_then(|payload| payload.downcast::<String>().ok())
+                .map(|message| *message)
+                .unwrap_or_default();
+            assert!(
+                panic_text.contains(&format!(
+                    "allocator domain '{}' exhausted at {maximum}",
+                    domain.label()
+                )),
+                "unexpected exhaustion panic for {domain:?}: {panic_text}"
+            );
+        }
+    }
+
+    #[test]
+    fn derived_legacy_audio_layer_boundary_is_checked_and_exhaustion_safe() {
+        let mut accepted = snapshot_with_allocator_candidate(
+            AllocatorDomain::TimelineLayers,
+            u64::from(u32::MAX - 3),
+        );
+        accepted.timeline.audio = Some(AudioAnalysisSummary {
+            path: "memory://legacy.wav".to_string(),
+            sample_rate: 48_000,
+            channels: 2,
+            duration_ms: 1_000,
+            estimated_bpm: None,
+            waveform: Vec::new(),
+            spectrum: Vec::new(),
+            beats: Vec::new(),
+        });
+        let engine = allocator_test_handle(Arc::new(RwLock::new(EngineSnapshot::default())));
+        assert!(engine
+            .send(EngineCommand::LoadProjectSnapshot(accepted))
+            .is_ok());
+        assert_eq!(
+            allocator_value(&engine, AllocatorDomain::TimelineLayers),
+            u64::from(u32::MAX - 1)
+        );
+        let exhausted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            allocator_value(&engine, AllocatorDomain::TimelineLayers)
+        }));
+        assert!(exhausted.is_err());
+        assert_eq!(
+            allocator_counter_value(&engine, AllocatorDomain::TimelineLayers),
+            u64::from(u32::MAX)
+        );
+
+        let mut rejected = snapshot_with_allocator_candidate(
+            AllocatorDomain::TimelineLayers,
+            u64::from(u32::MAX - 2),
+        );
+        rejected.timeline.audio = Some(AudioAnalysisSummary {
+            path: "memory://legacy.wav".to_string(),
+            sample_rate: 48_000,
+            channels: 2,
+            duration_ms: 1_000,
+            estimated_bpm: None,
+            waveform: Vec::new(),
+            spectrum: Vec::new(),
+            beats: Vec::new(),
+        });
+        let direct = allocator_test_handle(Arc::new(RwLock::new(EngineSnapshot::default())));
+        let error = direct
+            .send(EngineCommand::LoadProjectSnapshot(rejected))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            allocator_capacity_error(AllocatorDomain::TimelineLayers, u64::from(u32::MAX - 1))
+        );
+        assert_eq!(allocator_value(&direct, AllocatorDomain::TimelineLayers), 2);
+    }
+
+    #[test]
+    fn project_snapshot_load_and_wait_publishes_fifo_and_syncs_allocators() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let stage_map = |min_x: f32| StageMapConfig {
+            locked: false,
+            min_x,
+            max_x: min_x + 100.0,
+            min_z: -50.0,
+            max_z: 50.0,
+        };
+
+        engine
+            .load_project_snapshot(EngineSnapshot {
+                stage_map: stage_map(-10.0),
+                ..EngineSnapshot::default()
+            })
+            .unwrap();
+
+        let mut replacement = EngineSnapshot {
+            stage_map: stage_map(-20.0),
+            ..EngineSnapshot::default()
+        };
+        replacement.timeline.events.push(TimelineCueEventSummary {
+            id: 10_000,
+            cue_id: 9_999,
+            ..TimelineCueEventSummary::default()
+        });
+
+        engine.load_project_snapshot_and_wait(replacement).unwrap();
+
+        assert_eq!(engine.snapshot().stage_map, stage_map(-20.0));
+        assert_eq!(engine.allocate_timeline_event_id(), 10_001);
+    }
+
+    #[test]
+    fn project_snapshot_load_and_wait_rejects_without_replacing_authoritative_state() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let previous = EngineSnapshot {
+            stage_map: StageMapConfig {
+                locked: true,
+                min_x: -12.0,
+                max_x: 12.0,
+                min_z: -8.0,
+                max_z: 18.0,
+            },
+            ..EngineSnapshot::default()
+        };
+        engine
+            .load_project_snapshot_and_wait(previous.clone())
+            .unwrap();
+        let authoritative_a = engine.snapshot();
+
+        let assert_authoritative_a = || {
+            let current = engine.snapshot();
+            assert_eq!(current.stage_map, authoritative_a.stage_map);
+            assert_eq!(current.timeline, authoritative_a.timeline);
+            assert_eq!(current.video, authoritative_a.video);
+            assert_eq!(current.fixtures, authoritative_a.fixtures);
+        };
+
+        let mut invalid_layer = previous.clone();
+        invalid_layer.stage_map.min_x = 700.0;
+        invalid_layer.timeline.layers = vec![TimelineLayerSummary {
+            id: 7,
+            label: "Audio only".to_string(),
+            order: 0,
+            muted: false,
+            locked: false,
+            solo: false,
+            expanded: true,
+            kind: TimelineLayerKind::Audio,
+        }];
+        invalid_layer.timeline.events = vec![TimelineCueEventSummary {
+            id: 42,
+            cue_id: 1,
+            track: TimelineTrackKind::Lighting,
+            layer_id: Some(7),
+            duration_ms: 1,
+            ..TimelineCueEventSummary::default()
+        }];
+        let error = engine
+            .load_project_snapshot_and_wait(invalid_layer)
+            .unwrap_err();
+        assert!(error.contains("invalid layer"), "unexpected error: {error}");
+        assert_authoritative_a();
+
+        let mut invalid_conform = previous.clone();
+        invalid_conform.stage_map.min_x = 701.0;
+        invalid_conform.cues = vec![CueSummary {
+            id: 1,
+            ..CueSummary::default()
+        }];
+        invalid_conform.timeline.events = vec![TimelineCueEventSummary {
+            id: 43,
+            cue_id: 1,
+            duration_ms: 1_000,
+            duration_beats: Some(1.0),
+            conform_to_tempo: true,
+            ..TimelineCueEventSummary::default()
+        }];
+        let error = engine
+            .load_project_snapshot_and_wait(invalid_conform)
+            .unwrap_err();
+        assert!(
+            error.contains("requires authored beats"),
+            "unexpected error: {error}"
+        );
+        assert_authoritative_a();
+
+        let mut invalid_audio = previous.clone();
+        invalid_audio.stage_map.min_x = 702.0;
+        invalid_audio.timeline.layers = vec![TimelineLayerSummary {
+            id: 8,
+            label: "Audio".to_string(),
+            order: 0,
+            muted: false,
+            locked: false,
+            solo: false,
+            expanded: true,
+            kind: TimelineLayerKind::Audio,
+        }];
+        invalid_audio.timeline.audio_clips = vec![TimelineAudioClipSummary {
+            id: 1,
+            layer_id: 8,
+            duration_ms: 1_000,
+            ..TimelineAudioClipSummary::default()
+        }];
+        let error = engine
+            .load_project_snapshot_and_wait(invalid_audio)
+            .unwrap_err();
+        assert!(
+            error.contains("path must not be empty"),
+            "unexpected error: {error}"
+        );
+        assert_authoritative_a();
+
+        let mut invalid_isf = previous.clone();
+        invalid_isf.stage_map.min_x = 703.0;
+        invalid_isf.video.layers = vec![VideoLayerSummary {
+            id: 1,
+            label: "Over-budget ISF".to_string(),
+            source: VideoSourceSummary {
+                kind: VideoSourceKind::StillImage,
+                path: None,
+                name: None,
+                codec: None,
+                metadata: None,
+            },
+            media_asset_id: None,
+            blend_mode: VideoBlendMode::Normal,
+            state: VideoLayerState::default(),
+            isf_effect: Some(VideoIsfEffectSummary {
+                enabled: true,
+                label: "Over budget".to_string(),
+                source: Arc::<str>::from(
+                    "x".repeat(VIDEO_ISF_PROJECT_SOURCE_MAX_BYTES.saturating_add(1)),
+                ),
+                source_path: None,
+                description: None,
+                categories: Vec::new(),
+                controls: Vec::new(),
+                stack: Vec::new(),
+            }),
+        }];
+        let error = engine
+            .load_project_snapshot_and_wait(invalid_isf)
+            .unwrap_err();
+        assert!(
+            error.contains("Video ISF project source size"),
+            "unexpected error: {error}"
+        );
+        assert_authoritative_a();
+    }
+
+    #[test]
+    fn project_snapshot_load_and_wait_cancels_queued_request_before_admission() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let previous = engine.snapshot();
+        let mut candidate = previous.clone();
+        candidate.stage_map.min_x = 900.0;
+
+        let started = Instant::now();
+        let error = engine
+            .load_project_snapshot_and_wait_with_timeout(candidate, Duration::ZERO)
+            .unwrap_err();
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert!(error.contains("timed out"), "unexpected error: {error}");
+
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(engine.snapshot().stage_map, previous.stage_map);
+        assert_eq!(engine.allocate_timeline_event_id(), 1);
+
+        let (ack, receiver) = mpsc::sync_channel::<Result<(), String>>(1);
+        drop(ack);
+        assert!(matches!(receiver.recv(), Err(mpsc::RecvError)));
+    }
+
+    #[test]
+    fn admitted_project_snapshot_load_waits_past_caller_deadline_for_definitive_ack() {
+        let admission = ProjectSnapshotLoadAdmission::new();
+        assert!(admission.try_admit_before(Instant::now() + Duration::from_secs(1)));
+        let (ack, receiver) = mpsc::sync_channel(1);
+        let sender = thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(75));
+            ack.send(Ok(())).unwrap();
+        });
+        let started = Instant::now();
+        let result = receive_project_snapshot_load_ack(
+            receiver,
+            &admission,
+            Instant::now() + Duration::from_millis(50),
+            Duration::from_millis(50),
+        );
+        assert_eq!(result, Ok(()));
+        assert!(started.elapsed() >= Duration::from_millis(60));
+        sender.join().unwrap();
+    }
+
+    #[test]
+    fn admitted_project_snapshot_load_contention_has_no_timeout_then_late_publish() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let published = Arc::new(RwLock::new(runtime.build_snapshot(0)));
+        let read_guard = published.read().unwrap();
+        let old_stage_map_min_x = read_guard.stage_map.min_x;
+        let (ack, receiver) = mpsc::sync_channel(1);
+        let admission = ProjectSnapshotLoadAdmission::new();
+        runtime.apply_command(EngineCommand::LoadProjectSnapshotPublished {
+            snapshot: EngineSnapshot {
+                stage_map: StageMapConfig {
+                    locked: true,
+                    min_x: 100.0,
+                    max_x: 140.0,
+                    min_z: -20.0,
+                    max_z: 20.0,
+                },
+                ..EngineSnapshot::default()
+            },
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: admission.clone(),
+            ack,
+        });
+        assert_eq!(runtime.stage_map.min_x, 100.0);
+
+        let publisher_snapshot = Arc::clone(&published);
+        let publisher = thread::spawn(move || {
+            runtime.publish_pending_command_acks(0, &publisher_snapshot);
+        });
+        let caller_admission = admission.clone();
+        let caller = thread::spawn(move || {
+            receive_project_snapshot_load_ack(
+                receiver,
+                &caller_admission,
+                Instant::now() + Duration::from_millis(10),
+                Duration::from_millis(10),
+            )
+        });
+
+        std::thread::sleep(Duration::from_millis(25));
+        assert!(!caller.is_finished());
+        assert_eq!(read_guard.stage_map.min_x, old_stage_map_min_x);
+        drop(read_guard);
+
+        publisher.join().unwrap();
+        assert_eq!(caller.join().unwrap(), Ok(()));
+        assert_eq!(published.read().unwrap().stage_map.min_x, 100.0);
+    }
+
+    #[test]
+    fn project_snapshot_load_publication_is_a_barrier_before_later_commands() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let published = Arc::new(RwLock::new(runtime.build_snapshot(0)));
+        let read_guard = published.read().unwrap();
+        let queue = Arc::new(ArrayQueue::new(2));
+        let (ack, receiver) = mpsc::sync_channel(1);
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let replacement = EngineSnapshot {
+            stage_map: StageMapConfig {
+                locked: true,
+                min_x: 100.0,
+                max_x: 140.0,
+                min_z: -20.0,
+                max_z: 20.0,
+            },
+            ..EngineSnapshot::default()
+        };
+        let expires_at = Instant::now() + Duration::from_secs(1);
+        assert!(queue
+            .push(QueuedEngineCommand {
+                command: EngineCommand::LoadProjectSnapshotPublished {
+                    snapshot: replacement,
+                    expires_at,
+                    admission,
+                    ack,
+                },
+                queued_at: Instant::now(),
+            })
+            .is_ok());
+        let later_stage_map = StageMapConfig {
+            locked: false,
+            min_x: 200.0,
+            max_x: 240.0,
+            min_z: -30.0,
+            max_z: 30.0,
+        };
+        assert!(queue
+            .push(QueuedEngineCommand {
+                command: EngineCommand::SetStageMapConfig(later_stage_map),
+                queued_at: Instant::now(),
+            })
+            .is_ok());
+
+        runtime.consume_commands(&queue);
+        assert_eq!(queue.len(), 1);
+        assert_eq!(runtime.stage_map.min_x, 100.0);
+
+        let worker_published = Arc::clone(&published);
+        let worker_queue = Arc::clone(&queue);
+        let worker = thread::spawn(move || {
+            runtime.publish_pending_command_acks(0, &worker_published);
+            (runtime, receiver, worker_queue.len())
+        });
+        std::thread::sleep(Duration::from_millis(20));
+        assert_eq!(queue.len(), 1);
+        drop(read_guard);
+
+        let (mut runtime, receiver, queued_after_ack) = worker.join().unwrap();
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
+        assert_eq!(queued_after_ack, 1);
+        assert_eq!(published.read().unwrap().stage_map.min_x, 100.0);
+
+        runtime.consume_commands(&queue);
+        assert_eq!(runtime.stage_map, later_stage_map);
+    }
+
     #[test]
     fn load_project_snapshot_restores_stage_map_config() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -44655,7 +51532,7 @@ mod tests {
 
     #[test]
     fn stage_map_presets_are_saved_applied_and_removed() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -44727,8 +51604,219 @@ mod tests {
     }
 
     #[test]
+    fn stage_map_preset_published_upserts_sanitized_b_without_changing_live_stage() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let live_map = StageMapConfig {
+            locked: true,
+            min_x: -48.0,
+            max_x: 48.0,
+            min_z: -24.0,
+            max_z: 24.0,
+        };
+        let live_object = StageObjectSummary {
+            id: 1,
+            label: "Live deck".to_string(),
+            kind: StageObjectKind::Stage,
+            x: 1.0,
+            z: -2.0,
+            width: 8.0,
+            depth: 4.0,
+            rotation_deg: 0.0,
+            color: Some("#112233".to_string()),
+        };
+        engine
+            .send(EngineCommand::SetStageMapConfig(live_map))
+            .unwrap();
+        engine
+            .send(EngineCommand::UpsertStageObject(live_object.clone()))
+            .unwrap();
+        let _ = engine.persistence_snapshot().unwrap();
+
+        let mut preset = published_stage_map_preset("  Imported layout  ", 41);
+        // Invalid bounds sanitize to the established default instead of
+        // contaminating the live map; valid nested B is clamped/trimmed and
+        // the malformed nested entry is dropped before the list swap.
+        preset.config = StageMapConfig {
+            locked: true,
+            min_x: f32::NAN,
+            max_x: 20.0,
+            min_z: -10.0,
+            max_z: 10.0,
+        };
+        let mut nested = allocator_stage_object(41);
+        nested.label = "  Imported screen  ".to_string();
+        nested.kind = StageObjectKind::Screen;
+        nested.x = 2_000.0;
+        nested.z = -2_000.0;
+        nested.width = 0.0;
+        nested.depth = 2_000.0;
+        nested.rotation_deg = 999.0;
+        nested.color = Some(" #AAbbCC ".to_string());
+        preset.stage_objects = Some(vec![
+            nested,
+            StageObjectSummary {
+                id: 0,
+                label: "Discarded".to_string(),
+                kind: StageObjectKind::Stage,
+                x: 0.0,
+                z: 0.0,
+                width: 1.0,
+                depth: 1.0,
+                rotation_deg: 0.0,
+                color: None,
+            },
+        ]);
+
+        engine.upsert_stage_map_preset_published(preset).unwrap();
+        let after = engine.persistence_snapshot().unwrap();
+        assert_eq!(after.stage_map, live_map);
+        assert_eq!(after.stage_objects, vec![live_object]);
+        assert_eq!(after.stage_map_presets.len(), 1);
+        let saved = &after.stage_map_presets[0];
+        assert_eq!(saved.label, "Imported layout");
+        assert_eq!(saved.config, StageMapConfig::default());
+        assert_eq!(
+            saved.stage_objects.as_deref(),
+            Some(
+                &[StageObjectSummary {
+                    id: 41,
+                    label: "Imported screen".to_string(),
+                    kind: StageObjectKind::Screen,
+                    x: 1_000.0,
+                    z: -1_000.0,
+                    width: 0.05,
+                    depth: 1_000.0,
+                    rotation_deg: 360.0,
+                    color: Some("#AAbbCC".to_string()),
+                }][..]
+            )
+        );
+        assert!(engine.allocate_stage_object_id() > 41);
+    }
+
+    #[test]
+    fn stage_map_preset_published_invalid_and_queued_cancel_leave_no_b() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let live_map = StageMapConfig {
+            locked: true,
+            min_x: -30.0,
+            max_x: 30.0,
+            min_z: -15.0,
+            max_z: 15.0,
+        };
+        engine
+            .send(EngineCommand::SetStageMapConfig(live_map))
+            .unwrap();
+        let before = engine.persistence_snapshot().unwrap();
+
+        let invalid = engine.upsert_stage_map_preset_published(StageMapPresetSummary {
+            label: "   ".to_string(),
+            config: StageMapConfig::default(),
+            stage_objects: None,
+        });
+        assert!(invalid.is_err());
+        let after_invalid = engine.persistence_snapshot().unwrap();
+        assert_eq!(after_invalid.stage_map_presets, before.stage_map_presets);
+        assert_eq!(after_invalid.stage_map, before.stage_map);
+        assert_eq!(after_invalid.stage_objects, before.stage_objects);
+
+        let cancelled = engine.upsert_stage_map_preset_published_with_timeout(
+            published_stage_map_preset("Cancelled B", 7),
+            Duration::ZERO,
+        );
+        assert!(cancelled.is_err());
+        thread::sleep(Duration::from_millis(20));
+        let after_cancel = engine.persistence_snapshot().unwrap();
+        assert_eq!(after_cancel.stage_map_presets, before.stage_map_presets);
+        assert_eq!(after_cancel.stage_map, before.stage_map);
+        assert_eq!(after_cancel.stage_objects, before.stage_objects);
+    }
+
+    #[test]
+    fn stage_map_preset_published_waits_for_definitive_shared_snapshot_publication() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let before = engine.snapshot();
+        let published_guard = engine.snapshot.read().unwrap();
+        let caller_engine = engine.clone();
+        let caller = thread::spawn(move || {
+            caller_engine
+                .upsert_stage_map_preset_published(published_stage_map_preset("Blocked B", 7))
+        });
+        thread::sleep(Duration::from_millis(25));
+        assert!(
+            !caller.is_finished(),
+            "admitted stage preset upsert must wait for definitive shared publication"
+        );
+        assert_eq!(published_guard.stage_map_presets, before.stage_map_presets);
+        drop(published_guard);
+        assert_eq!(caller.join().unwrap(), Ok(()));
+        assert_eq!(engine.snapshot().stage_map_presets[0].label, "Blocked B");
+    }
+
+    #[test]
+    fn stage_map_preset_published_publication_failure_restores_complete_a() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        runtime.stage_map = StageMapConfig {
+            locked: true,
+            min_x: -40.0,
+            max_x: 40.0,
+            min_z: -20.0,
+            max_z: 20.0,
+        };
+        runtime.stage_objects = vec![allocator_stage_object(1)];
+        runtime.stage_map_presets = vec![published_stage_map_preset("A", 2)];
+        runtime.last_error = Some("A diagnostic".to_string());
+        let before_snapshot = runtime.build_persistence_snapshot();
+        let before_presets = runtime.stage_map_presets.clone();
+        let before_live_map = runtime.stage_map;
+        let before_live_objects = runtime.stage_objects.clone();
+        let snapshot = RwLock::new(before_snapshot.clone());
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+
+        runtime.apply_command(EngineCommand::UpsertStageMapPresetPublished {
+            preset: published_stage_map_preset("B", 41),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission,
+            ack,
+        });
+        runtime.fail_next_pending_publication = true;
+        runtime.publish_pending_command_acks(0, &snapshot);
+
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(runtime.stage_map_presets, before_presets);
+        assert_eq!(runtime.stage_map, before_live_map);
+        assert_eq!(runtime.stage_objects, before_live_objects);
+        assert_eq!(runtime.last_error.as_deref(), Some("A diagnostic"));
+        assert_eq!(
+            snapshot.read().unwrap().stage_map_presets,
+            before_snapshot.stage_map_presets
+        );
+        assert_eq!(
+            snapshot.read().unwrap().stage_map,
+            before_snapshot.stage_map
+        );
+        assert_eq!(
+            snapshot.read().unwrap().stage_objects,
+            before_snapshot.stage_objects
+        );
+    }
+
+    #[test]
     fn stage_map_presets_restore_stage_objects_when_included() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -44827,7 +51915,7 @@ mod tests {
 
     #[test]
     fn stage_objects_are_upserted_removed_and_restored_from_projects() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -44888,7 +51976,7 @@ mod tests {
 
     #[test]
     fn patch_fixture_rejects_missing_named_dmx_mode_in_engine_runtime() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -45007,7 +52095,7 @@ mod tests {
 
     #[test]
     fn remove_fixture_clears_patch_state_and_fixture_owned_targets() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -45124,7 +52212,7 @@ mod tests {
 
     #[test]
     fn update_cue_replaces_existing_snapshot_without_reordering() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -45501,7 +52589,7 @@ mod tests {
 
     #[test]
     fn published_cue_apis_assign_non_main_list_and_publish_complete_body_before_return() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -46129,7 +53217,7 @@ mod tests {
 
     #[test]
     fn reference_palette_resolves_latest_values_on_go_and_explicit_cue_values_win() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -46297,7 +53385,7 @@ mod tests {
 
     #[test]
     fn playback_executors_share_list_position_merge_levels_and_spare_programmer() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -46403,7 +53491,7 @@ mod tests {
 
     #[test]
     fn set_cue_metadata_preserves_stored_targets() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -46485,7 +53573,7 @@ mod tests {
 
     #[test]
     fn cue_ifcb_timing_delays_focus_without_holding_intensity() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -46618,7 +53706,7 @@ mod tests {
 
     #[test]
     fn mib_marks_non_intensity_attributes_only_while_fixture_is_dark() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -46707,7 +53795,7 @@ mod tests {
 
     #[test]
     fn mib_manual_fixture_filter_limits_marking_but_keeps_dark_safety() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -46813,7 +53901,7 @@ mod tests {
 
     #[test]
     fn non_tracking_cue_blocks_unspecified_attributes_to_fixture_defaults() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -46895,7 +53983,7 @@ mod tests {
 
     #[test]
     fn cue_pre_wait_and_follow_schedule_the_next_cue() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -46956,7 +54044,7 @@ mod tests {
 
     #[test]
     fn dmx_input_supports_htp_ltp_signal_clear_and_blackout() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             universe: 0,
             ..DmxOutputConfig::default()
@@ -47025,7 +54113,7 @@ mod tests {
 
     #[test]
     fn programmer_blind_non_active_scene_commit_preserves_live_output_and_active_cue() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -47169,7 +54257,7 @@ mod tests {
 
     #[test]
     fn programmer_blind_active_scene_keeps_dmx_frozen_then_explicit_commit_applies_once() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -47304,7 +54392,7 @@ mod tests {
 
     #[test]
     fn programmer_blind_discard_keeps_live_dmx_byte_identical() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -47355,7 +54443,7 @@ mod tests {
 
     #[test]
     fn programmer_blind_toggle_off_commits_staged_values() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -47405,7 +54493,7 @@ mod tests {
 
     #[test]
     fn create_cue_rejects_invalid_lighting_targets_and_canonicalizes_attributes() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -47548,7 +54636,7 @@ mod tests {
 
     #[test]
     fn update_cue_rejects_invalid_targets_without_mutating_existing_cue() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -47633,7 +54721,7 @@ mod tests {
 
     #[test]
     fn create_cue_validates_and_sanitizes_video_targets() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -47785,7 +54873,7 @@ mod tests {
 
     #[test]
     fn move_cue_changes_go_back_order() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -47841,7 +54929,7 @@ mod tests {
 
     #[test]
     fn remove_cue_clears_timeline_events_active_state_and_reports_missing() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -47942,7 +55030,7 @@ mod tests {
 
     #[test]
     fn remove_timeline_event_reports_missing_event() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -47999,7 +55087,7 @@ mod tests {
 
     #[test]
     fn cue_lists_keep_independent_executor_positions_and_migrate_on_remove() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -48099,7 +55187,7 @@ mod tests {
 
     #[test]
     fn duplicate_cue_copies_targets_and_inserts_after_source() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -48172,7 +55260,7 @@ mod tests {
 
     #[test]
     fn set_timeline_cue_event_updates_and_sorts_events() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -48248,7 +55336,7 @@ mod tests {
 
     #[test]
     fn set_timeline_automation_replaces_keyframes_and_resorts() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -48330,7 +55418,7 @@ mod tests {
 
     #[test]
     fn set_timeline_video_automation_replaces_keyframes_and_resorts() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -48410,7 +55498,7 @@ mod tests {
 
     #[test]
     fn set_timeline_automation_enabled_preserves_state_across_lighting_updates() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -48484,7 +55572,7 @@ mod tests {
 
     #[test]
     fn set_timeline_automation_enabled_preserves_state_across_video_updates() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -48555,7 +55643,7 @@ mod tests {
 
     #[test]
     fn timeline_lighting_automation_validates_and_canonicalizes_attribute() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -48652,7 +55740,7 @@ mod tests {
 
     #[test]
     fn set_timeline_automation_rejects_invalid_update_without_mutating_existing() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -48720,7 +55808,7 @@ mod tests {
 
     #[test]
     fn timeline_video_automation_rejects_invalid_layer_or_nonfinite_values() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -48817,7 +55905,7 @@ mod tests {
 
     #[test]
     fn set_fixture_groups_updates_snapshot_and_submasters() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -48871,7 +55959,7 @@ mod tests {
 
     #[test]
     fn fixture_group_ids_are_normalized_in_engine_runtime() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -48945,7 +56033,7 @@ mod tests {
 
     #[test]
     fn fixture_group_update_rejects_empty_group_ids_without_mutating_snapshot() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -49002,7 +56090,7 @@ mod tests {
 
     #[test]
     fn set_fixture_patch_updates_snapshot_and_dmx_address() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -49062,7 +56150,7 @@ mod tests {
 
     #[test]
     fn set_fixture_patch_rejects_invalid_values_without_mutating_snapshot() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -49150,7 +56238,7 @@ mod tests {
 
     #[test]
     fn set_group_attribute_updates_every_fixture_in_group() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -49279,7 +56367,7 @@ mod tests {
 
     #[test]
     fn hierarchical_group_parent_targets_descendants_only() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -49489,7 +56577,7 @@ mod tests {
 
     #[test]
     fn set_group_attribute_rejects_unknown_group_without_mutating_snapshot() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -49553,7 +56641,7 @@ mod tests {
 
     #[test]
     fn set_group_attribute_rejects_unknown_attribute_without_partial_update() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -49627,7 +56715,7 @@ mod tests {
 
     #[test]
     fn set_group_fixture_flags_updates_only_group_members() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -49811,7 +56899,7 @@ mod tests {
 
     #[test]
     fn set_group_fixture_limits_updates_only_group_members() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -49916,7 +57004,7 @@ mod tests {
 
     #[test]
     fn clear_fixture_flags_clears_requested_global_flags() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -50034,7 +57122,7 @@ mod tests {
 
     #[test]
     fn set_group_fixture_flags_reject_missing_group() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -50183,7 +57271,7 @@ mod tests {
 
     #[test]
     fn telemetry_accumulates_tick_jitter_statistics() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -50206,7 +57294,7 @@ mod tests {
 
     #[test]
     fn telemetry_records_command_queue_latency() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -50231,7 +57319,7 @@ mod tests {
 
     #[test]
     fn telemetry_records_command_to_dmx_tick_latency() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -50274,7 +57362,7 @@ mod tests {
 
     #[test]
     fn engine_thread_stops_after_last_handle_is_dropped() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -50294,6 +57382,14 @@ mod tests {
     fn low_latency_dmx_tick_is_requested_only_for_lighting_commands() {
         assert!(EngineCommand::SetLightingMaster(0.5).requests_low_latency_dmx_tick());
         assert!(EngineCommand::Blackout(true).requests_low_latency_dmx_tick());
+        let (stage_ack, _stage_receiver) = mpsc::sync_channel(1);
+        assert!(EngineCommand::UpsertStageMapPresetPublished {
+            preset: published_stage_map_preset("Low latency stage preset", 1),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack: stage_ack,
+        }
+        .requests_low_latency_dmx_tick());
         assert!(EngineCommand::ApplyAttributeValues {
             fixture_id: 1,
             values: vec![AttributeValueSummary {
@@ -50538,6 +57634,8 @@ mod tests {
             wake,
             shared_telemetry: Arc::clone(&shared_telemetry),
             snapshot: Arc::new(RwLock::new(EngineSnapshot::default())),
+            output_ownership_gate: OutputOwnershipGate::for_role(MachineOutputRole::Both),
+            allocator_gate: Arc::new(Mutex::new(())),
             next_fixture_id: Arc::new(AtomicU64::new(1)),
             next_effect_id: Arc::new(AtomicU64::new(1)),
             next_cue_id: Arc::new(AtomicU64::new(1)),
@@ -50548,6 +57646,7 @@ mod tests {
             next_timeline_layer_id: Arc::new(AtomicU32::new(2)),
             next_timeline_audio_clip_id: Arc::new(AtomicU64::new(1)),
             next_automation_id: Arc::new(AtomicU64::new(1)),
+            next_media_asset_id: Arc::new(AtomicU64::new(1)),
             next_video_layer_id: Arc::new(AtomicU64::new(1)),
             next_composition_id: Arc::new(AtomicU64::new(1)),
             next_video_output_id: Arc::new(AtomicU64::new(1)),
@@ -50729,8 +57828,15 @@ mod tests {
         let now = Instant::now();
         let frame = [0_u8; 512];
 
-        let first =
-            send_output_frame_with_recovery(&mut sender, &mut recovery, &config, 0, &frame, now);
+        let first = send_output_frame_with_recovery(
+            &mut sender,
+            &mut recovery,
+            &config,
+            0,
+            &frame,
+            now,
+            true,
+        );
         assert!(first.attempted);
         assert!(first.result.is_err());
         assert_eq!(recovery.reconnect_attempts, 1);
@@ -50742,6 +57848,7 @@ mod tests {
             0,
             &frame,
             now + Duration::from_millis(100),
+            true,
         );
         assert!(!waiting.attempted);
         assert_eq!(recovery.reconnect_attempts, 1);
@@ -50753,6 +57860,7 @@ mod tests {
             0,
             &frame,
             now + Duration::from_millis(251),
+            true,
         );
         assert!(retry.attempted);
         assert!(retry.result.is_err());
@@ -50762,7 +57870,7 @@ mod tests {
 
     #[test]
     fn disabled_incomplete_dmx_output_is_not_an_error_or_send_route() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             protocol: DmxOutputProtocol::EnttecUsbPro,
             target_ip: String::new(),
@@ -50793,7 +57901,7 @@ mod tests {
 
     #[test]
     fn telemetry_counts_dmx_send_failures() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: true,
             protocol: DmxOutputProtocol::EnttecUsbPro,
             target_ip: "127.0.0.1".to_string(),
@@ -50834,7 +57942,7 @@ mod tests {
 
     #[test]
     fn lighting_master_scales_intensity_without_touching_movement_channels() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -50905,7 +58013,7 @@ mod tests {
 
     #[test]
     fn group_submaster_scales_grouped_intensity_without_touching_movement_channels() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -50981,7 +58089,7 @@ mod tests {
 
     #[test]
     fn highlight_and_solo_affect_dmx_output_without_changing_base_values() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -51076,7 +58184,7 @@ mod tests {
 
     #[test]
     fn park_holds_rendered_fixture_values_until_cleared() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -51216,7 +58324,7 @@ mod tests {
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
         let port = receiver.local_addr().unwrap().port();
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: true,
             protocol: DmxOutputProtocol::ArtNet,
             target_ip: "127.0.0.1".to_string(),
@@ -51308,7 +58416,7 @@ mod tests {
 
     #[test]
     fn cue_fade_can_pause_and_resume() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -51397,7 +58505,7 @@ mod tests {
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
         let port = receiver.local_addr().unwrap().port();
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: true,
             protocol: DmxOutputProtocol::ArtNet,
             target_ip: "127.0.0.1".to_string(),
@@ -51486,7 +58594,7 @@ mod tests {
 
     #[test]
     fn timecode_sync_updates_timeline_and_triggers_due_cues() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -51563,7 +58671,7 @@ mod tests {
 
     #[test]
     fn ltc_timecode_sync_marks_ltc_clock_source() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..Default::default()
         });
@@ -51604,7 +58712,7 @@ mod tests {
 
     #[test]
     fn external_clock_sync_marks_ableton_link_source() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..Default::default()
         });
@@ -51631,7 +58739,7 @@ mod tests {
 
     #[test]
     fn external_clock_sync_drives_bpm_synced_video_layer_position() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..Default::default()
         });
@@ -51710,7 +58818,7 @@ mod tests {
 
     #[test]
     fn midi_song_position_pointer_syncs_timeline_from_bpm() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -51753,7 +58861,7 @@ mod tests {
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
         let port = receiver.local_addr().unwrap().port();
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: true,
             protocol: DmxOutputProtocol::ArtNet,
             target_ip: "127.0.0.1".to_string(),
@@ -51877,7 +58985,7 @@ mod tests {
 
     #[test]
     fn cue_can_trigger_video_layer_state() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -51958,7 +59066,7 @@ mod tests {
 
     #[test]
     fn duplicate_video_layer_copies_state_and_composition_membership() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -52157,6 +59265,7 @@ mod tests {
                 codec: None,
                 metadata: None,
             },
+            media_asset_id: None,
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState::default(),
             isf_effect: effect,
@@ -52164,7 +59273,7 @@ mod tests {
     }
 
     fn near_limit_isf_source_budget_engine() -> (EngineHandle, VideoLayerId, [VideoLayerId; 2]) {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -52341,7 +59450,7 @@ mod tests {
 
     #[test]
     fn video_isf_stack_mutations_are_published_atomically_and_promote_new_root() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -52742,7 +59851,7 @@ mod tests {
 
     #[test]
     fn video_layer_source_can_be_updated_without_resetting_state() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -52816,7 +59925,7 @@ mod tests {
 
     #[test]
     fn video_layer_enabled_solo_commands_update_state_without_overwriting_level() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -53124,7 +60233,7 @@ mod tests {
 
     #[test]
     fn video_layer_opacity_can_fade_and_direct_set_cancels_fade() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -53203,7 +60312,7 @@ mod tests {
 
     #[test]
     fn cue_fade_interpolates_video_layer_visual_state() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -53331,7 +60440,7 @@ mod tests {
 
     #[test]
     fn cue_part_delays_and_fades_video_layer_and_output_targets() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -53496,7 +60605,7 @@ mod tests {
 
     #[test]
     fn playing_video_layer_position_advances_on_engine_tick() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -53548,7 +60657,7 @@ mod tests {
 
     #[test]
     fn reverse_playing_video_layer_position_rewinds_on_engine_tick() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -53606,7 +60715,7 @@ mod tests {
 
     #[test]
     fn playing_video_layer_stops_at_source_duration() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -53664,7 +60773,7 @@ mod tests {
 
     #[test]
     fn video_cue_point_commands_add_remove_and_jump() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -53874,7 +60983,7 @@ mod tests {
 
     #[test]
     fn video_layer_loop_command_updates_bounds_and_sanitizes() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -53949,7 +61058,7 @@ mod tests {
 
     #[test]
     fn video_bpm_sync_params_update_and_sanitize_layer_state() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -54011,7 +61120,7 @@ mod tests {
 
     #[test]
     fn bpm_synced_video_layer_advances_even_with_manual_speed_zero() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -54070,7 +61179,7 @@ mod tests {
 
     #[test]
     fn bootstrap_vj_show_is_atomic_safe_and_acknowledges_published_snapshot() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -54222,6 +61331,458 @@ mod tests {
         assert!(busy_runtime.video_layers.is_empty());
         assert!(busy_runtime.video_outputs.is_empty());
         drop(read_guard);
+    }
+
+    fn media_asset_test_source(name: &str) -> VideoSourceSummary {
+        VideoSourceSummary {
+            kind: VideoSourceKind::StillImage,
+            path: Some(format!("memory://media-assets/{name}.png")),
+            name: None,
+            codec: None,
+            metadata: None,
+        }
+    }
+
+    fn media_asset_test_summary(
+        id: MediaAssetId,
+        label: &str,
+        source: VideoSourceSummary,
+    ) -> MediaAssetSummary {
+        MediaAssetSummary {
+            id,
+            label: label.to_string(),
+            source,
+            content_hash: None,
+            byte_size: None,
+        }
+    }
+
+    fn media_asset_test_layer(
+        id: VideoLayerId,
+        asset_id: MediaAssetId,
+        label: &str,
+        source: VideoSourceSummary,
+    ) -> VideoLayerSummary {
+        VideoLayerSummary {
+            id,
+            label: label.to_string(),
+            source,
+            media_asset_id: Some(asset_id),
+            blend_mode: VideoBlendMode::Normal,
+            state: VideoLayerState::default(),
+            isf_effect: None,
+        }
+    }
+
+    fn publish_test_media_asset_transaction(
+        runtime: &mut EngineRuntime,
+        published: &RwLock<EngineSnapshot>,
+        transaction: MediaAssetTransaction,
+        expires_at: Instant,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::MediaAssetTransactionPublished {
+            transaction,
+            expires_at,
+            admission: ProjectSnapshotLoadAdmission::new(),
+            ack,
+        });
+        runtime.publish_pending_command_acks(0, published);
+        receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("media asset transaction acknowledgement was not delivered")
+    }
+
+    #[test]
+    fn media_asset_catalog_import_does_not_create_layers_or_outputs() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let source = media_asset_test_source("catalog-only");
+        let asset = media_asset_test_summary(41, "Catalog only", source);
+
+        assert_eq!(
+            publish_test_media_asset_transaction(
+                &mut runtime,
+                &published,
+                MediaAssetTransaction::Import(MediaAssetImportCandidate {
+                    assets: vec![asset.clone()],
+                    layers: Vec::new(),
+                }),
+                Instant::now() + Duration::from_secs(1),
+            ),
+            Ok(())
+        );
+
+        let snapshot = published.read().unwrap();
+        assert_eq!(snapshot.video.media_assets, vec![asset]);
+        assert!(snapshot.video.layers.is_empty());
+        assert!(snapshot.video.outputs.is_empty());
+        assert_eq!(
+            snapshot.video.compositions[0].layer_ids,
+            Vec::<VideoLayerId>::new()
+        );
+    }
+
+    #[test]
+    fn media_asset_legacy_batch_import_creates_assets_and_layers_in_one_publication() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let first_layer_id = engine.allocate_video_layer_id();
+        let second_layer_id = engine.allocate_video_layer_id();
+        let output_id = engine.allocate_video_output_id();
+        let first_source = VideoSourceSummary {
+            kind: VideoSourceKind::File,
+            path: Some("memory://legacy-batch/first.mp4".to_string()),
+            name: None,
+            codec: Some("H264".to_string()),
+            metadata: None,
+        };
+        let second_source = VideoSourceSummary {
+            kind: VideoSourceKind::File,
+            path: Some("memory://legacy-batch/second.mp4".to_string()),
+            name: None,
+            codec: Some("H264".to_string()),
+            metadata: None,
+        };
+        let output = VideoOutputSummary {
+            id: output_id,
+            label: "Legacy batch program".to_string(),
+            kind: VideoOutputKind::Display,
+            enabled: false,
+            composition_id: 1,
+            fullscreen: false,
+            monitor_id: Some(0),
+            width: 1_280,
+            height: 720,
+            endpoint_name: None,
+            opacity: 1.0,
+            blackout: true,
+            mapping: VideoOutputMapping::default(),
+        };
+
+        engine
+            .bootstrap_vj_show(
+                vec![
+                    (first_layer_id, "First".to_string(), first_source.clone()),
+                    (second_layer_id, "Second".to_string(), second_source.clone()),
+                ],
+                output,
+            )
+            .unwrap();
+
+        let snapshot = engine.snapshot();
+        assert_eq!(snapshot.video.media_assets.len(), 2);
+        assert_eq!(snapshot.video.layers.len(), 2);
+        assert_eq!(snapshot.video.outputs.len(), 1);
+        for layer in &snapshot.video.layers {
+            let asset = snapshot
+                .video
+                .media_assets
+                .iter()
+                .find(|asset| Some(asset.id) == layer.media_asset_id)
+                .expect("legacy layer did not publish a paired media asset");
+            assert_eq!(layer.source, asset.source);
+        }
+        assert_eq!(
+            snapshot.video.compositions[0].layer_ids,
+            vec![first_layer_id, second_layer_id]
+        );
+    }
+
+    #[test]
+    fn media_asset_engine_publication_failure_rolls_back_assets_layers_and_compositions() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let retained_source = media_asset_test_source("retained");
+        assert_eq!(
+            publish_test_media_asset_transaction(
+                &mut runtime,
+                &published,
+                MediaAssetTransaction::Import(MediaAssetImportCandidate {
+                    assets: vec![media_asset_test_summary(
+                        10,
+                        "Retained",
+                        retained_source.clone(),
+                    )],
+                    layers: vec![media_asset_test_layer(
+                        1,
+                        10,
+                        "Retained layer",
+                        retained_source,
+                    )],
+                }),
+                Instant::now() + Duration::from_secs(1),
+            ),
+            Ok(())
+        );
+        runtime.apply_command(EngineCommand::AddVideoComposition(CompositionSummary {
+            id: 2,
+            label: "Retained composition".to_string(),
+            layer_ids: vec![1],
+            output_ids: Vec::new(),
+        }));
+        let before = runtime.video_snapshot();
+
+        runtime.fail_next_pending_publication = true;
+        let replacement_source = media_asset_test_source("replacement");
+        let error = publish_test_media_asset_transaction(
+            &mut runtime,
+            &published,
+            MediaAssetTransaction::Import(MediaAssetImportCandidate {
+                assets: vec![media_asset_test_summary(
+                    11,
+                    "Replacement",
+                    replacement_source.clone(),
+                )],
+                layers: vec![media_asset_test_layer(
+                    2,
+                    11,
+                    "Replacement layer",
+                    replacement_source,
+                )],
+            }),
+            Instant::now() + Duration::from_secs(1),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("rolled back"));
+        assert_eq!(runtime.video_snapshot(), before);
+    }
+
+    #[test]
+    fn media_asset_transaction_invalid_or_expired_keeps_catalog_unchanged() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let before = runtime.video_snapshot();
+        let source = media_asset_test_source("invalid");
+
+        let invalid = publish_test_media_asset_transaction(
+            &mut runtime,
+            &published,
+            MediaAssetTransaction::Import(MediaAssetImportCandidate {
+                assets: vec![media_asset_test_summary(0, "Invalid", source.clone())],
+                layers: Vec::new(),
+            }),
+            Instant::now() + Duration::from_secs(1),
+        )
+        .unwrap_err();
+        assert!(invalid.contains("non-zero"));
+        assert_eq!(runtime.video_snapshot(), before);
+
+        let expired = publish_test_media_asset_transaction(
+            &mut runtime,
+            &published,
+            MediaAssetTransaction::Import(MediaAssetImportCandidate {
+                assets: vec![media_asset_test_summary(1, "Expired", source)],
+                layers: Vec::new(),
+            }),
+            Instant::now() - Duration::from_millis(1),
+        )
+        .unwrap_err();
+        assert!(expired.contains("expired"));
+        assert_eq!(runtime.video_snapshot(), before);
+    }
+
+    #[test]
+    fn media_asset_update_mirrors_every_referencing_layer() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let original_source = media_asset_test_source("shared-original");
+        assert_eq!(
+            publish_test_media_asset_transaction(
+                &mut runtime,
+                &published,
+                MediaAssetTransaction::Import(MediaAssetImportCandidate {
+                    assets: vec![media_asset_test_summary(
+                        20,
+                        "Shared",
+                        original_source.clone(),
+                    )],
+                    layers: vec![
+                        media_asset_test_layer(1, 20, "Shared one", original_source.clone(),),
+                        media_asset_test_layer(2, 20, "Shared two", original_source),
+                    ],
+                }),
+                Instant::now() + Duration::from_secs(1),
+            ),
+            Ok(())
+        );
+
+        let replacement_source = media_asset_test_source("shared-relinked");
+        let replacement =
+            media_asset_test_summary(20, "Shared relinked", replacement_source.clone());
+        assert_eq!(
+            publish_test_media_asset_transaction(
+                &mut runtime,
+                &published,
+                MediaAssetTransaction::Update(replacement.clone()),
+                Instant::now() + Duration::from_secs(1),
+            ),
+            Ok(())
+        );
+
+        let snapshot = published.read().unwrap();
+        assert_eq!(snapshot.video.media_assets, vec![replacement]);
+        assert_eq!(snapshot.video.layers.len(), 2);
+        assert!(snapshot
+            .video
+            .layers
+            .iter()
+            .all(|layer| layer.source == replacement_source && layer.media_asset_id == Some(20)));
+    }
+
+    #[test]
+    fn media_asset_duplicate_shares_asset_remove_layer_retains_asset() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let source = media_asset_test_source("duplicate");
+        runtime
+            .apply_media_asset_transaction(MediaAssetTransaction::Import(
+                MediaAssetImportCandidate {
+                    assets: vec![media_asset_test_summary(30, "Duplicate", source.clone())],
+                    layers: vec![media_asset_test_layer(1, 30, "Original", source)],
+                },
+            ))
+            .unwrap();
+        runtime
+            .duplicate_video_layer(1, 2, "Copy".to_string())
+            .unwrap();
+        let duplicated = runtime.video_snapshot();
+        assert_eq!(duplicated.media_assets.len(), 1);
+        assert_eq!(duplicated.layers.len(), 2);
+        assert!(duplicated
+            .layers
+            .iter()
+            .all(|layer| layer.media_asset_id == Some(30)));
+
+        runtime.apply_command(EngineCommand::RemoveVideoLayer(1));
+        let removed = runtime.video_snapshot();
+        assert_eq!(removed.layers.len(), 1);
+        assert_eq!(removed.layers[0].id, 2);
+        assert_eq!(removed.media_assets.len(), 1);
+        assert_eq!(removed.media_assets[0].id, 30);
+    }
+
+    #[test]
+    fn media_asset_legacy_creator_uses_independent_ids_with_orphan_and_divergent_maxima() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let referenced_source = media_asset_test_source("referenced");
+        let orphan_source = media_asset_test_source("orphan");
+        engine
+            .load_project_snapshot_and_wait(EngineSnapshot {
+                video: VideoSnapshot {
+                    media_assets: vec![
+                        media_asset_test_summary(3, "Referenced", referenced_source.clone()),
+                        media_asset_test_summary(80, "Orphan", orphan_source),
+                    ],
+                    layers: vec![media_asset_test_layer(
+                        40,
+                        3,
+                        "Existing layer",
+                        referenced_source,
+                    )],
+                    ..VideoSnapshot::default()
+                },
+                ..EngineSnapshot::default()
+            })
+            .unwrap();
+
+        let new_layer_id = engine.allocate_video_layer_id();
+        assert_eq!(new_layer_id, 41);
+        engine
+            .send(EngineCommand::AddVideoLayer {
+                layer_id: new_layer_id,
+                label: "Compatibility layer".to_string(),
+                source: media_asset_test_source("compatibility"),
+            })
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let snapshot = loop {
+            let snapshot = engine.snapshot();
+            if snapshot.video.layers.len() == 2 {
+                break snapshot;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "compatibility creator did not reach the runtime"
+            );
+            std::thread::yield_now();
+        };
+        let created_layer = snapshot
+            .video
+            .layers
+            .iter()
+            .find(|layer| layer.id == new_layer_id)
+            .unwrap();
+        assert_eq!(created_layer.media_asset_id, Some(81));
+        assert_ne!(created_layer.media_asset_id, Some(new_layer_id));
+        assert!(snapshot
+            .video
+            .media_assets
+            .iter()
+            .any(|asset| asset.id == 80));
+        assert_eq!(
+            snapshot
+                .video
+                .media_assets
+                .iter()
+                .find(|asset| asset.id == 81)
+                .map(|asset| &asset.source),
+            Some(&created_layer.source)
+        );
+    }
+
+    #[test]
+    fn media_asset_allocator_max_boundary_rejects_explicit_and_issues_last_once() {
+        let rejected = allocator_test_handle(Arc::new(RwLock::new(EngineSnapshot::default())));
+        let error = rejected
+            .send(EngineCommand::LoadProjectSnapshot(
+                snapshot_with_allocator_candidate(AllocatorDomain::MediaAssets, u64::MAX - 1),
+            ))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            allocator_capacity_error(AllocatorDomain::MediaAssets, u64::MAX - 1)
+        );
+        assert!(rejected.queue.pop().is_none());
+        assert_eq!(rejected.allocate_media_asset_id(), 1);
+
+        let accepted = allocator_test_handle(Arc::new(RwLock::new(EngineSnapshot::default())));
+        accepted
+            .send(EngineCommand::LoadProjectSnapshot(
+                snapshot_with_allocator_candidate(AllocatorDomain::MediaAssets, u64::MAX - 2),
+            ))
+            .unwrap();
+        assert_eq!(accepted.allocate_media_asset_id(), u64::MAX - 1);
+        let exhausted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            accepted.allocate_media_asset_id()
+        }));
+        assert!(exhausted.is_err());
+        assert_eq!(
+            allocator_counter_value(&accepted, AllocatorDomain::MediaAssets),
+            u64::MAX
+        );
     }
 
     #[test]
@@ -54380,7 +61941,7 @@ mod tests {
 
     #[test]
     fn exclusive_video_take_handle_returns_after_snapshot_publication() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -54430,7 +61991,7 @@ mod tests {
 
     #[test]
     fn video_layer_blend_mode_and_default_composition_are_in_snapshot() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -54501,7 +62062,7 @@ mod tests {
 
     #[test]
     fn all_blackout_sets_lighting_and_video_blackout_together() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -54532,7 +62093,7 @@ mod tests {
 
     #[test]
     fn video_layer_order_updates_main_composition_order() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -54597,7 +62158,7 @@ mod tests {
 
     #[test]
     fn video_outputs_are_routed_to_composition_snapshot() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -54668,7 +62229,7 @@ mod tests {
 
     #[test]
     fn video_output_mapping_command_sanitizes_external_values() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -54773,7 +62334,7 @@ mod tests {
 
     #[test]
     fn video_output_mapping_field_command_updates_one_sanitized_value() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -54902,7 +62463,7 @@ mod tests {
 
     #[test]
     fn video_output_opacity_can_fade_over_engine_ticks() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -54975,7 +62536,7 @@ mod tests {
 
     #[test]
     fn cue_can_recall_and_fade_video_output_state() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -55084,7 +62645,7 @@ mod tests {
 
     #[test]
     fn video_output_mapping_presets_are_saved_replaced_removed_and_sanitized() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -55150,7 +62711,7 @@ mod tests {
 
     #[test]
     fn video_output_mapping_preset_can_be_applied_to_output() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -55218,7 +62779,7 @@ mod tests {
 
     #[test]
     fn video_output_config_update_preserves_state_and_mapping() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -55300,7 +62861,7 @@ mod tests {
 
     #[test]
     fn custom_video_compositions_filter_layers_and_reroute_outputs() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -55453,7 +63014,7 @@ mod tests {
 
     #[test]
     fn remove_video_layer_clears_dependent_targets_automations_effects_and_fade() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -55566,7 +63127,7 @@ mod tests {
 
     #[test]
     fn remove_video_output_clears_dependent_cue_targets_and_fade() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -55635,7 +63196,7 @@ mod tests {
 
     #[test]
     fn timeline_video_track_event_can_trigger_video_only_cue() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -55716,7 +63277,7 @@ mod tests {
 
     #[test]
     fn timeline_video_track_event_can_trigger_node_graph_only_cue() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -55790,7 +63351,7 @@ mod tests {
 
     #[test]
     fn one_timeline_cue_event_triggers_lighting_and_video_targets() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -55949,7 +63510,7 @@ mod tests {
 
     #[test]
     fn timeline_video_automation_interpolates_layer_opacity() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -56011,7 +63572,7 @@ mod tests {
 
     #[test]
     fn shared_timeline_position_drives_lighting_and_video_automations() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -56115,7 +63676,7 @@ mod tests {
 
     #[test]
     fn timeline_video_automation_interpolates_transform_params() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -56188,7 +63749,7 @@ mod tests {
 
     #[test]
     fn timeline_video_automation_interpolates_color_params() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -56261,7 +63822,7 @@ mod tests {
 
     #[test]
     fn timeline_video_automation_interpolates_fx_params() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -56348,7 +63909,7 @@ mod tests {
 
     #[test]
     fn lfo_effect_targets_are_validated_and_canonicalized_before_save() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -56460,7 +64021,7 @@ mod tests {
 
     #[test]
     fn lfo_effect_rejects_unknown_group_attribute_or_empty_targets() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -56603,7 +64164,7 @@ mod tests {
 
     #[test]
     fn video_only_lfo_effect_validates_layer_targets_without_requiring_light_attribute() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -56715,7 +64276,7 @@ mod tests {
 
     #[test]
     fn position_wave_effect_rejects_unknown_attribute_without_mutating_stack() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -56783,7 +64344,7 @@ mod tests {
 
     #[test]
     fn lfo_effect_can_target_video_layer_opacity() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -56858,7 +64419,7 @@ mod tests {
 
     #[test]
     fn lfo_effect_can_target_fixture_and_video_layer_from_same_source() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -56960,7 +64521,7 @@ mod tests {
 
     #[test]
     fn lfo_effect_can_target_video_layer_color() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -57035,7 +64596,7 @@ mod tests {
 
     #[test]
     fn lfo_effect_can_target_video_layer_fx() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -57110,7 +64671,7 @@ mod tests {
 
     #[test]
     fn position_wave_effect_can_target_video_layers_with_stage_positions() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -57227,7 +64788,7 @@ mod tests {
 
     #[test]
     fn position_wave_effect_can_span_fixture_and_video_layer_positions() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -57336,7 +64897,7 @@ mod tests {
 
     #[test]
     fn set_effect_video_target_position_updates_position_wave_target() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -57429,7 +64990,7 @@ mod tests {
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
         let port = receiver.local_addr().unwrap().port();
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: true,
             protocol: DmxOutputProtocol::ArtNet,
             target_ip: "127.0.0.1".to_string(),
@@ -57505,7 +65066,7 @@ mod tests {
 
     #[test]
     fn one_lfo_effect_can_drive_lighting_and_video_together() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -57597,7 +65158,7 @@ mod tests {
 
     #[test]
     fn effect_enabled_toggle_suspends_effect_without_removing_it() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -57678,7 +65239,7 @@ mod tests {
 
     #[test]
     fn update_lfo_effect_preserves_id_order_and_enabled_state() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -57802,7 +65363,7 @@ mod tests {
 
     #[test]
     fn update_position_wave_effect_preserves_id_order_and_enabled_state() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -57943,7 +65504,7 @@ mod tests {
 
     #[test]
     fn move_effect_changes_stack_order_and_rendered_result() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -58041,7 +65602,7 @@ mod tests {
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
         let port = receiver.local_addr().unwrap().port();
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: true,
             protocol: DmxOutputProtocol::ArtNet,
             target_ip: "127.0.0.1".to_string(),
@@ -58130,7 +65691,7 @@ mod tests {
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
         let port = receiver.local_addr().unwrap().port();
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: true,
             protocol: DmxOutputProtocol::ArtNet,
             target_ip: "127.0.0.1".to_string(),
@@ -58216,7 +65777,7 @@ mod tests {
 
     #[test]
     fn position_wave_effect_targets_map_selection_fixture_ids() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -59423,7 +66984,7 @@ mod tests {
 
     #[test]
     fn identity_colors_set_clear_and_survive_snapshot_roundtrip() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -59499,8 +67060,517 @@ mod tests {
     }
 
     #[test]
+    fn fixture_group_state_publication_is_atomic_and_waits_for_definitive_ack() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine
+            .send(EngineCommand::PatchFixture {
+                fixture_id: 1,
+                request: sample_patch_request("Atomic group fixture", 1),
+                profile: sample_profile(),
+            })
+            .unwrap();
+        let ready_deadline = Instant::now() + Duration::from_secs(1);
+        while engine.snapshot().fixtures.len() != 1 {
+            assert!(
+                Instant::now() < ready_deadline,
+                "fixture did not reach runtime"
+            );
+            thread::yield_now();
+        }
+        let before = engine.persistence_snapshot().unwrap();
+
+        // Full validation occurs before the runtime mutates the valid fixture.
+        let invalid = engine.apply_fixture_group_state_published(
+            vec![
+                (1, vec!["Front".to_string()]),
+                (99, vec!["Missing".to_string()]),
+            ],
+            BTreeMap::from([("Front".to_string(), "#22aa88".to_string())]),
+        );
+        assert!(invalid.is_err());
+        assert_eq!(
+            engine.persistence_snapshot().unwrap().fixtures,
+            before.fixtures
+        );
+        assert_eq!(
+            engine.persistence_snapshot().unwrap().group_colors,
+            before.group_colors
+        );
+
+        // A deadline which is already expired cannot late-apply a candidate.
+        let expired = engine.apply_fixture_group_state_published_with_timeout(
+            vec![(1, vec!["Front".to_string()])],
+            BTreeMap::from([("Front".to_string(), "#22aa88".to_string())]),
+            Duration::ZERO,
+        );
+        assert!(expired.is_err());
+        thread::sleep(Duration::from_millis(20));
+        assert_eq!(
+            engine.persistence_snapshot().unwrap().fixtures,
+            before.fixtures
+        );
+        assert_eq!(
+            engine.persistence_snapshot().unwrap().group_colors,
+            before.group_colors
+        );
+
+        // After runtime admission, a busy shared snapshot is not a caller
+        // timeout followed by a late B publish. The caller waits for the
+        // definitive publication acknowledgement, then sees all B at once.
+        let published_guard = engine.snapshot.read().unwrap();
+        let caller_engine = engine.clone();
+        let caller = thread::spawn(move || {
+            caller_engine.apply_fixture_group_state_published(
+                vec![(1, vec!["Front".to_string()])],
+                BTreeMap::from([("Front".to_string(), "#22aa88".to_string())]),
+            )
+        });
+        thread::sleep(Duration::from_millis(25));
+        assert!(!caller.is_finished());
+        assert_eq!(published_guard.fixtures, before.fixtures);
+        assert_eq!(published_guard.group_colors, before.group_colors);
+        drop(published_guard);
+        assert_eq!(caller.join().unwrap(), Ok(()));
+        let after = engine.persistence_snapshot().unwrap();
+        assert_eq!(after.fixtures[0].group_ids, vec!["Front".to_string()]);
+        assert_eq!(
+            after.group_colors.get("Front").map(String::as_str),
+            Some("#22aa88")
+        );
+    }
+
+    #[test]
+    fn fixture_patch_batch_publishes_all_candidates_or_applies_none() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+
+        // The acknowledgement comes only after one shared B snapshot contains
+        // every candidate. There is no observable first-fixture publication.
+        engine
+            .patch_fixtures_published(vec![
+                sample_fixture_patch_candidate(1, "Batch A", 1),
+                sample_fixture_patch_candidate(2, "Batch B", 4),
+            ])
+            .unwrap();
+        let published = engine.persistence_snapshot().unwrap();
+        assert_eq!(published.fixtures.len(), 2);
+        assert_eq!(
+            published
+                .fixtures
+                .iter()
+                .map(|fixture| fixture.id)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+
+        let before = published.clone();
+        // Candidate two conflicts with candidate one. Validation stages both
+        // before applying either, so neither ID 3 nor ID 4 leaks into B.
+        let conflict = engine.patch_fixtures_published(vec![
+            sample_fixture_patch_candidate(3, "Would apply first", 7),
+            sample_fixture_patch_candidate(4, "Conflicts second", 8),
+        ]);
+        assert!(conflict.is_err());
+        assert_eq!(
+            engine.persistence_snapshot().unwrap().fixtures,
+            before.fixtures
+        );
+
+        // An already-expired queued admission is cancelled before runtime
+        // mutation and cannot late-apply after the caller returned.
+        let expired = engine.patch_fixtures_published_with_timeout(
+            vec![sample_fixture_patch_candidate(5, "Expired", 7)],
+            Duration::ZERO,
+        );
+        assert!(expired.is_err());
+        thread::sleep(Duration::from_millis(20));
+        assert_eq!(
+            engine.persistence_snapshot().unwrap().fixtures,
+            before.fixtures
+        );
+    }
+
+    #[test]
+    fn fixture_patch_batch_waits_after_admission_for_shared_snapshot_publication() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let before = engine.snapshot();
+        let published_guard = engine.snapshot.read().unwrap();
+        let caller_engine = engine.clone();
+        let caller = thread::spawn(move || {
+            caller_engine.patch_fixtures_published(vec![sample_fixture_patch_candidate(
+                1,
+                "Blocked publication",
+                1,
+            )])
+        });
+        thread::sleep(Duration::from_millis(25));
+        assert!(
+            !caller.is_finished(),
+            "admitted PATCH must wait for definitive shared publication"
+        );
+        assert_eq!(published_guard.fixtures, before.fixtures);
+        drop(published_guard);
+        assert_eq!(caller.join().unwrap(), Ok(()));
+        assert_eq!(engine.snapshot().fixtures.len(), 1);
+    }
+
+    #[test]
+    fn fixture_patch_batch_publication_failure_restores_complete_runtime_a() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        runtime.apply_command(EngineCommand::PatchFixture {
+            fixture_id: 1,
+            request: sample_patch_request("A", 1),
+            profile: sample_profile(),
+        });
+        runtime.apply_command(EngineCommand::SetFixtureHighlight {
+            fixture_id: 1,
+            enabled: true,
+        });
+        runtime.apply_command(EngineCommand::SetFixtureSolo {
+            fixture_id: 1,
+            enabled: true,
+        });
+        runtime.apply_command(EngineCommand::SetFixturePark {
+            fixture_id: 1,
+            enabled: true,
+        });
+        runtime.last_error = Some("A diagnostic".to_string());
+        let before_snapshot = runtime.build_persistence_snapshot();
+        let before_values = runtime.values.clone();
+        let before_highlighted = runtime.highlighted_fixtures.clone();
+        let before_soloed = runtime.soloed_fixtures.clone();
+        let before_parked = runtime.parked_fixture_values.clone();
+        let snapshot = RwLock::new(before_snapshot.clone());
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+
+        runtime.apply_command(EngineCommand::PatchFixturesPublished {
+            candidates: vec![sample_fixture_patch_candidate(2, "B", 4)],
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission,
+            ack,
+        });
+        runtime.fail_next_pending_publication = true;
+        runtime.publish_pending_command_acks(0, &snapshot);
+
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(
+            runtime.build_persistence_snapshot().fixtures,
+            before_snapshot.fixtures
+        );
+        assert_eq!(runtime.values, before_values);
+        assert_eq!(runtime.highlighted_fixtures, before_highlighted);
+        assert_eq!(runtime.soloed_fixtures, before_soloed);
+        assert_eq!(runtime.parked_fixture_values, before_parked);
+        assert_eq!(runtime.last_error.as_deref(), Some("A diagnostic"));
+        assert_eq!(snapshot.read().unwrap().fixtures, before_snapshot.fixtures);
+    }
+
+    #[test]
+    fn fixture_profile_repair_published_preserves_matching_fixture_runtime_state() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine
+            .patch_fixtures_published(vec![sample_fixture_patch_candidate(1, "A", 1)])
+            .unwrap();
+        engine
+            .send(EngineCommand::ApplyAttributeValues {
+                fixture_id: 1,
+                values: vec![AttributeValueSummary {
+                    attribute: "Dimmer".to_string(),
+                    value: 42_000,
+                }],
+            })
+            .unwrap();
+        let limits = FixtureLimits {
+            dimmer_min: 1_000,
+            dimmer_max: 60_000,
+            pan_min: 2_000,
+            pan_max: 50_000,
+            tilt_min: 3_000,
+            tilt_max: 40_000,
+            invert_pan: true,
+            invert_tilt: false,
+            swap_pan_tilt: true,
+        };
+        engine
+            .send(EngineCommand::SetFixtureLimits {
+                fixture_id: 1,
+                limits,
+            })
+            .unwrap();
+        for command in [
+            EngineCommand::SetFixtureHighlight {
+                fixture_id: 1,
+                enabled: true,
+            },
+            EngineCommand::SetFixtureSolo {
+                fixture_id: 1,
+                enabled: true,
+            },
+            EngineCommand::SetFixturePark {
+                fixture_id: 1,
+                enabled: true,
+            },
+        ] {
+            engine.send(command).unwrap();
+        }
+        let before = engine.persistence_snapshot().unwrap();
+
+        engine
+            .repair_fixture_profile_published(
+                1,
+                sample_repaired_fixture_profile(),
+                Some("Standard".to_string()),
+            )
+            .unwrap();
+        let after = engine.persistence_snapshot().unwrap();
+        let fixture = after
+            .fixtures
+            .iter()
+            .find(|fixture| fixture.id == 1)
+            .unwrap();
+
+        assert_eq!(
+            fixture.profile_source_path,
+            "memory://fixture-repaired.gdtf"
+        );
+        assert_eq!(fixture.limits, limits);
+        assert!(fixture.highlighted);
+        assert!(fixture.soloed);
+        assert!(fixture.parked);
+        assert_eq!(
+            fixture
+                .attribute_values
+                .iter()
+                .find(|value| value.attribute == "Dimmer")
+                .map(|value| value.value),
+            Some(42_000)
+        );
+        assert_eq!(
+            after
+                .fixtures
+                .iter()
+                .find(|fixture| fixture.id == 1)
+                .map(|fixture| fixture.id),
+            before
+                .fixtures
+                .iter()
+                .find(|fixture| fixture.id == 1)
+                .map(|fixture| fixture.id)
+        );
+    }
+
+    #[test]
+    fn fixture_profile_repair_published_rejects_identity_layout_and_missing_fixture_without_b() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine
+            .patch_fixtures_published(vec![sample_fixture_patch_candidate(1, "A", 1)])
+            .unwrap();
+        let before = engine.persistence_snapshot().unwrap();
+
+        let mut wrong_identity = sample_repaired_fixture_profile();
+        wrong_identity.name = "Different Fixture".to_string();
+        let identity_error = engine
+            .repair_fixture_profile_published(1, wrong_identity, Some("Standard".to_string()))
+            .unwrap_err();
+        assert!(identity_error.contains("identity"));
+        assert_eq!(
+            engine.persistence_snapshot().unwrap().fixtures,
+            before.fixtures
+        );
+
+        let mut wrong_layout = sample_repaired_fixture_profile();
+        wrong_layout.dmx_modes[0].controls[0].offsets = vec![4];
+        let layout_error = engine
+            .repair_fixture_profile_published(1, wrong_layout, Some("Standard".to_string()))
+            .unwrap_err();
+        assert!(layout_error.contains("does not exactly match"));
+        assert_eq!(
+            engine.persistence_snapshot().unwrap().fixtures,
+            before.fixtures
+        );
+
+        let missing_mode_error = engine
+            .repair_fixture_profile_published(
+                1,
+                sample_repaired_fixture_profile(),
+                Some("Missing".to_string()),
+            )
+            .unwrap_err();
+        assert!(missing_mode_error.contains("DMX mode 'Missing' was not found"));
+        assert_eq!(
+            engine.persistence_snapshot().unwrap().fixtures,
+            before.fixtures
+        );
+
+        let missing_error = engine
+            .repair_fixture_profile_published(
+                99,
+                sample_repaired_fixture_profile(),
+                Some("Standard".to_string()),
+            )
+            .unwrap_err();
+        assert!(missing_error.contains("was not found"));
+        assert_eq!(
+            engine.persistence_snapshot().unwrap().fixtures,
+            before.fixtures
+        );
+    }
+
+    #[test]
+    fn fixture_profile_repair_published_queued_cancel_never_late_applies_b() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine
+            .patch_fixtures_published(vec![sample_fixture_patch_candidate(1, "A", 1)])
+            .unwrap();
+        let before = engine.persistence_snapshot().unwrap();
+
+        let cancelled = engine.repair_fixture_profile_published_with_timeout(
+            1,
+            sample_repaired_fixture_profile(),
+            Some("Standard".to_string()),
+            Duration::ZERO,
+        );
+        assert!(cancelled.is_err());
+        thread::sleep(Duration::from_millis(20));
+        assert_eq!(
+            engine.persistence_snapshot().unwrap().fixtures,
+            before.fixtures
+        );
+    }
+
+    #[test]
+    fn fixture_profile_repair_published_waits_after_admission_for_shared_snapshot_publication() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine
+            .patch_fixtures_published(vec![sample_fixture_patch_candidate(1, "A", 1)])
+            .unwrap();
+        let before = engine.snapshot();
+        let published_guard = engine.snapshot.read().unwrap();
+        let caller_engine = engine.clone();
+        let caller = thread::spawn(move || {
+            caller_engine.repair_fixture_profile_published(
+                1,
+                sample_repaired_fixture_profile(),
+                Some("Standard".to_string()),
+            )
+        });
+        thread::sleep(Duration::from_millis(25));
+        assert!(
+            !caller.is_finished(),
+            "admitted repair must wait for definitive shared publication"
+        );
+        assert_eq!(published_guard.fixtures, before.fixtures);
+        drop(published_guard);
+        assert_eq!(caller.join().unwrap(), Ok(()));
+        assert_eq!(
+            engine.snapshot().fixtures[0].profile_source_path,
+            "memory://fixture-repaired.gdtf"
+        );
+    }
+
+    #[test]
+    fn fixture_profile_repair_published_publication_failure_restores_complete_runtime_a() {
+        let mut runtime = EngineRuntime::new(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        runtime.apply_command(EngineCommand::PatchFixture {
+            fixture_id: 1,
+            request: sample_patch_request("A", 1),
+            profile: sample_profile(),
+        });
+        runtime.apply_command(EngineCommand::SetAttribute {
+            fixture_id: 1,
+            attribute: "Dimmer".to_string(),
+            value: 42_000,
+        });
+        runtime.apply_command(EngineCommand::SetFixtureLimits {
+            fixture_id: 1,
+            limits: FixtureLimits {
+                dimmer_min: 1_000,
+                dimmer_max: 60_000,
+                pan_min: 2_000,
+                pan_max: 50_000,
+                tilt_min: 3_000,
+                tilt_max: 40_000,
+                invert_pan: true,
+                invert_tilt: false,
+                swap_pan_tilt: true,
+            },
+        });
+        runtime.apply_command(EngineCommand::SetFixtureHighlight {
+            fixture_id: 1,
+            enabled: true,
+        });
+        runtime.apply_command(EngineCommand::SetFixtureSolo {
+            fixture_id: 1,
+            enabled: true,
+        });
+        runtime.apply_command(EngineCommand::SetFixturePark {
+            fixture_id: 1,
+            enabled: true,
+        });
+        runtime.last_error = Some("A diagnostic".to_string());
+        let before_snapshot = runtime.build_persistence_snapshot();
+        let before_values = runtime.values.clone();
+        let before_highlighted = runtime.highlighted_fixtures.clone();
+        let before_soloed = runtime.soloed_fixtures.clone();
+        let before_parked = runtime.parked_fixture_values.clone();
+        let snapshot = RwLock::new(before_snapshot.clone());
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+
+        runtime.apply_command(EngineCommand::RepairFixtureProfilePublished {
+            fixture_id: 1,
+            profile: sample_repaired_fixture_profile(),
+            mode_name: Some("Standard".to_string()),
+            expires_at: Instant::now() + Duration::from_secs(1),
+            admission,
+            ack,
+        });
+        runtime.fail_next_pending_publication = true;
+        runtime.publish_pending_command_acks(0, &snapshot);
+
+        assert!(receiver.recv().unwrap().is_err());
+        assert_eq!(
+            runtime.build_persistence_snapshot().fixtures,
+            before_snapshot.fixtures
+        );
+        assert_eq!(runtime.values, before_values);
+        assert_eq!(runtime.highlighted_fixtures, before_highlighted);
+        assert_eq!(runtime.soloed_fixtures, before_soloed);
+        assert_eq!(runtime.parked_fixture_values, before_parked);
+        assert_eq!(runtime.last_error.as_deref(), Some("A diagnostic"));
+        assert_eq!(snapshot.read().unwrap().fixtures, before_snapshot.fixtures);
+    }
+
+    #[test]
     fn large_show_loads_200_fixtures_across_8_universes_and_100_cues() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -68156,7 +76226,7 @@ mod tests {
 
     #[test]
     fn color_effect_handle_returns_only_after_snapshot_publication() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -70220,7 +78290,7 @@ mod tests {
 
     #[test]
     fn chaser_handle_returns_only_after_add_and_update_are_published() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -79647,7 +87717,7 @@ mod tests {
 
         let mut untyped_snapshot = snapshot.clone();
         untyped_snapshot.timeline.layers.clear();
-        let handle = EngineHandle::start(DmxOutputConfig {
+        let handle = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });

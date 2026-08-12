@@ -12,6 +12,8 @@ pub type TimelineEventId = u64;
 pub type TimelineAudioClipId = u64;
 pub type AutomationId = u64;
 pub type VideoLayerId = u64;
+/// Stable project-local identity for a reusable media library entry.
+pub type MediaAssetId = u64;
 pub type CompositionId = u64;
 pub type VideoOutputId = u64;
 pub type NodeGraphId = u64;
@@ -457,6 +459,104 @@ pub struct VideoSourceSummary {
     pub metadata: Option<VideoMediaMetadata>,
 }
 
+/// The content-address algorithm used by a local media library entry.
+///
+/// This is deliberately explicit rather than treating the hash string as an
+/// opaque implementation detail: persisted projects remain self-describing if
+/// another identity algorithm is added in a later format revision.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MediaHashAlgorithm {
+    Sha256,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MediaContentHash {
+    pub algorithm: MediaHashAlgorithm,
+    /// A lowercase hexadecimal digest. `validate_media_asset_catalog` checks
+    /// the exact SHA-256 shape before an engine-ready project is installed.
+    pub hex: String,
+}
+
+/// A reusable source entry. Availability intentionally is not a field here:
+/// file presence and verification are machine-local IPC facts, never `.sdc`
+/// project data.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MediaAssetSummary {
+    pub id: MediaAssetId,
+    pub label: String,
+    pub source: VideoSourceSummary,
+    /// `None` paired with `byte_size: None` is the allowed legacy identity
+    /// state. New local imports persist both values together.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<MediaContentHash>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub byte_size: Option<u64>,
+}
+
+/// Machine-local availability truth returned by media-library IPC. This type
+/// is purposefully separate from `MediaAssetSummary` so serializing a project
+/// cannot leak a machine's filesystem state into `.sdc`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MediaAssetAvailability {
+    AvailableVerified {
+        asset_id: MediaAssetId,
+    },
+    AvailableUnverified {
+        asset_id: MediaAssetId,
+    },
+    Missing {
+        asset_id: MediaAssetId,
+    },
+    HashMismatch {
+        asset_id: MediaAssetId,
+        expected: MediaContentHash,
+        actual: MediaContentHash,
+    },
+    Unreadable {
+        asset_id: MediaAssetId,
+        error: String,
+    },
+    LiveSource {
+        asset_id: MediaAssetId,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MediaAssetRelinkPolicy {
+    RequireContentMatch,
+    AdoptReplacement,
+}
+
+/// A typed relink result prevents a caller from accidentally treating a hash
+/// mismatch or an unadopted legacy replacement as a successful path change.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MediaAssetRelinkOutcome {
+    Relinked {
+        asset_id: MediaAssetId,
+        adopted_replacement: bool,
+    },
+    NeedsExplicitAdoption {
+        asset_id: MediaAssetId,
+    },
+    HashMismatch {
+        asset_id: MediaAssetId,
+        expected: MediaContentHash,
+        actual: MediaContentHash,
+    },
+    MissingReplacement {
+        asset_id: MediaAssetId,
+    },
+    UnreadableReplacement {
+        asset_id: MediaAssetId,
+        error: String,
+    },
+    LiveSource {
+        asset_id: MediaAssetId,
+    },
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct VideoMediaMetadata {
     #[serde(default)]
@@ -713,6 +813,11 @@ pub struct VideoLayerSummary {
     pub id: VideoLayerId,
     pub label: String,
     pub source: VideoSourceSummary,
+    /// Compatibility projection of the referenced catalog entry. Older
+    /// readers continue to consume `source`; engine-ready snapshots require
+    /// this reference and require the two sources to be exactly equal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_asset_id: Option<MediaAssetId>,
     pub blend_mode: VideoBlendMode,
     pub state: VideoLayerState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1215,6 +1320,8 @@ pub struct AutoVjSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VideoSnapshot {
     pub layers: Vec<VideoLayerSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub media_assets: Vec<MediaAssetSummary>,
     pub compositions: Vec<CompositionSummary>,
     pub outputs: Vec<VideoOutputSummary>,
     #[serde(default)]
@@ -1229,6 +1336,7 @@ impl Default for VideoSnapshot {
     fn default() -> Self {
         Self {
             layers: Vec::new(),
+            media_assets: Vec::new(),
             compositions: Vec::new(),
             outputs: Vec::new(),
             mapping_presets: Vec::new(),
@@ -1237,6 +1345,235 @@ impl Default for VideoSnapshot {
             auto_vj: AutoVjSnapshot::default(),
         }
     }
+}
+
+/// What a successful legacy-media normalization changed. The report is
+/// intentionally deterministic and contains IDs in serialized layer order so
+/// a caller can explain a pending explicit-save migration without inspecting
+/// mutable runtime state.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MediaAssetMigrationReport {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub created_asset_ids: Vec<MediaAssetId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub migrated_layer_ids: Vec<VideoLayerId>,
+}
+
+/// Validate persisted media-library invariants while allowing an old layer to
+/// retain its `None` reference before migration. Use
+/// `validate_engine_ready_video_media_assets` for a runtime-installable image.
+pub fn validate_media_asset_catalog(video: &VideoSnapshot) -> Result<(), String> {
+    validate_video_media_asset_catalog(video, false)
+}
+
+/// Validate the post-migration form consumed by the engine. Every layer must
+/// reference one catalog item, and its legacy-compatible `source` projection
+/// must exactly mirror that item.
+pub fn validate_engine_ready_video_media_assets(video: &VideoSnapshot) -> Result<(), String> {
+    validate_video_media_asset_catalog(video, true)
+}
+
+/// Convert an old inline-video project into the catalog representation without
+/// changing a caller's value unless *all* validation and ID allocation steps
+/// succeed. The conversion never hashes files, resolves paths, or otherwise
+/// observes machine-local state, so loading a project cannot touch its source
+/// files or rewrite its JSON.
+pub fn normalize_legacy_video_media_assets(
+    video: &mut VideoSnapshot,
+) -> Result<MediaAssetMigrationReport, String> {
+    // Work on a complete candidate. In particular, a duplicate/dangling ref
+    // after several legacy layers must not leave those earlier layers migrated.
+    let mut candidate = video.clone();
+    validate_media_asset_catalog(&candidate)?;
+
+    let mut next_asset_id = candidate
+        .media_assets
+        .iter()
+        .map(|asset| asset.id)
+        .chain(candidate.layers.iter().map(|layer| layer.id))
+        .max()
+        .unwrap_or(0);
+    let mut report = MediaAssetMigrationReport::default();
+
+    for layer_index in 0..candidate.layers.len() {
+        if candidate.layers[layer_index].media_asset_id.is_some() {
+            continue;
+        }
+        next_asset_id = next_asset_id.checked_add(1).ok_or_else(|| {
+            "Media asset ID allocation overflow while migrating legacy video layers".to_string()
+        })?;
+        let layer = candidate.layers[layer_index].clone();
+        candidate.media_assets.push(MediaAssetSummary {
+            id: next_asset_id,
+            // Lossless migration means no trim, fallback label, probe refresh,
+            // path normalization, or dedupe. A legacy layer becomes exactly one
+            // independently addressable library entry.
+            label: layer.label.clone(),
+            source: layer.source.clone(),
+            content_hash: None,
+            byte_size: None,
+        });
+        candidate.layers[layer_index].media_asset_id = Some(next_asset_id);
+        report.created_asset_ids.push(next_asset_id);
+        report.migrated_layer_ids.push(layer.id);
+    }
+
+    validate_engine_ready_video_media_assets(&candidate)?;
+    *video = candidate;
+    Ok(report)
+}
+
+fn validate_video_media_asset_catalog(
+    video: &VideoSnapshot,
+    require_layer_asset_references: bool,
+) -> Result<(), String> {
+    // Keep this first pass deliberately ID-only. It gives callers a stable
+    // rejection for duplicate/zero asset IDs before a later malformed payload
+    // distracts from the identity corruption.
+    let mut asset_ids = BTreeMap::new();
+    for asset in &video.media_assets {
+        if asset.id == 0 {
+            return Err("Media asset IDs must be non-zero".to_string());
+        }
+        if asset_ids.insert(asset.id, asset).is_some() {
+            return Err(format!("Media asset ID {} is duplicated", asset.id));
+        }
+    }
+
+    let mut layer_ids = BTreeMap::new();
+    for layer in &video.layers {
+        if layer.id == 0 {
+            return Err("Video layer IDs must be non-zero".to_string());
+        }
+        if layer_ids.insert(layer.id, layer).is_some() {
+            return Err(format!("Video layer ID {} is duplicated", layer.id));
+        }
+    }
+
+    for asset in &video.media_assets {
+        validate_media_asset_summary(asset)?;
+    }
+
+    for layer in &video.layers {
+        validate_media_asset_source(&layer.source, &format!("video layer {}", layer.id))?;
+        match layer.media_asset_id {
+            Some(asset_id) => {
+                let asset = asset_ids.get(&asset_id).ok_or_else(|| {
+                    format!(
+                        "Video layer {} references missing media asset {asset_id}",
+                        layer.id
+                    )
+                })?;
+                if layer.source != asset.source {
+                    return Err(format!(
+                        "Video layer {} source does not exactly mirror media asset {asset_id}",
+                        layer.id
+                    ));
+                }
+            }
+            None if require_layer_asset_references => {
+                return Err(format!(
+                    "Video layer {} is missing its media asset reference",
+                    layer.id
+                ));
+            }
+            None => {}
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_media_asset_summary(asset: &MediaAssetSummary) -> Result<(), String> {
+    if asset.label.trim().is_empty() {
+        return Err(format!("Media asset {} has an empty label", asset.id));
+    }
+    validate_media_asset_source(&asset.source, &format!("media asset {}", asset.id))?;
+
+    let local = media_asset_source_is_local(&asset.source);
+    match (&asset.content_hash, asset.byte_size) {
+        (None, None) => {}
+        (Some(hash), Some(byte_size)) if local => {
+            validate_media_content_hash(hash, asset.id)?;
+            if byte_size == 0 {
+                return Err(format!("Media asset {} has a zero byte size", asset.id));
+            }
+        }
+        (Some(_), Some(_)) => {
+            return Err(format!(
+                "Live media asset {} must not persist a content hash or byte size",
+                asset.id
+            ));
+        }
+        (Some(_), None) | (None, Some(_)) => {
+            return Err(format!(
+                "Media asset {} must persist content hash and byte size together",
+                asset.id
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_media_content_hash(
+    hash: &MediaContentHash,
+    asset_id: MediaAssetId,
+) -> Result<(), String> {
+    match hash.algorithm {
+        MediaHashAlgorithm::Sha256 => {}
+    }
+    if hash.hex.len() != 64
+        || !hash
+            .hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(format!(
+            "Media asset {asset_id} SHA-256 hash must be exactly 64 lowercase hexadecimal characters"
+        ));
+    }
+    Ok(())
+}
+
+fn media_asset_source_is_local(source: &VideoSourceSummary) -> bool {
+    matches!(
+        source.kind,
+        VideoSourceKind::File | VideoSourceKind::StillImage
+    )
+}
+
+fn validate_media_asset_source(source: &VideoSourceSummary, owner: &str) -> Result<(), String> {
+    if source
+        .codec
+        .as_deref()
+        .is_some_and(|codec| codec.trim().is_empty())
+    {
+        return Err(format!("{owner} has an empty codec"));
+    }
+
+    if media_asset_source_is_local(source) {
+        if source.path.as_deref().unwrap_or_default().trim().is_empty() {
+            return Err(format!("{owner} requires a local source path"));
+        }
+    } else if source.name.as_deref().unwrap_or_default().trim().is_empty() {
+        return Err(format!("{owner} requires a live source name"));
+    }
+
+    if let Some(metadata) = source.metadata {
+        if metadata.width.is_some_and(|width| width == 0) {
+            return Err(format!("{owner} has invalid metadata width"));
+        }
+        if metadata.height.is_some_and(|height| height == 0) {
+            return Err(format!("{owner} has invalid metadata height"));
+        }
+        if metadata
+            .frame_rate
+            .is_some_and(|frame_rate| !frame_rate.is_finite() || frame_rate <= 0.0)
+        {
+            return Err(format!("{owner} has invalid metadata frame rate"));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -3356,6 +3693,214 @@ impl Default for DmxOutputConfig {
     }
 }
 
+/// Runtime-only ownership for this machine's physical and external outputs.
+/// This type is intentionally not part of `EngineSnapshot` or `ProjectFile`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MachineOutputRole {
+    Lighting,
+    Video,
+    Both,
+    Standby,
+}
+
+impl Default for MachineOutputRole {
+    fn default() -> Self {
+        Self::Both
+    }
+}
+
+impl MachineOutputRole {
+    pub const fn lighting_allowed(self) -> bool {
+        matches!(self, Self::Lighting | Self::Both)
+    }
+
+    pub const fn video_allowed(self) -> bool {
+        matches!(self, Self::Video | Self::Both)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum OutputOwnershipReason {
+    OwnedByMachineRole,
+    BlockedByMachineRole,
+    Transitioning,
+    TransitionFailed,
+    ProjectSwapDisarmed,
+    StartupDenied,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum OutputOwnershipState {
+    Ready,
+    Transitioning,
+    Activating,
+    Failed,
+}
+
+impl Default for OutputOwnershipState {
+    fn default() -> Self {
+        Self::Ready
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OutputOwnershipStatus {
+    /// Effective role. This remains `Standby` while a transition is in flight or failed.
+    pub role: MachineOutputRole,
+    pub effective_role: MachineOutputRole,
+    pub desired_role: MachineOutputRole,
+    pub persisted_role: Option<MachineOutputRole>,
+    pub state: OutputOwnershipState,
+    pub generation: u64,
+    pub epoch: u64,
+    pub lighting_allowed: bool,
+    pub video_allowed: bool,
+    pub lighting_reason: OutputOwnershipReason,
+    pub video_reason: OutputOwnershipReason,
+    pub error: Option<String>,
+}
+
+impl Default for OutputOwnershipStatus {
+    fn default() -> Self {
+        Self::failed(
+            MachineOutputRole::Standby,
+            None,
+            0,
+            0,
+            OutputOwnershipReason::StartupDenied,
+            "Machine output ownership has not been initialized".to_string(),
+        )
+    }
+}
+
+impl OutputOwnershipStatus {
+    pub fn for_role(role: MachineOutputRole) -> Self {
+        Self::ready(role, Some(role), 0, 0)
+    }
+
+    pub fn ready(
+        role: MachineOutputRole,
+        persisted_role: Option<MachineOutputRole>,
+        generation: u64,
+        epoch: u64,
+    ) -> Self {
+        let lighting_allowed = role.lighting_allowed();
+        let video_allowed = role.video_allowed();
+        Self {
+            role,
+            effective_role: role,
+            desired_role: role,
+            persisted_role,
+            state: OutputOwnershipState::Ready,
+            generation,
+            epoch,
+            lighting_allowed,
+            video_allowed,
+            lighting_reason: if lighting_allowed {
+                OutputOwnershipReason::OwnedByMachineRole
+            } else {
+                OutputOwnershipReason::BlockedByMachineRole
+            },
+            video_reason: if video_allowed {
+                OutputOwnershipReason::OwnedByMachineRole
+            } else {
+                OutputOwnershipReason::BlockedByMachineRole
+            },
+            error: None,
+        }
+    }
+
+    pub fn transitioning(
+        desired_role: MachineOutputRole,
+        persisted_role: Option<MachineOutputRole>,
+        generation: u64,
+        epoch: u64,
+    ) -> Self {
+        Self {
+            role: MachineOutputRole::Standby,
+            effective_role: MachineOutputRole::Standby,
+            desired_role,
+            persisted_role,
+            state: OutputOwnershipState::Transitioning,
+            generation,
+            epoch,
+            lighting_allowed: false,
+            video_allowed: false,
+            lighting_reason: OutputOwnershipReason::Transitioning,
+            video_reason: OutputOwnershipReason::Transitioning,
+            error: None,
+        }
+    }
+
+    pub fn activating(
+        desired_role: MachineOutputRole,
+        persisted_role: Option<MachineOutputRole>,
+        generation: u64,
+        epoch: u64,
+    ) -> Self {
+        Self {
+            role: MachineOutputRole::Standby,
+            effective_role: MachineOutputRole::Standby,
+            desired_role,
+            persisted_role,
+            state: OutputOwnershipState::Activating,
+            generation,
+            epoch,
+            lighting_allowed: false,
+            video_allowed: false,
+            lighting_reason: OutputOwnershipReason::Transitioning,
+            video_reason: OutputOwnershipReason::Transitioning,
+            error: None,
+        }
+    }
+
+    pub fn project_swap_disarmed(
+        desired_role: MachineOutputRole,
+        persisted_role: Option<MachineOutputRole>,
+        generation: u64,
+        epoch: u64,
+    ) -> Self {
+        Self {
+            role: MachineOutputRole::Standby,
+            effective_role: MachineOutputRole::Standby,
+            desired_role,
+            persisted_role,
+            state: OutputOwnershipState::Ready,
+            generation,
+            epoch,
+            lighting_allowed: false,
+            video_allowed: false,
+            lighting_reason: OutputOwnershipReason::ProjectSwapDisarmed,
+            video_reason: OutputOwnershipReason::ProjectSwapDisarmed,
+            error: None,
+        }
+    }
+
+    pub fn failed(
+        desired_role: MachineOutputRole,
+        persisted_role: Option<MachineOutputRole>,
+        generation: u64,
+        epoch: u64,
+        reason: OutputOwnershipReason,
+        error: String,
+    ) -> Self {
+        Self {
+            role: MachineOutputRole::Standby,
+            effective_role: MachineOutputRole::Standby,
+            desired_role,
+            persisted_role,
+            state: OutputOwnershipState::Failed,
+            generation,
+            epoch,
+            lighting_allowed: false,
+            video_allowed: false,
+            lighting_reason: reason,
+            video_reason: reason,
+            error: Some(error),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DmxOutputRouteTelemetry {
     #[serde(default)]
@@ -4955,6 +5500,288 @@ mod tests {
         assert!(matches!(parsed.auto_vj.status.mode, super::AutoVjMode::Off));
     }
 
+    fn media_asset_test_source(path: &str) -> super::VideoSourceSummary {
+        super::VideoSourceSummary {
+            kind: super::VideoSourceKind::File,
+            path: Some(path.to_string()),
+            name: None,
+            codec: Some("h264".to_string()),
+            metadata: Some(super::VideoMediaMetadata {
+                duration_ms: Some(1_250),
+                width: Some(1920),
+                height: Some(1080),
+                frame_rate: Some(29.97),
+                has_audio: true,
+            }),
+        }
+    }
+
+    fn media_asset_test_layer(
+        id: super::VideoLayerId,
+        label: &str,
+        path: &str,
+    ) -> super::VideoLayerSummary {
+        super::VideoLayerSummary {
+            id,
+            label: label.to_string(),
+            source: media_asset_test_source(path),
+            media_asset_id: None,
+            blend_mode: super::VideoBlendMode::Screen,
+            state: super::VideoLayerState {
+                opacity: 0.72,
+                speed: 1.25,
+                playing: true,
+                position_ms: 444,
+                loop_enabled: true,
+                loop_start_ms: 100,
+                loop_end_ms: 900,
+                ..super::VideoLayerState::default()
+            },
+            isf_effect: None,
+        }
+    }
+
+    fn media_asset_test_asset(
+        id: super::MediaAssetId,
+        label: &str,
+        path: &str,
+    ) -> super::MediaAssetSummary {
+        super::MediaAssetSummary {
+            id,
+            label: label.to_string(),
+            source: media_asset_test_source(path),
+            content_hash: None,
+            byte_size: None,
+        }
+    }
+
+    #[test]
+    fn media_asset_legacy_wire_roundtrip_preserves_exact_source_and_omits_machine_availability() {
+        let legacy_snapshot = super::VideoSnapshot {
+            layers: vec![media_asset_test_layer(
+                4,
+                "Legacy Cut",
+                "C:/show/legacy.mp4",
+            )],
+            media_assets: Vec::new(),
+            ..super::VideoSnapshot::default()
+        };
+        let legacy_source = legacy_snapshot.layers[0].source.clone();
+        let mut legacy_json = serde_json::to_value(&legacy_snapshot).unwrap();
+        legacy_json.as_object_mut().unwrap().remove("media_assets");
+        legacy_json["layers"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("media_asset_id");
+
+        let mut parsed: super::VideoSnapshot = serde_json::from_value(legacy_json).unwrap();
+        assert!(parsed.media_assets.is_empty());
+        assert_eq!(parsed.layers[0].media_asset_id, None);
+        assert_eq!(parsed.layers[0].source, legacy_source);
+
+        let report = super::normalize_legacy_video_media_assets(&mut parsed).unwrap();
+        assert_eq!(report.created_asset_ids, vec![5]);
+        assert_eq!(parsed.layers[0].media_asset_id, Some(5));
+        assert_eq!(parsed.media_assets[0].source, legacy_source);
+        let encoded = serde_json::to_value(&parsed).unwrap();
+        assert!(encoded.get("media_assets").is_some());
+        assert!(encoded["layers"][0].get("media_asset_id").is_some());
+        assert!(!serde_json::to_string(&encoded)
+            .unwrap()
+            .contains("availability"));
+
+        #[derive(serde::Deserialize)]
+        struct LegacyLayerReader {
+            source: super::VideoSourceSummary,
+        }
+        #[derive(serde::Deserialize)]
+        struct LegacyVideoReader {
+            layers: Vec<LegacyLayerReader>,
+        }
+        let legacy_reader: LegacyVideoReader = serde_json::from_value(encoded).unwrap();
+        assert_eq!(legacy_reader.layers[0].source, legacy_source);
+    }
+
+    #[test]
+    fn media_asset_migration_is_all_or_nothing_and_second_pass_byte_equivalent() {
+        let mut video = super::VideoSnapshot {
+            layers: vec![
+                media_asset_test_layer(7, "Existing Ref", "C:/show/existing.mp4"),
+                media_asset_test_layer(8, "Legacy A", "C:/show/a.mp4"),
+                media_asset_test_layer(9, "Legacy B", "C:/show/b.mp4"),
+            ],
+            media_assets: vec![media_asset_test_asset(
+                40,
+                "Existing",
+                "C:/show/existing.mp4",
+            )],
+            ..super::VideoSnapshot::default()
+        };
+        video.layers[0].media_asset_id = Some(40);
+        let original_legacy_a = video.layers[1].clone();
+        let original_legacy_b = video.layers[2].clone();
+
+        let report = super::normalize_legacy_video_media_assets(&mut video).unwrap();
+        assert_eq!(report.created_asset_ids, vec![41, 42]);
+        assert_eq!(report.migrated_layer_ids, vec![8, 9]);
+        assert_eq!(video.layers[0].media_asset_id, Some(40));
+        assert_eq!(video.layers[1].media_asset_id, Some(41));
+        assert_eq!(video.layers[2].media_asset_id, Some(42));
+        assert_eq!(video.media_assets[1].label, original_legacy_a.label);
+        assert_eq!(video.media_assets[1].source, original_legacy_a.source);
+        assert_eq!(video.media_assets[2].label, original_legacy_b.label);
+        assert_eq!(video.media_assets[2].source, original_legacy_b.source);
+
+        let once = serde_json::to_vec(&video).unwrap();
+        let second = super::normalize_legacy_video_media_assets(&mut video).unwrap();
+        assert!(second.created_asset_ids.is_empty());
+        assert!(second.migrated_layer_ids.is_empty());
+        assert_eq!(serde_json::to_vec(&video).unwrap(), once);
+        super::validate_engine_ready_video_media_assets(&video).unwrap();
+
+        let invalid_cases = [
+            {
+                let value = super::VideoSnapshot {
+                    layers: vec![media_asset_test_layer(1, "Legacy", "C:/show/a.mp4")],
+                    media_assets: vec![
+                        media_asset_test_asset(3, "A", "C:/show/a.mp4"),
+                        media_asset_test_asset(3, "B", "C:/show/b.mp4"),
+                    ],
+                    ..super::VideoSnapshot::default()
+                };
+                value
+            },
+            {
+                let mut value = super::VideoSnapshot {
+                    layers: vec![media_asset_test_layer(1, "Dangling", "C:/show/a.mp4")],
+                    ..super::VideoSnapshot::default()
+                };
+                value.layers[0].media_asset_id = Some(88);
+                value
+            },
+            {
+                let mut value = super::VideoSnapshot {
+                    layers: vec![media_asset_test_layer(1, "Mismatch", "C:/show/a.mp4")],
+                    media_assets: vec![media_asset_test_asset(2, "Other", "C:/show/b.mp4")],
+                    ..super::VideoSnapshot::default()
+                };
+                value.layers[0].media_asset_id = Some(2);
+                value
+            },
+            super::VideoSnapshot {
+                layers: vec![media_asset_test_layer(1, "Overflow", "C:/show/a.mp4")],
+                media_assets: vec![media_asset_test_asset(
+                    u64::MAX,
+                    "Maximum",
+                    "C:/show/existing.mp4",
+                )],
+                ..super::VideoSnapshot::default()
+            },
+        ];
+        for mut invalid in invalid_cases {
+            let before = invalid.clone();
+            assert!(super::normalize_legacy_video_media_assets(&mut invalid).is_err());
+            assert_eq!(invalid, before);
+        }
+    }
+
+    #[test]
+    fn media_asset_catalog_validates_hash_pairing_and_live_identity() {
+        let source = media_asset_test_source("C:/show/verified.mp4");
+        let asset = super::MediaAssetSummary {
+            id: 17,
+            label: "Verified".to_string(),
+            source: source.clone(),
+            content_hash: Some(super::MediaContentHash {
+                algorithm: super::MediaHashAlgorithm::Sha256,
+                hex: "a".repeat(64),
+            }),
+            byte_size: Some(3),
+        };
+        let mut layer = media_asset_test_layer(3, "Verified layer", "C:/show/verified.mp4");
+        layer.media_asset_id = Some(17);
+        let video = super::VideoSnapshot {
+            layers: vec![layer],
+            media_assets: vec![asset.clone()],
+            ..super::VideoSnapshot::default()
+        };
+        super::validate_engine_ready_video_media_assets(&video).unwrap();
+
+        let mut upper = video.clone();
+        upper.media_assets[0].content_hash.as_mut().unwrap().hex = "A".repeat(64);
+        assert!(super::validate_media_asset_catalog(&upper).is_err());
+
+        let mut partial = video.clone();
+        partial.media_assets[0].byte_size = None;
+        assert!(super::validate_media_asset_catalog(&partial).is_err());
+
+        // Orphan library entries are legal, so their source metadata must be
+        // validated independently of whether a layer currently references
+        // them.
+        let mut malformed_orphan = video.clone();
+        malformed_orphan.layers.clear();
+        malformed_orphan.media_assets[0].source.metadata = Some(super::VideoMediaMetadata {
+            duration_ms: Some(1_000),
+            width: Some(0),
+            height: Some(1080),
+            frame_rate: Some(30.0),
+            has_audio: false,
+        });
+        assert!(super::validate_media_asset_catalog(&malformed_orphan).is_err());
+
+        malformed_orphan.media_assets[0].source.metadata = Some(super::VideoMediaMetadata {
+            duration_ms: Some(1_000),
+            width: Some(1920),
+            height: Some(1080),
+            frame_rate: Some(f32::NAN),
+            has_audio: false,
+        });
+        assert!(super::validate_media_asset_catalog(&malformed_orphan).is_err());
+
+        let mut live = asset;
+        live.source = super::VideoSourceSummary {
+            kind: super::VideoSourceKind::Ndi,
+            path: None,
+            name: Some("Stage feed".to_string()),
+            codec: None,
+            metadata: None,
+        };
+        let mut live_layer = media_asset_test_layer(4, "Live", "C:/unused.mp4");
+        live_layer.source = live.source.clone();
+        live_layer.media_asset_id = Some(live.id);
+        let live_video = super::VideoSnapshot {
+            layers: vec![live_layer],
+            media_assets: vec![live],
+            ..super::VideoSnapshot::default()
+        };
+        assert!(super::validate_engine_ready_video_media_assets(&live_video).is_err());
+    }
+
+    #[test]
+    fn media_asset_availability_and_relink_outcomes_are_typed_machine_local_dtos() {
+        let availability = super::MediaAssetAvailability::HashMismatch {
+            asset_id: 4,
+            expected: super::MediaContentHash {
+                algorithm: super::MediaHashAlgorithm::Sha256,
+                hex: "a".repeat(64),
+            },
+            actual: super::MediaContentHash {
+                algorithm: super::MediaHashAlgorithm::Sha256,
+                hex: "b".repeat(64),
+            },
+        };
+        let encoded = serde_json::to_value(&availability).unwrap();
+        assert_eq!(encoded["kind"], "hash_mismatch");
+        assert_eq!(
+            serde_json::from_value::<super::MediaAssetAvailability>(encoded).unwrap(),
+            availability
+        );
+        assert!(matches!(
+            super::MediaAssetRelinkOutcome::NeedsExplicitAdoption { asset_id: 4 },
+            super::MediaAssetRelinkOutcome::NeedsExplicitAdoption { .. }
+        ));
+    }
+
     #[test]
     fn legacy_auto_vj_defaults_to_clock_without_live_audio_runtime_state() {
         let mut value = serde_json::to_value(super::AutoVjSnapshot::default()).unwrap();
@@ -6271,6 +7098,113 @@ mod tests {
             back.group_colors.get("Back").map(String::as_str),
             Some("#8844cc")
         );
+    }
+
+    #[test]
+    fn machine_output_role_has_exact_runtime_only_ownership_matrix() {
+        assert_eq!(
+            super::MachineOutputRole::default(),
+            super::MachineOutputRole::Both
+        );
+        assert_eq!(
+            serde_json::to_string(&super::MachineOutputRole::Lighting).unwrap(),
+            "\"Lighting\""
+        );
+        let cases = [
+            (super::MachineOutputRole::Lighting, true, false),
+            (super::MachineOutputRole::Video, false, true),
+            (super::MachineOutputRole::Both, true, true),
+            (super::MachineOutputRole::Standby, false, false),
+        ];
+        for (role, lighting_allowed, video_allowed) in cases {
+            let status = super::OutputOwnershipStatus::for_role(role);
+            assert_eq!(status.lighting_allowed, lighting_allowed);
+            assert_eq!(status.video_allowed, video_allowed);
+            assert_eq!(
+                status.lighting_reason,
+                if lighting_allowed {
+                    super::OutputOwnershipReason::OwnedByMachineRole
+                } else {
+                    super::OutputOwnershipReason::BlockedByMachineRole
+                }
+            );
+            assert_eq!(
+                status.video_reason,
+                if video_allowed {
+                    super::OutputOwnershipReason::OwnedByMachineRole
+                } else {
+                    super::OutputOwnershipReason::BlockedByMachineRole
+                }
+            );
+        }
+        let activating = super::OutputOwnershipStatus::activating(
+            super::MachineOutputRole::Video,
+            Some(super::MachineOutputRole::Standby),
+            0,
+            1,
+        );
+        assert_eq!(activating.state, super::OutputOwnershipState::Activating);
+        assert!(!activating.lighting_allowed && !activating.video_allowed);
+    }
+
+    #[test]
+    fn output_ownership_status_default_is_fail_closed() {
+        assert_eq!(
+            super::OutputOwnershipStatus::default(),
+            super::OutputOwnershipStatus {
+                role: super::MachineOutputRole::Standby,
+                effective_role: super::MachineOutputRole::Standby,
+                desired_role: super::MachineOutputRole::Standby,
+                persisted_role: None,
+                state: super::OutputOwnershipState::Failed,
+                generation: 0,
+                epoch: 0,
+                lighting_allowed: false,
+                video_allowed: false,
+                lighting_reason: super::OutputOwnershipReason::StartupDenied,
+                video_reason: super::OutputOwnershipReason::StartupDenied,
+                error: Some("Machine output ownership has not been initialized".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn project_swap_disarmed_status_constructor_preserves_every_field_exactly() {
+        let status = super::OutputOwnershipStatus::project_swap_disarmed(
+            super::MachineOutputRole::Both,
+            Some(super::MachineOutputRole::Video),
+            42,
+            7,
+        );
+
+        assert_eq!(
+            status,
+            super::OutputOwnershipStatus {
+                role: super::MachineOutputRole::Standby,
+                effective_role: super::MachineOutputRole::Standby,
+                desired_role: super::MachineOutputRole::Both,
+                persisted_role: Some(super::MachineOutputRole::Video),
+                state: super::OutputOwnershipState::Ready,
+                generation: 42,
+                epoch: 7,
+                lighting_allowed: false,
+                video_allowed: false,
+                lighting_reason: super::OutputOwnershipReason::ProjectSwapDisarmed,
+                video_reason: super::OutputOwnershipReason::ProjectSwapDisarmed,
+                error: None,
+            }
+        );
+        assert_eq!(
+            serde_json::to_string(&super::OutputOwnershipReason::ProjectSwapDisarmed).unwrap(),
+            "\"ProjectSwapDisarmed\""
+        );
+    }
+
+    #[test]
+    fn machine_output_role_is_absent_from_project_snapshot_serialization() {
+        let value = serde_json::to_value(super::EngineSnapshot::default()).unwrap();
+        assert!(value.get("machine_output_role").is_none());
+        assert!(value.get("output_ownership").is_none());
     }
 
     #[test]
