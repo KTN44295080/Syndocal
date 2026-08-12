@@ -1,6 +1,7 @@
-# Syndocal completion roadmap and frozen checkpoint
+# Syndocal complete product roadmap and frozen checkpoint
 
 Status: implementation paused at the user-requested checkpoint on 2026-08-13 (JST).
+Roadmap revision: v2, completeness-audit additions integrated on 2026-08-13 (JST).
 
 This document is the detailed continuation contract from the current checkout to a release candidate that can truthfully be compared with Daslight 5 and SynapseRack. It records what is committed, what is only present in the dirty worktree, what has been tested, what is still unsafe, the dependency order, file ownership, required evidence, commit boundaries, and the native completion gate.
 
@@ -11,8 +12,12 @@ It does **not** claim that Syndocal is complete. It does **not** replace:
 - `qa/SYNDOCAL_VIDEO_LAYER_MEDIA_TRANSITION_MODEL.md`
 - `qa/SYNDOCAL_SYNAPSERACK_VIDEO_OPERATOR_BENCHMARK.md`
 - `qa/SYNDOCAL_2PC_TRANCHE1_OUTPUT_OWNERSHIP.md`
+- `RELEASE_STATUS.md`
+- `qa/DASLIGHT_PARITY_COMPLETION_PLAN.md`
+- `qa/DASLIGHT_COMPARISON_VERDICT.md`
+- `qa/SYNDOCAL_VIDEO_MODEL_GAP_AUDIT_2026-08-12.md`
 
-Those files define the product target. This file defines the route from the frozen implementation checkpoint to that target.
+Those files remain detailed evidence and domain specifications. This file is the master route from the frozen implementation checkpoint to the target. A requirement is not allowed to disappear merely because its detailed evidence lives in another file; every release-blocking requirement must also appear in the traceability ledger defined below.
 
 ## 1. Stop condition and exact current checkpoint
 
@@ -63,9 +68,16 @@ Before every future commit:
 
 These percentages are planning estimates, not release evidence. They must move backward when review invalidates an assumption.
 
+There is no longer one ambiguous “overall” percentage. Report these dimensions independently after every checkpoint. The release-readiness estimate is a planning roll-up weighted as software implementation 50%, automated proof 20%, current-source native/hardware proof 20%, and distribution/legal readiness 10%. A P0 release blocker overrides the numeric result.
+
 | Area | Frozen estimate | Basis |
 | --- | ---: | --- |
-| Overall route to the currently planned Syndocal product target | 81% | Core runtime and several authority foundations exist; Media Asset T1, Clip Slots, distributed ShowClock, comparative/native acceptance remain |
+| Software implementation toward the planned product target | 81% | Core runtime and authority foundations exist; Media Asset T1, Clip Slots, media-derived data, recording, distributed ShowClock, and several cross-domain boundaries remain |
+| Product-surface coverage | 74% | Lighting and substantial Video/Audio/I/O surfaces exist; reusable media/slot workflow, recording truth, distributed operation, and some operator paths remain incomplete |
+| Automated proof coverage | 70% | Strong focused Rust/static/browser evidence exists, but terminal reply-loss, migration corpus, cross-platform identity, full concurrency, and several physical-adapter seams remain |
+| Current-source native and hardware proof | 25% | Historical native and selected NDI/Spout/audio evidence exists; the current dirty Media/authority tranche has no release build and most real DMX/control/venue gates remain open |
+| Distribution/legal/clean-machine readiness | 35% | Packaging/CI foundations exist; signing, notarization, license disposition, release artifact publication, and clean-machine acceptance remain |
+| Planning roll-up to public release candidate | 63% | Weighted planning indicator only; unresolved P0-Release gates prevent release regardless of percentage |
 | Media Asset T1 overall | 85% | Schema/runtime/frontend staging are advanced; terminal reply-loss/history closure and compatibility/cross-platform boundaries remain |
 | Protocol Media Asset schema/migration/validation | 100% for T1 scope | Focused Protocol tests passed before commit |
 | Engine Media Asset runtime/allocator/Published rollback | 94% | Focused tests passed; Bootstrap output/fade rollback proof remains |
@@ -75,6 +87,8 @@ These percentages are planning estimates, not release evidence. They must move b
 | Native release/UI/hardware acceptance for this tranche | 0% | No native release build or maximized-window acceptance was run for the current tranche |
 | Clip Slot T2 | design complete, implementation 0% | Transition model is accepted; code has not begun |
 | Distributed ShowClock/2PC | architecture requirements drafted, implementation 0% | Local clock and machine-local output fence exist; authenticated distributed authority does not |
+
+After every checkpoint report at least: software implementation, automated proof, native/hardware proof, distribution/legal readiness, affected domain percentage, and the next blocking gate. Do not report a percentage without its denominator and evidence boundary.
 
 ## 3. Evidence already obtained
 
@@ -196,6 +210,51 @@ Every remaining tranche must preserve these invariants.
 - Report commit hash and percentages after every committed checkpoint.
 - A green build with zero selected tests is not evidence.
 - Static, browser, Rust, native, and hardware evidence must be named separately.
+
+### 4.6 Supported-product boundary
+
+- Record the supported OS, architecture, GPU/API, media codec, audio backend, lighting interface, remote-client, and package matrix before calling a release candidate complete.
+- A capability that is intentionally unsupported is listed as `Out of scope` with a reason and operator-facing fallback; it is not silently omitted.
+- Windows-only file-identity guarantees may not be generalized to macOS/Linux. Either implement and test an equivalent proof or narrow the supported platform claim.
+- Built-in 3D and standalone-hardware programming remain explicit product decisions: the accepted current direction is external Art-Net visualization and no standalone-hardware claim unless separately approved.
+- Commercial comparison uses pinned product versions, license tiers, fixtures/media, hardware, and task definitions.
+
+### 4.7 Definition of done and severity
+
+`Done` for one tranche means all of the following:
+
+1. requirement and non-goals are written;
+2. schema/API is backward compatible or has a tested migration;
+3. all fallible work precedes irreversible publication, or a durable terminal recovery protocol exists;
+4. focused automated gates pass with nonzero selected tests;
+5. adversarial review on frozen files reports no open P0/P1 in that tranche;
+6. a scoped commit exists with exact files, hash, evidence, warnings, and non-claims;
+7. any native/runtime-affecting tranche has a current-source native release smoke before the next dependent tranche;
+8. hardware or external acceptance is recorded separately when required.
+
+Severity policy:
+
+- `P0-Code`: corrupts data, violates physical-output safety, prevents launch/core workflow, or creates an uncontrolled security boundary.
+- `P0-Release`: mandatory signing/legal/clean-machine/hardware/venue gate that is not yet satisfied. It blocks public release even when no P0-Code is known.
+- `P1`: realistic data loss, split-brain, false success/failure, authority bypass, indefinite liveness loss, or major operator workflow failure.
+- `P2`: bounded degradation, proof gap, maintainability risk, or noncritical UX defect. A P2 blocks release when it affects security, migration, legal compliance, supported-platform correctness, recovery, or an advertised comparison claim.
+
+### 4.8 Global dependency order
+
+The authoritative order is:
+
+1. finish Media Asset terminal authority and native smoke;
+2. close generic Begin reply-loss or give each dependent mutation a backend-owned authoritative operation;
+3. close PATCH/Repair/Stage mutation integrity;
+4. close project replacement/Takeover output fencing, including Audio/MIDI/recording ownership decisions;
+5. implement media-derived cache/thumbnail/proxy foundations;
+6. implement Clip Slots and Video transitions;
+7. close Audio/recording/live-source product paths;
+8. freeze ShowClock platform, transport, authentication, and fencing decisions, then implement distributed synchronization;
+9. finish shared UI and accessibility;
+10. run comparative, migration, security, hardware, performance, clean-machine, and distribution acceptance.
+
+Independent pure/read-only work may proceed earlier, but no dependent mutation may ship on an unresolved authority or ownership boundary.
 
 ## 5. Critical path A: finish Media Asset T1
 
@@ -625,6 +684,8 @@ Preserve legacy built-in color/FX and ISF ordering. Add enable/bypass, reorder, 
 
 This work is largely designed and partly implemented, but must be resumed from a fresh static audit because `main.rs`, Engine, App, and panels have moved.
 
+Dependency rule: D1 machine/session read purity may proceed independently. D2-D4 must wait for E1 generic transaction recovery, or each command must use an equivalent backend-owned authoritative terminal operation with its own reply-loss receipt. Frontend `Begin` wrapping alone is not an acceptable server-side authority boundary.
+
 ### D1. Machine/session cache purity
 
 - `list_gdtf_fixture_cache` is pure list only.
@@ -897,7 +958,22 @@ Fault tests:
 - stale action after takeover;
 - witness/shared-fence unavailable.
 
-### G8. ShowClock tranche order
+### G8. Decisions required before implementation
+
+Freeze these decisions in Q2 before writing the network protocol:
+
+- canonical show-time unit, range, precision, and long-duration/wrap behavior;
+- mapping between monotonic clocks and display/wall time;
+- master-clock policy for free-run, audio playback/device, MTC/LTC, MIDI Clock, Ableton Link, OSC, MSC, ArtTimeCode, and ArtSync;
+- concrete slew limit, step/Hold threshold, lock-acquisition window, loss timeout, holdover duration, and resume policy;
+- transport, discovery, ports, multicast/unicast policy, firewall behavior, and protocol versioning;
+- authentication, key provisioning, rotation, revocation, replay window, and downgrade rejection;
+- witness/shared strongly consistent fence/physical interlock choice, or an explicit manual-Hold-only two-node product boundary;
+- rolling upgrade and mixed-version refusal policy;
+- action scheduling horizon, per-action late tolerance, dedupe lifetime, and queue limit;
+- supported network/load envelope and whether Wi-Fi is diagnostic-only or supported.
+
+### G9. ShowClock tranche order
 
 1. Protocol/authenticated clock sample and action schema.
 2. Pure estimator/slew/Hold state machine and deterministic simulator tests.
@@ -966,6 +1042,16 @@ At 1920x1080, 1920x1032, 1366x768, and 1280x720:
 - paste/input compatibility;
 - Japanese localization coverage.
 
+Native accessibility acceptance additionally includes:
+
+- NVDA or another supported Windows screen reader through the primary Setup/Edit/Control workflows;
+- Windows High Contrast and color-independent state/error indication;
+- OS display scaling and text scaling at 125%, 150%, and 200% without clipped critical controls;
+- keyboard-only Import, Patch, GO/Back/Release, Take, Blackout, Save, recovery, and output Arm paths;
+- IME composition and long Japanese/English strings without premature submit or lost text;
+- focus ownership across native file dialogs, popouts, disclosures, and error recovery;
+- reduced-motion behavior that preserves truthful Take/transition state rather than hiding progress.
+
 ## 13. Critical path I: comparative and production acceptance
 
 Use the pinned tasks in `qa/SYNDOCAL_SYNAPSERACK_VIDEO_OPERATOR_BENCHMARK.md` and the corresponding Daslight task set.
@@ -996,9 +1082,535 @@ Priority Video tasks:
 - V16 full-bank Import reachability at all viewports;
 - V17 decoder/effect fault isolation.
 
-## 14. Global final verification order
+Lighting/Daslight comparison must also retain:
 
-Only after all implementation tranches are committed and P0/P1 review-clean:
+- every task in the accepted Daslight operation-count set, with unmeasured tasks remaining explicitly `Unmeasured`;
+- synchronized same-show output captures from Syndocal and the pinned Daslight build where an equivalence claim is made;
+- DVC exact/imported/fail-closed coverage by effect family and source evidence;
+- GDTF/OFL semantic coverage, including capability ranges, wheel slots, geometry, matrix/pixel semantics, and calibrated emitters rather than catalog count alone;
+- physical controller/feedback, real LAN node/fixture, external visualizer, and venue rehearsal evidence;
+- the explicit external-Art-Net visualizer boundary for 3D;
+- the explicit no-standalone-hardware-programming boundary unless a separate hardware product is approved.
+
+Never convert a loopback packet capture, fixture count, internal schema, or three measured tasks into a claim of whole-product parity.
+
+## 14. Critical path J: release, distribution, legal, and clean-machine delivery
+
+This is a release-blocking path, not post-release paperwork. Open items are `P0-Release` until evidence is attached.
+
+### J1. Supported artifact matrix
+
+Freeze and publish one table containing:
+
+- Windows x86_64: portable/release executable, NSIS, MSI, file association, updater channel;
+- macOS supported architectures: signed app/DMG, hardened runtime, entitlements, notarization, Gatekeeper launch;
+- Linux supported architectures/distributions: AppImage/deb and required system libraries;
+- normal MIT/WASAPI build versus any separately licensed ASIO build;
+- optional NDI/Spout/Syphon/features and what happens when their runtime/SDK is absent;
+- exact version, commit, build profile, feature set, and SHA-256 for every artifact.
+
+Unsupported combinations must fail as an unavailable capability, not prevent the whole application from starting.
+
+### J2. Signing and notarization
+
+- Windows Authenticode-sign executable, installer, and updater payload; validate signature and timestamp on a clean machine.
+- Sign macOS app and DMG with Apple Developer ID, enable the required hardened-runtime entitlements, notarize, staple, and verify with Gatekeeper.
+- Define key/certificate custody, rotation, expiry, CI secret access, and emergency revocation.
+- Prevent unsigned or wrong-channel updater payloads from being treated as trusted releases.
+
+### J3. Third-party licensing and notices
+
+Produce a release-component bill of materials and legal decision for:
+
+- FFmpeg/libav dynamic linking, LGPL obligations, license text, notices, and corresponding-source access;
+- NDI SDK/runtime redistribution;
+- Spout/Syphon dependencies;
+- ISF shader licenses and bundled examples;
+- GDTF/OFL/catalog data licensing and attribution;
+- fonts, icons, sample projects, images, audio, and video;
+- ASIO: keep normal distribution WASAPI-only unless the GPL/proprietary agreement and separate artifact workflow are approved;
+- Rust/npm transitive licenses and prohibited-license scan.
+
+No artifact is published until the manifest, notice bundle, and actual packaged files agree.
+
+### J4. Clean install, upgrade, repair, and removal
+
+For each supported package:
+
+- download from the actual release endpoint;
+- verify hash/signature;
+- install as a standard user where supported;
+- first launch, project open, save, media import, and output-disabled startup;
+- file association/deep-link behavior;
+- upgrade from the previous supported release while retaining projects, backups, settings, and recovery state;
+- failed/interrupted upgrade rollback;
+- repair/reinstall;
+- uninstall without deleting user projects; clearly document retained app data;
+- launch after reboot and without developer SDKs, PATH entries, or source checkout.
+
+### J5. Release publication and rollback
+
+- Freeze version/tag/commit and release notes.
+- Publish SHA-256 and signed update manifest for stable/beta/nightly channels.
+- Test wrong-channel, downgrade, expired signature, corrupted download, partial download, offline, and endpoint-unavailable behavior.
+- Define rollback artifact, database/project compatibility, and emergency channel disable.
+- Archive build logs, dependency lockfiles, SBOM, licenses, test reports, and native/hardware evidence under one release evidence ID.
+
+Acceptance: one operator can start from a clean machine, verify the artifact, install, launch, complete the declared smoke workflow, update, rollback where supported, and uninstall, with no checkout or development tool present.
+
+## 15. Critical path K: physical hardware and protocol acceptance matrix
+
+Loopback, mocks, SDK-free tests, and browser UI are prerequisites only. The matrix records device identity, firmware/driver, topology, cable/switch, duration, operator, date, commit/artifact hash, measurement source, and raw evidence path.
+
+### K1. Lighting output
+
+- Art-Net node plus real fixtures: address, RGB/color wheel, Pan/Tilt direction/range, intensity, strobe where supported, Blackout, reconnect, 44 Hz continuity, and multi-universe routing.
+- sACN multicast node across the supported network-switch topology: universe routing, priority, join/leave, reconnect, and sustained output.
+- Enttec USB PRO and DMXKing: discovery, serial identity, reconnect, device removal, queue/backpressure, and long run.
+- Enttec Open DMX: logic-analyzer proof of Break 176 microseconds, MAB 16 microseconds, frame period, and failure behavior; recommend PRO-class hardware for critical venues.
+- RDM/TOD: discovery, response correlation, timeout, cancellation boundary, ownership fencing, and device removal.
+- Blackout and Standby must dominate all paths, including direct test, stale worker, reconnect, and project replacement.
+
+### K2. Control input and feedback
+
+- physical MIDI Note/CC/Clock/MTC input;
+- MIDI feedback and All Notes Off on the declared controllers;
+- OSC over wired and Wi-Fi paths;
+- TouchOSC and iPad/Android Web Remote round trip;
+- Learn, conflict, disconnect/reconnect, stale reply, and project replacement;
+- measure input-to-engine, engine-to-DMX/pixel, and feedback round-trip p50/p95/p99/max.
+
+### K3. Video and displays
+
+- HDMI/Display 1 and 2 mapping, fullscreen, unplug/replug, monitor reorder, DPI, refresh-rate change, and GPU reset behavior;
+- NDI discovery/send/receive, color/alpha, fractional frame rate, resize, disconnect/reconnect, and one-hour stability;
+- Spout/Syphon send/receive and sender restart;
+- physical camera format negotiation and unplug/replug;
+- screen capture display/window loss and permission denial;
+- Preview/Program/Take truth during every route fault;
+- project replacement retires removed endpoints before a new snapshot becomes active.
+
+### K4. Audio hardware
+
+- WASAPI system default and explicit stable device ID;
+- at least two representative device families where available;
+- ASIO only for the separately approved artifact;
+- sample-rate/channel/sample-format/fixed-buffer negotiation;
+- unplug/replug, exclusive-device conflict, callback gap, XRUN, worker panic, and safe-zero recovery;
+- capture-to-analysis, capture-to-engine, and capture-to-pixel latency percentiles;
+- one-hour WASAPI and approved-ASIO soak with no silent fallback.
+
+### K5. Venue and two-machine rehearsal
+
+- real LAN switch, realistic cable lengths, multicast policy, firewall profile, sleep/power policy, and clock-source topology;
+- Primary crash, Standby restart, network partition/rejoin, witness/fence loss, output device removal, and explicit Arm after recovery;
+- zero simultaneous physical output during the complete rehearsal;
+- operator runbook for startup, sound/light/video check, failure, takeover, recovery, and shutdown.
+
+## 16. Critical path L: Audio, recording, and live capture product completion
+
+Audio is not merely an analysis input. The product target includes authored audio, monitoring, synchronized playback, recording, and failure truth.
+
+### L1. Authored Audio model
+
+- stable audio asset/clip IDs and reference integrity;
+- source, duration, trim, gain, mute, routing, fade, waveform/analysis reference, and missing state;
+- additive migration and strict validation;
+- authored state separated from runtime playhead, device, level meter, and decoder state;
+- save/recovery/history/Undo/Redo and project replacement coverage.
+
+### L2. Audio runtime and ShowClock relationship
+
+- declare whether the ShowClock, audio device clock, or decoded-media PTS is master for each mode;
+- define resampling/slew, seek, loop, preroll, late-start, underrun, and discontinuity behavior;
+- bounded A/V drift and no backward show-time step;
+- audio-device replacement and sample-rate change enter a truthful Hold/Fault state;
+- safe-zero affects reactive modulation without overwriting authored values.
+
+### L3. Live sources
+
+- camera, screen capture, NDI, Spout/Syphon, and generators have stable authored source identity plus machine-local availability;
+- permission denial, unplug, format change, sender disappearance, and reconnect are explicit states;
+- a source fault cannot mutate the authored project or replace another source through a stale reply;
+- project replacement retires old capture workers before new workers publish frames.
+
+### L4. Recording transaction
+
+Recording requires an explicit state machine such as `Idle -> Preparing -> Recording -> Finalizing -> Complete | Fault`.
+
+- target reservation and free-space estimate before start;
+- one canonical A/V timeline and timestamp policy;
+- temporary file plus atomic final publication where the format permits;
+- explicit behavior for disk full, permission loss, encoder failure, app crash, output loss, and Stop timeout;
+- no UI success until the playable artifact is finalized and verified;
+- recovery inventory for interrupted temporary recordings;
+- recording ownership and two-PC policy are explicit: local recording must not accidentally imply permission to emit external output;
+- successful recording appears as a reusable asset only through an authoritative import transaction.
+
+### L5. Audio/recording acceptance
+
+- V15 two-output program recording with audio produces a playable artifact;
+- seek/loop/BPM change/Take remain synchronized under the defined envelope;
+- one-hour maximum-condition recording with Preview/Program, NDI/Spout, effects, and audio input;
+- inspect duration, frame count, audio samples, drift, corruption, and finalization time;
+- crash/fault tests preserve the original project and produce either a recoverable partial artifact or an explicit nonrecoverable report.
+
+## 17. Critical path M: media-derived data, cache, and performance envelope
+
+Project-authored MediaAsset identity remains separate from machine-local derived data.
+
+### M1. Derived-data model
+
+- thumbnail/contact sheet;
+- codec/container/stream detail;
+- waveform;
+- proxy/transcode variants;
+- BPM, beat markers, onset, energy, spectral/color/section features where product-visible;
+- decoder capability/health and last verified source fingerprint.
+
+Derived records are keyed by content identity plus algorithm/version/settings, never only by pathname. They do not dirty `.sdc` unless the user explicitly authors derived markers or overrides.
+
+### M2. Background work and cancellation
+
+- hash/probe/thumbnail/proxy/analysis run outside project transactions;
+- bounded worker pools and priority queues;
+- exact operation identity, progress, cancellation, restart, and terminal result;
+- project replacement/unmount prevents stale UI application but does not corrupt reusable cache entries;
+- process exit either cancels cleanly or leaves a versioned resumable artifact.
+
+### M3. Cache policy
+
+- configured size limit and minimum free-space reserve;
+- LRU or another documented eviction policy;
+- pinned/in-use entries cannot be evicted underneath active decoders;
+- orphan/temp cleanup, corrupt-entry quarantine, and version migration;
+- concurrent readers/writers and identical-content dedupe;
+- removable/network source behavior;
+- operator-visible clear/rebuild/status without changing project authority.
+
+### M4. Predecode/prefetch and degraded operation
+
+- queued/Next/Take media receives priority over background thumbnails;
+- define decoder warm-up and preroll budget;
+- slow disk, cache miss, unsupported codec, and memory pressure produce truthful readiness/fault state;
+- no unbounded layer/effect claim without a tested envelope and warning policy;
+- resource-pressure degradation must protect DMX/ShowClock/control responsiveness before preview quality.
+
+### M5. Fixed performance budgets
+
+For the pinned reference machine and each supported minimum machine, record thresholds for:
+
+- Engine 44 Hz tick p95/p99/max;
+- render frame and Take scheduling p95/p99/max;
+- dropped/late video frames and audio XRUNs;
+- decode and command queues;
+- command-to-DMX and input-to-pixel latency;
+- CPU/GPU/RAM/VRAM, file handles, threads, and cache size;
+- Save/Recovery/Backup/project-load pause;
+- cold-cache and warm-cache V01/V02/V13/V17 runs;
+- one-hour and extended soak leak slope.
+
+Every performance gate names workload, build profile, machine, driver, sample count, warm-up, percentile method, threshold chosen before measurement, and raw result artifact.
+
+## 18. Critical path N: Remote, Touch, RDM, and security boundary
+
+### N1. Web Remote and Touch
+
+- default bind remains localhost; trusted-LAN exposure is explicit and visibly unencrypted unless behind an approved TLS/VPN boundary;
+- pairing PIN/token, Origin, Host, connection, message-size, and rate limits are server-enforced;
+- credentials remain session/machine local and never enter `.sdc`, template, backup, diagnostic bundle, or logs;
+- client list, revoke/disconnect, stale session expiry, and project/authority replacement are exact;
+- Touch and Web Remote commands use the same operator lock, target IDs, validation, and terminal authority as the desktop UI;
+- real iPad/Android/TouchOSC acceptance records Wi-Fi topology and latency.
+
+### N2. RDM/TOD and blocking device work
+
+- RDM/TOD work retains the physical-output permit through the blocking call;
+- cancellation semantics distinguish “request abandoned” from “driver call stopped”;
+- timeouts, duplicate responses, malformed packets, device removal, and late completion cannot cross an ownership generation;
+- discovery/cache is machine/runtime state unless explicitly authored;
+- no RDM operation can bypass Standby/Blackout/output fencing.
+
+### N3. Security threat model
+
+Document assets, trust zones, entry points, and abuse cases for:
+
+- local Tauri IPC and raw command invocation;
+- WebSocket/HTTP remote;
+- LAN discovery and distributed ShowClock;
+- update manifests/downloads;
+- project, DVC, GDTF, media, preset, shader, and archive parsing;
+- filesystem paths, symlinks/junctions, network shares, and archive traversal;
+- logs/diagnostic packages and personal/project data;
+- dependency/supply-chain compromise.
+
+Required proof includes malformed/fuzz inputs at parser boundaries, size/count/depth limits, path traversal rejection, secret redaction, dependency audit/SBOM, and authenticated protocol replay/downgrade tests. Security-critical P2 issues block release.
+
+## 19. Critical path O: compatibility, migration, and corruption recovery
+
+### O1. Version support matrix
+
+Publish the exact project versions accepted by the release:
+
+- oldest supported `.sdc` version;
+- each additive migration step;
+- current canonical version;
+- future-version fail-closed behavior;
+- whether downgrade/reopen in an older Syndocal is supported;
+- platform path/Unicode/case behavior.
+
+### O2. Golden migration corpus
+
+Maintain representative projects for:
+
+- empty/new project;
+- large lighting show and DVC imports;
+- GDTF/custom profiles/groups/mappings;
+- Timeline, Cue, effects, Stage, Touch, Node Graph;
+- Video layers, MediaAssets, Clip Slots, outputs, effects, missing/relinked assets;
+- audio, recording references, recovery, backup, template;
+- legacy fields, unknown additive fields, maximum IDs, and cross-platform paths.
+
+For every corpus item prove load, validate, migrate, save, reload, semantic equality, and second-save idempotency. Migration is clone-then-validate-then-commit; failure leaves the original bytes and current project unchanged.
+
+### O3. Corruption and hostile-input matrix
+
+- truncated/invalid JSON and invalid UTF-8/path encoding where applicable;
+- duplicate/zero/MAX IDs and allocator overflow;
+- cyclic/deep/oversized graph, group, timeline, and composition structures;
+- missing fixture/profile/media/output references;
+- impossible durations, NaN/infinity, negative sizes, and oversized counts;
+- corrupt DVC/GDTF/archive/media/preset files;
+- partial Save/Recovery/Backup/upgrade journal states.
+
+Add deterministic property/fuzz tests to the pure parsers/normalizers. Bound time, allocation, recursion, decompression, and diagnostics. Never fuzz through live physical output.
+
+### O4. Recovery/backup compatibility
+
+- old browser recovery, desktop backup, and template formats either migrate or are rejected with actionable non-destructive messaging;
+- startup serial/tag handshake is compatible across supported upgrades;
+- upgrade/downgrade cannot silently suppress the last valid recovery image;
+- corrupt newest generation falls back only to a verified older generation and reports which image was used;
+- clean save, unsaved replacement, history navigation, and recovery acknowledgement retain their exact disposition across restart.
+
+## 20. Critical path P: observability, updater, diagnostics, and supportability
+
+### P1. Runtime observability
+
+Expose bounded, generation-stamped status for:
+
+- project authority/history/recovery/save;
+- input workers and feedback;
+- DMX/output ownership/Blackout;
+- NDI/Spout/Display/camera/screen/audio/recording;
+- decoder/cache/background operations;
+- ShowClock peer/source/action queues.
+
+Statuses distinguish configured, preparing, running, held, degraded, failed, cleanup pending, and retired. A stale status cannot overwrite a newer generation.
+
+### P2. Logging and diagnostic bundle
+
+- structured severity/domain/generation/timestamp with bounded rotation;
+- redact tokens, pairing credentials, paths where configured, and media/project content;
+- crash log plus last safe authority/output/clock state;
+- diagnostic ZIP manifest and integrity validation;
+- operator preview of included data before export;
+- support runbook mapping visible error codes to safe next actions.
+
+### P3. Updater operation
+
+- stable/beta/nightly endpoints and signed manifest;
+- exact mapping flush/save/recovery fence before install;
+- download resume/cancel/hash/signature;
+- install failure rollback and no project/recovery loss;
+- channel switch and downgrade policy;
+- offline/unreachable endpoint does not degrade show operation;
+- update cannot start during unsafe recording/output/transaction state without an explicit safe transition.
+
+### P4. Operational runbooks
+
+Produce operator-facing and support-facing procedures for:
+
+- pre-show health check;
+- output Arm/Standby/Blackout;
+- audio/video/DMX device loss;
+- Primary/Standby takeover;
+- project corruption/recovery;
+- missing media/profile relink;
+- recording recovery;
+- diagnostic export;
+- safe update/rollback;
+- emergency shutdown and post-incident evidence preservation.
+
+## 21. Master traceability, decision, risk, and evidence ledger
+
+This section is the mechanism that prevents future omissions. Before the product may be called complete, create and maintain the following tables in this file. A generated companion may mirror them for CI, but it may not replace or hide rows from this master index.
+
+### Q0. Current master coverage registry
+
+This is the minimum domain-level inventory. Each row must be decomposed into Q1 requirement rows before implementation of that domain is declared complete.
+
+| Domain ID | Scope | Primary section/source | Frozen status | Release-blocking remainder |
+| --- | --- | --- | --- | --- |
+| `MEDIA-T1` | MediaAsset schema, import, relink, authority | A | In progress | terminal reply-loss/history, compatibility internals, platform/lifecycle proof, native acceptance |
+| `MEDIA-DERIVED` | thumbnails, proxies, waveform, analysis, cache | M | Not started as one tranche | authored/cache separation, cancellation, eviction, performance |
+| `VIDEO-SLOT` | clip banks/slots, queue/Take | B | Design complete, code not started | full implementation and native acceptance |
+| `VIDEO-FX` | scoped effects and transition buses | C | Partial foundation | scope model, deterministic Take, mapping/timeline and faults |
+| `VIDEO-SOURCE` | camera, screen, NDI, Spout/Syphon, generators | L/K | Partial | authored/runtime identity, replacement fence, physical faults |
+| `AUDIO-AUTHORED` | audio asset/clip/timeline/waveform | L | Partial foundation | canonical authored/runtime model and migration |
+| `AUDIO-LIVE` | WASAPI/ASIO analysis and reactive paths | L/K | Advanced but externally incomplete | ownership, extended soak, devices, end-to-end latency, license decision |
+| `RECORDING` | A/V recording and finalization | L | Partial legacy capability | terminal state machine, crash/disk-full recovery, artifact verification |
+| `PATCH-GDTF` | fixture catalog/cache/Patch/Repair | D | Partial implementation | cache purity and atomic project/engine publication |
+| `STAGE` | Stage import and mutation | D | Partial implementation | authoritative Published transaction and stale-dialog fence proof |
+| `PROJECT-TX` | generic Begin/Commit/Cancel/history | E | In progress | Begin reply-loss/liveness and terminal recovery |
+| `PROJECT-AUTH` | authority bundle, mappings, disposition | E | Advanced | frozen re-audit and integration proof |
+| `RECOVERY-SAVE` | recovery journal, backup, Save/As | E/O/P | Advanced | full route/latch audit, upgrade compatibility, fault evidence |
+| `INPUT` | MIDI/OSC/DMX/manual lifecycle and feedback | F/K | Advanced | generation/reply-loss re-audit and physical matrix |
+| `OUTPUT-LOCAL` | DMX/NDI/Spout/Display roles/fences | F/K | Advanced local tranche | project/Takeover replacement fence and real hardware |
+| `REMOTE-TOUCH` | Web Remote, Touch, TouchOSC | N/K | Security foundation exists | current-source audit, physical clients, latency and stale-session proof |
+| `RDM` | RDM/TOD device operation | N/K | Partial | physical, timeout/cancellation, ownership proof |
+| `SHOWCLOCK` | shared time, actions, two-PC failover | G | Architecture draft | decisions, implementation, witness/fence, two-machine soak |
+| `UI-SHELL` | Setup/Edit/Control and shared shell | H | Product vision/roadmap exists | staged implementation and native/accessibility acceptance |
+| `ACCESSIBILITY` | keyboard, AT, contrast, DPI, IME | H | Basic static coverage | native screen-reader/contrast/scaling matrix |
+| `MIGRATION` | `.sdc`, recovery, backup, template compatibility | O | Per-feature tests exist | unified version/corruption/golden/fuzz matrix |
+| `SECURITY` | IPC, remote, LAN clock, parser, update threat model | N/J | Partial | unified threat model and release-blocking proof |
+| `PERFORMANCE` | latency/frame/tick/resource/soak budgets | M/K | Domain-specific evidence exists | fixed whole-product envelope and current-source soaks |
+| `OBSERVABILITY` | statuses, logs, diagnostics, runbooks | P | Partial | cross-domain generation truth and support acceptance |
+| `RELEASE` | packages, signing, legal, updater, clean machine | J | Partial CI/package foundation | all P0-Release items |
+| `COMPARE-VIDEO` | SynapseRack pinned benchmark | I | Acceptance plan only | pinned build/license and measured V01-V17 evidence |
+| `COMPARE-LIGHTING` | Daslight task/parity boundary | I | Partial measured evidence | unmeasured tasks, semantic/profile and physical output evidence |
+
+Source-to-roadmap coverage:
+
+| Source contract | Master sections that carry its release path |
+| --- | --- |
+| `RELEASE_STATUS.md` | J, K, L, N, O, P, 22, 25 |
+| `qa/SYNDOCAL_UI_PRODUCT_VISION.md` | B, C, G, H, L, M |
+| `qa/SYNDOCAL_UI_IMPLEMENTATION_ROADMAP.md` | H and the per-tranche native gate in 22.1 |
+| `qa/SYNDOCAL_VIDEO_LAYER_MEDIA_TRANSITION_MODEL.md` | A, B, C, L, M |
+| `qa/SYNDOCAL_VIDEO_MODEL_GAP_AUDIT_2026-08-12.md` | A, B, C, L, M, I |
+| `qa/SYNDOCAL_SYNAPSERACK_VIDEO_OPERATOR_BENCHMARK.md` | I, K, L, M, Q4 |
+| `qa/SYNDOCAL_2PC_TRANCHE1_OUTPUT_OWNERSHIP.md` | F, G, K, L, N |
+| `qa/DASLIGHT_PARITY_COMPLETION_PLAN.md` and comparison verdict | D, I, K, N, O |
+| `AGENTS.md` | section 4.5, 22.1, and 22.2 native completion procedure |
+
+### Q1. Requirements traceability table
+
+One row per requirement:
+
+| Field | Required content |
+| --- | --- |
+| Requirement ID | Stable domain-prefixed ID, for example `MEDIA-AUTH-001` |
+| Requirement | Observable behavior and failure behavior |
+| Source | Product vision/spec/release-status/user decision |
+| Scope | Supported, deferred, external acceptance, or out of scope |
+| Owner/files | Exclusive implementation ownership and affected files |
+| Dependencies | Required earlier IDs/decisions |
+| Automated proof | Exact test/harness and nonzero expected count |
+| Native proof | Build/hash/window/workflow evidence |
+| Hardware/external proof | Device/topology/duration/raw artifact or `N/A` with reason |
+| Status | Not started/In progress/Implemented/Reviewed/Accepted/Blocked |
+| Commit | Focused commit SHA; never `HEAD` only |
+| Residual risk | P0/P1/P2/non-blocking and disposition |
+
+The table must include every item from the referenced product vision, UI roadmap, media transition model, Video benchmark, Output Ownership document, Release Status P0 list, Daslight comparison/parity documents, and this master roadmap.
+
+### Q2. Decision log
+
+Record irreversible or scope-changing choices with date, approver, alternatives, and consequences:
+
+- supported OS/architecture matrix;
+- Windows-only versus cross-platform file identity;
+- external 3D visualizer boundary;
+- no standalone-hardware programming boundary;
+- ASIO licensing/artifact decision;
+- ShowClock transport/authentication/discovery/fencing/witness;
+- audio/video/ShowClock master-clock policy;
+- recording ownership and recovery format;
+- P2 release-blocking policy;
+- comparison product versions/license tiers and reference hardware.
+
+Initial decision state:
+
+| Decision ID | Decision | State at this checkpoint |
+| --- | --- | --- |
+| `DEC-3D-001` | Built-in 3D versus external visualizer | Accepted: external Art-Net visualizer is the product boundary |
+| `DEC-STANDALONE-001` | Standalone hardware scene programming | Out of current PC-software scope unless a separate hardware product is approved |
+| `DEC-FILE-ID-001` | Media file identity on non-Windows | Open: implement equivalent coherence or narrow support claim |
+| `DEC-ASIO-001` | ASIO license and artifact | Open; normal MIT distribution remains WASAPI-only |
+| `DEC-SHOW-TRANSPORT-001` | ShowClock transport/discovery/versioning | Open |
+| `DEC-SHOW-FENCE-001` | witness/shared lease/physical interlock/manual Hold | Open and blocks split-brain-safe automatic failover claim |
+| `DEC-CLOCK-MASTER-001` | ShowClock/audio/video/device master policy | Open |
+| `DEC-RECORD-OWN-001` | recording ownership and two-PC behavior | Open |
+| `DEC-P2-001` | Which P2s block release | Accepted by section 4.7; security/migration/legal/platform/recovery/advertised-claim P2s block |
+| `DEC-COMPARE-001` | pinned Daslight/SynapseRack versions/licenses/hardware | Open before comparative measurement |
+
+### Q3. Risk register
+
+Each open risk records ID, severity, reproduction, affected data/output/operator, likelihood, owner, mitigation, blocking milestone, proof needed, current status, and last review date. Closed risks remain in the ledger with the closing commit/evidence.
+
+Initial high-severity register:
+
+| Risk ID | Severity | Boundary | Status / blocking milestone |
+| --- | --- | --- | --- |
+| `R-MEDIA-TERM-001` | P1 | media publish/history/reply loss | Open; blocks A completion |
+| `R-TX-BEGIN-001` | P1 | Begin side effect with lost reply | Open; blocks generic dependent mutations |
+| `R-MEDIA-COMPAT-001` | P1 | old raw IPC authority/hash/atomicity | Open; blocks A completion |
+| `R-FILE-ABA-001` | P1 if non-Windows supported | path/file image coherence | Open decision/implementation |
+| `R-PATCH-ATOMIC-001` | P1 | profile ancillary and Engine Patch/Repair | Open; blocks D completion |
+| `R-OUTPUT-SWAP-001` | P1 | project/Takeover replacement and external outputs | Open; blocks distributed/venue completion |
+| `R-SHOW-SPLIT-001` | P1 | two-node partition and dual output | Not implemented; blocks automatic failover claim |
+| `R-AUDIO-OWN-001` | P1 product boundary | Audio/MIDI/recording ownership | Open before two-PC/full-output claim |
+| `R-RELEASE-HW-001` | P0-Release | required physical acceptance | Open; blocks public release |
+| `R-RELEASE-LEGAL-001` | P0-Release | signing/notarization/licenses | Open; blocks public release |
+| `R-MIGRATION-001` | P2 release-blocking | unified compatibility/corruption proof | Open; blocks supported-upgrade claim |
+| `R-SECURITY-001` | P2 release-blocking | unified remote/parser/update threat model | Open; blocks public-network/security claims |
+
+### Q4. Evidence manifest
+
+Each release candidate receives a stable evidence directory containing:
+
+- commit/tag/artifact hashes and feature matrix;
+- exact commands, exit codes, selected/pass/fail/ignored counts, warnings, and logs;
+- browser/native screenshots or recordings with build identity;
+- performance raw samples and summary method;
+- hardware topology/device/firmware/driver and captures;
+- comparison recordings and unfavorable first runs;
+- signing/notarization/license/SBOM results;
+- clean-machine install/update/uninstall results;
+- known failures, waivers, and non-claims.
+
+### Q5. Completion query
+
+The product may be called complete for the declared release only when a generated or manually audited query shows:
+
+- no open P0-Code or P0-Release;
+- no open P1;
+- no release-blocking P2;
+- every Supported requirement has Implemented, Reviewed, and required Accepted evidence;
+- every Deferred/External/Out-of-scope row is explicitly documented in release notes and does not contradict an advertised claim;
+- all focused commits are contained in the frozen release tag;
+- final native/hardware/clean-machine evidence refers to that exact tag and artifact hashes.
+
+## 22. Global final verification order
+
+Verification is two-tiered.
+
+### 22.1 Per-tranche gate
+
+After each native/runtime-affecting focused commit, before starting a dependent tranche:
+
+1. focused format/check/tests/static/localization/viewport gates for the changed domain;
+2. adversarial read-only review on frozen files;
+3. resolve every P0/P1 or explicitly stop the dependency chain;
+4. build the current source through the repository native gate;
+5. launch the exact artifact, verify one responsive Syndocal window, maximize it, and smoke the changed workflow plus one neighboring regression path;
+6. record artifact hash, screenshot/recording, result, warnings, and non-claims;
+7. create the focused commit and update Q1-Q4 plus percentages.
+
+### 22.2 Final integrated release gate
+
+Only after all implementation tranches are committed, per-tranche native smoke is complete, and P0/P1 review is clean:
 
 1. `cargo fmt --check` for all Rust packages.
 2. Focused Protocol/Engine/Syndocal tests for every changed domain.
@@ -1017,14 +1629,20 @@ Only after all implementation tranches are committed and P0/P1 review-clean:
     - launch exact release executable;
     - verify exactly one responsive Syndocal window;
     - maximize before UI actions.
-12. native UI acceptance at all supported viewports.
-13. physical DMX, HDMI 1/2, audio input, MIDI/OSC, NDI/Spout as available.
-14. one-hour maximum-condition soak on RTX 5090 / 13900KF / 128 GB.
-15. two-PC ShowClock/output-ownership soak after that tranche exists.
+12. native UI and accessibility acceptance at all supported viewports/DPI/text-scale modes.
+13. the full K physical hardware/protocol matrix, without substituting loopback for physical evidence.
+14. cold/warm-cache performance gates and one-hour maximum-condition soak on the pinned reference machine.
+15. extended leak/stability soak at the duration fixed in M5/K5.
+16. two-PC ShowClock/output-ownership fault and soak matrix after that tranche exists.
+17. O migration/corruption corpus and supported upgrade/downgrade matrix.
+18. N security and remote exposure tests.
+19. J signed/notarized clean-machine install/update/rollback/uninstall matrix.
+20. I pinned Daslight/SynapseRack comparison, preserving first failures and unmeasured rows.
+21. final Q5 completion query against the exact release tag and artifact hashes.
 
 No final completion claim may be based only on browser harnesses, TypeScript, Vite, or Rust unit tests.
 
-## 15. Planned commit cadence
+## 23. Planned commit cadence
 
 Commit after each frozen green unit and report percentages.
 
@@ -1038,15 +1656,28 @@ Recommended future commits:
    - old IPC internals and exact compatibility tests.
 4. `fix: close media file identity and lifecycle gaps`
    - cross-platform/availability/reaper/proof gaps.
-5. `feat: add authored video clip slots`
-   - Protocol/migration.
-6. `feat: publish atomic clip slot operations`
-   - Engine/runtime.
-7. `feat: bridge clip slot project authority`
-   - backend.
-8. `feat: add video clip authoring and control surfaces`
-   - frontend.
-9. PATCH/GDTF, Stage, generic authority/recovery, input/output, ShowClock, and UI roadmap commits remain separate by domain.
+5. `test: accept media asset tranche in native release`
+   - current-source native smoke/evidence only; no unrelated implementation.
+6. `fix: make project transactions recoverable after reply loss`
+   - generic Begin/terminal receipt/liveness only.
+7. `fix: make patch repair and stage publication atomic`
+    - PATCH/GDTF/Stage authority and tests, split further if file ownership requires it.
+8. `fix: fence project replacement across all outputs`
+    - project/Takeover output retirement/rearm and ownership tests.
+9. `feat: add media derived-data cache`
+    - thumbnail/proxy/analysis/cache model and bounded workers.
+10. `feat: add authored video clip slots`
+    - Protocol/migration.
+11. `feat: publish atomic clip slot operations`
+    - Engine/runtime.
+12. `feat: bridge clip slot project authority`
+    - backend.
+13. `feat: add video clip authoring and control surfaces`
+    - frontend.
+14. Video effect/transition work remains separate by scoped model, runtime, authority, and UI.
+15. Audio/recording/live-source work remains separate by schema, runtime, backend, and UI.
+16. ShowClock work remains separate by decision record, protocol/simulator, peer transport, authority/fencing, UI, and hardware acceptance.
+17. Remote/RDM/security, migration/corruption, observability/updater, UI/accessibility, and release/distribution remain separate focused commits.
 
 After each commit report:
 
@@ -1058,7 +1689,7 @@ After each commit report:
 - updated overall and per-domain percentages;
 - next blocking boundary.
 
-## 16. Resume protocol
+## 24. Resume protocol
 
 At the next session or agent handoff:
 
@@ -1075,11 +1706,19 @@ At the next session or agent handoff:
 11. Do not start Clip Slot T2, ShowClock, UI redesign, or legacy IPC cleanup concurrently with A1 in the same files.
 12. Stop and report if the intended staged file list contains unrelated user/shared changes that cannot be separated safely.
 
-## 17. Known open risks at this pause
+## 25. Known open risks at this pause
 
-### P0
+### P0-Code
 
-No confirmed P0 at the last frozen reviewed checkpoint. Current dirty `main.rs` has not received a final full GO.
+No confirmed P0-Code at the last frozen reviewed checkpoint. Current dirty `main.rs` has not received a final full GO.
+
+### P0-Release
+
+- real Art-Net/sACN/serial DMX and fixture acceptance is incomplete;
+- physical MIDI/Touch/Web Remote feedback and latency acceptance is incomplete;
+- maximum-condition GPU/audio/video/recording soak is incomplete;
+- current-source cross-platform native acceptance is incomplete;
+- signing, notarization, third-party distribution review, release artifact publication, and clean-machine install/update/uninstall are incomplete.
 
 ### P1
 
@@ -1090,6 +1729,9 @@ No confirmed P0 at the last frozen reviewed checkpoint. Current dirty `main.rs` 
 - Pending broader PATCH/GDTF atomic project/engine commit and raw mutation admission.
 - Remaining generic project/input/output authority boundaries identified in prior reviews must be re-audited before release.
 - Distributed ShowClock/split-brain-safe two-PC operation is not implemented.
+- Audio/recording/live-source ownership and authoritative completion are not yet a closed product tranche.
+- Project/New/Recovery/Backup/Takeover replacement is not yet proven under one complete output retirement/rearm fence.
+- Web Remote/Touch/RDM/security and compatibility/migration matrices are not represented by a final accepted ledger.
 
 ### P2 / proof gaps
 
@@ -1101,8 +1743,13 @@ No confirmed P0 at the last frozen reviewed checkpoint. Current dirty `main.rs` 
 - non-Windows tests;
 - native Tauri release build and UI/hardware acceptance;
 - comparative benchmark evidence.
+- media thumbnail/proxy/cache/analysis lifecycle and performance proof;
+- full migration/corruption/fuzz corpus;
+- native screen-reader/high-contrast/DPI/text-scale acceptance;
+- observability/support/update failure matrix;
+- requirements traceability and evidence manifest completion.
 
-## 18. Claims that must not be made yet
+## 26. Claims that must not be made yet
 
 Do not claim:
 
@@ -1115,5 +1762,10 @@ Do not claim:
 - Daslight 5 or SynapseRack has been beaten without measured benchmark evidence;
 - cross-platform file identity safety unless non-Windows is implemented and tested;
 - hardware NDI/Spout/dual-HDMI/DMX correctness from SDK-free/unit tests alone.
+- public-release readiness while any J/K P0-Release row is open;
+- recording/audio/live-source product completion without L acceptance;
+- cross-platform project/media/migration safety without O and supported-platform evidence;
+- secure internet exposure of Web Remote or ShowClock without the declared TLS/authentication/fencing boundary;
+- whole-product Daslight parity from loopback, fixture count, internal schema, or the currently measured subset of tasks.
 
 The next truthful milestone is: **backend-owned terminal Media Asset commit, reviewed and committed as a focused checkpoint**.
