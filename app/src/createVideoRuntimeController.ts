@@ -1,6 +1,12 @@
 import type { Accessor, Setter } from "solid-js";
 import { videoFrameToDataUrl } from "./videoFrameCanvas";
 import { defaultColorAdjust, defaultFxAdjust, defaultTransform } from "./videoLayerDefaults";
+import {
+  mediaAssetImportReportMessage,
+  mediaAssetRelinkOutcomeMessage,
+  prepareFinalizeAndCommitMediaAssetRelink,
+  prepareFinalizeAndCommitMediaAssets,
+} from "./mediaAssetAuthority";
 import type {
   EngineSnapshot,
   ExternalVideoIoPlans,
@@ -8,6 +14,7 @@ import type {
   ExternalVideoTransportStatus,
   ExternalVideoTransportSyncReport,
   ExternalVideoTransportSyncResponse,
+  MediaAssetImportReport,
   VideoBlendMode,
   VideoAudioMonitorStatus,
   VideoFrame,
@@ -31,6 +38,11 @@ interface VideoRuntimeControllerOptions {
   refreshSnapshot: () => Promise<EngineSnapshot | null>;
   setMessage: (message: string) => unknown;
   videoSourceKind: Accessor<VideoSourceKind>;
+  /** Captured before any picker/prepare so A cannot commit into a later B. */
+  getCurrentProjectEpoch: Accessor<number>;
+  /** Uses the epoch captured before Browse, then clears that one-shot fence. */
+  consumeVideoSourceExpectedEpoch: () => number;
+  projectTransactionOwnerId: string;
   videoLabel: Accessor<string>;
   setVideoLabel: Setter<string>;
   videoPath: Accessor<string>;
@@ -64,13 +76,40 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
   const addVideoLayer = async () => {
     try {
       const sourceKind = options.videoSourceKind();
-      const layerId = sourceKind === "File" || sourceKind === "StillImage"
-        ? await options.invoke<number>(sourceKind === "StillImage" ? "add_still_image_layer" : "add_video_file_layer", {
-          label: options.videoLabel(), path: options.videoPath(),
-        })
-        : await options.invoke<number>("add_video_input_layer", {
-          label: options.videoLabel(), kind: sourceKind, name: options.videoPath(),
+      if (sourceKind === "File" || sourceKind === "StillImage") {
+        const path = options.videoPath().trim();
+        if (!path) {
+          options.setMessage("Choose a local media file before adding a layer.");
+          return;
+        }
+        const expectedEpoch = options.consumeVideoSourceExpectedEpoch();
+        const staged = await prepareFinalizeAndCommitMediaAssets<number>({
+          invoke: options.invoke,
+          kind: sourceKind,
+          paths: [path],
+          expectedEpoch,
+          ownerId: options.projectTransactionOwnerId,
+          commitCommand: sourceKind === "StillImage"
+            ? "commit_prepared_still_image_layer"
+            : "commit_prepared_video_file_layer",
+          commitArgs: { label: options.videoLabel() },
         });
+        const layerId = staged.committed;
+        if (layerId === null) {
+          options.setMessage(mediaAssetImportReportMessage(staged.report));
+          return;
+        }
+        options.setVideoLabel(`Layer ${options.snapshot().video.layers.length + 2}`);
+        const failures = staged.report.failed + staged.report.skipped;
+        options.setMessage(
+          `Added video layer ${layerId} from 1 prepared media source.${failures > 0 ? ` ${mediaAssetImportReportMessage(staged.report)}` : ""}`,
+        );
+        await options.refreshSnapshot();
+        return;
+      }
+      const layerId = await options.invoke<number>("add_video_input_layer", {
+        label: options.videoLabel(), kind: sourceKind, name: options.videoPath(),
+      });
       options.setVideoLabel(`Layer ${options.snapshot().video.layers.length + 2}`);
       options.setMessage(`Added video layer ${layerId}`);
       await options.refreshSnapshot();
@@ -83,14 +122,26 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       return;
     }
     try {
+      // Fence before the native picker: dialog A, hashing A, and commit A all
+      // use this identity. App's mutation wrapper rejects a later project B.
+      const expectedEpoch = options.getCurrentProjectEpoch();
       const paths = await options.invoke<string[]>("select_video_source_files", { kind });
       if (paths.length === 0) {
         options.setMessage("Media import canceled.");
         return;
       }
-      const layerIds = await options.invoke<number[]>("add_local_media_layers", { kind, paths });
-      options.setVideoLabel(`Layer ${options.snapshot().video.layers.length + layerIds.length + 1}`);
-      options.setMessage(`Imported ${layerIds.length} media clip(s).`);
+      const staged = await prepareFinalizeAndCommitMediaAssets<MediaAssetImportReport>({
+        invoke: options.invoke,
+        kind,
+        paths,
+        expectedEpoch,
+        ownerId: options.projectTransactionOwnerId,
+        commitCommand: "commit_prepared_media_assets",
+      });
+      const report = staged.committed ?? staged.report;
+      // Normal library import never creates layers: one selected file becomes
+      // one catalog entry (or a dedupe reuse), preserving the operator's mix.
+      options.setMessage(mediaAssetImportReportMessage(report));
       await options.refreshSnapshot();
     } catch (error) { options.setMessage(String(error)); }
   };
@@ -224,7 +275,27 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
   };
   const refreshVideoLayerMetadata = async (layerId: number) => {
     try {
-      options.setMessage(await options.invoke<string>("refresh_video_layer_metadata", { layerId }));
+      const layer = options.snapshot().video.layers.find((candidate) => candidate.id === layerId);
+      const assetId = layer?.media_asset_id;
+      const path = layer?.source.path?.trim();
+      if (assetId === null || assetId === undefined || !path) {
+        options.setMessage("This layer has no relinkable Media Library source.");
+        return;
+      }
+      const expectedEpoch = options.getCurrentProjectEpoch();
+      const staged = await prepareFinalizeAndCommitMediaAssetRelink({
+        invoke: options.invoke,
+        assetId,
+        replacementPath: path,
+        policy: "RequireContentMatch",
+        expectedEpoch,
+        ownerId: options.projectTransactionOwnerId,
+      });
+      if (!staged.outcome) {
+        options.setMessage("Media metadata refresh did not return a result.");
+        return;
+      }
+      options.setMessage(mediaAssetRelinkOutcomeMessage(staged.outcome));
       await options.refreshSnapshot();
     } catch (error) { options.setMessage(String(error)); }
   };

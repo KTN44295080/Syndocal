@@ -1,3 +1,30 @@
+export type MachineOutputRole = "Lighting" | "Video" | "Both" | "Standby";
+
+export type OutputOwnershipReason =
+  | "OwnedByMachineRole"
+  | "BlockedByMachineRole"
+  | "Transitioning"
+  | "TransitionFailed"
+  | "ProjectSwapDisarmed"
+  | "StartupDenied";
+
+export type OutputOwnershipState = "Ready" | "Transitioning" | "Activating" | "Failed";
+
+export interface OutputOwnershipStatus {
+  role: MachineOutputRole;
+  effective_role: MachineOutputRole;
+  desired_role: MachineOutputRole;
+  persisted_role: MachineOutputRole | null;
+  state: OutputOwnershipState;
+  generation: number;
+  epoch: number;
+  lighting_allowed: boolean;
+  video_allowed: boolean;
+  lighting_reason: OutputOwnershipReason;
+  video_reason: OutputOwnershipReason;
+  error: string | null;
+}
+
 export type AttributeResolution = "EightBit" | "SixteenBit";
 
 export interface CieColorSummary {
@@ -780,11 +807,141 @@ export interface ProjectFile {
 
 export interface ProjectLoadResult {
   path: string;
+  /** Exact backend-owned current project path; unlike `path`, this may be null. */
+  current_project_path: string | null;
   profiles: FixtureProfileSummary[];
   midi_mappings: MidiControlMapping[];
   osc_mappings: OscControlMapping[];
   dmx_mappings: DmxControlMapping[];
   warnings: string[];
+  /** Backend-authoritative identity token for subsequent mapping/history CAS. */
+  project_epoch: number;
+  project_revision: number;
+  history_generation: number;
+  checkpoint_hash: string;
+  /** Durable clean/recovery interpretation of this fenced publication. */
+  authority_disposition_generation: number;
+  authority_disposition: ProjectAuthorityDisposition;
+  /** Coherent UI authority image captured with the result's token. */
+  authority?: ProjectAuthorityBundle | null;
+}
+
+/**
+ * Browser recovery is offered only after this machine-local serial handshake.
+ * A journal advance is durable before the backend invalidates a prior project
+ * authority, so a stale localStorage image cannot cross a crash/restart.
+ */
+export interface ProjectRecoveryAuthorityStatus {
+  recovery_authority_serial: number;
+  last_transition: ProjectRecoveryAuthorityTransition;
+}
+
+export type ProjectRecoveryAuthorityTransition =
+  | { kind: "legacy_unknown" }
+  | { kind: "project_publication" }
+  | {
+    kind: "recovery_publication";
+    source_serial: number;
+    request_id: string;
+    target_checkpoint_hash: string;
+  }
+  | { kind: "history_navigation" }
+  | { kind: "clean_save" }
+  | {
+    kind: "recovery_acknowledged";
+    recovery_publication_serial: number;
+    request_id: string;
+    target_checkpoint_hash: string;
+  };
+
+/** One fenced project-root capture used by recovery/autosave. */
+export interface ProjectCheckpointBundle {
+  project: ProjectFile;
+  current_path: string | null;
+  project_epoch: number;
+  project_revision: number;
+  checkpoint_hash: string;
+  recovery_authority_serial: number;
+}
+
+export interface ProjectInputRuntimeStatus {
+  project_input_runtime_generation: number;
+  mapping_input_runtime_generation: number;
+  midi_clock_active: boolean;
+  midi_control_active: boolean;
+  midi_feedback_output_active: boolean;
+  midi_feedback_runtime_active: boolean;
+  osc_active: boolean;
+  dmx_active: boolean;
+}
+
+/** Durable coordinator publication semantics for event-loss polling. */
+export type ProjectAuthorityPublicationKind =
+  | "runtime_status"
+  | "mutation"
+  | "identity_replacement"
+  | "history_navigation";
+
+/**
+ * Backend-owned dirty/recovery semantics for a project authority image.
+ * Consumers must never infer these from a display label or a partial
+ * snapshot signature because event loss is recovered through polling.
+ */
+export type ProjectAuthorityDisposition =
+  | "clean_at_path"
+  | "unsaved_replacement"
+  | "recovery_pending_ack"
+  | "history_navigation"
+  | "runtime_sanitize";
+
+/**
+ * Complete, staged frontend authority state. Backend captures this under
+ * external-command admission and the ProjectCoordinator; callers must apply
+ * it as one identity-guarded operation rather than refreshing fields in
+ * separate RPCs.
+ */
+export interface ProjectAuthorityBundle {
+  project_epoch: number;
+  project_revision: number;
+  checkpoint_hash: string;
+  publication_generation: number;
+  publication_kind: ProjectAuthorityPublicationKind;
+  /** Advances only for identity/Undo/Redo mapping replacement publications. */
+  mapping_replacement_generation: number;
+  authority_disposition_generation: number;
+  authority_disposition: ProjectAuthorityDisposition;
+  /** Durable machine-local recovery journal generation. */
+  recovery_authority_serial: number;
+  recovery_authority_last_transition: ProjectRecoveryAuthorityTransition;
+  path_generation: number;
+  history_generation: number;
+  current_project_path: string | null;
+  snapshot: EngineSnapshot;
+  profiles: FixtureProfileSummary[];
+  fixture_groups: FixtureGroupSummary[];
+  operator_policy: OperatorPolicy | null;
+  midi_mappings: MidiControlMapping[];
+  osc_mappings: OscControlMapping[];
+  dmx_mappings: DmxControlMapping[];
+  history: ProjectHistoryStatus;
+  input_runtime: ProjectInputRuntimeStatus;
+}
+
+export interface ProjectHistoryNavigationResult {
+  history_status: ProjectHistoryStatus;
+  authority: ProjectAuthorityBundle;
+}
+
+/** Atomic coordinator result for transaction Commit/Cancel and history Clear. */
+export interface ProjectHistoryMutationResult {
+  history_status: ProjectHistoryStatus;
+  authority: ProjectAuthorityBundle;
+}
+
+/** A Save/Save As acknowledgement captured after final disk publication. */
+export interface ProjectSaveResult {
+  path: string;
+  authority: ProjectAuthorityBundle;
 }
 
 export interface DvcImportDetail {
@@ -890,6 +1047,16 @@ export interface ProjectHistoryStatus {
   redo_depth: number;
   undo_label?: string | null;
   redo_label?: string | null;
+  project_epoch: number;
+  project_revision: number;
+  /** Canonical persistence hash paired with the history stack. */
+  checkpoint_hash: string;
+  /** Changes even when the project content token is unchanged but history UI changes. */
+  history_generation: number;
+  undo_entry_id?: number | null;
+  undo_checkpoint_hash?: string | null;
+  redo_entry_id?: number | null;
+  redo_checkpoint_hash?: string | null;
 }
 
 export interface EngineSnapshotSyncResponse {
@@ -937,6 +1104,99 @@ export interface VideoSourceSummary {
   name?: string | null;
   codec?: string | null;
   metadata?: VideoMediaMetadata | null;
+}
+
+/** Persisted content identity for a local Media Library entry. */
+export type MediaAssetId = number;
+export type MediaHashAlgorithm = "Sha256";
+
+export interface MediaContentHash {
+  algorithm: MediaHashAlgorithm;
+  hex: string;
+}
+
+/**
+ * Project-persisted Media Library data. Availability deliberately lives in the
+ * IPC-only DTO below so a `.sdc` never serializes another machine's file state.
+ */
+export interface MediaAssetSummary {
+  id: MediaAssetId;
+  label: string;
+  source: VideoSourceSummary;
+  content_hash?: MediaContentHash | null;
+  byte_size?: number | null;
+}
+
+export type MediaAssetAvailability =
+  | { kind: "available_verified"; asset_id: MediaAssetId }
+  | { kind: "available_unverified"; asset_id: MediaAssetId }
+  | { kind: "missing"; asset_id: MediaAssetId }
+  | { kind: "hash_mismatch"; asset_id: MediaAssetId; expected: MediaContentHash; actual: MediaContentHash }
+  | { kind: "unreadable"; asset_id: MediaAssetId; error: string }
+  | { kind: "live_source"; asset_id: MediaAssetId };
+
+export type MediaAssetRelinkPolicy = "RequireContentMatch" | "AdoptReplacement";
+
+export type MediaAssetRelinkOutcome =
+  | { kind: "relinked"; asset_id: MediaAssetId; adopted_replacement: boolean }
+  | { kind: "needs_explicit_adoption"; asset_id: MediaAssetId }
+  | { kind: "hash_mismatch"; asset_id: MediaAssetId; expected: MediaContentHash; actual: MediaContentHash }
+  | { kind: "missing_replacement"; asset_id: MediaAssetId }
+  | { kind: "unreadable_replacement"; asset_id: MediaAssetId; error: string }
+  | { kind: "live_source"; asset_id: MediaAssetId };
+
+export type MediaAssetImportEntryStatus = "prepared" | "imported" | "reused" | "skipped" | "failed";
+
+export interface MediaAssetImportEntryReport {
+  input_index: number;
+  path: string;
+  status: MediaAssetImportEntryStatus;
+  asset_id?: MediaAssetId | null;
+  message?: string | null;
+}
+
+/** Long-I/O Prepare/Finalize and short ticketed Commit report. */
+export interface MediaAssetImportReport {
+  request_id: number;
+  operation_generation: number;
+  prepared_import_token?: number | null;
+  project_epoch: number;
+  project_revision: number;
+  checkpoint_hash: string;
+  prepared: number;
+  imported: number;
+  reused: number;
+  skipped: number;
+  failed: number;
+  entries: MediaAssetImportEntryReport[];
+}
+
+export interface MediaAssetAvailabilityReport {
+  request_id: number;
+  operation_generation: number;
+  project_epoch: number;
+  project_revision: number;
+  checkpoint_hash: string;
+  availability: MediaAssetAvailability[];
+}
+
+export interface MediaAssetRelinkPrepareReport {
+  request_id: number;
+  operation_generation: number;
+  prepared_relink_token?: number | null;
+  project_epoch: number;
+  project_revision: number;
+  checkpoint_hash: string;
+  outcome?: MediaAssetRelinkOutcome | null;
+}
+
+export interface MediaAssetRelinkReport {
+  request_id: number;
+  operation_generation: number;
+  project_epoch: number;
+  project_revision: number;
+  checkpoint_hash: string;
+  outcome: MediaAssetRelinkOutcome;
 }
 
 export interface VideoMediaMetadata {
@@ -1273,6 +1533,10 @@ export interface ExternalVideoTransportSyncReport {
 export interface ExternalVideoTransportStatus {
   active_routes: ExternalVideoTransportRoute[];
   active_count: number;
+  ownership_allowed: boolean;
+  ownership_state: OutputOwnershipState;
+  ownership_reason: OutputOwnershipReason;
+  ownership_error: string | null;
 }
 
 export interface ExternalVideoTransportSyncResponse {
@@ -1379,6 +1643,7 @@ export interface VideoLayerSummary {
   id: number;
   label: string;
   source: VideoSourceSummary;
+  media_asset_id?: MediaAssetId | null;
   blend_mode: VideoBlendMode;
   state: VideoLayerState;
   isf_effect?: VideoIsfEffectSummary | null;
@@ -1520,6 +1785,10 @@ export interface VideoOutputWindowStatus {
   test_pattern_open: boolean;
   live_window_label: string;
   test_pattern_window_label: string;
+  ownership_allowed: boolean;
+  ownership_state: OutputOwnershipState;
+  ownership_reason: OutputOwnershipReason;
+  ownership_error: string | null;
   performance?: NativeVideoOutputPerformance | null;
 }
 
@@ -1556,6 +1825,7 @@ export interface VideoOutputWindowCloseSummary {
 
 export interface VideoSnapshot {
   layers: VideoLayerSummary[];
+  media_assets: MediaAssetSummary[];
   compositions: CompositionSummary[];
   outputs: VideoOutputSummary[];
   mapping_presets: VideoOutputMappingPresetSummary[];

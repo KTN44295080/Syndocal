@@ -26,6 +26,7 @@ export const createInitialEngineSnapshot = (): EngineSnapshot => ({
   },
   video: {
     layers: [],
+    media_assets: [],
     compositions: [],
     outputs: [],
     mapping_presets: [],

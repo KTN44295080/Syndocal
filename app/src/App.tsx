@@ -2,7 +2,7 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { batch, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { CueManagementPanel } from "./components/CueManagementPanel";
 import { SceneMatrixPanel } from "./components/SceneMatrixPanel";
 import {
@@ -299,9 +299,15 @@ import type {
   Phase1SmokeReport,
   PositionWaveEffectRequest,
   ProjectBackupSummary,
+  ProjectCheckpointBundle,
   ProjectFile,
   ProjectHistoryStatus,
+  ProjectHistoryMutationResult,
+  ProjectHistoryNavigationResult,
+  ProjectAuthorityBundle,
   ProjectLoadResult,
+  ProjectRecoveryAuthorityStatus,
+  ProjectSaveResult,
   UserTemplateLoadResult,
   ReferencePaletteSummary,
   RemoteControlConfig,
@@ -446,6 +452,10 @@ import { createTimelineOverviewAutomationController } from "./createTimelineOver
 import { createTimelineKeyframeController } from "./createTimelineKeyframeController";
 import { createTimelineAutomationController } from "./createTimelineAutomationController";
 import { createVideoRuntimeController } from "./createVideoRuntimeController";
+import {
+  mediaAssetImportReportMessage,
+  prepareFinalizeAndCommitMediaAssets,
+} from "./mediaAssetAuthority";
 import { createLiveVideoMonitorController } from "./createLiveVideoMonitorController";
 import { createAppKeyboardController } from "./createAppKeyboardController";
 import { createStageMapController } from "./createStageMapController";
@@ -562,11 +572,14 @@ import {
 import {
   clearProjectRecoveryCheckpoint,
   createProjectRecoveryCheckpoint,
-  loadProjectRecoveryCheckpoint,
+  loadProjectRecoveryStorageState,
   projectRecoverySourceLabel,
   projectRecoveryTimeLabel,
+  registerProjectRecoveryIntent,
   saveProjectRecoveryCheckpoint,
+  tombstoneProjectRecoveryCheckpoint,
   type ProjectRecoveryCheckpoint,
+  type ProjectRecoveryIntent,
 } from "./projectRecoveryStorage";
 import {
   cueMetadataDraftFromSummary,
@@ -631,6 +644,40 @@ import {
 } from "./controlMappingActions";
 import { controlMappingTargetLabel } from "./controlMappingLabels";
 import { createControlInputController } from "./createControlInputController";
+import {
+  acknowledgeProjectAuthorityPersist,
+  beginProjectAuthorityApplication,
+  beginProjectAuthorityRequest,
+  createProjectAuthoritySyncState,
+  invalidateProjectAuthorityIdentity,
+  markProjectAuthorityPersisted,
+  noteLocalProjectAuthorityEdit,
+  projectAuthorityApplicationIsCurrent,
+  projectAuthorityCanApply,
+  projectAuthorityCanApplyHistoryStatus,
+  projectAuthorityHasDirtyMappings,
+  projectAuthorityMappingCommitRetiredInputs,
+  projectAuthorityDispositionTransition,
+  projectAuthorityDispositionClearsRecovery,
+  projectAuthorityRecoveryTombstonePreflight,
+  projectAuthorityResponseIsCurrent,
+  projectAuthorityReplacementVerdict,
+  projectAuthorityReplacementContinuationIsCurrent,
+  type ProjectAuthorityReplacementVerdict,
+  type ProjectAuthorityDispositionState,
+  projectAuthorityPollPreservesDirtyMappings,
+  projectAuthorityPollMustHydrateMappings,
+  projectRecoveryCaptureIsCurrent,
+  projectRecoveryAuthoritySignature,
+  projectRecoveryAcknowledgementCanClear,
+  projectRecoveryAcknowledgementApplicationIsCurrent,
+  projectRecoveryIntentDeliveryForAuthority,
+  projectRecoveryIntentStartupAction,
+  projectAuthorityShouldRetryPersist,
+  projectAuthorityTokenIsCurrent,
+  rebaseDirtyProjectAuthorityMappings,
+  type ProjectAuthorityToken,
+} from "./projectAuthority";
 import {
   controlMappingTargetsFromElement,
   dmxMappingsFromLearnedControl,
@@ -698,7 +745,6 @@ const projectMutationCommands = new Set([
   "set_timeline_audio_master",
   "set_timeline_metronome",
   "create_custom_fixture_profile",
-  "use_fixture_profile",
   "patch_fixture",
   "patch_fixtures",
   "remove_fixture",
@@ -763,11 +809,12 @@ const projectMutationCommands = new Set([
   "set_timeline_video_automation",
   "set_timeline_automation_enabled",
   "remove_timeline_automation",
-  "add_video_file_layer",
-  "add_still_image_layer",
-  "add_local_media_layers",
-  "bootstrap_vj_show",
-  "refresh_video_layer_metadata",
+  "commit_prepared_media_assets",
+  "commit_prepared_video_file_layer",
+  "commit_prepared_still_image_layer",
+  "commit_prepared_local_media_layers",
+  "commit_prepared_bootstrap_vj_show",
+  "commit_prepared_media_asset_relink",
   "add_video_input_layer",
   "duplicate_video_layer",
   "remove_video_layer",
@@ -846,6 +893,7 @@ const projectMutationCommands = new Set([
   "save_stage_map_preset",
   "apply_stage_map_preset",
   "remove_stage_map_preset",
+  "import_stage_map_preset",
   "add_stage_object",
   "set_stage_object",
   "remove_stage_object",
@@ -884,17 +932,64 @@ const invoke = async <T,>(command: string, args?: Record<string, unknown>): Prom
   if (!projectMutationCommands.has(command)) {
     return tauriInvoke<T>(command, args);
   }
-  const transactionId = await tauriInvoke<number>("begin_project_transaction", {
+  const requestedExpectedEpoch = typeof args?.__expectedProjectEpoch === "number"
+    ? args.__expectedProjectEpoch
+    : null;
+  const onProjectTransactionOpened = typeof args?.__onProjectTransactionOpened === "function"
+    ? args.__onProjectTransactionOpened as () => void
+    : null;
+  const commandArgs = { ...(args ?? {}) };
+  delete commandArgs.__expectedProjectEpoch;
+  // Renderer-only lifecycle callback for staged long-I/O helpers. Never let a
+  // closure cross the Tauri boundary; it is fired only after the backend has
+  // returned an actual project ticket. It is a classification hook, not an
+  // AbortSignal barrier: a terminal cancellation guarantee needs backend
+  // Cancelable→Admitted linearization/receipt.
+  delete commandArgs.__onProjectTransactionOpened;
+  // Mapping edits are debounced independently of the generic history wrapper.
+  // Materialize their authoritative checkpoint before capturing this
+  // transaction's `before` image, so a fast fader/edit cannot silently fold an
+  // older mapping generation into a later engine mutation.
+  // Capture the identity before the async mapping barrier. A replacement
+  // during that await must not let this old click reserve a B transaction.
+  const currentEpoch = await flushProjectControlMappingsBeforeProjectMutation?.() ?? 0;
+  if (requestedExpectedEpoch !== null && requestedExpectedEpoch !== currentEpoch) {
+    throw new Error("Project changed while the operation dialog was open; nothing was applied.");
+  }
+  const expectedEpoch = requestedExpectedEpoch ?? currentEpoch;
+  const transaction = await tauriInvoke<ProjectTransactionTicket>("begin_project_transaction", {
     label: projectMutationLabel(command),
     coalesceKey: projectMutationCoalesceKey(command, args),
+    expectedEpoch,
+    ownerId: projectTransactionOwnerId,
   });
   try {
-    const result = await tauriInvoke<T>(command, args);
-    const status = await tauriInvoke<ProjectHistoryStatus>("commit_project_transaction", { transactionId });
-    window.dispatchEvent(new CustomEvent<ProjectHistoryStatus>(projectHistoryChangedEvent, { detail: status }));
+    onProjectTransactionOpened?.();
+    // Backend mutation commands may opt into server-authoritative transaction
+    // ownership. Tauri ignores unused object fields for legacy commands, while
+    // newly hardened commands reject raw/direct IPC without this exact ticket.
+    const result = await tauriInvoke<T>(command, {
+      ...commandArgs,
+      projectTransactionId: transaction.transaction_id,
+      expectedEpoch: transaction.project_epoch,
+      ownerId: projectTransactionOwnerId,
+    });
+    const mutation = await tauriInvoke<ProjectHistoryMutationResult>("commit_project_transaction", {
+      transactionId: transaction.transaction_id,
+      expectedEpoch: transaction.project_epoch,
+      ownerId: projectTransactionOwnerId,
+    });
+    window.dispatchEvent(new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: mutation }));
     return result;
   } catch (error) {
-    await tauriInvoke("cancel_project_transaction", { transactionId }).catch(() => undefined);
+    const cancellation = await tauriInvoke<ProjectHistoryMutationResult>("cancel_project_transaction", {
+      transactionId: transaction.transaction_id,
+      expectedEpoch: transaction.project_epoch,
+      ownerId: projectTransactionOwnerId,
+    }).catch(() => null);
+    if (cancellation) {
+      window.dispatchEvent(new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: cancellation }));
+    }
     throw error;
   }
 };
@@ -1301,6 +1396,52 @@ const explicitBeamTargetCount = (effect: EffectSummary | null): number => {
   return effect.color_mapping?.cells?.length ?? 0;
 };
 
+type ProjectControlMappingsAuthority = {
+  project_epoch: number;
+  project_revision: number;
+  checkpoint_hash: string;
+  publication_generation?: number;
+  publication_kind?: ProjectAuthorityBundle["publication_kind"];
+  mapping_replacement_generation?: number;
+  path_generation?: number;
+  history_generation?: number;
+  midi_mappings: MidiControlMapping[];
+  osc_mappings: OscControlMapping[];
+  dmx_mappings: DmxControlMapping[];
+  mapping_runtimes_retired?: boolean;
+};
+
+type ProjectTransactionTicket = {
+  transaction_id: number;
+  project_epoch: number;
+};
+
+type AppliedProjectAuthorityResult = {
+  verdict: ProjectAuthorityReplacementVerdict;
+  token: ProjectAuthorityToken;
+  applicationGenerationAtDecision: number;
+  bundle: ProjectAuthorityBundle | null;
+};
+
+/**
+ * The saved baseline is coordinator authority, not the UI's partial engine
+ * signature. Profiles and fixture-group metadata are persisted project data
+ * too, so comparing only snapshot/operator/mappings would falsely call those
+ * changes clean.
+ */
+type SavedProjectAuthorityBaseline = ProjectAuthorityToken & {
+  current_project_path: string | null;
+};
+
+type DvcImportProjectLoadResult = {
+  report: DvcImportReport;
+  load: ProjectLoadResult;
+};
+
+let flushProjectControlMappingsBeforeProjectMutation: (() => Promise<number>) | null = null;
+const projectTransactionOwnerId = typeof crypto !== "undefined" && "randomUUID" in crypto
+  ? `renderer:${crypto.randomUUID()}`
+  : `renderer:${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}`;
 
 export default function App() {
   const outputWindowId = readVideoOutputWindowId();
@@ -1317,9 +1458,14 @@ export default function App() {
   const [projectDropState, setProjectDropState] = createSignal<"project" | "invalid" | null>(null);
   const [dvcImportReport, setDvcImportReport] = createSignal<DvcImportReport | null>(null);
   const [recentProjectPaths, setRecentProjectPaths] = createSignal<string[]>(loadRecentProjectPaths());
-  const [projectRecoveryCheckpoint, setProjectRecoveryCheckpoint] = createSignal<ProjectRecoveryCheckpoint | null>(
-    loadProjectRecoveryCheckpoint(),
-  );
+  // Browser recovery is intentionally unavailable until the backend journal
+  // handshake proves the localStorage payload belongs to this machine's
+  // current authority serial.
+  const [projectRecoveryCheckpoint, setProjectRecoveryCheckpoint] = createSignal<ProjectRecoveryCheckpoint | null>(null);
+  const [projectRecoveryAuthoritySerial, setProjectRecoveryAuthoritySerial] = createSignal<number | null>(null);
+  let activeProjectRecoveryIntent: ProjectRecoveryIntent | null = null;
+  let projectRecoveryIntentRequestGeneration = 0;
+  let projectRecoveryIntentConsumer: Promise<void> | null = null;
   const [projectBackups, setProjectBackups] = createSignal<ProjectBackupSummary[]>([]);
   const [applicationUpdateConfiguration, setApplicationUpdateConfiguration] =
     createSignal<ApplicationUpdateConfiguration | null>(null);
@@ -1334,6 +1480,14 @@ export default function App() {
     redo_depth: 0,
     undo_label: null,
     redo_label: null,
+    project_epoch: 0,
+    project_revision: 0,
+    checkpoint_hash: "",
+    history_generation: 0,
+    undo_entry_id: null,
+    undo_checkpoint_hash: null,
+    redo_entry_id: null,
+    redo_checkpoint_hash: null,
   });
   const [namedWorkspaces, setNamedWorkspaces] = createSignal<NamedWorkspaceProfile[]>(loadNamedWorkspaces());
   const [selectedNamedWorkspaceId, setSelectedNamedWorkspaceId] = createSignal<string | null>(null);
@@ -1537,6 +1691,36 @@ export default function App() {
   const [oscPort, setOscPort] = createSignal(9000);
   const [oscRunning, setOscRunning] = createSignal(false);
   const [oscMappings, setOscMappings] = createSignal<OscControlMapping[]>([]);
+  const [projectMappingsAuthority, setProjectMappingsAuthority] = createSignal<
+    Pick<ProjectControlMappingsAuthority, "project_epoch" | "project_revision" | "checkpoint_hash">
+  >({ project_epoch: 0, project_revision: 0, checkpoint_hash: "" });
+  const [projectMappingsAuthorityReady, setProjectMappingsAuthorityReady] = createSignal(false);
+  let mappingSyncTimer: number | null = null;
+  let mappingSyncInFlight = false;
+  let mappingSyncDisposed = false;
+  // Every identity replacement invalidates all earlier refresh/persist replies.
+  // Request IDs distinguish replies within the same identity. This data-only
+  // state is also exercised by app/scripts/check-project-authority.mjs.
+  let projectAuthoritySync = createProjectAuthoritySyncState();
+  // Coherent authority publication invalidates all older independent reads
+  // before the new token is visible to individual Solid signals.
+  let projectReadGeneration = 0;
+  // Coordinator status may observe B before the B replacement result arrives.
+  // Track the stronger identity application separately so an event/reply
+  // duplicate is a real no-op, not another mapping invalidation.
+  let lastAppliedProjectReplacement: ProjectAuthorityToken | null = null;
+  let observedProjectInputRuntimeGeneration = 0;
+  let observedMappingInputRuntimeGeneration = 0;
+  let observedProjectPathGeneration = 0;
+  let observedProjectHistoryGeneration = 0;
+  let observedMappingReplacementGeneration = 0;
+  let observedAuthorityDispositionGeneration = 0;
+  let observedRecoveryAuthoritySerial = 0;
+  let authorityDispositionInitialized = false;
+  let savedProjectAuthorityBaseline: SavedProjectAuthorityBaseline | null = null;
+  let projectDirtyUsesAuthorityBaseline = false;
+  let mappingPersistPromise: Promise<void> | null = null;
+  let mappingObservedSignature: string | null = null;
   const [oscMapAddress, setOscMapAddress] = createSignal("/touchosc/fader1");
   const [oscMapAction, setOscMapAction] = createSignal<OscControlAction>("FixtureAttribute");
   const [oscMapAttribute, setOscMapAttribute] = createSignal("Dimmer");
@@ -1626,6 +1810,14 @@ export default function App() {
   const [videoLabel, setVideoLabel] = createSignal("Video Layer 1");
   const [videoSourceKind, setVideoSourceKind] = createSignal<VideoSourceKind>("File");
   const [videoPath, setVideoPath] = createSignal("");
+  // A Browse selection belongs to the project identity visible before its
+  // native picker opened. One Add consumes the fence; manually editing the
+  // path intentionally starts a fresh operation from the current identity.
+  const [videoSourceSelectionEpoch, setVideoSourceSelectionEpoch] = createSignal<number | null>(null);
+  const setVideoPathFromOperator = (path: string) => {
+    setVideoPath(path);
+    setVideoSourceSelectionEpoch(null);
+  };
   const [videoPreviewInfo, setVideoPreviewInfo] = createSignal("No preview");
   const [videoPreviewUrl, setVideoPreviewUrl] = createSignal("");
   const [videoPreviewLayerId, setVideoPreviewLayerId] = createSignal<number | null>(null);
@@ -2807,14 +2999,15 @@ export default function App() {
     setWorkspaceTab("control");
     setControlMode("mixer");
     setSelectedVideoOutputId(outputs[0]?.id ?? null);
-    setProjectHistoryStatus({
+    setProjectHistoryStatus((current) => ({
+      ...current,
       can_undo: true,
       can_redo: true,
       undo_depth: 4,
       redo_depth: 2,
       undo_label: "Existing edit",
       redo_label: "Existing redo",
-    });
+    }));
     setVideoProgramAudioEnabled(true);
     setVideoAudioMonitorStatus({
       output_open: true,
@@ -3164,10 +3357,46 @@ export default function App() {
     delete sceneBlockFixtureWindow.__syndocalSetControlFixtureSelection;
   });
   let lastRecoverySignature = projectRecoveryCheckpoint()?.signature ?? null;
+  // An Unsaved replacement must not offer A's recovery image as if it were a
+  // recovery candidate for B. Keep the stored bytes until a coherent B
+  // capture replaces them, but suppress the stale prompt in this authority
+  // generation instead of deleting data on an event-only notification.
+  let recoveryCheckpointNeedsReplacement = false;
+  let recoveryTombstoneWarningGeneration: number | null = null;
+  // A recovery write intentionally does not serialize slow backend/file work.
+  // Its monotonic request number instead makes reverse completion latest-wins.
+  let projectRecoveryWriteGeneration = 0;
   let lastDesktopBackupSignature: string | null = null;
   let lastDesktopBackupAt = 0;
+  const applyAuthoritativeProjectHistoryStatus = (status: ProjectHistoryStatus): boolean => {
+    if (!projectAuthorityCanApplyHistoryStatus(
+      status,
+      projectMappingsAuthority(),
+      observedProjectHistoryGeneration,
+    )) return false;
+    setProjectHistoryStatus(status);
+    observedProjectHistoryGeneration = status.history_generation;
+    return true;
+  };
+  const applyProjectHistoryMutationResult = (result: ProjectHistoryMutationResult): boolean => {
+    const candidate = authorityToken(result.authority);
+    const current = projectMappingsAuthority();
+    if (projectAuthorityTokenIsCurrent(candidate, current)) {
+      return applyAuthoritativeProjectHistoryStatus(result.history_status);
+    }
+    if (!projectAuthorityCanApply(candidate, current)) return false;
+
+    // Commit/Cancel/Clear can publish R+1 together with H+1. Apply that
+    // paired coordinator image first; only then can the exact-token history
+    // guard accept its status. A delayed A result after B is rejected before
+    // either mappings or history can be touched.
+    if (!applyPolledProjectAuthorityBundle(result.authority)) return false;
+    return applyAuthoritativeProjectHistoryStatus(result.history_status);
+  };
   const handleProjectHistoryChanged = (event: Event) => {
-    setProjectHistoryStatus((event as CustomEvent<ProjectHistoryStatus>).detail);
+    applyProjectHistoryMutationResult(
+      (event as CustomEvent<ProjectHistoryMutationResult>).detail,
+    );
   };
   window.addEventListener(projectHistoryChangedEvent, handleProjectHistoryChanged);
   onCleanup(() => window.removeEventListener(projectHistoryChangedEvent, handleProjectHistoryChanged));
@@ -3210,13 +3439,29 @@ export default function App() {
     setAppStatus(appStatusFromMessage(text, key));
     return text;
   };
+  if (isTauriRuntime()) {
+    void tauriInvoke<ProjectHistoryMutationResult | null>("register_project_transaction_owner", {
+      ownerId: projectTransactionOwnerId,
+    }).then((recovered) => {
+      if (!recovered) return;
+      window.dispatchEvent(
+        new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: recovered }),
+      );
+      setMessage("Recovered an interrupted edit from the previous application session. Undo is available.");
+    }).catch((error) => {
+      setMessage(`Interrupted edit recovery failed: ${String(error)}`);
+    });
+  }
   const refreshFixtureGroups = async () => {
     if (!isTauriRuntime()) return fixtureGroups();
+    const guard = captureProjectReadGuard();
     try {
       const groups = await tauriInvoke<FixtureGroupSummary[]>("get_fixture_groups");
+      if (!projectReadGuardIsCurrent(guard)) return fixtureGroups();
       setFixtureGroupList(groups);
       return groups;
     } catch (error) {
+      if (!projectReadGuardIsCurrent(guard)) return fixtureGroups();
       setMessage(`Fixture groups unavailable: ${String(error)}`);
       return fixtureGroups();
     }
@@ -3292,8 +3537,10 @@ export default function App() {
       setOperatorPolicyReady(true);
       return operatorPolicy();
     }
+    const guard = captureProjectReadGuard();
     try {
       const raw = await tauriInvoke<unknown>("get_operator_policy");
+      if (!projectReadGuardIsCurrent(guard)) return operatorPolicy();
       const policy = raw === null ? null : operatorPolicyFromUnknown(raw);
       if (raw !== null && !policy) throw new Error("Project operator policy failed frontend validation.");
       setOperatorPolicy(policy);
@@ -3306,6 +3553,7 @@ export default function App() {
       }
       return policy;
     } catch (error) {
+      if (!projectReadGuardIsCurrent(guard)) return operatorPolicy();
       setOperatorPolicy(null);
       setOperatorLockMode(null);
       setOperatorPolicyReady(true);
@@ -3443,17 +3691,39 @@ export default function App() {
     }
   };
   const startDmxInput = async () => {
+    const authority = captureProjectAuthorityIdentity();
     try {
-      await invoke("start_dmx_input", { config: dmxInputConfig(), mappings: dmxMappings() });
+      await flushProjectControlMappingsAuthority();
+      if (!isProjectAuthorityIdentityCurrent(authority)) return;
+      setDmxInputStatus((current) => ({
+        ...current,
+        running: false,
+        signal_present: false,
+        source_address: null,
+      }));
+      await invoke("start_dmx_input", {
+        config: dmxInputConfig(),
+        mappings: dmxMappings(),
+        expectedEpoch: authority.project_epoch,
+      });
+      if (!isProjectAuthorityIdentityCurrent(authority)) return;
       await refreshDmxInputStatus();
       setMessage("DMX input started.");
     } catch (error) {
+      setDmxInputStatus((current) => ({
+        ...current,
+        running: false,
+        signal_present: false,
+        source_address: null,
+      }));
       setMessage(`DMX input start failed: ${String(error)}`);
     }
   };
   const stopDmxInput = async () => {
+    const authority = captureProjectAuthorityIdentity();
     try {
-      await invoke("stop_dmx_input");
+      await invoke("stop_dmx_input", { expectedEpoch: authority.project_epoch });
+      if (!isProjectAuthorityIdentityCurrent(authority)) return;
       await refreshDmxInputStatus();
       setMessage("DMX input stopped and the merged input frame was cleared.");
     } catch (error) {
@@ -6341,15 +6611,34 @@ export default function App() {
     const blocked = blockedRoutes > 0 ? `, ${blockedRoutes} blocked` : "";
     return `${plans.inputs.length} in (${liveInputs} live), ${plans.outputs.length} out (${liveOutputs} live)${blocked}`;
   });
+  const externalVideoOwnershipReasonLabel = (reason: ExternalVideoTransportStatus["ownership_reason"]) => {
+    switch (reason) {
+      case "OwnedByMachineRole":
+        return "Owned by this machine role";
+      case "BlockedByMachineRole":
+        return "Blocked by this machine role";
+      case "Transitioning":
+        return "Transition in progress";
+      case "ProjectSwapDisarmed":
+        return "Project changed — outputs disarmed";
+      case "StartupDenied":
+        return "Startup denied output ownership";
+      case "TransitionFailed":
+        return "Transition failed; outputs remain fenced";
+    }
+  };
   const externalVideoTransportSummary = createMemo(() => {
     const report = externalVideoTransportReport();
+    const status = externalVideoTransportStatus();
+    const ownershipPolicy = status && !status.ownership_allowed
+      ? `, Blocked — ${status.ownership_error ?? externalVideoOwnershipReasonLabel(status.ownership_reason)}`
+      : "";
     if (!report) {
-      const status = externalVideoTransportStatus();
-      return status ? `active ${status.active_count}, not synced` : "Routes not synced";
+      return status ? `active ${status.active_count}, not synced${ownershipPolicy}` : "Routes not synced";
     }
     const failed = report.start_failed.length + report.stop_failed.length;
     const failedText = failed > 0 ? `, failed ${failed}` : "";
-    return `active ${report.active_count}, +${report.started.length}, =${report.kept.length}, -${report.stopped.length}, blocked ${report.blocked.length}, idle ${report.idle.length}${failedText}`;
+    return `active ${report.active_count}, +${report.started.length}, =${report.kept.length}, -${report.stopped.length}, blocked ${report.blocked.length}, idle ${report.idle.length}${failedText}${ownershipPolicy}`;
   });
   const externalVideoIoPlanRows = createMemo(() => {
     const plans = externalVideoIoPlans();
@@ -8656,11 +8945,19 @@ export default function App() {
     + `|control-mappings:${JSON.stringify({ midi: midiMappings(), osc: oscMappings(), dmx: dmxMappings() })}`;
   const markProjectClean = (nextSnapshot = snapshot()) => {
     setCleanProjectSignature(projectStateSignature(nextSnapshot));
+    const authority = projectMappingsAuthority();
+    savedProjectAuthorityBaseline = {
+      ...authority,
+      current_project_path: currentProjectPath(),
+    };
+    projectDirtyUsesAuthorityBaseline = true;
     setProjectDirty(false);
   };
 
   const clearProjectRecovery = () => {
     lastRecoverySignature = null;
+    recoveryCheckpointNeedsReplacement = false;
+    activeProjectRecoveryIntent = null;
     setProjectRecoveryCheckpoint(null);
     clearProjectRecoveryCheckpoint();
   };
@@ -8737,6 +9034,7 @@ export default function App() {
     setApplicationUpdateProgress({ phase: "downloading", downloaded_bytes: 0, total_bytes: null });
     setMessage(`Downloading signed Syndocal ${update.version} update...`);
     try {
+      await flushProjectControlMappingsAuthority();
       await invoke<ProjectBackupSummary>("install_application_update", {
         expectedVersion: update.version,
         midiMappings: midiMappings(),
@@ -8758,9 +9056,13 @@ export default function App() {
     if (!isTauriRuntime()) {
       return;
     }
+    const guard = captureProjectReadGuard();
     try {
-      setProjectHistoryStatus(await invoke<ProjectHistoryStatus>("get_project_history_status"));
+      const status = await invoke<ProjectHistoryStatus>("get_project_history_status");
+      if (!projectReadGuardIsCurrent(guard)) return;
+      applyAuthoritativeProjectHistoryStatus(status);
     } catch (error) {
+      if (!projectReadGuardIsCurrent(guard)) return;
       setMessage(`Unable to read Undo history: ${String(error)}`);
     }
   };
@@ -8769,7 +9071,15 @@ export default function App() {
     if (!isTauriRuntime()) {
       return;
     }
-    setProjectHistoryStatus(await invoke<ProjectHistoryStatus>("clear_project_history"));
+    const guard = captureProjectReadGuard();
+    try {
+      const mutation = await invoke<ProjectHistoryMutationResult>("clear_project_history");
+      if (!projectReadGuardIsCurrent(guard)) return;
+      applyProjectHistoryMutationResult(mutation);
+    } catch (error) {
+      if (!projectReadGuardIsCurrent(guard)) return;
+      setMessage(`Unable to clear Undo history: ${String(error)}`);
+    }
   };
 
   const undoProject = async () => {
@@ -8793,14 +9103,15 @@ export default function App() {
         cues: structuredClone(entry.beforeCues),
       }));
       setViewportSceneMatrixBankMoveUndo(null);
-      setProjectHistoryStatus({
+      setProjectHistoryStatus((current) => ({
+        ...current,
         can_undo: false,
         can_redo: false,
         undo_depth: 0,
         redo_depth: 0,
         undo_label: null,
         redo_label: null,
-      });
+      }));
       setMessage("Undid Move Cue Between Scene Banks.");
       return;
     }
@@ -8820,24 +9131,31 @@ export default function App() {
       }));
       setViewportControlEditUndo(nextUndo);
       setViewportControlEditRedo(nextRedo);
-      setProjectHistoryStatus({
+      setProjectHistoryStatus((current) => ({
+        ...current,
         can_undo: nextUndo.length > 0,
         can_redo: true,
         undo_depth: nextUndo.length,
         redo_depth: nextRedo.length,
         undo_label: nextUndo.length > 0 ? "Update Cue From Current" : null,
         redo_label: "Update Cue From Current",
-      });
+      }));
       setMessage("Undid Update Cue From Current.");
       return;
     }
     try {
-      const status = await invoke<ProjectHistoryStatus>("undo_project_transaction");
-      setProjectHistoryStatus(status);
-      await refreshSnapshot(true, true);
-      await refreshVideoPreviewDiagnostics(true);
-      setMessage(`Undid ${status.redo_label ?? "last edit"}.`);
+      const history = projectHistoryStatus();
+      const navigation = await invoke<ProjectHistoryNavigationResult>("undo_project_transaction", {
+        expectedEpoch: history.project_epoch,
+        expectedEntryId: history.undo_entry_id,
+        expectedCheckpointHash: history.undo_checkpoint_hash,
+      });
+      const applied = applyAuthorityBundleAsReplacement(navigation.authority);
+      if (!projectAuthorityApplicationResultIsCurrent(applied)) return;
+      applyAuthoritativeProjectHistoryStatus(navigation.history_status);
+      setMessage(`Undid ${navigation.history_status.redo_label ?? "last edit"}.`);
     } catch (error) {
+      void pollProjectAuthorityBundle();
       setMessage(`Undo failed: ${String(error)}`);
     }
   };
@@ -8871,24 +9189,31 @@ export default function App() {
       }));
       setViewportControlEditUndo(nextUndo);
       setViewportControlEditRedo(nextRedo);
-      setProjectHistoryStatus({
+      setProjectHistoryStatus((current) => ({
+        ...current,
         can_undo: true,
         can_redo: nextRedo.length > 0,
         undo_depth: nextUndo.length,
         redo_depth: nextRedo.length,
         undo_label: "Update Cue From Current",
         redo_label: nextRedo.length > 0 ? "Update Cue From Current" : null,
-      });
+      }));
       setMessage("Redid Update Cue From Current.");
       return;
     }
     try {
-      const status = await invoke<ProjectHistoryStatus>("redo_project_transaction");
-      setProjectHistoryStatus(status);
-      await refreshSnapshot(true, true);
-      await refreshVideoPreviewDiagnostics(true);
-      setMessage(`Redid ${status.undo_label ?? "last edit"}.`);
+      const history = projectHistoryStatus();
+      const navigation = await invoke<ProjectHistoryNavigationResult>("redo_project_transaction", {
+        expectedEpoch: history.project_epoch,
+        expectedEntryId: history.redo_entry_id,
+        expectedCheckpointHash: history.redo_checkpoint_hash,
+      });
+      const applied = applyAuthorityBundleAsReplacement(navigation.authority);
+      if (!projectAuthorityApplicationResultIsCurrent(applied)) return;
+      applyAuthoritativeProjectHistoryStatus(navigation.history_status);
+      setMessage(`Redid ${navigation.history_status.undo_label ?? "last edit"}.`);
     } catch (error) {
+      void pollProjectAuthorityBundle();
       setMessage(`Redo failed: ${String(error)}`);
     }
   };
@@ -8897,27 +9222,92 @@ export default function App() {
     if (!isTauriRuntime() || (!projectDirty() && !timelineEventEditorDirty())) {
       return;
     }
-    const sceneBlockDrafts = dirtyTimelineEventDrafts();
-    const signature = `${projectStateSignature(snapshot())}|scene-block-drafts:${JSON.stringify(
-      Object.entries(sceneBlockDrafts).sort(([left], [right]) => Number(left) - Number(right)),
-    )}`;
+    const capturedRecoverySerial = projectRecoveryAuthoritySerial();
+    if (typeof capturedRecoverySerial !== "number"
+      || !Number.isSafeInteger(capturedRecoverySerial)
+      || capturedRecoverySerial < 0) {
+      // Do not infer a serial while setup has not completed the backend
+      // journal handshake.
+      return;
+    }
     try {
+      // Every persistence capture sees the same mapping authority as an
+      // explicit Save. A debounced mapping edit cannot be omitted from a
+      // recovery/autosave image merely because this timer fired first.
+      await flushProjectControlMappingsAuthority();
+      const recoveryReadGuard = captureProjectReadGuard();
+      const sceneBlockDrafts = dirtyTimelineEventDrafts();
+      const draftSignature = JSON.stringify(
+        Object.entries(sceneBlockDrafts).sort(([left], [right]) => Number(left) - Number(right)),
+      );
+      const signature = projectRecoveryAuthoritySignature(
+        projectStateSignature(snapshot()),
+        draftSignature,
+        recoveryReadGuard.authority,
+      );
       if (signature !== lastRecoverySignature) {
-        const project = await invoke<ProjectFile>("get_project_checkpoint", {
-          midiMappings: midiMappings(),
-          oscMappings: oscMappings(),
-          dmxMappings: dmxMappings(),
+        if (!Number.isSafeInteger(projectRecoveryWriteGeneration)
+          || projectRecoveryWriteGeneration >= Number.MAX_SAFE_INTEGER) {
+          throw new Error("Recovery write generation is exhausted; reload Syndocal before continuing.");
+        }
+        const recoveryWriteGeneration = ++projectRecoveryWriteGeneration;
+        const capturedRecoveryGuard = {
+          writeGeneration: recoveryWriteGeneration,
+          readGeneration: recoveryReadGuard.generation,
+          authority: recoveryReadGuard.authority,
+          draftSignature,
+        };
+        const bundle = await invoke<ProjectCheckpointBundle>("get_project_checkpoint_bundle", {
+          expectedEpoch: recoveryReadGuard.authority.project_epoch,
+          expectedRevision: recoveryReadGuard.authority.project_revision,
+          expectedCheckpointHash: recoveryReadGuard.authority.checkpoint_hash,
         });
+        const currentDraftSignature = JSON.stringify(
+          Object.entries(dirtyTimelineEventDrafts()).sort(([left], [right]) => Number(left) - Number(right)),
+        );
+        if (!projectRecoveryCaptureIsCurrent(capturedRecoveryGuard, {
+          writeGeneration: projectRecoveryWriteGeneration,
+          readGeneration: projectReadGeneration,
+          authority: captureProjectAuthorityIdentity(),
+          draftSignature: currentDraftSignature,
+        }, {
+            project_epoch: bundle.project_epoch,
+            project_revision: bundle.project_revision,
+            checkpoint_hash: bundle.checkpoint_hash,
+          }) || bundle.recovery_authority_serial !== capturedRecoverySerial
+            || projectRecoveryAuthoritySerial() !== capturedRecoverySerial) {
+          // A later timer, identity replacement, or draft edit owns the next
+          // coherent checkpoint. Never stitch A drafts onto B's root JSON.
+          return;
+        }
         const checkpoint = createProjectRecoveryCheckpoint(
-          project,
-          currentProjectPath(),
+          bundle.project,
+          bundle.current_path,
           signature,
           sceneBlockDrafts,
         );
-        if (!saveProjectRecoveryCheckpoint(checkpoint)) {
+        if (!saveProjectRecoveryCheckpoint(checkpoint, capturedRecoverySerial)) {
           throw new Error("browser storage is unavailable or full");
         }
+        if (!projectRecoveryCaptureIsCurrent(capturedRecoveryGuard, {
+          writeGeneration: projectRecoveryWriteGeneration,
+          readGeneration: projectReadGeneration,
+          authority: captureProjectAuthorityIdentity(),
+          draftSignature: JSON.stringify(
+            Object.entries(dirtyTimelineEventDrafts()).sort(([left], [right]) => Number(left) - Number(right)),
+          ),
+        }, {
+          project_epoch: bundle.project_epoch,
+          project_revision: bundle.project_revision,
+          checkpoint_hash: bundle.checkpoint_hash,
+        }) || projectRecoveryAuthoritySerial() !== capturedRecoverySerial) {
+          // Do not advertise an older completed write after R2/identity won.
+          // Its bytes are coherent, and the current owner will replace them.
+          return;
+        }
         lastRecoverySignature = signature;
+        recoveryCheckpointNeedsReplacement = false;
+        activeProjectRecoveryIntent = null;
         setProjectRecoveryCheckpoint(checkpoint);
       }
       const now = Date.now();
@@ -9005,11 +9395,17 @@ export default function App() {
     if (syncProjectState) {
       const signature = projectStateSignature(next);
       const cleanSignature = cleanProjectSignature();
-      if (cleanSignature === null) {
-        setCleanProjectSignature(signature);
-        setProjectDirty(false);
-      } else {
-        setProjectDirty(signature !== cleanSignature);
+      // Once a coordinator bundle has established the durable baseline, a
+      // partial snapshot signature cannot decide dirty truth: it omits
+      // ancillary project data such as embedded profiles and fixture groups.
+      // Mutations/polls update it via their authority token instead.
+      if (!projectDirtyUsesAuthorityBaseline) {
+        if (cleanSignature === null) {
+          setCleanProjectSignature(signature);
+          setProjectDirty(false);
+        } else {
+          setProjectDirty(signature !== cleanSignature);
+        }
       }
       setOutput(next.output);
       setDmxOutputRoutes(next.dmx_outputs.length > 0 ? next.dmx_outputs : [next.output]);
@@ -9045,6 +9441,7 @@ export default function App() {
   type SnapshotRefreshWaiter = {
     syncProjectState: boolean;
     resetEditorDrafts: boolean;
+    projectReadGeneration: number;
     resolve: (snapshot: EngineSnapshot | null) => void;
   };
   const pendingFullSnapshotRefreshes: SnapshotRefreshWaiter[] = [];
@@ -9054,25 +9451,41 @@ export default function App() {
     fullSnapshotRefreshRunning = true;
     try {
       while (pendingFullSnapshotRefreshes.length > 0) {
-        const batch = pendingFullSnapshotRefreshes.splice(0);
+        const requestedReadGeneration = pendingFullSnapshotRefreshes[0].projectReadGeneration;
+        const batch: SnapshotRefreshWaiter[] = [];
+        for (let index = pendingFullSnapshotRefreshes.length - 1; index >= 0; index -= 1) {
+          if (pendingFullSnapshotRefreshes[index].projectReadGeneration === requestedReadGeneration) {
+            const [waiter] = pendingFullSnapshotRefreshes.splice(index, 1);
+            batch.unshift(waiter);
+          }
+        }
         snapshotRequestGuard.beginFull();
         let next: EngineSnapshot | null = null;
         try {
-          next = await invoke<EngineSnapshot>("get_snapshot");
-          setSnapshotRevision(null);
-          if (batch.some((waiter) => waiter.resetEditorDrafts)) {
-            await refreshOperatorPolicy(true);
-            await refreshFixtureGroups();
-            setFixtureGroupDeleteUndoAvailable(false);
-            setViewportFixtureGroupDeleteUndo(null);
+          const candidate = await invoke<EngineSnapshot>("get_snapshot");
+          if (requestedReadGeneration === projectReadGeneration) {
+            next = candidate;
+            setSnapshotRevision(null);
+            if (batch.some((waiter) => waiter.resetEditorDrafts)) {
+              await refreshOperatorPolicy(true);
+              await refreshFixtureGroups();
+              if (requestedReadGeneration !== projectReadGeneration) {
+                next = null;
+              } else {
+                setFixtureGroupDeleteUndoAvailable(false);
+                setViewportFixtureGroupDeleteUndo(null);
+              }
+            }
+            if (next !== null && requestedReadGeneration === projectReadGeneration) {
+              applyEngineSnapshot(
+                next,
+                batch.some((waiter) => waiter.syncProjectState),
+                batch.some((waiter) => waiter.resetEditorDrafts),
+              );
+            }
           }
-          applyEngineSnapshot(
-            next,
-            batch.some((waiter) => waiter.syncProjectState),
-            batch.some((waiter) => waiter.resetEditorDrafts),
-          );
         } catch (error) {
-          setMessage(String(error));
+          if (requestedReadGeneration === projectReadGeneration) setMessage(String(error));
         } finally {
           snapshotRequestGuard.finishFull();
         }
@@ -9087,7 +9500,12 @@ export default function App() {
     resetEditorDrafts = false,
   ): Promise<EngineSnapshot | null> =>
     new Promise((resolve) => {
-      pendingFullSnapshotRefreshes.push({ syncProjectState, resetEditorDrafts, resolve });
+      pendingFullSnapshotRefreshes.push({
+        syncProjectState,
+        resetEditorDrafts,
+        projectReadGeneration,
+        resolve,
+      });
       void runFullSnapshotRefreshes();
     });
 
@@ -9116,18 +9534,21 @@ export default function App() {
     }, true);
   }
   const refreshSnapshotDelta = async (syncUiState = true) => {
+    const requestedReadGeneration = projectReadGeneration;
     const requestGeneration = snapshotRequestGuard.beginDelta();
     if (requestGeneration === null) return null;
     try {
       const response = await invoke<EngineSnapshotSyncResponse>("get_snapshot_delta", {
         clientRevision: snapshotRevision(),
       });
-      if (!snapshotRequestGuard.canApplyDelta(requestGeneration)) {
+      if (requestedReadGeneration !== projectReadGeneration
+        || !snapshotRequestGuard.canApplyDelta(requestGeneration)) {
         return null;
       }
       return applyEngineSnapshotSyncResponse(response, syncUiState);
     } catch (error) {
-      if (!snapshotRequestGuard.canApplyDelta(requestGeneration)) {
+      if (requestedReadGeneration !== projectReadGeneration
+        || !snapshotRequestGuard.canApplyDelta(requestGeneration)) {
         return null;
       }
       setSnapshotRevision(null);
@@ -9154,12 +9575,67 @@ export default function App() {
     }, intervalMs);
   };
   scheduleSnapshotPoll();
+  let projectAuthorityPollTimer: number | null = null;
+  let projectAuthorityPollInFlight = false;
+  const pollProjectAuthorityBundle = async () => {
+    if (!isTauriRuntime() || projectAuthorityPollInFlight) return;
+    const known = projectMappingsAuthority();
+    projectAuthorityPollInFlight = true;
+    try {
+      const bundle = await tauriInvoke<ProjectAuthorityBundle | null>("poll_project_authority_bundle", {
+        knownEpoch: known.project_epoch,
+        knownRevision: known.project_revision,
+        knownCheckpointHash: known.checkpoint_hash,
+        knownPathGeneration: observedProjectPathGeneration,
+        knownHistoryGeneration: observedProjectHistoryGeneration,
+        knownMappingReplacementGeneration: observedMappingReplacementGeneration,
+        knownAuthorityDispositionGeneration: observedAuthorityDispositionGeneration,
+        knownRecoveryAuthoritySerial: observedRecoveryAuthoritySerial,
+        knownProjectInputRuntimeGeneration: observedProjectInputRuntimeGeneration,
+        knownMappingInputRuntimeGeneration: observedMappingInputRuntimeGeneration,
+      });
+      if (bundle) {
+        applyPolledProjectAuthorityBundle(bundle);
+        void consumePendingProjectRecoveryIntent(bundle);
+      }
+    } catch (error) {
+      // A pending transaction intentionally rejects a partial capture. This
+      // poll is convergence-only, so surface neither a stale B error nor a
+      // noisy transient while a user edit owns the coordinator.
+      if (projectMappingsAuthorityReady()) {
+        const detail = String(error);
+        if (!detail.includes("transaction")) setMessage(`Project authority refresh failed: ${detail}`);
+      }
+    } finally {
+      projectAuthorityPollInFlight = false;
+    }
+  };
+  const scheduleProjectAuthorityPoll = () => {
+    if (!isTauriRuntime()) return;
+    projectAuthorityPollTimer = window.setTimeout(async () => {
+      await pollProjectAuthorityBundle();
+      scheduleProjectAuthorityPoll();
+    }, document.hidden ? 2_000 : 1_000);
+  };
+  scheduleProjectAuthorityPoll();
   const telemetryReportTimer = isTauriRuntime() ? window.setInterval(refreshEngineTelemetryReport, 1000) : null;
   const dmxInputStatusTimer = isTauriRuntime() ? window.setInterval(refreshDmxInputStatus, 1000) : null;
   const recoveryTimer = isTauriRuntime() ? window.setInterval(() => void saveProjectRecovery(), 10_000) : null;
   onCleanup(() => {
+    mappingSyncDisposed = true;
+    // This App instance is the sole owner of the module-level bridge while
+    // mounted. Clear it unconditionally so a later window never calls a
+    // disposed mapping authority closure.
+    flushProjectControlMappingsBeforeProjectMutation = null;
+    if (mappingSyncTimer !== null) {
+      window.clearTimeout(mappingSyncTimer);
+      mappingSyncTimer = null;
+    }
     if (snapshotPollTimer !== null) {
       window.clearTimeout(snapshotPollTimer);
+    }
+    if (projectAuthorityPollTimer !== null) {
+      window.clearTimeout(projectAuthorityPollTimer);
     }
     if (telemetryReportTimer !== null) {
       window.clearInterval(telemetryReportTimer);
@@ -9185,6 +9661,7 @@ export default function App() {
     void refreshDmxInputStatus();
     void refreshProjectBackups();
     void refreshProjectHistoryStatus();
+    void refreshProjectControlMappings().catch((error) => setMessage(String(error)));
     void initializeApplicationUpdate();
   });
   createEffect(() => {
@@ -9207,6 +9684,47 @@ export default function App() {
     onCleanup(() => {
       disposed = true;
       unlistenUpdateProgress?.();
+    });
+  });
+  createEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+    let disposed = false;
+    let unlistenProjectAuthority: (() => void) | null = null;
+    let unlistenProjectInputsRetired: (() => void) | null = null;
+    void listen<ProjectLoadResult>("syndocal://project-authority-replaced", (event) => {
+      // The monotonic guard is inside applyLoadedProjectResult. A slow B
+      // event that arrives after C therefore cannot reset C path/mappings,
+      // clean state, input signals, or resurrect its dirty sync request.
+      void applyAuthoritativeProjectReplacement(event.payload).catch((error) => setMessage(String(error)));
+    })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+        } else {
+          unlistenProjectAuthority = unlisten;
+        }
+      })
+      .catch((error) => setMessage(String(error)));
+    void listen("syndocal://project-control-inputs-retired", () => {
+      // Standby startup can perform a same-identity runtime-only sanitize.
+      // It preserves mappings/history/path, so reset just live worker signals
+      // rather than passing through the identity hydration path.
+      resetRetiredProjectControlInputUi();
+    })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+        } else {
+          unlistenProjectInputsRetired = unlisten;
+        }
+      })
+      .catch((error) => setMessage(String(error)));
+    onCleanup(() => {
+      disposed = true;
+      unlistenProjectAuthority?.();
+      unlistenProjectInputsRetired?.();
     });
   });
   createEffect(() => {
@@ -9395,12 +9913,14 @@ export default function App() {
       return;
     }
     try {
+      const expectedEpoch = captureProjectAuthorityIdentity().project_epoch;
       const path = await invoke<string | null>("select_video_source_file", { kind: sourceKind });
       if (!path) {
         setMessage("Video source selection canceled.");
         return;
       }
       setVideoPath(path);
+      setVideoSourceSelectionEpoch(expectedEpoch);
       if (shouldReplaceVideoLayerDraftLabel(videoLabel())) {
         setVideoLabel(mediaLabelFromPath(path));
       }
@@ -9570,7 +10090,7 @@ export default function App() {
         },
         rotation: { ...fixture.rotation },
       };
-      const fixtureIds = await invoke<number[]>("patch_fixtures", { requests: [request] });
+      const fixtureIds = await invoke<number[]>("patch_fixtures", { requests: [request], profiles: [imported] });
       const fixtureId = fixtureIds[0];
       if (fixtureId === undefined) {
         setMessage("Fixture duplicate did not return a fixture id.");
@@ -9623,6 +10143,7 @@ export default function App() {
     const offset = mappingSnapEnabled() ? normalizedMappingSnapSize() : 1;
     const sourceFixtures: PatchedFixtureSummary[] = [];
     const requests: PatchFixtureRequest[] = [];
+    const profiles: FixtureProfileSummary[] = [];
 
     try {
       for (const fixture of fixtures) {
@@ -9640,6 +10161,7 @@ export default function App() {
         reserveDmxAddressRange(occupiedRanges, fixture.universe, nextAddress, footprint);
         nextAddressByUniverse.set(fixture.universe, nextAddress + footprint);
         sourceFixtures.push(fixture);
+        profiles.push(imported);
         requests.push({
           profile_path: imported.source_path,
           mode_name: fixture.mode_name,
@@ -9656,7 +10178,7 @@ export default function App() {
         });
       }
 
-      const fixtureIds = await invoke<number[]>("patch_fixtures", { requests });
+      const fixtureIds = await invoke<number[]>("patch_fixtures", { requests, profiles });
       if (fixtureIds.length !== requests.length) {
         setMessage(`Fixture duplicate returned ${fixtureIds.length}/${requests.length} fixture id(s).`);
         await refreshSnapshot();
@@ -9745,7 +10267,10 @@ export default function App() {
     try {
       const fixtureIds = viewportFixture === "patch"
         ? requests.map((request, index) => Math.max(0, ...snapshot().fixtures.map((fixture) => fixture.id)) + index + 1)
-        : await invoke<number[]>("patch_fixtures", { requests });
+        : await invoke<number[]>("patch_fixtures", {
+          requests,
+          profiles: requests.map(() => imported),
+        });
       if (viewportFixture === "patch") {
         setSnapshot((current) => ({
           ...current,
@@ -9939,14 +10464,15 @@ export default function App() {
     const nextUndo = [...viewportControlEditUndo(), historyEntry];
     setViewportControlEditUndo(nextUndo);
     setViewportControlEditRedo([]);
-    setProjectHistoryStatus({
+    setProjectHistoryStatus((current) => ({
+      ...current,
       can_undo: true,
       can_redo: false,
       undo_depth: nextUndo.length,
       redo_depth: 0,
       undo_label: "Update Cue From Current",
       redo_label: null,
-    });
+    }));
     setProjectDirty(true);
   };
   const runControlEditLookUpdate = async (
@@ -9972,9 +10498,12 @@ export default function App() {
       .map(controlEditTargetKey)
       .sort((left, right) => left.localeCompare(right))
       .join(",");
-    const transactionId = await tauriInvoke<number>("begin_project_transaction", {
+    const expectedEpoch = await flushProjectControlMappingsBeforeMutation();
+    const transaction = await tauriInvoke<ProjectTransactionTicket>("begin_project_transaction", {
       label: projectMutationLabel("update_cue_from_current"),
       coalesceKey: `update_cue_from_current:cue:${cue.id}:${scopeSignature}`,
+      expectedEpoch,
+      ownerId: projectTransactionOwnerId,
     });
     try {
       for (const captureScope of captureTargets) {
@@ -9985,16 +10514,27 @@ export default function App() {
           captureScope,
         });
       }
-      const status = await tauriInvoke<ProjectHistoryStatus>("commit_project_transaction", {
-        transactionId,
+      const mutation = await tauriInvoke<ProjectHistoryMutationResult>("commit_project_transaction", {
+        transactionId: transaction.transaction_id,
+        expectedEpoch: transaction.project_epoch,
+        ownerId: projectTransactionOwnerId,
       });
       window.dispatchEvent(
-        new CustomEvent<ProjectHistoryStatus>(projectHistoryChangedEvent, { detail: status }),
+        new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: mutation }),
       );
       setMessage(`Updated cue ${cue.id} look from the current Store Scope.`);
       await refreshSnapshot();
     } catch (error) {
-      await tauriInvoke("cancel_project_transaction", { transactionId }).catch(() => undefined);
+      const cancellation = await tauriInvoke<ProjectHistoryMutationResult>("cancel_project_transaction", {
+        transactionId: transaction.transaction_id,
+        expectedEpoch: transaction.project_epoch,
+        ownerId: projectTransactionOwnerId,
+      }).catch(() => null);
+      if (cancellation) {
+        window.dispatchEvent(
+          new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: cancellation }),
+        );
+      }
       throw error;
     }
   };
@@ -10689,6 +11229,7 @@ export default function App() {
     importStageMapPreset,
   } = createStageMapController({
     invoke,
+    projectEpoch: () => projectMappingsAuthority().project_epoch,
     snapshot,
     refreshSnapshot,
     setMessage,
@@ -11001,41 +11542,609 @@ export default function App() {
     }));
   };
 
-  const replaceProjectControlMappings = async (
-    nextMidiMappings: MidiControlMapping[],
-    nextOscMappings: OscControlMapping[],
-    nextDmxMappings: DmxControlMapping[],
-  ) => {
-    if (midiControlConnected()) {
-      try {
-        await invoke("disconnect_midi_control");
-      } catch {
-        // Project replacement still owns the frontend mapping state.
-      }
+  const projectControlMappingsSignature = (
+    midi: MidiControlMapping[],
+    osc: OscControlMapping[],
+    dmx: DmxControlMapping[],
+  ) => JSON.stringify({ midi, osc, dmx });
+
+  const authorityToken = (authority: Partial<ProjectControlMappingsAuthority>): ProjectAuthorityToken => ({
+    project_epoch: authority.project_epoch ?? projectMappingsAuthority().project_epoch,
+    project_revision: authority.project_revision ?? projectMappingsAuthority().project_revision,
+    checkpoint_hash: authority.checkpoint_hash ?? projectMappingsAuthority().checkpoint_hash,
+  });
+
+  const savedProjectAuthorityBaselineMatches = (bundle: ProjectAuthorityBundle): boolean => {
+    const saved = savedProjectAuthorityBaseline;
+    return saved !== null
+      && saved.project_epoch === bundle.project_epoch
+      && saved.checkpoint_hash === bundle.checkpoint_hash
+      && saved.current_project_path === bundle.current_project_path;
+  };
+
+  const recomputeProjectDirtyFromAuthority = (bundle: ProjectAuthorityBundle) => {
+    projectDirtyUsesAuthorityBaseline = true;
+    if (savedProjectAuthorityBaseline === null) {
+      setProjectDirty(true);
+      return;
     }
-    if (oscRunning()) {
-      try {
-        await invoke("stop_osc_input");
-      } catch {
-        // The newly loaded project's mappings must still replace the old set.
-      }
+    setProjectDirty(!savedProjectAuthorityBaselineMatches(bundle));
+  };
+
+  /**
+   * An UnsavedReplacement makes the prior browser recovery image unsafe.
+   * Do its one-key durable invalidation before any B signals are committed;
+   * otherwise a crash between UI hydration and storage cleanup could offer A
+   * on restart. Exact event/reply/poll duplicates deliberately do nothing.
+   */
+  const preflightProjectAuthorityRecoveryDisposition = (bundle: ProjectAuthorityBundle): boolean => {
+    const state: ProjectAuthorityDispositionState = {
+      baseline: savedProjectAuthorityBaseline,
+      observedDispositionGeneration: observedAuthorityDispositionGeneration,
+      dispositionInitialized: authorityDispositionInitialized,
+      dirty: projectDirty(),
+    };
+    // Determine whether this is a newly observed B before writing. Exact
+    // event/reply/poll duplicates have no storage side effect or warning.
+    const preview = projectAuthorityRecoveryTombstonePreflight(state, bundle, true);
+    const transition = bundle.recovery_authority_last_transition;
+    const preservesAcknowledgedIntent = activeProjectRecoveryIntent !== null
+      && transition.kind === "recovery_acknowledged"
+      && transition.request_id === activeProjectRecoveryIntent.request_id
+      && transition.recovery_publication_serial
+        === activeProjectRecoveryIntent.expected_target_serial
+      && transition.target_checkpoint_hash === bundle.checkpoint_hash;
+    const tombstoneWritten = preservesAcknowledgedIntent
+      || !preview.suppressRecoveryPrompt
+      || tombstoneProjectRecoveryCheckpoint(bundle.recovery_authority_serial);
+    const decision = projectAuthorityRecoveryTombstonePreflight(state, bundle, tombstoneWritten);
+    if (decision.suppressRecoveryPrompt) {
+      // Even when localStorage is unavailable, B is authoritative. Suppress
+      // A from this live UI and let the periodic coherent capture retry the
+      // durable recovery write; do not leave engine B paired with UI A.
+      recoveryCheckpointNeedsReplacement = true;
+      lastRecoverySignature = null;
+      setProjectRecoveryCheckpoint(null);
     }
-    if (dmxInputStatus().running) {
-      try {
-        await invoke("stop_dmx_input");
-      } catch {
-        // Project replacement still owns the frontend mapping state.
-      }
+    if (decision.warnRecoveryStorageUnavailable
+      && recoveryTombstoneWarningGeneration !== bundle.authority_disposition_generation) {
+      recoveryTombstoneWarningGeneration = bundle.authority_disposition_generation;
+      setMessage(
+        "Project was applied, but browser recovery storage is unavailable. Crash recovery is unavailable until a later recovery save succeeds.",
+      );
     }
-    setMidiControlConnected(false);
-    setOscRunning(false);
-    setMidiMappings(nextMidiMappings);
-    setOscMappings(nextOscMappings);
-    setDmxMappings(nextDmxMappings);
-    if (nextDmxMappings.length > 0) {
+    return decision.applyAuthority;
+  };
+
+  /**
+   * Apply only a newer durable disposition.  Event/reply duplicates therefore
+   * cannot re-clear browser recovery or flip dirty state after a local edit;
+   * an event-loss poll still reaches exactly the same state.
+   */
+  const applyProjectAuthorityDisposition = (bundle: ProjectAuthorityBundle): boolean => {
+    const previous: ProjectAuthorityDispositionState = {
+      baseline: savedProjectAuthorityBaseline,
+      observedDispositionGeneration: observedAuthorityDispositionGeneration,
+      dispositionInitialized: authorityDispositionInitialized,
+      dirty: projectDirty(),
+    };
+    const next = projectAuthorityDispositionTransition(previous, bundle);
+    if (next === previous) return false;
+    savedProjectAuthorityBaseline = next.baseline;
+    observedAuthorityDispositionGeneration = next.observedDispositionGeneration;
+    authorityDispositionInitialized = next.dispositionInitialized;
+    projectDirtyUsesAuthorityBaseline = true;
+    setProjectDirty(next.dirty);
+    if (bundle.authority_disposition === "clean_at_path") {
+      setCleanProjectSignature(projectStateSignature(bundle.snapshot));
+      // This is an explicit saved baseline, so an old crash-recovery image
+      // belongs to a discarded project and can be retired deterministically.
+      if (projectAuthorityDispositionClearsRecovery(bundle.authority_disposition)) {
+        clearProjectRecovery();
+      }
+    } else if (bundle.authority_disposition === "unsaved_replacement"
+      || bundle.authority_disposition === "recovery_pending_ack") {
+      setCleanProjectSignature(null);
+      if (bundle.authority_disposition === "unsaved_replacement") {
+        recoveryCheckpointNeedsReplacement = true;
+        lastRecoverySignature = null;
+        // Storage was atomically tombstoned in the preflight before any B UI
+        // signal was visible. Keep the local prompt absent until save recovery
+        // writes one coherent B checkpoint over that tombstone.
+        setProjectRecoveryCheckpoint(null);
+      }
+    } else if (bundle.authority_disposition === "history_navigation") {
+      // Undo/Redo advances the durable recovery serial. Its old browser
+      // checkpoint is therefore no longer a valid live action even though
+      // the saved-authority baseline may make the navigated image clean.
+      activeProjectRecoveryIntent = null;
+      recoveryCheckpointNeedsReplacement = true;
+      lastRecoverySignature = null;
+      setProjectRecoveryCheckpoint(null);
+      void tombstoneProjectRecoveryCheckpoint(bundle.recovery_authority_serial);
+    }
+    return true;
+  };
+
+  const applyProjectAuthorityDirtyState = (bundle: ProjectAuthorityBundle) => {
+    if (applyProjectAuthorityDisposition(bundle)) return;
+    // Ordinary coordinator mutations retain the prior disposition but still
+    // change the authoritative checkpoint. Re-evaluate against the saved
+    // baseline so profile/group-only edits become dirty too.
+    if (bundle.publication_kind === "mutation") {
+      recomputeProjectDirtyFromAuthority(bundle);
+    }
+  };
+
+  const timelineEventDraftSignature = () => JSON.stringify(
+    Object.entries(timelineEventDrafts()).sort(([left], [right]) => Number(left) - Number(right)),
+  );
+
+  const abandonProjectRecoveryIntent = (serial: number) => {
+    activeProjectRecoveryIntent = null;
+    projectRecoveryIntentConsumer = null;
+    recoveryCheckpointNeedsReplacement = true;
+    lastRecoverySignature = null;
+    setProjectRecoveryCheckpoint(null);
+    // This is best effort like the UnsavedReplacement preflight. The backend
+    // authority already won; a failed browser write must not resurrect A in
+    // the live UI or prevent C from remaining visible.
+    void tombstoneProjectRecoveryCheckpoint(serial);
+  };
+
+  /**
+   * One recovery invoke can be delivered in any order: Tauri event first,
+   * command reply first, or only a later authority poll. The intent is stored
+   * before invoke and this is the sole draft-staging/ACK owner, so duplicate
+   * deliveries coalesce instead of acknowledging or clearing twice.
+   */
+  const consumePendingProjectRecoveryIntent = (bundle: ProjectAuthorityBundle): Promise<void> => {
+    const intent = activeProjectRecoveryIntent;
+    if (!intent) return Promise.resolve();
+    const delivery = projectRecoveryIntentDeliveryForAuthority(intent, bundle);
+    if (delivery === "keep") return Promise.resolve();
+    if (delivery === "offer") {
+      if (saveProjectRecoveryCheckpoint(intent.checkpoint, bundle.recovery_authority_serial)) {
+        activeProjectRecoveryIntent = null;
+        recoveryCheckpointNeedsReplacement = false;
+        setProjectRecoveryCheckpoint(intent.checkpoint);
+        setMessage("Project recovery did not publish. The recovery checkpoint remains available to retry.");
+      } else {
+        setMessage(
+          "Project recovery did not publish, and browser storage could not be refreshed. Keep Syndocal open and retry recovery.",
+        );
+      }
+      return Promise.resolve();
+    }
+    if (delivery === "invalidate") {
+      abandonProjectRecoveryIntent(bundle.recovery_authority_serial);
+      return Promise.resolve();
+    }
+    if (projectRecoveryIntentConsumer) return projectRecoveryIntentConsumer;
+    const capturedIntent = intent;
+    if (delivery === "acknowledged") {
+      const expectedDrafts = reconcileTimelineEventDrafts(
+        bundle.snapshot.timeline.events,
+        capturedIntent.checkpoint.editor_drafts?.timeline_events ?? {},
+      );
+      const expectedDraftSignature = JSON.stringify(
+        Object.entries(expectedDrafts).sort(([left], [right]) => Number(left) - Number(right)),
+      );
+      if (timelineEventDraftSignature() === expectedDraftSignature) {
+        if (saveProjectRecoveryCheckpoint(
+          capturedIntent.checkpoint,
+          bundle.recovery_authority_serial,
+        )) {
+          activeProjectRecoveryIntent = null;
+          recoveryCheckpointNeedsReplacement = true;
+          lastRecoverySignature = null;
+          setProjectRecoveryCheckpoint(null);
+          setMessage(
+            `Recovered ${projectRecoverySourceLabel(capturedIntent.checkpoint)} from ${projectRecoveryTimeLabel(capturedIntent.checkpoint)}. Save to keep it.`,
+          );
+        } else {
+          setMessage(
+            "Recovered project is active, but its crash-recovery checkpoint could not be updated. Keep Syndocal open and save the project.",
+          );
+        }
+      } else {
+        setMessage(
+          "Recovered project acknowledgement arrived after local draft changes. The recovery intent remains available until the project is saved.",
+        );
+      }
+      return Promise.resolve();
+    }
+    const capturedAuthority = authorityToken(bundle);
+    const work = (async () => {
+      // The event may be observed before the original invoke resolves, but B
+      // must already be the UI's current authority before local A drafts can
+      // be reconciled into B's timeline.
+      if (activeProjectRecoveryIntent !== capturedIntent
+        || !projectAuthorityTokenIsCurrent(capturedAuthority, projectMappingsAuthority())
+        || projectRecoveryAuthoritySerial() !== capturedIntent.expected_target_serial) {
+        return;
+      }
+      const recoveredTimelineEventDrafts = capturedIntent.checkpoint.editor_drafts?.timeline_events ?? {};
+      setTimelineEventDrafts(reconcileTimelineEventDrafts(
+        bundle.snapshot.timeline.events,
+        recoveredTimelineEventDrafts,
+      ));
+      const stagedDraftSignature = timelineEventDraftSignature();
+      try {
+        const acknowledged = await tauriInvoke<ProjectAuthorityBundle>("acknowledge_project_recovery_applied", {
+          expectedEpoch: bundle.project_epoch,
+          expectedRevision: bundle.project_revision,
+          expectedCheckpointHash: bundle.checkpoint_hash,
+          expectedAuthorityDispositionGeneration: bundle.authority_disposition_generation,
+          recoveryRequestId: capturedIntent.request_id,
+        });
+        const acknowledgementApplicationCurrent = projectRecoveryAcknowledgementApplicationIsCurrent(
+          activeProjectRecoveryIntent === capturedIntent,
+          capturedAuthority,
+          projectMappingsAuthority(),
+        );
+        if (!acknowledgementApplicationCurrent) {
+          // A later project C already applied and is the live authority: its
+          // own application invalidated this intent and/or replaced the
+          // authority token while the ACK was in flight. Applying this stale B
+          // acknowledgement bundle would rewind C's MIDI/OSC/DMX/path/history/
+          // disposition UI, so drop every side effect and let C win. C's
+          // application already resolved this intent, and the durable
+          // acknowledged transition stays stored/recoverable for a restart.
+          return;
+        }
+        // Recovery ACK changes durable recovery/disposition state only. Input
+        // workers may have been connected or stopped while this RPC was in
+        // flight without changing the project token, so never let the ACK's
+        // captured input snapshot rewind that newer live UI truth.
+        applyProjectAuthorityRuntimeStatus(acknowledged, false);
+        const currentDraftSignature = timelineEventDraftSignature();
+        if (acknowledged.recovery_authority_serial === capturedIntent.expected_target_serial + 1
+          && projectRecoveryAcknowledgementCanClear(
+            stagedDraftSignature,
+            currentDraftSignature,
+            capturedAuthority,
+            authorityToken(acknowledged),
+            projectMappingsAuthority(),
+            acknowledgementApplicationCurrent,
+          )) {
+          if (saveProjectRecoveryCheckpoint(
+            capturedIntent.checkpoint,
+            acknowledged.recovery_authority_serial,
+          )) {
+            activeProjectRecoveryIntent = null;
+            recoveryCheckpointNeedsReplacement = true;
+            lastRecoverySignature = null;
+            setProjectRecoveryCheckpoint(null);
+            setMessage(
+              `Recovered ${projectRecoverySourceLabel(capturedIntent.checkpoint)} from ${projectRecoveryTimeLabel(capturedIntent.checkpoint)}. Save to keep it.`,
+            );
+          } else {
+            setMessage(
+              "Recovered project is active, but its crash-recovery checkpoint could not be updated. Keep Syndocal open and save the project.",
+            );
+          }
+        } else {
+          // B is still the live authority (the stale-C case returned above),
+          // but a local draft edit occurred while ACK was in flight. The
+          // backend is now truthfully unsaved B; retain that draft and force
+          // the next capture to write a coherent B envelope rather than
+          // clearing it.
+          activeProjectRecoveryIntent = null;
+          recoveryCheckpointNeedsReplacement = true;
+          lastRecoverySignature = null;
+        }
+      } catch (error) {
+        // A later C may have won the exact ACK race. Its event/poll will
+        // invalidate this intent; until then the one durable v3 envelope
+        // remains available for retry/restart rather than losing local drafts.
+        if (activeProjectRecoveryIntent === capturedIntent) {
+          setMessage(`Recovered project is waiting for acknowledgement: ${String(error)}`);
+        }
+      }
+    })();
+    const settled = work.finally(() => {
+      if (projectRecoveryIntentConsumer === settled) projectRecoveryIntentConsumer = null;
+    });
+    projectRecoveryIntentConsumer = settled;
+    return settled;
+  };
+
+  const captureProjectAuthorityIdentity = (): ProjectAuthorityToken => ({
+    ...projectMappingsAuthority(),
+  });
+  const isProjectAuthorityIdentityCurrent = (captured: ProjectAuthorityToken): boolean =>
+    projectAuthorityTokenIsCurrent(captured, projectMappingsAuthority());
+
+  const beginProjectReadGeneration = () => {
+    if (!Number.isSafeInteger(projectReadGeneration) || projectReadGeneration >= Number.MAX_SAFE_INTEGER) {
+      throw new Error("Project read generation is exhausted; reload Syndocal before continuing.");
+    }
+    projectReadGeneration += 1;
+    return projectReadGeneration;
+  };
+  const captureProjectReadGuard = () => ({
+    generation: projectReadGeneration,
+    authority: captureProjectAuthorityIdentity(),
+  });
+  const projectReadGuardIsCurrent = (guard: ReturnType<typeof captureProjectReadGuard>) =>
+    guard.generation === projectReadGeneration
+    && projectAuthorityTokenIsCurrent(guard.authority, projectMappingsAuthority());
+
+  const adoptProjectMappingsAuthority = (authority: Partial<ProjectControlMappingsAuthority>) => {
+    const next = authorityToken(authority);
+    if (!projectAuthorityCanApply(next, projectMappingsAuthority())) {
+      return false;
+    }
+    setProjectMappingsAuthority(next);
+    setProjectMappingsAuthorityReady(true);
+    return true;
+  };
+
+  const mappingResponseIsCurrent = (request: { identityGeneration: number; requestGeneration: number }) =>
+    !mappingSyncDisposed
+    && projectAuthorityResponseIsCurrent(projectAuthoritySync, request);
+
+  const invalidateProjectControlMappingsForIdentity = () => {
+    projectAuthoritySync = invalidateProjectAuthorityIdentity(projectAuthoritySync);
+    // A newly published identity owns the mapping arrays. Drop any unsent A
+    // edit rather than allowing a delayed A request to overwrite/recommit B.
+    if (mappingSyncTimer !== null) {
+      window.clearTimeout(mappingSyncTimer);
+      mappingSyncTimer = null;
+    }
+    mappingObservedSignature = null;
+  };
+
+  type PreparedProjectControlMappings = {
+    authority: Partial<ProjectControlMappingsAuthority>;
+    token: ProjectAuthorityToken;
+    midi: MidiControlMapping[];
+    osc: OscControlMapping[];
+    dmx: DmxControlMapping[];
+  };
+
+  // Validate and copy the full mapping image before any identity signal is
+  // invalidated. The authority-bundle commit then has no Promise/fallible
+  // branch between mapping arrays and its companion snapshot/history/path.
+  const prepareProjectControlMappings = (
+    authority: Partial<ProjectControlMappingsAuthority>,
+    fallbackMidi: MidiControlMapping[] = [],
+    fallbackOsc: OscControlMapping[] = [],
+    fallbackDmx: DmxControlMapping[] = [],
+  ): PreparedProjectControlMappings | null => {
+    const token = authorityToken(authority);
+    if (!projectAuthorityCanApply(token, projectMappingsAuthority())) return null;
+    return {
+      authority,
+      token,
+      midi: authority.midi_mappings ?? fallbackMidi,
+      osc: authority.osc_mappings ?? fallbackOsc,
+      dmx: authority.dmx_mappings ?? fallbackDmx,
+    };
+  };
+
+  const commitPreparedProjectControlMappings = (prepared: PreparedProjectControlMappings) => {
+    mappingObservedSignature = projectControlMappingsSignature(prepared.midi, prepared.osc, prepared.dmx);
+    setMidiMappings(prepared.midi);
+    setOscMappings(prepared.osc);
+    setDmxMappings(prepared.dmx);
+    setProjectMappingsAuthority(prepared.token);
+    setProjectMappingsAuthorityReady(true);
+    if (prepared.dmx.length > 0) {
       setDmxInputConfig((current) => ({ ...current, merge_enabled: false }));
     }
   };
+
+  const hydrateProjectControlMappings = (
+    authority: Partial<ProjectControlMappingsAuthority>,
+    fallbackMidi: MidiControlMapping[] = [],
+    fallbackOsc: OscControlMapping[] = [],
+    fallbackDmx: DmxControlMapping[] = [],
+  ) => {
+    const prepared = prepareProjectControlMappings(authority, fallbackMidi, fallbackOsc, fallbackDmx);
+    if (!prepared) return false;
+    commitPreparedProjectControlMappings(prepared);
+    return true;
+  };
+
+  const currentProjectControlMappings = () => ({
+    midi: midiMappings(),
+    osc: oscMappings(),
+    dmx: dmxMappings(),
+  });
+
+  const scheduleProjectControlMappingsPersist = (delayMs = 180) => {
+    if (
+      mappingSyncDisposed
+      || !isTauriRuntime()
+      || !projectMappingsAuthorityReady()
+    ) {
+      return;
+    }
+    if (mappingSyncTimer !== null) window.clearTimeout(mappingSyncTimer);
+    mappingSyncTimer = window.setTimeout(() => {
+      mappingSyncTimer = null;
+      void persistProjectControlMappings();
+    }, delayMs);
+  };
+
+  const refreshProjectControlMappings = async (identityReplacement = false) => {
+    if (identityReplacement) {
+      invalidateProjectControlMappingsForIdentity();
+    }
+    const readGuard = captureProjectReadGuard();
+    const started = beginProjectAuthorityRequest(projectAuthoritySync);
+    projectAuthoritySync = started.state;
+    const authority = await tauriInvoke<ProjectControlMappingsAuthority>("get_project_control_mappings");
+    if (projectReadGuardIsCurrent(readGuard)
+      && mappingResponseIsCurrent(started.request)
+      && hydrateProjectControlMappings(authority)) {
+      projectAuthoritySync = markProjectAuthorityPersisted(projectAuthoritySync);
+    }
+    return authority;
+  };
+
+  const replaceProjectControlMappings = (
+    nextMidiMappings: MidiControlMapping[],
+    nextOscMappings: OscControlMapping[],
+    nextDmxMappings: DmxControlMapping[],
+    authority: Partial<ProjectControlMappingsAuthority> = {},
+  ) => {
+    // Project replacement retires old input workers in the backend before its
+    // engine publication barrier. The UI only hydrates the authoritative
+    // result; it must not race that fenced cleanup with frontend Stop calls.
+    const prepared = prepareProjectControlMappings(
+      authority,
+      nextMidiMappings,
+      nextOscMappings,
+      nextDmxMappings,
+    );
+    if (!prepared) return false;
+    invalidateProjectControlMappingsForIdentity();
+    commitPreparedProjectControlMappings(prepared);
+    projectAuthoritySync = markProjectAuthorityPersisted(projectAuthoritySync);
+    return true;
+  };
+
+  const persistProjectControlMappings = (): Promise<void> => {
+    if (
+      mappingSyncDisposed
+      || !isTauriRuntime()
+      || !projectMappingsAuthorityReady()
+    ) {
+      return Promise.resolve();
+    }
+    if (mappingSyncInFlight) {
+      return mappingPersistPromise ?? Promise.resolve();
+    }
+
+    const sentGeneration = projectAuthoritySync.localGeneration;
+    const started = beginProjectAuthorityRequest(projectAuthoritySync);
+    projectAuthoritySync = started.state;
+    const authority = projectMappingsAuthority();
+    const sentMappings = currentProjectControlMappings();
+    mappingSyncInFlight = true;
+    const request = (async () => {
+      try {
+        const next = await tauriInvoke<ProjectControlMappingsAuthority>("set_project_control_mappings", {
+          expectedEpoch: authority.project_epoch,
+          expectedRevision: authority.project_revision,
+          midiMappings: sentMappings.midi,
+          oscMappings: sentMappings.osc,
+          dmxMappings: sentMappings.dmx,
+        });
+        if (mappingResponseIsCurrent(started.request) && adoptProjectMappingsAuthority(next)) {
+          // Only the request that still owns this identity may acknowledge a
+          // local generation. A newer local edit remains dirty and is sent
+          // with this new CAS token below.
+          projectAuthoritySync = acknowledgeProjectAuthorityPersist(
+            projectAuthoritySync,
+            started.request,
+            sentGeneration,
+          );
+          if (projectAuthoritySync.localGeneration === sentGeneration) {
+            hydrateProjectControlMappings(next);
+          }
+          if (projectAuthorityMappingCommitRetiredInputs(next)) {
+            // `set_project_control_mappings` acknowledges after it has
+            // fenced, taken, and joined only mapping-driven runtimes. Keep
+            // MIDI Clock visible because it remains live by design.
+            resetRetiredMappingDrivenProjectControlInputUi();
+          }
+        }
+      } catch (error) {
+        // A CAS rejection gets a fresh authoritative token. It is still bound
+        // to the original identity/request: an A recovery reply cannot reset
+        // arrays or tokens after B has hydrated.
+        if (!mappingResponseIsCurrent(started.request)) return;
+        const recoveryStarted = beginProjectAuthorityRequest(projectAuthoritySync);
+        projectAuthoritySync = recoveryStarted.state;
+        try {
+          const current = await tauriInvoke<ProjectControlMappingsAuthority>("get_project_control_mappings");
+          if (mappingResponseIsCurrent(recoveryStarted.request) && adoptProjectMappingsAuthority(current)) {
+            if (projectAuthoritySync.localGeneration === sentGeneration) {
+              if (hydrateProjectControlMappings(current)) {
+                projectAuthoritySync = acknowledgeProjectAuthorityPersist(
+                  projectAuthoritySync,
+                  recoveryStarted.request,
+                  sentGeneration,
+                );
+              }
+              setMessage(`Project control mappings changed before this edit could be saved: ${String(error)}`);
+            } else {
+              setMessage("Project control mappings changed elsewhere; the newer local edit will be retried.");
+            }
+          }
+        } catch {
+          if (mappingResponseIsCurrent(recoveryStarted.request)) {
+            setMessage(`Unable to update project control mappings: ${String(error)}`);
+          }
+        }
+      }
+    })();
+    mappingPersistPromise = request;
+    void request.finally(() => {
+      if (mappingPersistPromise === request) {
+        mappingPersistPromise = null;
+        mappingSyncInFlight = false;
+      }
+      if (
+        !mappingSyncDisposed
+        && projectAuthorityShouldRetryPersist(
+          projectAuthoritySync,
+          started.request.identityGeneration,
+        )
+      ) {
+        scheduleProjectControlMappingsPersist(0);
+      }
+    });
+    return request;
+  };
+
+  const flushProjectControlMappingsAuthority = async () => {
+    if (mappingSyncTimer !== null) {
+      window.clearTimeout(mappingSyncTimer);
+      mappingSyncTimer = null;
+    }
+    while (
+      !mappingSyncDisposed
+      && projectMappingsAuthorityReady()
+      && projectAuthorityHasDirtyMappings(projectAuthoritySync)
+    ) {
+      const identityGeneration = projectAuthoritySync.identityGeneration;
+      await persistProjectControlMappings();
+      if (identityGeneration !== projectAuthoritySync.identityGeneration || mappingSyncInFlight) {
+        return;
+      }
+      // A rejected latest edit is hydrated above and marks itself current; a
+      // newer local edit loops with the newly adopted CAS token.
+      if (!projectAuthorityHasDirtyMappings(projectAuthoritySync)) return;
+    }
+  };
+  const flushProjectControlMappingsBeforeMutation = async (): Promise<number> => {
+    const expectedEpoch = projectMappingsAuthority().project_epoch;
+    await flushProjectControlMappingsAuthority();
+    if (projectMappingsAuthority().project_epoch !== expectedEpoch) {
+      throw new Error("Project changed while synchronizing control mappings; retry the edit.");
+    }
+    return expectedEpoch;
+  };
+  flushProjectControlMappingsBeforeProjectMutation = flushProjectControlMappingsBeforeMutation;
+
+  createEffect(() => {
+    const current = currentProjectControlMappings();
+    const signature = projectControlMappingsSignature(current.midi, current.osc, current.dmx);
+    if (mappingObservedSignature === null) {
+      mappingObservedSignature = signature;
+      return;
+    }
+    if (signature === mappingObservedSignature) return;
+    mappingObservedSignature = signature;
+    if (!isTauriRuntime() || !projectMappingsAuthorityReady()) return;
+    projectAuthoritySync = noteLocalProjectAuthorityEdit(projectAuthoritySync);
+    scheduleProjectControlMappingsPersist();
+  });
 
   const applySelectedFixtureLimits = () => {
     const fixture = selectedFixture();
@@ -11052,18 +12161,12 @@ export default function App() {
       return;
     }
     try {
-      await invoke("new_project");
-      await replaceProjectControlMappings([], [], []);
-      await resetProjectHistory();
-      setCurrentProjectPath(null);
+      const result = await invoke<ProjectLoadResult>("new_project");
+      const applied = await applyLoadedProjectResult(result, null);
+      if (!projectAuthorityApplicationResultIsCurrent(applied)) return;
       setWorkspaceTab("setup");
       setSetupSubTab("patch");
       setMessage("Created new untitled project.");
-      const next = await refreshSnapshot(true, true);
-      if (next) {
-        markProjectClean(next);
-      }
-      clearProjectRecovery();
     } catch (error) {
       setMessage(String(error));
     }
@@ -11071,6 +12174,7 @@ export default function App() {
 
   const saveUserTemplate = async () => {
     try {
+      await flushProjectControlMappingsAuthority();
       const path = await invoke<string | null>("save_user_template", {
         midiMappings: midiMappings(),
         oscMappings: oscMappings(),
@@ -11093,23 +12197,12 @@ export default function App() {
         setMessage("Template load canceled.");
         return;
       }
-      await replaceProjectControlMappings(
-        result.midi_mappings,
-        result.osc_mappings,
-        result.dmx_mappings,
-      );
-      await resetProjectHistory();
-      setCurrentProjectPath(null);
+      const applied = await applyLoadedProjectResult(result, null);
+      if (!projectAuthorityApplicationResultIsCurrent(applied)) return;
       setWorkspaceTab("setup");
       setSetupSubTab("patch");
-      const next = await refreshSnapshot(true, true);
-      if (next) {
-        setCleanProjectSignature("__syndocal_template_unsaved__");
-        setProjectDirty(true);
-      }
-      clearProjectRecovery();
       setMessage(
-        `Created an unsaved project from ${result.label} (${result.profiles.length} embedded profiles, ${result.midi_mappings.length} MIDI, ${result.osc_mappings.length} OSC, ${result.dmx_mappings.length} DMX mappings). All DMX and video outputs are disabled and blacked out.`,
+        `Created an unsaved project from ${result.label} (${result.profiles.length} embedded profiles, ${result.midi_mappings.length} MIDI, ${result.osc_mappings.length} OSC, ${result.dmx_mappings.length} DMX mappings). Outputs remain disarmed until explicit Arm; authored output settings were preserved.`,
       );
     } catch (error) {
       setMessage(`Template load failed: ${String(error)}`);
@@ -11122,21 +12215,37 @@ export default function App() {
       return;
     }
     try {
-      const path = await invoke<string | null>("save_project", {
+      await flushProjectControlMappingsAuthority();
+      const capturedAuthority = captureProjectAuthorityIdentity();
+      const capturedApplicationGeneration = projectAuthoritySync.applicationGeneration;
+      const saved = await invoke<ProjectSaveResult | null>("save_project", {
         midiMappings: midiMappings(),
         oscMappings: oscMappings(),
         dmxMappings: dmxMappings(),
       });
-      if (path) {
-        setCurrentProjectPath(path);
-        rememberRecentProjectPath(path);
-        const next = await refreshSnapshot();
-        if (next) {
-          markProjectClean(next);
+      if (saved) {
+        const savedToken = authorityToken(saved.authority);
+        if (projectAuthorityTokenIsCurrent(capturedAuthority, savedToken)
+          && projectAuthorityTokenIsCurrent(savedToken, projectMappingsAuthority())
+          && capturedApplicationGeneration === projectAuthoritySync.applicationGeneration) {
+          // Save changes path/disposition, not input workers. A same-project
+          // Connect/Stop may complete while Save is in flight, so its captured
+          // input snapshot must not overwrite the newer lifecycle result.
+          applyProjectAuthorityRuntimeStatus(saved.authority, false);
+          if (projectAuthorityTokenIsCurrent(savedToken, projectMappingsAuthority())
+            && capturedApplicationGeneration === projectAuthoritySync.applicationGeneration) {
+            rememberRecentProjectPath(saved.path);
+            setMessage(`Saved project ${saved.path}`);
+            return;
+          }
         }
-        clearProjectRecovery();
+        // The A file may be valid, but B won the authority race. Do not mark
+        // B clean/path-adopted from a delayed A reply; polling/event delivery
+        // will converge the visible state to B.
+        setMessage(`Saved an earlier project image to ${saved.path}; the current project changed before the acknowledgement arrived.`);
+        return;
       }
-      setMessage(path ? `Saved project ${path}` : "Project save canceled.");
+      setMessage("Project save canceled.");
     } catch (error) {
       setMessage(String(error));
     }
@@ -11148,21 +12257,31 @@ export default function App() {
       return;
     }
     try {
-      const path = await invoke<string | null>("save_project_as", {
+      await flushProjectControlMappingsAuthority();
+      const capturedAuthority = captureProjectAuthorityIdentity();
+      const capturedApplicationGeneration = projectAuthoritySync.applicationGeneration;
+      const saved = await invoke<ProjectSaveResult | null>("save_project_as", {
         midiMappings: midiMappings(),
         oscMappings: oscMappings(),
         dmxMappings: dmxMappings(),
       });
-      if (path) {
-        setCurrentProjectPath(path);
-        rememberRecentProjectPath(path);
-        const next = await refreshSnapshot();
-        if (next) {
-          markProjectClean(next);
+      if (saved) {
+        const savedToken = authorityToken(saved.authority);
+        if (projectAuthorityTokenIsCurrent(capturedAuthority, savedToken)
+          && projectAuthorityTokenIsCurrent(savedToken, projectMappingsAuthority())
+          && capturedApplicationGeneration === projectAuthoritySync.applicationGeneration) {
+          applyProjectAuthorityRuntimeStatus(saved.authority, false);
+          if (projectAuthorityTokenIsCurrent(savedToken, projectMappingsAuthority())
+            && capturedApplicationGeneration === projectAuthoritySync.applicationGeneration) {
+            rememberRecentProjectPath(saved.path);
+            setMessage(`Saved project ${saved.path}`);
+            return;
+          }
         }
-        clearProjectRecovery();
+        setMessage(`Saved an earlier project image to ${saved.path}; the current project changed before the acknowledgement arrived.`);
+        return;
       }
-      setMessage(path ? `Saved project ${path}` : "Project save canceled.");
+      setMessage("Project save canceled.");
     } catch (error) {
       setMessage(String(error));
     }
@@ -11178,22 +12297,333 @@ export default function App() {
       : `Loaded project ${result.path} (${profileLabel}; ${mappingLabel})`;
   };
 
-  const applyLoadedProjectResult = async (result: ProjectLoadResult, currentPath: string | null) => {
-    await replaceProjectControlMappings(
-      result.midi_mappings ?? [],
-      result.osc_mappings ?? [],
-      result.dmx_mappings ?? [],
-    );
-    await resetProjectHistory();
-    setCurrentProjectPath(currentPath);
-    rememberRecentProjectPath(currentPath);
-    setMessage(loadedProjectMessage(result));
-    const next = await refreshSnapshot(true, true);
-    if (next) {
-      markProjectClean(next);
-    }
-    clearProjectRecovery();
+  const applyProjectAuthorityBundle = (
+    bundle: ProjectAuthorityBundle,
+    application: ReturnType<typeof beginProjectAuthorityApplication>["application"],
+    replacement: boolean,
+    preserveDirtyMappings = false,
+  ) => {
+    // Stage/validate the entire candidate before touching any signal.  A
+    // full snapshot queue is deliberately not involved: B and C must never
+    // share one asynchronous refresh result.
+    const candidate = authorityToken(bundle);
+    if (!projectAuthorityCanApply(candidate, projectMappingsAuthority())) return false;
+    if (!projectAuthorityApplicationIsCurrent(projectAuthoritySync, application)) return false;
+
+    const preparedMappings = preserveDirtyMappings
+      ? null
+      : prepareProjectControlMappings(
+        bundle,
+        bundle.midi_mappings,
+        bundle.osc_mappings,
+        bundle.dmx_mappings,
+      );
+    if ((!preserveDirtyMappings && !preparedMappings)
+      || !projectAuthorityApplicationIsCurrent(projectAuthoritySync, application)) return false;
+    if (!preflightProjectAuthorityRecoveryDisposition(bundle)) return false;
+    const storedMode = matchingStoredOperatorLock(bundle.operator_policy);
+    if (replacement) invalidateProjectControlMappingsForIdentity();
+
+    // From this point no await/fallible RPC is allowed. These values came
+    // from one admission+coordinator capture and therefore become visible as
+    // one B (or C) image to the UI.
+    batch(() => {
+      if (preparedMappings) {
+        commitPreparedProjectControlMappings(preparedMappings);
+      } else {
+        // Adopt C's CAS token but retain local B arrays. The pending/in-flight
+        // B persist response was invalidated before this batch and a new B
+        // request is scheduled below against this exact C token.
+        setProjectMappingsAuthority(candidate);
+        setProjectMappingsAuthorityReady(true);
+      }
+      // A recovery replacement may arrive event-only before its originating
+      // command reply has staged the browser timeline drafts. Preserve those
+      // drafts until the guarded recovery acknowledgement; all other fenced
+      // replacements intentionally clear editor state with their new image.
+      applyEngineSnapshot(
+        bundle.snapshot,
+        true,
+        replacement && bundle.authority_disposition !== "recovery_pending_ack",
+      );
+      setSnapshotRevision(null);
+      setFixtureGroupList(bundle.fixture_groups);
+      setFixtureGroupDeleteUndoAvailable(false);
+      setViewportFixtureGroupDeleteUndo(null);
+      setOperatorPolicy(bundle.operator_policy);
+      setOperatorPolicyReady(true);
+      setOperatorLockMode(storedMode ?? (replacement && bundle.operator_policy?.lock_on_load
+        ? bundle.operator_policy.lock_mode
+        : null));
+      applyAuthoritativeProjectHistoryStatus(bundle.history);
+      setCurrentProjectPath(bundle.current_project_path);
+      rememberRecentProjectPath(bundle.current_project_path);
+      setMidiConnected(bundle.input_runtime.midi_clock_active);
+      setMidiControlConnected(bundle.input_runtime.midi_control_active);
+      setMidiFeedbackConnected(bundle.input_runtime.midi_feedback_output_active);
+      setMidiFeedbackEnabled(bundle.input_runtime.midi_feedback_runtime_active);
+      setOscRunning(bundle.input_runtime.osc_active);
+      setDmxInputStatus((current) => ({
+        ...current,
+        running: bundle.input_runtime.dmx_active,
+        signal_present: bundle.input_runtime.dmx_active ? current.signal_present : false,
+        source_address: bundle.input_runtime.dmx_active ? current.source_address : null,
+      }));
+      observedProjectInputRuntimeGeneration = bundle.input_runtime.project_input_runtime_generation;
+      observedMappingInputRuntimeGeneration = bundle.input_runtime.mapping_input_runtime_generation;
+      observedProjectPathGeneration = bundle.path_generation;
+      observedProjectHistoryGeneration = bundle.history_generation;
+      observedMappingReplacementGeneration = bundle.mapping_replacement_generation;
+      observedRecoveryAuthoritySerial = bundle.recovery_authority_serial;
+      setProjectRecoveryAuthoritySerial(bundle.recovery_authority_serial);
+    });
+    applyProjectAuthorityDirtyState(bundle);
+    if (replacement) projectAuthoritySync = markProjectAuthorityPersisted(projectAuthoritySync);
+    void consumePendingProjectRecoveryIntent(bundle);
+    return true;
   };
+
+  const applyProjectAuthorityRuntimeStatus = (
+    bundle: ProjectAuthorityBundle,
+    applyInputRuntime = true,
+  ) => {
+    // A same-token poll is intentionally status-only: it must not hydrate
+    // mapping arrays over a local dirty edit, but it still converges a dropped
+    // retirement event to the backend's durable worker truth.
+    const applyPath = bundle.path_generation >= observedProjectPathGeneration;
+    const applyHistory = bundle.history_generation >= observedProjectHistoryGeneration;
+    if (!preflightProjectAuthorityRecoveryDisposition(bundle)) return;
+    batch(() => {
+      if (applyPath) {
+        setCurrentProjectPath(bundle.current_project_path);
+        rememberRecentProjectPath(bundle.current_project_path);
+      }
+      if (applyHistory) applyAuthoritativeProjectHistoryStatus(bundle.history);
+      if (applyInputRuntime) {
+        setMidiConnected(bundle.input_runtime.midi_clock_active);
+        setMidiControlConnected(bundle.input_runtime.midi_control_active);
+        setMidiFeedbackConnected(bundle.input_runtime.midi_feedback_output_active);
+        setMidiFeedbackEnabled(bundle.input_runtime.midi_feedback_runtime_active);
+        setOscRunning(bundle.input_runtime.osc_active);
+        setDmxInputStatus((current) => ({
+          ...current,
+          running: bundle.input_runtime.dmx_active,
+          signal_present: bundle.input_runtime.dmx_active ? current.signal_present : false,
+          source_address: bundle.input_runtime.dmx_active ? current.source_address : null,
+        }));
+        observedProjectInputRuntimeGeneration = bundle.input_runtime.project_input_runtime_generation;
+        observedMappingInputRuntimeGeneration = bundle.input_runtime.mapping_input_runtime_generation;
+      }
+      if (applyPath) observedProjectPathGeneration = bundle.path_generation;
+      if (applyHistory) observedProjectHistoryGeneration = bundle.history_generation;
+      observedMappingReplacementGeneration = Math.max(
+        observedMappingReplacementGeneration,
+        bundle.mapping_replacement_generation,
+      );
+      observedRecoveryAuthoritySerial = Math.max(
+        observedRecoveryAuthoritySerial,
+        bundle.recovery_authority_serial,
+      );
+      setProjectRecoveryAuthoritySerial(observedRecoveryAuthoritySerial);
+    });
+    applyProjectAuthorityDirtyState(bundle);
+    void consumePendingProjectRecoveryIntent(bundle);
+  };
+
+  const applyPolledProjectAuthorityBundle = (bundle: ProjectAuthorityBundle) => {
+    const candidate = authorityToken(bundle);
+    const current = projectMappingsAuthority();
+    if (projectAuthorityTokenIsCurrent(candidate, current)) {
+      applyProjectAuthorityRuntimeStatus(bundle);
+      return true;
+    }
+    if (!projectAuthorityCanApply(candidate, current)) return false;
+    if (projectAuthorityPollMustHydrateMappings(
+      bundle.mapping_replacement_generation,
+      observedMappingReplacementGeneration,
+    )) {
+      // A fenced identity/Undo/Redo image owns its mapping arrays.  Never
+      // rebase a dirty A debounce onto B merely because the event was lost
+      // and the authority poll happened to arrive first. This durable counter
+      // remains evidence even if a later ordinary Mutation becomes the last
+      // publication before the poll runs.
+      return projectAuthorityApplicationResultIsCurrent(
+        applyAuthorityBundleAsReplacement(bundle),
+      );
+    }
+    const preserveDirtyMappings = projectAuthorityPollPreservesDirtyMappings(
+      candidate,
+      current,
+      projectAuthoritySync,
+      mappingSyncInFlight,
+      bundle.publication_kind,
+    );
+    beginProjectReadGeneration();
+    const started = beginProjectAuthorityApplication(projectAuthoritySync);
+    projectAuthoritySync = started.state;
+    if (preserveDirtyMappings) {
+      projectAuthoritySync = rebaseDirtyProjectAuthorityMappings(projectAuthoritySync, true);
+    }
+    const applied = applyProjectAuthorityBundle(
+      bundle,
+      started.application,
+      false,
+      preserveDirtyMappings,
+    );
+    if (applied && preserveDirtyMappings) scheduleProjectControlMappingsPersist(0);
+    return applied;
+  };
+
+  const fetchProjectAuthorityBundle = async (result: ProjectLoadResult) => {
+    if (result.authority) return result.authority;
+    // Compatibility-only fallback for an older backend. The expected token
+    // makes the one fallback operation fail closed if C publishes while B is
+    // in flight; it is never followed by snapshot/history/profile refreshes.
+    return tauriInvoke<ProjectAuthorityBundle>("get_project_authority_bundle", {
+      expectedEpoch: result.project_epoch,
+      expectedRevision: result.project_revision,
+      expectedCheckpointHash: result.checkpoint_hash,
+    });
+  };
+
+  const projectAuthorityApplicationResultIsCurrent = (result: AppliedProjectAuthorityResult) =>
+    projectAuthorityReplacementContinuationIsCurrent(
+      result.verdict,
+      result.token,
+      result.applicationGenerationAtDecision,
+      projectMappingsAuthority(),
+      projectAuthoritySync,
+    );
+
+  const applyAuthorityBundleAsReplacement = (bundle: ProjectAuthorityBundle): AppliedProjectAuthorityResult => {
+    const candidate = authorityToken(bundle);
+    const verdict = projectAuthorityReplacementVerdict(
+      candidate,
+      projectMappingsAuthority(),
+      lastAppliedProjectReplacement,
+      projectMappingsAuthorityReady(),
+    );
+    if (verdict !== "apply") {
+      return {
+        verdict,
+        token: candidate,
+        applicationGenerationAtDecision: projectAuthoritySync.applicationGeneration,
+        bundle: verdict === "duplicate" ? bundle : null,
+      };
+    }
+    beginProjectReadGeneration();
+    const started = beginProjectAuthorityApplication(projectAuthoritySync);
+    projectAuthoritySync = started.state;
+    if (!applyProjectAuthorityBundle(bundle, started.application, true)) {
+      return {
+        verdict: "stale",
+        token: candidate,
+        applicationGenerationAtDecision: projectAuthoritySync.applicationGeneration,
+        bundle: null,
+      };
+    }
+    lastAppliedProjectReplacement = candidate;
+    return {
+      verdict: "apply",
+      token: candidate,
+      applicationGenerationAtDecision: started.application.applicationGeneration,
+      bundle,
+    };
+  };
+
+  const applyLoadedProjectResult = async (
+    result: ProjectLoadResult,
+    _legacyCurrentPath: string | null,
+  ): Promise<AppliedProjectAuthorityResult> => {
+    const candidate = authorityToken(result);
+    const current = projectMappingsAuthority();
+    const verdict = projectAuthorityReplacementVerdict(
+      candidate,
+      current,
+      lastAppliedProjectReplacement,
+      projectMappingsAuthorityReady(),
+    );
+    if (verdict !== "apply") {
+      return {
+        verdict,
+        token: candidate,
+        applicationGenerationAtDecision: projectAuthoritySync.applicationGeneration,
+        // A duplicate reply is not hydrated again, but its already-captured
+        // bundle may be used by the originating command's guarded local
+        // continuation (for example recovery drafts).
+        bundle: result.authority ?? null,
+      };
+    }
+
+    beginProjectReadGeneration();
+    const started = beginProjectAuthorityApplication(projectAuthoritySync);
+    projectAuthoritySync = started.state;
+    const bundle = await fetchProjectAuthorityBundle(result);
+    // Backend may publish B then C while B waits for the compatibility fetch.
+    // The application generation prevents B from applying even one field.
+    if (!projectAuthorityApplicationIsCurrent(projectAuthoritySync, started.application)) {
+      return {
+        verdict: "stale",
+        token: candidate,
+        applicationGenerationAtDecision: projectAuthoritySync.applicationGeneration,
+        bundle: null,
+      };
+    }
+    if (!projectAuthorityTokenIsCurrent(candidate, authorityToken(bundle))) {
+      return {
+        verdict: "stale",
+        token: candidate,
+        applicationGenerationAtDecision: projectAuthoritySync.applicationGeneration,
+        bundle: null,
+      };
+    }
+    if (!applyProjectAuthorityBundle(bundle, started.application, true)) {
+      return {
+        verdict: "stale",
+        token: candidate,
+        applicationGenerationAtDecision: projectAuthoritySync.applicationGeneration,
+        bundle: null,
+      };
+    }
+
+    lastAppliedProjectReplacement = candidate;
+    const loadedMessage = loadedProjectMessage(result);
+    setMessage(recoveryTombstoneWarningGeneration === bundle.authority_disposition_generation
+      ? `${loadedMessage} Browser recovery storage is unavailable, so crash recovery remains unavailable until a later recovery save succeeds.`
+      : loadedMessage);
+    return {
+      verdict: "apply",
+      token: candidate,
+      applicationGenerationAtDecision: started.application.applicationGeneration,
+      bundle,
+    };
+  };
+
+  const resetRetiredProjectControlInputUi = () => {
+    // Project replacement retires callback-capable inputs before publication.
+    // Do not leave Learn/reconnect flows believing an old worker remains live
+    // while waiting for the next DMX status poll.
+    setMidiConnected(false);
+    resetRetiredMappingDrivenProjectControlInputUi();
+  };
+
+  const resetRetiredMappingDrivenProjectControlInputUi = () => {
+    // A control-mapping commit retires MIDI Control/Feedback, OSC, and DMX
+    // only. MIDI Clock does not depend on mappings and remains connected.
+    setMidiControlConnected(false);
+    setMidiFeedbackConnected(false);
+    setMidiFeedbackEnabled(false);
+    setOscRunning(false);
+    setDmxInputStatus((current) => ({
+      ...current,
+      running: false,
+      signal_present: false,
+      source_address: null,
+    }));
+  };
+
+  const applyAuthoritativeProjectReplacement = async (result: ProjectLoadResult) =>
+    applyLoadedProjectResult(result, result.current_project_path);
 
   const loadProject = async () => {
     if (!confirmDiscardProjectChanges("load another project")) {
@@ -11223,22 +12653,20 @@ export default function App() {
     setDaslightProjectImportBusy(true);
     setMessage("Importing Daslight Project...", "daslight-project-import-busy");
     try {
-      const report = await invoke<DvcImportReport | null>("import_daslight_project", { path: null });
-      if (!report) {
+      const imported = await invoke<DvcImportProjectLoadResult | null>("import_daslight_project_with_result", { path: null });
+      if (!imported) {
         setMessage("Daslight Project import canceled.");
         return;
       }
-      await replaceProjectControlMappings(report.midi_mappings ?? [], [], report.dmx_mappings ?? []);
-      await resetProjectHistory();
-      setCurrentProjectPath(null);
+      // The paired backend result is the same fenced publication that owns
+      // the report mappings. Applying it directly avoids racing a later
+      // authority event/refresh and keeps imported MIDI+DMX bindings in the
+      // coordinator before the UI advertises their counts.
+      const applied = await applyLoadedProjectResult(imported.load, null);
+      if (!projectAuthorityApplicationResultIsCurrent(applied)) return;
+      const report = imported.report;
       setWorkspaceTab("setup");
       setSetupSubTab("patch");
-      const next = await refreshSnapshot(true, true);
-      if (next) {
-        setCleanProjectSignature("__syndocal_dvc_import_unsaved__");
-        setProjectDirty(true);
-      }
-      clearProjectRecovery();
       setDvcImportReport(report);
       setMessage(
         `Imported Daslight Project (.dvc): ${report.summary.fixtures} fixtures, ${report.summary.cues} cues, ${report.midi_mappings?.length ?? 0} MIDI and ${report.dmx_mappings?.length ?? 0} DMX mappings. Save As to create a Syndocal Project (.sdc).`,
@@ -11268,6 +12696,10 @@ export default function App() {
   };
 
   const loadProjectRecovery = async () => {
+    if (recoveryCheckpointNeedsReplacement) {
+      setMessage("A previous recovery image is being replaced by a coherent checkpoint for the current project.");
+      return;
+    }
     const checkpoint = projectRecoveryCheckpoint();
     if (!checkpoint) {
       setMessage("No recovery checkpoint is available.");
@@ -11277,31 +12709,51 @@ export default function App() {
       setMessage("Project recovery canceled.");
       return;
     }
+    const sourceSerial = projectRecoveryAuthoritySerial();
+    if (typeof sourceSerial !== "number"
+      || !Number.isSafeInteger(sourceSerial)
+      || sourceSerial < 0) {
+      setMessage("Recovery authority is still initializing. Try again in a moment.");
+      return;
+    }
+    if (!Number.isSafeInteger(projectRecoveryIntentRequestGeneration)
+      || projectRecoveryIntentRequestGeneration >= Number.MAX_SAFE_INTEGER) {
+      setMessage("Recovery request generation is exhausted; reload Syndocal before retrying.");
+      return;
+    }
+    const intent = registerProjectRecoveryIntent(
+      checkpoint,
+      sourceSerial,
+      ++projectRecoveryIntentRequestGeneration,
+    );
+    if (!intent) {
+      setMessage("Unable to persist the recovery handoff. Browser recovery storage is unavailable.");
+      return;
+    }
+    // Register before invoking Tauri. An event-only B can now find this exact
+    // A/source+1 rendezvous even if the command reply is dropped.
+    activeProjectRecoveryIntent = intent;
+    setProjectRecoveryCheckpoint(null);
     try {
       const result = await invoke<ProjectLoadResult>("load_project_checkpoint", {
         project: checkpoint.project,
         label: `Recovery ${checkpoint.saved_at}`,
         currentPath: checkpoint.source_path,
+        expectedRecoveryAuthoritySerial: intent.source_serial,
+        recoveryRequestId: intent.request_id,
       });
-      await replaceProjectControlMappings(
-        result.midi_mappings ?? [],
-        result.osc_mappings ?? [],
-        result.dmx_mappings ?? [],
-      );
-      await resetProjectHistory();
-      setCurrentProjectPath(checkpoint.source_path);
-      setMessage(
-        `Recovered ${projectRecoverySourceLabel(checkpoint)} from ${projectRecoveryTimeLabel(checkpoint)} (${result.profiles.length} embedded profiles). Save to keep it.`,
-      );
-      const next = await refreshSnapshot(true, true);
-      if (next) {
-        const recoveredTimelineEventDrafts = checkpoint.editor_drafts?.timeline_events ?? {};
-        setTimelineEventDrafts(reconcileTimelineEventDrafts(next.timeline.events, recoveredTimelineEventDrafts));
-        setCleanProjectSignature("__syndocal_recovered_unsaved__");
-        setProjectDirty(true);
-      }
-      clearProjectRecovery();
+      const applied = await applyLoadedProjectResult(result, checkpoint.source_path);
+      if (!projectAuthorityApplicationResultIsCurrent(applied) || !applied.bundle) return;
+      await consumePendingProjectRecoveryIntent(applied.bundle);
     } catch (error) {
+      // If B published before a transport/reply failure, its event or poll
+      // consumes the durable intent. Otherwise restore the explicit offer so
+      // the user can retry without losing A.
+      if (activeProjectRecoveryIntent === intent
+        && projectRecoveryAuthoritySerial() === intent.source_serial) {
+        activeProjectRecoveryIntent = null;
+        setProjectRecoveryCheckpoint(checkpoint);
+      }
       setMessage(String(error));
     }
   };
@@ -11311,6 +12763,70 @@ export default function App() {
     setMessage("Recovery checkpoint discarded.");
   };
 
+  let projectRecoveryHandshakeStarted = false;
+  const initializeProjectRecoveryAuthority = async () => {
+    if (!isTauriRuntime() || projectRecoveryHandshakeStarted) return;
+    projectRecoveryHandshakeStarted = true;
+    try {
+      const status = await tauriInvoke<ProjectRecoveryAuthorityStatus>(
+        "get_project_recovery_authority_status",
+      );
+      if (!Number.isSafeInteger(status.recovery_authority_serial)
+        || status.recovery_authority_serial < 0) {
+        throw new Error("Backend returned an invalid recovery authority serial");
+      }
+      // Fetch one coherent authority image after the lightweight journal
+      // handshake. An identity publication may race the first response, so
+      // never read or offer browser recovery against that older serial.
+      const bundle = await tauriInvoke<ProjectAuthorityBundle>("get_project_authority_bundle", {});
+      if (!Number.isSafeInteger(bundle.recovery_authority_serial)
+        || bundle.recovery_authority_serial < status.recovery_authority_serial) {
+        throw new Error("Backend recovery authority moved backwards during startup");
+      }
+      const alreadyObserved = projectRecoveryAuthoritySerial();
+      if (alreadyObserved !== null && alreadyObserved > bundle.recovery_authority_serial) return;
+      observedRecoveryAuthoritySerial = Math.max(
+        observedRecoveryAuthoritySerial,
+        bundle.recovery_authority_serial,
+      );
+      setProjectRecoveryAuthoritySerial(observedRecoveryAuthoritySerial);
+      const stored = loadProjectRecoveryStorageState(bundle.recovery_authority_serial);
+      if (projectRecoveryAuthoritySerial() !== bundle.recovery_authority_serial) return;
+      if (stored.kind === "checkpoint") {
+        setProjectRecoveryCheckpoint(stored.checkpoint);
+        return;
+      }
+      if (stored.kind !== "intent") return;
+
+      // A renderer can restart in either half of the handoff. Use the same
+      // coherent authority image which selected the storage envelope to
+      // decide whether A remains an offer or B must resume draft staging.
+      const startup = projectRecoveryIntentStartupAction(
+        stored.intent,
+        bundle.recovery_authority_serial,
+        bundle.authority_disposition,
+        bundle.recovery_authority_last_transition,
+        bundle.checkpoint_hash,
+      );
+      if (startup === "offer_checkpoint") {
+        setProjectRecoveryCheckpoint(stored.intent.checkpoint);
+        return;
+      }
+      if (startup !== "resume_intent") return;
+      activeProjectRecoveryIntent = stored.intent;
+      const applied = applyAuthorityBundleAsReplacement(bundle);
+      if (projectAuthorityApplicationResultIsCurrent(applied) && applied.bundle) {
+        await consumePendingProjectRecoveryIntent(applied.bundle);
+      }
+    } catch (error) {
+      // Do not offer an unstamped v1/browser payload when the durable backend
+      // journal cannot be read. Recovery remains absent rather than guessing.
+      setProjectRecoveryCheckpoint(null);
+      setMessage(`Browser recovery is unavailable: ${String(error)}`);
+    }
+  };
+  void initializeProjectRecoveryAuthority();
+
   const loadProjectBackup = async (backup: ProjectBackupSummary) => {
     if (!confirmDiscardProjectChanges("restore a project backup")) {
       setMessage("Project backup restore canceled.");
@@ -11318,22 +12834,11 @@ export default function App() {
     }
     try {
       const result = await invoke<ProjectLoadResult>("load_project_backup", { backupId: backup.id });
-      await replaceProjectControlMappings(
-        result.midi_mappings ?? [],
-        result.osc_mappings ?? [],
-        result.dmx_mappings ?? [],
-      );
-      await resetProjectHistory();
-      setCurrentProjectPath(backup.source_path ?? null);
+      const applied = await applyLoadedProjectResult(result, backup.source_path ?? null);
+      if (!projectAuthorityApplicationResultIsCurrent(applied)) return;
       setMessage(
         `Restored backup from ${new Date(backup.created_at_unix_ms).toLocaleString()}. Save the project to keep it.`,
       );
-      const next = await refreshSnapshot(true, true);
-      if (next) {
-        setCleanProjectSignature("__syndocal_backup_recovered_unsaved__");
-        setProjectDirty(true);
-      }
-      clearProjectRecovery();
       if (result.profiles.length > 0) {
         setMessage(
           `Restored backup from ${new Date(backup.created_at_unix_ms).toLocaleString()} (${result.profiles.length} embedded profiles). Save to keep it.`,
@@ -11396,22 +12901,12 @@ export default function App() {
     }
     try {
       const result = await invoke<ProjectLoadResult>("load_phase1_sample_project");
-      await replaceProjectControlMappings(
-        result.midi_mappings ?? [],
-        result.osc_mappings ?? [],
-        result.dmx_mappings ?? [],
-      );
-      await resetProjectHistory();
+      const applied = await applyLoadedProjectResult(result, null);
+      if (!projectAuthorityApplicationResultIsCurrent(applied)) return;
       setPhase1SmokeReport(null);
-      setCurrentProjectPath(null);
       setWorkspaceTab("setup");
       setSetupSubTab("patch");
       setMessage(loadedProjectMessage(result));
-      const next = await refreshSnapshot(true, true);
-      if (next) {
-        markProjectClean(next);
-      }
-      clearProjectRecovery();
     } catch (error) {
       setMessage(String(error));
     }
@@ -11420,8 +12915,7 @@ export default function App() {
   const runPhase1Smoke = async () => {
     try {
       const report = await invoke<Phase1SmokeReport>("run_phase1_smoke");
-      await replaceProjectControlMappings([], [], []);
-      await resetProjectHistory();
+      await refreshProjectControlMappings();
       setPhase1SmokeReport(report);
       setCurrentProjectPath(null);
       setWorkspaceTab("setup");
@@ -11430,11 +12924,7 @@ export default function App() {
       setDmxTestChannel(1);
       setDmxTestWidth(8);
       setDmxTestValue(255);
-      const afterSmoke = await refreshSnapshot(true, true);
-      if (afterSmoke) {
-        markProjectClean(afterSmoke);
-      }
-      clearProjectRecovery();
+      await refreshSnapshot(true, true);
       const values = report.first_8.map((value) => value.toString(16).padStart(2, "0").toUpperCase()).join(" ");
       const expected = report.expected_first_8.map((value) => value.toString(16).padStart(2, "0").toUpperCase()).join(" ");
       setMessage(
@@ -12312,7 +13802,7 @@ export default function App() {
     try {
       const request = verifiedFixtureProfileRequest(profileId);
       if (!request) throw new Error(`Verified fixture profile '${profileId}' was not found`);
-      const imported = await tauriInvoke<FixtureProfileSummary>("create_custom_fixture_profile", { request });
+      const imported = await tauriInvoke<FixtureProfileSummary>("preview_custom_fixture_profile", { request });
       selectLoadedProfile(imported, `Loaded verified ${imported.name}`, modeName, false);
       return true;
     } catch (error) {
@@ -12325,7 +13815,7 @@ export default function App() {
     try {
       const request = bundledLibraryProfileRequest(modeKey);
       if (!request) throw new Error(`Bundled library profile '${label}' was not found`);
-      const imported = await tauriInvoke<FixtureProfileSummary>("create_custom_fixture_profile", { request });
+      const imported = await tauriInvoke<FixtureProfileSummary>("preview_custom_fixture_profile", { request });
       selectLoadedProfile(imported, `Loaded ${label}`, request.mode_name, false);
       return true;
     } catch (error) {
@@ -12362,10 +13852,15 @@ export default function App() {
 
   const repairCatalogFixtureProfile = async (
     fixtureId: number,
-    profilePath: string,
+    profile: FixtureProfileSummary,
     modeName: string | null,
   ) => {
-    await invoke("repair_fixture_profile", { fixtureId, profilePath, modeName });
+    await invoke("repair_fixture_profile", {
+      fixtureId,
+      profilePath: profile.source_path,
+      modeName,
+      profile,
+    });
     await refreshSnapshot();
     setMessage(`Repaired fixture ${fixtureId} profile source with an exact DMX layout match.`);
   };
@@ -12399,7 +13894,7 @@ export default function App() {
     const armed = profile();
     if (!health || !armed) return;
     try {
-      await repairCatalogFixtureProfile(health.fixture_id, armed.source_path, selectedMode() || null);
+      await repairCatalogFixtureProfile(health.fixture_id, armed, selectedMode() || null);
       await refreshPatchProfileHealth();
     } catch (error) {
       setMessage(String(error));
@@ -12802,6 +14297,9 @@ export default function App() {
     stopOscInput,
   } = createControlInputController({
     invoke,
+    flushProjectControlMappingsAuthority,
+    captureProjectAuthorityIdentity,
+    isProjectAuthorityIdentityCurrent,
     setMessage,
     selectedFixture,
     selectedEffectAttribute,
@@ -12903,10 +14401,30 @@ export default function App() {
       setMessage("This control cannot be mapped to DMX input.");
       return;
     }
+    const authority = captureProjectAuthorityIdentity();
+    const authorityIsCurrent = () => {
+      if (isProjectAuthorityIdentityCurrent(authority)) return true;
+      setMessage("Project changed while DMX Learn was waiting; the older learned input was discarded.");
+      return false;
+    };
     if (!dmxInputStatus().running) {
       try {
-        await invoke("start_dmx_input", { config: dmxInputConfig(), mappings: dmxMappings() });
+        await flushProjectControlMappingsAuthority();
+        if (!authorityIsCurrent()) return;
+        setDmxInputStatus((current) => ({
+          ...current,
+          running: false,
+          signal_present: false,
+          source_address: null,
+        }));
+        await invoke("start_dmx_input", {
+          config: dmxInputConfig(),
+          mappings: dmxMappings(),
+          expectedEpoch: authority.project_epoch,
+        });
+        if (!authorityIsCurrent()) return;
         const status = await invoke<DmxInputStatus>("dmx_input_status");
+        if (!authorityIsCurrent()) return;
         setDmxInputStatus(status);
         if (!status.running) {
           setMessage("DMX Learn could not start the configured DMX input.");
@@ -12918,7 +14436,10 @@ export default function App() {
       }
     }
     try {
-      const learned = await invoke<LearnedDmxControl | null>("learn_dmx_control");
+      const learned = await invoke<LearnedDmxControl | null>("learn_dmx_control", {
+        expectedEpoch: authority.project_epoch,
+      });
+      if (!authorityIsCurrent()) return;
       if (!learned) {
         setMessage("DMX Learn timed out. Move the hardware control after learning starts.");
         return;
@@ -12929,11 +14450,28 @@ export default function App() {
         ...learnedMappings,
       ];
       setDmxMappings(nextMappings);
+      if (!authorityIsCurrent()) return;
       const controlConfig = { ...dmxInputConfig(), merge_enabled: false };
       setDmxInputConfig(controlConfig);
-      await invoke("stop_dmx_input");
-      await invoke("start_dmx_input", { config: controlConfig, mappings: nextMappings });
-      setDmxInputStatus(await invoke<DmxInputStatus>("dmx_input_status"));
+      await invoke("stop_dmx_input", { expectedEpoch: authority.project_epoch });
+      if (!authorityIsCurrent()) return;
+      await flushProjectControlMappingsAuthority();
+      if (!authorityIsCurrent()) return;
+      setDmxInputStatus((current) => ({
+        ...current,
+        running: false,
+        signal_present: false,
+        source_address: null,
+      }));
+      await invoke("start_dmx_input", {
+        config: controlConfig,
+        mappings: dmxMappings(),
+        expectedEpoch: authority.project_epoch,
+      });
+      if (!authorityIsCurrent()) return;
+      const status = await invoke<DmxInputStatus>("dmx_input_status");
+      if (!authorityIsCurrent()) return;
+      setDmxInputStatus(status);
       setMessage(
         `Mapped U${learned.universe + 1} Ch ${learned.channel} to ${learnedMappings.length} control(s). DMX input is active in Control mappings mode.`,
       );
@@ -13568,24 +15106,38 @@ export default function App() {
           : "Operator Partial Lock blocks programming and project replacement commands.",
       );
     }
-    const transactionId = await tauriInvoke<number>("begin_project_transaction", {
+    const expectedEpoch = await flushProjectControlMappingsBeforeMutation();
+    const transaction = await tauriInvoke<ProjectTransactionTicket>("begin_project_transaction", {
       label: "Move Cue Between Scene Banks",
       coalesceKey: `scene_matrix_bank_move:cue:${cue.id}`,
+      expectedEpoch,
+      ownerId: projectTransactionOwnerId,
     });
     try {
       await tauriInvoke("set_cue_metadata", sceneMatrixCueMetadataArgs(cue, groupId));
       for (let step = 0; step < stepCount; step += 1) {
         await tauriInvoke("move_cue", { cueId: cue.id, delta });
       }
-      const status = await tauriInvoke<ProjectHistoryStatus>("commit_project_transaction", {
-        transactionId,
+      const mutation = await tauriInvoke<ProjectHistoryMutationResult>("commit_project_transaction", {
+        transactionId: transaction.transaction_id,
+        expectedEpoch: transaction.project_epoch,
+        ownerId: projectTransactionOwnerId,
       });
       window.dispatchEvent(
-        new CustomEvent<ProjectHistoryStatus>(projectHistoryChangedEvent, { detail: status }),
+        new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: mutation }),
       );
-      return status;
+      return mutation.history_status;
     } catch (error) {
-      await tauriInvoke("cancel_project_transaction", { transactionId }).catch(() => undefined);
+      const cancellation = await tauriInvoke<ProjectHistoryMutationResult>("cancel_project_transaction", {
+        transactionId: transaction.transaction_id,
+        expectedEpoch: transaction.project_epoch,
+        ownerId: projectTransactionOwnerId,
+      }).catch(() => null);
+      if (cancellation) {
+        window.dispatchEvent(
+          new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: cancellation }),
+        );
+      }
       throw error;
     }
   };
@@ -13661,14 +15213,15 @@ export default function App() {
         if (crossesBank && viewportFixture === "scene-matrix") {
           setViewportSceneMatrixBankMoveUndo({ beforeCues, afterCues: structuredClone(afterCues) });
           if (!isTauriRuntime()) {
-            setProjectHistoryStatus({
+            setProjectHistoryStatus((current) => ({
+              ...current,
               can_undo: true,
               can_redo: false,
               undo_depth: 1,
               redo_depth: 0,
               undo_label: "Move Cue Between Scene Banks",
               redo_label: null,
-            });
+            }));
           }
         }
       } else {
@@ -14352,6 +15905,13 @@ export default function App() {
     refreshSnapshot,
     setMessage,
     videoSourceKind,
+    getCurrentProjectEpoch: () => captureProjectAuthorityIdentity().project_epoch,
+    consumeVideoSourceExpectedEpoch: () => {
+      const expectedEpoch = videoSourceSelectionEpoch();
+      setVideoSourceSelectionEpoch(null);
+      return expectedEpoch ?? captureProjectAuthorityIdentity().project_epoch;
+    },
+    projectTransactionOwnerId,
     videoLabel,
     setVideoLabel,
     videoPath,
@@ -14504,6 +16064,10 @@ export default function App() {
   const vjFirstRunAvailable = createMemo(() =>
     !vjFirstRunAwaitingSync() &&
     snapshot().video.layers.length === 0 &&
+    // A catalog-only import intentionally keeps the mix empty, but it is no
+    // longer an empty *show*: Bootstrap would otherwise reject after another
+    // picker/hash cycle. Keep the first-run CTA truthful and fail-closed.
+    snapshot().video.media_assets.length === 0 &&
     snapshot().video.outputs.length === 0 &&
     snapshot().video.compositions.every((composition) => composition.id === 1),
   );
@@ -14524,15 +16088,31 @@ export default function App() {
     setVjFirstRunBusy(true);
     setVjFirstRunError(null);
     try {
+      // Capture before opening the picker. The staged helper passes this
+      // identity into Prepare/Finalize and App's short ticketed Commit.
+      const expectedEpoch = captureProjectAuthorityIdentity().project_epoch;
       const paths = await invoke<string[]>("select_video_source_files", { kind: "File" });
       if (paths.length === 0) {
         setMessage("VJ setup canceled. No project changes were made.");
         return;
       }
-      const result = await invoke<VjFirstRunSetupResult>("bootstrap_vj_show", {
+      const staged = await prepareFinalizeAndCommitMediaAssets<VjFirstRunSetupResult>({
+        invoke,
         kind: "File",
         paths,
+        expectedEpoch,
+        ownerId: projectTransactionOwnerId,
+        commitCommand: "commit_prepared_bootstrap_vj_show",
+        requireAllPrepared: true,
+        commitArgs: {
+          kind: "File",
+        },
       });
+      const result = staged.committed;
+      if (!result) {
+        setMessage(mediaAssetImportReportMessage(staged.report));
+        return;
+      }
       setVjFirstRunAwaitingSync(true);
       const refreshed = await refreshSnapshot();
       setSelectedVideoOutputId(result.output_id);
@@ -14556,8 +16136,9 @@ export default function App() {
         setMessage(detail);
         return;
       }
+      const failures = staged.report.failed + staged.report.skipped;
       setMessage(
-        `VJ show ready with ${result.layer_ids.length} clip(s). VJ Program remains Off and Blackout until you enable it explicitly.`,
+        `VJ show ready with ${result.layer_ids.length} clip(s). VJ Program remains Off and Blackout until you enable it explicitly.${failures > 0 ? ` ${mediaAssetImportReportMessage(staged.report)}` : ""}`,
       );
     } catch (error) {
       const detail = String(error);
@@ -19356,7 +20937,7 @@ export default function App() {
             get path() { return videoPath(); },
             onSetSourceKind: setVideoSourceKind,
             onSetLabel: setVideoLabel,
-            onSetPath: setVideoPath,
+            onSetPath: setVideoPathFromOperator,
             onBrowseSource: selectVideoSourceFile,
             onImportMultiple: importMediaFiles,
             onAddLayer: addVideoLayer,
