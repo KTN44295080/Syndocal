@@ -22,7 +22,8 @@ use engine::{
     validate_mapping_effect_request as validate_engine_mapping_effect_request,
     validate_move_effect_request as validate_engine_move_effect_request,
     validate_value_effect_request as validate_engine_value_effect_request, EngineCommand,
-    EngineHandle, FixtureFlagClearKind, VideoIsfStackMutation,
+    EngineHandle, FixtureFlagClearKind, FixturePatchCandidate, MediaAssetImportCandidate,
+    MediaAssetTransaction, OutputOwnershipActivation, VideoIsfStackMutation,
 };
 use io::midi::{
     MidiClockEvent, MidiClockInput, MidiControlEvent, MidiControlInput, MidiFeedbackOutput,
@@ -34,7 +35,8 @@ use minisign_verify::PublicKey;
 #[cfg(test)]
 use protocol::DmxControlAction;
 use protocol::{
-    canonical_video_output_mapping_field, AttributeControl, AttributeResolution,
+    canonical_video_output_mapping_field, normalize_legacy_video_media_assets,
+    validate_engine_ready_video_media_assets, AttributeControl, AttributeResolution,
     AudioAnalysisSummary, AutoVjConfig, AutomationId, AutomationKeyframeSummary,
     ChaserEffectRequest, ChaserStep, ChildTimelineSummary, ChildTimelineTransportPathSegment,
     ClockSnapshot, ColorEffectRequest, ColorMappingEffectRequest, CompositionId,
@@ -44,15 +46,17 @@ use protocol::{
     DmxOutputProtocol, EffectBeamTarget, EffectId, EffectKind, EffectParamsSnapshot, EffectPreset,
     EffectSummary, EngineSnapshot, EngineTelemetry, ExclusiveVideoTakeRequest, FixtureGroupSummary,
     FixtureId, FixtureLimits, FixturePreset, FixtureProfileSummary, GeometrySummary,
-    LearnedDmxControl, LearnedMidiControl, LearnedOscControl, LfoEffectRequest,
-    MappingEffectRequest, MidiControlAction, MidiControlMapping, MidiFeedbackMessage,
-    MidiInputSummary, MidiOutputSummary, MoveEffectBeamTarget, MoveEffectRequest, NodeGraphId,
-    NodeGraphNodeKind, NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp,
-    OperatorFeatureFaderResult, OperatorPolicy, OperatorSelectionContext, OscControlAction,
-    OscControlMapping, OscInputConfig, PatchFixtureRequest, PatchedFixtureSummary,
-    PositionWaveEffectRequest, ProjectFile, RecallMode, RemoteControlConfig, RemoteControlStatus,
-    Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile, StageMapPresetSummary,
-    StageObjectId, StageObjectKind, StageObjectSummary, TimelineAudioClipId,
+    LearnedDmxControl, LearnedMidiControl, LearnedOscControl, LfoEffectRequest, MachineOutputRole,
+    MappingEffectRequest, MediaAssetAvailability, MediaAssetId, MediaAssetRelinkOutcome,
+    MediaAssetRelinkPolicy, MediaAssetSummary, MediaContentHash, MediaHashAlgorithm,
+    MidiControlAction, MidiControlMapping, MidiFeedbackMessage, MidiInputSummary,
+    MidiOutputSummary, MoveEffectBeamTarget, MoveEffectRequest, NodeGraphId, NodeGraphNodeKind,
+    NodeGraphPresetFile, NodeGraphSummary, NodeGraphTransformOp, OperatorFeatureFaderResult,
+    OperatorLockMode, OperatorPolicy, OperatorSelectionContext, OscControlAction,
+    OscControlMapping, OscInputConfig, OutputOwnershipStatus, PatchFixtureRequest,
+    PatchedFixtureSummary, PositionWaveEffectRequest, ProjectFile, RecallMode, RemoteControlConfig,
+    RemoteControlStatus, Rotation3, SerialPortSummary, StageMapConfig, StageMapPresetFile,
+    StageMapPresetSummary, StageObjectId, StageObjectKind, StageObjectSummary, TimelineAudioClipId,
     TimelineAudioClipSummary, TimelineEventId, TimelineLayerKind, TimelineSnapRequest,
     TimelineTrackKind, TouchControlBinding, TouchFeaturePresetTarget, TouchSurfaceSummary,
     ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode,
@@ -64,6 +68,9 @@ use protocol::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
+#[cfg(windows)]
+use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
 use tauri::Emitter;
 use tauri::{Manager, State, WebviewWindow};
 use tauri_plugin_updater::UpdaterExt;
@@ -130,6 +137,14 @@ const TELEMETRY_COMMAND_QUEUE_P99_TARGET_US: u64 = 1_000;
 const TELEMETRY_COMMAND_TO_DMX_P99_TARGET_US: u64 = 5_000;
 const TELEMETRY_DMX_SEND_INTERVAL_TOLERANCE_US: u64 = 1_000;
 const OPEN_PROJECT_EVENT: &str = "syndocal://open-project";
+/// A single backend-authoritative replacement signal covers New/Open/Undo/
+/// Redo/Recovery/standby polling/Take Over. Frontend listeners apply it only
+/// monotonically by its epoch/revision/hash token.
+const PROJECT_AUTHORITY_REPLACED_EVENT: &str = "syndocal://project-authority-replaced";
+/// Same-identity runtime sanitization retires callback-capable inputs but
+/// deliberately preserves project/history/mapping authority. Keep that UI
+/// signal separate from a project identity hydrate.
+const PROJECT_CONTROL_INPUTS_RETIRED_EVENT: &str = "syndocal://project-control-inputs-retired";
 const PROJECT_BACKUP_VERSION: u32 = 1;
 const PROJECT_BACKUP_RETENTION: usize = 30;
 const PROJECT_HISTORY_RETENTION: usize = 100;
@@ -139,6 +154,10 @@ const PROJECT_ISF_SOURCE_MAX_BYTES: usize = 16 * 1024 * 1024;
 const PROJECT_BACKUP_DIRECTORY: &str = "project-backups";
 const CRASH_REPORT_DIRECTORY: &str = "crash-reports";
 const FIXTURE_PROFILE_CACHE_DIRECTORY: &str = "fixture-profile-cache";
+const OUTPUT_OWNERSHIP_STATE_VERSION: u32 = 1;
+const OUTPUT_OWNERSHIP_STATE_FILE: &str = "machine-output-ownership.json";
+const PROJECT_RECOVERY_AUTHORITY_STATE_VERSION: u32 = 1;
+const PROJECT_RECOVERY_AUTHORITY_STATE_FILE: &str = "project-recovery-authority.json";
 const APPLICATION_UPDATE_PROGRESS_EVENT: &str = "syndocal://application-update-progress";
 const APPLICATION_UPDATE_ENDPOINT: Option<&str> = option_env!("SYNDOCAL_UPDATE_ENDPOINT");
 const APPLICATION_UPDATE_PUBKEY: Option<&str> = option_env!("SYNDOCAL_UPDATE_PUBKEY");
@@ -150,8 +169,23 @@ const STANDBY_SYNC_STALE_MS: u64 = 5_000;
 const STANDBY_SYNC_RETENTION: usize = 5;
 const MIDI_FEEDBACK_REFRESH_INTERVAL: Duration =
     Duration::from_micros(1_000_000 / TELEMETRY_DMX_TARGET_FRAME_RATE_HZ as u64);
+const MEDIA_ASSET_HASH_CHUNK_BYTES: usize = 1024 * 1024;
+const MAX_LOCAL_MEDIA_ASSET_IMPORT_FILES: usize = 64;
+const MEDIA_ASSET_PREPARED_IMPORT_TTL: Duration = Duration::from_secs(10 * 60);
+/// A reserved-but-not-yet-prepared operation only holds a registry slot (no
+/// file handle). It is reaped if the staged prepare never arrives so a client
+/// that starts an operation and then dies cannot leak the request slot.
+const MEDIA_ASSET_RESERVED_OPERATION_TTL: Duration = Duration::from_secs(2 * 60);
+/// A terminal commit receipt is retained past the engine ACK so an exact retry
+/// after a lost reply returns the same definitive result without republishing.
+const MEDIA_ASSET_COMMIT_RECEIPT_TTL: Duration = Duration::from_secs(10 * 60);
+/// The single background reaper wakes on this cadence to release expired
+/// prepared handles and finished receipts at TTL without waiting for the next
+/// registry call. One task total, owned by `AppState`; never one per item.
+const MEDIA_ASSET_OPERATION_REAP_INTERVAL: Duration = Duration::from_millis(500);
 static RDM_TRANSACTION_NUMBER: AtomicU8 = AtomicU8::new(1);
 static LIVE_VIDEO_MONITOR_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static PROJECT_SAVE_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 fn validate_app_name(file_label: &str, app: &str) -> Result<(), String> {
     if app.trim() == APP_NAME {
@@ -161,12 +195,33 @@ fn validate_app_name(file_label: &str, app: &str) -> Result<(), String> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectOperatorSession {
+    project_epoch: u64,
+    policy: OperatorPolicy,
+    unlocked: bool,
+}
+
 struct AppState {
     engine: EngineHandle,
+    /// The application handle is retained for fenced project replacement so
+    /// every project entry point can retire native Display windows before the
+    /// engine accepts a new snapshot. Commands do not run until setup has
+    /// installed this value.
+    app_handle: Mutex<Option<tauri::AppHandle>>,
     vj_first_run: Arc<Mutex<()>>,
     vj_preview_transport: Mutex<VjPreviewTransportRuntime>,
     vj_preview_renderer: Mutex<AppVideoPreviewRenderer>,
     vj_preview_renderer_reset_pending: AtomicBool,
+    /// Long-running local media preparation is explicitly separate from the
+    /// project mutation ticket. Each operation is owned by an opaque server
+    /// generation so a delayed cancel for an old request cannot stop a newer
+    /// request that reused the same client request ID.
+    media_asset_operations: Arc<MediaAssetOperationRegistry>,
+    /// The single background reaper for `media_asset_operations`, installed once
+    /// during setup. Holding it here keeps the thread owned by `AppState` and
+    /// joined on teardown instead of leaked.
+    media_asset_reaper: Mutex<Option<MediaAssetOperationReaper>>,
     media_audio: Arc<Mutex<MediaAudioPlayback>>,
     program_audio_handoff: Arc<ProgramAudioHandoffCoordinator>,
     _media_audio_sync: MediaAudioSyncRuntime,
@@ -203,11 +258,3013 @@ struct AppState {
     current_project_path: Mutex<Option<PathBuf>>,
     operator_policy: Mutex<Option<OperatorPolicy>>,
     operator_selection: Arc<Mutex<OperatorSelectionContext>>,
-    project_history: Mutex<ProjectHistory>,
+    /// Serializes every project-identity operation with its authoritative
+    /// ancillary state.  The legacy per-feature mutexes below remain UI
+    /// compatibility mirrors while the coordinator is migrated through the
+    /// command surface; they must only be changed by coordinator-owned
+    /// helpers.
+    project_coordinator: Mutex<ProjectCoordinator>,
+    /// Input callbacks deliberately do not take the coordinator mutex.  They
+    /// compare this atomic generation immediately before an engine send so a
+    /// callback captured by a retired project can never affect its successor.
+    project_callback_epoch: Arc<AtomicU64>,
+    /// Separate callback generation for mappings. Updating MIDI/OSC/DMX
+    /// mappings retires only mapping-driven runtimes and must not silence the
+    /// independent MIDI Clock transport input.
+    project_mapping_callback_epoch: Arc<AtomicU64>,
+    /// Begin→Commit reserves a coherent persistence capture. Callback inputs
+    /// never take the coordinator mutex, so this atomic blocks MIDI/OSC/DMX
+    /// and remote sends during that interval without creating a lock cycle.
+    project_transaction_active: Arc<AtomicBool>,
+    /// Webview label -> current renderer generation. This makes transaction
+    /// recovery a liveness decision instead of treating every different
+    /// renderer as orphaned (which could steal a live pane's edit).
+    project_transaction_owners: Mutex<HashMap<String, String>>,
+    /// Backend-enforced Operator Lock state for each registered renderer owner.
+    /// The project policy remains authoritative in the coordinator; this cache
+    /// records only whether that exact owner has successfully unlocked the
+    /// current epoch/policy image. A policy or identity change resets to the
+    /// policy's `lock_on_load` default before any authoritative mutation.
+    project_operator_sessions: Mutex<HashMap<String, ProjectOperatorSession>>,
+    /// Linearizes every external callback/remote engine send with project
+    /// transaction baselines and identity publication.  Any path that also
+    /// needs coordinator state must acquire this mutex first.
+    project_external_command_admission: Arc<ProjectExternalCommandAdmission>,
+    /// Serializes only the final atomic replacement/adoption phase of project
+    /// saves. JSON/temp-file preparation happens outside this gate, while a
+    /// delayed older writer is rejected under this gate before it can replace
+    /// a newer file.
+    project_save_publication: Mutex<()>,
     snapshot_sync: Mutex<SnapshotSyncState>,
     standby_sync: Mutex<StandbySyncRuntime>,
+    standby_sync_lifecycle: Arc<Mutex<()>>,
+    output_ownership_transition: Arc<Mutex<()>>,
     native_video_output_metrics:
         Mutex<HashMap<VideoOutputId, Arc<Mutex<NativeVideoOutputMetrics>>>>,
+    native_video_output_workers: Mutex<HashMap<String, NativeVideoOutputWorker>>,
+}
+
+/// Cancelable -> Admitted | Cancelled linearization for one media operation.
+///
+/// A media commit and a cancel can arrive concurrently. This single atomic is
+/// the only agreement point between them: `try_admit` (taken immediately before
+/// the engine publish) and `try_cancel` (taken by the cancel IPC) both CAS the
+/// same word, so at most one wins. Once admitted, cancel can never win, so a
+/// `cancel == true` result and an engine-publish-success can never coexist. The
+/// separate `cancel` `AtomicBool` remains the cooperative stop flag read by the
+/// hashing loop; it is set only *after* a winning `try_cancel`.
+const MEDIA_ASSET_OP_CANCELABLE: u8 = 0;
+const MEDIA_ASSET_OP_ADMITTED: u8 = 1;
+const MEDIA_ASSET_OP_CANCELLED: u8 = 2;
+
+/// The outcome of a commit's admission attempt. `Admitted` is returned to the
+/// single caller that won the Cancelable -> Admitted transition; every later
+/// caller that observes an already-admitted operation gets `AlreadyAdmitted`.
+/// Terminal commits publish only on `Admitted`, so a concurrent duplicate that
+/// slips past the receipt check can never publish twice or overwrite a receipt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MediaAssetCommitAdmission {
+    Admitted,
+    AlreadyAdmitted,
+}
+
+#[derive(Debug)]
+struct MediaAssetOperationAdmission {
+    state: AtomicU8,
+}
+
+impl MediaAssetOperationAdmission {
+    fn new() -> Self {
+        Self {
+            state: AtomicU8::new(MEDIA_ASSET_OP_CANCELABLE),
+        }
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.state.load(Ordering::Acquire) == MEDIA_ASSET_OP_CANCELLED
+    }
+
+    fn is_admitted(&self) -> bool {
+        self.state.load(Ordering::Acquire) == MEDIA_ASSET_OP_ADMITTED
+    }
+
+    /// Win cancellation iff the operation has not been admitted. Idempotent: a
+    /// second cancel of an already-cancelled operation still reports `true`.
+    fn try_cancel(&self) -> bool {
+        loop {
+            match self.state.compare_exchange_weak(
+                MEDIA_ASSET_OP_CANCELABLE,
+                MEDIA_ASSET_OP_CANCELLED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return true,
+                Err(MEDIA_ASSET_OP_CANCELLED) => return true,
+                Err(MEDIA_ASSET_OP_ADMITTED) => return false,
+                // Spurious weak failure while still Cancelable; retry.
+                Err(_) => continue,
+            }
+        }
+    }
+
+    /// Admit iff the operation has not been cancelled, distinguishing the single
+    /// caller that won the Cancelable -> Admitted CAS (`Admitted`, the one and
+    /// only publisher) from any later caller that finds the operation already
+    /// admitted (`AlreadyAdmitted`, an exact retry or a concurrent duplicate).
+    /// A commit publishes only on `Admitted`; `AlreadyAdmitted` never re-enters
+    /// the engine, so a lost ACK retry or a duplicate that slipped past the
+    /// receipt check cannot publish a second layer/import.
+    fn try_admit(&self) -> Result<MediaAssetCommitAdmission, ()> {
+        loop {
+            match self.state.compare_exchange_weak(
+                MEDIA_ASSET_OP_CANCELABLE,
+                MEDIA_ASSET_OP_ADMITTED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Ok(MediaAssetCommitAdmission::Admitted),
+                Err(MEDIA_ASSET_OP_ADMITTED) => {
+                    return Ok(MediaAssetCommitAdmission::AlreadyAdmitted)
+                }
+                Err(MEDIA_ASSET_OP_CANCELLED) => return Err(()),
+                Err(_) => continue,
+            }
+        }
+    }
+}
+
+/// Which terminal commit a receipt belongs to. Included in the receipt key so a
+/// retry that reuses an exact identity for a different command shape can never
+/// receive a mismatched payload type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum MediaAssetCommitReceiptKind {
+    Import,
+    Relink,
+    Layers,
+    Bootstrap,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct MediaAssetCommitReceiptKey {
+    kind: MediaAssetCommitReceiptKind,
+    prepared_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    project_transaction_id: u64,
+    owner_id: String,
+}
+
+/// The definitive result of a terminal commit, retained so a lost engine ACK
+/// reply plus an exact retry returns the same value without republishing.
+#[derive(Debug, Clone)]
+enum MediaAssetCommitReceipt {
+    Import(MediaAssetImportReport),
+    Relink(MediaAssetRelinkReport),
+    Layers(Vec<VideoLayerId>),
+    Bootstrap(VjFirstRunSetupResult),
+}
+
+/// Backend-owned media commits use an operation-stable identity which never
+/// contains a renderer project-transaction ticket. The exact Start authority
+/// is part of the key, so a reply retry cannot accidentally bind the prepared
+/// bytes to a later same-owner project image.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct MediaAssetAuthoritativeOperationKey {
+    prepared_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    owner_id: String,
+    start_epoch: u64,
+    start_revision: u64,
+    start_checkpoint_hash: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum MediaAssetAuthoritativeCommitKind {
+    Import,
+    Relink,
+    VideoFileLayer,
+    StillImageLayer,
+    LocalMediaLayers,
+    BootstrapVjShow,
+}
+
+/// The operation identity answers "which prepared bytes?" while this shape
+/// answers "what should those bytes do?". Keeping both prevents a retry which
+/// changes a label/kind/policy from receiving a typed result for a different
+/// semantic request. A shape conflict never publishes and the canonical
+/// terminal result remains available through the query command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MediaAssetAuthoritativeRequestShape {
+    kind: MediaAssetAuthoritativeCommitKind,
+    fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct MediaAssetAuthoritativeLayerResult {
+    layer_ids: Vec<VideoLayerId>,
+    mutation: ProjectHistoryMutationResult,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct MediaAssetAuthoritativeBootstrapResult {
+    setup: VjFirstRunSetupResult,
+    mutation: ProjectHistoryMutationResult,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct MediaAssetAuthoritativeRelinkResult {
+    report: MediaAssetRelinkReport,
+    mutation: ProjectHistoryMutationResult,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct MediaAssetAuthoritativeFailureResult {
+    message: String,
+}
+
+/// One generic terminal payload is retained for exact retry/query. Command
+/// wrappers down-cast only after the operation lane has returned the canonical
+/// result, so a receipt can never be mistaken for another command family.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", content = "result", rename_all = "snake_case")]
+enum MediaAssetAuthoritativeTerminalResult {
+    Import(MediaAssetAuthoritativeImportResult),
+    Relink(MediaAssetAuthoritativeRelinkResult),
+    Layers(MediaAssetAuthoritativeLayerResult),
+    Bootstrap(MediaAssetAuthoritativeBootstrapResult),
+    Failure(MediaAssetAuthoritativeFailureResult),
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct MediaAssetAuthoritativeTerminalEnvelope {
+    command_kind: MediaAssetAuthoritativeCommitKind,
+    shape_fingerprint: String,
+    terminal: MediaAssetAuthoritativeTerminalResult,
+}
+
+#[derive(Debug, Clone)]
+struct MediaAssetAuthoritativeReceiptRecord {
+    shape: MediaAssetAuthoritativeRequestShape,
+    terminal: MediaAssetAuthoritativeTerminalResult,
+    expires_at: Instant,
+}
+
+#[derive(Debug, Clone)]
+struct MediaAssetCommitReceiptRecord {
+    receipt: MediaAssetCommitReceipt,
+    expires_at: Instant,
+}
+
+/// One start/reserve reply. The client learns its exact
+/// {request_id, generation, owner_id} before any hashing begins, so an
+/// AbortSignal can cancel the very first hashed chunk of the staged prepare.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct MediaAssetOperationStartReport {
+    request_id: u64,
+    operation_generation: u64,
+    project_epoch: u64,
+    project_revision: u64,
+    checkpoint_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MediaAssetOperationHandle {
+    request_id: u64,
+    generation: u64,
+}
+
+#[derive(Debug)]
+struct MediaAssetOperationEntry {
+    generation: u64,
+    owner_id: String,
+    cancel: Arc<AtomicBool>,
+    admission: Arc<MediaAssetOperationAdmission>,
+    /// `Some` while the slot is reserved and awaiting its staged prepare (the
+    /// reaper may reclaim it at TTL). Adoption into a running guard clears it to
+    /// `None`; from then on the guard's `Drop` owns removal.
+    expires_at: Option<Instant>,
+    /// The exact persistence authority captured at `start_media_asset_operation`
+    /// and returned to the client (A). It is `Some` only for a reserved slot; the
+    /// staged prepare must prove the current authority still equals this exact A
+    /// before hashing, so a same-epoch revision/hash mutation between Start and
+    /// Prepare is rejected instead of silently rebinding to a newer B. Cleared to
+    /// `None` on adoption together with `expires_at`.
+    reserved_authority: Option<MediaAssetPrepareAuthority>,
+}
+
+#[derive(Debug, Default)]
+struct MediaAssetOperationRegistry {
+    next_generation: AtomicU64,
+    active: Mutex<HashMap<u64, MediaAssetOperationEntry>>,
+    prepared: Mutex<HashMap<u64, PreparedMediaAssetImport>>,
+    prepared_relinks: Mutex<HashMap<u64, PreparedMediaAssetRelink>>,
+    /// Terminal commit evidence keyed by exact operation identity. Retained
+    /// past the engine ACK so a lost reply plus an exact retry/query returns the
+    /// same definitive outcome without republishing.
+    commit_receipts: Mutex<HashMap<MediaAssetCommitReceiptKey, MediaAssetCommitReceiptRecord>>,
+    /// Per-exact-receipt-key single-flight lanes for the terminal commit. Two
+    /// identical concurrent commits both miss the pre-lane receipt check; the
+    /// first to take a key's lane publishes and records its receipt while the
+    /// duplicate blocks on the same lane, then observes that receipt instead of
+    /// publishing a second time. This lane — never a receipt mutex — is what is
+    /// held across the engine publication, so no receipt lock is held across an
+    /// engine operation. Idle lanes are reaped alongside receipts.
+    commit_lanes: Mutex<HashMap<MediaAssetCommitReceiptKey, Arc<Mutex<()>>>>,
+    /// Canonical backend-owned terminal results, keyed by the operation rather
+    /// than an ephemeral frontend transaction. Exactly one semantic shape may
+    /// win for an operation; conflicting shapes can query but never republish.
+    authoritative_receipts:
+        Mutex<HashMap<MediaAssetAuthoritativeOperationKey, MediaAssetAuthoritativeReceiptRecord>>,
+    authoritative_lanes: Mutex<HashMap<MediaAssetAuthoritativeOperationKey, Arc<Mutex<()>>>>,
+}
+
+struct MediaAssetOperationGuard {
+    registry: Arc<MediaAssetOperationRegistry>,
+    handle: MediaAssetOperationHandle,
+    cancel: Arc<AtomicBool>,
+    admission: Arc<MediaAssetOperationAdmission>,
+}
+
+impl MediaAssetOperationRegistry {
+    /// Allocate a strictly monotonic non-zero generation. Never reused, never
+    /// decreased; exhaustion fails closed rather than wrapping to 0.
+    fn allocate_generation(&self) -> Result<u64, String> {
+        let mut generation = self.next_generation.load(Ordering::Acquire);
+        loop {
+            let next = generation.checked_add(1).ok_or_else(|| {
+                "Media asset operation generation is exhausted; restart Syndocal".to_string()
+            })?;
+            match self.next_generation.compare_exchange_weak(
+                generation,
+                next,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Ok(next),
+                Err(actual) => generation = actual,
+            }
+        }
+    }
+
+    fn begin(
+        self: &Arc<Self>,
+        request_id: u64,
+        owner_id: String,
+    ) -> Result<MediaAssetOperationGuard, String> {
+        if request_id == 0 {
+            return Err("Media asset operation request ID must be non-zero".to_string());
+        }
+        let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+        let mut active = self
+            .active
+            .lock()
+            .map_err(|_| "Media asset operation registry lock was poisoned".to_string())?;
+        if active.contains_key(&request_id) {
+            return Err(format!(
+                "Media asset operation request {request_id} is already active"
+            ));
+        }
+        let generation = self.allocate_generation()?;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let admission = Arc::new(MediaAssetOperationAdmission::new());
+        let handle = MediaAssetOperationHandle {
+            request_id,
+            generation,
+        };
+        active.insert(
+            request_id,
+            MediaAssetOperationEntry {
+                generation,
+                owner_id,
+                cancel: Arc::clone(&cancel),
+                admission: Arc::clone(&admission),
+                // Guard-owned from creation: `Drop` removes it, so the reaper
+                // must never reclaim it out from under an in-flight prepare.
+                expires_at: None,
+                // A `begin`-owned slot captures its authority inline, never
+                // across an IPC boundary, so there is no reserved A to bind.
+                reserved_authority: None,
+            },
+        );
+        Ok(MediaAssetOperationGuard {
+            registry: Arc::clone(self),
+            handle,
+            cancel,
+            admission,
+        })
+    }
+
+    /// Reserve an operation slot and return its exact identity *before* any
+    /// hashing. The slot persists across the IPC boundary (unlike `begin`,
+    /// there is no RAII guard yet) so the client can cancel the very first
+    /// hashed chunk of the subsequent staged prepare. A reserved slot that is
+    /// never adopted is reclaimed by the reaper at `MEDIA_ASSET_RESERVED_OPERATION_TTL`.
+    fn reserve(
+        self: &Arc<Self>,
+        request_id: u64,
+        owner_id: String,
+        authority: MediaAssetPrepareAuthority,
+    ) -> Result<MediaAssetOperationHandle, String> {
+        if request_id == 0 {
+            return Err("Media asset operation request ID must be non-zero".to_string());
+        }
+        let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+        let mut active = self
+            .active
+            .lock()
+            .map_err(|_| "Media asset operation registry lock was poisoned".to_string())?;
+        if active.contains_key(&request_id) {
+            return Err(format!(
+                "Media asset operation request {request_id} is already active"
+            ));
+        }
+        let generation = self.allocate_generation()?;
+        active.insert(
+            request_id,
+            MediaAssetOperationEntry {
+                generation,
+                owner_id,
+                cancel: Arc::new(AtomicBool::new(false)),
+                admission: Arc::new(MediaAssetOperationAdmission::new()),
+                expires_at: Some(Instant::now() + MEDIA_ASSET_RESERVED_OPERATION_TTL),
+                // Bind the exact authority the client was told at Start; the
+                // staged prepare adopts it and must confirm it is still current.
+                reserved_authority: Some(authority),
+            },
+        );
+        Ok(MediaAssetOperationHandle {
+            request_id,
+            generation,
+        })
+    }
+
+    /// Adopt a previously reserved slot for the staged prepare. Clearing the
+    /// slot's TTL hands ownership to the returned RAII guard, so the reaper no
+    /// longer touches it and normal drop-on-error cleanup applies. A second
+    /// adoption or an adoption of a `begin`-owned slot is rejected.
+    fn adopt_reserved(
+        self: &Arc<Self>,
+        request_id: u64,
+        generation: u64,
+        owner_id: String,
+    ) -> Result<(MediaAssetOperationGuard, MediaAssetPrepareAuthority), String> {
+        let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+        let mut active = self
+            .active
+            .lock()
+            .map_err(|_| "Media asset operation registry lock was poisoned".to_string())?;
+        let entry = active.get_mut(&request_id).ok_or_else(|| {
+            "Media asset operation was not reserved or has already been released".to_string()
+        })?;
+        if entry.generation != generation || entry.owner_id != owner_id {
+            return Err(
+                "Media asset operation reservation does not match this operation owner".to_string(),
+            );
+        }
+        if entry.expires_at.is_none() {
+            return Err("Media asset operation is already in progress".to_string());
+        }
+        if entry.admission.is_cancelled() || entry.cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
+        // The authority bound at Start (A). Take it out with the adoption so the
+        // caller can prove the current authority still equals this exact A before
+        // any hashing. A reserved slot always carries one; a missing binding fails
+        // closed rather than silently adopting a recaptured (possibly newer) B.
+        let reserved_authority = entry.reserved_authority.take().ok_or_else(|| {
+            "Media asset operation reservation is missing its start authority".to_string()
+        })?;
+        entry.expires_at = None;
+        let cancel = Arc::clone(&entry.cancel);
+        let admission = Arc::clone(&entry.admission);
+        Ok((
+            MediaAssetOperationGuard {
+                registry: Arc::clone(self),
+                handle: MediaAssetOperationHandle {
+                    request_id,
+                    generation,
+                },
+                cancel,
+                admission,
+            },
+            reserved_authority,
+        ))
+    }
+
+    /// Attempt to cancel an exact operation. Returns `true` only if the cancel
+    /// won the admission race, i.e. it reached the operation before any commit
+    /// admitted it. Once a commit has admitted (it is at or past its engine
+    /// publish), cancel loses and returns `false`; the commit then reports the
+    /// definitive outcome and cancel must not claim a stop that did not happen.
+    fn cancel_exact(
+        &self,
+        request_id: u64,
+        generation: u64,
+        owner_id: String,
+    ) -> Result<bool, String> {
+        let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+        // Never hold `active` while acquiring `prepared`: preparation writes
+        // in the same order, and a cancel must remain usable after the RAII
+        // operation guard has dropped its active entry. Active and prepared for
+        // the same operation share one admission cell, so `try_cancel` is
+        // idempotent across the two lock scopes below.
+        let active_won = {
+            let active = self
+                .active
+                .lock()
+                .map_err(|_| "Media asset operation registry lock was poisoned".to_string())?;
+            match active.get(&request_id) {
+                Some(entry) if entry.generation == generation && entry.owner_id == owner_id => {
+                    if entry.admission.try_cancel() {
+                        entry.cancel.store(true, Ordering::Release);
+                        true
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            }
+        };
+        let prepared_won = {
+            let mut prepared = self
+                .prepared
+                .lock()
+                .map_err(|_| "Prepared media asset store lock was poisoned".to_string())?;
+            let matched = prepared.get(&generation).is_some_and(|prepared| {
+                prepared.request_id == request_id
+                    && prepared.operation_generation == generation
+                    && prepared.owner_id == owner_id
+            });
+            if matched {
+                // Losing here means a commit already admitted; leave the entry
+                // in place so the committing thread owns its lifecycle.
+                let won = prepared
+                    .get(&generation)
+                    .is_some_and(|entry| entry.admission.try_cancel());
+                if won {
+                    if let Some(entry) = prepared.remove(&generation) {
+                        entry.cancel.store(true, Ordering::Release);
+                    }
+                }
+                won
+            } else {
+                false
+            }
+        };
+        let prepared_relink_won = {
+            let mut prepared = self
+                .prepared_relinks
+                .lock()
+                .map_err(|_| "Prepared media asset relink store lock was poisoned".to_string())?;
+            let matched = prepared.get(&generation).is_some_and(|prepared| {
+                prepared.request_id == request_id
+                    && prepared.operation_generation == generation
+                    && prepared.owner_id == owner_id
+            });
+            if matched {
+                let won = prepared
+                    .get(&generation)
+                    .is_some_and(|entry| entry.admission.try_cancel());
+                if won {
+                    if let Some(entry) = prepared.remove(&generation) {
+                        entry.cancel.store(true, Ordering::Release);
+                    }
+                }
+                won
+            } else {
+                false
+            }
+        };
+        Ok(active_won || prepared_won || prepared_relink_won)
+    }
+
+    fn store_prepared_from_active(
+        &self,
+        handle: &MediaAssetOperationHandle,
+        owner_id: &str,
+        prepared: PreparedMediaAssetImport,
+    ) -> Result<u64, String> {
+        let token = prepared.operation_generation;
+        if token != handle.generation {
+            return Err(
+                "Prepared media asset operation generation changed unexpectedly".to_string(),
+            );
+        }
+        let active = self
+            .active
+            .lock()
+            .map_err(|_| "Media asset operation registry lock was poisoned".to_string())?;
+        let entry = active
+            .get(&handle.request_id)
+            .ok_or_else(|| "Media asset operation is no longer active".to_string())?;
+        if entry.generation != handle.generation || entry.owner_id != owner_id {
+            return Err(
+                "Media asset operation owner changed before preparation completed".to_string(),
+            );
+        }
+        if entry.cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
+        let mut entries = self
+            .prepared
+            .lock()
+            .map_err(|_| "Prepared media asset store lock was poisoned".to_string())?;
+        let now = Instant::now();
+        entries.retain(|_, entry| entry.expires_at > now);
+        if entries.insert(token, prepared).is_some() {
+            return Err("Prepared media asset token collision; retry the import".to_string());
+        }
+        drop(active);
+        Ok(token)
+    }
+
+    fn prepared_exact(
+        &self,
+        token: u64,
+        request_id: u64,
+        operation_generation: u64,
+        owner_id: &str,
+    ) -> Result<PreparedMediaAssetImport, String> {
+        let mut entries = self
+            .prepared
+            .lock()
+            .map_err(|_| "Prepared media asset store lock was poisoned".to_string())?;
+        let now = Instant::now();
+        entries.retain(|_, entry| entry.expires_at > now);
+        let entry = entries
+            .get(&token)
+            .cloned()
+            .ok_or_else(|| "Prepared media asset import was not found or expired".to_string())?;
+        if entry.request_id != request_id
+            || entry.operation_generation != operation_generation
+            || entry.owner_id != owner_id
+        {
+            return Err(
+                "Prepared media asset import token does not match this operation owner".to_string(),
+            );
+        }
+        Ok(entry)
+    }
+
+    /// Called only after an engine ACK and coordinator commit. Poison recovery
+    /// is intentional here: removal is a post-commit memory cleanup and must
+    /// not manufacture a failure after a durable authoritative mutation.
+    fn consume_prepared_after_commit(
+        &self,
+        token: u64,
+        request_id: u64,
+        operation_generation: u64,
+        owner_id: &str,
+    ) {
+        let mut entries = self
+            .prepared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if entries.get(&token).is_some_and(|entry| {
+            entry.request_id == request_id
+                && entry.operation_generation == operation_generation
+                && entry.owner_id == owner_id
+        }) {
+            entries.remove(&token);
+        }
+    }
+
+    fn finalize_prepared_import_exact(
+        &self,
+        token: u64,
+        request_id: u64,
+        operation_generation: u64,
+        owner_id: &str,
+        authority: &MediaAssetPrepareAuthority,
+        sources: Vec<FinalizedLocalMediaSource>,
+    ) -> Result<(), String> {
+        let mut entries = self
+            .prepared
+            .lock()
+            .map_err(|_| "Prepared media asset store lock was poisoned".to_string())?;
+        let entry = entries
+            .get_mut(&token)
+            .ok_or_else(|| "Prepared media asset import was not found or expired".to_string())?;
+        if entry.request_id != request_id
+            || entry.operation_generation != operation_generation
+            || entry.owner_id != owner_id
+            || entry.authority != *authority
+        {
+            return Err("Prepared media asset import changed before finalization".to_string());
+        }
+        if entry.cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
+        if entry.expires_at <= Instant::now() {
+            return Err("Prepared media asset import expired; prepare again".to_string());
+        }
+        entry.finalized_sources = Some(sources);
+        Ok(())
+    }
+
+    fn store_prepared_relink_from_active(
+        &self,
+        handle: &MediaAssetOperationHandle,
+        owner_id: &str,
+        prepared: PreparedMediaAssetRelink,
+    ) -> Result<u64, String> {
+        let token = prepared.operation_generation;
+        if token != handle.generation {
+            return Err("Prepared media asset relink generation changed unexpectedly".to_string());
+        }
+        let active = self
+            .active
+            .lock()
+            .map_err(|_| "Media asset operation registry lock was poisoned".to_string())?;
+        let entry = active
+            .get(&handle.request_id)
+            .ok_or_else(|| "Media asset operation is no longer active".to_string())?;
+        if entry.generation != handle.generation || entry.owner_id != owner_id {
+            return Err(
+                "Media asset operation owner changed before relink preparation completed"
+                    .to_string(),
+            );
+        }
+        if entry.cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
+        let mut entries = self
+            .prepared_relinks
+            .lock()
+            .map_err(|_| "Prepared media asset relink store lock was poisoned".to_string())?;
+        let now = Instant::now();
+        entries.retain(|_, entry| entry.expires_at > now);
+        if entries.insert(token, prepared).is_some() {
+            return Err("Prepared media asset relink token collision; retry".to_string());
+        }
+        drop(active);
+        Ok(token)
+    }
+
+    fn prepared_relink_exact(
+        &self,
+        token: u64,
+        request_id: u64,
+        operation_generation: u64,
+        owner_id: &str,
+    ) -> Result<PreparedMediaAssetRelink, String> {
+        let mut entries = self
+            .prepared_relinks
+            .lock()
+            .map_err(|_| "Prepared media asset relink store lock was poisoned".to_string())?;
+        let now = Instant::now();
+        entries.retain(|_, entry| entry.expires_at > now);
+        let entry = entries
+            .get(&token)
+            .cloned()
+            .ok_or_else(|| "Prepared media asset relink was not found or expired".to_string())?;
+        if entry.request_id != request_id
+            || entry.operation_generation != operation_generation
+            || entry.owner_id != owner_id
+        {
+            return Err(
+                "Prepared media asset relink token does not match this operation owner".to_string(),
+            );
+        }
+        Ok(entry)
+    }
+
+    fn consume_prepared_relink_after_commit(
+        &self,
+        token: u64,
+        request_id: u64,
+        operation_generation: u64,
+        owner_id: &str,
+    ) {
+        let mut entries = self
+            .prepared_relinks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if entries.get(&token).is_some_and(|entry| {
+            entry.request_id == request_id
+                && entry.operation_generation == operation_generation
+                && entry.owner_id == owner_id
+        }) {
+            entries.remove(&token);
+        }
+    }
+
+    fn finalize_prepared_relink_exact(
+        &self,
+        token: u64,
+        request_id: u64,
+        operation_generation: u64,
+        owner_id: &str,
+        authority: &MediaAssetPrepareAuthority,
+        replacement_source: FinalizedLocalMediaSource,
+        legacy_source: Option<FinalizedLocalMediaSource>,
+    ) -> Result<(), String> {
+        let mut entries = self
+            .prepared_relinks
+            .lock()
+            .map_err(|_| "Prepared media asset relink store lock was poisoned".to_string())?;
+        let entry = entries
+            .get_mut(&token)
+            .ok_or_else(|| "Prepared media asset relink was not found or expired".to_string())?;
+        if entry.request_id != request_id
+            || entry.operation_generation != operation_generation
+            || entry.owner_id != owner_id
+            || entry.authority != *authority
+        {
+            return Err("Prepared media asset relink changed before finalization".to_string());
+        }
+        if entry.cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
+        if entry.expires_at <= Instant::now() {
+            return Err("Prepared media asset relink expired; prepare again".to_string());
+        }
+        entry.finalized_replacement_source = Some(replacement_source);
+        entry.finalized_legacy_source = legacy_source;
+        Ok(())
+    }
+
+    /// Look up a terminal commit receipt for an exact identity. This is the
+    /// evidence a lost engine-ACK reply left behind, so an exact retry returns
+    /// the original outcome instead of re-running (and re-publishing) the
+    /// commit. Poison recovery is deliberate: reading durable evidence must not
+    /// manufacture a failure.
+    fn commit_receipt(&self, key: &MediaAssetCommitReceiptKey) -> Option<MediaAssetCommitReceipt> {
+        let mut receipts = self
+            .commit_receipts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let now = Instant::now();
+        receipts.retain(|_, record| record.expires_at > now);
+        receipts.get(key).map(|record| record.receipt.clone())
+    }
+
+    /// Record the definitive commit outcome *before* the prepared token is
+    /// consumed, so the only evidence of success is never destroyed before it
+    /// can be delivered on a retry. Bounded by `MEDIA_ASSET_COMMIT_RECEIPT_TTL`
+    /// and eagerly reaped.
+    fn record_commit_receipt(
+        &self,
+        key: MediaAssetCommitReceiptKey,
+        receipt: MediaAssetCommitReceipt,
+    ) {
+        let mut receipts = self
+            .commit_receipts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let now = Instant::now();
+        receipts.retain(|_, record| record.expires_at > now);
+        receipts.insert(
+            key,
+            MediaAssetCommitReceiptRecord {
+                receipt,
+                expires_at: now + MEDIA_ASSET_COMMIT_RECEIPT_TTL,
+            },
+        );
+    }
+
+    /// The shared single-flight lane for one exact receipt key. All commits for
+    /// the same key take the same lock; distinct keys never contend.
+    fn commit_publication_lane(&self, key: &MediaAssetCommitReceiptKey) -> Arc<Mutex<()>> {
+        let mut lanes = self
+            .commit_lanes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Arc::clone(
+            lanes
+                .entry(key.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(()))),
+        )
+    }
+
+    /// Serialize the terminal publication for one exact receipt key and publish
+    /// exactly once. The first caller to take the key's lane runs `publish` and
+    /// records its receipt; a concurrent exact duplicate blocks on the same lane
+    /// and then returns that recorded receipt without publishing again. The lane
+    /// (not the receipt mutex) is held across `publish`, so no receipt lock is
+    /// held across the engine operation and the lane order — lane before the
+    /// external-command/coordinator locks acquired inside `publish` — cannot
+    /// deadlock. `publish` is the sole engine-publishing body; it still admits on
+    /// the shared admission cell, so even a same-operation duplicate arriving on
+    /// a *different* receipt key (e.g. a second transaction ticket) is refused at
+    /// the linearization point rather than publishing twice.
+    fn commit_terminal_single_flight<F>(
+        &self,
+        key: &MediaAssetCommitReceiptKey,
+        publish: F,
+    ) -> Result<MediaAssetCommitReceipt, String>
+    where
+        F: FnOnce() -> Result<MediaAssetCommitReceipt, String>,
+    {
+        let lane = self.commit_publication_lane(key);
+        let _lane_guard = lane.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Safe second receipt check inside the serialized publication lane: a
+        // duplicate that lost the lane race returns the first publisher's exact
+        // terminal result instead of re-validating, re-allocating, or
+        // republishing anything.
+        if let Some(receipt) = self.commit_receipt(key) {
+            return Ok(receipt);
+        }
+        let receipt = publish()?;
+        // Record before the lane is released so the very next duplicate to take
+        // the lane observes this receipt.
+        self.record_commit_receipt(key.clone(), receipt.clone());
+        Ok(receipt)
+    }
+
+    fn authoritative_receipt(
+        &self,
+        key: &MediaAssetAuthoritativeOperationKey,
+    ) -> Option<MediaAssetAuthoritativeReceiptRecord> {
+        let mut receipts = self
+            .authoritative_receipts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let now = Instant::now();
+        receipts.retain(|_, record| record.expires_at > now);
+        let record = receipts.get_mut(key)?;
+        // A legitimate retry/query proves this terminal result is still in use.
+        // Sliding the bounded TTL prevents the reaper from deleting it while a
+        // response-recovery loop is actively resolving the same operation.
+        record.expires_at = now + MEDIA_ASSET_COMMIT_RECEIPT_TTL;
+        Some(record.clone())
+    }
+
+    fn authoritative_publication_lane(
+        &self,
+        key: &MediaAssetAuthoritativeOperationKey,
+    ) -> Arc<Mutex<()>> {
+        let mut lanes = self
+            .authoritative_lanes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Arc::clone(
+            lanes
+                .entry(key.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(()))),
+        )
+    }
+
+    /// Single-flight every semantic request for one prepared operation. The
+    /// operation lane is intentionally broader than the shape: an exact retry
+    /// gets the original terminal payload, while a different label/kind for the
+    /// same prepared bytes is rejected after discovering (and retaining) the
+    /// canonical result. Neither path re-enters the engine.
+    fn authoritative_terminal_single_flight<F>(
+        &self,
+        key: &MediaAssetAuthoritativeOperationKey,
+        shape: &MediaAssetAuthoritativeRequestShape,
+        publish: F,
+    ) -> Result<MediaAssetAuthoritativeTerminalResult, String>
+    where
+        F: FnOnce() -> Result<MediaAssetAuthoritativeTerminalResult, String>,
+    {
+        let lane = self.authoritative_publication_lane(key);
+        let _lane_guard = lane.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(record) = self.authoritative_receipt(key) {
+            if record.shape == *shape {
+                return Ok(record.terminal);
+            }
+            return Err(format!(
+                "Media asset operation already completed as {:?} with shape {}; query its canonical terminal result instead of republishing",
+                record.shape.kind, record.shape.fingerprint
+            ));
+        }
+
+        let terminal = publish()?;
+        let now = Instant::now();
+        let mut receipts = self
+            .authoritative_receipts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        receipts.retain(|_, record| record.expires_at > now);
+        receipts.insert(
+            key.clone(),
+            MediaAssetAuthoritativeReceiptRecord {
+                shape: shape.clone(),
+                terminal: terminal.clone(),
+                expires_at: now + MEDIA_ASSET_COMMIT_RECEIPT_TTL,
+            },
+        );
+        Ok(terminal)
+    }
+
+    /// Eagerly release everything past its TTL: reserved-but-unadopted slots,
+    /// prepared imports/relinks (dropping their retained Windows file handles),
+    /// and delivered commit receipts. Returns the number of entries reclaimed.
+    /// The single background reaper calls this so handles are released at TTL
+    /// without waiting for the next registry command; it is also the unit under
+    /// test with an injected `now`.
+    fn reap_expired(&self, now: Instant) -> usize {
+        let mut reclaimed = 0usize;
+        {
+            let mut active = self
+                .active
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let before = active.len();
+            active.retain(|_, entry| match entry.expires_at {
+                Some(expires_at) => expires_at > now,
+                None => true,
+            });
+            reclaimed += before - active.len();
+        }
+        {
+            let mut prepared = self
+                .prepared
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let before = prepared.len();
+            prepared.retain(|_, entry| entry.expires_at > now);
+            reclaimed += before - prepared.len();
+        }
+        {
+            let mut prepared = self
+                .prepared_relinks
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let before = prepared.len();
+            prepared.retain(|_, entry| entry.expires_at > now);
+            reclaimed += before - prepared.len();
+        }
+        {
+            let mut receipts = self
+                .commit_receipts
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let before = receipts.len();
+            receipts.retain(|_, record| record.expires_at > now);
+            reclaimed += before - receipts.len();
+        }
+        {
+            let mut receipts = self
+                .authoritative_receipts
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let before = receipts.len();
+            receipts.retain(|_, record| record.expires_at > now);
+            reclaimed += before - receipts.len();
+        }
+        {
+            // An idle lane (only the map still references it) has no publisher
+            // inside it and no duplicate blocked on it, so dropping it cannot open
+            // a double-publish window; a later commit for the same key mints a
+            // fresh lane. A lane referenced by an in-flight commit or a blocked
+            // duplicate has strong_count > 1 and is kept.
+            let mut lanes = self
+                .commit_lanes
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let before = lanes.len();
+            lanes.retain(|_, lane| Arc::strong_count(lane) > 1);
+            reclaimed += before - lanes.len();
+        }
+        {
+            let mut lanes = self
+                .authoritative_lanes
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let before = lanes.len();
+            lanes.retain(|_, lane| Arc::strong_count(lane) > 1);
+            reclaimed += before - lanes.len();
+        }
+        reclaimed
+    }
+}
+
+impl MediaAssetOperationGuard {
+    fn handle(&self) -> MediaAssetOperationHandle {
+        self.handle.clone()
+    }
+
+    fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Acquire)
+    }
+
+    fn cancellation_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.cancel)
+    }
+
+    fn admission(&self) -> Arc<MediaAssetOperationAdmission> {
+        Arc::clone(&self.admission)
+    }
+}
+
+impl Drop for MediaAssetOperationGuard {
+    fn drop(&mut self) {
+        let mut active = match self.registry.active.lock() {
+            Ok(active) => active,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if active
+            .get(&self.handle.request_id)
+            .is_some_and(|entry| entry.generation == self.handle.generation)
+        {
+            active.remove(&self.handle.request_id);
+        }
+    }
+}
+
+/// The single background task that reaps expired media-operation state. It is
+/// owned by `AppState`, holds exactly one thread (never one per item), and joins
+/// cleanly on drop. Handles retained by prepared imports are therefore released
+/// at TTL without waiting for the next registry command.
+struct MediaAssetOperationReaper {
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl MediaAssetOperationReaper {
+    fn spawn(registry: Arc<MediaAssetOperationRegistry>) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let handle = std::thread::Builder::new()
+            .name("syndocal-media-asset-reaper".to_string())
+            .spawn(move || {
+                while !worker_stop.load(Ordering::Acquire) {
+                    registry.reap_expired(Instant::now());
+                    // Sleep in one short slice so a stop request is observed
+                    // promptly and drop-time join never blocks meaningfully.
+                    std::thread::park_timeout(MEDIA_ASSET_OPERATION_REAP_INTERVAL);
+                }
+            })
+            .ok();
+        Self { stop, handle }
+    }
+}
+
+impl Drop for MediaAssetOperationReaper {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(handle) = self.handle.take() {
+            handle.thread().unpark();
+            let _ = handle.join();
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocalMediaSourceFingerprint {
+    byte_size: u64,
+    modified: Option<SystemTime>,
+}
+
+/// A finalized source is deliberately retained until its opaque token is
+/// consumed/cancelled/expired. On Windows it denies write/delete sharing and
+/// owns an exclusive byte-range lock, closing the same-size/mtime-restored
+/// replacement hole between full rehash and short transaction commit.
+#[derive(Debug, Clone)]
+struct FinalizedLocalMediaSource {
+    path: String,
+    fingerprint: LocalMediaSourceFingerprint,
+    #[cfg(windows)]
+    retained: Arc<Mutex<RetainedWindowsMediaFile>>,
+    #[cfg(windows)]
+    identity: WindowsMediaFileIdentity,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WindowsMediaFileIdentity {
+    volume_serial_number: u32,
+    file_index_high: u32,
+    file_index_low: u32,
+    creation_time_low: u32,
+    creation_time_high: u32,
+}
+
+#[cfg(windows)]
+#[derive(Debug)]
+struct RetainedWindowsMediaFile {
+    file: fs::File,
+}
+
+#[cfg(windows)]
+impl Drop for RetainedWindowsMediaFile {
+    fn drop(&mut self) {
+        use windows::Win32::{
+            Foundation::HANDLE, Storage::FileSystem::UnlockFileEx, System::IO::OVERLAPPED,
+        };
+        let handle = HANDLE(self.file.as_raw_handle() as _);
+        let mut overlapped = OVERLAPPED::default();
+        // The OS closes the handle even if an unlock is impossible during
+        // teardown; explicit unlock simply releases the exclusion promptly.
+        let _ = unsafe { UnlockFileEx(handle, None, u32::MAX, u32::MAX, &mut overlapped) };
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PreparedLocalMediaAsset {
+    input_index: usize,
+    label: String,
+    source: VideoSourceSummary,
+    content_hash: MediaContentHash,
+    byte_size: u64,
+    fingerprint: LocalMediaSourceFingerprint,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedMediaAssetImport {
+    request_id: u64,
+    operation_generation: u64,
+    owner_id: String,
+    authority: MediaAssetPrepareAuthority,
+    assets: Vec<PreparedLocalMediaAsset>,
+    entries: Vec<MediaAssetImportEntryReport>,
+    /// Kept with the prepared record so an exact late cancel also reaches a
+    /// commit that already cloned this record out of the registry.
+    cancel: Arc<AtomicBool>,
+    /// Shared Cancelable/Admitted/Cancelled cell. The commit admits on this cell
+    /// immediately before the engine publish; a cancel that arrives after that
+    /// loses. Same `Arc` as the operation's active entry.
+    admission: Arc<MediaAssetOperationAdmission>,
+    /// Full hashes are finalized while no project transaction is pending.
+    /// Commit only performs the short same-fingerprint CAS check.
+    finalized_sources: Option<Vec<FinalizedLocalMediaSource>>,
+    expires_at: Instant,
+}
+
+/// The persistence identity a prepared local file is allowed to join.  This
+/// intentionally excludes history/publication counters: the normal workflow
+/// prepares first and then opens its short-lived project transaction, whose
+/// pending reservation changes those counters without replacing the project.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MediaAssetPrepareAuthority {
+    epoch: u64,
+    revision: u64,
+    checkpoint_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum MediaAssetImportEntryStatus {
+    Prepared,
+    Imported,
+    Reused,
+    Skipped,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct MediaAssetImportEntryReport {
+    input_index: usize,
+    path: String,
+    status: MediaAssetImportEntryStatus,
+    asset_id: Option<MediaAssetId>,
+    message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct MediaAssetImportReport {
+    request_id: u64,
+    operation_generation: u64,
+    prepared_import_token: Option<u64>,
+    project_epoch: u64,
+    project_revision: u64,
+    checkpoint_hash: String,
+    prepared: usize,
+    imported: usize,
+    reused: usize,
+    skipped: usize,
+    failed: usize,
+    entries: Vec<MediaAssetImportEntryReport>,
+}
+
+/// The terminal result of a backend-owned authoritative Media Library import.
+/// It pairs the import `report` with the single project-history `mutation` that
+/// the same command committed, so a lost reply plus an exact retry returns both
+/// halves without republishing the catalog or advancing history a second time.
+#[derive(Debug, Clone, Serialize)]
+struct MediaAssetAuthoritativeImportResult {
+    report: MediaAssetImportReport,
+    mutation: ProjectHistoryMutationResult,
+}
+
+/// Machine-local dependency truth. The authority tuple proves which project
+/// catalog was inspected without persisting filesystem availability into the
+/// project itself.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct MediaAssetAvailabilityReport {
+    request_id: u64,
+    operation_generation: u64,
+    project_epoch: u64,
+    project_revision: u64,
+    checkpoint_hash: String,
+    availability: Vec<MediaAssetAvailability>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct MediaAssetRelinkReport {
+    request_id: u64,
+    operation_generation: u64,
+    project_epoch: u64,
+    project_revision: u64,
+    checkpoint_hash: String,
+    outcome: MediaAssetRelinkOutcome,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct MediaAssetRelinkPrepareReport {
+    request_id: u64,
+    operation_generation: u64,
+    prepared_relink_token: Option<u64>,
+    project_epoch: u64,
+    project_revision: u64,
+    checkpoint_hash: String,
+    outcome: Option<MediaAssetRelinkOutcome>,
+}
+
+#[derive(Debug, Clone)]
+struct LegacyMediaAssetSourceIdentity {
+    path: String,
+    content_hash: MediaContentHash,
+    byte_size: u64,
+    fingerprint: LocalMediaSourceFingerprint,
+}
+
+#[derive(Debug, Clone)]
+enum PreparedMediaAssetRelinkDecision {
+    Ready {
+        replacement: PreparedLocalMediaAsset,
+        adopted_replacement: bool,
+        legacy_source_identity: Option<LegacyMediaAssetSourceIdentity>,
+    },
+    Outcome(MediaAssetRelinkOutcome),
+}
+
+#[derive(Debug, Clone)]
+struct PreparedMediaAssetRelink {
+    request_id: u64,
+    operation_generation: u64,
+    owner_id: String,
+    asset_id: MediaAssetId,
+    authority: MediaAssetPrepareAuthority,
+    original_asset: MediaAssetSummary,
+    replacement: PreparedLocalMediaAsset,
+    adopted_replacement: bool,
+    legacy_source_identity: Option<LegacyMediaAssetSourceIdentity>,
+    cancel: Arc<AtomicBool>,
+    /// Same shared admission cell as the import path; the relink commit admits
+    /// on it immediately before publishing the asset update.
+    admission: Arc<MediaAssetOperationAdmission>,
+    finalized_replacement_source: Option<FinalizedLocalMediaSource>,
+    finalized_legacy_source: Option<FinalizedLocalMediaSource>,
+    expires_at: Instant,
+}
+
+fn local_media_source_fingerprint(
+    metadata: &fs::Metadata,
+) -> Result<LocalMediaSourceFingerprint, String> {
+    if !metadata.is_file() {
+        return Err("Media path must be a regular file".to_string());
+    }
+    Ok(LocalMediaSourceFingerprint {
+        byte_size: metadata.len(),
+        modified: metadata.modified().ok(),
+    })
+}
+
+fn local_media_source_fingerprint_matches(
+    expected: &LocalMediaSourceFingerprint,
+    actual: &LocalMediaSourceFingerprint,
+) -> bool {
+    expected.byte_size == actual.byte_size && expected.modified == actual.modified
+}
+
+fn stream_sha256_from_open_file(
+    file: &mut fs::File,
+    cancel: &AtomicBool,
+) -> Result<MediaContentHash, String> {
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; MEDIA_ASSET_HASH_CHUNK_BYTES];
+    loop {
+        if cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("Unable to read media file while hashing: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        if cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
+    }
+    Ok(MediaContentHash {
+        algorithm: MediaHashAlgorithm::Sha256,
+        hex: format!("{:x}", hasher.finalize()),
+    })
+}
+
+/// Re-open and stream the current path after a probe or before commit. This
+/// deliberately proves byte identity again: path metadata can be unchanged by
+/// a same-size atomic replacement, while a second content hash cannot turn a
+/// hash(A)/probe(B) mixture into a valid prepared asset.
+fn rehash_local_media_path_exact(
+    path: &Path,
+    cancel: &AtomicBool,
+) -> Result<(MediaContentHash, LocalMediaSourceFingerprint), String> {
+    if cancel.load(Ordering::Acquire) {
+        return Err("Media asset operation was cancelled".to_string());
+    }
+    let mut file = fs::File::open(path)
+        .map_err(|error| format!("Unable to reopen media file '{}': {error}", path.display()))?;
+    let before =
+        local_media_source_fingerprint(&file.metadata().map_err(|error| {
+            format!("Unable to read media metadata before rehashing: {error}")
+        })?)?;
+    if before.byte_size == 0 {
+        return Err("Media files must not be empty".to_string());
+    }
+    let hash = stream_sha256_from_open_file(&mut file, cancel)?;
+    let after = local_media_source_fingerprint(
+        &file
+            .metadata()
+            .map_err(|error| format!("Unable to read media metadata after rehashing: {error}"))?,
+    )?;
+    if !local_media_source_fingerprint_matches(&before, &after) {
+        return Err("Media changed while hashing".to_string());
+    }
+    Ok((hash, before))
+}
+
+fn sha256_local_media_file_streaming(
+    path: &Path,
+    cancel: &AtomicBool,
+    probe: impl FnOnce(&Path) -> Result<Option<protocol::VideoMediaMetadata>, String>,
+) -> Result<
+    (
+        MediaContentHash,
+        u64,
+        LocalMediaSourceFingerprint,
+        Option<protocol::VideoMediaMetadata>,
+    ),
+    String,
+> {
+    if cancel.load(Ordering::Acquire) {
+        return Err("Media asset operation was cancelled".to_string());
+    }
+    // On Windows the handle denies write/delete for its whole lifetime, so the
+    // path cannot be atomically replaced while we hash and then probe it: the
+    // hash(A)/probe(B) ABA window is closed by the OS. Elsewhere we cannot deny
+    // writes through `std`, so the evidence-backed rehash below is the
+    // cross-platform equivalent.
+    #[cfg(windows)]
+    let mut file = open_windows_media_file_deny_write(path)?;
+    #[cfg(not(windows))]
+    let mut file = fs::File::open(path)
+        .map_err(|error| format!("Unable to open media file '{}': {error}", path.display()))?;
+    let before = local_media_source_fingerprint(
+        &file
+            .metadata()
+            .map_err(|error| format!("Unable to read media metadata before hashing: {error}"))?,
+    )?;
+    if before.byte_size == 0 {
+        return Err("Media files must not be empty".to_string());
+    }
+    #[cfg(windows)]
+    let guard_identity = windows_media_file_identity(&file)?;
+    let hash = stream_sha256_from_open_file(&mut file, cancel)?;
+    // Hold the original handle across the probe so its A fingerprint is
+    // coherent, then rehash the current path. That second byte proof rejects
+    // an atomic same-size A→B path replacement even if the original handle
+    // still reports A's metadata after a path-based probe reopened B.
+    let metadata = probe(path)?;
+    let after = local_media_source_fingerprint(
+        &file
+            .metadata()
+            .map_err(|error| format!("Unable to read media metadata after hashing: {error}"))?,
+    )?;
+    if !local_media_source_fingerprint_matches(&before, &after) {
+        return Err("Media changed while hashing or probing".to_string());
+    }
+    // Bind the hashed bytes AND the probed metadata to the current path
+    // identity: prove the path still resolves to the exact file we held under
+    // deny-write. Because deletion/rename was denied, this always matches; it is
+    // the explicit evidence that no A→B→A swap occurred during the probe.
+    #[cfg(windows)]
+    {
+        let current = open_windows_media_file_deny_write(path)?;
+        if windows_media_file_identity(&current)? != guard_identity {
+            return Err("Media path was replaced while hashing or probing".to_string());
+        }
+    }
+    let (current_hash, current_fingerprint) = rehash_local_media_path_exact(path, cancel)?;
+    if current_hash != hash
+        || !local_media_source_fingerprint_matches(&before, &current_fingerprint)
+    {
+        return Err("Media changed while hashing or probing".to_string());
+    }
+    if cancel.load(Ordering::Acquire) {
+        return Err("Media asset operation was cancelled".to_string());
+    }
+    Ok((hash, before.byte_size, before, metadata))
+}
+
+fn prepare_one_local_media_asset(
+    input_index: usize,
+    kind: VideoSourceKind,
+    path: String,
+    cancel: &AtomicBool,
+) -> Result<PreparedLocalMediaAsset, String> {
+    if !matches!(kind, VideoSourceKind::File | VideoSourceKind::StillImage) {
+        return Err(
+            "Local media asset preparation supports video files and still images only".to_string(),
+        );
+    }
+    let context = if kind == VideoSourceKind::File {
+        "Video file"
+    } else {
+        "Still image"
+    };
+    let path = validate_existing_file_path(path, context)?;
+    let path_buf = PathBuf::from(&path);
+    let (content_hash, byte_size, fingerprint, metadata) = if kind == VideoSourceKind::File {
+        let (hash, byte_size, fingerprint, metadata) =
+            sha256_local_media_file_streaming(&path_buf, cancel, |path| {
+                video::probe_video_file_metadata(path.to_string_lossy().as_ref())
+                    .map(|probe| probe.metadata)
+                    .map_err(|error| format!("Video metadata probe failed: {error:?}"))
+            })?;
+        (hash, byte_size, fingerprint, metadata)
+    } else {
+        sha256_local_media_file_streaming(&path_buf, cancel, |path| {
+            video::probe_still_image_metadata(path.to_string_lossy().as_ref())
+                .map(Some)
+                .map_err(|error| format!("Still image metadata probe failed: {error:?}"))
+        })?
+    };
+    let label = path_buf
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("Media")
+        .to_string();
+    Ok(PreparedLocalMediaAsset {
+        input_index,
+        label: normalize_video_layer_label(label)?,
+        source: VideoSourceSummary {
+            kind: kind.clone(),
+            path: Some(path.clone()),
+            name: None,
+            codec: if kind == VideoSourceKind::File {
+                video::infer_video_codec_from_path(&path)
+            } else {
+                None
+            },
+            metadata,
+        },
+        content_hash,
+        byte_size,
+        fingerprint,
+    })
+}
+
+fn prepare_local_media_asset_batch(
+    kind: VideoSourceKind,
+    paths: Vec<String>,
+    cancel: &AtomicBool,
+) -> Result<
+    (
+        Vec<PreparedLocalMediaAsset>,
+        Vec<MediaAssetImportEntryReport>,
+    ),
+    String,
+> {
+    if !matches!(kind, VideoSourceKind::File | VideoSourceKind::StillImage) {
+        return Err(
+            "Local media asset import supports video files and still images only".to_string(),
+        );
+    }
+    if paths.is_empty() {
+        return Err("Select at least one media file".to_string());
+    }
+    if paths.len() > MAX_LOCAL_MEDIA_ASSET_IMPORT_FILES {
+        return Err(format!(
+            "Local media asset import is limited to {MAX_LOCAL_MEDIA_ASSET_IMPORT_FILES} files at a time"
+        ));
+    }
+
+    let mut prepared = Vec::new();
+    let mut entries = Vec::with_capacity(paths.len());
+    let mut seen_paths = HashSet::new();
+    for (input_index, path) in paths.into_iter().enumerate() {
+        if cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
+        let dedupe_key = if cfg!(windows) {
+            path.trim().to_ascii_lowercase()
+        } else {
+            path.trim().to_string()
+        };
+        if !seen_paths.insert(dedupe_key) {
+            entries.push(MediaAssetImportEntryReport {
+                input_index,
+                path,
+                status: MediaAssetImportEntryStatus::Skipped,
+                asset_id: None,
+                message: Some("Duplicate input path was skipped".to_string()),
+            });
+            continue;
+        }
+        match prepare_one_local_media_asset(input_index, kind.clone(), path.clone(), cancel) {
+            Ok(asset) => {
+                entries.push(MediaAssetImportEntryReport {
+                    input_index,
+                    path,
+                    status: MediaAssetImportEntryStatus::Prepared,
+                    asset_id: None,
+                    message: None,
+                });
+                prepared.push(asset);
+            }
+            Err(error) if error.contains("cancelled") => return Err(error),
+            Err(error) => entries.push(MediaAssetImportEntryReport {
+                input_index,
+                path,
+                status: MediaAssetImportEntryStatus::Failed,
+                asset_id: None,
+                message: Some(error),
+            }),
+        }
+    }
+    Ok((prepared, entries))
+}
+
+fn media_asset_import_report(
+    request_id: u64,
+    operation_generation: u64,
+    prepared_import_token: Option<u64>,
+    authority: &MediaAssetPrepareAuthority,
+    entries: Vec<MediaAssetImportEntryReport>,
+) -> MediaAssetImportReport {
+    let prepared = entries
+        .iter()
+        .filter(|entry| entry.status == MediaAssetImportEntryStatus::Prepared)
+        .count();
+    let imported = entries
+        .iter()
+        .filter(|entry| entry.status == MediaAssetImportEntryStatus::Imported)
+        .count();
+    let reused = entries
+        .iter()
+        .filter(|entry| entry.status == MediaAssetImportEntryStatus::Reused)
+        .count();
+    let skipped = entries
+        .iter()
+        .filter(|entry| entry.status == MediaAssetImportEntryStatus::Skipped)
+        .count();
+    let failed = entries
+        .iter()
+        .filter(|entry| entry.status == MediaAssetImportEntryStatus::Failed)
+        .count();
+    MediaAssetImportReport {
+        request_id,
+        operation_generation,
+        prepared_import_token,
+        project_epoch: authority.epoch,
+        project_revision: authority.revision,
+        checkpoint_hash: authority.checkpoint_hash.clone(),
+        prepared,
+        imported,
+        reused,
+        skipped,
+        failed,
+        entries,
+    }
+}
+
+fn capture_media_asset_prepare_authority(
+    state: &AppState,
+    owner_id: &str,
+    expected_epoch: u64,
+) -> Result<MediaAssetPrepareAuthority, String> {
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    ensure_project_transaction_owner_registered(state, owner_id)?;
+    ensure_project_epoch_matches(&coordinator, expected_epoch)?;
+    ensure_no_pending_project_transaction(&coordinator)?;
+    // Reconcile every already-admitted persistent engine mutation before
+    // freezing the prepare authority stamp; otherwise H2 in the engine could
+    // be incorrectly paired with stale H1 catalog inventory in the report.
+    reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
+    Ok(media_asset_prepare_authority(&coordinator))
+}
+
+/// Read an exact authoritative catalog without reconciling it. Unlike a
+/// mutation admission, availability inspection is required to leave revision
+/// and history unchanged. If an external engine send is newer than the
+/// coordinator checkpoint, reject the stale inspection instead of silently
+/// advancing authority as a side effect of a read command.
+fn capture_media_asset_availability_inventory(
+    state: &AppState,
+    owner_id: &str,
+    expected_epoch: u64,
+) -> Result<(MediaAssetPrepareAuthority, Vec<MediaAssetSummary>), String> {
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let coordinator = lock_project_coordinator(state)?;
+    ensure_project_transaction_owner_registered(state, owner_id)?;
+    ensure_project_epoch_matches(&coordinator, expected_epoch)?;
+    let checkpoint = project_checkpoint_for_coordinator(state, &coordinator)?;
+    if checkpoint.hash != coordinator.checkpoint_hash {
+        return Err(
+            "Project persistence changed outside the current authority checkpoint; retry availability inspection"
+                .to_string(),
+        );
+    }
+    let assets = media_asset_catalog_for_snapshot(&checkpoint.project.snapshot).to_vec();
+    Ok((media_asset_prepare_authority(&coordinator), assets))
+}
+
+fn capture_media_asset_relink_prepare_asset(
+    state: &AppState,
+    asset_id: MediaAssetId,
+    expected_epoch: u64,
+    owner_id: &str,
+) -> Result<(MediaAssetPrepareAuthority, MediaAssetSummary), String> {
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    // Relink is a project mutation, so unlike availability inspection it
+    // reconciles admitted persistent commands before taking the A authority.
+    let checkpoint = reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
+    ensure_project_transaction_owner_registered(state, owner_id)?;
+    ensure_project_epoch_matches(&coordinator, expected_epoch)?;
+    ensure_no_pending_project_transaction(&coordinator)?;
+    let asset = media_asset_catalog_for_snapshot(&checkpoint.project.snapshot)
+        .iter()
+        .find(|asset| asset.id == asset_id)
+        .cloned()
+        .ok_or_else(|| format!("Media asset {asset_id} was not found"))?;
+    Ok((media_asset_prepare_authority(&coordinator), asset))
+}
+
+fn media_asset_prepare_authority(coordinator: &ProjectCoordinator) -> MediaAssetPrepareAuthority {
+    MediaAssetPrepareAuthority {
+        epoch: coordinator.epoch,
+        revision: coordinator.revision,
+        checkpoint_hash: coordinator.checkpoint_hash.clone(),
+    }
+}
+
+/// A reserved staged operation announced authority A to the client at Start.
+/// Its prepare must run against that exact A: if the current authority is any
+/// different B — including a same-epoch revision/hash mutation the epoch check
+/// alone cannot see — reject before hashing so a prepared A image can never be
+/// silently rebound onto a replaced B. Epoch replacement is still rejected
+/// upstream by the `expected_epoch` check in the authority capture.
+fn ensure_reserved_media_asset_authority_unchanged(
+    reserved: &MediaAssetPrepareAuthority,
+    current: &MediaAssetPrepareAuthority,
+) -> Result<(), String> {
+    if reserved != current {
+        return Err(
+            "Project changed between reserving and preparing this media operation; retry"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// Commit deliberately repeats the byte proof after preparation. Metadata
+/// alone is not an identity proof: a same-size replacement can preserve it.
+#[cfg(test)]
+fn reverify_prepared_local_media_assets(
+    prepared: &[PreparedLocalMediaAsset],
+    cancel: &AtomicBool,
+) -> Result<Vec<LocalMediaSourceFingerprint>, String> {
+    let mut fingerprints = Vec::with_capacity(prepared.len());
+    for asset in prepared {
+        if cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
+        let path = asset
+            .source
+            .path
+            .as_deref()
+            .ok_or_else(|| "Prepared local media asset has no source path".to_string())?;
+        let (current_hash, current_fingerprint) =
+            rehash_local_media_path_exact(Path::new(path), cancel)?;
+        if current_hash != asset.content_hash
+            || current_fingerprint.byte_size != asset.byte_size
+            || !local_media_source_fingerprint_matches(&asset.fingerprint, &current_fingerprint)
+        {
+            return Err(format!(
+                "Media changed after preparation and before commit: {path}"
+            ));
+        }
+        fingerprints.push(current_fingerprint);
+    }
+    Ok(fingerprints)
+}
+
+#[cfg(windows)]
+fn windows_media_file_identity(file: &fs::File) -> Result<WindowsMediaFileIdentity, String> {
+    use windows::Win32::{Foundation::HANDLE, Storage::FileSystem::GetFileInformationByHandle};
+    let mut info = windows::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION::default();
+    let handle = HANDLE(file.as_raw_handle() as _);
+    unsafe { GetFileInformationByHandle(handle, &mut info) }
+        .map_err(|error| format!("Unable to capture Windows media file identity: {error}"))?;
+    Ok(WindowsMediaFileIdentity {
+        volume_serial_number: info.dwVolumeSerialNumber,
+        file_index_high: info.nFileIndexHigh,
+        file_index_low: info.nFileIndexLow,
+        creation_time_low: info.ftCreationTime.dwLowDateTime,
+        creation_time_high: info.ftCreationTime.dwHighDateTime,
+    })
+}
+
+/// Open a media file for reading while denying other writers and deleters for
+/// the handle's lifetime. Unlike finalization this takes no exclusive byte-range
+/// lock, so it is safe to hold across a path-based probe: existing readers
+/// (including the probe itself) still open, but the path cannot be atomically
+/// replaced underneath the hash. This is the deny-write/stable-identity guard
+/// that closes the hash(A)/probe(B) window during preparation and availability.
+#[cfg(windows)]
+fn open_windows_media_file_deny_write(path: &Path) -> Result<fs::File, String> {
+    use windows::Win32::Storage::FileSystem::FILE_SHARE_READ;
+    fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ.0)
+        .open(path)
+        .map_err(|error| format!("Unable to open media file '{}': {error}", path.display()))
+}
+
+#[cfg(windows)]
+fn open_windows_media_file_for_finalization(
+    path: &Path,
+) -> Result<RetainedWindowsMediaFile, String> {
+    use windows::Win32::{
+        Foundation::HANDLE,
+        Storage::FileSystem::{
+            LockFileEx, FILE_SHARE_READ, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
+        },
+        System::IO::OVERLAPPED,
+    };
+    let file = fs::OpenOptions::new()
+        .read(true)
+        // Existing decoders/readers can coexist; new write/delete handles are
+        // denied for the token lifetime.
+        .share_mode(FILE_SHARE_READ.0)
+        .open(path)
+        .map_err(|error| format!("Unable to open media source for finalization: {error}"))?;
+    let retained = RetainedWindowsMediaFile { file };
+    let mut overlapped = OVERLAPPED::default();
+    let handle = HANDLE(retained.file.as_raw_handle() as _);
+    let flags = windows::Win32::Storage::FileSystem::LOCK_FILE_FLAGS(
+        LOCKFILE_EXCLUSIVE_LOCK.0 | LOCKFILE_FAIL_IMMEDIATELY.0,
+    );
+    unsafe { LockFileEx(handle, flags, None, u32::MAX, u32::MAX, &mut overlapped) }.map_err(
+        |error| format!("Media source is busy and cannot be finalized exclusively: {error}"),
+    )?;
+    Ok(retained)
+}
+
+fn finalize_one_prepared_local_media_asset(
+    asset: &PreparedLocalMediaAsset,
+    cancel: &AtomicBool,
+) -> Result<FinalizedLocalMediaSource, String> {
+    if cancel.load(Ordering::Acquire) {
+        return Err("Media asset operation was cancelled".to_string());
+    }
+    let path = asset
+        .source
+        .path
+        .as_deref()
+        .ok_or_else(|| "Prepared local media asset has no source path".to_string())?;
+    #[cfg(windows)]
+    let mut retained = open_windows_media_file_for_finalization(Path::new(path))?;
+    #[cfg(not(windows))]
+    let mut file = fs::File::open(path)
+        .map_err(|error| format!("Unable to open media source for finalization: {error}"))?;
+    #[cfg(windows)]
+    let file = &mut retained.file;
+    #[cfg(not(windows))]
+    let file = &mut file;
+    let before = local_media_source_fingerprint(
+        &file
+            .metadata()
+            .map_err(|error| format!("Unable to inspect media before finalization: {error}"))?,
+    )?;
+    file.seek(std::io::SeekFrom::Start(0))
+        .map_err(|error| format!("Unable to seek media before finalization hash: {error}"))?;
+    let actual_hash = stream_sha256_from_open_file(file, cancel)?;
+    let after = local_media_source_fingerprint(
+        &file
+            .metadata()
+            .map_err(|error| format!("Unable to inspect media after finalization: {error}"))?,
+    )?;
+    if actual_hash != asset.content_hash
+        || before.byte_size != asset.byte_size
+        || !local_media_source_fingerprint_matches(&asset.fingerprint, &before)
+        || !local_media_source_fingerprint_matches(&before, &after)
+    {
+        return Err(format!(
+            "Media changed after preparation and before finalization: {path}"
+        ));
+    }
+    #[cfg(windows)]
+    let identity = windows_media_file_identity(file)?;
+    Ok(FinalizedLocalMediaSource {
+        path: path.to_string(),
+        fingerprint: before,
+        #[cfg(windows)]
+        retained: Arc::new(Mutex::new(retained)),
+        #[cfg(windows)]
+        identity,
+    })
+}
+
+fn finalize_prepared_local_media_assets(
+    prepared: &[PreparedLocalMediaAsset],
+    cancel: &AtomicBool,
+) -> Result<Vec<FinalizedLocalMediaSource>, String> {
+    prepared
+        .iter()
+        .map(|asset| finalize_one_prepared_local_media_asset(asset, cancel))
+        .collect()
+}
+
+fn finalized_local_media_source_matches_path(
+    finalized: &FinalizedLocalMediaSource,
+    path: &Path,
+) -> Result<bool, String> {
+    #[cfg(windows)]
+    {
+        let path_file = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(windows::Win32::Storage::FileSystem::FILE_SHARE_READ.0)
+            .open(path)
+            .map_err(|error| {
+                format!(
+                    "Unable to compare finalized media source '{}': {error}",
+                    path.display()
+                )
+            })?;
+        Ok(windows_media_file_identity(&path_file)? == finalized.identity)
+    }
+    #[cfg(not(windows))]
+    {
+        let finalized_path = fs::canonicalize(&finalized.path).map_err(|error| {
+            format!(
+                "Unable to canonicalize finalized media source '{}': {error}",
+                finalized.path
+            )
+        })?;
+        let candidate = fs::canonicalize(path).map_err(|error| {
+            format!(
+                "Unable to canonicalize legacy media source '{}': {error}",
+                path.display()
+            )
+        })?;
+        Ok(finalized_path == candidate)
+    }
+}
+
+/// The `PreparedLocalMediaAsset` view of a legacy source identity. Shared so the
+/// finalize and commit paths reverify the same synthetic prepared entry.
+fn legacy_media_asset_prepared_for_identity(
+    identity: &LegacyMediaAssetSourceIdentity,
+) -> PreparedLocalMediaAsset {
+    PreparedLocalMediaAsset {
+        input_index: 0,
+        label: "legacy-source".to_string(),
+        source: VideoSourceSummary {
+            kind: VideoSourceKind::File,
+            path: Some(identity.path.clone()),
+            name: None,
+            codec: None,
+            metadata: None,
+        },
+        content_hash: identity.content_hash.clone(),
+        byte_size: identity.byte_size,
+        fingerprint: identity.fingerprint.clone(),
+    }
+}
+
+fn finalize_legacy_media_source_for_relink(
+    replacement_source: &FinalizedLocalMediaSource,
+    identity: &LegacyMediaAssetSourceIdentity,
+    cancel: &AtomicBool,
+) -> Result<FinalizedLocalMediaSource, String> {
+    // Refresh/relink-in-place is the common legacy case. Taking a second
+    // exclusive LockFileEx on the same Windows file would self-conflict, so
+    // reuse the already verified retained guard (also for hard-link aliases).
+    if finalized_local_media_source_matches_path(replacement_source, Path::new(&identity.path))? {
+        return Ok(replacement_source.clone());
+    }
+    let legacy = legacy_media_asset_prepared_for_identity(identity);
+    finalize_one_prepared_local_media_asset(&legacy, cancel)
+}
+
+/// The full byte proof was completed by `finalize_*` outside a pending
+/// transaction. Windows keeps the exact locked source alive and verifies path
+/// identity; the non-Windows fallback rehashes because it cannot make the
+/// same OS-level no-write guarantee.
+fn verify_finalized_local_media_asset_fingerprints(
+    prepared: &[PreparedLocalMediaAsset],
+    expected: &[FinalizedLocalMediaSource],
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    if prepared.len() != expected.len() {
+        return Err("Prepared media asset finalization is incomplete".to_string());
+    }
+    for (asset, expected) in prepared.iter().zip(expected) {
+        if cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
+        let path = asset
+            .source
+            .path
+            .as_deref()
+            .ok_or_else(|| "Prepared local media asset has no source path".to_string())?;
+        if expected.path != path {
+            return Err("Prepared media asset finalization path changed unexpectedly".to_string());
+        }
+        #[cfg(windows)]
+        {
+            let retained = expected
+                .retained
+                .lock()
+                .map_err(|_| "Finalized media source lock was poisoned".to_string())?;
+            let actual =
+                local_media_source_fingerprint(&retained.file.metadata().map_err(|error| {
+                    format!("Unable to inspect retained media source: {error}")
+                })?)?;
+            if !local_media_source_fingerprint_matches(&expected.fingerprint, &actual) {
+                return Err(format!(
+                    "Media changed after finalization and before commit: {path}"
+                ));
+            }
+            let path_file = fs::OpenOptions::new()
+                .read(true)
+                .share_mode(windows::Win32::Storage::FileSystem::FILE_SHARE_READ.0)
+                .open(path)
+                .map_err(|error| {
+                    format!("Unable to verify finalized media path '{path}': {error}")
+                })?;
+            if windows_media_file_identity(&path_file)? != expected.identity {
+                return Err(format!(
+                    "Media path was replaced after finalization: {path}"
+                ));
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let (actual_hash, actual) = rehash_local_media_path_exact(Path::new(path), cancel)?;
+            if actual_hash != asset.content_hash
+                || !local_media_source_fingerprint_matches(&expected.fingerprint, &actual)
+            {
+                return Err(format!(
+                    "Media changed after finalization and before commit: {path}"
+                ));
+            }
+        }
+        #[cfg(windows)]
+        if cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn is_local_media_source(kind: &VideoSourceKind) -> bool {
+    matches!(kind, VideoSourceKind::File | VideoSourceKind::StillImage)
+}
+
+fn inspect_one_media_asset_availability(
+    asset: &MediaAssetSummary,
+    verify_hash: bool,
+    cancel: &AtomicBool,
+) -> Result<MediaAssetAvailability, String> {
+    if !is_local_media_source(&asset.source.kind) {
+        return Ok(MediaAssetAvailability::LiveSource { asset_id: asset.id });
+    }
+    if cancel.load(Ordering::Acquire) {
+        return Err("Media asset operation was cancelled".to_string());
+    }
+    let Some(path) = asset.source.path.as_deref() else {
+        return Ok(MediaAssetAvailability::Missing { asset_id: asset.id });
+    };
+    // On Windows the verification handle denies write/delete for its lifetime,
+    // so the path cannot be atomically replaced between the hash and the final
+    // Verified answer. The `NotFound`/other-error split below is preserved so a
+    // truly missing file is still `Missing`, never `Unreadable`.
+    let open_result = {
+        #[cfg(windows)]
+        {
+            use windows::Win32::Storage::FileSystem::FILE_SHARE_READ;
+            fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ.0)
+                .open(path)
+        }
+        #[cfg(not(windows))]
+        {
+            fs::File::open(path)
+        }
+    };
+    let mut file = match open_result {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(MediaAssetAvailability::Missing { asset_id: asset.id });
+        }
+        Err(error) => {
+            return Ok(MediaAssetAvailability::Unreadable {
+                asset_id: asset.id,
+                error: format!("Unable to open local media source: {error}"),
+            });
+        }
+    };
+    let metadata = match file.metadata() {
+        Ok(metadata) if metadata.is_file() => metadata,
+        Ok(_) => {
+            return Ok(MediaAssetAvailability::Unreadable {
+                asset_id: asset.id,
+                error: "Local media source is not a regular file".to_string(),
+            });
+        }
+        Err(error) => {
+            return Ok(MediaAssetAvailability::Unreadable {
+                asset_id: asset.id,
+                error: format!("Unable to inspect local media source: {error}"),
+            });
+        }
+    };
+    if !verify_hash || asset.content_hash.is_none() || asset.byte_size.is_none() {
+        return Ok(MediaAssetAvailability::AvailableUnverified { asset_id: asset.id });
+    }
+    let expected = asset
+        .content_hash
+        .clone()
+        .expect("the presence was checked above");
+    let expected_byte_size = asset.byte_size.expect("the presence was checked above");
+    // Use the already-open file for the byte scan, then check the same handle
+    // before/after. A source changed during inspection is a machine-local I/O
+    // failure, never a false Verified result.
+    let before = match local_media_source_fingerprint(&metadata) {
+        Ok(fingerprint) => fingerprint,
+        Err(error) => {
+            return Ok(MediaAssetAvailability::Unreadable {
+                asset_id: asset.id,
+                error,
+            });
+        }
+    };
+    let actual = match stream_sha256_from_open_file(&mut file, cancel) {
+        Ok(hash) => hash,
+        Err(error) if error.contains("cancelled") => return Err(error),
+        Err(error) => {
+            return Ok(MediaAssetAvailability::Unreadable {
+                asset_id: asset.id,
+                error,
+            });
+        }
+    };
+    let after = match file.metadata().and_then(|metadata| {
+        if metadata.is_file() {
+            Ok(metadata)
+        } else {
+            Err(std::io::Error::other(
+                "Local media source is not a regular file",
+            ))
+        }
+    }) {
+        Ok(metadata) => match local_media_source_fingerprint(&metadata) {
+            Ok(fingerprint) => fingerprint,
+            Err(error) => {
+                return Ok(MediaAssetAvailability::Unreadable {
+                    asset_id: asset.id,
+                    error,
+                });
+            }
+        },
+        Err(error) => {
+            return Ok(MediaAssetAvailability::Unreadable {
+                asset_id: asset.id,
+                error: format!("Unable to inspect local media source after hashing: {error}"),
+            });
+        }
+    };
+    if !local_media_source_fingerprint_matches(&before, &after) {
+        return Ok(MediaAssetAvailability::Unreadable {
+            asset_id: asset.id,
+            error: "Media changed while hashing for availability inspection".to_string(),
+        });
+    }
+    if actual != expected || before.byte_size != expected_byte_size {
+        return Ok(MediaAssetAvailability::HashMismatch {
+            asset_id: asset.id,
+            expected,
+            actual,
+        });
+    }
+    // Bind the verified bytes to the *current* path identity before returning.
+    // A path-replacement during inspection cannot leave us claiming Verified for
+    // bytes that no longer live at this path. Read-only: no lock, no project or
+    // history mutation.
+    #[cfg(windows)]
+    {
+        let held_identity = match windows_media_file_identity(&file) {
+            Ok(identity) => identity,
+            Err(error) => {
+                return Ok(MediaAssetAvailability::Unreadable {
+                    asset_id: asset.id,
+                    error,
+                })
+            }
+        };
+        let current = match open_windows_media_file_deny_write(Path::new(path)) {
+            Ok(current) => current,
+            Err(error) => {
+                return Ok(MediaAssetAvailability::Unreadable {
+                    asset_id: asset.id,
+                    error,
+                })
+            }
+        };
+        match windows_media_file_identity(&current) {
+            Ok(current_identity) if current_identity == held_identity => {}
+            Ok(_) => {
+                return Ok(MediaAssetAvailability::Unreadable {
+                    asset_id: asset.id,
+                    error: "Local media source path was replaced during availability verification"
+                        .to_string(),
+                })
+            }
+            Err(error) => {
+                return Ok(MediaAssetAvailability::Unreadable {
+                    asset_id: asset.id,
+                    error,
+                })
+            }
+        }
+    }
+    Ok(MediaAssetAvailability::AvailableVerified { asset_id: asset.id })
+}
+
+fn inspect_media_asset_availability_batch(
+    assets: &[MediaAssetSummary],
+    asset_ids: &[MediaAssetId],
+    verify_hash: bool,
+    cancel: &AtomicBool,
+) -> Result<Vec<MediaAssetAvailability>, String> {
+    if asset_ids.is_empty() {
+        return Err("Select at least one media asset to inspect".to_string());
+    }
+    let inventory = assets
+        .iter()
+        .map(|asset| (asset.id, asset))
+        .collect::<HashMap<_, _>>();
+    let mut availability = Vec::with_capacity(asset_ids.len());
+    for asset_id in asset_ids {
+        if cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
+        let asset = inventory
+            .get(asset_id)
+            .copied()
+            .ok_or_else(|| format!("Media asset {asset_id} was not found"))?;
+        availability.push(inspect_one_media_asset_availability(
+            asset,
+            verify_hash,
+            cancel,
+        )?);
+    }
+    Ok(availability)
+}
+
+fn relink_outcome_for_unreadable_replacement(
+    asset_id: MediaAssetId,
+    replacement_path: &str,
+) -> Option<MediaAssetRelinkOutcome> {
+    let path = replacement_path.trim();
+    if path.is_empty() {
+        return Some(MediaAssetRelinkOutcome::MissingReplacement { asset_id });
+    }
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => None,
+        Ok(_) => Some(MediaAssetRelinkOutcome::UnreadableReplacement {
+            asset_id,
+            error: "Replacement media source is not a regular file".to_string(),
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Some(MediaAssetRelinkOutcome::MissingReplacement { asset_id })
+        }
+        Err(error) => Some(MediaAssetRelinkOutcome::UnreadableReplacement {
+            asset_id,
+            error: format!("Unable to inspect replacement media source: {error}"),
+        }),
+    }
+}
+
+fn legacy_media_asset_source_identity(
+    asset: &MediaAssetSummary,
+    cancel: &AtomicBool,
+) -> Result<Option<LegacyMediaAssetSourceIdentity>, String> {
+    let Some(path) = asset.source.path.as_deref() else {
+        return Err(format!(
+            "Legacy media asset {} has no source path",
+            asset.id
+        ));
+    };
+    let path = Path::new(path);
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_) => {
+            return Err(format!(
+                "Legacy media asset {} source is not a regular file",
+                asset.id
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "Unable to inspect legacy media asset {} source '{}': {error}",
+                asset.id,
+                path.display()
+            ));
+        }
+    }
+    match rehash_local_media_path_exact(path, cancel) {
+        Ok((content_hash, fingerprint)) => Ok(Some(LegacyMediaAssetSourceIdentity {
+            path: path.to_string_lossy().into_owned(),
+            byte_size: fingerprint.byte_size,
+            content_hash,
+            fingerprint,
+        })),
+        // The source existed at the start of the proof. Any read, stability,
+        // or disappearance failure after that point is not equivalent to the
+        // explicit old-source-missing adoption case; fail closed.
+        Err(error) => Err(format!(
+            "Unable to verify legacy media asset {} source '{}': {error}",
+            asset.id,
+            path.display()
+        )),
+    }
+}
+
+fn evaluate_prepared_media_asset_relink(
+    asset: &MediaAssetSummary,
+    replacement: PreparedLocalMediaAsset,
+    policy: MediaAssetRelinkPolicy,
+    legacy_source_identity: Option<LegacyMediaAssetSourceIdentity>,
+) -> Result<PreparedMediaAssetRelinkDecision, String> {
+    match (&asset.content_hash, asset.byte_size) {
+        (Some(expected), Some(expected_size)) => {
+            if expected != &replacement.content_hash || expected_size != replacement.byte_size {
+                // Once a project asset has a persisted content identity, a
+                // relink is only a path repair.  Explicit adoption must not
+                // silently rewrite that identity to different bytes.
+                return Ok(PreparedMediaAssetRelinkDecision::Outcome(
+                    MediaAssetRelinkOutcome::HashMismatch {
+                        asset_id: asset.id,
+                        expected: expected.clone(),
+                        actual: replacement.content_hash,
+                    },
+                ));
+            }
+            Ok(PreparedMediaAssetRelinkDecision::Ready {
+                replacement,
+                adopted_replacement: false,
+                legacy_source_identity: None,
+            })
+        }
+        (None, None) => match legacy_source_identity {
+            Some(identity)
+                if identity.content_hash != replacement.content_hash
+                    || identity.byte_size != replacement.byte_size =>
+            {
+                // A readable legacy source gives us an exact identity to
+                // preserve.  Adoption is reserved for the old-source-missing
+                // case below, where no comparison can be made.
+                Ok(PreparedMediaAssetRelinkDecision::Outcome(
+                    MediaAssetRelinkOutcome::HashMismatch {
+                        asset_id: asset.id,
+                        expected: identity.content_hash,
+                        actual: replacement.content_hash,
+                    },
+                ))
+            }
+            Some(identity) => Ok(PreparedMediaAssetRelinkDecision::Ready {
+                replacement,
+                adopted_replacement: false,
+                legacy_source_identity: Some(identity),
+            }),
+            None if matches!(policy, MediaAssetRelinkPolicy::RequireContentMatch) => {
+                Ok(PreparedMediaAssetRelinkDecision::Outcome(
+                    MediaAssetRelinkOutcome::NeedsExplicitAdoption { asset_id: asset.id },
+                ))
+            }
+            None => Ok(PreparedMediaAssetRelinkDecision::Ready {
+                replacement,
+                adopted_replacement: true,
+                legacy_source_identity: None,
+            }),
+        },
+        _ => Err(format!(
+            "Media asset {} has incomplete hash identity",
+            asset.id
+        )),
+    }
+}
+
+fn prepare_media_asset_relink_decision(
+    asset: &MediaAssetSummary,
+    replacement_path: String,
+    policy: MediaAssetRelinkPolicy,
+    cancel: &AtomicBool,
+) -> Result<PreparedMediaAssetRelinkDecision, String> {
+    if !is_local_media_source(&asset.source.kind) {
+        return Ok(PreparedMediaAssetRelinkDecision::Outcome(
+            MediaAssetRelinkOutcome::LiveSource { asset_id: asset.id },
+        ));
+    }
+    if let Some(outcome) = relink_outcome_for_unreadable_replacement(asset.id, &replacement_path) {
+        return Ok(PreparedMediaAssetRelinkDecision::Outcome(outcome));
+    }
+    let replacement =
+        match prepare_one_local_media_asset(0, asset.source.kind.clone(), replacement_path, cancel)
+        {
+            Ok(prepared) => prepared,
+            Err(error) if error.contains("cancelled") => return Err(error),
+            Err(error) => {
+                return Ok(PreparedMediaAssetRelinkDecision::Outcome(
+                    MediaAssetRelinkOutcome::UnreadableReplacement {
+                        asset_id: asset.id,
+                        error,
+                    },
+                ));
+            }
+        };
+
+    let legacy_source_identity = if asset.content_hash.is_none() && asset.byte_size.is_none() {
+        legacy_media_asset_source_identity(asset, cancel)?
+    } else {
+        None
+    };
+    evaluate_prepared_media_asset_relink(asset, replacement, policy, legacy_source_identity)
+}
+
+fn media_asset_catalog_for_snapshot(snapshot: &EngineSnapshot) -> &[MediaAssetSummary] {
+    snapshot
+        .authored_video
+        .as_ref()
+        .unwrap_or(&snapshot.video)
+        .media_assets
+        .as_slice()
+}
+
+fn media_asset_content_identity_matches(
+    asset: &MediaAssetSummary,
+    prepared: &PreparedLocalMediaAsset,
+) -> bool {
+    asset.source.kind == prepared.source.kind
+        && asset.content_hash.as_ref() == Some(&prepared.content_hash)
+        && asset.byte_size == Some(prepared.byte_size)
+}
+
+/// Build only catalog entries. Layer assignment is intentionally absent from
+/// normal Media Library import; compatibility commands use paired candidates.
+fn build_media_asset_catalog_import_candidate(
+    existing: &[MediaAssetSummary],
+    prepared: &[PreparedLocalMediaAsset],
+    mut allocate_id: impl FnMut() -> MediaAssetId,
+) -> (
+    MediaAssetImportCandidate,
+    Vec<(usize, MediaAssetImportEntryStatus, MediaAssetId)>,
+) {
+    let mut known = existing.to_vec();
+    let mut candidate = MediaAssetImportCandidate::default();
+    let mut results = Vec::with_capacity(prepared.len());
+    for entry in prepared {
+        if let Some(asset) = known
+            .iter()
+            .find(|asset| media_asset_content_identity_matches(asset, entry))
+        {
+            results.push((
+                entry.input_index,
+                MediaAssetImportEntryStatus::Reused,
+                asset.id,
+            ));
+            continue;
+        }
+        let asset = MediaAssetSummary {
+            id: allocate_id(),
+            label: entry.label.clone(),
+            source: entry.source.clone(),
+            content_hash: Some(entry.content_hash.clone()),
+            byte_size: Some(entry.byte_size),
+        };
+        let asset_id = asset.id;
+        known.push(asset.clone());
+        candidate.assets.push(asset);
+        results.push((
+            entry.input_index,
+            MediaAssetImportEntryStatus::Imported,
+            asset_id,
+        ));
+    }
+    (candidate, results)
+}
+
+/// Build the compatibility form of a media import.  Unlike the ordinary
+/// Media Library path this deliberately creates layers too, but it still
+/// publishes the asset rows and their layer projections through one engine
+/// transaction.  A content-identical source reuses its existing provenance;
+/// each requested legacy layer then points at that canonical source instead
+/// of silently inventing a second asset identity.
+fn build_media_asset_layer_import_candidate(
+    existing: &[MediaAssetSummary],
+    prepared: &[PreparedLocalMediaAsset],
+    labels: &[String],
+    mut allocate_asset_id: impl FnMut() -> MediaAssetId,
+    mut allocate_layer_id: impl FnMut() -> VideoLayerId,
+) -> Result<(MediaAssetImportCandidate, Vec<VideoLayerId>), String> {
+    if prepared.is_empty() {
+        return Err("Prepared media asset import contains no successful local files".to_string());
+    }
+    if prepared.len() != labels.len() {
+        return Err(
+            "Prepared media asset layer labels do not match the finalized files".to_string(),
+        );
+    }
+
+    let mut known = existing.to_vec();
+    let mut candidate = MediaAssetImportCandidate::default();
+    let mut layer_ids = Vec::with_capacity(prepared.len());
+    for (entry, label) in prepared.iter().zip(labels) {
+        let asset = if let Some(asset) = known
+            .iter()
+            .find(|asset| media_asset_content_identity_matches(asset, entry))
+        {
+            asset.clone()
+        } else {
+            let asset = MediaAssetSummary {
+                id: allocate_asset_id(),
+                label: entry.label.clone(),
+                source: entry.source.clone(),
+                content_hash: Some(entry.content_hash.clone()),
+                byte_size: Some(entry.byte_size),
+            };
+            known.push(asset.clone());
+            candidate.assets.push(asset.clone());
+            asset
+        };
+        let layer_id = allocate_layer_id();
+        candidate.layers.push(protocol::VideoLayerSummary {
+            id: layer_id,
+            label: normalize_video_layer_label(label.clone())?,
+            source: asset.source.clone(),
+            media_asset_id: Some(asset.id),
+            blend_mode: VideoBlendMode::Normal,
+            state: VideoLayerState::default(),
+            isf_effect: None,
+        });
+        layer_ids.push(layer_id);
+    }
+    Ok((candidate, layer_ids))
+}
+
+fn require_prepared_local_media_kind(
+    prepared: &[PreparedLocalMediaAsset],
+    kind: VideoSourceKind,
+    operation: &str,
+) -> Result<(), String> {
+    if prepared.is_empty() {
+        return Err(format!(
+            "{operation} requires at least one prepared local media file"
+        ));
+    }
+    if prepared.iter().any(|asset| asset.source.kind != kind) {
+        return Err(format!(
+            "{operation} prepared media kind does not match the requested source kind"
+        ));
+    }
+    Ok(())
+}
+
+fn require_legacy_prepared_media_all_or_nothing(
+    prepared: &PreparedMediaAssetImport,
+    operation: &str,
+) -> Result<(), String> {
+    let failures = prepared
+        .entries
+        .iter()
+        .filter(|entry| entry.status == MediaAssetImportEntryStatus::Failed)
+        .count();
+    if failures > 0 {
+        return Err(format!(
+            "{operation} rejected {failures} failed input(s); no media was added"
+        ));
+    }
+    // Duplicate paths remain intentional skips for historical compatibility:
+    // the old batch wrapper deduped them before publishing the unique inputs.
+    Ok(())
+}
+
+fn apply_media_asset_import_results_to_report(
+    entries: &mut [MediaAssetImportEntryReport],
+    results: &[(usize, MediaAssetImportEntryStatus, MediaAssetId)],
+) {
+    for (input_index, status, asset_id) in results {
+        if let Some(entry) = entries
+            .iter_mut()
+            .find(|entry| entry.input_index == *input_index)
+        {
+            entry.status = status.clone();
+            entry.asset_id = Some(*asset_id);
+            entry.message = None;
+        }
+    }
+}
+
+fn validate_media_asset_commit_ticket_and_authority(
+    state: &AppState,
+    coordinator: &mut ProjectCoordinator,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: &str,
+    authority: &MediaAssetPrepareAuthority,
+) -> Result<(), String> {
+    // The caller holds external admission before coordinator. Reconcile first
+    // so a completed external persistent send cannot masquerade as the
+    // prepared catalog's checkpoint.
+    reconcile_project_checkpoint_for_coordinator(state, coordinator)?;
+    ensure_project_transaction_owner_registered(state, owner_id)?;
+    validate_media_asset_commit_ticket_and_authority_after_reconcile(
+        coordinator,
+        project_transaction_id,
+        expected_epoch,
+        owner_id,
+        authority,
+    )
+}
+
+/// The testable half of commit admission after the caller has established
+/// external-admission ordering and reconciled persistence. Keeping this
+/// separate makes the raw-IPC rejection properties explicit without allowing
+/// any command to bypass the full wrapper above.
+fn validate_media_asset_commit_ticket_and_authority_after_reconcile(
+    coordinator: &ProjectCoordinator,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: &str,
+    authority: &MediaAssetPrepareAuthority,
+) -> Result<(), String> {
+    project_transaction_for_owner_epoch(
+        coordinator,
+        project_transaction_id,
+        expected_epoch,
+        owner_id,
+    )?;
+    if media_asset_prepare_authority(coordinator) != *authority {
+        return Err(
+            "Project changed since local media assets were prepared; retry the import".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn media_asset_commit_receipt_key(
+    kind: MediaAssetCommitReceiptKind,
+    prepared_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    project_transaction_id: u64,
+    owner_id: &str,
+) -> MediaAssetCommitReceiptKey {
+    MediaAssetCommitReceiptKey {
+        kind,
+        prepared_token,
+        request_id,
+        operation_generation,
+        project_transaction_id,
+        owner_id: owner_id.to_string(),
+    }
+}
+
+fn media_asset_authoritative_kind_name(kind: MediaAssetAuthoritativeCommitKind) -> &'static str {
+    match kind {
+        MediaAssetAuthoritativeCommitKind::Import => "import",
+        MediaAssetAuthoritativeCommitKind::Relink => "relink",
+        MediaAssetAuthoritativeCommitKind::VideoFileLayer => "video_file_layer",
+        MediaAssetAuthoritativeCommitKind::StillImageLayer => "still_image_layer",
+        MediaAssetAuthoritativeCommitKind::LocalMediaLayers => "local_media_layers",
+        MediaAssetAuthoritativeCommitKind::BootstrapVjShow => "bootstrap_vj_show",
+    }
+}
+
+fn media_asset_video_source_kind_name(kind: &VideoSourceKind) -> &'static str {
+    match kind {
+        VideoSourceKind::File => "file",
+        VideoSourceKind::Camera => "camera",
+        VideoSourceKind::ScreenCapture => "screen_capture",
+        VideoSourceKind::Ndi => "ndi",
+        VideoSourceKind::Spout => "spout",
+        VideoSourceKind::Syphon => "syphon",
+        VideoSourceKind::StillImage => "still_image",
+    }
+}
+
+fn media_asset_authoritative_shape(
+    kind: MediaAssetAuthoritativeCommitKind,
+    fields: &[&str],
+) -> MediaAssetAuthoritativeRequestShape {
+    let mut hasher = Sha256::new();
+    hasher.update(b"syndocal-media-authoritative-shape-v1");
+    let kind_name = media_asset_authoritative_kind_name(kind);
+    hasher.update((kind_name.len() as u64).to_le_bytes());
+    hasher.update(kind_name.as_bytes());
+    for field in fields {
+        hasher.update((field.len() as u64).to_le_bytes());
+        hasher.update(field.as_bytes());
+    }
+    MediaAssetAuthoritativeRequestShape {
+        kind,
+        fingerprint: format!("{:x}", hasher.finalize()),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn media_asset_authoritative_operation_key(
+    prepared_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    owner_id: &str,
+    start_epoch: u64,
+    start_revision: u64,
+    start_checkpoint_hash: String,
+) -> Result<MediaAssetAuthoritativeOperationKey, String> {
+    if prepared_token == 0 || request_id == 0 || operation_generation == 0 {
+        return Err("Media asset authoritative operation identity must be non-zero".to_string());
+    }
+    if prepared_token != operation_generation {
+        return Err(
+            "Prepared media asset token does not match the operation generation".to_string(),
+        );
+    }
+    Ok(MediaAssetAuthoritativeOperationKey {
+        prepared_token,
+        request_id,
+        operation_generation,
+        owner_id: owner_id.to_string(),
+        start_epoch,
+        start_revision,
+        start_checkpoint_hash,
+    })
+}
+
+fn media_asset_authoritative_expected_authority(
+    key: &MediaAssetAuthoritativeOperationKey,
+) -> MediaAssetPrepareAuthority {
+    MediaAssetPrepareAuthority {
+        epoch: key.start_epoch,
+        revision: key.start_revision,
+        checkpoint_hash: key.start_checkpoint_hash.clone(),
+    }
+}
+
+/// Consume a *finalized* local-media token as the compatibility layer-creation
+/// form. The expensive hash/probe and exclusive finalization already happened
+/// before the caller opened its generic project transaction. This routine only
+/// performs the short ticket/authority checks, retained-source CAS, and one
+/// definitive engine publication — serialized per exact receipt key so two
+/// identical concurrent commits publish once and return the same receipt.
+#[allow(clippy::too_many_arguments)]
+fn commit_prepared_media_asset_layers(
+    state: &AppState,
+    prepared_import_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: &str,
+    labels: Vec<String>,
+    bootstrap_output: Option<VideoOutputSummary>,
+    receipt_key: MediaAssetCommitReceiptKey,
+    bootstrap_receipt: Option<(VideoOutputId, CompositionId)>,
+) -> Result<MediaAssetCommitReceipt, String> {
+    let registry = Arc::clone(&state.media_asset_operations);
+    let receipt = registry.commit_terminal_single_flight(&receipt_key, || {
+        commit_prepared_media_asset_layers_locked(
+            state,
+            prepared_import_token,
+            request_id,
+            operation_generation,
+            project_transaction_id,
+            expected_epoch,
+            owner_id,
+            labels,
+            bootstrap_output,
+            bootstrap_receipt,
+        )
+    })?;
+    // Post-commit memory cleanup, always after the receipt is recorded. A
+    // duplicate that returned the receipt from the lane runs this too, but the
+    // exact-identity match makes it an idempotent no-op once the first publisher
+    // has already removed the token.
+    registry.consume_prepared_after_commit(
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        owner_id,
+    );
+    Ok(receipt)
+}
+
+/// The single engine-publishing body for the layer/bootstrap commit. It runs
+/// under the caller's per-key single-flight lane (held by
+/// `commit_terminal_single_flight`), so the exact-duplicate receipt check has
+/// already been made and a same-key duplicate never reaches this body. It still
+/// admits on the shared cell, so a same-operation duplicate that arrived on a
+/// *different* receipt key is refused here instead of publishing twice.
+#[allow(clippy::too_many_arguments)]
+fn commit_prepared_media_asset_layers_locked(
+    state: &AppState,
+    prepared_import_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: &str,
+    labels: Vec<String>,
+    bootstrap_output: Option<VideoOutputSummary>,
+    bootstrap_receipt: Option<(VideoOutputId, CompositionId)>,
+) -> Result<MediaAssetCommitReceipt, String> {
+    let registry = Arc::clone(&state.media_asset_operations);
+    let prepared = registry.prepared_exact(
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        owner_id,
+    )?;
+    if prepared.cancel.load(Ordering::Acquire) {
+        return Err("Media asset operation was cancelled".to_string());
+    }
+    if Instant::now() >= prepared.expires_at {
+        return Err("Prepared media asset import expired; prepare again".to_string());
+    }
+    let finalized_sources = prepared.finalized_sources.clone().ok_or_else(|| {
+        "Prepared media asset import must be finalized before opening a project transaction"
+            .to_string()
+    })?;
+
+    // First prove the token is paired with an exact live frontend ticket.
+    // The second pass below closes the small window after filesystem CAS.
+    {
+        let _external_admission = lock_project_external_command_admission(state)?;
+        let mut coordinator = lock_project_coordinator(state)?;
+        validate_media_asset_commit_ticket_and_authority(
+            state,
+            &mut coordinator,
+            project_transaction_id,
+            expected_epoch,
+            owner_id,
+            &prepared.authority,
+        )?;
+    }
+    verify_finalized_local_media_asset_fingerprints(
+        &prepared.assets,
+        &finalized_sources,
+        prepared.cancel.as_ref(),
+    )?;
+    if prepared.cancel.load(Ordering::Acquire) {
+        return Err("Media asset operation was cancelled".to_string());
+    }
+
+    let authority = prepared.authority.clone();
+    let (_external_admission, mut coordinator) = (
+        lock_project_external_command_admission(state)?,
+        lock_project_coordinator(state)?,
+    );
+    validate_media_asset_commit_ticket_and_authority(
+        state,
+        &mut coordinator,
+        project_transaction_id,
+        expected_epoch,
+        owner_id,
+        &authority,
+    )?;
+    if prepared.cancel.load(Ordering::Acquire) {
+        return Err("Media asset operation was cancelled".to_string());
+    }
+    let snapshot = state.engine.persistence_snapshot()?;
+    let (candidate, layer_ids) = build_media_asset_layer_import_candidate(
+        media_asset_catalog_for_snapshot(&snapshot),
+        &prepared.assets,
+        &labels,
+        || state.engine.allocate_media_asset_id(),
+        || state.engine.allocate_video_layer_id(),
+    )?;
+    let transaction = match bootstrap_output {
+        Some(output) => MediaAssetTransaction::BootstrapVjShow { candidate, output },
+        None => MediaAssetTransaction::Import(candidate),
+    };
+    // Linearization point: admit iff no cancel has won. Once admitted, cancel
+    // loses, so a published layer set and a `cancel == true` cannot coexist. A
+    // duplicate that finds the operation already admitted (only reachable via a
+    // different receipt key, since the same key was already returned from the
+    // lane's receipt check) fails closed here rather than publishing again.
+    match prepared.admission.try_admit() {
+        Ok(MediaAssetCommitAdmission::Admitted) => {}
+        Ok(MediaAssetCommitAdmission::AlreadyAdmitted) => {
+            return Err(
+                "Media asset operation was already committed; prepare again to add more media"
+                    .to_string(),
+            )
+        }
+        Err(()) => return Err("Media asset operation was cancelled".to_string()),
+    }
+    state
+        .engine
+        .media_asset_transaction_published(transaction)?;
+    // The single-flight seam records this receipt before releasing the lane, so
+    // an exact retry after a lost reply returns the same freshly allocated
+    // layer/output IDs instead of allocating and publishing a second time.
+    Ok(match bootstrap_receipt {
+        Some((output_id, composition_id)) => {
+            MediaAssetCommitReceipt::Bootstrap(VjFirstRunSetupResult {
+                layer_ids,
+                composition_id,
+                output_id,
+            })
+        }
+        None => MediaAssetCommitReceipt::Layers(layer_ids),
+    })
+}
+
+/// Extract the published layer IDs from a layer/bootstrap commit receipt. The
+/// layer commit commands only ever record `Layers` or `Bootstrap`; the other
+/// variants cannot key to a layer command and so yield no layers.
+fn media_asset_commit_receipt_layer_ids(receipt: &MediaAssetCommitReceipt) -> Vec<VideoLayerId> {
+    match receipt {
+        MediaAssetCommitReceipt::Layers(layer_ids) => layer_ids.clone(),
+        MediaAssetCommitReceipt::Bootstrap(result) => result.layer_ids.clone(),
+        MediaAssetCommitReceipt::Import(_) | MediaAssetCommitReceipt::Relink(_) => Vec::new(),
+    }
+}
+
+/// Owns the presenter thread for one native Display output window. The
+/// registry takes this value before joining so no registry mutex is held while
+/// a renderer is allowed to finish releasing its native surface.
+struct NativeVideoOutputWorker {
+    stop: Arc<AtomicBool>,
+    join: Option<std::thread::JoinHandle<Result<(), String>>>,
+    /// A worker-failure fence is deliberately owned by the registry entry,
+    /// not by the render thread. It remains live until the thread has joined
+    /// (and therefore dropped its GPU presenter) and the native window has
+    /// acknowledged retirement.
+    teardown_lease: Arc<Mutex<Option<engine::OutputOwnershipTeardownLease>>>,
+}
+
+impl NativeVideoOutputWorker {
+    #[cfg(test)]
+    fn new(stop: Arc<AtomicBool>, join: std::thread::JoinHandle<Result<(), String>>) -> Self {
+        Self::with_teardown_lease(stop, join, Arc::new(Mutex::new(None)))
+    }
+
+    fn with_teardown_lease(
+        stop: Arc<AtomicBool>,
+        join: std::thread::JoinHandle<Result<(), String>>,
+        teardown_lease: Arc<Mutex<Option<engine::OutputOwnershipTeardownLease>>>,
+    ) -> Self {
+        Self {
+            stop,
+            join: Some(join),
+            teardown_lease,
+        }
+    }
+
+    fn new_teardown_lease_slot() -> Arc<Mutex<Option<engine::OutputOwnershipTeardownLease>>> {
+        Arc::new(Mutex::new(None))
+    }
+
+    fn request_stop(&self) {
+        self.stop.store(true, Ordering::Release);
+    }
+
+    fn join(&mut self, label: &str) -> Result<(), String> {
+        let join = self
+            .join
+            .take()
+            .ok_or_else(|| format!("Native video output worker {label} was already joined"))?;
+        let result = join
+            .join()
+            .map_err(|_| format!("Native video output worker {label} panicked"))?;
+        result.map_err(|error| format!("Native video output worker {label} failed: {error}"))
+    }
+
+    fn release_teardown_lease_after_retirement_ack(&mut self) {
+        let lease = match self.teardown_lease.lock() {
+            Ok(mut lease) => lease.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        drop(lease);
+    }
 }
 
 struct MidiFeedbackRuntime {
@@ -222,6 +3279,9 @@ impl MidiFeedbackRuntime {
         operator_selection: Arc<Mutex<OperatorSelectionContext>>,
         mappings: Vec<MidiControlMapping>,
         last_error: Arc<Mutex<Option<String>>>,
+        callback_epoch: Arc<AtomicU64>,
+        captured_callback_epoch: u64,
+        callback_installed: Arc<AtomicBool>,
     ) -> Result<Self, String> {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
@@ -230,7 +3290,17 @@ impl MidiFeedbackRuntime {
             .spawn(move || {
                 let mut force = true;
                 let mut next_refresh = Instant::now();
-                while !worker_stop.load(Ordering::Acquire) {
+                while !worker_stop.load(Ordering::Acquire)
+                    && callback_epoch.load(Ordering::Acquire) == captured_callback_epoch
+                {
+                    // The output worker may begin scheduling immediately on
+                    // its constructor thread.  Do not emit device feedback
+                    // until the caller has installed the runtime slot under
+                    // external admission and coordinator ownership.
+                    if !callback_installed.load(Ordering::Acquire) {
+                        std::thread::park_timeout(Duration::from_millis(1));
+                        continue;
+                    }
                     let selection = match operator_selection.lock() {
                         Ok(selection) => selection.clone(),
                         Err(_) => {
@@ -258,6 +3328,9 @@ impl MidiFeedbackRuntime {
                             break;
                         }
                     };
+                    if callback_epoch.load(Ordering::Acquire) != captured_callback_epoch {
+                        break;
+                    }
                     let send_result = output
                         .lock()
                         .map_err(|_| "MIDI feedback output state lock was poisoned".to_string())
@@ -3139,6 +6212,16 @@ struct ExternalVideoTransportSyncResponse {
     events: Vec<ExternalVideoTransportDriverEvent>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct ExternalVideoTransportStatusResponse {
+    active_routes: Vec<video::ExternalVideoTransportRoute>,
+    active_count: usize,
+    ownership_allowed: bool,
+    ownership_state: protocol::OutputOwnershipState,
+    ownership_reason: protocol::OutputOwnershipReason,
+    ownership_error: Option<String>,
+}
+
 const EXTERNAL_VIDEO_TRANSPORT_EVENT_LIMIT: usize = 64;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -3192,11 +6275,219 @@ struct PreparedFixturePatch {
 #[derive(Debug, Clone, Serialize)]
 struct ProjectLoadResult {
     path: String,
+    /// The sole authoritative persistence path. `path` is a display label and
+    /// may be "New project", a template label, or a standby status; clients
+    /// must never infer current-file ownership from it.
+    current_project_path: Option<String>,
     profiles: Vec<FixtureProfileSummary>,
     midi_mappings: Vec<MidiControlMapping>,
     osc_mappings: Vec<OscControlMapping>,
     dmx_mappings: Vec<DmxControlMapping>,
     warnings: Vec<String>,
+    /// Backend-authoritative identity metadata.  Older frontends safely
+    /// ignore these additive fields; current callers use them as a compare
+    /// and set token when editing mappings.
+    project_epoch: u64,
+    project_revision: u64,
+    checkpoint_hash: String,
+    history_generation: u64,
+    /// Durable frontend clean/recovery semantics.  This cannot live only in
+    /// the command reply because an authority event may be lost and later
+    /// recovered by polling the same coordinator image.
+    authority_disposition_generation: u64,
+    authority_disposition: ProjectAuthorityDisposition,
+    /// Captured under external admission + the project coordinator after the
+    /// publication acknowledgement. The frontend stages this one object and
+    /// commits it atomically, rather than issuing a sequence of B/C-racy
+    /// snapshot/history/profile requests.
+    authority: Option<ProjectAuthorityBundle>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ProjectInputRuntimeStatus {
+    project_input_runtime_generation: u64,
+    mapping_input_runtime_generation: u64,
+    midi_clock_active: bool,
+    midi_control_active: bool,
+    midi_feedback_output_active: bool,
+    midi_feedback_runtime_active: bool,
+    osc_active: bool,
+    dmx_active: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ProjectAuthorityBundle {
+    project_epoch: u64,
+    project_revision: u64,
+    checkpoint_hash: String,
+    /// Distinguishes an ordinary external mutation (which a dirty local
+    /// mapping draft may rebase onto) from a fenced identity/history
+    /// publication (which must hydrate mappings before any retry).
+    publication_generation: u64,
+    publication_kind: ProjectAuthorityPublicationKind,
+    mapping_replacement_generation: u64,
+    /// Changes whenever the persisted clean/recovery interpretation of this
+    /// authority image changes.  It is separate from content and publication
+    /// counters: a recovery acknowledgement may leave E/R/H untouched.
+    authority_disposition_generation: u64,
+    authority_disposition: ProjectAuthorityDisposition,
+    /// Machine-local durable generation used to reject a browser recovery
+    /// image which belongs to a project authority invalidated before the
+    /// frontend received its replacement event/reply.
+    recovery_authority_serial: u64,
+    recovery_authority_last_transition: ProjectRecoveryAuthorityTransition,
+    path_generation: u64,
+    history_generation: u64,
+    current_project_path: Option<String>,
+    snapshot: EngineSnapshot,
+    profiles: Vec<FixtureProfileSummary>,
+    fixture_groups: Vec<FixtureGroupSummary>,
+    operator_policy: Option<OperatorPolicy>,
+    midi_mappings: Vec<MidiControlMapping>,
+    osc_mappings: Vec<OscControlMapping>,
+    dmx_mappings: Vec<DmxControlMapping>,
+    history: ProjectHistoryStatus,
+    input_runtime: ProjectInputRuntimeStatus,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ProjectCheckpoint {
+    project: ProjectFile,
+    mappings: ProjectControlMappings,
+    epoch: u64,
+    revision: u64,
+    hash: String,
+}
+
+#[derive(Debug, Clone)]
+struct ProjectSaveTicket {
+    checkpoint: ProjectCheckpoint,
+    /// The current-path mirror is part of the same immutable checkpoint as
+    /// the project root.  A Save As completion may only adopt its path when
+    /// this generation still names the path it captured.
+    current_project_path: Option<PathBuf>,
+    path_generation: u64,
+    authority_disposition_generation: u64,
+    /// Present only for a project-file/template publication. Background
+    /// backup/standby captures intentionally do not reserve the final-save
+    /// lane, so their periodic checkpoints cannot starve a user Save.
+    save_reservation_generation: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ProjectSaveResult {
+    path: String,
+    authority: ProjectAuthorityBundle,
+}
+
+/// App-local state that must move with an engine snapshot. It is deliberately
+/// prepared before the engine request but committed only after its publication
+/// acknowledgement; a later local commit failure restores this complete
+/// bundle together with the previous engine snapshot.
+#[derive(Debug, Clone, Default)]
+struct ProjectSwapAncillaryState {
+    custom_profiles: HashMap<String, FixtureProfileSummary>,
+    fixture_groups: Vec<FixtureGroupSummary>,
+    fixture_group_delete_undo: Option<DeletedFixtureGroup>,
+    operator_policy: Option<OperatorPolicy>,
+    current_project_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedProjectLoad {
+    snapshot: EngineSnapshot,
+    ancillary: ProjectSwapAncillaryState,
+    mappings: ProjectControlMappings,
+    authority_disposition: ProjectAuthorityDisposition,
+    recovery_request: Option<ProjectRecoveryPublicationRequest>,
+    result: ProjectLoadResult,
+}
+
+#[derive(Debug, Clone)]
+struct ProjectRecoveryPublicationRequest {
+    source_serial: u64,
+    request_id: String,
+}
+
+fn recovery_publication_transition_for_request(
+    current_serial: u64,
+    request: &ProjectRecoveryPublicationRequest,
+    target_checkpoint_hash: &str,
+) -> Result<ProjectRecoveryAuthorityTransition, String> {
+    if request.source_serial != current_serial {
+        return Err(format!(
+            "Project recovery authority changed before publication (expected serial {}, current serial {current_serial})",
+            request.source_serial
+        ));
+    }
+    if request.request_id.trim().is_empty() || request.request_id.len() > 160 {
+        return Err("Project recovery request ID is missing or too long".to_string());
+    }
+    if target_checkpoint_hash.is_empty() {
+        return Err("Project recovery target checkpoint hash is missing".to_string());
+    }
+    Ok(ProjectRecoveryAuthorityTransition::RecoveryPublication {
+        source_serial: request.source_serial,
+        request_id: request.request_id.clone(),
+        target_checkpoint_hash: target_checkpoint_hash.to_string(),
+    })
+}
+
+/// The polling worker intentionally never obtains the lifecycle mutex: normal
+/// callers first obtain that mutex and join the worker before taking the
+/// output-transition mutex. This one-way ordering prevents a stop/join from
+/// waiting on a worker which is itself waiting for that lifecycle mutex.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProjectSnapshotReplacementScope {
+    ExternalCaller,
+    LifecycleAlreadyHeld,
+    StandbyPollingWorker,
+    /// Re-applies only runtime fences for the already-authoritative project.
+    /// It must not manufacture a new identity/history/path generation.
+    SameProjectRuntimeSanitize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProjectReplacementCoordinatorEffect {
+    IdentitySwap,
+    RevisionMutation,
+    RuntimeSanitize,
+}
+
+/// A coordinator publication has stronger semantics than its content token.
+/// In particular Undo/Redo may stay within an epoch, yet its mappings are a
+/// replacement image rather than a base onto which a local debounce may be
+/// replayed. Keep this durable in the coordinator so an event-loss poll has
+/// exactly the same decision material as an immediate event/reply.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ProjectAuthorityPublicationKind {
+    RuntimeStatus,
+    Mutation,
+    IdentityReplacement,
+    HistoryNavigation,
+}
+
+/// The UI must not infer whether an applied image is saved from its display
+/// label or from a partial snapshot signature.  Keep this coordinator-owned
+/// disposition durable so event-only and poll-only consumers reach the same
+/// clean/recovery truth as the originating command.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ProjectAuthorityDisposition {
+    /// A concrete project file/new document becomes the saved baseline.
+    CleanAtPath,
+    /// Templates, DVC imports, samples, and backup restores are loaded but
+    /// still require an explicit Save/Save As.
+    UnsavedReplacement,
+    /// A browser recovery image is loaded; its local drafts must remain until
+    /// the guarded frontend acknowledgement says they were applied.
+    RecoveryPendingAck,
+    /// Undo/Redo replaces content but recomputes dirty against the existing
+    /// saved authority baseline instead of blindly becoming clean.
+    HistoryNavigation,
+    /// Runtime-only output/input sanitation must not change dirty/recovery.
+    RuntimeSanitize,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -3212,12 +6503,73 @@ struct ProjectControlMappings {
 #[derive(Debug, Clone, Serialize)]
 struct UserTemplateLoadResult {
     path: String,
+    current_project_path: Option<String>,
     label: String,
     profiles: Vec<FixtureProfileSummary>,
     midi_mappings: Vec<MidiControlMapping>,
     osc_mappings: Vec<OscControlMapping>,
     dmx_mappings: Vec<DmxControlMapping>,
     warnings: Vec<String>,
+    project_epoch: u64,
+    project_revision: u64,
+    checkpoint_hash: String,
+    history_generation: u64,
+    authority_disposition_generation: u64,
+    authority_disposition: ProjectAuthorityDisposition,
+    authority: Option<ProjectAuthorityBundle>,
+}
+
+/// A recovery capture must not stitch JSON from one project generation to a
+/// frontend path or mapping list from another. The legacy root-only command
+/// stays compatible while new callers take this single coordinator ticket.
+#[derive(Debug, Clone, Serialize)]
+struct ProjectCheckpointBundle {
+    project: Value,
+    current_path: Option<String>,
+    project_epoch: u64,
+    project_revision: u64,
+    checkpoint_hash: String,
+    recovery_authority_serial: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ProjectRecoveryAuthorityTransition {
+    #[default]
+    LegacyUnknown,
+    ProjectPublication,
+    RecoveryPublication {
+        source_serial: u64,
+        #[serde(default)]
+        request_id: String,
+        #[serde(default)]
+        target_checkpoint_hash: String,
+    },
+    HistoryNavigation,
+    CleanSave,
+    RecoveryAcknowledged {
+        recovery_publication_serial: u64,
+        #[serde(default)]
+        request_id: String,
+        #[serde(default)]
+        target_checkpoint_hash: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ProjectRecoveryAuthorityStatus {
+    recovery_authority_serial: u64,
+    last_transition: ProjectRecoveryAuthorityTransition,
+}
+
+/// A Daslight import has two equally authoritative products: the detailed
+/// conversion report for the UI and the fenced project result that owns the
+/// post-import mapping/path/input state.  Keep them in one command reply so
+/// the caller does not have to race a best-effort application event.
+#[derive(Debug, Clone, Serialize)]
+struct DvcImportProjectLoadResult {
+    report: dvc_import::DvcImportReport,
+    load: ProjectLoadResult,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3358,30 +6710,916 @@ impl Default for StandbySyncRuntime {
 struct StandbyCheckpoint {
     manifest: StandbySyncManifest,
     project: ProjectFile,
+    mappings: ProjectControlMappings,
 }
 
 #[derive(Debug, Clone)]
 struct ProjectHistoryEntry {
+    entry_id: u64,
     label: String,
     coalesce_key: String,
     committed_at_unix_ms: u64,
-    before: ProjectFile,
-    after: ProjectFile,
+    before: ProjectCheckpoint,
+    after: ProjectCheckpoint,
 }
 
 #[derive(Debug, Clone)]
 struct PendingProjectTransaction {
+    transaction_id: u64,
+    owner_id: String,
     label: String,
     coalesce_key: String,
-    before: ProjectFile,
+    before: ProjectCheckpoint,
+    epoch: u64,
 }
 
-#[derive(Debug, Default)]
+/// A transaction reservation is scoped to the identity that created it.  The
+/// counter itself is global so a delayed A/1 request cannot collide with B/1
+/// after an identity reset, and the epoch gives callers a truthful stale-token
+/// error before any B state can be touched.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct ProjectTransactionTicket {
+    transaction_id: u64,
+    project_epoch: u64,
+}
+
+#[derive(Debug, Default, Clone)]
 struct ProjectHistory {
-    next_transaction_id: u64,
     pending: HashMap<u64, PendingProjectTransaction>,
     undo: Vec<ProjectHistoryEntry>,
     redo: Vec<ProjectHistoryEntry>,
+}
+
+/// The backend authority for project identity.  Holding this mutex is the
+/// operation boundary for project replacement, history changes, persistence
+/// checkpoints, control mappings and input installation.  `epoch` changes on
+/// every identity swap; callbacks use the matching atomic mirror in AppState
+/// without ever taking this lock.
+#[derive(Debug)]
+struct ProjectCoordinator {
+    epoch: u64,
+    revision: u64,
+    checkpoint_hash: String,
+    publication_generation: u64,
+    last_publication_kind: ProjectAuthorityPublicationKind,
+    /// Advances only when mappings themselves are replaced by an identity
+    /// publication or Undo/Redo navigation. A later ordinary Mutation must
+    /// not erase this evidence before a polling frontend observes it.
+    mapping_replacement_generation: u64,
+    /// Durable clean/recovery interpretation for the latest fenced project
+    /// publication.  A poll carries this even when the content token itself
+    /// is unchanged since a recovery acknowledgement.
+    authority_disposition_generation: u64,
+    authority_disposition: ProjectAuthorityDisposition,
+    /// Loaded from the machine-local recovery-authority journal during
+    /// Tauri setup. Invalidating publications persist and advance this value
+    /// before their external commit point.
+    recovery_authority_serial: u64,
+    recovery_authority_last_transition: ProjectRecoveryAuthorityTransition,
+    /// IDs outlive identity swaps. A delayed A/1 Commit or Cancel therefore
+    /// can never address a fresh B/1 reservation after history is reset.
+    next_transaction_id: u64,
+    /// Separates path adoption from content revision. Save As and normal Save
+    /// both compare this value before claiming a path is current.
+    path_generation: u64,
+    /// Latest final-save reservation. This is intentionally internal to save
+    /// publication, not a content revision: S2 invalidates an older stalled
+    /// S1 before either writer can replace the same project file.
+    next_save_reservation_generation: u64,
+    latest_save_reservation_generation: u64,
+    /// Changes on every externally observable history-stack or pending-ticket
+    /// transition. Content tokens can stay equal while an Undo/Redo/Clear
+    /// status changes, so polling carries this separately.
+    history_generation: u64,
+    history: ProjectHistory,
+    mappings: ProjectControlMappings,
+    ancillary: ProjectSwapAncillaryState,
+}
+
+/// Callback and remote sources take this short gate with `try_lock` so a
+/// project retirement never waits on a blocked callback thread.  The counter
+/// gives read-only authority capture a seqlock-style proof that no admitted
+/// external engine command slipped between its engine snapshot and final
+/// coordinator validation.
+#[derive(Default)]
+struct ProjectExternalCommandAdmission {
+    gate: Mutex<()>,
+    generation: AtomicU64,
+    /// A two-phase Save reached an outcome which cannot be classified until
+    /// startup re-reads the target and its durable pending journal. While set,
+    /// no project mutation or recovery capture may create state at an authority
+    /// serial that could later change underneath it.
+    recovery_authority_faulted: AtomicBool,
+}
+
+impl ProjectExternalCommandAdmission {
+    fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
+    }
+
+    fn note_admitted_external_command(&self) {
+        // Wrapping can only make an old read retry conservatively. The
+        // generation is an implementation seqlock, not a client-visible ID.
+        self.generation.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+impl Default for ProjectCoordinator {
+    fn default() -> Self {
+        Self {
+            epoch: 0,
+            revision: 0,
+            checkpoint_hash: String::new(),
+            publication_generation: 0,
+            last_publication_kind: ProjectAuthorityPublicationKind::RuntimeStatus,
+            mapping_replacement_generation: 0,
+            authority_disposition_generation: 0,
+            authority_disposition: ProjectAuthorityDisposition::RuntimeSanitize,
+            recovery_authority_serial: 0,
+            recovery_authority_last_transition: ProjectRecoveryAuthorityTransition::LegacyUnknown,
+            next_transaction_id: 0,
+            path_generation: 0,
+            next_save_reservation_generation: 0,
+            latest_save_reservation_generation: 0,
+            history_generation: 0,
+            history: ProjectHistory::default(),
+            mappings: ProjectControlMappings::default(),
+            ancillary: ProjectSwapAncillaryState::default(),
+        }
+    }
+}
+
+fn checked_project_history_generation_after_change(
+    coordinator: &ProjectCoordinator,
+) -> Result<u64, String> {
+    coordinator
+        .history_generation
+        .checked_add(1)
+        .ok_or_else(|| {
+            "Project history generation is exhausted; restart Syndocal before changing history"
+                .to_string()
+        })
+}
+
+fn checked_project_authority_publication_generation_after_change(
+    coordinator: &ProjectCoordinator,
+) -> Result<u64, String> {
+    coordinator
+        .publication_generation
+        .checked_add(1)
+        .ok_or_else(|| {
+            "Project authority publication generation is exhausted; restart Syndocal before publishing project state"
+                .to_string()
+        })
+}
+
+fn checked_project_mapping_replacement_generation_after_change(
+    coordinator: &ProjectCoordinator,
+) -> Result<u64, String> {
+    coordinator
+        .mapping_replacement_generation
+        .checked_add(1)
+        .ok_or_else(|| {
+            "Project mapping replacement generation is exhausted; restart Syndocal before replacing mappings"
+                .to_string()
+        })
+}
+
+fn checked_project_authority_disposition_generation_after_change(
+    coordinator: &ProjectCoordinator,
+) -> Result<u64, String> {
+    coordinator
+        .authority_disposition_generation
+        .checked_add(1)
+        .ok_or_else(|| {
+            "Project authority disposition generation is exhausted; restart Syndocal before replacing the project"
+                .to_string()
+        })
+}
+
+/// Applies only a previously checked disposition generation.  Call this only
+/// after an acknowledged publication (or an explicit recovery acknowledgement)
+/// so no post-commit failure can leave an already-published image ambiguous.
+fn commit_project_authority_disposition_after_preflight(
+    coordinator: &mut ProjectCoordinator,
+    generation: u64,
+    disposition: ProjectAuthorityDisposition,
+) {
+    coordinator.authority_disposition_generation = generation;
+    coordinator.authority_disposition = disposition;
+}
+
+/// Apply only a preflighted publication value. This deliberately cannot fail
+/// after an engine acknowledgement or a direct engine mutation has committed.
+fn commit_project_authority_publication_after_preflight(
+    coordinator: &mut ProjectCoordinator,
+    generation: u64,
+    kind: ProjectAuthorityPublicationKind,
+) {
+    coordinator.publication_generation = generation;
+    coordinator.last_publication_kind = kind;
+}
+
+/// A compact seqlock stamp for a read-only authority capture.  Every
+/// coordinator-owned mutation changes at least one member before it releases
+/// the coordinator, so a poll can capture the expensive engine snapshot
+/// outside both coordinator and external-admission locks, then validate that
+/// it did not stitch that snapshot to different ancillary/mapping state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectAuthorityCaptureStamp {
+    epoch: u64,
+    revision: u64,
+    checkpoint_hash: String,
+    publication_generation: u64,
+    publication_kind: ProjectAuthorityPublicationKind,
+    mapping_replacement_generation: u64,
+    authority_disposition_generation: u64,
+    authority_disposition: ProjectAuthorityDisposition,
+    recovery_authority_serial: u64,
+    recovery_authority_last_transition: ProjectRecoveryAuthorityTransition,
+    path_generation: u64,
+    history_generation: u64,
+}
+
+/// Every counter that an identity replacement changes is calculated before
+/// engine publication.  Applying this value after the engine ACK is therefore
+/// assignment-only: no counter overflow can turn an already-published B into
+/// a false error/rollback claim.
+#[derive(Debug, Clone, Copy)]
+struct PreparedProjectIdentitySwapCounters {
+    epoch: u64,
+    path_generation: u64,
+    history_generation: u64,
+    publication_generation: u64,
+    mapping_replacement_generation: u64,
+    authority_disposition_generation: u64,
+}
+
+fn project_authority_capture_stamp(
+    coordinator: &ProjectCoordinator,
+) -> ProjectAuthorityCaptureStamp {
+    ProjectAuthorityCaptureStamp {
+        epoch: coordinator.epoch,
+        revision: coordinator.revision,
+        checkpoint_hash: coordinator.checkpoint_hash.clone(),
+        publication_generation: coordinator.publication_generation,
+        publication_kind: coordinator.last_publication_kind,
+        mapping_replacement_generation: coordinator.mapping_replacement_generation,
+        authority_disposition_generation: coordinator.authority_disposition_generation,
+        authority_disposition: coordinator.authority_disposition,
+        recovery_authority_serial: coordinator.recovery_authority_serial,
+        recovery_authority_last_transition: coordinator.recovery_authority_last_transition.clone(),
+        path_generation: coordinator.path_generation,
+        history_generation: coordinator.history_generation,
+    }
+}
+
+fn project_authority_capture_stamp_matches(
+    coordinator: &ProjectCoordinator,
+    stamp: &ProjectAuthorityCaptureStamp,
+) -> bool {
+    coordinator.epoch == stamp.epoch
+        && coordinator.revision == stamp.revision
+        && coordinator.checkpoint_hash == stamp.checkpoint_hash
+        && coordinator.publication_generation == stamp.publication_generation
+        && coordinator.last_publication_kind == stamp.publication_kind
+        && coordinator.mapping_replacement_generation == stamp.mapping_replacement_generation
+        && coordinator.authority_disposition_generation == stamp.authority_disposition_generation
+        && coordinator.authority_disposition == stamp.authority_disposition
+        && coordinator.recovery_authority_serial == stamp.recovery_authority_serial
+        && coordinator.recovery_authority_last_transition
+            == stamp.recovery_authority_last_transition
+        && coordinator.path_generation == stamp.path_generation
+        && coordinator.history_generation == stamp.history_generation
+}
+
+impl ProjectCoordinator {
+    #[cfg(test)]
+    fn begin_identity_swap(&self) -> u64 {
+        self.epoch
+    }
+
+    fn preflight_identity_swap_counters(
+        &self,
+    ) -> Result<PreparedProjectIdentitySwapCounters, String> {
+        Ok(PreparedProjectIdentitySwapCounters {
+            epoch: self.epoch.checked_add(1).ok_or_else(|| {
+                "Project identity epoch is exhausted; restart Syndocal before replacing the project"
+                    .to_string()
+            })?,
+            path_generation: self.path_generation.checked_add(1).ok_or_else(|| {
+                "Project path generation is exhausted; restart Syndocal before replacing the project"
+                    .to_string()
+            })?,
+            history_generation: checked_project_history_generation_after_change(self)?,
+            publication_generation: checked_project_authority_publication_generation_after_change(self)?,
+            mapping_replacement_generation:
+                checked_project_mapping_replacement_generation_after_change(self)?,
+            authority_disposition_generation:
+                checked_project_authority_disposition_generation_after_change(self)?,
+        })
+    }
+
+    /// Applies only values already validated by
+    /// `preflight_identity_swap_counters`. Keep this infallible: the engine
+    /// snapshot is authoritative once its publication ACK has arrived.
+    fn finish_identity_swap_after_preflight(
+        &mut self,
+        ancillary: ProjectSwapAncillaryState,
+        mappings: ProjectControlMappings,
+        checkpoint_hash: String,
+        counters: PreparedProjectIdentitySwapCounters,
+        disposition: ProjectAuthorityDisposition,
+    ) {
+        self.epoch = counters.epoch;
+        self.revision = 0;
+        self.checkpoint_hash = checkpoint_hash;
+        self.ancillary = ancillary;
+        self.mappings = mappings;
+        self.history = ProjectHistory::default();
+        self.path_generation = counters.path_generation;
+        self.history_generation = counters.history_generation;
+        commit_project_authority_publication_after_preflight(
+            self,
+            counters.publication_generation,
+            ProjectAuthorityPublicationKind::IdentityReplacement,
+        );
+        self.mapping_replacement_generation = counters.mapping_replacement_generation;
+        commit_project_authority_disposition_after_preflight(
+            self,
+            counters.authority_disposition_generation,
+            disposition,
+        );
+    }
+
+    #[cfg(test)]
+    fn finish_identity_swap(
+        &mut self,
+        ancillary: ProjectSwapAncillaryState,
+        mappings: ProjectControlMappings,
+        checkpoint_hash: String,
+    ) -> Result<(), String> {
+        let counters = self.preflight_identity_swap_counters()?;
+        self.finish_identity_swap_after_preflight(
+            ancillary,
+            mappings,
+            checkpoint_hash,
+            counters,
+            ProjectAuthorityDisposition::CleanAtPath,
+        );
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn note_mutation(&mut self) -> Result<(), String> {
+        self.revision = self.revision.checked_add(1).ok_or_else(|| {
+            "Project revision is exhausted; restart Syndocal before editing the project".to_string()
+        })?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+struct ProjectControlMappingsStatus {
+    project_epoch: u64,
+    project_revision: u64,
+    checkpoint_hash: String,
+    publication_generation: u64,
+    publication_kind: ProjectAuthorityPublicationKind,
+    mapping_replacement_generation: u64,
+    path_generation: u64,
+    history_generation: u64,
+    midi_mappings: Vec<MidiControlMapping>,
+    osc_mappings: Vec<OscControlMapping>,
+    dmx_mappings: Vec<DmxControlMapping>,
+    /// Only a successful mapping mutation retires mapping-driven workers.
+    /// The frontend uses this acknowledgement to clear connected indicators
+    /// immediately instead of waiting for the next status poll.
+    mapping_runtimes_retired: bool,
+}
+
+fn lock_project_coordinator<'a>(
+    state: &'a AppState,
+) -> Result<std::sync::MutexGuard<'a, ProjectCoordinator>, String> {
+    state
+        .project_coordinator
+        .lock()
+        .map_err(|_| "Project coordinator lock was poisoned".to_string())
+}
+
+/// The only lock acquired by callback/remote threads.  Coordinator-owning
+/// paths must take this before the coordinator, establishing one global order:
+/// lifecycle -> standby stop/join -> external admission -> coordinator ->
+/// output transition.  That makes an accepted external send wholly before a
+/// transaction baseline or wholly after its Commit/Cancel boundary.
+fn lock_project_external_command_admission<'a>(
+    state: &'a AppState,
+) -> Result<std::sync::MutexGuard<'a, ()>, String> {
+    let guard = state
+        .project_external_command_admission
+        .gate
+        .lock()
+        .map_err(|_| "Project external command admission lock was poisoned".to_string())?;
+    if state
+        .project_external_command_admission
+        .recovery_authority_faulted
+        .load(Ordering::Acquire)
+    {
+        return Err(
+            "Project recovery authority is awaiting startup reconciliation after an indeterminate Save; restart Syndocal before editing, saving, or changing the project"
+                .to_string(),
+        );
+    }
+    Ok(guard)
+}
+
+fn try_lock_project_external_command_admission(
+    project_external_command_admission: &ProjectExternalCommandAdmission,
+) -> Option<std::sync::MutexGuard<'_, ()>> {
+    let guard = project_external_command_admission.gate.try_lock().ok()?;
+    (!project_external_command_admission
+        .recovery_authority_faulted
+        .load(Ordering::Acquire))
+    .then_some(guard)
+}
+
+fn project_control_mappings_status(
+    coordinator: &ProjectCoordinator,
+) -> ProjectControlMappingsStatus {
+    ProjectControlMappingsStatus {
+        project_epoch: coordinator.epoch,
+        project_revision: coordinator.revision,
+        checkpoint_hash: coordinator.checkpoint_hash.clone(),
+        publication_generation: coordinator.publication_generation,
+        publication_kind: coordinator.last_publication_kind,
+        mapping_replacement_generation: coordinator.mapping_replacement_generation,
+        path_generation: coordinator.path_generation,
+        history_generation: coordinator.history_generation,
+        midi_mappings: coordinator.mappings.midi_mappings.clone(),
+        osc_mappings: coordinator.mappings.osc_mappings.clone(),
+        dmx_mappings: coordinator.mappings.dmx_mappings.clone(),
+        mapping_runtimes_retired: false,
+    }
+}
+
+fn checked_project_revision_after_mutation(
+    coordinator: &ProjectCoordinator,
+) -> Result<u64, String> {
+    coordinator.revision.checked_add(1).ok_or_else(|| {
+        "Project revision is exhausted; restart Syndocal before editing the project".to_string()
+    })
+}
+
+fn ensure_no_pending_project_transaction(coordinator: &ProjectCoordinator) -> Result<(), String> {
+    if coordinator.history.pending.is_empty() {
+        Ok(())
+    } else {
+        Err("A project edit is still being committed; try again after it finishes".to_string())
+    }
+}
+
+fn ensure_project_epoch_matches(
+    coordinator: &ProjectCoordinator,
+    expected_epoch: u64,
+) -> Result<(), String> {
+    if coordinator.epoch == expected_epoch {
+        Ok(())
+    } else {
+        Err(format!(
+            "Project changed before this edit began (expected epoch {expected_epoch}, current epoch {})",
+            coordinator.epoch,
+        ))
+    }
+}
+
+fn ensure_optional_project_epoch_matches(
+    coordinator: &ProjectCoordinator,
+    expected_epoch: Option<u64>,
+) -> Result<(), String> {
+    expected_epoch.map_or(Ok(()), |epoch| {
+        ensure_project_epoch_matches(coordinator, epoch)
+    })
+}
+
+fn reserve_project_callback_epoch(callback_epoch: &AtomicU64) -> Result<u64, String> {
+    let mut observed = callback_epoch.load(Ordering::Acquire);
+    loop {
+        let next = observed.checked_add(1).ok_or_else(|| {
+            "Project input callback epoch is exhausted; restart Syndocal before replacing the project"
+                .to_string()
+        })?;
+        match callback_epoch.compare_exchange_weak(
+            observed,
+            next,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return Ok(next),
+            Err(actual) => observed = actual,
+        }
+    }
+}
+
+fn send_engine_command_if_callback_epoch(
+    engine: &EngineHandle,
+    callback_epoch: &Arc<AtomicU64>,
+    project_transaction_active: &Arc<AtomicBool>,
+    project_external_command_admission: &Arc<ProjectExternalCommandAdmission>,
+    callback_installed: &Arc<AtomicBool>,
+    captured_epoch: u64,
+    command: EngineCommand,
+) {
+    let mutates_persistence = command.mutates_persistence_snapshot();
+    let admission = Arc::clone(project_external_command_admission);
+    let _ = run_if_installed_project_callback_epoch(
+        project_external_command_admission,
+        callback_epoch,
+        captured_epoch,
+        project_transaction_active,
+        callback_installed,
+        || {
+            let result = engine.send(command);
+            if result.is_ok() && mutates_persistence {
+                admission.note_admitted_external_command();
+            }
+            result
+        },
+    );
+}
+
+fn callback_epoch_allows_send(callback_epoch: &AtomicU64, captured_epoch: u64) -> bool {
+    callback_epoch.load(Ordering::Acquire) == captured_epoch
+}
+
+fn run_if_callback_epoch<T>(
+    callback_epoch: &AtomicU64,
+    captured_epoch: u64,
+    send: impl FnOnce() -> T,
+) -> Option<T> {
+    callback_epoch_allows_send(callback_epoch, captured_epoch).then(send)
+}
+
+fn run_if_project_callback_epoch<T>(
+    project_external_command_admission: &ProjectExternalCommandAdmission,
+    callback_epoch: &AtomicU64,
+    captured_epoch: u64,
+    project_transaction_active: &AtomicBool,
+    send: impl FnOnce() -> T,
+) -> Option<T> {
+    // A project replacement holds admission while it takes and joins input
+    // workers. Callback threads must never wait for that guard: a callback
+    // blocked here could be the worker that retirement is waiting to join.
+    // Dropping the event is safe because the external source is advisory and
+    // the next current-generation event will be admitted after the boundary.
+    let _admission =
+        try_lock_project_external_command_admission(project_external_command_admission)?;
+    let result = run_if_project_callback_epoch_while_admitted(
+        callback_epoch,
+        captured_epoch,
+        project_transaction_active,
+        send,
+    );
+    result
+}
+
+/// A callback-capable input constructor can synchronously invoke its callback
+/// before returning its worker to the caller.  That event is not allowed to
+/// enter the engine: the worker must first be installed into its state slot
+/// while admission and coordinator are held.  The flag remains false on every
+/// constructor or slot-install error, so dropping the local worker is enough
+/// to fail closed.
+fn run_if_installed_project_callback_epoch<T>(
+    project_external_command_admission: &ProjectExternalCommandAdmission,
+    callback_epoch: &AtomicU64,
+    captured_epoch: u64,
+    project_transaction_active: &AtomicBool,
+    callback_installed: &AtomicBool,
+    send: impl FnOnce() -> T,
+) -> Option<T> {
+    let _admission =
+        try_lock_project_external_command_admission(project_external_command_admission)?;
+    let result = (callback_installed.load(Ordering::Acquire)
+        && !project_transaction_active.load(Ordering::Acquire)
+        && callback_epoch_allows_send(callback_epoch, captured_epoch))
+    .then(send);
+    result
+}
+
+fn run_if_project_callback_epoch_while_admitted<T>(
+    callback_epoch: &AtomicU64,
+    captured_epoch: u64,
+    project_transaction_active: &AtomicBool,
+    send: impl FnOnce() -> T,
+) -> Option<T> {
+    run_if_callback_epoch_when_transaction_idle(
+        callback_epoch,
+        captured_epoch,
+        project_transaction_active,
+        send,
+    )
+}
+
+/// External sources without a project callback generation (the Remote control
+/// server) share the same admission gate.  Constructing/matching the command
+/// is deliberately inside `send` so no check -> command -> send window remains.
+fn run_if_project_external_command_admitted<T>(
+    project_external_command_admission: &ProjectExternalCommandAdmission,
+    project_transaction_active: &AtomicBool,
+    send: impl FnOnce() -> T,
+) -> Option<T> {
+    let _admission =
+        try_lock_project_external_command_admission(project_external_command_admission)?;
+    let result = (!project_transaction_active.load(Ordering::Acquire)).then(send);
+    result
+}
+
+/// Called only while the canonical external-admission guard and coordinator
+/// guard are live. Keeping the flag flip and persistence baseline capture in
+/// this small seam makes it impossible to reintroduce the old
+/// capture-then-fence window by accident.
+fn arm_project_transaction_and_capture_baseline<T>(
+    project_transaction_active: &AtomicBool,
+    capture: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    project_transaction_active.store(true, Ordering::Release);
+    match capture() {
+        Ok(baseline) => Ok(baseline),
+        Err(error) => {
+            project_transaction_active.store(false, Ordering::Release);
+            Err(error)
+        }
+    }
+}
+
+fn run_if_callback_epoch_when_transaction_idle<T>(
+    callback_epoch: &AtomicU64,
+    captured_epoch: u64,
+    project_transaction_active: &AtomicBool,
+    send: impl FnOnce() -> T,
+) -> Option<T> {
+    (!project_transaction_active.load(Ordering::Acquire)
+        && callback_epoch_allows_send(callback_epoch, captured_epoch))
+    .then(send)
+}
+
+fn project_input_installation_is_current(
+    current_project_epoch: u64,
+    expected_project_epoch: u64,
+    callback_epoch: &AtomicU64,
+    expected_callback_epoch: u64,
+) -> bool {
+    current_project_epoch == expected_project_epoch
+        && callback_epoch_allows_send(callback_epoch, expected_callback_epoch)
+}
+
+/// This read is deliberately infallible after publication: poisoned UI mirror
+/// locks retain their inner state, which is more truthful than returning a
+/// false failed load after the authoritative engine snapshot has already
+/// changed. Callers hold admission + coordinator whenever this is bundled.
+fn project_input_runtime_status_from_state(state: &AppState) -> ProjectInputRuntimeStatus {
+    let midi_clock_active = state
+        .midi_clock
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .is_some();
+    let midi_control_active = state
+        .midi_control
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .is_some();
+    let midi_feedback_output_active = state
+        .midi_feedback
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .is_some();
+    let midi_feedback_runtime_active = state
+        .midi_feedback_runtime
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .is_some_and(MidiFeedbackRuntime::is_running);
+    let osc_active = state
+        .osc_input
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .is_some();
+    let dmx_active = state
+        .dmx_input
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .is_some();
+    ProjectInputRuntimeStatus {
+        project_input_runtime_generation: state.project_callback_epoch.load(Ordering::Acquire),
+        mapping_input_runtime_generation: state
+            .project_mapping_callback_epoch
+            .load(Ordering::Acquire),
+        midi_clock_active,
+        midi_control_active,
+        midi_feedback_output_active,
+        midi_feedback_runtime_active,
+        osc_active,
+        dmx_active,
+    }
+}
+
+/// Build the UI bundle from an engine snapshot which was captured at the same
+/// coordinator/admission boundary as its project token.  Polling supplies its
+/// own seqlock-validated snapshot here; normal replacement paths use the
+/// engine's current published snapshot while their admission guard is live.
+fn project_authority_bundle_from_captured_snapshot(
+    state: &AppState,
+    coordinator: &ProjectCoordinator,
+    snapshot: EngineSnapshot,
+) -> ProjectAuthorityBundle {
+    let mut profiles = coordinator
+        .ancillary
+        .custom_profiles
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    profiles.sort_by(|left, right| left.source_path.cmp(&right.source_path));
+    ProjectAuthorityBundle {
+        project_epoch: coordinator.epoch,
+        project_revision: coordinator.revision,
+        checkpoint_hash: coordinator.checkpoint_hash.clone(),
+        publication_generation: coordinator.publication_generation,
+        publication_kind: coordinator.last_publication_kind,
+        mapping_replacement_generation: coordinator.mapping_replacement_generation,
+        authority_disposition_generation: coordinator.authority_disposition_generation,
+        authority_disposition: coordinator.authority_disposition,
+        recovery_authority_serial: coordinator.recovery_authority_serial,
+        recovery_authority_last_transition: coordinator.recovery_authority_last_transition.clone(),
+        path_generation: coordinator.path_generation,
+        history_generation: coordinator.history_generation,
+        current_project_path: coordinator
+            .ancillary
+            .current_project_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string()),
+        snapshot,
+        profiles,
+        fixture_groups: coordinator.ancillary.fixture_groups.clone(),
+        operator_policy: coordinator.ancillary.operator_policy.clone(),
+        midi_mappings: coordinator.mappings.midi_mappings.clone(),
+        osc_mappings: coordinator.mappings.osc_mappings.clone(),
+        dmx_mappings: coordinator.mappings.dmx_mappings.clone(),
+        history: project_history_status_for_coordinator(coordinator),
+        input_runtime: project_input_runtime_status_from_state(state),
+    }
+}
+
+/// The normal (exclusive) paths retain this concise helper.  Read-only poll
+/// must use `project_authority_bundle_from_captured_snapshot` instead so it
+/// never holds external admission across an engine snapshot read.
+fn project_authority_bundle_from_coordinator(
+    state: &AppState,
+    coordinator: &ProjectCoordinator,
+) -> ProjectAuthorityBundle {
+    project_authority_bundle_from_captured_snapshot(state, coordinator, state.engine.snapshot())
+}
+
+struct RetiredProjectControlInputs {
+    midi_clock: Option<MidiClockInput>,
+    midi_control: Option<MidiControlInput>,
+    midi_feedback_runtime: Option<MidiFeedbackRuntime>,
+    midi_feedback: Option<MidiFeedbackOutput>,
+    osc_input: Option<OscInput>,
+    dmx_input: Option<io::dmx_input::DmxInput>,
+}
+
+impl RetiredProjectControlInputs {
+    fn empty() -> Self {
+        Self {
+            midi_clock: None,
+            midi_control: None,
+            midi_feedback_runtime: None,
+            midi_feedback: None,
+            osc_input: None,
+            dmx_input: None,
+        }
+    }
+
+    fn release_outside_slots(mut self) {
+        // Each value was taken while its slot mutex was held, then all slot
+        // guards were released before Drop/Join. MIDI feedback is explicitly
+        // joined before its output so its worker cannot be waiting on that
+        // output mutex during retirement.
+        drop(self.midi_clock.take());
+        drop(self.midi_control.take());
+        drop(self.midi_feedback_runtime.take());
+        drop(self.midi_feedback.take());
+        drop(self.osc_input.take());
+        drop(self.dmx_input.take());
+    }
+}
+
+fn retire_after_project_control_slots_taken<T, Take, Release>(
+    take_slots: Take,
+    release_outside_slots: Release,
+) -> Result<(), String>
+where
+    Take: FnOnce() -> (T, Result<(), String>),
+    Release: FnOnce(T),
+{
+    // The release callback runs even when a later slot was poisoned, so any
+    // earlier take cannot leak a live callback-capable worker. Callers place
+    // engine publication only after this acknowledgement returns.
+    let (taken, result) = take_slots();
+    release_outside_slots(taken);
+    result
+}
+
+fn retire_project_control_inputs_before_project_publish(state: &AppState) -> Result<(), String> {
+    retire_after_project_control_slots_taken(
+        || {
+            let mut retired = RetiredProjectControlInputs::empty();
+            let result = (|| {
+                retired.midi_clock = state
+                    .midi_clock
+                    .lock()
+                    .map_err(|_| "MIDI clock state lock was poisoned".to_string())?
+                    .take();
+                retired.midi_control = state
+                    .midi_control
+                    .lock()
+                    .map_err(|_| "MIDI control state lock was poisoned".to_string())?
+                    .take();
+                retired.midi_feedback_runtime = state
+                    .midi_feedback_runtime
+                    .lock()
+                    .map_err(|_| "MIDI feedback runtime lock was poisoned".to_string())?
+                    .take();
+                retired.midi_feedback = state
+                    .midi_feedback
+                    .lock()
+                    .map_err(|_| "MIDI feedback state lock was poisoned".to_string())?
+                    .take();
+                retired.osc_input = state
+                    .osc_input
+                    .lock()
+                    .map_err(|_| "OSC input state lock was poisoned".to_string())?
+                    .take();
+                retired.dmx_input = state
+                    .dmx_input
+                    .lock()
+                    .map_err(|_| "DMX input state lock was poisoned".to_string())?
+                    .take();
+                *state
+                    .midi_feedback_last_error
+                    .lock()
+                    .map_err(|_| "MIDI feedback error state lock was poisoned".to_string())? = None;
+                Ok(())
+            })();
+            (retired, result)
+        },
+        RetiredProjectControlInputs::release_outside_slots,
+    )
+}
+
+/// Mapping edits invalidate mapping-driven input runtimes but intentionally
+/// retain MIDI Clock, whose transport events do not depend on the control
+/// mapping table. The callback epoch is reserved by the caller before taking
+/// slots, then every Drop/Join occurs outside all slot mutexes.
+fn retire_mapping_driven_project_control_inputs(state: &AppState) -> Result<(), String> {
+    retire_after_project_control_slots_taken(
+        || {
+            let mut retired = RetiredProjectControlInputs::empty();
+            let result = (|| {
+                retired.midi_control = state
+                    .midi_control
+                    .lock()
+                    .map_err(|_| "MIDI control state lock was poisoned".to_string())?
+                    .take();
+                retired.midi_feedback_runtime = state
+                    .midi_feedback_runtime
+                    .lock()
+                    .map_err(|_| "MIDI feedback runtime lock was poisoned".to_string())?
+                    .take();
+                retired.midi_feedback = state
+                    .midi_feedback
+                    .lock()
+                    .map_err(|_| "MIDI feedback state lock was poisoned".to_string())?
+                    .take();
+                retired.osc_input = state
+                    .osc_input
+                    .lock()
+                    .map_err(|_| "OSC input state lock was poisoned".to_string())?
+                    .take();
+                retired.dmx_input = state
+                    .dmx_input
+                    .lock()
+                    .map_err(|_| "DMX input state lock was poisoned".to_string())?
+                    .take();
+                *state
+                    .midi_feedback_last_error
+                    .lock()
+                    .map_err(|_| "MIDI feedback error state lock was poisoned".to_string())? = None;
+                Ok(())
+            })();
+            (retired, result)
+        },
+        RetiredProjectControlInputs::release_outside_slots,
+    )
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -3392,6 +7630,33 @@ struct ProjectHistoryStatus {
     redo_depth: usize,
     undo_label: Option<String>,
     redo_label: Option<String>,
+    project_epoch: u64,
+    project_revision: u64,
+    checkpoint_hash: String,
+    history_generation: u64,
+    undo_entry_id: Option<u64>,
+    undo_checkpoint_hash: Option<String>,
+    redo_entry_id: Option<u64>,
+    redo_checkpoint_hash: Option<String>,
+}
+
+/// Navigation moves history and publishes an engine snapshot as one fenced
+/// operation. Return the same complete coordinator image to the direct caller
+/// so Undo/Redo never stitch its status with later mapping/snapshot RPCs.
+#[derive(Debug, Clone, Serialize)]
+struct ProjectHistoryNavigationResult {
+    history_status: ProjectHistoryStatus,
+    authority: ProjectAuthorityBundle,
+}
+
+/// Commit, Cancel, and Clear can advance the coordinator revision and/or the
+/// independently visible history generation.  Return both parts of that one
+/// coordinator image so a frontend never tries to apply a new R/H history
+/// status against the old token it held before the operation.
+#[derive(Debug, Clone, Serialize)]
+struct ProjectHistoryMutationResult {
+    history_status: ProjectHistoryStatus,
+    authority: ProjectAuthorityBundle,
 }
 
 #[derive(Debug, Default)]
@@ -3727,6 +7992,8 @@ const USER_TEMPLATE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const OPERATOR_CREDENTIAL_SCHEME: &str = "PBKDF2-SHA256";
 const OPERATOR_CREDENTIAL_MIN_ITERATIONS: u32 = 100_000;
 const OPERATOR_CREDENTIAL_MAX_ITERATIONS: u32 = 2_000_000;
+const OPERATOR_PASSWORD_MIN_CHARACTERS: usize = 8;
+const OPERATOR_PASSWORD_MAX_BYTES: usize = 1_024;
 
 fn parented_file_dialog(window: &WebviewWindow) -> rfd::FileDialog {
     // rfd treats failed raw-window/display handle acquisition as no parent,
@@ -3824,10 +8091,10 @@ fn import_video_output_bitmap_mask(
 }
 
 #[tauri::command]
-fn import_gdtf(state: State<'_, AppState>, path: String) -> Result<FixtureProfileSummary, String> {
-    let profile = import_gdtf_from_path(path)?;
-    cache_fixture_profile(&state.custom_profiles, &profile)?;
-    Ok(profile)
+fn import_gdtf(path: String) -> Result<FixtureProfileSummary, String> {
+    // Import is a session preview. The profile becomes project persistence only
+    // when a successful Patch/Repair publication explicitly embeds it.
+    import_gdtf_from_path(path)
 }
 
 #[tauri::command]
@@ -3978,26 +8245,14 @@ fn download_gdtf_from_share(
 }
 
 #[tauri::command]
-fn list_gdtf_fixture_cache(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-) -> Result<Vec<GdtfFixtureCacheEntry>, String> {
+fn list_gdtf_fixture_cache(app: tauri::AppHandle) -> Result<Vec<GdtfFixtureCacheEntry>, String> {
     let directory = app_data_subdirectory(&app, FIXTURE_PROFILE_CACHE_DIRECTORY)?;
-    let entries = inspect_gdtf_fixture_cache_directory(&directory)?;
-    for entry in &entries {
-        if entry.health == "healthy" || entry.health == "warnings" {
-            if let Ok(profile) = gdtf::load_profile(&entry.path) {
-                cache_fixture_profile(&state.custom_profiles, &profile)?;
-            }
-        }
-    }
-    Ok(entries)
+    inspect_gdtf_fixture_cache_directory(&directory)
 }
 
 #[tauri::command]
 fn cache_gdtf_from_share(
     app: tauri::AppHandle,
-    state: State<'_, AppState>,
     request: GdtfShareDownloadRequest,
 ) -> Result<GdtfFixtureCacheEntry, String> {
     validate_gdtf_share_credentials(&request.user, &request.password)?;
@@ -4008,8 +8263,6 @@ fn cache_gdtf_from_share(
     if path.is_file() {
         let entry = inspect_gdtf_cache_file(&path, Some(metadata.clone()))?;
         if entry.health == "healthy" || entry.health == "warnings" {
-            let profile = gdtf::load_profile(&path).map_err(|error| error.to_string())?;
-            cache_fixture_profile(&state.custom_profiles, &profile)?;
             return Ok(entry);
         }
     }
@@ -4024,7 +8277,7 @@ fn cache_gdtf_from_share(
     let result = (|| {
         login_gdtf_share(&request.user, &request.password, &cookie_path)?;
         download_gdtf_share_file(&request, &cookie_path, &partial_path)?;
-        let profile = gdtf::load_profile(&partial_path)
+        gdtf::load_profile(&partial_path)
             .map_err(|error| format!("Downloaded GDTF Share cache file is invalid: {error}"))?;
         if path.exists() {
             fs::remove_file(&path).map_err(|error| {
@@ -4041,7 +8294,6 @@ fn cache_gdtf_from_share(
             )
         })?;
         write_gdtf_fixture_cache_metadata(&path, &metadata)?;
-        cache_fixture_profile(&state.custom_profiles, &profile)?;
         inspect_gdtf_cache_file(&path, Some(metadata.clone()))
     })();
     let _ = fs::remove_file(&cookie_path);
@@ -4065,10 +8317,7 @@ fn list_verified_fixture_profiles() -> Vec<VerifiedFixtureProfileSummary> {
 }
 
 #[tauri::command]
-fn load_verified_fixture_profile(
-    state: State<'_, AppState>,
-    profile_id: String,
-) -> Result<FixtureProfileSummary, String> {
+fn load_verified_fixture_profile(profile_id: String) -> Result<FixtureProfileSummary, String> {
     let (_, profile) = verified_fixture_profiles()
         .into_iter()
         .find(|(summary, _)| summary.id == profile_id.trim())
@@ -4078,7 +8327,6 @@ fn load_verified_fixture_profile(
                 profile_id.trim()
             )
         })?;
-    cache_fixture_profile(&state.custom_profiles, &profile)?;
     Ok(profile)
 }
 
@@ -4088,14 +8336,31 @@ fn repair_fixture_profile(
     fixture_id: FixtureId,
     profile_path: String,
     mode_name: Option<String>,
+    profile: FixtureProfileSummary,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
 ) -> Result<(), String> {
-    let snapshot = state.engine.snapshot();
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let coordinator = lock_project_coordinator(&state)?;
+    ensure_project_transaction_owner_registered(&state, &owner_id)?;
+    project_transaction_for_owner_epoch(
+        &coordinator,
+        project_transaction_id,
+        expected_epoch,
+        &owner_id,
+    )?;
+    let snapshot = state.engine.persistence_snapshot()?;
     let fixture = snapshot
         .fixtures
         .iter()
         .find(|fixture| fixture.id == fixture_id)
         .ok_or_else(|| format!("Fixture {fixture_id} was not found"))?;
-    let profile = load_patch_profile(&state, &profile_path)?;
+    let profile = resolve_patch_profile_against_authority(
+        &profile_path,
+        Some(&profile),
+        &coordinator.ancillary.custom_profiles,
+    )?;
     if !profile
         .manufacturer
         .trim()
@@ -4122,33 +8387,36 @@ fn repair_fixture_profile(
             "Replacement profile mode '{requested_mode}' does not exactly match the patched attribute, geometry, offset and resolution layout"
         ));
     }
-    cache_fixture_profile(&state.custom_profiles, &profile)?;
-    let expected_path = profile.source_path.clone();
-    state
-        .engine
-        .send(EngineCommand::ReplaceFixtureProfile {
-            fixture_id,
-            profile_path: expected_path.clone(),
-            mode_name: Some(replacement_mode.name.clone()),
-            profile,
-        })
-        .map_err(|error| error.to_string())?;
-    let mut last_error = None;
-    for _ in 0..20 {
-        let snapshot = state.engine.snapshot();
-        if snapshot
-            .fixtures
-            .iter()
-            .any(|fixture| fixture.id == fixture_id && fixture.profile_source_path == expected_path)
-        {
-            return Ok(());
-        }
-        last_error = snapshot.telemetry.last_error;
-        std::thread::sleep(Duration::from_millis(5));
+    let replacement_mode_name = replacement_mode.name.clone();
+    let mut candidate_ancillary = coordinator.ancillary.clone();
+    let source_path = profile.source_path.trim();
+    if !source_path.is_empty() {
+        candidate_ancillary
+            .custom_profiles
+            .insert(source_path.to_string(), profile.clone());
     }
-    Err(last_error.unwrap_or_else(|| {
-        format!("Timed out waiting for fixture {fixture_id} profile repair publication")
-    }))
+    let prepared_ancillary = prepare_direct_project_ancillary_mutation(
+        &state,
+        &coordinator,
+        snapshot,
+        candidate_ancillary,
+    )?;
+
+    // The definitive engine call is wired once the engine-only owner freezes
+    // its API. Until then this branch intentionally remains compile-blocked
+    // rather than falling back to the old queue+poll partial publication.
+    state.engine.repair_fixture_profile_published(
+        fixture_id,
+        profile,
+        Some(replacement_mode_name),
+    )?;
+    let mut coordinator = coordinator;
+    commit_direct_project_ancillary_mutation_after_preflight(
+        &state,
+        &mut coordinator,
+        prepared_ancillary,
+    );
+    Ok(())
 }
 
 #[tauri::command]
@@ -4157,6 +8425,14 @@ fn create_custom_fixture_profile(
     request: CustomFixtureProfileRequest,
 ) -> Result<FixtureProfileSummary, String> {
     register_custom_fixture_profile(&state, request)
+}
+
+#[tauri::command]
+fn preview_custom_fixture_profile(
+    request: CustomFixtureProfileRequest,
+) -> Result<FixtureProfileSummary, String> {
+    validate_custom_fixture_profile_request(&request)?;
+    Ok(custom_fixture_profile_from_request(request))
 }
 
 #[tauri::command]
@@ -4188,7 +8464,6 @@ fn save_custom_fixture_profile(
 #[tauri::command]
 fn load_custom_fixture_profile(
     window: WebviewWindow,
-    state: State<'_, AppState>,
 ) -> Result<Option<FixtureProfileSummary>, String> {
     let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal Fixture Profile", &["fixture"])
@@ -4200,7 +8475,7 @@ fn load_custom_fixture_profile(
     let profile_file: CustomFixtureProfileFile =
         serde_json::from_str(&json).map_err(|error| error.to_string())?;
     validate_custom_fixture_profile_file(&profile_file)?;
-    let profile = register_custom_fixture_profile(&state, profile_file.request)?;
+    let profile = custom_fixture_profile_from_request(profile_file.request);
     Ok(Some(profile))
 }
 
@@ -4216,60 +8491,122 @@ fn use_fixture_profile(
         .find(|fixture| fixture.id == fixture_id)
         .ok_or_else(|| format!("Fixture {fixture_id} was not found"))?;
     let profile = fixture_profile_from_patched_fixture(fixture);
-    state
-        .custom_profiles
-        .lock()
-        .map_err(|_| "Memory profile state lock was poisoned".to_string())?
-        .insert(profile.source_path.clone(), profile.clone());
     Ok(profile)
 }
 
 #[tauri::command]
 fn patch_fixture(
     state: State<'_, AppState>,
-    mut request: PatchFixtureRequest,
+    request: PatchFixtureRequest,
+    profile: Option<FixtureProfileSummary>,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
 ) -> Result<FixtureId, String> {
-    request.group_ids = normalize_group_ids(request.group_ids)?;
-    validate_fixture_group_memberships(&state, &request.group_ids)?;
-    validate_patch_request(&request)?;
-    let profile = load_patch_profile(&state, &request.profile_path)?;
-    validate_patch_footprint(&request, &profile)?;
-    validate_patch_address_conflicts(&request, &profile, &state.engine.snapshot().fixtures)?;
-    let fixture_id = state.engine.allocate_fixture_id();
-    state
-        .engine
-        .send(EngineCommand::PatchFixture {
-            fixture_id,
-            request,
-            profile,
-        })
-        .map_err(|error| error.to_string())?;
-    Ok(fixture_id)
+    patch_fixtures_in_project_transaction(
+        &state,
+        vec![request],
+        profile.map(|profile| vec![profile]),
+        project_transaction_id,
+        expected_epoch,
+        owner_id,
+    )?
+    .into_iter()
+    .next()
+    .ok_or_else(|| "Fixture patch did not allocate a fixture id".to_string())
 }
 
 #[tauri::command]
 fn patch_fixtures(
     state: State<'_, AppState>,
     requests: Vec<PatchFixtureRequest>,
+    profiles: Option<Vec<FixtureProfileSummary>>,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
 ) -> Result<Vec<FixtureId>, String> {
-    let prepared = prepare_fixture_patches(&state, requests)?;
+    patch_fixtures_in_project_transaction(
+        &state,
+        requests,
+        profiles,
+        project_transaction_id,
+        expected_epoch,
+        owner_id,
+    )
+}
+
+fn patch_fixtures_in_project_transaction(
+    state: &AppState,
+    requests: Vec<PatchFixtureRequest>,
+    profiles: Option<Vec<FixtureProfileSummary>>,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<Vec<FixtureId>, String> {
+    // One backend-authoritative boundary owns validation, publication and the
+    // project profile image. Raw IPC cannot bypass the transaction/fault
+    // fence, and callbacks/remotes cannot race the prepared A→B image.
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    ensure_project_transaction_owner_registered(state, &owner_id)?;
+    project_transaction_for_owner_epoch(
+        &coordinator,
+        project_transaction_id,
+        expected_epoch,
+        &owner_id,
+    )?;
+
+    let before_snapshot = state.engine.persistence_snapshot()?;
+    let prepared = prepare_fixture_patches_against_authority(
+        requests,
+        profiles.as_deref(),
+        &coordinator.ancillary.custom_profiles,
+        &before_snapshot.fixtures,
+    )?;
     for patch in &prepared {
-        validate_fixture_group_memberships(&state, &patch.request.group_ids)?;
+        validate_fixture_group_memberships_against(
+            &coordinator.ancillary.fixture_groups,
+            &patch.request.group_ids,
+        )?;
     }
+
     let fixture_ids = prepared
         .iter()
         .map(|_| state.engine.allocate_fixture_id())
         .collect::<Vec<_>>();
-    for (fixture_id, prepared_patch) in fixture_ids.iter().copied().zip(prepared) {
-        state
-            .engine
-            .send(EngineCommand::PatchFixture {
-                fixture_id,
-                request: prepared_patch.request,
-                profile: prepared_patch.profile,
-            })
-            .map_err(|error| error.to_string())?;
+    let candidates = fixture_ids
+        .iter()
+        .copied()
+        .zip(prepared.iter())
+        .map(|(fixture_id, patch)| FixturePatchCandidate {
+            fixture_id,
+            request: patch.request.clone(),
+            profile: patch.profile.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    let mut candidate_ancillary = coordinator.ancillary.clone();
+    for patch in &prepared {
+        let source_path = patch.profile.source_path.trim();
+        if !source_path.is_empty() {
+            candidate_ancillary
+                .custom_profiles
+                .insert(source_path.to_string(), patch.profile.clone());
+        }
     }
+    let prepared_ancillary = prepare_direct_project_ancillary_mutation(
+        state,
+        &coordinator,
+        before_snapshot,
+        candidate_ancillary,
+    )?;
+
+    state.engine.patch_fixtures_published(candidates)?;
+    commit_direct_project_ancillary_mutation_after_preflight(
+        state,
+        &mut coordinator,
+        prepared_ancillary,
+    );
     Ok(fixture_ids)
 }
 
@@ -4394,14 +8731,186 @@ fn normalize_fixture_group_color(color: Option<String>) -> Result<Option<String>
         .transpose()
 }
 
+/// The direct legacy paths do not have the App's Begin→Commit wrapper.  Their
+/// full persistence image is therefore prepared before the first engine
+/// command.  Once an engine command has published, coordinator/mirror commit
+/// is assignment-only and poison-recovering: no serialization/hash/revision
+/// error can report a false failed mutation after the physical change.
+#[derive(Debug, Clone)]
+struct PreparedDirectAncillaryMutation {
+    ancillary: ProjectSwapAncillaryState,
+    next_revision: Option<u64>,
+    checkpoint_hash: Option<String>,
+    next_history_generation: Option<u64>,
+    next_publication_generation: Option<u64>,
+}
+
+fn project_file_for_save_from_parts(
+    snapshot: EngineSnapshot,
+    ancillary: &ProjectSwapAncillaryState,
+) -> ProjectFile {
+    let mut custom_profiles = ancillary
+        .custom_profiles
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    custom_profiles.sort_by(|left, right| left.source_path.cmp(&right.source_path));
+    let snapshot = project_snapshot_for_save(snapshot);
+    let mut fixture_groups = ancillary.fixture_groups.clone();
+    for group in &mut fixture_groups {
+        group.color = snapshot.group_colors.get(&group.id).cloned();
+    }
+    ProjectFile {
+        version: 1,
+        app: APP_NAME.to_string(),
+        operator_policy: ancillary.operator_policy.clone(),
+        custom_profiles,
+        fixture_groups,
+        snapshot,
+    }
+}
+
+fn prepare_direct_project_ancillary_mutation(
+    state: &AppState,
+    coordinator: &ProjectCoordinator,
+    candidate_snapshot: EngineSnapshot,
+    candidate_ancillary: ProjectSwapAncillaryState,
+) -> Result<PreparedDirectAncillaryMutation, String> {
+    // Direct ancillary writers may change fixture groups, profiles, policy,
+    // delete-undo, or the current path. Preflight every compatibility mirror
+    // before the engine publication so the post-ACK commit is infallible.
+    preflight_project_swap_ancillary_mirrors(state)?;
+    prepare_direct_project_ancillary_commit(coordinator, candidate_snapshot, candidate_ancillary)
+}
+
+/// Every direct ancillary route must prepare its complete canonical
+/// coordinator/mirror commit before issuing its first engine callback.  Keep
+/// the ordering in a small production seam so the failure proof covers
+/// create/recolor/delete/set-group-color rather than a look-alike test path.
+fn publish_after_direct_project_ancillary_preflight<T, Prepare, Publish>(
+    prepare: Prepare,
+    publish: Publish,
+) -> Result<T, String>
+where
+    Prepare: FnOnce() -> Result<T, String>,
+    Publish: FnOnce() -> Result<(), String>,
+{
+    let prepared = prepare()?;
+    publish()?;
+    Ok(prepared)
+}
+
+fn publish_direct_project_ancillary_mutation<Publish>(
+    state: &AppState,
+    coordinator: &ProjectCoordinator,
+    candidate_snapshot: EngineSnapshot,
+    candidate_ancillary: ProjectSwapAncillaryState,
+    publish: Publish,
+) -> Result<PreparedDirectAncillaryMutation, String>
+where
+    Publish: FnOnce() -> Result<(), String>,
+{
+    publish_after_direct_project_ancillary_preflight(
+        || {
+            prepare_direct_project_ancillary_mutation(
+                state,
+                coordinator,
+                candidate_snapshot,
+                candidate_ancillary,
+            )
+        },
+        publish,
+    )
+}
+
+/// Every fixture-group route supplies the engine a complete candidate rather
+/// than issuing per-fixture membership commands followed by a color command.
+/// The engine validates and publishes this tuple atomically, so coordinator
+/// mirrors are committed only after the acknowledgement.
+fn publish_fixture_group_state_candidate(
+    engine: &EngineHandle,
+    candidate_snapshot: &EngineSnapshot,
+) -> Result<(), String> {
+    engine.apply_fixture_group_state_published(
+        candidate_snapshot
+            .fixtures
+            .iter()
+            .map(|fixture| (fixture.id, fixture.group_ids.clone()))
+            .collect(),
+        candidate_snapshot.group_colors.clone(),
+    )
+}
+
+fn prepare_direct_project_ancillary_commit(
+    coordinator: &ProjectCoordinator,
+    candidate_snapshot: EngineSnapshot,
+    candidate_ancillary: ProjectSwapAncillaryState,
+) -> Result<PreparedDirectAncillaryMutation, String> {
+    if coordinator.history.pending.is_empty() {
+        let next_revision = checked_project_revision_after_mutation(coordinator)?;
+        let next_history_generation = (!coordinator.history.redo.is_empty())
+            .then(|| checked_project_history_generation_after_change(coordinator))
+            .transpose()?;
+        let next_publication_generation =
+            checked_project_authority_publication_generation_after_change(coordinator)?;
+        let project = project_file_for_save_from_parts(candidate_snapshot, &candidate_ancillary);
+        let checkpoint_hash = project_checkpoint_hash(&project, &coordinator.mappings)?;
+        Ok(PreparedDirectAncillaryMutation {
+            ancillary: candidate_ancillary,
+            next_revision: Some(next_revision),
+            checkpoint_hash: Some(checkpoint_hash),
+            next_history_generation,
+            next_publication_generation: Some(next_publication_generation),
+        })
+    } else {
+        Ok(PreparedDirectAncillaryMutation {
+            ancillary: candidate_ancillary,
+            next_revision: None,
+            checkpoint_hash: None,
+            next_history_generation: None,
+            next_publication_generation: None,
+        })
+    }
+}
+
+fn commit_direct_project_ancillary_mutation_after_preflight(
+    state: &AppState,
+    coordinator: &mut ProjectCoordinator,
+    prepared: PreparedDirectAncillaryMutation,
+) {
+    coordinator.ancillary = prepared.ancillary;
+    if let (Some(revision), Some(checkpoint_hash)) =
+        (prepared.next_revision, prepared.checkpoint_hash)
+    {
+        coordinator.revision = revision;
+        coordinator.checkpoint_hash = checkpoint_hash;
+        coordinator.history.redo.clear();
+    }
+    if let Some(next_history_generation) = prepared.next_history_generation {
+        coordinator.history_generation = next_history_generation;
+    }
+    if let Some(next_publication_generation) = prepared.next_publication_generation {
+        commit_project_authority_publication_after_preflight(
+            coordinator,
+            next_publication_generation,
+            ProjectAuthorityPublicationKind::Mutation,
+        );
+    }
+    commit_project_swap_ancillary_state_after_preflight(state, &coordinator.ancillary);
+}
+
 fn validate_fixture_group_memberships(
     state: &State<'_, AppState>,
     group_ids: &[String],
 ) -> Result<(), String> {
-    let groups = state
-        .fixture_groups
-        .lock()
-        .map_err(|_| "Fixture group state lock was poisoned".to_string())?;
+    let coordinator = lock_project_coordinator(state)?;
+    validate_fixture_group_memberships_against(&coordinator.ancillary.fixture_groups, group_ids)
+}
+
+fn validate_fixture_group_memberships_against(
+    groups: &[FixtureGroupSummary],
+    group_ids: &[String],
+) -> Result<(), String> {
     for group_id in group_ids {
         if !groups.iter().any(|group| group.id == *group_id) {
             return Err(format!("Fixture group '{group_id}' was not found"));
@@ -4425,11 +8934,8 @@ fn allocate_fixture_group_id(groups: &[FixtureGroupSummary]) -> String {
 
 #[tauri::command]
 fn get_fixture_groups(state: State<'_, AppState>) -> Result<Vec<FixtureGroupSummary>, String> {
-    state
-        .fixture_groups
-        .lock()
-        .map_err(|_| "Fixture group state lock was poisoned".to_string())
-        .map(|groups| groups.clone())
+    let coordinator = lock_project_coordinator(&state)?;
+    Ok(coordinator.ancillary.fixture_groups.clone())
 }
 
 #[tauri::command]
@@ -4441,7 +8947,9 @@ fn create_fixture_group(
 ) -> Result<FixtureGroupSummary, String> {
     let label = normalize_fixture_group_label(label)?;
     let color = normalize_fixture_group_color(color)?;
-    let snapshot = state.engine.snapshot();
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let mut coordinator = lock_project_coordinator(&state)?;
+    let snapshot = state.engine.persistence_snapshot()?;
     let fixture_ids = fixture_ids.into_iter().collect::<HashSet<_>>();
     if let Some(fixture_id) = fixture_ids.iter().find(|fixture_id| {
         !snapshot
@@ -4451,52 +8959,51 @@ fn create_fixture_group(
     }) {
         return Err(format!("Fixture {fixture_id} was not found"));
     }
-    let group = {
-        let groups = state
-            .fixture_groups
-            .lock()
-            .map_err(|_| "Fixture group state lock was poisoned".to_string())?;
-        if groups
-            .iter()
-            .any(|group| group.label.eq_ignore_ascii_case(&label))
-        {
-            return Err(format!("A fixture group named '{label}' already exists"));
-        }
-        FixtureGroupSummary {
-            id: allocate_fixture_group_id(&groups),
-            label,
-            color,
-        }
-    };
-    for fixture in snapshot
-        .fixtures
+    if coordinator
+        .ancillary
+        .fixture_groups
         .iter()
+        .any(|group| group.label.eq_ignore_ascii_case(&label))
+    {
+        return Err(format!("A fixture group named '{label}' already exists"));
+    }
+    let group = FixtureGroupSummary {
+        id: allocate_fixture_group_id(&coordinator.ancillary.fixture_groups),
+        label,
+        color,
+    };
+    let mut candidate_snapshot = snapshot.clone();
+    for fixture in candidate_snapshot
+        .fixtures
+        .iter_mut()
         .filter(|fixture| fixture_ids.contains(&fixture.id))
     {
-        let mut group_ids = fixture.group_ids.clone();
-        if !group_ids.contains(&group.id) {
-            group_ids.push(group.id.clone());
-            state
-                .engine
-                .send(EngineCommand::SetFixtureGroups {
-                    fixture_id: fixture.id,
-                    group_ids,
-                })
-                .map_err(|error| error.to_string())?;
+        if !fixture.group_ids.contains(&group.id) {
+            fixture.group_ids.push(group.id.clone());
         }
     }
-    state
-        .engine
-        .set_group_color_published(group.id.clone(), group.color.clone())?;
-    state
-        .fixture_groups
-        .lock()
-        .map_err(|_| "Fixture group state lock was poisoned".to_string())?
-        .push(group.clone());
-    *state
-        .fixture_group_delete_undo
-        .lock()
-        .map_err(|_| "Fixture group delete Undo lock was poisoned".to_string())? = None;
+    match group.color.clone() {
+        Some(color) => {
+            candidate_snapshot
+                .group_colors
+                .insert(group.id.clone(), color);
+        }
+        None => {
+            candidate_snapshot.group_colors.remove(&group.id);
+        }
+    }
+    let mut candidate_ancillary = coordinator.ancillary.clone();
+    candidate_ancillary.fixture_groups.push(group.clone());
+    candidate_ancillary.fixture_group_delete_undo = None;
+    let published_snapshot = candidate_snapshot.clone();
+    let prepared = publish_direct_project_ancillary_mutation(
+        &state,
+        &coordinator,
+        candidate_snapshot,
+        candidate_ancillary,
+        || publish_fixture_group_state_candidate(&state.engine, &published_snapshot),
+    )?;
+    commit_direct_project_ancillary_mutation_after_preflight(&state, &mut coordinator, prepared);
     Ok(group)
 }
 
@@ -4507,22 +9014,35 @@ fn rename_fixture_group(
     label: String,
 ) -> Result<FixtureGroupSummary, String> {
     let label = normalize_fixture_group_label(label)?;
-    let mut groups = state
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let mut coordinator = lock_project_coordinator(&state)?;
+    if coordinator
+        .ancillary
         .fixture_groups
-        .lock()
-        .map_err(|_| "Fixture group state lock was poisoned".to_string())?;
-    if groups
         .iter()
         .any(|group| group.id != group_id && group.label.eq_ignore_ascii_case(&label))
     {
         return Err(format!("A fixture group named '{label}' already exists"));
     }
-    let group = groups
+    let mut candidate_ancillary = coordinator.ancillary.clone();
+    let group = candidate_ancillary
+        .fixture_groups
         .iter_mut()
         .find(|group| group.id == group_id)
         .ok_or_else(|| format!("Fixture group '{group_id}' was not found"))?;
     group.label = label;
-    Ok(group.clone())
+    let group = group.clone();
+    let candidate_snapshot = state.engine.persistence_snapshot()?;
+    let published_snapshot = candidate_snapshot.clone();
+    let prepared = publish_direct_project_ancillary_mutation(
+        &state,
+        &coordinator,
+        candidate_snapshot,
+        candidate_ancillary,
+        || publish_fixture_group_state_candidate(&state.engine, &published_snapshot),
+    )?;
+    commit_direct_project_ancillary_mutation_after_preflight(&state, &mut coordinator, prepared);
+    Ok(group)
 }
 
 #[tauri::command]
@@ -4532,28 +9052,45 @@ fn recolor_fixture_group(
     color: Option<String>,
 ) -> Result<FixtureGroupSummary, String> {
     let color = normalize_fixture_group_color(color)?;
-    if !state
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let mut coordinator = lock_project_coordinator(&state)?;
+    if !coordinator
+        .ancillary
         .fixture_groups
-        .lock()
-        .map_err(|_| "Fixture group state lock was poisoned".to_string())?
         .iter()
         .any(|group| group.id == group_id)
     {
         return Err(format!("Fixture group '{group_id}' was not found"));
     }
-    state
-        .engine
-        .set_group_color_published(group_id.clone(), color.clone())?;
-    let mut groups = state
+    let mut candidate_snapshot = state.engine.persistence_snapshot()?;
+    match color.clone() {
+        Some(color) => {
+            candidate_snapshot
+                .group_colors
+                .insert(group_id.clone(), color);
+        }
+        None => {
+            candidate_snapshot.group_colors.remove(&group_id);
+        }
+    }
+    let mut candidate_ancillary = coordinator.ancillary.clone();
+    let group = candidate_ancillary
         .fixture_groups
-        .lock()
-        .map_err(|_| "Fixture group state lock was poisoned".to_string())?;
-    let group = groups
         .iter_mut()
         .find(|group| group.id == group_id)
         .ok_or_else(|| format!("Fixture group '{group_id}' was not found"))?;
     group.color = color;
-    Ok(group.clone())
+    let group = group.clone();
+    let published_snapshot = candidate_snapshot.clone();
+    let prepared = publish_direct_project_ancillary_mutation(
+        &state,
+        &coordinator,
+        candidate_snapshot,
+        candidate_ancillary,
+        || publish_fixture_group_state_candidate(&state.engine, &published_snapshot),
+    )?;
+    commit_direct_project_ancillary_mutation_after_preflight(&state, &mut coordinator, prepared);
+    Ok(group)
 }
 
 #[tauri::command]
@@ -4561,19 +9098,17 @@ fn delete_fixture_group(
     state: State<'_, AppState>,
     group_id: String,
 ) -> Result<FixtureGroupSummary, String> {
-    let (group_index, group) = {
-        let groups = state
-            .fixture_groups
-            .lock()
-            .map_err(|_| "Fixture group state lock was poisoned".to_string())?;
-        groups
-            .iter()
-            .enumerate()
-            .find(|(_, group)| group.id == group_id)
-            .map(|(index, group)| (index, group.clone()))
-            .ok_or_else(|| format!("Fixture group '{group_id}' was not found"))?
-    };
-    let snapshot = state.engine.snapshot();
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let mut coordinator = lock_project_coordinator(&state)?;
+    let (group_index, group) = coordinator
+        .ancillary
+        .fixture_groups
+        .iter()
+        .enumerate()
+        .find(|(_, group)| group.id == group_id)
+        .map(|(index, group)| (index, group.clone()))
+        .ok_or_else(|| format!("Fixture group '{group_id}' was not found"))?;
+    let snapshot = state.engine.persistence_snapshot()?;
     let mut fixture_membership_indexes = Vec::new();
     for fixture in &snapshot.fixtures {
         let Some(index) = fixture
@@ -4584,33 +9119,30 @@ fn delete_fixture_group(
             continue;
         };
         fixture_membership_indexes.push((fixture.id, index));
-        let mut group_ids = fixture.group_ids.clone();
-        group_ids.remove(index);
-        state
-            .engine
-            .send(EngineCommand::SetFixtureGroups {
-                fixture_id: fixture.id,
-                group_ids,
-            })
-            .map_err(|error| error.to_string())?;
     }
-    state
-        .engine
-        .set_group_color_published(group_id.clone(), None)?;
-    state
-        .fixture_groups
-        .lock()
-        .map_err(|_| "Fixture group state lock was poisoned".to_string())?
-        .remove(group_index);
-    *state
-        .fixture_group_delete_undo
-        .lock()
-        .map_err(|_| "Fixture group delete Undo lock was poisoned".to_string())? =
-        Some(DeletedFixtureGroup {
-            group: group.clone(),
-            group_index,
-            fixture_membership_indexes,
-        });
+    let mut candidate_snapshot = snapshot.clone();
+    for fixture in &mut candidate_snapshot.fixtures {
+        fixture
+            .group_ids
+            .retain(|fixture_group_id| fixture_group_id != &group_id);
+    }
+    candidate_snapshot.group_colors.remove(&group_id);
+    let mut candidate_ancillary = coordinator.ancillary.clone();
+    candidate_ancillary.fixture_groups.remove(group_index);
+    candidate_ancillary.fixture_group_delete_undo = Some(DeletedFixtureGroup {
+        group: group.clone(),
+        group_index,
+        fixture_membership_indexes: fixture_membership_indexes.clone(),
+    });
+    let published_snapshot = candidate_snapshot.clone();
+    let prepared = publish_direct_project_ancillary_mutation(
+        &state,
+        &coordinator,
+        candidate_snapshot,
+        candidate_ancillary,
+        || publish_fixture_group_state_candidate(&state.engine, &published_snapshot),
+    )?;
+    commit_direct_project_ancillary_mutation_after_preflight(&state, &mut coordinator, prepared);
     Ok(group)
 }
 
@@ -4618,18 +9150,15 @@ fn delete_fixture_group(
 fn undo_delete_fixture_group(
     state: State<'_, AppState>,
 ) -> Result<Option<FixtureGroupSummary>, String> {
-    let deleted = state
-        .fixture_group_delete_undo
-        .lock()
-        .map_err(|_| "Fixture group delete Undo lock was poisoned".to_string())?
-        .clone();
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let mut coordinator = lock_project_coordinator(&state)?;
+    let deleted = coordinator.ancillary.fixture_group_delete_undo.clone();
     let Some(deleted) = deleted else {
         return Ok(None);
     };
-    if state
+    if coordinator
+        .ancillary
         .fixture_groups
-        .lock()
-        .map_err(|_| "Fixture group state lock was poisoned".to_string())?
         .iter()
         .any(|group| group.id == deleted.group.id)
     {
@@ -4638,11 +9167,12 @@ fn undo_delete_fixture_group(
             deleted.group.id
         ));
     }
-    let snapshot = state.engine.snapshot();
+    let snapshot = state.engine.persistence_snapshot()?;
+    let mut candidate_snapshot = snapshot.clone();
     for (fixture_id, membership_index) in &deleted.fixture_membership_indexes {
-        let Some(fixture) = snapshot
+        let Some(fixture) = candidate_snapshot
             .fixtures
-            .iter()
+            .iter_mut()
             .find(|fixture| fixture.id == *fixture_id)
         else {
             continue;
@@ -4650,32 +9180,38 @@ fn undo_delete_fixture_group(
         if fixture.group_ids.contains(&deleted.group.id) {
             continue;
         }
-        let mut group_ids = fixture.group_ids.clone();
-        group_ids.insert(
-            (*membership_index).min(group_ids.len()),
+        fixture.group_ids.insert(
+            (*membership_index).min(fixture.group_ids.len()),
             deleted.group.id.clone(),
         );
-        state
-            .engine
-            .send(EngineCommand::SetFixtureGroups {
-                fixture_id: *fixture_id,
-                group_ids,
-            })
-            .map_err(|error| error.to_string())?;
     }
-    state
-        .engine
-        .set_group_color_published(deleted.group.id.clone(), deleted.group.color.clone())?;
-    let mut groups = state
+    match deleted.group.color.clone() {
+        Some(color) => {
+            candidate_snapshot
+                .group_colors
+                .insert(deleted.group.id.clone(), color);
+        }
+        None => {
+            candidate_snapshot.group_colors.remove(&deleted.group.id);
+        }
+    }
+    let mut candidate_ancillary = coordinator.ancillary.clone();
+    let index = deleted
+        .group_index
+        .min(candidate_ancillary.fixture_groups.len());
+    candidate_ancillary
         .fixture_groups
-        .lock()
-        .map_err(|_| "Fixture group state lock was poisoned".to_string())?;
-    let index = deleted.group_index.min(groups.len());
-    groups.insert(index, deleted.group.clone());
-    *state
-        .fixture_group_delete_undo
-        .lock()
-        .map_err(|_| "Fixture group delete Undo lock was poisoned".to_string())? = None;
+        .insert(index, deleted.group.clone());
+    candidate_ancillary.fixture_group_delete_undo = None;
+    let published_snapshot = candidate_snapshot.clone();
+    let prepared = publish_direct_project_ancillary_mutation(
+        &state,
+        &coordinator,
+        candidate_snapshot,
+        candidate_ancillary,
+        || publish_fixture_group_state_candidate(&state.engine, &published_snapshot),
+    )?;
+    commit_direct_project_ancillary_mutation_after_preflight(&state, &mut coordinator, prepared);
     Ok(Some(deleted.group))
 }
 
@@ -5136,8 +9672,23 @@ fn set_dmx_outputs(
         .map_err(|error| error.to_string())
 }
 
+fn ensure_lighting_output_allowed(
+    engine: &EngineHandle,
+) -> Result<engine::OutputOwnershipPermit, String> {
+    engine.acquire_lighting_output().map_err(|error| {
+        let status = engine.output_ownership_status();
+        let role = status.effective_role;
+        let status_error = status.error;
+        status_error.unwrap_or_else(|| format!("Lighting output is blocked ({role:?}): {error}"))
+    })
+}
+
 #[tauri::command]
-fn send_dmx_test_frame(request: DmxTestFrameRequest) -> Result<DmxTestFrameResult, String> {
+fn send_dmx_test_frame(
+    state: State<'_, AppState>,
+    request: DmxTestFrameRequest,
+) -> Result<DmxTestFrameResult, String> {
+    let _lighting_permit = ensure_lighting_output_allowed(&state.engine)?;
     let frame = build_dmx_test_frame(request.channel, request.width, request.value)?;
     send_dmx_config_test_frame(
         &request.config,
@@ -5150,8 +9701,10 @@ fn send_dmx_test_frame(request: DmxTestFrameRequest) -> Result<DmxTestFrameResul
 
 #[tauri::command]
 fn send_dmx_routes_test_frame(
+    state: State<'_, AppState>,
     request: DmxRoutesTestFrameRequest,
 ) -> Result<Vec<DmxTestFrameResult>, String> {
+    let _lighting_permit = ensure_lighting_output_allowed(&state.engine)?;
     let frame = build_dmx_test_frame(request.channel, request.width, request.value)?;
     send_dmx_route_test_frames(
         &request.configs,
@@ -5494,48 +10047,144 @@ fn list_serial_ports() -> Result<Vec<SerialPortSummary>, String> {
 }
 
 #[tauri::command]
-fn connect_midi_clock(state: State<'_, AppState>, input_index: usize) -> Result<(), String> {
+fn connect_midi_clock(
+    state: State<'_, AppState>,
+    input_index: usize,
+    expected_epoch: Option<u64>,
+) -> Result<(), String> {
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let coordinator = lock_project_coordinator(&state)?;
+    ensure_optional_project_epoch_matches(&coordinator, expected_epoch)?;
+    ensure_no_pending_project_transaction(&coordinator)?;
+    let coordinator_epoch = coordinator.epoch;
+    let callback_epoch = Arc::clone(&state.project_callback_epoch);
+    let captured_callback_epoch = callback_epoch.load(Ordering::Acquire);
+    let previous = state
+        .midi_clock
+        .lock()
+        .map_err(|_| "MIDI state lock was poisoned".to_string())?
+        .take();
+    drop(previous);
     let engine = state.engine.clone();
+    let callback_epoch_for_worker = Arc::clone(&callback_epoch);
+    let project_transaction_active_for_worker = Arc::clone(&state.project_transaction_active);
+    let project_external_command_admission_for_worker =
+        Arc::clone(&state.project_external_command_admission);
+    let callback_installed = Arc::new(AtomicBool::new(false));
+    let callback_installed_for_worker = Arc::clone(&callback_installed);
     let connection = io::midi::connect_midi_clock(input_index, move |event| match event {
         MidiClockEvent::ClockPulse => {
-            let _ = engine.send(EngineCommand::MidiClockPulse);
+            send_engine_command_if_callback_epoch(
+                &engine,
+                &callback_epoch_for_worker,
+                &project_transaction_active_for_worker,
+                &project_external_command_admission_for_worker,
+                &callback_installed_for_worker,
+                captured_callback_epoch,
+                EngineCommand::MidiClockPulse,
+            );
         }
         MidiClockEvent::Start => {
-            let _ = engine.send(EngineCommand::SeekTimeline(0));
-            let _ = engine.send(EngineCommand::SetTimelinePlaying(true));
+            send_engine_command_if_callback_epoch(
+                &engine,
+                &callback_epoch_for_worker,
+                &project_transaction_active_for_worker,
+                &project_external_command_admission_for_worker,
+                &callback_installed_for_worker,
+                captured_callback_epoch,
+                EngineCommand::SeekTimeline(0),
+            );
+            send_engine_command_if_callback_epoch(
+                &engine,
+                &callback_epoch_for_worker,
+                &project_transaction_active_for_worker,
+                &project_external_command_admission_for_worker,
+                &callback_installed_for_worker,
+                captured_callback_epoch,
+                EngineCommand::SetTimelinePlaying(true),
+            );
         }
         MidiClockEvent::Continue => {
-            let _ = engine.send(EngineCommand::SetTimelinePlaying(true));
+            send_engine_command_if_callback_epoch(
+                &engine,
+                &callback_epoch_for_worker,
+                &project_transaction_active_for_worker,
+                &project_external_command_admission_for_worker,
+                &callback_installed_for_worker,
+                captured_callback_epoch,
+                EngineCommand::SetTimelinePlaying(true),
+            );
         }
         MidiClockEvent::Stop => {
-            let _ = engine.send(EngineCommand::SetTimelinePlaying(false));
+            send_engine_command_if_callback_epoch(
+                &engine,
+                &callback_epoch_for_worker,
+                &project_transaction_active_for_worker,
+                &project_external_command_admission_for_worker,
+                &callback_installed_for_worker,
+                captured_callback_epoch,
+                EngineCommand::SetTimelinePlaying(false),
+            );
         }
         MidiClockEvent::SongPositionPointer(sixteenth_notes) => {
-            let _ = engine.send(EngineCommand::MidiSongPositionPointer(sixteenth_notes));
+            send_engine_command_if_callback_epoch(
+                &engine,
+                &callback_epoch_for_worker,
+                &project_transaction_active_for_worker,
+                &project_external_command_admission_for_worker,
+                &callback_installed_for_worker,
+                captured_callback_epoch,
+                EngineCommand::MidiSongPositionPointer(sixteenth_notes),
+            );
         }
         MidiClockEvent::Timecode(timecode) => {
-            let _ = engine.send(EngineCommand::SyncTimelineTimecode {
-                position_ms: timecode.position_ms(),
-                source: protocol::ClockSource::MidiTimecode,
-            });
+            send_engine_command_if_callback_epoch(
+                &engine,
+                &callback_epoch_for_worker,
+                &project_transaction_active_for_worker,
+                &project_external_command_admission_for_worker,
+                &callback_installed_for_worker,
+                captured_callback_epoch,
+                EngineCommand::SyncTimelineTimecode {
+                    position_ms: timecode.position_ms(),
+                    source: protocol::ClockSource::MidiTimecode,
+                },
+            );
         }
     })
     .map_err(|error| error.to_string())?;
+    if !project_input_installation_is_current(
+        coordinator.epoch,
+        coordinator_epoch,
+        &callback_epoch,
+        captured_callback_epoch,
+    ) {
+        drop(connection);
+        return Err("Project changed while MIDI clock input was opening".to_string());
+    }
     let mut guard = state
         .midi_clock
         .lock()
         .map_err(|_| "MIDI state lock was poisoned".to_string())?;
     *guard = Some(connection);
+    callback_installed.store(true, Ordering::Release);
     Ok(())
 }
 
 #[tauri::command]
-fn disconnect_midi_clock(state: State<'_, AppState>) -> Result<(), String> {
-    let mut guard = state
+fn disconnect_midi_clock(
+    state: State<'_, AppState>,
+    expected_epoch: Option<u64>,
+) -> Result<(), String> {
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let _coordinator = lock_project_coordinator(&state)?;
+    ensure_optional_project_epoch_matches(&_coordinator, expected_epoch)?;
+    let connection = state
         .midi_clock
         .lock()
-        .map_err(|_| "MIDI state lock was poisoned".to_string())?;
-    *guard = None;
+        .map_err(|_| "MIDI state lock was poisoned".to_string())?
+        .take();
+    drop(connection);
     Ok(())
 }
 
@@ -5544,13 +10193,39 @@ fn connect_midi_control(
     state: State<'_, AppState>,
     input_index: usize,
     mappings: Vec<MidiControlMapping>,
+    expected_epoch: Option<u64>,
 ) -> Result<(), String> {
-    let mappings = validate_midi_control_mappings(mappings)?;
+    let received_mappings = validate_midi_control_mappings(mappings)?;
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let coordinator = lock_project_coordinator(&state)?;
+    ensure_optional_project_epoch_matches(&coordinator, expected_epoch)?;
+    ensure_no_pending_project_transaction(&coordinator)?;
+    if received_mappings != coordinator.mappings.midi_mappings {
+        return Err(
+            "MIDI control mappings changed locally; refresh before connecting input".to_string(),
+        );
+    }
+    let mappings = coordinator.mappings.midi_mappings.clone();
     if mappings.is_empty() {
         return Err("At least one MIDI control mapping is required".to_string());
     }
+    let coordinator_epoch = coordinator.epoch;
+    let callback_epoch = Arc::clone(&state.project_mapping_callback_epoch);
+    let captured_callback_epoch = callback_epoch.load(Ordering::Acquire);
+    let previous = state
+        .midi_control
+        .lock()
+        .map_err(|_| "MIDI control state lock was poisoned".to_string())?
+        .take();
+    drop(previous);
     let engine = state.engine.clone();
     let operator_selection = Arc::clone(&state.operator_selection);
+    let callback_epoch_for_worker = Arc::clone(&callback_epoch);
+    let project_transaction_active_for_worker = Arc::clone(&state.project_transaction_active);
+    let project_external_command_admission_for_worker =
+        Arc::clone(&state.project_external_command_admission);
+    let callback_installed = Arc::new(AtomicBool::new(false));
+    let callback_installed_for_worker = Arc::clone(&callback_installed);
     let connection = io::midi::connect_midi_control(input_index, mappings, move |event| {
         let command = match event {
             MidiControlEvent::SetAttribute {
@@ -5765,36 +10440,88 @@ fn connect_midi_control(
                 }
             }
         };
-        let _ = engine.send(command);
+        send_engine_command_if_callback_epoch(
+            &engine,
+            &callback_epoch_for_worker,
+            &project_transaction_active_for_worker,
+            &project_external_command_admission_for_worker,
+            &callback_installed_for_worker,
+            captured_callback_epoch,
+            command,
+        );
     })
     .map_err(|error| error.to_string())?;
+    if !project_input_installation_is_current(
+        coordinator.epoch,
+        coordinator_epoch,
+        &callback_epoch,
+        captured_callback_epoch,
+    ) {
+        drop(connection);
+        return Err("Project changed while MIDI control input was opening".to_string());
+    }
     let mut guard = state
         .midi_control
         .lock()
         .map_err(|_| "MIDI control state lock was poisoned".to_string())?;
     *guard = Some(connection);
+    callback_installed.store(true, Ordering::Release);
     Ok(())
 }
 
 #[tauri::command]
-fn disconnect_midi_control(state: State<'_, AppState>) -> Result<(), String> {
-    let mut guard = state
+fn disconnect_midi_control(
+    state: State<'_, AppState>,
+    expected_epoch: Option<u64>,
+) -> Result<(), String> {
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let _coordinator = lock_project_coordinator(&state)?;
+    ensure_optional_project_epoch_matches(&_coordinator, expected_epoch)?;
+    let connection = state
         .midi_control
         .lock()
-        .map_err(|_| "MIDI control state lock was poisoned".to_string())?;
-    *guard = None;
+        .map_err(|_| "MIDI control state lock was poisoned".to_string())?
+        .take();
+    drop(connection);
     Ok(())
 }
 
 #[tauri::command]
-fn connect_midi_feedback(state: State<'_, AppState>, output_index: usize) -> Result<(), String> {
-    let mut runtime = state
+fn connect_midi_feedback(
+    state: State<'_, AppState>,
+    output_index: usize,
+    expected_epoch: Option<u64>,
+) -> Result<(), String> {
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let coordinator = lock_project_coordinator(&state)?;
+    ensure_optional_project_epoch_matches(&coordinator, expected_epoch)?;
+    ensure_no_pending_project_transaction(&coordinator)?;
+    let coordinator_epoch = coordinator.epoch;
+    let callback_epoch = Arc::clone(&state.project_mapping_callback_epoch);
+    let captured_callback_epoch = callback_epoch.load(Ordering::Acquire);
+    let runtime = state
         .midi_feedback_runtime
         .lock()
-        .map_err(|_| "MIDI feedback runtime lock was poisoned".to_string())?;
-    runtime.take();
+        .map_err(|_| "MIDI feedback runtime lock was poisoned".to_string())?
+        .take();
+    drop(runtime);
+    let previous = state
+        .midi_feedback
+        .lock()
+        .map_err(|_| "MIDI feedback state lock was poisoned".to_string())?
+        .take();
+    drop(previous);
     let connection =
         io::midi::connect_midi_feedback_output(output_index).map_err(|error| error.to_string())?;
+    if !project_input_installation_is_current(
+        coordinator.epoch,
+        coordinator_epoch,
+        &callback_epoch,
+        captured_callback_epoch,
+    ) {
+        drop(connection);
+        return Err("Project changed while MIDI feedback output was opening".to_string());
+    }
     let mut guard = state
         .midi_feedback
         .lock()
@@ -5808,17 +10535,25 @@ fn connect_midi_feedback(state: State<'_, AppState>, output_index: usize) -> Res
 }
 
 #[tauri::command]
-fn disconnect_midi_feedback(state: State<'_, AppState>) -> Result<(), String> {
-    let mut runtime = state
+fn disconnect_midi_feedback(
+    state: State<'_, AppState>,
+    expected_epoch: Option<u64>,
+) -> Result<(), String> {
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let _coordinator = lock_project_coordinator(&state)?;
+    ensure_optional_project_epoch_matches(&_coordinator, expected_epoch)?;
+    let runtime = state
         .midi_feedback_runtime
         .lock()
-        .map_err(|_| "MIDI feedback runtime lock was poisoned".to_string())?;
-    runtime.take();
-    let mut guard = state
+        .map_err(|_| "MIDI feedback runtime lock was poisoned".to_string())?
+        .take();
+    drop(runtime);
+    let output = state
         .midi_feedback
         .lock()
-        .map_err(|_| "MIDI feedback state lock was poisoned".to_string())?;
-    *guard = None;
+        .map_err(|_| "MIDI feedback state lock was poisoned".to_string())?
+        .take();
+    drop(output);
     *state
         .midi_feedback_last_error
         .lock()
@@ -5831,13 +10566,27 @@ fn set_midi_feedback_auto(
     state: State<'_, AppState>,
     enabled: bool,
     mappings: Vec<MidiControlMapping>,
+    expected_epoch: Option<u64>,
 ) -> Result<MidiFeedbackRuntimeStatus, String> {
-    let mappings = validate_midi_control_mappings(mappings)?;
-    let mut runtime = state
+    let received_mappings = validate_midi_control_mappings(mappings)?;
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let coordinator = lock_project_coordinator(&state)?;
+    ensure_optional_project_epoch_matches(&coordinator, expected_epoch)?;
+    if received_mappings != coordinator.mappings.midi_mappings {
+        return Err(
+            "MIDI control mappings changed locally; refresh before changing feedback".to_string(),
+        );
+    }
+    let mappings = coordinator.mappings.midi_mappings.clone();
+    let coordinator_epoch = coordinator.epoch;
+    let callback_epoch = Arc::clone(&state.project_mapping_callback_epoch);
+    let captured_callback_epoch = callback_epoch.load(Ordering::Acquire);
+    let previous = state
         .midi_feedback_runtime
         .lock()
-        .map_err(|_| "MIDI feedback runtime lock was poisoned".to_string())?;
-    runtime.take();
+        .map_err(|_| "MIDI feedback runtime lock was poisoned".to_string())?
+        .take();
+    drop(previous);
     *state
         .midi_feedback_last_error
         .lock()
@@ -5855,15 +10604,37 @@ fn set_midi_feedback_auto(
         {
             return Err("MIDI feedback output is not connected".to_string());
         }
-        *runtime = Some(MidiFeedbackRuntime::start(
+        let callback_installed = Arc::new(AtomicBool::new(false));
+        let runtime = MidiFeedbackRuntime::start(
             state.engine.clone(),
             Arc::clone(&state.midi_feedback),
             Arc::clone(&state.operator_selection),
             mappings,
             Arc::clone(&state.midi_feedback_last_error),
-        )?);
+            Arc::clone(&callback_epoch),
+            captured_callback_epoch,
+            Arc::clone(&callback_installed),
+        )?;
+        if !project_input_installation_is_current(
+            coordinator.epoch,
+            coordinator_epoch,
+            &callback_epoch,
+            captured_callback_epoch,
+        ) {
+            drop(runtime);
+            return Err("Project changed while MIDI feedback was starting".to_string());
+        }
+        *state
+            .midi_feedback_runtime
+            .lock()
+            .map_err(|_| "MIDI feedback runtime lock was poisoned".to_string())? = Some(runtime);
+        callback_installed.store(true, Ordering::Release);
     }
 
+    let runtime = state
+        .midi_feedback_runtime
+        .lock()
+        .map_err(|_| "MIDI feedback runtime lock was poisoned".to_string())?;
     Ok(MidiFeedbackRuntimeStatus {
         enabled: runtime
             .as_ref()
@@ -5897,7 +10668,14 @@ fn send_midi_feedback(
     mappings: Vec<MidiControlMapping>,
     force: Option<bool>,
 ) -> Result<usize, String> {
-    let mappings = validate_midi_control_mappings(mappings)?;
+    let received_mappings = validate_midi_control_mappings(mappings)?;
+    let coordinator = lock_project_coordinator(&state)?;
+    if received_mappings != coordinator.mappings.midi_mappings {
+        return Err(
+            "MIDI control mappings changed locally; refresh before sending feedback".to_string(),
+        );
+    }
+    let mappings = coordinator.mappings.midi_mappings.clone();
     let snapshot = state.engine.snapshot();
     let operator_selection = state
         .operator_selection
@@ -5922,9 +10700,27 @@ fn send_midi_feedback(
 }
 
 #[tauri::command]
-fn learn_midi_control(input_index: usize) -> Result<Option<LearnedMidiControl>, String> {
-    io::midi::learn_midi_control(input_index, Duration::from_secs(10))
-        .map_err(|error| error.to_string())
+fn learn_midi_control(
+    state: State<'_, AppState>,
+    input_index: usize,
+    expected_epoch: Option<u64>,
+) -> Result<Option<LearnedMidiControl>, String> {
+    // Do not hold the operation locks while the user moves a controller, but
+    // bracket the wait with exact-epoch admission checks. A late A result can
+    // therefore never be applied to B by an eager frontend reconnect.
+    {
+        let _admission = lock_project_external_command_admission(&state)?;
+        let coordinator = lock_project_coordinator(&state)?;
+        ensure_optional_project_epoch_matches(&coordinator, expected_epoch)?;
+    }
+    let learned = io::midi::learn_midi_control(input_index, Duration::from_secs(10))
+        .map_err(|error| error.to_string())?;
+    {
+        let _admission = lock_project_external_command_admission(&state)?;
+        let coordinator = lock_project_coordinator(&state)?;
+        ensure_optional_project_epoch_matches(&coordinator, expected_epoch)?;
+    }
+    Ok(learned)
 }
 
 #[tauri::command]
@@ -6435,13 +11231,34 @@ fn normalize_control_mapping_osc_address(address: &str) -> Result<String, String
 }
 
 #[tauri::command]
-fn learn_osc_control(config: OscInputConfig) -> Result<Option<LearnedOscControl>, String> {
-    io::osc::learn_osc_control(config, Duration::from_secs(10)).map_err(|error| error.to_string())
+fn learn_osc_control(
+    state: State<'_, AppState>,
+    config: OscInputConfig,
+    expected_epoch: Option<u64>,
+) -> Result<Option<LearnedOscControl>, String> {
+    {
+        let _admission = lock_project_external_command_admission(&state)?;
+        let coordinator = lock_project_coordinator(&state)?;
+        ensure_optional_project_epoch_matches(&coordinator, expected_epoch)?;
+    }
+    let learned = io::osc::learn_osc_control(config, Duration::from_secs(10))
+        .map_err(|error| error.to_string())?;
+    {
+        let _admission = lock_project_external_command_admission(&state)?;
+        let coordinator = lock_project_coordinator(&state)?;
+        ensure_optional_project_epoch_matches(&coordinator, expected_epoch)?;
+    }
+    Ok(learned)
 }
 
 fn dispatch_external_control_event(
     engine: &EngineHandle,
     operator_selection: &Arc<Mutex<OperatorSelectionContext>>,
+    callback_epoch: &Arc<AtomicU64>,
+    project_transaction_active: &Arc<AtomicBool>,
+    project_external_command_admission: &Arc<ProjectExternalCommandAdmission>,
+    callback_installed: &Arc<AtomicBool>,
+    captured_callback_epoch: u64,
     event: OscInputEvent,
     source: &str,
 ) {
@@ -6654,7 +11471,15 @@ fn dispatch_external_control_event(
             source,
         },
     };
-    let _ = engine.send(command);
+    send_engine_command_if_callback_epoch(
+        engine,
+        callback_epoch,
+        project_transaction_active,
+        project_external_command_admission,
+        callback_installed,
+        captured_callback_epoch,
+        command,
+    );
 }
 
 #[tauri::command]
@@ -6662,10 +11487,36 @@ fn start_osc_input(
     state: State<'_, AppState>,
     config: OscInputConfig,
     mappings: Option<Vec<OscControlMapping>>,
+    expected_epoch: Option<u64>,
 ) -> Result<(), String> {
-    let mappings = validate_osc_control_mappings(mappings.unwrap_or_default())?;
+    let received_mappings = validate_osc_control_mappings(mappings.unwrap_or_default())?;
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let coordinator = lock_project_coordinator(&state)?;
+    ensure_optional_project_epoch_matches(&coordinator, expected_epoch)?;
+    ensure_no_pending_project_transaction(&coordinator)?;
+    if received_mappings != coordinator.mappings.osc_mappings {
+        return Err(
+            "OSC control mappings changed locally; refresh before starting input".to_string(),
+        );
+    }
+    let mappings = coordinator.mappings.osc_mappings.clone();
+    let coordinator_epoch = coordinator.epoch;
+    let callback_epoch = Arc::clone(&state.project_mapping_callback_epoch);
+    let captured_callback_epoch = callback_epoch.load(Ordering::Acquire);
+    let previous = state
+        .osc_input
+        .lock()
+        .map_err(|_| "OSC state lock was poisoned".to_string())?
+        .take();
+    drop(previous);
     let engine = state.engine.clone();
     let operator_selection = Arc::clone(&state.operator_selection);
+    let callback_epoch_for_worker = Arc::clone(&callback_epoch);
+    let project_transaction_active_for_worker = Arc::clone(&state.project_transaction_active);
+    let project_external_command_admission_for_worker =
+        Arc::clone(&state.project_external_command_admission);
+    let callback_installed = Arc::new(AtomicBool::new(false));
+    let callback_installed_for_worker = Arc::clone(&callback_installed);
     let input = OscInput::start_with_mappings(config, mappings, move |event| {
         let command = match event {
             OscInputEvent::SetAttribute {
@@ -6885,24 +11736,46 @@ fn start_osc_input(
                 source,
             },
         };
-        let _ = engine.send(command);
+        send_engine_command_if_callback_epoch(
+            &engine,
+            &callback_epoch_for_worker,
+            &project_transaction_active_for_worker,
+            &project_external_command_admission_for_worker,
+            &callback_installed_for_worker,
+            captured_callback_epoch,
+            command,
+        );
     })
     .map_err(|error| error.to_string())?;
+    if !project_input_installation_is_current(
+        coordinator.epoch,
+        coordinator_epoch,
+        &callback_epoch,
+        captured_callback_epoch,
+    ) {
+        drop(input);
+        return Err("Project changed while OSC input was opening".to_string());
+    }
     let mut guard = state
         .osc_input
         .lock()
         .map_err(|_| "OSC state lock was poisoned".to_string())?;
     *guard = Some(input);
+    callback_installed.store(true, Ordering::Release);
     Ok(())
 }
 
 #[tauri::command]
-fn stop_osc_input(state: State<'_, AppState>) -> Result<(), String> {
-    let mut guard = state
+fn stop_osc_input(state: State<'_, AppState>, expected_epoch: Option<u64>) -> Result<(), String> {
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let _coordinator = lock_project_coordinator(&state)?;
+    ensure_optional_project_epoch_matches(&_coordinator, expected_epoch)?;
+    let input = state
         .osc_input
         .lock()
-        .map_err(|_| "OSC state lock was poisoned".to_string())?;
-    *guard = None;
+        .map_err(|_| "OSC state lock was poisoned".to_string())?
+        .take();
+    drop(input);
     Ok(())
 }
 
@@ -6966,13 +11839,22 @@ fn start_remote_control(
     state: State<'_, AppState>,
     config: RemoteControlConfig,
 ) -> Result<(), String> {
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let coordinator = lock_project_coordinator(&state)?;
+    ensure_no_pending_project_transaction(&coordinator)?;
+    drop(coordinator);
     let command_engine = state.engine.clone();
+    let remote_project_transaction_active = Arc::clone(&state.project_transaction_active);
+    let remote_project_external_command_admission =
+        Arc::clone(&state.project_external_command_admission);
     let remote_operator_selection = Arc::clone(&state.operator_selection);
     let snapshot_engine = state.engine.clone();
     let render_plans_engine = state.engine.clone();
     let io_plans_engine = state.engine.clone();
     let transport_status = Arc::clone(&state.external_video_transport);
+    let transport_status_engine = state.engine.clone();
     let sync_engine = state.engine.clone();
+    let sync_output_ownership_transition = Arc::clone(&state.output_ownership_transition);
     let sync_transport = Arc::clone(&state.external_video_transport);
     let sync_events = Arc::clone(&state.external_video_transport_events);
     let sync_capture_transport = Arc::clone(&state.capture_transport);
@@ -6983,270 +11865,292 @@ fn start_remote_control(
     let server = RemoteWsServer::start_with_snapshot_and_video_status_providers(
         config,
         move |event| {
-            let command = match event {
-                RemoteInputEvent::SetAttribute {
-                    fixture_id,
-                    attribute,
-                    value,
-                } => EngineCommand::SetAttribute {
-                    fixture_id,
-                    attribute,
-                    value,
-                },
-                RemoteInputEvent::SetOperatorSelection(context) => {
-                    let context = match normalize_operator_selection_context(context) {
-                        Ok(context) => context,
-                        Err(error) => {
-                            eprintln!("Ignoring remote operator selection: {error}");
-                            return;
-                        }
-                    };
-                    match remote_operator_selection.lock() {
-                        Ok(mut selection) => *selection = context,
-                        Err(_) => {
-                            eprintln!(
+            let persistence_admission = Arc::clone(&remote_project_external_command_admission);
+            let admitted = run_if_project_external_command_admitted(
+                &remote_project_external_command_admission,
+                &remote_project_transaction_active,
+                || {
+                    let command = match event {
+                        RemoteInputEvent::SetAttribute {
+                            fixture_id,
+                            attribute,
+                            value,
+                        } => EngineCommand::SetAttribute {
+                            fixture_id,
+                            attribute,
+                            value,
+                        },
+                        RemoteInputEvent::SetOperatorSelection(context) => {
+                            let context = match normalize_operator_selection_context(context) {
+                                Ok(context) => context,
+                                Err(error) => {
+                                    eprintln!("Ignoring remote operator selection: {error}");
+                                    return;
+                                }
+                            };
+                            match remote_operator_selection.lock() {
+                                Ok(mut selection) => *selection = context,
+                                Err(_) => {
+                                    eprintln!(
                                 "Ignoring remote operator selection: state lock was poisoned"
                             );
-                        }
-                    }
-                    return;
-                }
-                RemoteInputEvent::SetOperatorFeatureFader {
-                    target_index,
-                    value,
-                } => match operator_feature_fader_command(
-                    &command_engine,
-                    &remote_operator_selection,
-                    target_index,
-                    value,
-                ) {
-                    Ok((command, _)) => command,
-                    Err(error) => {
-                        eprintln!("Ignoring remote selected feature fader: {error}");
-                        return;
-                    }
-                },
-                RemoteInputEvent::SetGroupAttribute {
-                    group_id,
-                    attribute,
-                    value,
-                } => EngineCommand::SetGroupAttribute {
-                    group_id,
-                    attribute,
-                    value,
-                },
-                RemoteInputEvent::SetFixtureHighlight {
-                    fixture_id,
-                    enabled,
-                } => EngineCommand::SetFixtureHighlight {
-                    fixture_id,
-                    enabled,
-                },
-                RemoteInputEvent::SetFixtureSolo {
-                    fixture_id,
-                    enabled,
-                } => EngineCommand::SetFixtureSolo {
-                    fixture_id,
-                    enabled,
-                },
-                RemoteInputEvent::SetFixturePark {
-                    fixture_id,
-                    enabled,
-                } => EngineCommand::SetFixturePark {
-                    fixture_id,
-                    enabled,
-                },
-                RemoteInputEvent::SetGroupHighlight { group_id, enabled } => {
-                    EngineCommand::SetGroupHighlight { group_id, enabled }
-                }
-                RemoteInputEvent::SetGroupSolo { group_id, enabled } => {
-                    EngineCommand::SetGroupSolo { group_id, enabled }
-                }
-                RemoteInputEvent::SetGroupPark { group_id, enabled } => {
-                    EngineCommand::SetGroupPark { group_id, enabled }
-                }
-                RemoteInputEvent::ClearFixtureFlags { kind } => {
-                    match parse_fixture_flag_clear_kind(&kind) {
-                        Ok(kind) => EngineCommand::ClearFixtureFlags(kind),
-                        Err(error) => {
-                            eprintln!("Ignoring remote clear fixture flags command: {error}");
+                                }
+                            }
                             return;
                         }
+                        RemoteInputEvent::SetOperatorFeatureFader {
+                            target_index,
+                            value,
+                        } => match operator_feature_fader_command(
+                            &command_engine,
+                            &remote_operator_selection,
+                            target_index,
+                            value,
+                        ) {
+                            Ok((command, _)) => command,
+                            Err(error) => {
+                                eprintln!("Ignoring remote selected feature fader: {error}");
+                                return;
+                            }
+                        },
+                        RemoteInputEvent::SetGroupAttribute {
+                            group_id,
+                            attribute,
+                            value,
+                        } => EngineCommand::SetGroupAttribute {
+                            group_id,
+                            attribute,
+                            value,
+                        },
+                        RemoteInputEvent::SetFixtureHighlight {
+                            fixture_id,
+                            enabled,
+                        } => EngineCommand::SetFixtureHighlight {
+                            fixture_id,
+                            enabled,
+                        },
+                        RemoteInputEvent::SetFixtureSolo {
+                            fixture_id,
+                            enabled,
+                        } => EngineCommand::SetFixtureSolo {
+                            fixture_id,
+                            enabled,
+                        },
+                        RemoteInputEvent::SetFixturePark {
+                            fixture_id,
+                            enabled,
+                        } => EngineCommand::SetFixturePark {
+                            fixture_id,
+                            enabled,
+                        },
+                        RemoteInputEvent::SetGroupHighlight { group_id, enabled } => {
+                            EngineCommand::SetGroupHighlight { group_id, enabled }
+                        }
+                        RemoteInputEvent::SetGroupSolo { group_id, enabled } => {
+                            EngineCommand::SetGroupSolo { group_id, enabled }
+                        }
+                        RemoteInputEvent::SetGroupPark { group_id, enabled } => {
+                            EngineCommand::SetGroupPark { group_id, enabled }
+                        }
+                        RemoteInputEvent::ClearFixtureFlags { kind } => {
+                            match parse_fixture_flag_clear_kind(&kind) {
+                                Ok(kind) => EngineCommand::ClearFixtureFlags(kind),
+                                Err(error) => {
+                                    eprintln!(
+                                        "Ignoring remote clear fixture flags command: {error}"
+                                    );
+                                    return;
+                                }
+                            }
+                        }
+                        RemoteInputEvent::Blackout(enabled) => EngineCommand::Blackout(enabled),
+                        RemoteInputEvent::AllBlackout(enabled) => {
+                            EngineCommand::SetAllBlackout(enabled)
+                        }
+                        RemoteInputEvent::SetGroupSubmaster { group_id, level } => {
+                            EngineCommand::SetGroupSubmaster { group_id, level }
+                        }
+                        RemoteInputEvent::SetBpm(bpm) => EngineCommand::SetBpm(bpm),
+                        RemoteInputEvent::TapBpm => EngineCommand::TapBpm,
+                        RemoteInputEvent::SyncExternalClock {
+                            bpm,
+                            beat_phase,
+                            source,
+                        } => EngineCommand::SyncExternalClock {
+                            bpm,
+                            beat_phase,
+                            source,
+                        },
+                        RemoteInputEvent::ResetTelemetry => EngineCommand::ResetTelemetry,
+                        RemoteInputEvent::TriggerCue(cue_id) => EngineCommand::TriggerCue(cue_id),
+                        RemoteInputEvent::TriggerNextCue => EngineCommand::TriggerNextCue,
+                        RemoteInputEvent::TriggerPreviousCue => EngineCommand::TriggerPreviousCue,
+                        RemoteInputEvent::SetCueFadePaused(paused) => {
+                            EngineCommand::SetCueFadePaused(paused)
+                        }
+                        RemoteInputEvent::SetTimelinePlaying(playing) => {
+                            EngineCommand::SetTimelinePlaying(playing)
+                        }
+                        RemoteInputEvent::SeekTimeline { position_ms } => {
+                            EngineCommand::SeekTimeline(position_ms)
+                        }
+                        RemoteInputEvent::SeekTimelineBeat { direction } => {
+                            EngineCommand::SeekTimelineBeat { direction }
+                        }
+                        RemoteInputEvent::SyncTimelineTimecode {
+                            position_ms,
+                            source,
+                        } => EngineCommand::SyncTimelineTimecode {
+                            position_ms,
+                            source,
+                        },
+                        RemoteInputEvent::SetEffectEnabled { effect_id, enabled } => {
+                            EngineCommand::SetEffectEnabled { effect_id, enabled }
+                        }
+                        RemoteInputEvent::SetNodeGraphEnabled { graph_id, enabled } => {
+                            EngineCommand::SetNodeGraphEnabled { graph_id, enabled }
+                        }
+                        RemoteInputEvent::MoveEffect { effect_id, delta } => {
+                            EngineCommand::MoveEffect { effect_id, delta }
+                        }
+                        RemoteInputEvent::RemoveEffect { effect_id } => {
+                            EngineCommand::RemoveEffect(effect_id)
+                        }
+                        RemoteInputEvent::SetVideoParam {
+                            layer_id,
+                            param,
+                            value,
+                        } => EngineCommand::SetVideoLayerParam {
+                            layer_id,
+                            param,
+                            value,
+                        },
+                        RemoteInputEvent::SetVideoLayerEnabled { layer_id, enabled } => {
+                            EngineCommand::SetVideoLayerEnabled { layer_id, enabled }
+                        }
+                        RemoteInputEvent::SetVideoLayerSolo { layer_id, solo } => {
+                            EngineCommand::SetVideoLayerSolo { layer_id, solo }
+                        }
+                        RemoteInputEvent::SetVideoPlaying { layer_id, playing } => {
+                            EngineCommand::SetVideoLayerPlaying { layer_id, playing }
+                        }
+                        RemoteInputEvent::SeekVideoLayer {
+                            layer_id,
+                            position_ms,
+                        } => EngineCommand::SetVideoLayerParam {
+                            layer_id,
+                            param: VideoParam::PositionMs,
+                            value: position_ms as f32,
+                        },
+                        RemoteInputEvent::SetVideoLoop {
+                            layer_id,
+                            enabled,
+                            loop_start_ms,
+                            loop_end_ms,
+                        } => EngineCommand::SetVideoLayerLoop {
+                            layer_id,
+                            enabled,
+                            loop_start_ms,
+                            loop_end_ms,
+                        },
+                        RemoteInputEvent::FadeVideoLayerOpacity {
+                            layer_id,
+                            opacity,
+                            duration_ms,
+                        } => EngineCommand::FadeVideoLayerOpacity {
+                            layer_id,
+                            opacity,
+                            duration_ms,
+                        },
+                        RemoteInputEvent::AddVideoCuePoint {
+                            layer_id,
+                            position_ms,
+                        } => EngineCommand::AddVideoCuePoint {
+                            layer_id,
+                            position_ms,
+                        },
+                        RemoteInputEvent::RemoveVideoCuePoint {
+                            layer_id,
+                            position_ms,
+                        } => EngineCommand::RemoveVideoCuePoint {
+                            layer_id,
+                            position_ms,
+                        },
+                        RemoteInputEvent::JumpVideoCuePoint {
+                            layer_id,
+                            cue_point_index,
+                        } => EngineCommand::JumpVideoCuePoint {
+                            layer_id,
+                            cue_point_index,
+                        },
+                        RemoteInputEvent::JumpVideoCuePointRelative {
+                            layer_id,
+                            direction,
+                        } => EngineCommand::JumpVideoCuePointRelative {
+                            layer_id,
+                            direction,
+                        },
+                        RemoteInputEvent::SetVideoOutputEnabled { output_id, enabled } => {
+                            EngineCommand::SetVideoOutputEnabled { output_id, enabled }
+                        }
+                        RemoteInputEvent::SetVideoOutputOpacity { output_id, opacity } => {
+                            EngineCommand::SetVideoOutputOpacity { output_id, opacity }
+                        }
+                        RemoteInputEvent::FadeVideoOutputOpacity {
+                            output_id,
+                            opacity,
+                            duration_ms,
+                        } => EngineCommand::FadeVideoOutputOpacity {
+                            output_id,
+                            opacity,
+                            duration_ms,
+                        },
+                        RemoteInputEvent::SetVideoOutputMapping { output_id, mapping } => {
+                            EngineCommand::SetVideoOutputMapping { output_id, mapping }
+                        }
+                        RemoteInputEvent::SetVideoOutputMappingField {
+                            output_id,
+                            field,
+                            value,
+                        } => EngineCommand::SetVideoOutputMappingField {
+                            output_id,
+                            field,
+                            value,
+                        },
+                        RemoteInputEvent::ApplyVideoOutputMappingPreset { output_id, label } => {
+                            EngineCommand::ApplyVideoOutputMappingPreset { output_id, label }
+                        }
+                        RemoteInputEvent::SetVideoOutputBlackout {
+                            output_id,
+                            blackout,
+                        } => EngineCommand::SetVideoOutputBlackout {
+                            output_id,
+                            blackout,
+                        },
+                        RemoteInputEvent::VideoMasterOpacity(opacity) => {
+                            EngineCommand::SetVideoMasterOpacity(opacity)
+                        }
+                        RemoteInputEvent::VideoBlackout(enabled) => {
+                            EngineCommand::SetVideoBlackout(enabled)
+                        }
+                        RemoteInputEvent::LightingMaster(master) => {
+                            EngineCommand::SetLightingMaster(master)
+                        }
+                    };
+                    let mutates_persistence = command.mutates_persistence_snapshot();
+                    if command_engine.send(command).is_ok() && mutates_persistence {
+                        persistence_admission.note_admitted_external_command();
                     }
-                }
-                RemoteInputEvent::Blackout(enabled) => EngineCommand::Blackout(enabled),
-                RemoteInputEvent::AllBlackout(enabled) => EngineCommand::SetAllBlackout(enabled),
-                RemoteInputEvent::SetGroupSubmaster { group_id, level } => {
-                    EngineCommand::SetGroupSubmaster { group_id, level }
-                }
-                RemoteInputEvent::SetBpm(bpm) => EngineCommand::SetBpm(bpm),
-                RemoteInputEvent::TapBpm => EngineCommand::TapBpm,
-                RemoteInputEvent::SyncExternalClock {
-                    bpm,
-                    beat_phase,
-                    source,
-                } => EngineCommand::SyncExternalClock {
-                    bpm,
-                    beat_phase,
-                    source,
                 },
-                RemoteInputEvent::ResetTelemetry => EngineCommand::ResetTelemetry,
-                RemoteInputEvent::TriggerCue(cue_id) => EngineCommand::TriggerCue(cue_id),
-                RemoteInputEvent::TriggerNextCue => EngineCommand::TriggerNextCue,
-                RemoteInputEvent::TriggerPreviousCue => EngineCommand::TriggerPreviousCue,
-                RemoteInputEvent::SetCueFadePaused(paused) => {
-                    EngineCommand::SetCueFadePaused(paused)
-                }
-                RemoteInputEvent::SetTimelinePlaying(playing) => {
-                    EngineCommand::SetTimelinePlaying(playing)
-                }
-                RemoteInputEvent::SeekTimeline { position_ms } => {
-                    EngineCommand::SeekTimeline(position_ms)
-                }
-                RemoteInputEvent::SeekTimelineBeat { direction } => {
-                    EngineCommand::SeekTimelineBeat { direction }
-                }
-                RemoteInputEvent::SyncTimelineTimecode {
-                    position_ms,
-                    source,
-                } => EngineCommand::SyncTimelineTimecode {
-                    position_ms,
-                    source,
-                },
-                RemoteInputEvent::SetEffectEnabled { effect_id, enabled } => {
-                    EngineCommand::SetEffectEnabled { effect_id, enabled }
-                }
-                RemoteInputEvent::SetNodeGraphEnabled { graph_id, enabled } => {
-                    EngineCommand::SetNodeGraphEnabled { graph_id, enabled }
-                }
-                RemoteInputEvent::MoveEffect { effect_id, delta } => {
-                    EngineCommand::MoveEffect { effect_id, delta }
-                }
-                RemoteInputEvent::RemoveEffect { effect_id } => {
-                    EngineCommand::RemoveEffect(effect_id)
-                }
-                RemoteInputEvent::SetVideoParam {
-                    layer_id,
-                    param,
-                    value,
-                } => EngineCommand::SetVideoLayerParam {
-                    layer_id,
-                    param,
-                    value,
-                },
-                RemoteInputEvent::SetVideoLayerEnabled { layer_id, enabled } => {
-                    EngineCommand::SetVideoLayerEnabled { layer_id, enabled }
-                }
-                RemoteInputEvent::SetVideoLayerSolo { layer_id, solo } => {
-                    EngineCommand::SetVideoLayerSolo { layer_id, solo }
-                }
-                RemoteInputEvent::SetVideoPlaying { layer_id, playing } => {
-                    EngineCommand::SetVideoLayerPlaying { layer_id, playing }
-                }
-                RemoteInputEvent::SeekVideoLayer {
-                    layer_id,
-                    position_ms,
-                } => EngineCommand::SetVideoLayerParam {
-                    layer_id,
-                    param: VideoParam::PositionMs,
-                    value: position_ms as f32,
-                },
-                RemoteInputEvent::SetVideoLoop {
-                    layer_id,
-                    enabled,
-                    loop_start_ms,
-                    loop_end_ms,
-                } => EngineCommand::SetVideoLayerLoop {
-                    layer_id,
-                    enabled,
-                    loop_start_ms,
-                    loop_end_ms,
-                },
-                RemoteInputEvent::FadeVideoLayerOpacity {
-                    layer_id,
-                    opacity,
-                    duration_ms,
-                } => EngineCommand::FadeVideoLayerOpacity {
-                    layer_id,
-                    opacity,
-                    duration_ms,
-                },
-                RemoteInputEvent::AddVideoCuePoint {
-                    layer_id,
-                    position_ms,
-                } => EngineCommand::AddVideoCuePoint {
-                    layer_id,
-                    position_ms,
-                },
-                RemoteInputEvent::RemoveVideoCuePoint {
-                    layer_id,
-                    position_ms,
-                } => EngineCommand::RemoveVideoCuePoint {
-                    layer_id,
-                    position_ms,
-                },
-                RemoteInputEvent::JumpVideoCuePoint {
-                    layer_id,
-                    cue_point_index,
-                } => EngineCommand::JumpVideoCuePoint {
-                    layer_id,
-                    cue_point_index,
-                },
-                RemoteInputEvent::JumpVideoCuePointRelative {
-                    layer_id,
-                    direction,
-                } => EngineCommand::JumpVideoCuePointRelative {
-                    layer_id,
-                    direction,
-                },
-                RemoteInputEvent::SetVideoOutputEnabled { output_id, enabled } => {
-                    EngineCommand::SetVideoOutputEnabled { output_id, enabled }
-                }
-                RemoteInputEvent::SetVideoOutputOpacity { output_id, opacity } => {
-                    EngineCommand::SetVideoOutputOpacity { output_id, opacity }
-                }
-                RemoteInputEvent::FadeVideoOutputOpacity {
-                    output_id,
-                    opacity,
-                    duration_ms,
-                } => EngineCommand::FadeVideoOutputOpacity {
-                    output_id,
-                    opacity,
-                    duration_ms,
-                },
-                RemoteInputEvent::SetVideoOutputMapping { output_id, mapping } => {
-                    EngineCommand::SetVideoOutputMapping { output_id, mapping }
-                }
-                RemoteInputEvent::SetVideoOutputMappingField {
-                    output_id,
-                    field,
-                    value,
-                } => EngineCommand::SetVideoOutputMappingField {
-                    output_id,
-                    field,
-                    value,
-                },
-                RemoteInputEvent::ApplyVideoOutputMappingPreset { output_id, label } => {
-                    EngineCommand::ApplyVideoOutputMappingPreset { output_id, label }
-                }
-                RemoteInputEvent::SetVideoOutputBlackout {
-                    output_id,
-                    blackout,
-                } => EngineCommand::SetVideoOutputBlackout {
-                    output_id,
-                    blackout,
-                },
-                RemoteInputEvent::VideoMasterOpacity(opacity) => {
-                    EngineCommand::SetVideoMasterOpacity(opacity)
-                }
-                RemoteInputEvent::VideoBlackout(enabled) => {
-                    EngineCommand::SetVideoBlackout(enabled)
-                }
-                RemoteInputEvent::LightingMaster(master) => {
-                    EngineCommand::SetLightingMaster(master)
-                }
-            };
-            let _ = command_engine.send(command);
+            );
+            if admitted.is_none() {
+                // Remote requests are external input too. Never wait behind an
+                // identity replacement that may be joining an input/transport
+                // worker; fail closed instead of creating a join dependency.
+                eprintln!(
+                    "Ignoring remote control event while project admission is busy or fenced"
+                );
+            }
         },
         move || snapshot_engine.snapshot(),
         video::video_runtime_status,
@@ -7279,24 +12183,67 @@ fn start_remote_control(
                 })
             })
         },
-        move || match transport_status.lock() {
-            Ok(transport) => serde_json::to_value(transport.status()).unwrap_or_else(|_| {
+        move || match external_video_transport_status_for(
+            transport_status.as_ref(),
+            &transport_status_engine,
+        ) {
+            Ok(status) => serde_json::to_value(status).unwrap_or_else(|_| {
                 json!({
                     "active_routes": [],
                     "active_count": 0,
                     "error": "External video transport status serialization failed",
                 })
             }),
-            Err(_) => json!({
+            Err(error) => json!({
                 "active_routes": [],
                 "active_count": 0,
-                "error": "External video transport runtime lock was poisoned",
+                "error": error,
             }),
         },
         move || {
+            let Ok(_transition_guard) = sync_output_ownership_transition.lock() else {
+                sync_engine.mark_output_ownership_transition_failure(
+                    "Output ownership transition lock was poisoned during remote synchronization",
+                );
+                return json!({
+                    "report": null,
+                    "events": [],
+                    "error": "Output ownership transition lock was poisoned",
+                });
+            };
             let snapshot = sync_engine.snapshot();
-            match sync_external_video_transports_from_snapshot(
+            #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+            if let Err(error) =
+                harvest_spout_output_failures(sync_spout_transport.as_ref(), &sync_engine)
+            {
+                return json!({
+                    "report": null,
+                    "events": [],
+                    "error": error,
+                });
+            }
+            let role = sync_engine.output_ownership_status().role;
+            let mut transition = match sync_engine.begin_output_ownership_transition(role) {
+                Ok(transition) => transition,
+                Err(error) => {
+                    return json!({
+                        "report": null,
+                        "events": [],
+                        "error": format!("External video sync admission failed: {error}"),
+                    });
+                }
+            };
+            if let Err(error) = sync_engine.fence_output_ownership() {
+                transition.fail(error.clone());
+                return json!({
+                    "report": null,
+                    "events": [],
+                    "error": error,
+                });
+            }
+            let result = sync_external_video_transports_from_snapshot(
                 &snapshot,
+                role,
                 sync_transport.as_ref(),
                 sync_events.as_ref(),
                 sync_capture_transport.as_ref(),
@@ -7309,7 +12256,14 @@ fn start_remote_control(
                     all(feature = "spout", target_os = "windows", target_arch = "x86_64")
                 ))]
                 &sync_engine,
-            ) {
+                #[cfg(any(
+                    feature = "ndi",
+                    all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+                ))]
+                None,
+                Some(&mut transition),
+            );
+            match finish_external_video_transport_maintenance_transition(transition, result) {
                 Ok(sync) => serde_json::to_value(sync).unwrap_or_else(|_| {
                     json!({
                         "report": null,
@@ -7394,15 +12348,41 @@ fn start_dmx_input(
     state: State<'_, AppState>,
     config: DmxInputConfig,
     mappings: Option<Vec<DmxControlMapping>>,
+    expected_epoch: Option<u64>,
 ) -> Result<(), String> {
     validate_dmx_input_config(&config)?;
-    let mappings = validate_dmx_control_mappings(mappings.unwrap_or_default())?;
+    let received_mappings = validate_dmx_control_mappings(mappings.unwrap_or_default())?;
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let coordinator = lock_project_coordinator(&state)?;
+    ensure_optional_project_epoch_matches(&coordinator, expected_epoch)?;
+    ensure_no_pending_project_transaction(&coordinator)?;
+    if received_mappings != coordinator.mappings.dmx_mappings {
+        return Err(
+            "DMX control mappings changed locally; refresh before starting input".to_string(),
+        );
+    }
+    let mappings = coordinator.mappings.dmx_mappings.clone();
+    let coordinator_epoch = coordinator.epoch;
+    let callback_epoch = Arc::clone(&state.project_mapping_callback_epoch);
+    let captured_callback_epoch = callback_epoch.load(Ordering::Acquire);
+    let previous = state
+        .dmx_input
+        .lock()
+        .map_err(|_| "DMX input state lock was poisoned".to_string())?
+        .take();
+    drop(previous);
     let control_mapping_universe =
         io::dmx_input::control_mapping_universe(config.protocol, config.universe)
             .ok_or_else(|| "DMX control mapping universe could not be normalized".to_string())?;
     let engine = state.engine.clone();
     let operator_selection = Arc::clone(&state.operator_selection);
+    let callback_epoch_for_worker = Arc::clone(&callback_epoch);
     let previous_control_frames = Arc::new(Mutex::new(HashMap::<u16, Box<[u8; 512]>>::new()));
+    let project_transaction_active_for_worker = Arc::clone(&state.project_transaction_active);
+    let project_external_command_admission_for_worker =
+        Arc::clone(&state.project_external_command_admission);
+    let callback_installed = Arc::new(AtomicBool::new(false));
+    let callback_installed_for_worker = Arc::clone(&callback_installed);
     let merge_enabled = config.merge_enabled;
     let input = io::dmx_input::DmxInput::start(config, move |event| match event {
         io::dmx_input::DmxInputEvent::Frame {
@@ -7411,11 +12391,19 @@ fn start_dmx_input(
             merge_mode,
         } => {
             if merge_enabled {
-                let _ = engine.send(EngineCommand::SetDmxInputFrame {
-                    universe,
-                    values,
-                    merge_mode,
-                });
+                send_engine_command_if_callback_epoch(
+                    &engine,
+                    &callback_epoch_for_worker,
+                    &project_transaction_active_for_worker,
+                    &project_external_command_admission_for_worker,
+                    &callback_installed_for_worker,
+                    captured_callback_epoch,
+                    EngineCommand::SetDmxInputFrame {
+                        universe,
+                        values,
+                        merge_mode,
+                    },
+                );
             } else {
                 let previous = previous_control_frames
                     .lock()
@@ -7427,7 +12415,17 @@ fn start_dmx_input(
                     previous.as_deref(),
                     &mappings,
                 ) {
-                    dispatch_external_control_event(&engine, &operator_selection, event, "DMX");
+                    dispatch_external_control_event(
+                        &engine,
+                        &operator_selection,
+                        &callback_epoch_for_worker,
+                        &project_transaction_active_for_worker,
+                        &project_external_command_admission_for_worker,
+                        &callback_installed_for_worker,
+                        captured_callback_epoch,
+                        event,
+                        "DMX",
+                    );
                 }
             }
         }
@@ -7436,21 +12434,47 @@ fn start_dmx_input(
                 frames.remove(&control_mapping_universe);
             }
             if merge_enabled {
-                let _ = engine.send(EngineCommand::ClearDmxInput(universe));
+                send_engine_command_if_callback_epoch(
+                    &engine,
+                    &callback_epoch_for_worker,
+                    &project_transaction_active_for_worker,
+                    &project_external_command_admission_for_worker,
+                    &callback_installed_for_worker,
+                    captured_callback_epoch,
+                    EngineCommand::ClearDmxInput(universe),
+                );
             }
         }
     })
     .map_err(|error| error.to_string())?;
+    if !project_input_installation_is_current(
+        coordinator.epoch,
+        coordinator_epoch,
+        &callback_epoch,
+        captured_callback_epoch,
+    ) {
+        drop(input);
+        return Err("Project changed while DMX input was opening".to_string());
+    }
     let mut active = state
         .dmx_input
         .lock()
         .map_err(|_| "DMX input state lock was poisoned".to_string())?;
     *active = Some(input);
+    callback_installed.store(true, Ordering::Release);
     Ok(())
 }
 
 #[tauri::command]
-fn learn_dmx_control(state: State<'_, AppState>) -> Result<Option<LearnedDmxControl>, String> {
+fn learn_dmx_control(
+    state: State<'_, AppState>,
+    expected_epoch: Option<u64>,
+) -> Result<Option<LearnedDmxControl>, String> {
+    {
+        let _admission = lock_project_external_command_admission(&state)?;
+        let coordinator = lock_project_coordinator(&state)?;
+        ensure_optional_project_epoch_matches(&coordinator, expected_epoch)?;
+    }
     let active = state
         .dmx_input
         .lock()
@@ -7458,7 +12482,14 @@ fn learn_dmx_control(state: State<'_, AppState>) -> Result<Option<LearnedDmxCont
     let input = active
         .as_ref()
         .ok_or_else(|| "Start DMX input before using DMX Learn".to_string())?;
-    Ok(input.learn_control(Duration::from_secs(10)))
+    let learned = input.learn_control(Duration::from_secs(10));
+    drop(active);
+    {
+        let _admission = lock_project_external_command_admission(&state)?;
+        let coordinator = lock_project_coordinator(&state)?;
+        ensure_optional_project_epoch_matches(&coordinator, expected_epoch)?;
+    }
+    Ok(learned)
 }
 
 #[tauri::command]
@@ -7474,12 +12505,16 @@ fn dmx_input_status(state: State<'_, AppState>) -> Result<DmxInputStatus, String
 }
 
 #[tauri::command]
-fn stop_dmx_input(state: State<'_, AppState>) -> Result<(), String> {
-    let mut active = state
+fn stop_dmx_input(state: State<'_, AppState>, expected_epoch: Option<u64>) -> Result<(), String> {
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let _coordinator = lock_project_coordinator(&state)?;
+    ensure_optional_project_epoch_matches(&_coordinator, expected_epoch)?;
+    let input = state
         .dmx_input
         .lock()
-        .map_err(|_| "DMX input state lock was poisoned".to_string())?;
-    *active = None;
+        .map_err(|_| "DMX input state lock was poisoned".to_string())?
+        .take();
+    drop(input);
     Ok(())
 }
 
@@ -7635,7 +12670,10 @@ fn rdm_response_summary(
 }
 
 #[tauri::command]
-async fn send_art_rdm_request(request: ArtRdmRequest) -> Result<ArtRdmResponse, String> {
+async fn send_art_rdm_request(
+    state: State<'_, AppState>,
+    request: ArtRdmRequest,
+) -> Result<ArtRdmResponse, String> {
     let gateway_ip = request.gateway_ip.trim().to_string();
     if gateway_ip.is_empty() {
         return Err("Art-Net gateway IP is required".to_string());
@@ -7652,7 +12690,9 @@ async fn send_art_rdm_request(request: ArtRdmRequest) -> Result<ArtRdmResponse, 
     )?;
     let port_address = request.port_address;
     let timeout = Duration::from_millis(request.timeout_ms.clamp(50, 120_000));
+    let lighting_permit = ensure_lighting_output_allowed(&state.engine)?;
     let transaction = tauri::async_runtime::spawn_blocking(move || {
+        let _lighting_permit = lighting_permit;
         io::artnet::ArtNetSender::new(&gateway_ip, io::artnet::ARTNET_PORT)
             .and_then(|sender| sender.transact_rdm_complete(port_address, &message, timeout))
     })
@@ -7688,7 +12728,9 @@ async fn send_usb_rdm_request(
     )?;
     let timeout = Duration::from_millis(request.timeout_ms.clamp(50, 120_000));
     let baud_rate = request.serial_baud_rate.max(1);
+    let lighting_permit = ensure_lighting_output_allowed(&state.engine)?;
     let transaction = tauri::async_runtime::spawn_blocking(move || {
+        let _lighting_permit = lighting_permit;
         let mut controller =
             io::serial_rdm::EnttecUsbProRdmController::new(&serial_port, baud_rate)?;
         controller.transact_rdm_complete(&message, timeout)
@@ -7743,7 +12785,9 @@ async fn discover_usb_rdm_devices(
     ensure_serial_rdm_port_available(&state.engine.snapshot(), &serial_port)?;
     let source_uid = parse_rdm_uid(&source_uid)?;
     let timeout = Duration::from_millis(timeout_ms.unwrap_or(60_000).clamp(1_000, 120_000));
+    let lighting_permit = ensure_lighting_output_allowed(&state.engine)?;
     let devices = tauri::async_runtime::spawn_blocking(move || {
+        let _lighting_permit = lighting_permit;
         let mut controller = io::serial_rdm::EnttecUsbProRdmController::new(&serial_port, 57_600)?;
         controller.discover_devices(source_uid, timeout)
     })
@@ -7755,6 +12799,7 @@ async fn discover_usb_rdm_devices(
 
 #[tauri::command]
 async fn discover_art_rdm_devices(
+    state: State<'_, AppState>,
     gateway_ip: String,
     port_address: u16,
     timeout_ms: Option<u64>,
@@ -7767,7 +12812,9 @@ async fn discover_art_rdm_devices(
         return Err("ArtRdm Port-Address must be between 0 and 32767".to_string());
     }
     let timeout = Duration::from_millis(timeout_ms.unwrap_or(1_000).clamp(50, 10_000));
+    let lighting_permit = ensure_lighting_output_allowed(&state.engine)?;
     let uids = tauri::async_runtime::spawn_blocking(move || {
+        let _lighting_permit = lighting_permit;
         io::artnet::ArtNetSender::new(&gateway_ip, io::artnet::ARTNET_PORT)
             .and_then(|sender| sender.request_tod(port_address, timeout))
     })
@@ -7778,7 +12825,11 @@ async fn discover_art_rdm_devices(
 }
 
 #[tauri::command]
-async fn start_art_rdm_full_discovery(gateway_ip: String, port_address: u16) -> Result<(), String> {
+async fn start_art_rdm_full_discovery(
+    state: State<'_, AppState>,
+    gateway_ip: String,
+    port_address: u16,
+) -> Result<(), String> {
     let gateway_ip = gateway_ip.trim().to_string();
     if gateway_ip.is_empty() {
         return Err("Art-Net gateway IP is required".to_string());
@@ -7786,7 +12837,9 @@ async fn start_art_rdm_full_discovery(gateway_ip: String, port_address: u16) -> 
     if port_address > 0x7fff {
         return Err("ArtRdm Port-Address must be between 0 and 32767".to_string());
     }
+    let lighting_permit = ensure_lighting_output_allowed(&state.engine)?;
     tauri::async_runtime::spawn_blocking(move || {
+        let _lighting_permit = lighting_permit;
         io::artnet::ArtNetSender::new(&gateway_ip, io::artnet::ARTNET_PORT).and_then(|sender| {
             sender
                 .send_tod_control(
@@ -8619,18 +13672,43 @@ fn set_group_color(
     if let Some(color) = &color {
         validate_video_cue_point_color(color)?;
     }
-    state
-        .engine
-        .set_group_color_published(group_id.clone(), color.clone())?;
-    if let Some(group) = state
+    let color = normalize_fixture_group_color(color)?;
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let mut coordinator = lock_project_coordinator(&state)?;
+    let affects_project_groups = coordinator
+        .ancillary
         .fixture_groups
-        .lock()
-        .map_err(|_| "Fixture group state lock was poisoned".to_string())?
-        .iter_mut()
-        .find(|group| group.id == group_id)
-    {
-        group.color = normalize_fixture_group_color(color)?;
+        .iter()
+        .any(|group| group.id == group_id);
+    let mut candidate_snapshot = state.engine.persistence_snapshot()?;
+    match color.clone() {
+        Some(color) => {
+            candidate_snapshot
+                .group_colors
+                .insert(group_id.clone(), color);
+        }
+        None => {
+            candidate_snapshot.group_colors.remove(&group_id);
+        }
     }
+    let mut candidate_ancillary = coordinator.ancillary.clone();
+    if affects_project_groups {
+        let group = candidate_ancillary
+            .fixture_groups
+            .iter_mut()
+            .find(|group| group.id == group_id)
+            .expect("membership was checked above");
+        group.color = color.clone();
+    }
+    let published_snapshot = candidate_snapshot.clone();
+    let prepared = publish_direct_project_ancillary_mutation(
+        &state,
+        &coordinator,
+        candidate_snapshot,
+        candidate_ancillary,
+        || publish_fixture_group_state_candidate(&state.engine, &published_snapshot),
+    )?;
+    commit_direct_project_ancillary_mutation_after_preflight(&state, &mut coordinator, prepared);
     Ok(())
 }
 
@@ -9541,6 +14619,2255 @@ fn sync_ltc_timecode(state: State<'_, AppState>, position_ms: u64) -> Result<(),
         .map_err(|error| error.to_string())
 }
 
+/// Hash/probe a prepared batch under an already-owned operation guard, recheck
+/// the authority, and store the prepared record. Shared by the legacy
+/// `prepare_local_media_assets` (which allocates its own generation) and the
+/// staged `prepare_reserved_media_assets` (which adopts a slot the client
+/// reserved before hashing). The guard is moved in so it drops — removing the
+/// active entry — exactly when preparation completes or fails.
+async fn run_prepared_local_media_asset_batch(
+    state: &AppState,
+    operation: MediaAssetOperationGuard,
+    kind: VideoSourceKind,
+    paths: Vec<String>,
+    expected_epoch: u64,
+    owner_id: &str,
+    authority: MediaAssetPrepareAuthority,
+) -> Result<MediaAssetImportReport, String> {
+    let registry = Arc::clone(&state.media_asset_operations);
+    let handle = operation.handle();
+    let request_id = handle.request_id;
+    let cancel = operation.cancellation_flag();
+    let admission = operation.admission();
+    let prepare_cancel = Arc::clone(&cancel);
+    let prepared_result = tauri::async_runtime::spawn_blocking(move || {
+        prepare_local_media_asset_batch(kind, paths, prepare_cancel.as_ref())
+    })
+    .await
+    .map_err(|error| format!("Local media asset prepare worker failed: {error}"))?;
+    let (assets, entries) = prepared_result?;
+    if operation.cancelled() {
+        return Err("Media asset operation was cancelled".to_string());
+    }
+    // A prepared A image must never be applied to a replaced B project. A
+    // normal concurrent mutation also invalidates preparation because its
+    // catalog dedupe inventory changed under this report.
+    let current_authority = capture_media_asset_prepare_authority(state, owner_id, expected_epoch)?;
+    if current_authority != authority {
+        return Err(
+            "Project changed while local media assets were being prepared; retry the import"
+                .to_string(),
+        );
+    }
+    let token = if assets.is_empty() {
+        None
+    } else {
+        Some(registry.store_prepared_from_active(
+            &handle,
+            owner_id,
+            PreparedMediaAssetImport {
+                request_id,
+                operation_generation: handle.generation,
+                owner_id: owner_id.to_string(),
+                authority: authority.clone(),
+                assets,
+                entries: entries.clone(),
+                cancel,
+                admission,
+                finalized_sources: None,
+                expires_at: Instant::now() + MEDIA_ASSET_PREPARED_IMPORT_TTL,
+            },
+        )?)
+    };
+    Ok(media_asset_import_report(
+        request_id,
+        handle.generation,
+        token,
+        &authority,
+        entries,
+    ))
+}
+
+/// Reserve an operation and hand its exact identity to the client *before* any
+/// hashing begins, so an AbortSignal can cancel the very first hashed chunk of
+/// the subsequent `prepare_reserved_media_assets`. This is the missing
+/// first-phase-cancellation seam: the legacy `prepare_local_media_assets` only
+/// reveals the generation in its reply, after hashing has already run.
+#[tauri::command]
+fn start_media_asset_operation(
+    state: State<'_, AppState>,
+    request_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<MediaAssetOperationStartReport, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    // Capture (and reconcile) the authority first so a busy/replaced project
+    // fails fast before a generation is burned, and the client learns the exact
+    // A baseline it will later fence its staged commit against.
+    let authority = capture_media_asset_prepare_authority(&state, &owner_id, expected_epoch)?;
+    // Bind the exact authority (A) into the reservation and return the same A to
+    // the client. The staged prepare adopts this A and refuses to run against any
+    // other current authority.
+    let handle =
+        state
+            .media_asset_operations
+            .reserve(request_id, owner_id.clone(), authority.clone())?;
+    Ok(MediaAssetOperationStartReport {
+        request_id: handle.request_id,
+        operation_generation: handle.generation,
+        project_epoch: authority.epoch,
+        project_revision: authority.revision,
+        checkpoint_hash: authority.checkpoint_hash,
+    })
+}
+
+/// Staged prepare that adopts a reserved operation. Because the reservation
+/// already exists, a `cancel_media_asset_operation` for this exact
+/// {request_id, generation, owner_id} can win before or during the first hashed
+/// chunk. Kept separate from `prepare_local_media_assets` so the legacy
+/// single-call flow stays byte-for-byte compatible.
+#[tauri::command]
+async fn prepare_reserved_media_assets(
+    state: State<'_, AppState>,
+    request_id: u64,
+    operation_generation: u64,
+    kind: VideoSourceKind,
+    paths: Vec<String>,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<MediaAssetImportReport, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let (operation, reserved_authority) = state.media_asset_operations.adopt_reserved(
+        request_id,
+        operation_generation,
+        owner_id.clone(),
+    )?;
+    // Recapture the current authority and require it still equals the exact A the
+    // client was told at Start. This rejects a same-epoch revision/hash mutation
+    // between Start and Prepare *before* any hashing, token, or publication, so a
+    // prepared A image can never be silently rebound onto a replaced B. Epoch
+    // replacement is still rejected by the `expected_epoch` check inside the
+    // capture. Either early return drops the adopted `operation` guard, releasing
+    // the slot so a later cancel/adopt reports the truth.
+    let current_authority =
+        capture_media_asset_prepare_authority(&state, &owner_id, expected_epoch)?;
+    ensure_reserved_media_asset_authority_unchanged(&reserved_authority, &current_authority)?;
+    run_prepared_local_media_asset_batch(
+        &state,
+        operation,
+        kind,
+        paths,
+        expected_epoch,
+        &owner_id,
+        reserved_authority,
+    )
+    .await
+}
+
+/// Prepare local files outside a pending project transaction. The result
+/// exposes only an opaque server token; hashes, fingerprints and sources stay
+/// in the backend store until the exact owner/ticket commit arrives.
+#[tauri::command]
+async fn prepare_local_media_assets(
+    state: State<'_, AppState>,
+    request_id: u64,
+    kind: VideoSourceKind,
+    paths: Vec<String>,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<MediaAssetImportReport, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let authority = capture_media_asset_prepare_authority(&state, &owner_id, expected_epoch)?;
+    let operation = state
+        .media_asset_operations
+        .begin(request_id, owner_id.clone())?;
+    run_prepared_local_media_asset_batch(
+        &state,
+        operation,
+        kind,
+        paths,
+        expected_epoch,
+        &owner_id,
+        authority,
+    )
+    .await
+}
+
+#[tauri::command]
+fn cancel_media_asset_operation(
+    state: State<'_, AppState>,
+    request_id: u64,
+    operation_generation: u64,
+    owner_id: String,
+) -> Result<bool, String> {
+    state
+        .media_asset_operations
+        .cancel_exact(request_id, operation_generation, owner_id)
+}
+
+/// Inspect machine-local availability without opening a project transaction or
+/// mutating catalog/history state. The second exact capture prevents a report
+/// for project A being presented as a report for a replaced project B.
+#[tauri::command]
+async fn inspect_media_asset_availability(
+    state: State<'_, AppState>,
+    request_id: u64,
+    asset_ids: Vec<MediaAssetId>,
+    verify_hash: bool,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<MediaAssetAvailabilityReport, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let (authority, assets) =
+        capture_media_asset_availability_inventory(&state, &owner_id, expected_epoch)?;
+    let registry = Arc::clone(&state.media_asset_operations);
+    let operation = registry.begin(request_id, owner_id.clone())?;
+    let handle = operation.handle();
+    let cancel = operation.cancellation_flag();
+    let availability = tauri::async_runtime::spawn_blocking(move || {
+        inspect_media_asset_availability_batch(&assets, &asset_ids, verify_hash, cancel.as_ref())
+    })
+    .await
+    .map_err(|error| format!("Media asset availability worker failed: {error}"))??;
+    if operation.cancelled() {
+        return Err("Media asset operation was cancelled".to_string());
+    }
+    let (current_authority, _) =
+        capture_media_asset_availability_inventory(&state, &owner_id, expected_epoch)?;
+    if current_authority != authority {
+        return Err(
+            "Project changed while media asset availability was being inspected; retry".to_string(),
+        );
+    }
+    Ok(MediaAssetAvailabilityReport {
+        request_id,
+        operation_generation: handle.generation,
+        project_epoch: authority.epoch,
+        project_revision: authority.revision,
+        checkpoint_hash: authority.checkpoint_hash,
+        availability,
+    })
+}
+
+/// Hash/probe a relink replacement under an already-owned operation guard,
+/// recheck the authority, and store the prepared relink record. Shared by the
+/// legacy `prepare_media_asset_relink_impl` (which allocates its own generation
+/// with `begin`) and the staged `prepare_reserved_media_asset_relink` (which
+/// adopts a slot the client reserved before hashing). The guard is moved in so
+/// it drops — removing the active entry — exactly when preparation completes or
+/// fails. `authority`/`original_asset` are captured by the caller so the reserved
+/// path can fence them against its Start authority before any hashing.
+#[allow(clippy::too_many_arguments)]
+async fn run_prepared_media_asset_relink_batch(
+    state: &AppState,
+    operation: MediaAssetOperationGuard,
+    asset_id: MediaAssetId,
+    replacement_path: String,
+    policy: MediaAssetRelinkPolicy,
+    expected_epoch: u64,
+    owner_id: &str,
+    authority: MediaAssetPrepareAuthority,
+    original_asset: MediaAssetSummary,
+) -> Result<MediaAssetRelinkPrepareReport, String> {
+    let registry = Arc::clone(&state.media_asset_operations);
+    let handle = operation.handle();
+    let request_id = handle.request_id;
+    let cancel = operation.cancellation_flag();
+    let admission = operation.admission();
+    let worker_asset = original_asset.clone();
+    let worker_cancel = Arc::clone(&cancel);
+    let decision = tauri::async_runtime::spawn_blocking(move || {
+        prepare_media_asset_relink_decision(
+            &worker_asset,
+            replacement_path,
+            policy,
+            worker_cancel.as_ref(),
+        )
+    })
+    .await
+    .map_err(|error| format!("Media asset relink prepare worker failed: {error}"))??;
+    if operation.cancelled() {
+        return Err("Media asset operation was cancelled".to_string());
+    }
+    let (current_authority, _) =
+        capture_media_asset_relink_prepare_asset(state, asset_id, expected_epoch, owner_id)?;
+    if current_authority != authority {
+        return Err("Project changed while media asset relink was prepared; retry".to_string());
+    }
+    match decision {
+        PreparedMediaAssetRelinkDecision::Outcome(outcome) => Ok(MediaAssetRelinkPrepareReport {
+            request_id,
+            operation_generation: handle.generation,
+            prepared_relink_token: None,
+            project_epoch: authority.epoch,
+            project_revision: authority.revision,
+            checkpoint_hash: authority.checkpoint_hash,
+            outcome: Some(outcome),
+        }),
+        PreparedMediaAssetRelinkDecision::Ready {
+            replacement,
+            adopted_replacement,
+            legacy_source_identity,
+        } => {
+            let token = registry.store_prepared_relink_from_active(
+                &handle,
+                owner_id,
+                PreparedMediaAssetRelink {
+                    request_id,
+                    operation_generation: handle.generation,
+                    owner_id: owner_id.to_string(),
+                    asset_id,
+                    authority: authority.clone(),
+                    original_asset,
+                    replacement,
+                    adopted_replacement,
+                    legacy_source_identity,
+                    cancel,
+                    admission,
+                    finalized_replacement_source: None,
+                    finalized_legacy_source: None,
+                    expires_at: Instant::now() + MEDIA_ASSET_PREPARED_IMPORT_TTL,
+                },
+            )?;
+            Ok(MediaAssetRelinkPrepareReport {
+                request_id,
+                operation_generation: handle.generation,
+                prepared_relink_token: Some(token),
+                project_epoch: authority.epoch,
+                project_revision: authority.revision,
+                checkpoint_hash: authority.checkpoint_hash,
+                outcome: None,
+            })
+        }
+    }
+}
+
+async fn prepare_media_asset_relink_impl(
+    state: &AppState,
+    request_id: u64,
+    asset_id: MediaAssetId,
+    replacement_path: String,
+    policy: MediaAssetRelinkPolicy,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<MediaAssetRelinkPrepareReport, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let operation = state
+        .media_asset_operations
+        .begin(request_id, owner_id.clone())?;
+    let (authority, original_asset) =
+        capture_media_asset_relink_prepare_asset(state, asset_id, expected_epoch, &owner_id)?;
+    run_prepared_media_asset_relink_batch(
+        state,
+        operation,
+        asset_id,
+        replacement_path,
+        policy,
+        expected_epoch,
+        &owner_id,
+        authority,
+        original_asset,
+    )
+    .await
+}
+
+/// Staged relink preparation that adopts a slot reserved by
+/// `start_media_asset_operation`, so relink hashing runs under a preannounced
+/// generation an `AbortSignal` can cancel before the first hashed chunk — the
+/// first-phase-cancellation seam the import staged path already has. Additive:
+/// the legacy single-call `relink_media_asset` / `prepare_media_asset_relink`
+/// entry points are unchanged.
+#[tauri::command]
+async fn prepare_reserved_media_asset_relink(
+    state: State<'_, AppState>,
+    request_id: u64,
+    operation_generation: u64,
+    asset_id: MediaAssetId,
+    replacement_path: String,
+    policy: MediaAssetRelinkPolicy,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<MediaAssetRelinkPrepareReport, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let (operation, reserved_authority) = state.media_asset_operations.adopt_reserved(
+        request_id,
+        operation_generation,
+        owner_id.clone(),
+    )?;
+    // Capture the relink authority (and the exact original asset) and require it
+    // still equals the exact A the client was told at Start. A same-epoch
+    // revision/hash mutation between Start and Prepare is rejected before any
+    // hashing/token/publication; the adopted `operation` guard drops on the early
+    // return, releasing the slot. Epoch replacement is still rejected inside the
+    // capture.
+    let (authority, original_asset) =
+        capture_media_asset_relink_prepare_asset(&state, asset_id, expected_epoch, &owner_id)?;
+    ensure_reserved_media_asset_authority_unchanged(&reserved_authority, &authority)?;
+    run_prepared_media_asset_relink_batch(
+        &state,
+        operation,
+        asset_id,
+        replacement_path,
+        policy,
+        expected_epoch,
+        &owner_id,
+        authority,
+        original_asset,
+    )
+    .await
+}
+
+/// Read-only relink preparation. This preserves the established public name
+/// while deliberately not accepting a transaction ticket or mutating state.
+#[tauri::command]
+async fn relink_media_asset(
+    state: State<'_, AppState>,
+    request_id: u64,
+    asset_id: MediaAssetId,
+    replacement_path: String,
+    policy: MediaAssetRelinkPolicy,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<MediaAssetRelinkPrepareReport, String> {
+    prepare_media_asset_relink_impl(
+        &state,
+        request_id,
+        asset_id,
+        replacement_path,
+        policy,
+        expected_epoch,
+        owner_id,
+    )
+    .await
+}
+
+/// Explicit two-phase name for callers that do not use the legacy-shaped
+/// `relink_media_asset` entry point. Both paths are read-only preparation.
+#[tauri::command]
+async fn prepare_media_asset_relink(
+    state: State<'_, AppState>,
+    request_id: u64,
+    asset_id: MediaAssetId,
+    replacement_path: String,
+    policy: MediaAssetRelinkPolicy,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<MediaAssetRelinkPrepareReport, String> {
+    prepare_media_asset_relink_impl(
+        &state,
+        request_id,
+        asset_id,
+        replacement_path,
+        policy,
+        expected_epoch,
+        owner_id,
+    )
+    .await
+}
+
+/// Finalize relink bytes while no project transaction is pending. The short
+/// commit command can then CAS its fingerprint and publish the engine update.
+#[tauri::command]
+async fn finalize_prepared_media_asset_relink(
+    state: State<'_, AppState>,
+    prepared_relink_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<MediaAssetRelinkPrepareReport, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let registry = Arc::clone(&state.media_asset_operations);
+    let prepared = registry.prepared_relink_exact(
+        prepared_relink_token,
+        request_id,
+        operation_generation,
+        &owner_id,
+    )?;
+    let (authority, current_asset) = capture_media_asset_relink_prepare_asset(
+        &state,
+        prepared.asset_id,
+        expected_epoch,
+        &owner_id,
+    )?;
+    if authority != prepared.authority || current_asset != prepared.original_asset {
+        return Err("Media asset changed since relink preparation; retry".to_string());
+    }
+    // Exact-retry idempotency: a lost finalize reply must not reopen and
+    // re-lock the same source against the exclusive handle we already hold.
+    // Validate the retained source(s) and return the same report instead.
+    if let Some(existing_replacement) = prepared.finalized_replacement_source.clone() {
+        if prepared.cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
+        verify_finalized_local_media_asset_fingerprints(
+            std::slice::from_ref(&prepared.replacement),
+            std::slice::from_ref(&existing_replacement),
+            prepared.cancel.as_ref(),
+        )?;
+        if let Some(identity) = &prepared.legacy_source_identity {
+            let legacy_source = prepared.finalized_legacy_source.as_ref().ok_or_else(|| {
+                "Prepared legacy media source was not finalized before relink commit".to_string()
+            })?;
+            verify_finalized_local_media_asset_fingerprints(
+                std::slice::from_ref(&legacy_media_asset_prepared_for_identity(identity)),
+                std::slice::from_ref(legacy_source),
+                prepared.cancel.as_ref(),
+            )?;
+        }
+        return Ok(MediaAssetRelinkPrepareReport {
+            request_id,
+            operation_generation,
+            prepared_relink_token: Some(prepared_relink_token),
+            project_epoch: authority.epoch,
+            project_revision: authority.revision,
+            checkpoint_hash: authority.checkpoint_hash,
+            outcome: None,
+        });
+    }
+    let replacement = prepared.replacement.clone();
+    let legacy_identity = prepared.legacy_source_identity.clone();
+    let cancel = Arc::clone(&prepared.cancel);
+    let (replacement_source, legacy_source) = tauri::async_runtime::spawn_blocking(move || {
+        let sources = finalize_prepared_local_media_assets(
+            std::slice::from_ref(&replacement),
+            cancel.as_ref(),
+        )?;
+        let replacement_source = sources
+            .into_iter()
+            .next()
+            .expect("one replacement produces one source guard");
+        let legacy_source = if let Some(identity) = legacy_identity {
+            Some(finalize_legacy_media_source_for_relink(
+                &replacement_source,
+                &identity,
+                cancel.as_ref(),
+            )?)
+        } else {
+            None
+        };
+        Ok::<_, String>((replacement_source, legacy_source))
+    })
+    .await
+    .map_err(|error| format!("Media asset relink finalization worker failed: {error}"))??;
+    let (current_authority, current_asset) = capture_media_asset_relink_prepare_asset(
+        &state,
+        prepared.asset_id,
+        expected_epoch,
+        &owner_id,
+    )?;
+    if current_authority != authority || current_asset != prepared.original_asset {
+        return Err("Media asset changed while relink was finalized; retry".to_string());
+    }
+    registry.finalize_prepared_relink_exact(
+        prepared_relink_token,
+        request_id,
+        operation_generation,
+        &owner_id,
+        &authority,
+        replacement_source,
+        legacy_source,
+    )?;
+    Ok(MediaAssetRelinkPrepareReport {
+        request_id,
+        operation_generation,
+        prepared_relink_token: Some(prepared_relink_token),
+        project_epoch: authority.epoch,
+        project_revision: authority.revision,
+        checkpoint_hash: authority.checkpoint_hash,
+        outcome: None,
+    })
+}
+
+#[tauri::command]
+async fn commit_prepared_media_asset_relink(
+    state: State<'_, AppState>,
+    prepared_relink_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<MediaAssetRelinkReport, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let registry = Arc::clone(&state.media_asset_operations);
+    let receipt_key = MediaAssetCommitReceiptKey {
+        kind: MediaAssetCommitReceiptKind::Relink,
+        prepared_token: prepared_relink_token,
+        request_id,
+        operation_generation,
+        project_transaction_id,
+        owner_id: owner_id.clone(),
+    };
+    // Exact retry after a lost engine-ACK reply: fast-path the recorded outcome
+    // without taking the single-flight lane or touching the engine again.
+    if let Some(MediaAssetCommitReceipt::Relink(report)) = registry.commit_receipt(&receipt_key) {
+        return Ok(report);
+    }
+    // Serialize the terminal publication per exact receipt key so a concurrent
+    // exact duplicate returns the recorded outcome instead of publishing a
+    // second engine update.
+    let receipt = registry.commit_terminal_single_flight(&receipt_key, || {
+        let registry = Arc::clone(&state.media_asset_operations);
+        let prepared = registry.prepared_relink_exact(
+            prepared_relink_token,
+            request_id,
+            operation_generation,
+            &owner_id,
+        )?;
+        let finalized_replacement_source = prepared
+            .finalized_replacement_source
+            .clone()
+            .ok_or_else(|| {
+                "Prepared media asset relink must be finalized before opening a project transaction"
+                    .to_string()
+            })?;
+        if prepared.cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
+        {
+            let _external_admission = lock_project_external_command_admission(&state)?;
+            let mut coordinator = lock_project_coordinator(&state)?;
+            validate_media_asset_commit_ticket_and_authority(
+                &state,
+                &mut coordinator,
+                project_transaction_id,
+                expected_epoch,
+                &owner_id,
+                &prepared.authority,
+            )?;
+        }
+        verify_finalized_local_media_asset_fingerprints(
+            std::slice::from_ref(&prepared.replacement),
+            std::slice::from_ref(&finalized_replacement_source),
+            prepared.cancel.as_ref(),
+        )?;
+        if let Some(identity) = &prepared.legacy_source_identity {
+            let legacy_source = prepared.finalized_legacy_source.as_ref().ok_or_else(|| {
+                "Prepared legacy media source was not finalized before relink commit".to_string()
+            })?;
+            let legacy = legacy_media_asset_prepared_for_identity(identity);
+            verify_finalized_local_media_asset_fingerprints(
+                std::slice::from_ref(&legacy),
+                std::slice::from_ref(legacy_source),
+                prepared.cancel.as_ref(),
+            )?;
+        }
+        let (_external_admission, mut coordinator) = (
+            lock_project_external_command_admission(&state)?,
+            lock_project_coordinator(&state)?,
+        );
+        validate_media_asset_commit_ticket_and_authority(
+            &state,
+            &mut coordinator,
+            project_transaction_id,
+            expected_epoch,
+            &owner_id,
+            &prepared.authority,
+        )?;
+        let snapshot = state.engine.persistence_snapshot()?;
+        let current_asset = media_asset_catalog_for_snapshot(&snapshot)
+            .iter()
+            .find(|asset| asset.id == prepared.asset_id)
+            .cloned()
+            .ok_or_else(|| format!("Media asset {} was not found", prepared.asset_id))?;
+        if current_asset != prepared.original_asset {
+            return Err("Media asset changed while relink was being finalized; retry".to_string());
+        }
+        let mut updated_asset = prepared.original_asset.clone();
+        updated_asset.source = prepared.replacement.source.clone();
+        updated_asset.content_hash = Some(prepared.replacement.content_hash.clone());
+        updated_asset.byte_size = Some(prepared.replacement.byte_size);
+        // Linearization point: admit iff no cancel has won. Once admitted, a
+        // concurrent cancel loses and returns `false`, so an engine publish and a
+        // `cancel == true` can never coexist. A duplicate that finds the
+        // operation already admitted (only reachable via a different receipt key,
+        // since the same key was already returned from the lane's receipt check)
+        // fails closed rather than publishing a second update.
+        match prepared.admission.try_admit() {
+            Ok(MediaAssetCommitAdmission::Admitted) => {}
+            Ok(MediaAssetCommitAdmission::AlreadyAdmitted) => {
+                return Err(
+                    "Media asset operation was already committed; prepare the relink again"
+                        .to_string(),
+                )
+            }
+            Err(()) => return Err("Media asset operation was cancelled".to_string()),
+        }
+        state
+            .engine
+            .media_asset_transaction_published(MediaAssetTransaction::Update(updated_asset))?;
+        Ok(MediaAssetCommitReceipt::Relink(MediaAssetRelinkReport {
+            request_id,
+            operation_generation,
+            project_epoch: prepared.authority.epoch,
+            project_revision: prepared.authority.revision,
+            checkpoint_hash: prepared.authority.checkpoint_hash.clone(),
+            outcome: MediaAssetRelinkOutcome::Relinked {
+                asset_id: prepared.asset_id,
+                adopted_replacement: prepared.adopted_replacement,
+            },
+        }))
+    })?;
+    registry.consume_prepared_relink_after_commit(
+        prepared_relink_token,
+        request_id,
+        operation_generation,
+        &owner_id,
+    );
+    match receipt {
+        MediaAssetCommitReceipt::Relink(report) => Ok(report),
+        other => Err(format!(
+            "Media asset relink received an unexpected commit receipt: {other:?}"
+        )),
+    }
+}
+
+/// Run the final full byte proof while no generic project transaction is
+/// pending. The returned opaque token is unchanged; its server record gains a
+/// short-lived finalized fingerprint set for the subsequent quick commit.
+#[tauri::command]
+async fn finalize_prepared_media_assets(
+    state: State<'_, AppState>,
+    prepared_import_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<MediaAssetImportReport, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let registry = Arc::clone(&state.media_asset_operations);
+    let prepared = registry.prepared_exact(
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        &owner_id,
+    )?;
+    let authority = capture_media_asset_prepare_authority(&state, &owner_id, expected_epoch)?;
+    if authority != prepared.authority {
+        return Err(
+            "Project changed since local media assets were prepared; retry the import".to_string(),
+        );
+    }
+    // Exact-retry idempotency: a lost finalize reply must not reopen and
+    // re-lock each source against the exclusive handles we already hold (that
+    // would self-conflict on Windows). Revalidate the retained sources and
+    // return the same report instead.
+    if let Some(existing_sources) = prepared.finalized_sources.clone() {
+        if prepared.cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
+        verify_finalized_local_media_asset_fingerprints(
+            &prepared.assets,
+            &existing_sources,
+            prepared.cancel.as_ref(),
+        )?;
+        return Ok(media_asset_import_report(
+            request_id,
+            operation_generation,
+            Some(prepared_import_token),
+            &authority,
+            prepared.entries,
+        ));
+    }
+    let assets = prepared.assets.clone();
+    let cancel = Arc::clone(&prepared.cancel);
+    let sources = tauri::async_runtime::spawn_blocking(move || {
+        finalize_prepared_local_media_assets(&assets, cancel.as_ref())
+    })
+    .await
+    .map_err(|error| format!("Local media asset finalization worker failed: {error}"))??;
+    let current_authority =
+        capture_media_asset_prepare_authority(&state, &owner_id, expected_epoch)?;
+    if current_authority != authority {
+        return Err(
+            "Project changed while local media assets were finalized; retry the import".to_string(),
+        );
+    }
+    registry.finalize_prepared_import_exact(
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        &owner_id,
+        &authority,
+        sources,
+    )?;
+    Ok(media_asset_import_report(
+        request_id,
+        operation_generation,
+        Some(prepared_import_token),
+        &authority,
+        prepared.entries,
+    ))
+}
+
+/// Commit a server-held finalized import through the normal project-mutation
+/// ticket. The frontend must subsequently call `commit_project_transaction`;
+/// this command intentionally never edits coordinator history itself.
+#[tauri::command]
+async fn commit_prepared_media_assets(
+    state: State<'_, AppState>,
+    prepared_import_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<MediaAssetImportReport, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let registry = Arc::clone(&state.media_asset_operations);
+    let receipt_key = MediaAssetCommitReceiptKey {
+        kind: MediaAssetCommitReceiptKind::Import,
+        prepared_token: prepared_import_token,
+        request_id,
+        operation_generation,
+        project_transaction_id,
+        owner_id: owner_id.clone(),
+    };
+    // Exact retry after a lost engine-ACK reply: fast-path the recorded import
+    // report without taking the single-flight lane, allocating IDs, or
+    // republishing.
+    if let Some(MediaAssetCommitReceipt::Import(report)) = registry.commit_receipt(&receipt_key) {
+        return Ok(report);
+    }
+    // Serialize the terminal publication per exact receipt key. A concurrent
+    // exact duplicate blocks on this lane and then returns the recorded receipt
+    // instead of validating, allocating IDs, or publishing a second import.
+    let receipt = registry.commit_terminal_single_flight(&receipt_key, || {
+        let registry = Arc::clone(&state.media_asset_operations);
+        let prepared = registry.prepared_exact(
+            prepared_import_token,
+            request_id,
+            operation_generation,
+            &owner_id,
+        )?;
+        if prepared.cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
+
+        let finalized_sources = prepared.finalized_sources.clone().ok_or_else(|| {
+            "Prepared media asset import must be finalized before opening a project transaction"
+                .to_string()
+        })?;
+        // First authority capture proves this is an exact currently-pending
+        // frontend mutation. Full hashing was already finalized with no ticket;
+        // only the intentionally short metadata CAS remains below.
+        {
+            let _external_admission = lock_project_external_command_admission(&state)?;
+            let mut coordinator = lock_project_coordinator(&state)?;
+            validate_media_asset_commit_ticket_and_authority(
+                &state,
+                &mut coordinator,
+                project_transaction_id,
+                expected_epoch,
+                &owner_id,
+                &prepared.authority,
+            )?;
+        }
+
+        verify_finalized_local_media_asset_fingerprints(
+            &prepared.assets,
+            &finalized_sources,
+            prepared.cancel.as_ref(),
+        )?;
+        if prepared.cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
+        if Instant::now() >= prepared.expires_at {
+            return Err("Prepared media asset import expired; prepare again".to_string());
+        }
+
+        // Reacquire the authoritative mutation lane after I/O. This second exact
+        // check rejects an old A token after a project replacement, external
+        // mutation, wrong-owner ticket, or stale epoch before an engine ACK.
+        let mut entries = prepared.entries.clone();
+        let authority = prepared.authority.clone();
+        let (_external_admission, mut coordinator) = (
+            lock_project_external_command_admission(&state)?,
+            lock_project_coordinator(&state)?,
+        );
+        validate_media_asset_commit_ticket_and_authority(
+            &state,
+            &mut coordinator,
+            project_transaction_id,
+            expected_epoch,
+            &owner_id,
+            &authority,
+        )?;
+        if prepared.cancel.load(Ordering::Acquire) {
+            return Err("Media asset operation was cancelled".to_string());
+        }
+        let snapshot = state.engine.persistence_snapshot()?;
+        let (candidate, results) = build_media_asset_catalog_import_candidate(
+            media_asset_catalog_for_snapshot(&snapshot),
+            &prepared.assets,
+            || state.engine.allocate_media_asset_id(),
+        );
+        apply_media_asset_import_results_to_report(&mut entries, &results);
+        // Linearization point: admit iff no cancel has won. After this a
+        // concurrent cancel loses and returns `false`, so cancel-true and
+        // publish-success can never coexist. A duplicate that finds the operation
+        // already admitted (only reachable via a different receipt key, since the
+        // same key was already returned from the lane's receipt check) fails
+        // closed rather than publishing a second import.
+        match prepared.admission.try_admit() {
+            Ok(MediaAssetCommitAdmission::Admitted) => {}
+            Ok(MediaAssetCommitAdmission::AlreadyAdmitted) => {
+                return Err(
+                    "Media asset operation was already committed; prepare again to import"
+                        .to_string(),
+                )
+            }
+            Err(()) => return Err("Media asset operation was cancelled".to_string()),
+        }
+        // Engine publication validates and ACKs the complete candidate before
+        // exposing it. No coordinator state is advanced here: the paired
+        // `commit_project_transaction` command captures authoritative engine B.
+        state
+            .engine
+            .media_asset_transaction_published(MediaAssetTransaction::Import(candidate))?;
+        Ok(MediaAssetCommitReceipt::Import(media_asset_import_report(
+            request_id,
+            operation_generation,
+            None,
+            &authority,
+            entries,
+        )))
+    })?;
+    // The receipt is already recorded; consume the token only after that durable
+    // evidence exists so a lost reply plus an exact retry still returns it.
+    registry.consume_prepared_after_commit(
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        &owner_id,
+    );
+    match receipt {
+        MediaAssetCommitReceipt::Import(report) => Ok(report),
+        other => Err(format!(
+            "Media asset import received an unexpected commit receipt: {other:?}"
+        )),
+    }
+}
+
+/// A fully preflighted internal media-asset project transaction commit. Every
+/// fallible step (baseline/candidate serialization, hash, revision/publication/
+/// history-generation preflight, and the history entry itself) is computed
+/// *before* the engine publication so the post-ACK apply is assignment-only and
+/// cannot report a false failure after the catalog physically changed. This is
+/// the media-library analogue of `PreparedDirectAncillaryMutation`, but it also
+/// records exactly one normal Undo history entry rather than clearing redo only.
+#[derive(Debug, Clone)]
+struct PreparedInternalMediaAssetCommit {
+    /// The internally-allocated transaction id becomes the new Undo entry id and
+    /// the coordinator's `next_transaction_id`. `Some` exactly when the import
+    /// changed the catalog; `None` for a dedupe-only import that leaves the
+    /// catalog byte-identical (so it also encodes whether anything changed).
+    next_transaction_id: Option<u64>,
+    next_history: ProjectHistory,
+    next_revision: Option<u64>,
+    next_checkpoint_hash: Option<String>,
+    next_history_generation: Option<u64>,
+    next_publication_generation: Option<u64>,
+}
+
+/// Derive the exact authored persistence image of an engine Media Asset
+/// transaction before it is published. This mirrors the engine's three
+/// transaction variants and validates the same engine-ready catalog invariant,
+/// allowing every hash/history/generation failure to happen before the ACK.
+fn media_asset_transaction_candidate_snapshot(
+    mut snapshot: EngineSnapshot,
+    transaction: &MediaAssetTransaction,
+) -> Result<EngineSnapshot, String> {
+    let video = match snapshot.authored_video.as_mut() {
+        Some(authored_video) => authored_video,
+        None => &mut snapshot.video,
+    };
+    match transaction {
+        MediaAssetTransaction::Import(candidate) => {
+            video.media_assets.extend(candidate.assets.iter().cloned());
+            video.layers.extend(candidate.layers.iter().cloned());
+        }
+        MediaAssetTransaction::BootstrapVjShow { candidate, output } => {
+            if !video.layers.is_empty()
+                || !video.media_assets.is_empty()
+                || !video.outputs.is_empty()
+                || !video.compositions.is_empty()
+            {
+                return Err("First-run VJ setup requires an empty video show".to_string());
+            }
+            if candidate.layers.is_empty() {
+                return Err("First-run VJ setup requires at least one media layer".to_string());
+            }
+            if output.id == 0
+                || output.kind != VideoOutputKind::Display
+                || output.composition_id != 1
+                || output.enabled
+                || !output.blackout
+                || output.fullscreen
+            {
+                return Err(
+                    "First-run VJ output must be a disabled, blacked-out windowed Display routed to Main"
+                        .to_string(),
+                );
+            }
+            video.media_assets = candidate.assets.clone();
+            video.layers = candidate.layers.clone();
+            video.outputs = vec![output.clone()];
+        }
+        MediaAssetTransaction::Update(asset) => {
+            let current = video
+                .media_assets
+                .iter_mut()
+                .find(|current| current.id == asset.id)
+                .ok_or_else(|| format!("Media asset {} was not found", asset.id))?;
+            *current = asset.clone();
+            for layer in &mut video.layers {
+                if layer.media_asset_id == Some(asset.id) {
+                    layer.source = asset.source.clone();
+                }
+            }
+        }
+    }
+    validate_engine_ready_video_media_assets(video)?;
+    Ok(snapshot)
+}
+
+/// Preflight the entire coordinator commit for one internal media transaction.
+/// The caller supplies the baseline `before` (A) and the candidate `after` (B,
+/// derived in memory before the engine publish). Every fallible operation lives
+/// here; nothing below `commit_internal_media_asset_transaction_after_preflight`
+/// can fail. Sharing this with the tests keeps the failure/idempotency proof on
+/// the real preflight rather than a look-alike.
+fn prepare_internal_media_asset_commit(
+    coordinator: &ProjectCoordinator,
+    label: &str,
+    coalesce_key: &str,
+    before: ProjectCheckpoint,
+    mut after: ProjectCheckpoint,
+    committed_at_unix_ms: u64,
+) -> Result<PreparedInternalMediaAssetCommit, String> {
+    let changed = before.project != after.project || before.mappings != after.mappings;
+    let (next_transaction_id, next_revision, next_checkpoint_hash, next_publication_generation) =
+        if changed {
+            let transaction_id =
+                coordinator
+                    .next_transaction_id
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        "Project transaction ID space is exhausted; restart Syndocal".to_string()
+                    })?;
+            let revision = checked_project_revision_after_mutation(coordinator)?;
+            let hash = project_checkpoint_hash(&after.project, &after.mappings)?;
+            after.revision = revision;
+            after.hash = hash.clone();
+            let publication_generation =
+                checked_project_authority_publication_generation_after_change(coordinator)?;
+            (
+                Some(transaction_id),
+                Some(revision),
+                Some(hash),
+                Some(publication_generation),
+            )
+        } else {
+            (None, None, None, None)
+        };
+    // Only a real catalog change is an observable history-stack transition, so a
+    // dedupe-only import leaves `history_generation` untouched.
+    let next_history_generation = changed
+        .then(|| checked_project_history_generation_after_change(coordinator))
+        .transpose()?;
+    // Build the entry on a clone so a fallible coalesce/entry step never mutates
+    // the live history while the operation can still fail.
+    let mut next_history = coordinator.history.clone();
+    let pending = PendingProjectTransaction {
+        transaction_id: next_transaction_id.unwrap_or(coordinator.next_transaction_id),
+        // The Undo entry does not retain an owner; the internal transaction has
+        // no renderer ticket.
+        owner_id: String::new(),
+        label: label.trim().chars().take(80).collect(),
+        coalesce_key: coalesce_key.trim().chars().take(240).collect(),
+        before,
+        epoch: coordinator.epoch,
+    };
+    commit_project_history_entry(&mut next_history, pending, after, committed_at_unix_ms)?;
+    Ok(PreparedInternalMediaAssetCommit {
+        next_transaction_id,
+        next_history,
+        next_revision,
+        next_checkpoint_hash,
+        next_history_generation,
+        next_publication_generation,
+    })
+}
+
+/// Apply a preflighted internal media commit. This is assignment-only and
+/// infallible: it runs only after a definitive engine acknowledgement, so no
+/// serialization/hash/revision error can retroactively fail the mutation. It
+/// also disarms the bounded transaction-active flag.
+fn commit_internal_media_asset_transaction_after_preflight(
+    transaction_active: &AtomicBool,
+    coordinator: &mut ProjectCoordinator,
+    plan: PreparedInternalMediaAssetCommit,
+) {
+    if let Some(next_transaction_id) = plan.next_transaction_id {
+        coordinator.next_transaction_id = next_transaction_id;
+    }
+    if let (Some(revision), Some(checkpoint_hash)) = (plan.next_revision, plan.next_checkpoint_hash)
+    {
+        coordinator.revision = revision;
+        coordinator.checkpoint_hash = checkpoint_hash;
+    }
+    if let Some(next_publication_generation) = plan.next_publication_generation {
+        commit_project_authority_publication_after_preflight(
+            coordinator,
+            next_publication_generation,
+            ProjectAuthorityPublicationKind::Mutation,
+        );
+    }
+    coordinator.history = plan.next_history;
+    if let Some(next_history_generation) = plan.next_history_generation {
+        coordinator.history_generation = next_history_generation;
+    }
+    transaction_active.store(false, Ordering::Release);
+}
+
+/// Run one internal media-asset project transaction around a bounded engine
+/// publication. The admission CAS is the linearization point: a cancel that wins
+/// before it yields zero mutation and history; once `Admitted`, the transaction
+/// arms the bounded active flag, performs the short publication, and — on a
+/// definitive acknowledgement — applies the preflighted plan with assignment-only
+/// commit bookkeeping. A concurrent duplicate that reaches this on a different
+/// receipt key finds the operation already admitted and is refused rather than
+/// publishing twice; a publication failure disarms and leaves the coordinator
+/// untouched. Shared with the tests so the CAS/commit proof uses the real path.
+fn run_internal_media_asset_transaction<T>(
+    transaction_active: &AtomicBool,
+    coordinator: &mut ProjectCoordinator,
+    admission: &MediaAssetOperationAdmission,
+    plan: PreparedInternalMediaAssetCommit,
+    publish: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    match admission.try_admit() {
+        Ok(MediaAssetCommitAdmission::Admitted) => {}
+        Ok(MediaAssetCommitAdmission::AlreadyAdmitted) => {
+            return Err(
+                "Media asset import was already committed; prepare again to import".to_string(),
+            )
+        }
+        Err(()) => return Err("Media asset import was cancelled".to_string()),
+    }
+    run_admitted_internal_media_asset_transaction(transaction_active, coordinator, plan, publish)
+}
+
+/// The definitive half after the operation admission CAS has selected its sole
+/// publisher. It contains no fallible coordinator bookkeeping after the engine
+/// ACK: an engine error disarms and returns A, while success applies the already
+/// prepared assignments and returns the published payload.
+fn run_admitted_internal_media_asset_transaction<T>(
+    transaction_active: &AtomicBool,
+    coordinator: &mut ProjectCoordinator,
+    plan: PreparedInternalMediaAssetCommit,
+    publish: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    // Arm the bounded transaction window only for the publication + commit; a
+    // pre-admit error above never reaches here, so it can never leave the flag
+    // armed.
+    transaction_active.store(true, Ordering::Release);
+    let published = match publish() {
+        Ok(published) => published,
+        Err(error) => {
+            transaction_active.store(false, Ordering::Release);
+            return Err(error);
+        }
+    };
+    commit_internal_media_asset_transaction_after_preflight(transaction_active, coordinator, plan);
+    Ok(published)
+}
+
+/// Authoritative admission for a backend-owned media commit. Unlike
+/// `validate_media_asset_commit_ticket_and_authority`, there is no renderer
+/// transaction ticket: the command owns the transaction internally, so it must
+/// require a registered owner, the exact current epoch, no pending renderer
+/// transaction, and that the prepared Start authority still matches the live
+/// project. The caller holds external admission before the coordinator so the
+/// reconcile here cannot race a completed external persistence send.
+fn validate_authoritative_media_asset_commit(
+    state: &AppState,
+    coordinator: &mut ProjectCoordinator,
+    expected_epoch: u64,
+    owner_id: &str,
+    authority: &MediaAssetPrepareAuthority,
+) -> Result<(), String> {
+    reconcile_project_checkpoint_for_coordinator(state, coordinator)?;
+    ensure_project_transaction_owner_registered(state, owner_id)?;
+    validate_authoritative_media_asset_commit_after_reconcile(
+        coordinator,
+        expected_epoch,
+        authority,
+    )?;
+    ensure_project_operator_authoritative_mutation_allowed(state, coordinator, owner_id)
+}
+
+fn validate_authoritative_media_asset_commit_after_reconcile(
+    coordinator: &ProjectCoordinator,
+    expected_epoch: u64,
+    authority: &MediaAssetPrepareAuthority,
+) -> Result<(), String> {
+    ensure_project_epoch_matches(coordinator, expected_epoch)?;
+    ensure_no_pending_project_transaction(coordinator)?;
+    if media_asset_prepare_authority(coordinator) != *authority {
+        return Err(
+            "Project changed since local media assets were prepared; retry the import".to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// Verify a finalized import token while no project transaction is held. The
+/// first authority pass rejects stale work before filesystem access; the shared
+/// internal transaction helper performs the second pass immediately before
+/// candidate capture and publication.
+fn verify_authoritative_prepared_import(
+    state: &AppState,
+    prepared: &PreparedMediaAssetImport,
+    expected_epoch: u64,
+    owner_id: &str,
+    expected_authority: &MediaAssetPrepareAuthority,
+) -> Result<(), String> {
+    if prepared.authority != *expected_authority {
+        return Err(
+            "Prepared media asset Start authority does not match this terminal request".to_string(),
+        );
+    }
+    if prepared.cancel.load(Ordering::Acquire) {
+        return Err("Media asset operation was cancelled".to_string());
+    }
+    if Instant::now() >= prepared.expires_at {
+        return Err("Prepared media asset import expired; prepare again".to_string());
+    }
+    let finalized_sources = prepared.finalized_sources.as_ref().ok_or_else(|| {
+        "Prepared media asset import must be finalized before committing".to_string()
+    })?;
+    {
+        let _external_admission = lock_project_external_command_admission(state)?;
+        let mut coordinator = lock_project_coordinator(state)?;
+        validate_authoritative_media_asset_commit(
+            state,
+            &mut coordinator,
+            expected_epoch,
+            owner_id,
+            expected_authority,
+        )?;
+    }
+    verify_finalized_local_media_asset_fingerprints(
+        &prepared.assets,
+        finalized_sources,
+        prepared.cancel.as_ref(),
+    )?;
+    if prepared.cancel.load(Ordering::Acquire) {
+        return Err("Media asset operation was cancelled".to_string());
+    }
+    if Instant::now() >= prepared.expires_at {
+        return Err("Prepared media asset import expired; prepare again".to_string());
+    }
+    Ok(())
+}
+
+fn verify_authoritative_prepared_relink(
+    state: &AppState,
+    prepared: &PreparedMediaAssetRelink,
+    expected_epoch: u64,
+    owner_id: &str,
+    expected_authority: &MediaAssetPrepareAuthority,
+) -> Result<(), String> {
+    if prepared.authority != *expected_authority {
+        return Err(
+            "Prepared media asset relink Start authority does not match this terminal request"
+                .to_string(),
+        );
+    }
+    if prepared.cancel.load(Ordering::Acquire) {
+        return Err("Media asset operation was cancelled".to_string());
+    }
+    if Instant::now() >= prepared.expires_at {
+        return Err("Prepared media asset relink expired; prepare again".to_string());
+    }
+    let replacement_source = prepared
+        .finalized_replacement_source
+        .as_ref()
+        .ok_or_else(|| {
+            "Prepared media asset relink must be finalized before committing".to_string()
+        })?;
+    {
+        let _external_admission = lock_project_external_command_admission(state)?;
+        let mut coordinator = lock_project_coordinator(state)?;
+        validate_authoritative_media_asset_commit(
+            state,
+            &mut coordinator,
+            expected_epoch,
+            owner_id,
+            expected_authority,
+        )?;
+    }
+    verify_finalized_local_media_asset_fingerprints(
+        std::slice::from_ref(&prepared.replacement),
+        std::slice::from_ref(replacement_source),
+        prepared.cancel.as_ref(),
+    )?;
+    if let Some(identity) = &prepared.legacy_source_identity {
+        let legacy_source = prepared.finalized_legacy_source.as_ref().ok_or_else(|| {
+            "Prepared legacy media source was not finalized before relink commit".to_string()
+        })?;
+        let legacy = legacy_media_asset_prepared_for_identity(identity);
+        verify_finalized_local_media_asset_fingerprints(
+            std::slice::from_ref(&legacy),
+            std::slice::from_ref(legacy_source),
+            prepared.cancel.as_ref(),
+        )?;
+    }
+    if prepared.cancel.load(Ordering::Acquire) {
+        return Err("Media asset operation was cancelled".to_string());
+    }
+    if Instant::now() >= prepared.expires_at {
+        return Err("Prepared media asset relink expired; prepare again".to_string());
+    }
+    Ok(())
+}
+
+fn authoritative_terminal_failure_if_admitted(
+    admission: &MediaAssetOperationAdmission,
+    error: String,
+) -> Result<MediaAssetAuthoritativeTerminalResult, String> {
+    if admission.is_admitted() {
+        // A Published ACK error is definitive and the engine contract has
+        // rolled back to A. Record it as terminal so exact retries/queries see
+        // the same failure and prepared handles can be released. Errors before
+        // admission remain retryable and are deliberately not recorded.
+        Ok(MediaAssetAuthoritativeTerminalResult::Failure(
+            MediaAssetAuthoritativeFailureResult { message: error },
+        ))
+    } else {
+        Err(error)
+    }
+}
+
+/// Shared backend-owned transaction for every authoritative media commit. It
+/// performs the second exact authority validation, captures A, derives and
+/// validates B in memory, preflights the complete history/revision/hash update,
+/// then crosses one definitive engine ACK and applies only assignments. No
+/// renderer project transaction or pending history record is created.
+#[allow(clippy::too_many_arguments)]
+fn commit_authoritative_media_asset_transaction<R>(
+    state: &AppState,
+    admission: &MediaAssetOperationAdmission,
+    expected_epoch: u64,
+    owner_id: &str,
+    expected_authority: &MediaAssetPrepareAuthority,
+    history_label: &str,
+    history_coalesce_key: &str,
+    build: impl FnOnce(&EngineSnapshot) -> Result<(MediaAssetTransaction, R), String>,
+) -> Result<(R, ProjectHistoryMutationResult), String> {
+    let (_external_admission, mut coordinator) = (
+        lock_project_external_command_admission(state)?,
+        lock_project_coordinator(state)?,
+    );
+    validate_authoritative_media_asset_commit(
+        state,
+        &mut coordinator,
+        expected_epoch,
+        owner_id,
+        expected_authority,
+    )?;
+    let snapshot = state.engine.persistence_snapshot()?;
+    let before_project = project_file_for_save_from_parts(snapshot.clone(), &coordinator.ancillary);
+    let before_hash = project_checkpoint_hash(&before_project, &coordinator.mappings)?;
+    let before = ProjectCheckpoint {
+        project: before_project,
+        mappings: coordinator.mappings.clone(),
+        epoch: coordinator.epoch,
+        revision: coordinator.revision,
+        hash: before_hash,
+    };
+    let (transaction, command_result) = build(&snapshot)?;
+    let candidate_snapshot = media_asset_transaction_candidate_snapshot(snapshot, &transaction)?;
+    let after_project =
+        project_file_for_save_from_parts(candidate_snapshot, &coordinator.ancillary);
+    let after = ProjectCheckpoint {
+        project: after_project,
+        mappings: coordinator.mappings.clone(),
+        epoch: coordinator.epoch,
+        revision: coordinator.revision,
+        hash: String::new(),
+    };
+    let plan = prepare_internal_media_asset_commit(
+        &coordinator,
+        history_label,
+        history_coalesce_key,
+        before,
+        after,
+        current_unix_ms().min(u64::MAX as u128) as u64,
+    )?;
+    run_internal_media_asset_transaction(
+        &state.project_transaction_active,
+        &mut coordinator,
+        admission,
+        plan,
+        || state.engine.media_asset_transaction_published(transaction),
+    )?;
+    let mutation = ProjectHistoryMutationResult {
+        history_status: project_history_status_for_coordinator(&coordinator),
+        authority: project_authority_bundle_from_coordinator(state, &coordinator),
+    };
+    Ok((command_result, mutation))
+}
+
+/// Backend-owned Media Library import. This is the authoritative replacement for
+/// the renderer-ticketed `commit_prepared_media_assets`: it owns the project
+/// transaction internally, so it takes no `project_transaction_id` and its
+/// terminal receipt key is transaction-id-independent. A lost reply followed by
+/// an exact retry — which cannot reuse the old ticket — still lands on the same
+/// receipt key and returns the recorded `report` + `mutation` without
+/// republishing the catalog or advancing history twice.
+#[tauri::command]
+fn commit_prepared_media_assets_authoritative(
+    state: State<'_, AppState>,
+    prepared_import_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<MediaAssetAuthoritativeImportResult, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    ensure_project_transaction_owner_registered(&state, &owner_id)?;
+    let registry = Arc::clone(&state.media_asset_operations);
+    let operation_key = media_asset_authoritative_operation_key(
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        &owner_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+    )?;
+    let expected_authority = media_asset_authoritative_expected_authority(&operation_key);
+    let shape = media_asset_authoritative_shape(MediaAssetAuthoritativeCommitKind::Import, &[]);
+    // The operation lane performs canonical receipt lookup before this closure,
+    // so a token already consumed after a lost reply is still recoverable.
+    let terminal = registry.authoritative_terminal_single_flight(&operation_key, &shape, || {
+        let registry = Arc::clone(&state.media_asset_operations);
+        let prepared = registry.prepared_exact(
+            prepared_import_token,
+            request_id,
+            operation_generation,
+            &owner_id,
+        )?;
+        verify_authoritative_prepared_import(
+            &state,
+            &prepared,
+            expected_epoch,
+            &owner_id,
+            &expected_authority,
+        )?;
+        let entries = prepared.entries.clone();
+        let committed = commit_authoritative_media_asset_transaction(
+            &state,
+            prepared.admission.as_ref(),
+            expected_epoch,
+            &owner_id,
+            &expected_authority,
+            "Import media assets",
+            "",
+            |snapshot| {
+                let (candidate, results) = build_media_asset_catalog_import_candidate(
+                    media_asset_catalog_for_snapshot(snapshot),
+                    &prepared.assets,
+                    || state.engine.allocate_media_asset_id(),
+                );
+                let mut entries = entries;
+                apply_media_asset_import_results_to_report(&mut entries, &results);
+                let report = media_asset_import_report(
+                    request_id,
+                    operation_generation,
+                    None,
+                    &expected_authority,
+                    entries,
+                );
+                Ok((MediaAssetTransaction::Import(candidate), report))
+            },
+        );
+        let (report, mutation) = match committed {
+            Ok(committed) => committed,
+            Err(error) => {
+                return authoritative_terminal_failure_if_admitted(
+                    prepared.admission.as_ref(),
+                    error,
+                )
+            }
+        };
+        Ok(MediaAssetAuthoritativeTerminalResult::Import(
+            MediaAssetAuthoritativeImportResult { report, mutation },
+        ))
+    })?;
+    // The receipt is already recorded; consume the token only after that durable
+    // evidence exists so a lost reply plus an exact retry still returns it.
+    registry.consume_prepared_after_commit(
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        &owner_id,
+    );
+    match terminal {
+        MediaAssetAuthoritativeTerminalResult::Import(result) => Ok(result),
+        MediaAssetAuthoritativeTerminalResult::Failure(failure) => Err(failure.message),
+        other => Err(format!(
+            "Authoritative media asset import received an unexpected commit receipt: {other:?}"
+        )),
+    }
+}
+
+#[tauri::command]
+fn get_media_asset_operation_terminal_result(
+    state: State<'_, AppState>,
+    prepared_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<Option<MediaAssetAuthoritativeTerminalEnvelope>, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    ensure_project_transaction_owner_registered(&state, &owner_id)?;
+    let operation_key = media_asset_authoritative_operation_key(
+        prepared_token,
+        request_id,
+        operation_generation,
+        &owner_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+    )?;
+    Ok(state
+        .media_asset_operations
+        .authoritative_receipt(&operation_key)
+        .map(|record| MediaAssetAuthoritativeTerminalEnvelope {
+            command_kind: record.shape.kind,
+            shape_fingerprint: record.shape.fingerprint,
+            terminal: record.terminal,
+        }))
+}
+
+#[tauri::command]
+fn commit_prepared_media_asset_relink_authoritative(
+    state: State<'_, AppState>,
+    prepared_relink_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<MediaAssetAuthoritativeRelinkResult, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    ensure_project_transaction_owner_registered(&state, &owner_id)?;
+    let registry = Arc::clone(&state.media_asset_operations);
+    let operation_key = media_asset_authoritative_operation_key(
+        prepared_relink_token,
+        request_id,
+        operation_generation,
+        &owner_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+    )?;
+    let expected_authority = media_asset_authoritative_expected_authority(&operation_key);
+    let shape = media_asset_authoritative_shape(MediaAssetAuthoritativeCommitKind::Relink, &[]);
+    let terminal = registry.authoritative_terminal_single_flight(&operation_key, &shape, || {
+        let prepared = registry.prepared_relink_exact(
+            prepared_relink_token,
+            request_id,
+            operation_generation,
+            &owner_id,
+        )?;
+        verify_authoritative_prepared_relink(
+            &state,
+            &prepared,
+            expected_epoch,
+            &owner_id,
+            &expected_authority,
+        )?;
+        let committed = commit_authoritative_media_asset_transaction(
+            &state,
+            prepared.admission.as_ref(),
+            expected_epoch,
+            &owner_id,
+            &expected_authority,
+            "Relink media asset",
+            "",
+            |snapshot| {
+                let current_asset = media_asset_catalog_for_snapshot(snapshot)
+                    .iter()
+                    .find(|asset| asset.id == prepared.asset_id)
+                    .cloned()
+                    .ok_or_else(|| format!("Media asset {} was not found", prepared.asset_id))?;
+                if current_asset != prepared.original_asset {
+                    return Err(
+                        "Media asset changed while relink was being finalized; retry".to_string(),
+                    );
+                }
+                let mut updated_asset = prepared.original_asset.clone();
+                updated_asset.source = prepared.replacement.source.clone();
+                updated_asset.content_hash = Some(prepared.replacement.content_hash.clone());
+                updated_asset.byte_size = Some(prepared.replacement.byte_size);
+                let report = MediaAssetRelinkReport {
+                    request_id,
+                    operation_generation,
+                    project_epoch: expected_authority.epoch,
+                    project_revision: expected_authority.revision,
+                    checkpoint_hash: expected_authority.checkpoint_hash.clone(),
+                    outcome: MediaAssetRelinkOutcome::Relinked {
+                        asset_id: prepared.asset_id,
+                        adopted_replacement: prepared.adopted_replacement,
+                    },
+                };
+                Ok((MediaAssetTransaction::Update(updated_asset), report))
+            },
+        );
+        let (report, mutation) = match committed {
+            Ok(committed) => committed,
+            Err(error) => {
+                return authoritative_terminal_failure_if_admitted(
+                    prepared.admission.as_ref(),
+                    error,
+                )
+            }
+        };
+        Ok(MediaAssetAuthoritativeTerminalResult::Relink(
+            MediaAssetAuthoritativeRelinkResult { report, mutation },
+        ))
+    })?;
+    registry.consume_prepared_relink_after_commit(
+        prepared_relink_token,
+        request_id,
+        operation_generation,
+        &owner_id,
+    );
+    match terminal {
+        MediaAssetAuthoritativeTerminalResult::Relink(result) => Ok(result),
+        MediaAssetAuthoritativeTerminalResult::Failure(failure) => Err(failure.message),
+        other => Err(format!(
+            "Authoritative media asset relink received an unexpected terminal result: {other:?}"
+        )),
+    }
+}
+
+enum PreparedAuthoritativeLayerCommandResult {
+    Layers(Vec<VideoLayerId>),
+    Bootstrap(VjFirstRunSetupResult),
+}
+
+#[allow(clippy::too_many_arguments)]
+fn commit_prepared_media_asset_layers_authoritative(
+    state: &AppState,
+    prepared_import_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: &str,
+    shape: MediaAssetAuthoritativeRequestShape,
+    labels: Option<Vec<String>>,
+    required_kind: VideoSourceKind,
+    history_label: &str,
+    bootstrap: bool,
+) -> Result<MediaAssetAuthoritativeTerminalResult, String> {
+    ensure_project_transaction_owner_registered(state, owner_id)?;
+    let registry = Arc::clone(&state.media_asset_operations);
+    let operation_key = media_asset_authoritative_operation_key(
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        owner_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+    )?;
+    let expected_authority = media_asset_authoritative_expected_authority(&operation_key);
+    let terminal = registry.authoritative_terminal_single_flight(&operation_key, &shape, || {
+        let _first_run = bootstrap
+            .then(|| {
+                state
+                    .vj_first_run
+                    .lock()
+                    .map_err(|_| "First-run VJ setup lock is unavailable".to_string())
+            })
+            .transpose()?;
+        let prepared = registry.prepared_exact(
+            prepared_import_token,
+            request_id,
+            operation_generation,
+            owner_id,
+        )?;
+        require_legacy_prepared_media_all_or_nothing(&prepared, history_label)?;
+        require_prepared_local_media_kind(&prepared.assets, required_kind, history_label)?;
+        verify_authoritative_prepared_import(
+            state,
+            &prepared,
+            expected_epoch,
+            owner_id,
+            &expected_authority,
+        )?;
+        if bootstrap {
+            ensure_video_output_backend_available(&VideoOutputKind::Display)?;
+        }
+        let committed = commit_authoritative_media_asset_transaction(
+            state,
+            prepared.admission.as_ref(),
+            expected_epoch,
+            owner_id,
+            &expected_authority,
+            history_label,
+            "",
+            |snapshot| {
+                let labels = labels.unwrap_or_else(|| {
+                    prepared
+                        .assets
+                        .iter()
+                        .map(|asset| asset.label.clone())
+                        .collect()
+                });
+                let (candidate, layer_ids) = build_media_asset_layer_import_candidate(
+                    media_asset_catalog_for_snapshot(snapshot),
+                    &prepared.assets,
+                    &labels,
+                    || state.engine.allocate_media_asset_id(),
+                    || state.engine.allocate_video_layer_id(),
+                )?;
+                if bootstrap {
+                    let output_id = state.engine.allocate_video_output_id();
+                    let setup = VjFirstRunSetupResult {
+                        layer_ids,
+                        composition_id: 1,
+                        output_id,
+                    };
+                    Ok((
+                        MediaAssetTransaction::BootstrapVjShow {
+                            candidate,
+                            output: safe_first_run_vj_output(output_id),
+                        },
+                        PreparedAuthoritativeLayerCommandResult::Bootstrap(setup),
+                    ))
+                } else {
+                    Ok((
+                        MediaAssetTransaction::Import(candidate),
+                        PreparedAuthoritativeLayerCommandResult::Layers(layer_ids),
+                    ))
+                }
+            },
+        );
+        let (command_result, mutation) = match committed {
+            Ok(committed) => committed,
+            Err(error) => {
+                return authoritative_terminal_failure_if_admitted(
+                    prepared.admission.as_ref(),
+                    error,
+                )
+            }
+        };
+        match command_result {
+            PreparedAuthoritativeLayerCommandResult::Bootstrap(setup) => {
+                Ok(MediaAssetAuthoritativeTerminalResult::Bootstrap(
+                    MediaAssetAuthoritativeBootstrapResult { setup, mutation },
+                ))
+            }
+            PreparedAuthoritativeLayerCommandResult::Layers(layer_ids) => Ok(
+                MediaAssetAuthoritativeTerminalResult::Layers(MediaAssetAuthoritativeLayerResult {
+                    layer_ids,
+                    mutation,
+                }),
+            ),
+        }
+    })?;
+    registry.consume_prepared_after_commit(
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        owner_id,
+    );
+    Ok(terminal)
+}
+
+#[tauri::command]
+fn commit_prepared_video_file_layer_authoritative(
+    state: State<'_, AppState>,
+    label: String,
+    prepared_import_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<MediaAssetAuthoritativeLayerResult, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let label = normalize_video_layer_label(label)?;
+    let shape = media_asset_authoritative_shape(
+        MediaAssetAuthoritativeCommitKind::VideoFileLayer,
+        &[&label],
+    );
+    let terminal = commit_prepared_media_asset_layers_authoritative(
+        &state,
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        &owner_id,
+        shape,
+        Some(vec![label]),
+        VideoSourceKind::File,
+        "Add video file layer",
+        false,
+    )?;
+    match terminal {
+        MediaAssetAuthoritativeTerminalResult::Layers(result) if result.layer_ids.len() == 1 => {
+            Ok(result)
+        }
+        MediaAssetAuthoritativeTerminalResult::Layers(_) => Err(
+            "Authoritative video file layer add published an unexpected layer count".to_string(),
+        ),
+        MediaAssetAuthoritativeTerminalResult::Failure(failure) => Err(failure.message),
+        other => Err(format!(
+            "Authoritative video file layer add received an unexpected terminal result: {other:?}"
+        )),
+    }
+}
+
+#[tauri::command]
+fn commit_prepared_still_image_layer_authoritative(
+    state: State<'_, AppState>,
+    label: String,
+    prepared_import_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<MediaAssetAuthoritativeLayerResult, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let label = normalize_video_layer_label(label)?;
+    let shape = media_asset_authoritative_shape(
+        MediaAssetAuthoritativeCommitKind::StillImageLayer,
+        &[&label],
+    );
+    let terminal = commit_prepared_media_asset_layers_authoritative(
+        &state,
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        &owner_id,
+        shape,
+        Some(vec![label]),
+        VideoSourceKind::StillImage,
+        "Add still image layer",
+        false,
+    )?;
+    match terminal {
+        MediaAssetAuthoritativeTerminalResult::Layers(result) if result.layer_ids.len() == 1 => {
+            Ok(result)
+        }
+        MediaAssetAuthoritativeTerminalResult::Layers(_) => Err(
+            "Authoritative still image layer add published an unexpected layer count".to_string(),
+        ),
+        MediaAssetAuthoritativeTerminalResult::Failure(failure) => Err(failure.message),
+        other => Err(format!(
+            "Authoritative still image layer add received an unexpected terminal result: {other:?}"
+        )),
+    }
+}
+
+#[tauri::command]
+fn commit_prepared_local_media_layers_authoritative(
+    state: State<'_, AppState>,
+    kind: VideoSourceKind,
+    prepared_import_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<MediaAssetAuthoritativeLayerResult, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let kind_name = media_asset_video_source_kind_name(&kind);
+    let shape = media_asset_authoritative_shape(
+        MediaAssetAuthoritativeCommitKind::LocalMediaLayers,
+        &[kind_name],
+    );
+    let terminal = commit_prepared_media_asset_layers_authoritative(
+        &state,
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        &owner_id,
+        shape,
+        None,
+        kind,
+        "Add local media layers",
+        false,
+    )?;
+    match terminal {
+        MediaAssetAuthoritativeTerminalResult::Layers(result) => Ok(result),
+        MediaAssetAuthoritativeTerminalResult::Failure(failure) => Err(failure.message),
+        other => Err(format!(
+            "Authoritative local media layer add received an unexpected terminal result: {other:?}"
+        )),
+    }
+}
+
+#[tauri::command]
+fn commit_prepared_bootstrap_vj_show_authoritative(
+    state: State<'_, AppState>,
+    kind: VideoSourceKind,
+    prepared_import_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<MediaAssetAuthoritativeBootstrapResult, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    if kind != VideoSourceKind::File {
+        return Err("First-run VJ setup requires local video files".to_string());
+    }
+    let shape = media_asset_authoritative_shape(
+        MediaAssetAuthoritativeCommitKind::BootstrapVjShow,
+        &[media_asset_video_source_kind_name(&kind), "safe_output_v1"],
+    );
+    let terminal = commit_prepared_media_asset_layers_authoritative(
+        &state,
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        &owner_id,
+        shape,
+        None,
+        VideoSourceKind::File,
+        "Set up first-run VJ show",
+        true,
+    )?;
+    match terminal {
+        MediaAssetAuthoritativeTerminalResult::Bootstrap(result) => Ok(result),
+        MediaAssetAuthoritativeTerminalResult::Failure(failure) => Err(failure.message),
+        other => Err(format!(
+            "Authoritative first-run VJ setup received an unexpected terminal result: {other:?}"
+        )),
+    }
+}
+
+/// Staged compatibility commit for a single File layer. New UI callers must
+/// prepare and finalize the local bytes before opening the generic ticket.
+#[tauri::command]
+fn commit_prepared_video_file_layer(
+    state: State<'_, AppState>,
+    label: String,
+    prepared_import_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<VideoLayerId, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let label = normalize_video_layer_label(label)?;
+    let receipt_key = media_asset_commit_receipt_key(
+        MediaAssetCommitReceiptKind::Layers,
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        project_transaction_id,
+        &owner_id,
+    );
+    if let Some(MediaAssetCommitReceipt::Layers(layer_ids)) =
+        state.media_asset_operations.commit_receipt(&receipt_key)
+    {
+        return layer_ids
+            .into_iter()
+            .next()
+            .ok_or_else(|| "Video layer add published no layer".to_string());
+    }
+    let prepared = state.media_asset_operations.prepared_exact(
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        &owner_id,
+    )?;
+    require_legacy_prepared_media_all_or_nothing(&prepared, "Video layer add")?;
+    require_prepared_local_media_kind(&prepared.assets, VideoSourceKind::File, "Video layer add")?;
+    let receipt = commit_prepared_media_asset_layers(
+        &state,
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        project_transaction_id,
+        expected_epoch,
+        &owner_id,
+        vec![label],
+        None,
+        receipt_key,
+        None,
+    )?;
+    media_asset_commit_receipt_layer_ids(&receipt)
+        .into_iter()
+        .next()
+        .ok_or_else(|| "Video layer add published no layer".to_string())
+}
+
+/// Staged compatibility commit for the historical batch-layer affordance.
+#[tauri::command]
+fn commit_prepared_local_media_layers(
+    state: State<'_, AppState>,
+    kind: VideoSourceKind,
+    prepared_import_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<Vec<VideoLayerId>, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    if !matches!(kind, VideoSourceKind::File | VideoSourceKind::StillImage) {
+        return Err("Batch media import supports video files and still images only".to_string());
+    }
+    let receipt_key = media_asset_commit_receipt_key(
+        MediaAssetCommitReceiptKind::Layers,
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        project_transaction_id,
+        &owner_id,
+    );
+    if let Some(MediaAssetCommitReceipt::Layers(layer_ids)) =
+        state.media_asset_operations.commit_receipt(&receipt_key)
+    {
+        return Ok(layer_ids);
+    }
+    let prepared = state.media_asset_operations.prepared_exact(
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        &owner_id,
+    )?;
+    require_legacy_prepared_media_all_or_nothing(&prepared, "Batch media import")?;
+    require_prepared_local_media_kind(&prepared.assets, kind, "Batch media import")?;
+    let labels = prepared
+        .assets
+        .iter()
+        .map(|asset| asset.label.clone())
+        .collect();
+    let receipt = commit_prepared_media_asset_layers(
+        &state,
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        project_transaction_id,
+        expected_epoch,
+        &owner_id,
+        labels,
+        None,
+        receipt_key,
+        None,
+    )?;
+    Ok(media_asset_commit_receipt_layer_ids(&receipt))
+}
+
+fn safe_first_run_vj_output(output_id: VideoOutputId) -> VideoOutputSummary {
+    VideoOutputSummary {
+        id: output_id,
+        label: "VJ Program".to_string(),
+        kind: VideoOutputKind::Display,
+        enabled: false,
+        composition_id: 1,
+        fullscreen: false,
+        monitor_id: Some(0),
+        width: 1920,
+        height: 1080,
+        endpoint_name: None,
+        opacity: 1.0,
+        blackout: true,
+        mapping: VideoOutputMapping::default(),
+    }
+}
+
+fn validate_bootstrap_vj_prepared_import(
+    prepared: &PreparedMediaAssetImport,
+    kind: VideoSourceKind,
+) -> Result<(), String> {
+    if kind != VideoSourceKind::File {
+        return Err("First-run VJ setup requires local video files".to_string());
+    }
+    require_legacy_prepared_media_all_or_nothing(prepared, "First-run VJ setup")?;
+    require_prepared_local_media_kind(
+        &prepared.assets,
+        VideoSourceKind::File,
+        "First-run VJ setup",
+    )
+}
+
+/// Staged first-run setup commit. The preflight has intentionally completed
+/// before the generic transaction ticket exists.
+#[tauri::command]
+fn commit_prepared_bootstrap_vj_show(
+    state: State<'_, AppState>,
+    kind: VideoSourceKind,
+    prepared_import_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<VjFirstRunSetupResult, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let receipt_key = media_asset_commit_receipt_key(
+        MediaAssetCommitReceiptKind::Bootstrap,
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        project_transaction_id,
+        &owner_id,
+    );
+    // Check the receipt before allocating a fresh output ID so an exact retry
+    // returns the original show's IDs rather than a new (unpublished) output.
+    if let Some(MediaAssetCommitReceipt::Bootstrap(result)) =
+        state.media_asset_operations.commit_receipt(&receipt_key)
+    {
+        return Ok(result);
+    }
+    let prepared = state.media_asset_operations.prepared_exact(
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        &owner_id,
+    )?;
+    require_legacy_prepared_media_all_or_nothing(&prepared, "Still image layer add")?;
+    validate_bootstrap_vj_prepared_import(&prepared, kind)?;
+    ensure_video_output_backend_available(&VideoOutputKind::Display)?;
+    let _first_run = state
+        .vj_first_run
+        .lock()
+        .map_err(|_| "First-run VJ setup lock is unavailable".to_string())?;
+    let output_id = state.engine.allocate_video_output_id();
+    let composition_id: CompositionId = 1;
+    let labels = prepared
+        .assets
+        .iter()
+        .map(|asset| asset.label.clone())
+        .collect();
+    let receipt = commit_prepared_media_asset_layers(
+        &state,
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        project_transaction_id,
+        expected_epoch,
+        &owner_id,
+        labels,
+        Some(safe_first_run_vj_output(output_id)),
+        receipt_key,
+        Some((output_id, composition_id)),
+    )?;
+    // A duplicate that lost the single-flight race returns the first publisher's
+    // terminal Bootstrap result — including its original output ID — so both
+    // callers report the same show rather than this call's unpublished output ID.
+    match receipt {
+        MediaAssetCommitReceipt::Bootstrap(result) => Ok(result),
+        other => Err(format!(
+            "First-run VJ setup received an unexpected commit receipt: {other:?}"
+        )),
+    }
+}
+
+/// Staged compatibility commit for one StillImage layer.
+#[tauri::command]
+fn commit_prepared_still_image_layer(
+    state: State<'_, AppState>,
+    label: String,
+    prepared_import_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<VideoLayerId, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let label = normalize_video_layer_label(label)?;
+    let receipt_key = media_asset_commit_receipt_key(
+        MediaAssetCommitReceiptKind::Layers,
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        project_transaction_id,
+        &owner_id,
+    );
+    if let Some(MediaAssetCommitReceipt::Layers(layer_ids)) =
+        state.media_asset_operations.commit_receipt(&receipt_key)
+    {
+        return layer_ids
+            .into_iter()
+            .next()
+            .ok_or_else(|| "Still image layer add published no layer".to_string());
+    }
+    let prepared = state.media_asset_operations.prepared_exact(
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        &owner_id,
+    )?;
+    require_prepared_local_media_kind(
+        &prepared.assets,
+        VideoSourceKind::StillImage,
+        "Still image layer add",
+    )?;
+    let receipt = commit_prepared_media_asset_layers(
+        &state,
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        project_transaction_id,
+        expected_epoch,
+        &owner_id,
+        vec![label],
+        None,
+        receipt_key,
+        None,
+    )?;
+    media_asset_commit_receipt_layer_ids(&receipt)
+        .into_iter()
+        .next()
+        .ok_or_else(|| "Still image layer add published no layer".to_string())
+}
+
+/// Transitional wire-compatible route. The existing renderer still invokes
+/// `{ label, path }`; it remains usable until that renderer moves to the
+/// staged Prepare -> Finalize -> Commit API above. It deliberately keeps the
+/// legacy synchronous I/O behavior local to this bridge rather than leaving
+/// a missing-argument IPC failure in released builds.
 #[tauri::command]
 fn add_video_file_layer(
     state: State<'_, AppState>,
@@ -9572,7 +16899,7 @@ fn add_video_file_layer(
     Ok(layer_id)
 }
 
-fn prepare_local_media_layers(
+fn prepare_legacy_local_media_layers(
     kind: VideoSourceKind,
     paths: Vec<String>,
 ) -> Result<Vec<(String, VideoSourceSummary)>, String> {
@@ -9588,8 +16915,7 @@ fn prepare_local_media_layers(
             "Batch media import is limited to {MAX_BATCH_MEDIA_FILES} files at a time"
         ));
     }
-
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     let mut prepared = Vec::new();
     for path in paths {
         let context = if kind == VideoSourceKind::File {
@@ -9606,7 +16932,7 @@ fn prepare_local_media_layers(
         if !seen.insert(dedupe_key) {
             continue;
         }
-        let label = std::path::Path::new(&path)
+        let label = Path::new(&path)
             .file_stem()
             .and_then(|value| value.to_str())
             .filter(|value| !value.trim().is_empty())
@@ -9641,7 +16967,7 @@ fn prepare_local_media_layers(
     Ok(prepared)
 }
 
-fn add_prepared_local_media_layers(
+fn add_legacy_prepared_local_media_layers(
     engine: &EngineHandle,
     prepared: Vec<(String, VideoSourceSummary)>,
 ) -> Result<Vec<VideoLayerId>, String> {
@@ -9666,26 +16992,8 @@ fn add_local_media_layers(
     kind: VideoSourceKind,
     paths: Vec<String>,
 ) -> Result<Vec<VideoLayerId>, String> {
-    let prepared = prepare_local_media_layers(kind, paths)?;
-    add_prepared_local_media_layers(&state.engine, prepared)
-}
-
-fn safe_first_run_vj_output(output_id: VideoOutputId) -> VideoOutputSummary {
-    VideoOutputSummary {
-        id: output_id,
-        label: "VJ Program".to_string(),
-        kind: VideoOutputKind::Display,
-        enabled: false,
-        composition_id: 1,
-        fullscreen: false,
-        monitor_id: Some(0),
-        width: 1920,
-        height: 1080,
-        endpoint_name: None,
-        opacity: 1.0,
-        blackout: true,
-        mapping: VideoOutputMapping::default(),
-    }
+    let prepared = prepare_legacy_local_media_layers(kind, paths)?;
+    add_legacy_prepared_local_media_layers(&state.engine, prepared)
 }
 
 fn bootstrap_vj_show_engine(
@@ -9710,8 +17018,7 @@ fn bootstrap_vj_show_engine(
                 .to_string(),
         );
     }
-
-    let prepared = prepare_local_media_layers(kind, paths)?;
+    let prepared = prepare_legacy_local_media_layers(kind, paths)?;
     ensure_video_output_backend_available(&VideoOutputKind::Display)?;
     let output_id = engine.allocate_video_output_id();
     let output = safe_first_run_vj_output(output_id);
@@ -9719,10 +17026,7 @@ fn bootstrap_vj_show_engine(
         .into_iter()
         .map(|(label, source)| (engine.allocate_video_layer_id(), label, source))
         .collect::<Vec<_>>();
-    let layer_ids = layers
-        .iter()
-        .map(|(layer_id, _, _)| *layer_id)
-        .collect::<Vec<_>>();
+    let layer_ids = layers.iter().map(|(layer_id, _, _)| *layer_id).collect();
     engine.bootstrap_vj_show(layers, output)?;
     Ok(VjFirstRunSetupResult {
         layer_ids,
@@ -9788,7 +17092,7 @@ fn refresh_video_layer_metadata(
         .iter()
         .find(|layer| layer.id == layer_id)
         .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
-    let (source, message) = refresh_video_source_metadata(&layer.source)?;
+    let (source, message) = refresh_legacy_video_source_metadata(&layer.source)?;
     state
         .engine
         .send(EngineCommand::SetVideoLayerSource { layer_id, source })
@@ -9796,12 +17100,12 @@ fn refresh_video_layer_metadata(
     Ok(message)
 }
 
-fn refresh_video_source_metadata(
+fn refresh_legacy_video_source_metadata(
     source: &VideoSourceSummary,
 ) -> Result<(VideoSourceSummary, String), String> {
     match source.kind {
-        VideoSourceKind::File => refresh_file_video_source_metadata(source),
-        VideoSourceKind::StillImage => refresh_still_image_source_metadata(source),
+        VideoSourceKind::File => refresh_legacy_file_video_source_metadata(source),
+        VideoSourceKind::StillImage => refresh_legacy_still_image_source_metadata(source),
         VideoSourceKind::Camera
         | VideoSourceKind::ScreenCapture
         | VideoSourceKind::Ndi
@@ -9812,7 +17116,7 @@ fn refresh_video_source_metadata(
     }
 }
 
-fn refresh_file_video_source_metadata(
+fn refresh_legacy_file_video_source_metadata(
     source: &VideoSourceSummary,
 ) -> Result<(VideoSourceSummary, String), String> {
     let path = source
@@ -9853,7 +17157,7 @@ fn refresh_file_video_source_metadata(
     ))
 }
 
-fn refresh_still_image_source_metadata(
+fn refresh_legacy_still_image_source_metadata(
     source: &VideoSourceSummary,
 ) -> Result<(VideoSourceSummary, String), String> {
     let path = source
@@ -9882,7 +17186,11 @@ fn add_video_input_layer(
     label: String,
     kind: VideoSourceKind,
     name: String,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
 ) -> Result<VideoLayerId, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     let label = normalize_video_layer_label(label)?;
     let name = normalize_video_input_source_name(&kind, name)?;
     if !matches!(
@@ -9898,21 +17206,50 @@ fn add_video_input_layer(
         );
     }
     ensure_video_input_backend_available(&kind)?;
+    let source = VideoSourceSummary {
+        kind,
+        path: None,
+        name: Some(name),
+        codec: None,
+        metadata: None,
+    };
+    let (_external_admission, mut coordinator) = (
+        lock_project_external_command_admission(&state)?,
+        lock_project_coordinator(&state)?,
+    );
+    let authority = media_asset_prepare_authority(&coordinator);
+    validate_media_asset_commit_ticket_and_authority(
+        &state,
+        &mut coordinator,
+        project_transaction_id,
+        expected_epoch,
+        &owner_id,
+        &authority,
+    )?;
     let layer_id = state.engine.allocate_video_layer_id();
+    let asset_id = state.engine.allocate_media_asset_id();
     state
         .engine
-        .send(EngineCommand::AddVideoLayer {
-            layer_id,
-            label,
-            source: VideoSourceSummary {
-                kind,
-                path: None,
-                name: Some(name),
-                codec: None,
-                metadata: None,
+        .media_asset_transaction_published(MediaAssetTransaction::Import(
+            MediaAssetImportCandidate {
+                assets: vec![MediaAssetSummary {
+                    id: asset_id,
+                    label: label.clone(),
+                    source: source.clone(),
+                    content_hash: None,
+                    byte_size: None,
+                }],
+                layers: vec![protocol::VideoLayerSummary {
+                    id: layer_id,
+                    label,
+                    source,
+                    media_asset_id: Some(asset_id),
+                    blend_mode: VideoBlendMode::Normal,
+                    state: VideoLayerState::default(),
+                    isf_effect: None,
+                }],
             },
-        })
-        .map_err(|error| error.to_string())?;
+        ))?;
     Ok(layer_id)
 }
 
@@ -14791,40 +22128,20 @@ fn load_fixture_preset_for_all_matching(
 }
 
 #[tauri::command]
-fn new_project(state: State<'_, AppState>) -> Result<(), String> {
-    {
-        let mut custom_profiles = state
-            .custom_profiles
-            .lock()
-            .map_err(|_| "Custom profile state lock was poisoned".to_string())?;
-        custom_profiles.clear();
-    }
-    {
-        let mut current_path = state
-            .current_project_path
-            .lock()
-            .map_err(|_| "Current project path lock was poisoned".to_string())?;
-        *current_path = None;
-    }
-    {
-        let mut operator_policy = state
-            .operator_policy
-            .lock()
-            .map_err(|_| "Operator policy state lock was poisoned".to_string())?;
-        *operator_policy = None;
-    }
-    state
-        .fixture_groups
-        .lock()
-        .map_err(|_| "Fixture group state lock was poisoned".to_string())?
-        .clear();
-    *state
-        .fixture_group_delete_undo
-        .lock()
-        .map_err(|_| "Fixture group delete Undo lock was poisoned".to_string())? = None;
-    load_project_snapshot_with_runtime_reset(&state, EngineSnapshot::default())?;
-    reset_vj_preview_after_project_change(&state);
-    Ok(())
+fn new_project(state: State<'_, AppState>) -> Result<ProjectLoadResult, String> {
+    load_project_from_file(
+        &state,
+        ProjectFile {
+            version: PROJECT_FILE_VERSION,
+            app: APP_NAME.to_string(),
+            operator_policy: None,
+            custom_profiles: Vec::new(),
+            fixture_groups: Vec::new(),
+            snapshot: EngineSnapshot::default(),
+        },
+        "New project".to_string(),
+        None,
+    )
 }
 
 fn validate_operator_policy(policy: &OperatorPolicy) -> Result<(), String> {
@@ -14856,33 +22173,276 @@ fn validate_operator_policy(policy: &OperatorPolicy) -> Result<(), String> {
     Ok(())
 }
 
+fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
+    const BLOCK_BYTES: usize = 64;
+    let mut key_block = [0_u8; BLOCK_BYTES];
+    if key.len() > BLOCK_BYTES {
+        key_block[..32].copy_from_slice(&Sha256::digest(key));
+    } else {
+        key_block[..key.len()].copy_from_slice(key);
+    }
+    let mut inner_pad = [0x36_u8; BLOCK_BYTES];
+    let mut outer_pad = [0x5c_u8; BLOCK_BYTES];
+    for index in 0..BLOCK_BYTES {
+        inner_pad[index] ^= key_block[index];
+        outer_pad[index] ^= key_block[index];
+    }
+    let mut inner = Sha256::new();
+    inner.update(inner_pad);
+    inner.update(data);
+    let inner_digest = inner.finalize();
+    let mut outer = Sha256::new();
+    outer.update(outer_pad);
+    outer.update(inner_digest);
+    outer.finalize().into()
+}
+
+/// PBKDF2-HMAC-SHA256 for the project's fixed 32-byte Operator verifier. This
+/// deliberately computes one RFC 8018 block; the stored verifier length is
+/// already validated as exactly 32 bytes.
+fn operator_pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u32) -> [u8; 32] {
+    debug_assert!(iterations > 0);
+    let mut first_input = Vec::with_capacity(salt.len() + 4);
+    first_input.extend_from_slice(salt);
+    first_input.extend_from_slice(&1_u32.to_be_bytes());
+    let mut u = hmac_sha256(password, &first_input);
+    let mut verifier = u;
+    for _ in 1..iterations {
+        u = hmac_sha256(password, &u);
+        for (target, value) in verifier.iter_mut().zip(u) {
+            *target ^= value;
+        }
+    }
+    verifier
+}
+
+fn operator_password_matches_policy(
+    policy: &OperatorPolicy,
+    password: &[u8],
+) -> Result<bool, String> {
+    validate_operator_policy(policy)?;
+    let salt = base64::engine::general_purpose::STANDARD
+        .decode(&policy.credential.salt_b64)
+        .map_err(|_| "Operator credential salt is not valid base64".to_string())?;
+    let expected = base64::engine::general_purpose::STANDARD
+        .decode(&policy.credential.verifier_b64)
+        .map_err(|_| "Operator credential verifier is not valid base64".to_string())?;
+    let actual = operator_pbkdf2_sha256(password, &salt, policy.credential.iterations);
+    let mut difference = 0_u8;
+    for (left, right) in actual.iter().zip(expected.iter()) {
+        difference |= left ^ right;
+    }
+    Ok(difference == 0)
+}
+
+fn validate_operator_password_input(password: &str) -> Result<(), String> {
+    // Match the existing Web Crypto policy creator's JavaScript `length`
+    // contract (UTF-16 code units), including previously saved non-BMP passwords.
+    if password.encode_utf16().count() < OPERATOR_PASSWORD_MIN_CHARACTERS
+        || password.len() > OPERATOR_PASSWORD_MAX_BYTES
+    {
+        return Err(format!(
+            "Operator password must contain at least {OPERATOR_PASSWORD_MIN_CHARACTERS} characters and at most {OPERATOR_PASSWORD_MAX_BYTES} UTF-8 bytes"
+        ));
+    }
+    Ok(())
+}
+
+fn project_operator_session_for_policy<'a>(
+    sessions: &'a mut HashMap<String, ProjectOperatorSession>,
+    coordinator: &ProjectCoordinator,
+    owner_id: &str,
+) -> Option<&'a mut ProjectOperatorSession> {
+    let Some(policy) = coordinator.ancillary.operator_policy.clone() else {
+        sessions.remove(owner_id);
+        return None;
+    };
+    let reset = sessions.get(owner_id).is_none_or(|session| {
+        session.project_epoch != coordinator.epoch || session.policy != policy
+    });
+    if reset {
+        sessions.insert(
+            owner_id.to_string(),
+            ProjectOperatorSession {
+                project_epoch: coordinator.epoch,
+                unlocked: !policy.lock_on_load,
+                policy,
+            },
+        );
+    }
+    sessions.get_mut(owner_id)
+}
+
+/// Server-side Operator admission for backend-owned authoritative mutations.
+/// Terminal receipt lookup intentionally happens before this check: a lock
+/// engaged after B committed may not erase the caller's ability to learn that
+/// definitive result. The check is repeated only on the not-yet-published path.
+fn ensure_project_operator_authoritative_mutation_allowed(
+    state: &AppState,
+    coordinator: &ProjectCoordinator,
+    owner_id: &str,
+) -> Result<(), String> {
+    let mut sessions = state
+        .project_operator_sessions
+        .lock()
+        .map_err(|_| "Project operator session registry lock was poisoned".to_string())?;
+    project_operator_sessions_allow_authoritative_mutation(&mut sessions, coordinator, owner_id)
+}
+
+fn project_operator_sessions_allow_authoritative_mutation(
+    sessions: &mut HashMap<String, ProjectOperatorSession>,
+    coordinator: &ProjectCoordinator,
+    owner_id: &str,
+) -> Result<(), String> {
+    let Some(session) = project_operator_session_for_policy(sessions, coordinator, owner_id) else {
+        return Ok(());
+    };
+    if session.unlocked {
+        return Ok(());
+    }
+    let mode = match session.policy.lock_mode {
+        OperatorLockMode::Full => "Full",
+        OperatorLockMode::Partial => "Partial",
+    };
+    Err(format!(
+        "Operator {mode} Lock blocks project mutations for this renderer session"
+    ))
+}
+
+#[tauri::command]
+fn lock_project_operator_session(
+    state: State<'_, AppState>,
+    owner_id: String,
+) -> Result<OperatorLockMode, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let coordinator = lock_project_coordinator(&state)?;
+    ensure_project_transaction_owner_registered(&state, &owner_id)?;
+    let mut sessions = state
+        .project_operator_sessions
+        .lock()
+        .map_err(|_| "Project operator session registry lock was poisoned".to_string())?;
+    let session = project_operator_session_for_policy(&mut sessions, &coordinator, &owner_id)
+        .ok_or_else(|| "Configure an Operator policy before locking this project".to_string())?;
+    session.unlocked = false;
+    Ok(session.policy.lock_mode)
+}
+
+#[tauri::command]
+async fn unlock_project_operator_session(
+    state: State<'_, AppState>,
+    owner_id: String,
+    password: String,
+) -> Result<(), String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    validate_operator_password_input(&password)?;
+    let (project_epoch, policy) = {
+        let _external_admission = lock_project_external_command_admission(&state)?;
+        let coordinator = lock_project_coordinator(&state)?;
+        ensure_project_transaction_owner_registered(&state, &owner_id)?;
+        let policy = coordinator
+            .ancillary
+            .operator_policy
+            .clone()
+            .ok_or_else(|| "This project has no Operator policy".to_string())?;
+        validate_operator_policy(&policy)?;
+        (coordinator.epoch, policy)
+    };
+    let verification_policy = policy.clone();
+    let verified = tauri::async_runtime::spawn_blocking(move || {
+        let mut password_bytes = password.into_bytes();
+        let result = operator_password_matches_policy(&verification_policy, &password_bytes);
+        password_bytes.fill(0);
+        result
+    })
+    .await
+    .map_err(|error| format!("Operator password verification worker failed: {error}"))??;
+    if !verified {
+        return Err("Operator password is incorrect".to_string());
+    }
+
+    // Password work is intentionally outside project locks. Revalidate the
+    // exact policy and epoch before granting this owner an unlocked session.
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let coordinator = lock_project_coordinator(&state)?;
+    ensure_project_transaction_owner_registered(&state, &owner_id)?;
+    if coordinator.epoch != project_epoch
+        || coordinator.ancillary.operator_policy.as_ref() != Some(&policy)
+    {
+        return Err("Project Operator policy changed while the password was verified".to_string());
+    }
+    let mut sessions = state
+        .project_operator_sessions
+        .lock()
+        .map_err(|_| "Project operator session registry lock was poisoned".to_string())?;
+    sessions.insert(
+        owner_id,
+        ProjectOperatorSession {
+            project_epoch,
+            policy,
+            unlocked: true,
+        },
+    );
+    Ok(())
+}
+
 #[tauri::command]
 fn get_operator_policy(state: State<'_, AppState>) -> Result<Option<OperatorPolicy>, String> {
-    state
-        .operator_policy
-        .lock()
-        .map_err(|_| "Operator policy state lock was poisoned".to_string())
-        .map(|policy| policy.clone())
+    let coordinator = lock_project_coordinator(&state)?;
+    Ok(coordinator.ancillary.operator_policy.clone())
 }
 
 #[tauri::command]
 fn set_operator_policy(state: State<'_, AppState>, policy: OperatorPolicy) -> Result<(), String> {
     validate_operator_policy(&policy)?;
-    let mut current = state
+    let mut coordinator = lock_project_coordinator(&state)?;
+    // Preflight the legacy compatibility mirror before producing a candidate;
+    // after the authoritative assignment this path must not return an error.
+    drop(
+        state
+            .operator_policy
+            .lock()
+            .map_err(|_| "Operator policy state lock was poisoned".to_string())?,
+    );
+    let mut candidate_ancillary = coordinator.ancillary.clone();
+    candidate_ancillary.operator_policy = Some(policy);
+    let prepared = prepare_direct_project_ancillary_mutation(
+        &state,
+        &coordinator,
+        state.engine.persistence_snapshot()?,
+        candidate_ancillary,
+    )?;
+    commit_direct_project_ancillary_mutation_after_preflight(&state, &mut coordinator, prepared);
+    *state
         .operator_policy
         .lock()
-        .map_err(|_| "Operator policy state lock was poisoned".to_string())?;
-    *current = Some(policy);
+        .unwrap_or_else(|poison| poison.into_inner()) =
+        coordinator.ancillary.operator_policy.clone();
     Ok(())
 }
 
 #[tauri::command]
 fn clear_operator_policy(state: State<'_, AppState>) -> Result<(), String> {
-    let mut current = state
+    let mut coordinator = lock_project_coordinator(&state)?;
+    drop(
+        state
+            .operator_policy
+            .lock()
+            .map_err(|_| "Operator policy state lock was poisoned".to_string())?,
+    );
+    let mut candidate_ancillary = coordinator.ancillary.clone();
+    candidate_ancillary.operator_policy = None;
+    let prepared = prepare_direct_project_ancillary_mutation(
+        &state,
+        &coordinator,
+        state.engine.persistence_snapshot()?,
+        candidate_ancillary,
+    )?;
+    commit_direct_project_ancillary_mutation_after_preflight(&state, &mut coordinator, prepared);
+    *state
         .operator_policy
         .lock()
-        .map_err(|_| "Operator policy state lock was poisoned".to_string())?;
-    *current = None;
+        .unwrap_or_else(|poison| poison.into_inner()) = None;
     Ok(())
 }
 
@@ -14894,6 +22454,20 @@ fn save_user_template(
     osc_mappings: Vec<OscControlMapping>,
     dmx_mappings: Vec<DmxControlMapping>,
 ) -> Result<Option<String>, String> {
+    // Reserve before opening the native dialog. A project replacement while
+    // it is visible must reject this export rather than serializing B under
+    // the user's A-era template choice.
+    let ticket = {
+        let _external_admission = lock_project_external_command_admission(&state)?;
+        let mut coordinator = lock_project_coordinator(&state)?;
+        validate_frontend_mappings_match_authority(
+            &coordinator,
+            midi_mappings,
+            osc_mappings,
+            dmx_mappings,
+        )?;
+        reserve_project_save_ticket_for_publication(&state, &mut coordinator)?
+    };
     let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal User Template", &["sdctemplate"])
         .set_file_name("show.sdctemplate")
@@ -14914,10 +22488,10 @@ fn save_user_template(
         version: USER_TEMPLATE_VERSION,
         app: APP_NAME.to_string(),
         label,
-        project: project_file_for_save(&state)?,
-        midi_mappings,
-        osc_mappings,
-        dmx_mappings,
+        project: ticket.checkpoint.project.clone(),
+        midi_mappings: ticket.checkpoint.mappings.midi_mappings.clone(),
+        osc_mappings: ticket.checkpoint.mappings.osc_mappings.clone(),
+        dmx_mappings: ticket.checkpoint.mappings.dmx_mappings.clone(),
     })?;
     let bytes = serde_json::to_vec_pretty(&template).map_err(|error| error.to_string())?;
     if bytes.len() as u64 > USER_TEMPLATE_MAX_BYTES {
@@ -14926,7 +22500,11 @@ fn save_user_template(
             USER_TEMPLATE_MAX_BYTES / 1024 / 1024
         ));
     }
-    fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    let temp = prepare_project_save_bytes(&path, &bytes)?;
+    if let Err(error) = finalize_project_export_ticket(&state, &path, &temp, &ticket) {
+        discard_prepared_project_save_write(&temp);
+        return Err(error);
+    }
     Ok(Some(path.to_string_lossy().to_string()))
 }
 
@@ -14961,20 +22539,37 @@ fn load_user_template(
         dmx_mappings,
         ..
     } = template;
-    let loaded = load_project_from_file(
+    let loaded = load_project_from_file_with_control_mappings_and_disposition(
         &state,
-        project_for_warm_standby(project),
+        // Ownership fencing controls effective output. Do not rewrite the
+        // template's authored output intent: a later explicit Arm must be
+        // able to restore the saved DMX/video configuration unchanged.
+        project,
+        ProjectControlMappings {
+            midi_mappings: midi_mappings.clone(),
+            osc_mappings: osc_mappings.clone(),
+            dmx_mappings: dmx_mappings.clone(),
+        },
         format!("Template {label}"),
         None,
+        ProjectAuthorityDisposition::UnsavedReplacement,
     )?;
     Ok(Some(UserTemplateLoadResult {
         path: path.to_string_lossy().to_string(),
+        current_project_path: loaded.current_project_path.clone(),
         label,
         profiles: loaded.profiles,
         midi_mappings,
         osc_mappings,
         dmx_mappings,
         warnings: loaded.warnings,
+        project_epoch: loaded.project_epoch,
+        project_revision: loaded.project_revision,
+        checkpoint_hash: loaded.checkpoint_hash,
+        history_generation: loaded.history_generation,
+        authority_disposition_generation: loaded.authority_disposition_generation,
+        authority_disposition: loaded.authority_disposition,
+        authority: loaded.authority,
     }))
 }
 
@@ -14985,17 +22580,32 @@ fn save_project(
     midi_mappings: Vec<MidiControlMapping>,
     osc_mappings: Vec<OscControlMapping>,
     dmx_mappings: Vec<DmxControlMapping>,
-) -> Result<Option<String>, String> {
-    let current_path = state
-        .current_project_path
-        .lock()
-        .map_err(|_| "Current project path lock was poisoned".to_string())?
-        .clone();
+) -> Result<Option<ProjectSaveResult>, String> {
+    let (current_path, ticket) = {
+        let _external_admission = lock_project_external_command_admission(&state)?;
+        let mut coordinator = lock_project_coordinator(&state)?;
+        validate_frontend_mappings_match_authority(
+            &coordinator,
+            midi_mappings.clone(),
+            osc_mappings.clone(),
+            dmx_mappings.clone(),
+        )?;
+        (
+            coordinator.ancillary.current_project_path.clone(),
+            reserve_project_save_ticket_for_publication(&state, &mut coordinator)?,
+        )
+    };
     if let Some(path) = current_path {
-        write_project_file(&state, &path, midi_mappings, osc_mappings, dmx_mappings)?;
-        return Ok(Some(path.to_string_lossy().to_string()));
+        let temp = prepare_project_save_ticket_write(&path, &ticket)?;
+        return match finalize_project_save_ticket(&state, &path, &temp, &ticket, false) {
+            Ok(result) => Ok(Some(result)),
+            Err(error) => {
+                discard_prepared_project_save_write(&temp);
+                Err(error)
+            }
+        };
     }
-    save_project_with_dialog(&window, &state, midi_mappings, osc_mappings, dmx_mappings)
+    save_project_with_dialog(&window, &state, ticket)
 }
 
 #[tauri::command]
@@ -15005,17 +22615,26 @@ fn save_project_as(
     midi_mappings: Vec<MidiControlMapping>,
     osc_mappings: Vec<OscControlMapping>,
     dmx_mappings: Vec<DmxControlMapping>,
-) -> Result<Option<String>, String> {
-    save_project_with_dialog(&window, &state, midi_mappings, osc_mappings, dmx_mappings)
+) -> Result<Option<ProjectSaveResult>, String> {
+    let ticket = {
+        let _external_admission = lock_project_external_command_admission(&state)?;
+        let mut coordinator = lock_project_coordinator(&state)?;
+        validate_frontend_mappings_match_authority(
+            &coordinator,
+            midi_mappings,
+            osc_mappings,
+            dmx_mappings,
+        )?;
+        reserve_project_save_ticket_for_publication(&state, &mut coordinator)?
+    };
+    save_project_with_dialog(&window, &state, ticket)
 }
 
 fn save_project_with_dialog(
     window: &WebviewWindow,
     state: &State<'_, AppState>,
-    midi_mappings: Vec<MidiControlMapping>,
-    osc_mappings: Vec<OscControlMapping>,
-    dmx_mappings: Vec<DmxControlMapping>,
-) -> Result<Option<String>, String> {
+    ticket: ProjectSaveTicket,
+) -> Result<Option<ProjectSaveResult>, String> {
     let Some(path) = parented_file_dialog(window)
         .add_filter("Syndocal Project", &["sdc"])
         .set_file_name("show.sdc")
@@ -15024,26 +22643,14 @@ fn save_project_with_dialog(
         return Ok(None);
     };
     let path = normalize_project_save_path(path)?;
-    write_project_file(state, &path, midi_mappings, osc_mappings, dmx_mappings)?;
-    set_current_project_path(state, &path)?;
-    Ok(Some(path.to_string_lossy().to_string()))
-}
-
-fn write_project_file(
-    state: &State<'_, AppState>,
-    path: &Path,
-    midi_mappings: Vec<MidiControlMapping>,
-    osc_mappings: Vec<OscControlMapping>,
-    dmx_mappings: Vec<DmxControlMapping>,
-) -> Result<(), String> {
-    let project = project_file_for_save(state)?;
-    let json = project_json_for_write_with_control_mappings(
-        &project,
-        midi_mappings,
-        osc_mappings,
-        dmx_mappings,
-    )?;
-    fs::write(path, json).map_err(|error| error.to_string())
+    let temp = prepare_project_save_ticket_write(&path, &ticket)?;
+    match finalize_project_save_ticket(state, &path, &temp, &ticket, true) {
+        Ok(result) => Ok(Some(result)),
+        Err(error) => {
+            discard_prepared_project_save_write(&temp);
+            Err(error)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -15057,6 +22664,28 @@ fn project_json_for_write_with_control_mappings(
     osc_mappings: Vec<OscControlMapping>,
     dmx_mappings: Vec<DmxControlMapping>,
 ) -> Result<String, String> {
+    let value = project_root_value_with_control_mappings(
+        project,
+        midi_mappings,
+        osc_mappings,
+        dmx_mappings,
+    )?;
+    let json = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
+    if json.len() as u64 > PROJECT_FILE_MAX_BYTES {
+        return Err(format!(
+            "Project JSON is {} bytes; the limit is {PROJECT_FILE_MAX_BYTES} bytes",
+            json.len()
+        ));
+    }
+    Ok(json)
+}
+
+fn project_root_value_with_control_mappings(
+    project: &ProjectFile,
+    midi_mappings: Vec<MidiControlMapping>,
+    osc_mappings: Vec<OscControlMapping>,
+    dmx_mappings: Vec<DmxControlMapping>,
+) -> Result<Value, String> {
     validate_project_file(project)?;
     let mappings = ProjectControlMappings {
         midi_mappings: validate_midi_control_mappings(midi_mappings)?,
@@ -15085,46 +22714,513 @@ fn project_json_for_write_with_control_mappings(
             serde_json::to_value(&mappings.dmx_mappings).map_err(|error| error.to_string())?,
         );
     }
-    let json = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
-    if json.len() as u64 > PROJECT_FILE_MAX_BYTES {
-        return Err(format!(
-            "Project JSON is {} bytes; the limit is {PROJECT_FILE_MAX_BYTES} bytes",
-            json.len()
-        ));
-    }
-    Ok(json)
+    Ok(value)
 }
 
-fn project_file_for_save(state: &State<'_, AppState>) -> Result<ProjectFile, String> {
-    let mut custom_profiles = state
-        .custom_profiles
-        .lock()
-        .map_err(|_| "Custom profile state lock was poisoned".to_string())?
-        .values()
-        .cloned()
-        .collect::<Vec<_>>();
-    custom_profiles.sort_by(|left, right| left.source_path.cmp(&right.source_path));
-    let snapshot = project_snapshot_for_save(state.engine.persistence_snapshot()?);
-    let mut fixture_groups = state
-        .fixture_groups
-        .lock()
-        .map_err(|_| "Fixture group state lock was poisoned".to_string())?
-        .clone();
-    for group in &mut fixture_groups {
-        group.color = snapshot.group_colors.get(&group.id).cloned();
-    }
-    Ok(ProjectFile {
-        version: 1,
-        app: APP_NAME.to_string(),
-        operator_policy: state
-            .operator_policy
-            .lock()
-            .map_err(|_| "Operator policy state lock was poisoned".to_string())?
-            .clone(),
-        custom_profiles,
-        fixture_groups,
-        snapshot,
+fn project_file_for_save_with_coordinator(
+    state: &AppState,
+    coordinator: &ProjectCoordinator,
+) -> Result<ProjectFile, String> {
+    Ok(project_file_for_save_from_parts(
+        state.engine.persistence_snapshot()?,
+        &coordinator.ancillary,
+    ))
+}
+
+fn project_checkpoint_hash(
+    project: &ProjectFile,
+    mappings: &ProjectControlMappings,
+) -> Result<String, String> {
+    // Hash compact canonical root JSON, never the human-readable pretty file
+    // bytes.  A formatting-only rewrite must not invalidate a navigation CAS.
+    let root = project_root_value_with_control_mappings(
+        project,
+        mappings.midi_mappings.clone(),
+        mappings.osc_mappings.clone(),
+        mappings.dmx_mappings.clone(),
+    )?;
+    let canonical = serde_json::to_vec(&root).map_err(|error| error.to_string())?;
+    let digest = Sha256::digest(canonical);
+    Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+fn project_checkpoint_for_coordinator(
+    state: &AppState,
+    coordinator: &ProjectCoordinator,
+) -> Result<ProjectCheckpoint, String> {
+    let project = project_file_for_save_with_coordinator(state, coordinator)?;
+    let hash = project_checkpoint_hash(&project, &coordinator.mappings)?;
+    Ok(ProjectCheckpoint {
+        project,
+        mappings: coordinator.mappings.clone(),
+        epoch: coordinator.epoch,
+        revision: coordinator.revision,
+        hash,
     })
+}
+
+/// Capture the actual persistence surface at a coordinator boundary.  Engine
+/// commands are intentionally available to live MIDI/OSC/DMX and remote paths,
+/// so `checkpoint_hash` is a cache for UI/history tokens rather than the sole
+/// authority.  Reconcile it from `persistence_snapshot` before deciding that a
+/// save ticket or historic source is still current.
+fn reconcile_project_checkpoint_for_coordinator(
+    state: &AppState,
+    coordinator: &mut ProjectCoordinator,
+) -> Result<ProjectCheckpoint, String> {
+    let mut checkpoint = project_checkpoint_for_coordinator(state, coordinator)?;
+    reconcile_project_checkpoint_metadata(coordinator, &mut checkpoint)?;
+    Ok(checkpoint)
+}
+
+/// Advance the authority revision when the canonical persistence image was
+/// changed by an admitted external command. Kept separate from the engine
+/// capture so the generation invariant has an SDK-free regression seam.
+fn reconcile_project_checkpoint_metadata(
+    coordinator: &mut ProjectCoordinator,
+    checkpoint: &mut ProjectCheckpoint,
+) -> Result<(), String> {
+    // A live MIDI/OSC/DMX/remote command is allowed to alter the engine
+    // persistence image outside a frontend transaction.  Its canonical hash
+    // must never be published at the coordinator's old revision: that would
+    // make an exact B token indistinguishable from A to the frontend.
+    if checkpoint.hash != coordinator.checkpoint_hash {
+        if !coordinator.history.pending.is_empty() {
+            return Err(
+                "Live project persistence changed while a project transaction was active; cancel or complete the transaction before reconciling authority"
+                    .to_string(),
+            );
+        }
+        let next_revision = checked_project_revision_after_mutation(coordinator)?;
+        let next_history_generation = checked_project_history_generation_after_change(coordinator)?;
+        let next_publication_generation =
+            checked_project_authority_publication_generation_after_change(coordinator)?;
+        coordinator.revision = next_revision;
+        coordinator.checkpoint_hash = checkpoint.hash.clone();
+        // A command admitted outside the transaction/history protocol is
+        // intentionally non-Undoable. Both stacks name an older persistence
+        // source, so leave no stale Undo/Redo CAS token visible to the UI.
+        coordinator.history.undo.clear();
+        coordinator.history.redo.clear();
+        coordinator.history_generation = next_history_generation;
+        commit_project_authority_publication_after_preflight(
+            coordinator,
+            next_publication_generation,
+            ProjectAuthorityPublicationKind::Mutation,
+        );
+        checkpoint.revision = next_revision;
+    } else {
+        checkpoint.revision = coordinator.revision;
+    }
+    Ok(())
+}
+
+fn project_save_ticket_for_coordinator(
+    state: &AppState,
+    coordinator: &mut ProjectCoordinator,
+) -> Result<ProjectSaveTicket, String> {
+    ensure_no_pending_project_transaction(coordinator)?;
+    let checkpoint = reconcile_project_checkpoint_for_coordinator(state, coordinator)?;
+    Ok(ProjectSaveTicket {
+        checkpoint,
+        current_project_path: coordinator.ancillary.current_project_path.clone(),
+        path_generation: coordinator.path_generation,
+        authority_disposition_generation: coordinator.authority_disposition_generation,
+        save_reservation_generation: None,
+    })
+}
+
+/// Reserve the final-save lane after capturing an immutable image.  The
+/// reservation is deliberately acquired before a native dialog can block:
+/// when an older dialog returns after S2 has captured, its final replacement
+/// is rejected before touching disk.
+fn reserve_project_save_ticket_for_publication(
+    state: &AppState,
+    coordinator: &mut ProjectCoordinator,
+) -> Result<ProjectSaveTicket, String> {
+    let mut ticket = project_save_ticket_for_coordinator(state, coordinator)?;
+    let reservation = coordinator
+        .next_save_reservation_generation
+        .checked_add(1)
+        .ok_or_else(|| {
+            "Project save reservation space is exhausted; restart Syndocal".to_string()
+        })?;
+    coordinator.next_save_reservation_generation = reservation;
+    coordinator.latest_save_reservation_generation = reservation;
+    ticket.save_reservation_generation = Some(reservation);
+    Ok(ticket)
+}
+
+fn project_coordinator_for_initial_snapshot(snapshot: EngineSnapshot) -> ProjectCoordinator {
+    let project = ProjectFile {
+        version: PROJECT_FILE_VERSION,
+        app: APP_NAME.to_string(),
+        operator_policy: None,
+        custom_profiles: Vec::new(),
+        fixture_groups: Vec::new(),
+        snapshot: project_snapshot_for_save(snapshot),
+    };
+    let mappings = ProjectControlMappings::default();
+    let checkpoint_hash = project_checkpoint_hash(&project, &mappings)
+        .expect("the default engine snapshot must form a valid project checkpoint");
+    ProjectCoordinator {
+        checkpoint_hash,
+        mappings,
+        ..ProjectCoordinator::default()
+    }
+}
+
+fn prepare_project_save_ticket_write(
+    path: &Path,
+    ticket: &ProjectSaveTicket,
+) -> Result<PathBuf, String> {
+    let json = project_json_for_write_with_control_mappings(
+        &ticket.checkpoint.project,
+        ticket.checkpoint.mappings.midi_mappings.clone(),
+        ticket.checkpoint.mappings.osc_mappings.clone(),
+        ticket.checkpoint.mappings.dmx_mappings.clone(),
+    )?;
+    prepare_project_save_bytes(path, json.as_bytes())
+}
+
+fn prepare_project_save_bytes(path: &Path, bytes: &[u8]) -> Result<PathBuf, String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("Project path has no parent directory: {}", path.display()))?;
+    let file_name = path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| format!("Project path has no file name: {}", path.display()))?;
+    let temp = parent.join(format!(
+        ".{file_name}.{}.{}.{}.tmp",
+        std::process::id(),
+        current_unix_ms(),
+        PROJECT_SAVE_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+    ));
+    let result = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(|error| {
+                format!(
+                    "Unable to create temporary project file {}: {error}",
+                    temp.display()
+                )
+            })?;
+        file.write_all(bytes)
+            .and_then(|_| file.sync_all())
+            .map_err(|error| format!("Unable to write project file {}: {error}", temp.display()))?;
+        drop(file);
+        Ok(temp.clone())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
+}
+
+fn discard_prepared_project_save_write(temp: &Path) {
+    let _ = fs::remove_file(temp);
+}
+
+/// The caller must hold its publication/admission/coordinator guards while
+/// evaluating `ticket_is_current`. Keeping the check and replace adjacent in
+/// one production helper makes it impossible for a rejected reverse writer to
+/// touch the target file.
+fn publish_prepared_project_save_if_current(
+    temp: &Path,
+    path: &Path,
+    ticket_is_current: bool,
+) -> Result<(), String> {
+    if !ticket_is_current {
+        return Err(
+            "Project changed while Save was preparing; the older writer was rejected before replacing the file"
+                .to_string(),
+        );
+    }
+    replace_file_atomically(temp, path)
+}
+
+fn invalidate_recovery_for_current_save_ticket<T>(
+    ticket_is_current: bool,
+    invalidate: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    if !ticket_is_current {
+        return Err(
+            "Project changed while Save was preparing; the older writer was rejected before replacing the file"
+                .to_string(),
+        );
+    }
+    invalidate()
+}
+
+fn project_save_ticket_is_current(
+    state: &AppState,
+    coordinator: &mut ProjectCoordinator,
+    ticket: &ProjectSaveTicket,
+) -> Result<bool, String> {
+    ensure_no_pending_project_transaction(coordinator)?;
+    let current = reconcile_project_checkpoint_for_coordinator(state, coordinator)?;
+    Ok(project_save_ticket_matches_current(
+        ticket,
+        &current,
+        &coordinator.ancillary.current_project_path,
+        coordinator.path_generation,
+        coordinator.authority_disposition_generation,
+        coordinator.latest_save_reservation_generation,
+    ))
+}
+
+/// Keep Save/Save As adoption as a pure CAS predicate so the completion order
+/// is testable without file I/O. A stale writer may leave a coherent file on
+/// disk, but it can never claim or overwrite the newer current path.
+fn project_save_ticket_matches_current(
+    ticket: &ProjectSaveTicket,
+    current: &ProjectCheckpoint,
+    current_path: &Option<PathBuf>,
+    path_generation: u64,
+    authority_disposition_generation: u64,
+    latest_save_reservation_generation: u64,
+) -> bool {
+    current.epoch == ticket.checkpoint.epoch
+        && current.revision == ticket.checkpoint.revision
+        && current.hash == ticket.checkpoint.hash
+        && path_generation == ticket.path_generation
+        && current_path == &ticket.current_project_path
+        && authority_disposition_generation == ticket.authority_disposition_generation
+        && ticket
+            .save_reservation_generation
+            .is_none_or(|reservation| reservation == latest_save_reservation_generation)
+}
+
+/// Publish a prepared project file only while the ticket still owns the
+/// final-save lane. Lock order is deliberately save publication -> external
+/// admission -> coordinator, so a later reservation wins before any stale
+/// temp can replace the target. No fallible coordinator work remains after
+/// the atomic rename succeeds.
+fn finalize_project_save_ticket(
+    state: &AppState,
+    path: &Path,
+    temp: &Path,
+    ticket: &ProjectSaveTicket,
+    adopt_path: bool,
+) -> Result<ProjectSaveResult, String> {
+    let _save_publication = state
+        .project_save_publication
+        .lock()
+        .map_err(|_| "Project save publication lock was poisoned".to_string())?;
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    let ticket_is_current = project_save_ticket_is_current(state, &mut coordinator, ticket)?;
+    let next_disposition_generation =
+        checked_project_authority_disposition_generation_after_change(&coordinator)?;
+    let next_path_generation =
+        if adopt_path && coordinator.ancillary.current_project_path.as_deref() != Some(path) {
+            Some(coordinator.path_generation.checked_add(1).ok_or_else(|| {
+                "Project path generation is exhausted; restart Syndocal before saving".to_string()
+            })?)
+        } else {
+            None
+        };
+    // Preflight the compatibility mirror before disk publication. Its update
+    // after the rename is assignment-only and cannot turn a successful save
+    // into a false error.
+    let mut current_path_mirror = if adopt_path {
+        Some(
+            state
+                .current_project_path
+                .lock()
+                .map_err(|_| "Current project path lock was poisoned".to_string())?,
+        )
+    } else {
+        None
+    };
+    // The saved file becomes a new recovery baseline, but the previous browser
+    // recovery serial must stay eligible if the target replace fails.  Run the
+    // two-phase CleanSave journal around the atomic replace: a pending record
+    // that binds the exact target plus prepared-byte digest without moving the
+    // committed serial, then a commit only once the replace is proven durable.
+    // On a replace error the journal re-hashes the target: if the exact bytes
+    // still landed it commits S+1 (a landed save is never rolled back) and
+    // returns a truthful error, otherwise it rolls pending back to committed S so
+    // the dirty-A recovery image stays eligible.  This runs inside the
+    // stale-writer guard (so a superseded ticket never touches the journal, the
+    // app handle, or the target) while the publication/admission/coordinator
+    // guards above are held across every phase.  The committed serial is only
+    // read here; it is never mutated before the journal's durable commit.
+    let committed_serial = coordinator.recovery_authority_serial;
+    let committed_transition = coordinator.recovery_authority_last_transition.clone();
+    let journal_commit = invalidate_recovery_for_current_save_ticket(ticket_is_current, || {
+        let recovery_authority_path = {
+            let app = project_swap_app_handle(state)?;
+            project_recovery_authority_state_path(&app)?
+        };
+        run_project_clean_save_journal(
+            &recovery_authority_path,
+            committed_serial,
+            &committed_transition,
+            path,
+            temp,
+            &state
+                .project_external_command_admission
+                .recovery_authority_faulted,
+            || replace_file_atomically(temp, path),
+        )
+    })?;
+    coordinator.recovery_authority_serial = journal_commit.serial;
+    coordinator.recovery_authority_last_transition = journal_commit.transition;
+    if let Some(next_path_generation) = next_path_generation {
+        coordinator.path_generation = next_path_generation;
+    }
+    if adopt_path {
+        coordinator.ancillary.current_project_path = Some(path.to_path_buf());
+        if let Some(current_path_mirror) = current_path_mirror.as_mut() {
+            **current_path_mirror = coordinator.ancillary.current_project_path.clone();
+        }
+    }
+    commit_project_authority_disposition_after_preflight(
+        &mut coordinator,
+        next_disposition_generation,
+        ProjectAuthorityDisposition::CleanAtPath,
+    );
+    let authority = project_authority_bundle_from_coordinator(state, &coordinator);
+    Ok(ProjectSaveResult {
+        path: path.to_string_lossy().to_string(),
+        authority,
+    })
+}
+
+/// User-template export has the same pre-dialog ticket and stale-writer
+/// defense, but it is not a project Save and must not change dirty/path
+/// disposition. The caller owns deletion of `temp` on an error.
+fn finalize_project_export_ticket(
+    state: &AppState,
+    path: &Path,
+    temp: &Path,
+    ticket: &ProjectSaveTicket,
+) -> Result<(), String> {
+    let _save_publication = state
+        .project_save_publication
+        .lock()
+        .map_err(|_| "Project save publication lock was poisoned".to_string())?;
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    let ticket_is_current = project_save_ticket_is_current(state, &mut coordinator, ticket)?;
+    publish_prepared_project_save_if_current(temp, path, ticket_is_current).map_err(|_| {
+        "Project changed while the template dialog was open; export was rejected before writing"
+            .to_string()
+    })
+}
+
+fn validate_frontend_mappings_match_authority(
+    coordinator: &ProjectCoordinator,
+    midi_mappings: Vec<MidiControlMapping>,
+    osc_mappings: Vec<OscControlMapping>,
+    dmx_mappings: Vec<DmxControlMapping>,
+) -> Result<(), String> {
+    let received = ProjectControlMappings {
+        midi_mappings: validate_midi_control_mappings(midi_mappings)?,
+        osc_mappings: validate_osc_control_mappings(osc_mappings)?,
+        dmx_mappings: validate_dmx_control_mappings(dmx_mappings)?,
+    };
+    if received == coordinator.mappings {
+        Ok(())
+    } else {
+        Err(
+            "Project control mappings changed locally; refresh the project before saving"
+                .to_string(),
+        )
+    }
+}
+
+#[tauri::command]
+fn get_project_control_mappings(
+    state: State<'_, AppState>,
+) -> Result<ProjectControlMappingsStatus, String> {
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let mut coordinator = lock_project_coordinator(&state)?;
+    reconcile_project_checkpoint_for_coordinator(&state, &mut coordinator)?;
+    Ok(project_control_mappings_status(&coordinator))
+}
+
+#[tauri::command]
+fn set_project_control_mappings(
+    state: State<'_, AppState>,
+    expected_epoch: u64,
+    expected_revision: u64,
+    midi_mappings: Vec<MidiControlMapping>,
+    osc_mappings: Vec<OscControlMapping>,
+    dmx_mappings: Vec<DmxControlMapping>,
+) -> Result<ProjectControlMappingsStatus, String> {
+    let mappings = ProjectControlMappings {
+        midi_mappings: validate_midi_control_mappings(midi_mappings)?,
+        osc_mappings: validate_osc_control_mappings(osc_mappings)?,
+        dmx_mappings: validate_dmx_control_mappings(dmx_mappings)?,
+    };
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let mut coordinator = lock_project_coordinator(&state)?;
+    reconcile_project_checkpoint_for_coordinator(&state, &mut coordinator)?;
+    ensure_no_pending_project_transaction(&coordinator)?;
+    if coordinator.epoch != expected_epoch || coordinator.revision != expected_revision {
+        return Err(format!(
+            "Project mappings are stale (expected epoch {expected_epoch} revision {expected_revision}, current epoch {} revision {})",
+            coordinator.epoch, coordinator.revision
+        ));
+    }
+    if coordinator.mappings == mappings {
+        return Ok(project_control_mappings_status(&coordinator));
+    }
+    let before = project_checkpoint_for_coordinator(&state, &coordinator)?;
+    let project = before.project.clone();
+    let checkpoint_hash = project_checkpoint_hash(&project, &mappings)?;
+    let revision = checked_project_revision_after_mutation(&coordinator)?;
+    let next_history_generation = checked_project_history_generation_after_change(&coordinator)?;
+    let next_publication_generation =
+        checked_project_authority_publication_generation_after_change(&coordinator)?;
+    let entry_id = coordinator
+        .next_transaction_id
+        .checked_add(1)
+        .ok_or_else(|| "Project transaction ID space is exhausted; restart Syndocal".to_string())?;
+    let after = ProjectCheckpoint {
+        project,
+        mappings: mappings.clone(),
+        epoch: coordinator.epoch,
+        revision,
+        hash: checkpoint_hash.clone(),
+    };
+    let mut next_history = coordinator.history.clone();
+    next_history.undo.push(ProjectHistoryEntry {
+        entry_id,
+        label: "Update control mappings".to_string(),
+        coalesce_key: "project-control-mappings".to_string(),
+        committed_at_unix_ms: current_unix_ms().min(u64::MAX as u128) as u64,
+        before,
+        after,
+    });
+    if next_history.undo.len() > PROJECT_HISTORY_RETENTION {
+        let expired = next_history.undo.len() - PROJECT_HISTORY_RETENTION;
+        next_history.undo.drain(0..expired);
+    }
+    next_history.redo.clear();
+    // Reserve/fence before taking mapping-dependent worker slots. If this
+    // fails, no runtime is retired and no coordinator/history state changes.
+    reserve_project_callback_epoch(&state.project_mapping_callback_epoch)?;
+    retire_mapping_driven_project_control_inputs(&state)?;
+    coordinator.mappings = mappings;
+    coordinator.revision = revision;
+    coordinator.checkpoint_hash = checkpoint_hash;
+    coordinator.next_transaction_id = entry_id;
+    coordinator.history = next_history;
+    coordinator.history_generation = next_history_generation;
+    commit_project_authority_publication_after_preflight(
+        &mut coordinator,
+        next_publication_generation,
+        ProjectAuthorityPublicationKind::Mutation,
+    );
+    let mut status = project_control_mappings_status(&coordinator);
+    status.mapping_runtimes_retired = true;
+    Ok(status)
 }
 
 #[tauri::command]
@@ -15134,14 +23230,294 @@ fn get_project_checkpoint(
     osc_mappings: Vec<OscControlMapping>,
     dmx_mappings: Vec<DmxControlMapping>,
 ) -> Result<Value, String> {
-    let project = project_file_for_save(&state)?;
-    let json = project_json_for_write_with_control_mappings(
-        &project,
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let mut coordinator = lock_project_coordinator(&state)?;
+    ensure_no_pending_project_transaction(&coordinator)?;
+    reconcile_project_checkpoint_for_coordinator(&state, &mut coordinator)?;
+    validate_frontend_mappings_match_authority(
+        &coordinator,
         midi_mappings,
         osc_mappings,
         dmx_mappings,
     )?;
+    let project = project_file_for_save_with_coordinator(&state, &coordinator)?;
+    let json = project_json_for_write_with_control_mappings(
+        &project,
+        coordinator.mappings.midi_mappings.clone(),
+        coordinator.mappings.osc_mappings.clone(),
+        coordinator.mappings.dmx_mappings.clone(),
+    )?;
     serde_json::from_str(&json).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_project_checkpoint_bundle(
+    state: State<'_, AppState>,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+) -> Result<ProjectCheckpointBundle, String> {
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let mut coordinator = lock_project_coordinator(&state)?;
+    ensure_no_pending_project_transaction(&coordinator)?;
+    let checkpoint = reconcile_project_checkpoint_for_coordinator(&state, &mut coordinator)?;
+    if checkpoint.epoch != expected_epoch
+        || checkpoint.revision != expected_revision
+        || checkpoint.hash != expected_checkpoint_hash
+    {
+        return Err(format!(
+            "Project changed before recovery capture (expected epoch {expected_epoch} revision {expected_revision})"
+        ));
+    }
+    let project = project_root_value_with_control_mappings(
+        &checkpoint.project,
+        checkpoint.mappings.midi_mappings.clone(),
+        checkpoint.mappings.osc_mappings.clone(),
+        checkpoint.mappings.dmx_mappings.clone(),
+    )?;
+    Ok(ProjectCheckpointBundle {
+        project,
+        current_path: coordinator
+            .ancillary
+            .current_project_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string()),
+        project_epoch: checkpoint.epoch,
+        project_revision: checkpoint.revision,
+        checkpoint_hash: checkpoint.hash,
+        recovery_authority_serial: coordinator.recovery_authority_serial,
+    })
+}
+
+#[tauri::command]
+fn get_project_recovery_authority_status(
+    state: State<'_, AppState>,
+) -> Result<ProjectRecoveryAuthorityStatus, String> {
+    let coordinator = lock_project_coordinator(&state)?;
+    Ok(ProjectRecoveryAuthorityStatus {
+        recovery_authority_serial: coordinator.recovery_authority_serial,
+        last_transition: coordinator.recovery_authority_last_transition.clone(),
+    })
+}
+
+/// Fetch the full frontend authority image in one operation. Expected tokens
+/// make polling/load followups fail closed rather than applying a stale B
+/// bundle after C has published. This intentionally rejects while a Begin
+/// reservation is active because a partial project cannot be hydrated.
+#[tauri::command]
+fn get_project_authority_bundle(
+    state: State<'_, AppState>,
+    expected_epoch: Option<u64>,
+    expected_revision: Option<u64>,
+    expected_checkpoint_hash: Option<String>,
+) -> Result<ProjectAuthorityBundle, String> {
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let mut coordinator = lock_project_coordinator(&state)?;
+    ensure_no_pending_project_transaction(&coordinator)?;
+    let current = reconcile_project_checkpoint_for_coordinator(&state, &mut coordinator)?;
+    if let Some(expected_epoch) = expected_epoch {
+        ensure_project_epoch_matches(&coordinator, expected_epoch)?;
+    }
+    if let Some(expected_revision) = expected_revision {
+        if current.revision != expected_revision {
+            return Err(format!(
+                "Project authority changed before bundle capture (expected revision {expected_revision}, current revision {})",
+                current.revision,
+            ));
+        }
+    }
+    if let Some(expected_hash) = expected_checkpoint_hash {
+        if current.hash != expected_hash {
+            return Err(
+                "Project authority changed before bundle capture (checkpoint hash differs)"
+                    .to_string(),
+            );
+        }
+    }
+    Ok(project_authority_bundle_from_coordinator(
+        &state,
+        &coordinator,
+    ))
+}
+
+/// A capture can distinguish "nothing changed" from "this attempt was mixed
+/// and must retry". The latter is intentionally not an error: another
+/// authority event/poll will converge if all bounded attempts lose a race.
+enum ProjectAuthoritySeqlockCapture<T> {
+    Complete(Option<T>),
+    Retry,
+}
+
+/// Run a read-only capture without external admission. The generation check
+/// is outside the closure so tests and production share the proof that a
+/// callback can complete an admitted send while an engine snapshot is slow.
+fn capture_project_authority_without_external_admission<T, Capture>(
+    admission: &ProjectExternalCommandAdmission,
+    mut capture: Capture,
+) -> Result<Option<T>, String>
+where
+    Capture: FnMut(u64) -> Result<ProjectAuthoritySeqlockCapture<T>, String>,
+{
+    const ATTEMPTS: usize = 3;
+    for _ in 0..ATTEMPTS {
+        let admitted_before = admission.generation();
+        match capture(admitted_before)? {
+            ProjectAuthoritySeqlockCapture::Retry => continue,
+            ProjectAuthoritySeqlockCapture::Complete(candidate)
+                if admission.generation() == admitted_before =>
+            {
+                return Ok(candidate);
+            }
+            ProjectAuthoritySeqlockCapture::Complete(_) => {
+                // An admitted send completed after the capture's local
+                // coordinator validation. Retry rather than returning a
+                // snapshot stitched to the pre-send ancillary state.
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Read-only authority capture deliberately never acquires external
+/// admission.  A callback thread must be able to take that short gate while a
+/// potentially slow `persistence_snapshot` is in progress; otherwise a
+/// replacement waiting to retire that worker can deadlock.  The external
+/// command generation plus this coordinator stamp form a small seqlock: an
+/// admitted send or coordinator mutation makes the attempt retry instead of
+/// returning a mixed A/B bundle.
+fn poll_project_authority_bundle_seqlock(
+    state: &AppState,
+    known_epoch: u64,
+    known_revision: u64,
+    known_checkpoint_hash: &str,
+    known_path_generation: Option<u64>,
+    known_history_generation: Option<u64>,
+    known_mapping_replacement_generation: Option<u64>,
+    known_authority_disposition_generation: Option<u64>,
+    known_recovery_authority_serial: Option<u64>,
+    known_project_input_runtime_generation: Option<u64>,
+    known_mapping_input_runtime_generation: Option<u64>,
+) -> Result<Option<ProjectAuthorityBundle>, String> {
+    capture_project_authority_without_external_admission(
+        &state.project_external_command_admission,
+        |admitted_before| {
+            // Do not take admission here. The callback/remote paths use the
+            // gate as their linearization point.
+            let (stamp, ancillary, mappings) = {
+                let coordinator = lock_project_coordinator(state)?;
+                // A Begin reservation owns a partial engine image. There is no
+                // coherent frontend image to return until Commit/Cancel resolves
+                // it, so make polling a harmless no-op rather than blocking.
+                if !coordinator.history.pending.is_empty() {
+                    return Ok(ProjectAuthoritySeqlockCapture::Complete(None));
+                }
+                (
+                    project_authority_capture_stamp(&coordinator),
+                    coordinator.ancillary.clone(),
+                    coordinator.mappings.clone(),
+                )
+            };
+
+            // This can wait on the engine's published snapshot. No admission or
+            // coordinator guard is live while it does, so live callback sends are
+            // never held behind a UI poll.
+            let persistence_snapshot = state.engine.persistence_snapshot()?;
+            let published_snapshot = state.engine.snapshot();
+            if state.project_external_command_admission.generation() != admitted_before {
+                return Ok(ProjectAuthoritySeqlockCapture::Retry);
+            }
+
+            let project = project_file_for_save_from_parts(persistence_snapshot, &ancillary);
+            let hash = project_checkpoint_hash(&project, &mappings)?;
+
+            let mut coordinator = lock_project_coordinator(state)?;
+            if !coordinator.history.pending.is_empty()
+                || !project_authority_capture_stamp_matches(&coordinator, &stamp)
+                || state.project_external_command_admission.generation() != admitted_before
+            {
+                return Ok(ProjectAuthoritySeqlockCapture::Retry);
+            }
+
+            // Reconcile the captured canonical persistence image without making a
+            // second engine call while coordinator is held. A direct external
+            // command receives a fresh revision and clears stale history before
+            // this bundle becomes observable.
+            let mut checkpoint = ProjectCheckpoint {
+                project,
+                mappings: coordinator.mappings.clone(),
+                epoch: coordinator.epoch,
+                revision: coordinator.revision,
+                hash,
+            };
+            reconcile_project_checkpoint_metadata(&mut coordinator, &mut checkpoint)?;
+            let bundle = project_authority_bundle_from_captured_snapshot(
+                state,
+                &coordinator,
+                published_snapshot,
+            );
+            drop(coordinator);
+
+            let unchanged = bundle.project_epoch == known_epoch
+                && bundle.project_revision == known_revision
+                && bundle.checkpoint_hash == known_checkpoint_hash
+                && known_path_generation
+                    .map(|known| known == bundle.path_generation)
+                    .unwrap_or(false)
+                && known_history_generation
+                    .map(|known| known == bundle.history_generation)
+                    .unwrap_or(false)
+                && known_mapping_replacement_generation
+                    .map(|known| known == bundle.mapping_replacement_generation)
+                    .unwrap_or(false)
+                && known_authority_disposition_generation
+                    .map(|known| known == bundle.authority_disposition_generation)
+                    .unwrap_or(false)
+                && known_recovery_authority_serial
+                    .map(|known| known == bundle.recovery_authority_serial)
+                    .unwrap_or(false)
+                && known_project_input_runtime_generation
+                    .map(|known| known == bundle.input_runtime.project_input_runtime_generation)
+                    .unwrap_or(false)
+                && known_mapping_input_runtime_generation
+                    .map(|known| known == bundle.input_runtime.mapping_input_runtime_generation)
+                    .unwrap_or(false);
+            Ok(ProjectAuthoritySeqlockCapture::Complete(
+                (!unchanged).then_some(bundle),
+            ))
+        },
+    )
+}
+
+/// Poll the authority token without transferring another complete snapshot
+/// when nothing changed. A read-only seqlock capture keeps live callbacks
+/// available even if the engine snapshot read stalls.
+#[tauri::command]
+fn poll_project_authority_bundle(
+    state: State<'_, AppState>,
+    known_epoch: u64,
+    known_revision: u64,
+    known_checkpoint_hash: String,
+    known_path_generation: Option<u64>,
+    known_history_generation: Option<u64>,
+    known_mapping_replacement_generation: Option<u64>,
+    known_authority_disposition_generation: Option<u64>,
+    known_recovery_authority_serial: Option<u64>,
+    known_project_input_runtime_generation: Option<u64>,
+    known_mapping_input_runtime_generation: Option<u64>,
+) -> Result<Option<ProjectAuthorityBundle>, String> {
+    poll_project_authority_bundle_seqlock(
+        &state,
+        known_epoch,
+        known_revision,
+        &known_checkpoint_hash,
+        known_path_generation,
+        known_history_generation,
+        known_mapping_replacement_generation,
+        known_authority_disposition_generation,
+        known_recovery_authority_serial,
+        known_project_input_runtime_generation,
+        known_mapping_input_runtime_generation,
+    )
 }
 
 fn project_history_status(history: &ProjectHistory) -> ProjectHistoryStatus {
@@ -15152,16 +23528,34 @@ fn project_history_status(history: &ProjectHistory) -> ProjectHistoryStatus {
         redo_depth: history.redo.len(),
         undo_label: history.undo.last().map(|entry| entry.label.clone()),
         redo_label: history.redo.last().map(|entry| entry.label.clone()),
+        project_epoch: 0,
+        project_revision: 0,
+        checkpoint_hash: String::new(),
+        history_generation: 0,
+        undo_entry_id: history.undo.last().map(|entry| entry.entry_id),
+        undo_checkpoint_hash: history.undo.last().map(|entry| entry.after.hash.clone()),
+        redo_entry_id: history.redo.last().map(|entry| entry.entry_id),
+        redo_checkpoint_hash: history.redo.last().map(|entry| entry.before.hash.clone()),
     }
+}
+
+fn project_history_status_for_coordinator(
+    coordinator: &ProjectCoordinator,
+) -> ProjectHistoryStatus {
+    let mut status = project_history_status(&coordinator.history);
+    status.project_epoch = coordinator.epoch;
+    status.project_revision = coordinator.revision;
+    status.checkpoint_hash = coordinator.checkpoint_hash.clone();
+    status.history_generation = coordinator.history_generation;
+    status
 }
 
 #[tauri::command]
 fn get_project_history_status(state: State<'_, AppState>) -> Result<ProjectHistoryStatus, String> {
-    let history = state
-        .project_history
-        .lock()
-        .map_err(|_| "Project history lock was poisoned".to_string())?;
-    Ok(project_history_status(&history))
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let mut coordinator = lock_project_coordinator(&state)?;
+    reconcile_project_checkpoint_for_coordinator(&state, &mut coordinator)?;
+    Ok(project_history_status_for_coordinator(&coordinator))
 }
 
 #[tauri::command]
@@ -15169,58 +23563,217 @@ fn begin_project_transaction(
     state: State<'_, AppState>,
     label: String,
     coalesce_key: String,
-) -> Result<u64, String> {
-    let before = project_file_for_save(&state)?;
-    let mut history = state
-        .project_history
-        .lock()
-        .map_err(|_| "Project history lock was poisoned".to_string())?;
-    history.next_transaction_id = history.next_transaction_id.saturating_add(1).max(1);
-    let transaction_id = history.next_transaction_id;
-    history.pending.insert(
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<ProjectTransactionTicket, String> {
+    // The admission gate is acquired before coordinator so an external send is
+    // either already queued before `before` is captured or held until the
+    // transaction is active. Do not reverse this order anywhere.
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let mut coordinator = lock_project_coordinator(&state)?;
+    // The frontend captures this before awaiting its mapping-flush barrier.
+    // Rejecting here prevents a delayed A click from reserving a B baseline.
+    ensure_project_epoch_matches(&coordinator, expected_epoch)?;
+    ensure_no_pending_project_transaction(&coordinator)?;
+    // Admission is live, so reconcile any persistence command that completed
+    // before Begin before reserving Begin's own observable history change.
+    // Otherwise an external reconciliation and pending insertion could both
+    // publish the same history generation.
+    reconcile_project_checkpoint_for_coordinator(&state, &mut coordinator)?;
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    ensure_project_transaction_owner_registered(&state, &owner_id)?;
+    let transaction_id = coordinator
+        .next_transaction_id
+        .checked_add(1)
+        .ok_or_else(|| "Project transaction ID space is exhausted; restart Syndocal".to_string())?;
+    // Inserting a pending reservation changes what the history UI may do.
+    // Check the generation before capture/fencing so no Begin can leave a
+    // partially armed transaction after an overflow error.
+    let next_history_generation = checked_project_history_generation_after_change(&coordinator)?;
+    let epoch = coordinator.epoch;
+    let before =
+        arm_project_transaction_and_capture_baseline(&state.project_transaction_active, || {
+            project_checkpoint_for_coordinator(&state, &coordinator)
+        })?;
+    coordinator.next_transaction_id = transaction_id;
+    coordinator.history.pending.insert(
         transaction_id,
         PendingProjectTransaction {
+            transaction_id,
+            owner_id,
             label: label.trim().chars().take(80).collect(),
             coalesce_key: coalesce_key.trim().chars().take(240).collect(),
             before,
+            epoch,
         },
     );
-    Ok(transaction_id)
+    coordinator.history_generation = next_history_generation;
+    Ok(ProjectTransactionTicket {
+        transaction_id,
+        project_epoch: epoch,
+    })
 }
 
 #[tauri::command]
 fn commit_project_transaction(
     state: State<'_, AppState>,
     transaction_id: u64,
-) -> Result<ProjectHistoryStatus, String> {
-    let after = project_file_for_save(&state)?;
-    let mut history = state
-        .project_history
-        .lock()
-        .map_err(|_| "Project history lock was poisoned".to_string())?;
-    let Some(pending) = history.pending.remove(&transaction_id) else {
-        return Err(format!("Unknown project transaction {transaction_id}"));
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<ProjectHistoryMutationResult, String> {
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let mut coordinator = lock_project_coordinator(&state)?;
+    ensure_project_transaction_owner_registered(&state, &owner_id)?;
+    let pending = project_transaction_for_owner_epoch(
+        &coordinator,
+        transaction_id,
+        expected_epoch,
+        &owner_id,
+    )?;
+    // Commit consumes a pending reservation even for a no-op edit. Preflight
+    // its observable history generation before any fallible checkpoint/hash
+    // work so the success path assigns it exactly once.
+    let next_history_generation = checked_project_history_generation_after_change(&coordinator)?;
+    // The single-pending reservation makes all engine mutations between Begin
+    // and Commit one intended transaction. Do not compare the current hash to
+    // `before`: a normal edit necessarily changes it from A to B.
+    let mut after = project_checkpoint_for_coordinator(&state, &coordinator)?;
+    let changed =
+        pending.before.project != after.project || pending.before.mappings != after.mappings;
+    let prepared_revision_and_hash = if changed {
+        let revision = checked_project_revision_after_mutation(&coordinator)?;
+        let hash = project_checkpoint_hash(&after.project, &after.mappings)?;
+        after.revision = revision;
+        after.hash = hash.clone();
+        Some((revision, hash))
+    } else {
+        None
     };
+    let next_publication_generation = prepared_revision_and_hash
+        .is_some()
+        .then(|| checked_project_authority_publication_generation_after_change(&coordinator))
+        .transpose()?;
+    // Build history on a clone so a fallible entry/coalesce step cannot alter
+    // revision/hash/history while the pending ticket remains cancellable.
+    let mut next_history = coordinator.history.clone();
     commit_project_history_entry(
-        &mut history,
+        &mut next_history,
         pending,
         after,
         current_unix_ms().min(u64::MAX as u128) as u64,
-    )
+    )?;
+    next_history.pending.remove(&transaction_id);
+    if let Some((revision, hash)) = prepared_revision_and_hash {
+        coordinator.revision = revision;
+        coordinator.checkpoint_hash = hash;
+        commit_project_authority_publication_after_preflight(
+            &mut coordinator,
+            next_publication_generation
+                .expect("a changed transaction preflights its mutation publication"),
+            ProjectAuthorityPublicationKind::Mutation,
+        );
+    }
+    coordinator.history = next_history;
+    coordinator.history_generation = next_history_generation;
+    state
+        .project_transaction_active
+        .store(false, Ordering::Release);
+    Ok(ProjectHistoryMutationResult {
+        history_status: project_history_status_for_coordinator(&coordinator),
+        authority: project_authority_bundle_from_coordinator(&state, &coordinator),
+    })
+}
+
+fn project_transaction_for_epoch(
+    coordinator: &ProjectCoordinator,
+    transaction_id: u64,
+    expected_epoch: u64,
+) -> Result<PendingProjectTransaction, String> {
+    let Some(pending) = coordinator.history.pending.get(&transaction_id).cloned() else {
+        return Err(format!("Unknown project transaction {transaction_id}"));
+    };
+    if pending.epoch != expected_epoch || pending.epoch != coordinator.epoch {
+        return Err(format!(
+            "Project transaction {transaction_id} belongs to a replaced project and was discarded"
+        ));
+    }
+    Ok(pending)
+}
+
+fn project_transaction_for_owner_epoch(
+    coordinator: &ProjectCoordinator,
+    transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: &str,
+) -> Result<PendingProjectTransaction, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id.to_string())?;
+    let pending = project_transaction_for_epoch(coordinator, transaction_id, expected_epoch)?;
+    if pending.owner_id != owner_id {
+        return Err(format!(
+            "Project transaction {transaction_id} belongs to another renderer session"
+        ));
+    }
+    Ok(pending)
+}
+
+fn normalize_project_transaction_owner_id(owner_id: String) -> Result<String, String> {
+    let owner_id = owner_id.trim();
+    if owner_id.is_empty() || owner_id.len() > 128 {
+        return Err("Project transaction owner ID must be 1 to 128 bytes".to_string());
+    }
+    if !owner_id
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+    {
+        return Err("Project transaction owner ID contains unsupported characters".to_string());
+    }
+    Ok(owner_id.to_string())
+}
+
+fn ensure_project_transaction_owner_registered(
+    state: &AppState,
+    owner_id: &str,
+) -> Result<(), String> {
+    let owners = state
+        .project_transaction_owners
+        .lock()
+        .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
+    if owners.values().any(|candidate| candidate == owner_id) {
+        Ok(())
+    } else {
+        Err("Project transaction renderer session is no longer registered".to_string())
+    }
+}
+
+fn with_retained_project_transaction<T>(
+    coordinator: &mut ProjectCoordinator,
+    transaction_id: u64,
+    expected_epoch: u64,
+    finalize: impl FnOnce(&mut ProjectCoordinator, PendingProjectTransaction) -> Result<T, String>,
+) -> Result<T, String> {
+    let pending = project_transaction_for_epoch(coordinator, transaction_id, expected_epoch)?;
+    let result = finalize(coordinator, pending)?;
+    // All fallible preparation/history work succeeded. Only now can the
+    // caller lose the reservation; an earlier error leaves Cancel available.
+    coordinator.history.pending.remove(&transaction_id);
+    Ok(result)
 }
 
 fn commit_project_history_entry(
     history: &mut ProjectHistory,
     pending: PendingProjectTransaction,
-    after: ProjectFile,
+    after: ProjectCheckpoint,
     committed_at_unix_ms: u64,
 ) -> Result<ProjectHistoryStatus, String> {
-    if pending.before == after {
+    if pending.before.project == after.project && pending.before.mappings == after.mappings {
         return Ok(project_history_status(&history));
     }
     let can_coalesce = history.undo.last().is_some_and(|entry| {
         !pending.coalesce_key.is_empty()
             && entry.coalesce_key == pending.coalesce_key
+            && entry.after.epoch == pending.before.epoch
+            && entry.after.revision == pending.before.revision
+            && entry.after.hash == pending.before.hash
             && committed_at_unix_ms.saturating_sub(entry.committed_at_unix_ms)
                 <= PROJECT_HISTORY_COALESCE_MS
     });
@@ -15232,6 +23785,7 @@ fn commit_project_history_entry(
         }
     } else {
         history.undo.push(ProjectHistoryEntry {
+            entry_id: pending.transaction_id,
             label: pending.label,
             coalesce_key: pending.coalesce_key,
             committed_at_unix_ms,
@@ -15251,99 +23805,520 @@ fn commit_project_history_entry(
 fn cancel_project_transaction(
     state: State<'_, AppState>,
     transaction_id: u64,
-) -> Result<(), String> {
-    let mut history = state
-        .project_history
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<ProjectHistoryMutationResult, String> {
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let mut coordinator = lock_project_coordinator(&state)?;
+    ensure_project_transaction_owner_registered(&state, &owner_id)?;
+    let pending = project_transaction_for_owner_epoch(
+        &coordinator,
+        transaction_id,
+        expected_epoch,
+        &owner_id,
+    )?;
+    cancel_pending_project_transaction_locked(&state, &mut coordinator, pending)
+}
+
+/// Register the current generation of one concrete webview. Only the owner
+/// displaced from this same window may be recovered here; a live pane's
+/// transaction is never stolen merely because the main renderer reloaded.
+#[tauri::command]
+fn register_project_transaction_owner(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    owner_id: String,
+) -> Result<Option<ProjectHistoryMutationResult>, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let mut coordinator = lock_project_coordinator(&state)?;
+    let mut owners = state
+        .project_transaction_owners
         .lock()
-        .map_err(|_| "Project history lock was poisoned".to_string())?;
-    history.pending.remove(&transaction_id);
+        .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
+    let previous_owner = owners.get(window.label()).cloned();
+    let recovered = transition_project_transaction_window_owner(
+        &mut owners,
+        window.label(),
+        Some(owner_id.clone()),
+        |previous_owner| {
+            let Some(previous_owner) = previous_owner else {
+                return Ok(None);
+            };
+            let Some(pending) =
+                project_transaction_for_retired_owner(&coordinator.history, previous_owner)?
+            else {
+                return Ok(None);
+            };
+            cancel_pending_project_transaction_locked(&state, &mut coordinator, pending).map(Some)
+        },
+    )?;
+    drop(owners);
+    if previous_owner.as_deref() != Some(owner_id.as_str()) {
+        if let Some(previous_owner) = previous_owner {
+            state
+                .project_operator_sessions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(&previous_owner);
+        }
+    }
+    Ok(recovered)
+}
+
+fn project_transaction_for_retired_owner(
+    history: &ProjectHistory,
+    retired_owner_id: &str,
+) -> Result<Option<PendingProjectTransaction>, String> {
+    if history.pending.len() > 1 {
+        return Err("Project history contains multiple pending transactions; restart Syndocal to preserve recovery safety".to_string());
+    }
+    Ok(history
+        .pending
+        .values()
+        .next()
+        .filter(|pending| pending.owner_id == retired_owner_id)
+        .cloned())
+}
+
+fn retire_project_transaction_owner_for_window(
+    state: &AppState,
+    window_label: &str,
+) -> Result<Option<ProjectHistoryMutationResult>, String> {
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    let mut owners = state
+        .project_transaction_owners
+        .lock()
+        .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
+    let retired_owner = owners.get(window_label).cloned();
+    let recovered = transition_project_transaction_window_owner(
+        &mut owners,
+        window_label,
+        None,
+        |retired_owner| {
+            let Some(retired_owner) = retired_owner else {
+                return Ok(None);
+            };
+            let Some(pending) =
+                project_transaction_for_retired_owner(&coordinator.history, retired_owner)?
+            else {
+                return Ok(None);
+            };
+            cancel_pending_project_transaction_locked(state, &mut coordinator, pending).map(Some)
+        },
+    )?;
+    drop(owners);
+    if let Some(retired_owner) = retired_owner {
+        state
+            .project_operator_sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&retired_owner);
+    }
+    Ok(recovered)
+}
+
+fn transition_project_transaction_window_owner<T>(
+    owners: &mut HashMap<String, String>,
+    window_label: &str,
+    next_owner: Option<String>,
+    finalize_retired: impl FnOnce(Option<&str>) -> Result<Option<T>, String>,
+) -> Result<Option<T>, String> {
+    let previous_owner = owners.get(window_label).cloned();
+    // Finalize first. If checkpoint/hash/history preparation fails, the map
+    // remains byte-for-byte unchanged and the retired owner stays retryable.
+    let finalized = finalize_retired(previous_owner.as_deref())?;
+    if let Some(next_owner) = next_owner {
+        owners.insert(window_label.to_string(), next_owner);
+    } else {
+        owners.remove(window_label);
+    }
+    Ok(finalized)
+}
+
+fn cancel_pending_project_transaction_locked(
+    state: &AppState,
+    coordinator: &mut ProjectCoordinator,
+    pending: PendingProjectTransaction,
+) -> Result<ProjectHistoryMutationResult, String> {
+    // Cancel likewise removes an observable pending reservation whether or
+    // not it creates an Interrupted Undo entry.
+    let next_history_generation = checked_project_history_generation_after_change(coordinator)?;
+
+    // Cancellation is not a rollback: live engine commands can have already
+    // produced hardware/runtime effects. Preserve a changed persistence image
+    // as an explicit interrupted entry so Undo remains truthful. All fallible
+    // capture/hash work occurs before removing the reservation.
+    let after = project_checkpoint_for_coordinator(state, coordinator)?;
+    let (next_history, prepared_revision_and_hash) = prepare_cancelled_project_transaction_history(
+        coordinator,
+        pending,
+        after,
+        current_unix_ms().min(u64::MAX as u128) as u64,
+    )?;
+    let next_publication_generation = prepared_revision_and_hash
+        .is_some()
+        .then(|| checked_project_authority_publication_generation_after_change(coordinator))
+        .transpose()?;
+    if let Some((revision, hash)) = prepared_revision_and_hash {
+        coordinator.revision = revision;
+        coordinator.checkpoint_hash = hash;
+        commit_project_authority_publication_after_preflight(
+            coordinator,
+            next_publication_generation
+                .expect("a changed cancellation preflights its mutation publication"),
+            ProjectAuthorityPublicationKind::Mutation,
+        );
+    }
+    coordinator.history = next_history;
+    coordinator.history_generation = next_history_generation;
+    state
+        .project_transaction_active
+        .store(false, Ordering::Release);
+    Ok(ProjectHistoryMutationResult {
+        history_status: project_history_status_for_coordinator(coordinator),
+        authority: project_authority_bundle_from_coordinator(state, coordinator),
+    })
+}
+
+/// Builds the truthful cancellation result without touching the live
+/// coordinator. This is intentionally shared by the command and tests: a
+/// partial engine mutation becomes an interrupted Undo entry only after every
+/// fallible checkpoint/hash/history operation has succeeded.
+fn prepare_cancelled_project_transaction_history(
+    coordinator: &ProjectCoordinator,
+    pending: PendingProjectTransaction,
+    mut after: ProjectCheckpoint,
+    committed_at_unix_ms: u64,
+) -> Result<(ProjectHistory, Option<(u64, String)>), String> {
+    let transaction_id = pending.transaction_id;
+    let changed =
+        pending.before.project != after.project || pending.before.mappings != after.mappings;
+    let prepared_revision_and_hash = if changed {
+        let revision = checked_project_revision_after_mutation(coordinator)?;
+        let hash = project_checkpoint_hash(&after.project, &after.mappings)?;
+        after.revision = revision;
+        after.hash = hash.clone();
+        Some((revision, hash))
+    } else {
+        None
+    };
+    let mut next_history = coordinator.history.clone();
+    if changed {
+        let interrupted = PendingProjectTransaction {
+            label: format!("Interrupted: {}", pending.label),
+            coalesce_key: String::new(),
+            ..pending
+        };
+        commit_project_history_entry(&mut next_history, interrupted, after, committed_at_unix_ms)?;
+    }
+    next_history.pending.remove(&transaction_id);
+    Ok((next_history, prepared_revision_and_hash))
+}
+
+#[tauri::command]
+fn clear_project_history(
+    state: State<'_, AppState>,
+) -> Result<ProjectHistoryMutationResult, String> {
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let mut coordinator = lock_project_coordinator(&state)?;
+    ensure_no_pending_project_transaction(&coordinator)?;
+    let history_changed = !coordinator.history.undo.is_empty()
+        || !coordinator.history.redo.is_empty()
+        || !coordinator.history.pending.is_empty();
+    let next_history_generation = history_changed
+        .then(|| checked_project_history_generation_after_change(&coordinator))
+        .transpose()?;
+    coordinator.history.pending.clear();
+    coordinator.history.undo.clear();
+    coordinator.history.redo.clear();
+    if let Some(next_history_generation) = next_history_generation {
+        coordinator.history_generation = next_history_generation;
+    }
+    state
+        .project_transaction_active
+        .store(false, Ordering::Release);
+    Ok(ProjectHistoryMutationResult {
+        history_status: project_history_status_for_coordinator(&coordinator),
+        authority: project_authority_bundle_from_coordinator(&state, &coordinator),
+    })
+}
+
+fn validate_history_navigation_cas(
+    coordinator: &ProjectCoordinator,
+    current: &ProjectCheckpoint,
+    entry: Option<&ProjectHistoryEntry>,
+    expected_epoch: Option<u64>,
+    expected_entry_id: Option<u64>,
+    expected_checkpoint_hash: Option<&str>,
+    source_checkpoint: impl FnOnce(&ProjectHistoryEntry) -> &ProjectCheckpoint,
+) -> Result<(), String> {
+    if let Some(expected_epoch) = expected_epoch {
+        if expected_epoch != coordinator.epoch {
+            return Err(format!(
+                "Project history is stale (expected epoch {expected_epoch}, current epoch {})",
+                coordinator.epoch
+            ));
+        }
+    }
+    let Some(entry) = entry else {
+        if expected_entry_id.is_some() || expected_checkpoint_hash.is_some() {
+            return Err("Project history changed before navigation could start".to_string());
+        }
+        return Ok(());
+    };
+    let source = source_checkpoint(entry);
+    // This backend-side comparison is mandatory even for legacy callers that
+    // have not supplied frontend CAS tokens.  A top entry only navigates from
+    // the exact checkpoint it was recorded against.
+    if current.epoch != source.epoch
+        || current.revision != source.revision
+        || current.hash != source.hash
+    {
+        return Err("Project history no longer matches the current project checkpoint".to_string());
+    }
+    if let Some(expected_entry_id) = expected_entry_id {
+        if expected_entry_id != entry.entry_id {
+            return Err("Project history changed before navigation could start".to_string());
+        }
+    }
+    if let Some(expected_checkpoint_hash) = expected_checkpoint_hash {
+        if expected_checkpoint_hash != source.hash {
+            return Err(
+                "Project history checkpoint changed before navigation could start".to_string(),
+            );
+        }
+    }
     Ok(())
 }
 
-#[tauri::command]
-fn clear_project_history(state: State<'_, AppState>) -> Result<ProjectHistoryStatus, String> {
-    let mut history = state
-        .project_history
-        .lock()
-        .map_err(|_| "Project history lock was poisoned".to_string())?;
-    history.pending.clear();
-    history.undo.clear();
-    history.redo.clear();
-    Ok(project_history_status(&history))
-}
-
-fn current_project_path(state: &State<'_, AppState>) -> Result<Option<PathBuf>, String> {
-    state
-        .current_project_path
-        .lock()
-        .map_err(|_| "Current project path lock was poisoned".to_string())
-        .map(|path| path.clone())
-}
-
-#[tauri::command]
-fn undo_project_transaction(state: State<'_, AppState>) -> Result<ProjectHistoryStatus, String> {
-    let entry = {
-        let mut history = state
-            .project_history
-            .lock()
-            .map_err(|_| "Project history lock was poisoned".to_string())?;
-        history.pending.clear();
-        history.undo.pop()
+fn navigate_project_history(
+    state: &State<'_, AppState>,
+    undo: bool,
+    expected_epoch: Option<u64>,
+    expected_entry_id: Option<u64>,
+    expected_checkpoint_hash: Option<String>,
+) -> Result<ProjectHistoryNavigationResult, String> {
+    // Match all external replacement paths: lifecycle -> stop/join ->
+    // coordinator.  The polling worker never takes lifecycle.
+    let _lifecycle_guard = lock_standby_sync_lifecycle_for_project_swap(state)?;
+    stop_standby_sync_for_project_swap(state)?;
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    // Undo/Redo is an identity-adjacent publication. It may not consume or
+    // silently discard a Begin→Commit reservation from an in-flight edit.
+    ensure_no_pending_project_transaction(&coordinator)?;
+    let current = reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
+    let top = if undo {
+        coordinator.history.undo.last()
+    } else {
+        coordinator.history.redo.last()
+    };
+    validate_history_navigation_cas(
+        &coordinator,
+        &current,
+        top,
+        expected_epoch,
+        expected_entry_id,
+        expected_checkpoint_hash.as_deref(),
+        |entry| {
+            if undo {
+                &entry.after
+            } else {
+                &entry.before
+            }
+        },
+    )?;
+    // Preparation is deliberately before pop.  A malformed historic payload
+    // therefore leaves the top entry intact instead of silently losing Undo.
+    let prepared = if let Some(entry) = top {
+        let target = if undo {
+            entry.before.clone()
+        } else {
+            entry.after.clone()
+        };
+        let current_path = coordinator.ancillary.current_project_path.clone();
+        Some(prepare_project_load(
+            target.project,
+            target.mappings,
+            format!("{} {}", if undo { "Undo" } else { "Redo" }, entry.label),
+            current_path.as_deref(),
+        )?)
+    } else {
+        None
+    };
+    // `prepare_project_load` is fallible and intentionally happens before
+    // popping. A direct live command can also arrive while it runs, so prove
+    // the historical source is still the persistence snapshot immediately
+    // before consuming the stack entry.
+    let current = reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
+    let top = if undo {
+        coordinator.history.undo.last()
+    } else {
+        coordinator.history.redo.last()
+    };
+    validate_history_navigation_cas(
+        &coordinator,
+        &current,
+        top,
+        expected_epoch,
+        expected_entry_id,
+        expected_checkpoint_hash.as_deref(),
+        |entry| {
+            if undo {
+                &entry.after
+            } else {
+                &entry.before
+            }
+        },
+    )?;
+    // A successful Undo/Redo moves one entry between stacks. Check its
+    // separate status generation before popping or publishing so the final
+    // post-ACK coordinator mutation is assignment-only.
+    let next_history_generation = top
+        .is_some()
+        .then(|| checked_project_history_generation_after_change(&coordinator))
+        .transpose()?;
+    let next_publication_generation = top
+        .is_some()
+        .then(|| checked_project_authority_publication_generation_after_change(&coordinator))
+        .transpose()?;
+    let next_mapping_replacement_generation = top
+        .is_some()
+        .then(|| checked_project_mapping_replacement_generation_after_change(&coordinator))
+        .transpose()?;
+    let entry = if undo {
+        coordinator.history.undo.pop()
+    } else {
+        coordinator.history.redo.pop()
     };
     let Some(entry) = entry else {
-        return get_project_history_status(state);
+        return Ok(ProjectHistoryNavigationResult {
+            history_status: project_history_status_for_coordinator(&coordinator),
+            authority: project_authority_bundle_from_coordinator(state, &coordinator),
+        });
     };
-    let path = current_project_path(&state)?;
-    if let Err(error) = load_project_from_file(
-        &state,
-        entry.before.clone(),
-        format!("Undo {}", entry.label),
-        path.as_deref(),
+    let target_checkpoint = if undo {
+        entry.before.clone()
+    } else {
+        entry.after.clone()
+    };
+    let mut prepared = prepared.expect("history top was prepared before it was popped");
+    prepared.authority_disposition = ProjectAuthorityDisposition::HistoryNavigation;
+    let mut replacement_result = match replace_prepared_project_snapshot_with_coordinator(
+        state,
+        prepared,
+        &mut coordinator,
+        ProjectReplacementCoordinatorEffect::RevisionMutation,
+        false,
     ) {
-        if let Ok(mut history) = state.project_history.lock() {
-            history.undo.push(entry);
+        Ok(result) => result,
+        Err(error) => {
+            if undo {
+                coordinator.history.undo.push(entry);
+            } else {
+                coordinator.history.redo.push(entry);
+            }
+            return Err(error);
         }
-        return Err(error);
+    };
+    // Replacement advances the coordinator revision. Rewrite the source side
+    // of the moved entry to that actual post-navigation checkpoint, so the
+    // next Undo/Redo validates B→A→B→A rather than comparing stale metadata
+    // from the entry's original timeline.
+    let actual_target = ProjectCheckpoint {
+        project: target_checkpoint.project,
+        mappings: target_checkpoint.mappings,
+        epoch: coordinator.epoch,
+        revision: coordinator.revision,
+        hash: coordinator.checkpoint_hash.clone(),
+    };
+    let entry = rewrite_navigated_project_history_entry(entry, undo, actual_target);
+    if undo {
+        coordinator.history.redo.push(entry);
+    } else {
+        coordinator.history.undo.push(entry);
     }
-    let mut history = state
-        .project_history
-        .lock()
-        .map_err(|_| "Project history lock was poisoned".to_string())?;
-    history.redo.push(entry);
-    Ok(project_history_status(&history))
+    coordinator.history_generation =
+        next_history_generation.expect("a moved history entry preflights its status generation");
+    commit_project_authority_publication_after_preflight(
+        &mut coordinator,
+        next_publication_generation
+            .expect("a moved history entry preflights its publication generation"),
+        ProjectAuthorityPublicationKind::HistoryNavigation,
+    );
+    coordinator.mapping_replacement_generation = next_mapping_replacement_generation
+        .expect("a moved history entry preflights its mapping replacement generation");
+    let history_status = project_history_status_for_coordinator(&coordinator);
+    let authority = project_authority_bundle_from_coordinator(state, &coordinator);
+    // The replacement helper intentionally suppressed its normal event: the
+    // moved history entry is only complete after it has been rewritten and
+    // pushed to the opposite stack. Emit exactly that final paired image.
+    replacement_result.project_epoch = authority.project_epoch;
+    replacement_result.project_revision = authority.project_revision;
+    replacement_result.history_generation = authority.history_generation;
+    replacement_result.checkpoint_hash = authority.checkpoint_hash.clone();
+    replacement_result.authority_disposition_generation =
+        authority.authority_disposition_generation;
+    replacement_result.authority_disposition = authority.authority_disposition;
+    replacement_result.current_project_path = authority.current_project_path.clone();
+    replacement_result.authority = Some(authority.clone());
+    if let Ok(app) = project_swap_app_handle(state) {
+        let _ = app.emit(PROJECT_AUTHORITY_REPLACED_EVENT, replacement_result);
+    }
+    Ok(ProjectHistoryNavigationResult {
+        history_status,
+        authority,
+    })
+}
+
+/// A navigation publication increments coordinator revision. Rewrite the side
+/// that will be used as the next navigation source to that exact post-publish
+/// checkpoint; otherwise B→Undo(A)→Redo(B) would compare a stale A/B token.
+fn rewrite_navigated_project_history_entry(
+    mut entry: ProjectHistoryEntry,
+    undo: bool,
+    actual_target: ProjectCheckpoint,
+) -> ProjectHistoryEntry {
+    if undo {
+        entry.before = actual_target;
+    } else {
+        entry.after = actual_target;
+    }
+    entry
 }
 
 #[tauri::command]
-fn redo_project_transaction(state: State<'_, AppState>) -> Result<ProjectHistoryStatus, String> {
-    let entry = {
-        let mut history = state
-            .project_history
-            .lock()
-            .map_err(|_| "Project history lock was poisoned".to_string())?;
-        history.pending.clear();
-        history.redo.pop()
-    };
-    let Some(entry) = entry else {
-        return get_project_history_status(state);
-    };
-    let path = current_project_path(&state)?;
-    if let Err(error) = load_project_from_file(
+fn undo_project_transaction(
+    state: State<'_, AppState>,
+    expected_epoch: Option<u64>,
+    expected_entry_id: Option<u64>,
+    expected_checkpoint_hash: Option<String>,
+) -> Result<ProjectHistoryNavigationResult, String> {
+    navigate_project_history(
         &state,
-        entry.after.clone(),
-        format!("Redo {}", entry.label),
-        path.as_deref(),
-    ) {
-        if let Ok(mut history) = state.project_history.lock() {
-            history.redo.push(entry);
-        }
-        return Err(error);
-    }
-    let mut history = state
-        .project_history
-        .lock()
-        .map_err(|_| "Project history lock was poisoned".to_string())?;
-    history.undo.push(entry);
-    Ok(project_history_status(&history))
+        true,
+        expected_epoch,
+        expected_entry_id,
+        expected_checkpoint_hash,
+    )
+}
+
+#[tauri::command]
+fn redo_project_transaction(
+    state: State<'_, AppState>,
+    expected_epoch: Option<u64>,
+    expected_entry_id: Option<u64>,
+    expected_checkpoint_hash: Option<String>,
+) -> Result<ProjectHistoryNavigationResult, String> {
+    navigate_project_history(
+        &state,
+        false,
+        expected_epoch,
+        expected_entry_id,
+        expected_checkpoint_hash,
+    )
 }
 
 fn app_data_subdirectory(app: &tauri::AppHandle, name: &str) -> Result<PathBuf, String> {
@@ -15355,6 +24330,839 @@ fn app_data_subdirectory(app: &tauri::AppHandle, name: &str) -> Result<PathBuf, 
     fs::create_dir_all(&directory)
         .map_err(|error| format!("Unable to create {}: {error}", directory.display()))?;
     Ok(directory)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct PersistedOutputOwnershipState {
+    version: u32,
+    role: MachineOutputRole,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct PersistedProjectRecoveryAuthorityState {
+    version: u32,
+    serial: u64,
+    #[serde(default)]
+    last_transition: ProjectRecoveryAuthorityTransition,
+    /// Two-phase durable Save intent.  Present only between a pending CleanSave
+    /// journal write and its commit/rollback.  `#[serde(default)]` plus
+    /// `skip_serializing_if` keep every no-pending record byte-identical to the
+    /// original v1 journal, so existing files deserialize unchanged and files
+    /// this build writes without a pending stay readable by older builds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending_clean_save: Option<PendingProjectCleanSave>,
+}
+
+/// Durable binding that lets startup decide, without metadata/time heuristics,
+/// whether an interrupted CleanSave actually replaced its target.  The digest is
+/// taken over the exact prepared file bytes that were about to be atomically
+/// renamed onto `target_path`; an exact re-hash of the target after restart is
+/// the only evidence that the intended save landed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct PendingProjectCleanSave {
+    /// Committed recovery serial this CleanSave publishes once the replace is
+    /// proven durable (the S+1 that must not be observed until then).
+    serial: u64,
+    /// Normalized, canonical-parent target path suitable for an exact reopen on
+    /// restart, so a Windows path alias cannot hide or misidentify the target.
+    /// Stored as a `PathBuf` and serialized through serde's `PathBuf`
+    /// implementation, so a valid path round-trips exactly.  A non-Unicode path
+    /// is reported as an encode error at journal-write time rather than being
+    /// silently corrupted by `to_string_lossy` (which maps invalid units to
+    /// U+FFFD and could even alias two distinct targets onto one key).
+    target_path: PathBuf,
+    /// SHA-256 hex digest of the exact prepared bytes destined for `target_path`.
+    digest: String,
+}
+
+fn validate_pending_project_clean_save(
+    committed_serial: u64,
+    pending: &PendingProjectCleanSave,
+) -> Result<(), String> {
+    let expected = committed_serial.checked_add(1).ok_or_else(|| {
+        "Project recovery authority journal has a pending CleanSave after an exhausted serial"
+            .to_string()
+    })?;
+    if pending.serial != expected {
+        return Err(format!(
+            "Project recovery authority journal has invalid pending CleanSave serial {} (expected {expected})",
+            pending.serial
+        ));
+    }
+    if pending.digest.len() != 64
+        || !pending
+            .digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(
+            "Project recovery authority journal has an invalid pending CleanSave SHA-256 digest"
+                .to_string(),
+        );
+    }
+    if !pending.target_path.is_absolute() || pending.target_path.file_name().is_none() {
+        return Err(format!(
+            "Project recovery authority journal has an invalid pending CleanSave target path: {}",
+            pending.target_path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn output_ownership_state_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_local_data_dir()
+        .map(|directory| directory.join(OUTPUT_OWNERSHIP_STATE_FILE))
+        .map_err(|error| format!("Unable to resolve Syndocal output ownership state path: {error}"))
+}
+
+fn project_recovery_authority_state_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_local_data_dir()
+        .map(|directory| directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE))
+        .map_err(|error| {
+            format!("Unable to resolve project recovery authority state path: {error}")
+        })
+}
+
+fn load_project_recovery_authority_state_from_path(
+    path: &Path,
+) -> Result<PersistedProjectRecoveryAuthorityState, String> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(PersistedProjectRecoveryAuthorityState {
+                version: PROJECT_RECOVERY_AUTHORITY_STATE_VERSION,
+                serial: 0,
+                last_transition: ProjectRecoveryAuthorityTransition::LegacyUnknown,
+                pending_clean_save: None,
+            });
+        }
+        Err(error) => {
+            return Err(format!(
+                "Unable to read project recovery authority state {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    let state: PersistedProjectRecoveryAuthorityState =
+        serde_json::from_slice(&bytes).map_err(|error| {
+            format!(
+                "Project recovery authority state {} is corrupt: {error}",
+                path.display()
+            )
+        })?;
+    if state.version != PROJECT_RECOVERY_AUTHORITY_STATE_VERSION {
+        return Err(format!(
+            "Unsupported project recovery authority state version {} in {}",
+            state.version,
+            path.display()
+        ));
+    }
+    if let Some(pending) = state.pending_clean_save.as_ref() {
+        validate_pending_project_clean_save(state.serial, pending)?;
+    }
+    Ok(state)
+}
+
+fn load_project_recovery_authority_serial_from_path(path: &Path) -> Result<u64, String> {
+    load_project_recovery_authority_state_from_path(path).map(|state| state.serial)
+}
+
+fn persist_project_recovery_authority_serial_to_path(
+    path: &Path,
+    serial: u64,
+    last_transition: ProjectRecoveryAuthorityTransition,
+) -> Result<(), String> {
+    persist_project_recovery_authority_state_to_path(
+        path,
+        &PersistedProjectRecoveryAuthorityState {
+            version: PROJECT_RECOVERY_AUTHORITY_STATE_VERSION,
+            serial,
+            last_transition,
+            pending_clean_save: None,
+        },
+    )
+}
+
+/// Durably record a pending CleanSave intent.  The committed serial/transition
+/// the coordinator and browser checkpoints observe are written unchanged; only
+/// the additive `pending_clean_save` binding is added, so a crash before the
+/// target replace leaves the previously eligible recovery serial intact.
+fn persist_pending_project_clean_save_to_path(
+    path: &Path,
+    committed_serial: u64,
+    committed_transition: ProjectRecoveryAuthorityTransition,
+    pending: PendingProjectCleanSave,
+) -> Result<(), String> {
+    persist_project_recovery_authority_state_to_path(
+        path,
+        &PersistedProjectRecoveryAuthorityState {
+            version: PROJECT_RECOVERY_AUTHORITY_STATE_VERSION,
+            serial: committed_serial,
+            last_transition: committed_transition,
+            pending_clean_save: Some(pending),
+        },
+    )
+}
+
+/// Atomically persist the full recovery authority record (serial, transition,
+/// and any pending CleanSave).  This is the single durable write seam used by
+/// the serial-only wrapper, the pending write, and the commit/rollback steps, so
+/// every recovery authority mutation shares the same temp-write + fsync +
+/// atomic-rename contract.
+fn persist_project_recovery_authority_state_to_path(
+    path: &Path,
+    state: &PersistedProjectRecoveryAuthorityState,
+) -> Result<(), String> {
+    let parent = path.parent().ok_or_else(|| {
+        format!(
+            "Project recovery authority state path has no parent: {}",
+            path.display()
+        )
+    })?;
+    fs::create_dir_all(parent).map_err(|error| {
+        format!(
+            "Unable to create project recovery authority state directory {}: {error}",
+            parent.display()
+        )
+    })?;
+    let bytes = serde_json::to_vec(state)
+        .map_err(|error| format!("Unable to encode project recovery authority state: {error}"))?;
+    let file_name = path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+    let temp = parent.join(format!(
+        ".{file_name}.{}.{}.{}.tmp",
+        std::process::id(),
+        current_unix_ms(),
+        PROJECT_SAVE_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+    ));
+    let result = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(|error| {
+                format!(
+                    "Unable to create temporary project recovery authority state {}: {error}",
+                    temp.display()
+                )
+            })?;
+        file.write_all(&bytes).map_err(|error| {
+            format!(
+                "Unable to write temporary project recovery authority state {}: {error}",
+                temp.display()
+            )
+        })?;
+        file.sync_all().map_err(|error| {
+            format!(
+                "Unable to flush temporary project recovery authority state {}: {error}",
+                temp.display()
+            )
+        })?;
+        drop(file);
+        replace_file_atomically(&temp, path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
+}
+
+/// Persist before an invalidating publication. If the later publication
+/// fails, the advanced serial intentionally remains fail-closed: a still
+/// valid older recovery image may be hidden, but it can never be offered for
+/// a project authority whose publication may already have committed.
+fn prepare_next_project_recovery_authority_serial(
+    current: u64,
+    last_transition: ProjectRecoveryAuthorityTransition,
+    persist: impl FnOnce(u64, ProjectRecoveryAuthorityTransition) -> Result<(), String>,
+) -> Result<u64, String> {
+    let next = current.checked_add(1).ok_or_else(|| {
+        "Project recovery authority serial is exhausted; restart Syndocal before changing project authority"
+            .to_string()
+    })?;
+    persist(next, last_transition)?;
+    Ok(next)
+}
+
+fn advance_project_recovery_authority_serial_before_publication(
+    state: &AppState,
+    coordinator: &mut ProjectCoordinator,
+    last_transition: ProjectRecoveryAuthorityTransition,
+) -> Result<u64, String> {
+    let app = project_swap_app_handle(state)?;
+    let path = project_recovery_authority_state_path(&app)?;
+    let next = prepare_next_project_recovery_authority_serial(
+        coordinator.recovery_authority_serial,
+        last_transition.clone(),
+        |next, transition| {
+            persist_project_recovery_authority_serial_to_path(&path, next, transition)
+        },
+    )?;
+    coordinator.recovery_authority_serial = next;
+    coordinator.recovery_authority_last_transition = last_transition;
+    Ok(next)
+}
+
+/// SHA-256 hex digest, matching the strong-digest style used for project
+/// checkpoint hashing.  Kept as a small seam so the two-phase Save journal binds
+/// bytes with the same strong digest used elsewhere on the project surface.
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Digest the exact prepared bytes that are about to be renamed onto the target.
+/// Reading the temp back guarantees the journal binds precisely the bytes the
+/// atomic replace will publish, never a separately serialized copy that could
+/// drift from what actually lands.
+fn strong_prepared_file_digest(path: &Path) -> Result<String, String> {
+    let bytes = fs::read(path).map_err(|error| {
+        format!(
+            "Unable to read prepared project file {} for save journaling: {error}",
+            path.display()
+        )
+    })?;
+    Ok(sha256_hex(&bytes))
+}
+
+/// Digest the current target bytes for startup reconciliation.  `Ok(None)` means
+/// the target is absent (the intended replace did not land); a hard read error
+/// is surfaced so reconciliation can stay fail-safe rather than guess whether
+/// the exact bytes landed.
+fn strong_target_file_digest(path: &Path) -> Result<Option<String>, String> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(sha256_hex(&bytes))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!(
+            "Unable to read project file {} for recovery reconciliation: {error}",
+            path.display()
+        )),
+    }
+}
+
+/// Resolve a target into a normalized, canonical-parent absolute form suitable
+/// for an exact reopen after restart.  Canonicalizing the parent (which always
+/// exists while a Save is in flight, since the prepared temp was written beside
+/// the target) resolves `..`, relative components, and directory symlinks, and
+/// on Windows yields an extended-length path, so no path alias can hide or
+/// misidentify the target during reconciliation.  The target file itself need
+/// not exist yet, so a first Save As to a brand-new path is handled.  The result
+/// is returned as a `PathBuf` and persisted through serde's `PathBuf` support,
+/// so the exact os-level path (not a `to_string_lossy` approximation) is what
+/// reconciliation reopens on restart.
+fn normalized_recovery_target_key(path: &Path) -> Result<PathBuf, String> {
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| format!("Project path has no file name: {}", path.display()))?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty());
+    let canonical_parent = match parent {
+        Some(parent) => fs::canonicalize(parent).map_err(|error| {
+            format!(
+                "Unable to resolve project directory {} for save journaling: {error}",
+                parent.display()
+            )
+        })?,
+        None => fs::canonicalize(Path::new(".")).map_err(|error| {
+            format!("Unable to resolve current directory for save journaling: {error}")
+        })?,
+    };
+    Ok(canonical_parent.join(file_name))
+}
+
+/// Startup decision for an interrupted CleanSave, kept pure so every branch is
+/// deterministically testable.  Only an exact digest match commits the pending
+/// serial; a mismatch or missing target rolls back to the committed serial; an
+/// unreadable target is left pending so a healthier later run can decide without
+/// ever losing recoverability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingCleanSaveReconciliation {
+    Commit,
+    Rollback,
+    Retain,
+}
+
+fn reconcile_pending_clean_save_decision(
+    pending_digest: &str,
+    target_digest: &Result<Option<String>, String>,
+) -> PendingCleanSaveReconciliation {
+    match target_digest {
+        Ok(Some(actual)) if actual == pending_digest => PendingCleanSaveReconciliation::Commit,
+        Ok(_) => PendingCleanSaveReconciliation::Rollback,
+        Err(_) => PendingCleanSaveReconciliation::Retain,
+    }
+}
+
+/// The committed recovery authority a durable CleanSave journal step reached.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CleanSaveJournalCommit {
+    serial: u64,
+    transition: ProjectRecoveryAuthorityTransition,
+}
+
+/// Once the exact prepared bytes have landed, the durable pending record is
+/// already sufficient crash evidence for startup to converge to `S+1`. A
+/// failure while compacting that pending record into the committed journal
+/// must therefore not leave the live coordinator at `S`: subsequent browser
+/// recovery captures would be stamped with the obsolete serial and suppressed
+/// when startup reconciles the pending save. Log the cleanup failure, but
+/// return the landed authority so the caller advances in-memory state now.
+fn landed_clean_save_commit(
+    pending_serial: u64,
+    journal_commit: Result<(), String>,
+    context: &str,
+) -> CleanSaveJournalCommit {
+    if let Err(error) = journal_commit {
+        eprintln!(
+            "{context}; the exact saved bytes and pending CleanSave serial {pending_serial} are durable, but compacting the recovery journal failed: {error}. Startup will reconcile the retained pending record."
+        );
+    }
+    CleanSaveJournalCommit {
+        serial: pending_serial,
+        transition: ProjectRecoveryAuthorityTransition::CleanSave,
+    }
+}
+
+fn rollback_indeterminate_clean_save(
+    committed_serial: u64,
+    recovery_authority_faulted: &AtomicBool,
+    rollback: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    match rollback() {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            recovery_authority_faulted.store(true, Ordering::Release);
+            Err(format!(
+                "rolling back the pending recovery journal failed: {error}. Project mutation is now blocked until Syndocal restarts and reconciles the target digest (committed serial {committed_serial})"
+            ))
+        }
+    }
+}
+
+/// Two-phase durable CleanSave journal shared by `finalize_project_save_ticket`.
+///
+/// The caller holds save-publication -> external-admission -> coordinator across
+/// this whole call, so no concurrent authority publication can interleave the
+/// pending write, the target replace, and the commit/rollback.
+///
+///   1. Preflight the next serial, resolve the exact-reopen target key, and hash
+///      the prepared bytes.  None of this changes the committed serial, so a
+///      failure here is inert and the target is never touched.
+///   2. Persist a PENDING CleanSave: committed serial S is written unchanged, but
+///      the journal now binds {S+1, target, digest}.
+///   3. Replace the target.
+///      - Ok  -> durably commit S+1 CleanSave (clears pending) and report it.
+///      - Err -> do NOT blindly roll back.  A spurious or post-rename replace
+///               error can still leave the exact prepared bytes on the target, so
+///               immediately re-hash the target and compare it to the pending
+///               digest:
+///                 * exact match  -> the bytes DID land, so durably commit S+1
+///                   CleanSave (never roll a landed save back) and return the
+///                   committed outcome so the live coordinator advances with the
+///                   journal. The low-level replace anomaly is logged truthfully.
+///                 * mismatch/missing -> the bytes did not land, so durably clear
+///                   pending, retain committed S (dirty-A recovery stays
+///                   eligible), and return the original replace error.
+///                 * target unreadable -> keep pending intact and return a
+///                   compound error so startup reconciliation retries.
+///               If the final commit compaction fails after exact bytes landed,
+///               pending is left on disk and the live S+1 outcome is still
+///               returned; startup reconciles to that same serial. A rollback
+///               write failure remains a compound error because bytes did not
+///               land and the live authority must stay at S.
+fn run_project_clean_save_journal(
+    journal_path: &Path,
+    committed_serial: u64,
+    committed_transition: &ProjectRecoveryAuthorityTransition,
+    target_path: &Path,
+    prepared_temp: &Path,
+    recovery_authority_faulted: &AtomicBool,
+    replace_target: impl FnOnce() -> Result<(), String>,
+) -> Result<CleanSaveJournalCommit, String> {
+    let pending_serial = committed_serial.checked_add(1).ok_or_else(|| {
+        "Project recovery authority serial is exhausted; restart Syndocal before saving".to_string()
+    })?;
+    let target_key = normalized_recovery_target_key(target_path)?;
+    let digest = strong_prepared_file_digest(prepared_temp)?;
+    // Clone the digest into the pending record so the owned `digest` stays
+    // available for post-replace inspection below; it must not be moved away
+    // while a failed replace still needs to be compared against the target.
+    persist_pending_project_clean_save_to_path(
+        journal_path,
+        committed_serial,
+        committed_transition.clone(),
+        PendingProjectCleanSave {
+            serial: pending_serial,
+            target_path: target_key,
+            digest: digest.clone(),
+        },
+    )?;
+    match replace_target() {
+        Ok(()) => {
+            // Only after the replace is proven does the committed serial advance
+            // to S+1; a failure here is truthful and startup-reconcilable because
+            // the pending record plus the now-matching target still resolve to
+            // this same commit on the next run.
+            let journal_commit = persist_project_recovery_authority_serial_to_path(
+                journal_path,
+                pending_serial,
+                ProjectRecoveryAuthorityTransition::CleanSave,
+            );
+            Ok(landed_clean_save_commit(
+                pending_serial,
+                journal_commit,
+                "Project file replacement completed",
+            ))
+        }
+        Err(replace_error) => {
+            // The replace reported failure, but that does not prove the bytes
+            // never landed.  Re-hash the target and compare it to the exact
+            // pending digest before deciding, so a save whose bytes actually
+            // reached disk is committed rather than rolled back.
+            let target_digest = strong_target_file_digest(target_path);
+            // Bind the decision first so the shared borrow of `target_digest`
+            // ends here; the Retain arm then moves the read error out of it.
+            let decision = reconcile_pending_clean_save_decision(&digest, &target_digest);
+            match decision {
+                PendingCleanSaveReconciliation::Commit => {
+                    // Exact bytes are present on the target despite the error:
+                    // durably commit S+1 CleanSave (which clears pending).  A
+                    // landed save must never roll the serial back.  If this
+                    // commit write fails, pending is left on disk so startup
+                    // reconciliation re-commits from the still-matching target.
+                    let journal_commit = persist_project_recovery_authority_serial_to_path(
+                        journal_path,
+                        pending_serial,
+                        ProjectRecoveryAuthorityTransition::CleanSave,
+                    );
+                    // Exact bytes plus a durable CleanSave journal are the
+                    // authoritative success outcome. Returning Err here would
+                    // skip the caller's coordinator assignment and leave the
+                    // live process at S while disk is already at S+1.
+                    eprintln!(
+                        "Project save replace reported an error, but the exact saved bytes are present on {target} and CleanSave serial {pending_serial} was durably committed: {replace_error}",
+                        target = target_path.display(),
+                    );
+                    Ok(landed_clean_save_commit(
+                        pending_serial,
+                        journal_commit,
+                        &format!(
+                            "{replace_error}; however the exact saved bytes are present on {target}",
+                            target = target_path.display(),
+                        ),
+                    ))
+                }
+                PendingCleanSaveReconciliation::Rollback => {
+                    // Mismatched or missing target: the intended bytes did not
+                    // land, so durably clear pending and retain committed S, then
+                    // return the original replace error.  If the rollback write
+                    // fails, pending is left on disk (a mismatch/missing target
+                    // still reconciles to a rollback on the next run).
+                    rollback_indeterminate_clean_save(
+                        committed_serial,
+                        recovery_authority_faulted,
+                        || {
+                            persist_project_recovery_authority_serial_to_path(
+                                journal_path,
+                                committed_serial,
+                                committed_transition.clone(),
+                            )
+                        },
+                    )
+                    .map_err(|rollback_error| format!("{replace_error}; {rollback_error}"))?;
+                    Err(replace_error)
+                }
+                PendingCleanSaveReconciliation::Retain => {
+                    // The replace itself reported failure, so prefer preserving
+                    // recovery at committed S when the target cannot be read.
+                    // If that rollback also fails, the durable pending could
+                    // later reconcile either way; latch all mutation/capture
+                    // admission until restart resolves it.
+                    let read_error = target_digest.err().unwrap_or_default();
+                    match rollback_indeterminate_clean_save(
+                        committed_serial,
+                        recovery_authority_faulted,
+                        || {
+                            persist_project_recovery_authority_serial_to_path(
+                                journal_path,
+                                committed_serial,
+                                committed_transition.clone(),
+                            )
+                        },
+                    ) {
+                        Ok(()) => Err(format!(
+                            "{replace_error}; the target {target} could not be read to confirm whether the exact saved bytes landed: {read_error}. Recovery authority was rolled back to serial {committed_serial}; the project remains unsaved.",
+                            target = target_path.display(),
+                        )),
+                        Err(rollback_error) => {
+                            Err(format!(
+                                "{replace_error}; the target {target} could not be read to classify the Save ({read_error}), and {rollback_error}",
+                                target = target_path.display(),
+                            ))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Load the recovery authority journal and reconcile any interrupted CleanSave
+/// by hashing the exact target bytes.  Used at startup so the committed serial a
+/// coordinator adopts already reflects whether an in-flight Save actually
+/// landed: an exact match commits S+1 CleanSave, a mismatch or missing target
+/// clears pending and retains S, and an unreadable target is a hard error that
+/// fails startup truthfully (leaving the pending record durable) rather than
+/// silently exposing S while the real outcome is unknown.
+fn load_and_reconcile_project_recovery_authority_state_from_path(
+    path: &Path,
+) -> Result<ProjectRecoveryAuthorityStatus, String> {
+    load_and_reconcile_project_recovery_authority_state_with_target_digest(
+        path,
+        strong_target_file_digest,
+    )
+}
+
+/// Reconciliation core with the target-digest step exposed as an injectable
+/// production seam.  Startup passes `strong_target_file_digest`; tests pass a
+/// deterministic digest result so the unreadable-target branch can be exercised
+/// without relying on flaky per-file ACL manipulation.  The `Retain` decision
+/// (a hard target read error) is surfaced as an `Err` that names the target and
+/// the underlying read error, and the pending record is intentionally left on
+/// disk so a healthier later run can reconcile it.
+fn load_and_reconcile_project_recovery_authority_state_with_target_digest(
+    path: &Path,
+    target_digest: impl FnOnce(&Path) -> Result<Option<String>, String>,
+) -> Result<ProjectRecoveryAuthorityStatus, String> {
+    let state = load_project_recovery_authority_state_from_path(path)?;
+    let Some(pending) = state.pending_clean_save.clone() else {
+        return Ok(ProjectRecoveryAuthorityStatus {
+            recovery_authority_serial: state.serial,
+            last_transition: state.last_transition,
+        });
+    };
+    let target_digest = target_digest(pending.target_path.as_path());
+    // Bind the decision first so the shared borrow of `target_digest` ends here;
+    // the Retain arm then moves the read error out of it.
+    let decision = reconcile_pending_clean_save_decision(&pending.digest, &target_digest);
+    match decision {
+        PendingCleanSaveReconciliation::Commit => {
+            // Exact bytes landed: commit S+1 CleanSave and clear pending.  A
+            // failure here is fail-safe: pending plus a matching target remain,
+            // so a later run reconciles to the same commit.
+            persist_project_recovery_authority_serial_to_path(
+                path,
+                pending.serial,
+                ProjectRecoveryAuthorityTransition::CleanSave,
+            )?;
+            Ok(ProjectRecoveryAuthorityStatus {
+                recovery_authority_serial: pending.serial,
+                last_transition: ProjectRecoveryAuthorityTransition::CleanSave,
+            })
+        }
+        PendingCleanSaveReconciliation::Rollback => {
+            // The intended save did not land: clear pending and retain the
+            // committed serial so the dirty-project recovery image at S stays
+            // eligible.
+            persist_project_recovery_authority_serial_to_path(
+                path,
+                state.serial,
+                state.last_transition.clone(),
+            )?;
+            Ok(ProjectRecoveryAuthorityStatus {
+                recovery_authority_serial: state.serial,
+                last_transition: state.last_transition,
+            })
+        }
+        PendingCleanSaveReconciliation::Retain => {
+            // The target could not be read, so whether the interrupted Save
+            // landed is genuinely unknown.  Fail startup truthfully instead of
+            // silently exposing the committed serial S, and leave the pending
+            // record durable (no journal write here) so a healthier later run
+            // reconciles it against a readable target.
+            let read_error = target_digest.err().unwrap_or_default();
+            Err(format!(
+                "Project recovery reconciliation could not read the interrupted Save target {target} to confirm whether the exact saved bytes landed: {read_error}. The pending Save recovery journal was left intact for a later startup to reconcile.",
+                target = pending.target_path.display(),
+            ))
+        }
+    }
+}
+
+fn load_output_ownership_role_from_path(path: &Path) -> Result<Option<MachineOutputRole>, String> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "Unable to read machine output ownership state {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    let state: PersistedOutputOwnershipState = serde_json::from_slice(&bytes).map_err(|error| {
+        format!(
+            "Machine output ownership state {} is corrupt: {error}",
+            path.display()
+        )
+    })?;
+    if state.version != OUTPUT_OWNERSHIP_STATE_VERSION {
+        return Err(format!(
+            "Unsupported machine output ownership state version {} in {}",
+            state.version,
+            path.display()
+        ));
+    }
+    Ok(Some(state.role))
+}
+
+#[cfg(test)]
+fn resolve_output_ownership_role_from_path(path: &Path) -> Result<MachineOutputRole, String> {
+    load_output_ownership_role_from_path(path).map(|role| role.unwrap_or_default())
+}
+
+/// Read the preferred local role without arming any output. A true first run
+/// may create the preferred Both record only while the engine is still in its
+/// startup-denied state; every later launch still requires an explicit arm.
+fn load_or_initialize_output_ownership_preference(
+    path: &Path,
+) -> Result<MachineOutputRole, String> {
+    match load_output_ownership_role_from_path(path)? {
+        Some(role) => Ok(role),
+        None => {
+            persist_output_ownership_role_to_path(path, MachineOutputRole::Both)?;
+            Ok(MachineOutputRole::Both)
+        }
+    }
+}
+
+fn replace_file_atomically(temp: &Path, target: &Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::core::PCWSTR;
+        use windows::Win32::Storage::FileSystem::{
+            MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+        };
+
+        let temp_wide = temp
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let target_wide = target
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        unsafe {
+            MoveFileExW(
+                PCWSTR(temp_wide.as_ptr()),
+                PCWSTR(target_wide.as_ptr()),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+            .map_err(|error| format!("Unable to atomically replace {}: {error}", target.display()))
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        fs::rename(temp, target)
+            .map_err(|error| format!("Unable to atomically replace {}: {error}", target.display()))
+    }
+}
+
+fn persist_output_ownership_role_to_path(
+    path: &Path,
+    role: MachineOutputRole,
+) -> Result<(), String> {
+    let parent = path.parent().ok_or_else(|| {
+        format!(
+            "Machine output ownership state path has no parent: {}",
+            path.display()
+        )
+    })?;
+    fs::create_dir_all(parent).map_err(|error| {
+        format!(
+            "Unable to create machine output ownership state directory {}: {error}",
+            parent.display()
+        )
+    })?;
+    let bytes = serde_json::to_vec(&PersistedOutputOwnershipState {
+        version: OUTPUT_OWNERSHIP_STATE_VERSION,
+        role,
+    })
+    .map_err(|error| format!("Unable to encode machine output ownership state: {error}"))?;
+    let nonce = current_unix_ms().min(u128::from(u64::MAX));
+    let file_name = path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or(OUTPUT_OWNERSHIP_STATE_FILE);
+    let temp = parent.join(format!(".{file_name}.{}.{}.tmp", std::process::id(), nonce));
+    let result = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(|error| {
+                format!(
+                    "Unable to create temporary machine output ownership state {}: {error}",
+                    temp.display()
+                )
+            })?;
+        file.write_all(&bytes).map_err(|error| {
+            format!(
+                "Unable to write temporary machine output ownership state {}: {error}",
+                temp.display()
+            )
+        })?;
+        file.sync_all().map_err(|error| {
+            format!(
+                "Unable to flush temporary machine output ownership state {}: {error}",
+                temp.display()
+            )
+        })?;
+        drop(file);
+        replace_file_atomically(&temp, path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
+}
+
+fn persist_output_ownership_target_after_preparation<F>(
+    path: &Path,
+    role: MachineOutputRole,
+    prepare: F,
+) -> Result<(), String>
+where
+    F: FnOnce() -> Result<(), String>,
+{
+    persist_output_ownership_target_after_preparation_with(
+        path,
+        role,
+        prepare,
+        persist_output_ownership_role_to_path,
+    )
+}
+
+fn persist_output_ownership_target_after_preparation_with<F, P>(
+    path: &Path,
+    role: MachineOutputRole,
+    prepare: F,
+    persist: P,
+) -> Result<(), String>
+where
+    F: FnOnce() -> Result<(), String>,
+    P: FnOnce(&Path, MachineOutputRole) -> Result<(), String>,
+{
+    prepare()?;
+    persist(path, role)
 }
 
 fn project_backup_path(directory: &Path, id: u64) -> PathBuf {
@@ -15541,23 +25349,31 @@ async fn install_application_update(
 
     let backup = {
         let state = app.state::<AppState>();
-        let source_path = state
-            .current_project_path
-            .lock()
-            .map_err(|_| "Current project path lock was poisoned".to_string())?
-            .as_ref()
-            .map(|path| path.to_string_lossy().to_string());
-        let directory = app_data_subdirectory(&app, PROJECT_BACKUP_DIRECTORY)?;
-        write_project_backup_in(
-            &directory,
-            project_file_for_save(&state)?,
-            source_path,
-            format!("before update {expected_version}"),
-            ProjectControlMappings {
+        let (source_path, ticket) = {
+            let _external_admission = lock_project_external_command_admission(&state)?;
+            let mut coordinator = lock_project_coordinator(&state)?;
+            validate_frontend_mappings_match_authority(
+                &coordinator,
                 midi_mappings,
                 osc_mappings,
                 dmx_mappings,
-            },
+            )?;
+            (
+                coordinator
+                    .ancillary
+                    .current_project_path
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().to_string()),
+                project_save_ticket_for_coordinator(&state, &mut coordinator)?,
+            )
+        };
+        let directory = app_data_subdirectory(&app, PROJECT_BACKUP_DIRECTORY)?;
+        write_project_backup_in(
+            &directory,
+            ticket.checkpoint.project,
+            source_path,
+            format!("before update {expected_version}"),
+            ticket.checkpoint.mappings,
         )?
     };
 
@@ -15720,17 +25536,34 @@ fn save_project_backup(
             return Err("Project backup source path must use the .sdc extension".to_string());
         }
     }
-    let directory = app_data_subdirectory(&app, PROJECT_BACKUP_DIRECTORY)?;
-    write_project_backup_in(
-        &directory,
-        project_file_for_save(&state)?,
-        source_path,
-        reason,
-        ProjectControlMappings {
+    let ticket = {
+        let _external_admission = lock_project_external_command_admission(&state)?;
+        let mut coordinator = lock_project_coordinator(&state)?;
+        validate_frontend_mappings_match_authority(
+            &coordinator,
             midi_mappings,
             osc_mappings,
             dmx_mappings,
-        },
+        )?;
+        project_save_ticket_for_coordinator(&state, &mut coordinator)?
+    };
+    let authoritative_source_path = ticket
+        .current_project_path
+        .as_ref()
+        .map(|path| path.to_string_lossy().to_string());
+    if source_path.is_some() && source_path != authoritative_source_path {
+        return Err(
+            "Project backup path changed before capture; refresh before creating a backup"
+                .to_string(),
+        );
+    }
+    let directory = app_data_subdirectory(&app, PROJECT_BACKUP_DIRECTORY)?;
+    write_project_backup_in(
+        &directory,
+        ticket.checkpoint.project,
+        authoritative_source_path,
+        reason,
+        ticket.checkpoint.mappings,
     )
 }
 
@@ -15753,7 +25586,7 @@ fn load_project_backup(
         .as_deref()
         .map(Path::new)
         .filter(|path| is_syndocal_project_path(path));
-    load_project_from_file_with_control_mappings(
+    load_project_from_file_with_control_mappings_and_disposition(
         &state,
         backup.project,
         ProjectControlMappings {
@@ -15763,6 +25596,7 @@ fn load_project_backup(
         },
         format!("Backup {}", backup.created_at_unix_ms),
         current_path,
+        ProjectAuthorityDisposition::UnsavedReplacement,
     )
 }
 
@@ -15936,12 +25770,19 @@ fn cleanup_standby_generations(directory: &Path, session_id: &str) -> Result<(),
 fn write_standby_checkpoint_in(
     directory: &Path,
     project: &ProjectFile,
+    mappings: &ProjectControlMappings,
     session_id: &str,
     generation: u64,
     written_at_unix_ms: u64,
 ) -> Result<StandbySyncManifest, String> {
     validate_project_file(project)?;
-    let project_bytes = serde_json::to_vec_pretty(project).map_err(|error| error.to_string())?;
+    let project_bytes = project_json_for_write_with_control_mappings(
+        project,
+        mappings.midi_mappings.clone(),
+        mappings.osc_mappings.clone(),
+        mappings.dmx_mappings.clone(),
+    )?
+    .into_bytes();
     let project_file = standby_project_file_name(session_id, generation);
     write_immutable_sync_file(&directory.join(&project_file), &project_bytes)?;
 
@@ -15995,8 +25836,18 @@ fn read_standby_checkpoint_for_session(
             ));
             continue;
         }
-        let project: ProjectFile = match serde_json::from_slice(&bytes) {
-            Ok(project) => project,
+        let value: Value = match serde_json::from_slice(&bytes) {
+            Ok(value) => value,
+            Err(error) => {
+                last_error = Some(format!(
+                    "Invalid standby project {}: {error}",
+                    path.display()
+                ));
+                continue;
+            }
+        };
+        let (project, mappings) = match project_and_control_mappings_from_value(value) {
+            Ok(checkpoint) => checkpoint,
             Err(error) => {
                 last_error = Some(format!(
                     "Invalid standby project {}: {error}",
@@ -16012,10 +25863,42 @@ fn read_standby_checkpoint_for_session(
             ));
             continue;
         }
-        return Ok(Some(StandbyCheckpoint { manifest, project }));
+        return Ok(Some(StandbyCheckpoint {
+            manifest,
+            project,
+            mappings,
+        }));
     }
     Err(last_error
         .unwrap_or_else(|| "No valid standby synchronization checkpoint was found".to_string()))
+}
+
+fn standby_checkpoint_requires_identity_apply(
+    state: &AppState,
+    project: &ProjectFile,
+    mappings: &ProjectControlMappings,
+) -> Result<bool, String> {
+    let mut coordinator = lock_project_coordinator(state)?;
+    let current = reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
+    let incoming_hash = project_checkpoint_hash(project, mappings)?;
+    // Generations are a heartbeat transport detail. A same-content primary
+    // checkpoint must not repeatedly retire inputs/reset runtime or create
+    // artificial project identity history on the Standby machine.
+    Ok(project_checkpoint_content_requires_identity_apply(
+        &current,
+        mappings,
+        &incoming_hash,
+    ))
+}
+
+/// Poll transport generations are heartbeats, not project identities. This
+/// pure decision keeps the same bytes from repeatedly retiring inputs.
+fn project_checkpoint_content_requires_identity_apply(
+    current: &ProjectCheckpoint,
+    incoming_mappings: &ProjectControlMappings,
+    incoming_hash: &str,
+) -> bool {
+    current.hash != incoming_hash || current.mappings != *incoming_mappings
 }
 
 #[cfg(test)]
@@ -16057,20 +25940,6 @@ fn observe_active_primary_sessions(
         .collect::<Vec<_>>();
     active.sort();
     active
-}
-
-fn project_for_warm_standby(mut project: ProjectFile) -> ProjectFile {
-    project.snapshot.output.enabled = false;
-    for output in &mut project.snapshot.dmx_outputs {
-        output.enabled = false;
-    }
-    project.snapshot.blackout = true;
-    project.snapshot.video.blackout = true;
-    for output in &mut project.snapshot.video.outputs {
-        output.enabled = false;
-        output.blackout = true;
-    }
-    project
 }
 
 fn update_standby_status(
@@ -16116,33 +25985,111 @@ fn start_standby_sync(
     role: StandbySyncRole,
 ) -> Result<StandbySyncStatus, String> {
     let directory = validate_standby_sync_directory(&directory)?;
+    let _lifecycle_guard = state.standby_sync_lifecycle.lock().map_err(|_| {
+        let error = "Standby synchronization lifecycle lock was poisoned".to_string();
+        state
+            .engine
+            .mark_output_ownership_transition_failure(error.clone());
+        error
+    })?;
+    let session_id = standby_session_id();
+    let stop = Arc::new(AtomicBool::new(false));
+    let status = Arc::new(Mutex::new(StandbySyncStatus {
+        // Standby is published only after the ownership fence has reserved
+        // and completed the all-deny transition below.
+        running: role != StandbySyncRole::Standby,
+        role: Some(role),
+        directory: Some(directory.to_string_lossy().to_string()),
+        session_id: (role == StandbySyncRole::Primary).then(|| session_id.clone()),
+        ..StandbySyncStatus::default()
+    }));
+    // This is deliberately before every output-transition lock. A normal
+    // project replacement uses the same lifecycle -> stop/join -> transition
+    // order, while the polling worker itself never acquires lifecycle.
+    stop_standby_sync_for_project_swap(&state)?;
     {
         let mut runtime = state
             .standby_sync
             .lock()
             .map_err(|_| "Standby synchronization lock was poisoned".to_string())?;
-        stop_standby_sync_runtime(&mut runtime);
+        runtime.status = Arc::clone(&status);
     }
+
     if role == StandbySyncRole::Standby {
-        let safe_project = project_for_warm_standby(project_file_for_save(&state)?);
-        load_project_from_file(&state, safe_project, "Warm standby".to_string(), None)?;
+        {
+            let _transition_guard = state.output_ownership_transition.lock().map_err(|_| {
+                let error = "Output ownership transition lock was poisoned".to_string();
+                state
+                    .engine
+                    .mark_output_ownership_transition_failure(error.clone());
+                error
+            })?;
+            let (path, transition) = match reserve_standby_output_ownership_transition(&app, &state)
+            {
+                Ok(reservation) => reservation,
+                Err((path, error)) => {
+                    let error = fail_output_ownership_transition(
+                        &app,
+                        &state,
+                        path.as_deref(),
+                        MachineOutputRole::Standby,
+                        error,
+                        None,
+                    );
+                    update_standby_status(&status, |status| {
+                        status.running = false;
+                        status.last_error = Some(error.clone());
+                    });
+                    return Err(error);
+                }
+            };
+            if let Err(error) = apply_output_ownership_transition_after_reservation(
+                &app,
+                &state,
+                MachineOutputRole::Standby,
+                &path,
+                Some(transition),
+            ) {
+                update_standby_status(&status, |status| {
+                    status.running = false;
+                    status.last_error = Some(error.clone());
+                });
+                return Err(error);
+            }
+        }
+        let warm_standby_result =
+            sanitize_current_project_runtime_under_authority(&state).map(|_| ());
+        if let Err(error) = warm_standby_result {
+            update_standby_status(&status, |status| {
+                status.running = false;
+                status.last_error = Some(error.clone());
+            });
+            return Err(error);
+        }
+        if !standby_sync_may_publish_running(&state.engine.output_ownership_status()) {
+            let error =
+                "Standby synchronization cannot publish running before the Standby ownership fence is Ready"
+                    .to_string();
+            state
+                .engine
+                .mark_output_ownership_transition_failure(error.clone());
+            update_standby_status(&status, |status| {
+                status.running = false;
+                status.last_error = Some(error.clone());
+            });
+            return Err(error);
+        }
+        update_standby_status(&status, |status| {
+            status.running = true;
+        });
     }
 
     let mut runtime = state
         .standby_sync
         .lock()
         .map_err(|_| "Standby synchronization lock was poisoned".to_string())?;
-    let session_id = standby_session_id();
-    let stop = Arc::new(AtomicBool::new(false));
-    let status = Arc::new(Mutex::new(StandbySyncStatus {
-        running: true,
-        role: Some(role),
-        directory: Some(directory.to_string_lossy().to_string()),
-        session_id: (role == StandbySyncRole::Primary).then(|| session_id.clone()),
-        ..StandbySyncStatus::default()
-    }));
     runtime.stop = Some(stop.clone());
-    runtime.status = status.clone();
+    runtime.status = Arc::clone(&status);
 
     let worker_directory = directory.clone();
     runtime.worker = Some(std::thread::spawn(move || match role {
@@ -16153,7 +26100,15 @@ fn start_standby_sync(
                 let written_at_unix_ms = current_unix_ms().min(u64::MAX as u128) as u64;
                 let result = {
                     let state = app.state::<AppState>();
-                    project_file_for_save(&state).and_then(|project| {
+                    (|| {
+                        let _external_admission = lock_project_external_command_admission(&state)?;
+                        let mut coordinator = lock_project_coordinator(&state)?;
+                        Ok(project_save_ticket_for_coordinator(
+                            &state,
+                            &mut coordinator,
+                        )?)
+                    })()
+                    .and_then(|ticket| {
                         while worker_directory
                             .join(standby_manifest_file_name(&session_id, generation))
                             .exists()
@@ -16162,7 +26117,8 @@ fn start_standby_sync(
                         }
                         write_standby_checkpoint_in(
                             &worker_directory,
-                            &project,
+                            &ticket.checkpoint.project,
+                            &ticket.checkpoint.mappings,
                             &session_id,
                             generation,
                             written_at_unix_ms,
@@ -16251,20 +26207,42 @@ fn start_standby_sync(
                             != Some(&checkpoint_identity)
                             && !split_brain;
                         if should_apply {
-                            let safe_project = project_for_warm_standby(checkpoint.project.clone());
                             let state = app.state::<AppState>();
-                            if let Err(error) = load_project_from_file(
+                            // The polling worker deliberately does not take
+                            // standby_sync_lifecycle. Normal replacement
+                            // callers acquire it, request this stop, join us,
+                            // and only then wait for output ownership.
+                            match standby_checkpoint_requires_identity_apply(
                                 &state,
-                                safe_project,
-                                format!(
-                                    "Warm standby generation {}",
-                                    checkpoint.manifest.generation
-                                ),
-                                None,
+                                &checkpoint.project,
+                                &checkpoint.mappings,
                             ) {
-                                apply_error = Some(error);
-                            } else {
-                                applied_checkpoint = Some(checkpoint_identity);
+                                Ok(false) => {
+                                    // A fresh heartbeat carrying the same
+                                    // canonical checkpoint is observed/applied
+                                    // without triggering a replacement.
+                                    applied_checkpoint = Some(checkpoint_identity);
+                                }
+                                Ok(true) => {
+                                    if let Err(error) =
+                                        load_project_from_file_with_control_mappings_in_scope(
+                                            &state,
+                                            checkpoint.project.clone(),
+                                            checkpoint.mappings.clone(),
+                                            format!(
+                                                "Warm standby generation {}",
+                                                checkpoint.manifest.generation
+                                            ),
+                                            None,
+                                            ProjectSnapshotReplacementScope::StandbyPollingWorker,
+                                        )
+                                    {
+                                        apply_error = Some(error);
+                                    } else {
+                                        applied_checkpoint = Some(checkpoint_identity);
+                                    }
+                                }
+                                Err(error) => apply_error = Some(error),
                             }
                         }
                         update_standby_status(&status, |status| {
@@ -16318,6 +26296,13 @@ fn start_standby_sync(
 
 #[tauri::command]
 fn stop_standby_sync(state: State<'_, AppState>) -> Result<StandbySyncStatus, String> {
+    let _lifecycle_guard = state.standby_sync_lifecycle.lock().map_err(|_| {
+        let error = "Standby synchronization lifecycle lock was poisoned".to_string();
+        state
+            .engine
+            .mark_output_ownership_transition_failure(error.clone());
+        error
+    })?;
     let mut runtime = state
         .standby_sync
         .lock()
@@ -16346,6 +26331,13 @@ fn standby_sync_status(state: State<'_, AppState>) -> Result<StandbySyncStatus, 
 
 #[tauri::command]
 fn take_over_standby(state: State<'_, AppState>, force: bool) -> Result<ProjectLoadResult, String> {
+    let _lifecycle_guard = state.standby_sync_lifecycle.lock().map_err(|_| {
+        let error = "Standby synchronization lifecycle lock was poisoned".to_string();
+        state
+            .engine
+            .mark_output_ownership_transition_failure(error.clone());
+        error
+    })?;
     let (directory, status_snapshot) = {
         let runtime = state
             .standby_sync
@@ -16364,9 +26356,7 @@ fn take_over_standby(state: State<'_, AppState>, force: bool) -> Result<ProjectL
             .ok_or_else(|| "Standby synchronization is not configured".to_string())?;
         (directory, status)
     };
-    if status_snapshot.role != Some(StandbySyncRole::Standby) {
-        return Err("Take Over is only available while running as Standby".to_string());
-    }
+    validate_takeover_running_status(&status_snapshot)?;
     if status_snapshot.split_brain && !force {
         return Err(
             "Multiple active Primary sessions are present; confirm forced Take Over to continue"
@@ -16389,15 +26379,21 @@ fn take_over_standby(state: State<'_, AppState>, force: bool) -> Result<ProjectL
             .map_err(|_| "Standby synchronization lock was poisoned".to_string())?;
         stop_standby_sync_runtime(&mut runtime);
     }
-    load_project_from_file(
+    // Take Over keeps the lifecycle guard through the join and the fenced
+    // replacement. The current ownership role is Standby, so the replacement
+    // cannot re-arm physical outputs while the checkpoint is applied.
+    let load_result = load_project_from_file_with_control_mappings_in_scope(
         &state,
         checkpoint.project,
+        checkpoint.mappings,
         format!(
             "Standby Take Over generation {}",
             checkpoint.manifest.generation
         ),
         None,
-    )
+        ProjectSnapshotReplacementScope::LifecycleAlreadyHeld,
+    )?;
+    Ok(load_result)
 }
 
 fn diagnostic_zip_file_name(path: PathBuf) -> PathBuf {
@@ -16530,21 +26526,24 @@ fn export_diagnostic_package(
     Ok(Some(path.to_string_lossy().to_string()))
 }
 
-fn set_current_project_path(state: &State<'_, AppState>, path: &Path) -> Result<(), String> {
+fn set_current_project_path_with_coordinator(
+    state: &AppState,
+    coordinator: &mut ProjectCoordinator,
+    path: &Path,
+) -> Result<(), String> {
     let mut current_path = state
         .current_project_path
         .lock()
         .map_err(|_| "Current project path lock was poisoned".to_string())?;
-    *current_path = Some(path.to_path_buf());
-    Ok(())
-}
-
-fn clear_current_project_path(state: &State<'_, AppState>) -> Result<(), String> {
-    let mut current_path = state
-        .current_project_path
-        .lock()
-        .map_err(|_| "Current project path lock was poisoned".to_string())?;
-    *current_path = None;
+    let next = Some(path.to_path_buf());
+    if coordinator.ancillary.current_project_path != next {
+        coordinator.path_generation =
+            coordinator.path_generation.checked_add(1).ok_or_else(|| {
+                "Project path generation is exhausted; restart Syndocal before saving".to_string()
+            })?;
+    }
+    coordinator.ancillary.current_project_path = next;
+    *current_path = coordinator.ancillary.current_project_path.clone();
     Ok(())
 }
 
@@ -16622,6 +26621,13 @@ fn normalize_project_timeline_layers(snapshot: &mut EngineSnapshot) {
 fn project_snapshot_for_save(mut snapshot: EngineSnapshot) -> EngineSnapshot {
     use_authored_video_snapshot(&mut snapshot);
     normalize_project_timeline_layers(&mut snapshot);
+    // The shared clock's phase/counter/tap/external-lock fields advance at
+    // runtime even while the authored project is idle. Project load only
+    // restores the authored BPM, so persist exactly that stable surface.
+    snapshot.clock = ClockSnapshot {
+        bpm: snapshot.clock.bpm,
+        ..ClockSnapshot::default()
+    };
     for graph in &mut snapshot.node_graphs {
         graph.audio_runtime.clear();
     }
@@ -16681,18 +26687,67 @@ fn import_daslight_project(
             path
         }
     };
+    import_daslight_project_from_path(&state, path).map(|loaded| Some(loaded.report))
+}
+
+/// Current frontend callers use this paired reply. The legacy report-only
+/// command remains above for compatibility with older clients.
+#[tauri::command]
+fn import_daslight_project_with_result(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    path: Option<String>,
+) -> Result<Option<DvcImportProjectLoadResult>, String> {
+    let path = match path {
+        Some(path) => PathBuf::from(path),
+        None => {
+            let Some(path) = parented_file_dialog(&window)
+                .add_filter("Daslight 5 Project", &["dvc"])
+                .pick_file()
+            else {
+                return Ok(None);
+            };
+            path
+        }
+    };
+    import_daslight_project_from_path(&state, path).map(Some)
+}
+
+fn import_daslight_project_from_path(
+    state: &State<'_, AppState>,
+    path: PathBuf,
+) -> Result<DvcImportProjectLoadResult, String> {
     let dvc_import::DvcImportOutcome {
         project,
         mut report,
     } = dvc_import::import_path(&path)?;
-    let loaded = load_project_from_file(
-        &state,
+    let mappings = project_control_mappings_from_daslight_import_report(&report);
+    let loaded = load_project_from_file_with_control_mappings_and_disposition(
+        state,
         project,
+        mappings,
         format!("Imported Daslight project: {}", path.to_string_lossy()),
         None,
+        ProjectAuthorityDisposition::UnsavedReplacement,
     )?;
-    report.warnings.extend(loaded.warnings);
-    Ok(Some(report))
+    report.warnings.extend(loaded.warnings.clone());
+    Ok(DvcImportProjectLoadResult {
+        report,
+        load: loaded,
+    })
+}
+
+/// Daslight's verified import surface currently supplies MIDI and DMX control
+/// mappings. OSC has no source representation in a `.dvc`, so it remains
+/// deliberately empty rather than inheriting state from the replaced project.
+fn project_control_mappings_from_daslight_import_report(
+    report: &dvc_import::DvcImportReport,
+) -> ProjectControlMappings {
+    ProjectControlMappings {
+        midi_mappings: report.midi_mappings.clone(),
+        osc_mappings: Vec::new(),
+        dmx_mappings: report.dmx_mappings.clone(),
+    }
 }
 
 #[tauri::command]
@@ -16716,11 +26771,12 @@ fn load_startup_project(state: State<'_, AppState>) -> Result<Option<ProjectLoad
 
 #[tauri::command]
 fn load_phase1_sample_project(state: State<'_, AppState>) -> Result<ProjectLoadResult, String> {
-    load_project_from_json(
+    load_project_from_json_and_disposition(
         &state,
         PHASE1_SAMPLE_PROJECT_JSON,
         PHASE1_SAMPLE_PROJECT_LABEL.to_string(),
         None,
+        ProjectAuthorityDisposition::UnsavedReplacement,
     )
 }
 
@@ -16738,11 +26794,12 @@ fn phase1_smoke_first_8(snapshot: &EngineSnapshot) -> Vec<u8> {
 
 #[tauri::command]
 fn run_phase1_smoke(state: State<'_, AppState>) -> Result<Phase1SmokeReport, String> {
-    let result = load_project_from_json(
+    let result = load_project_from_json_and_disposition(
         &state,
         PHASE1_SAMPLE_PROJECT_JSON,
         PHASE1_SAMPLE_PROJECT_LABEL.to_string(),
         None,
+        ProjectAuthorityDisposition::UnsavedReplacement,
     )?;
     let loaded = state.engine.snapshot();
     let cue = loaded
@@ -16894,6 +26951,22 @@ fn load_project_from_json(
     path_label: String,
     current_path: Option<&Path>,
 ) -> Result<ProjectLoadResult, String> {
+    load_project_from_json_and_disposition(
+        state,
+        json,
+        path_label,
+        current_path,
+        ProjectAuthorityDisposition::CleanAtPath,
+    )
+}
+
+fn load_project_from_json_and_disposition(
+    state: &State<'_, AppState>,
+    json: &str,
+    path_label: String,
+    current_path: Option<&Path>,
+    disposition: ProjectAuthorityDisposition,
+) -> Result<ProjectLoadResult, String> {
     if json.len() as u64 > PROJECT_FILE_MAX_BYTES {
         return Err(format!(
             "Project JSON is {} bytes; the limit is {PROJECT_FILE_MAX_BYTES} bytes",
@@ -16902,7 +26975,14 @@ fn load_project_from_json(
     }
     let value: Value = serde_json::from_str(json).map_err(|error| error.to_string())?;
     let (project, mappings) = project_and_control_mappings_from_value(value)?;
-    load_project_from_file_with_control_mappings(state, project, mappings, path_label, current_path)
+    load_project_from_file_with_control_mappings_and_disposition(
+        state,
+        project,
+        mappings,
+        path_label,
+        current_path,
+        disposition,
+    )
 }
 
 #[tauri::command]
@@ -16911,6 +26991,8 @@ fn load_project_checkpoint(
     project: Value,
     label: String,
     current_path: Option<String>,
+    expected_recovery_authority_serial: u64,
+    recovery_request_id: String,
 ) -> Result<ProjectLoadResult, String> {
     let current_path = current_path.map(PathBuf::from);
     if let Some(path) = current_path.as_deref() {
@@ -16922,13 +27004,94 @@ fn load_project_checkpoint(
         }
     }
     let (project, mappings) = project_and_control_mappings_from_value(project)?;
-    load_project_from_file_with_control_mappings(
+    let request_id = recovery_request_id.trim();
+    if request_id.is_empty() || request_id.len() > 160 {
+        return Err("Project recovery request ID is missing or too long".to_string());
+    }
+    let mut prepared = prepare_project_load(project, mappings, label, current_path.as_deref())?;
+    prepared.authority_disposition = ProjectAuthorityDisposition::RecoveryPendingAck;
+    prepared.recovery_request = Some(ProjectRecoveryPublicationRequest {
+        source_serial: expected_recovery_authority_serial,
+        request_id: request_id.to_string(),
+    });
+    replace_prepared_project_snapshot(
         &state,
-        project,
-        mappings,
-        label,
-        current_path.as_deref(),
+        prepared,
+        ProjectSnapshotReplacementScope::ExternalCaller,
     )
+}
+
+/// Browser recovery drafts are local-only and are applied after the fenced
+/// project image reaches the UI.  Do not let an event-only replacement delete
+/// them: the originating frontend explicitly acknowledges success against the
+/// exact authority/disposition token, then this durable state changes to the
+/// normal unsaved-project interpretation for poll/event-loss convergence.
+#[tauri::command]
+fn acknowledge_project_recovery_applied(
+    state: State<'_, AppState>,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    expected_authority_disposition_generation: u64,
+    recovery_request_id: String,
+) -> Result<ProjectAuthorityBundle, String> {
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let mut coordinator = lock_project_coordinator(&state)?;
+    ensure_no_pending_project_transaction(&coordinator)?;
+    if coordinator.epoch != expected_epoch
+        || coordinator.revision != expected_revision
+        || coordinator.checkpoint_hash != expected_checkpoint_hash
+        || coordinator.authority_disposition_generation != expected_authority_disposition_generation
+    {
+        return Err(
+            "Project recovery changed before its local drafts were acknowledged".to_string(),
+        );
+    }
+    if coordinator.authority_disposition != ProjectAuthorityDisposition::RecoveryPendingAck {
+        return Err(
+            "Project recovery was already superseded before its local drafts were acknowledged"
+                .to_string(),
+        );
+    }
+    let (publication_request_id, target_checkpoint_hash) = match &coordinator
+        .recovery_authority_last_transition
+    {
+        ProjectRecoveryAuthorityTransition::RecoveryPublication {
+            request_id,
+            target_checkpoint_hash,
+            ..
+        } if request_id == recovery_request_id.trim()
+            && target_checkpoint_hash == &coordinator.checkpoint_hash =>
+        {
+            (request_id.clone(), target_checkpoint_hash.clone())
+        }
+        _ => {
+            return Err(
+                "Project recovery request no longer owns the published recovery image".to_string(),
+            );
+        }
+    };
+    let next_generation =
+        checked_project_authority_disposition_generation_after_change(&coordinator)?;
+    let recovery_publication_serial = coordinator.recovery_authority_serial;
+    advance_project_recovery_authority_serial_before_publication(
+        &state,
+        &mut coordinator,
+        ProjectRecoveryAuthorityTransition::RecoveryAcknowledged {
+            recovery_publication_serial,
+            request_id: publication_request_id,
+            target_checkpoint_hash,
+        },
+    )?;
+    commit_project_authority_disposition_after_preflight(
+        &mut coordinator,
+        next_generation,
+        ProjectAuthorityDisposition::UnsavedReplacement,
+    );
+    Ok(project_authority_bundle_from_coordinator(
+        &state,
+        &coordinator,
+    ))
 }
 
 fn project_and_control_mappings_from_value(
@@ -17163,76 +27326,637 @@ fn load_project_from_file(
     path_label: String,
     current_path: Option<&Path>,
 ) -> Result<ProjectLoadResult, String> {
-    load_project_from_file_with_control_mappings(
+    load_project_from_file_with_control_mappings_in_scope(
         state,
         project,
         ProjectControlMappings::default(),
         path_label,
         current_path,
+        ProjectSnapshotReplacementScope::ExternalCaller,
     )
 }
 
 fn load_project_from_file_with_control_mappings(
     state: &State<'_, AppState>,
-    mut project: ProjectFile,
+    project: ProjectFile,
     mappings: ProjectControlMappings,
     path_label: String,
     current_path: Option<&Path>,
 ) -> Result<ProjectLoadResult, String> {
+    load_project_from_file_with_control_mappings_and_disposition(
+        state,
+        project,
+        mappings,
+        path_label,
+        current_path,
+        ProjectAuthorityDisposition::CleanAtPath,
+    )
+}
+
+fn load_project_from_file_with_control_mappings_and_disposition(
+    state: &State<'_, AppState>,
+    project: ProjectFile,
+    mappings: ProjectControlMappings,
+    path_label: String,
+    current_path: Option<&Path>,
+    disposition: ProjectAuthorityDisposition,
+) -> Result<ProjectLoadResult, String> {
+    load_project_from_file_with_control_mappings_in_scope_and_disposition(
+        state,
+        project,
+        mappings,
+        path_label,
+        current_path,
+        ProjectSnapshotReplacementScope::ExternalCaller,
+        disposition,
+    )
+}
+
+fn load_project_from_file_with_control_mappings_in_scope(
+    state: &State<'_, AppState>,
+    project: ProjectFile,
+    mappings: ProjectControlMappings,
+    path_label: String,
+    current_path: Option<&Path>,
+    scope: ProjectSnapshotReplacementScope,
+) -> Result<ProjectLoadResult, String> {
+    load_project_from_file_with_control_mappings_in_scope_and_disposition(
+        state,
+        project,
+        mappings,
+        path_label,
+        current_path,
+        scope,
+        ProjectAuthorityDisposition::CleanAtPath,
+    )
+}
+
+fn load_project_from_file_with_control_mappings_in_scope_and_disposition(
+    state: &State<'_, AppState>,
+    project: ProjectFile,
+    mappings: ProjectControlMappings,
+    path_label: String,
+    current_path: Option<&Path>,
+    scope: ProjectSnapshotReplacementScope,
+    disposition: ProjectAuthorityDisposition,
+) -> Result<ProjectLoadResult, String> {
+    let mut prepared = prepare_project_load(project, mappings, path_label, current_path)?;
+    prepared.authority_disposition = disposition;
+    replace_prepared_project_snapshot(state, prepared, scope)
+}
+
+/// Same-project Standby sanitization reuses the project that is authoritative
+/// at the admission/coordinator boundary. Capturing A before that boundary
+/// and later publishing it would otherwise let an admitted external B edit be
+/// overwritten without an identity swap.
+fn sanitize_current_project_runtime_under_authority(
+    state: &State<'_, AppState>,
+) -> Result<ProjectLoadResult, String> {
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    ensure_no_pending_project_transaction(&coordinator)?;
+    // Reconcile the actual persistence image while admission is held before
+    // preparing the runtime-only reload. Otherwise an admitted external B
+    // from just before this boundary could be published as runtime data while
+    // coordinator/result metadata still claimed stale A.
+    let checkpoint = reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
+    let project = checkpoint.project;
+    let current_path = coordinator.ancillary.current_project_path.clone();
+    let prepared = prepare_project_load(
+        project,
+        coordinator.mappings.clone(),
+        "Warm standby".to_string(),
+        current_path.as_deref(),
+    )?;
+    replace_prepared_project_snapshot_with_coordinator(
+        state,
+        prepared,
+        &mut coordinator,
+        ProjectReplacementCoordinatorEffect::RuntimeSanitize,
+        true,
+    )
+}
+
+fn prepare_project_load(
+    mut project: ProjectFile,
+    mappings: ProjectControlMappings,
+    path_label: String,
+    current_path: Option<&Path>,
+) -> Result<PreparedProjectLoad, String> {
     let mappings = ProjectControlMappings {
         midi_mappings: validate_midi_control_mappings(mappings.midi_mappings)?,
         osc_mappings: validate_osc_control_mappings(mappings.osc_mappings)?,
         dmx_mappings: validate_dmx_control_mappings(mappings.dmx_mappings)?,
     };
     use_authored_video_snapshot(&mut project.snapshot);
+    // Legacy `.sdc` files reach backend validation before the engine receives
+    // them. Normalize the selected authored image here on a local clone so a
+    // successful load installs an engine-ready catalog, while merely opening
+    // the original source file never writes migration fields back to disk.
+    normalize_legacy_video_media_assets(&mut project.snapshot.video)?;
     normalize_project_timeline_layers(&mut project.snapshot);
     clear_runtime_programmer_state(&mut project.snapshot);
     reconcile_project_fixture_groups(&mut project)?;
     validate_project_file(&project)?;
     let warnings = project_validation_warnings(&project);
     let profiles = project.custom_profiles.clone();
-    {
-        let mut custom_profiles = state
-            .custom_profiles
-            .lock()
-            .map_err(|_| "Custom profile state lock was poisoned".to_string())?;
-        custom_profiles.clear();
-        for profile in &project.custom_profiles {
-            custom_profiles.insert(profile.source_path.clone(), profile.clone());
-        }
+    let custom_profiles = project
+        .custom_profiles
+        .iter()
+        .cloned()
+        .map(|profile| (profile.source_path.clone(), profile))
+        .collect();
+    Ok(PreparedProjectLoad {
+        snapshot: project.snapshot,
+        ancillary: ProjectSwapAncillaryState {
+            custom_profiles,
+            fixture_groups: project.fixture_groups,
+            fixture_group_delete_undo: None,
+            operator_policy: project.operator_policy,
+            current_project_path: current_path.map(Path::to_path_buf),
+        },
+        mappings: mappings.clone(),
+        authority_disposition: ProjectAuthorityDisposition::CleanAtPath,
+        recovery_request: None,
+        result: ProjectLoadResult {
+            path: path_label,
+            current_project_path: current_path.map(|path| path.to_string_lossy().to_string()),
+            profiles,
+            midi_mappings: mappings.midi_mappings,
+            osc_mappings: mappings.osc_mappings,
+            dmx_mappings: mappings.dmx_mappings,
+            warnings,
+            project_epoch: 0,
+            project_revision: 0,
+            history_generation: 0,
+            checkpoint_hash: String::new(),
+            authority_disposition_generation: 0,
+            authority_disposition: ProjectAuthorityDisposition::RuntimeSanitize,
+            authority: None,
+        },
+    })
+}
+
+fn project_file_from_prepared_load(prepared: &PreparedProjectLoad) -> ProjectFile {
+    let mut custom_profiles = prepared
+        .ancillary
+        .custom_profiles
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    custom_profiles.sort_by(|left, right| left.source_path.cmp(&right.source_path));
+    ProjectFile {
+        version: PROJECT_FILE_VERSION,
+        app: APP_NAME.to_string(),
+        operator_policy: prepared.ancillary.operator_policy.clone(),
+        custom_profiles,
+        fixture_groups: prepared.ancillary.fixture_groups.clone(),
+        snapshot: prepared.snapshot.clone(),
     }
-    let operator_policy = project.operator_policy.clone();
-    let fixture_groups = project.fixture_groups.clone();
-    load_project_snapshot_with_runtime_reset(state, project.snapshot)?;
-    *state
+}
+
+fn project_swap_app_handle(state: &AppState) -> Result<tauri::AppHandle, String> {
+    state
+        .app_handle
+        .lock()
+        .map_err(|_| "Application handle state lock was poisoned".to_string())?
+        .clone()
+        .ok_or_else(|| "Application handle is not initialized for project replacement".to_string())
+}
+
+/// Acquire every legacy mirror before an engine publication.  The coordinator
+/// is authoritative, but these mirrors are still read by older command
+/// handlers; preflighting makes the post-ack mirror update infallible.
+fn preflight_project_swap_ancillary_mirrors(state: &AppState) -> Result<(), String> {
+    let custom_profiles = state
+        .custom_profiles
+        .lock()
+        .map_err(|_| "Custom profile state lock was poisoned".to_string())?;
+    let fixture_groups = state
         .fixture_groups
         .lock()
-        .map_err(|_| "Fixture group state lock was poisoned".to_string())? = fixture_groups;
-    *state
+        .map_err(|_| "Fixture group state lock was poisoned".to_string())?;
+    let fixture_group_delete_undo = state
         .fixture_group_delete_undo
         .lock()
-        .map_err(|_| "Fixture group delete Undo lock was poisoned".to_string())? = None;
-    {
-        let mut current_policy = state
-            .operator_policy
-            .lock()
-            .map_err(|_| "Operator policy state lock was poisoned".to_string())?;
-        *current_policy = operator_policy;
-    }
-    reset_vj_preview_after_project_change(state);
-    if let Some(path) = current_path {
-        set_current_project_path(state, path)?;
-    } else {
-        clear_current_project_path(state)?;
-    }
-    Ok(ProjectLoadResult {
-        path: path_label,
-        profiles,
-        midi_mappings: mappings.midi_mappings,
-        osc_mappings: mappings.osc_mappings,
-        dmx_mappings: mappings.dmx_mappings,
-        warnings,
+        .map_err(|_| "Fixture group delete Undo lock was poisoned".to_string())?;
+    let operator_policy = state
+        .operator_policy
+        .lock()
+        .map_err(|_| "Operator policy state lock was poisoned".to_string())?;
+    let current_project_path = state
+        .current_project_path
+        .lock()
+        .map_err(|_| "Current project path lock was poisoned".to_string())?;
+    drop((
+        custom_profiles,
+        fixture_groups,
+        fixture_group_delete_undo,
+        operator_policy,
+        current_project_path,
+    ));
+    Ok(())
+}
+
+fn commit_project_swap_ancillary_state_after_preflight(
+    state: &AppState,
+    authoritative: &ProjectSwapAncillaryState,
+) {
+    // Every guard was checked before publication.  If one becomes poisoned
+    // after that point, retain the data rather than reporting a false failed
+    // load after the engine has already published the replacement.
+    let mut custom_profiles = state
+        .custom_profiles
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut fixture_groups = state
+        .fixture_groups
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut fixture_group_delete_undo = state
+        .fixture_group_delete_undo
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut operator_policy = state
+        .operator_policy
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut current_project_path = state
+        .current_project_path
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *custom_profiles = authoritative.custom_profiles.clone();
+    *fixture_groups = authoritative.fixture_groups.clone();
+    *fixture_group_delete_undo = authoritative.fixture_group_delete_undo.clone();
+    *operator_policy = authoritative.operator_policy.clone();
+    *current_project_path = authoritative.current_project_path.clone();
+}
+
+fn lock_standby_sync_lifecycle_for_project_swap<'a>(
+    state: &'a AppState,
+) -> Result<std::sync::MutexGuard<'a, ()>, String> {
+    state.standby_sync_lifecycle.lock().map_err(|_| {
+        let error =
+            "Standby synchronization lifecycle lock was poisoned during project replacement"
+                .to_string();
+        state
+            .engine
+            .mark_output_ownership_transition_failure(error.clone());
+        error
     })
+}
+
+fn stop_standby_sync_for_project_swap(state: &AppState) -> Result<(), String> {
+    let mut runtime = state.standby_sync.lock().map_err(|_| {
+        let error =
+            "Standby synchronization lock was poisoned during project replacement".to_string();
+        state
+            .engine
+            .mark_output_ownership_transition_failure(error.clone());
+        error
+    })?;
+    // Callers hold standby_sync_lifecycle and have not taken the output lock.
+    // The polling worker never takes lifecycle, so this join cannot invert the
+    // lifecycle -> stop/join -> output-transition order.
+    stop_standby_sync_runtime(&mut runtime);
+    Ok(())
+}
+
+fn replace_prepared_project_snapshot(
+    state: &State<'_, AppState>,
+    prepared: PreparedProjectLoad,
+    scope: ProjectSnapshotReplacementScope,
+) -> Result<ProjectLoadResult, String> {
+    if scope == ProjectSnapshotReplacementScope::ExternalCaller {
+        let _lifecycle_guard = lock_standby_sync_lifecycle_for_project_swap(state)?;
+        return run_project_snapshot_replacement_scope(
+            scope,
+            || stop_standby_sync_for_project_swap(state),
+            || replace_prepared_project_snapshot_after_standby_stop(state, prepared, scope),
+        );
+    }
+    // Do not take standby_sync_lifecycle from the polling worker. An external
+    // replacement obtains it, asks the worker to stop, joins it, and only then
+    // waits for the output-transition lock taken by the worker below.
+    run_project_snapshot_replacement_scope(
+        scope,
+        || Ok(()),
+        || replace_prepared_project_snapshot_after_standby_stop(state, prepared, scope),
+    )
+}
+
+fn run_project_snapshot_replacement_scope<Stop, Replace, T>(
+    scope: ProjectSnapshotReplacementScope,
+    stop_and_join: Stop,
+    replace_after_stop: Replace,
+) -> Result<T, String>
+where
+    Stop: FnOnce() -> Result<(), String>,
+    Replace: FnOnce() -> Result<T, String>,
+{
+    if scope == ProjectSnapshotReplacementScope::ExternalCaller {
+        stop_and_join()?;
+    }
+    replace_after_stop()
+}
+
+#[cfg(test)]
+fn preflighted_project_snapshot_publication<Retire, Publish, Commit>(
+    retire: Retire,
+    publish: Publish,
+    commit_after_ack: Commit,
+) -> Result<(), String>
+where
+    Retire: FnOnce() -> Result<(), String>,
+    Publish: FnOnce() -> Result<(), String>,
+    Commit: FnOnce(),
+{
+    retire().map_err(|error| format!("Project replacement output retirement failed: {error}"))?;
+    publish().map_err(|error| format!("Project replacement engine publication failed: {error}"))?;
+    // Production preflights all fallible reset/mirror state. Once publication
+    // acknowledges, this phase is poison-recovering and cannot manufacture a
+    // false failure or rollback claim for an already-published snapshot.
+    commit_after_ack();
+    Ok(())
+}
+
+fn replace_prepared_project_snapshot_after_standby_stop(
+    state: &State<'_, AppState>,
+    prepared: PreparedProjectLoad,
+    scope: ProjectSnapshotReplacementScope,
+) -> Result<ProjectLoadResult, String> {
+    // External callbacks/remote control can never enqueue between input
+    // retirement, the fenced publication and the authoritative coordinator
+    // commit.  This must precede the coordinator (see callback helper).
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    // Do not publish a different identity over an in-flight Begin→Commit
+    // baseline. The caller can either finish or cancel the reservation first;
+    // importantly this occurs before input/output retirement or engine load.
+    ensure_no_pending_project_transaction(&coordinator)?;
+    let effect = if scope == ProjectSnapshotReplacementScope::SameProjectRuntimeSanitize {
+        ProjectReplacementCoordinatorEffect::RuntimeSanitize
+    } else {
+        ProjectReplacementCoordinatorEffect::IdentitySwap
+    };
+    replace_prepared_project_snapshot_with_coordinator(
+        state,
+        prepared,
+        &mut coordinator,
+        effect,
+        true,
+    )
+}
+
+/// The coordinator is held from the point normal callers have completed the
+/// lifecycle -> standby stop/join phase until engine publication and the
+/// authoritative local commit have finished.  This makes the baseline for a
+/// later serialized replacement the project actually published by its
+/// predecessor, not a stale pre-lock observation.
+fn replace_prepared_project_snapshot_with_coordinator(
+    state: &State<'_, AppState>,
+    mut prepared: PreparedProjectLoad,
+    coordinator: &mut ProjectCoordinator,
+    coordinator_effect: ProjectReplacementCoordinatorEffect,
+    emit_authority_event: bool,
+) -> Result<ProjectLoadResult, String> {
+    let app = project_swap_app_handle(state)?;
+    let next_project = project_file_from_prepared_load(&prepared);
+    let next_checkpoint_hash = project_checkpoint_hash(&next_project, &prepared.mappings)?;
+    let recovery_transition =
+        if prepared.authority_disposition == ProjectAuthorityDisposition::RecoveryPendingAck {
+            let request = prepared.recovery_request.as_ref().ok_or_else(|| {
+                "Recovery publication is missing its source authority request".to_string()
+            })?;
+            Some(recovery_publication_transition_for_request(
+                coordinator.recovery_authority_serial,
+                request,
+                &next_checkpoint_hash,
+            )?)
+        } else {
+            if prepared.recovery_request.is_some() {
+                return Err(
+                    "A non-recovery project publication carried a recovery request".to_string(),
+                );
+            }
+            None
+        };
+    let identity_swap_counters =
+        if coordinator_effect == ProjectReplacementCoordinatorEffect::IdentitySwap {
+            // Prove every counter changed by the post-ACK identity commit before
+            // publishing. Nothing below the engine acknowledgement may fail.
+            Some(coordinator.preflight_identity_swap_counters()?)
+        } else if coordinator_effect == ProjectReplacementCoordinatorEffect::RevisionMutation {
+            None
+        } else {
+            None
+        };
+    let revision_mutation_revision =
+        if coordinator_effect == ProjectReplacementCoordinatorEffect::RevisionMutation {
+            Some(checked_project_revision_after_mutation(coordinator)?)
+        } else {
+            None
+        };
+    let revision_mutation_disposition_generation =
+        if coordinator_effect == ProjectReplacementCoordinatorEffect::RevisionMutation {
+            Some(checked_project_authority_disposition_generation_after_change(coordinator)?)
+        } else {
+            None
+        };
+    preflight_project_swap_ancillary_mirrors(state)?;
+    preflight_project_runtime_reset(state)?;
+    if coordinator_effect != ProjectReplacementCoordinatorEffect::RuntimeSanitize {
+        // Identity and HistoryNavigation invalidate any prior browser
+        // recovery image. Persist the new machine-local serial before input
+        // retirement/engine publication; a later failure intentionally
+        // leaves recovery invalidated rather than risking cross-project data.
+        let transition = match coordinator_effect {
+            ProjectReplacementCoordinatorEffect::IdentitySwap
+                if prepared.authority_disposition
+                    == ProjectAuthorityDisposition::RecoveryPendingAck =>
+            {
+                recovery_transition
+                    .clone()
+                    .expect("recovery publication request was validated before preflight")
+            }
+            ProjectReplacementCoordinatorEffect::IdentitySwap => {
+                ProjectRecoveryAuthorityTransition::ProjectPublication
+            }
+            ProjectReplacementCoordinatorEffect::RevisionMutation => {
+                ProjectRecoveryAuthorityTransition::HistoryNavigation
+            }
+            ProjectReplacementCoordinatorEffect::RuntimeSanitize => unreachable!(),
+        };
+        advance_project_recovery_authority_serial_before_publication(
+            state,
+            coordinator,
+            transition,
+        )?;
+    }
+    // Fence callbacks before taking any input slot. A constructor can receive
+    // data immediately, so every callback compares this generation again just
+    // before it sends an engine command. On a later retirement failure the
+    // old inputs remain fail-closed rather than addressing the replacement.
+    reserve_project_callback_epoch(&state.project_callback_epoch)?;
+    reserve_project_callback_epoch(&state.project_mapping_callback_epoch)?;
+    retire_project_control_inputs_before_project_publish(state)?;
+    let _transition_guard = state.output_ownership_transition.lock().map_err(|_| {
+        let error =
+            "Output ownership transition lock was poisoned during project replacement".to_string();
+        state
+            .engine
+            .mark_output_ownership_transition_failure(error.clone());
+        error
+    })?;
+    // Read desired only after serializing against Arm/role changes. The
+    // polling worker does not take lifecycle, so this is the point at which it
+    // becomes impossible to overwrite a concurrently selected machine role.
+    let desired_role = state.engine.output_ownership_status().desired_role;
+    let mut transition = Some(
+        state
+            .engine
+            .begin_output_ownership_transition(desired_role)
+            .map_err(|error| {
+                format!("Project replacement could not enter output fence: {error}")
+            })?,
+    );
+
+    let replacement = (|| {
+        fence_and_retire_project_swap_output_resources(&app, state)?;
+        publish_project_snapshot_with_runtime_reset_admission(state, prepared.snapshot.clone())
+    })();
+
+    if let Err(error) = replacement {
+        if let Some(transition) = transition.take() {
+            // A failed retirement/publication is a physical transition
+            // failure.  Keep desired/persisted role untouched.
+            transition.fail(error.clone());
+        }
+        return Err(format!("Project replacement could not publish: {error}"));
+    }
+
+    // The engine acknowledgement is the commit point.  Everything below was
+    // preflighted and is deliberately infallible; do not claim a rollback
+    // after this point because the published snapshot is authoritative.
+    reset_project_runtime_after_published_snapshot_infallible(state);
+    if coordinator_effect == ProjectReplacementCoordinatorEffect::IdentitySwap {
+        coordinator.finish_identity_swap_after_preflight(
+            prepared.ancillary.clone(),
+            prepared.mappings.clone(),
+            next_checkpoint_hash.clone(),
+            identity_swap_counters
+                .expect("identity swap counters were preflighted before publication"),
+            prepared.authority_disposition,
+        );
+    } else if coordinator_effect == ProjectReplacementCoordinatorEffect::RevisionMutation {
+        coordinator.ancillary = prepared.ancillary.clone();
+        coordinator.mappings = prepared.mappings.clone();
+        coordinator.revision = revision_mutation_revision
+            .expect("project revision was preflighted before publication");
+        coordinator.checkpoint_hash = next_checkpoint_hash.clone();
+        commit_project_authority_disposition_after_preflight(
+            coordinator,
+            revision_mutation_disposition_generation
+                .expect("history navigation disposition was preflighted before publication"),
+            prepared.authority_disposition,
+        );
+    }
+    // Same-project runtime sanitization must not let `prepare_project_load`
+    // manufacture a fresh ancillary image (notably delete-undo=None) and
+    // overwrite the coordinator-owned mirrors.  The engine receives the
+    // sanitized runtime snapshot, while all project ancillary state remains
+    // exactly the current coordinator value.
+    let mirrors_after_commit = project_swap_ancillary_mirrors_after_commit(
+        coordinator,
+        &prepared.ancillary,
+        coordinator_effect,
+    );
+    commit_project_swap_ancillary_state_after_preflight(state, &mirrors_after_commit);
+
+    synchronize_project_load_result_authority_metadata(&mut prepared.result, coordinator);
+    match finish_project_snapshot_replacement_with_current_status_model(
+        transition
+            .take()
+            .expect("project replacement transition must remain live"),
+        desired_role,
+    ) {
+        Ok(_) => {}
+        Err(error) => {
+            // Publication is already committed. Surface the finalization fault
+            // as a truthful loaded-but-fenced warning rather than a false load
+            // failure; the gate remains deny-all until a later explicit Arm.
+            prepared.result.warnings.push(format!(
+                "Project loaded but output ownership finalization is fenced: {error}"
+            ));
+            state.engine.mark_output_ownership_transition_failure(error);
+        }
+    }
+    // No fallible work remains after the engine acknowledgement. This bundle
+    // is built from poison-recovering mirrors so an App can apply one complete
+    // authoritative generation even if a legacy mirror was poisoned later.
+    prepared.result.authority = Some(project_authority_bundle_from_coordinator(
+        state,
+        coordinator,
+    ));
+    // An emit fault cannot invalidate an already-acknowledged publication.
+    // The periodic authority refresh remains a recovery path, while this
+    // immediate signal clears stale input-connected UI state after every
+    // retirement, including a warm polling replacement and Take Over.
+    if emit_authority_event {
+        if coordinator_effect != ProjectReplacementCoordinatorEffect::RuntimeSanitize {
+            let _ = app.emit(PROJECT_AUTHORITY_REPLACED_EVENT, prepared.result.clone());
+        } else {
+            let _ = app.emit(PROJECT_CONTROL_INPUTS_RETIRED_EVENT, ());
+        }
+    }
+    Ok(prepared.result)
+}
+
+/// Copy the coordinator-owned result token only after the publication/commit
+/// boundary. RuntimeSanitize uses this too: after reconciling a live B
+/// persistence image, the command result must never expose stale A metadata.
+fn synchronize_project_load_result_authority_metadata(
+    result: &mut ProjectLoadResult,
+    coordinator: &ProjectCoordinator,
+) {
+    result.project_epoch = coordinator.epoch;
+    result.project_revision = coordinator.revision;
+    result.history_generation = coordinator.history_generation;
+    result.checkpoint_hash = coordinator.checkpoint_hash.clone();
+    result.authority_disposition_generation = coordinator.authority_disposition_generation;
+    result.authority_disposition = coordinator.authority_disposition;
+    result.current_project_path = coordinator
+        .ancillary
+        .current_project_path
+        .as_ref()
+        .map(|path| path.to_string_lossy().to_string());
+}
+
+/// Select the exact ancillary image which legacy UI mirrors receive after an
+/// acknowledged snapshot publication. Kept as a small pure seam because
+/// RuntimeSanitize must preserve coordinator-owned path/profiles/groups/delete
+/// undo rather than commit the transient `PreparedProjectLoad` image.
+fn project_swap_ancillary_mirrors_after_commit(
+    coordinator: &ProjectCoordinator,
+    prepared: &ProjectSwapAncillaryState,
+    effect: ProjectReplacementCoordinatorEffect,
+) -> ProjectSwapAncillaryState {
+    if effect == ProjectReplacementCoordinatorEffect::RuntimeSanitize {
+        coordinator.ancillary.clone()
+    } else {
+        prepared.clone()
+    }
+}
+
+fn finish_project_snapshot_replacement_with_current_status_model(
+    transition: engine::OutputOwnershipTransition,
+    _desired_role: MachineOutputRole,
+) -> Result<OutputOwnershipStatus, String> {
+    // A successful project identity replacement intentionally leaves effective
+    // output in Standby while preserving the machine-local desired/persisted
+    // role.  This is not a failure: explicit Arm is the only operation that
+    // may restore the authored output intent.
+    transition.complete_project_swap_disarmed()
 }
 
 fn reconcile_project_fixture_groups(project: &mut ProjectFile) -> Result<(), String> {
@@ -17347,7 +28071,10 @@ fn undo_delete_fixture_group_in_project_data(
     Ok(())
 }
 
-fn load_project_snapshot_with_runtime_reset(
+/// Suspend program-audio work before requesting publication. The suspend state
+/// deliberately survives a successful acknowledgement until the published
+/// snapshot's runtime reset has completed.
+fn publish_project_snapshot_with_runtime_reset_admission(
     state: &State<'_, AppState>,
     snapshot: EngineSnapshot,
 ) -> Result<(), String> {
@@ -17363,37 +28090,79 @@ fn load_project_snapshot_with_runtime_reset(
         program_handoff.suspended = true;
         program_handoff.pending_job = None;
     }
-    let result = state
-        .engine
-        .load_project_snapshot(snapshot)
-        .map_err(|error| error.to_string());
-    if let Err(error) = result {
-        let mut program_handoff = state
-            .program_audio_handoff
-            .state
-            .lock()
-            .map_err(|_| "Program audio handoff lock was poisoned".to_string())?;
-        program_handoff.suspended = false;
-        if program_handoff.config.enabled {
-            if let Some(layer_id) = program_handoff
-                .desired_layer_id
-                .or(program_handoff.owned_layer_id)
-            {
-                if let Some(plan) = program_handoff.manual_take_plan(layer_id) {
-                    state
-                        .program_audio_handoff
-                        .queue_locked(&mut program_handoff, ProgramAudioJobKind::Handoff(plan));
-                }
-            }
+    if let Err(error) = request_project_snapshot_publication(&state.engine, snapshot) {
+        if let Err(resume_error) =
+            resume_program_audio_handoff_after_failed_project_publication(state)
+        {
+            return Err(format!(
+                "Engine publication failed: {error}; program audio handoff could not resume: {resume_error}"
+            ));
         }
-        state.program_audio_handoff.wake.notify_all();
         return Err(error);
     }
+    Ok(())
+}
+
+fn resume_program_audio_handoff_after_failed_project_publication(
+    state: &State<'_, AppState>,
+) -> Result<(), String> {
+    let mut program_handoff = state
+        .program_audio_handoff
+        .state
+        .lock()
+        .map_err(|_| "Program audio handoff lock was poisoned".to_string())?;
+    program_handoff.suspended = false;
+    if program_handoff.config.enabled {
+        if let Some(layer_id) = program_handoff
+            .desired_layer_id
+            .or(program_handoff.owned_layer_id)
+        {
+            if let Some(plan) = program_handoff.manual_take_plan(layer_id) {
+                state
+                    .program_audio_handoff
+                    .queue_locked(&mut program_handoff, ProgramAudioJobKind::Handoff(plan));
+            }
+        }
+    }
+    drop(program_handoff);
+    state.program_audio_handoff.wake.notify_all();
+    Ok(())
+}
+
+fn preflight_project_runtime_reset(state: &AppState) -> Result<(), String> {
+    let audio = state
+        .media_audio
+        .lock()
+        .map_err(|_| "Media audio monitor lock was poisoned".to_string())?;
+    let handoff = state
+        .program_audio_handoff
+        .state
+        .lock()
+        .map_err(|_| "Program audio handoff lock was poisoned".to_string())?;
+    let transport = state
+        .vj_preview_transport
+        .lock()
+        .map_err(|_| "VJ Preview transport lock was poisoned".to_string())?;
+    match state.vj_preview_renderer.try_lock() {
+        Ok(renderer) => drop(renderer),
+        Err(TryLockError::WouldBlock) => {}
+        Err(TryLockError::Poisoned(_)) => {
+            return Err("VJ Preview renderer lock was poisoned".to_string());
+        }
+    }
+    drop((audio, handoff, transport));
+    Ok(())
+}
+
+/// All fallible locks are preflighted before engine publication.  Once the
+/// engine acknowledgement arrives, reset through poison recovery so a local
+/// bookkeeping fault cannot lie that the newly published project failed.
+fn reset_project_runtime_after_published_snapshot_infallible(state: &AppState) {
     {
         let mut audio = state
             .media_audio
             .lock()
-            .map_err(|_| "Media audio monitor lock was poisoned".to_string())?;
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         audio.stop_all();
         audio.stop_all_timeline();
         audio.timeline_transport = TimelineAudioTransportState::default();
@@ -17405,19 +28174,47 @@ fn load_project_snapshot_with_runtime_reset(
         .program_audio_handoff
         .state
         .lock()
-        .map_err(|_| "Program audio handoff lock was poisoned".to_string())?;
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     program_handoff.reset_for_project_change();
     program_handoff.suppress_through(published.video.auto_vj.status.last_action.as_ref());
     drop(program_handoff);
     state.program_audio_handoff.wake.notify_all();
-    Ok(())
+    let mut transport = state
+        .vj_preview_transport
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    transport.clear_at(vj_preview_timestamp_ms());
+    drop(transport);
+    state
+        .vj_preview_renderer_reset_pending
+        .store(true, Ordering::Release);
+    match state.vj_preview_renderer.try_lock() {
+        Ok(mut renderer) => {
+            *renderer = new_vj_preview_renderer();
+            state
+                .vj_preview_renderer_reset_pending
+                .store(false, Ordering::Release);
+        }
+        Err(TryLockError::WouldBlock) => {}
+        Err(TryLockError::Poisoned(poisoned)) => {
+            let mut renderer = poisoned.into_inner();
+            *renderer = new_vj_preview_renderer();
+            state
+                .vj_preview_renderer_reset_pending
+                .store(false, Ordering::Release);
+        }
+    }
 }
 
-fn reset_vj_preview_after_project_change(state: &State<'_, AppState>) {
-    if let Ok(mut transport) = state.vj_preview_transport.lock() {
-        transport.clear_at(vj_preview_timestamp_ms());
-    }
-    let _ = reset_vj_preview_renderer(state);
+/// Single integration seam for the engine's publication acknowledgement. The
+/// engine call returns only after runtime validation and shared-snapshot
+/// publication have completed; on `Err`, its acknowledged rollback contract
+/// guarantees this request did not leave a replacement snapshot published.
+fn request_project_snapshot_publication(
+    engine: &EngineHandle,
+    snapshot: EngineSnapshot,
+) -> Result<(), String> {
+    engine.load_project_snapshot_and_wait(snapshot)
 }
 
 fn normalize_project_save_path(mut path: PathBuf) -> Result<PathBuf, String> {
@@ -21871,8 +32668,7 @@ fn save_stage_map_preset_file(
 #[tauri::command]
 fn load_stage_map_preset_file(
     window: WebviewWindow,
-    state: State<'_, AppState>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<StageMapPresetSummary>, String> {
     let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal Stage Map", &["stagemap"])
         .pick_file()
@@ -21883,16 +32679,47 @@ fn load_stage_map_preset_file(
     let file: StageMapPresetFile =
         serde_json::from_str(&json).map_err(|error| error.to_string())?;
     validate_stage_map_preset_file(&file)?;
-    let label = file.preset.label.clone();
-    state
-        .engine
-        .send(EngineCommand::SaveStageMapPreset {
-            label: file.preset.label,
-            config: file.preset.config,
-            stage_objects: file.preset.stage_objects,
-        })
-        .map_err(|error| error.to_string())?;
-    Ok(Some(label))
+    Ok(Some(prepare_stage_map_preset_import(file.preset)?))
+}
+
+#[tauri::command]
+fn import_stage_map_preset(
+    state: State<'_, AppState>,
+    mut preset: StageMapPresetSummary,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<String, String> {
+    let _external_admission = lock_project_external_command_admission(&state)?;
+    let coordinator = lock_project_coordinator(&state)?;
+    ensure_project_transaction_owner_registered(&state, &owner_id)?;
+    project_transaction_for_owner_epoch(
+        &coordinator,
+        project_transaction_id,
+        expected_epoch,
+        &owner_id,
+    )?;
+    preset = prepare_stage_map_preset_import(preset)?;
+    let label = preset.label.clone();
+    state.engine.upsert_stage_map_preset_published(preset)?;
+    Ok(label)
+}
+
+fn prepare_stage_map_preset_import(
+    mut preset: StageMapPresetSummary,
+) -> Result<StageMapPresetSummary, String> {
+    preset.label = normalize_stage_map_preset_label(preset.label)?;
+    validate_stage_map_config(&preset.config)?;
+    if let Some(objects) = preset.stage_objects.take() {
+        preset.stage_objects = Some(
+            objects
+                .into_iter()
+                .map(normalize_stage_object)
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+    }
+    validate_project_stage_map_presets(std::slice::from_ref(&preset))?;
+    Ok(preset)
 }
 
 #[tauri::command]
@@ -22315,12 +33142,39 @@ fn get_external_video_io_plans(state: State<'_, AppState>) -> video::ExternalVid
 #[tauri::command]
 fn get_external_video_transport_status(
     state: State<'_, AppState>,
-) -> Result<video::ExternalVideoTransportStatus, String> {
-    state
-        .external_video_transport
+) -> Result<ExternalVideoTransportStatusResponse, String> {
+    external_video_transport_status_for(state.external_video_transport.as_ref(), &state.engine)
+}
+
+fn external_video_transport_status_for(
+    transport: &Mutex<video::ExternalVideoTransportRuntime>,
+    engine: &EngineHandle,
+) -> Result<ExternalVideoTransportStatusResponse, String> {
+    let status = transport
         .lock()
-        .map(|transport| transport.status())
-        .map_err(|_| "External video transport runtime lock was poisoned".to_string())
+        .map_err(|_| "External video transport runtime lock was poisoned".to_string())?
+        .status();
+    let ownership = engine.output_ownership_status();
+    Ok(ExternalVideoTransportStatusResponse {
+        active_routes: status.active_routes,
+        active_count: status.active_count,
+        ownership_allowed: ownership.video_allowed,
+        ownership_state: ownership.state,
+        ownership_reason: ownership.video_reason,
+        ownership_error: ownership.error,
+    })
+}
+
+#[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+fn harvest_spout_output_failures(
+    transport: &Mutex<spout_transport::SpoutTransportState>,
+    engine: &EngineHandle,
+) -> Result<(), String> {
+    transport
+        .lock()
+        .map_err(|_| "Spout transport state lock was poisoned".to_string())?
+        .harvest_failed_workers(engine)
+        .map_err(|error| error.message)
 }
 
 struct RecordingExternalVideoTransportDriver<'a> {
@@ -22386,6 +33240,7 @@ impl video::ExternalVideoTransportDriver for RecordingExternalVideoTransportDriv
 
 struct AppExternalVideoTransportDriver<'a> {
     recording: RecordingExternalVideoTransportDriver<'a>,
+    output_ownership_role: MachineOutputRole,
     capture: &'a mut capture_transport::CaptureTransportState,
     #[cfg(feature = "ndi")]
     ndi: &'a mut ndi_transport::NdiTransportState,
@@ -22396,6 +33251,41 @@ struct AppExternalVideoTransportDriver<'a> {
         all(feature = "spout", target_os = "windows", target_arch = "x86_64")
     ))]
     engine: EngineHandle,
+    #[cfg(any(
+        feature = "ndi",
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+    ))]
+    activation: Option<OutputOwnershipActivation>,
+}
+
+impl AppExternalVideoTransportDriver<'_> {
+    #[cfg(any(
+        feature = "ndi",
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+    ))]
+    fn validate_external_video_activation(
+        &self,
+        route: &video::ExternalVideoTransportRoute,
+    ) -> Result<OutputOwnershipActivation, video::ExternalVideoTransportDriverError> {
+        if route.direction == video::ExternalVideoTransportDirection::Output
+            && matches!(route.backend_id.as_str(), "ndi" | "spout")
+        {
+            let activation = self.activation.as_ref().ok_or_else(|| {
+                video::ExternalVideoTransportDriverError {
+                    message: "External video resource activation was not admitted".to_string(),
+                }
+            })?;
+            self.engine
+                .validate_output_activation(activation, self.output_ownership_role)
+                .map_err(|message| video::ExternalVideoTransportDriverError { message })?;
+            return Ok(activation.clone());
+        }
+        Err(video::ExternalVideoTransportDriverError {
+            message:
+                "External video resource activation is only available for NDI/Spout output routes"
+                    .to_string(),
+        })
+    }
 }
 
 impl video::ExternalVideoTransportDriver for AppExternalVideoTransportDriver<'_> {
@@ -22403,6 +33293,13 @@ impl video::ExternalVideoTransportDriver for AppExternalVideoTransportDriver<'_>
         &mut self,
         route: &video::ExternalVideoTransportRoute,
     ) -> Result<(), video::ExternalVideoTransportDriverError> {
+        if route.direction == video::ExternalVideoTransportDirection::Output
+            && !self.output_ownership_role.video_allowed()
+        {
+            return Err(video::ExternalVideoTransportDriverError {
+                message: "External video output blocked by machine output role".to_string(),
+            });
+        }
         if route.backend_id == "camera" || route.backend_id == "screen_capture" {
             self.capture.start_route(route)?;
             self.recording.push_event(
@@ -22417,7 +33314,9 @@ impl video::ExternalVideoTransportDriver for AppExternalVideoTransportDriver<'_>
         }
         #[cfg(feature = "ndi")]
         if route.backend_id == "ndi" {
-            self.ndi.start_route(route, &self.engine)?;
+            let activation = self.validate_external_video_activation(route)?;
+            let engine = &self.engine;
+            self.ndi.start_route(route, engine, Some(activation))?;
             self.recording.push_event(
                 ExternalVideoTransportDriverAction::Start,
                 route,
@@ -22431,7 +33330,9 @@ impl video::ExternalVideoTransportDriver for AppExternalVideoTransportDriver<'_>
         }
         #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
         if route.backend_id == "spout" {
-            self.spout.start_route(route, &self.engine)?;
+            let activation = self.validate_external_video_activation(route)?;
+            let engine = &self.engine;
+            self.spout.start_route(route, engine, Some(activation))?;
             self.recording.push_event(
                 ExternalVideoTransportDriverAction::Start,
                 route,
@@ -22464,7 +33365,7 @@ impl video::ExternalVideoTransportDriver for AppExternalVideoTransportDriver<'_>
         }
         #[cfg(feature = "ndi")]
         if route.backend_id == "ndi" {
-            self.ndi.stop_route(route)?;
+            self.ndi.stop_route(route, &self.engine)?;
             self.recording.push_event(
                 ExternalVideoTransportDriverAction::Stop,
                 route,
@@ -22478,7 +33379,7 @@ impl video::ExternalVideoTransportDriver for AppExternalVideoTransportDriver<'_>
         }
         #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
         if route.backend_id == "spout" {
-            self.spout.stop_route(route)?;
+            self.spout.stop_route(route, &self.engine)?;
             self.recording.push_event(
                 ExternalVideoTransportDriverAction::Stop,
                 route,
@@ -22505,6 +33406,7 @@ fn external_video_transport_direction_label(
 
 fn sync_external_video_transports_from_snapshot(
     snapshot: &EngineSnapshot,
+    output_ownership_role: MachineOutputRole,
     transport: &Mutex<video::ExternalVideoTransportRuntime>,
     event_log: &Mutex<Vec<ExternalVideoTransportDriverEvent>>,
     capture_transport: &Mutex<capture_transport::CaptureTransportState>,
@@ -22516,6 +33418,12 @@ fn sync_external_video_transports_from_snapshot(
         all(feature = "spout", target_os = "windows", target_arch = "x86_64")
     ))]
     engine: &EngineHandle,
+    #[cfg(any(
+        feature = "ndi",
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+    ))]
+    activation: Option<OutputOwnershipActivation>,
+    maintenance_transition: Option<&mut engine::OutputOwnershipTransition>,
 ) -> Result<ExternalVideoTransportSyncResponse, String> {
     let plans =
         video::build_external_video_io_route_plans(&snapshot.video, &video::video_runtime_status());
@@ -22536,10 +33444,14 @@ fn sync_external_video_transports_from_snapshot(
     let mut spout = spout_transport
         .lock()
         .map_err(|_| "Spout transport state lock was poisoned".to_string())?;
+    spout
+        .harvest_failed_workers(engine)
+        .map_err(|error| error.message)?;
     let mut driver = AppExternalVideoTransportDriver {
         recording: RecordingExternalVideoTransportDriver {
             events: &mut events,
         },
+        output_ownership_role,
         capture: &mut capture,
         #[cfg(feature = "ndi")]
         ndi: &mut ndi,
@@ -22550,21 +33462,647 @@ fn sync_external_video_transports_from_snapshot(
             all(feature = "spout", target_os = "windows", target_arch = "x86_64")
         ))]
         engine: engine.clone(),
+        #[cfg(any(
+            feature = "ndi",
+            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        ))]
+        activation,
     };
-    let report = transport.sync_routes_with_driver(&plans, &mut driver);
+    #[cfg(any(
+        feature = "ndi",
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+    ))]
+    let report = {
+        let mut maintenance_transition = maintenance_transition;
+        transport.sync_routes_with_driver_and_role_with_start_admission(
+            &plans,
+            &mut driver,
+            output_ownership_role,
+            |driver| {
+                if let Some(transition) = maintenance_transition.as_deref_mut() {
+                    if output_ownership_role.video_allowed() {
+                        transition.begin_activation()?;
+                        driver.activation = Some(transition.admit_output_activation()?);
+                    }
+                    Ok(())
+                } else if driver.activation.is_none() && output_ownership_role.video_allowed() {
+                    driver.activation =
+                        Some(engine.admit_output_activation(output_ownership_role)?);
+                    Ok(())
+                } else {
+                    Ok(())
+                }
+            },
+        )
+    };
+    #[cfg(not(any(
+        feature = "ndi",
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+    )))]
+    let report =
+        transport.sync_routes_with_driver_and_role(&plans, &mut driver, output_ownership_role);
     Ok(ExternalVideoTransportSyncResponse {
         report,
         events: events.clone(),
     })
 }
 
-#[tauri::command]
-fn sync_external_video_transports(
-    state: State<'_, AppState>,
+fn finish_external_video_transport_maintenance_transition(
+    transition: engine::OutputOwnershipTransition,
+    result: Result<ExternalVideoTransportSyncResponse, String>,
+) -> Result<ExternalVideoTransportSyncResponse, String> {
+    match result {
+        Ok(response)
+            if response.report.stop_failed.is_empty()
+                && response.report.start_failed.is_empty() =>
+        {
+            transition.complete().map(|_| response)
+        }
+        Ok(response) => {
+            let error = format!(
+                "External video route synchronization failed during the serialized ownership transition (stops: {}; starts: {})",
+                response.report.stop_failed.len(),
+                response.report.start_failed.len(),
+            );
+            transition.fail(error.clone());
+            Err(error)
+        }
+        Err(error) => {
+            transition.fail(error.clone());
+            Err(error)
+        }
+    }
+}
+
+fn ensure_video_output_allowed(engine: &EngineHandle) -> Result<(), String> {
+    let status = engine.output_ownership_status();
+    if status.video_allowed {
+        Ok(())
+    } else {
+        let role = status.effective_role;
+        let status_error = status.error;
+        Err(status_error.unwrap_or_else(|| {
+            format!(
+                "External video output is blocked by machine role {:?}",
+                role
+            )
+        }))
+    }
+}
+
+const NATIVE_VIDEO_OUTPUT_WINDOW_PREFIX: &str = "video-output-";
+
+fn is_native_video_output_window_label(label: &str) -> bool {
+    label.starts_with(NATIVE_VIDEO_OUTPUT_WINDOW_PREFIX)
+}
+
+fn native_video_output_window_labels_from<I>(labels: I) -> Vec<String>
+where
+    I: IntoIterator,
+    I::Item: AsRef<str>,
+{
+    labels
+        .into_iter()
+        .filter_map(|label| {
+            let label = label.as_ref();
+            is_native_video_output_window_label(label).then(|| label.to_string())
+        })
+        .collect()
+}
+
+fn take_native_video_output_worker<T>(
+    workers: &Mutex<HashMap<String, T>>,
+    label: &str,
+) -> Result<Option<T>, String> {
+    workers
+        .lock()
+        .map_err(|_| "Native video output worker registry lock was poisoned".to_string())
+        .map(|mut workers| workers.remove(label))
+}
+
+fn insert_native_video_output_worker<T>(
+    workers: &Mutex<HashMap<String, T>>,
+    label: String,
+    worker: T,
+) -> Result<(), (String, T)> {
+    match workers.lock() {
+        Ok(mut workers) => {
+            workers.insert(label, worker);
+            Ok(())
+        }
+        Err(_) => Err((
+            "Native video output worker registry lock was poisoned".to_string(),
+            worker,
+        )),
+    }
+}
+
+fn native_video_output_worker_labels(
+    workers: &Mutex<HashMap<String, NativeVideoOutputWorker>>,
+) -> Result<Vec<String>, String> {
+    workers
+        .lock()
+        .map_err(|_| "Native video output worker registry lock was poisoned".to_string())
+        .map(|workers| workers.keys().cloned().collect())
+}
+
+fn native_video_output_retirement_labels_from<I, J>(
+    worker_labels: I,
+    window_labels: J,
+) -> Vec<String>
+where
+    I: IntoIterator,
+    I::Item: AsRef<str>,
+    J: IntoIterator,
+    J::Item: AsRef<str>,
+{
+    let mut labels = worker_labels
+        .into_iter()
+        .map(|label| label.as_ref().to_string())
+        .collect::<HashSet<_>>();
+    labels.extend(native_video_output_window_labels_from(window_labels));
+    let mut labels = labels.into_iter().collect::<Vec<_>>();
+    labels.sort();
+    labels
+}
+
+fn native_video_output_retirement_labels(
+    app: &tauri::AppHandle,
+    workers: &Mutex<HashMap<String, NativeVideoOutputWorker>>,
+) -> Result<Vec<String>, String> {
+    native_video_output_worker_labels(workers).map(|worker_labels| {
+        native_video_output_retirement_labels_from(worker_labels, app.windows().keys())
+    })
+}
+
+fn desired_native_video_output_window_labels(snapshot: &EngineSnapshot) -> HashSet<String> {
+    snapshot
+        .video
+        .outputs
+        .iter()
+        .filter(|output| output.kind == VideoOutputKind::Display)
+        .flat_map(|output| {
+            [
+                video_output_window_label(output.id, false),
+                video_output_window_label(output.id, true),
+            ]
+        })
+        .collect()
+}
+
+fn stale_native_video_output_retirement_labels_from<I, J, K>(
+    desired_labels: I,
+    worker_labels: J,
+    window_labels: K,
+) -> Vec<String>
+where
+    I: IntoIterator,
+    I::Item: AsRef<str>,
+    J: IntoIterator,
+    J::Item: AsRef<str>,
+    K: IntoIterator,
+    K::Item: AsRef<str>,
+{
+    let desired = desired_labels
+        .into_iter()
+        .map(|label| label.as_ref().to_string())
+        .collect::<HashSet<_>>();
+    native_video_output_retirement_labels_from(worker_labels, window_labels)
+        .into_iter()
+        .filter(|label| !desired.contains(label))
+        .collect()
+}
+
+fn stale_native_video_output_retirement_labels(
+    app: &tauri::AppHandle,
+    workers: &Mutex<HashMap<String, NativeVideoOutputWorker>>,
+    snapshot: &EngineSnapshot,
+) -> Result<Vec<String>, String> {
+    native_video_output_worker_labels(workers).map(|worker_labels| {
+        stale_native_video_output_retirement_labels_from(
+            desired_native_video_output_window_labels(snapshot),
+            worker_labels,
+            app.windows().keys(),
+        )
+    })
+}
+
+fn wait_for_native_video_output_retirement(
+    app: &tauri::AppHandle,
+    workers: &Mutex<HashMap<String, NativeVideoOutputWorker>>,
+    label: &str,
+) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let worker_retired = workers
+            .lock()
+            .map_err(|_| "Native video output worker registry lock was poisoned".to_string())?
+            .get(label)
+            .is_none();
+        let window_retired = !app.windows().contains_key(label);
+        if worker_retired && window_retired {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "Native video output {label} did not acknowledge retirement (worker_retired={worker_retired}, window_retired={window_retired})"
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_for_native_video_output_window_retirement(
+    app: &tauri::AppHandle,
+    label: &str,
+) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if !app.windows().contains_key(label) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "Native video output window {label} did not acknowledge retirement"
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn retire_unregistered_native_video_output_worker(
+    app: &tauri::AppHandle,
+    label: &str,
+    mut worker: NativeVideoOutputWorker,
+) -> Result<(), String> {
+    worker.request_stop();
+    let mut errors = Vec::new();
+    if let Some(window) = app.windows().get(label).cloned() {
+        if let Err(error) = window.close() {
+            errors.push(format!(
+                "Unable to close native video output {label}: {error}"
+            ));
+        }
+    }
+    if let Err(error) = worker.join(label) {
+        errors.push(error);
+    }
+    let window_retirement = wait_for_native_video_output_window_retirement(app, label);
+    if let Err(error) = &window_retirement {
+        errors.push(error.clone());
+        // A failed acknowledgement must preserve the worker-held failure fence.
+        std::mem::forget(worker);
+    } else {
+        worker.release_teardown_lease_after_retirement_ack();
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+/// Retire one Display output without holding the registry mutex during the
+/// potentially blocking worker join. A worker is removed first so a later open
+/// cannot accidentally overwrite and detach its join handle.
+fn retire_native_video_output_window(
+    app: &tauri::AppHandle,
+    workers: &Mutex<HashMap<String, NativeVideoOutputWorker>>,
+    label: &str,
+) -> Result<bool, String> {
+    let worker = take_native_video_output_worker(workers, label)?;
+    let window = app.windows().get(label).cloned();
+    if worker.is_none() && window.is_none() {
+        return Ok(false);
+    }
+
+    if let Some(worker) = worker.as_ref() {
+        worker.request_stop();
+    }
+
+    let mut errors = Vec::new();
+    if let Some(window) = window {
+        if let Err(error) = window.close() {
+            errors.push(format!(
+                "Unable to close native video output {label}: {error}"
+            ));
+        }
+    }
+    let mut worker = worker;
+    if let Some(worker) = worker.as_mut() {
+        if let Err(error) = worker.join(label) {
+            errors.push(error);
+        }
+    }
+    let retirement_ack = wait_for_native_video_output_retirement(app, workers, label);
+    if let Err(error) = retirement_ack.as_ref() {
+        errors.push(error.clone());
+    }
+    if let Some(mut worker) = worker {
+        if retirement_ack.is_ok() {
+            worker.release_teardown_lease_after_retirement_ack();
+        } else {
+            // The worker may be holding a failure-fence teardown lease. Keep
+            // that lease alive while the native window remains unacknowledged.
+            std::mem::forget(worker);
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(true)
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+fn attempt_native_video_output_retirements<I, F>(labels: I, mut retire: F) -> Vec<String>
+where
+    I: IntoIterator,
+    I::Item: AsRef<str>,
+    F: FnMut(&str) -> Result<(), String>,
+{
+    labels
+        .into_iter()
+        .filter_map(|label| {
+            let label = label.as_ref();
+            retire(label)
+                .err()
+                .map(|error| format!("Unable to retire native video output {label}: {error}"))
+        })
+        .collect()
+}
+
+fn retire_native_video_output_windows(
+    app: &tauri::AppHandle,
+    workers: &Mutex<HashMap<String, NativeVideoOutputWorker>>,
+) -> Result<(), String> {
+    let labels = native_video_output_retirement_labels(app, workers)?;
+    let errors = attempt_native_video_output_retirements(labels, |label| {
+        retire_native_video_output_window(app, workers, label).map(|_| ())
+    });
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+fn retire_native_video_output_labels<I>(
+    app: &tauri::AppHandle,
+    workers: &Mutex<HashMap<String, NativeVideoOutputWorker>>,
+    labels: I,
+) -> Result<(), String>
+where
+    I: IntoIterator,
+    I::Item: AsRef<str>,
+{
+    let errors = attempt_native_video_output_retirements(labels, |label| {
+        retire_native_video_output_window(app, workers, label).map(|_| ())
+    });
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+/// Keep the gate's resource-creation lease across the actual native creation
+/// call and the publication that makes the resource reachable by teardown.
+/// When a fence wins after construction started, retire the resource before
+/// releasing the lease; a failed retirement intentionally leaves the lease
+/// leaked as a fail-closed in-flight fence rather than allowing a retry to
+/// overlap an unacknowledged native window.
+#[cfg(test)]
+fn with_output_resource_creation_lease<T, Create, Retire>(
+    activation: &OutputOwnershipActivation,
+    create: Create,
+    retire: Retire,
+) -> Result<T, String>
+where
+    Create: FnOnce() -> Result<T, String>,
+    Retire: FnOnce(&T) -> Result<(), String>,
+{
+    let lease = activation.admit_resource_creation()?;
+    let resource = match create() {
+        Ok(resource) => resource,
+        Err(error) => {
+            lease.retire();
+            return Err(error);
+        }
+    };
+    match lease.publish() {
+        Ok(()) => Ok(resource),
+        Err(lease) => {
+            let retire_result = retire(&resource);
+            if retire_result.is_ok() {
+                lease.retire();
+            } else {
+                std::mem::forget(lease);
+            }
+            match retire_result {
+                Ok(()) => Err(
+                    "External video resource creation was invalidated before publication"
+                        .to_string(),
+                ),
+                Err(error) => Err(format!(
+                    "External video resource creation was invalidated and native retirement failed: {error}"
+                )),
+            }
+        }
+    }
+}
+
+enum OutputResourceCreation<T> {
+    Ready(T),
+    FailedWithResource { error: String, resource: T },
+    FailedWithoutResource(String),
+    FailedUnacknowledged(String),
+}
+
+fn output_resource_creation_from_setup<T>(
+    resource: T,
+    setup: Result<(), String>,
+) -> OutputResourceCreation<T> {
+    match setup {
+        Ok(()) => OutputResourceCreation::Ready(resource),
+        Err(error) => OutputResourceCreation::FailedWithResource { error, resource },
+    }
+}
+
+fn output_resource_creation_after_cleanup<T>(
+    error: String,
+    cleanup: Result<(), String>,
+) -> OutputResourceCreation<T> {
+    match cleanup {
+        Ok(()) => OutputResourceCreation::FailedWithoutResource(error),
+        Err(cleanup_error) => OutputResourceCreation::FailedUnacknowledged(format!(
+            "{error}; native retirement failed: {cleanup_error}"
+        )),
+    }
+}
+
+/// Preserve the labels of Display windows that have already begun a
+/// sequential shell update. If a later shell operation fails, the
+/// cleanup-aware creation lease uses this resource to retire and acknowledge
+/// every affected native window before allowing another sync.
+fn native_video_output_sync_resource_from_shell<T>(
+    resource: T,
+    shell: Result<(), String>,
+) -> OutputResourceCreation<T> {
+    output_resource_creation_from_setup(resource, shell)
+}
+
+/// Like `with_output_resource_creation_lease`, but also retires a resource
+/// that became reachable before a later setup step failed. A failed retirement
+/// intentionally retains the creation lease as an in-flight fail-closed fence.
+fn with_output_resource_creation_lease_with_cleanup<T, Create, Retire>(
+    activation: &OutputOwnershipActivation,
+    create: Create,
+    retire: Retire,
+) -> Result<T, String>
+where
+    Create: FnOnce() -> OutputResourceCreation<T>,
+    Retire: FnOnce(&T) -> Result<(), String>,
+{
+    let lease = activation.admit_resource_creation()?;
+    let resource = match create() {
+        OutputResourceCreation::Ready(resource) => resource,
+        OutputResourceCreation::FailedWithoutResource(error) => {
+            lease.retire();
+            return Err(error);
+        }
+        OutputResourceCreation::FailedUnacknowledged(error) => {
+            std::mem::forget(lease);
+            return Err(error);
+        }
+        OutputResourceCreation::FailedWithResource { error, resource } => {
+            return match retire(&resource) {
+                Ok(()) => {
+                    lease.retire();
+                    Err(error)
+                }
+                Err(cleanup_error) => {
+                    std::mem::forget(lease);
+                    Err(format!(
+                        "{error}; native retirement failed: {cleanup_error}"
+                    ))
+                }
+            };
+        }
+    };
+    match lease.publish() {
+        Ok(()) => Ok(resource),
+        Err(lease) => {
+            let retire_result = retire(&resource);
+            if retire_result.is_ok() {
+                lease.retire();
+            } else {
+                std::mem::forget(lease);
+            }
+            match retire_result {
+                Ok(()) => Err(
+                    "External video resource creation was invalidated before publication".to_string(),
+                ),
+                Err(error) => Err(format!(
+                    "External video resource creation was invalidated and native retirement failed: {error}"
+                )),
+            }
+        }
+    }
+}
+
+fn stop_video_output_recording_runtime(
+    video_recording: &Mutex<VideoRecordingRuntime>,
+) -> Result<VideoRecordingStatus, String> {
+    let worker = {
+        let mut runtime = video_recording
+            .lock()
+            .map_err(|_| "Video recording state lock was poisoned".to_string())?;
+        if let Some(stop) = runtime.stop.take() {
+            stop.store(true, Ordering::Relaxed);
+        }
+        runtime.worker.take()
+    };
+    if let Some(worker) = worker {
+        worker
+            .join()
+            .map_err(|_| "Video recording worker panicked".to_string())?;
+    }
+    video_recording
+        .lock()
+        .map_err(|_| "Video recording state lock was poisoned".to_string())?
+        .status
+        .lock()
+        .map_err(|_| "Video recording status lock was poisoned".to_string())
+        .map(|status| status.clone())
+}
+
+fn validate_output_role_change_for_standby_sync(
+    state: &AppState,
+    requested_role: MachineOutputRole,
+) -> Result<(), String> {
+    let runtime = state.standby_sync.lock().map_err(|_| {
+        let error = "Standby synchronization lock was poisoned".to_string();
+        state
+            .engine
+            .mark_output_ownership_transition_failure(error.clone());
+        error
+    })?;
+    let status = runtime.status.lock().map_err(|_| {
+        let error = "Standby synchronization status lock was poisoned".to_string();
+        state
+            .engine
+            .mark_output_ownership_transition_failure(error.clone());
+        error
+    })?;
+    validate_output_role_change_during_standby(&status, requested_role)
+}
+
+fn validate_output_role_change_during_standby(
+    status: &StandbySyncStatus,
+    requested_role: MachineOutputRole,
+) -> Result<(), String> {
+    if status.running
+        && status.role == Some(StandbySyncRole::Standby)
+        && requested_role != MachineOutputRole::Standby
+    {
+        Err(
+            "Machine output ownership must remain Standby while Standby synchronization is running"
+                .to_string(),
+        )
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_takeover_running_status(status: &StandbySyncStatus) -> Result<(), String> {
+    if status.running && status.role == Some(StandbySyncRole::Standby) {
+        Ok(())
+    } else {
+        Err("Take Over is only available while running as Standby".to_string())
+    }
+}
+
+fn standby_sync_may_publish_running(status: &OutputOwnershipStatus) -> bool {
+    status.state == protocol::OutputOwnershipState::Ready
+        && status.effective_role == MachineOutputRole::Standby
+        && !status.lighting_allowed
+        && !status.video_allowed
+}
+
+fn sync_output_ownership_routes_for_role(
+    state: &AppState,
+    role: MachineOutputRole,
+    #[cfg(any(
+        feature = "ndi",
+        all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+    ))]
+    activation: Option<OutputOwnershipActivation>,
 ) -> Result<ExternalVideoTransportSyncResponse, String> {
     let snapshot = state.engine.snapshot();
     sync_external_video_transports_from_snapshot(
         &snapshot,
+        role,
         state.external_video_transport.as_ref(),
         state.external_video_transport_events.as_ref(),
         state.capture_transport.as_ref(),
@@ -22577,7 +34115,467 @@ fn sync_external_video_transports(
             all(feature = "spout", target_os = "windows", target_arch = "x86_64")
         ))]
         &state.engine,
+        #[cfg(any(
+            feature = "ndi",
+            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        ))]
+        activation,
+        None,
     )
+}
+
+/// Retire every app-owned physical video resource while the caller already
+/// holds an output-ownership transition. Native retirement unions the worker
+/// registry with every `video-output-*` window label, so stale Display shells
+/// cannot survive a project snapshot boundary.
+fn retire_project_swap_output_resources(
+    app: &tauri::AppHandle,
+    state: &AppState,
+) -> Result<(), String> {
+    let mut errors = Vec::new();
+    match sync_output_ownership_routes_for_role(
+        state,
+        MachineOutputRole::Standby,
+        #[cfg(any(
+            feature = "ndi",
+            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        ))]
+        None,
+    ) {
+        Ok(stopped) => {
+            if !stopped.report.stop_failed.is_empty() {
+                errors.push(format!(
+                    "external video output cleanup still has stop failures: {}",
+                    stopped
+                        .report
+                        .stop_failed
+                        .iter()
+                        .map(|route| route.route.endpoint_name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+        Err(error) => errors.push(format!("external video cleanup failed: {error}")),
+    }
+    if let Err(error) = retire_native_video_output_windows(app, &state.native_video_output_workers)
+    {
+        errors.push(format!("native video output cleanup failed: {error}"));
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+/// A failed engine fence is itself a failed replacement, but it must not skip
+/// best-effort physical retirement. In particular, the local NDI/Spout state
+/// and Display worker/window registry are still authoritative resources that
+/// must be asked to retire before reporting the failed fence.
+fn fence_and_retire_project_swap_output_resources(
+    app: &tauri::AppHandle,
+    state: &AppState,
+) -> Result<(), String> {
+    let mut errors = Vec::new();
+    if let Err(error) = state.engine.fence_output_ownership() {
+        errors.push(format!("engine output fence failed: {error}"));
+    }
+    if let Err(error) = retire_project_swap_output_resources(app, state) {
+        errors.push(error);
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+fn cleanup_output_ownership_transition(
+    app: &tauri::AppHandle,
+    state: &AppState,
+) -> Result<(), String> {
+    fence_and_retire_project_swap_output_resources(app, state)
+}
+
+fn initialize_output_ownership(app: &tauri::AppHandle, state: &AppState) -> Result<(), String> {
+    let path = match output_ownership_state_path(app) {
+        Ok(path) => path,
+        Err(error) => {
+            state
+                .engine
+                .mark_output_ownership_startup_failure(error.clone());
+            return Err(error);
+        }
+    };
+    let role = match load_or_initialize_output_ownership_preference(&path) {
+        Ok(role) => role,
+        Err(error) => {
+            state
+                .engine
+                .mark_output_ownership_startup_failure(error.clone());
+            return Err(error);
+        }
+    };
+    if let Err(error) = state
+        .engine
+        .publish_output_ownership_startup_preference(role)
+    {
+        state
+            .engine
+            .mark_output_ownership_startup_failure(error.clone());
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn apply_output_ownership_role(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    role: MachineOutputRole,
+) -> Result<OutputOwnershipStatus, String> {
+    let _lifecycle_guard = state.standby_sync_lifecycle.lock().map_err(|_| {
+        let error = "Standby synchronization lifecycle lock was poisoned".to_string();
+        state
+            .engine
+            .mark_output_ownership_transition_failure(error.clone());
+        error
+    })?;
+    apply_output_ownership_role_locked(app, state, role)
+}
+
+fn fail_output_ownership_transition(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    path: Option<&Path>,
+    desired_role: MachineOutputRole,
+    initial_error: String,
+    transition: Option<engine::OutputOwnershipTransition>,
+) -> String {
+    fail_output_ownership_transition_with_cleanup(
+        &state.engine,
+        path,
+        desired_role,
+        initial_error,
+        transition,
+        || cleanup_output_ownership_transition(app, state),
+    )
+}
+
+fn fail_output_ownership_transition_with_cleanup<F>(
+    engine: &EngineHandle,
+    path: Option<&Path>,
+    desired_role: MachineOutputRole,
+    initial_error: String,
+    mut transition: Option<engine::OutputOwnershipTransition>,
+    cleanup: F,
+) -> String
+where
+    F: FnOnce() -> Result<(), String>,
+{
+    let mut error = initial_error;
+    let failure_teardown = transition
+        .is_none()
+        .then(|| engine.begin_output_ownership_failure_fence(error.clone()));
+    if let Err(cleanup_error) = cleanup() {
+        error = format!("{error}; cleanup failed: {cleanup_error}");
+    }
+    if let Some(transition) = transition.take() {
+        transition.fail(error.clone());
+    }
+    if let Some(path) = path {
+        match persist_output_ownership_role_to_path(path, MachineOutputRole::Standby) {
+            Ok(()) => {
+                engine.mark_output_ownership_durable_standby_failure(desired_role, error.clone())
+            }
+            Err(marker_error) => {
+                error = format!(
+                    "{error}; durable Standby marker could not be persisted: {marker_error}"
+                );
+                engine.mark_output_ownership_transition_failure(error.clone());
+            }
+        }
+    } else {
+        engine.mark_output_ownership_transition_failure(error.clone());
+    }
+    drop(failure_teardown);
+    error
+}
+
+fn apply_output_ownership_transition_after_reservation(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    role: MachineOutputRole,
+    path: &Path,
+    mut transition: Option<engine::OutputOwnershipTransition>,
+) -> Result<OutputOwnershipStatus, String> {
+    let result = (|| -> Result<OutputOwnershipStatus, String> {
+        // The gate is already denying new physical operations here. Fence the
+        // engine and then wait for every app-owned transport/window to retire.
+        state.engine.fence_output_ownership()?;
+        let stopped = sync_output_ownership_routes_for_role(
+            state,
+            MachineOutputRole::Standby,
+            #[cfg(any(
+                feature = "ndi",
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+            ))]
+            None,
+        )?;
+        if !stopped.report.stop_failed.is_empty() {
+            return Err(format!(
+                "External video output stop failed during ownership transition: {}",
+                stopped
+                    .report
+                    .stop_failed
+                    .iter()
+                    .map(|route| route.route.endpoint_name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        retire_native_video_output_windows(app, &state.native_video_output_workers)?;
+
+        let prepared = (|| -> Result<(), String> {
+            state.engine.prepare_output_ownership_role(role)?;
+            #[cfg(any(
+                feature = "ndi",
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+            ))]
+            if role.video_allowed() {
+                transition
+                    .as_mut()
+                    .ok_or_else(|| {
+                        "Output ownership transition was unexpectedly consumed".to_string()
+                    })?
+                    .begin_activation()?;
+            }
+            #[cfg(any(
+                feature = "ndi",
+                all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+            ))]
+            let activation = if role.video_allowed() {
+                Some(
+                    transition
+                        .as_ref()
+                        .ok_or_else(|| {
+                            "Output ownership transition was unexpectedly consumed".to_string()
+                        })?
+                        .admit_output_activation()?,
+                )
+            } else {
+                None
+            };
+            let started = sync_output_ownership_routes_for_role(
+                state,
+                role,
+                #[cfg(any(
+                    feature = "ndi",
+                    all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+                ))]
+                activation,
+            )?;
+            if !started.report.start_failed.is_empty() || !started.report.stop_failed.is_empty() {
+                return Err(format!(
+                    "External video output route synchronization failed while preparing {:?}",
+                    role
+                ));
+            }
+            Ok(())
+        })();
+        // Preparation and external-route creation are complete while the
+        // gate is still fenced. Only now may the durable target be recorded.
+        persist_output_ownership_target_after_preparation(path, role, || prepared)?;
+        transition
+            .as_mut()
+            .ok_or_else(|| "Output ownership transition was unexpectedly consumed".to_string())?
+            .record_persisted_role(role)?;
+        transition
+            .take()
+            .ok_or_else(|| "Output ownership transition was unexpectedly consumed".to_string())?
+            .complete()
+    })();
+
+    match result {
+        Ok(status) => Ok(status),
+        Err(error) => Err(fail_output_ownership_transition(
+            app,
+            state,
+            Some(path),
+            role,
+            error,
+            transition.take(),
+        )),
+    }
+}
+
+fn reserve_standby_output_ownership_transition(
+    app: &tauri::AppHandle,
+    state: &AppState,
+) -> Result<(PathBuf, engine::OutputOwnershipTransition), (Option<PathBuf>, String)> {
+    let path = output_ownership_state_path(app).map_err(|error| (None, error))?;
+    persist_output_ownership_role_to_path(&path, MachineOutputRole::Standby).map_err(|error| {
+        (
+            Some(path.clone()),
+            format!("Unable to persist durable Standby fence before standby start: {error}"),
+        )
+    })?;
+    state
+        .engine
+        .record_output_ownership_persisted_role(MachineOutputRole::Standby)
+        .map_err(|error| {
+            (
+                Some(path.clone()),
+                format!("Unable to publish durable Standby fence before standby start: {error}"),
+            )
+        })?;
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    harvest_spout_output_failures(state.spout_transport.as_ref(), &state.engine)
+        .map_err(|error| (Some(path.clone()), error))?;
+    state
+        .engine
+        .begin_output_ownership_transition(MachineOutputRole::Standby)
+        .map(|transition| (path.clone(), transition))
+        .map_err(|error| (Some(path), error))
+}
+
+fn apply_output_ownership_role_locked(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    role: MachineOutputRole,
+) -> Result<OutputOwnershipStatus, String> {
+    validate_output_role_change_for_standby_sync(state, role)?;
+    let _transition_lock = state.output_ownership_transition.lock().map_err(|_| {
+        let error = "Output ownership transition lock was poisoned".to_string();
+        state
+            .engine
+            .mark_output_ownership_transition_failure(error.clone());
+        error
+    })?;
+    validate_output_role_change_for_standby_sync(state, role)?;
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    harvest_spout_output_failures(state.spout_transport.as_ref(), &state.engine)?;
+
+    let path = match output_ownership_state_path(app) {
+        Ok(path) => path,
+        Err(error) => {
+            return Err(fail_output_ownership_transition(
+                app, state, None, role, error, None,
+            ));
+        }
+    };
+    // The on-disk fence is written before any runtime state changes. A later
+    // restart therefore cannot re-arm a role whose preparation is about to
+    // fail halfway through.
+    if let Err(error) = persist_output_ownership_role_to_path(&path, MachineOutputRole::Standby) {
+        return Err(fail_output_ownership_transition(
+            app,
+            state,
+            Some(&path),
+            role,
+            format!("Unable to persist durable Standby fence before transition: {error}"),
+            None,
+        ));
+    }
+    if let Err(error) = state
+        .engine
+        .record_output_ownership_persisted_role(MachineOutputRole::Standby)
+    {
+        return Err(fail_output_ownership_transition(
+            app,
+            state,
+            Some(&path),
+            role,
+            format!("Unable to publish durable Standby fence: {error}"),
+            None,
+        ));
+    }
+
+    let transition = match state.engine.begin_output_ownership_transition(role) {
+        Ok(transition) => Some(transition),
+        Err(error) => {
+            return Err(fail_output_ownership_transition(
+                app,
+                state,
+                Some(&path),
+                role,
+                error,
+                None,
+            ));
+        }
+    };
+    apply_output_ownership_transition_after_reservation(app, state, role, &path, transition)
+}
+
+#[tauri::command]
+fn get_output_ownership_status(state: State<'_, AppState>) -> OutputOwnershipStatus {
+    state.engine.output_ownership_status()
+}
+
+#[tauri::command]
+fn set_output_ownership_role(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    role: MachineOutputRole,
+) -> Result<OutputOwnershipStatus, String> {
+    apply_output_ownership_role(&app, &state, role)
+}
+
+#[tauri::command]
+fn arm_output_ownership_role(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<OutputOwnershipStatus, String> {
+    let preferred_role = state.engine.output_ownership_status().desired_role;
+    apply_output_ownership_role(&app, &state, preferred_role)
+}
+
+#[tauri::command]
+fn sync_external_video_transports(
+    state: State<'_, AppState>,
+) -> Result<ExternalVideoTransportSyncResponse, String> {
+    let _transition_guard = state.output_ownership_transition.lock().map_err(|_| {
+        let error = "Output ownership transition lock was poisoned".to_string();
+        state
+            .engine
+            .mark_output_ownership_transition_failure(error.clone());
+        error
+    })?;
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    harvest_spout_output_failures(state.spout_transport.as_ref(), &state.engine)?;
+    let role = state.engine.output_ownership_status().role;
+    let mut transition = state
+        .engine
+        .begin_output_ownership_transition(role)
+        .map_err(|error| format!("External video sync admission failed: {error}"))?;
+    if let Err(error) = state.engine.fence_output_ownership() {
+        transition.fail(error.clone());
+        return Err(error);
+    }
+    let snapshot = state.engine.snapshot();
+    let result = sync_external_video_transports_from_snapshot(
+        &snapshot,
+        role,
+        state.external_video_transport.as_ref(),
+        state.external_video_transport_events.as_ref(),
+        state.capture_transport.as_ref(),
+        #[cfg(feature = "ndi")]
+        state.ndi_transport.as_ref(),
+        #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+        state.spout_transport.as_ref(),
+        #[cfg(any(
+            feature = "ndi",
+            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        ))]
+        &state.engine,
+        #[cfg(any(
+            feature = "ndi",
+            all(feature = "spout", target_os = "windows", target_arch = "x86_64")
+        ))]
+        None,
+        Some(&mut transition),
+    );
+    finish_external_video_transport_maintenance_transition(transition, result)
 }
 
 #[tauri::command]
@@ -23092,22 +35090,7 @@ fn finish_video_recording_status(status: &Mutex<VideoRecordingStatus>, error: Op
 
 #[tauri::command]
 fn stop_video_output_recording(state: State<'_, AppState>) -> Result<VideoRecordingStatus, String> {
-    let worker = {
-        let mut runtime = state
-            .video_recording
-            .lock()
-            .map_err(|_| "Video recording state lock was poisoned".to_string())?;
-        if let Some(stop) = runtime.stop.take() {
-            stop.store(true, Ordering::Relaxed);
-        }
-        runtime.worker.take()
-    };
-    if let Some(worker) = worker {
-        worker
-            .join()
-            .map_err(|_| "Video recording worker panicked".to_string())?;
-    }
-    video_output_recording_status(state)
+    stop_video_output_recording_runtime(&state.video_recording)
 }
 
 #[tauri::command]
@@ -23340,6 +35323,7 @@ fn vj_preview_render_snapshot(
     layer.state.loop_start_ms = 0;
     Ok(protocol::VideoSnapshot {
         layers: vec![layer],
+        media_assets: Vec::new(),
         compositions: Vec::new(),
         outputs: Vec::new(),
         mapping_presets: Vec::new(),
@@ -23710,6 +35694,7 @@ mod vj_preview_transport_tests {
                     has_audio: true,
                 }),
             },
+            media_asset_id: None,
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState {
                 position_ms,
@@ -24032,6 +36017,10 @@ struct VideoOutputWindowStatus {
     test_pattern_open: bool,
     live_window_label: String,
     test_pattern_window_label: String,
+    ownership_allowed: bool,
+    ownership_state: protocol::OutputOwnershipState,
+    ownership_reason: protocol::OutputOwnershipReason,
+    ownership_error: Option<String>,
     performance: Option<NativeVideoOutputPerformance>,
 }
 
@@ -24216,10 +36205,141 @@ fn apply_native_video_output_window_shell(
     Ok(())
 }
 
+const NATIVE_VIDEO_OUTPUT_TRANSITION_RETRY_INTERVAL: Duration = Duration::from_millis(5);
+const NATIVE_VIDEO_OUTPUT_TRANSITION_STOP_POLL_INTERVAL: Duration = Duration::from_millis(1);
+
+/// Wait briefly before retrying a frame permit while an ownership transition
+/// is in progress. The stop check happens both before and during the wait so a
+/// retiring worker never re-enters the retry loop after its owner has started
+/// joining it.
+fn native_video_output_transition_retry_wait_with<F>(
+    stop: &AtomicBool,
+    retry_interval: Duration,
+    mut wait: F,
+) -> bool
+where
+    F: FnMut(Duration),
+{
+    let mut waited = Duration::ZERO;
+    while waited < retry_interval {
+        if stop.load(Ordering::Acquire) {
+            return false;
+        }
+        let interval =
+            (retry_interval - waited).min(NATIVE_VIDEO_OUTPUT_TRANSITION_STOP_POLL_INTERVAL);
+        wait(interval);
+        waited += interval;
+    }
+    !stop.load(Ordering::Acquire)
+}
+
+fn wait_for_native_video_output_transition_retry(stop: &AtomicBool) -> bool {
+    native_video_output_transition_retry_wait_with(
+        stop,
+        NATIVE_VIDEO_OUTPUT_TRANSITION_RETRY_INTERVAL,
+        std::thread::sleep,
+    )
+}
+
+fn native_video_output_worker_exited_normally(
+    stop: &AtomicBool,
+    ownership_state: protocol::OutputOwnershipState,
+) -> bool {
+    stop.load(Ordering::Acquire) || ownership_state == protocol::OutputOwnershipState::Transitioning
+}
+
+fn native_video_output_worker_result(
+    stop: &AtomicBool,
+    ownership_state: protocol::OutputOwnershipState,
+    physical_result: Result<(), String>,
+) -> Result<(), String> {
+    match physical_result {
+        Ok(()) => Ok(()),
+        Err(_) if native_video_output_worker_exited_normally(stop, ownership_state) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn arm_native_video_output_failure_fence(
+    engine: &EngineHandle,
+    teardown_lease: &Arc<Mutex<Option<engine::OutputOwnershipTeardownLease>>>,
+    label: &str,
+    error: String,
+) {
+    let lease = engine.begin_output_ownership_failure_fence(format!(
+        "Native video output {label} physical failure: {error}"
+    ));
+    match teardown_lease.lock() {
+        Ok(mut slot) => {
+            if slot.is_none() {
+                *slot = Some(lease);
+            }
+        }
+        Err(poisoned) => {
+            let mut slot = poisoned.into_inner();
+            if slot.is_none() {
+                *slot = Some(lease);
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+enum NativeVideoOutputLiveFrameError {
+    Permit(String),
+    Physical(String),
+}
+
+fn native_video_output_live_frame_with_permit<
+    Presenter,
+    Permit,
+    Frame,
+    Acquire,
+    Resize,
+    Render,
+    Present,
+    PhysicalFailure,
+>(
+    presenter: &mut Presenter,
+    mut acquire: Acquire,
+    mut resize: Resize,
+    mut render: Render,
+    mut present: Present,
+    mut on_physical_failure: PhysicalFailure,
+) -> Result<(), NativeVideoOutputLiveFrameError>
+where
+    Acquire: FnMut() -> Result<Permit, String>,
+    Resize: FnMut(&mut Presenter) -> Result<(), String>,
+    Render: FnMut() -> Result<Frame, String>,
+    Present: FnMut(&mut Presenter, Frame) -> Result<(), String>,
+    PhysicalFailure: FnMut(&str),
+{
+    let _permit = acquire().map_err(NativeVideoOutputLiveFrameError::Permit)?;
+    let physical_result = (|| -> Result<(), String> {
+        resize(presenter)?;
+        let frame = render()?;
+        present(presenter, frame)
+    })();
+    match physical_result {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            // Keep the video permit alive while the failure fence is armed.
+            // Otherwise a concurrent role change could observe the presenter
+            // error after this frame's capability permit was already dropped.
+            on_physical_failure(&error);
+            Err(NativeVideoOutputLiveFrameError::Physical(error))
+        }
+    }
+}
+
 fn start_native_video_test_pattern(
     window: tauri::Window,
     frame: video::VideoFrame,
-) -> Result<(), String> {
+    engine: EngineHandle,
+    label: String,
+    teardown_lease: Arc<Mutex<Option<engine::OutputOwnershipTeardownLease>>>,
+) -> Result<NativeVideoOutputWorker, String> {
+    ensure_video_output_allowed(&engine)?;
     let initial_size = window.inner_size().map_err(|error| error.to_string())?;
     let window = Arc::new(window);
     let mut presenter = video::GpuSurfacePresenter::new(
@@ -24228,6 +36348,8 @@ fn start_native_video_test_pattern(
         initial_size.height.max(1),
     )
     .map_err(|error| format!("Native video output initialization failed: {error:?}"))?;
+    ensure_video_output_allowed(&engine)?;
+    let _video_permit = engine.acquire_video_output()?;
     presenter
         .present_rgba8(&frame)
         .map_err(|error| format!("Native video output first frame failed: {error:?}"))?;
@@ -24242,25 +36364,82 @@ fn start_native_video_test_pattern(
             event_stop.store(true, Ordering::Release);
         }
     });
-    std::thread::Builder::new()
+    let worker_stop = Arc::clone(&stop);
+    let worker_teardown_lease = Arc::clone(&teardown_lease);
+    let join = std::thread::Builder::new()
         .name("syndocal-video-test-pattern".to_string())
-        .spawn(move || {
-            while !stop.load(Ordering::Acquire) {
-                let Ok(size) = window.inner_size() else {
-                    break;
+        .spawn(move || -> Result<(), String> {
+            while !worker_stop.load(Ordering::Acquire) {
+                let size = match window.inner_size() {
+                    Ok(size) => size,
+                    Err(error) => {
+                        let error = format!("Native video output window size failed: {error}");
+                        let result = native_video_output_worker_result(
+                            &worker_stop,
+                            engine.output_ownership_status().state,
+                            Err(error),
+                        );
+                        if let Err(error) = &result {
+                            arm_native_video_output_failure_fence(
+                                &engine,
+                                &worker_teardown_lease,
+                                &label,
+                                error.clone(),
+                            );
+                            let _ = window.close();
+                        }
+                        return result;
+                    }
                 };
                 if size.width > 0 && size.height > 0 {
-                    if presenter.resize(size.width, size.height).is_err()
-                        || presenter.present_rgba8(&frame).is_err()
-                    {
-                        break;
+                    let _video_permit = match engine.acquire_video_output() {
+                        Ok(permit) => permit,
+                        Err(_) => {
+                            if engine.output_ownership_status().state
+                                != protocol::OutputOwnershipState::Transitioning
+                            {
+                                break;
+                            }
+                            if !wait_for_native_video_output_transition_retry(&worker_stop) {
+                                break;
+                            }
+                            continue;
+                        }
+                    };
+                    let physical_result = (|| -> Result<(), String> {
+                        presenter.resize(size.width, size.height).map_err(|error| {
+                            format!("Native video output resize failed: {error:?}")
+                        })?;
+                        presenter.present_rgba8(&frame).map_err(|error| {
+                            format!("Native video output present failed: {error:?}")
+                        })
+                    })();
+                    let result = native_video_output_worker_result(
+                        &worker_stop,
+                        engine.output_ownership_status().state,
+                        physical_result,
+                    );
+                    if let Err(error) = result {
+                        arm_native_video_output_failure_fence(
+                            &engine,
+                            &worker_teardown_lease,
+                            &label,
+                            error.clone(),
+                        );
+                        let _ = window.close();
+                        return Err(error);
                     }
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
+            Ok(())
         })
         .map_err(|error| format!("Native video output thread failed: {error}"))?;
-    Ok(())
+    Ok(NativeVideoOutputWorker::with_teardown_lease(
+        stop,
+        join,
+        teardown_lease,
+    ))
 }
 
 fn prepare_native_video_output(
@@ -24309,7 +36488,10 @@ fn start_native_video_live_output(
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     spout_inputs: spout_transport::SpoutInputRegistry,
     capture_inputs: capture_transport::CaptureInputRegistry,
-) -> Result<(), String> {
+    label: String,
+    teardown_lease: Arc<Mutex<Option<engine::OutputOwnershipTeardownLease>>>,
+) -> Result<NativeVideoOutputWorker, String> {
+    ensure_video_output_allowed(&engine)?;
     let initial_size = window.inner_size().map_err(|error| error.to_string())?;
     let window = Arc::new(window);
     let mut presenter = video::GpuSurfacePresenter::new(
@@ -24337,6 +36519,7 @@ fn start_native_video_live_output(
         initial_size.height,
     )
     .and_then(|first_output| {
+        let _video_permit = engine.acquire_video_output()?;
         presenter
             .present_prepared_output(
                 &first_output,
@@ -24366,19 +36549,45 @@ fn start_native_video_live_output(
             event_stop.store(true, Ordering::Release);
         }
     });
-    std::thread::Builder::new()
+    let worker_stop = Arc::clone(&stop);
+    let worker_teardown_lease = Arc::clone(&teardown_lease);
+    let join = std::thread::Builder::new()
         .name(format!("syndocal-video-output-{output_id}"))
-        .spawn(move || {
+        .spawn(move || -> Result<(), String> {
             let target_interval = Duration::from_nanos(1_000_000_000 / 60);
-            while !stop.load(Ordering::Acquire) {
+            while !worker_stop.load(Ordering::Acquire) {
                 let frame_started = Instant::now();
-                let Ok(size) = window.inner_size() else {
-                    break;
+                let size = match window.inner_size() {
+                    Ok(size) => size,
+                    Err(error) => {
+                        let error = format!("Native video output window size failed: {error}");
+                        let result = native_video_output_worker_result(
+                            &worker_stop,
+                            engine.output_ownership_status().state,
+                            Err(error),
+                        );
+                        if let Err(error) = &result {
+                            arm_native_video_output_failure_fence(
+                                &engine,
+                                &worker_teardown_lease,
+                                &label,
+                                error.clone(),
+                            );
+                            let _ = window.close();
+                        }
+                        return result;
+                    }
                 };
                 if size.width > 0 && size.height > 0 {
-                    let result = presenter
-                        .resize(size.width, size.height)
-                        .and_then(|_| {
+                    let result = native_video_output_live_frame_with_permit(
+                        &mut presenter,
+                        || engine.acquire_video_output(),
+                        |presenter| {
+                            presenter.resize(size.width, size.height).map_err(|error| {
+                                format!("Native video output resize failed: {error:?}")
+                            })
+                        },
+                        || {
                             prepare_native_video_output(
                                 &mut renderer,
                                 &engine,
@@ -24386,11 +36595,30 @@ fn start_native_video_live_output(
                                 size.width,
                                 size.height,
                             )
-                            .map_err(video::GpuSurfaceError::Present)
-                        })
-                        .and_then(|prepared| {
-                            presenter.present_prepared_output(&prepared, size.width, size.height)
-                        });
+                        },
+                        |presenter, prepared| {
+                            presenter
+                                .present_prepared_output(&prepared, size.width, size.height)
+                                .map_err(|error| {
+                                    format!("Native video output present failed: {error:?}")
+                                })
+                        },
+                        |error| {
+                            let result = native_video_output_worker_result(
+                                &worker_stop,
+                                engine.output_ownership_status().state,
+                                Err(error.to_string()),
+                            );
+                            if let Err(error) = result {
+                                arm_native_video_output_failure_fence(
+                                    &engine,
+                                    &worker_teardown_lease,
+                                    &label,
+                                    error,
+                                );
+                            }
+                        },
+                    );
                     record_native_video_output_metrics(
                         &metrics,
                         size.width,
@@ -24398,19 +36626,51 @@ fn start_native_video_live_output(
                         frame_started,
                         presenter.buffer_stats(),
                         renderer.frame_provider().decoder().diagnostics(),
-                        result.as_ref().err().map(|error| format!("{error:?}")),
+                        result.as_ref().err().map(|error| match error {
+                            NativeVideoOutputLiveFrameError::Permit(error)
+                            | NativeVideoOutputLiveFrameError::Physical(error) => error.clone(),
+                        }),
                     );
-                    if result.is_err() {
-                        break;
+                    match result {
+                        Ok(()) => {}
+                        Err(NativeVideoOutputLiveFrameError::Permit(_)) => {
+                            // Capability denial is not a physical presenter
+                            // failure. A role transition owns its teardown;
+                            // every other denial means this worker is done.
+                            if engine.output_ownership_status().state
+                                == protocol::OutputOwnershipState::Transitioning
+                                && wait_for_native_video_output_transition_retry(&worker_stop)
+                            {
+                                continue;
+                            }
+                            break;
+                        }
+                        Err(NativeVideoOutputLiveFrameError::Physical(error)) => {
+                            let result = native_video_output_worker_result(
+                                &worker_stop,
+                                engine.output_ownership_status().state,
+                                Err(error),
+                            );
+                            if let Err(error) = result {
+                                let _ = window.close();
+                                return Err(error);
+                            }
+                            break;
+                        }
                     }
                 }
                 if let Some(remaining) = target_interval.checked_sub(frame_started.elapsed()) {
                     std::thread::sleep(remaining);
                 }
             }
+            Ok(())
         })
         .map_err(|error| format!("Native video output thread failed: {error}"))?;
-    Ok(())
+    Ok(NativeVideoOutputWorker::with_teardown_lease(
+        stop,
+        join,
+        teardown_lease,
+    ))
 }
 
 fn native_video_output_performance(
@@ -24433,6 +36693,7 @@ fn get_video_output_window_statuses(
     state: State<'_, AppState>,
 ) -> Vec<VideoOutputWindowStatus> {
     let snapshot = state.engine.snapshot();
+    let ownership = state.engine.output_ownership_status();
     snapshot
         .video
         .outputs
@@ -24448,6 +36709,10 @@ fn get_video_output_window_statuses(
                 test_pattern_open: app.windows().contains_key(&test_pattern_window_label),
                 live_window_label,
                 test_pattern_window_label,
+                ownership_allowed: ownership.video_allowed,
+                ownership_state: ownership.state,
+                ownership_reason: ownership.video_reason,
+                ownership_error: ownership.error.clone(),
                 performance: native_video_output_performance(&state, output.id),
             }
         })
@@ -24459,61 +36724,106 @@ async fn sync_open_video_output_windows(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<VideoOutputWindowSyncSummary, String> {
+    let _transition_guard = state.output_ownership_transition.lock().map_err(|_| {
+        let error = "Output ownership transition lock was poisoned".to_string();
+        state
+            .engine
+            .mark_output_ownership_transition_failure(error.clone());
+        error
+    })?;
     let snapshot = state.engine.snapshot();
-    let mut summary = VideoOutputWindowSyncSummary {
+    let summary = VideoOutputWindowSyncSummary {
         synced_live: 0,
         synced_test_pattern: 0,
         skipped_closed: 0,
     };
 
-    for output in snapshot
-        .video
-        .outputs
-        .iter()
-        .filter(|output| output.kind == VideoOutputKind::Display)
-    {
-        let live_label = video_output_window_label(output.id, false);
-        if let Some(window) = app.windows().get(&live_label).cloned() {
-            apply_native_video_output_window_shell(&app, &window, output, false)?;
-            summary.synced_live += 1;
-        } else {
-            summary.skipped_closed += 1;
-        }
-
-        let test_pattern_label = video_output_window_label(output.id, true);
-        if let Some(window) = app.windows().get(&test_pattern_label).cloned() {
-            apply_native_video_output_window_shell(&app, &window, output, true)?;
-            summary.synced_test_pattern += 1;
-        } else {
-            summary.skipped_closed += 1;
-        }
+    if !state.engine.output_ownership_status().video_allowed {
+        retire_native_video_output_windows(&app, &state.native_video_output_workers)?;
+        return Ok(summary);
     }
+    let stale_labels = stale_native_video_output_retirement_labels(
+        &app,
+        &state.native_video_output_workers,
+        &snapshot,
+    )?;
+    retire_native_video_output_labels(&app, &state.native_video_output_workers, stale_labels)?;
+    let ownership = state.engine.output_ownership_status();
+    let activation = state
+        .engine
+        .admit_output_activation(ownership.effective_role)?;
+    with_output_resource_creation_lease_with_cleanup(
+        &activation,
+        || {
+            let mut resource = (
+                VideoOutputWindowSyncSummary {
+                    synced_live: 0,
+                    synced_test_pattern: 0,
+                    skipped_closed: 0,
+                },
+                Vec::new(),
+            );
+            for output in snapshot
+                .video
+                .outputs
+                .iter()
+                .filter(|output| output.kind == VideoOutputKind::Display)
+            {
+                let live_label = video_output_window_label(output.id, false);
+                if let Some(window) = app.windows().get(&live_label).cloned() {
+                    resource.1.push(live_label);
+                    if let Err(error) =
+                        apply_native_video_output_window_shell(&app, &window, output, false)
+                    {
+                        return native_video_output_sync_resource_from_shell(resource, Err(error));
+                    }
+                    resource.0.synced_live += 1;
+                } else {
+                    resource.0.skipped_closed += 1;
+                }
 
-    Ok(summary)
+                let test_pattern_label = video_output_window_label(output.id, true);
+                if let Some(window) = app.windows().get(&test_pattern_label).cloned() {
+                    resource.1.push(test_pattern_label);
+                    if let Err(error) =
+                        apply_native_video_output_window_shell(&app, &window, output, true)
+                    {
+                        return native_video_output_sync_resource_from_shell(resource, Err(error));
+                    }
+                    resource.0.synced_test_pattern += 1;
+                } else {
+                    resource.0.skipped_closed += 1;
+                }
+            }
+            OutputResourceCreation::Ready(resource)
+        },
+        |(_, labels)| {
+            retire_native_video_output_labels(&app, &state.native_video_output_workers, labels)
+        },
+    )
+    .map(|(summary, _)| summary)
 }
 
 #[tauri::command]
 async fn close_video_output_window(
     app: tauri::AppHandle,
+    state: State<'_, AppState>,
     output_id: VideoOutputId,
     test_pattern: Option<bool>,
 ) -> Result<(), String> {
+    let _transition_guard = state.output_ownership_transition.lock().map_err(|_| {
+        let error = "Output ownership transition lock was poisoned".to_string();
+        state
+            .engine
+            .mark_output_ownership_transition_failure(error.clone());
+        error
+    })?;
     let test_pattern = test_pattern.unwrap_or(false);
     let label = video_output_window_label(output_id, test_pattern);
-    if test_pattern {
-        app.windows()
-            .get(&label)
-            .cloned()
-            .ok_or_else(|| format!("Video output window {label} is not open"))?
-            .close()
-            .map_err(|error| error.to_string())
+    if retire_native_video_output_window(&app, &state.native_video_output_workers, &label)? {
+        Ok(())
     } else {
-        app.windows()
-            .get(&label)
-            .cloned()
-            .ok_or_else(|| format!("Video output window {label} is not open"))?
-            .close()
-            .map_err(|error| error.to_string())
+        Err(format!("Video output window {label} is not open"))
     }
 }
 
@@ -24522,36 +36832,27 @@ async fn close_open_video_output_windows(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<VideoOutputWindowCloseSummary, String> {
-    let snapshot = state.engine.snapshot();
+    let _transition_guard = state.output_ownership_transition.lock().map_err(|_| {
+        let error = "Output ownership transition lock was poisoned".to_string();
+        state
+            .engine
+            .mark_output_ownership_transition_failure(error.clone());
+        error
+    })?;
+    let labels = native_video_output_retirement_labels(&app, &state.native_video_output_workers)?;
     let mut summary = VideoOutputWindowCloseSummary {
         closed_live: 0,
         closed_test_pattern: 0,
         skipped_closed: 0,
     };
-
-    for output in snapshot
-        .video
-        .outputs
-        .iter()
-        .filter(|output| output.kind == VideoOutputKind::Display)
-    {
-        let live_label = video_output_window_label(output.id, false);
-        if let Some(window) = app.windows().get(&live_label).cloned() {
-            window.close().map_err(|error| error.to_string())?;
-            summary.closed_live += 1;
-        } else {
-            summary.skipped_closed += 1;
-        }
-
-        let test_pattern_label = video_output_window_label(output.id, true);
-        if let Some(window) = app.windows().get(&test_pattern_label).cloned() {
-            window.close().map_err(|error| error.to_string())?;
+    for label in labels {
+        if label.ends_with("-test-pattern") {
             summary.closed_test_pattern += 1;
         } else {
-            summary.skipped_closed += 1;
+            summary.closed_live += 1;
         }
     }
-
+    retire_native_video_output_windows(&app, &state.native_video_output_workers)?;
     Ok(summary)
 }
 
@@ -24562,34 +36863,88 @@ async fn sync_video_output_window(
     output_id: VideoOutputId,
     test_pattern: Option<bool>,
 ) -> Result<(), String> {
+    let _transition_guard = state.output_ownership_transition.lock().map_err(|_| {
+        let error = "Output ownership transition lock was poisoned".to_string();
+        state
+            .engine
+            .mark_output_ownership_transition_failure(error.clone());
+        error
+    })?;
     let test_pattern = test_pattern.unwrap_or(false);
+    let label = video_output_window_label(output_id, test_pattern);
     let snapshot = state.engine.snapshot();
-    let output = snapshot
+    let output = match snapshot
         .video
         .outputs
         .iter()
         .find(|output| output.id == output_id)
         .cloned()
-        .ok_or_else(|| format!("Video output {output_id} was not found"))?;
+    {
+        Some(output) => output,
+        None => {
+            return match retire_native_video_output_window(
+                &app,
+                &state.native_video_output_workers,
+                &label,
+            ) {
+                Ok(_) => Err(format!("Video output {output_id} was not found")),
+                Err(cleanup_error) => Err(format!(
+                    "Video output {output_id} was not found; native retirement failed: {cleanup_error}"
+                )),
+            };
+        }
+    };
     if output.kind != VideoOutputKind::Display {
-        return Err("Only Display video outputs can be synced as windows".to_string());
+        return match retire_native_video_output_window(
+            &app,
+            &state.native_video_output_workers,
+            &label,
+        ) {
+            Ok(_) => Err("Only Display video outputs can be synced as windows".to_string()),
+            Err(cleanup_error) => Err(format!(
+                "Only Display video outputs can be synced as windows; native retirement failed: {cleanup_error}"
+            )),
+        };
     }
-    let label = video_output_window_label(output_id, test_pattern);
-    if test_pattern {
-        let window = app
-            .windows()
-            .get(&label)
-            .cloned()
-            .ok_or_else(|| format!("Video output window {label} is not open"))?;
-        apply_native_video_output_window_shell(&app, &window, &output, true)
-    } else {
-        let window = app
-            .windows()
-            .get(&label)
-            .cloned()
-            .ok_or_else(|| format!("Video output window {label} is not open"))?;
-        apply_native_video_output_window_shell(&app, &window, &output, false)
+    if !state.engine.output_ownership_status().video_allowed {
+        let _ =
+            retire_native_video_output_window(&app, &state.native_video_output_workers, &label)?;
+        let status = state.engine.output_ownership_status();
+        let role = status.effective_role;
+        let status_error = status.error;
+        return Err(status_error.unwrap_or_else(|| {
+            format!(
+                "External video output is blocked by machine role {:?}",
+                role
+            )
+        }));
     }
+    let ownership = state.engine.output_ownership_status();
+    let activation = state
+        .engine
+        .admit_output_activation(ownership.effective_role)?;
+    with_output_resource_creation_lease_with_cleanup(
+        &activation,
+        || {
+            let window = match app.windows().get(&label).cloned() {
+                Some(window) => window,
+                None => {
+                    return OutputResourceCreation::FailedWithoutResource(format!(
+                        "Video output window {label} is not open"
+                    ));
+                }
+            };
+            native_video_output_sync_resource_from_shell(
+                label.clone(),
+                apply_native_video_output_window_shell(&app, &window, &output, test_pattern),
+            )
+        },
+        |label| {
+            retire_native_video_output_window(&app, &state.native_video_output_workers, label)
+                .map(|_| ())
+        },
+    )
+    .map(|_| ())
 }
 
 fn pane_window_label(pane: &str) -> String {
@@ -24751,6 +37106,7 @@ async fn open_pane_window(
     }
     let emit_pane = pane.clone();
     let emit_app = app.clone();
+    let retire_owner_label = label.clone();
     let mut builder = tauri::WebviewWindowBuilder::new(
         &app,
         &label,
@@ -24773,6 +37129,12 @@ async fn open_pane_window(
     }
     window.on_window_event(move |event| {
         if matches!(event, tauri::WindowEvent::Destroyed) {
+            let state = emit_app.state::<AppState>();
+            if let Err(error) =
+                retire_project_transaction_owner_for_window(&state, &retire_owner_label)
+            {
+                eprintln!("failed to recover pane transaction owner after Destroyed: {error}");
+            }
             let _ = emit_app.emit("syndocal://pane-window-closed", emit_pane.clone());
         }
     });
@@ -24802,6 +37164,13 @@ async fn open_video_output_window(
     output_id: VideoOutputId,
     test_pattern: Option<bool>,
 ) -> Result<(), String> {
+    let _transition_guard = state.output_ownership_transition.lock().map_err(|_| {
+        let error = "Output ownership transition lock was poisoned".to_string();
+        state
+            .engine
+            .mark_output_ownership_transition_failure(error.clone());
+        error
+    })?;
     let test_pattern = test_pattern.unwrap_or(false);
     let snapshot = state.engine.snapshot();
     let output = snapshot
@@ -24816,14 +37185,66 @@ async fn open_video_output_window(
     }
 
     let label = video_output_window_label(output_id, test_pattern);
+    if !state.engine.output_ownership_status().video_allowed {
+        let _ =
+            retire_native_video_output_window(&app, &state.native_video_output_workers, &label)?;
+        let status = state.engine.output_ownership_status();
+        let role = status.effective_role;
+        let status_error = status.error;
+        return Err(status_error.unwrap_or_else(|| {
+            format!(
+                "External video output is blocked by machine role {:?}",
+                role
+            )
+        }));
+    }
+    let ownership = state.engine.output_ownership_status();
+    let activation = state
+        .engine
+        .admit_output_activation(ownership.effective_role)?;
+    let existing_window = app.windows().get(&label).cloned();
+    if existing_window.is_none() {
+        // A native close can have removed the window before its worker was
+        // reaped. Finish that retirement before a same-label open can create a
+        // replacement presenter.
+        let _ =
+            retire_native_video_output_window(&app, &state.native_video_output_workers, &label)?;
+    }
     if test_pattern {
-        if let Some(window) = app.windows().get(&label).cloned() {
-            apply_native_video_output_window_shell(&app, &window, &output, true)?;
-            window.show().map_err(|error| error.to_string())?;
-            window.set_focus().map_err(|error| error.to_string())?;
-            return Ok(());
+        if let Some(window) = existing_window {
+            let label_for_retire = label.clone();
+            let create_app = app.clone();
+            let retire_app = app.clone();
+            let native_workers = &state.native_video_output_workers;
+            return with_output_resource_creation_lease_with_cleanup(
+                &activation,
+                || {
+                    output_resource_creation_from_setup(
+                        (),
+                        (|| {
+                            apply_native_video_output_window_shell(
+                                &create_app,
+                                &window,
+                                &output,
+                                true,
+                            )?;
+                            window.show().map_err(|error| error.to_string())?;
+                            window.set_focus().map_err(|error| error.to_string())
+                        })(),
+                    )
+                },
+                move |_| {
+                    retire_native_video_output_window(
+                        &retire_app,
+                        native_workers,
+                        &label_for_retire,
+                    )
+                    .map(|_| ())
+                },
+            );
         }
-        let mut builder = tauri::window::WindowBuilder::new(&app, label)
+        let builder_app = app.clone();
+        let mut builder = tauri::window::WindowBuilder::new(&builder_app, label.clone())
             .title(format!("Syndocal Test Pattern - {}", output.label))
             .inner_size(output.width as f64, output.height as f64)
             .resizable(true)
@@ -24838,27 +37259,92 @@ async fn open_video_output_window(
                 builder = builder.position(position.x as f64, position.y as f64);
             }
         }
-        let window = builder.build().map_err(|error| error.to_string())?;
-        apply_native_video_output_window_shell(&app, &window, &output, true)?;
-        let frame = video::render_video_output_test_pattern(
-            &snapshot.video,
-            output_id,
-            output.width.max(1),
-            output.height.max(1),
-        )
-        .map_err(|error| format!("{error:?}"))?;
-        let cleanup_window = window.clone();
-        return start_native_video_test_pattern(window, frame).inspect_err(|_| {
-            let _ = cleanup_window.close();
-        });
+        let label_for_retire = label.clone();
+        let create_app = app.clone();
+        let retire_app = app.clone();
+        let native_workers = &state.native_video_output_workers;
+        return with_output_resource_creation_lease_with_cleanup(
+            &activation,
+            || {
+                let window = match builder.build() {
+                    Ok(window) => window,
+                    Err(error) => {
+                        return OutputResourceCreation::FailedWithoutResource(error.to_string());
+                    }
+                };
+                let teardown_lease = NativeVideoOutputWorker::new_teardown_lease_slot();
+                let worker = match (|| {
+                    apply_native_video_output_window_shell(&create_app, &window, &output, true)?;
+                    let frame = video::render_video_output_test_pattern(
+                        &snapshot.video,
+                        output_id,
+                        output.width.max(1),
+                        output.height.max(1),
+                    )
+                    .map_err(|error| format!("{error:?}"))?;
+                    start_native_video_test_pattern(
+                        window.clone(),
+                        frame,
+                        state.engine.clone(),
+                        label.clone(),
+                        Arc::clone(&teardown_lease),
+                    )
+                })() {
+                    Ok(worker) => worker,
+                    Err(error) => {
+                        return output_resource_creation_after_cleanup(
+                            error,
+                            retire_native_video_output_window(&create_app, native_workers, &label)
+                                .map(|_| ()),
+                        );
+                    }
+                };
+                if let Err((error, worker)) =
+                    insert_native_video_output_worker(native_workers, label.clone(), worker)
+                {
+                    return output_resource_creation_after_cleanup(
+                        error,
+                        retire_unregistered_native_video_output_worker(&create_app, &label, worker),
+                    );
+                }
+                OutputResourceCreation::Ready(())
+            },
+            move |_| {
+                retire_native_video_output_window(&retire_app, native_workers, &label_for_retire)
+                    .map(|_| ())
+            },
+        );
     }
-    if let Some(window) = app.windows().get(&label).cloned() {
-        apply_native_video_output_window_shell(&app, &window, &output, false)?;
-        window.show().map_err(|error| error.to_string())?;
-        window.set_focus().map_err(|error| error.to_string())?;
-        return Ok(());
+    if let Some(window) = existing_window {
+        let label_for_retire = label.clone();
+        let create_app = app.clone();
+        let retire_app = app.clone();
+        let native_workers = &state.native_video_output_workers;
+        return with_output_resource_creation_lease_with_cleanup(
+            &activation,
+            || {
+                output_resource_creation_from_setup(
+                    (),
+                    (|| {
+                        apply_native_video_output_window_shell(
+                            &create_app,
+                            &window,
+                            &output,
+                            false,
+                        )?;
+                        window.show().map_err(|error| error.to_string())?;
+                        window.set_focus().map_err(|error| error.to_string())
+                    })(),
+                )
+            },
+            move |_| {
+                retire_native_video_output_window(&retire_app, native_workers, &label_for_retire)
+                    .map(|_| ())
+            },
+        );
     }
-    let mut builder = tauri::window::WindowBuilder::new(&app, label)
+    let builder_app = app.clone();
+    let mut builder = tauri::window::WindowBuilder::new(&builder_app, label.clone())
         .title(format!("Syndocal Output - {}", output.label))
         .inner_size(output.width as f64, output.height as f64)
         .resizable(true)
@@ -24875,34 +37361,136 @@ async fn open_video_output_window(
         }
     }
 
-    let window = builder.build().map_err(|error| error.to_string())?;
-    apply_native_video_output_window_shell(&app, &window, &output, false)?;
-    let cleanup_window = window.clone();
+    let label_for_retire = label.clone();
+    let create_app = app.clone();
+    let retire_app = app.clone();
+    let native_metrics = &state.native_video_output_metrics;
+    let native_workers = &state.native_video_output_workers;
     let metrics = Arc::new(Mutex::new(NativeVideoOutputMetrics::default()));
-    if let Ok(mut active_metrics) = state.native_video_output_metrics.lock() {
-        active_metrics.insert(output_id, Arc::clone(&metrics));
-    }
-    start_native_video_live_output(
-        window,
-        state.engine.clone(),
-        output_id,
-        metrics,
-        #[cfg(feature = "ndi")]
-        Arc::clone(&state.ndi_inputs),
-        #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
-        Arc::clone(&state.spout_inputs),
-        Arc::clone(&state.capture_inputs),
+    with_output_resource_creation_lease_with_cleanup(
+        &activation,
+        || {
+            let window = match builder.build() {
+                Ok(window) => window,
+                Err(error) => {
+                    return OutputResourceCreation::FailedWithoutResource(error.to_string());
+                }
+            };
+            let teardown_lease = NativeVideoOutputWorker::new_teardown_lease_slot();
+            let worker = match (|| {
+                apply_native_video_output_window_shell(&create_app, &window, &output, false)?;
+                if let Ok(mut active_metrics) = native_metrics.lock() {
+                    active_metrics.insert(output_id, Arc::clone(&metrics));
+                }
+                start_native_video_live_output(
+                    window.clone(),
+                    state.engine.clone(),
+                    output_id,
+                    Arc::clone(&metrics),
+                    #[cfg(feature = "ndi")]
+                    Arc::clone(&state.ndi_inputs),
+                    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+                    Arc::clone(&state.spout_inputs),
+                    Arc::clone(&state.capture_inputs),
+                    label.clone(),
+                    Arc::clone(&teardown_lease),
+                )
+            })() {
+                Ok(worker) => worker,
+                Err(error) => {
+                    return OutputResourceCreation::FailedWithResource {
+                        error,
+                        resource: (),
+                    };
+                }
+            };
+            if let Err((error, worker)) =
+                insert_native_video_output_worker(native_workers, label.clone(), worker)
+            {
+                if let Ok(mut active_metrics) = native_metrics.lock() {
+                    active_metrics.remove(&output_id);
+                }
+                return output_resource_creation_after_cleanup(
+                    error,
+                    retire_unregistered_native_video_output_worker(&create_app, &label, worker),
+                );
+            }
+            OutputResourceCreation::Ready(())
+        },
+        move |_| {
+            if let Ok(mut active_metrics) = native_metrics.lock() {
+                active_metrics.remove(&output_id);
+            }
+            retire_native_video_output_window(&retire_app, native_workers, &label_for_retire)
+                .map(|_| ())
+        },
     )
-    .inspect_err(|_| {
-        let _ = cleanup_window.close();
-    })
 }
 
 fn load_patch_profile(
     state: &State<'_, AppState>,
     profile_path: &str,
 ) -> Result<FixtureProfileSummary, String> {
-    load_patch_profile_from_cache_or_file(&state.custom_profiles, profile_path)
+    let profile_path = profile_path.trim();
+    if profile_path.starts_with("memory://") || profile_path.starts_with("snapshot://") {
+        let coordinator = lock_project_coordinator(state)?;
+        return coordinator
+            .ancillary
+            .custom_profiles
+            .get(profile_path)
+            .cloned()
+            .ok_or_else(|| format!("Memory fixture profile {profile_path} was not found"));
+    }
+    match gdtf::load_profile(profile_path) {
+        // Resolving a disk profile is session-only. Patch/Repair owns the
+        // later project-embedding boundary after every validation succeeds.
+        Ok(profile) => Ok(profile),
+        Err(error) => {
+            let coordinator = lock_project_coordinator(state)?;
+            coordinator
+                .ancillary
+                .custom_profiles
+                .get(profile_path)
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "Fixture profile {profile_path} could not be loaded from disk or project cache: {error}"
+                    )
+                })
+        }
+    }
+}
+
+fn resolve_patch_profile_against_authority(
+    profile_path: &str,
+    inline_profile: Option<&FixtureProfileSummary>,
+    project_profiles: &HashMap<String, FixtureProfileSummary>,
+) -> Result<FixtureProfileSummary, String> {
+    if let Some(profile) = inline_profile {
+        if profile.source_path.trim() != profile_path.trim() {
+            return Err(format!(
+                "Inline fixture profile '{}' does not match patch profile path '{}'",
+                profile.source_path, profile_path
+            ));
+        }
+        validate_project_custom_profiles(std::slice::from_ref(profile))?;
+        return Ok(profile.clone());
+    }
+    let profile_path = profile_path.trim();
+    if profile_path.starts_with("memory://") || profile_path.starts_with("snapshot://") {
+        return project_profiles
+            .get(profile_path)
+            .cloned()
+            .ok_or_else(|| format!("Memory fixture profile {profile_path} was not found"));
+    }
+    match gdtf::load_profile(profile_path) {
+        Ok(profile) => Ok(profile),
+        Err(error) => project_profiles.get(profile_path).cloned().ok_or_else(|| {
+            format!(
+                "Fixture profile {profile_path} could not be loaded from disk or project cache: {error}"
+            )
+        }),
+    }
 }
 
 fn import_gdtf_from_path(path: String) -> Result<FixtureProfileSummary, String> {
@@ -24910,6 +37498,7 @@ fn import_gdtf_from_path(path: String) -> Result<FixtureProfileSummary, String> 
     gdtf::load_profile(path).map_err(|error| error.to_string())
 }
 
+#[cfg(test)]
 fn cache_fixture_profile(
     profiles: &Mutex<HashMap<String, FixtureProfileSummary>>,
     profile: &FixtureProfileSummary,
@@ -24925,6 +37514,63 @@ fn cache_fixture_profile(
     Ok(())
 }
 
+fn cache_fixture_profile_for_state(
+    state: &AppState,
+    profile: &FixtureProfileSummary,
+) -> Result<(), String> {
+    let source_path = profile.source_path.trim();
+    if source_path.is_empty() {
+        return Ok(());
+    }
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    if !project_fixture_profile_cache_requires_update(
+        coordinator.ancillary.custom_profiles.get(source_path),
+        profile,
+    ) {
+        // Re-resolving an identical profile is strictly idempotent. Keep the
+        // compatibility mirror truthful without manufacturing a project
+        // revision/history/publication or taking an engine persistence image.
+        state
+            .custom_profiles
+            .lock()
+            .map_err(|_| "Fixture profile state lock was poisoned".to_string())?
+            .insert(source_path.to_string(), profile.clone());
+        return Ok(());
+    }
+    drop(
+        state
+            .custom_profiles
+            .lock()
+            .map_err(|_| "Fixture profile state lock was poisoned".to_string())?,
+    );
+    let mut candidate_ancillary = coordinator.ancillary.clone();
+    candidate_ancillary
+        .custom_profiles
+        .insert(source_path.to_string(), profile.clone());
+    let prepared = prepare_direct_project_ancillary_mutation(
+        state,
+        &coordinator,
+        state.engine.persistence_snapshot()?,
+        candidate_ancillary,
+    )?;
+    commit_direct_project_ancillary_mutation_after_preflight(state, &mut coordinator, prepared);
+    *state
+        .custom_profiles
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) =
+        coordinator.ancillary.custom_profiles.clone();
+    Ok(())
+}
+
+fn project_fixture_profile_cache_requires_update(
+    existing: Option<&FixtureProfileSummary>,
+    candidate: &FixtureProfileSummary,
+) -> bool {
+    existing != Some(candidate)
+}
+
+#[cfg(test)]
 fn cached_fixture_profile(
     profiles: &Mutex<HashMap<String, FixtureProfileSummary>>,
     profile_path: &str,
@@ -24935,6 +37581,7 @@ fn cached_fixture_profile(
         .map(|profiles| profiles.get(profile_path).cloned())
 }
 
+#[cfg(test)]
 fn load_patch_profile_from_cache_or_file(
     profiles: &Mutex<HashMap<String, FixtureProfileSummary>>,
     profile_path: &str,
@@ -24962,11 +37609,7 @@ fn register_custom_fixture_profile(
 ) -> Result<FixtureProfileSummary, String> {
     validate_custom_fixture_profile_request(&request)?;
     let profile = custom_fixture_profile_from_request(request);
-    state
-        .custom_profiles
-        .lock()
-        .map_err(|_| "Fixture profile state lock was poisoned".to_string())?
-        .insert(profile.source_path.clone(), profile.clone());
+    cache_fixture_profile_for_state(state, &profile)?;
     Ok(profile)
 }
 
@@ -26328,9 +38971,11 @@ fn validate_patch_footprint(
     Ok(())
 }
 
-fn prepare_fixture_patches(
-    state: &State<'_, AppState>,
+fn prepare_fixture_patches_against_authority(
     requests: Vec<PatchFixtureRequest>,
+    inline_profiles: Option<&[FixtureProfileSummary]>,
+    project_profiles: &HashMap<String, FixtureProfileSummary>,
+    existing_fixtures: &[PatchedFixtureSummary],
 ) -> Result<Vec<PreparedFixturePatch>, String> {
     if requests.is_empty() {
         return Err("At least one fixture patch request is required".to_string());
@@ -26338,16 +38983,23 @@ fn prepare_fixture_patches(
     if requests.len() > 256 {
         return Err("Cannot patch more than 256 fixtures at once".to_string());
     }
+    if inline_profiles.is_some_and(|profiles| profiles.len() != requests.len()) {
+        return Err("Inline fixture profile count must match patch request count".to_string());
+    }
 
     let mut prepared = Vec::with_capacity(requests.len());
-    for mut request in requests {
+    for (index, mut request) in requests.into_iter().enumerate() {
         request.group_ids = normalize_group_ids(request.group_ids)?;
         validate_patch_request(&request)?;
-        let profile = load_patch_profile(state, &request.profile_path)?;
+        let profile = resolve_patch_profile_against_authority(
+            &request.profile_path,
+            inline_profiles.and_then(|profiles| profiles.get(index)),
+            project_profiles,
+        )?;
         validate_patch_footprint(&request, &profile)?;
         prepared.push(PreparedFixturePatch { request, profile });
     }
-    validate_prepared_patch_conflicts(&prepared, &state.engine.snapshot().fixtures)?;
+    validate_prepared_patch_conflicts(&prepared, existing_fixtures)?;
     Ok(prepared)
 }
 
@@ -28496,6 +41148,4080 @@ mod tests {
     }
 
     #[test]
+    fn media_asset_operation_delayed_cancel_cannot_cancel_reused_or_newer_operation() {
+        let registry = Arc::new(MediaAssetOperationRegistry::default());
+        let first = registry.begin(7, "renderer:test".to_string()).unwrap();
+        let first_handle = first.handle();
+        assert!(!first.cancelled());
+        assert!(!registry
+            .cancel_exact(
+                first_handle.request_id,
+                first_handle.generation.saturating_add(1),
+                "renderer:test".to_string(),
+            )
+            .unwrap());
+        assert!(!first.cancelled());
+        drop(first);
+
+        let second = registry.begin(7, "renderer:test".to_string()).unwrap();
+        let second_handle = second.handle();
+        assert_ne!(first_handle.generation, second_handle.generation);
+        assert!(!registry
+            .cancel_exact(
+                first_handle.request_id,
+                first_handle.generation,
+                "renderer:test".to_string(),
+            )
+            .unwrap());
+        assert!(!second.cancelled());
+        assert!(!registry
+            .cancel_exact(
+                second_handle.request_id,
+                second_handle.generation,
+                "renderer:other".to_string(),
+            )
+            .unwrap());
+        assert!(!second.cancelled());
+        assert!(registry
+            .cancel_exact(
+                second_handle.request_id,
+                second_handle.generation,
+                "renderer:test".to_string(),
+            )
+            .unwrap());
+        assert!(second.cancelled());
+    }
+
+    fn media_asset_test_authority() -> MediaAssetPrepareAuthority {
+        media_asset_prepare_authority(&ProjectCoordinator::default())
+    }
+
+    fn media_asset_test_prepared_import(
+        request_id: u64,
+        handle: &MediaAssetOperationHandle,
+        owner_id: &str,
+    ) -> PreparedMediaAssetImport {
+        PreparedMediaAssetImport {
+            request_id,
+            operation_generation: handle.generation,
+            owner_id: owner_id.to_string(),
+            authority: media_asset_prepare_authority(&ProjectCoordinator::default()),
+            assets: Vec::new(),
+            entries: Vec::new(),
+            cancel: Arc::new(AtomicBool::new(false)),
+            admission: Arc::new(MediaAssetOperationAdmission::new()),
+            finalized_sources: None,
+            expires_at: Instant::now() + Duration::from_secs(1),
+        }
+    }
+
+    /// A project whose catalog holds one media asset, so a `before`/`after`
+    /// checkpoint pair differs and the internal commit is a real mutation.
+    fn media_asset_authoritative_test_project_with_asset() -> ProjectFile {
+        let mut project = empty_project_file();
+        project.snapshot.video.media_assets.push(MediaAssetSummary {
+            id: 1,
+            label: "Clip".to_string(),
+            source: media_asset_commit_test_source("C:/media/clip.mov"),
+            content_hash: Some(media_asset_commit_test_hash('a')),
+            byte_size: Some(1024),
+        });
+        project
+    }
+
+    /// Package a coordinator image into the terminal DTO the way the command
+    /// does. The history status is the real coordinator status; the authority
+    /// bundle is minimal scaffolding for the receipt payload (the assertions
+    /// target the report and the real history status, not the bundle).
+    fn authoritative_test_mutation(
+        coordinator: &ProjectCoordinator,
+    ) -> ProjectHistoryMutationResult {
+        ProjectHistoryMutationResult {
+            history_status: project_history_status_for_coordinator(coordinator),
+            authority: ProjectAuthorityBundle {
+                project_epoch: coordinator.epoch,
+                project_revision: coordinator.revision,
+                checkpoint_hash: coordinator.checkpoint_hash.clone(),
+                publication_generation: coordinator.publication_generation,
+                publication_kind: coordinator.last_publication_kind,
+                mapping_replacement_generation: coordinator.mapping_replacement_generation,
+                authority_disposition_generation: coordinator.authority_disposition_generation,
+                authority_disposition: coordinator.authority_disposition,
+                recovery_authority_serial: coordinator.recovery_authority_serial,
+                recovery_authority_last_transition: coordinator
+                    .recovery_authority_last_transition
+                    .clone(),
+                path_generation: coordinator.path_generation,
+                history_generation: coordinator.history_generation,
+                current_project_path: None,
+                snapshot: EngineSnapshot::default(),
+                profiles: Vec::new(),
+                fixture_groups: coordinator.ancillary.fixture_groups.clone(),
+                operator_policy: coordinator.ancillary.operator_policy.clone(),
+                midi_mappings: coordinator.mappings.midi_mappings.clone(),
+                osc_mappings: coordinator.mappings.osc_mappings.clone(),
+                dmx_mappings: coordinator.mappings.dmx_mappings.clone(),
+                history: project_history_status_for_coordinator(coordinator),
+                input_runtime: ProjectInputRuntimeStatus {
+                    project_input_runtime_generation: 0,
+                    mapping_input_runtime_generation: 0,
+                    midi_clock_active: false,
+                    midi_control_active: false,
+                    midi_feedback_output_active: false,
+                    midi_feedback_runtime_active: false,
+                    osc_active: false,
+                    dmx_active: false,
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn media_asset_authoritative_commit_publishes_once_and_advances_single_history() {
+        // One admitted authoritative transaction publishes exactly once and
+        // commits exactly one normal history entry/revision/publication, then
+        // clears the bounded active flag and leaves no pending reservation.
+        let mut coordinator = ProjectCoordinator::default();
+        let before = test_project_checkpoint(empty_project_file(), 0);
+        let after = test_project_checkpoint(media_asset_authoritative_test_project_with_asset(), 0);
+        let plan = prepare_internal_media_asset_commit(
+            &coordinator,
+            "Import media assets",
+            "",
+            before,
+            after,
+            42,
+        )
+        .expect("preflight succeeds");
+        // A real catalog change preflights every counter and one Undo entry.
+        assert_eq!(plan.next_transaction_id, Some(1));
+        assert_eq!(plan.next_revision, Some(1));
+        assert_eq!(plan.next_publication_generation, Some(1));
+        assert_eq!(plan.next_history_generation, Some(1));
+        assert_eq!(plan.next_history.undo.len(), 1);
+        assert_eq!(plan.next_history.undo[0].entry_id, 1);
+
+        let admission = MediaAssetOperationAdmission::new();
+        let active = AtomicBool::new(false);
+        let publishes = AtomicU64::new(0);
+        run_internal_media_asset_transaction(&active, &mut coordinator, &admission, plan, || {
+            publishes.fetch_add(1, Ordering::AcqRel);
+            Ok::<(), String>(())
+        })
+        .expect("admitted transaction commits");
+
+        assert_eq!(
+            publishes.load(Ordering::Acquire),
+            1,
+            "exactly one publication"
+        );
+        assert_eq!(coordinator.revision, 1);
+        assert_eq!(coordinator.next_transaction_id, 1);
+        assert_eq!(
+            coordinator.history.undo.len(),
+            1,
+            "exactly one history entry"
+        );
+        assert_eq!(coordinator.history.undo[0].entry_id, 1);
+        assert_eq!(coordinator.history_generation, 1);
+        assert_eq!(coordinator.publication_generation, 1);
+        assert!(
+            coordinator.history.pending.is_empty(),
+            "no pending reservation"
+        );
+        assert!(
+            !active.load(Ordering::Acquire),
+            "active flag cleared on success"
+        );
+    }
+
+    #[test]
+    fn media_asset_authoritative_cancellation_before_admit_yields_zero_mutation() {
+        // A cancel that wins the Cancelable -> Cancelled CAS before admission
+        // refuses the transaction: no publication, no coordinator mutation, and
+        // the active flag is never armed.
+        let mut coordinator = ProjectCoordinator::default();
+        let before = test_project_checkpoint(empty_project_file(), 0);
+        let after = test_project_checkpoint(media_asset_authoritative_test_project_with_asset(), 0);
+        let plan = prepare_internal_media_asset_commit(
+            &coordinator,
+            "Import media assets",
+            "",
+            before,
+            after,
+            42,
+        )
+        .expect("preflight succeeds");
+        let admission = MediaAssetOperationAdmission::new();
+        assert!(admission.try_cancel(), "cancel wins before admit");
+        let active = AtomicBool::new(false);
+        let publishes = AtomicU64::new(0);
+        let result = run_internal_media_asset_transaction(
+            &active,
+            &mut coordinator,
+            &admission,
+            plan,
+            || {
+                publishes.fetch_add(1, Ordering::AcqRel);
+                Ok::<(), String>(())
+            },
+        );
+        assert!(result.is_err(), "a cancelled operation is refused");
+        assert_eq!(
+            publishes.load(Ordering::Acquire),
+            0,
+            "no publication after cancel"
+        );
+        assert_eq!(coordinator.revision, 0);
+        assert_eq!(coordinator.next_transaction_id, 0);
+        assert!(coordinator.history.undo.is_empty(), "no history entry");
+        assert_eq!(coordinator.history_generation, 0);
+        assert!(coordinator.history.pending.is_empty());
+        assert!(!active.load(Ordering::Acquire), "active flag never armed");
+    }
+
+    #[test]
+    fn media_asset_authoritative_publish_failure_and_already_admitted_clear_active_without_history()
+    {
+        // A post-admit publication failure disarms the active flag and leaves
+        // the coordinator (revision/history/pending) untouched.
+        {
+            let mut coordinator = ProjectCoordinator::default();
+            let before = test_project_checkpoint(empty_project_file(), 0);
+            let after =
+                test_project_checkpoint(media_asset_authoritative_test_project_with_asset(), 0);
+            let plan = prepare_internal_media_asset_commit(
+                &coordinator,
+                "Import media assets",
+                "",
+                before,
+                after,
+                42,
+            )
+            .expect("preflight succeeds");
+            let admission = MediaAssetOperationAdmission::new();
+            let active = AtomicBool::new(false);
+            let attempts = AtomicU64::new(0);
+            let result = run_internal_media_asset_transaction(
+                &active,
+                &mut coordinator,
+                &admission,
+                plan,
+                || {
+                    attempts.fetch_add(1, Ordering::AcqRel);
+                    Err::<(), String>("engine publication failed".to_string())
+                },
+            );
+            assert!(result.is_err());
+            assert_eq!(
+                attempts.load(Ordering::Acquire),
+                1,
+                "publish attempted once"
+            );
+            assert_eq!(coordinator.revision, 0);
+            assert!(
+                coordinator.history.undo.is_empty(),
+                "no history after publish failure"
+            );
+            assert_eq!(coordinator.history_generation, 0);
+            assert!(coordinator.history.pending.is_empty());
+            assert!(
+                !active.load(Ordering::Acquire),
+                "active disarmed after publish failure"
+            );
+        }
+        // A concurrent duplicate arriving on a different receipt key finds the
+        // operation already admitted: it is refused without arming, publishing,
+        // or mutating anything.
+        {
+            let mut coordinator = ProjectCoordinator::default();
+            let before = test_project_checkpoint(empty_project_file(), 0);
+            let after =
+                test_project_checkpoint(media_asset_authoritative_test_project_with_asset(), 0);
+            let plan = prepare_internal_media_asset_commit(
+                &coordinator,
+                "Import media assets",
+                "",
+                before,
+                after,
+                42,
+            )
+            .expect("preflight succeeds");
+            let admission = MediaAssetOperationAdmission::new();
+            assert_eq!(
+                admission.try_admit(),
+                Ok(MediaAssetCommitAdmission::Admitted)
+            );
+            let active = AtomicBool::new(false);
+            let publishes = AtomicU64::new(0);
+            let result = run_internal_media_asset_transaction(
+                &active,
+                &mut coordinator,
+                &admission,
+                plan,
+                || {
+                    publishes.fetch_add(1, Ordering::AcqRel);
+                    Ok::<(), String>(())
+                },
+            );
+            assert!(result.is_err(), "already-admitted operation is refused");
+            assert_eq!(
+                publishes.load(Ordering::Acquire),
+                0,
+                "no second publication"
+            );
+            assert_eq!(coordinator.revision, 0);
+            assert!(coordinator.history.undo.is_empty());
+            assert!(coordinator.history.pending.is_empty());
+            assert!(
+                !active.load(Ordering::Acquire),
+                "active never armed on refusal"
+            );
+        }
+    }
+
+    #[test]
+    fn media_asset_authoritative_concurrent_exact_commits_publish_and_record_history_once() {
+        // Two exact concurrent authoritative commits share the broader operation
+        // lane (not a renderer transaction key). The real transaction runs once;
+        // both callers receive the same terminal report and history image.
+        let registry = Arc::new(MediaAssetOperationRegistry::default());
+        let coordinator = Arc::new(Mutex::new(ProjectCoordinator::default()));
+        let admission = Arc::new(MediaAssetOperationAdmission::new());
+        let active = Arc::new(AtomicBool::new(false));
+        let publishes = Arc::new(AtomicU64::new(0));
+        let key = MediaAssetAuthoritativeOperationKey {
+            prepared_token: 7,
+            request_id: 8,
+            operation_generation: 7,
+            owner_id: "renderer:test".to_string(),
+            start_epoch: 0,
+            start_revision: 0,
+            start_checkpoint_hash: String::new(),
+        };
+        let shape = media_asset_authoritative_shape(MediaAssetAuthoritativeCommitKind::Import, &[]);
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let mut handles = Vec::new();
+        for _ in 0..2 {
+            let registry = Arc::clone(&registry);
+            let coordinator = Arc::clone(&coordinator);
+            let admission = Arc::clone(&admission);
+            let active = Arc::clone(&active);
+            let publishes = Arc::clone(&publishes);
+            let key = key.clone();
+            let shape = shape.clone();
+            let barrier = Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                registry.authoritative_terminal_single_flight(&key, &shape, || {
+                    let mut coordinator = coordinator
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let before = test_project_checkpoint(empty_project_file(), 0);
+                    let after = test_project_checkpoint(
+                        media_asset_authoritative_test_project_with_asset(),
+                        0,
+                    );
+                    let plan = prepare_internal_media_asset_commit(
+                        &coordinator,
+                        "Import media assets",
+                        "",
+                        before,
+                        after,
+                        42,
+                    )?;
+                    run_internal_media_asset_transaction(
+                        &active,
+                        &mut coordinator,
+                        &admission,
+                        plan,
+                        || {
+                            publishes.fetch_add(1, Ordering::AcqRel);
+                            Ok::<(), String>(())
+                        },
+                    )?;
+                    let report = media_asset_import_report(
+                        8,
+                        7,
+                        None,
+                        &media_asset_test_authority(),
+                        Vec::new(),
+                    );
+                    let mutation = authoritative_test_mutation(&coordinator);
+                    Ok(MediaAssetAuthoritativeTerminalResult::Import(
+                        MediaAssetAuthoritativeImportResult { report, mutation },
+                    ))
+                })
+            }));
+        }
+        let results: Vec<MediaAssetAuthoritativeTerminalResult> = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap().unwrap())
+            .collect();
+        assert_eq!(
+            publishes.load(Ordering::Acquire),
+            1,
+            "exact concurrent duplicates publish exactly once"
+        );
+        {
+            let coordinator = coordinator
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            assert_eq!(
+                coordinator.history.undo.len(),
+                1,
+                "exactly one history entry"
+            );
+            assert_eq!(coordinator.history_generation, 1);
+            assert_eq!(coordinator.history.undo[0].entry_id, 1);
+            assert!(coordinator.history.pending.is_empty());
+        }
+        assert!(
+            !active.load(Ordering::Acquire),
+            "active cleared after commit"
+        );
+        let reports: Vec<MediaAssetImportReport> = results
+            .iter()
+            .map(|receipt| match receipt {
+                MediaAssetAuthoritativeTerminalResult::Import(result) => result.report.clone(),
+                other => panic!("unexpected receipt {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            reports[0], reports[1],
+            "both callers observe the same report"
+        );
+        let recorded = registry
+            .authoritative_receipt(&key)
+            .expect("receipt recorded");
+        assert_eq!(recorded.shape, shape);
+        match recorded.terminal {
+            MediaAssetAuthoritativeTerminalResult::Import(result) => {
+                assert_eq!(result.report, reports[0]);
+                assert_eq!(result.mutation.history_status.history_generation, 1);
+                assert_eq!(result.mutation.history_status.undo_entry_id, Some(1));
+            }
+            other => panic!("unexpected recorded receipt {other:?}"),
+        }
+    }
+
+    fn media_asset_authoritative_test_operation_key(
+        request_id: u64,
+        generation: u64,
+    ) -> MediaAssetAuthoritativeOperationKey {
+        MediaAssetAuthoritativeOperationKey {
+            prepared_token: generation,
+            request_id,
+            operation_generation: generation,
+            owner_id: "renderer:test".to_string(),
+            start_epoch: 0,
+            start_revision: 0,
+            start_checkpoint_hash: String::new(),
+        }
+    }
+
+    fn media_asset_authoritative_test_terminal(
+        request_id: u64,
+        generation: u64,
+    ) -> MediaAssetAuthoritativeTerminalResult {
+        let coordinator = ProjectCoordinator::default();
+        let report = media_asset_import_report(
+            request_id,
+            generation,
+            None,
+            &media_asset_test_authority(),
+            Vec::new(),
+        );
+        MediaAssetAuthoritativeTerminalResult::Import(MediaAssetAuthoritativeImportResult {
+            report,
+            mutation: authoritative_test_mutation(&coordinator),
+        })
+    }
+
+    #[test]
+    fn media_asset_authoritative_lost_reply_retries_after_token_cleanup_and_history_loss() {
+        let registry = Arc::new(MediaAssetOperationRegistry::default());
+        let request_id = 501;
+        let owner_id = "renderer:test";
+        let guard = registry.begin(request_id, owner_id.to_string()).unwrap();
+        let handle = guard.handle();
+        registry
+            .store_prepared_from_active(
+                &handle,
+                owner_id,
+                media_asset_test_prepared_import(request_id, &handle, owner_id),
+            )
+            .unwrap();
+        drop(guard);
+        let key = media_asset_authoritative_test_operation_key(request_id, handle.generation);
+        let shape = media_asset_authoritative_shape(MediaAssetAuthoritativeCommitKind::Import, &[]);
+        let publishes = AtomicU64::new(0);
+        let first = registry
+            .authoritative_terminal_single_flight(&key, &shape, || {
+                publishes.fetch_add(1, Ordering::AcqRel);
+                Ok(media_asset_authoritative_test_terminal(
+                    request_id,
+                    handle.generation,
+                ))
+            })
+            .unwrap();
+        // The command records terminal report+history before consuming its
+        // prepared token. Simulate reply loss after that cleanup.
+        registry.consume_prepared_after_commit(
+            handle.generation,
+            request_id,
+            handle.generation,
+            owner_id,
+        );
+        assert!(registry
+            .prepared_exact(handle.generation, request_id, handle.generation, owner_id,)
+            .is_err());
+        let retry = registry
+            .authoritative_terminal_single_flight(&key, &shape, || {
+                panic!("lost-reply retry must not republish or look up the consumed token")
+            })
+            .unwrap();
+        let queried = registry
+            .authoritative_receipt(&key)
+            .expect("terminal query survives token cleanup")
+            .terminal;
+        assert_eq!(publishes.load(Ordering::Acquire), 1);
+        assert_eq!(
+            serde_json::to_value(&first).unwrap(),
+            serde_json::to_value(&retry).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&queried).unwrap(),
+            serde_json::to_value(&retry).unwrap()
+        );
+    }
+
+    #[test]
+    fn media_asset_authoritative_shape_conflict_never_republishes_and_exposes_canonical_result() {
+        let registry = MediaAssetOperationRegistry::default();
+        let key = media_asset_authoritative_test_operation_key(502, 12);
+        let import_shape =
+            media_asset_authoritative_shape(MediaAssetAuthoritativeCommitKind::Import, &[]);
+        let changed_shape = media_asset_authoritative_shape(
+            MediaAssetAuthoritativeCommitKind::VideoFileLayer,
+            &["Changed label"],
+        );
+        let publishes = AtomicU64::new(0);
+        let canonical = registry
+            .authoritative_terminal_single_flight(&key, &import_shape, || {
+                publishes.fetch_add(1, Ordering::AcqRel);
+                Ok(media_asset_authoritative_test_terminal(502, 12))
+            })
+            .unwrap();
+        let conflict = registry.authoritative_terminal_single_flight(&key, &changed_shape, || {
+            publishes.fetch_add(1, Ordering::AcqRel);
+            Ok(media_asset_authoritative_test_terminal(502, 12))
+        });
+        assert!(conflict.unwrap_err().contains("canonical terminal result"));
+        assert_eq!(publishes.load(Ordering::Acquire), 1);
+        let queried = registry
+            .authoritative_receipt(&key)
+            .expect("canonical result remains discoverable");
+        assert_eq!(queried.shape, import_shape);
+        assert_eq!(
+            serde_json::to_value(queried.terminal).unwrap(),
+            serde_json::to_value(canonical).unwrap()
+        );
+    }
+
+    #[test]
+    fn media_asset_authoritative_concurrent_different_shapes_choose_one_canonical_terminal() {
+        let registry = Arc::new(MediaAssetOperationRegistry::default());
+        let key = media_asset_authoritative_test_operation_key(506, 16);
+        let shapes = [
+            media_asset_authoritative_shape(MediaAssetAuthoritativeCommitKind::Import, &[]),
+            media_asset_authoritative_shape(
+                MediaAssetAuthoritativeCommitKind::VideoFileLayer,
+                &["Different semantic shape"],
+            ),
+        ];
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let publishes = Arc::new(AtomicU64::new(0));
+        let mut handles = Vec::new();
+        for shape in shapes {
+            let registry = Arc::clone(&registry);
+            let key = key.clone();
+            let barrier = Arc::clone(&barrier);
+            let publishes = Arc::clone(&publishes);
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                registry.authoritative_terminal_single_flight(&key, &shape, || {
+                    publishes.fetch_add(1, Ordering::AcqRel);
+                    Ok(media_asset_authoritative_test_terminal(506, 16))
+                })
+            }));
+        }
+        let results = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
+        assert_eq!(publishes.load(Ordering::Acquire), 1);
+        assert!(registry.authoritative_receipt(&key).is_some());
+    }
+
+    #[test]
+    fn media_asset_authoritative_cancel_after_admit_loses_and_commit_remains_definitive() {
+        let mut coordinator = ProjectCoordinator::default();
+        let before = test_project_checkpoint(empty_project_file(), 0);
+        let after = test_project_checkpoint(media_asset_authoritative_test_project_with_asset(), 0);
+        let plan = prepare_internal_media_asset_commit(
+            &coordinator,
+            "Import media assets",
+            "",
+            before,
+            after,
+            42,
+        )
+        .unwrap();
+        let admission = MediaAssetOperationAdmission::new();
+        assert_eq!(
+            admission.try_admit(),
+            Ok(MediaAssetCommitAdmission::Admitted)
+        );
+        assert!(!admission.try_cancel(), "cancel must lose after admission");
+        let active = AtomicBool::new(false);
+        let publishes = AtomicU64::new(0);
+        let payload =
+            run_admitted_internal_media_asset_transaction(&active, &mut coordinator, plan, || {
+                publishes.fetch_add(1, Ordering::AcqRel);
+                Ok::<_, String>("definitive")
+            })
+            .unwrap();
+        assert_eq!(payload, "definitive");
+        assert_eq!(publishes.load(Ordering::Acquire), 1);
+        assert_eq!(coordinator.revision, 1);
+        assert_eq!(coordinator.history.undo.len(), 1);
+        assert!(!active.load(Ordering::Acquire));
+        assert!(coordinator.history.pending.is_empty());
+    }
+
+    #[test]
+    fn media_asset_authoritative_post_publication_receipt_poison_cannot_create_false_failure() {
+        let registry = Arc::new(MediaAssetOperationRegistry::default());
+        let poison_registry = Arc::clone(&registry);
+        assert!(std::thread::spawn(move || {
+            let _guard = poison_registry.authoritative_receipts.lock().unwrap();
+            panic!("inject authoritative receipt bookkeeping poison");
+        })
+        .join()
+        .is_err());
+        let key = media_asset_authoritative_test_operation_key(503, 13);
+        let shape = media_asset_authoritative_shape(MediaAssetAuthoritativeCommitKind::Import, &[]);
+        let publishes = AtomicU64::new(0);
+        let terminal = registry
+            .authoritative_terminal_single_flight(&key, &shape, || {
+                publishes.fetch_add(1, Ordering::AcqRel);
+                Ok(media_asset_authoritative_test_terminal(503, 13))
+            })
+            .expect("post-publication receipt bookkeeping is infallible");
+        assert_eq!(publishes.load(Ordering::Acquire), 1);
+        let recorded = registry
+            .authoritative_receipt(&key)
+            .expect("receipt recorded despite poisoned mutex");
+        assert_eq!(
+            serde_json::to_value(recorded.terminal).unwrap(),
+            serde_json::to_value(terminal).unwrap()
+        );
+    }
+
+    #[test]
+    fn media_asset_authoritative_engine_reject_records_terminal_failure_and_releases_token() {
+        let registry = MediaAssetOperationRegistry::default();
+        let request_id = 505;
+        let generation = 15;
+        let owner_id = "renderer:test";
+        let admission = Arc::new(MediaAssetOperationAdmission::new());
+        registry.prepared.lock().unwrap().insert(
+            generation,
+            PreparedMediaAssetImport {
+                request_id,
+                operation_generation: generation,
+                owner_id: owner_id.to_string(),
+                authority: media_asset_test_authority(),
+                assets: Vec::new(),
+                entries: Vec::new(),
+                cancel: Arc::new(AtomicBool::new(false)),
+                admission: Arc::clone(&admission),
+                finalized_sources: Some(Vec::new()),
+                expires_at: Instant::now() + Duration::from_secs(60),
+            },
+        );
+        let key = media_asset_authoritative_test_operation_key(request_id, generation);
+        let shape = media_asset_authoritative_shape(MediaAssetAuthoritativeCommitKind::Import, &[]);
+        let mut coordinator = ProjectCoordinator::default();
+        let before = test_project_checkpoint(empty_project_file(), 0);
+        let after = test_project_checkpoint(media_asset_authoritative_test_project_with_asset(), 0);
+        let plan = prepare_internal_media_asset_commit(
+            &coordinator,
+            "Import media assets",
+            "",
+            before,
+            after,
+            42,
+        )
+        .unwrap();
+        let active = AtomicBool::new(false);
+        let attempts = AtomicU64::new(0);
+        let terminal = registry
+            .authoritative_terminal_single_flight(&key, &shape, || {
+                let error = run_internal_media_asset_transaction(
+                    &active,
+                    &mut coordinator,
+                    admission.as_ref(),
+                    plan,
+                    || {
+                        attempts.fetch_add(1, Ordering::AcqRel);
+                        Err::<(), String>("engine rejected media publication".to_string())
+                    },
+                )
+                .unwrap_err();
+                authoritative_terminal_failure_if_admitted(admission.as_ref(), error)
+            })
+            .unwrap();
+        registry.consume_prepared_after_commit(generation, request_id, generation, owner_id);
+        assert!(registry
+            .prepared_exact(generation, request_id, generation, owner_id)
+            .is_err());
+        assert_eq!(attempts.load(Ordering::Acquire), 1);
+        assert_eq!(coordinator.revision, 0);
+        assert!(coordinator.history.undo.is_empty());
+        assert!(coordinator.history.pending.is_empty());
+        assert!(!active.load(Ordering::Acquire));
+        match &terminal {
+            MediaAssetAuthoritativeTerminalResult::Failure(failure) => {
+                assert_eq!(failure.message, "engine rejected media publication")
+            }
+            other => panic!("expected terminal failure, got {other:?}"),
+        }
+        let retry = registry
+            .authoritative_terminal_single_flight(&key, &shape, || {
+                panic!("terminal engine failure retry must not republish")
+            })
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&terminal).unwrap(),
+            serde_json::to_value(&retry).unwrap()
+        );
+    }
+
+    #[test]
+    fn media_asset_authoritative_active_query_refreshes_bounded_receipt_ttl() {
+        let registry = MediaAssetOperationRegistry::default();
+        let key = media_asset_authoritative_test_operation_key(504, 14);
+        let shape = media_asset_authoritative_shape(MediaAssetAuthoritativeCommitKind::Import, &[]);
+        registry
+            .authoritative_terminal_single_flight(&key, &shape, || {
+                Ok(media_asset_authoritative_test_terminal(504, 14))
+            })
+            .unwrap();
+        {
+            let mut receipts = registry.authoritative_receipts.lock().unwrap();
+            receipts.get_mut(&key).unwrap().expires_at = Instant::now() + Duration::from_millis(1);
+        }
+        assert!(registry.authoritative_receipt(&key).is_some());
+        registry.reap_expired(Instant::now() + Duration::from_secs(60));
+        assert!(
+            registry.authoritative_receipt(&key).is_some(),
+            "an active response-recovery query extends the bounded receipt TTL"
+        );
+    }
+
+    #[test]
+    fn media_asset_authoritative_request_shapes_cover_every_semantic_input() {
+        let shapes = [
+            media_asset_authoritative_shape(MediaAssetAuthoritativeCommitKind::Import, &[]),
+            media_asset_authoritative_shape(MediaAssetAuthoritativeCommitKind::Relink, &[]),
+            media_asset_authoritative_shape(
+                MediaAssetAuthoritativeCommitKind::VideoFileLayer,
+                &["Layer A"],
+            ),
+            media_asset_authoritative_shape(
+                MediaAssetAuthoritativeCommitKind::VideoFileLayer,
+                &["Layer B"],
+            ),
+            media_asset_authoritative_shape(
+                MediaAssetAuthoritativeCommitKind::StillImageLayer,
+                &["Layer A"],
+            ),
+            media_asset_authoritative_shape(
+                MediaAssetAuthoritativeCommitKind::LocalMediaLayers,
+                &["file"],
+            ),
+            media_asset_authoritative_shape(
+                MediaAssetAuthoritativeCommitKind::LocalMediaLayers,
+                &["still_image"],
+            ),
+            media_asset_authoritative_shape(
+                MediaAssetAuthoritativeCommitKind::BootstrapVjShow,
+                &["file", "safe_output_v1"],
+            ),
+        ];
+        let distinct = shapes
+            .iter()
+            .map(|shape| (shape.kind, shape.fingerprint.clone()))
+            .collect::<HashSet<_>>();
+        assert_eq!(distinct.len(), shapes.len());
+        assert!(shapes.iter().all(|shape| shape.fingerprint.len() == 64));
+    }
+
+    #[test]
+    fn media_asset_authoritative_candidate_images_cover_import_layers_relink_and_bootstrap() {
+        let asset = MediaAssetSummary {
+            id: 41,
+            label: "Clip A".to_string(),
+            source: media_asset_commit_test_source("C:/media/a.mov"),
+            content_hash: Some(media_asset_commit_test_hash('a')),
+            byte_size: Some(1024),
+        };
+        let layer = VideoLayerSummary {
+            id: 51,
+            label: "Layer A".to_string(),
+            source: asset.source.clone(),
+            media_asset_id: Some(asset.id),
+            blend_mode: VideoBlendMode::Normal,
+            state: VideoLayerState::default(),
+            isf_effect: None,
+        };
+
+        let catalog = media_asset_transaction_candidate_snapshot(
+            EngineSnapshot::default(),
+            &MediaAssetTransaction::Import(MediaAssetImportCandidate {
+                assets: vec![asset.clone()],
+                layers: Vec::new(),
+            }),
+        )
+        .unwrap();
+        assert_eq!(catalog.video.media_assets, vec![asset.clone()]);
+        assert!(
+            catalog.video.layers.is_empty(),
+            "library import is asset-only"
+        );
+
+        let authored = media_asset_transaction_candidate_snapshot(
+            EngineSnapshot {
+                authored_video: Some(protocol::VideoSnapshot::default()),
+                ..EngineSnapshot::default()
+            },
+            &MediaAssetTransaction::Import(MediaAssetImportCandidate {
+                assets: vec![asset.clone()],
+                layers: Vec::new(),
+            }),
+        )
+        .unwrap();
+        assert!(
+            authored.video.media_assets.is_empty(),
+            "rendered/runtime snapshot is not rewritten when authored authority exists"
+        );
+        assert_eq!(
+            authored.authored_video.unwrap().media_assets,
+            vec![asset.clone()]
+        );
+
+        let layered = media_asset_transaction_candidate_snapshot(
+            EngineSnapshot::default(),
+            &MediaAssetTransaction::Import(MediaAssetImportCandidate {
+                assets: vec![asset.clone()],
+                layers: vec![layer.clone()],
+            }),
+        )
+        .unwrap();
+        assert_eq!(layered.video.layers, vec![layer.clone()]);
+        assert_eq!(layered.video.layers[0].media_asset_id, Some(asset.id));
+
+        let mut replacement = asset.clone();
+        replacement.source = media_asset_commit_test_source("C:/media/relinked.mov");
+        replacement.content_hash = Some(media_asset_commit_test_hash('b'));
+        let relinked = media_asset_transaction_candidate_snapshot(
+            layered,
+            &MediaAssetTransaction::Update(replacement.clone()),
+        )
+        .unwrap();
+        assert_eq!(relinked.video.media_assets, vec![replacement.clone()]);
+        assert_eq!(relinked.video.layers[0].source, replacement.source);
+
+        let bootstrap = media_asset_transaction_candidate_snapshot(
+            EngineSnapshot::default(),
+            &MediaAssetTransaction::BootstrapVjShow {
+                candidate: MediaAssetImportCandidate {
+                    assets: vec![asset],
+                    layers: vec![layer],
+                },
+                output: safe_first_run_vj_output(61),
+            },
+        )
+        .unwrap();
+        assert_eq!(bootstrap.video.media_assets.len(), 1);
+        assert_eq!(bootstrap.video.layers.len(), 1);
+        assert_eq!(bootstrap.video.outputs.len(), 1);
+        assert_eq!(bootstrap.video.outputs[0].id, 61);
+        assert!(!bootstrap.video.outputs[0].enabled);
+        assert!(bootstrap.video.outputs[0].blackout);
+    }
+
+    #[test]
+    fn media_asset_authoritative_dedupe_noop_ack_has_no_revision_or_history_entry() {
+        let mut coordinator = ProjectCoordinator::default();
+        let checkpoint = test_project_checkpoint(empty_project_file(), 0);
+        let plan = prepare_internal_media_asset_commit(
+            &coordinator,
+            "Import media assets",
+            "",
+            checkpoint.clone(),
+            checkpoint,
+            42,
+        )
+        .unwrap();
+        assert_eq!(plan.next_transaction_id, None);
+        assert_eq!(plan.next_revision, None);
+        assert_eq!(plan.next_history_generation, None);
+        let admission = MediaAssetOperationAdmission::new();
+        let active = AtomicBool::new(false);
+        let publishes = AtomicU64::new(0);
+        run_internal_media_asset_transaction(&active, &mut coordinator, &admission, plan, || {
+            publishes.fetch_add(1, Ordering::AcqRel);
+            Ok::<_, String>(())
+        })
+        .unwrap();
+        assert_eq!(
+            publishes.load(Ordering::Acquire),
+            1,
+            "ACK boundary retained"
+        );
+        assert_eq!(coordinator.revision, 0);
+        assert_eq!(coordinator.history_generation, 0);
+        assert!(coordinator.history.undo.is_empty());
+        assert!(coordinator.history.pending.is_empty());
+        assert!(!active.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn media_asset_authoritative_counter_overflow_preflight_is_zero_mutation() {
+        let cases = [
+            ProjectCoordinator {
+                next_transaction_id: u64::MAX,
+                ..ProjectCoordinator::default()
+            },
+            ProjectCoordinator {
+                revision: u64::MAX,
+                ..ProjectCoordinator::default()
+            },
+            ProjectCoordinator {
+                publication_generation: u64::MAX,
+                ..ProjectCoordinator::default()
+            },
+            ProjectCoordinator {
+                history_generation: u64::MAX,
+                ..ProjectCoordinator::default()
+            },
+        ];
+        for coordinator in cases {
+            let before = test_project_checkpoint(empty_project_file(), coordinator.revision);
+            let after = test_project_checkpoint(
+                media_asset_authoritative_test_project_with_asset(),
+                coordinator.revision,
+            );
+            let original_epoch = coordinator.epoch;
+            let original_revision = coordinator.revision;
+            let original_transaction_id = coordinator.next_transaction_id;
+            let original_publication_generation = coordinator.publication_generation;
+            let original_history_generation = coordinator.history_generation;
+            let original_pending = coordinator.history.pending.len();
+            let original_undo = coordinator.history.undo.len();
+            let original_redo = coordinator.history.redo.len();
+            assert!(prepare_internal_media_asset_commit(
+                &coordinator,
+                "Import media assets",
+                "",
+                before,
+                after,
+                42,
+            )
+            .is_err());
+            assert_eq!(coordinator.epoch, original_epoch);
+            assert_eq!(coordinator.revision, original_revision);
+            assert_eq!(coordinator.next_transaction_id, original_transaction_id);
+            assert_eq!(
+                coordinator.publication_generation,
+                original_publication_generation
+            );
+            assert_eq!(coordinator.history_generation, original_history_generation);
+            assert_eq!(coordinator.history.pending.len(), original_pending);
+            assert_eq!(coordinator.history.undo.len(), original_undo);
+            assert_eq!(coordinator.history.redo.len(), original_redo);
+        }
+
+        let coordinator = ProjectCoordinator::default();
+        let before = test_project_checkpoint(empty_project_file(), 0);
+        let mut invalid_project = media_asset_authoritative_test_project_with_asset();
+        invalid_project.version = PROJECT_FILE_VERSION + 1;
+        let invalid_after = ProjectCheckpoint {
+            project: invalid_project,
+            mappings: ProjectControlMappings::default(),
+            epoch: 0,
+            revision: 0,
+            hash: String::new(),
+        };
+        assert!(prepare_internal_media_asset_commit(
+            &coordinator,
+            "Import media assets",
+            "",
+            before,
+            invalid_after,
+            42,
+        )
+        .is_err());
+        assert_eq!(coordinator.revision, 0);
+        assert_eq!(coordinator.next_transaction_id, 0);
+        assert!(coordinator.history.undo.is_empty());
+        assert!(coordinator.history.pending.is_empty());
+    }
+
+    #[test]
+    fn media_asset_authoritative_admission_rejects_stale_authority_and_pending_ticket() {
+        let mut coordinator = ProjectCoordinator::default();
+        let exact = media_asset_prepare_authority(&coordinator);
+        validate_authoritative_media_asset_commit_after_reconcile(&coordinator, 0, &exact).unwrap();
+
+        let stale_epoch =
+            validate_authoritative_media_asset_commit_after_reconcile(&coordinator, 1, &exact)
+                .unwrap_err();
+        assert!(stale_epoch.contains("Project changed before this edit began"));
+
+        coordinator.revision = 1;
+        coordinator.checkpoint_hash = "changed".to_string();
+        let stale_authority =
+            validate_authoritative_media_asset_commit_after_reconcile(&coordinator, 0, &exact)
+                .unwrap_err();
+        assert!(stale_authority.contains("Project changed"));
+        coordinator.revision = exact.revision;
+        coordinator.checkpoint_hash = exact.checkpoint_hash.clone();
+
+        coordinator.history.pending.insert(
+            1,
+            test_pending_project_transaction(
+                1,
+                "Other mutation",
+                "",
+                test_project_checkpoint(empty_project_file(), 0),
+            ),
+        );
+        let pending =
+            validate_authoritative_media_asset_commit_after_reconcile(&coordinator, 0, &exact)
+                .unwrap_err();
+        assert!(pending.contains("still being committed"));
+        assert_eq!(coordinator.history.pending.len(), 1);
+        assert_eq!(coordinator.revision, 0);
+        assert!(coordinator.history.undo.is_empty());
+    }
+
+    #[test]
+    fn media_asset_operation_cancel_after_prepare_guard_drop_discards_only_exact_token() {
+        let registry = Arc::new(MediaAssetOperationRegistry::default());
+        let owner_id = "renderer:test";
+        let first = registry.begin(19, owner_id.to_string()).unwrap();
+        let first_handle = first.handle();
+        registry
+            .store_prepared_from_active(
+                &first_handle,
+                owner_id,
+                media_asset_test_prepared_import(19, &first_handle, owner_id),
+            )
+            .unwrap();
+        drop(first);
+        assert!(registry
+            .cancel_exact(19, first_handle.generation, owner_id.to_string())
+            .unwrap());
+        assert!(registry
+            .prepared_exact(
+                first_handle.generation,
+                19,
+                first_handle.generation,
+                owner_id,
+            )
+            .is_err());
+
+        let old = registry.begin(20, owner_id.to_string()).unwrap();
+        let old_handle = old.handle();
+        registry
+            .store_prepared_from_active(
+                &old_handle,
+                owner_id,
+                media_asset_test_prepared_import(20, &old_handle, owner_id),
+            )
+            .unwrap();
+        drop(old);
+        let newer = registry.begin(20, owner_id.to_string()).unwrap();
+        let newer_handle = newer.handle();
+        registry
+            .store_prepared_from_active(
+                &newer_handle,
+                owner_id,
+                media_asset_test_prepared_import(20, &newer_handle, owner_id),
+            )
+            .unwrap();
+        assert!(registry
+            .cancel_exact(20, old_handle.generation, owner_id.to_string())
+            .unwrap());
+        assert!(!newer.cancelled());
+        assert!(registry
+            .prepared_exact(
+                newer_handle.generation,
+                20,
+                newer_handle.generation,
+                owner_id,
+            )
+            .is_ok());
+    }
+
+    #[test]
+    fn media_asset_operation_reserve_exposes_generation_before_hashing_and_adopts_once() {
+        let registry = Arc::new(MediaAssetOperationRegistry::default());
+        let owner_id = "renderer:test";
+        let handle = registry
+            .reserve(203, owner_id.to_string(), media_asset_test_authority())
+            .unwrap();
+        assert_ne!(handle.generation, 0, "generation must be non-zero");
+        // The client now holds {request_id, generation, owner_id} before any
+        // file was opened. Reserving the same request id again is rejected.
+        assert!(registry
+            .reserve(203, owner_id.to_string(), media_asset_test_authority())
+            .is_err());
+        let (guard, reserved_authority) = registry
+            .adopt_reserved(203, handle.generation, owner_id.to_string())
+            .unwrap();
+        assert_eq!(guard.handle(), handle);
+        // Adoption returns the exact authority bound at Start.
+        assert_eq!(reserved_authority, media_asset_test_authority());
+        // A second adoption of an in-progress operation is rejected.
+        assert!(registry
+            .adopt_reserved(203, handle.generation, owner_id.to_string())
+            .is_err());
+        drop(guard);
+        // Dropping the adopted guard releases the slot.
+        assert!(registry
+            .adopt_reserved(203, handle.generation, owner_id.to_string())
+            .is_err());
+    }
+
+    #[test]
+    fn media_asset_operation_reserved_slot_is_cancelable_before_first_chunk() {
+        let registry = Arc::new(MediaAssetOperationRegistry::default());
+        let owner_id = "renderer:test";
+        let handle = registry
+            .reserve(204, owner_id.to_string(), media_asset_test_authority())
+            .unwrap();
+        // A cancel for the exact reserved identity wins before any prepare.
+        assert!(registry
+            .cancel_exact(204, handle.generation, owner_id.to_string())
+            .unwrap());
+        // A cancelled reservation cannot be adopted (fails closed).
+        assert!(registry
+            .adopt_reserved(204, handle.generation, owner_id.to_string())
+            .is_err());
+    }
+
+    #[test]
+    fn media_asset_operation_reserved_prepare_requires_start_authority() {
+        // P1-2: Start binds authority A into the reservation and returns A to the
+        // client. The staged prepare adopts that exact A and must reject a
+        // same-epoch revision/hash mutation (B) before any hashing/token, then
+        // leave reservation cleanup and cancel truthful.
+        let registry = Arc::new(MediaAssetOperationRegistry::default());
+        let owner_id = "renderer:test";
+        let start_authority = media_asset_test_authority();
+        let handle = registry
+            .reserve(701, owner_id.to_string(), start_authority.clone())
+            .unwrap();
+        let (operation, reserved_authority) = registry
+            .adopt_reserved(701, handle.generation, owner_id.to_string())
+            .unwrap();
+        // Adoption yields the exact A captured at Start, not a recaptured B.
+        assert_eq!(reserved_authority, start_authority);
+
+        // A same-epoch coordinator revision/hash mutation between Start and
+        // Prepare produces a different current authority B with the same epoch.
+        let mut mutated = ProjectCoordinator::default();
+        mutated.revision = start_authority.revision + 1;
+        mutated.checkpoint_hash = "same-epoch-b".to_string();
+        let current_b = media_asset_prepare_authority(&mutated);
+        assert_eq!(current_b.epoch, reserved_authority.epoch, "epoch unchanged");
+        assert_ne!(current_b, reserved_authority);
+        // The staged prepare's authority fence rejects B before hashing...
+        assert!(
+            ensure_reserved_media_asset_authority_unchanged(&reserved_authority, &current_b)
+                .is_err()
+        );
+        // ...and accepts the unchanged A.
+        ensure_reserved_media_asset_authority_unchanged(&reserved_authority, &start_authority)
+            .unwrap();
+
+        // A rejected prepare drops the adopted guard, releasing the slot so a
+        // later adopt/cancel reports the truth (no phantom in-flight operation).
+        drop(operation);
+        assert!(registry
+            .adopt_reserved(701, handle.generation, owner_id.to_string())
+            .is_err());
+        assert!(!registry
+            .cancel_exact(701, handle.generation, owner_id.to_string())
+            .unwrap());
+    }
+
+    #[test]
+    fn media_asset_relink_reserved_prepare_rejects_same_epoch_authority_change() {
+        // The additive reserved relink prepare adopts the same slot kind as the
+        // import staged path and fences relink hashing behind the exact Start
+        // authority. A same-epoch B is rejected before any relink hashing/token.
+        let registry = Arc::new(MediaAssetOperationRegistry::default());
+        let owner_id = "renderer:test";
+        let start_authority = media_asset_test_authority();
+        let handle = registry
+            .reserve(801, owner_id.to_string(), start_authority.clone())
+            .unwrap();
+        let (operation, reserved_authority) = registry
+            .adopt_reserved(801, handle.generation, owner_id.to_string())
+            .unwrap();
+        assert_eq!(reserved_authority, start_authority);
+
+        let mut mutated = ProjectCoordinator::default();
+        mutated.revision = start_authority.revision + 1;
+        let current_b = media_asset_prepare_authority(&mutated);
+        assert_eq!(current_b.epoch, reserved_authority.epoch, "epoch unchanged");
+        assert!(
+            ensure_reserved_media_asset_authority_unchanged(&reserved_authority, &current_b)
+                .is_err(),
+            "a same-epoch B must reject the reserved relink prepare before hashing"
+        );
+
+        // The rejecting prepare drops the guard, releasing the reserved slot.
+        drop(operation);
+        assert!(registry
+            .adopt_reserved(801, handle.generation, owner_id.to_string())
+            .is_err());
+    }
+
+    #[test]
+    fn media_asset_operation_prepare_batch_aborts_on_first_chunk_when_cancelled() {
+        // A cancel that won during the reserved phase sets the shared stop flag;
+        // the staged prepare then aborts before hashing the first chunk.
+        let directory = unique_test_directory("media-asset-first-chunk-cancel");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("clip.bin");
+        fs::write(&path, b"abc").unwrap();
+        let cancel = AtomicBool::new(true);
+        let error = prepare_local_media_asset_batch(
+            VideoSourceKind::File,
+            vec![path.to_string_lossy().into_owned()],
+            &cancel,
+        )
+        .unwrap_err();
+        assert!(error.contains("cancelled"));
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn media_asset_operation_cancel_loses_to_admission_but_wins_before_it() {
+        let registry = Arc::new(MediaAssetOperationRegistry::default());
+        let owner_id = "renderer:test";
+
+        // Case 1: a commit admits first; a later cancel loses and the prepared
+        // entry survives so the committing thread owns its lifecycle.
+        let operation = registry.begin(401, owner_id.to_string()).unwrap();
+        let handle = operation.handle();
+        let admission = operation.admission();
+        let mut prepared = media_asset_test_prepared_import(401, &handle, owner_id);
+        prepared.admission = Arc::clone(&admission);
+        registry
+            .store_prepared_from_active(&handle, owner_id, prepared)
+            .unwrap();
+        drop(operation);
+        assert!(admission.try_admit().is_ok());
+        assert!(!registry
+            .cancel_exact(401, handle.generation, owner_id.to_string())
+            .unwrap());
+        assert!(registry
+            .prepared_exact(handle.generation, 401, handle.generation, owner_id)
+            .is_ok());
+        // Re-admit is idempotent for an exact commit retry after a lost reply.
+        assert!(admission.try_admit().is_ok());
+
+        // Case 2: a cancel wins before admission; the later commit's admit fails
+        // and the prepared entry is discarded.
+        let operation = registry.begin(402, owner_id.to_string()).unwrap();
+        let handle = operation.handle();
+        let admission = operation.admission();
+        let mut prepared = media_asset_test_prepared_import(402, &handle, owner_id);
+        prepared.admission = Arc::clone(&admission);
+        registry
+            .store_prepared_from_active(&handle, owner_id, prepared)
+            .unwrap();
+        drop(operation);
+        assert!(registry
+            .cancel_exact(402, handle.generation, owner_id.to_string())
+            .unwrap());
+        assert!(admission.try_admit().is_err());
+        assert!(registry
+            .prepared_exact(handle.generation, 402, handle.generation, owner_id)
+            .is_err());
+    }
+
+    #[test]
+    fn media_asset_operation_admission_distinguishes_first_publisher_from_retry() {
+        // P1-1: the first admit wins the Cancelable -> Admitted CAS and is the
+        // one and only publisher; every later admit is a retry/duplicate that
+        // must never publish again.
+        let admission = MediaAssetOperationAdmission::new();
+        assert_eq!(
+            admission.try_admit(),
+            Ok(MediaAssetCommitAdmission::Admitted)
+        );
+        assert_eq!(
+            admission.try_admit(),
+            Ok(MediaAssetCommitAdmission::AlreadyAdmitted)
+        );
+        // A cancel that wins first makes every admit fail closed.
+        let cancelled = MediaAssetOperationAdmission::new();
+        assert!(cancelled.try_cancel());
+        assert_eq!(cancelled.try_admit(), Err(()));
+    }
+
+    #[test]
+    fn media_asset_commit_single_flight_publishes_once_for_layers_and_import() {
+        // P1-1: two identical concurrent commits that both miss the pre-lane
+        // receipt check must publish exactly once and return the same terminal
+        // receipt. The barrier maximizes the overlap; the per-key single-flight
+        // lane makes the single-publication invariant deterministic regardless of
+        // thread scheduling. Covers Layers and Import at minimum.
+        fn assert_single_publication(
+            key: MediaAssetCommitReceiptKey,
+            make_receipt: fn(u64) -> MediaAssetCommitReceipt,
+        ) {
+            let registry = Arc::new(MediaAssetOperationRegistry::default());
+            let publications = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let mut handles = Vec::new();
+            for _ in 0..2 {
+                let registry = Arc::clone(&registry);
+                let key = key.clone();
+                let publications = Arc::clone(&publications);
+                let barrier = Arc::clone(&barrier);
+                handles.push(std::thread::spawn(move || {
+                    barrier.wait();
+                    registry.commit_terminal_single_flight(&key, || {
+                        // Only the single first publisher ever runs this body.
+                        let ordinal = publications.fetch_add(1, Ordering::SeqCst) as u64 + 1;
+                        Ok(make_receipt(ordinal))
+                    })
+                }));
+            }
+            let results: Vec<MediaAssetCommitReceipt> = handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap().unwrap())
+                .collect();
+            assert_eq!(
+                publications.load(Ordering::SeqCst),
+                1,
+                "an exact duplicate must publish exactly once"
+            );
+            // Both callers observe the identical first-publisher receipt, and the
+            // recorded receipt matches it.
+            let first = format!("{:?}", results[0]);
+            assert_eq!(first, format!("{:?}", results[1]), "same terminal result");
+            let recorded = registry.commit_receipt(&key).expect("receipt recorded");
+            assert_eq!(first, format!("{recorded:?}"));
+        }
+
+        let owner_id = "renderer:test";
+        assert_single_publication(
+            media_asset_commit_receipt_key(
+                MediaAssetCommitReceiptKind::Layers,
+                5,
+                6,
+                5,
+                7,
+                owner_id,
+            ),
+            |ordinal| MediaAssetCommitReceipt::Layers(vec![100 + ordinal]),
+        );
+        assert_single_publication(
+            media_asset_commit_receipt_key(
+                MediaAssetCommitReceiptKind::Import,
+                8,
+                9,
+                8,
+                10,
+                owner_id,
+            ),
+            |ordinal| {
+                MediaAssetCommitReceipt::Import(MediaAssetImportReport {
+                    request_id: 9,
+                    operation_generation: 8,
+                    prepared_import_token: Some(8),
+                    project_epoch: 0,
+                    project_revision: 0,
+                    checkpoint_hash: "test".to_string(),
+                    prepared: 0,
+                    imported: ordinal as usize,
+                    reused: 0,
+                    skipped: 0,
+                    failed: 0,
+                    entries: Vec::new(),
+                })
+            },
+        );
+    }
+
+    #[test]
+    fn media_asset_operation_reaper_releases_expired_prepared_and_receipt_state() {
+        let registry = Arc::new(MediaAssetOperationRegistry::default());
+        let owner_id = "renderer:test";
+        let reserved = registry
+            .reserve(501, owner_id.to_string(), media_asset_test_authority())
+            .unwrap();
+        let operation = registry.begin(502, owner_id.to_string()).unwrap();
+        let handle = operation.handle();
+        registry
+            .store_prepared_from_active(
+                &handle,
+                owner_id,
+                media_asset_test_prepared_import(502, &handle, owner_id),
+            )
+            .unwrap();
+        drop(operation);
+        registry.record_commit_receipt(
+            media_asset_commit_receipt_key(
+                MediaAssetCommitReceiptKind::Import,
+                handle.generation,
+                502,
+                handle.generation,
+                7,
+                owner_id,
+            ),
+            MediaAssetCommitReceipt::Layers(vec![9]),
+        );
+        // A far-future clock treats every TTL as elapsed; the single reaper pass
+        // reclaims the reserved slot, the prepared import, and the receipt.
+        let reclaimed = registry.reap_expired(Instant::now() + Duration::from_secs(3600));
+        assert!(
+            reclaimed >= 3,
+            "expected at least 3 reclaimed, got {reclaimed}"
+        );
+        assert!(registry
+            .adopt_reserved(501, reserved.generation, owner_id.to_string())
+            .is_err());
+        assert!(registry
+            .prepared_exact(handle.generation, 502, handle.generation, owner_id)
+            .is_err());
+    }
+
+    #[test]
+    fn media_asset_commit_receipt_returns_recorded_result_on_exact_retry() {
+        let registry = Arc::new(MediaAssetOperationRegistry::default());
+        let owner_id = "renderer:test";
+        let key = media_asset_commit_receipt_key(
+            MediaAssetCommitReceiptKind::Layers,
+            5,
+            6,
+            5,
+            7,
+            owner_id,
+        );
+        assert!(registry.commit_receipt(&key).is_none());
+        registry.record_commit_receipt(key.clone(), MediaAssetCommitReceipt::Layers(vec![11, 12]));
+        match registry.commit_receipt(&key) {
+            Some(MediaAssetCommitReceipt::Layers(ids)) => assert_eq!(ids, vec![11, 12]),
+            other => panic!("expected recorded Layers receipt, got {other:?}"),
+        }
+        // A different receipt kind at the same token identity does not collide.
+        let import_key = MediaAssetCommitReceiptKey {
+            kind: MediaAssetCommitReceiptKind::Import,
+            ..key.clone()
+        };
+        assert!(registry.commit_receipt(&import_key).is_none());
+        // The retry answer is stable across repeated queries.
+        assert!(registry.commit_receipt(&key).is_some());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn media_asset_finalize_reuses_retained_source_on_exact_retry_without_relocking() {
+        let directory = unique_test_directory("media-asset-finalize-idempotent");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("clip.bin");
+        fs::write(&path, b"abc").unwrap();
+        let cancel = AtomicBool::new(false);
+        let (content_hash, byte_size, fingerprint, _) =
+            sha256_local_media_file_streaming(&path, &cancel, |_| Ok(None)).unwrap();
+        let prepared = PreparedLocalMediaAsset {
+            input_index: 0,
+            label: "clip".to_string(),
+            source: media_asset_commit_test_source(path.to_string_lossy().as_ref()),
+            content_hash,
+            byte_size,
+            fingerprint,
+        };
+        // First finalize takes the exclusive retained handle.
+        let sources = finalize_prepared_local_media_assets(&[prepared.clone()], &cancel).unwrap();
+        // The idempotent retry path revalidates the retained source instead of
+        // reopening/relocking it (a second LockFileEx would self-conflict).
+        verify_finalized_local_media_asset_fingerprints(&[prepared], &sources, &cancel).unwrap();
+        assert!(
+            fs::OpenOptions::new().write(true).open(&path).is_err(),
+            "retained source must still deny writers during the idempotent retry"
+        );
+        drop(sources);
+        assert!(fs::OpenOptions::new().write(true).open(&path).is_ok());
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn media_asset_operation_prepare_guard_denies_path_replacement_across_probe() {
+        let directory = unique_test_directory("media-asset-aba-guard");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("clip.bin");
+        fs::write(&path, b"abc").unwrap();
+        let cancel = AtomicBool::new(false);
+        let swap_denied = AtomicBool::new(false);
+        // A->B->A: attempt to rename a same-length B over the path during the
+        // probe, then restore A. The deny-delete guard held across the probe
+        // must reject the swap so we never return hash(A)+metadata(B).
+        let (hash, _, _, metadata) =
+            sha256_local_media_file_streaming(&path, &cancel, |probe_path| {
+                let replacement = probe_path.with_extension("swap");
+                if fs::write(&replacement, b"xyz").is_ok() {
+                    if fs::rename(&replacement, probe_path).is_err() {
+                        swap_denied.store(true, Ordering::Release);
+                    }
+                    let _ = fs::remove_file(&replacement);
+                }
+                Ok(None)
+            })
+            .unwrap();
+        assert!(
+            swap_denied.load(Ordering::Acquire),
+            "deny-delete guard must block the A->B path replacement"
+        );
+        assert_eq!(hash.hex, format!("{:x}", Sha256::digest(b"abc")));
+        assert_eq!(metadata, None);
+        assert_eq!(fs::read(&path).unwrap(), b"abc");
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn media_asset_availability_verification_guard_denies_concurrent_replacement() {
+        let directory = unique_test_directory("media-asset-availability-guard");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("clip.bin");
+        fs::write(&path, b"abc").unwrap();
+        // The availability path holds this exact deny-write/delete handle across
+        // its hash and its final Verified answer, so the path cannot be
+        // overwritten or replaced underneath the verification.
+        let guard = open_windows_media_file_deny_write(&path).unwrap();
+        assert!(
+            fs::OpenOptions::new().write(true).open(&path).is_err(),
+            "availability verification must deny a concurrent overwrite"
+        );
+        let replacement = directory.join("swap.bin");
+        fs::write(&replacement, b"xyz").unwrap();
+        assert!(
+            fs::rename(&replacement, &path).is_err(),
+            "availability verification must deny a path replacement"
+        );
+        drop(guard);
+        assert!(fs::OpenOptions::new().write(true).open(&path).is_ok());
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn media_asset_prepare_authority_reconcile_advances_external_mutation_stamp() {
+        let mut coordinator = ProjectCoordinator::default();
+        coordinator.checkpoint_hash = "checkpoint-a".to_string();
+        let mut externally_mutated = ProjectCheckpoint {
+            project: ProjectFile {
+                version: PROJECT_FILE_VERSION,
+                app: APP_NAME.to_string(),
+                operator_policy: None,
+                custom_profiles: Vec::new(),
+                fixture_groups: Vec::new(),
+                snapshot: EngineSnapshot::default(),
+            },
+            mappings: ProjectControlMappings::default(),
+            epoch: 0,
+            revision: 0,
+            hash: "checkpoint-b".to_string(),
+        };
+        reconcile_project_checkpoint_metadata(&mut coordinator, &mut externally_mutated).unwrap();
+        let stamp = project_authority_capture_stamp(&coordinator);
+        assert_eq!(stamp.checkpoint_hash, "checkpoint-b");
+        assert_eq!(stamp.revision, 1);
+        assert_eq!(externally_mutated.revision, 1);
+    }
+
+    #[test]
+    fn media_asset_hash_streaming_is_exact_and_rejects_cancellation() {
+        let directory = unique_test_directory("media-asset-hash");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("abc.bin");
+        fs::write(&path, b"abc").unwrap();
+        let cancel = AtomicBool::new(false);
+        let (hash, byte_size, fingerprint, metadata) =
+            sha256_local_media_file_streaming(&path, &cancel, |_| Ok(None)).unwrap();
+        assert_eq!(hash.algorithm, MediaHashAlgorithm::Sha256);
+        assert_eq!(
+            hash.hex,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(byte_size, 3);
+        assert_eq!(fingerprint.byte_size, 3);
+        assert_eq!(metadata, None);
+
+        let cancelled = AtomicBool::new(true);
+        let error = sha256_local_media_file_streaming(&path, &cancelled, |_| Ok(None)).unwrap_err();
+        assert!(error.contains("cancelled"));
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn media_asset_hash_and_probe_reject_same_size_media_changed_during_preparation() {
+        let directory = unique_test_directory("media-asset-replace-during-probe");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("replace.bin");
+        fs::write(&path, b"abc").unwrap();
+        let cancel = AtomicBool::new(false);
+        let write_denied = AtomicBool::new(false);
+        // The probe is intentionally path-based like ffprobe/image metadata
+        // probing. Attempt a same-length A->B replacement mid-probe.
+        let result = sha256_local_media_file_streaming(&path, &cancel, |probe_path| {
+            if fs::write(probe_path, b"xyz").is_err() {
+                write_denied.store(true, Ordering::Release);
+            }
+            Ok(None)
+        });
+        #[cfg(windows)]
+        {
+            // The deny-write/delete guard held across the probe blocks the swap
+            // entirely, so hash(A) completes and the file still holds A.
+            assert!(
+                write_denied.load(Ordering::Acquire),
+                "deny-write guard must block the in-probe replacement"
+            );
+            let (hash, _, _, _) = result.unwrap();
+            assert_eq!(hash.hex, format!("{:x}", Sha256::digest(b"abc")));
+            assert_eq!(fs::read(&path).unwrap(), b"abc");
+        }
+        #[cfg(not(windows))]
+        {
+            // Without an OS deny-write guard the swap succeeds; the post-probe
+            // exact rehash rejects hash(A)/probe(B).
+            let _ = write_denied;
+            let error = result.unwrap_err();
+            assert!(error.contains("changed while hashing or probing"));
+        }
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn media_asset_finalize_retains_exclusive_source_until_token_guard_drops() {
+        let directory = unique_test_directory("media-asset-finalize-exclusive");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("candidate.bin");
+        fs::write(&path, b"abc").unwrap();
+        let cancel = AtomicBool::new(false);
+        let (content_hash, byte_size, fingerprint, _) =
+            sha256_local_media_file_streaming(&path, &cancel, |_| Ok(None)).unwrap();
+        let prepared = PreparedLocalMediaAsset {
+            input_index: 0,
+            label: "candidate".to_string(),
+            source: media_asset_commit_test_source(path.to_string_lossy().as_ref()),
+            content_hash,
+            byte_size,
+            fingerprint,
+        };
+        let retained = finalize_prepared_local_media_assets(&[prepared], &cancel).unwrap();
+        assert!(
+            fs::OpenOptions::new().write(true).open(&path).is_err(),
+            "finalized source must deny a same-process overwrite while token guard lives"
+        );
+        let replacement = directory.join("replacement.bin");
+        fs::write(&replacement, b"xyz").unwrap();
+        assert!(
+            fs::rename(&replacement, &path).is_err(),
+            "finalized source must deny replacement/rename while token guard lives"
+        );
+        drop(retained);
+        assert!(fs::OpenOptions::new().write(true).open(&path).is_ok());
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    fn media_asset_commit_test_source(path: &str) -> VideoSourceSummary {
+        VideoSourceSummary {
+            kind: VideoSourceKind::File,
+            path: Some(path.to_string()),
+            name: None,
+            codec: None,
+            metadata: None,
+        }
+    }
+
+    fn media_asset_commit_test_hash(hex: char) -> MediaContentHash {
+        MediaContentHash {
+            algorithm: MediaHashAlgorithm::Sha256,
+            hex: std::iter::repeat_n(hex, 64).collect(),
+        }
+    }
+
+    fn media_asset_commit_test_prepared(
+        input_index: usize,
+        path: &str,
+        hash: MediaContentHash,
+        byte_size: u64,
+    ) -> PreparedLocalMediaAsset {
+        PreparedLocalMediaAsset {
+            input_index,
+            label: format!("asset-{input_index}"),
+            source: media_asset_commit_test_source(path),
+            content_hash: hash,
+            byte_size,
+            fingerprint: LocalMediaSourceFingerprint {
+                byte_size,
+                modified: None,
+            },
+        }
+    }
+
+    #[test]
+    fn media_asset_commit_raw_import_without_exact_transaction_ticket_is_rejected() {
+        let coordinator = ProjectCoordinator::default();
+        let before = media_asset_prepare_authority(&coordinator);
+        let error = validate_media_asset_commit_ticket_and_authority_after_reconcile(
+            &coordinator,
+            701,
+            0,
+            "renderer:test",
+            &before,
+        )
+        .unwrap_err();
+        assert!(error.contains("Unknown project transaction 701"));
+        assert_eq!(media_asset_prepare_authority(&coordinator), before);
+        assert!(coordinator.history.pending.is_empty());
+    }
+
+    #[test]
+    fn media_asset_commit_stale_epoch_and_wrong_owner_leave_ticket_unchanged() {
+        let checkpoint = test_project_checkpoint(empty_project_file(), 0);
+        let mut coordinator = ProjectCoordinator::default();
+        coordinator.history.pending.insert(
+            702,
+            test_pending_project_transaction(702, "Import", "", checkpoint),
+        );
+        let authority = media_asset_prepare_authority(&coordinator);
+        let stale = validate_media_asset_commit_ticket_and_authority_after_reconcile(
+            &coordinator,
+            702,
+            1,
+            "renderer:test",
+            &authority,
+        )
+        .unwrap_err();
+        assert!(stale.contains("replaced project"));
+        let wrong_owner = validate_media_asset_commit_ticket_and_authority_after_reconcile(
+            &coordinator,
+            702,
+            0,
+            "renderer:other",
+            &authority,
+        )
+        .unwrap_err();
+        assert!(wrong_owner.contains("another renderer"));
+        assert_eq!(coordinator.history.pending.len(), 1);
+        assert_eq!(media_asset_prepare_authority(&coordinator), authority);
+    }
+
+    #[test]
+    fn media_asset_commit_project_change_between_prepare_and_commit_is_rejected() {
+        let checkpoint = test_project_checkpoint(empty_project_file(), 0);
+        let mut coordinator = ProjectCoordinator::default();
+        coordinator.history.pending.insert(
+            703,
+            test_pending_project_transaction(703, "Import", "", checkpoint),
+        );
+        let prepared_authority = media_asset_prepare_authority(&coordinator);
+        coordinator.revision = 1;
+        coordinator.checkpoint_hash = "changed-after-prepare".to_string();
+        let error = validate_media_asset_commit_ticket_and_authority_after_reconcile(
+            &coordinator,
+            703,
+            0,
+            "renderer:test",
+            &prepared_authority,
+        )
+        .unwrap_err();
+        assert!(error.contains("changed since local media assets were prepared"));
+        assert_eq!(coordinator.history.pending.len(), 1);
+    }
+
+    #[test]
+    fn media_asset_commit_rejects_file_changed_after_preparation() {
+        let directory = unique_test_directory("media-asset-commit-change");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("candidate.bin");
+        fs::write(&path, b"abc").unwrap();
+        let cancel = AtomicBool::new(false);
+        let (hash, byte_size, fingerprint, _) =
+            sha256_local_media_file_streaming(&path, &cancel, |_| Ok(None)).unwrap();
+        let prepared = PreparedLocalMediaAsset {
+            input_index: 0,
+            label: "candidate".to_string(),
+            source: media_asset_commit_test_source(path.to_string_lossy().as_ref()),
+            content_hash: hash,
+            byte_size,
+            fingerprint,
+        };
+        fs::write(&path, b"xyz").unwrap();
+        let error = reverify_prepared_local_media_assets(&[prepared], &cancel).unwrap_err();
+        assert!(error.contains("changed after preparation"));
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn media_asset_commit_partial_prepare_commits_successes_once_in_input_order() {
+        let prepared = vec![
+            media_asset_commit_test_prepared(1, "one.mov", media_asset_commit_test_hash('a'), 10),
+            media_asset_commit_test_prepared(3, "three.mov", media_asset_commit_test_hash('b'), 11),
+        ];
+        let (candidate, results) = build_media_asset_catalog_import_candidate(&[], &prepared, {
+            let mut next = 40_u64;
+            move || {
+                let value = next;
+                next += 1;
+                value
+            }
+        });
+        assert_eq!(candidate.layers.len(), 0, "normal import is asset-only");
+        assert_eq!(
+            results,
+            vec![
+                (1, MediaAssetImportEntryStatus::Imported, 40),
+                (3, MediaAssetImportEntryStatus::Imported, 41),
+            ]
+        );
+        let mut entries = vec![
+            MediaAssetImportEntryReport {
+                input_index: 0,
+                path: "bad.mov".to_string(),
+                status: MediaAssetImportEntryStatus::Failed,
+                asset_id: None,
+                message: Some("probe failed".to_string()),
+            },
+            MediaAssetImportEntryReport {
+                input_index: 1,
+                path: "one.mov".to_string(),
+                status: MediaAssetImportEntryStatus::Prepared,
+                asset_id: None,
+                message: None,
+            },
+            MediaAssetImportEntryReport {
+                input_index: 2,
+                path: "duplicate.mov".to_string(),
+                status: MediaAssetImportEntryStatus::Skipped,
+                asset_id: None,
+                message: Some("duplicate".to_string()),
+            },
+            MediaAssetImportEntryReport {
+                input_index: 3,
+                path: "three.mov".to_string(),
+                status: MediaAssetImportEntryStatus::Prepared,
+                asset_id: None,
+                message: None,
+            },
+        ];
+        apply_media_asset_import_results_to_report(&mut entries, &results);
+        assert_eq!(entries[0].status, MediaAssetImportEntryStatus::Failed);
+        assert_eq!(entries[1].asset_id, Some(40));
+        assert_eq!(entries[2].status, MediaAssetImportEntryStatus::Skipped);
+        assert_eq!(entries[3].asset_id, Some(41));
+    }
+
+    #[test]
+    fn media_asset_legacy_staged_compatibility_rejects_failed_but_allows_duplicate_skip() {
+        let registry = Arc::new(MediaAssetOperationRegistry::default());
+        let owner_id = "renderer:test";
+        let operation = registry.begin(61, owner_id.to_string()).unwrap();
+        let handle = operation.handle();
+        let mut prepared = media_asset_test_prepared_import(61, &handle, owner_id);
+        prepared.entries = vec![
+            MediaAssetImportEntryReport {
+                input_index: 0,
+                path: "one.mov".to_string(),
+                status: MediaAssetImportEntryStatus::Prepared,
+                asset_id: None,
+                message: None,
+            },
+            MediaAssetImportEntryReport {
+                input_index: 1,
+                path: "missing.mov".to_string(),
+                status: MediaAssetImportEntryStatus::Failed,
+                asset_id: None,
+                message: Some("not found".to_string()),
+            },
+        ];
+        assert!(
+            require_legacy_prepared_media_all_or_nothing(&prepared, "Legacy import")
+                .unwrap_err()
+                .contains("no media was added")
+        );
+
+        prepared.entries[1] = MediaAssetImportEntryReport {
+            input_index: 1,
+            path: "one.mov".to_string(),
+            status: MediaAssetImportEntryStatus::Skipped,
+            asset_id: None,
+            message: Some("duplicate".to_string()),
+        };
+        require_legacy_prepared_media_all_or_nothing(&prepared, "Legacy import").unwrap();
+    }
+
+    #[test]
+    fn media_asset_commit_same_bytes_different_path_reuses_asset_without_rewriting_provenance() {
+        let hash = media_asset_commit_test_hash('c');
+        let original_source = media_asset_commit_test_source("C:/library/original.mov");
+        let existing = MediaAssetSummary {
+            id: 88,
+            label: "Original provenance".to_string(),
+            source: original_source.clone(),
+            content_hash: Some(hash.clone()),
+            byte_size: Some(42),
+        };
+        let prepared = media_asset_commit_test_prepared(0, "D:/other-copy.mov", hash, 42);
+        let (candidate, results) =
+            build_media_asset_catalog_import_candidate(&[existing.clone()], &[prepared], || 99);
+        assert!(candidate.assets.is_empty());
+        assert!(candidate.layers.is_empty());
+        assert_eq!(results, vec![(0, MediaAssetImportEntryStatus::Reused, 88)]);
+        assert_eq!(existing.source, original_source);
+        assert_eq!(existing.label, "Original provenance");
+    }
+
+    #[test]
+    fn media_asset_commit_dedupe_only_consumes_exact_prepared_token_after_ack_boundary() {
+        let registry = Arc::new(MediaAssetOperationRegistry::default());
+        let operation = registry.begin(704, "renderer:test".to_string()).unwrap();
+        let handle = operation.handle();
+        let token = registry
+            .store_prepared_from_active(
+                &handle,
+                "renderer:test",
+                media_asset_test_prepared_import(704, &handle, "renderer:test"),
+            )
+            .unwrap();
+        drop(operation);
+        // The production call site reaches this cleanup only after the engine
+        // publishes its dedupe-only ACK; the registry itself must still match
+        // every exact opaque identity before removing the token.
+        registry.consume_prepared_after_commit(token, 704, handle.generation, "renderer:test");
+        assert!(registry
+            .prepared_exact(token, 704, handle.generation, "renderer:test")
+            .is_err());
+    }
+
+    fn media_asset_availability_test_asset(
+        id: MediaAssetId,
+        kind: VideoSourceKind,
+        path: Option<String>,
+        content_hash: Option<MediaContentHash>,
+        byte_size: Option<u64>,
+    ) -> MediaAssetSummary {
+        MediaAssetSummary {
+            id,
+            label: format!("asset-{id}"),
+            source: VideoSourceSummary {
+                kind,
+                path,
+                name: None,
+                codec: None,
+                metadata: None,
+            },
+            content_hash,
+            byte_size,
+        }
+    }
+
+    #[test]
+    fn media_asset_availability_verify_false_never_claims_verified() {
+        let directory = unique_test_directory("media-asset-availability-unverified");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("abc.bin");
+        fs::write(&path, b"abc").unwrap();
+        let hash = MediaContentHash {
+            algorithm: MediaHashAlgorithm::Sha256,
+            hex: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".to_string(),
+        };
+        let asset = media_asset_availability_test_asset(
+            1,
+            VideoSourceKind::File,
+            Some(path.to_string_lossy().to_string()),
+            Some(hash),
+            Some(3),
+        );
+        let cancel = AtomicBool::new(false);
+        assert_eq!(
+            inspect_one_media_asset_availability(&asset, false, &cancel).unwrap(),
+            MediaAssetAvailability::AvailableUnverified { asset_id: 1 }
+        );
+        assert_eq!(
+            inspect_one_media_asset_availability(&asset, true, &cancel).unwrap(),
+            MediaAssetAvailability::AvailableVerified { asset_id: 1 }
+        );
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn media_asset_availability_reports_typed_states_in_input_order() {
+        let directory = unique_test_directory("media-asset-availability-states");
+        fs::create_dir_all(&directory).unwrap();
+        let unreadable_directory = directory.join("directory-source");
+        fs::create_dir_all(&unreadable_directory).unwrap();
+        let mismatch_path = directory.join("mismatch.bin");
+        fs::write(&mismatch_path, b"xyz").unwrap();
+        let assets = vec![
+            media_asset_availability_test_asset(
+                1,
+                VideoSourceKind::File,
+                Some(directory.join("missing.bin").to_string_lossy().to_string()),
+                None,
+                None,
+            ),
+            media_asset_availability_test_asset(
+                2,
+                VideoSourceKind::StillImage,
+                Some(unreadable_directory.to_string_lossy().to_string()),
+                None,
+                None,
+            ),
+            media_asset_availability_test_asset(3, VideoSourceKind::Camera, None, None, None),
+            media_asset_availability_test_asset(
+                4,
+                VideoSourceKind::File,
+                Some(mismatch_path.to_string_lossy().to_string()),
+                Some(media_asset_commit_test_hash('d')),
+                Some(3),
+            ),
+        ];
+        let cancel = AtomicBool::new(false);
+        let results =
+            inspect_media_asset_availability_batch(&assets, &[3, 1, 2, 4], true, &cancel).unwrap();
+        assert!(matches!(
+            results[0],
+            MediaAssetAvailability::LiveSource { asset_id: 3 }
+        ));
+        assert!(matches!(
+            results[1],
+            MediaAssetAvailability::Missing { asset_id: 1 }
+        ));
+        assert!(matches!(
+            results[2],
+            MediaAssetAvailability::Unreadable { asset_id: 2, .. }
+        ));
+        assert!(matches!(
+            results[3],
+            MediaAssetAvailability::HashMismatch { asset_id: 4, .. }
+        ));
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn media_asset_availability_inspection_never_changes_checkpoint_hash() {
+        let mut coordinator = ProjectCoordinator::default();
+        coordinator.checkpoint_hash = "checkpoint-a".to_string();
+        coordinator.revision = 7;
+        let before = media_asset_prepare_authority(&coordinator);
+        let cancel = AtomicBool::new(false);
+        let live = media_asset_availability_test_asset(5, VideoSourceKind::Ndi, None, None, None);
+        let report = inspect_media_asset_availability_batch(&[live], &[5], true, &cancel).unwrap();
+        assert!(matches!(
+            report.as_slice(),
+            [MediaAssetAvailability::LiveSource { asset_id: 5 }]
+        ));
+        assert_eq!(media_asset_prepare_authority(&coordinator), before);
+        assert_eq!(coordinator.history.undo.len(), 0);
+        assert_eq!(coordinator.history.redo.len(), 0);
+    }
+
+    fn media_asset_relink_test_asset(
+        content_hash: Option<MediaContentHash>,
+        byte_size: Option<u64>,
+    ) -> MediaAssetSummary {
+        media_asset_availability_test_asset(
+            91,
+            VideoSourceKind::File,
+            Some("C:/old-source.mov".to_string()),
+            content_hash,
+            byte_size,
+        )
+    }
+
+    fn media_asset_relink_test_legacy_identity(
+        content_hash: MediaContentHash,
+        byte_size: u64,
+    ) -> LegacyMediaAssetSourceIdentity {
+        LegacyMediaAssetSourceIdentity {
+            path: "C:/old-source.mov".to_string(),
+            content_hash,
+            byte_size,
+            fingerprint: LocalMediaSourceFingerprint {
+                byte_size,
+                modified: None,
+            },
+        }
+    }
+
+    fn media_asset_relink_test_ready(
+        prepared: PreparedMediaAssetRelinkDecision,
+    ) -> (bool, Option<LegacyMediaAssetSourceIdentity>) {
+        match prepared {
+            PreparedMediaAssetRelinkDecision::Ready {
+                adopted_replacement,
+                legacy_source_identity,
+                ..
+            } => (adopted_replacement, legacy_source_identity),
+            PreparedMediaAssetRelinkDecision::Outcome(outcome) => {
+                panic!("expected relink Ready, got {outcome:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn media_asset_relink_verified_identity_policy_matrix() {
+        let expected_hash = media_asset_commit_test_hash('a');
+        let replacement_hash = media_asset_commit_test_hash('b');
+        let asset = media_asset_relink_test_asset(Some(expected_hash.clone()), Some(12));
+        let matching = media_asset_commit_test_prepared(0, "replacement.mov", expected_hash, 12);
+        let mismatching =
+            media_asset_commit_test_prepared(0, "replacement.mov", replacement_hash, 13);
+        for policy in [
+            MediaAssetRelinkPolicy::RequireContentMatch,
+            MediaAssetRelinkPolicy::AdoptReplacement,
+        ] {
+            let (adopted, identity) = media_asset_relink_test_ready(
+                evaluate_prepared_media_asset_relink(&asset, matching.clone(), policy, None)
+                    .unwrap(),
+            );
+            assert!(!adopted);
+            assert!(identity.is_none());
+        }
+        assert!(matches!(
+            evaluate_prepared_media_asset_relink(
+                &asset,
+                mismatching.clone(),
+                MediaAssetRelinkPolicy::RequireContentMatch,
+                None,
+            )
+            .unwrap(),
+            PreparedMediaAssetRelinkDecision::Outcome(MediaAssetRelinkOutcome::HashMismatch {
+                asset_id: 91,
+                ..
+            })
+        ));
+        assert!(matches!(
+            evaluate_prepared_media_asset_relink(
+                &asset,
+                mismatching,
+                MediaAssetRelinkPolicy::AdoptReplacement,
+                None,
+            )
+            .unwrap(),
+            PreparedMediaAssetRelinkDecision::Outcome(MediaAssetRelinkOutcome::HashMismatch {
+                asset_id: 91,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn media_asset_relink_legacy_readable_identity_policy_matrix() {
+        let old_hash = media_asset_commit_test_hash('c');
+        let changed_hash = media_asset_commit_test_hash('d');
+        let asset = media_asset_relink_test_asset(None, None);
+        let matching = media_asset_commit_test_prepared(0, "replacement.mov", old_hash.clone(), 21);
+        let mismatch = media_asset_commit_test_prepared(0, "replacement.mov", changed_hash, 22);
+        let identity = media_asset_relink_test_legacy_identity(old_hash, 21);
+        for policy in [
+            MediaAssetRelinkPolicy::RequireContentMatch,
+            MediaAssetRelinkPolicy::AdoptReplacement,
+        ] {
+            let (adopted, retained_identity) = media_asset_relink_test_ready(
+                evaluate_prepared_media_asset_relink(
+                    &asset,
+                    matching.clone(),
+                    policy,
+                    Some(identity.clone()),
+                )
+                .unwrap(),
+            );
+            assert!(!adopted);
+            assert_eq!(
+                retained_identity.as_ref().map(|value| value.byte_size),
+                Some(21)
+            );
+        }
+        assert!(matches!(
+            evaluate_prepared_media_asset_relink(
+                &asset,
+                mismatch.clone(),
+                MediaAssetRelinkPolicy::RequireContentMatch,
+                Some(identity.clone()),
+            )
+            .unwrap(),
+            PreparedMediaAssetRelinkDecision::Outcome(MediaAssetRelinkOutcome::HashMismatch {
+                asset_id: 91,
+                ..
+            })
+        ));
+        assert!(matches!(
+            evaluate_prepared_media_asset_relink(
+                &asset,
+                mismatch,
+                MediaAssetRelinkPolicy::AdoptReplacement,
+                Some(identity),
+            )
+            .unwrap(),
+            PreparedMediaAssetRelinkDecision::Outcome(MediaAssetRelinkOutcome::HashMismatch {
+                asset_id: 91,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn media_asset_relink_legacy_missing_requires_explicit_adoption() {
+        let asset = media_asset_relink_test_asset(None, None);
+        let replacement = media_asset_commit_test_prepared(
+            0,
+            "replacement.mov",
+            media_asset_commit_test_hash('e'),
+            7,
+        );
+        assert!(matches!(
+            evaluate_prepared_media_asset_relink(
+                &asset,
+                replacement.clone(),
+                MediaAssetRelinkPolicy::RequireContentMatch,
+                None,
+            )
+            .unwrap(),
+            PreparedMediaAssetRelinkDecision::Outcome(
+                MediaAssetRelinkOutcome::NeedsExplicitAdoption { asset_id: 91 }
+            )
+        ));
+        let (adopted, identity) = media_asset_relink_test_ready(
+            evaluate_prepared_media_asset_relink(
+                &asset,
+                replacement,
+                MediaAssetRelinkPolicy::AdoptReplacement,
+                None,
+            )
+            .unwrap(),
+        );
+        assert!(adopted);
+        assert!(identity.is_none());
+    }
+
+    #[test]
+    fn media_asset_relink_legacy_adoption_distinguishes_missing_from_unreadable_source() {
+        let directory = unique_test_directory("media-asset-legacy-source-state");
+        fs::create_dir_all(&directory).unwrap();
+        let missing = directory.join("missing.mov");
+        let mut asset = media_asset_relink_test_asset(None, None);
+        asset.source.path = Some(missing.to_string_lossy().into_owned());
+        let cancel = AtomicBool::new(false);
+        assert!(legacy_media_asset_source_identity(&asset, &cancel)
+            .unwrap()
+            .is_none());
+
+        asset.source.path = Some(directory.to_string_lossy().into_owned());
+        assert!(legacy_media_asset_source_identity(&asset, &cancel)
+            .unwrap_err()
+            .contains("not a regular file"));
+
+        let empty = directory.join("empty.mov");
+        fs::write(&empty, []).unwrap();
+        asset.source.path = Some(empty.to_string_lossy().into_owned());
+        assert!(legacy_media_asset_source_identity(&asset, &cancel)
+            .unwrap_err()
+            .contains("must not be empty"));
+
+        let readable = directory.join("readable.mov");
+        fs::write(&readable, b"abc").unwrap();
+        asset.source.path = Some(readable.to_string_lossy().into_owned());
+        let identity = legacy_media_asset_source_identity(&asset, &cancel)
+            .unwrap()
+            .expect("readable legacy source should have an exact identity");
+        assert_eq!(identity.byte_size, 3);
+        assert_eq!(
+            identity.content_hash.hex,
+            format!("{:x}", Sha256::digest(b"abc"))
+        );
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn media_asset_relink_same_file_reuses_finalized_guard_without_self_lock() {
+        let directory = unique_test_directory("media-asset-relink-same-file");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("same.mov");
+        fs::write(&path, b"abc").unwrap();
+        let fingerprint = local_media_source_fingerprint(&fs::metadata(&path).unwrap()).unwrap();
+        let content_hash = MediaContentHash {
+            algorithm: MediaHashAlgorithm::Sha256,
+            hex: format!("{:x}", Sha256::digest(b"abc")),
+        };
+        let prepared = PreparedLocalMediaAsset {
+            input_index: 0,
+            label: "Same".to_string(),
+            source: VideoSourceSummary {
+                kind: VideoSourceKind::File,
+                path: Some(path.to_string_lossy().into_owned()),
+                name: None,
+                codec: None,
+                metadata: None,
+            },
+            content_hash: content_hash.clone(),
+            byte_size: 3,
+            fingerprint: fingerprint.clone(),
+        };
+        let identity = LegacyMediaAssetSourceIdentity {
+            path: path.to_string_lossy().into_owned(),
+            content_hash,
+            byte_size: 3,
+            fingerprint,
+        };
+        let cancel = AtomicBool::new(false);
+        let replacement = finalize_one_prepared_local_media_asset(&prepared, &cancel).unwrap();
+        let legacy =
+            finalize_legacy_media_source_for_relink(&replacement, &identity, &cancel).unwrap();
+        #[cfg(windows)]
+        assert!(Arc::ptr_eq(&replacement.retained, &legacy.retained));
+        #[cfg(not(windows))]
+        assert_eq!(replacement.path, legacy.path);
+        drop(legacy);
+        drop(replacement);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn machine_output_ownership_state_is_atomic_and_fail_closed_on_read_errors() {
+        let directory = unique_test_directory("output-ownership-state");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(OUTPUT_OWNERSHIP_STATE_FILE);
+
+        assert_eq!(load_output_ownership_role_from_path(&path).unwrap(), None);
+        assert_eq!(
+            resolve_output_ownership_role_from_path(&path).unwrap(),
+            MachineOutputRole::Both
+        );
+        persist_output_ownership_role_to_path(&path, MachineOutputRole::Video).unwrap();
+        assert_eq!(
+            load_output_ownership_role_from_path(&path).unwrap(),
+            Some(MachineOutputRole::Video)
+        );
+        assert_eq!(
+            resolve_output_ownership_role_from_path(&path).unwrap(),
+            MachineOutputRole::Video
+        );
+        persist_output_ownership_role_to_path(&path, MachineOutputRole::Standby).unwrap();
+        assert_eq!(
+            load_output_ownership_role_from_path(&path).unwrap(),
+            Some(MachineOutputRole::Standby)
+        );
+        assert_eq!(
+            resolve_output_ownership_role_from_path(&path).unwrap(),
+            MachineOutputRole::Standby
+        );
+        assert!(!fs::read_dir(&directory)
+            .unwrap()
+            .flatten()
+            .any(|entry| entry.file_name().to_string_lossy().contains(".tmp")));
+
+        fs::write(&path, b"not-json").unwrap();
+        let corrupt = load_output_ownership_role_from_path(&path).unwrap_err();
+        assert!(corrupt.contains("corrupt"));
+        assert!(load_output_ownership_role_from_path(&path).is_err());
+
+        fs::write(
+            &path,
+            serde_json::to_vec(&PersistedOutputOwnershipState {
+                version: OUTPUT_OWNERSHIP_STATE_VERSION + 1,
+                role: MachineOutputRole::Both,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let version_error = load_output_ownership_role_from_path(&path).unwrap_err();
+        assert!(version_error.contains("Unsupported machine output ownership state version"));
+
+        fs::remove_file(&path).unwrap();
+        fs::create_dir_all(&path).unwrap();
+        let unreadable = load_output_ownership_role_from_path(&path).unwrap_err();
+        assert!(unreadable.contains("Unable to read machine output ownership state"));
+        let persist_error =
+            persist_output_ownership_role_to_path(&path, MachineOutputRole::Both).unwrap_err();
+        assert!(
+            persist_error.contains("atomically replace") || persist_error.contains("temporary")
+        );
+        assert!(!fs::read_dir(&directory)
+            .unwrap()
+            .flatten()
+            .any(|entry| entry.file_name().to_string_lossy().contains(".tmp")));
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn project_recovery_authority_state_round_trips_and_rejects_corrupt_or_newer_state() {
+        let directory = unique_test_directory("project-recovery-authority-state");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+
+        assert_eq!(
+            load_project_recovery_authority_serial_from_path(&path).unwrap(),
+            0
+        );
+        persist_project_recovery_authority_serial_to_path(
+            &path,
+            7,
+            ProjectRecoveryAuthorityTransition::CleanSave,
+        )
+        .unwrap();
+        assert_eq!(
+            load_project_recovery_authority_serial_from_path(&path).unwrap(),
+            7
+        );
+        assert_eq!(
+            load_project_recovery_authority_state_from_path(&path)
+                .unwrap()
+                .last_transition,
+            ProjectRecoveryAuthorityTransition::CleanSave
+        );
+        persist_project_recovery_authority_serial_to_path(
+            &path,
+            8,
+            ProjectRecoveryAuthorityTransition::RecoveryAcknowledged {
+                recovery_publication_serial: 7,
+                request_id: "request-7".to_string(),
+                target_checkpoint_hash: "checkpoint-7".to_string(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            load_project_recovery_authority_state_from_path(&path)
+                .unwrap()
+                .last_transition,
+            ProjectRecoveryAuthorityTransition::RecoveryAcknowledged {
+                recovery_publication_serial: 7,
+                request_id: "request-7".to_string(),
+                target_checkpoint_hash: "checkpoint-7".to_string(),
+            }
+        );
+        fs::write(
+            &path,
+            serde_json::json!({
+                "version": PROJECT_RECOVERY_AUTHORITY_STATE_VERSION,
+                "serial": 9,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            load_project_recovery_authority_state_from_path(&path)
+                .unwrap()
+                .last_transition,
+            ProjectRecoveryAuthorityTransition::LegacyUnknown
+        );
+        assert!(!fs::read_dir(&directory)
+            .unwrap()
+            .flatten()
+            .any(|entry| entry.file_name().to_string_lossy().contains(".tmp")));
+
+        fs::write(&path, b"not-json").unwrap();
+        assert!(load_project_recovery_authority_serial_from_path(&path)
+            .unwrap_err()
+            .contains("corrupt"));
+
+        fs::write(
+            &path,
+            serde_json::to_vec(&PersistedProjectRecoveryAuthorityState {
+                version: PROJECT_RECOVERY_AUTHORITY_STATE_VERSION + 1,
+                serial: 8,
+                last_transition: ProjectRecoveryAuthorityTransition::ProjectPublication,
+                pending_clean_save: None,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(load_project_recovery_authority_serial_from_path(&path)
+            .unwrap_err()
+            .contains("Unsupported project recovery authority state version"));
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn project_recovery_authority_serial_persists_before_publication_and_overflow_is_inert() {
+        let mut persisted = None;
+        let next = prepare_next_project_recovery_authority_serial(
+            41,
+            ProjectRecoveryAuthorityTransition::HistoryNavigation,
+            |serial, transition| {
+                persisted = Some(serial);
+                assert_eq!(
+                    transition,
+                    ProjectRecoveryAuthorityTransition::HistoryNavigation
+                );
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(persisted, Some(42));
+        assert_eq!(next, 42);
+
+        let mut failed_persist_attempt = None;
+        let error = prepare_next_project_recovery_authority_serial(
+            42,
+            ProjectRecoveryAuthorityTransition::CleanSave,
+            |serial, _| {
+                failed_persist_attempt = Some(serial);
+                Err("injected journal failure".to_string())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(failed_persist_attempt, Some(43));
+        assert!(error.contains("injected journal failure"));
+
+        let mut overflow_persist_called = false;
+        let overflow = prepare_next_project_recovery_authority_serial(
+            u64::MAX,
+            ProjectRecoveryAuthorityTransition::ProjectPublication,
+            |_, _| {
+                overflow_persist_called = true;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(!overflow_persist_called);
+        assert!(overflow.contains("serial is exhausted"));
+    }
+
+    fn recovery_authority_journal_temp_leaked(directory: &Path) -> bool {
+        fs::read_dir(directory).unwrap().flatten().any(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            name.starts_with(&format!(".{PROJECT_RECOVERY_AUTHORITY_STATE_FILE}"))
+                && name.ends_with(".tmp")
+        })
+    }
+
+    // Bug regression: a failed Save must keep the committed recovery serial at S
+    // so the previous browser recovery checkpoint stays eligible, and it must not
+    // touch the target file.
+    #[test]
+    fn clean_save_journal_replace_failure_retains_committed_serial_and_target() {
+        let directory = unique_test_directory("clean-save-journal-replace-fail");
+        fs::create_dir_all(&directory).unwrap();
+        let journal = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+        let target = directory.join("show.sdc");
+        let temp = directory.join("show.sdc.prepared.tmp");
+
+        // Committed baseline S = 7 is a real prior recovery serial the browser
+        // recovery checkpoint may own.
+        persist_project_recovery_authority_serial_to_path(
+            &journal,
+            7,
+            ProjectRecoveryAuthorityTransition::ProjectPublication,
+        )
+        .unwrap();
+        // Dirty project A already has an older saved file on disk, and the
+        // prepared (new) bytes differ from it.
+        fs::write(&target, b"OLD DIRTY-A SAVED BYTES").unwrap();
+        fs::write(&temp, b"NEW PREPARED SAVE BYTES").unwrap();
+
+        let replace_calls = std::cell::Cell::new(0u32);
+        let error = run_project_clean_save_journal(
+            &journal,
+            7,
+            &ProjectRecoveryAuthorityTransition::ProjectPublication,
+            &target,
+            &temp,
+            &AtomicBool::new(false),
+            || {
+                replace_calls.set(replace_calls.get() + 1);
+                Err("injected atomic replace failure".to_string())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(replace_calls.get(), 1);
+        assert!(error.contains("injected atomic replace failure"));
+
+        // Committed serial/transition remain S; the pending record was durably
+        // rolled back.
+        let state = load_project_recovery_authority_state_from_path(&journal).unwrap();
+        assert_eq!(state.serial, 7);
+        assert_eq!(
+            state.last_transition,
+            ProjectRecoveryAuthorityTransition::ProjectPublication
+        );
+        assert!(state.pending_clean_save.is_none());
+        // Startup reconciliation still resolves to the eligible S; the old
+        // browser recovery at serial 7 remains valid.
+        let reconciled =
+            load_and_reconcile_project_recovery_authority_state_from_path(&journal).unwrap();
+        assert_eq!(reconciled.recovery_authority_serial, 7);
+        assert_eq!(
+            reconciled.last_transition,
+            ProjectRecoveryAuthorityTransition::ProjectPublication
+        );
+        // The target file was never modified by the failed save.
+        assert_eq!(fs::read(&target).unwrap(), b"OLD DIRTY-A SAVED BYTES");
+        assert!(!recovery_authority_journal_temp_leaked(&directory));
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    // Crash after the replace landed the new bytes but before the commit: startup
+    // must reconcile to S+1 CleanSave by hashing the exact target bytes.
+    #[test]
+    fn pending_clean_save_with_matching_target_reconciles_to_committed_clean_save() {
+        let directory = unique_test_directory("pending-clean-save-match");
+        fs::create_dir_all(&directory).unwrap();
+        let journal = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+        let target = directory.join("show.sdc");
+
+        let new_bytes = b"COMMITTED CLEAN SAVE BYTES".as_slice();
+        fs::write(&target, new_bytes).unwrap();
+        let target_key = normalized_recovery_target_key(&target).unwrap();
+        persist_pending_project_clean_save_to_path(
+            &journal,
+            7,
+            ProjectRecoveryAuthorityTransition::ProjectPublication,
+            PendingProjectCleanSave {
+                serial: 8,
+                target_path: target_key,
+                digest: sha256_hex(new_bytes),
+            },
+        )
+        .unwrap();
+
+        let reconciled =
+            load_and_reconcile_project_recovery_authority_state_from_path(&journal).unwrap();
+        assert_eq!(reconciled.recovery_authority_serial, 8);
+        assert_eq!(
+            reconciled.last_transition,
+            ProjectRecoveryAuthorityTransition::CleanSave
+        );
+        // Pending was durably cleared and the commit is idempotent on a re-run.
+        let state = load_project_recovery_authority_state_from_path(&journal).unwrap();
+        assert_eq!(state.serial, 8);
+        assert!(state.pending_clean_save.is_none());
+        assert_eq!(
+            state.last_transition,
+            ProjectRecoveryAuthorityTransition::CleanSave
+        );
+        let reconciled_again =
+            load_and_reconcile_project_recovery_authority_state_from_path(&journal).unwrap();
+        assert_eq!(reconciled_again.recovery_authority_serial, 8);
+        assert!(!recovery_authority_journal_temp_leaked(&directory));
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    // Crash with a pending CleanSave whose intended bytes never reached the
+    // target (mismatched old bytes, or a missing target from an interrupted Save
+    // As): startup must retain S and clear pending so dirty-A recovery is kept.
+    #[test]
+    fn pending_clean_save_with_mismatched_or_missing_target_retains_committed_serial() {
+        // (a) Target still holds the OLD bytes: the intended replace did not land.
+        let directory = unique_test_directory("pending-clean-save-mismatch");
+        fs::create_dir_all(&directory).unwrap();
+        let journal = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+        let target = directory.join("show.sdc");
+        fs::write(&target, b"OLD DIRTY-A SAVED BYTES").unwrap();
+        let target_key = normalized_recovery_target_key(&target).unwrap();
+        persist_pending_project_clean_save_to_path(
+            &journal,
+            7,
+            ProjectRecoveryAuthorityTransition::ProjectPublication,
+            PendingProjectCleanSave {
+                serial: 8,
+                target_path: target_key,
+                // Digest of bytes that never reached the target.
+                digest: sha256_hex(b"NEW PREPARED SAVE BYTES"),
+            },
+        )
+        .unwrap();
+        let reconciled =
+            load_and_reconcile_project_recovery_authority_state_from_path(&journal).unwrap();
+        assert_eq!(reconciled.recovery_authority_serial, 7);
+        assert_eq!(
+            reconciled.last_transition,
+            ProjectRecoveryAuthorityTransition::ProjectPublication
+        );
+        let state = load_project_recovery_authority_state_from_path(&journal).unwrap();
+        assert_eq!(state.serial, 7);
+        assert!(state.pending_clean_save.is_none());
+        // The dirty-A target bytes are untouched, so its recovery image stays
+        // eligible.
+        assert_eq!(fs::read(&target).unwrap(), b"OLD DIRTY-A SAVED BYTES");
+        let _ = fs::remove_dir_all(&directory);
+
+        // (b) Target is missing entirely (e.g., an interrupted Save As to a new
+        // path).
+        let directory = unique_test_directory("pending-clean-save-missing");
+        fs::create_dir_all(&directory).unwrap();
+        let journal = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+        let missing_target = directory.join("never-created.sdc");
+        let missing_key = normalized_recovery_target_key(&missing_target).unwrap();
+        persist_pending_project_clean_save_to_path(
+            &journal,
+            4,
+            ProjectRecoveryAuthorityTransition::HistoryNavigation,
+            PendingProjectCleanSave {
+                serial: 5,
+                target_path: missing_key,
+                digest: sha256_hex(b"WOULD-BE SAVE BYTES"),
+            },
+        )
+        .unwrap();
+        let reconciled =
+            load_and_reconcile_project_recovery_authority_state_from_path(&journal).unwrap();
+        assert_eq!(reconciled.recovery_authority_serial, 4);
+        assert_eq!(
+            reconciled.last_transition,
+            ProjectRecoveryAuthorityTransition::HistoryNavigation
+        );
+        let state = load_project_recovery_authority_state_from_path(&journal).unwrap();
+        assert_eq!(state.serial, 4);
+        assert!(state.pending_clean_save.is_none());
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    // A pre-existing v1 journal without the pending field must deserialize
+    // unchanged, reconcile as a no-op, and a no-pending record this build writes
+    // must round-trip to JSON without the new key so older builds still read it.
+    #[test]
+    fn recovery_authority_journal_without_pending_is_backward_compatible() {
+        let directory = unique_test_directory("recovery-journal-compat");
+        fs::create_dir_all(&directory).unwrap();
+        let journal = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+
+        fs::write(
+            &journal,
+            serde_json::json!({
+                "version": PROJECT_RECOVERY_AUTHORITY_STATE_VERSION,
+                "serial": 12,
+                "last_transition": { "kind": "clean_save" },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let state = load_project_recovery_authority_state_from_path(&journal).unwrap();
+        assert_eq!(state.serial, 12);
+        assert!(state.pending_clean_save.is_none());
+        assert_eq!(
+            state.last_transition,
+            ProjectRecoveryAuthorityTransition::CleanSave
+        );
+        // Reconciliation is a no-op with no pending; the serial is preserved.
+        let reconciled =
+            load_and_reconcile_project_recovery_authority_state_from_path(&journal).unwrap();
+        assert_eq!(reconciled.recovery_authority_serial, 12);
+        assert_eq!(
+            reconciled.last_transition,
+            ProjectRecoveryAuthorityTransition::CleanSave
+        );
+
+        // A no-pending record round-trips without the new key.
+        persist_project_recovery_authority_serial_to_path(
+            &journal,
+            13,
+            ProjectRecoveryAuthorityTransition::ProjectPublication,
+        )
+        .unwrap();
+        let raw = fs::read_to_string(&journal).unwrap();
+        assert!(!raw.contains("pending_clean_save"));
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    // Serial overflow and a pending-journal write failure both happen before the
+    // target replace, so neither runs the replace nor touches the target.
+    #[test]
+    fn clean_save_journal_overflow_and_write_failure_are_inert() {
+        let directory = unique_test_directory("clean-save-journal-inert");
+        fs::create_dir_all(&directory).unwrap();
+        let journal = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+        let target = directory.join("show.sdc");
+        let temp = directory.join("show.sdc.prepared.tmp");
+        fs::write(&target, b"OLD DIRTY-A SAVED BYTES").unwrap();
+        fs::write(&temp, b"NEW PREPARED SAVE BYTES").unwrap();
+
+        // Serial overflow: the counter is checked before any target work, so the
+        // replace closure never runs and no journal file is created.
+        let replace_calls = std::cell::Cell::new(0u32);
+        let overflow = run_project_clean_save_journal(
+            &journal,
+            u64::MAX,
+            &ProjectRecoveryAuthorityTransition::ProjectPublication,
+            &target,
+            &temp,
+            &AtomicBool::new(false),
+            || {
+                replace_calls.set(replace_calls.get() + 1);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(overflow.contains("serial is exhausted"));
+        assert_eq!(replace_calls.get(), 0);
+        assert!(!journal.exists());
+        assert_eq!(fs::read(&target).unwrap(), b"OLD DIRTY-A SAVED BYTES");
+
+        // Pending journal write failure: a journal path whose parent is a file
+        // makes the pending write fail before the replace, so the target is
+        // untouched and the committed serial is never advanced.
+        let blocker = directory.join("blocker");
+        fs::write(&blocker, b"not a directory").unwrap();
+        let blocked_journal = blocker.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+        let replace_calls = std::cell::Cell::new(0u32);
+        let write_failure = run_project_clean_save_journal(
+            &blocked_journal,
+            3,
+            &ProjectRecoveryAuthorityTransition::ProjectPublication,
+            &target,
+            &temp,
+            &AtomicBool::new(false),
+            || {
+                replace_calls.set(replace_calls.get() + 1);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(replace_calls.get(), 0);
+        assert!(write_failure.contains("recovery authority state"));
+        assert_eq!(fs::read(&target).unwrap(), b"OLD DIRTY-A SAVED BYTES");
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    // A replace that reports failure but has already written the exact prepared
+    // bytes to the target must NOT roll the serial back.  The journal re-hashes
+    // the target, sees the exact bytes, durably commits S+1 CleanSave, and returns
+    // the committed outcome so the live coordinator can advance with the journal.
+    #[test]
+    fn clean_save_journal_replace_error_after_bytes_land_commits_and_reports_truthfully() {
+        let directory = unique_test_directory("clean-save-journal-landed-error");
+        fs::create_dir_all(&directory).unwrap();
+        let journal = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+        let target = directory.join("show.sdc");
+        let temp = directory.join("show.sdc.prepared.tmp");
+
+        // Committed baseline S = 7.
+        persist_project_recovery_authority_serial_to_path(
+            &journal,
+            7,
+            ProjectRecoveryAuthorityTransition::ProjectPublication,
+        )
+        .unwrap();
+        fs::write(&target, b"OLD DIRTY-A SAVED BYTES").unwrap();
+        let prepared_bytes = b"NEW PREPARED SAVE BYTES".as_slice();
+        fs::write(&temp, prepared_bytes).unwrap();
+
+        // The replace lands the exact prepared bytes on the target, then reports a
+        // spurious/post-rename failure.
+        let replace_calls = std::cell::Cell::new(0u32);
+        let committed = run_project_clean_save_journal(
+            &journal,
+            7,
+            &ProjectRecoveryAuthorityTransition::ProjectPublication,
+            &target,
+            &temp,
+            &AtomicBool::new(false),
+            || {
+                replace_calls.set(replace_calls.get() + 1);
+                fs::write(&target, prepared_bytes).unwrap();
+                Err("injected post-rename replace failure".to_string())
+            },
+        )
+        .unwrap();
+        assert_eq!(replace_calls.get(), 1);
+        assert_eq!(committed.serial, 8);
+        assert_eq!(
+            committed.transition,
+            ProjectRecoveryAuthorityTransition::CleanSave
+        );
+
+        // The committed serial durably advanced to S+1 CleanSave with no pending;
+        // a landed save is never rolled back.
+        let state = load_project_recovery_authority_state_from_path(&journal).unwrap();
+        assert_eq!(state.serial, 8);
+        assert_eq!(
+            state.last_transition,
+            ProjectRecoveryAuthorityTransition::CleanSave
+        );
+        assert!(state.pending_clean_save.is_none());
+        // Startup observes the committed S+1 with no further work.
+        let reconciled =
+            load_and_reconcile_project_recovery_authority_state_from_path(&journal).unwrap();
+        assert_eq!(reconciled.recovery_authority_serial, 8);
+        assert_eq!(
+            reconciled.last_transition,
+            ProjectRecoveryAuthorityTransition::CleanSave
+        );
+        assert_eq!(fs::read(&target).unwrap(), prepared_bytes);
+        assert!(!recovery_authority_journal_temp_leaked(&directory));
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    // Once pending + exact target bytes are durable, a failure compacting the
+    // journal must still advance the live serial. Otherwise a later browser
+    // recovery capture would be stamped S and then suppressed when restart
+    // reconciliation advances the journal to S+1.
+    #[test]
+    fn landed_clean_save_commit_failure_advances_live_and_restart_serial() {
+        let directory = unique_test_directory("clean-save-final-commit-failure");
+        fs::create_dir_all(&directory).unwrap();
+        let journal = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+        let target = directory.join("show.sdc");
+        let saved_bytes = b"EXACT LANDED SAVE BYTES";
+        fs::write(&target, saved_bytes).unwrap();
+        persist_pending_project_clean_save_to_path(
+            &journal,
+            7,
+            ProjectRecoveryAuthorityTransition::ProjectPublication,
+            PendingProjectCleanSave {
+                serial: 8,
+                target_path: normalized_recovery_target_key(&target).unwrap(),
+                digest: sha256_hex(saved_bytes),
+            },
+        )
+        .unwrap();
+
+        let live_commit = landed_clean_save_commit(
+            8,
+            Err("injected final journal compaction failure".to_string()),
+            "injected landed Save",
+        );
+        assert_eq!(live_commit.serial, 8);
+        assert_eq!(
+            live_commit.transition,
+            ProjectRecoveryAuthorityTransition::CleanSave
+        );
+        // Any newer dirty browser checkpoint is now stamped with the live S+1,
+        // so it remains eligible after startup resolves the retained pending
+        // record to that exact same serial.
+        let later_browser_recovery_serial = live_commit.serial;
+        let restarted =
+            load_and_reconcile_project_recovery_authority_state_from_path(&journal).unwrap();
+        assert_eq!(restarted.recovery_authority_serial, 8);
+        assert_eq!(
+            later_browser_recovery_serial,
+            restarted.recovery_authority_serial
+        );
+        let state = load_project_recovery_authority_state_from_path(&journal).unwrap();
+        assert!(state.pending_clean_save.is_none());
+        assert_eq!(state.serial, 8);
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    // A target that cannot be read during startup reconciliation is a hard error:
+    // the loader returns Err (naming the target and the underlying read error) and
+    // leaves the pending record durable so a healthier relaunch can reconcile.  The
+    // unreadable digest is injected through the production reconciliation seam so
+    // the test is deterministic instead of depending on flaky per-file ACLs.
+    #[test]
+    fn pending_clean_save_with_unreadable_target_fails_reconciliation_and_keeps_pending() {
+        let directory = unique_test_directory("pending-clean-save-unreadable");
+        fs::create_dir_all(&directory).unwrap();
+        let journal = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+        let target = directory.join("show.sdc");
+        fs::write(&target, b"UNKNOWN OUTCOME BYTES").unwrap();
+        let expected_key = normalized_recovery_target_key(&target).unwrap();
+        persist_pending_project_clean_save_to_path(
+            &journal,
+            7,
+            ProjectRecoveryAuthorityTransition::ProjectPublication,
+            PendingProjectCleanSave {
+                serial: 8,
+                target_path: expected_key.clone(),
+                digest: sha256_hex(b"NEW PREPARED SAVE BYTES"),
+            },
+        )
+        .unwrap();
+
+        // Inject a hard read error through the production seam the startup loader
+        // uses, so reconciliation cannot decide whether the exact bytes landed.
+        let digest_calls = std::cell::Cell::new(0u32);
+        let error = load_and_reconcile_project_recovery_authority_state_with_target_digest(
+            &journal,
+            |seen_target| {
+                digest_calls.set(digest_calls.get() + 1);
+                // The seam is invoked with the exact normalized target key.
+                assert_eq!(seen_target, expected_key.as_path());
+                Err("injected unreadable target".to_string())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(digest_calls.get(), 1);
+        // The error names the target and preserves the underlying read error, and
+        // states the pending record was kept.
+        assert!(error.contains("injected unreadable target"));
+        assert!(error.contains("could not read"));
+        assert!(error.contains("show.sdc"));
+        assert!(error.contains("left intact"));
+
+        // Pending is left durable and the committed serial is untouched, so a
+        // later run against a readable target can still reconcile.
+        let state = load_project_recovery_authority_state_from_path(&journal).unwrap();
+        assert_eq!(state.serial, 7);
+        assert_eq!(
+            state.last_transition,
+            ProjectRecoveryAuthorityTransition::ProjectPublication
+        );
+        let pending = state
+            .pending_clean_save
+            .expect("pending record must remain durable after an unreadable target");
+        assert_eq!(pending.serial, 8);
+        assert_eq!(pending.target_path, expected_key);
+        assert!(!recovery_authority_journal_temp_leaked(&directory));
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn indeterminate_clean_save_rollback_failure_latches_project_admission() {
+        let faulted = AtomicBool::new(false);
+        rollback_indeterminate_clean_save(7, &faulted, || {
+            Err("injected rollback journal failure".to_string())
+        })
+        .unwrap_err();
+        assert!(faulted.load(Ordering::Acquire));
+
+        let admission = ProjectExternalCommandAdmission {
+            gate: Mutex::new(()),
+            generation: AtomicU64::new(0),
+            recovery_authority_faulted: AtomicBool::new(true),
+        };
+        assert!(try_lock_project_external_command_admission(&admission).is_none());
+
+        let healthy = AtomicBool::new(false);
+        rollback_indeterminate_clean_save(7, &healthy, || Ok(())).unwrap();
+        assert!(!healthy.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn corrupt_pending_clean_save_semantics_are_rejected_before_reconciliation() {
+        let directory = unique_test_directory("pending-clean-save-validation");
+        fs::create_dir_all(&directory).unwrap();
+        let journal = directory.join(PROJECT_RECOVERY_AUTHORITY_STATE_FILE);
+        let absolute_target = directory.join("show.sdc");
+
+        for pending in [
+            serde_json::json!({
+                "serial": 99,
+                "target_path": absolute_target,
+                "digest": sha256_hex(b"bytes"),
+            }),
+            serde_json::json!({
+                "serial": 8,
+                "target_path": directory.join("show.sdc"),
+                "digest": "NOT-A-SHA256",
+            }),
+            serde_json::json!({
+                "serial": 8,
+                "target_path": "relative/show.sdc",
+                "digest": sha256_hex(b"bytes"),
+            }),
+        ] {
+            fs::write(
+                &journal,
+                serde_json::json!({
+                    "version": PROJECT_RECOVERY_AUTHORITY_STATE_VERSION,
+                    "serial": 7,
+                    "last_transition": { "kind": "project_publication" },
+                    "pending_clean_save": pending,
+                })
+                .to_string(),
+            )
+            .unwrap();
+            assert!(load_project_recovery_authority_state_from_path(&journal).is_err());
+        }
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn recovery_publication_request_cas_and_identity_are_bound_before_publication() {
+        let first = ProjectRecoveryPublicationRequest {
+            source_serial: 11,
+            request_id: "recovery-request-first".to_string(),
+        };
+        let second = ProjectRecoveryPublicationRequest {
+            source_serial: 11,
+            request_id: "recovery-request-second".to_string(),
+        };
+        assert_eq!(
+            recovery_publication_transition_for_request(11, &first, "checkpoint-b").unwrap(),
+            ProjectRecoveryAuthorityTransition::RecoveryPublication {
+                source_serial: 11,
+                request_id: "recovery-request-first".to_string(),
+                target_checkpoint_hash: "checkpoint-b".to_string(),
+            }
+        );
+        assert_ne!(
+            recovery_publication_transition_for_request(11, &first, "checkpoint-b").unwrap(),
+            recovery_publication_transition_for_request(11, &second, "checkpoint-b").unwrap(),
+            "two renderer intents at one source serial cannot alias"
+        );
+        assert!(
+            recovery_publication_transition_for_request(12, &first, "checkpoint-b")
+                .unwrap_err()
+                .contains("expected serial 11, current serial 12")
+        );
+        assert!(recovery_publication_transition_for_request(11, &first, "").is_err());
+    }
+
+    #[test]
+    fn stale_save_ticket_never_enters_recovery_invalidation() {
+        let mut invalidation_calls = 0usize;
+        let error = invalidate_recovery_for_current_save_ticket(false, || {
+            invalidation_calls += 1;
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(invalidation_calls, 0);
+        assert!(error.contains("rejected before replacing"));
+
+        invalidate_recovery_for_current_save_ticket(true, || {
+            invalidation_calls += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(invalidation_calls, 1);
+    }
+
+    #[test]
+    fn pre_transition_failure_fences_ready_output_before_cleanup_admission() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let existing_output = engine.acquire_video_output().unwrap();
+        assert_eq!(
+            engine.output_ownership_status().state,
+            protocol::OutputOwnershipState::Ready
+        );
+        let mut cleanup_admitted = false;
+
+        let error = fail_output_ownership_transition_with_cleanup(
+            &engine,
+            None,
+            MachineOutputRole::Video,
+            "injected pre-transition failure".to_string(),
+            None,
+            || {
+                assert_eq!(
+                    engine.output_ownership_status().state,
+                    protocol::OutputOwnershipState::Failed
+                );
+                let teardown = engine
+                    .begin_output_ownership_teardown()
+                    .expect("cleanup must be admitted after the failure fence");
+                cleanup_admitted = true;
+                drop(existing_output);
+                drop(teardown);
+                assert!(engine
+                    .begin_output_ownership_transition(MachineOutputRole::Both)
+                    .is_err());
+                Ok(())
+            },
+        );
+
+        assert!(cleanup_admitted);
+        assert_eq!(error, "injected pre-transition failure");
+        let status = engine.output_ownership_status();
+        assert_eq!(status.state, protocol::OutputOwnershipState::Failed);
+        assert_eq!(status.effective_role, MachineOutputRole::Standby);
+        assert!(!status.video_allowed);
+
+        let retry = engine
+            .begin_output_ownership_transition(MachineOutputRole::Both)
+            .unwrap();
+        retry.complete().unwrap();
+    }
+
+    #[test]
+    fn fenced_resource_creation_rejects_ndi_spout_and_display_constructor_seams() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let activation = engine
+            .admit_output_activation(MachineOutputRole::Both)
+            .unwrap();
+        engine
+            .validate_output_activation(&activation, MachineOutputRole::Both)
+            .unwrap();
+        let failure = engine.begin_output_ownership_failure_fence(
+            "injected fence before external resource creation admission",
+        );
+        let mut ndi_constructor_attempts = 0;
+        let mut spout_constructor_attempts = 0;
+        let mut display_builder_attempts = 0;
+
+        for attempts in [
+            &mut ndi_constructor_attempts,
+            &mut spout_constructor_attempts,
+            &mut display_builder_attempts,
+        ] {
+            let result = with_output_resource_creation_lease(
+                &activation,
+                || {
+                    *attempts += 1;
+                    Ok(())
+                },
+                |_| Ok(()),
+            );
+            assert!(result.is_err());
+        }
+
+        assert_eq!(ndi_constructor_attempts, 0);
+        assert_eq!(spout_constructor_attempts, 0);
+        assert_eq!(display_builder_attempts, 0);
+        drop(failure);
+    }
+
+    #[test]
+    fn startup_preference_requires_explicit_arm() {
+        let directory = unique_test_directory("output-ownership-startup");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(OUTPUT_OWNERSHIP_STATE_FILE);
+        let engine = EngineHandle::start(DmxOutputConfig::default());
+
+        assert_eq!(
+            load_or_initialize_output_ownership_preference(&path).unwrap(),
+            MachineOutputRole::Both
+        );
+        let status = engine
+            .publish_output_ownership_startup_preference(MachineOutputRole::Both)
+            .unwrap();
+        assert_eq!(status.desired_role, MachineOutputRole::Both);
+        assert_eq!(status.effective_role, MachineOutputRole::Standby);
+        assert_eq!(status.state, protocol::OutputOwnershipState::Failed);
+        assert!(engine.acquire_lighting_output().is_err());
+        assert!(engine.acquire_video_output().is_err());
+
+        persist_output_ownership_role_to_path(&path, MachineOutputRole::Both).unwrap();
+        let failed_marker = persist_output_ownership_target_after_preparation_with(
+            &path,
+            MachineOutputRole::Video,
+            || Ok(()),
+            |_path, _role| Err("injected Standby marker write failure".to_string()),
+        );
+        assert!(failed_marker.is_err());
+        assert_eq!(
+            load_output_ownership_role_from_path(&path).unwrap(),
+            Some(MachineOutputRole::Both)
+        );
+
+        // Restart simulation: the stale preferred Both is remembered, but a
+        // new startup gate remains denied until the operator explicitly arms.
+        let restarted = EngineHandle::start(DmxOutputConfig::default());
+        let preferred = load_or_initialize_output_ownership_preference(&path).unwrap();
+        let restarted_status = restarted
+            .publish_output_ownership_startup_preference(preferred)
+            .unwrap();
+        assert_eq!(restarted_status.desired_role, MachineOutputRole::Both);
+        assert_eq!(restarted_status.effective_role, MachineOutputRole::Standby);
+        assert!(restarted.acquire_lighting_output().is_err());
+        assert!(restarted.acquire_video_output().is_err());
+
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn output_ownership_target_is_not_durable_until_preparation_succeeds() {
+        let directory = unique_test_directory("output-ownership-transaction");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(OUTPUT_OWNERSHIP_STATE_FILE);
+        persist_output_ownership_role_to_path(&path, MachineOutputRole::Standby).unwrap();
+
+        let failure = persist_output_ownership_target_after_preparation(
+            &path,
+            MachineOutputRole::Video,
+            || Err("injected route preparation failure".to_string()),
+        );
+        assert!(failure.is_err());
+        assert_eq!(
+            load_output_ownership_role_from_path(&path).unwrap(),
+            Some(MachineOutputRole::Standby)
+        );
+        assert_eq!(
+            resolve_output_ownership_role_from_path(&path).unwrap(),
+            MachineOutputRole::Standby,
+            "a failed preparation must restart into durable Standby"
+        );
+
+        let final_persist_failure = persist_output_ownership_target_after_preparation_with(
+            &path,
+            MachineOutputRole::Video,
+            || Ok(()),
+            |_path, _role| Err("injected final target persist failure".to_string()),
+        );
+        assert!(final_persist_failure.is_err());
+        assert_eq!(
+            resolve_output_ownership_role_from_path(&path).unwrap(),
+            MachineOutputRole::Standby,
+            "a failed final persist must preserve the durable Standby marker"
+        );
+
+        persist_output_ownership_role_to_path(&path, MachineOutputRole::Standby).unwrap();
+        persist_output_ownership_target_after_preparation(&path, MachineOutputRole::Video, || {
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            load_output_ownership_role_from_path(&path).unwrap(),
+            Some(MachineOutputRole::Video)
+        );
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn standby_output_role_lock_and_takeover_require_running_standby() {
+        let running_standby = StandbySyncStatus {
+            running: true,
+            role: Some(StandbySyncRole::Standby),
+            ..StandbySyncStatus::default()
+        };
+        assert!(validate_output_role_change_during_standby(
+            &running_standby,
+            MachineOutputRole::Lighting
+        )
+        .is_err());
+        assert!(validate_output_role_change_during_standby(
+            &running_standby,
+            MachineOutputRole::Standby
+        )
+        .is_ok());
+        assert!(validate_takeover_running_status(&running_standby).is_ok());
+
+        let stopped_standby = StandbySyncStatus {
+            running: false,
+            role: Some(StandbySyncRole::Standby),
+            ..StandbySyncStatus::default()
+        };
+        assert!(validate_takeover_running_status(&stopped_standby).is_err());
+        assert!(validate_output_role_change_during_standby(
+            &stopped_standby,
+            MachineOutputRole::Both
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn standby_sync_running_publication_requires_completed_all_deny_status() {
+        assert!(standby_sync_may_publish_running(
+            &OutputOwnershipStatus::for_role(MachineOutputRole::Standby)
+        ));
+        assert!(!standby_sync_may_publish_running(
+            &OutputOwnershipStatus::for_role(MachineOutputRole::Both)
+        ));
+        assert!(!standby_sync_may_publish_running(
+            &OutputOwnershipStatus::transitioning(
+                MachineOutputRole::Standby,
+                Some(MachineOutputRole::Standby),
+                0,
+                1
+            )
+        ));
+    }
+
+    #[test]
+    fn external_project_replacement_joins_standby_worker_before_fenced_swap() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            while !worker_stop.load(Ordering::Acquire) {
+                std::thread::yield_now();
+            }
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let joined = Arc::new(AtomicBool::new(false));
+        let joined_for_stop = Arc::clone(&joined);
+        let joined_for_replace = Arc::clone(&joined);
+
+        run_project_snapshot_replacement_scope(
+            ProjectSnapshotReplacementScope::ExternalCaller,
+            move || {
+                stop.store(true, Ordering::Release);
+                worker.join().unwrap();
+                joined_for_stop.store(true, Ordering::Release);
+                Ok(())
+            },
+            move || {
+                assert!(
+                    joined_for_replace.load(Ordering::Acquire),
+                    "the fenced output replacement must not begin before the polling worker joins"
+                );
+                Ok(())
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn standby_polling_replacement_never_attempts_lifecycle_stop() {
+        let replaced = Arc::new(AtomicBool::new(false));
+        let replaced_for_closure = Arc::clone(&replaced);
+        run_project_snapshot_replacement_scope(
+            ProjectSnapshotReplacementScope::StandbyPollingWorker,
+            || Err("polling worker attempted lifecycle stop".to_string()),
+            move || {
+                replaced_for_closure.store(true, Ordering::Release);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(replaced.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn fenced_project_replacement_does_not_publish_when_output_retirement_fails() {
+        let published = Arc::new(AtomicBool::new(false));
+        let committed = Arc::new(AtomicBool::new(false));
+        let published_for_publish = Arc::clone(&published);
+        let committed_for_commit = Arc::clone(&committed);
+
+        let error = preflighted_project_snapshot_publication(
+            || Err("injected Display retirement acknowledgement failure".to_string()),
+            move || {
+                published_for_publish.store(true, Ordering::Release);
+                Ok(())
+            },
+            move || {
+                committed_for_commit.store(true, Ordering::Release);
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.contains("output retirement failed"));
+        assert!(!published.load(Ordering::Acquire));
+        assert!(!committed.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn fenced_project_replacement_does_not_commit_local_state_when_publication_ack_fails() {
+        let committed = Arc::new(AtomicBool::new(false));
+        let committed_for_commit = Arc::clone(&committed);
+
+        let error = preflighted_project_snapshot_publication(
+            || Ok(()),
+            || Err("injected shared snapshot publication acknowledgement failure".to_string()),
+            move || {
+                committed_for_commit.store(true, Ordering::Release);
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.contains("engine publication failed"));
+        assert!(
+            !committed.load(Ordering::Acquire),
+            "profiles/groups/current path must not change without a publication acknowledgement"
+        );
+    }
+
+    #[test]
+    fn fenced_project_replacement_commits_infallibly_after_publication_ack() {
+        let published = Arc::new(AtomicBool::new(false));
+        let committed = Arc::new(AtomicBool::new(false));
+        let published_for_publish = Arc::clone(&published);
+        let published_for_commit = Arc::clone(&published);
+        let committed_for_commit = Arc::clone(&committed);
+
+        preflighted_project_snapshot_publication(
+            || Ok(()),
+            move || {
+                published_for_publish.store(true, Ordering::Release);
+                Ok(())
+            },
+            move || {
+                assert!(
+                    published_for_commit.load(Ordering::Acquire),
+                    "app-local profile/group/path state must commit only after engine publication"
+                );
+                committed_for_commit.store(true, Ordering::Release);
+            },
+        )
+        .unwrap();
+        assert!(published.load(Ordering::Acquire));
+        assert!(committed.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn native_video_output_window_prefix_covers_stale_live_and_test_labels() {
+        let labels = native_video_output_window_labels_from([
+            "main".to_string(),
+            "video-output-1".to_string(),
+            "video-output-999-test-pattern".to_string(),
+            "pane-live".to_string(),
+            "video-output".to_string(),
+        ]);
+        assert_eq!(
+            labels,
+            vec![
+                "video-output-1".to_string(),
+                "video-output-999-test-pattern".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn native_video_output_retirement_unions_worker_and_stale_window_labels() {
+        let labels = native_video_output_retirement_labels_from(
+            [
+                "video-output-1".to_string(),
+                "video-output-7-test-pattern".to_string(),
+            ],
+            [
+                "main".to_string(),
+                "video-output-7-test-pattern".to_string(),
+                "video-output-999".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            labels,
+            vec![
+                "video-output-1".to_string(),
+                "video-output-7-test-pattern".to_string(),
+                "video-output-999".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn native_video_output_transition_retry_stop_allows_bounded_join() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let (waiting_tx, waiting_rx) = std::sync::mpsc::sync_channel(1);
+        let (joined_tx, joined_rx) = std::sync::mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || -> Result<(), String> {
+            let mut announced_wait = false;
+            while native_video_output_transition_retry_wait_with(
+                &worker_stop,
+                Duration::from_millis(100),
+                |interval| {
+                    if !announced_wait {
+                        waiting_tx
+                            .send(())
+                            .expect("test must observe transition retry wait");
+                        announced_wait = true;
+                    }
+                    std::thread::sleep(interval);
+                },
+            ) {}
+            Ok(())
+        });
+
+        waiting_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("worker must enter the transition retry wait");
+        stop.store(true, Ordering::Release);
+        let joiner = std::thread::spawn(move || {
+            joined_tx
+                .send(
+                    worker
+                        .join()
+                        .map_err(|_| "transition retry worker panicked".to_string())?,
+                )
+                .expect("test must observe worker join");
+            Ok::<(), String>(())
+        });
+
+        joined_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("stop during transition retry wait must permit a bounded join")
+            .unwrap();
+        joiner.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn native_video_output_worker_is_taken_outside_registry_lock_before_join() {
+        let label = "video-output-1".to_string();
+        let workers = Arc::new(Mutex::new(HashMap::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker = NativeVideoOutputWorker::new(
+            Arc::clone(&stop),
+            std::thread::spawn(move || -> Result<(), String> {
+                release_rx
+                    .recv()
+                    .map_err(|error| format!("injected delayed worker release failed: {error}"))?;
+                Ok(())
+            }),
+        );
+        workers.lock().unwrap().insert(label.clone(), worker);
+
+        let workers_for_retire = Arc::clone(&workers);
+        let label_for_retire = label.clone();
+        let (joining_tx, joining_rx) = std::sync::mpsc::channel();
+        let retirement = std::thread::spawn(move || -> Result<(), String> {
+            let mut worker =
+                take_native_video_output_worker(&workers_for_retire, &label_for_retire)?
+                    .expect("worker must be present before retirement");
+            worker.request_stop();
+            joining_tx
+                .send(())
+                .map_err(|error| format!("injected joining signal failed: {error}"))?;
+            worker.join(&label_for_retire)
+        });
+
+        joining_rx.recv().unwrap();
+        assert!(stop.load(Ordering::Acquire));
+        assert!(
+            workers.try_lock().is_ok(),
+            "the registry mutex must be released before worker.join blocks"
+        );
+        release_tx.send(()).unwrap();
+        retirement.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn native_video_output_delayed_join_blocks_reopen_until_retirement_completes() {
+        let label = "video-output-1".to_string();
+        let workers = Arc::new(Mutex::new(HashMap::new()));
+        let transition = Arc::new(Mutex::new(()));
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        workers.lock().unwrap().insert(
+            label.clone(),
+            NativeVideoOutputWorker::new(
+                Arc::new(AtomicBool::new(false)),
+                std::thread::spawn(move || -> Result<(), String> {
+                    release_rx.recv().map_err(|error| {
+                        format!("injected delayed worker release failed: {error}")
+                    })?;
+                    Ok(())
+                }),
+            ),
+        );
+
+        let workers_for_retire = Arc::clone(&workers);
+        let transition_for_retire = Arc::clone(&transition);
+        let label_for_retire = label.clone();
+        let (joining_tx, joining_rx) = std::sync::mpsc::channel();
+        let retirement = std::thread::spawn(move || -> Result<(), String> {
+            let _transition_guard = transition_for_retire.lock().unwrap();
+            let mut worker =
+                take_native_video_output_worker(&workers_for_retire, &label_for_retire)?
+                    .expect("worker must be present before retirement");
+            worker.request_stop();
+            joining_tx
+                .send(())
+                .map_err(|error| format!("injected joining signal failed: {error}"))?;
+            worker.join(&label_for_retire)
+        });
+
+        joining_rx.recv().unwrap();
+        assert!(
+            transition.try_lock().is_err(),
+            "a same-label open must wait for the retirement join under the transition lock"
+        );
+        release_tx.send(()).unwrap();
+        retirement.join().unwrap().unwrap();
+        assert!(transition.try_lock().is_ok());
+    }
+
+    #[test]
+    fn native_video_output_retirement_attempts_all_labels_after_a_failure() {
+        let labels = vec![
+            "video-output-1".to_string(),
+            "video-output-999-test-pattern".to_string(),
+            "video-output-42".to_string(),
+        ];
+        let mut attempted = Vec::new();
+        let errors = attempt_native_video_output_retirements(labels, |label| {
+            attempted.push(label.to_string());
+            if label == "video-output-1" {
+                Err("injected retirement failure".to_string())
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(
+            attempted,
+            vec![
+                "video-output-1".to_string(),
+                "video-output-999-test-pattern".to_string(),
+                "video-output-42".to_string(),
+            ]
+        );
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("video-output-1"));
+    }
+
+    #[test]
+    fn native_video_output_runtime_failure_remains_fenced_until_retirement_ack() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let teardown_lease = NativeVideoOutputWorker::new_teardown_lease_slot();
+        let mut worker = NativeVideoOutputWorker::with_teardown_lease(
+            Arc::new(AtomicBool::new(false)),
+            std::thread::spawn(|| Ok::<(), String>(())),
+            Arc::clone(&teardown_lease),
+        );
+        let error = native_video_output_worker_result(
+            worker.stop.as_ref(),
+            protocol::OutputOwnershipState::Ready,
+            Err("injected runtime presenter failure".to_string()),
+        )
+        .unwrap_err();
+
+        arm_native_video_output_failure_fence(&engine, &teardown_lease, "video-output-1", error);
+        assert_eq!(
+            engine.output_ownership_status().state,
+            protocol::OutputOwnershipState::Failed
+        );
+        assert!(engine
+            .begin_output_ownership_transition(MachineOutputRole::Both)
+            .is_err());
+
+        worker.join("video-output-1").unwrap();
+        assert!(
+            engine
+                .begin_output_ownership_transition(MachineOutputRole::Both)
+                .is_err(),
+            "joining the presenter is insufficient before native window retirement acknowledgement"
+        );
+
+        worker.release_teardown_lease_after_retirement_ack();
+        let retry = engine
+            .begin_output_ownership_transition(MachineOutputRole::Both)
+            .expect(
+                "retirement acknowledgement must release the failure fence for an explicit rearm",
+            );
+        retry.complete().unwrap();
+    }
+
+    #[test]
+    fn native_video_output_live_resize_runs_only_while_video_permit_is_held() {
+        struct TestPermit(Arc<AtomicBool>);
+
+        impl Drop for TestPermit {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::Release);
+            }
+        }
+
+        let permit_held = Arc::new(AtomicBool::new(false));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut presenter = ();
+        native_video_output_live_frame_with_permit(
+            &mut presenter,
+            {
+                let permit_held = Arc::clone(&permit_held);
+                let events = Arc::clone(&events);
+                move || {
+                    assert!(
+                        !permit_held.swap(true, Ordering::AcqRel),
+                        "a frame must not acquire a second video permit"
+                    );
+                    events.lock().unwrap().push("permit");
+                    Ok::<_, String>(TestPermit(Arc::clone(&permit_held)))
+                }
+            },
+            {
+                let permit_held = Arc::clone(&permit_held);
+                let events = Arc::clone(&events);
+                move |_| {
+                    assert!(
+                        permit_held.load(Ordering::Acquire),
+                        "GPU resize must be performed inside the video permit"
+                    );
+                    events.lock().unwrap().push("resize");
+                    Ok::<_, String>(())
+                }
+            },
+            {
+                let permit_held = Arc::clone(&permit_held);
+                let events = Arc::clone(&events);
+                move || {
+                    assert!(permit_held.load(Ordering::Acquire));
+                    events.lock().unwrap().push("render");
+                    Ok::<_, String>(())
+                }
+            },
+            {
+                let permit_held = Arc::clone(&permit_held);
+                let events = Arc::clone(&events);
+                move |_, ()| {
+                    assert!(permit_held.load(Ordering::Acquire));
+                    events.lock().unwrap().push("present");
+                    Ok::<_, String>(())
+                }
+            },
+            |_| {},
+        )
+        .unwrap();
+
+        assert!(!permit_held.load(Ordering::Acquire));
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["permit", "resize", "render", "present"]
+        );
+    }
+
+    #[test]
+    fn native_video_output_live_physical_failure_fences_before_video_permit_drop() {
+        struct TestPermit {
+            _permit: engine::OutputOwnershipPermit,
+            dropped: Arc<AtomicBool>,
+        }
+
+        impl Drop for TestPermit {
+            fn drop(&mut self) {
+                self.dropped.store(true, Ordering::Release);
+            }
+        }
+
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let teardown_lease = NativeVideoOutputWorker::new_teardown_lease_slot();
+        let permit_dropped = Arc::new(AtomicBool::new(false));
+        let fence_observed = Arc::new(AtomicBool::new(false));
+        let mut presenter = ();
+        let result = native_video_output_live_frame_with_permit(
+            &mut presenter,
+            {
+                let engine = engine.clone();
+                let permit_dropped = Arc::clone(&permit_dropped);
+                move || {
+                    engine.acquire_video_output().map(|permit| TestPermit {
+                        _permit: permit,
+                        dropped: Arc::clone(&permit_dropped),
+                    })
+                }
+            },
+            |_| Err::<(), String>("injected live resize failure".to_string()),
+            || Ok::<(), String>(()),
+            |_, ()| Ok::<(), String>(()),
+            {
+                let engine = engine.clone();
+                let teardown_lease = Arc::clone(&teardown_lease);
+                let permit_dropped = Arc::clone(&permit_dropped);
+                let fence_observed = Arc::clone(&fence_observed);
+                move |error| {
+                    arm_native_video_output_failure_fence(
+                        &engine,
+                        &teardown_lease,
+                        "video-output-1",
+                        error.to_string(),
+                    );
+                    assert_eq!(
+                        engine.output_ownership_status().state,
+                        protocol::OutputOwnershipState::Failed
+                    );
+                    assert!(
+                        !permit_dropped.load(Ordering::Acquire)
+                            && teardown_lease.lock().unwrap().is_some(),
+                        "the failure callback must run while both the frame permit and teardown lease remain in flight"
+                    );
+                    let third_engine = engine.clone();
+                    let third = std::thread::spawn(move || third_engine.acquire_video_output());
+                    assert!(
+                        third.join().unwrap().is_err(),
+                        "a third frame must be rejected immediately after the in-permit failure fence"
+                    );
+                    fence_observed.store(true, Ordering::Release);
+                }
+            },
+        );
+
+        assert!(matches!(
+            result,
+            Err(NativeVideoOutputLiveFrameError::Physical(error))
+                if error.contains("injected live resize failure")
+        ));
+        assert!(fence_observed.load(Ordering::Acquire));
+        assert!(
+            permit_dropped.load(Ordering::Acquire),
+            "the frame permit must drop only after the callback has armed the fence"
+        );
+        assert!(
+            teardown_lease.lock().unwrap().is_some(),
+            "permit drop must not acknowledge the worker-owned teardown lease"
+        );
+        assert!(
+            engine
+                .begin_output_ownership_transition(MachineOutputRole::Both)
+                .is_err(),
+            "the teardown lease must keep the failure fence active after permit drop"
+        );
+
+        let acknowledgement = teardown_lease.lock().unwrap().take();
+        drop(acknowledgement);
+        let retry = engine
+            .begin_output_ownership_transition(MachineOutputRole::Both)
+            .expect("retirement acknowledgement must permit an explicit rearm");
+        retry.complete().unwrap();
+    }
+
+    #[test]
+    fn native_video_output_sync_shell_failure_injects_affected_cleanup_resource() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let activation = engine
+            .admit_output_activation(MachineOutputRole::Both)
+            .expect("test engine must admit Display sync");
+        let cleaned_labels = Arc::new(Mutex::new(Vec::new()));
+        let error = with_output_resource_creation_lease_with_cleanup(
+            &activation,
+            || {
+                native_video_output_sync_resource_from_shell(
+                    vec![
+                        "video-output-1".to_string(),
+                        "video-output-1-test-pattern".to_string(),
+                    ],
+                    Err("injected sequential shell failure".to_string()),
+                )
+            },
+            {
+                let cleaned_labels = Arc::clone(&cleaned_labels);
+                move |labels: &Vec<String>| {
+                    *cleaned_labels.lock().unwrap() = labels.clone();
+                    Err("injected retirement acknowledgement failure".to_string())
+                }
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.contains("sequential shell failure"));
+        assert!(error.contains("retirement acknowledgement failure"));
+        assert_eq!(
+            *cleaned_labels.lock().unwrap(),
+            vec![
+                "video-output-1".to_string(),
+                "video-output-1-test-pattern".to_string(),
+            ],
+            "a partial all-window shell sync must retire every label touched before the failure"
+        );
+        let retry_engine = engine.clone();
+        let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+        let retry = std::thread::spawn(move || {
+            let started = Instant::now();
+            let result = retry_engine.begin_output_ownership_transition(MachineOutputRole::Both);
+            result_tx.send((started.elapsed(), result)).unwrap();
+        });
+        assert!(
+            result_rx.recv_timeout(Duration::from_millis(150)).is_err(),
+            "an unacknowledged sync cleanup must retain its creation lease"
+        );
+        let (elapsed, retry_result) = result_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("the held sync lease must eventually fail closed instead of rearming");
+        retry.join().unwrap();
+        assert!(elapsed >= Duration::from_secs(1));
+        assert!(retry_result.unwrap_err().contains("timed out"));
+    }
+
+    #[test]
+    fn native_video_output_partial_creation_cleanup_failure_keeps_creation_lease_fail_closed() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let activation = engine
+            .admit_output_activation(MachineOutputRole::Both)
+            .expect("test engine must admit Display creation");
+        let error = with_output_resource_creation_lease_with_cleanup(
+            &activation,
+            || OutputResourceCreation::FailedWithResource {
+                error: "injected partial native creation failure".to_string(),
+                resource: (),
+            },
+            |_| Err("injected native cleanup acknowledgement failure".to_string()),
+        )
+        .unwrap_err();
+        assert!(error.contains("partial native creation failure"));
+        assert!(error.contains("cleanup acknowledgement failure"));
+
+        let retry_engine = engine.clone();
+        let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+        let retry = std::thread::spawn(move || {
+            let started = Instant::now();
+            let result = retry_engine
+                .begin_output_ownership_transition(MachineOutputRole::Both)
+                .map(|transition| {
+                    transition.fail("unexpected retry after a leaked creation lease");
+                });
+            result_tx.send((started.elapsed(), result)).unwrap();
+        });
+
+        assert!(
+            result_rx.recv_timeout(Duration::from_millis(150)).is_err(),
+            "the retry must wait behind the unacknowledged creation lease"
+        );
+        let (elapsed, retry_result) = result_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("the ownership gate must eventually fail closed instead of rearming");
+        retry.join().unwrap();
+        assert!(elapsed >= Duration::from_secs(1));
+        let retry_error = retry_result.unwrap_err();
+        assert!(retry_error.contains("timed out"));
+        assert_eq!(
+            engine.output_ownership_status().state,
+            protocol::OutputOwnershipState::Failed
+        );
+    }
+
+    #[test]
+    fn native_video_output_stale_sync_cleanup_uses_desired_display_label_difference() {
+        let desired = vec![
+            video_output_window_label(1, false),
+            video_output_window_label(1, true),
+        ];
+        let stale = stale_native_video_output_retirement_labels_from(
+            desired,
+            [
+                "video-output-1".to_string(),
+                "video-output-77".to_string(),
+                "not-a-video-worker".to_string(),
+            ],
+            [
+                "main".to_string(),
+                "video-output-1-test-pattern".to_string(),
+                "video-output-77-test-pattern".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            stale,
+            vec![
+                "not-a-video-worker".to_string(),
+                "video-output-77".to_string(),
+                "video-output-77-test-pattern".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn operator_selection_context_is_ordered_deduplicated_and_runtime_only() {
         let normalized = normalize_operator_selection_context(OperatorSelectionContext {
             fixture_ids: vec![7, 3, 7],
@@ -28520,7 +45246,7 @@ mod tests {
 
     #[test]
     fn operator_feature_fader_resolves_visible_slot_to_existing_engine_batch_command() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -28689,6 +45415,554 @@ mod tests {
         }
     }
 
+    fn test_project_checkpoint(project: ProjectFile, revision: u64) -> ProjectCheckpoint {
+        let mappings = ProjectControlMappings::default();
+        let hash = project_checkpoint_hash(&project, &mappings).unwrap();
+        ProjectCheckpoint {
+            project,
+            mappings,
+            epoch: 0,
+            revision,
+            hash,
+        }
+    }
+
+    fn test_pending_project_transaction(
+        transaction_id: u64,
+        label: &str,
+        coalesce_key: &str,
+        before: ProjectCheckpoint,
+    ) -> PendingProjectTransaction {
+        PendingProjectTransaction {
+            transaction_id,
+            owner_id: "renderer:test".to_string(),
+            label: label.to_string(),
+            coalesce_key: coalesce_key.to_string(),
+            epoch: before.epoch,
+            before,
+        }
+    }
+
+    #[test]
+    fn renderer_owner_recovery_selects_only_the_explicitly_retired_window_generation() {
+        let checkpoint = test_project_checkpoint(empty_project_file(), 0);
+        let pending = test_pending_project_transaction(7, "Patch Fixtures", "", checkpoint);
+        let mut history = ProjectHistory::default();
+        history.pending.insert(7, pending.clone());
+
+        assert!(
+            project_transaction_for_retired_owner(&history, "renderer:main-old")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            project_transaction_for_retired_owner(&history, "renderer:test")
+                .unwrap()
+                .map(|candidate| candidate.transaction_id),
+            Some(7)
+        );
+        assert!(project_transaction_for_owner_epoch(
+            &ProjectCoordinator {
+                history,
+                ..ProjectCoordinator::default()
+            },
+            7,
+            0,
+            "renderer:new",
+        )
+        .unwrap_err()
+        .contains("another renderer"));
+    }
+
+    #[test]
+    fn renderer_owner_transition_keeps_predecessor_retryable_when_recovery_fails() {
+        let mut owners = HashMap::from([("pane-live".to_string(), "renderer:old".to_string())]);
+
+        let error = transition_project_transaction_window_owner::<()>(
+            &mut owners,
+            "pane-live",
+            Some("renderer:new".to_string()),
+            |owner| {
+                assert_eq!(owner, Some("renderer:old"));
+                Err("injected checkpoint failure".to_string())
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("injected checkpoint failure"));
+        assert_eq!(
+            owners.get("pane-live").map(String::as_str),
+            Some("renderer:old")
+        );
+
+        let recovered = transition_project_transaction_window_owner(
+            &mut owners,
+            "pane-live",
+            Some("renderer:new".to_string()),
+            |owner| Ok(owner.map(str::to_string)),
+        )
+        .unwrap();
+        assert_eq!(recovered.as_deref(), Some("renderer:old"));
+        assert_eq!(
+            owners.get("pane-live").map(String::as_str),
+            Some("renderer:new")
+        );
+    }
+
+    #[test]
+    fn reconcile_external_persistence_advances_revision_before_new_hash_is_visible() {
+        let project = empty_project_file();
+        let mut coordinator = ProjectCoordinator::default();
+        let mut before = test_project_checkpoint(project.clone(), 4);
+        coordinator.revision = 4;
+        coordinator.checkpoint_hash = before.hash.clone();
+
+        let mut changed_project = project;
+        changed_project.snapshot.timeline.metronome_enabled = true;
+        let mut external = test_project_checkpoint(changed_project, 4);
+        assert_ne!(external.hash, coordinator.checkpoint_hash);
+        reconcile_project_checkpoint_metadata(&mut coordinator, &mut external).unwrap();
+
+        assert_eq!(coordinator.revision, 5);
+        assert_eq!(external.revision, 5);
+        assert_eq!(coordinator.checkpoint_hash, external.hash);
+        assert_ne!(before.hash, external.hash);
+        // Same revision with a different hash must never escape reconciliation.
+        assert_ne!(external.revision, before.revision);
+        before.hash = external.hash.clone();
+        assert_eq!(before.revision, 4);
+        assert_ne!(before.revision, external.revision);
+    }
+
+    #[test]
+    fn reconcile_external_persistence_fails_closed_on_revision_exhaustion() {
+        let project = empty_project_file();
+        let mut coordinator = ProjectCoordinator::default();
+        coordinator.revision = u64::MAX;
+        coordinator.checkpoint_hash = "before".to_string();
+        let mut changed = test_project_checkpoint(project, u64::MAX);
+        changed.hash = "after".to_string();
+
+        assert!(reconcile_project_checkpoint_metadata(&mut coordinator, &mut changed).is_err());
+        assert_eq!(coordinator.revision, u64::MAX);
+        assert_eq!(coordinator.checkpoint_hash, "before");
+        assert_eq!(changed.revision, u64::MAX);
+        assert_eq!(changed.hash, "after");
+    }
+
+    #[test]
+    fn retained_transaction_keeps_pending_when_finalize_fails_then_can_cancel() {
+        let before = test_project_checkpoint(empty_project_file(), 0);
+        let mut coordinator = ProjectCoordinator::default();
+        coordinator.history.pending.insert(
+            17,
+            test_pending_project_transaction(17, "Edit", "fixture:1", before),
+        );
+        let error =
+            with_retained_project_transaction(&mut coordinator, 17, 0, |_coordinator, _pending| {
+                Err::<(), _>("canonical hash failed".to_string())
+            })
+            .unwrap_err();
+        assert_eq!(error, "canonical hash failed");
+        assert!(coordinator.history.pending.contains_key(&17));
+
+        let status =
+            with_retained_project_transaction(&mut coordinator, 17, 0, |_coordinator, _pending| {
+                Ok::<_, String>("cancelled")
+            })
+            .unwrap();
+        assert_eq!(status, "cancelled");
+        assert!(!coordinator.history.pending.contains_key(&17));
+    }
+
+    #[test]
+    fn direct_ancillary_preflight_rejects_exhausted_revision_without_mutation() {
+        let mut coordinator = ProjectCoordinator::default();
+        coordinator.revision = u64::MAX;
+        let before = coordinator.ancillary.clone();
+        let result = prepare_direct_project_ancillary_commit(
+            &coordinator,
+            EngineSnapshot::default(),
+            ProjectSwapAncillaryState {
+                fixture_groups: vec![FixtureGroupSummary {
+                    id: "g".to_string(),
+                    label: "Group".to_string(),
+                    color: Some("#112233".to_string()),
+                }],
+                ..ProjectSwapAncillaryState::default()
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(coordinator.ancillary.fixture_groups, before.fixture_groups);
+        assert_eq!(coordinator.revision, u64::MAX);
+    }
+
+    #[test]
+    fn direct_ancillary_preflight_blocks_engine_publish_before_revision_or_hash_failure() {
+        let mut coordinator = ProjectCoordinator::default();
+        coordinator.revision = u64::MAX;
+        let before = coordinator.ancillary.clone();
+        let publishes = AtomicU64::new(0);
+        let result = publish_after_direct_project_ancillary_preflight(
+            || {
+                prepare_direct_project_ancillary_commit(
+                    &coordinator,
+                    EngineSnapshot::default(),
+                    ProjectSwapAncillaryState::default(),
+                )
+            },
+            || {
+                publishes.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(publishes.load(Ordering::Acquire), 0);
+        assert_eq!(coordinator.revision, u64::MAX);
+        assert_eq!(
+            coordinator.ancillary.fixture_groups, before.fixture_groups,
+            "preflight failure must leave the coordinator/mirror candidate untouched"
+        );
+        assert_eq!(
+            coordinator.ancillary.current_project_path,
+            before.current_project_path
+        );
+
+        let serialization_publishes = AtomicU64::new(0);
+        let serialization_result = publish_after_direct_project_ancillary_preflight(
+            || {
+                Err::<PreparedDirectAncillaryMutation, _>(
+                    "injected canonical checkpoint serialization failure".to_string(),
+                )
+            },
+            || {
+                serialization_publishes.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            },
+        );
+        assert!(serialization_result.is_err());
+        assert_eq!(serialization_publishes.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn save_ticket_path_generation_rejects_reverse_save_as_and_normal_save_completion() {
+        let checkpoint = test_project_checkpoint(empty_project_file(), 3);
+        let ticket = ProjectSaveTicket {
+            checkpoint: checkpoint.clone(),
+            current_project_path: Some(PathBuf::from("C:/shows/A.sdc")),
+            path_generation: 9,
+            authority_disposition_generation: 4,
+            save_reservation_generation: Some(7),
+        };
+        assert!(project_save_ticket_matches_current(
+            &ticket,
+            &checkpoint,
+            &Some(PathBuf::from("C:/shows/A.sdc")),
+            9,
+            4,
+            7,
+        ));
+
+        // SA2 completes before SA1. It alone adopts C and increments the
+        // path generation; the older Save As and a concurrent normal Save
+        // may have written coherent A bytes but cannot report current success.
+        let adopted_path = Some(PathBuf::from("C:/shows/C.sdc"));
+        assert!(!project_save_ticket_matches_current(
+            &ticket,
+            &checkpoint,
+            &adopted_path,
+            10,
+            4,
+            7,
+        ));
+    }
+
+    #[test]
+    fn prepared_save_publish_rejects_reverse_writer_before_replace_and_keeps_newer_bytes() {
+        let directory = std::env::temp_dir().join(format!(
+            "syndocal-save-publication-test-{}-{}",
+            std::process::id(),
+            PROJECT_SAVE_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let target = directory.join("show.sdc");
+        let checkpoint = test_project_checkpoint(empty_project_file(), 3);
+        let ticket_a = ProjectSaveTicket {
+            checkpoint: checkpoint.clone(),
+            current_project_path: Some(target.clone()),
+            path_generation: 4,
+            authority_disposition_generation: 2,
+            save_reservation_generation: Some(1),
+        };
+        let ticket_b = ProjectSaveTicket {
+            save_reservation_generation: Some(2),
+            ..ticket_a.clone()
+        };
+        let temp_a = prepare_project_save_bytes(&target, b"A").unwrap();
+        let temp_b = prepare_project_save_bytes(&target, b"B").unwrap();
+
+        let b_is_current = project_save_ticket_matches_current(
+            &ticket_b,
+            &checkpoint,
+            &Some(target.clone()),
+            4,
+            2,
+            2,
+        );
+        publish_prepared_project_save_if_current(&temp_b, &target, b_is_current).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"B");
+
+        let a_is_current = project_save_ticket_matches_current(
+            &ticket_a,
+            &checkpoint,
+            &Some(target.clone()),
+            4,
+            2,
+            2,
+        );
+        assert!(!a_is_current, "S2 reservation must invalidate stalled S1");
+        assert!(publish_prepared_project_save_if_current(&temp_a, &target, a_is_current).is_err());
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            b"B",
+            "a rejected older writer must fail before replacing same-target B bytes"
+        );
+        discard_prepared_project_save_write(&temp_a);
+
+        // A Save As/template ticket is captured before its native dialog. A
+        // fenced identity B published while the dialog is open invalidates
+        // the A ticket before the selected path can be replaced.
+        let temp_dialog_a = prepare_project_save_bytes(&target, b"dialog-A").unwrap();
+        let mut identity_b = checkpoint.clone();
+        identity_b.epoch = checkpoint.epoch + 1;
+        let dialog_is_current = project_save_ticket_matches_current(
+            &ticket_b,
+            &identity_b,
+            &Some(target.clone()),
+            4,
+            2,
+            2,
+        );
+        assert!(!dialog_is_current);
+        assert!(publish_prepared_project_save_if_current(
+            &temp_dialog_a,
+            &target,
+            dialog_is_current
+        )
+        .is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"B");
+        discard_prepared_project_save_write(&temp_dialog_a);
+        fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn pending_identity_replacement_and_save_capture_are_rejected_before_publish() {
+        let before = test_project_checkpoint(empty_project_file(), 0);
+        let mut coordinator = ProjectCoordinator::default();
+        coordinator.history.pending.insert(
+            41,
+            test_pending_project_transaction(41, "Edit", "fixture:1", before),
+        );
+        assert!(ensure_no_pending_project_transaction(&coordinator).is_err());
+        // Both save-ticket capture and identity swap take this exact guard
+        // before their writer/publication callbacks.
+        let writer_callbacks = AtomicU64::new(0);
+        if ensure_no_pending_project_transaction(&coordinator).is_ok() {
+            writer_callbacks.fetch_add(1, Ordering::AcqRel);
+        }
+        assert_eq!(writer_callbacks.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn delayed_old_epoch_transaction_cannot_address_new_identity_reservation() {
+        let before = test_project_checkpoint(empty_project_file(), 0);
+        let mut coordinator = ProjectCoordinator {
+            epoch: 1,
+            next_transaction_id: 2,
+            ..ProjectCoordinator::default()
+        };
+        let mut new_before = before.clone();
+        new_before.epoch = 1;
+        coordinator.history.pending.insert(
+            2,
+            test_pending_project_transaction(2, "B edit", "fixture:2", new_before),
+        );
+        // A/1 was consumed before the identity swap. It is neither a current
+        // ticket nor an alias for B/2.
+        assert!(project_transaction_for_epoch(&coordinator, 1, 0).is_err());
+        assert!(project_transaction_for_epoch(&coordinator, 2, 1).is_ok());
+    }
+
+    #[test]
+    fn cancel_partial_transaction_keeps_changed_checkpoint_undoable() {
+        let before = test_project_checkpoint(empty_project_file(), 0);
+        let mut changed_project = empty_project_file();
+        changed_project.snapshot.blackout = true;
+        let after = test_project_checkpoint(changed_project, 0);
+        let mut coordinator = ProjectCoordinator::default();
+        let pending =
+            test_pending_project_transaction(73, "Edit fixtures", "fixture:1", before.clone());
+        coordinator.history.pending.insert(73, pending.clone());
+
+        let (history, revision_and_hash) =
+            prepare_cancelled_project_transaction_history(&coordinator, pending, after, 1).unwrap();
+        assert!(!history.pending.contains_key(&73));
+        assert_eq!(history.undo.len(), 1);
+        assert_eq!(history.undo[0].label, "Interrupted: Edit fixtures");
+        assert_eq!(history.undo[0].before, before);
+        assert_eq!(
+            revision_and_hash.as_ref().map(|(revision, _)| *revision),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn history_navigation_rewrites_actual_sources_for_b_to_a_to_b_to_a() {
+        let mut project_b = empty_project_file();
+        project_b.snapshot.blackout = true;
+        let a = test_project_checkpoint(empty_project_file(), 0);
+        let b = test_project_checkpoint(project_b, 1);
+        let entry = ProjectHistoryEntry {
+            entry_id: 1,
+            label: "Edit".to_string(),
+            coalesce_key: String::new(),
+            committed_at_unix_ms: 1,
+            before: a.clone(),
+            after: b.clone(),
+        };
+        let mut applied_a = a.clone();
+        applied_a.revision = 2;
+        let redo_entry = rewrite_navigated_project_history_entry(entry, true, applied_a.clone());
+        assert_eq!(redo_entry.before, applied_a);
+
+        let mut applied_b = b.clone();
+        applied_b.revision = 3;
+        let undo_entry =
+            rewrite_navigated_project_history_entry(redo_entry, false, applied_b.clone());
+        assert_eq!(undo_entry.after, applied_b);
+
+        let mut applied_a_again = a;
+        applied_a_again.revision = 4;
+        let redo_entry_again =
+            rewrite_navigated_project_history_entry(undo_entry, true, applied_a_again.clone());
+        assert_eq!(redo_entry_again.before, applied_a_again);
+    }
+
+    #[test]
+    fn same_standby_content_does_not_require_an_identity_apply() {
+        let project = empty_project_file();
+        let mappings = ProjectControlMappings::default();
+        let hash = project_checkpoint_hash(&project, &mappings).unwrap();
+        let current = ProjectCheckpoint {
+            project: project.clone(),
+            mappings: mappings.clone(),
+            epoch: 8,
+            revision: 4,
+            hash: hash.clone(),
+        };
+        let same_hash = project_checkpoint_hash(&project, &mappings).unwrap();
+        assert_eq!(hash, same_hash);
+        // This is the pure transport decision used by the polling worker:
+        // generation may advance, but canonical project+mappings content does
+        // not justify another retirement/identity replacement.
+        assert_eq!(
+            hash == same_hash && mappings == ProjectControlMappings::default(),
+            true
+        );
+        assert!(!project_checkpoint_content_requires_identity_apply(
+            &current, &mappings, &same_hash,
+        ));
+
+        let mut changed_mappings = mappings.clone();
+        changed_mappings.osc_mappings.push(OscControlMapping {
+            address: "/changed".to_string(),
+            action: OscControlAction::VideoMaster,
+            fixture_id: None,
+            attribute: None,
+            group_id: None,
+            cue_id: None,
+            layer_id: None,
+            video_param: None,
+            cue_point_index: None,
+            output_id: None,
+            duration_ms: None,
+            low: 0.0,
+            high: 1.0,
+        });
+        assert_ne!(
+            hash,
+            project_checkpoint_hash(&project, &changed_mappings).unwrap()
+        );
+        assert!(project_checkpoint_content_requires_identity_apply(
+            &current,
+            &changed_mappings,
+            &project_checkpoint_hash(&project, &changed_mappings).unwrap(),
+        ));
+    }
+
+    #[test]
+    fn daslight_import_mapping_result_keeps_report_midi_and_dmx_in_the_project_checkpoint() {
+        let midi = MidiControlMapping {
+            channel: Some(0),
+            message: protocol::MidiControlMessage::ControlChange,
+            number: 7,
+            action: MidiControlAction::VideoMaster,
+            fixture_id: None,
+            attribute: None,
+            group_id: None,
+            cue_id: None,
+            layer_id: None,
+            output_id: None,
+            video_param: None,
+            cue_point_index: None,
+            duration_ms: None,
+            feedback: None,
+            low: 0.0,
+            high: 1.0,
+        };
+        let dmx = DmxControlMapping {
+            universe: 0,
+            channel: 12,
+            action: DmxControlAction::VideoMaster,
+            fixture_id: None,
+            attribute: None,
+            group_id: None,
+            cue_id: None,
+            layer_id: None,
+            output_id: None,
+            video_param: None,
+            cue_point_index: None,
+            duration_ms: None,
+            low: 0.0,
+            high: 65_535.0,
+        };
+        let report = dvc_import::DvcImportReport {
+            path: "C:/imports/show.dvc".to_string(),
+            das_build: String::new(),
+            version_file: "2".to_string(),
+            summary: dvc_import::DvcImportSummary::default(),
+            converted: dvc_import::DvcImportCategory::default(),
+            approximate: dvc_import::DvcImportCategory::default(),
+            skipped: dvc_import::DvcImportCategory::default(),
+            unsupported: dvc_import::DvcImportCategory::default(),
+            warnings: Vec::new(),
+            midi_mappings: vec![midi.clone()],
+            dmx_mappings: vec![dmx.clone()],
+        };
+
+        let mappings = project_control_mappings_from_daslight_import_report(&report);
+        let prepared = prepare_project_load(
+            empty_project_file(),
+            mappings.clone(),
+            "Daslight test".to_string(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(prepared.mappings, mappings);
+        assert_eq!(prepared.mappings.midi_mappings, vec![midi]);
+        assert_eq!(prepared.mappings.dmx_mappings, vec![dmx]);
+        assert!(prepared.mappings.osc_mappings.is_empty());
+    }
+
     fn sample_operator_policy() -> OperatorPolicy {
         OperatorPolicy {
             lock_mode: protocol::OperatorLockMode::Partial,
@@ -28835,10 +46109,12 @@ mod tests {
         let directory = unique_test_directory("standby-checkpoints");
         fs::create_dir_all(&directory).unwrap();
         let project = empty_project_file();
+        let mappings = ProjectControlMappings::default();
         for generation in 1..=(STANDBY_SYNC_RETENTION as u64 + 2) {
             write_standby_checkpoint_in(
                 &directory,
                 &project,
+                &mappings,
                 "primary-a",
                 generation,
                 1_000 + generation,
@@ -28883,43 +46159,554 @@ mod tests {
     }
 
     #[test]
-    fn warm_standby_project_disarms_every_output_without_mutating_source() {
-        let mut project = empty_project_file();
+    fn standby_checkpoint_round_trips_backend_control_mappings() {
+        let directory = unique_test_directory("standby-control-mappings");
+        fs::create_dir_all(&directory).unwrap();
+        let mappings = ProjectControlMappings {
+            midi_mappings: Vec::new(),
+            osc_mappings: vec![OscControlMapping {
+                address: "/standby/master".to_string(),
+                action: OscControlAction::VideoMaster,
+                fixture_id: None,
+                attribute: None,
+                group_id: None,
+                cue_id: None,
+                layer_id: None,
+                video_param: None,
+                cue_point_index: None,
+                output_id: None,
+                duration_ms: None,
+                low: 0.0,
+                high: 1.0,
+            }],
+            dmx_mappings: Vec::new(),
+        };
+        let manifest = write_standby_checkpoint_in(
+            &directory,
+            &empty_project_file(),
+            &mappings,
+            "primary-mapped",
+            1,
+            1,
+        )
+        .unwrap();
+        let checkpoint = read_standby_checkpoint_for_session(&directory, Some("primary-mapped"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(checkpoint.manifest, manifest);
+        assert_eq!(checkpoint.mappings, mappings);
+        let bytes = fs::read(directory.join(checkpoint.manifest.project_file)).unwrap();
+        assert!(String::from_utf8(bytes)
+            .unwrap()
+            .contains("/standby/master"));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn standby_primary_poll_takeover_preserves_mappings_and_resets_history_epoch() {
+        // Primary writes the root-wire checkpoint, Standby polls exactly those
+        // bytes, and Take Over applies the polled mapping authority as an
+        // identity swap.  This keeps input mappings and history generation in
+        // the same checkpoint instead of treating mappings as frontend state.
+        let directory = unique_test_directory("standby-primary-poll-takeover");
+        fs::create_dir_all(&directory).unwrap();
+        let project = empty_project_file();
+        let mappings = ProjectControlMappings {
+            midi_mappings: Vec::new(),
+            osc_mappings: vec![OscControlMapping {
+                address: "/takeover/video-master".to_string(),
+                action: OscControlAction::VideoMaster,
+                fixture_id: None,
+                attribute: None,
+                group_id: None,
+                cue_id: None,
+                layer_id: None,
+                video_param: None,
+                cue_point_index: None,
+                output_id: None,
+                duration_ms: None,
+                low: 0.0,
+                high: 1.0,
+            }],
+            dmx_mappings: Vec::new(),
+        };
+        write_standby_checkpoint_in(&directory, &project, &mappings, "primary", 4, 4).unwrap();
+        let polled = read_standby_checkpoint_for_session(&directory, Some("primary"))
+            .unwrap()
+            .unwrap();
+
+        let mut coordinator = ProjectCoordinator {
+            epoch: 12,
+            revision: 9,
+            checkpoint_hash: "old-checkpoint".to_string(),
+            publication_generation: 0,
+            last_publication_kind: ProjectAuthorityPublicationKind::RuntimeStatus,
+            mapping_replacement_generation: 0,
+            authority_disposition_generation: 0,
+            authority_disposition: ProjectAuthorityDisposition::RuntimeSanitize,
+            next_transaction_id: 1,
+            path_generation: 0,
+            next_save_reservation_generation: 0,
+            latest_save_reservation_generation: 0,
+            history_generation: 0,
+            recovery_authority_serial: 0,
+            recovery_authority_last_transition: ProjectRecoveryAuthorityTransition::LegacyUnknown,
+            history: ProjectHistory {
+                undo: vec![ProjectHistoryEntry {
+                    entry_id: 1,
+                    label: "old edit".to_string(),
+                    coalesce_key: "old".to_string(),
+                    committed_at_unix_ms: 1,
+                    before: test_project_checkpoint(empty_project_file(), 8),
+                    after: test_project_checkpoint(empty_project_file(), 9),
+                }],
+                ..ProjectHistory::default()
+            },
+            mappings: ProjectControlMappings::default(),
+            ancillary: ProjectSwapAncillaryState::default(),
+        };
+        let next_hash = project_checkpoint_hash(&polled.project, &polled.mappings).unwrap();
+        coordinator
+            .finish_identity_swap(
+                ProjectSwapAncillaryState::default(),
+                polled.mappings.clone(),
+                next_hash.clone(),
+            )
+            .unwrap();
+
+        assert_eq!(coordinator.epoch, 13);
+        assert_eq!(coordinator.revision, 0);
+        assert_eq!(coordinator.checkpoint_hash, next_hash);
+        assert_eq!(coordinator.mappings, mappings);
+        assert!(coordinator.history.undo.is_empty());
+        assert!(coordinator.history.redo.is_empty());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn callback_epoch_fences_constructor_callbacks_and_stale_installation() {
+        let callback_epoch = Arc::new(AtomicU64::new(41));
+        let captured = callback_epoch.load(Ordering::Acquire);
+        assert!(callback_epoch_allows_send(&callback_epoch, captured));
+        assert!(project_input_installation_is_current(
+            7,
+            7,
+            &callback_epoch,
+            captured,
+        ));
+
+        // Model a replacement fence occurring after an input constructor has
+        // captured its epoch but before it can install its worker slot.
+        assert_eq!(reserve_project_callback_epoch(&callback_epoch).unwrap(), 42);
+        assert!(!callback_epoch_allows_send(&callback_epoch, captured));
+        assert!(!project_input_installation_is_current(
+            8,
+            7,
+            &callback_epoch,
+            captured,
+        ));
+    }
+
+    #[test]
+    fn callback_epoch_rejects_stale_constructor_callback_before_send() {
+        let callback_epoch = AtomicU64::new(24);
+        let captured = callback_epoch.load(Ordering::Acquire);
+        let sends = Arc::new(Mutex::new(0usize));
+
+        let sends_before_fence = Arc::clone(&sends);
+        assert_eq!(
+            run_if_callback_epoch(&callback_epoch, captured, move || {
+                *sends_before_fence.lock().unwrap() += 1;
+            }),
+            Some(())
+        );
+        assert_eq!(reserve_project_callback_epoch(&callback_epoch).unwrap(), 25);
+
+        // This models an event emitted by a constructor/worker after swap has
+        // fenced callbacks but before its taken worker is dropped. The send
+        // seam must not be invoked at all.
+        let sends_after_fence = Arc::clone(&sends);
+        assert_eq!(
+            run_if_callback_epoch(&callback_epoch, captured, move || {
+                *sends_after_fence.lock().unwrap() += 1;
+            }),
+            None
+        );
+        assert_eq!(*sends.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn installed_callback_gate_drops_constructor_events_and_never_waits_for_retirement() {
+        let admission = Arc::new(ProjectExternalCommandAdmission::default());
+        let callback_epoch = Arc::new(AtomicU64::new(24));
+        let transaction_active = Arc::new(AtomicBool::new(false));
+        let installed = Arc::new(AtomicBool::new(false));
+        let sends = Arc::new(AtomicU64::new(0));
+
+        // This is the production callback seam exercised by every MIDI/OSC/
+        // DMX constructor. A synchronous callback from inside the constructor
+        // is fail-closed until the caller has put its worker in the slot.
+        let suppressed_sends = Arc::clone(&sends);
+        assert_eq!(
+            run_if_installed_project_callback_epoch(
+                &admission,
+                &callback_epoch,
+                24,
+                &transaction_active,
+                &installed,
+                || suppressed_sends.fetch_add(1, Ordering::AcqRel),
+            ),
+            None
+        );
+        assert_eq!(sends.load(Ordering::Acquire), 0);
+
+        installed.store(true, Ordering::Release);
+        let admitted_sends = Arc::clone(&sends);
+        assert_eq!(
+            run_if_installed_project_callback_epoch(
+                &admission,
+                &callback_epoch,
+                24,
+                &transaction_active,
+                &installed,
+                || admitted_sends.fetch_add(1, Ordering::AcqRel),
+            ),
+            Some(0)
+        );
+        assert_eq!(sends.load(Ordering::Acquire), 1);
+
+        // A replacement holds admission while it takes/drops worker slots.
+        // The callback must return immediately instead of waiting behind it,
+        // otherwise retirement could wait on the same worker forever.
+        let replacement_admission = admission.gate.lock().unwrap();
+        let worker_admission = Arc::clone(&admission);
+        let worker_epoch = Arc::clone(&callback_epoch);
+        let worker_active = Arc::clone(&transaction_active);
+        let worker_installed = Arc::clone(&installed);
+        let worker_sends = Arc::clone(&sends);
+        let started = Instant::now();
+        let worker = std::thread::spawn(move || {
+            run_if_installed_project_callback_epoch(
+                &worker_admission,
+                &worker_epoch,
+                24,
+                &worker_active,
+                &worker_installed,
+                || worker_sends.fetch_add(1, Ordering::AcqRel),
+            )
+        });
+        assert_eq!(worker.join().unwrap(), None);
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert_eq!(sends.load(Ordering::Acquire), 1);
+        drop(replacement_admission);
+    }
+
+    #[test]
+    fn project_transaction_fence_blocks_external_callback_until_commit_boundary() {
+        let callback_epoch = AtomicU64::new(8);
+        let transaction_active = AtomicBool::new(true);
+        let sends = AtomicU64::new(0);
+        assert_eq!(
+            run_if_callback_epoch_when_transaction_idle(
+                &callback_epoch,
+                8,
+                &transaction_active,
+                || sends.fetch_add(1, Ordering::AcqRel),
+            ),
+            None
+        );
+        assert_eq!(sends.load(Ordering::Acquire), 0);
+        transaction_active.store(false, Ordering::Release);
+        assert_eq!(
+            run_if_callback_epoch_when_transaction_idle(
+                &callback_epoch,
+                8,
+                &transaction_active,
+                || sends.fetch_add(1, Ordering::AcqRel),
+            ),
+            Some(0)
+        );
+        assert_eq!(sends.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn external_admission_linearizes_callback_remote_and_transaction_baseline() {
+        use std::sync::mpsc;
+
+        let admission = Arc::new(ProjectExternalCommandAdmission::default());
+        let callback_epoch = Arc::new(AtomicU64::new(7));
+        let transaction_active = Arc::new(AtomicBool::new(false));
+        let external_version = Arc::new(AtomicU64::new(0));
+
+        // Callback wins admission first. Begin cannot capture until that exact
+        // send has completed, so its A baseline includes the external change.
+        let (callback_holds_tx, callback_holds_rx) = mpsc::channel();
+        let (release_callback_tx, release_callback_rx) = mpsc::channel();
+        let callback_admission = Arc::clone(&admission);
+        let callback_epoch_for_worker = Arc::clone(&callback_epoch);
+        let callback_active = Arc::clone(&transaction_active);
+        let callback_version = Arc::clone(&external_version);
+        let callback = std::thread::spawn(move || {
+            run_if_project_callback_epoch(
+                &callback_admission,
+                &callback_epoch_for_worker,
+                7,
+                &callback_active,
+                || {
+                    callback_holds_tx.send(()).unwrap();
+                    release_callback_rx.recv().unwrap();
+                    callback_version.fetch_add(1, Ordering::AcqRel);
+                },
+            )
+        });
+        callback_holds_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        let (baseline_tx, baseline_rx) = mpsc::channel();
+        let begin_admission = Arc::clone(&admission);
+        let begin_active = Arc::clone(&transaction_active);
+        let begin_version = Arc::clone(&external_version);
+        let begin = std::thread::spawn(move || {
+            let _admission = begin_admission.gate.lock().unwrap();
+            let baseline = arm_project_transaction_and_capture_baseline(&begin_active, || {
+                Ok(begin_version.load(Ordering::Acquire))
+            })
+            .unwrap();
+            baseline_tx.send(baseline).unwrap();
+        });
+        assert!(matches!(
+            baseline_rx.recv_timeout(Duration::from_millis(50)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        release_callback_tx.send(()).unwrap();
+        assert_eq!(callback.join().unwrap(), Some(()));
+        assert_eq!(baseline_rx.recv_timeout(Duration::from_secs(1)).unwrap(), 1);
+        begin.join().unwrap();
+        transaction_active.store(false, Ordering::Release);
+
+        // Begin wins admission. A current-generation callback cannot enqueue
+        // after the baseline or contaminate its intended transaction.
+        let _begin_admission = admission.gate.lock().unwrap();
+        let baseline = arm_project_transaction_and_capture_baseline(&transaction_active, || {
+            Ok(external_version.load(Ordering::Acquire))
+        })
+        .unwrap();
+        assert_eq!(baseline, 1);
+        let stale_admission = Arc::clone(&admission);
+        let stale_epoch = Arc::clone(&callback_epoch);
+        let stale_active = Arc::clone(&transaction_active);
+        let stale_version = Arc::clone(&external_version);
+        let stale_callback = std::thread::spawn(move || {
+            run_if_project_callback_epoch(&stale_admission, &stale_epoch, 7, &stale_active, || {
+                stale_version.fetch_add(1, Ordering::AcqRel)
+            })
+        });
+        assert_eq!(stale_callback.join().unwrap(), None);
+        assert_eq!(external_version.load(Ordering::Acquire), 1);
+        drop(_begin_admission);
+        transaction_active.store(false, Ordering::Release);
+
+        // Remote control has no callback epoch, but uses the identical
+        // nonblocking admission boundary and is likewise rejected while a
+        // replacement/baseline holds the guard.
+        let replacement_admission = admission.gate.lock().unwrap();
+        let remote_admission = Arc::clone(&admission);
+        let remote_active = Arc::clone(&transaction_active);
+        let remote_version = Arc::clone(&external_version);
+        let remote = std::thread::spawn(move || {
+            run_if_project_external_command_admitted(&remote_admission, &remote_active, || {
+                remote_version.fetch_add(1, Ordering::AcqRel)
+            })
+        });
+        let joined_at = Instant::now();
+        assert_eq!(remote.join().unwrap(), None);
+        assert!(
+            joined_at.elapsed() < Duration::from_millis(500),
+            "an input worker callback waited behind replacement admission"
+        );
+        assert_eq!(external_version.load(Ordering::Acquire), 1);
+        drop(replacement_admission);
+    }
+
+    #[test]
+    fn transaction_baseline_capture_unarms_when_capture_fails() {
+        let transaction_active = AtomicBool::new(false);
+        let result = arm_project_transaction_and_capture_baseline(&transaction_active, || {
+            Err::<(), _>("persistence capture failed".to_string())
+        });
+        assert!(result.is_err());
+        assert!(!transaction_active.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn stale_expected_epoch_rejects_before_transaction_reservation() {
+        let mut coordinator = ProjectCoordinator::default();
+        coordinator.epoch = 9;
+        let error = ensure_project_epoch_matches(&coordinator, 8).unwrap_err();
+        assert!(error.contains("expected epoch 8"));
+        assert!(coordinator.history.pending.is_empty());
+
+        ensure_project_epoch_matches(&coordinator, 9).unwrap();
+        assert!(coordinator.history.pending.is_empty());
+    }
+
+    #[test]
+    fn external_admission_precedes_coordinator_in_every_external_mutator() {
+        // Keep the ordering review executable. The runtime locks are not
+        // re-entrant and a coordinator -> admission inversion can deadlock a
+        // replacement which is waiting for a retired callback worker. This
+        // list contains every command/helper intentionally holding both.
+        let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs"));
+        for function in [
+            "create_fixture_group",
+            "rename_fixture_group",
+            "recolor_fixture_group",
+            "delete_fixture_group",
+            "undo_delete_fixture_group",
+            "connect_midi_clock",
+            "disconnect_midi_clock",
+            "connect_midi_control",
+            "disconnect_midi_control",
+            "connect_midi_feedback",
+            "disconnect_midi_feedback",
+            "set_midi_feedback_auto",
+            "start_osc_input",
+            "stop_osc_input",
+            "start_remote_control",
+            "start_dmx_input",
+            "stop_dmx_input",
+            "set_group_color",
+            "set_project_control_mappings",
+            "begin_project_transaction",
+            "commit_project_transaction",
+            "cancel_project_transaction",
+            "clear_project_history",
+            "navigate_project_history",
+            "replace_prepared_project_snapshot_after_standby_stop",
+        ] {
+            let marker = format!("fn {function}");
+            let start = source
+                .find(&marker)
+                .unwrap_or_else(|| panic!("missing audited function {function}"));
+            let remainder = &source[start + marker.len()..];
+            let end = remainder.find("\nfn ").unwrap_or(remainder.len());
+            let body = &remainder[..end];
+            let admission = body
+                .find("lock_project_external_command_admission")
+                .unwrap_or_else(|| panic!("{function} no longer takes external admission"));
+            let coordinator = body
+                .find("lock_project_coordinator")
+                .unwrap_or_else(|| panic!("{function} no longer takes coordinator"));
+            assert!(
+                admission < coordinator,
+                "{function} acquired coordinator before external admission"
+            );
+        }
+    }
+
+    #[test]
+    fn callback_epoch_overflow_is_rejected_without_changing_the_generation() {
+        let callback_epoch = AtomicU64::new(u64::MAX);
+        assert!(reserve_project_callback_epoch(&callback_epoch).is_err());
+        assert_eq!(callback_epoch.load(Ordering::Acquire), u64::MAX);
+    }
+
+    #[test]
+    fn project_control_retirement_joins_before_publish_and_releases_partial_takes() {
+        let events = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+        let take_events = Arc::clone(&events);
+        let release_events = Arc::clone(&events);
+        retire_after_project_control_slots_taken(
+            move || {
+                take_events.lock().unwrap().push("take-slots");
+                ("worker", Ok(()))
+            },
+            move |worker| {
+                assert_eq!(worker, "worker");
+                release_events.lock().unwrap().push("join-worker");
+            },
+        )
+        .unwrap();
+        events.lock().unwrap().push("publish");
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["take-slots", "join-worker", "publish"]
+        );
+
+        let partial_release = Arc::new(AtomicBool::new(false));
+        let partial_release_for_callback = Arc::clone(&partial_release);
+        assert!(retire_after_project_control_slots_taken(
+            || ("partially-taken", Err("later slot poisoned".to_string())),
+            move |_| partial_release_for_callback.store(true, Ordering::Release),
+        )
+        .is_err());
+        assert!(partial_release.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn project_load_preserves_authored_outputs_while_the_ownership_gate_denies_them() {
+        let mut project = project_with_valid_video_graph();
         project.snapshot.output.enabled = true;
-        project.snapshot.dmx_outputs = vec![DmxOutputConfig::default(), DmxOutputConfig::default()];
-        project.snapshot.video.outputs =
-            vec![project_video_output(1, 1), project_video_output(2, 1)];
+        project.snapshot.dmx_outputs = vec![DmxOutputConfig::default()];
         project.snapshot.blackout = false;
         project.snapshot.video.blackout = false;
 
-        let safe = project_for_warm_standby(project.clone());
+        let prepared = prepare_project_load(
+            project.clone(),
+            ProjectControlMappings::default(),
+            "authored output test".to_string(),
+            None,
+        )
+        .unwrap();
 
+        assert!(prepared.snapshot.output.enabled);
+        assert!(prepared
+            .snapshot
+            .dmx_outputs
+            .iter()
+            .all(|output| output.enabled));
+        assert!(prepared
+            .snapshot
+            .video
+            .outputs
+            .iter()
+            .all(|output| output.enabled && !output.blackout));
+        assert!(!prepared.snapshot.blackout);
+        assert!(!prepared.snapshot.video.blackout);
+
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let transition = engine
+            .begin_output_ownership_transition(MachineOutputRole::Both)
+            .unwrap();
+        let status = engine.output_ownership_status();
+        assert_eq!(status.desired_role, MachineOutputRole::Both);
+        assert_eq!(status.persisted_role, Some(MachineOutputRole::Both));
+        assert_eq!(status.effective_role, MachineOutputRole::Standby);
+        assert!(!status.lighting_allowed && !status.video_allowed);
+        transition.fail("test-only intentional disarm compatibility state");
+    }
+
+    #[test]
+    fn standby_sync_role_preserves_authored_project_bytes_for_runtime_gate() {
+        let mut project = empty_project_file();
+        project.snapshot.output.enabled = true;
+        project.snapshot.dmx_outputs = vec![DmxOutputConfig::default()];
+        project.snapshot.video.outputs = vec![project_video_output(1, 1)];
+        let before = serde_json::to_vec(&project).unwrap();
+        let project_json = String::from_utf8(before.clone()).unwrap();
+        assert!(!project_json.contains("machine_output_role"));
+        assert!(!project_json.contains("output_ownership"));
+        let status = OutputOwnershipStatus::for_role(MachineOutputRole::Standby);
+
+        assert!(!status.lighting_allowed);
+        assert!(!status.video_allowed);
         assert!(project.snapshot.output.enabled);
-        assert!(project
-            .snapshot
-            .dmx_outputs
-            .iter()
-            .all(|output| output.enabled));
-        assert!(project
-            .snapshot
-            .video
-            .outputs
-            .iter()
-            .all(|output| output.enabled));
-        assert!(!safe.snapshot.output.enabled);
-        assert!(safe
-            .snapshot
-            .dmx_outputs
-            .iter()
-            .all(|output| !output.enabled));
-        assert!(safe
-            .snapshot
-            .video
-            .outputs
-            .iter()
-            .all(|output| !output.enabled && output.blackout));
-        assert!(safe.snapshot.blackout);
-        assert!(safe.snapshot.video.blackout);
+        assert!(project.snapshot.dmx_outputs[0].enabled);
+        assert!(project.snapshot.video.outputs[0].enabled);
+        assert_eq!(serde_json::to_vec(&project).unwrap(), before);
     }
 
     #[test]
@@ -28927,8 +46714,11 @@ mod tests {
         let directory = unique_test_directory("standby-split-brain");
         fs::create_dir_all(&directory).unwrap();
         let project = empty_project_file();
-        write_standby_checkpoint_in(&directory, &project, "primary-a", 1, 10_000).unwrap();
-        write_standby_checkpoint_in(&directory, &project, "primary-b", 1, 10_250).unwrap();
+        let mappings = ProjectControlMappings::default();
+        write_standby_checkpoint_in(&directory, &project, &mappings, "primary-a", 1, 10_000)
+            .unwrap();
+        write_standby_checkpoint_in(&directory, &project, &mappings, "primary-b", 1, 10_250)
+            .unwrap();
 
         let manifests = list_standby_manifests(&directory).unwrap();
         let mut activity = HashMap::new();
@@ -28943,7 +46733,7 @@ mod tests {
         }
         assert!(observe_active_primary_sessions(&manifests, &mut activity).is_empty());
 
-        write_standby_checkpoint_in(&directory, &project, "primary-b", 2, 1).unwrap();
+        write_standby_checkpoint_in(&directory, &project, &mappings, "primary-b", 2, 1).unwrap();
         let manifests = list_standby_manifests(&directory).unwrap();
         assert_eq!(
             observe_active_primary_sessions(&manifests, &mut activity),
@@ -28988,57 +46778,322 @@ mod tests {
     }
 
     #[test]
+    fn project_coordinator_identity_swap_resets_history_and_advances_generation() {
+        let mut coordinator = ProjectCoordinator::default();
+        coordinator.revision = 7;
+        let checkpoint = test_project_checkpoint(empty_project_file(), 7);
+        coordinator.history.undo.push(ProjectHistoryEntry {
+            entry_id: 1,
+            label: "Earlier edit".to_string(),
+            coalesce_key: String::new(),
+            committed_at_unix_ms: 1,
+            before: checkpoint.clone(),
+            after: checkpoint,
+        });
+        let baseline = coordinator.begin_identity_swap();
+
+        coordinator
+            .finish_identity_swap(
+                ProjectSwapAncillaryState {
+                    current_project_path: Some(PathBuf::from("C:/shows/b.sdc")),
+                    ..ProjectSwapAncillaryState::default()
+                },
+                ProjectControlMappings::default(),
+                "b-checkpoint".to_string(),
+            )
+            .unwrap();
+
+        assert_eq!(baseline, 0);
+        assert_eq!(coordinator.epoch, 1);
+        assert_eq!(coordinator.revision, 0);
+        assert_eq!(coordinator.checkpoint_hash, "b-checkpoint");
+        assert!(coordinator.history.undo.is_empty());
+        assert_eq!(
+            coordinator.ancillary.current_project_path,
+            Some(PathBuf::from("C:/shows/b.sdc"))
+        );
+
+        coordinator.note_mutation().unwrap();
+        assert_eq!(coordinator.revision, 1);
+    }
+
+    #[test]
+    fn project_history_generation_preflight_is_checked_and_does_not_mutate_on_overflow() {
+        let mut coordinator = ProjectCoordinator {
+            epoch: 7,
+            revision: 3,
+            checkpoint_hash: "A".to_string(),
+            path_generation: 11,
+            history_generation: u64::MAX,
+            ..ProjectCoordinator::default()
+        };
+        let before = project_authority_capture_stamp(&coordinator);
+
+        // Begin/Commit/Cancel/Clear/Undo/Redo all use this same preflight
+        // before changing their observable stacks or transaction fence. An
+        // exhausted counter therefore cannot leave a half-applied transition.
+        assert!(checked_project_history_generation_after_change(&coordinator).is_err());
+        assert!(coordinator.preflight_identity_swap_counters().is_err());
+        assert_eq!(project_authority_capture_stamp(&coordinator), before);
+
+        coordinator.history_generation = 41;
+        let next = checked_project_history_generation_after_change(&coordinator).unwrap();
+        assert_eq!(next, 42);
+        assert_eq!(coordinator.history_generation, 41);
+        coordinator.history_generation = next;
+        assert_eq!(coordinator.history_generation, 42);
+    }
+
+    #[test]
+    fn authority_poll_seqlock_retries_persistent_send_but_stays_live_for_runtime_only_work() {
+        let admission = ProjectExternalCommandAdmission::default();
+        let mut attempts = 0usize;
+        let captured = capture_project_authority_without_external_admission(&admission, |_| {
+            attempts += 1;
+            if attempts == 1 {
+                // This models a persistent callback/remote command that
+                // completed while persistence_snapshot was outside every
+                // authority lock. The poll must retry instead of returning
+                // a mixed snapshot/ancillary bundle.
+                admission.note_admitted_external_command();
+                Ok(ProjectAuthoritySeqlockCapture::Complete(Some("stale")))
+            } else {
+                Ok(ProjectAuthoritySeqlockCapture::Complete(Some("fresh")))
+            }
+        })
+        .unwrap();
+        assert_eq!(captured, Some("fresh"));
+        assert_eq!(attempts, 2);
+
+        let generation = admission.generation();
+        let runtime_only_capture =
+            capture_project_authority_without_external_admission(&admission, |_| {
+                // Runtime-only frame/clock work never calls
+                // note_admitted_external_command, so a 44 Hz input stream
+                // cannot starve the read-only authority poll.
+                Ok(ProjectAuthoritySeqlockCapture::Complete(Some("live")))
+            })
+            .unwrap();
+        assert_eq!(runtime_only_capture, Some("live"));
+        assert_eq!(admission.generation(), generation);
+    }
+
+    #[test]
+    fn mapping_replacement_generation_survives_later_ordinary_mutation_publication() {
+        let mut coordinator = ProjectCoordinator::default();
+        let navigation_publication =
+            checked_project_authority_publication_generation_after_change(&coordinator).unwrap();
+        let navigation_mapping_replacement =
+            checked_project_mapping_replacement_generation_after_change(&coordinator).unwrap();
+        commit_project_authority_publication_after_preflight(
+            &mut coordinator,
+            navigation_publication,
+            ProjectAuthorityPublicationKind::HistoryNavigation,
+        );
+        coordinator.mapping_replacement_generation = navigation_mapping_replacement;
+
+        // An admitted/direct ordinary mutation is later than Undo, but it
+        // must not erase the durable proof that mapping arrays were replaced.
+        let mutation_publication =
+            checked_project_authority_publication_generation_after_change(&coordinator).unwrap();
+        commit_project_authority_publication_after_preflight(
+            &mut coordinator,
+            mutation_publication,
+            ProjectAuthorityPublicationKind::Mutation,
+        );
+        assert_eq!(
+            coordinator.last_publication_kind,
+            ProjectAuthorityPublicationKind::Mutation
+        );
+        assert_eq!(coordinator.mapping_replacement_generation, 1);
+        assert!(coordinator.publication_generation > coordinator.mapping_replacement_generation);
+    }
+
+    #[test]
+    fn authority_disposition_is_preflighted_and_durable_in_identity_and_history_images() {
+        let mut coordinator = ProjectCoordinator::default();
+        let counters = coordinator.preflight_identity_swap_counters().unwrap();
+        coordinator.finish_identity_swap_after_preflight(
+            ProjectSwapAncillaryState::default(),
+            ProjectControlMappings::default(),
+            "template-B".to_string(),
+            counters,
+            ProjectAuthorityDisposition::UnsavedReplacement,
+        );
+        assert_eq!(coordinator.authority_disposition_generation, 1);
+        assert_eq!(
+            coordinator.authority_disposition,
+            ProjectAuthorityDisposition::UnsavedReplacement
+        );
+
+        // Recovery acknowledgement changes only durable clean/recovery truth;
+        // it must still be visible to event-loss polling even if E/R/H stay
+        // identical.
+        let next =
+            checked_project_authority_disposition_generation_after_change(&coordinator).unwrap();
+        commit_project_authority_disposition_after_preflight(
+            &mut coordinator,
+            next,
+            ProjectAuthorityDisposition::RecoveryPendingAck,
+        );
+        let stamp = project_authority_capture_stamp(&coordinator);
+        assert_eq!(stamp.authority_disposition_generation, 2);
+        assert_eq!(
+            stamp.authority_disposition,
+            ProjectAuthorityDisposition::RecoveryPendingAck
+        );
+    }
+
+    #[test]
+    fn runtime_sanitize_preserves_coordinator_ancillary_mirrors_and_reconciled_metadata() {
+        let retained_group = FixtureGroupSummary {
+            id: "front".to_string(),
+            label: "Front".to_string(),
+            color: Some("#ff00aa".to_string()),
+        };
+        let retained_ancillary = ProjectSwapAncillaryState {
+            fixture_groups: vec![retained_group.clone()],
+            fixture_group_delete_undo: Some(DeletedFixtureGroup {
+                group: retained_group.clone(),
+                group_index: 0,
+                fixture_membership_indexes: vec![(7, 0)],
+            }),
+            current_project_path: Some(PathBuf::from("C:/shows/A.sdc")),
+            ..ProjectSwapAncillaryState::default()
+        };
+        let mut coordinator = ProjectCoordinator {
+            epoch: 4,
+            revision: 8,
+            checkpoint_hash: "A".to_string(),
+            history_generation: 12,
+            authority_disposition_generation: 7,
+            authority_disposition: ProjectAuthorityDisposition::CleanAtPath,
+            ancillary: retained_ancillary.clone(),
+            ..ProjectCoordinator::default()
+        };
+        let prepared_ancillary = ProjectSwapAncillaryState::default();
+        let before_runtime_sanitize = project_authority_capture_stamp(&coordinator);
+        let mirrored = project_swap_ancillary_mirrors_after_commit(
+            &coordinator,
+            &prepared_ancillary,
+            ProjectReplacementCoordinatorEffect::RuntimeSanitize,
+        );
+        assert_eq!(mirrored.fixture_groups, retained_ancillary.fixture_groups);
+        assert_eq!(
+            mirrored.current_project_path,
+            retained_ancillary.current_project_path
+        );
+        assert_eq!(
+            mirrored
+                .fixture_group_delete_undo
+                .as_ref()
+                .map(|deleted| deleted.group.id.as_str()),
+            Some("front")
+        );
+        assert_eq!(
+            project_authority_capture_stamp(&coordinator),
+            before_runtime_sanitize,
+            "runtime-only mirror selection must not manufacture identity/history/path/disposition state"
+        );
+
+        // Model an admitted external B that was already in persistence when
+        // RuntimeSanitize acquired admission. Reconciliation advances the
+        // coordinator before result metadata is copied, so B is never paired
+        // with A's token.
+        let mut checkpoint = test_project_checkpoint(empty_project_file(), 0);
+        checkpoint.hash = "B".to_string();
+        reconcile_project_checkpoint_metadata(&mut coordinator, &mut checkpoint).unwrap();
+        let mut result = prepare_project_load(
+            empty_project_file(),
+            ProjectControlMappings::default(),
+            "Warm standby".to_string(),
+            None,
+        )
+        .unwrap()
+        .result;
+        synchronize_project_load_result_authority_metadata(&mut result, &coordinator);
+        assert_eq!(coordinator.checkpoint_hash, "B");
+        assert_eq!(result.checkpoint_hash, coordinator.checkpoint_hash);
+        assert_eq!(result.project_revision, coordinator.revision);
+        assert_eq!(
+            result.current_project_path,
+            Some("C:/shows/A.sdc".to_string())
+        );
+    }
+
+    #[test]
+    fn disposition_generation_overflow_rejects_identity_publish_before_mutation() {
+        let mut coordinator = ProjectCoordinator {
+            authority_disposition_generation: u64::MAX,
+            ..ProjectCoordinator::default()
+        };
+        let before = project_authority_capture_stamp(&coordinator);
+        assert!(coordinator.preflight_identity_swap_counters().is_err());
+        assert_eq!(project_authority_capture_stamp(&coordinator), before);
+
+        // Explicit recovery acknowledgement uses the same checked counter and
+        // likewise cannot turn an already-applied browser draft into an
+        // ambiguous post-overflow state.
+        coordinator.authority_disposition = ProjectAuthorityDisposition::RecoveryPendingAck;
+        assert!(
+            checked_project_authority_disposition_generation_after_change(&coordinator).is_err()
+        );
+    }
+
+    #[test]
     fn project_history_skips_noops_and_coalesces_continuous_edits_by_target() {
         let mut history = ProjectHistory::default();
-        let original = empty_project_file();
-        let noop = PendingProjectTransaction {
-            label: "Set Attribute".to_string(),
-            coalesce_key: "fixture:1:Dimmer".to_string(),
-            before: original.clone(),
-        };
+        let original = test_project_checkpoint(empty_project_file(), 0);
+        let noop = test_pending_project_transaction(
+            1,
+            "Set Attribute",
+            "fixture:1:Dimmer",
+            original.clone(),
+        );
         commit_project_history_entry(&mut history, noop, original.clone(), 10).unwrap();
         assert!(history.undo.is_empty());
 
-        let mut first_after = original.clone();
-        first_after.snapshot.lighting_master = 0.8;
+        let mut first_after_project = original.project.clone();
+        first_after_project.snapshot.lighting_master = 0.8;
+        let first_after = test_project_checkpoint(first_after_project, 1);
         commit_project_history_entry(
             &mut history,
-            PendingProjectTransaction {
-                label: "Set Lighting Master".to_string(),
-                coalesce_key: "master:lighting".to_string(),
-                before: original.clone(),
-            },
+            test_pending_project_transaction(
+                2,
+                "Set Lighting Master",
+                "master:lighting",
+                original.clone(),
+            ),
             first_after.clone(),
             100,
         )
         .unwrap();
-        let mut second_after = first_after.clone();
-        second_after.snapshot.lighting_master = 0.6;
+        let mut second_after_project = first_after.project.clone();
+        second_after_project.snapshot.lighting_master = 0.6;
+        let second_after = test_project_checkpoint(second_after_project, 2);
         commit_project_history_entry(
             &mut history,
-            PendingProjectTransaction {
-                label: "Set Lighting Master".to_string(),
-                coalesce_key: "master:lighting".to_string(),
-                before: first_after,
-            },
+            test_pending_project_transaction(
+                3,
+                "Set Lighting Master",
+                "master:lighting",
+                first_after,
+            ),
             second_after.clone(),
             500,
         )
         .unwrap();
 
         assert_eq!(history.undo.len(), 1);
-        assert_eq!(history.undo[0].before.snapshot.lighting_master, 1.0);
-        assert_eq!(history.undo[0].after.snapshot.lighting_master, 0.6);
+        assert_eq!(history.undo[0].before.project.snapshot.lighting_master, 1.0);
+        assert_eq!(history.undo[0].after.project.snapshot.lighting_master, 0.6);
 
-        let mut third_after = second_after.clone();
-        third_after.snapshot.lighting_master = 0.4;
+        let mut third_after_project = second_after.project.clone();
+        third_after_project.snapshot.lighting_master = 0.4;
+        let third_after = test_project_checkpoint(third_after_project, 3);
         commit_project_history_entry(
             &mut history,
-            PendingProjectTransaction {
-                label: "Set Other Target".to_string(),
-                coalesce_key: "master:other".to_string(),
-                before: second_after,
-            },
+            test_pending_project_transaction(4, "Set Other Target", "master:other", second_after),
             third_after,
             600,
         )
@@ -29082,7 +47137,7 @@ mod tests {
             ..protocol::CueSummary::default()
         }];
 
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -29934,7 +47989,7 @@ f 1 2 3
             Some(3)
         );
 
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -30218,7 +48273,7 @@ f 1 2 3
             output.enabled = false;
         }
 
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -30290,7 +48345,7 @@ f 1 2 3
             output.enabled = false;
         }
 
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -30349,7 +48404,7 @@ f 1 2 3
             output.enabled = false;
         }
 
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -30403,7 +48458,7 @@ f 1 2 3
         snapshot_to_load.output.universe = 0;
         snapshot_to_load.dmx_outputs = vec![snapshot_to_load.output.clone()];
 
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -30515,7 +48570,7 @@ f 1 2 3
     }
 
     #[test]
-    fn user_templates_round_trip_shared_mappings_and_open_with_outputs_disarmed() {
+    fn user_templates_round_trip_shared_mappings_without_rewriting_authored_outputs() {
         let mut project = project_with_valid_video_graph();
         let effect_project = project_with_effect_only_cue();
         project.snapshot.fixtures = effect_project.snapshot.fixtures;
@@ -30605,31 +48660,22 @@ f 1 2 3
             }]
         );
 
-        let safe = project_for_warm_standby(normalized.project);
-        assert!(!safe.snapshot.output.enabled);
-        assert!(safe
+        assert!(normalized.project.snapshot.output.enabled);
+        assert!(normalized
+            .project
             .snapshot
             .dmx_outputs
             .iter()
-            .all(|output| !output.enabled));
-        assert!(safe.snapshot.blackout);
-        assert!(safe.snapshot.video.blackout);
-        assert!(safe
+            .all(|output| output.enabled));
+        assert!(!normalized.project.snapshot.blackout);
+        assert!(!normalized.project.snapshot.video.blackout);
+        assert!(normalized
+            .project
             .snapshot
             .video
             .outputs
             .iter()
-            .all(|output| !output.enabled && output.blackout));
-        assert_eq!(
-            safe.snapshot.cues[0].effect_targets,
-            vec![CueEffectTarget {
-                effect_id: 9,
-                enabled: false,
-                params: None,
-                transition_ms: None,
-            }]
-        );
-
+            .all(|output| output.enabled && !output.blackout));
         let mut legacy = serde_json::to_value(&template).unwrap();
         legacy.as_object_mut().unwrap().remove("midi_mappings");
         legacy.as_object_mut().unwrap().remove("osc_mappings");
@@ -31801,7 +49847,7 @@ f 1 2 3
         let media_path = unique_test_directory("vj-first-run-media").with_extension("mov");
         let missing_path = media_path.with_extension("missing");
         fs::write(&media_path, b"test media").unwrap();
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -31921,6 +49967,7 @@ f 1 2 3
                 codec: None,
                 metadata: None,
             },
+            media_asset_id: None,
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState::default(),
             isf_effect: None,
@@ -31981,6 +50028,7 @@ f 1 2 3
                         codec: Some("H264".to_string()),
                         metadata: None,
                     },
+                    media_asset_id: None,
                     blend_mode: VideoBlendMode::Normal,
                     state: VideoLayerState {
                         position_ms: 100,
@@ -31999,11 +50047,13 @@ f 1 2 3
                         codec: None,
                         metadata: None,
                     },
+                    media_asset_id: None,
                     blend_mode: VideoBlendMode::Normal,
                     state: VideoLayerState::default(),
                     isf_effect: None,
                 },
             ],
+            media_assets: Vec::new(),
             compositions: vec![CompositionSummary {
                 id: 5,
                 label: "Main".to_string(),
@@ -32884,6 +50934,87 @@ f 1 2 3
     }
 
     #[test]
+    fn media_asset_authoritative_operator_pbkdf2_matches_known_sha256_vector() {
+        let derived = operator_pbkdf2_sha256(b"password", b"salt", 1);
+        let derived_hex = derived
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        assert_eq!(
+            derived_hex,
+            "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b"
+        );
+        validate_operator_password_input("12345678").unwrap();
+        validate_operator_password_input("😀😀😀😀").unwrap();
+        assert!(validate_operator_password_input("1234567").is_err());
+        assert!(
+            validate_operator_password_input(&"x".repeat(OPERATOR_PASSWORD_MAX_BYTES + 1)).is_err()
+        );
+    }
+
+    #[test]
+    fn media_asset_authoritative_operator_sessions_fail_closed_and_reset_on_policy_change() {
+        let owner_id = "renderer:test";
+        let mut coordinator = ProjectCoordinator::default();
+        let mut policy = sample_operator_policy();
+        coordinator.ancillary.operator_policy = Some(policy.clone());
+        let mut sessions = HashMap::new();
+
+        let locked = project_operator_sessions_allow_authoritative_mutation(
+            &mut sessions,
+            &coordinator,
+            owner_id,
+        )
+        .unwrap_err();
+        assert!(locked.contains("Partial Lock"));
+        sessions.get_mut(owner_id).unwrap().unlocked = true;
+        project_operator_sessions_allow_authoritative_mutation(
+            &mut sessions,
+            &coordinator,
+            owner_id,
+        )
+        .unwrap();
+
+        coordinator.epoch = 1;
+        let replaced = project_operator_sessions_allow_authoritative_mutation(
+            &mut sessions,
+            &coordinator,
+            owner_id,
+        )
+        .unwrap_err();
+        assert!(replaced.contains("Partial Lock"));
+        assert!(!sessions.get(owner_id).unwrap().unlocked);
+
+        policy.lock_mode = OperatorLockMode::Full;
+        coordinator.ancillary.operator_policy = Some(policy.clone());
+        let changed_policy = project_operator_sessions_allow_authoritative_mutation(
+            &mut sessions,
+            &coordinator,
+            owner_id,
+        )
+        .unwrap_err();
+        assert!(changed_policy.contains("Full Lock"));
+
+        policy.lock_on_load = false;
+        coordinator.ancillary.operator_policy = Some(policy);
+        project_operator_sessions_allow_authoritative_mutation(
+            &mut sessions,
+            &coordinator,
+            owner_id,
+        )
+        .unwrap();
+
+        coordinator.ancillary.operator_policy = None;
+        project_operator_sessions_allow_authoritative_mutation(
+            &mut sessions,
+            &coordinator,
+            owner_id,
+        )
+        .unwrap();
+        assert!(!sessions.contains_key(owner_id));
+    }
+
+    #[test]
     fn pane_window_placements_accept_known_safe_windows_and_reject_mismatches() {
         let placement = PaneWindowPlacement {
             pane: "timeline".to_string(),
@@ -33397,7 +51528,7 @@ f 1 2 3
         for output in &mut project.snapshot.dmx_outputs {
             output.enabled = false;
         }
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -33565,6 +51696,7 @@ f 1 2 3
             ..protocol::VideoSnapshot::default()
         };
         let snapshot = |rendered_layer, graph| EngineSnapshot {
+            fixtures: vec![project_fixture(1, "Runtime target", 0, 1)],
             video: protocol::VideoSnapshot {
                 layers: vec![rendered_layer],
                 ..protocol::VideoSnapshot::default()
@@ -33585,17 +51717,75 @@ f 1 2 3
             snapshot: project_snapshot_for_save(snapshot(after_rendered, after_graph)),
             ..before.clone()
         };
-        let pending = PendingProjectTransaction {
-            label: "Runtime audio modulation".to_string(),
-            coalesce_key: "audio-runtime".to_string(),
-            before,
-        };
+        let pending = test_pending_project_transaction(
+            1,
+            "Runtime audio modulation",
+            "audio-runtime",
+            test_project_checkpoint(before, 0),
+        );
         let mut history = ProjectHistory::default();
 
-        commit_project_history_entry(&mut history, pending, after, 1).unwrap();
+        commit_project_history_entry(&mut history, pending, test_project_checkpoint(after, 0), 1)
+            .unwrap();
 
         assert!(history.undo.is_empty());
         assert!(history.redo.is_empty());
+    }
+
+    #[test]
+    fn idle_engine_persistence_image_is_stable_across_runtime_ticks() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig::default());
+        let canonical = || {
+            serde_json::to_value(project_snapshot_for_save(
+                engine.persistence_snapshot().unwrap(),
+            ))
+            .unwrap()
+        };
+        let before = canonical();
+        std::thread::sleep(Duration::from_millis(150));
+        let after = canonical();
+
+        fn first_difference(
+            path: &str,
+            before: &serde_json::Value,
+            after: &serde_json::Value,
+        ) -> Option<String> {
+            match (before, after) {
+                (serde_json::Value::Object(before), serde_json::Value::Object(after)) => {
+                    let keys = before
+                        .keys()
+                        .chain(after.keys())
+                        .collect::<std::collections::BTreeSet<_>>();
+                    keys.into_iter().find_map(|key| {
+                        first_difference(
+                            &format!("{path}.{key}"),
+                            before.get(key).unwrap_or(&serde_json::Value::Null),
+                            after.get(key).unwrap_or(&serde_json::Value::Null),
+                        )
+                    })
+                }
+                (serde_json::Value::Array(before), serde_json::Value::Array(after)) => {
+                    if before.len() != after.len() {
+                        return Some(format!(
+                            "{path}.length: {} != {}",
+                            before.len(),
+                            after.len()
+                        ));
+                    }
+                    before
+                        .iter()
+                        .zip(after)
+                        .enumerate()
+                        .find_map(|(index, (before, after))| {
+                            first_difference(&format!("{path}[{index}]"), before, after)
+                        })
+                }
+                _ if before != after => Some(format!("{path}: {before} != {after}")),
+                _ => None,
+            }
+        }
+
+        assert_eq!(first_difference("snapshot", &before, &after), None);
     }
 
     #[test]
@@ -33948,7 +52138,7 @@ f 1 2 3
             }],
             ..EngineSnapshot::default()
         };
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -34029,7 +52219,7 @@ f 1 2 3
             }],
             ..EngineSnapshot::default()
         };
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -34076,22 +52266,20 @@ f 1 2 3
             }]
         );
 
-        let mut after = roundtrip.clone();
-        after.snapshot.cues[0].effect_targets[0].enabled = true;
+        let before = test_project_checkpoint(roundtrip.clone(), 0);
+        let mut after_project = roundtrip.clone();
+        after_project.snapshot.cues[0].effect_targets[0].enabled = true;
+        let after = test_project_checkpoint(after_project, 1);
         let mut history = ProjectHistory::default();
         commit_project_history_entry(
             &mut history,
-            PendingProjectTransaction {
-                label: "Update Cue Effects".to_string(),
-                coalesce_key: "cue:7:effects".to_string(),
-                before: roundtrip.clone(),
-            },
+            test_pending_project_transaction(1, "Update Cue Effects", "cue:7:effects", before),
             after,
             100,
         )
         .unwrap();
-        assert!(!history.undo[0].before.snapshot.cues[0].effect_targets[0].enabled);
-        assert!(history.undo[0].after.snapshot.cues[0].effect_targets[0].enabled);
+        assert!(!history.undo[0].before.project.snapshot.cues[0].effect_targets[0].enabled);
+        assert!(history.undo[0].after.project.snapshot.cues[0].effect_targets[0].enabled);
 
         let mut legacy = serde_json::to_value(roundtrip).unwrap();
         legacy["snapshot"]["cues"][0]
@@ -34114,6 +52302,7 @@ f 1 2 3
                 codec: None,
                 metadata: None,
             },
+            media_asset_id: None,
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState::default(),
             isf_effect: None,
@@ -36276,7 +54465,7 @@ f 1 2 3
         for output in &mut project.snapshot.dmx_outputs {
             output.enabled = false;
         }
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -36306,7 +54495,7 @@ f 1 2 3
         for output in &mut snapshot_to_load.dmx_outputs {
             output.enabled = false;
         }
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -36700,23 +54889,24 @@ f 1 2 3
         let mut history = ProjectHistory::default();
         commit_project_history_entry(
             &mut history,
-            PendingProjectTransaction {
-                label: "Edit Scene Block".to_string(),
-                coalesce_key: "timeline:scene-block:20".to_string(),
-                before: before.clone(),
-            },
-            after.clone(),
+            test_pending_project_transaction(
+                1,
+                "Edit Scene Block",
+                "timeline:scene-block:20",
+                test_project_checkpoint(before.clone(), 0),
+            ),
+            test_project_checkpoint(after.clone(), 1),
             1_000,
         )
         .unwrap();
 
         assert_eq!(history.undo.len(), 1);
         assert_eq!(
-            history.undo[0].before.snapshot.timeline.events,
+            history.undo[0].before.project.snapshot.timeline.events,
             before.snapshot.timeline.events
         );
         assert_eq!(
-            history.undo[0].after.snapshot.timeline.events,
+            history.undo[0].after.project.snapshot.timeline.events,
             after.snapshot.timeline.events
         );
     }
@@ -36724,6 +54914,11 @@ f 1 2 3
     #[test]
     fn timeline_snap_batch_is_preserved_as_one_project_history_entry() {
         let mut before = project_with_timeline_scene_blocks();
+        // Checkpoint hashing validates the complete persistence surface.  This
+        // automation intentionally targets fixture 1, so keep its historic
+        // test payload valid rather than weakening the checkpoint helper.
+        before.snapshot.fixtures = vec![project_fixture(1, "Automation target", 0, 1)];
+        before.snapshot.video.layers = vec![project_video_layer(1)];
         before.snapshot.timeline.automations = vec![protocol::TimelineAutomationSummary {
             id: 30,
             fixture_id: 1,
@@ -36767,23 +54962,24 @@ f 1 2 3
         let mut history = ProjectHistory::default();
         commit_project_history_entry(
             &mut history,
-            PendingProjectTransaction {
-                label: "Snap Timeline Items".to_string(),
-                coalesce_key: "timeline:snap-selection".to_string(),
-                before: before.clone(),
-            },
-            after.clone(),
+            test_pending_project_transaction(
+                1,
+                "Snap Timeline Items",
+                "timeline:snap-selection",
+                test_project_checkpoint(before.clone(), 0),
+            ),
+            test_project_checkpoint(after.clone(), 1),
             1_000,
         )
         .unwrap();
 
         assert_eq!(history.undo.len(), 1);
         assert_eq!(
-            history.undo[0].before.snapshot.timeline,
+            history.undo[0].before.project.snapshot.timeline,
             before.snapshot.timeline
         );
         assert_eq!(
-            history.undo[0].after.snapshot.timeline,
+            history.undo[0].after.project.snapshot.timeline,
             after.snapshot.timeline
         );
     }
@@ -37981,6 +56177,32 @@ f 1 2 3
         assert!(size_error.contains("size must be greater than zero"));
     }
 
+    #[test]
+    fn stage_map_file_candidate_is_normalized_before_transactional_import() {
+        let object = StageObjectSummary {
+            id: 9,
+            label: "  Front Truss  ".to_string(),
+            kind: StageObjectKind::Truss,
+            x: 0.0,
+            z: -4.0,
+            width: 12.0,
+            depth: 0.4,
+            rotation_deg: 0.0,
+            color: Some(" #55CCFF ".to_string()),
+        };
+        let prepared = prepare_stage_map_preset_import(StageMapPresetSummary {
+            label: "  Touring  ".to_string(),
+            config: StageMapConfig::default(),
+            stage_objects: Some(vec![object]),
+        })
+        .unwrap();
+
+        assert_eq!(prepared.label, "Touring");
+        let object = &prepared.stage_objects.as_ref().unwrap()[0];
+        assert_eq!(object.label, "Front Truss");
+        assert_eq!(object.color.as_deref(), Some("#55CCFF"));
+    }
+
     fn sample_patch_profile() -> FixtureProfileSummary {
         custom_fixture_profile_from_request(CustomFixtureProfileRequest {
             manufacturer: "Syndocal".to_string(),
@@ -38084,6 +56306,73 @@ f 1 2 3
         );
         assert!(rebuilt.warnings[0].contains("Rebuilt from patched fixture"));
         assert!(rebuilt.warnings[0].contains("original GDTF XML"));
+    }
+
+    #[test]
+    fn identical_project_fixture_profile_cache_is_a_strict_noop() {
+        let profile = project_custom_profile();
+        let mut changed = profile.clone();
+        changed.name.push_str(" Updated");
+
+        assert!(!project_fixture_profile_cache_requires_update(
+            Some(&profile),
+            &profile,
+        ));
+        assert!(project_fixture_profile_cache_requires_update(
+            Some(&profile),
+            &changed,
+        ));
+        assert!(project_fixture_profile_cache_requires_update(
+            None, &profile
+        ));
+    }
+
+    #[test]
+    fn custom_profile_preview_builds_profile_without_project_registration() {
+        let request = CustomFixtureProfileRequest {
+            manufacturer: "Preview".to_string(),
+            name: "Session Only".to_string(),
+            mode_name: "8-bit".to_string(),
+            attributes: vec!["Dimmer".to_string()],
+        };
+        validate_custom_fixture_profile_request(&request).unwrap();
+        let preview = custom_fixture_profile_from_request(request);
+        assert!(preview.source_path.starts_with("memory://custom/"));
+        assert_eq!(preview.manufacturer, "Preview");
+        assert_eq!(preview.name, "Session Only");
+    }
+
+    #[test]
+    fn inline_memory_profile_prepares_patch_without_prior_project_registration() {
+        let profile = sample_patch_profile();
+        let request = sample_patch_request(1, 1);
+
+        let prepared = prepare_fixture_patches_against_authority(
+            vec![request],
+            Some(std::slice::from_ref(&profile)),
+            &HashMap::new(),
+            &[],
+        )
+        .unwrap();
+
+        assert_eq!(prepared.len(), 1);
+        assert_eq!(prepared[0].profile, profile);
+    }
+
+    #[test]
+    fn patch_batch_rejects_second_conflict_before_any_publication_candidate_exists() {
+        let profile = sample_patch_profile();
+        let error = prepare_fixture_patches_against_authority(
+            vec![sample_patch_request(1, 1), sample_patch_request(1, 4)],
+            Some(&[profile.clone(), profile]),
+            &HashMap::new(),
+            &[],
+        )
+        .unwrap_err();
+
+        assert!(error.contains("DMX address conflict"));
+        assert!(error.contains("4-7"));
+        assert!(error.contains("1-4"));
     }
 
     #[test]
@@ -40396,7 +58685,7 @@ f 1 2 3
 
     #[test]
     fn embedded_sample_effect_preset_adds_retargeted_effect_to_engine() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -40481,7 +58770,7 @@ f 1 2 3
     fn effect_only_cue_loads_duplicates_recalls_and_cleans_removed_effect_refs() {
         let project = project_with_effect_only_cue();
         validate_project_file(&project).unwrap();
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -40572,7 +58861,7 @@ f 1 2 3
 
     #[test]
     fn embedded_color_sample_adds_and_duplicates_complete_disabled_body() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -40667,7 +58956,7 @@ f 1 2 3
 
     #[test]
     fn embedded_chaser_sample_expands_group_and_publishes_add_update_duplicate() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -40775,7 +59064,7 @@ f 1 2 3
 
     #[test]
     fn duplicate_effect_copies_lfo_preset_details_into_new_stack_item() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -40917,7 +59206,7 @@ f 1 2 3
 
     #[test]
     fn embedded_sample_move_circle_adds_one_atomic_pair_effect_to_engine() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -43348,7 +61637,7 @@ mod live_audio_input_tests {
 
     #[test]
     fn final_drop_clear_publishes_the_generation_recovered_after_stop_observation() {
-        let engine = EngineHandle::start(DmxOutputConfig {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,
             ..DmxOutputConfig::default()
         });
@@ -43741,6 +62030,7 @@ mod video_recording_runtime_tests {
                 codec: Some("H264".to_string()),
                 metadata: None,
             },
+            media_asset_id: None,
             blend_mode: VideoBlendMode::Normal,
             state: VideoLayerState {
                 enabled: true,
@@ -44047,6 +62337,7 @@ fn main() {
     let crash_directory = Arc::new(Mutex::new(None));
     install_crash_report_hook(Arc::clone(&crash_directory));
     let engine = EngineHandle::start(DmxOutputConfig::default());
+    let initial_project_coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
     let capture_inputs = Arc::new(Mutex::new(HashMap::new()));
     let capture_transport = Arc::new(Mutex::new(capture_transport::CaptureTransportState::new(
         Arc::clone(&capture_inputs),
@@ -44206,14 +62497,60 @@ fn main() {
             if let Ok(mut configured_directory) = crash_directory.lock() {
                 *configured_directory = Some(directory);
             }
+            let state = app.state::<AppState>();
+            // Install the single media-operation reaper up front so expired
+            // prepared handles are released at TTL for the whole session.
+            if let Ok(mut reaper_slot) = state.media_asset_reaper.lock() {
+                if reaper_slot.is_none() {
+                    *reaper_slot = Some(MediaAssetOperationReaper::spawn(Arc::clone(
+                        &state.media_asset_operations,
+                    )));
+                }
+            }
+            if let Ok(mut stored_app_handle) = state.app_handle.lock() {
+                *stored_app_handle = Some(app.handle().clone());
+            } else {
+                let error = "Application handle state lock was poisoned during setup".to_string();
+                state
+                    .engine
+                    .mark_output_ownership_startup_failure(error.clone());
+                eprintln!("machine output ownership remains Standby: {error}");
+            }
+            let recovery_authority_path =
+                project_recovery_authority_state_path(app.handle())?;
+            // Reconcile any CleanSave a crash left pending: hashing the exact
+            // target bytes decides whether the interrupted Save landed (commit
+            // S+1 CleanSave) or not (retain S so the prior browser recovery image
+            // stays eligible), before the coordinator adopts the committed serial.
+            // A target that cannot be read at all is a hard error here and fails
+            // startup truthfully (the `?`) rather than silently exposing S while
+            // the real outcome is unknown; the pending record is left durable so a
+            // healthier relaunch can reconcile it.
+            let recovery_authority =
+                load_and_reconcile_project_recovery_authority_state_from_path(
+                    &recovery_authority_path,
+                )?;
+            let mut coordinator = state
+                .project_coordinator
+                .lock()
+                .map_err(|_| "Project coordinator lock was poisoned during recovery authority initialization")?;
+            coordinator.recovery_authority_serial = recovery_authority.recovery_authority_serial;
+            coordinator.recovery_authority_last_transition = recovery_authority.last_transition;
+            drop(coordinator);
+            if let Err(error) = initialize_output_ownership(app.handle(), &state) {
+                eprintln!("machine output ownership remains Standby: {error}");
+            }
             Ok(())
         })
         .manage(AppState {
             engine,
+            app_handle: Mutex::new(None),
             vj_first_run: Arc::new(Mutex::new(())),
             vj_preview_transport: Mutex::new(VjPreviewTransportRuntime::default()),
             vj_preview_renderer: Mutex::new(new_vj_preview_renderer()),
             vj_preview_renderer_reset_pending: AtomicBool::new(false),
+            media_asset_operations: Arc::new(MediaAssetOperationRegistry::default()),
+            media_asset_reaper: Mutex::new(None),
             media_audio,
             program_audio_handoff,
             _media_audio_sync: media_audio_sync,
@@ -44257,10 +62594,20 @@ fn main() {
             current_project_path: Mutex::new(None),
             operator_policy: Mutex::new(None),
             operator_selection: Arc::new(Mutex::new(OperatorSelectionContext::default())),
-            project_history: Mutex::new(ProjectHistory::default()),
+            project_coordinator: Mutex::new(initial_project_coordinator),
+            project_callback_epoch: Arc::new(AtomicU64::new(0)),
+            project_mapping_callback_epoch: Arc::new(AtomicU64::new(0)),
+            project_transaction_active: Arc::new(AtomicBool::new(false)),
+            project_transaction_owners: Mutex::new(HashMap::new()),
+            project_operator_sessions: Mutex::new(HashMap::new()),
+            project_external_command_admission: Arc::new(ProjectExternalCommandAdmission::default()),
+            project_save_publication: Mutex::new(()),
             snapshot_sync: Mutex::new(SnapshotSyncState::default()),
             standby_sync: Mutex::new(StandbySyncRuntime::default()),
+            standby_sync_lifecycle: Arc::new(Mutex::new(())),
+            output_ownership_transition: Arc::new(Mutex::new(())),
             native_video_output_metrics: Mutex::new(HashMap::new()),
+            native_video_output_workers: Mutex::new(HashMap::new()),
         })
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(
@@ -44305,6 +62652,7 @@ fn main() {
             load_verified_fixture_profile,
             repair_fixture_profile,
             create_custom_fixture_profile,
+            preview_custom_fixture_profile,
             save_custom_fixture_profile,
             load_custom_fixture_profile,
             use_fixture_profile,
@@ -44346,6 +62694,9 @@ fn main() {
             clear_fixture_flags,
             set_output_config,
             set_dmx_outputs,
+            get_output_ownership_status,
+            set_output_ownership_role,
+            arm_output_ownership_role,
             send_dmx_test_frame,
             send_dmx_routes_test_frame,
             set_blackout,
@@ -44466,6 +62817,29 @@ fn main() {
             seek_direct_child_timeline,
             seek_timeline_beat,
             sync_ltc_timecode,
+            start_media_asset_operation,
+            prepare_local_media_assets,
+            prepare_reserved_media_assets,
+            cancel_media_asset_operation,
+            inspect_media_asset_availability,
+            relink_media_asset,
+            prepare_media_asset_relink,
+            prepare_reserved_media_asset_relink,
+            finalize_prepared_media_asset_relink,
+            commit_prepared_media_asset_relink,
+            finalize_prepared_media_assets,
+            commit_prepared_media_assets,
+            commit_prepared_media_assets_authoritative,
+            commit_prepared_media_asset_relink_authoritative,
+            commit_prepared_video_file_layer_authoritative,
+            commit_prepared_still_image_layer_authoritative,
+            commit_prepared_local_media_layers_authoritative,
+            commit_prepared_bootstrap_vj_show_authoritative,
+            get_media_asset_operation_terminal_result,
+            commit_prepared_video_file_layer,
+            commit_prepared_still_image_layer,
+            commit_prepared_local_media_layers,
+            commit_prepared_bootstrap_vj_show,
             add_video_file_layer,
             add_still_image_layer,
             add_local_media_layers,
@@ -44573,6 +62947,8 @@ fn main() {
             load_fixture_preset_for_all_matching,
             new_project,
             get_operator_policy,
+            lock_project_operator_session,
+            unlock_project_operator_session,
             set_operator_policy,
             clear_operator_policy,
             save_user_template,
@@ -44581,13 +62957,22 @@ fn main() {
             save_project_as,
             load_project,
             import_daslight_project,
+            import_daslight_project_with_result,
             load_project_path,
             get_project_checkpoint,
+            get_project_checkpoint_bundle,
+            get_project_recovery_authority_status,
+            get_project_authority_bundle,
+            poll_project_authority_bundle,
+            get_project_control_mappings,
+            set_project_control_mappings,
             load_project_checkpoint,
+            acknowledge_project_recovery_applied,
             get_project_history_status,
             begin_project_transaction,
             commit_project_transaction,
             cancel_project_transaction,
+            register_project_transaction_owner,
             clear_project_history,
             undo_project_transaction,
             redo_project_transaction,
@@ -44616,6 +63001,7 @@ fn main() {
             remove_stage_object,
             save_stage_map_preset_file,
             load_stage_map_preset_file,
+            import_stage_map_preset,
             get_visualizer_model_render_plans,
             get_visualizer_render_payload,
             get_visualizer_external_model_assets,
