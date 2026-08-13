@@ -186,6 +186,48 @@ const MEDIA_ASSET_OPERATION_REAP_INTERVAL: Duration = Duration::from_millis(500)
 static RDM_TRANSACTION_NUMBER: AtomicU8 = AtomicU8::new(1);
 static LIVE_VIDEO_MONITOR_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static PROJECT_SAVE_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+/// `mediaAssetAuthority.ts` creates request IDs in the exact JavaScript-safe
+/// range `1..=2^53-1` (`21-bit prefix * 2^32 + 32-bit sequence`). Compatibility
+/// IPC has no request field at all, so it owns this disjoint server-only
+/// namespace instead of guessing whether two equal `{ label, path }` calls are
+/// a reply retry or two intended adds.
+const LEGACY_MEDIA_ASSET_COMPATIBILITY_REQUEST_ID_MIN: u64 = 1_u64 << 63;
+const RENDERER_MEDIA_ASSET_REQUEST_ID_MAX: u64 = (1_u64 << 53) - 1;
+/// Legacy IPC predates renderer-owned media operation identities. Keep its
+/// server-generated requests outside the renderer's exact-JavaScript range so
+/// an old `{ label, path }` retry can never accidentally adopt a staged UI
+/// request. This is deliberately *not* a semantic-fingerprint dedupe: the old
+/// wire contract cannot distinguish a lost reply from a second intentional
+/// add, so it remains one backend operation per invocation.
+static LEGACY_MEDIA_ASSET_COMPATIBILITY_REQUEST_ID: AtomicU64 =
+    AtomicU64::new(LEGACY_MEDIA_ASSET_COMPATIBILITY_REQUEST_ID_MIN);
+
+fn allocate_legacy_media_asset_compatibility_request_id_from(
+    sequence: &AtomicU64,
+) -> Result<u64, String> {
+    if RENDERER_MEDIA_ASSET_REQUEST_ID_MAX >= LEGACY_MEDIA_ASSET_COMPATIBILITY_REQUEST_ID_MIN {
+        return Err(
+            "Legacy media compatibility request namespace overlaps renderer request IDs"
+                .to_string(),
+        );
+    }
+    let mut current = sequence.load(Ordering::Acquire);
+    loop {
+        if current < LEGACY_MEDIA_ASSET_COMPATIBILITY_REQUEST_ID_MIN {
+            return Err("Legacy media compatibility request namespace is invalid".to_string());
+        }
+        // Never hand out `u64::MAX`: reserving a next value first makes the
+        // exhaustion boundary fail closed rather than wrapping into any other
+        // registry namespace.
+        let next = current.checked_add(1).ok_or_else(|| {
+            "Legacy media compatibility request ID space is exhausted; restart Syndocal".to_string()
+        })?;
+        match sequence.compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return Ok(current),
+            Err(actual) => current = actual,
+        }
+    }
+}
 
 fn validate_app_name(file_label: &str, app: &str) -> Result<(), String> {
     if app.trim() == APP_NAME {
@@ -698,6 +740,117 @@ impl MediaAssetOperationRegistry {
             request_id,
             generation,
         })
+    }
+
+    /// Reserve a request ID for an old IPC command which has no caller-owned
+    /// operation identity. The compatibility allocator has its own server-only
+    /// range, but that range alone is not a proof: a malformed/raw staged
+    /// caller can still send any `u64`. Therefore choose and install the ID
+    /// while all request-keyed registry stores are locked, skipping every live
+    /// or retained identity (including receipt/lane keys) before the active
+    /// insert linearizes the reservation.
+    ///
+    /// The lock order is the registry's write order: active, prepared import,
+    /// prepared relink, legacy receipt/lane, then authoritative receipt/lane.
+    /// No engine/coordinator work occurs while these short bookkeeping locks
+    /// are held.
+    fn reserve_legacy_compatibility_from(
+        self: &Arc<Self>,
+        sequence: &AtomicU64,
+        owner_id: String,
+        authority: MediaAssetPrepareAuthority,
+    ) -> Result<MediaAssetOperationHandle, String> {
+        let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+        loop {
+            let request_id = allocate_legacy_media_asset_compatibility_request_id_from(sequence)?;
+            let now = Instant::now();
+            let mut active = self
+                .active
+                .lock()
+                .map_err(|_| "Media asset operation registry lock was poisoned".to_string())?;
+            let mut prepared = self
+                .prepared
+                .lock()
+                .map_err(|_| "Prepared media asset store lock was poisoned".to_string())?;
+            let mut prepared_relinks = self
+                .prepared_relinks
+                .lock()
+                .map_err(|_| "Prepared media asset relink store lock was poisoned".to_string())?;
+            let mut commit_receipts = self
+                .commit_receipts
+                .lock()
+                .map_err(|_| "Media asset commit receipt store lock was poisoned".to_string())?;
+            let commit_lanes = self
+                .commit_lanes
+                .lock()
+                .map_err(|_| "Media asset commit lane store lock was poisoned".to_string())?;
+            let mut authoritative_receipts = self.authoritative_receipts.lock().map_err(|_| {
+                "Media asset authoritative receipt store lock was poisoned".to_string()
+            })?;
+            let authoritative_lanes = self.authoritative_lanes.lock().map_err(|_| {
+                "Media asset authoritative lane store lock was poisoned".to_string()
+            })?;
+
+            // Treat an expired entry as no longer reserved exactly as the
+            // ordinary lookup paths do. Retaining here also prevents an
+            // arbitrary high raw request from blocking compatibility IDs after
+            // its documented recovery window.
+            prepared.retain(|_, entry| entry.expires_at > now);
+            prepared_relinks.retain(|_, entry| entry.expires_at > now);
+            commit_receipts.retain(|_, entry| entry.expires_at > now);
+            authoritative_receipts.retain(|_, entry| entry.expires_at > now);
+
+            let occupied = active.contains_key(&request_id)
+                || prepared
+                    .values()
+                    .any(|entry| entry.request_id == request_id)
+                || prepared_relinks
+                    .values()
+                    .any(|entry| entry.request_id == request_id)
+                || commit_receipts
+                    .keys()
+                    .any(|key| key.request_id == request_id)
+                || commit_lanes.keys().any(|key| key.request_id == request_id)
+                || authoritative_receipts
+                    .keys()
+                    .any(|key| key.request_id == request_id)
+                || authoritative_lanes
+                    .keys()
+                    .any(|key| key.request_id == request_id);
+            if occupied {
+                // All guards drop before the next monotonic candidate is read.
+                continue;
+            }
+
+            let generation = self.allocate_generation()?;
+            active.insert(
+                request_id,
+                MediaAssetOperationEntry {
+                    generation,
+                    owner_id: owner_id.clone(),
+                    cancel: Arc::new(AtomicBool::new(false)),
+                    admission: Arc::new(MediaAssetOperationAdmission::new()),
+                    expires_at: Some(Instant::now() + MEDIA_ASSET_RESERVED_OPERATION_TTL),
+                    reserved_authority: Some(authority.clone()),
+                },
+            );
+            return Ok(MediaAssetOperationHandle {
+                request_id,
+                generation,
+            });
+        }
+    }
+
+    fn reserve_legacy_compatibility(
+        self: &Arc<Self>,
+        owner_id: String,
+        authority: MediaAssetPrepareAuthority,
+    ) -> Result<MediaAssetOperationHandle, String> {
+        self.reserve_legacy_compatibility_from(
+            &LEGACY_MEDIA_ASSET_COMPATIBILITY_REQUEST_ID,
+            owner_id,
+            authority,
+        )
     }
 
     /// Adopt a previously reserved slot for the staged prepare. Clearing the
@@ -1497,6 +1650,23 @@ struct MediaAssetPrepareAuthority {
     checkpoint_hash: String,
 }
 
+/// Server-private identity used while adapting a legacy IPC request to the
+/// staged Media Asset protocol. It is intentionally never serialized into an
+/// old command's return payload, preserving that command's established JSON
+/// result shape.
+#[derive(Debug, Clone)]
+struct LegacyMediaAssetCompatibilityOperation {
+    request_id: u64,
+    operation_generation: u64,
+    /// The old IPC carries no renderer generation. Keep the concrete invoking
+    /// WebView label together with its owner generation so an owner ID freed
+    /// by a reload cannot be reused by another window to satisfy an old
+    /// operation's generic `values().any(...)` registration check.
+    window_label: String,
+    owner_id: String,
+    authority: MediaAssetPrepareAuthority,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum MediaAssetImportEntryStatus {
@@ -1942,9 +2112,15 @@ fn capture_media_asset_prepare_authority(
     state: &AppState,
     owner_id: &str,
     expected_epoch: u64,
+    legacy_operation: Option<&LegacyMediaAssetCompatibilityOperation>,
 ) -> Result<MediaAssetPrepareAuthority, String> {
     let _external_admission = lock_project_external_command_admission(state)?;
     let mut coordinator = lock_project_coordinator(state)?;
+    ensure_legacy_media_asset_compatibility_operation_binding_while_admitted(
+        state,
+        legacy_operation,
+        owner_id,
+    )?;
     ensure_project_transaction_owner_registered(state, owner_id)?;
     ensure_project_epoch_matches(&coordinator, expected_epoch)?;
     ensure_no_pending_project_transaction(&coordinator)?;
@@ -1985,13 +2161,19 @@ fn capture_media_asset_relink_prepare_asset(
     asset_id: MediaAssetId,
     expected_epoch: u64,
     owner_id: &str,
+    legacy_operation: Option<&LegacyMediaAssetCompatibilityOperation>,
 ) -> Result<(MediaAssetPrepareAuthority, MediaAssetSummary), String> {
     let _external_admission = lock_project_external_command_admission(state)?;
     let mut coordinator = lock_project_coordinator(state)?;
+    ensure_legacy_media_asset_compatibility_operation_binding_while_admitted(
+        state,
+        legacy_operation,
+        owner_id,
+    )?;
     // Relink is a project mutation, so unlike availability inspection it
     // reconciles admitted persistent commands before taking the A authority.
-    let checkpoint = reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
     ensure_project_transaction_owner_registered(state, owner_id)?;
+    let checkpoint = reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
     ensure_project_epoch_matches(&coordinator, expected_epoch)?;
     ensure_no_pending_project_transaction(&coordinator)?;
     let asset = media_asset_catalog_for_snapshot(&checkpoint.project.snapshot)
@@ -14619,6 +14801,60 @@ fn sync_ltc_timecode(state: State<'_, AppState>, position_ms: u64) -> Result<(),
         .map_err(|error| error.to_string())
 }
 
+/// Reserve a server-owned staged operation for an old wire-compatible IPC
+/// call. It resolves the owner from the invoking window, captures the current
+/// A authority under external admission, and applies the same server-side
+/// Operator policy used by A1 before any path is opened or hashed.
+fn reserve_legacy_media_asset_compatibility_operation(
+    state: &AppState,
+    window: &WebviewWindow,
+) -> Result<LegacyMediaAssetCompatibilityOperation, String> {
+    let window_label = window.label().to_string();
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    // Resolve the concrete window generation only while the same admission
+    // boundary that excludes owner rotation is held. Looking it up before this
+    // boundary left an ABA gap: A could read X, rotate to Y, and B could claim
+    // the now-free X before the old operation reserved its server token.
+    let owner_id = {
+        let owners = state
+            .project_transaction_owners
+            .lock()
+            .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
+        legacy_media_asset_compatibility_owner_for_window_label(&owners, &window_label)?
+    };
+    reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
+    ensure_project_transaction_owner_registered(state, &owner_id)?;
+    ensure_no_pending_project_transaction(&coordinator)?;
+    ensure_project_operator_authoritative_mutation_allowed(state, &coordinator, &owner_id)?;
+    let authority = media_asset_prepare_authority(&coordinator);
+    let handle = state
+        .media_asset_operations
+        .reserve_legacy_compatibility(owner_id.clone(), authority.clone())?;
+    Ok(LegacyMediaAssetCompatibilityOperation {
+        request_id: handle.request_id,
+        operation_generation: handle.generation,
+        window_label,
+        owner_id,
+        authority,
+    })
+}
+
+/// Best-effort cleanup for pre-admission compatibility failures. A failed
+/// cleanup must not replace the original prepare/finalize error; the registry
+/// reaper remains the final retained-handle backstop. Once A1 admission won,
+/// cancel intentionally returns false and its terminal receipt owns cleanup.
+fn cancel_legacy_media_asset_compatibility_operation(
+    state: &AppState,
+    operation: &LegacyMediaAssetCompatibilityOperation,
+) {
+    let _ = state.media_asset_operations.cancel_exact(
+        operation.request_id,
+        operation.operation_generation,
+        operation.owner_id.clone(),
+    );
+}
+
 /// Hash/probe a prepared batch under an already-owned operation guard, recheck
 /// the authority, and store the prepared record. Shared by the legacy
 /// `prepare_local_media_assets` (which allocates its own generation) and the
@@ -14633,6 +14869,7 @@ async fn run_prepared_local_media_asset_batch(
     expected_epoch: u64,
     owner_id: &str,
     authority: MediaAssetPrepareAuthority,
+    legacy_operation: Option<&LegacyMediaAssetCompatibilityOperation>,
 ) -> Result<MediaAssetImportReport, String> {
     let registry = Arc::clone(&state.media_asset_operations);
     let handle = operation.handle();
@@ -14652,7 +14889,8 @@ async fn run_prepared_local_media_asset_batch(
     // A prepared A image must never be applied to a replaced B project. A
     // normal concurrent mutation also invalidates preparation because its
     // catalog dedupe inventory changed under this report.
-    let current_authority = capture_media_asset_prepare_authority(state, owner_id, expected_epoch)?;
+    let current_authority =
+        capture_media_asset_prepare_authority(state, owner_id, expected_epoch, legacy_operation)?;
     if current_authority != authority {
         return Err(
             "Project changed while local media assets were being prepared; retry the import"
@@ -14704,7 +14942,7 @@ fn start_media_asset_operation(
     // Capture (and reconcile) the authority first so a busy/replaced project
     // fails fast before a generation is burned, and the client learns the exact
     // A baseline it will later fence its staged commit against.
-    let authority = capture_media_asset_prepare_authority(&state, &owner_id, expected_epoch)?;
+    let authority = capture_media_asset_prepare_authority(&state, &owner_id, expected_epoch, None)?;
     // Bind the exact authority (A) into the reservation and return the same A to
     // the client. The staged prepare adopts this A and refuses to run against any
     // other current authority.
@@ -14726,6 +14964,44 @@ fn start_media_asset_operation(
 /// {request_id, generation, owner_id} can win before or during the first hashed
 /// chunk. Kept separate from `prepare_local_media_assets` so the legacy
 /// single-call flow stays byte-for-byte compatible.
+async fn prepare_reserved_media_assets_impl(
+    state: &AppState,
+    request_id: u64,
+    operation_generation: u64,
+    kind: VideoSourceKind,
+    paths: Vec<String>,
+    expected_epoch: u64,
+    owner_id: &str,
+    legacy_operation: Option<&LegacyMediaAssetCompatibilityOperation>,
+) -> Result<MediaAssetImportReport, String> {
+    let (operation, reserved_authority) = state.media_asset_operations.adopt_reserved(
+        request_id,
+        operation_generation,
+        owner_id.to_string(),
+    )?;
+    // Recapture the current authority and require it still equals the exact A the
+    // client was told at Start. This rejects a same-epoch revision/hash mutation
+    // between Start and Prepare *before* any hashing, token, or publication, so a
+    // prepared A image can never be silently rebound onto a replaced B. Epoch
+    // replacement is still rejected by the `expected_epoch` check inside the
+    // capture. Either early return drops the adopted `operation` guard, releasing
+    // the slot so a later cancel/adopt reports the truth.
+    let current_authority =
+        capture_media_asset_prepare_authority(state, owner_id, expected_epoch, legacy_operation)?;
+    ensure_reserved_media_asset_authority_unchanged(&reserved_authority, &current_authority)?;
+    run_prepared_local_media_asset_batch(
+        state,
+        operation,
+        kind,
+        paths,
+        expected_epoch,
+        owner_id,
+        reserved_authority,
+        legacy_operation,
+    )
+    .await
+}
+
 #[tauri::command]
 async fn prepare_reserved_media_assets(
     state: State<'_, AppState>,
@@ -14737,29 +15013,15 @@ async fn prepare_reserved_media_assets(
     owner_id: String,
 ) -> Result<MediaAssetImportReport, String> {
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
-    let (operation, reserved_authority) = state.media_asset_operations.adopt_reserved(
+    prepare_reserved_media_assets_impl(
+        &state,
         request_id,
         operation_generation,
-        owner_id.clone(),
-    )?;
-    // Recapture the current authority and require it still equals the exact A the
-    // client was told at Start. This rejects a same-epoch revision/hash mutation
-    // between Start and Prepare *before* any hashing, token, or publication, so a
-    // prepared A image can never be silently rebound onto a replaced B. Epoch
-    // replacement is still rejected by the `expected_epoch` check inside the
-    // capture. Either early return drops the adopted `operation` guard, releasing
-    // the slot so a later cancel/adopt reports the truth.
-    let current_authority =
-        capture_media_asset_prepare_authority(&state, &owner_id, expected_epoch)?;
-    ensure_reserved_media_asset_authority_unchanged(&reserved_authority, &current_authority)?;
-    run_prepared_local_media_asset_batch(
-        &state,
-        operation,
         kind,
         paths,
         expected_epoch,
         &owner_id,
-        reserved_authority,
+        None,
     )
     .await
 }
@@ -14777,7 +15039,7 @@ async fn prepare_local_media_assets(
     owner_id: String,
 ) -> Result<MediaAssetImportReport, String> {
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
-    let authority = capture_media_asset_prepare_authority(&state, &owner_id, expected_epoch)?;
+    let authority = capture_media_asset_prepare_authority(&state, &owner_id, expected_epoch, None)?;
     let operation = state
         .media_asset_operations
         .begin(request_id, owner_id.clone())?;
@@ -14789,6 +15051,7 @@ async fn prepare_local_media_assets(
         expected_epoch,
         &owner_id,
         authority,
+        None,
     )
     .await
 }
@@ -14868,6 +15131,7 @@ async fn run_prepared_media_asset_relink_batch(
     owner_id: &str,
     authority: MediaAssetPrepareAuthority,
     original_asset: MediaAssetSummary,
+    legacy_operation: Option<&LegacyMediaAssetCompatibilityOperation>,
 ) -> Result<MediaAssetRelinkPrepareReport, String> {
     let registry = Arc::clone(&state.media_asset_operations);
     let handle = operation.handle();
@@ -14889,8 +15153,13 @@ async fn run_prepared_media_asset_relink_batch(
     if operation.cancelled() {
         return Err("Media asset operation was cancelled".to_string());
     }
-    let (current_authority, _) =
-        capture_media_asset_relink_prepare_asset(state, asset_id, expected_epoch, owner_id)?;
+    let (current_authority, _) = capture_media_asset_relink_prepare_asset(
+        state,
+        asset_id,
+        expected_epoch,
+        owner_id,
+        legacy_operation,
+    )?;
     if current_authority != authority {
         return Err("Project changed while media asset relink was prepared; retry".to_string());
     }
@@ -14956,7 +15225,7 @@ async fn prepare_media_asset_relink_impl(
         .media_asset_operations
         .begin(request_id, owner_id.clone())?;
     let (authority, original_asset) =
-        capture_media_asset_relink_prepare_asset(state, asset_id, expected_epoch, &owner_id)?;
+        capture_media_asset_relink_prepare_asset(state, asset_id, expected_epoch, &owner_id, None)?;
     run_prepared_media_asset_relink_batch(
         state,
         operation,
@@ -14967,6 +15236,7 @@ async fn prepare_media_asset_relink_impl(
         &owner_id,
         authority,
         original_asset,
+        None,
     )
     .await
 }
@@ -14977,6 +15247,51 @@ async fn prepare_media_asset_relink_impl(
 /// first-phase-cancellation seam the import staged path already has. Additive:
 /// the legacy single-call `relink_media_asset` / `prepare_media_asset_relink`
 /// entry points are unchanged.
+async fn prepare_reserved_media_asset_relink_impl(
+    state: &AppState,
+    request_id: u64,
+    operation_generation: u64,
+    asset_id: MediaAssetId,
+    replacement_path: String,
+    policy: MediaAssetRelinkPolicy,
+    expected_epoch: u64,
+    owner_id: &str,
+    legacy_operation: Option<&LegacyMediaAssetCompatibilityOperation>,
+) -> Result<MediaAssetRelinkPrepareReport, String> {
+    let (operation, reserved_authority) = state.media_asset_operations.adopt_reserved(
+        request_id,
+        operation_generation,
+        owner_id.to_string(),
+    )?;
+    // Capture the relink authority (and the exact original asset) and require it
+    // still equals the exact A the client was told at Start. A same-epoch
+    // revision/hash mutation between Start and Prepare is rejected before any
+    // hashing/token/publication; the adopted `operation` guard drops on the early
+    // return, releasing the slot. Epoch replacement is still rejected inside the
+    // capture.
+    let (authority, original_asset) = capture_media_asset_relink_prepare_asset(
+        state,
+        asset_id,
+        expected_epoch,
+        owner_id,
+        legacy_operation,
+    )?;
+    ensure_reserved_media_asset_authority_unchanged(&reserved_authority, &authority)?;
+    run_prepared_media_asset_relink_batch(
+        state,
+        operation,
+        asset_id,
+        replacement_path,
+        policy,
+        expected_epoch,
+        owner_id,
+        authority,
+        original_asset,
+        legacy_operation,
+    )
+    .await
+}
+
 #[tauri::command]
 async fn prepare_reserved_media_asset_relink(
     state: State<'_, AppState>,
@@ -14989,30 +15304,16 @@ async fn prepare_reserved_media_asset_relink(
     owner_id: String,
 ) -> Result<MediaAssetRelinkPrepareReport, String> {
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
-    let (operation, reserved_authority) = state.media_asset_operations.adopt_reserved(
+    prepare_reserved_media_asset_relink_impl(
+        &state,
         request_id,
         operation_generation,
-        owner_id.clone(),
-    )?;
-    // Capture the relink authority (and the exact original asset) and require it
-    // still equals the exact A the client was told at Start. A same-epoch
-    // revision/hash mutation between Start and Prepare is rejected before any
-    // hashing/token/publication; the adopted `operation` guard drops on the early
-    // return, releasing the slot. Epoch replacement is still rejected inside the
-    // capture.
-    let (authority, original_asset) =
-        capture_media_asset_relink_prepare_asset(&state, asset_id, expected_epoch, &owner_id)?;
-    ensure_reserved_media_asset_authority_unchanged(&reserved_authority, &authority)?;
-    run_prepared_media_asset_relink_batch(
-        &state,
-        operation,
         asset_id,
         replacement_path,
         policy,
         expected_epoch,
         &owner_id,
-        authority,
-        original_asset,
+        None,
     )
     .await
 }
@@ -15067,28 +15368,28 @@ async fn prepare_media_asset_relink(
 
 /// Finalize relink bytes while no project transaction is pending. The short
 /// commit command can then CAS its fingerprint and publish the engine update.
-#[tauri::command]
-async fn finalize_prepared_media_asset_relink(
-    state: State<'_, AppState>,
+async fn finalize_prepared_media_asset_relink_impl(
+    state: &AppState,
     prepared_relink_token: u64,
     request_id: u64,
     operation_generation: u64,
     expected_epoch: u64,
-    owner_id: String,
+    owner_id: &str,
+    legacy_operation: Option<&LegacyMediaAssetCompatibilityOperation>,
 ) -> Result<MediaAssetRelinkPrepareReport, String> {
-    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     let registry = Arc::clone(&state.media_asset_operations);
     let prepared = registry.prepared_relink_exact(
         prepared_relink_token,
         request_id,
         operation_generation,
-        &owner_id,
+        owner_id,
     )?;
     let (authority, current_asset) = capture_media_asset_relink_prepare_asset(
-        &state,
+        state,
         prepared.asset_id,
         expected_epoch,
-        &owner_id,
+        owner_id,
+        legacy_operation,
     )?;
     if authority != prepared.authority || current_asset != prepared.original_asset {
         return Err("Media asset changed since relink preparation; retry".to_string());
@@ -15114,6 +15415,22 @@ async fn finalize_prepared_media_asset_relink(
                 std::slice::from_ref(legacy_source),
                 prepared.cancel.as_ref(),
             )?;
+        }
+        // Retained-source retry validation still reads local bytes. Recheck
+        // the exact compatibility window generation after that I/O so a
+        // reload during a lost-reply retry cannot receive a fresh successful
+        // finalize response under a replacement renderer generation.
+        let (current_authority, current_asset) = capture_media_asset_relink_prepare_asset(
+            state,
+            prepared.asset_id,
+            expected_epoch,
+            owner_id,
+            legacy_operation,
+        )?;
+        if current_authority != authority || current_asset != prepared.original_asset {
+            return Err(
+                "Media asset changed while relink finalization was revalidated; retry".to_string(),
+            );
         }
         return Ok(MediaAssetRelinkPrepareReport {
             request_id,
@@ -15151,10 +15468,11 @@ async fn finalize_prepared_media_asset_relink(
     .await
     .map_err(|error| format!("Media asset relink finalization worker failed: {error}"))??;
     let (current_authority, current_asset) = capture_media_asset_relink_prepare_asset(
-        &state,
+        state,
         prepared.asset_id,
         expected_epoch,
-        &owner_id,
+        owner_id,
+        legacy_operation,
     )?;
     if current_authority != authority || current_asset != prepared.original_asset {
         return Err("Media asset changed while relink was finalized; retry".to_string());
@@ -15163,7 +15481,7 @@ async fn finalize_prepared_media_asset_relink(
         prepared_relink_token,
         request_id,
         operation_generation,
-        &owner_id,
+        owner_id,
         &authority,
         replacement_source,
         legacy_source,
@@ -15177,6 +15495,28 @@ async fn finalize_prepared_media_asset_relink(
         checkpoint_hash: authority.checkpoint_hash,
         outcome: None,
     })
+}
+
+#[tauri::command]
+async fn finalize_prepared_media_asset_relink(
+    state: State<'_, AppState>,
+    prepared_relink_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<MediaAssetRelinkPrepareReport, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    finalize_prepared_media_asset_relink_impl(
+        &state,
+        prepared_relink_token,
+        request_id,
+        operation_generation,
+        expected_epoch,
+        &owner_id,
+        None,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -15326,24 +15666,24 @@ async fn commit_prepared_media_asset_relink(
 /// Run the final full byte proof while no generic project transaction is
 /// pending. The returned opaque token is unchanged; its server record gains a
 /// short-lived finalized fingerprint set for the subsequent quick commit.
-#[tauri::command]
-async fn finalize_prepared_media_assets(
-    state: State<'_, AppState>,
+async fn finalize_prepared_media_assets_impl(
+    state: &AppState,
     prepared_import_token: u64,
     request_id: u64,
     operation_generation: u64,
     expected_epoch: u64,
-    owner_id: String,
+    owner_id: &str,
+    legacy_operation: Option<&LegacyMediaAssetCompatibilityOperation>,
 ) -> Result<MediaAssetImportReport, String> {
-    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
     let registry = Arc::clone(&state.media_asset_operations);
     let prepared = registry.prepared_exact(
         prepared_import_token,
         request_id,
         operation_generation,
-        &owner_id,
+        owner_id,
     )?;
-    let authority = capture_media_asset_prepare_authority(&state, &owner_id, expected_epoch)?;
+    let authority =
+        capture_media_asset_prepare_authority(state, owner_id, expected_epoch, legacy_operation)?;
     if authority != prepared.authority {
         return Err(
             "Project changed since local media assets were prepared; retry the import".to_string(),
@@ -15362,6 +15702,22 @@ async fn finalize_prepared_media_assets(
             &existing_sources,
             prepared.cancel.as_ref(),
         )?;
+        // The retained-handle retry proof is still filesystem I/O. Keep its
+        // reply fenced by the same exact label-to-owner generation as a first
+        // finalization, rather than allowing a reload to turn it into a stale
+        // success that is only rejected later at commit.
+        let current_authority = capture_media_asset_prepare_authority(
+            state,
+            owner_id,
+            expected_epoch,
+            legacy_operation,
+        )?;
+        if current_authority != authority {
+            return Err(
+                "Project changed while local media assets were revalidated; retry the import"
+                    .to_string(),
+            );
+        }
         return Ok(media_asset_import_report(
             request_id,
             operation_generation,
@@ -15378,7 +15734,7 @@ async fn finalize_prepared_media_assets(
     .await
     .map_err(|error| format!("Local media asset finalization worker failed: {error}"))??;
     let current_authority =
-        capture_media_asset_prepare_authority(&state, &owner_id, expected_epoch)?;
+        capture_media_asset_prepare_authority(state, owner_id, expected_epoch, legacy_operation)?;
     if current_authority != authority {
         return Err(
             "Project changed while local media assets were finalized; retry the import".to_string(),
@@ -15388,7 +15744,7 @@ async fn finalize_prepared_media_assets(
         prepared_import_token,
         request_id,
         operation_generation,
-        &owner_id,
+        owner_id,
         &authority,
         sources,
     )?;
@@ -15399,6 +15755,28 @@ async fn finalize_prepared_media_assets(
         &authority,
         prepared.entries,
     ))
+}
+
+#[tauri::command]
+async fn finalize_prepared_media_assets(
+    state: State<'_, AppState>,
+    prepared_import_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    owner_id: String,
+) -> Result<MediaAssetImportReport, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    finalize_prepared_media_assets_impl(
+        &state,
+        prepared_import_token,
+        request_id,
+        operation_generation,
+        expected_epoch,
+        &owner_id,
+        None,
+    )
+    .await
 }
 
 /// Commit a server-held finalized import through the normal project-mutation
@@ -15571,18 +15949,56 @@ struct PreparedInternalMediaAssetCommit {
     next_publication_generation: Option<u64>,
 }
 
-/// Derive the exact authored persistence image of an engine Media Asset
-/// transaction before it is published. This mirrors the engine's three
-/// transaction variants and validates the same engine-ready catalog invariant,
-/// allowing every hash/history/generation failure to happen before the ACK.
-fn media_asset_transaction_candidate_snapshot(
-    mut snapshot: EngineSnapshot,
+/// `EngineRuntime::video_snapshot` never stores Main as an editable runtime
+/// composition. It derives this row for every rendered/persistence snapshot:
+/// Main contains every layer and lists exactly the outputs routed to id 1.
+/// Keep the backend candidate image byte-for-byte aligned with that persisted
+/// projection before its project hash/history preflight is computed.
+fn derived_main_video_composition(video: &protocol::VideoSnapshot) -> CompositionSummary {
+    CompositionSummary {
+        id: 1,
+        label: "Main".to_string(),
+        layer_ids: video.layers.iter().map(|layer| layer.id).collect(),
+        output_ids: video
+            .outputs
+            .iter()
+            .filter(|output| output.composition_id == 1)
+            .map(|output| output.id)
+            .collect(),
+    }
+}
+
+/// Synchronize the derived composition references exactly as the engine's
+/// `video_snapshot`: Main is recreated from the current layers/outputs, while
+/// explicit non-Main compositions retain their order and layer assignments but
+/// receive their engine-derived output references.
+fn synchronize_derived_video_compositions(video: &mut protocol::VideoSnapshot) {
+    let main = derived_main_video_composition(video);
+    let mut explicit = std::mem::take(&mut video.compositions)
+        .into_iter()
+        .filter(|composition| composition.id != 1)
+        .collect::<Vec<_>>();
+    for composition in &mut explicit {
+        composition.output_ids = video
+            .outputs
+            .iter()
+            .filter(|output| output.composition_id == composition.id)
+            .map(|output| output.id)
+            .collect();
+    }
+    video.compositions = vec![main];
+    video.compositions.extend(explicit);
+}
+
+/// Apply one engine media transaction to a persistence video image. This is
+/// intentionally a direct mirror of the engine's transaction validation, not
+/// a second policy: persistence snapshots contain one implicit Main row which
+/// the runtime itself does not count as an editable composition. Thus Bootstrap
+/// permits id 1 only and rejects every explicit (non-Main) composition.
+fn apply_media_asset_transaction_to_candidate_video(
+    video: &mut protocol::VideoSnapshot,
     transaction: &MediaAssetTransaction,
-) -> Result<EngineSnapshot, String> {
-    let video = match snapshot.authored_video.as_mut() {
-        Some(authored_video) => authored_video,
-        None => &mut snapshot.video,
-    };
+) -> Result<(), String> {
     match transaction {
         MediaAssetTransaction::Import(candidate) => {
             video.media_assets.extend(candidate.assets.iter().cloned());
@@ -15592,12 +16008,21 @@ fn media_asset_transaction_candidate_snapshot(
             if !video.layers.is_empty()
                 || !video.media_assets.is_empty()
                 || !video.outputs.is_empty()
-                || !video.compositions.is_empty()
+                || video
+                    .compositions
+                    .iter()
+                    .any(|composition| composition.id != 1)
             {
                 return Err("First-run VJ setup requires an empty video show".to_string());
             }
             if candidate.layers.is_empty() {
                 return Err("First-run VJ setup requires at least one media layer".to_string());
+            }
+            if candidate.layers.iter().any(|layer| {
+                layer.source.kind != VideoSourceKind::File
+                    || layer.source.path.as_deref().is_none_or(str::is_empty)
+            }) {
+                return Err("First-run VJ setup only accepts local File layers".to_string());
             }
             if output.id == 0
                 || output.kind != VideoOutputKind::Display
@@ -15629,7 +16054,29 @@ fn media_asset_transaction_candidate_snapshot(
             }
         }
     }
+    synchronize_derived_video_compositions(video);
     validate_engine_ready_video_media_assets(video)?;
+    Ok(())
+}
+
+/// Derive the exact authored persistence image of an engine Media Asset
+/// transaction before it is published. This mirrors the engine's three
+/// transaction variants and validates the same engine-ready catalog invariant,
+/// allowing every hash/history/generation failure to happen before the ACK.
+///
+/// A persistence snapshot carries both rendered and authored video surfaces.
+/// The engine mutates both catalog projections at publication time, so update
+/// both candidate surfaces here as well; otherwise the preflighted history hash
+/// can retain stale derived Main layer/output references despite a successful
+/// engine ACK.
+fn media_asset_transaction_candidate_snapshot(
+    mut snapshot: EngineSnapshot,
+    transaction: &MediaAssetTransaction,
+) -> Result<EngineSnapshot, String> {
+    apply_media_asset_transaction_to_candidate_video(&mut snapshot.video, transaction)?;
+    if let Some(authored_video) = snapshot.authored_video.as_mut() {
+        apply_media_asset_transaction_to_candidate_video(authored_video, transaction)?;
+    }
     Ok(snapshot)
 }
 
@@ -15834,6 +16281,7 @@ fn verify_authoritative_prepared_import(
     expected_epoch: u64,
     owner_id: &str,
     expected_authority: &MediaAssetPrepareAuthority,
+    legacy_operation: Option<&LegacyMediaAssetCompatibilityOperation>,
 ) -> Result<(), String> {
     if prepared.authority != *expected_authority {
         return Err(
@@ -15852,6 +16300,11 @@ fn verify_authoritative_prepared_import(
     {
         let _external_admission = lock_project_external_command_admission(state)?;
         let mut coordinator = lock_project_coordinator(state)?;
+        ensure_legacy_media_asset_compatibility_operation_binding_while_admitted(
+            state,
+            legacy_operation,
+            owner_id,
+        )?;
         validate_authoritative_media_asset_commit(
             state,
             &mut coordinator,
@@ -15880,6 +16333,7 @@ fn verify_authoritative_prepared_relink(
     expected_epoch: u64,
     owner_id: &str,
     expected_authority: &MediaAssetPrepareAuthority,
+    legacy_operation: Option<&LegacyMediaAssetCompatibilityOperation>,
 ) -> Result<(), String> {
     if prepared.authority != *expected_authority {
         return Err(
@@ -15902,6 +16356,11 @@ fn verify_authoritative_prepared_relink(
     {
         let _external_admission = lock_project_external_command_admission(state)?;
         let mut coordinator = lock_project_coordinator(state)?;
+        ensure_legacy_media_asset_compatibility_operation_binding_while_admitted(
+            state,
+            legacy_operation,
+            owner_id,
+        )?;
         validate_authoritative_media_asset_commit(
             state,
             &mut coordinator,
@@ -15966,12 +16425,22 @@ fn commit_authoritative_media_asset_transaction<R>(
     expected_authority: &MediaAssetPrepareAuthority,
     history_label: &str,
     history_coalesce_key: &str,
+    legacy_operation: Option<&LegacyMediaAssetCompatibilityOperation>,
     build: impl FnOnce(&EngineSnapshot) -> Result<(MediaAssetTransaction, R), String>,
 ) -> Result<(R, ProjectHistoryMutationResult), String> {
     let (_external_admission, mut coordinator) = (
         lock_project_external_command_admission(state)?,
         lock_project_coordinator(state)?,
     );
+    // This is the final linearization point for an old wire-compatible route.
+    // It runs before reconcile/preflight, so a retired/reused owner cannot
+    // advance coordinator revision/history or reach the engine under another
+    // window's Operator session.
+    ensure_legacy_media_asset_compatibility_operation_binding_while_admitted(
+        state,
+        legacy_operation,
+        owner_id,
+    )?;
     validate_authoritative_media_asset_commit(
         state,
         &mut coordinator,
@@ -16070,6 +16539,7 @@ fn commit_prepared_media_assets_authoritative(
             expected_epoch,
             &owner_id,
             &expected_authority,
+            None,
         )?;
         let entries = prepared.entries.clone();
         let committed = commit_authoritative_media_asset_transaction(
@@ -16080,6 +16550,7 @@ fn commit_prepared_media_assets_authoritative(
             &expected_authority,
             "Import media assets",
             "",
+            None,
             |snapshot| {
                 let (candidate, results) = build_media_asset_catalog_import_candidate(
                     media_asset_catalog_for_snapshot(snapshot),
@@ -16160,25 +16631,25 @@ fn get_media_asset_operation_terminal_result(
         }))
 }
 
-#[tauri::command]
-fn commit_prepared_media_asset_relink_authoritative(
-    state: State<'_, AppState>,
+fn commit_prepared_media_asset_relink_authoritative_impl(
+    state: &AppState,
     prepared_relink_token: u64,
     request_id: u64,
     operation_generation: u64,
     expected_epoch: u64,
     expected_revision: u64,
     expected_checkpoint_hash: String,
-    owner_id: String,
+    owner_id: &str,
+    legacy_operation: Option<&LegacyMediaAssetCompatibilityOperation>,
 ) -> Result<MediaAssetAuthoritativeRelinkResult, String> {
-    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
-    ensure_project_transaction_owner_registered(&state, &owner_id)?;
+    ensure_legacy_media_asset_compatibility_operation_current(state, legacy_operation, owner_id)?;
+    ensure_project_transaction_owner_registered(state, owner_id)?;
     let registry = Arc::clone(&state.media_asset_operations);
     let operation_key = media_asset_authoritative_operation_key(
         prepared_relink_token,
         request_id,
         operation_generation,
-        &owner_id,
+        owner_id,
         expected_epoch,
         expected_revision,
         expected_checkpoint_hash,
@@ -16190,23 +16661,25 @@ fn commit_prepared_media_asset_relink_authoritative(
             prepared_relink_token,
             request_id,
             operation_generation,
-            &owner_id,
+            owner_id,
         )?;
         verify_authoritative_prepared_relink(
-            &state,
+            state,
             &prepared,
             expected_epoch,
-            &owner_id,
+            owner_id,
             &expected_authority,
+            legacy_operation,
         )?;
         let committed = commit_authoritative_media_asset_transaction(
-            &state,
+            state,
             prepared.admission.as_ref(),
             expected_epoch,
-            &owner_id,
+            owner_id,
             &expected_authority,
             "Relink media asset",
             "",
+            legacy_operation,
             |snapshot| {
                 let current_asset = media_asset_catalog_for_snapshot(snapshot)
                     .iter()
@@ -16253,7 +16726,7 @@ fn commit_prepared_media_asset_relink_authoritative(
         prepared_relink_token,
         request_id,
         operation_generation,
-        &owner_id,
+        owner_id,
     );
     match terminal {
         MediaAssetAuthoritativeTerminalResult::Relink(result) => Ok(result),
@@ -16262,6 +16735,31 @@ fn commit_prepared_media_asset_relink_authoritative(
             "Authoritative media asset relink received an unexpected terminal result: {other:?}"
         )),
     }
+}
+
+#[tauri::command]
+fn commit_prepared_media_asset_relink_authoritative(
+    state: State<'_, AppState>,
+    prepared_relink_token: u64,
+    request_id: u64,
+    operation_generation: u64,
+    expected_epoch: u64,
+    expected_revision: u64,
+    expected_checkpoint_hash: String,
+    owner_id: String,
+) -> Result<MediaAssetAuthoritativeRelinkResult, String> {
+    let owner_id = normalize_project_transaction_owner_id(owner_id)?;
+    commit_prepared_media_asset_relink_authoritative_impl(
+        &state,
+        prepared_relink_token,
+        request_id,
+        operation_generation,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash,
+        &owner_id,
+        None,
+    )
 }
 
 enum PreparedAuthoritativeLayerCommandResult {
@@ -16284,7 +16782,9 @@ fn commit_prepared_media_asset_layers_authoritative(
     required_kind: VideoSourceKind,
     history_label: &str,
     bootstrap: bool,
+    legacy_operation: Option<&LegacyMediaAssetCompatibilityOperation>,
 ) -> Result<MediaAssetAuthoritativeTerminalResult, String> {
+    ensure_legacy_media_asset_compatibility_operation_current(state, legacy_operation, owner_id)?;
     ensure_project_transaction_owner_registered(state, owner_id)?;
     let registry = Arc::clone(&state.media_asset_operations);
     let operation_key = media_asset_authoritative_operation_key(
@@ -16320,6 +16820,7 @@ fn commit_prepared_media_asset_layers_authoritative(
             expected_epoch,
             owner_id,
             &expected_authority,
+            legacy_operation,
         )?;
         if bootstrap {
             ensure_video_output_backend_available(&VideoOutputKind::Display)?;
@@ -16332,6 +16833,7 @@ fn commit_prepared_media_asset_layers_authoritative(
             &expected_authority,
             history_label,
             "",
+            legacy_operation,
             |snapshot| {
                 let labels = labels.unwrap_or_else(|| {
                     prepared
@@ -16433,6 +16935,7 @@ fn commit_prepared_video_file_layer_authoritative(
         VideoSourceKind::File,
         "Add video file layer",
         false,
+        None,
     )?;
     match terminal {
         MediaAssetAuthoritativeTerminalResult::Layers(result) if result.layer_ids.len() == 1 => {
@@ -16480,6 +16983,7 @@ fn commit_prepared_still_image_layer_authoritative(
         VideoSourceKind::StillImage,
         "Add still image layer",
         false,
+        None,
     )?;
     match terminal {
         MediaAssetAuthoritativeTerminalResult::Layers(result) if result.layer_ids.len() == 1 => {
@@ -16527,6 +17031,7 @@ fn commit_prepared_local_media_layers_authoritative(
         kind,
         "Add local media layers",
         false,
+        None,
     )?;
     match terminal {
         MediaAssetAuthoritativeTerminalResult::Layers(result) => Ok(result),
@@ -16571,6 +17076,7 @@ fn commit_prepared_bootstrap_vj_show_authoritative(
         VideoSourceKind::File,
         "Set up first-run VJ show",
         true,
+        None,
     )?;
     match terminal {
         MediaAssetAuthoritativeTerminalResult::Bootstrap(result) => Ok(result),
@@ -16863,42 +17369,225 @@ fn commit_prepared_still_image_layer(
         .ok_or_else(|| "Still image layer add published no layer".to_string())
 }
 
+/// The legacy IPC's historic batch rule is all-or-nothing for invalid input,
+/// while repeated paths are intentionally a successful first-wins no-op. The
+/// staged preparer reports those two cases separately; make the compatibility
+/// decision before Finalize/Published so no valid prefix can escape.
+fn require_legacy_media_asset_compatibility_all_or_nothing(
+    report: &MediaAssetImportReport,
+    operation: &str,
+) -> Result<(), String> {
+    if report.failed > 0 {
+        return Err(format!(
+            "{operation} rejected {} failed input(s); no media was added",
+            report.failed
+        ));
+    }
+    Ok(())
+}
+
+/// One old IPC invocation is adapted to the same server-owned long-I/O and
+/// authoritative short-publication boundary as new UI callers. There is no
+/// renderer ticket and no pending generic project transaction while hashing or
+/// finalizing; `commit_prepared_media_asset_layers_authoritative` owns history,
+/// revision, and the definitive Published ACK.
+async fn legacy_media_asset_compatibility_prepare_finalize_local_media(
+    state: &AppState,
+    operation: &LegacyMediaAssetCompatibilityOperation,
+    kind: VideoSourceKind,
+    paths: Vec<String>,
+    history_label: &str,
+) -> Result<u64, String> {
+    let prepared = prepare_reserved_media_assets_impl(
+        state,
+        operation.request_id,
+        operation.operation_generation,
+        kind,
+        paths,
+        operation.authority.epoch,
+        &operation.owner_id,
+        Some(operation),
+    )
+    .await?;
+    require_legacy_media_asset_compatibility_all_or_nothing(&prepared, history_label)?;
+    let prepared_import_token = prepared.prepared_import_token.ok_or_else(|| {
+        format!("{history_label} prepared no unique local media file; no media was added")
+    })?;
+    let finalized = finalize_prepared_media_assets_impl(
+        state,
+        prepared_import_token,
+        operation.request_id,
+        operation.operation_generation,
+        operation.authority.epoch,
+        &operation.owner_id,
+        Some(operation),
+    )
+    .await?;
+    require_legacy_media_asset_compatibility_all_or_nothing(&finalized, history_label)?;
+    Ok(prepared_import_token)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn legacy_media_asset_compatibility_commit_layers(
+    state: &AppState,
+    window: &WebviewWindow,
+    kind: VideoSourceKind,
+    paths: Vec<String>,
+    shape: MediaAssetAuthoritativeRequestShape,
+    labels: Option<Vec<String>>,
+    history_label: &str,
+    bootstrap: bool,
+) -> Result<MediaAssetAuthoritativeTerminalResult, String> {
+    let operation = reserve_legacy_media_asset_compatibility_operation(state, window)?;
+    let required_kind = kind.clone();
+    let result = async {
+        let prepared_import_token = legacy_media_asset_compatibility_prepare_finalize_local_media(
+            state,
+            &operation,
+            kind,
+            paths,
+            history_label,
+        )
+        .await?;
+        commit_prepared_media_asset_layers_authoritative(
+            state,
+            prepared_import_token,
+            operation.request_id,
+            operation.operation_generation,
+            operation.authority.epoch,
+            operation.authority.revision,
+            operation.authority.checkpoint_hash.clone(),
+            &operation.owner_id,
+            shape,
+            labels,
+            required_kind,
+            history_label,
+            bootstrap,
+            Some(&operation),
+        )
+    }
+    .await;
+    if result.is_err() {
+        cancel_legacy_media_asset_compatibility_operation(state, &operation);
+    }
+    result
+}
+
+#[derive(Debug, Clone)]
+struct LegacyMediaAssetRefreshTarget {
+    asset_id: MediaAssetId,
+    source: VideoSourceSummary,
+}
+
+/// Resolve the source from the catalog relationship rather than trusting a
+/// mutable layer projection. A legacy row lacking the reference is rejected
+/// fail-closed: raw `SetVideoLayerSource` is no longer allowed to invent it.
+fn legacy_media_asset_refresh_target(
+    snapshot: &EngineSnapshot,
+    layer_id: VideoLayerId,
+) -> Result<LegacyMediaAssetRefreshTarget, String> {
+    let video = snapshot.authored_video.as_ref().unwrap_or(&snapshot.video);
+    let layer = video
+        .layers
+        .iter()
+        .find(|layer| layer.id == layer_id)
+        .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
+    let asset_id = layer.media_asset_id.ok_or_else(|| {
+        format!(
+            "Video layer {layer_id} has no media asset reference; refresh requires an acknowledged media asset update"
+        )
+    })?;
+    let asset = video
+        .media_assets
+        .iter()
+        .find(|asset| asset.id == asset_id)
+        .ok_or_else(|| {
+            format!("Media asset {asset_id} was not found for video layer {layer_id}")
+        })?;
+    if layer.source != asset.source {
+        return Err(format!(
+            "Video layer {layer_id} source diverged from media asset {asset_id}; refresh requires project repair"
+        ));
+    }
+    if !matches!(
+        asset.source.kind,
+        VideoSourceKind::File | VideoSourceKind::StillImage
+    ) {
+        return Err("Live video inputs do not expose local file metadata".to_string());
+    }
+    if asset
+        .source
+        .path
+        .as_deref()
+        .map_or(true, |path| path.trim().is_empty())
+    {
+        return Err("Video layer local media source path is required".to_string());
+    }
+    Ok(LegacyMediaAssetRefreshTarget {
+        asset_id,
+        source: asset.source.clone(),
+    })
+}
+
+fn legacy_media_asset_refresh_message(source: &VideoSourceSummary) -> Result<String, String> {
+    match source.kind {
+        VideoSourceKind::File => Ok(if source.metadata.is_some() {
+            "Refreshed video file metadata".to_string()
+        } else {
+            "Refreshed video codec; ffprobe returned no stream metadata".to_string()
+        }),
+        VideoSourceKind::StillImage => Ok("Refreshed still image metadata".to_string()),
+        VideoSourceKind::Camera
+        | VideoSourceKind::ScreenCapture
+        | VideoSourceKind::Ndi
+        | VideoSourceKind::Spout
+        | VideoSourceKind::Syphon => {
+            Err("Live video inputs do not expose local file metadata".to_string())
+        }
+    }
+}
+
 /// Transitional wire-compatible route. The existing renderer still invokes
-/// `{ label, path }`; it remains usable until that renderer moves to the
-/// staged Prepare -> Finalize -> Commit API above. It deliberately keeps the
-/// legacy synchronous I/O behavior local to this bridge rather than leaving
-/// a missing-argument IPC failure in released builds.
+/// `{ label, path }`; the result remains a bare `VideoLayerId`, while the
+/// implementation is the A1 hash/finalize/Published/history path.
 #[tauri::command]
-fn add_video_file_layer(
+async fn add_video_file_layer(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     label: String,
     path: String,
 ) -> Result<VideoLayerId, String> {
     let label = normalize_video_layer_label(label)?;
-    let path = validate_existing_file_path(path, "Video file")?;
-    let probe = video::probe_video_file_metadata(&path).ok();
-    let codec = probe
-        .as_ref()
-        .and_then(|probe| probe.codec.clone())
-        .or_else(|| video::infer_video_codec_from_path(&path));
-    let layer_id = state.engine.allocate_video_layer_id();
-    state
-        .engine
-        .send(EngineCommand::AddVideoLayer {
-            layer_id,
-            label,
-            source: VideoSourceSummary {
-                kind: VideoSourceKind::File,
-                path: Some(path),
-                name: None,
-                codec,
-                metadata: probe.and_then(|probe| probe.metadata),
-            },
-        })
-        .map_err(|error| error.to_string())?;
-    Ok(layer_id)
+    let shape = media_asset_authoritative_shape(
+        MediaAssetAuthoritativeCommitKind::VideoFileLayer,
+        &[&label],
+    );
+    match legacy_media_asset_compatibility_commit_layers(
+        &state,
+        &window,
+        VideoSourceKind::File,
+        vec![path],
+        shape,
+        Some(vec![label]),
+        "Add video file layer",
+        false,
+    )
+    .await?
+    {
+        MediaAssetAuthoritativeTerminalResult::Layers(result) if result.layer_ids.len() == 1 => {
+            Ok(result.layer_ids[0])
+        }
+        MediaAssetAuthoritativeTerminalResult::Layers(_) => Err(
+            "Authoritative video file layer add published an unexpected layer count".to_string(),
+        ),
+        MediaAssetAuthoritativeTerminalResult::Failure(failure) => Err(failure.message),
+        other => Err(format!(
+            "Authoritative video file layer add received an unexpected terminal result: {other:?}"
+        )),
+    }
 }
 
+#[cfg(test)]
 fn prepare_legacy_local_media_layers(
     kind: VideoSourceKind,
     paths: Vec<String>,
@@ -16967,35 +17656,41 @@ fn prepare_legacy_local_media_layers(
     Ok(prepared)
 }
 
-fn add_legacy_prepared_local_media_layers(
-    engine: &EngineHandle,
-    prepared: Vec<(String, VideoSourceSummary)>,
-) -> Result<Vec<VideoLayerId>, String> {
-    let mut layer_ids = Vec::with_capacity(prepared.len());
-    for (label, source) in prepared {
-        let layer_id = engine.allocate_video_layer_id();
-        engine
-            .send(EngineCommand::AddVideoLayer {
-                layer_id,
-                label,
-                source,
-            })
-            .map_err(|error| error.to_string())?;
-        layer_ids.push(layer_id);
-    }
-    Ok(layer_ids)
-}
-
 #[tauri::command]
-fn add_local_media_layers(
+async fn add_local_media_layers(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     kind: VideoSourceKind,
     paths: Vec<String>,
 ) -> Result<Vec<VideoLayerId>, String> {
-    let prepared = prepare_legacy_local_media_layers(kind, paths)?;
-    add_legacy_prepared_local_media_layers(&state.engine, prepared)
+    if !matches!(kind, VideoSourceKind::File | VideoSourceKind::StillImage) {
+        return Err("Batch media import supports video files and still images only".to_string());
+    }
+    let shape = media_asset_authoritative_shape(
+        MediaAssetAuthoritativeCommitKind::LocalMediaLayers,
+        &[media_asset_video_source_kind_name(&kind)],
+    );
+    match legacy_media_asset_compatibility_commit_layers(
+        &state,
+        &window,
+        kind,
+        paths,
+        shape,
+        None,
+        "Add local media layers",
+        false,
+    )
+    .await?
+    {
+        MediaAssetAuthoritativeTerminalResult::Layers(result) => Ok(result.layer_ids),
+        MediaAssetAuthoritativeTerminalResult::Failure(failure) => Err(failure.message),
+        other => Err(format!(
+            "Authoritative local media layer add received an unexpected terminal result: {other:?}"
+        )),
+    }
 }
 
+#[cfg(test)]
 fn bootstrap_vj_show_engine(
     engine: &EngineHandle,
     kind: VideoSourceKind,
@@ -17037,147 +17732,156 @@ fn bootstrap_vj_show_engine(
 
 #[tauri::command]
 async fn bootstrap_vj_show(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     kind: VideoSourceKind,
     paths: Vec<String>,
 ) -> Result<VjFirstRunSetupResult, String> {
-    let engine = state.engine.clone();
-    let first_run = Arc::clone(&state.vj_first_run);
-    tauri::async_runtime::spawn_blocking(move || {
-        let _guard = first_run
-            .lock()
-            .map_err(|_| "First-run VJ setup lock is unavailable".to_string())?;
-        bootstrap_vj_show_engine(&engine, kind, paths)
-    })
-    .await
-    .map_err(|error| format!("First-run VJ setup worker failed: {error}"))?
+    if kind != VideoSourceKind::File {
+        return Err("First-run VJ setup requires local video files".to_string());
+    }
+    let shape = media_asset_authoritative_shape(
+        MediaAssetAuthoritativeCommitKind::BootstrapVjShow,
+        &[media_asset_video_source_kind_name(&kind), "safe_output_v1"],
+    );
+    match legacy_media_asset_compatibility_commit_layers(
+        &state,
+        &window,
+        kind,
+        paths,
+        shape,
+        None,
+        "Set up first-run VJ show",
+        true,
+    )
+    .await?
+    {
+        MediaAssetAuthoritativeTerminalResult::Bootstrap(result) => Ok(result.setup),
+        MediaAssetAuthoritativeTerminalResult::Failure(failure) => Err(failure.message),
+        other => Err(format!(
+            "Authoritative first-run VJ setup received an unexpected terminal result: {other:?}"
+        )),
+    }
 }
 
 #[tauri::command]
-fn add_still_image_layer(
+async fn add_still_image_layer(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     label: String,
     path: String,
 ) -> Result<VideoLayerId, String> {
     let label = normalize_video_layer_label(label)?;
-    let path = validate_existing_file_path(path, "Still image")?;
-    let metadata = video::probe_still_image_metadata(&path).ok();
-    let layer_id = state.engine.allocate_video_layer_id();
-    state
-        .engine
-        .send(EngineCommand::AddVideoLayer {
-            layer_id,
-            label,
-            source: VideoSourceSummary {
-                kind: VideoSourceKind::StillImage,
-                path: Some(path),
-                name: None,
-                codec: None,
-                metadata,
-            },
-        })
-        .map_err(|error| error.to_string())?;
-    Ok(layer_id)
-}
-
-#[tauri::command]
-fn refresh_video_layer_metadata(
-    state: State<'_, AppState>,
-    layer_id: VideoLayerId,
-) -> Result<String, String> {
-    let snapshot = state.engine.snapshot();
-    let layer = snapshot
-        .video
-        .layers
-        .iter()
-        .find(|layer| layer.id == layer_id)
-        .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
-    let (source, message) = refresh_legacy_video_source_metadata(&layer.source)?;
-    state
-        .engine
-        .send(EngineCommand::SetVideoLayerSource { layer_id, source })
-        .map_err(|error| error.to_string())?;
-    Ok(message)
-}
-
-fn refresh_legacy_video_source_metadata(
-    source: &VideoSourceSummary,
-) -> Result<(VideoSourceSummary, String), String> {
-    match source.kind {
-        VideoSourceKind::File => refresh_legacy_file_video_source_metadata(source),
-        VideoSourceKind::StillImage => refresh_legacy_still_image_source_metadata(source),
-        VideoSourceKind::Camera
-        | VideoSourceKind::ScreenCapture
-        | VideoSourceKind::Ndi
-        | VideoSourceKind::Spout
-        | VideoSourceKind::Syphon => {
-            Err("Live video inputs do not expose local file metadata".to_string())
+    let shape = media_asset_authoritative_shape(
+        MediaAssetAuthoritativeCommitKind::StillImageLayer,
+        &[&label],
+    );
+    match legacy_media_asset_compatibility_commit_layers(
+        &state,
+        &window,
+        VideoSourceKind::StillImage,
+        vec![path],
+        shape,
+        Some(vec![label]),
+        "Add still image layer",
+        false,
+    )
+    .await?
+    {
+        MediaAssetAuthoritativeTerminalResult::Layers(result) if result.layer_ids.len() == 1 => {
+            Ok(result.layer_ids[0])
         }
+        MediaAssetAuthoritativeTerminalResult::Layers(_) => Err(
+            "Authoritative still image layer add published an unexpected layer count".to_string(),
+        ),
+        MediaAssetAuthoritativeTerminalResult::Failure(failure) => Err(failure.message),
+        other => Err(format!(
+            "Authoritative still image layer add received an unexpected terminal result: {other:?}"
+        )),
     }
 }
 
-fn refresh_legacy_file_video_source_metadata(
-    source: &VideoSourceSummary,
-) -> Result<(VideoSourceSummary, String), String> {
-    let path = source
-        .path
-        .as_deref()
-        .filter(|path| !path.trim().is_empty())
-        .ok_or_else(|| "Video file source path is required".to_string())?;
-    let path = validate_existing_file_path(path.to_string(), "Video file")?;
-    let probe = video::probe_video_file_metadata(&path);
-    let (codec, metadata, message) = match probe {
-        Ok(probe) => {
-            let codec = probe
-                .codec
-                .or_else(|| video::infer_video_codec_from_path(&path))
-                .or_else(|| source.codec.clone());
-            let message = if probe.metadata.is_some() {
-                "Refreshed video file metadata".to_string()
-            } else {
-                "Refreshed video codec; ffprobe returned no stream metadata".to_string()
-            };
-            (codec, probe.metadata, message)
+#[tauri::command]
+async fn refresh_video_layer_metadata(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    layer_id: VideoLayerId,
+) -> Result<String, String> {
+    // Operator/owner admission happens before even reading the local source.
+    // The target is then re-captured during reserved relink Prepare against this
+    // exact A authority, so a stale layer cannot update B after a reload.
+    let operation = reserve_legacy_media_asset_compatibility_operation(&state, &window)?;
+    let result = async {
+        let target = legacy_media_asset_refresh_target(&state.engine.persistence_snapshot()?, layer_id)?;
+        let replacement_path = target.source.path.clone().ok_or_else(|| {
+            "Video layer local media source path is required".to_string()
+        })?;
+        let prepared = prepare_reserved_media_asset_relink_impl(
+            &state,
+            operation.request_id,
+            operation.operation_generation,
+            target.asset_id,
+            replacement_path,
+            // Metadata refresh never adopts different bytes. Same-path bytes
+            // are rehashed/probed, then update the catalog and every layer
+            // projection through one acknowledged MediaAssetTransaction::Update.
+            MediaAssetRelinkPolicy::RequireContentMatch,
+            operation.authority.epoch,
+            &operation.owner_id,
+            Some(&operation),
+        )
+        .await?;
+        let prepared_relink_token = prepared.prepared_relink_token.ok_or_else(|| {
+            format!(
+                "Video layer metadata refresh did not produce an acknowledged relink: {:?}",
+                prepared.outcome
+            )
+        })?;
+        let refreshed_source = state.media_asset_operations.prepared_relink_exact(
+            prepared_relink_token,
+            operation.request_id,
+            operation.operation_generation,
+            &operation.owner_id,
+        )?.replacement.source;
+        let message = legacy_media_asset_refresh_message(&refreshed_source)?;
+        let finalized = finalize_prepared_media_asset_relink_impl(
+            &state,
+            prepared_relink_token,
+            operation.request_id,
+            operation.operation_generation,
+            operation.authority.epoch,
+            &operation.owner_id,
+            Some(&operation),
+        )
+        .await?;
+        if finalized.prepared_relink_token != Some(prepared_relink_token) || finalized.outcome.is_some() {
+            return Err("Video layer metadata refresh finalization was not acknowledged".to_string());
         }
-        Err(error) => (
-            video::infer_video_codec_from_path(&path).or_else(|| source.codec.clone()),
-            None,
-            format!("Refreshed video codec fallback; ffprobe failed: {error:?}"),
-        ),
-    };
-    Ok((
-        VideoSourceSummary {
-            kind: VideoSourceKind::File,
-            path: Some(path),
-            name: source.name.clone(),
-            codec,
-            metadata,
-        },
-        message,
-    ))
-}
-
-fn refresh_legacy_still_image_source_metadata(
-    source: &VideoSourceSummary,
-) -> Result<(VideoSourceSummary, String), String> {
-    let path = source
-        .path
-        .as_deref()
-        .filter(|path| !path.trim().is_empty())
-        .ok_or_else(|| "Still image source path is required".to_string())?;
-    let path = validate_existing_file_path(path.to_string(), "Still image")?;
-    let metadata = video::probe_still_image_metadata(&path)
-        .map_err(|error| format!("Still image metadata probe failed: {error:?}"))?;
-    Ok((
-        VideoSourceSummary {
-            kind: VideoSourceKind::StillImage,
-            path: Some(path),
-            name: source.name.clone(),
-            codec: source.codec.clone(),
-            metadata: Some(metadata),
-        },
-        "Refreshed still image metadata".to_string(),
-    ))
+        let committed = commit_prepared_media_asset_relink_authoritative_impl(
+            &state,
+            prepared_relink_token,
+            operation.request_id,
+            operation.operation_generation,
+            operation.authority.epoch,
+            operation.authority.revision,
+            operation.authority.checkpoint_hash.clone(),
+            &operation.owner_id,
+            Some(&operation),
+        )?;
+        match committed.report.outcome {
+            MediaAssetRelinkOutcome::Relinked { asset_id, .. } if asset_id == target.asset_id => {
+                Ok(message)
+            }
+            outcome => Err(format!(
+                "Video layer metadata refresh received an unexpected authoritative outcome: {outcome:?}"
+            )),
+        }
+    }
+    .await;
+    if result.is_err() {
+        cancel_legacy_media_asset_compatibility_operation(&state, &operation);
+    }
+    result
 }
 
 #[tauri::command]
@@ -23745,6 +24449,83 @@ fn ensure_project_transaction_owner_registered(
     }
 }
 
+/// Old media IPC has no owner argument. Derive it only from the concrete
+/// invoking WebView's registered generation; accepting a caller-supplied
+/// string here would let raw IPC impersonate another renderer's Operator
+/// session. The later Start/Commit checks repeat registration so a reload that
+/// replaces this window generation fails closed instead of inheriting it.
+fn legacy_media_asset_compatibility_owner_for_window_label(
+    owners: &HashMap<String, String>,
+    window_label: &str,
+) -> Result<String, String> {
+    let owner_id = owners.get(window_label).cloned().ok_or_else(|| {
+        "Legacy media compatibility IPC requires a registered renderer session".to_string()
+    })?;
+    normalize_project_transaction_owner_id(owner_id)
+}
+
+/// Check the old IPC operation against the exact WebView label that created
+/// it. A bare owner-ID registration check is insufficient: owner X can be
+/// retired by window A and later registered by window B, at which point a
+/// stale A operation would otherwise inherit B's Operator session.
+fn ensure_legacy_media_asset_compatibility_operation_binding_in_owners(
+    owners: &HashMap<String, String>,
+    operation: &LegacyMediaAssetCompatibilityOperation,
+) -> Result<(), String> {
+    let current_owner =
+        legacy_media_asset_compatibility_owner_for_window_label(owners, &operation.window_label)?;
+    if current_owner == operation.owner_id {
+        return Ok(());
+    }
+    Err(
+        "Legacy media compatibility renderer window generation changed; retry the operation"
+            .to_string(),
+    )
+}
+
+/// The caller holds external admission and the coordinator before entering
+/// this helper. That order is shared with same-window owner rotation, making
+/// the label-to-owner comparison an atomic generation check rather than a
+/// best-effort lookup that can be invalidated between long-I/O phases.
+fn ensure_legacy_media_asset_compatibility_operation_binding_while_admitted(
+    state: &AppState,
+    operation: Option<&LegacyMediaAssetCompatibilityOperation>,
+    owner_id: &str,
+) -> Result<(), String> {
+    let Some(operation) = operation else {
+        return Ok(());
+    };
+    if operation.owner_id != owner_id {
+        return Err(
+            "Legacy media compatibility operation owner does not match its reservation".to_string(),
+        );
+    }
+    let owners = state
+        .project_transaction_owners
+        .lock()
+        .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
+    ensure_legacy_media_asset_compatibility_operation_binding_in_owners(&owners, operation)
+}
+
+/// Reject a stale compatibility operation before terminal receipt lookup. The
+/// final publication helper repeats this check while it retains the admission
+/// boundary, so a rotation after this early rejection point still cannot reach
+/// engine ACK/history mutation.
+fn ensure_legacy_media_asset_compatibility_operation_current(
+    state: &AppState,
+    operation: Option<&LegacyMediaAssetCompatibilityOperation>,
+    owner_id: &str,
+) -> Result<(), String> {
+    if operation.is_none() {
+        return Ok(());
+    }
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let _coordinator = lock_project_coordinator(state)?;
+    ensure_legacy_media_asset_compatibility_operation_binding_while_admitted(
+        state, operation, owner_id,
+    )
+}
+
 fn with_retained_project_transaction<T>(
     coordinator: &mut ProjectCoordinator,
     transaction_id: u64,
@@ -23836,12 +24617,23 @@ fn register_project_transaction_owner(
         .project_transaction_owners
         .lock()
         .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
-    let previous_owner = owners.get(window.label()).cloned();
-    let recovered = transition_project_transaction_window_owner(
+    ensure_project_transaction_owner_unique_to_window(&owners, window.label(), &owner_id)?;
+    // Hold both registries through recovery and the owner/session handoff. The
+    // external-admission and coordinator locks already exclude concurrent
+    // operator mutations; taking owners before sessions is the only nested
+    // registry order. Acquiring sessions before retirement means a failed
+    // cancellation leaves both maps untouched.
+    let mut sessions = state
+        .project_operator_sessions
+        .lock()
+        .map_err(|_| "Project operator session registry lock was poisoned".to_string())?;
+    let recovered = transition_project_transaction_window_owner_with_operator_session(
         &mut owners,
+        &mut sessions,
+        &mut coordinator,
         window.label(),
         Some(owner_id.clone()),
-        |previous_owner| {
+        |previous_owner, coordinator| {
             let Some(previous_owner) = previous_owner else {
                 return Ok(None);
             };
@@ -23850,20 +24642,33 @@ fn register_project_transaction_owner(
             else {
                 return Ok(None);
             };
-            cancel_pending_project_transaction_locked(&state, &mut coordinator, pending).map(Some)
+            cancel_pending_project_transaction_locked(&state, coordinator, pending).map(Some)
         },
     )?;
-    drop(owners);
-    if previous_owner.as_deref() != Some(owner_id.as_str()) {
-        if let Some(previous_owner) = previous_owner {
-            state
-                .project_operator_sessions
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .remove(&previous_owner);
-        }
-    }
     Ok(recovered)
+}
+
+/// An owner generation belongs to exactly one concrete WebView label. Owner
+/// IDs are correlation identities, not secrets: a raw caller can repeat an
+/// observed string, so allowing the same value under a second label would also
+/// share the first window's Operator unlock session. Check this while the
+/// registry lock is held and before retiring/replacing any existing owner so a
+/// rejected alias leaves registry, transaction, and session state unchanged.
+fn ensure_project_transaction_owner_unique_to_window(
+    owners: &HashMap<String, String>,
+    window_label: &str,
+    owner_id: &str,
+) -> Result<(), String> {
+    if owners
+        .iter()
+        .any(|(label, candidate)| label != window_label && candidate == owner_id)
+    {
+        return Err(
+            "Project transaction owner ID is already registered to another renderer window"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn project_transaction_for_retired_owner(
@@ -23891,12 +24696,20 @@ fn retire_project_transaction_owner_for_window(
         .project_transaction_owners
         .lock()
         .map_err(|_| "Project transaction owner registry lock was poisoned".to_string())?;
-    let retired_owner = owners.get(window_label).cloned();
-    let recovered = transition_project_transaction_window_owner(
+    // Match registration's atomic owner/session boundary. In particular, an
+    // orphan cancellation failure must leave its previous session available
+    // under the still-registered owner instead of orphaning its lock state.
+    let mut sessions = state
+        .project_operator_sessions
+        .lock()
+        .map_err(|_| "Project operator session registry lock was poisoned".to_string())?;
+    let recovered = transition_project_transaction_window_owner_with_operator_session(
         &mut owners,
+        &mut sessions,
+        &mut coordinator,
         window_label,
         None,
-        |retired_owner| {
+        |retired_owner, coordinator| {
             let Some(retired_owner) = retired_owner else {
                 return Ok(None);
             };
@@ -23905,17 +24718,9 @@ fn retire_project_transaction_owner_for_window(
             else {
                 return Ok(None);
             };
-            cancel_pending_project_transaction_locked(state, &mut coordinator, pending).map(Some)
+            cancel_pending_project_transaction_locked(state, coordinator, pending).map(Some)
         },
     )?;
-    drop(owners);
-    if let Some(retired_owner) = retired_owner {
-        state
-            .project_operator_sessions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(&retired_owner);
-    }
     Ok(recovered)
 }
 
@@ -23926,6 +24731,12 @@ fn transition_project_transaction_window_owner<T>(
     finalize_retired: impl FnOnce(Option<&str>) -> Result<Option<T>, String>,
 ) -> Result<Option<T>, String> {
     let previous_owner = owners.get(window_label).cloned();
+    // A renderer can repeat registration after a transport retry. It has not
+    // retired itself, so recovery must not cancel its own pending transaction
+    // or reset the associated Operator session.
+    if previous_owner.as_deref() == next_owner.as_deref() {
+        return Ok(None);
+    }
     // Finalize first. If checkpoint/hash/history preparation fails, the map
     // remains byte-for-byte unchanged and the retired owner stays retryable.
     let finalized = finalize_retired(previous_owner.as_deref())?;
@@ -23934,6 +24745,71 @@ fn transition_project_transaction_window_owner<T>(
     } else {
         owners.remove(window_label);
     }
+    Ok(finalized)
+}
+
+/// Move the exact current Operator-session state together with a same-window
+/// owner transition. The session is authoritative only when it was issued for
+/// the coordinator's current epoch and exact policy; a stale policy/epoch must
+/// fall back to the normal policy default for the new owner. A fresh owner can
+/// never inherit an unrelated stale entry, and a same-owner retry is a strict
+/// no-op.
+fn transition_project_operator_session_owner(
+    sessions: &mut HashMap<String, ProjectOperatorSession>,
+    coordinator: &ProjectCoordinator,
+    previous_owner: Option<&str>,
+    next_owner: Option<&str>,
+) {
+    if previous_owner == next_owner {
+        return;
+    }
+    let previous_session = previous_owner.and_then(|owner_id| sessions.remove(owner_id));
+    let Some(next_owner) = next_owner else {
+        return;
+    };
+
+    // A newly registered identity must not reuse a stale record which happens
+    // to share its string. It receives only the predecessor's exact current
+    // lock/unlock state, otherwise `project_operator_session_for_policy` mints
+    // the policy-default session on first use.
+    sessions.remove(next_owner);
+    let Some(policy) = coordinator.ancillary.operator_policy.as_ref() else {
+        return;
+    };
+    let Some(session) = previous_session else {
+        return;
+    };
+    if session.project_epoch == coordinator.epoch && session.policy == *policy {
+        sessions.insert(next_owner.to_string(), session);
+    }
+}
+
+/// One locked transition boundary for both owner correlation and Operator
+/// admission state. The caller holds external admission, coordinator, owners,
+/// and sessions in that order. Retirement runs first; only its successful,
+/// infallible completion can make either registry visible under the successor.
+fn transition_project_transaction_window_owner_with_operator_session<T>(
+    owners: &mut HashMap<String, String>,
+    sessions: &mut HashMap<String, ProjectOperatorSession>,
+    coordinator: &mut ProjectCoordinator,
+    window_label: &str,
+    next_owner: Option<String>,
+    finalize_retired: impl FnOnce(Option<&str>, &mut ProjectCoordinator) -> Result<Option<T>, String>,
+) -> Result<Option<T>, String> {
+    let previous_owner = owners.get(window_label).cloned();
+    let next_owner_for_session = next_owner.clone();
+    let finalized = transition_project_transaction_window_owner(
+        owners,
+        window_label,
+        next_owner,
+        |retired_owner| finalize_retired(retired_owner, coordinator),
+    )?;
+    transition_project_operator_session_owner(
+        sessions,
+        coordinator,
+        previous_owner.as_deref(),
+        next_owner_for_session.as_deref(),
+    );
     Ok(finalized)
 }
 
@@ -42139,12 +43015,9 @@ mod tests {
             }),
         )
         .unwrap();
-        assert!(
-            authored.video.media_assets.is_empty(),
-            "rendered/runtime snapshot is not rewritten when authored authority exists"
-        );
+        assert_eq!(authored.video.media_assets, vec![asset.clone()]);
         assert_eq!(
-            authored.authored_video.unwrap().media_assets,
+            authored.authored_video.as_ref().unwrap().media_assets,
             vec![asset.clone()]
         );
 
@@ -42187,6 +43060,207 @@ mod tests {
         assert_eq!(bootstrap.video.outputs[0].id, 61);
         assert!(!bootstrap.video.outputs[0].enabled);
         assert!(bootstrap.video.outputs[0].blackout);
+    }
+
+    #[test]
+    fn media_asset_authoritative_import_candidate_matches_real_engine_persistence_project_and_hash()
+    {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        // Give Import an explicit composition to prove candidate synchronization
+        // regenerates Main while retaining the engine-owned non-Main rows.
+        engine
+            .send(EngineCommand::AddVideoComposition(CompositionSummary {
+                id: 2,
+                label: "Aux".to_string(),
+                layer_ids: Vec::new(),
+                output_ids: Vec::new(),
+            }))
+            .unwrap();
+        let before = engine.persistence_snapshot().unwrap();
+        let before_authored = before.authored_video.as_ref().unwrap();
+        assert_eq!(
+            before_authored
+                .compositions
+                .iter()
+                .map(|composition| composition.id)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+
+        let asset_id = engine.allocate_media_asset_id();
+        let layer_id = engine.allocate_video_layer_id();
+        let asset = MediaAssetSummary {
+            id: asset_id,
+            label: "Real import".to_string(),
+            source: media_asset_commit_test_source("C:/media/real-import.mov"),
+            content_hash: Some(media_asset_commit_test_hash('d')),
+            byte_size: Some(123),
+        };
+        let layer = VideoLayerSummary {
+            id: layer_id,
+            label: "Real import layer".to_string(),
+            source: asset.source.clone(),
+            media_asset_id: Some(asset_id),
+            blend_mode: VideoBlendMode::Normal,
+            state: VideoLayerState::default(),
+            isf_effect: None,
+        };
+        let transaction = MediaAssetTransaction::Import(MediaAssetImportCandidate {
+            assets: vec![asset],
+            layers: vec![layer],
+        });
+        let candidate = media_asset_transaction_candidate_snapshot(before, &transaction).unwrap();
+        let candidate_authored = candidate.authored_video.as_ref().unwrap();
+        assert_eq!(candidate_authored.compositions[0].id, 1);
+        assert_eq!(candidate_authored.compositions[0].label, "Main");
+        assert_eq!(candidate_authored.compositions[0].layer_ids, vec![layer_id]);
+        assert_eq!(candidate_authored.compositions[1].id, 2);
+        assert_eq!(candidate_authored.compositions[1].label, "Aux");
+
+        engine
+            .media_asset_transaction_published(transaction)
+            .unwrap();
+        let published = engine.persistence_snapshot().unwrap();
+        let ancillary = ProjectSwapAncillaryState::default();
+        let candidate_project = project_file_for_save_from_parts(candidate, &ancillary);
+        let published_project = project_file_for_save_from_parts(published, &ancillary);
+        let mappings = ProjectControlMappings::default();
+        assert_eq!(candidate_project, published_project);
+        assert_eq!(
+            project_checkpoint_hash(&candidate_project, &mappings).unwrap(),
+            project_checkpoint_hash(&published_project, &mappings).unwrap()
+        );
+    }
+
+    #[test]
+    fn first_run_vj_setup_candidate_accepts_real_implicit_main_and_matches_persistence_project_and_hash(
+    ) {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let before = engine.persistence_snapshot().unwrap();
+        let before_authored = before.authored_video.as_ref().unwrap();
+        assert_eq!(
+            before_authored.compositions,
+            vec![derived_main_video_composition(before_authored)],
+            "the production persistence surface exposes only derived Main on a new show"
+        );
+
+        let asset_id = engine.allocate_media_asset_id();
+        let layer_id = engine.allocate_video_layer_id();
+        let output_id = engine.allocate_video_output_id();
+        let asset = MediaAssetSummary {
+            id: asset_id,
+            label: "First run".to_string(),
+            source: media_asset_commit_test_source("C:/media/first-run.mov"),
+            content_hash: Some(media_asset_commit_test_hash('f')),
+            byte_size: Some(456),
+        };
+        let layer = VideoLayerSummary {
+            id: layer_id,
+            label: "First run layer".to_string(),
+            source: asset.source.clone(),
+            media_asset_id: Some(asset_id),
+            blend_mode: VideoBlendMode::Normal,
+            state: VideoLayerState::default(),
+            isf_effect: None,
+        };
+        let transaction = MediaAssetTransaction::BootstrapVjShow {
+            candidate: MediaAssetImportCandidate {
+                assets: vec![asset],
+                layers: vec![layer],
+            },
+            output: safe_first_run_vj_output(output_id),
+        };
+        let candidate = media_asset_transaction_candidate_snapshot(before, &transaction).unwrap();
+        let candidate_authored = candidate.authored_video.as_ref().unwrap();
+        assert_eq!(candidate_authored.compositions[0].id, 1);
+        assert_eq!(candidate_authored.compositions[0].label, "Main");
+        assert_eq!(candidate_authored.compositions[0].layer_ids, vec![layer_id]);
+        assert_eq!(
+            candidate_authored.compositions[0].output_ids,
+            vec![output_id]
+        );
+
+        engine
+            .media_asset_transaction_published(transaction)
+            .unwrap();
+        let published = engine.persistence_snapshot().unwrap();
+        let ancillary = ProjectSwapAncillaryState::default();
+        let candidate_project = project_file_for_save_from_parts(candidate, &ancillary);
+        let published_project = project_file_for_save_from_parts(published, &ancillary);
+        let mappings = ProjectControlMappings::default();
+        assert_eq!(candidate_project, published_project);
+        assert_eq!(
+            project_checkpoint_hash(&candidate_project, &mappings).unwrap(),
+            project_checkpoint_hash(&published_project, &mappings).unwrap()
+        );
+    }
+
+    #[test]
+    fn first_run_vj_setup_candidate_rejects_real_explicit_composition_without_engine_mutation() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine
+            .send(EngineCommand::AddVideoComposition(CompositionSummary {
+                id: 2,
+                label: "Aux".to_string(),
+                layer_ids: Vec::new(),
+                output_ids: Vec::new(),
+            }))
+            .unwrap();
+        let before = engine.persistence_snapshot().unwrap();
+        assert!(before
+            .authored_video
+            .as_ref()
+            .unwrap()
+            .compositions
+            .iter()
+            .any(|composition| composition.id == 2));
+
+        let asset_id = engine.allocate_media_asset_id();
+        let layer_id = engine.allocate_video_layer_id();
+        let transaction = MediaAssetTransaction::BootstrapVjShow {
+            candidate: MediaAssetImportCandidate {
+                assets: vec![MediaAssetSummary {
+                    id: asset_id,
+                    label: "Rejected first run".to_string(),
+                    source: media_asset_commit_test_source("C:/media/rejected-first-run.mov"),
+                    content_hash: Some(media_asset_commit_test_hash('e')),
+                    byte_size: Some(789),
+                }],
+                layers: vec![VideoLayerSummary {
+                    id: layer_id,
+                    label: "Rejected first run layer".to_string(),
+                    source: media_asset_commit_test_source("C:/media/rejected-first-run.mov"),
+                    media_asset_id: Some(asset_id),
+                    blend_mode: VideoBlendMode::Normal,
+                    state: VideoLayerState::default(),
+                    isf_effect: None,
+                }],
+            },
+            output: safe_first_run_vj_output(engine.allocate_video_output_id()),
+        };
+        let error =
+            media_asset_transaction_candidate_snapshot(before.clone(), &transaction).unwrap_err();
+        assert!(error.contains("requires an empty video show"));
+
+        let after = engine.persistence_snapshot().unwrap();
+        let ancillary = ProjectSwapAncillaryState::default();
+        let mappings = ProjectControlMappings::default();
+        let before_project = project_file_for_save_from_parts(before, &ancillary);
+        let after_project = project_file_for_save_from_parts(after, &ancillary);
+        assert_eq!(before_project, after_project);
+        assert_eq!(
+            project_checkpoint_hash(&before_project, &mappings).unwrap(),
+            project_checkpoint_hash(&after_project, &mappings).unwrap()
+        );
     }
 
     #[test]
@@ -43173,6 +44247,505 @@ mod tests {
         assert_eq!(entries[1].asset_id, Some(40));
         assert_eq!(entries[2].status, MediaAssetImportEntryStatus::Skipped);
         assert_eq!(entries[3].asset_id, Some(41));
+    }
+
+    #[test]
+    fn legacy_media_asset_compatibility_request_namespace_is_disjoint_and_checked() {
+        assert!(
+            RENDERER_MEDIA_ASSET_REQUEST_ID_MAX < LEGACY_MEDIA_ASSET_COMPATIBILITY_REQUEST_ID_MIN,
+            "legacy server requests must stay outside the frontend's exact ID domain"
+        );
+        let sequence = AtomicU64::new(LEGACY_MEDIA_ASSET_COMPATIBILITY_REQUEST_ID_MIN);
+        let first = allocate_legacy_media_asset_compatibility_request_id_from(&sequence).unwrap();
+        let second = allocate_legacy_media_asset_compatibility_request_id_from(&sequence).unwrap();
+        assert_eq!(first, LEGACY_MEDIA_ASSET_COMPATIBILITY_REQUEST_ID_MIN);
+        assert_eq!(second, first + 1);
+        assert!(first > RENDERER_MEDIA_ASSET_REQUEST_ID_MAX);
+
+        let exhausted = AtomicU64::new(u64::MAX);
+        assert!(allocate_legacy_media_asset_compatibility_request_id_from(&exhausted).is_err());
+    }
+
+    #[test]
+    fn legacy_media_asset_compatibility_registry_skips_every_live_or_retained_request_key() {
+        let registry = Arc::new(MediaAssetOperationRegistry::default());
+        let owner_id = "renderer:legacy";
+        let base = LEGACY_MEDIA_ASSET_COMPATIBILITY_REQUEST_ID_MIN;
+
+        // A raw caller is allowed to choose any u64 at the lower-level staged
+        // seam, so prove that one using the server range cannot collide with a
+        // compatibility call simply because it falls outside the frontend's
+        // normal JavaScript-safe domain.
+        let active = registry.begin(base, owner_id.to_string()).unwrap();
+
+        // The test fixture accepts only a generation; keep the request ID in
+        // the retained record deliberately distinct from its map key.
+        let import_handle = MediaAssetOperationHandle {
+            request_id: base + 1,
+            generation: 41,
+        };
+        registry.prepared.lock().unwrap().insert(
+            import_handle.generation,
+            media_asset_test_prepared_import(base + 1, &import_handle, owner_id),
+        );
+
+        let source = media_asset_commit_test_source("C:/media/relink.mov");
+        let original_asset = MediaAssetSummary {
+            id: 9,
+            label: "Relink".to_string(),
+            source: source.clone(),
+            content_hash: Some(media_asset_commit_test_hash('a')),
+            byte_size: Some(12),
+        };
+        registry.prepared_relinks.lock().unwrap().insert(
+            42,
+            PreparedMediaAssetRelink {
+                request_id: base + 2,
+                operation_generation: 42,
+                owner_id: owner_id.to_string(),
+                asset_id: original_asset.id,
+                authority: media_asset_test_authority(),
+                original_asset,
+                replacement: media_asset_commit_test_prepared(
+                    0,
+                    "C:/media/relink.mov",
+                    media_asset_commit_test_hash('a'),
+                    12,
+                ),
+                adopted_replacement: false,
+                legacy_source_identity: None,
+                cancel: Arc::new(AtomicBool::new(false)),
+                admission: Arc::new(MediaAssetOperationAdmission::new()),
+                finalized_replacement_source: None,
+                finalized_legacy_source: None,
+                expires_at: Instant::now() + MEDIA_ASSET_PREPARED_IMPORT_TTL,
+            },
+        );
+
+        let commit_receipt_key = media_asset_commit_receipt_key(
+            MediaAssetCommitReceiptKind::Layers,
+            43,
+            base + 3,
+            43,
+            1,
+            owner_id,
+        );
+        registry.record_commit_receipt(
+            commit_receipt_key,
+            MediaAssetCommitReceipt::Layers(Vec::new()),
+        );
+        let commit_lane_key = media_asset_commit_receipt_key(
+            MediaAssetCommitReceiptKind::Bootstrap,
+            44,
+            base + 4,
+            44,
+            1,
+            owner_id,
+        );
+        let _commit_lane = registry.commit_publication_lane(&commit_lane_key);
+
+        let authoritative_receipt_key = media_asset_authoritative_test_operation_key(base + 5, 45);
+        registry.authoritative_receipts.lock().unwrap().insert(
+            authoritative_receipt_key,
+            MediaAssetAuthoritativeReceiptRecord {
+                shape: media_asset_authoritative_shape(
+                    MediaAssetAuthoritativeCommitKind::Import,
+                    &[],
+                ),
+                terminal: media_asset_authoritative_test_terminal(base + 5, 45),
+                expires_at: Instant::now() + MEDIA_ASSET_COMMIT_RECEIPT_TTL,
+            },
+        );
+        let authoritative_lane_key = media_asset_authoritative_test_operation_key(base + 6, 46);
+        let _authoritative_lane = registry.authoritative_publication_lane(&authoritative_lane_key);
+
+        let sequence = AtomicU64::new(base);
+        let reserved = registry
+            .reserve_legacy_compatibility_from(
+                &sequence,
+                owner_id.to_string(),
+                media_asset_test_authority(),
+            )
+            .unwrap();
+        assert_eq!(reserved.request_id, base + 7);
+        assert!(reserved.request_id > RENDERER_MEDIA_ASSET_REQUEST_ID_MAX);
+        assert!(registry
+            .active
+            .lock()
+            .unwrap()
+            .contains_key(&reserved.request_id));
+        drop(active);
+    }
+
+    #[test]
+    fn legacy_media_asset_compatibility_owner_is_bound_to_its_window_label() {
+        let mut owners = HashMap::new();
+        owners.insert("main".to_string(), "renderer:main:7".to_string());
+        owners.insert("aux".to_string(), "renderer:aux:3".to_string());
+
+        assert_eq!(
+            legacy_media_asset_compatibility_owner_for_window_label(&owners, "main").unwrap(),
+            "renderer:main:7"
+        );
+        assert!(
+            legacy_media_asset_compatibility_owner_for_window_label(&owners, "unknown")
+                .unwrap_err()
+                .contains("registered renderer session")
+        );
+    }
+
+    fn legacy_media_asset_compatibility_test_operation(
+        request_id: u64,
+        operation_generation: u64,
+        window_label: &str,
+        owner_id: &str,
+    ) -> LegacyMediaAssetCompatibilityOperation {
+        LegacyMediaAssetCompatibilityOperation {
+            request_id,
+            operation_generation,
+            window_label: window_label.to_string(),
+            owner_id: owner_id.to_string(),
+            authority: media_asset_test_authority(),
+        }
+    }
+
+    #[test]
+    fn legacy_media_asset_compatibility_window_owner_aba_rejects_prepare_finalize_and_publish_without_mutation(
+    ) {
+        let owner_x = "renderer:window-a:x";
+        let owner_y = "renderer:window-a:y";
+        let registry = Arc::new(MediaAssetOperationRegistry::default());
+        let handle = registry
+            .reserve(817, owner_x.to_string(), media_asset_test_authority())
+            .unwrap();
+        let operation = legacy_media_asset_compatibility_test_operation(
+            handle.request_id,
+            handle.generation,
+            "window-a",
+            owner_x,
+        );
+        let mut coordinator = owner_rotation_test_coordinator(false);
+        let mut owners = HashMap::from([("window-a".to_string(), owner_x.to_string())]);
+        let mut sessions = HashMap::from([(
+            owner_x.to_string(),
+            owner_rotation_test_session(&coordinator, true),
+        )]);
+
+        // Barrier: A has read/reserved X. Rotate A first, then let B claim the
+        // freed X. A generic owner-values check and B's fresh unlocked session
+        // would both pass here; only the operation's exact label binding must
+        // decide the old operation's fate.
+        transition_project_transaction_window_owner_with_operator_session(
+            &mut owners,
+            &mut sessions,
+            &mut coordinator,
+            "window-a",
+            Some(owner_y.to_string()),
+            |_, _| Ok::<_, String>(None::<()>),
+        )
+        .unwrap();
+        ensure_project_transaction_owner_unique_to_window(&owners, "window-b", owner_x).unwrap();
+        owners.insert("window-b".to_string(), owner_x.to_string());
+        project_operator_sessions_allow_authoritative_mutation(
+            &mut sessions,
+            &coordinator,
+            owner_x,
+        )
+        .unwrap();
+        assert!(owners.values().any(|owner| owner == owner_x));
+        assert!(sessions.get(owner_x).unwrap().unlocked);
+
+        for phase in [
+            "prepare post-I/O authority recapture",
+            "finalize post-I/O authority recapture",
+            "layer/bootstrap/refresh final authoritative admission",
+        ] {
+            let error = ensure_legacy_media_asset_compatibility_operation_binding_in_owners(
+                &owners, &operation,
+            )
+            .unwrap_err();
+            assert!(
+                error.contains("window generation changed"),
+                "{phase} must reject A's retired binding: {error}"
+            );
+        }
+
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let before_engine = engine.persistence_snapshot().unwrap();
+        let before_revision = coordinator.revision;
+        let before_history_generation = coordinator.history_generation;
+        let before_undo = coordinator.history.undo.len();
+        let before_redo = coordinator.history.redo.len();
+        let before_pending = coordinator.history.pending.len();
+        let asset = MediaAssetSummary {
+            id: engine.allocate_media_asset_id(),
+            label: "must not publish".to_string(),
+            source: media_asset_commit_test_source("C:/media/stale-window.mov"),
+            content_hash: Some(media_asset_commit_test_hash('a')),
+            byte_size: Some(1),
+        };
+        let transaction = MediaAssetTransaction::Import(MediaAssetImportCandidate {
+            assets: vec![asset],
+            layers: Vec::new(),
+        });
+        let mut publish_attempted = false;
+        let result = (|| -> Result<(), String> {
+            // This is the same production core gate that
+            // `commit_authoritative_media_asset_transaction` invokes before
+            // reconcile/history preflight and engine ACK.
+            ensure_legacy_media_asset_compatibility_operation_binding_in_owners(
+                &owners, &operation,
+            )?;
+            publish_attempted = true;
+            engine.media_asset_transaction_published(transaction)?;
+            coordinator.revision += 1;
+            coordinator.history_generation += 1;
+            Ok(())
+        })();
+        assert!(result.unwrap_err().contains("window generation changed"));
+        assert!(!publish_attempted);
+        assert_eq!(
+            engine.persistence_snapshot().unwrap().authored_video,
+            before_engine.authored_video,
+            "a rejected stale window operation must not mutate engine persistence"
+        );
+        assert_eq!(coordinator.revision, before_revision);
+        assert_eq!(coordinator.history_generation, before_history_generation);
+        assert_eq!(coordinator.history.undo.len(), before_undo);
+        assert_eq!(coordinator.history.redo.len(), before_redo);
+        assert_eq!(coordinator.history.pending.len(), before_pending);
+
+        // Compatibility cleanup retains the exact generation, so B's reuse of
+        // the string X cannot adopt A's reserved token after the rejection.
+        assert!(registry
+            .cancel_exact(handle.request_id, handle.generation, owner_x.to_string())
+            .unwrap());
+        let adoption =
+            registry.adopt_reserved(handle.request_id, handle.generation, owner_x.to_string());
+        assert!(matches!(adoption, Err(ref error) if error.contains("cancelled")));
+    }
+
+    #[test]
+    fn legacy_media_asset_compatibility_window_owner_rotation_without_reuse_rejects_while_stable_layer_bootstrap_and_refresh_bindings_succeed(
+    ) {
+        let operation = legacy_media_asset_compatibility_test_operation(
+            911,
+            17,
+            "window-a",
+            "renderer:window-a:x",
+        );
+        let stable = HashMap::from([("window-a".to_string(), "renderer:window-a:x".to_string())]);
+        // All three old IPC routes share the same operation binding through
+        // their prepare/finalize/final-commit helpers.
+        for route in ["layer import", "bootstrap", "metadata refresh relink"] {
+            ensure_legacy_media_asset_compatibility_operation_binding_in_owners(
+                &stable, &operation,
+            )
+            .unwrap_or_else(|error| panic!("stable {route} binding failed: {error}"));
+        }
+
+        let mut rotated = stable.clone();
+        rotated.insert("window-a".to_string(), "renderer:window-a:y".to_string());
+        for phase in ["prepare", "finalize", "final authoritative publish"] {
+            let error = ensure_legacy_media_asset_compatibility_operation_binding_in_owners(
+                &rotated, &operation,
+            )
+            .unwrap_err();
+            assert!(
+                error.contains("window generation changed"),
+                "rotation without X reuse must reject {phase}: {error}"
+            );
+        }
+
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let before = engine.persistence_snapshot().unwrap();
+        ensure_legacy_media_asset_compatibility_operation_binding_in_owners(&stable, &operation)
+            .unwrap();
+        engine
+            .media_asset_transaction_published(MediaAssetTransaction::Import(
+                MediaAssetImportCandidate {
+                    assets: vec![MediaAssetSummary {
+                        id: engine.allocate_media_asset_id(),
+                        label: "stable window operation".to_string(),
+                        source: media_asset_commit_test_source("C:/media/stable-window.mov"),
+                        content_hash: Some(media_asset_commit_test_hash('b')),
+                        byte_size: Some(1),
+                    }],
+                    layers: Vec::new(),
+                },
+            ))
+            .unwrap();
+        assert_ne!(
+            engine.persistence_snapshot().unwrap().authored_video,
+            before.authored_video
+        );
+    }
+
+    #[test]
+    fn legacy_media_asset_compatibility_uses_server_operator_admission_for_full_and_partial() {
+        let owner_id = "renderer:legacy";
+        let mut coordinator = ProjectCoordinator::default();
+        let mut policy = sample_operator_policy();
+        policy.lock_on_load = true;
+        policy.lock_mode = OperatorLockMode::Partial;
+        coordinator.ancillary.operator_policy = Some(policy.clone());
+        let mut sessions = HashMap::new();
+
+        assert!(project_operator_sessions_allow_authoritative_mutation(
+            &mut sessions,
+            &coordinator,
+            owner_id,
+        )
+        .unwrap_err()
+        .contains("Partial Lock"));
+
+        policy.lock_mode = OperatorLockMode::Full;
+        coordinator.ancillary.operator_policy = Some(policy);
+        assert!(project_operator_sessions_allow_authoritative_mutation(
+            &mut sessions,
+            &coordinator,
+            owner_id,
+        )
+        .unwrap_err()
+        .contains("Full Lock"));
+    }
+
+    #[test]
+    fn legacy_media_asset_compatibility_batch_rejects_failed_but_keeps_duplicate_skip() {
+        let authority = media_asset_test_authority();
+        let report = media_asset_import_report(
+            17,
+            19,
+            Some(19),
+            &authority,
+            vec![
+                MediaAssetImportEntryReport {
+                    input_index: 0,
+                    path: "valid.mov".to_string(),
+                    status: MediaAssetImportEntryStatus::Prepared,
+                    asset_id: None,
+                    message: None,
+                },
+                MediaAssetImportEntryReport {
+                    input_index: 1,
+                    path: "missing.mov".to_string(),
+                    status: MediaAssetImportEntryStatus::Failed,
+                    asset_id: None,
+                    message: Some("not found".to_string()),
+                },
+            ],
+        );
+        assert!(
+            require_legacy_media_asset_compatibility_all_or_nothing(&report, "Legacy batch")
+                .unwrap_err()
+                .contains("no media was added")
+        );
+
+        let duplicate_only = media_asset_import_report(
+            17,
+            19,
+            Some(19),
+            &authority,
+            vec![
+                MediaAssetImportEntryReport {
+                    input_index: 0,
+                    path: "valid.mov".to_string(),
+                    status: MediaAssetImportEntryStatus::Prepared,
+                    asset_id: None,
+                    message: None,
+                },
+                MediaAssetImportEntryReport {
+                    input_index: 1,
+                    path: "valid.mov".to_string(),
+                    status: MediaAssetImportEntryStatus::Skipped,
+                    asset_id: None,
+                    message: Some("Duplicate input path was skipped".to_string()),
+                },
+            ],
+        );
+        require_legacy_media_asset_compatibility_all_or_nothing(&duplicate_only, "Legacy batch")
+            .unwrap();
+        assert_eq!(duplicate_only.prepared, 1);
+        assert_eq!(duplicate_only.skipped, 1);
+    }
+
+    #[test]
+    fn legacy_media_asset_refresh_target_requires_catalog_reference_and_exact_projection() {
+        let source = media_asset_commit_test_source("C:/media/clip.mov");
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.video.media_assets.push(MediaAssetSummary {
+            id: 41,
+            label: "Clip".to_string(),
+            source: source.clone(),
+            content_hash: Some(media_asset_commit_test_hash('r')),
+            byte_size: Some(12),
+        });
+        snapshot.video.layers.push(VideoLayerSummary {
+            id: 7,
+            label: "Clip".to_string(),
+            source: source.clone(),
+            media_asset_id: Some(41),
+            blend_mode: VideoBlendMode::Normal,
+            state: VideoLayerState::default(),
+            isf_effect: None,
+        });
+        let target = legacy_media_asset_refresh_target(&snapshot, 7).unwrap();
+        assert_eq!(target.asset_id, 41);
+        assert_eq!(target.source, source);
+
+        snapshot.video.layers[0].media_asset_id = None;
+        assert!(legacy_media_asset_refresh_target(&snapshot, 7)
+            .unwrap_err()
+            .contains("no media asset reference"));
+    }
+
+    #[test]
+    fn legacy_media_asset_refresh_candidate_updates_every_referencing_layer_as_one_transaction() {
+        let original = MediaAssetSummary {
+            id: 41,
+            label: "Clip".to_string(),
+            source: media_asset_commit_test_source("C:/media/clip.mov"),
+            content_hash: Some(media_asset_commit_test_hash('a')),
+            byte_size: Some(12),
+        };
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.video.media_assets.push(original.clone());
+        for layer_id in [7, 8] {
+            snapshot.video.layers.push(VideoLayerSummary {
+                id: layer_id,
+                label: format!("Clip {layer_id}"),
+                source: original.source.clone(),
+                media_asset_id: Some(original.id),
+                blend_mode: VideoBlendMode::Normal,
+                state: VideoLayerState::default(),
+                isf_effect: None,
+            });
+        }
+        let mut refreshed = original.clone();
+        refreshed.source.metadata = Some(protocol::VideoMediaMetadata {
+            width: Some(1920),
+            height: Some(1080),
+            duration_ms: Some(2_000),
+            frame_rate: None,
+            has_audio: false,
+        });
+        let candidate = media_asset_transaction_candidate_snapshot(
+            snapshot,
+            &MediaAssetTransaction::Update(refreshed.clone()),
+        )
+        .unwrap();
+        assert_eq!(candidate.video.media_assets, vec![refreshed.clone()]);
+        assert!(candidate
+            .video
+            .layers
+            .iter()
+            .all(|layer| layer.media_asset_id == Some(41) && layer.source == refreshed.source));
     }
 
     #[test]
@@ -45629,6 +47202,224 @@ mod tests {
         assert_eq!(
             owners.get("pane-live").map(String::as_str),
             Some("renderer:new")
+        );
+    }
+
+    fn owner_rotation_test_coordinator(lock_on_load: bool) -> ProjectCoordinator {
+        let mut policy = sample_operator_policy();
+        policy.lock_on_load = lock_on_load;
+        ProjectCoordinator {
+            ancillary: ProjectSwapAncillaryState {
+                operator_policy: Some(policy),
+                ..ProjectSwapAncillaryState::default()
+            },
+            ..ProjectCoordinator::default()
+        }
+    }
+
+    fn owner_rotation_test_session(
+        coordinator: &ProjectCoordinator,
+        unlocked: bool,
+    ) -> ProjectOperatorSession {
+        ProjectOperatorSession {
+            project_epoch: coordinator.epoch,
+            policy: coordinator.ancillary.operator_policy.clone().unwrap(),
+            unlocked,
+        }
+    }
+
+    #[test]
+    fn renderer_owner_rotation_carries_manual_lock_even_when_policy_does_not_lock_on_load() {
+        for (mode, expected_mode) in [
+            (OperatorLockMode::Partial, "Partial"),
+            (OperatorLockMode::Full, "Full"),
+        ] {
+            let mut coordinator = owner_rotation_test_coordinator(false);
+            coordinator
+                .ancillary
+                .operator_policy
+                .as_mut()
+                .unwrap()
+                .lock_mode = mode;
+            let mut owners = HashMap::from([("main".to_string(), "renderer:old".to_string())]);
+            let mut sessions = HashMap::from([(
+                "renderer:old".to_string(),
+                owner_rotation_test_session(&coordinator, false),
+            )]);
+
+            transition_project_transaction_window_owner_with_operator_session(
+                &mut owners,
+                &mut sessions,
+                &mut coordinator,
+                "main",
+                Some("renderer:new".to_string()),
+                |retired, _| {
+                    assert_eq!(retired, Some("renderer:old"));
+                    Ok::<_, String>(None::<()>)
+                },
+            )
+            .unwrap();
+
+            assert_eq!(owners.get("main").map(String::as_str), Some("renderer:new"));
+            assert!(!sessions.contains_key("renderer:old"));
+            let error = project_operator_sessions_allow_authoritative_mutation(
+                &mut sessions,
+                &coordinator,
+                "renderer:new",
+            )
+            .unwrap_err();
+            assert!(error.contains(&format!("{expected_mode} Lock")));
+            assert_eq!(sessions.get("renderer:new").unwrap().policy.lock_mode, mode);
+            assert!(!sessions.get("renderer:new").unwrap().unlocked);
+        }
+    }
+
+    #[test]
+    fn renderer_owner_rotation_carries_current_unlocked_state() {
+        let mut coordinator = owner_rotation_test_coordinator(true);
+        let mut owners = HashMap::from([("main".to_string(), "renderer:old".to_string())]);
+        let mut sessions = HashMap::from([(
+            "renderer:old".to_string(),
+            owner_rotation_test_session(&coordinator, true),
+        )]);
+
+        transition_project_transaction_window_owner_with_operator_session(
+            &mut owners,
+            &mut sessions,
+            &mut coordinator,
+            "main",
+            Some("renderer:new".to_string()),
+            |_, _| Ok::<_, String>(None::<()>),
+        )
+        .unwrap();
+
+        assert!(!sessions.contains_key("renderer:old"));
+        assert!(sessions.get("renderer:new").unwrap().unlocked);
+        project_operator_sessions_allow_authoritative_mutation(
+            &mut sessions,
+            &coordinator,
+            "renderer:new",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn renderer_owner_same_generation_retry_preserves_owner_and_operator_session() {
+        let mut coordinator = owner_rotation_test_coordinator(false);
+        let mut owners = HashMap::from([("main".to_string(), "renderer:same".to_string())]);
+        let original_session = owner_rotation_test_session(&coordinator, false);
+        let mut sessions = HashMap::from([("renderer:same".to_string(), original_session.clone())]);
+
+        let finalized = transition_project_transaction_window_owner_with_operator_session(
+            &mut owners,
+            &mut sessions,
+            &mut coordinator,
+            "main",
+            Some("renderer:same".to_string()),
+            |_, _| -> Result<Option<()>, String> {
+                panic!("same generation retry must not retire/cancel itself")
+            },
+        )
+        .unwrap();
+
+        assert_eq!(finalized, None);
+        assert_eq!(
+            owners,
+            HashMap::from([("main".to_string(), "renderer:same".to_string())])
+        );
+        assert_eq!(
+            sessions,
+            HashMap::from([("renderer:same".to_string(), original_session)])
+        );
+    }
+
+    #[test]
+    fn renderer_owner_rotation_failure_keeps_owner_and_operator_session_byte_for_byte() {
+        let mut coordinator = owner_rotation_test_coordinator(false);
+        let mut owners = HashMap::from([("main".to_string(), "renderer:old".to_string())]);
+        let mut sessions = HashMap::from([(
+            "renderer:old".to_string(),
+            owner_rotation_test_session(&coordinator, false),
+        )]);
+        let before_owners = owners.clone();
+        let before_sessions = sessions.clone();
+
+        let error = transition_project_transaction_window_owner_with_operator_session(
+            &mut owners,
+            &mut sessions,
+            &mut coordinator,
+            "main",
+            Some("renderer:new".to_string()),
+            |_, _| Err::<Option<()>, _>("injected orphan cancellation failure".to_string()),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("injected orphan cancellation failure"));
+        assert_eq!(owners, before_owners);
+        assert_eq!(sessions, before_sessions);
+    }
+
+    #[test]
+    fn renderer_owner_retirement_failure_keeps_owner_and_operator_session_byte_for_byte() {
+        let mut coordinator = owner_rotation_test_coordinator(false);
+        let mut owners = HashMap::from([("main".to_string(), "renderer:old".to_string())]);
+        let mut sessions = HashMap::from([(
+            "renderer:old".to_string(),
+            owner_rotation_test_session(&coordinator, false),
+        )]);
+        let before_owners = owners.clone();
+        let before_sessions = sessions.clone();
+
+        let error = transition_project_transaction_window_owner_with_operator_session(
+            &mut owners,
+            &mut sessions,
+            &mut coordinator,
+            "main",
+            None,
+            |_, _| Err::<Option<()>, _>("injected orphan cancellation failure".to_string()),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("injected orphan cancellation failure"));
+        assert_eq!(owners, before_owners);
+        assert_eq!(sessions, before_sessions);
+    }
+
+    #[test]
+    fn renderer_owner_identity_cannot_alias_another_window_operator_session() {
+        let mut owners = HashMap::from([
+            ("main".to_string(), "renderer:shared".to_string()),
+            ("pane-live".to_string(), "renderer:pane-old".to_string()),
+        ]);
+        let before = owners.clone();
+
+        let error = ensure_project_transaction_owner_unique_to_window(
+            &owners,
+            "pane-live",
+            "renderer:shared",
+        )
+        .unwrap_err();
+        assert!(error.contains("another renderer window"));
+        assert_eq!(owners, before);
+
+        // A retry by the same concrete window generation is idempotent, and a
+        // fresh unique generation remains eligible for the normal transition.
+        ensure_project_transaction_owner_unique_to_window(&owners, "main", "renderer:shared")
+            .unwrap();
+        ensure_project_transaction_owner_unique_to_window(
+            &owners,
+            "pane-live",
+            "renderer:pane-new",
+        )
+        .unwrap();
+        owners.insert("pane-live".to_string(), "renderer:pane-new".to_string());
+        assert_eq!(
+            owners.get("main").map(String::as_str),
+            Some("renderer:shared")
+        );
+        assert_eq!(
+            owners.get("pane-live").map(String::as_str),
+            Some("renderer:pane-new")
         );
     }
 

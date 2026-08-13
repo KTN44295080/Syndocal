@@ -447,6 +447,7 @@ import {
 import { createInitialEngineSnapshot } from "./initialEngineSnapshot";
 import {
   mergeEngineSnapshotSyncResponse,
+  normalizeEngineSnapshotVideoMediaAssets,
   snapshotLiveFixtures,
 } from "./engineSnapshotLiveState";
 import { groupStrobeCompatibleFixtureCount } from "./groupStrobe";
@@ -9546,10 +9547,11 @@ export default function App() {
   };
 
   const applyEngineSnapshot = (
-    next: EngineSnapshot,
+    incoming: EngineSnapshot,
     syncProjectState = true,
     resetEditorDrafts = false,
   ) => {
+    const next = normalizeEngineSnapshotVideoMediaAssets(incoming);
     latestEngineSnapshot = next;
     setLiveDmxPreviews(engineDmxPreviews(next));
     setLiveFixtures(snapshotLiveFixtures(next));

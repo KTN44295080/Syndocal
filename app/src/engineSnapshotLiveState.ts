@@ -5,18 +5,40 @@ import type {
   PatchedFixtureSummary,
 } from "./types";
 
+/**
+ * `VideoSnapshot.media_assets` is serde-defaulted on the native side and is
+ * intentionally omitted from IPC when empty. Normalize at renderer snapshot
+ * entry boundaries so consumers can rely on the required TypeScript shape. In
+ * particular, a whole-video delta that omits the field represents an empty
+ * catalog; it must not retain the prior snapshot's catalog.
+ */
+export const normalizeEngineSnapshotVideoMediaAssets = (
+  snapshot: EngineSnapshot,
+): EngineSnapshot => {
+  if (snapshot.video.media_assets !== undefined && snapshot.video.media_assets !== null) {
+    return snapshot;
+  }
+  return {
+    ...snapshot,
+    video: {
+      ...snapshot.video,
+      media_assets: [],
+    },
+  };
+};
+
 export const mergeEngineSnapshotSyncResponse = (
   current: EngineSnapshot,
   response: EngineSnapshotSyncResponse,
 ): EngineSnapshot => {
-  if (response.full) return response.full;
+  if (response.full) return normalizeEngineSnapshotVideoMediaAssets(response.full);
   const {
     active_group_cue_ids: activeGroupCueIds,
     cue_live_modifiers: cueLiveModifiers,
     group_colors: groupColors,
     ...delta
   } = response.delta ?? {};
-  return {
+  return normalizeEngineSnapshotVideoMediaAssets({
     ...current,
     ...delta,
     ...(activeGroupCueIds === undefined
@@ -26,7 +48,7 @@ export const mergeEngineSnapshotSyncResponse = (
       ? {}
       : { cue_live_modifiers: cueLiveModifiers }),
     ...(groupColors === undefined ? {} : { group_colors: groupColors }),
-  } as EngineSnapshot;
+  } as EngineSnapshot);
 };
 
 const activeSnapshotCues = (snapshot: EngineSnapshot) => {

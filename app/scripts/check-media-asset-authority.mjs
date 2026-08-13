@@ -17,9 +17,68 @@ async function importTsModule(path) {
 }
 
 const authority = await importTsModule("../src/mediaAssetAuthority.ts");
+const liveSnapshotState = await importTsModule("../src/engineSnapshotLiveState.ts");
 const controller = await readFile(new URL("../src/createVideoRuntimeController.ts", import.meta.url), "utf8");
 const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
 const mediaAuthority = await readFile(new URL("../src/mediaAssetAuthority.ts", import.meta.url), "utf8");
+
+const liveSnapshot = (mediaAssets = []) => ({
+  video: {
+    layers: [],
+    media_assets: mediaAssets,
+    compositions: [],
+    outputs: [],
+    mapping_presets: [],
+    master_opacity: 1,
+    blackout: false,
+  },
+});
+
+// Native serde omits an empty media_assets list from full and whole-video delta
+// IPC. The live merge boundary makes the renderer contract total without
+// retaining a stale catalog when the video object itself was replaced.
+{
+  const current = liveSnapshot([{ id: "asset-current" }]);
+  const fullWithoutCatalog = liveSnapshot();
+  delete fullWithoutCatalog.video.media_assets;
+  const normalizedRaw = liveSnapshotState.normalizeEngineSnapshotVideoMediaAssets(fullWithoutCatalog);
+  assert.deepEqual(normalizedRaw.video.media_assets, [], "the exported raw-snapshot normalizer fills an omitted empty media catalog");
+  const normalizedFull = liveSnapshotState.mergeEngineSnapshotSyncResponse(current, {
+    revision: 1,
+    full: fullWithoutCatalog,
+  });
+  assert.deepEqual(normalizedFull.video.media_assets, [], "full snapshots normalize an omitted empty media catalog");
+
+  const replacementVideo = {
+    ...current.video,
+    layers: [{ id: 99 }],
+  };
+  delete replacementVideo.media_assets;
+  const normalizedWholeVideoDelta = liveSnapshotState.mergeEngineSnapshotSyncResponse(current, {
+    revision: 2,
+    delta: { video: replacementVideo },
+  });
+  assert.deepEqual(
+    normalizedWholeVideoDelta.video.media_assets,
+    [],
+    "a whole-video delta with no catalog clears rather than retaining the prior catalog",
+  );
+
+  const normalizedNonVideoDelta = liveSnapshotState.mergeEngineSnapshotSyncResponse(current, {
+    revision: 3,
+    delta: { blackout: true },
+  });
+  assert.equal(
+    normalizedNonVideoDelta.video,
+    current.video,
+    "a delta without video preserves the current video object",
+  );
+  assert.deepEqual(
+    normalizedNonVideoDelta.video.media_assets,
+    current.video.media_assets,
+    "a delta without video preserves the current media catalog",
+  );
+}
 
 const allocatedRequestIdA = authority.allocateMediaAssetRequestId();
 const allocatedRequestIdB = authority.allocateMediaAssetRequestId();
@@ -454,6 +513,15 @@ const historyApply = app.slice(
   app.indexOf("const applyProjectHistoryMutationResult ="),
   app.indexOf("applyServerAuthoritativeProjectMutationResult =", app.indexOf("const applyProjectHistoryMutationResult =")),
 );
+const applyEngineSnapshotSource = app.slice(
+  app.indexOf("const applyEngineSnapshot = ("),
+  app.indexOf("  type SnapshotRefreshWaiter =", app.indexOf("const applyEngineSnapshot = (")),
+);
+assert.match(
+  applyEngineSnapshotSource,
+  /const applyEngineSnapshot = \(\s*incoming: EngineSnapshot,[\s\S]*?const next = normalizeEngineSnapshotVideoMediaAssets\(incoming\);/,
+  "raw full and authority snapshots normalize at the common apply boundary",
+);
 assert.match(
   historyApply,
   /projectAuthorityTokenIsCurrent[\s\S]*?applyAuthoritativeProjectHistoryStatus\(result\.history_status\);[\s\S]*?return true;/,
@@ -518,4 +586,4 @@ assert.match(mediaAuthority, /get_media_asset_operation_terminal_result/, "helpe
 assert.match(mediaAuthority, /shape_fingerprint !== expectedShapeFingerprint/, "terminal recovery validates semantic shape");
 assert.doesNotMatch(mediaAuthority, /projectTransactionId|begin_project_transaction|commit_project_transaction/, "media helper owns no renderer project ticket");
 
-console.log("media asset authoritative frontend checks passed (phase order, reply loss/query, cancellation CAS, authority continuity, operator classification, direct paired application)");
+console.log("media asset authoritative frontend checks passed (phase order, reply loss/query, cancellation CAS, authority continuity, operator classification, direct paired application, snapshot empty-catalog normalization)");
