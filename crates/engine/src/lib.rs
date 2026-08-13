@@ -10,6 +10,9 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(test)]
+use std::sync::atomic::AtomicBool;
+
 mod move_path;
 
 use move_path::{move_rotation, transform_move_delta, CompiledMovePath};
@@ -1454,6 +1457,13 @@ pub enum EngineCommand {
     RequestPersistenceSnapshot {
         response: mpsc::SyncSender<EngineSnapshot>,
     },
+    /// Test-only runtime inspection and sentinel setup for the acknowledged
+    /// BootstrapVjShow rollback proof. This never exists in production builds.
+    #[cfg(test)]
+    InspectMediaAssetRollbackTestState {
+        seed_bootstrap_fade_sentinels: bool,
+        response: mpsc::SyncSender<MediaAssetRollbackTestState>,
+    },
     SetTouchSurface {
         surface: TouchSurfaceSummary,
         expires_at: Instant,
@@ -2504,6 +2514,10 @@ pub struct EngineHandle {
     next_video_output_id: Arc<AtomicU64>,
     next_node_graph_id: Arc<AtomicU64>,
     next_stage_object_id: Arc<AtomicU64>,
+    #[cfg(test)]
+    test_fail_next_pending_publication: Arc<AtomicBool>,
+    #[cfg(test)]
+    test_media_asset_publication_failed_after_b: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -2715,6 +2729,10 @@ impl EngineHandle {
         let next_video_output_id = Arc::new(AtomicU64::new(1));
         let next_node_graph_id = Arc::new(AtomicU64::new(1));
         let next_stage_object_id = Arc::new(AtomicU64::new(1));
+        #[cfg(test)]
+        let test_fail_next_pending_publication = Arc::new(AtomicBool::new(false));
+        #[cfg(test)]
+        let test_media_asset_publication_failed_after_b = Arc::new(AtomicBool::new(false));
         let allocator_gate = Arc::new(Mutex::new(()));
         let lifetime = Arc::new(EngineLifetime::new(Arc::clone(&wake)));
 
@@ -2724,6 +2742,12 @@ impl EngineHandle {
         let runtime_output_ownership_gate = output_ownership_gate.clone();
         let runtime_snapshot = Arc::clone(&snapshot);
         let runtime_lifetime = Arc::downgrade(&lifetime);
+        #[cfg(test)]
+        let runtime_test_fail_next_pending_publication =
+            Arc::clone(&test_fail_next_pending_publication);
+        #[cfg(test)]
+        let runtime_test_media_asset_publication_failed_after_b =
+            Arc::clone(&test_media_asset_publication_failed_after_b);
         let runtime_thread = thread::Builder::new()
             .name("syndocal-engine".to_string())
             .spawn(move || {
@@ -2732,6 +2756,10 @@ impl EngineHandle {
                     output,
                     runtime_shared_telemetry,
                     runtime_output_ownership_gate,
+                    #[cfg(test)]
+                    runtime_test_fail_next_pending_publication,
+                    #[cfg(test)]
+                    runtime_test_media_asset_publication_failed_after_b,
                 );
                 runtime.run(
                     runtime_queue,
@@ -2767,6 +2795,10 @@ impl EngineHandle {
             next_video_output_id,
             next_node_graph_id,
             next_stage_object_id,
+            #[cfg(test)]
+            test_fail_next_pending_publication,
+            #[cfg(test)]
+            test_media_asset_publication_failed_after_b,
         }
     }
 
@@ -4067,6 +4099,36 @@ impl EngineHandle {
         receive_project_snapshot_load_ack(receiver, &admission, deadline, timeout)
     }
 
+    #[cfg(test)]
+    fn force_next_pending_publication_failure_for_tests(&self) {
+        self.test_media_asset_publication_failed_after_b
+            .store(false, Ordering::Release);
+        self.test_fail_next_pending_publication
+            .store(true, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    fn media_asset_rollback_test_state_for_tests(
+        &self,
+        seed_bootstrap_fade_sentinels: bool,
+    ) -> MediaAssetRollbackTestState {
+        let (response, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::InspectMediaAssetRollbackTestState {
+            seed_bootstrap_fade_sentinels,
+            response,
+        })
+        .expect("media asset rollback test state request should enqueue");
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .expect("media asset rollback test state should arrive")
+    }
+
+    #[cfg(test)]
+    fn media_asset_publication_failed_after_b_for_tests(&self) -> bool {
+        self.test_media_asset_publication_failed_after_b
+            .load(Ordering::Acquire)
+    }
+
     pub fn exclusive_video_take(&self, request: ExclusiveVideoTakeRequest) -> Result<(), String> {
         let (ack, receiver) = mpsc::sync_channel(1);
         self.send(EngineCommand::ExclusiveVideoTake {
@@ -4908,6 +4970,8 @@ impl EngineHandle {
             | EngineCommand::SaveVideoOutputMappingPreset { .. }
             | EngineCommand::ApplyVideoOutputMappingPreset { .. }
             | EngineCommand::RemoveVideoOutputMappingPreset { .. } => {}
+            #[cfg(test)]
+            EngineCommand::InspectMediaAssetRollbackTestState { .. } => {}
         }
 
         Ok(maxima)
@@ -11675,6 +11739,41 @@ struct RuntimeVideoOutputFade {
     target_opacity: f32,
 }
 
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct MediaAssetRollbackLayerFadeTestState {
+    layer_id: VideoLayerId,
+    started_at: Instant,
+    duration: Duration,
+    start_opacity: f32,
+    target_opacity: f32,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct MediaAssetRollbackOutputFadeTestState {
+    output_id: VideoOutputId,
+    started_at: Instant,
+    duration: Duration,
+    start_opacity: f32,
+    target_opacity: f32,
+}
+
+/// Test-only direct runtime observation. The normal snapshot deliberately
+/// omits in-flight fades and diagnostics, so the EngineHandle rollback proof
+/// needs this read-only view to compare its complete A state after B fails.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct MediaAssetRollbackTestState {
+    media_assets: Vec<MediaAssetSummary>,
+    video_layers: Vec<VideoLayerSummary>,
+    video_compositions: Vec<CompositionSummary>,
+    video_layer_fades: Vec<MediaAssetRollbackLayerFadeTestState>,
+    video_outputs: Vec<VideoOutputSummary>,
+    video_output_fades: Vec<MediaAssetRollbackOutputFadeTestState>,
+    last_error: Option<String>,
+}
+
 struct RuntimeDmxOutput {
     config: DmxOutputConfig,
     sender: Option<DmxSender>,
@@ -11717,6 +11816,12 @@ struct EngineRuntime {
     /// of manufacturing a timeout/failure under normal lock contention.
     #[cfg(test)]
     fail_next_pending_publication: bool,
+    /// Handle-owned test seam. The runtime consumes this immediately before
+    /// shared-snapshot publication, after the real command has applied B.
+    #[cfg(test)]
+    test_fail_next_pending_publication: Arc<AtomicBool>,
+    #[cfg(test)]
+    test_media_asset_publication_failed_after_b: Arc<AtomicBool>,
     pending_video_isf_event_resets: Vec<PendingVideoIsfEventReset>,
     next_video_isf_event_pulse_id: u64,
     fixtures: Vec<RuntimeFixture>,
@@ -11934,6 +12039,8 @@ impl EngineRuntime {
             output,
             shared_telemetry,
             OutputOwnershipGate::for_role(MachineOutputRole::Both),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
         )
     }
 
@@ -11941,6 +12048,8 @@ impl EngineRuntime {
         output: DmxOutputConfig,
         shared_telemetry: Arc<EngineSharedTelemetry>,
         output_ownership_gate: OutputOwnershipGate,
+        #[cfg(test)] test_fail_next_pending_publication: Arc<AtomicBool>,
+        #[cfg(test)] test_media_asset_publication_failed_after_b: Arc<AtomicBool>,
     ) -> Self {
         let output_ownership_role = output_ownership_gate.status().effective_role;
         let dmx_sender_result =
@@ -11952,6 +12061,10 @@ impl EngineRuntime {
             pending_command_acks: Vec::new(),
             #[cfg(test)]
             fail_next_pending_publication: false,
+            #[cfg(test)]
+            test_fail_next_pending_publication,
+            #[cfg(test)]
+            test_media_asset_publication_failed_after_b,
             pending_video_isf_event_resets: Vec::new(),
             next_video_isf_event_pulse_id: 1,
             fixtures: Vec::new(),
@@ -14108,6 +14221,16 @@ impl EngineRuntime {
             }
             EngineCommand::RequestPersistenceSnapshot { response } => {
                 let _ = response.send(self.build_persistence_snapshot());
+            }
+            #[cfg(test)]
+            EngineCommand::InspectMediaAssetRollbackTestState {
+                seed_bootstrap_fade_sentinels,
+                response,
+            } => {
+                if seed_bootstrap_fade_sentinels {
+                    self.seed_media_asset_bootstrap_fade_sentinels_for_tests();
+                }
+                let _ = response.send(self.media_asset_rollback_test_state_for_tests());
             }
             EngineCommand::SetTouchSurface {
                 surface,
@@ -18665,7 +18788,12 @@ impl EngineRuntime {
                 )
         });
         #[cfg(test)]
-        let force_publication_failure = std::mem::take(&mut self.fail_next_pending_publication);
+        let force_publication_failure_from_handle = self
+            .test_fail_next_pending_publication
+            .swap(false, Ordering::AcqRel);
+        #[cfg(test)]
+        let force_publication_failure = std::mem::take(&mut self.fail_next_pending_publication)
+            || force_publication_failure_from_handle;
         #[cfg(not(test))]
         let force_publication_failure = false;
         let published = if requires_publication {
@@ -18705,6 +18833,23 @@ impl EngineRuntime {
             true
         };
         if !published {
+            #[cfg(test)]
+            if force_publication_failure_from_handle
+                && pending.iter().any(|pending| {
+                    pending.result.is_ok()
+                        && matches!(
+                            &pending.rollback,
+                            PendingCommandRollback::RestoreMediaAssetTransaction { .. }
+                        )
+                })
+            {
+                // This is intentionally recorded before the A restore. A
+                // successful pending result proves the real runtime applied
+                // B; reaching this branch proves the shared publication was
+                // then forced to fail.
+                self.test_media_asset_publication_failed_after_b
+                    .store(true, Ordering::Release);
+            }
             let restores_last_error = pending
                 .iter()
                 .any(|pending| pending.result.is_ok() && pending.rollback.restores_last_error());
@@ -28547,6 +28692,63 @@ impl EngineRuntime {
                 config: self.auto_vj.config.clone(),
                 status: self.auto_vj.status.clone(),
             },
+        }
+    }
+
+    #[cfg(test)]
+    fn seed_media_asset_bootstrap_fade_sentinels_for_tests(&mut self) {
+        let started_at = Instant::now();
+        // BootstrapVjShow intentionally requires an empty authored video
+        // show, but its transaction rollback still owns both fade queues.
+        // These detached sentinels make the EngineHandle proof detect an
+        // accidental omission of either queue from the complete A restore.
+        self.video_layer_fades = vec![RuntimeVideoLayerFade {
+            layer_id: 9_001,
+            started_at,
+            duration: Duration::from_secs(3_600),
+            start_opacity: 0.25,
+            target_opacity: 0.75,
+        }];
+        self.video_output_fades = vec![RuntimeVideoOutputFade {
+            output_id: 9_002,
+            started_at,
+            duration: Duration::from_secs(3_600),
+            start_opacity: 0.8,
+            target_opacity: 0.2,
+        }];
+    }
+
+    #[cfg(test)]
+    fn media_asset_rollback_test_state_for_tests(&self) -> MediaAssetRollbackTestState {
+        let video = self.video_snapshot();
+        MediaAssetRollbackTestState {
+            media_assets: video.media_assets,
+            video_layers: video.layers,
+            video_compositions: video.compositions,
+            video_layer_fades: self
+                .video_layer_fades
+                .iter()
+                .map(|fade| MediaAssetRollbackLayerFadeTestState {
+                    layer_id: fade.layer_id,
+                    started_at: fade.started_at,
+                    duration: fade.duration,
+                    start_opacity: fade.start_opacity,
+                    target_opacity: fade.target_opacity,
+                })
+                .collect(),
+            video_outputs: video.outputs,
+            video_output_fades: self
+                .video_output_fades
+                .iter()
+                .map(|fade| MediaAssetRollbackOutputFadeTestState {
+                    output_id: fade.output_id,
+                    started_at: fade.started_at,
+                    duration: fade.duration,
+                    start_opacity: fade.start_opacity,
+                    target_opacity: fade.target_opacity,
+                })
+                .collect(),
+            last_error: self.last_error.clone(),
         }
     }
 
@@ -49303,6 +49505,8 @@ mod tests {
             next_video_output_id: Arc::new(AtomicU64::new(1)),
             next_node_graph_id: Arc::new(AtomicU64::new(1)),
             next_stage_object_id: Arc::new(AtomicU64::new(1)),
+            test_fail_next_pending_publication: Arc::new(AtomicBool::new(false)),
+            test_media_asset_publication_failed_after_b: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -57652,6 +57856,8 @@ mod tests {
             next_video_output_id: Arc::new(AtomicU64::new(1)),
             next_node_graph_id: Arc::new(AtomicU64::new(1)),
             next_stage_object_id: Arc::new(AtomicU64::new(1)),
+            test_fail_next_pending_publication: Arc::new(AtomicBool::new(false)),
+            test_media_asset_publication_failed_after_b: Arc::new(AtomicBool::new(false)),
         };
 
         handle.send(EngineCommand::SetBpm(120.0)).unwrap();
@@ -61555,6 +61761,129 @@ mod tests {
 
         assert!(error.contains("rolled back"));
         assert_eq!(runtime.video_snapshot(), before);
+    }
+
+    #[test]
+    fn media_asset_bootstrap_published_publication_failure_restores_complete_a_through_engine_handle(
+    ) {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+
+        // Establish an A diagnostic through the ordinary EngineHandle queue,
+        // then add only test-only fade sentinels. Bootstrap requires the
+        // authored catalog/layer/output/composition state itself to be empty.
+        engine
+            .send(EngineCommand::SetVideoLayerSource {
+                layer_id: 777,
+                source: media_asset_test_source("preserved-diagnostic"),
+            })
+            .unwrap();
+        let before = engine.media_asset_rollback_test_state_for_tests(true);
+        assert!(before.media_assets.is_empty());
+        assert!(before.video_layers.is_empty());
+        assert_eq!(
+            before.video_compositions,
+            vec![CompositionSummary {
+                id: 1,
+                label: "Main".to_string(),
+                layer_ids: Vec::new(),
+                output_ids: Vec::new(),
+            }]
+        );
+        assert!(before.video_outputs.is_empty());
+        assert_eq!(before.video_layer_fades.len(), 1);
+        assert_eq!(before.video_output_fades.len(), 1);
+        assert_eq!(
+            before.last_error.as_deref(),
+            Some(
+                "Video layer 777 source is owned by its media asset; use an acknowledged media asset update"
+            )
+        );
+        let publication_deadline = Instant::now() + Duration::from_secs(1);
+        let before_published_video = loop {
+            let video = engine.snapshot().video;
+            if video.media_assets == before.media_assets
+                && video.layers == before.video_layers
+                && video.compositions == before.video_compositions
+                && video.outputs == before.video_outputs
+            {
+                break video;
+            }
+            assert!(
+                Instant::now() < publication_deadline,
+                "the EngineHandle must publish the complete A video snapshot before Bootstrap B"
+            );
+            thread::yield_now();
+        };
+
+        let asset_id = 101;
+        let layer_id = 201;
+        let output_id = 301;
+        let source = VideoSourceSummary {
+            kind: VideoSourceKind::File,
+            path: Some("memory://media-assets/bootstrap-a-to-b.mp4".to_string()),
+            name: None,
+            codec: Some("H264".to_string()),
+            metadata: None,
+        };
+        engine.force_next_pending_publication_failure_for_tests();
+        let error = engine
+            .media_asset_transaction_published(MediaAssetTransaction::BootstrapVjShow {
+                candidate: MediaAssetImportCandidate {
+                    assets: vec![MediaAssetSummary {
+                        id: asset_id,
+                        label: "Bootstrap B asset".to_string(),
+                        source: source.clone(),
+                        content_hash: None,
+                        byte_size: None,
+                    }],
+                    layers: vec![VideoLayerSummary {
+                        id: layer_id,
+                        label: "Bootstrap B layer".to_string(),
+                        source,
+                        media_asset_id: Some(asset_id),
+                        blend_mode: VideoBlendMode::Normal,
+                        state: VideoLayerState::default(),
+                        isf_effect: None,
+                    }],
+                },
+                output: VideoOutputSummary {
+                    id: output_id,
+                    label: "Bootstrap B program".to_string(),
+                    kind: VideoOutputKind::Display,
+                    enabled: false,
+                    composition_id: 1,
+                    fullscreen: false,
+                    monitor_id: Some(0),
+                    width: 1_280,
+                    height: 720,
+                    endpoint_name: None,
+                    opacity: 1.0,
+                    blackout: true,
+                    mapping: VideoOutputMapping::default(),
+                },
+            })
+            .unwrap_err();
+
+        assert!(error.contains("rolled back"));
+        assert!(
+            engine.media_asset_publication_failed_after_b_for_tests(),
+            "the forced failure must occur after the real Bootstrap B applied and at shared publication"
+        );
+        let after = engine.media_asset_rollback_test_state_for_tests(false);
+        assert_eq!(
+            after, before,
+            "publication failure must restore the full A state"
+        );
+        assert_eq!(engine.snapshot().video, before_published_video);
+
+        // Candidate maxima are reserved when the real handle enqueues B.
+        // Failed publication may leave monotonic gaps, but cannot reuse an ID.
+        assert!(engine.allocate_media_asset_id() > asset_id);
+        assert!(engine.allocate_video_layer_id() > layer_id);
+        assert!(engine.allocate_video_output_id() > output_id);
     }
 
     #[test]
